@@ -253,7 +253,8 @@ pub(crate) fn require_operator_caller() -> Result<(), ToolError> {
     }
 }
 
-const REFUSAL_MESSAGE: &str = "terminal requires operator; refused. An operator approving this call's own escalation card does not currently lift this refusal — nothing re-stamps the caller's role after approval.";
+const REFUSAL_MESSAGE: &str =
+    "terminal requires operator or an unused operator approval for this exact call; refused.";
 
 fn envelope(output: TerminalOutput) -> Result<ToolOutput, ToolError> {
     let value = serde_json::to_value(output).map_err(|error| ToolError::Execution {
@@ -273,7 +274,9 @@ fn envelope(output: TerminalOutput) -> Result<ToolOutput, ToolError> {
 /// legacy `TerminalOutput` envelope as an `Ok` value (the shape callers of the
 /// former `terminal` tool already parse), not an `Err`.
 pub(crate) async fn invoke_observation(name: &str, input: Value) -> Result<ToolOutput, ToolError> {
-    if require_operator_caller().is_err() {
+    if require_operator_caller().is_err()
+        && !crate::tools::dispatch_verdict::consume_operator_approval(name, &input)
+    {
         notify_tool_result(name, REFUSAL_MESSAGE, false);
         return envelope(TerminalOutput {
             success: false,

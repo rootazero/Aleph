@@ -1,6 +1,6 @@
 //! Transcript Indexer Module
 //!
-//! Stores transcript chunks as `raw_memories` rows (source
+//! Stores transcript chunks as Markdown raw records (source
 //! `Transcript`, path `aleph://transcript/...`) for later compression and
 //! substring recall via the `memory_search` transcripts leg. No embeddings
 //! are produced here.
@@ -14,30 +14,31 @@ pub use indexer::{TranscriptIndexer, TRANSCRIPT_PATH_PREFIX};
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::memory::store::{MemoryBackend, SqliteMemoryBackend};
+    use crate::memory::store::markdown::MarkdownSessionStore;
+    use crate::memory::store::raw_memory::RawMemoryStore;
     use crate::sync_primitives::Arc;
     use tempfile::tempdir;
 
-    fn create_test_db(temp_dir: &std::path::Path) -> MemoryBackend {
-        let db_path = temp_dir.join("sqlite_db");
-        Arc::new(SqliteMemoryBackend::new(&db_path).unwrap())
+    async fn create_raw_store(temp_dir: &std::path::Path) -> Arc<dyn RawMemoryStore> {
+        Arc::new(MarkdownSessionStore::new(temp_dir).await.unwrap())
     }
 
-    fn indexer_with_config(
+    async fn indexer_with_config(
         config: TranscriptIndexerConfig,
     ) -> (tempfile::TempDir, TranscriptIndexer) {
         let temp_dir = tempdir().unwrap();
-        let db = create_test_db(temp_dir.path());
-        (temp_dir, TranscriptIndexer::with_config(db, config))
+        let raw_store = create_raw_store(temp_dir.path()).await;
+        (temp_dir, TranscriptIndexer::with_config(raw_store, config))
     }
 
-    #[test]
-    fn chunk_text_splits_long_text_and_keeps_short_text_whole() {
+    #[tokio::test]
+    async fn chunk_text_splits_long_text_and_keeps_short_text_whole() {
         let (_dir, indexer) = indexer_with_config(TranscriptIndexerConfig {
             max_tokens_per_chunk: 50,
             overlap_tokens: 10,
             enable_chunking: true,
-        });
+        })
+        .await;
 
         let short_text = "This is short.";
         let chunks = indexer.chunk_text(short_text);
@@ -56,13 +57,14 @@ mod tests {
         }
     }
 
-    #[test]
-    fn chunk_text_consecutive_chunks_share_overlap() {
+    #[tokio::test]
+    async fn chunk_text_consecutive_chunks_share_overlap() {
         let (_dir, indexer) = indexer_with_config(TranscriptIndexerConfig {
             max_tokens_per_chunk: 50,
             overlap_tokens: 10,
             enable_chunking: true,
-        });
+        })
+        .await;
 
         let text = "First sentence here padding words. Second sentence here padding words. \
                     Third sentence here padding words. Fourth sentence here padding words. \
@@ -83,31 +85,32 @@ mod tests {
         }
     }
 
-    #[test]
-    fn chunk_text_disabled_returns_single_chunk() {
+    #[tokio::test]
+    async fn chunk_text_disabled_returns_single_chunk() {
         let (_dir, indexer) = indexer_with_config(TranscriptIndexerConfig {
             max_tokens_per_chunk: 50,
             overlap_tokens: 10,
             enable_chunking: false,
-        });
+        })
+        .await;
 
         let long_text = "word ".repeat(200);
         let chunks = indexer.chunk_text(&long_text);
         assert_eq!(chunks.len(), 1);
     }
 
-    #[test]
-    fn estimate_tokens_counts_ascii_chars() {
-        let (_dir, indexer) = indexer_with_config(TranscriptIndexerConfig::default());
+    #[tokio::test]
+    async fn estimate_tokens_counts_ascii_chars() {
+        let (_dir, indexer) = indexer_with_config(TranscriptIndexerConfig::default()).await;
 
         assert_eq!(indexer.estimate_tokens("1234"), 1);
         assert_eq!(indexer.estimate_tokens("12345678"), 2);
         assert_eq!(indexer.estimate_tokens("123456789"), 3); // rounded up
     }
 
-    #[test]
-    fn estimate_tokens_counts_chars_not_bytes_for_cjk() {
-        let (_dir, indexer) = indexer_with_config(TranscriptIndexerConfig::default());
+    #[tokio::test]
+    async fn estimate_tokens_counts_chars_not_bytes_for_cjk() {
+        let (_dir, indexer) = indexer_with_config(TranscriptIndexerConfig::default()).await;
 
         // 4 CJK chars = 12 bytes; a byte-based estimate would report 3.
         assert_eq!(indexer.estimate_tokens("你好世界"), 1);
@@ -120,12 +123,10 @@ mod tests {
     /// Assert on the effect: multiple rows reach the store.
     #[tokio::test]
     async fn index_turn_text_chunks_text_between_config_limit_and_old_800_gate() {
-        use crate::memory::store::raw_memory::RawMemoryStore;
-
         let temp_dir = tempdir().unwrap();
-        let db = create_test_db(temp_dir.path());
+        let raw_store = create_raw_store(temp_dir.path()).await;
         // Default config: max_tokens_per_chunk = 400.
-        let indexer = TranscriptIndexer::new(db.clone());
+        let indexer = TranscriptIndexer::new(raw_store.clone());
 
         // ~500 estimated tokens (2000 chars) — above the 400-token config
         // limit but below the removed 800-token gate.
@@ -143,7 +144,7 @@ mod tests {
             ids.len()
         );
 
-        let rows = db
+        let rows = raw_store
             .get_raw_by_path_prefix("aleph://transcript/sess-gate/", "main", 50)
             .await
             .unwrap();

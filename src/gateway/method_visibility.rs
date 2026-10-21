@@ -81,16 +81,12 @@
 //!   read for a denied caller.
 //! - `graph.search` → **PartitionChecked**, same contract as `graph.query`
 //!   (invisible partition → no hits, not a leaked title/tag/content).
-//! - `memory.delete` → **PartitionChecked**, but shaped differently from its
-//!   siblings: the RPC addresses a row by bare `id` with no `agent_id` at
-//!   all, so there is no caller-supplied partition to check directly. The
-//!   fix resolves the row's OWNING partition FIRST (a new, deliberately
-//!   narrow `SqliteMemoryBackend::raw_memory_agent_id` lookup — the existing
-//!   `delete_raw_memory` query itself was NOT widened) and runs THAT through
-//!   `visibility::partition_visible` before the delete executes. A
-//!   nonexistent id and an id whose partition is invisible to the caller
-//!   produce the exact same response (byte-identical, tested), and a denied
-//!   delete never touches the row.
+//! - `memory.delete` → **PartitionChecked**: the RPC addresses a row by bare `id` with no
+//!   `agent_id` at all, so there is no caller-supplied partition to check directly.
+//!   The fix resolves the row's owning partition through the injected raw-memory
+//!   store before the delete executes. A nonexistent id and an id whose partition
+//!   is invisible to the caller produce the exact same response (byte-identical,
+//!   tested), and a denied delete never touches the row.
 //!
 //! `graph.update_note`/`rename_note`/`delete_note` (siblings of the now-fixed
 //! `graph.search`/`graph.node_detail`) were NOT checked this round — still a

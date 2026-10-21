@@ -21,13 +21,13 @@
 //!   Does NOT accept a `session_id` filter; search is global across all sessions.
 //!
 //! - Memory-fact write entry-point (CORRECTED 2026-05-01): Spec B writes to the
-//!   `raw_memories` table via `RawMemoryStore`, NOT to the `notes`/wiki layer
+//!   Markdown-backed raw memory via `RawMemoryStore`, NOT to the `notes`/wiki layer
 //!   and NOT to a `memory_facts` table (that name is aspirational in the plan).
 //!
 //!   * Trait method: `RawMemoryStore::insert_raw_memory(&self, raw: &RawMemory) -> Result<(), AlephError>`
 //!     at `src/memory/store/raw_memory.rs:203`.
-//!   * `SQLite` impl: `src/memory/store/sqlite/raw_memories.rs:52`. Writes to the
-//!     `raw_memories` table.
+//!   * Markdown implementation: `src/memory/store/markdown/raw_memory.rs`.
+//!     Bodies live in Markdown; the SQLite metadata index tracks work state.
 //!   * Construction pattern (from `src/memory/session_compactor/mod.rs:503-506`,
 //!     also lines 758-761 and 854-857):
 //!     `RawMemory::new(content, RawMemorySource::SessionCompressed)
@@ -44,31 +44,26 @@
 //!   Read-side audit (Step A, for Tasks 5 and 8):
 //!   * Path-prefix lookup EXISTS:
 //!     `RawMemoryStore::get_raw_by_path_prefix(path_prefix, agent_id, limit)`
-//!     at `src/memory/store/raw_memory.rs:229` (impl `raw_memories.rs:174`,
-//!     SQL `WHERE path LIKE ?1 AND agent_id = ?2`). Task 8 can use this
-//!     directly to enumerate `aleph://session/{sid}/d*` rows.
+//!     is implemented in `src/memory/store/markdown/raw_memory.rs`, using the
+//!     metadata index to select paths within the agent scope and reading bodies
+//!     from Markdown to enumerate `aleph://session/{sid}/d*` records.
 //!   * Watermarked variant `get_raw_by_path_prefix_since(...since: i64)` also
-//!     exists at `raw_memory.rs:244` / `raw_memories.rs:207`.
+//!     exists on `RawMemoryStore`.
 //!   * Exact-path lookup does NOT exist (no `find_by_path` / `get_by_path`
 //!     method on `RawMemoryStore`). Task 5 must either:
 //!     (a) add a new trait method `find_by_path(path, agent_id) -> Option<RawMemory>`, or
 //!     (b) reuse `get_raw_by_path_prefix` with the full exact path and filter
 //!     for the single-row case.
 //!
-//!   `INSERT OR IGNORE` semantics:
-//!   * `insert_raw_memory` uses plain `INSERT INTO raw_memories ...` (no
-//!     `OR IGNORE` clause — see `raw_memories.rs:57`). Other writers in
-//!     `src/memory/store/sqlite/` (notes-links, `query_filed`, `recall_signals`)
-//!     do use `INSERT OR IGNORE`, but `raw_memories` does not.
-//!   * Task 7 will therefore need either (a) a new
-//!     `insert_raw_memory_or_ignore` helper on the trait, or (b) modify the
-//!     SQL in the existing impl to `INSERT OR IGNORE`. (a) is preferred to
-//!     avoid changing semantics for existing callers.
+//!   Write semantics:
+//!   * `RawMemoryStore::insert_raw_memory` publishes a Markdown body and updates
+//!     its metadata index. Callers must use the trait contract rather than
+//!     assuming SQL `INSERT OR IGNORE` semantics for raw memory storage.
 //!
 //!   Naming note: Spec B's plan text mentions "`memory_facts`" / "memory fact" /
 //!   `find_fact_by_path` / `write_fact_or_ignore`. Those are ASPIRATIONAL
 //!   placeholders; the actual implementation in this module will use
-//!   `RawMemoryStore` / `raw_memories` / `RawMemory` naming throughout.
+//!   `RawMemoryStore` / Markdown-backed raw memory / `RawMemory` naming throughout.
 //!
 //! - Spec A's `register_session_end_mcp` pattern in `src/thinker/memory_context_provider/helpers.rs`.
 //!   Uses `tokio::sync::OnceCell<Arc<MemoryContextProvider>>` for single registration (idempotent, subsequent calls are no-op).

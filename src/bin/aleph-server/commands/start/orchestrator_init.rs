@@ -102,6 +102,8 @@ pub(in crate::commands::start) async fn initialize_orchestrator(
     // SQLite memory backend, threaded into the per-run `ContextCompactor` so it
     // can reuse hierarchical session summaries for zero-API-cost compaction.
     memory_backend: Option<alephcore::memory::store::MemoryBackend>,
+    // Markdown-backed raw memory store used by compaction summary reuse.
+    raw_memory_store: Option<Arc<dyn alephcore::memory::store::raw_memory::RawMemoryStore>>,
     // Tool catalog — owns the `ToolHealthCache` whose snapshot
     // feeds `runtime_state_blocks`. Threaded so `build_system_prompt` can
     // populate `<tool_runtime_state>` fragments.
@@ -337,10 +339,7 @@ pub(in crate::commands::start) async fn initialize_orchestrator(
             |name| {
                 config.providers.get(name).is_some_and(|pc| {
                     pc.protocol() == "ollama"
-                        || pc
-                            .api_key
-                            .as_ref()
-                            .is_some_and(|key| !key.is_empty())
+                        || pc.api_key.as_ref().is_some_and(|key| !key.is_empty())
                 }) || shared_token_mgr
                     .get_secret(&format!("ai:{name}"))
                     .ok()
@@ -440,6 +439,7 @@ pub(in crate::commands::start) async fn initialize_orchestrator(
         power,
         memory_context_provider,
         memory_backend,
+        raw_memory_store,
         // Summary-reuse reads must resolve the same project-scoped storage id
         // the session-compactor writes use (see harness_bridge/mod.rs field doc).
         memory_project_scoped: config.memory.project_scoped,

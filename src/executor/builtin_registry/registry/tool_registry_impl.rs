@@ -60,10 +60,10 @@ impl ToolRegistry for BuiltinToolRegistry {
     ) -> Pin<Box<dyn std::future::Future<Output = Result<Value>> + Send + '_>> {
         debug!(tool = tool_name, "Executing builtin tool");
 
-        // Per-agent tool filtering happens before dispatch reaches here:
-        // AgentProfile whitelist at registry build (run_loop) and the
-        // src/tools/scoped/ enforcement point. (A parallel ToolPolicy rail
-        // that never had a writer was withdrawn — R10 YAGNI.)
+        // Authorization belongs to the caller: agent turns use the profile
+        // projection and src/tools/scoped/; ordinary tools.invoke instead
+        // enforces its narrower transport hard floors + agent allowlist.
+        // This raw dispatch is not itself a permission gate.
 
         // Use AlephTool::call_json directly for migrated tools
         // This simplifies the code by avoiding intermediate execute_* methods
@@ -424,7 +424,12 @@ impl ToolRegistry for BuiltinToolRegistry {
                             "flag_user_correction not available: no memory backend configured",
                         )
                     })?;
-                    Self::build_flag_user_correction(db, agent_id)
+                    let raw_store = self.raw_memory_store.clone().ok_or_else(|| {
+                        AlephError::tool(
+                            "flag_user_correction not available: no raw memory store configured",
+                        )
+                    })?;
+                    Self::build_flag_user_correction(db, raw_store, agent_id)
                         .call_json(arguments)
                         .await
                 })
@@ -440,8 +445,14 @@ impl ToolRegistry for BuiltinToolRegistry {
                         "governance_metrics not available: no memory backend configured",
                     )
                 })?;
+                let raw_store = self.raw_memory_store.clone().ok_or_else(|| {
+                    AlephError::tool(
+                        "governance_metrics not available: no raw memory store configured",
+                    )
+                })?;
                 let tool = crate::builtin_tools::governance_metrics::GovernanceMetricsTool::new(
                     db.clone(),
+                    raw_store,
                 );
                 tool.call_json(arguments).await
             }),
@@ -1783,7 +1794,7 @@ impl ToolRegistry for BuiltinToolRegistry {
                         .map(|ctx| ctx.session_key_str.clone())
                 });
                 Box::pin(async move {
-                    let db = self.recall_context_db.as_ref().ok_or_else(|| {
+                    let db = self.raw_memory_store.as_ref().ok_or_else(|| {
                         AlephError::tool(
                             "recall_context not available: no memory backend configured",
                         )
@@ -1829,8 +1840,14 @@ impl ToolRegistry for BuiltinToolRegistry {
                         serde_json::from_value(arguments).map_err(|e| {
                             AlephError::tool(format!("memory_trace: bad args: {e}"))
                         })?;
+                    let raw_store = self.raw_memory_store.clone().ok_or_else(|| {
+                        AlephError::tool(
+                            "memory_trace not available: no raw memory store configured",
+                        )
+                    })?;
                     let tool = crate::builtin_tools::memory_trace::MemoryTraceTool::new(
                         db.clone(),
+                        raw_store,
                         agent_id,
                         note_memory_dir,
                     );
@@ -1944,8 +1961,12 @@ mod recall_context_identity_tests {
 
         // Seed a raw chunk under this turn's (agent, session) pair.
         let turn_session = SessionKey::main("alice").to_key_string();
-        let db: crate::memory::store::MemoryBackend =
-            Arc::new(crate::memory::store::sqlite::SqliteMemoryBackend::in_memory().unwrap());
+        let raw_dir = tempfile::tempdir().unwrap();
+        let db = Arc::new(
+            crate::memory::store::markdown::MarkdownSessionStore::new(raw_dir.path())
+                .await
+                .unwrap(),
+        );
         let raw = RawMemory::new(
             "the alice chunk".to_string(),
             RawMemorySource::SessionCompressed,
@@ -1954,7 +1975,7 @@ mod recall_context_identity_tests {
         .with_session(turn_session.clone())
         .with_path(format!("aleph://session/{turn_session}/raw/0"));
         db.insert_raw_memory(&raw).await.unwrap();
-        registry.recall_context_db = Some(db);
+        registry.raw_memory_store = Some(db);
 
         // The process-global mirror points at ANOTHER run's session — exactly
         // what a concurrent run rewriting the handle mid-turn produces.
@@ -1996,8 +2017,12 @@ mod recall_context_identity_tests {
         let mut registry = BuiltinToolRegistry::new().await.unwrap();
 
         let mirror_session = SessionKey::main("bob").to_key_string();
-        let db: crate::memory::store::MemoryBackend =
-            Arc::new(crate::memory::store::sqlite::SqliteMemoryBackend::in_memory().unwrap());
+        let raw_dir = tempfile::tempdir().unwrap();
+        let db = Arc::new(
+            crate::memory::store::markdown::MarkdownSessionStore::new(raw_dir.path())
+                .await
+                .unwrap(),
+        );
         let raw = RawMemory::new(
             "the bob chunk".to_string(),
             RawMemorySource::SessionCompressed,
@@ -2006,7 +2031,7 @@ mod recall_context_identity_tests {
         .with_session(mirror_session.clone())
         .with_path(format!("aleph://session/{mirror_session}/raw/0"));
         db.insert_raw_memory(&raw).await.unwrap();
-        registry.recall_context_db = Some(db);
+        registry.raw_memory_store = Some(db);
         // The mirror's key encodes agent "bob"; without a turn scope both the
         // session AND the agent (via caller_agent_id parsing the same key)
         // resolve from this one handle — the pair stays coherent.

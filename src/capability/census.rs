@@ -971,24 +971,23 @@ mod tests {
     #[test]
     fn test_only_statics_are_not_candidates_at_all() {
         let c = take_census();
-        for (file, name) in [("src/session/store.rs", "TEST_STORE")] {
-            let in_handles = c
-                .written
-                .iter()
-                .chain(c.first_caller.iter())
-                .chain(c.slots.iter())
-                .any(|s| s.file.ends_with(file) && s.name == name);
-            let in_lazy = c
-                .lazy
-                .iter()
-                .any(|s| s.file.ends_with(file) && s.name == name);
-            assert!(
-                !in_handles && !in_lazy,
-                "{name} lives in a #[cfg(test)] fn in {file} and must not reach \
-                 the census at all — seeing it means production_prefix failed to \
-                 remove the enclosing item"
-            );
-        }
+        let (file, name) = ("src/session/store.rs", "TEST_STORE");
+        let in_handles = c
+            .written
+            .iter()
+            .chain(c.first_caller.iter())
+            .chain(c.slots.iter())
+            .any(|s| s.file.ends_with(file) && s.name == name);
+        let in_lazy = c
+            .lazy
+            .iter()
+            .any(|s| s.file.ends_with(file) && s.name == name);
+        assert!(
+            !in_handles && !in_lazy,
+            "{name} lives in a #[cfg(test)] fn in {file} and must not reach \
+             the census at all — seeing it means production_prefix failed to \
+             remove the enclosing item"
+        );
     }
 
     /// `capability_handles()` must label each site the way Tasks 7–11 read it.

@@ -28,6 +28,8 @@ pub struct BuiltinToolConfig {
     pub config: Option<Arc<tokio::sync::RwLock<Config>>>,
     /// Memory backend for `memory_search` and `memory_browse` tools
     pub memory_db: Option<MemoryBackend>,
+    /// Raw session memory, independent of the derived notes/vector backend.
+    pub raw_memory_store: Option<Arc<dyn crate::memory::store::raw_memory::RawMemoryStore>>,
     /// Embedding provider for semantic memory search
     pub embedder: Option<Arc<dyn EmbeddingProvider>>,
     /// Gateway context for sessions tools (`sessions_list`, `sessions_send`)

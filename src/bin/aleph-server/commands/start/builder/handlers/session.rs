@@ -1,6 +1,5 @@
 use super::{
-    channel_handlers, discord_panel_handlers, session_handlers, Arc, ChannelRegistry,
-    GatewayServer, MemoryBackend,
+    channel_handlers, discord_panel_handlers, session_handlers, Arc, ChannelRegistry, GatewayServer,
 };
 
 // ─── register_session_handlers ───────────────────────────────────────────────
@@ -8,7 +7,7 @@ use super::{
 pub(in crate::commands::start) fn register_session_handlers(
     server: &mut GatewayServer,
     session_store: &Arc<dyn alephcore::gateway::session_store::SessionStore>,
-    memory_db: &MemoryBackend,
+    raw_store: &Arc<dyn alephcore::memory::store::raw_memory::RawMemoryStore>,
     run_manager: Option<Arc<alephcore::gateway::handlers::agent::AgentRunManager>>,
     // `context.breakdown` reads the operator's per-provider `context_window`
     // override through it. Optional because the whole config handle is: the
@@ -38,8 +37,7 @@ pub(in crate::commands::start) fn register_session_handlers(
     // capture path fires before the transcript is dropped (G4 fix).
     {
         let store = Arc::clone(session_store);
-        let writer: Arc<dyn alephcore::memory::store::raw_memory::RawMemoryStore> =
-            Arc::clone(memory_db) as _;
+        let writer = Arc::clone(raw_store);
         server.handlers_mut().register("sessions.delete", move |req| {
             let store = Arc::clone(&store);
             let writer = Arc::clone(&writer);

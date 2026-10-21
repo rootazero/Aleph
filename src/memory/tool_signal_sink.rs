@@ -2,7 +2,7 @@
 //!
 //! Spec 3 wiring: every tool call completion (success or failure) flows
 //! through a `ToolSignalSink` and lands as a [`RawMemorySource::ToolInvocation`]
-//! row in `raw_memories`.
+//! record in the Markdown-backed raw memory store.
 //!
 //! These rows have exactly TWO readers, and both go through
 //! [`crate::memory::insights`]:
@@ -16,7 +16,7 @@
 //!
 //! `compute_raw_metrics()` is still NOT one: it derives its signals from note
 //! index entries, `recall_hit_counts` and the prior `DreamReport`, never from
-//! `raw_memories`. `CompressionService` deliberately bypasses these rows too
+//! `RawMemoryStore`. `CompressionService` deliberately bypasses these records too
 //! (they are telemetry, not knowledge). That is the whole consumer list; keep
 //! it that way or update these lines.
 //!

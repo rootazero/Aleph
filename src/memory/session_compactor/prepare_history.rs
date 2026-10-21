@@ -3,7 +3,6 @@ use crate::extension::hooks::{HookContext, HookExecutor};
 use crate::extension::HookEvent;
 use crate::gateway::agent_instance::AgentInstance;
 use crate::gateway::router::SessionKey;
-use crate::memory::store::raw_memory::RawMemoryStore;
 use crate::providers::message::UnifiedMessage;
 use crate::thinker::xml_util::escape_xml_attr;
 use tracing::{debug, warn};

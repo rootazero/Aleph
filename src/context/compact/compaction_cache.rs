@@ -31,7 +31,9 @@
 //! summaries plus the agent id they were written under. Same lifetime
 //! (`Option<…>` on the compactor) as the rest of the cache plumbing.
 
-use crate::memory::store::MemoryBackend;
+use std::sync::Arc;
+
+use crate::memory::store::raw_memory::RawMemoryStore;
 use crate::sync_primitives::Mutex;
 
 /// Un-summarized pre-tail growth beyond the cached summary that triggers an
@@ -88,11 +90,11 @@ pub(super) struct CompactionCache {
     pub(super) summary: String,
 }
 
-/// Wiring for the zero-API-cost session-summary reuse path: the memory backend
-/// holding the d0/d1/d2 summaries plus the agent id they were written under.
+/// Wiring for the zero-API-cost session-summary reuse path: the raw-memory
+/// store holding the d0/d1/d2 summaries plus the agent id they were written under.
 /// Both are required together — `get_raw_by_path_prefix` filters by agent id.
 pub(super) struct SummaryReuse {
-    pub(super) backend: MemoryBackend,
+    pub(super) backend: Arc<dyn RawMemoryStore>,
     pub(super) agent_id: String,
 }
 

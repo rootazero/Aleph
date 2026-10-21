@@ -45,44 +45,6 @@ pub fn init_schema(conn: &Connection) -> Result<(), AlephError> {
             AlephError::config(format!("Failed to create compression_metadata table: {e}"))
         })?;
 
-    conn.execute_batch(ddl::CREATE_RAW_MEMORIES)
-        .map_err(|e| AlephError::config(format!("Failed to create raw_memories table: {e}")))?;
-
-    let has_source_detail: bool = conn
-        .prepare("PRAGMA table_info(raw_memories)")
-        .map_err(|e| AlephError::config(format!("PRAGMA table_info failed: {e}")))?
-        .query_map([], |row| row.get::<_, String>(1))
-        .map_err(|e| AlephError::config(format!("PRAGMA table_info query failed: {e}")))?
-        .filter_map(Result::ok)
-        .any(|name| name == "source_detail");
-    if !has_source_detail {
-        conn.execute("ALTER TABLE raw_memories ADD COLUMN source_detail TEXT", [])
-            .map_err(|e| AlephError::config(format!("ALTER TABLE raw_memories failed: {e}")))?;
-    }
-
-    conn.execute(
-        "DELETE FROM raw_memories \
-         WHERE path IS NOT NULL \
-           AND id NOT IN ( \
-             SELECT MIN(id) FROM raw_memories \
-             WHERE path IS NOT NULL \
-             GROUP BY agent_id, path \
-           )",
-        [],
-    )
-    .map_err(|e| AlephError::config(format!("raw_memories dedup pre-index failed: {e}")))?;
-
-    conn.execute_batch(
-        "CREATE UNIQUE INDEX IF NOT EXISTS idx_raw_memories_agent_path \
-         ON raw_memories(agent_id, path) \
-         WHERE path IS NOT NULL;",
-    )
-    .map_err(|e| {
-        AlephError::config(format!(
-            "Failed to create idx_raw_memories_agent_path unique index: {e}"
-        ))
-    })?;
-
     conn.execute_batch(ddl::NOTES_INDEX_DDL)
         .map_err(|e| AlephError::config(format!("Failed to create notes_index table: {e}")))?;
     migrations::migrate_notes_index_aliases(conn)

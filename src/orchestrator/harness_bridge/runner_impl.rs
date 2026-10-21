@@ -183,10 +183,8 @@ impl HarnessRunner for AgentHarnessRunner {
             .map_or_else(|| session_key.clone(), |s| s.to_key_string());
         let session_model_snapshot =
             crate::providers::session_model_handle::get_session_model_snapshot(&session_pref_key);
-        let model_directive: Option<(Option<String>, String)> = effective_model_directive(
-            turn_model,
-            session_model_snapshot.pref,
-        );
+        let model_directive: Option<(Option<String>, String)> =
+            effective_model_directive(turn_model, session_model_snapshot.pref);
         // *attribution* must fall back with it. `select_model` refuses an
         // unknown key outright, so this is reachable only when an explicit
         // session directive names a provider that has since been deleted;
@@ -588,7 +586,7 @@ impl HarnessRunner for AgentHarnessRunner {
                 // inside this run's spawned task, so build-time resolution here
                 // sees the same root the writes see at call time.
                 // rust-doctor-disable-next-line excessive-clone
-                if let Some(backend) = self.memory_backend.clone() {
+                if let Some(backend) = self.raw_memory_store.clone() {
                     let reuse_agent_id = crate::memory::project_scope::session_write_id(
                         &spec.agent,
                         self.memory_project_scoped,
@@ -632,10 +630,8 @@ impl HarnessRunner for AgentHarnessRunner {
                 // Stage list + preventive-band gate live in ONE place
                 // (`preflight::default_pipeline`) so the subagent spawner builds
                 // the identical pipeline instead of re-deriving it.
-                let pipeline = crate::context::budget::preflight::default_pipeline(
-                    cfg,
-                    llm.as_ref(),
-                );
+                let pipeline =
+                    crate::context::budget::preflight::default_pipeline(cfg, llm.as_ref());
                 let registry = crate::extension::try_extension_manager()
                     .map(|manager| manager.plugin_registry_handle())
                     .unwrap_or_else(|| {
@@ -769,7 +765,7 @@ impl HarnessRunner for AgentHarnessRunner {
             // tool call completion flows into `raw_memories` for the
             // Dream cycle's metric aggregator to read. No store → no-op.
             // rust-doctor-disable-next-line excessive-clone
-            tool_signal_sink: match self.memory_backend.clone() {
+            tool_signal_sink: match self.session_service.raw_memory_writer() {
                 Some(store) => {
                     // The composed PARTITION, not the bare persona — the same
                     // resolution `with_summary_reuse` performs ~170 lines above
@@ -787,8 +783,7 @@ impl HarnessRunner for AgentHarnessRunner {
                         crate::projects::current_project_root().as_deref(),
                     );
                     std::sync::Arc::new(crate::memory::tool_signal_sink::RawMemoryToolSink::new(
-                        store
-                            as std::sync::Arc<dyn crate::memory::store::raw_memory::RawMemoryStore>,
+                        store,
                         sink_agent_id,
                         session_id.to_key_string(),
                     ))
@@ -1198,18 +1193,17 @@ impl HarnessRunner for AgentHarnessRunner {
         //    flow is invisible here — the estimate has no `FlowSpec`. All
         //    chat presets use `brain = default`, and the `≈` label plus the
         //    first real turn self-correct the narrow mismatch.)
-        let model: String = crate::providers::session_model_handle::get_session_model_snapshot(
-            &canonical_key,
-        )
-        .pref
-        .map(|p| p.model)
-        .unwrap_or_else(|| {
-            self.default_provider
-                .current()
-                .serving_model_hint()
-                .map(std::borrow::Cow::into_owned)
-                .unwrap_or_default()
-        });
+        let model: String =
+            crate::providers::session_model_handle::get_session_model_snapshot(&canonical_key)
+                .pref
+                .map(|p| p.model)
+                .unwrap_or_else(|| {
+                    self.default_provider
+                        .current()
+                        .serving_model_hint()
+                        .map(std::borrow::Cow::into_owned)
+                        .unwrap_or_default()
+                });
 
         // 3. Window = exactly what `run` resolves (runner_impl.rs:611): the
         //    configured per-provider override first, else the model catalog.

@@ -67,6 +67,7 @@ impl CompressionConfig {
 /// Main compression service
 pub struct CompressionService {
     database: MemoryBackend,
+    raw_store: Arc<dyn crate::memory::store::raw_memory::RawMemoryStore>,
     scheduler: Arc<CompressionScheduler>,
     config: CompressionConfig,
     compound_ingestor: Option<Arc<dyn crate::memory::notes::ingest::CompoundIngestor>>,
@@ -84,8 +85,8 @@ pub struct CompressionService {
     ///
     /// `compress_to_notes` reads the unprocessed batch, spends seconds inside an
     /// LLM ingest call, and only marks those rows processed at the END — a
-    /// read-then-mark window with no DB-level claim (`get_unprocessed_raw_memories`
-    /// is a plain `WHERE is_processed = 0` SELECT). Several unsynchronized sites
+    /// read-then-mark window with no atomic claim (`get_unprocessed_raw_memories`
+    /// reads unprocessed records through `RawMemoryStore`). Several unsynchronized sites
     /// drive one shared `Arc<CompressionService>`: the hourly background task, the
     /// session-end flush, the turn-threshold spawn, the correction flush, and the
     /// `memory.compress` RPC. Two runs overlapping on one agent would therefore
@@ -108,6 +109,7 @@ impl CompressionService {
     /// Otherwise, L1 generation is skipped.
     pub fn new(
         database: MemoryBackend,
+        raw_store: Arc<dyn crate::memory::store::raw_memory::RawMemoryStore>,
         _provider: Arc<dyn AiProvider>,
         _embedder: Arc<dyn EmbeddingProvider>,
         config: CompressionConfig,
@@ -116,6 +118,7 @@ impl CompressionService {
 
         Self {
             database,
+            raw_store,
             scheduler,
             config,
             compound_ingestor: None,
@@ -181,8 +184,6 @@ impl CompressionService {
     /// `compress_in_workspace` path only when the notes directory cannot be
     /// determined.
     pub async fn compress(&self) -> Result<CompressionResult, AlephError> {
-        use crate::memory::store::raw_memory::RawMemoryStore;
-
         // Consume the turn budget UP FRONT — before the first fallible DB call,
         // not after the loop. Every fallible step below (starting with the
         // `unprocessed_agent_ids` fetch just after this) propagates with `?`, so a
@@ -196,7 +197,7 @@ impl CompressionService {
         // spent whether or not this run completes.
         self.scheduler.reset_turns();
 
-        let mut agent_ids = self.database.unprocessed_agent_ids().await?;
+        let mut agent_ids = self.raw_store.unprocessed_agent_ids().await?;
         if agent_ids.is_empty() {
             agent_ids.push(crate::memory::DEFAULT_AGENT.to_string());
         }
@@ -257,10 +258,8 @@ impl CompressionService {
         let _ingest_guard = agent_lock.lock().await;
 
         // 2. Fetch unprocessed raw memories
-        use crate::memory::store::raw_memory::RawMemoryStore;
-
         let raw_memories = self
-            .database
+            .raw_store
             .get_unprocessed_raw_memories(workspace_id, self.config.batch_size as usize)
             .await
             .map_err(|e| AlephError::other(format!("Failed to fetch raw memories: {e}")))?;
@@ -296,7 +295,7 @@ impl CompressionService {
 
             // Rows this drain must NOT hand to the note-extraction LLM, because
             // a different consumer already owns them and that consumer reads
-            // `raw_memories` by source/path — never through `is_processed`:
+            // `RawMemoryStore` by source/path — never through `is_processed`:
             //
             //   * `ToolInvocation` — per-call telemetry for the insights
             //     aggregator and the dream signal metrics. Not knowledge; would
@@ -351,7 +350,7 @@ impl CompressionService {
             //
             // …except in a shared project room (P2), where "whose USER.md" has
             // no answer. This scheduler runs on a background task over
-            // `SELECT DISTINCT agent_id FROM raw_memories`, long after the runs
+            // agent IDs enumerated through `RawMemoryStore`, long after the runs
             // that wrote those rows finished, so the ambient scope is gone and
             // the partition id is all we have — hence the id-shaped twin of
             // `profile_floor_id`. Without this the room's compaction summaries
@@ -412,7 +411,7 @@ impl CompressionService {
             // Bypassed rows never enter an ingest group; mark them right away.
             if !bypassed.is_empty() {
                 let ids: Vec<String> = bypassed.iter().map(|r| r.id.clone()).collect();
-                match self.database.mark_raw_as_processed(&ids).await {
+                match self.raw_store.mark_raw_as_processed(&ids).await {
                     Ok(n) => {
                         memories_processed += n as u32;
                         tracing::info!(marked = n, "Marked non-ingestable raws as processed");
@@ -504,7 +503,7 @@ impl CompressionService {
                         };
 
                         if !consumed.is_empty() {
-                            match self.database.mark_raw_as_processed(&consumed).await {
+                            match self.raw_store.mark_raw_as_processed(&consumed).await {
                                 Ok(n) => {
                                     memories_processed += n as u32;
                                     tracing::info!(
@@ -550,7 +549,7 @@ impl CompressionService {
                             );
                         }
                         if !consumed.is_empty() {
-                            match self.database.mark_raw_as_processed(&consumed).await {
+                            match self.raw_store.mark_raw_as_processed(&consumed).await {
                                 Ok(n) => memories_processed += n as u32,
                                 Err(e) => tracing::warn!(
                                     error = %e,
@@ -712,8 +711,8 @@ impl CompressionService {
     /// The backing store, so a caller that must *drain* (rather than sip) can
     /// observe the remaining backlog between batches. See
     /// [`crate::memory::flush::flush_agent_memory`].
-    pub const fn store(&self) -> &MemoryBackend {
-        &self.database
+    pub const fn store(&self) -> &Arc<dyn crate::memory::store::raw_memory::RawMemoryStore> {
+        &self.raw_store
     }
 
     pub const fn get_config(&self) -> &CompressionConfig {
@@ -767,15 +766,10 @@ fn ingest_group_key(source: &crate::memory::store::raw_memory::RawMemorySource) 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::memory::store::markdown::MarkdownSessionStore;
     use crate::memory::store::raw_memory::{RawMemory, RawMemorySource, RawMemoryStore};
-    use crate::memory::store::SqliteMemoryBackend;
     use crate::providers::create_mock_provider;
     use tempfile::{tempdir, TempDir};
-
-    async fn create_test_service() -> (CompressionService, MemoryBackend) {
-        let (service, database, _temp_dir) = create_test_service_with_tempdir().await;
-        (service, database)
-    }
 
     /// Records every batch it is handed, and dawdles inside `ingest_batch` so the
     /// read-then-mark window is wide enough for a second caller to slip into.
@@ -814,6 +808,7 @@ mod tests {
         let temp_dir = tempdir().unwrap();
         let database: Arc<crate::memory::store::SqliteMemoryBackend> =
             Arc::new(crate::memory::store::SqliteMemoryBackend::new(temp_dir.path()).unwrap());
+        let raw_store = Arc::new(MarkdownSessionStore::new(temp_dir.path()).await.unwrap());
 
         let embedder: Arc<dyn EmbeddingProvider> = Arc::new(
             crate::memory::embedding_provider::tests::MockEmbeddingProvider::new(
@@ -826,6 +821,7 @@ mod tests {
         let service = Arc::new(
             CompressionService::new(
                 database.clone(),
+                raw_store.clone(),
                 create_mock_provider(),
                 embedder,
                 CompressionConfig::default(),
@@ -841,7 +837,7 @@ mod tests {
             RawMemorySource::Transcript,
         );
         raw.created_at = chrono::Utc::now().timestamp() - 7 * 3600;
-        database.insert_raw_memory(&raw).await.unwrap();
+        raw_store.insert_raw_memory(&raw).await.unwrap();
 
         let (a, b) = tokio::join!(
             service.compress_to_notes("default"),
@@ -859,10 +855,12 @@ mod tests {
         );
     }
 
-    async fn create_test_service_with_tempdir() -> (CompressionService, MemoryBackend, TempDir) {
+    async fn create_test_service_with_tempdir(
+    ) -> (CompressionService, Arc<MarkdownSessionStore>, TempDir) {
         let temp_dir = tempdir().unwrap();
         let database: MemoryBackend =
             Arc::new(crate::memory::store::SqliteMemoryBackend::new(temp_dir.path()).unwrap());
+        let raw_store = Arc::new(MarkdownSessionStore::new(temp_dir.path()).await.unwrap());
 
         let provider = create_mock_provider();
         let embedder: Arc<dyn EmbeddingProvider> = Arc::new(
@@ -874,14 +872,15 @@ mod tests {
 
         let config = CompressionConfig::default();
 
-        let service = CompressionService::new(database.clone(), provider, embedder, config);
+        let service =
+            CompressionService::new(database, raw_store.clone(), provider, embedder, config);
 
-        (service, database, temp_dir)
+        (service, raw_store, temp_dir)
     }
 
     #[tokio::test]
     async fn test_compress_empty_memories() {
-        let (service, _) = create_test_service().await;
+        let (service, _, _temp_dir) = create_test_service_with_tempdir().await;
 
         let result = service.compress().await.unwrap();
 
@@ -891,7 +890,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_scheduler_integration() {
-        let (service, _) = create_test_service().await;
+        let (service, _, _temp_dir) = create_test_service_with_tempdir().await;
         let service = Arc::new(service);
 
         // Drive the PRODUCTION turn path (this used to call `record_turn`, a
@@ -1460,7 +1459,8 @@ mod tests {
     #[tokio::test]
     async fn test_raw_memory_full_roundtrip() {
         let temp_dir = tempdir().unwrap();
-        let backend: MemoryBackend = Arc::new(SqliteMemoryBackend::new(temp_dir.path()).unwrap());
+        let backend: Arc<dyn RawMemoryStore> =
+            Arc::new(MarkdownSessionStore::new(temp_dir.path()).await.unwrap());
 
         // Insert 3 raw memories with varying sources
         let raw1 = RawMemory::new(
@@ -1513,7 +1513,7 @@ mod tests {
     /// the model's job (`flag_user_correction`), not a substring table's.
     #[tokio::test]
     async fn turn_hook_is_content_blind_and_only_fires_at_the_threshold() {
-        let (service, _db) = create_test_service().await;
+        let (service, _raw_store, _temp_dir) = create_test_service_with_tempdir().await;
         let service = Arc::new(service);
         let threshold = service.config.scheduler.turn_threshold;
 

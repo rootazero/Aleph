@@ -17,14 +17,14 @@ pub trait ToolService: Send + Sync + 'static {
 }
 ```
 
-Production impl: **`ScopedToolService`** (`src/tools/scoped.rs`). The Gateway
-builds one per request via
+Production harness impl: **`ScopedToolService`** (`src/tools/scoped/`). For agent
+turns, the Gateway builds one per request via
 `gateway::execution_engine::tool_service_builder::build_request_tool_service`
 and supplies it as `FlowRequest::tool_service` so each turn sees an
 allow-listed view over the shared `LoopToolRegistry`.
 
 `ScopedToolService` carries the HITL seams natively:
-- `with_confirmation(confirm_tools, requester)` — gates `requires_confirmation`
+- `with_confirmation(requester)` — gates `requires_confirmation`
   tools through `ApprovalRequester` (wired at boot to
   `ChannelApprovalBridgeAdapter`).
 - `with_turn_context(TurnContext)` — scopes the `TURN_CONTEXT` task-local for
@@ -39,9 +39,35 @@ that service signals upstream wiring regression.
 
 The pre-`ScopedToolService` Phase 2 decorator chain (`facade.rs` /
 `dispatch.rs` / `registry.rs` / `middleware/` / `handlers/`, ~2700 lines) was
-deleted in 2026-05-20; it was unreachable because every gateway request
-overrode it. See
+deleted in 2026-05-20; it was unreachable because agent-turn requests
+overrode it. This is not a claim that all RPC dispatch is scoped. See
 `docs/superpowers/specs/2026-05-19-hitl-loop-closure-design.md` §8.
+
+---
+
+## `tools.invoke` compatibility boundary / 兼容调用边界
+
+Ordinary `tools.invoke` calls still dispatch through raw `ToolRegistry`, even
+when boot supplies the canonical `ToolHandlerRegistry`. This is a **hard-floor
+contract, not the unified scoped gate**. It reuses existing predicates to refuse:
+
+1. Dangerous tools, static or registered confirmation declarations, and
+   `ExecTier::Auto::asks_for_arguments` risks (no approval card is available).
+2. Continuation-driven tools whose post-run hook this RPC cannot drive.
+3. Operator-only tools for non-operators.
+4. Tools outside the explicit member allowlist for non-operators.
+5. Tools outside the selected agent's allowlist (production supplies agents).
+
+`ALEPH_GATEWAY_TOOLS_ALLOW` remains an exact-name, operator-configured override
+for the first two floors only; it does not bypass operator/member/agent checks.
+The canonical terminal observation route is a narrow existing exception that
+uses a request-local `ScopedToolService`; it is not general authorization wiring.
+
+普通 RPC 没有真实 session、有效 exec tier、合并后的 global/agent/channel
+`tool_permissions` 或可路由的 approval context，也不经过 agent-loop hooks / ledger。
+因此保留 raw compatibility 的明确下限，不构造第二个 PermissionManager，也不把
+临时 session 或默认配置伪装成完整上下文。完整 scoped 接入必须先补齐这些上下文；
+当前下限会拒绝已知的审批风险，但不等价于执行全部用户策略。
 
 ---
 
@@ -764,7 +790,7 @@ let indexer = TranscriptIndexer::new(database);
 let chunks = indexer.chunk_text(&long_conversation);
 ```
 
-No embedder: the indexer writes plain `raw_memories` rows; recall over them
+No embedder: the indexer writes Markdown-backed raw records with metadata in `raw_memory_index`; recall over them
 is the substring transcripts leg of `memory_search`.
 
 ### ValueEstimator
@@ -817,7 +843,7 @@ let budget = TokenBudget::new(10000);
 let arbitrated = comptroller.arbitrate(retrieval_result, budget);
 
 // arbitrated.facts: Deduplicated facts
-// arbitrated.raw_memories: Deduplicated transcripts
+// arbitrated.raw_markdown: Deduplicated transcripts
 // arbitrated.tokens_saved: Tokens saved through deduplication
 ```
 

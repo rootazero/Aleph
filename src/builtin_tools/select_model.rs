@@ -37,7 +37,9 @@ pub struct SelectModelArgs {
     /// Optional configured provider id. Omit only for an unambiguous model id,
     /// or qualify the model as `provider/model`.
     #[serde(default)]
-    #[schemars(description = "Optional provider id to pin; omit to use the model's configured provider.")]
+    #[schemars(
+        description = "Optional provider id to pin; omit to use the model's configured provider."
+    )]
     pub provider: Option<String>,
 }
 
@@ -806,5 +808,4 @@ mod tests {
             }
         );
     }
-
 }

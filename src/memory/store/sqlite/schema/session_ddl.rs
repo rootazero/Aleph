@@ -55,6 +55,30 @@ pub fn init_session_tables(conn: &Connection) -> Result<(), AlephError> {
             FOREIGN KEY (session_id) REFERENCES sessions(session_id) ON DELETE CASCADE
         );
 
+        -- Raw-memory bodies and source details live in Markdown, never SQLite.
+        -- Processing state belongs to this persistent work index.
+        CREATE TABLE IF NOT EXISTS raw_memory_index (
+            id TEXT PRIMARY KEY NOT NULL,
+            file_id TEXT NOT NULL UNIQUE,
+            agent_id TEXT NOT NULL,
+            session_id TEXT,
+            path TEXT,
+            source TEXT NOT NULL,
+            is_processed INTEGER NOT NULL CHECK (is_processed IN (0, 1)),
+            created_at INTEGER NOT NULL
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_raw_memory_pending
+            ON raw_memory_index(agent_id, created_at) WHERE is_processed = 0;
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_raw_memory_agent_path_unique
+            ON raw_memory_index(agent_id, path) WHERE path IS NOT NULL;
+        CREATE INDEX IF NOT EXISTS idx_raw_memory_path
+            ON raw_memory_index(agent_id, path, created_at);
+        CREATE INDEX IF NOT EXISTS idx_raw_memory_session
+            ON raw_memory_index(agent_id, session_id, created_at);
+        CREATE INDEX IF NOT EXISTS idx_raw_memory_source
+            ON raw_memory_index(agent_id, source, created_at);
+
         -- FTS5 index for session transcripts
         CREATE VIRTUAL TABLE IF NOT EXISTS session_transcripts_fts USING fts5(
             session_id UNINDEXED,
@@ -99,5 +123,7 @@ mod tests {
         assert!(tables.contains(&"workspaces".to_string()));
         assert!(tables.contains(&"sessions".to_string()));
         assert!(tables.contains(&"attachments".to_string()));
+        assert!(tables.contains(&"raw_memory_index".to_string()));
+        assert!(!tables.contains(&"raw_memories".to_string()));
     }
 }

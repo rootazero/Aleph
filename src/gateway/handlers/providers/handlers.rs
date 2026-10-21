@@ -59,9 +59,7 @@ async fn refresh_selectable_publication(
                 .providers
                 .get(name)
                 .is_some_and(|pc| pc.protocol() == "ollama")
-            || (name != changed
-                && available.contains(name)
-                && env_provider == Some(name))
+            || (name != changed && available.contains(name) && env_provider == Some(name))
     });
 }
 

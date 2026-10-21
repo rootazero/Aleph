@@ -24,7 +24,7 @@ use serde::Deserialize;
 use serde_json::json;
 
 use crate::memory::insights::aggregate_tool_usage;
-use crate::memory::store::MemoryBackend;
+use crate::memory::store::raw_memory::RawMemoryStore;
 
 use super::super::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR};
 
@@ -57,7 +57,10 @@ fn now_unix_secs() -> i64 {
 /// real-but-empty one — the report is produced by the REAL aggregator over
 /// zero rows (`empty_tool_usage_report`), so it is byte-identical to a
 /// partition that genuinely ran nothing, and the store is never touched.
-pub async fn handle_tools(request: JsonRpcRequest, db: MemoryBackend) -> JsonRpcResponse {
+pub async fn handle_tools(
+    request: JsonRpcRequest,
+    raw_store: std::sync::Arc<dyn RawMemoryStore>,
+) -> JsonRpcResponse {
     let params: ToolInsightsParams = request
         .params
         .as_ref()
@@ -93,7 +96,16 @@ pub async fn handle_tools(request: JsonRpcRequest, db: MemoryBackend) -> JsonRpc
     // AFTER the visibility gate above; see `memory_scope`'s module doc.
     let partitions = crate::gateway::handlers::memory_scope::read_partitions(agent_id);
 
-    match aggregate_tool_usage(db.as_ref(), &partitions, since, window, top_n, FETCH_LIMIT).await {
+    match aggregate_tool_usage(
+        raw_store.as_ref(),
+        &partitions,
+        since,
+        window,
+        top_n,
+        FETCH_LIMIT,
+    )
+    .await
+    {
         Ok(report) => JsonRpcResponse::success(
             request.id,
             json!({
@@ -144,11 +156,15 @@ mod tests {
     #[tokio::test]
     async fn tools_report_for_a_foreign_partition_is_indistinguishable_from_empty() {
         use crate::gateway::caller_identity::CALLER_USER;
-        use crate::memory::store::sqlite::SqliteMemoryBackend;
+        use crate::memory::store::markdown::MarkdownSessionStore;
         use crate::sync_primitives::Arc;
 
-        let db: MemoryBackend =
-            Arc::new(SqliteMemoryBackend::in_memory().expect("in-memory backend"));
+        let temp_dir = tempfile::tempdir().expect("tempdir");
+        let raw_store: Arc<dyn RawMemoryStore> = Arc::new(
+            MarkdownSessionStore::new(temp_dir.path())
+                .await
+                .expect("Markdown raw store"),
+        );
         let req = |agent: &str| {
             JsonRpcRequest::with_id(
                 "insights.tools",
@@ -160,7 +176,7 @@ mod tests {
         let denied = CALLER_USER
             .scope(
                 Some("u-bob".to_string()),
-                handle_tools(req("main__u-alice"), db.clone()),
+                handle_tools(req("main__u-alice"), raw_store.clone()),
             )
             .await;
         // `main__u-bob` is bob's own, empty, partition — a genuine empty
@@ -168,7 +184,7 @@ mod tests {
         let genuine = CALLER_USER
             .scope(
                 Some("u-bob".to_string()),
-                handle_tools(req("main__u-bob"), db.clone()),
+                handle_tools(req("main__u-bob"), raw_store.clone()),
             )
             .await;
 

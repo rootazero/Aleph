@@ -93,8 +93,15 @@ async fn flag_user_correction_files_under_the_turns_agent_not_the_boot_agent() {
 
     let _home = crate::utils::paths::IsolatedAlephHome::new();
     let db: MemoryBackend = Arc::new(SqliteMemoryBackend::in_memory().unwrap());
+    let raw_dir = tempfile::tempdir().unwrap();
+    let raw_store = Arc::new(
+        crate::memory::store::markdown::MarkdownSessionStore::new(raw_dir.path())
+            .await
+            .unwrap(),
+    );
     let registry = BuiltinToolRegistry::with_config(BuiltinToolConfig {
         memory_db: Some(Arc::clone(&db)),
+        raw_memory_store: Some(raw_store.clone()),
         ..Default::default()
     })
     .await
@@ -128,7 +135,7 @@ async fn flag_user_correction_files_under_the_turns_agent_not_the_boot_agent() {
         .expect("flag_user_correction dispatch");
     assert_eq!(out["success"], serde_json::json!(true), "{out}");
 
-    let researcher = db
+    let researcher = raw_store
         .get_raw_by_path_prefix_since("aleph://correction/", "researcher", 0, 10)
         .await
         .unwrap();
@@ -137,7 +144,7 @@ async fn flag_user_correction_files_under_the_turns_agent_not_the_boot_agent() {
         1,
         "the correction must land in the corpus of the agent that ran the turn"
     );
-    let base = db
+    let base = raw_store
         .get_raw_by_path_prefix_since("aleph://correction/", "main", 0, 10)
         .await
         .unwrap();

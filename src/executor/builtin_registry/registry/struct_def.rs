@@ -147,6 +147,7 @@ pub struct BuiltinToolRegistry {
     /// `BuiltinToolRegistry::build_flag_user_correction`). `None` disables the
     /// tool — it requires a memory backend.
     pub(crate) flag_user_correction_db: Option<crate::memory::store::MemoryBackend>,
+    pub(crate) raw_memory_store: Option<Arc<dyn crate::memory::store::raw_memory::RawMemoryStore>>,
     /// Shared workspace handle for memory tools — written by `ExecutionEngine` after workspace resolution
     pub(crate) memory_workspace_handle: Option<Arc<RwLock<String>>>,
     /// Gateway context for sessions tools (session.list, session.send).
@@ -382,6 +383,7 @@ pub struct BuiltinToolRegistry {
     pub(crate) memory_project_scoped: bool,
     /// Memory backend for the `recall_context` tool (pre-compression recovery).
     /// Built per-call with the active session id from `session_context_handle`.
+    #[allow(dead_code)]
     pub(crate) recall_context_db: Option<crate::memory::store::MemoryBackend>,
     /// Memory backend for the `memory_trace` tool (evidence-chain walk).
     pub(crate) memory_trace_db: Option<crate::memory::store::MemoryBackend>,

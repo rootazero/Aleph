@@ -2,21 +2,21 @@
 //!
 //! When the context window fills up, instead of making a side-channel LLM API
 //! call for summarization, this module checks whether `SessionCompactor` has
-//! already written hierarchical summaries (d0/d1/d2) to `SQLite`. If so, those
+//! already written hierarchical summaries (d0/d1/d2) to Markdown-backed raw memory. If so, those
 //! are assembled within a token budget and used directly — zero API cost.
 
 use crate::memory::store::raw_memory::RawMemoryStore;
-use crate::memory::store::MemoryBackend;
 use crate::providers::message::UnifiedMessage;
+use crate::sync_primitives::Arc;
 
 use crate::context::compact::compactor::{CompactResult, CompactStrategy};
 
 /// Source of zero-cost compaction from pre-existing session summaries.
 ///
-/// Checks `SQLite` for `aleph://session/<session_id>/d*/…` facts and
+/// Checks `RawMemoryStore` for `aleph://session/<session_id>/d*/…` facts and
 /// assembles them into a single summary message within a token budget.
 pub struct SessionSummarySource {
-    database: MemoryBackend,
+    database: Arc<dyn RawMemoryStore>,
     session_id: String,
     /// Agent that owns the session summaries. `get_raw_by_path_prefix` filters
     /// `WHERE agent_id = ?`, so this must be the real owning agent id — the
@@ -28,7 +28,7 @@ pub struct SessionSummarySource {
 impl SessionSummarySource {
     /// Create a new source for the given session and owning agent.
     pub fn new(
-        database: MemoryBackend,
+        database: Arc<dyn RawMemoryStore>,
         session_id: impl Into<String>,
         agent_id: impl Into<String>,
     ) -> Self {
@@ -39,7 +39,7 @@ impl SessionSummarySource {
         }
     }
 
-    /// Try to reuse existing session summaries stored in `SQLite`.
+    /// Try to reuse existing session summaries stored in Markdown-backed raw memory.
     ///
     /// Returns `Some(CompactResult)` if usable summaries were found and the
     /// window was successfully replaced. Returns `None` if no summaries exist
@@ -159,6 +159,7 @@ fn estimate_tokens(text: &str) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::memory::store::markdown::MarkdownSessionStore;
 
     #[test]
     fn extract_depth_parses_d0() {
@@ -178,10 +179,10 @@ mod tests {
     #[tokio::test]
     async fn try_reuse_finds_summaries_for_the_owning_agent() {
         use crate::memory::store::raw_memory::{RawMemory, RawMemorySource, RawMemoryStore};
-        use crate::memory::store::sqlite::SqliteMemoryBackend;
         use crate::sync_primitives::Arc;
 
-        let backend: MemoryBackend = Arc::new(SqliteMemoryBackend::in_memory().unwrap());
+        let temp = tempfile::tempdir().unwrap();
+        let backend = Arc::new(MarkdownSessionStore::new(temp.path()).await.unwrap());
         // Seed a d0 session summary the way `post_turn_compress` writes it.
         let raw = RawMemory::new(
             "Earlier turns: set up the project and ran the tests.".to_string(),
@@ -210,10 +211,10 @@ mod tests {
     #[tokio::test]
     async fn try_reuse_returns_none_for_a_different_agent() {
         use crate::memory::store::raw_memory::{RawMemory, RawMemorySource, RawMemoryStore};
-        use crate::memory::store::sqlite::SqliteMemoryBackend;
         use crate::sync_primitives::Arc;
 
-        let backend: MemoryBackend = Arc::new(SqliteMemoryBackend::in_memory().unwrap());
+        let temp = tempfile::tempdir().unwrap();
+        let backend = Arc::new(MarkdownSessionStore::new(temp.path()).await.unwrap());
         let raw = RawMemory::new("summary".to_string(), RawMemorySource::SessionCompressed)
             .with_agent("agent-x")
             .with_session("sess-1")
@@ -249,11 +250,11 @@ mod tests {
     #[tokio::test]
     async fn try_reuse_prices_the_window_without_reasoning() {
         use crate::memory::store::raw_memory::{RawMemory, RawMemorySource, RawMemoryStore};
-        use crate::memory::store::sqlite::SqliteMemoryBackend;
         use crate::providers::message::ContentBlock;
         use crate::sync_primitives::Arc;
 
-        let backend: MemoryBackend = Arc::new(SqliteMemoryBackend::in_memory().unwrap());
+        let temp = tempfile::tempdir().unwrap();
+        let backend = Arc::new(MarkdownSessionStore::new(temp.path()).await.unwrap());
         let raw = RawMemory::new("summary".to_string(), RawMemorySource::SessionCompressed)
             .with_agent("agent-x")
             .with_session("sess-1")

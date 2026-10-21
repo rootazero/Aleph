@@ -30,6 +30,7 @@ pub(crate) struct Gatherer {
     pub retrieval: Arc<NoteFactRetrieval<SqliteMemoryBackend>>,
     pub snapshots: Arc<SnapshotReader>,
     pub backend: MemoryBackend,
+    pub raw_store: Arc<dyn RawMemoryStore>,
     pub profile: Arc<UserProfileLoader>,
     pub feedback_floor: Arc<FeedbackFloorLoader>,
     /// Mirror of `MemoryConfig.project_scoped`. When true and a project root is
@@ -269,7 +270,7 @@ impl Gatherer {
         };
         let prefix = format!("aleph://session/{sid}/raw/");
         match self
-            .backend
+            .raw_store
             .get_raw_by_path_prefix(&prefix, agent_id, 5)
             .await
         {
@@ -333,7 +334,7 @@ impl Gatherer {
         let mut out = Vec::new();
         for id in &ids {
             match self
-                .backend
+                .raw_store
                 .get_raw_by_source(RawMemorySource::SessionCompressed, id, 20)
                 .await
             {
@@ -646,6 +647,11 @@ mod tests {
             retrieval,
             snapshots,
             backend,
+            raw_store: Arc::new(
+                crate::memory::store::markdown::MarkdownSessionStore::new(tmp.path())
+                    .await
+                    .unwrap(),
+            ),
             profile,
             feedback_floor,
             project_scoped: false,

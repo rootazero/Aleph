@@ -350,14 +350,25 @@ mod tests {
     use crate::memory::store::sqlite::SqliteMemoryBackend;
     use crate::routing::DEFAULT_AGENT_ID;
 
-    fn make_tool() -> (FlagUserCorrectionTool, Arc<SqliteMemoryBackend>) {
+    async fn make_tool() -> (
+        tempfile::TempDir,
+        FlagUserCorrectionTool,
+        Arc<crate::memory::store::markdown::MarkdownSessionStore>,
+        Arc<SqliteMemoryBackend>,
+    ) {
+        let raw_dir = tempfile::tempdir().unwrap();
+        let raw_store = Arc::new(
+            crate::memory::store::markdown::MarkdownSessionStore::new(raw_dir.path())
+                .await
+                .unwrap(),
+        );
         let backend = Arc::new(SqliteMemoryBackend::in_memory().unwrap());
         let tool = FlagUserCorrectionTool::new(
-            backend.clone() as Arc<dyn RawMemoryStore>,
+            raw_store.clone() as Arc<dyn RawMemoryStore>,
             DEFAULT_AGENT_ID.to_string(),
         )
         .with_decision_log(Some(backend.clone() as MemoryBackend));
-        (tool, backend)
+        (raw_dir, tool, raw_store, backend)
     }
 
     /// Reasons filed for the default agent, newest first.
@@ -379,7 +390,7 @@ mod tests {
 
     #[tokio::test]
     async fn flag_correction_writes_typed_raw_memory() {
-        let (tool, backend) = make_tool();
+        let (_raw_dir, tool, backend, _decision_log) = make_tool().await;
         let out = tool
             .call(FlagUserCorrectionArgs {
                 content: "user pushed back on JSDoc".into(),
@@ -442,17 +453,20 @@ mod tests {
     async fn a_logged_correction_is_visible_to_the_stage_that_distills_it() {
         use crate::memory::dreaming::stages::feedback_distill::has_undistilled_corrections;
 
-        let backend = Arc::new(SqliteMemoryBackend::in_memory().unwrap());
-        let tool = FlagUserCorrectionTool::new(
-            backend.clone() as Arc<dyn RawMemoryStore>,
-            DEFAULT_AGENT_ID.to_string(),
-        );
+        let (_raw_dir, tool, backend, decision_log) = make_tool().await;
         let lookback = crate::config::types::memory::default_feedback_lookback();
         let min = crate::config::types::memory::default_feedback_distill_min_candidates();
-        let store: MemoryBackend = backend.clone();
+        let store: MemoryBackend = decision_log;
 
         assert!(
-            !has_undistilled_corrections(&store, DEFAULT_AGENT_ID, lookback, min).await,
+            !has_undistilled_corrections(
+                &store,
+                Some(backend.as_ref()),
+                DEFAULT_AGENT_ID,
+                lookback,
+                min,
+            )
+            .await,
             "nothing logged yet"
         );
 
@@ -465,7 +479,14 @@ mod tests {
         assert!(out.success, "{}", out.message);
 
         assert!(
-            has_undistilled_corrections(&store, DEFAULT_AGENT_ID, lookback, min).await,
+            has_undistilled_corrections(
+                &store,
+                Some(backend.as_ref()),
+                DEFAULT_AGENT_ID,
+                lookback,
+                min,
+            )
+            .await,
             "the distiller must see the row the tool just wrote — a writer and a \
              reader that address different prefixes both look healthy in isolation"
         );
@@ -473,7 +494,7 @@ mod tests {
 
     #[tokio::test]
     async fn flag_correction_path_uses_correction_prefix() {
-        let (tool, backend) = make_tool();
+        let (_raw_dir, tool, backend, _decision_log) = make_tool().await;
         let out = tool
             .call(FlagUserCorrectionArgs {
                 content: "x".into(),
@@ -500,7 +521,7 @@ mod tests {
 
     #[tokio::test]
     async fn flag_correction_without_suggested_rule_works() {
-        let (tool, backend) = make_tool();
+        let (_raw_dir, tool, backend, _decision_log) = make_tool().await;
         tool.call(FlagUserCorrectionArgs {
             content: "no rule".into(),
             severity: Severity::High,
@@ -527,7 +548,7 @@ mod tests {
 
     #[tokio::test]
     async fn flag_correction_round_trips_critical_severity() {
-        let (tool, backend) = make_tool();
+        let (_raw_dir, tool, backend, _decision_log) = make_tool().await;
         tool.call(FlagUserCorrectionArgs {
             content: "absolute redline".into(),
             severity: Severity::Critical,
@@ -551,7 +572,7 @@ mod tests {
         // prompt and enforced nowhere, while rung 1 (`remember`) has refused
         // exact duplicates structurally since day one. Each re-log also spent
         // a real-time consolidation drain — an LLM call — on the same lesson.
-        let (tool, backend) = make_tool();
+        let (_raw_dir, tool, backend, _decision_log) = make_tool().await;
         let first = tool
             .call(args("stop using JSDoc", Severity::Med))
             .await
@@ -593,7 +614,7 @@ mod tests {
         // "I already told you" is new information. Collapsing it onto the
         // earlier row would discard the only signal that says the user is
         // pushing harder, so severity is part of the duplicate key.
-        let (tool, backend) = make_tool();
+        let (_raw_dir, tool, backend, _decision_log) = make_tool().await;
         tool.call(args("stop using JSDoc", Severity::Low))
             .await
             .unwrap();
@@ -612,7 +633,7 @@ mod tests {
 
     #[tokio::test]
     async fn empty_content_is_refused_before_the_store_is_touched() {
-        let (tool, backend) = make_tool();
+        let (_raw_dir, tool, backend, _decision_log) = make_tool().await;
         let out = tool.call(args("   \n ", Severity::Med)).await.unwrap();
         assert!(!out.success);
         assert!(out.message.starts_with("rejected: "), "{}", out.message);
@@ -630,7 +651,7 @@ mod tests {
         // "why wasn't that saved" — was true for the hot zone and silently
         // empty for the correction rail. Both outcomes must be legible, and
         // under an `action` that keeps the two rails distinguishable.
-        let (tool, backend) = make_tool();
+        let (_raw_dir, tool, _backend, _decision_log) = make_tool().await;
         tool.call(args("stop using JSDoc", Severity::Med))
             .await
             .unwrap();
@@ -638,21 +659,21 @@ mod tests {
             .await
             .unwrap();
 
-        let rows = backend
+        let rows = _decision_log
             .recent_write_decisions(DEFAULT_AGENT_ID, None, 50)
             .unwrap();
         assert_eq!(rows.len(), 2, "success and refusal both audited: {rows:?}");
         assert!(rows.iter().all(|r| r.action == "flag_correction"));
         // The subject is what the call was ABOUT, not the outcome message.
         assert!(rows.iter().all(|r| r.subject == "stop using JSDoc"));
-        let filed = reasons(&backend);
+        let filed = reasons(&_decision_log);
         assert!(filed.contains(&"written".to_string()), "{filed:?}");
         assert!(filed.contains(&"duplicate".to_string()), "{filed:?}");
     }
 
     #[tokio::test]
     async fn without_a_backend_the_audit_is_a_no_op_not_a_failure() {
-        let backend = Arc::new(SqliteMemoryBackend::in_memory().unwrap());
+        let (_raw_dir, _, backend, _) = make_tool().await;
         let tool = FlagUserCorrectionTool::new(
             backend as Arc<dyn RawMemoryStore>,
             DEFAULT_AGENT_ID.to_string(),

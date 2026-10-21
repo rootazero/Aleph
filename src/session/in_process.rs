@@ -44,6 +44,7 @@ pub struct InProcessActorSessionService {
     wake_locks: Arc<Mutex<HashMap<SessionId, Arc<Mutex<()>>>>>,
     idle_timeout: Duration,
     observer: Option<Arc<dyn crate::session::observer::SessionEventObserver>>,
+    raw_memory_writer: Option<Arc<dyn crate::memory::store::raw_memory::RawMemoryStore>>,
 }
 
 impl InProcessActorSessionService {
@@ -55,7 +56,17 @@ impl InProcessActorSessionService {
             wake_locks: Arc::new(Mutex::new(HashMap::new())),
             idle_timeout: DEFAULT_IDLE_TIMEOUT,
             observer: None,
+            raw_memory_writer: None,
         }
+    }
+
+    /// Share the raw store with runtime producers without coupling it to SQLite indexes.
+    pub fn with_raw_memory_writer(
+        mut self,
+        writer: Arc<dyn crate::memory::store::raw_memory::RawMemoryStore>,
+    ) -> Self {
+        self.raw_memory_writer = Some(writer);
+        self
     }
 
     pub const fn with_idle_timeout(mut self, t: Duration) -> Self {
@@ -256,6 +267,12 @@ impl InProcessActorSessionService {
 
 #[async_trait]
 impl SessionService for InProcessActorSessionService {
+    fn raw_memory_writer(
+        &self,
+    ) -> Option<Arc<dyn crate::memory::store::raw_memory::RawMemoryStore>> {
+        self.raw_memory_writer.clone()
+    }
+
     async fn attach(&self, id: SessionId) -> Result<SessionHandle, SessionError> {
         if self.sender_for(&id).await.is_none() {
             self.spawn_actor(&id, None).await?;

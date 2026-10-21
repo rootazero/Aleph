@@ -25,6 +25,7 @@ use alephcore::memory::dreaming::stages::feedback_distill::{
 use alephcore::memory::dreaming::DistillAction;
 use alephcore::memory::notes::store::NoteStore;
 use alephcore::memory::notes::{NoteIndexer, Severity};
+use alephcore::memory::store::markdown::MarkdownSessionStore;
 use alephcore::memory::store::raw_memory::{RawMemorySource, RawMemoryStore};
 use alephcore::memory::store::sqlite::SqliteMemoryBackend;
 use alephcore::routing::DEFAULT_AGENT_ID;
@@ -37,7 +38,8 @@ async fn feedback_loop_end_to_end() {
     let dir = tempdir().unwrap();
     let db_path = dir.path().join("memory.db");
     let backend = Arc::new(SqliteMemoryBackend::new(&db_path).unwrap());
-    let store: Arc<dyn RawMemoryStore> = backend.clone();
+    let store: Arc<dyn RawMemoryStore> =
+        Arc::new(MarkdownSessionStore::new(dir.path()).await.unwrap());
     let indexer = NoteIndexer::new(dir.path().join("note"), backend.clone());
 
     // 2. Main LLM "decides" to flag three corrections via the tool.
@@ -64,16 +66,10 @@ async fn feedback_loop_end_to_end() {
         .expect("tool should succeed");
     }
 
-    // 3. Verify raw_memory rows landed under the correction prefix.
-    //    Use the trait method explicitly to make method resolution unambiguous.
-    let corrections = RawMemoryStore::get_raw_by_path_prefix(
-        &*backend,
-        "aleph://correction/",
-        DEFAULT_AGENT_ID,
-        50,
-    )
-    .await
-    .unwrap();
+    let corrections = store
+        .get_raw_by_path_prefix("aleph://correction/", DEFAULT_AGENT_ID, 50)
+        .await
+        .unwrap();
     assert_eq!(corrections.len(), 3);
     for c in &corrections {
         assert!(matches!(c.source, RawMemorySource::Correction { .. }));
@@ -187,7 +183,8 @@ async fn feedback_loop_end_to_end_for_a_non_default_agent() {
     let dir = tempdir().unwrap();
     let db_path = dir.path().join("memory.db");
     let backend = Arc::new(SqliteMemoryBackend::new(&db_path).unwrap());
-    let store: Arc<dyn RawMemoryStore> = backend.clone();
+    let store: Arc<dyn RawMemoryStore> =
+        Arc::new(MarkdownSessionStore::new(dir.path()).await.unwrap());
     let indexer = NoteIndexer::new(dir.path().join("note"), backend.clone());
 
     let tool = FlagUserCorrectionTool::new(store.clone(), agent_id.to_string());
@@ -200,22 +197,18 @@ async fn feedback_loop_end_to_end_for_a_non_default_agent() {
     .expect("tool should succeed");
 
     // The correction must land in *this* agent's partition...
-    let corrections =
-        RawMemoryStore::get_raw_by_path_prefix(&*backend, "aleph://correction/", agent_id, 50)
-            .await
-            .unwrap();
+    let corrections = store
+        .get_raw_by_path_prefix("aleph://correction/", agent_id, 50)
+        .await
+        .unwrap();
     assert_eq!(corrections.len(), 1);
 
     // ...and nowhere else. A partition key that silently degrades to the
     // default agent would satisfy every assertion above this line.
-    let leaked = RawMemoryStore::get_raw_by_path_prefix(
-        &*backend,
-        "aleph://correction/",
-        DEFAULT_AGENT_ID,
-        50,
-    )
-    .await
-    .unwrap();
+    let leaked = store
+        .get_raw_by_path_prefix("aleph://correction/", DEFAULT_AGENT_ID, 50)
+        .await
+        .unwrap();
     assert!(
         leaked.is_empty(),
         "a non-default agent's correction must not appear under the default agent"

@@ -1256,10 +1256,8 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                 if let Some(ref inbox) = self.inbox {
                     t = t.with_inbox(inbox.clone());
                 }
-                if let Some(ref mb) = self.memory_backend {
-                    t = t.with_raw_memory_writer(
-                        mb.clone() as Arc<dyn crate::memory::store::raw_memory::RawMemoryStore>
-                    );
+                if let Some(ref writer) = self.raw_memory_writer {
+                    t = t.with_raw_memory_writer(writer.clone());
                 }
                 // Weld the run-global Strategy into every spawned subagent's
                 // inline prompt (StraTA spec §7). A subagent is a downstream

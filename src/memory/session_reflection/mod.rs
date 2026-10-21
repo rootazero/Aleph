@@ -490,7 +490,7 @@ mod tests {
 
     #[tokio::test]
     async fn skips_when_disabled() {
-        let store = make_store();
+        let (_raw_dir, store) = make_store().await;
         let llm = MockSummaryLlm::with_response("- I should keep answers short");
         let reflector = SessionReflector::new(
             store.clone(),
@@ -505,7 +505,7 @@ mod tests {
 
     #[tokio::test]
     async fn skips_when_too_few_turns() {
-        let store = make_store();
+        let (_raw_dir, store) = make_store().await;
         let llm = MockSummaryLlm::with_response("- lesson");
         let reflector = SessionReflector::new(
             store.clone(),
@@ -520,7 +520,7 @@ mod tests {
 
     #[tokio::test]
     async fn skips_when_too_few_user_chars() {
-        let store = make_store();
+        let (_raw_dir, store) = make_store().await;
         let llm = MockSummaryLlm::with_response("- lesson");
         let reflector = SessionReflector::new(
             store.clone(),
@@ -541,7 +541,7 @@ mod tests {
         // engagement: this transcript is 22 characters of user text but 66
         // bytes, and under byte counting a 40-"char" threshold let a session
         // the gate exists to skip spend a real LLM call.
-        let store = make_store();
+        let (_raw_dir, store) = make_store().await;
         let llm = MockSummaryLlm::with_response("- lesson");
         let cjk = InMemorySessionStore::new().with_messages(
             "agent-1",
@@ -564,7 +564,7 @@ mod tests {
 
     #[tokio::test]
     async fn writes_reflection_when_qualified() {
-        let store = make_store();
+        let (_raw_dir, store) = make_store().await;
         let llm = MockSummaryLlm::with_response("- I should rebuild wasm before the panel");
         let reflector = SessionReflector::new(
             store.clone(),
@@ -586,7 +586,7 @@ mod tests {
 
     #[tokio::test]
     async fn skips_write_when_llm_returns_none() {
-        let store = make_store();
+        let (_raw_dir, store) = make_store().await;
         let llm = MockSummaryLlm::with_response("NONE");
         let reflector = SessionReflector::new(
             store.clone(),
@@ -605,7 +605,7 @@ mod tests {
 
     #[tokio::test]
     async fn cooldown_blocks_second_reflection() {
-        let store = make_store();
+        let (_raw_dir, store) = make_store().await;
         let llm = MockSummaryLlm::with_response("- a real lesson");
         // 30-minute cooldown; two calls in the same instant — the second must
         // be throttled.
@@ -626,7 +626,7 @@ mod tests {
         use crate::memory::store::sqlite::SqliteMemoryBackend;
 
         let backend = Arc::new(SqliteMemoryBackend::in_memory().expect("in-memory backend"));
-        let store = make_store();
+        let (_raw_dir, store) = make_store().await;
         let llm = MockSummaryLlm::with_response("- a real lesson");
 
         let reflector = SessionReflector::new(
@@ -668,7 +668,7 @@ mod tests {
         use crate::scope::{with_scope, ScopeAttribution};
         let _home = crate::utils::paths::IsolatedAlephHome::new();
 
-        let store = make_store();
+        let (_raw_dir, store) = make_store().await;
         let llm = MockSummaryLlm::with_response(
             "LESSONS:\nNONE\n\nOPEN_LOOPS:\n- Follow up on the deploy status",
         );

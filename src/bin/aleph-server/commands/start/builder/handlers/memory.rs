@@ -29,6 +29,7 @@ async fn resolve_active_embedder(
 pub(in crate::commands::start) fn register_memory_handlers(
     server: &mut GatewayServer,
     memory_db: &MemoryBackend,
+    raw_store: &std::sync::Arc<dyn alephcore::memory::store::raw_memory::RawMemoryStore>,
     compression_service: &Option<
         std::sync::Arc<alephcore::memory::compression::CompressionService>,
     >,
@@ -49,19 +50,20 @@ pub(in crate::commands::start) fn register_memory_handlers(
         server,
         "memory.search",
         memory_handlers::handle_search,
-        memory_db
+        raw_store
     );
     register_handler!(
         server,
         "memory.stats",
         memory_handlers::handle_stats,
+        raw_store,
         memory_db
     );
     register_handler!(
         server,
         "memory.delete",
         memory_handlers::handle_delete,
-        memory_db
+        raw_store
     );
     register_handler!(
         server,
@@ -74,6 +76,7 @@ pub(in crate::commands::start) fn register_memory_handlers(
         server,
         "memory.list_corrections",
         memory_handlers::handle_list_corrections,
+        raw_store,
         memory_db
     );
     // Curated hot memory (`MEMORY.md`) — the third memory pillar's manage face.
@@ -128,11 +131,13 @@ pub(in crate::commands::start) fn register_memory_handlers(
     // session, which on a stock single-machine install means every session.
     {
         let db = memory_db.clone();
+        let raw_store = raw_store.clone();
         let mcp = memory_context_provider.clone();
         server.handlers_mut().register("memory.trace", move |req| {
             let db = db.clone();
+            let raw_store = raw_store.clone();
             let mcp = mcp.clone();
-            async move { memory_handlers::handle_trace(req, db, mcp).await }
+            async move { memory_handlers::handle_trace(req, raw_store, db, mcp).await }
         });
     }
     // Read-only per-tool usage introspection over ToolInvocation raw rows.
@@ -140,7 +145,7 @@ pub(in crate::commands::start) fn register_memory_handlers(
         server,
         "insights.tools",
         alephcore::gateway::handlers::insights::handle_tools,
-        memory_db
+        raw_store
     );
     // Read-only dream insights listing (daily digests + synthesis + run history).
     register_handler!(
@@ -310,6 +315,7 @@ pub(in crate::commands::start) fn register_memory_handlers(
 #[allow(clippy::too_many_arguments)]
 pub(in crate::commands::start) fn init_compression_service(
     memory_db: &MemoryBackend,
+    raw_store: std::sync::Arc<dyn alephcore::memory::store::raw_memory::RawMemoryStore>,
     provider: std::sync::Arc<dyn alephcore::providers::AiProvider>,
     embedder: std::sync::Arc<dyn alephcore::memory::EmbeddingProvider>,
     policy: &alephcore::CompressionPolicy,
@@ -327,7 +333,8 @@ pub(in crate::commands::start) fn init_compression_service(
     use alephcore::memory::compression::{CompressionConfig, CompressionService};
 
     let config = CompressionConfig::from_policy(policy);
-    let mut service = CompressionService::new(memory_db.clone(), provider, embedder, config);
+    let mut service =
+        CompressionService::new(memory_db.clone(), raw_store, provider, embedder, config);
     if let Some(ing) = compound_ingestor {
         service = service.with_compound_ingestor(ing);
     }
@@ -377,6 +384,7 @@ pub(in crate::commands::start) async fn init_command_handler(
 /// error at every construction site, which no test can do.
 pub(in crate::commands::start) fn init_memory_context_provider(
     memory_db: &MemoryBackend,
+    raw_store: std::sync::Arc<dyn alephcore::memory::store::raw_memory::RawMemoryStore>,
     embedder: Option<std::sync::Arc<dyn alephcore::memory::EmbeddingProvider>>,
     provider: Option<std::sync::Arc<dyn alephcore::providers::AiProvider>>,
     assembler_config: alephcore::AssemblerConfig,
@@ -389,6 +397,7 @@ pub(in crate::commands::start) fn init_memory_context_provider(
 ) -> std::sync::Arc<alephcore::thinker::MemoryContextProvider> {
     init_memory_context_provider_with_extensions(
         memory_db,
+        raw_store,
         embedder,
         provider,
         assembler_config,
@@ -408,6 +417,7 @@ pub(in crate::commands::start) fn init_memory_context_provider(
 #[allow(clippy::too_many_arguments)]
 pub(in crate::commands::start) fn init_memory_context_provider_with_extensions(
     memory_db: &MemoryBackend,
+    raw_store: std::sync::Arc<dyn alephcore::memory::store::raw_memory::RawMemoryStore>,
     embedder: Option<std::sync::Arc<dyn alephcore::memory::EmbeddingProvider>>,
     provider: Option<std::sync::Arc<dyn alephcore::providers::AiProvider>>,
     assembler_config: alephcore::AssemblerConfig,
@@ -430,12 +440,15 @@ pub(in crate::commands::start) fn init_memory_context_provider_with_extensions(
     let mcp = match provider {
         Some(p) => alephcore::thinker::MemoryContextProvider::with_provider(
             memory_db.clone(),
+            raw_store,
             embedder,
             p,
             assembler_config,
             alephcore::thinker::MemoryContextConfig::default(),
         ),
-        None => alephcore::thinker::MemoryContextProvider::new(memory_db.clone(), embedder),
+        None => {
+            alephcore::thinker::MemoryContextProvider::new(memory_db.clone(), raw_store, embedder)
+        }
     };
     let mcp = mcp
         .with_injection_mode(injection_mode)

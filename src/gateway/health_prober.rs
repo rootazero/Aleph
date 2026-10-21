@@ -188,7 +188,7 @@ pub fn spawn_background(config: Arc<RwLock<Config>>, vault: Arc<SharedTokenManag
                     .collect()
             };
 
-            let outcomes = probe_open_circuits_once(&health, &configs, |name, pc| {
+            let outcomes = probe_open_circuits_once(health, &configs, |name, pc| {
                 let name = name.to_string();
                 async move { probe_provider_bounded(&name, pc).await.success }
             })

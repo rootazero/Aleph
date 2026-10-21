@@ -18,6 +18,7 @@ use crate::memory::store::sqlite::memory_write_decisions::{
     MemoryWriteDecisionRow, MAX_DECISIONS_PER_AGENT,
 };
 use crate::memory::store::MemoryBackend;
+use crate::sync_primitives::Arc;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
@@ -130,6 +131,7 @@ pub struct TraceResult {
 /// Tool that walks a memory claim down to ground-truth evidence.
 pub struct MemoryTraceTool {
     db: MemoryBackend,
+    raw_store: Arc<dyn RawMemoryStore>,
     agent_id: String,
     note_memory_dir: PathBuf,
 }
@@ -160,9 +162,15 @@ impl MemoryTraceTool {
     /// `note_memory_dir` is the base notes directory (the parent of per-agent
     /// subdirectories), matching the path injected into `ProfileSynthesizer` and
     /// the note-wiki tooling.
-    pub fn new(db: MemoryBackend, agent_id: impl Into<String>, note_memory_dir: PathBuf) -> Self {
+    pub fn new(
+        db: MemoryBackend,
+        raw_store: Arc<dyn RawMemoryStore>,
+        agent_id: impl Into<String>,
+        note_memory_dir: PathBuf,
+    ) -> Self {
         Self {
             db,
+            raw_store,
             agent_id: agent_id.into(),
             note_memory_dir,
         }
@@ -245,7 +253,7 @@ impl MemoryTraceTool {
                     if let Some(sessions) = p.sources.get(&args.target) {
                         for sid in sessions {
                             let raws = self
-                                .db
+                                .raw_store
                                 .get_raws_by_session(agent, sid)
                                 .await
                                 .map_err(|e| anyhow::anyhow!("get_raws_by_session: {e}"))?;
@@ -282,7 +290,7 @@ impl MemoryTraceTool {
                 .await
                 .map_err(|e| anyhow::anyhow!("sources_of: {e}"))?;
             let fetched = self
-                .db
+                .raw_store
                 .get_raws_by_ids(agent, &raw_ids)
                 .await
                 .map_err(|e| anyhow::anyhow!("get_raws_by_ids: {e}"))?;
@@ -304,7 +312,7 @@ impl MemoryTraceTool {
         // 3. For Raw kind: also surface the raw itself if present.
         if args.kind == TraceKind::Raw {
             let fetched = self
-                .db
+                .raw_store
                 .get_raws_by_ids(agent, std::slice::from_ref(&args.target))
                 .await
                 .map_err(|e| anyhow::anyhow!("get_raws_by_ids(raw): {e}"))?;
@@ -363,6 +371,7 @@ mod tests {
     use super::*;
     use crate::memory::notes::store::NoteStore;
     use crate::memory::notes::KnowledgeNote;
+    use crate::memory::store::markdown::MarkdownSessionStore;
     use crate::memory::store::{
         MemoryBackend, RawMemory, RawMemorySource, RawMemoryStore, SqliteMemoryBackend,
     };
@@ -373,6 +382,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let backend: MemoryBackend =
             Arc::new(SqliteMemoryBackend::new(&dir.path().join("m.db")).unwrap());
+        let raw_store = Arc::new(MarkdownSessionStore::new(dir.path()).await.unwrap());
 
         // A note that cites raw-present (exists) and raw-missing (does not).
         let note = KnowledgeNote {
@@ -394,10 +404,10 @@ mod tests {
         );
         r.id = "raw-present".into();
         r.agent_id = "default".into();
-        backend.insert_raw_memory(&r).await.unwrap();
+        raw_store.insert_raw_memory(&r).await.unwrap();
 
         // note_memory_dir unused for TraceKind::Note; any path is fine.
-        let tool = MemoryTraceTool::new(backend, "default", dir.path().to_path_buf());
+        let tool = MemoryTraceTool::new(backend, raw_store, "default", dir.path().to_path_buf());
         let out = tool
             .call_impl(MemoryTraceArgs {
                 target: "preference/typescript".into(),
@@ -434,6 +444,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let backend: MemoryBackend =
             Arc::new(SqliteMemoryBackend::new(&dir.path().join("m.db")).unwrap());
+        let raw_store = Arc::new(MarkdownSessionStore::new(dir.path()).await.unwrap());
         let agent = "main";
 
         // L0: a raw memory carrying the ground-truth utterance, tagged with a session.
@@ -444,7 +455,7 @@ mod tests {
         raw.id = "raw-ts".into();
         raw.agent_id = agent.into();
         raw.session_id = Some("ses_x".into());
-        backend.insert_raw_memory(&raw).await.unwrap();
+        raw_store.insert_raw_memory(&raw).await.unwrap();
 
         // L1: a note distilled from that raw (source_notes cites it → notes_sources).
         let note = KnowledgeNote {
@@ -470,7 +481,7 @@ mod tests {
             .unwrap();
 
         // Drill from the L3 section down to L0 raw content.
-        let tool = MemoryTraceTool::new(backend, agent, dir.path().to_path_buf());
+        let tool = MemoryTraceTool::new(backend, raw_store, agent, dir.path().to_path_buf());
         let out = tool
             .call_impl(MemoryTraceArgs {
                 target: "Identity".into(),
@@ -500,6 +511,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let backend: MemoryBackend =
             Arc::new(SqliteMemoryBackend::new(&dir.path().join("m.db")).unwrap());
+        let raw_store = Arc::new(MarkdownSessionStore::new(dir.path()).await.unwrap());
         backend
             .record_write_decision("main", "add", MemoryWriteReason::OverBudget, "prefers tabs")
             .unwrap();
@@ -507,7 +519,7 @@ mod tests {
             .record_write_decision("main", "add", MemoryWriteReason::Written, "lives in Berlin")
             .unwrap();
 
-        let tool = MemoryTraceTool::new(backend, "main", dir.path().to_path_buf());
+        let tool = MemoryTraceTool::new(backend, raw_store, "main", dir.path().to_path_buf());
         let out = tool
             .call_impl(MemoryTraceArgs {
                 target: "tabs".into(),
@@ -531,7 +543,8 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let backend: MemoryBackend =
             Arc::new(SqliteMemoryBackend::new(&dir.path().join("m.db")).unwrap());
-        let tool = MemoryTraceTool::new(backend, "main", dir.path().to_path_buf());
+        let raw_store = Arc::new(MarkdownSessionStore::new(dir.path()).await.unwrap());
+        let tool = MemoryTraceTool::new(backend, raw_store, "main", dir.path().to_path_buf());
         let out = tool
             .call_impl(MemoryTraceArgs {
                 target: "preference/nothing".into(),
@@ -555,6 +568,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let backend: MemoryBackend =
             Arc::new(SqliteMemoryBackend::new(&dir.path().join("m.db")).unwrap());
+        let raw_store = Arc::new(MarkdownSessionStore::new(dir.path()).await.unwrap());
         let note_dir = dir.path().join("main").join("preference");
         tokio::fs::create_dir_all(&note_dir).await.unwrap();
         // Built line-by-line on purpose: `extract_facts` treats an indented
@@ -575,7 +589,7 @@ mod tests {
             .await
             .unwrap();
 
-        let tool = MemoryTraceTool::new(backend, "main", dir.path().to_path_buf());
+        let tool = MemoryTraceTool::new(backend, raw_store, "main", dir.path().to_path_buf());
         let out = tool
             .call_impl(MemoryTraceArgs {
                 target: "preference/typescript".into(),
@@ -613,7 +627,8 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let backend: MemoryBackend =
             Arc::new(SqliteMemoryBackend::new(&dir.path().join("m.db")).unwrap());
-        let tool = MemoryTraceTool::new(backend, "main", dir.path().to_path_buf());
+        let raw_store = Arc::new(MarkdownSessionStore::new(dir.path()).await.unwrap());
+        let tool = MemoryTraceTool::new(backend, raw_store, "main", dir.path().to_path_buf());
 
         for (target, kind) in [
             ("preference/missing", TraceKind::Note),
@@ -640,7 +655,8 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let backend: MemoryBackend =
             Arc::new(SqliteMemoryBackend::new(&dir.path().join("m.db")).unwrap());
-        let tool = MemoryTraceTool::new(backend, "main", dir.path().to_path_buf());
+        let raw_store = Arc::new(MarkdownSessionStore::new(dir.path()).await.unwrap());
+        let tool = MemoryTraceTool::new(backend, raw_store, "main", dir.path().to_path_buf());
         let out = tool
             .call_impl(MemoryTraceArgs {
                 target: "../../..".into(),

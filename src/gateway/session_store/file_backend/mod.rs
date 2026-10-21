@@ -2518,8 +2518,8 @@ mod reap_tests {
 #[cfg(test)]
 mod emit_tests {
     use super::*;
+    use crate::memory::store::markdown::MarkdownSessionStore;
     use crate::memory::store::raw_memory::{RawMemorySource, RawMemoryStore};
-    use crate::memory::store::sqlite::SqliteMemoryBackend;
 
     fn msg(role: &str, content: &str) -> MessageRecord {
         MessageRecord {
@@ -2576,8 +2576,12 @@ mod emit_tests {
 
     #[tokio::test]
     async fn close_session_emits_session_end_raw_when_writer_present() {
-        let raw: Arc<dyn RawMemoryStore> =
-            Arc::new(SqliteMemoryBackend::in_memory().expect("mem backend"));
+        let raw_dir = tempfile::tempdir().expect("raw tempdir");
+        let raw: Arc<dyn RawMemoryStore> = Arc::new(
+            MarkdownSessionStore::new(raw_dir.path())
+                .await
+                .expect("Markdown raw store"),
+        );
         let (store, _dir) = temp_store(Some(raw.clone()));
         let key = SessionKey::Main {
             agent_id: "main".into(),
@@ -2627,8 +2631,12 @@ mod emit_tests {
 
     #[tokio::test]
     async fn already_stopped_session_does_not_double_emit() {
-        let raw: Arc<dyn RawMemoryStore> =
-            Arc::new(SqliteMemoryBackend::in_memory().expect("mem backend"));
+        let raw_dir = tempfile::tempdir().expect("raw tempdir");
+        let raw: Arc<dyn RawMemoryStore> = Arc::new(
+            MarkdownSessionStore::new(raw_dir.path())
+                .await
+                .expect("Markdown raw store"),
+        );
         let (store, _dir) = temp_store(Some(raw.clone()));
         let key = SessionKey::Main {
             agent_id: "main".into(),

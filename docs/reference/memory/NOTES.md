@@ -369,7 +369,7 @@ degrade gracefully to the legacy create-everything behaviour (P7).
 
 ### 6.2 Compression Scheduler
 
-`CompressionScheduler` in `src/memory/compression/scheduler.rs` is now just a turn counter: it tracks `pending_turns: AtomicU32`, and `should_trigger_compression()` returns `CompressionTrigger::TurnThreshold(n)` when `pending_turns >= turn_threshold` (default 20, `[policies.memory.compression]`) or `None` otherwise. The earlier `IdleTimeout` / `SessionEnd` / `ManualRequest` / `BackgroundSchedule` variants and the idle timer were removed — none had a live production path (the manual / session-end / background flows call `CompressionService::compress()` directly, bypassing the scheduler). The live triggers are: turn threshold, the hourly background tick (`background_interval_seconds = 3600`), the session-end flush, the correction flush (`flag_user_correction`), and the `memory.compress` RPC. When a run fires, `CompressionService` (`src/memory/compression/service.rs`) drains a batch from `raw_memories`, splits it per source, and routes each group through `CompoundIngestor::ingest_batch`, which plans and dispatches `Create` / `Append` / `Update` note writes via `NoteIndexer` (see `RAW_MEMORY.md` §7.1).
+`CompressionScheduler` in `src/memory/compression/scheduler.rs` is now just a turn counter: it tracks `pending_turns: AtomicU32`, and `should_trigger_compression()` returns `CompressionTrigger::TurnThreshold(n)` when `pending_turns >= turn_threshold` (default 20, `[policies.memory.compression]`) or `None` otherwise. The earlier `IdleTimeout` / `SessionEnd` / `ManualRequest` / `BackgroundSchedule` variants and the idle timer were removed — none had a live production path (the manual / session-end / background flows call `CompressionService::compress()` directly, bypassing the scheduler). The live triggers are: turn threshold, the hourly background tick (`background_interval_seconds = 3600`), the session-end flush, the correction flush (`flag_user_correction`), and the `memory.compress` RPC. When a run fires, `CompressionService` (`src/memory/compression/service.rs`) drains pending Markdown-backed raw records through `RawMemoryStore`, splits them per source, and routes each group through `CompoundIngestor::ingest_batch`, which plans and dispatches `Create` / `Append` / `Update` note writes via `NoteIndexer` (see `RAW_MEMORY.md` §7.1).
 
 ### 6.3 Cold-Start reconcile — one corpus, and all of them
 
@@ -783,6 +783,6 @@ Both halves are now closed, and each is owned by the side that caused it:
 
 ## See Also
 
-- [Raw Memory (L0)](RAW_MEMORY.md) §7.1 — `CompressionService` reads unprocessed `raw_memories` and writes notes through the §6 pipeline.
+- [Raw Memory (L0)](RAW_MEMORY.md) §7.1 — `CompressionService` reads pending Markdown-backed raw records and writes notes through the §6 pipeline.
 - [Dream Daemon](DREAM_DAEMON.md) — the dream pipeline's subject is the note corpus: drift detection, decay, and lint stages all operate on the markdown + index layer described here.
 - [Retrieval](RETRIEVAL.md) §1 — how notes are queried (FTS, vector, hybrid, graph) by the retrieval pipeline.

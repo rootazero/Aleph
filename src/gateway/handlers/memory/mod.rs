@@ -7,6 +7,7 @@ use serde_json::json;
 
 use super::super::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR};
 use super::parse_params;
+use crate::memory::store::raw_memory::RawMemoryStore;
 use crate::memory::store::MemoryBackend;
 use crate::sync_primitives::Arc;
 
@@ -14,7 +15,7 @@ use crate::sync_primitives::Arc;
 ///
 /// One raw conversation record, one body. It used to advertise `user_input` /
 /// `ai_output` "so the panel can style the two halves independently" — but
-/// `raw_memories` stores a single `content` column, so `ai_output` went out as
+/// `RawMemory` stores a single `content` field, so `ai_output` went out as
 /// `""` on every row this handler ever returned, and `window_title` likewise.
 /// The Panel's two-weight Q/A card was styling a distinction the store cannot
 /// make; both fields are gone rather than kept as permanently-empty strings a
@@ -77,16 +78,19 @@ impl Default for SearchParams {
 /// duplicating `graph.search`, which calls the same `search_notes_fts`. The
 /// panel wired that branch into its raw-memory table, so searching showed note
 /// filenames dressed as conversation records and the row delete button targeted
-/// `delete_raw_memory` with a note path (always `Ok(false)` → error → swallowed).
+/// raw deletion with a note path (always `Ok(false)` → error → swallowed).
 /// Note search belongs to `graph.search`; keep it there.
 ///
 /// The response carries `total`, the row count under the *same* `(agent_id,
-/// query)` filter as `memories` (via `MemoryBackend::count_raw_memories`),
+/// query)` filter as `memories` (via `RawMemoryStore::raw_dashboard_count`),
 /// not the whole-store total. The panel's pager sizes itself from this field;
 /// a store-wide total would leave "next" enabled past the last match once a
 /// query narrows the list — the B4 phantom-page bug, resurrected for the
 /// filtered case.
-pub async fn handle_search(request: JsonRpcRequest, db: MemoryBackend) -> JsonRpcResponse {
+pub async fn handle_search(
+    request: JsonRpcRequest,
+    raw_store: Arc<dyn RawMemoryStore>,
+) -> JsonRpcResponse {
     let params: SearchParams = request
         .params
         .as_ref()
@@ -122,12 +126,15 @@ pub async fn handle_search(request: JsonRpcRequest, db: MemoryBackend) -> JsonRp
     // See `memory_scope`'s module doc.
     let partitions = super::memory_scope::read_partitions(agent_id);
 
-    let memories = match db.get_raw_memories_dashboard(
-        Some(&partitions),
-        query,
-        params.limit as usize,
-        params.offset as usize,
-    ) {
+    let memories = match raw_store
+        .raw_dashboard(
+            Some(&partitions),
+            query,
+            params.limit as usize,
+            params.offset as usize,
+        )
+        .await
+    {
         Ok(memories) => memories,
         Err(e) => {
             return JsonRpcResponse::error(
@@ -142,7 +149,10 @@ pub async fn handle_search(request: JsonRpcRequest, db: MemoryBackend) -> JsonRp
     // that filtered set — not the whole store. A pager sized to the store
     // total would keep "next" enabled past the last match (B4 phantom-page,
     // resurrected for the filtered case).
-    let total = match db.count_raw_memories(Some(&partitions), query) {
+    let total = match raw_store
+        .raw_dashboard_count(Some(&partitions), query)
+        .await
+    {
         Ok(total) => total,
         Err(e) => {
             return JsonRpcResponse::error(
@@ -179,20 +189,23 @@ pub struct DeleteParams {
 
 /// Delete a single raw memory entry (Layer 1 conversation record).
 ///
-/// Raw memories live in the self-contained `raw_memories` table with no
-/// vector/foreign-key linkage, so a single-row delete is safe. (Layer-2
+/// Raw bodies live in Markdown files; the raw store deletes the file and
+/// updates its derived metadata index. (Layer-2
 /// knowledge notes are a separate model curated via the `note_manage` tool and
 /// are not affected by this handler.)
 ///
 /// P1 partition isolation (spec §11-1c): this endpoint addresses a row by
 /// bare `id` with no `agent_id` — unlike `memory.search`/`memory.listFacts`,
 /// there is no caller-supplied partition to default or check directly. The
-/// row's OWNING partition is resolved first (`raw_memory_agent_id`) and run
+/// row's OWNING partition is resolved first (`raw_owner`) and run
 /// through `visibility::partition_visible` BEFORE the delete executes: an id
 /// that doesn't exist and an id whose partition is invisible to the caller
 /// get the exact same response (no oracle), and a denied delete never
 /// touches the row.
-pub async fn handle_delete(request: JsonRpcRequest, db: MemoryBackend) -> JsonRpcResponse {
+pub async fn handle_delete(
+    request: JsonRpcRequest,
+    raw_store: Arc<dyn RawMemoryStore>,
+) -> JsonRpcResponse {
     let params: DeleteParams = match parse_params(&request) {
         Ok(p) => p,
         Err(e) => return e,
@@ -205,8 +218,8 @@ pub async fn handle_delete(request: JsonRpcRequest, db: MemoryBackend) -> JsonRp
             format!("No raw memory found with id '{}'", params.id),
         )
     };
-    match db.raw_memory_agent_id(&params.id) {
-        Ok(Some(owner)) if crate::gateway::visibility::partition_visible(&owner) => {}
+    let owner = match raw_store.raw_owner(&params.id).await {
+        Ok(Some(owner)) if crate::gateway::visibility::partition_visible(&owner) => owner,
         Ok(_) => return not_found(),
         Err(e) => {
             return JsonRpcResponse::error(
@@ -215,9 +228,9 @@ pub async fn handle_delete(request: JsonRpcRequest, db: MemoryBackend) -> JsonRp
                 format!("Delete raw memory failed: {e}"),
             )
         }
-    }
+    };
 
-    match db.delete_raw_memory(&params.id) {
+    match raw_store.remove_raw(&params.id, &owner).await {
         Ok(true) => JsonRpcResponse::success(request.id, json!({ "ok": true })),
         Ok(false) => JsonRpcResponse::error(
             request.id,
@@ -374,7 +387,11 @@ pub struct StatsParams {
 /// existence oracle). Omitting `agent_id` scopes a member to the org
 /// partition rather than falling through to the whole-store rollup — see
 /// [`StatsParams::agent_id`].
-pub async fn handle_stats(request: JsonRpcRequest, db: MemoryBackend) -> JsonRpcResponse {
+pub async fn handle_stats(
+    request: JsonRpcRequest,
+    raw_store: Arc<dyn RawMemoryStore>,
+    db: MemoryBackend,
+) -> JsonRpcResponse {
     use crate::memory::notes::store::NoteStore;
 
     let params: StatsParams = request
@@ -413,7 +430,16 @@ pub async fn handle_stats(request: JsonRpcRequest, db: MemoryBackend) -> JsonRpc
         agent.as_deref().map(super::memory_scope::read_partitions);
     let partitions = partitions.as_deref();
 
-    let raw_count = db.count_raw_memories(partitions, None).unwrap_or(0);
+    let raw_count = match raw_store.raw_dashboard_count(partitions, None).await {
+        Ok(count) => count,
+        Err(e) => {
+            return JsonRpcResponse::error(
+                request.id,
+                INTERNAL_ERROR,
+                format!("Count raw memories failed: {e}"),
+            )
+        }
+    };
     let note_count = match partitions {
         Some(ids) => db.count_notes_multi(ids).await.unwrap_or(0),
         None => db.count_all_notes().await.unwrap_or(0),
@@ -494,9 +520,10 @@ pub async fn handle_compress(
 /// with no corrections produces.
 pub async fn handle_list_corrections(
     request: JsonRpcRequest,
+    raw_store: Arc<dyn RawMemoryStore>,
     db: MemoryBackend,
 ) -> JsonRpcResponse {
-    use crate::memory::store::raw_memory::{RawMemorySource, RawMemoryStore};
+    use crate::memory::store::raw_memory::RawMemorySource;
 
     #[derive(serde::Deserialize, Default)]
     struct Params {
@@ -559,7 +586,7 @@ pub async fn handle_list_corrections(
                 None
             })
             .unwrap_or(0);
-        match db
+        match raw_store
             .get_raw_by_path_prefix("aleph://correction/", partition, limit)
             .await
         {
@@ -638,6 +665,7 @@ pub async fn handle_list_corrections(
 /// scope to compose then either, so the bare id is the correct answer.
 pub async fn handle_trace(
     request: JsonRpcRequest,
+    raw_store: Arc<dyn RawMemoryStore>,
     db: MemoryBackend,
     mcp: Option<crate::sync_primitives::Arc<crate::thinker::MemoryContextProvider>>,
 ) -> JsonRpcResponse {
@@ -699,7 +727,7 @@ pub async fn handle_trace(
     // caller never sent.
     let partition = mcp.map_or_else(|| agent.clone(), |m| m.resolve_storage_id(&agent));
 
-    let tool = MemoryTraceTool::new(db, partition, note_memory_dir);
+    let tool = MemoryTraceTool::new(db, raw_store, partition, note_memory_dir);
     match tool
         .call_impl(MemoryTraceArgs {
             target: params.target,
@@ -889,6 +917,15 @@ pub async fn handle_reembed_cancel(
 }
 
 #[cfg(test)]
+async fn raw_test_store() -> (tempfile::TempDir, Arc<dyn RawMemoryStore>) {
+    let dir = tempfile::tempdir().unwrap();
+    let store = crate::memory::store::markdown::MarkdownSessionStore::new(dir.path())
+        .await
+        .unwrap();
+    (dir, Arc::new(store))
+}
+
+#[cfg(test)]
 mod list_corrections_tests {
     use super::*;
     use crate::memory::store::raw_memory::{RawMemory, RawMemorySource, RawMemoryStore};
@@ -897,7 +934,7 @@ mod list_corrections_tests {
     use serde_json::json;
 
     async fn seed(
-        db: &SqliteMemoryBackend,
+        db: &dyn RawMemoryStore,
         id_suffix: &str,
         created_at: i64,
         processed: bool,
@@ -920,11 +957,12 @@ mod list_corrections_tests {
     #[tokio::test]
     async fn maps_status_from_feedback_distill_watermark() {
         let backend = SqliteMemoryBackend::in_memory().unwrap();
+        let (_raw_dir, raw_store) = raw_test_store().await;
         // c1 sits at/below the watermark → distilled; c2 sits above → pending
         // even though CompressionService already flipped its `is_processed`
         // flag (the flag that used to be misread as "distilled").
-        seed(&backend, "c1", 1000, true, "high").await;
-        seed(&backend, "c2", 2000, true, "low").await;
+        seed(raw_store.as_ref(), "c1", 1000, true, "high").await;
+        seed(raw_store.as_ref(), "c2", 2000, true, "low").await;
         backend
             .set_dream_watermark("feedback_distill", "main", 1500)
             .unwrap();
@@ -935,7 +973,7 @@ mod list_corrections_tests {
             Some(json!({ "agent_id": "main" })),
             json!(1),
         );
-        let resp = handle_list_corrections(req, db).await;
+        let resp = handle_list_corrections(req, raw_store, db).await;
         assert!(resp.is_success(), "{:?}", resp.error);
         let items = resp.result.unwrap()["corrections"]
             .as_array()
@@ -961,10 +999,11 @@ mod list_corrections_tests {
     #[tokio::test]
     async fn no_watermark_means_nothing_distilled() {
         let backend = SqliteMemoryBackend::in_memory().unwrap();
+        let (_raw_dir, raw_store) = raw_test_store().await;
         // is_processed=true used to render this row "distilled" instantly
         // (sedimentation kicks within seconds); with no FeedbackDistill
         // watermark committed yet it must report pending.
-        seed(&backend, "c1", 1000, true, "high").await;
+        seed(raw_store.as_ref(), "c1", 1000, true, "high").await;
         let db: crate::memory::store::MemoryBackend = Arc::new(backend);
 
         let req = JsonRpcRequest::with_id(
@@ -972,7 +1011,7 @@ mod list_corrections_tests {
             Some(json!({ "agent_id": "main" })),
             json!(1),
         );
-        let resp = handle_list_corrections(req, db).await;
+        let resp = handle_list_corrections(req, raw_store, db).await;
         let items = resp.result.unwrap()["corrections"]
             .as_array()
             .unwrap()
@@ -984,8 +1023,9 @@ mod list_corrections_tests {
     #[tokio::test]
     async fn include_distilled_false_filters_below_watermark() {
         let backend = SqliteMemoryBackend::in_memory().unwrap();
-        seed(&backend, "c1", 1000, true, "high").await;
-        seed(&backend, "c2", 2000, false, "low").await;
+        let (_raw_dir, raw_store) = raw_test_store().await;
+        seed(raw_store.as_ref(), "c1", 1000, true, "high").await;
+        seed(raw_store.as_ref(), "c2", 2000, false, "low").await;
         backend
             .set_dream_watermark("feedback_distill", "main", 1500)
             .unwrap();
@@ -996,7 +1036,7 @@ mod list_corrections_tests {
             Some(json!({ "agent_id": "main", "include_distilled": false })),
             json!(1),
         );
-        let resp = handle_list_corrections(req, db).await;
+        let resp = handle_list_corrections(req, raw_store, db).await;
         let items = resp.result.unwrap()["corrections"]
             .as_array()
             .unwrap()
@@ -1106,7 +1146,7 @@ mod trace_tests {
     use super::*;
     use crate::memory::notes::store::NoteStore;
     use crate::memory::notes::KnowledgeNote;
-    use crate::memory::store::raw_memory::{RawMemory, RawMemorySource, RawMemoryStore};
+    use crate::memory::store::raw_memory::{RawMemory, RawMemorySource};
     use crate::memory::store::sqlite::SqliteMemoryBackend;
     use crate::sync_primitives::Arc;
     use serde_json::json;
@@ -1116,6 +1156,7 @@ mod trace_tests {
         let dir = tempfile::tempdir().unwrap();
         let db: crate::memory::store::MemoryBackend =
             Arc::new(SqliteMemoryBackend::new(&dir.path().join("m.db")).unwrap());
+        let (_raw_dir, raw_store) = raw_test_store().await;
 
         // Seed a note that cites one raw memory (mirrors memory_trace.rs unit test).
         let note = KnowledgeNote {
@@ -1131,14 +1172,14 @@ mod trace_tests {
         let mut raw = RawMemory::new("user: I run daily".into(), RawMemorySource::Transcript);
         raw.id = "raw-ev1".into();
         raw.agent_id = "main".into();
-        db.insert_raw_memory(&raw).await.unwrap();
+        raw_store.insert_raw_memory(&raw).await.unwrap();
 
         let req = JsonRpcRequest::with_id(
             "memory.trace",
             Some(json!({ "agent_id": "main", "target": "habits/exercise", "kind": "note" })),
             json!(1),
         );
-        let resp = handle_trace(req, db, None).await;
+        let resp = handle_trace(req, raw_store.clone(), db, None).await;
         assert!(resp.is_success(), "{:?}", resp.error);
         let result = resp.result.unwrap();
         assert!(
@@ -1173,6 +1214,7 @@ mod trace_tests {
         let dir = tempfile::tempdir().unwrap();
         let db: crate::memory::store::MemoryBackend =
             Arc::new(SqliteMemoryBackend::new(&dir.path().join("m.db")).unwrap());
+        let (_raw_dir, raw_store) = raw_test_store().await;
 
         db.record_write_decision("main", "add", MemoryWriteReason::OverBudget, "likes tea")
             .unwrap();
@@ -1195,6 +1237,7 @@ mod trace_tests {
                 })),
                 json!(1),
             ),
+            raw_store,
             db,
             None,
         )
@@ -1235,6 +1278,7 @@ mod trace_tests {
         let dir = tempfile::tempdir().unwrap();
         let db: crate::memory::store::MemoryBackend =
             Arc::new(SqliteMemoryBackend::new(&dir.path().join("m.db")).unwrap());
+        let (_raw_dir, raw_store) = raw_test_store().await;
 
         // One row in each partition, so "it found something" cannot pass by
         // reading the wrong one.
@@ -1253,7 +1297,11 @@ mod trace_tests {
         )
         .unwrap();
 
-        let mcp = Arc::new(crate::thinker::MemoryContextProvider::new(db.clone(), None));
+        let mcp = Arc::new(crate::thinker::MemoryContextProvider::new(
+            db.clone(),
+            raw_store.clone(),
+            None,
+        ));
         let req = JsonRpcRequest::with_id(
             "memory.trace",
             Some(json!({
@@ -1267,7 +1315,7 @@ mod trace_tests {
 
         let resp = crate::scope::with_scope(
             Some(crate::scope::ScopeAttribution::personal("u-alice")),
-            handle_trace(req, db, Some(mcp)),
+            handle_trace(req, raw_store.clone(), db, Some(mcp)),
         )
         .await;
 
@@ -1290,6 +1338,7 @@ mod trace_tests {
         let dir = tempfile::tempdir().unwrap();
         let db: crate::memory::store::MemoryBackend =
             Arc::new(SqliteMemoryBackend::new(&dir.path().join("m.db")).unwrap());
+        let (_raw_dir, raw_store) = raw_test_store().await;
 
         let note = KnowledgeNote {
             title: "alice-secret".into(),
@@ -1304,7 +1353,7 @@ mod trace_tests {
         let mut raw = RawMemory::new("user: I run daily".into(), RawMemorySource::Transcript);
         raw.id = "raw-ev1".into();
         raw.agent_id = "main__u-alice".into();
-        db.insert_raw_memory(&raw).await.unwrap();
+        raw_store.insert_raw_memory(&raw).await.unwrap();
 
         let req = JsonRpcRequest::with_id(
             "memory.trace",
@@ -1315,7 +1364,7 @@ mod trace_tests {
         );
         let resp = CALLER_USER
             .scope(Some("u-bob".to_string()), async {
-                handle_trace(req, db, None).await
+                handle_trace(req, raw_store.clone(), db, None).await
             })
             .await;
         assert!(resp.is_success(), "success, not an error: {:?}", resp.error);
@@ -1329,19 +1378,16 @@ mod trace_tests {
 mod delete_tests {
     use super::*;
     use crate::memory::store::raw_memory::{RawMemory, RawMemorySource, RawMemoryStore};
-    use crate::memory::store::sqlite::SqliteMemoryBackend;
-    use crate::sync_primitives::Arc;
 
-    fn db() -> (tempfile::TempDir, MemoryBackend) {
-        let (scratch, path) = crate::utils::scratch::scratch_root();
-        (scratch, Arc::new(SqliteMemoryBackend::new(&path).unwrap()))
+    async fn db() -> (tempfile::TempDir, Arc<dyn RawMemoryStore>) {
+        raw_test_store().await
     }
 
     fn req(id: &str) -> JsonRpcRequest {
         JsonRpcRequest::with_id("memory.delete", Some(json!({ "id": id })), json!(1))
     }
 
-    async fn seed(db: &MemoryBackend, id: &str, agent_id: &str) {
+    async fn seed(db: &Arc<dyn RawMemoryStore>, id: &str, agent_id: &str) {
         let mut raw = RawMemory::new("content".to_string(), RawMemorySource::Transcript);
         raw.id = id.to_string();
         raw.agent_id = agent_id.to_string();
@@ -1350,7 +1396,7 @@ mod delete_tests {
 
     #[tokio::test]
     async fn owner_can_delete_their_own_row() {
-        let (_scratch, db) = db();
+        let (_scratch, db) = db().await;
         seed(&db, "r1", "main__u-alice").await;
 
         let resp = crate::gateway::caller_identity::CALLER_USER
@@ -1374,7 +1420,7 @@ mod delete_tests {
     /// oracle), and the row is left completely intact.
     #[tokio::test]
     async fn foreign_partition_delete_is_denied_row_intact() {
-        let (_scratch, db) = db();
+        let (_scratch, db) = db().await;
         seed(&db, "r1", "main__u-alice").await;
 
         let resp = crate::gateway::caller_identity::CALLER_USER
@@ -1388,7 +1434,7 @@ mod delete_tests {
         // against the SAME id string on a fresh, empty store, so any
         // difference can only come from the denial itself, not from the id
         // appearing in the message.
-        let (_scratch2, empty_db) = self::db();
+        let (_scratch2, empty_db) = self::db().await;
         let unknown_resp = crate::gateway::caller_identity::CALLER_USER
             .scope(Some("u-bob".to_string()), async {
                 handle_delete(req("r1"), empty_db).await
@@ -1415,7 +1461,7 @@ mod delete_tests {
 
     #[tokio::test]
     async fn unknown_id_reports_not_found() {
-        let (_scratch, db) = db();
+        let (_scratch, db) = db().await;
         let resp = handle_delete(req("nope"), db).await;
         assert!(resp.error.is_some());
     }
@@ -1430,9 +1476,11 @@ mod search_tests {
     use crate::memory::store::sqlite::SqliteMemoryBackend;
     use crate::sync_primitives::Arc;
 
-    fn db() -> (tempfile::TempDir, MemoryBackend) {
-        let (scratch, path) = crate::utils::scratch::scratch_root();
-        (scratch, Arc::new(SqliteMemoryBackend::new(&path).unwrap()))
+    async fn db() -> (tempfile::TempDir, MemoryBackend, Arc<dyn RawMemoryStore>) {
+        let (scratch, raw_store) = raw_test_store().await;
+        let db: MemoryBackend =
+            Arc::new(SqliteMemoryBackend::new(&scratch.path().join("notes.db")).unwrap());
+        (scratch, db, raw_store)
     }
 
     fn req(params: serde_json::Value) -> JsonRpcRequest {
@@ -1444,7 +1492,7 @@ mod search_tests {
         }
     }
 
-    async fn seed(db: &MemoryBackend) {
+    async fn seed(db: &MemoryBackend, raw_store: &Arc<dyn RawMemoryStore>) {
         // One raw conversation row…
         let raw = RawMemory {
             id: "raw-1".to_string(),
@@ -1457,7 +1505,7 @@ mod search_tests {
             is_processed: false,
             created_at: 1_700_000_000,
         };
-        db.insert_raw_memory(&raw).await.unwrap();
+        raw_store.insert_raw_memory(&raw).await.unwrap();
 
         // …and one note whose body ALSO contains the word "smoke", so an
         // accidental note-FTS branch would be visible in the assertion.
@@ -1479,8 +1527,8 @@ mod search_tests {
     /// filenames and its delete button targeted a table that does not hold them.
     #[tokio::test]
     async fn query_returns_raw_rows_never_notes() {
-        let (_scratch, db) = db();
-        seed(&db).await;
+        let (_scratch, db, raw_store) = db().await;
+        seed(&db, &raw_store).await;
 
         let resp = handle_search(
             req(serde_json::json!({
@@ -1488,7 +1536,7 @@ mod search_tests {
                 "query": "smoke",
                 "limit": 20
             })),
-            db,
+            raw_store,
         )
         .await;
 
@@ -1510,8 +1558,8 @@ mod search_tests {
 
     #[tokio::test]
     async fn empty_query_browses_all_raw_rows() {
-        let (_scratch, db) = db();
-        seed(&db).await;
+        let (_scratch, db, raw_store) = db().await;
+        seed(&db, &raw_store).await;
 
         let resp = handle_search(
             req(serde_json::json!({
@@ -1519,7 +1567,7 @@ mod search_tests {
                 "query": "",
                 "limit": 20
             })),
-            db,
+            raw_store,
         )
         .await;
 
@@ -1534,8 +1582,8 @@ mod search_tests {
 
     #[tokio::test]
     async fn query_with_no_match_returns_empty_not_error() {
-        let (_scratch, db) = db();
-        seed(&db).await;
+        let (_scratch, db, raw_store) = db().await;
+        seed(&db, &raw_store).await;
 
         let resp = handle_search(
             req(serde_json::json!({
@@ -1543,7 +1591,7 @@ mod search_tests {
                 "query": "zzz-nothing-matches",
                 "limit": 20
             })),
-            db,
+            raw_store,
         )
         .await;
 
@@ -1555,7 +1603,7 @@ mod search_tests {
     }
 
     /// B4 phantom-page regression, filtered case: `total` must be the
-    /// FILTERED row count (`count_raw_memories(agent, query)`), not the
+    /// FILTERED row count (`raw_dashboard_count(agent, query)`), not the
     /// whole-store count and not the page size. Seed count (5) and match
     /// count (2) are deliberately different numbers so a store-total
     /// implementation cannot pass by coincidence, and the page is capped
@@ -1563,7 +1611,7 @@ mod search_tests {
     /// either.
     #[tokio::test]
     async fn total_reflects_filtered_count_not_store_count() {
-        let (_scratch, db) = db();
+        let (_scratch, _db, raw_store) = db().await;
 
         for (i, content) in [
             "apple pie recipe",
@@ -1586,7 +1634,7 @@ mod search_tests {
                 is_processed: false,
                 created_at: 1_700_000_000 + i as i64,
             };
-            db.insert_raw_memory(&raw).await.unwrap();
+            raw_store.insert_raw_memory(&raw).await.unwrap();
         }
 
         let resp = handle_search(
@@ -1595,7 +1643,7 @@ mod search_tests {
                 "query": "apple",
                 "limit": 1
             })),
-            db.clone(),
+            raw_store.clone(),
         )
         .await;
 
@@ -1618,7 +1666,7 @@ mod search_tests {
                 "query": "",
                 "limit": 20
             })),
-            db,
+            raw_store,
         )
         .await;
         assert_eq!(resp.result.expect("success")["total"], 5);
@@ -1631,7 +1679,7 @@ mod search_tests {
     async fn foreign_partition_reads_empty_not_the_owners_rows() {
         use crate::gateway::caller_identity::CALLER_USER;
 
-        let (_scratch, db) = db();
+        let (_scratch, _db, raw_store) = db().await;
         let raw = RawMemory {
             id: "alice-secret".to_string(),
             content: "alice's private note".to_string(),
@@ -1643,14 +1691,14 @@ mod search_tests {
             is_processed: false,
             created_at: 1_700_000_000,
         };
-        db.insert_raw_memory(&raw).await.unwrap();
+        raw_store.insert_raw_memory(&raw).await.unwrap();
 
         // Sanity: the row is really there for its owner.
         let owner_resp = CALLER_USER
             .scope(Some("u-alice".to_string()), async {
                 handle_search(
                     req(serde_json::json!({ "agent_id": "main__u-alice" })),
-                    db.clone(),
+                    raw_store.clone(),
                 )
                 .await
             })
@@ -1667,7 +1715,11 @@ mod search_tests {
         // Bob addresses the same partition by name — invisible.
         let bob_resp = CALLER_USER
             .scope(Some("u-bob".to_string()), async {
-                handle_search(req(serde_json::json!({ "agent_id": "main__u-alice" })), db).await
+                handle_search(
+                    req(serde_json::json!({ "agent_id": "main__u-alice" })),
+                    raw_store,
+                )
+                .await
             })
             .await;
         let result = bob_resp.result.expect("success, not an error");
@@ -1685,7 +1737,7 @@ mod search_tests {
     async fn list_corrections_hides_a_foreign_partition() {
         use crate::gateway::caller_identity::CALLER_USER;
 
-        let (_scratch, db) = db();
+        let (_scratch, db, raw_store) = db().await;
         let correction = RawMemory {
             id: "alice-correction".to_string(),
             content: "no, my address is 12 Privacy Lane".to_string(),
@@ -1700,15 +1752,17 @@ mod search_tests {
             is_processed: false,
             created_at: 1_700_000_000,
         };
-        db.insert_raw_memory(&correction).await.unwrap();
+        raw_store.insert_raw_memory(&correction).await.unwrap();
 
         let ask = |caller: &'static str| {
             let db = db.clone();
+            let raw_store = raw_store.clone();
             async move {
                 CALLER_USER
                     .scope(Some(caller.to_string()), async {
                         handle_list_corrections(
                             req(serde_json::json!({ "agent_id": "main__u-alice" })),
+                            raw_store.clone(),
                             db,
                         )
                         .await
@@ -1749,9 +1803,11 @@ mod stats_tests {
     use crate::memory::store::sqlite::SqliteMemoryBackend;
     use crate::sync_primitives::Arc;
 
-    fn db() -> (tempfile::TempDir, MemoryBackend) {
-        let (scratch, path) = crate::utils::scratch::scratch_root();
-        (scratch, Arc::new(SqliteMemoryBackend::new(&path).unwrap()))
+    async fn db() -> (tempfile::TempDir, MemoryBackend, Arc<dyn RawMemoryStore>) {
+        let (scratch, raw_store) = raw_test_store().await;
+        let db: MemoryBackend =
+            Arc::new(SqliteMemoryBackend::new(&scratch.path().join("notes.db")).unwrap());
+        (scratch, db, raw_store)
     }
 
     fn req(params: Option<serde_json::Value>) -> JsonRpcRequest {
@@ -1790,13 +1846,22 @@ mod stats_tests {
     }
 
     /// Two agents, asymmetric data. Scoped stats must describe ONE of them.
-    async fn seed(db: &MemoryBackend) {
+    async fn seed(db: &MemoryBackend, raw_store: &Arc<dyn RawMemoryStore>) {
         db.index_note(&note("a1"), "alpha", "facts").await.unwrap();
         db.index_note(&note("a2"), "alpha", "facts").await.unwrap();
         db.index_note(&note("b1"), "beta", "facts").await.unwrap();
-        db.insert_raw_memory(&raw("r1", "alpha")).await.unwrap();
-        db.insert_raw_memory(&raw("r2", "alpha")).await.unwrap();
-        db.insert_raw_memory(&raw("r3", "beta")).await.unwrap();
+        raw_store
+            .insert_raw_memory(&raw("r1", "alpha"))
+            .await
+            .unwrap();
+        raw_store
+            .insert_raw_memory(&raw("r2", "alpha"))
+            .await
+            .unwrap();
+        raw_store
+            .insert_raw_memory(&raw("r3", "beta"))
+            .await
+            .unwrap();
     }
 
     /// The regression: the stat cards used to show a cross-agent note count and
@@ -1804,10 +1869,15 @@ mod stats_tests {
     /// switching agents left the numbers describing a different population.
     #[tokio::test]
     async fn scoped_stats_describe_only_that_agent() {
-        let (_scratch, db) = db();
-        seed(&db).await;
+        let (_scratch, db, raw_store) = db().await;
+        seed(&db, &raw_store).await;
 
-        let r = handle_stats(req(Some(serde_json::json!({ "agent_id": "alpha" }))), db).await;
+        let r = handle_stats(
+            req(Some(serde_json::json!({ "agent_id": "alpha" }))),
+            raw_store.clone(),
+            db,
+        )
+        .await;
         let v = r.result.expect("success");
 
         assert_eq!(v["scope"], "agent");
@@ -1817,10 +1887,10 @@ mod stats_tests {
 
     #[tokio::test]
     async fn unscoped_stats_are_global_and_disclaim_graph_counts() {
-        let (_scratch, db) = db();
-        seed(&db).await;
+        let (_scratch, db, raw_store) = db().await;
+        seed(&db, &raw_store).await;
 
-        let r = handle_stats(req(None), db).await;
+        let r = handle_stats(req(None), raw_store.clone(), db).await;
         let v = r.result.expect("success");
 
         assert_eq!(v["scope"], "global");
@@ -1835,10 +1905,15 @@ mod stats_tests {
 
     #[tokio::test]
     async fn scoped_stats_answer_graph_counts() {
-        let (_scratch, db) = db();
-        seed(&db).await;
+        let (_scratch, db, raw_store) = db().await;
+        seed(&db, &raw_store).await;
 
-        let r = handle_stats(req(Some(serde_json::json!({ "agent_id": "alpha" }))), db).await;
+        let r = handle_stats(
+            req(Some(serde_json::json!({ "agent_id": "alpha" }))),
+            raw_store.clone(),
+            db,
+        )
+        .await;
         let v = r.result.expect("success");
         assert_eq!(v["totalGraphNodes"], 2, "alpha's two notes are two nodes");
         assert!(v["totalGraphEdges"].is_i64());
@@ -1851,10 +1926,15 @@ mod stats_tests {
     /// into "unanswerable".
     #[tokio::test]
     async fn scoped_stats_zero_notes_reports_real_zero_not_null() {
-        let (_scratch, db) = db();
-        seed(&db).await; // "gamma" is never seeded — zero notes, not an error
+        let (_scratch, db, raw_store) = db().await;
+        seed(&db, &raw_store).await; // "gamma" is never seeded — zero notes, not an error
 
-        let r = handle_stats(req(Some(serde_json::json!({ "agent_id": "gamma" }))), db).await;
+        let r = handle_stats(
+            req(Some(serde_json::json!({ "agent_id": "gamma" }))),
+            raw_store.clone(),
+            db,
+        )
+        .await;
         let v = r.result.expect("success");
 
         assert_eq!(v["scope"], "agent");
@@ -1875,16 +1955,19 @@ mod stats_tests {
     async fn member_omitted_agent_id_gets_org_partition_not_whole_store() {
         use crate::gateway::caller_identity::CALLER_USER;
 
-        let (_scratch, db) = db();
-        seed(&db).await; // "alpha"/"beta" — neither is the org partition
-        db.insert_raw_memory(&raw("r-main", "main")).await.unwrap();
+        let (_scratch, db, raw_store) = db().await;
+        seed(&db, &raw_store).await; // "alpha"/"beta" — neither is the org partition
+        raw_store
+            .insert_raw_memory(&raw("r-main", "main"))
+            .await
+            .unwrap();
         db.index_note(&note("main-note"), "main", "facts")
             .await
             .unwrap();
 
         let r = CALLER_USER
             .scope(Some("u-alice".to_string()), async {
-                handle_stats(req(None), db).await
+                handle_stats(req(None), raw_store.clone(), db).await
             })
             .await;
         let v = r.result.expect("success");
@@ -1899,10 +1982,10 @@ mod stats_tests {
     /// pre-P1 whole-store rollup, unchanged.
     #[tokio::test]
     async fn unrestricted_omitted_agent_id_still_gets_whole_store() {
-        let (_scratch, db) = db();
-        seed(&db).await;
+        let (_scratch, db, raw_store) = db().await;
+        seed(&db, &raw_store).await;
 
-        let r = handle_stats(req(None), db).await;
+        let r = handle_stats(req(None), raw_store.clone(), db).await;
         let v = r.result.expect("success");
         assert_eq!(v["scope"], "global");
         assert_eq!(v["totalFacts"], 3, "whole store, all agents");
@@ -1915,11 +1998,13 @@ mod stats_tests {
     async fn foreign_explicit_partition_reads_as_empty_not_the_owners_counts() {
         use crate::gateway::caller_identity::CALLER_USER;
 
-        let (_scratch, db) = db();
-        db.insert_raw_memory(&raw("r1", "main__u-alice"))
+        let (_scratch, db, raw_store) = db().await;
+        raw_store
+            .insert_raw_memory(&raw("r1", "main__u-alice"))
             .await
             .unwrap();
-        db.insert_raw_memory(&raw("r2", "main__u-alice"))
+        raw_store
+            .insert_raw_memory(&raw("r2", "main__u-alice"))
             .await
             .unwrap();
 
@@ -1927,6 +2012,7 @@ mod stats_tests {
             .scope(Some("u-bob".to_string()), async {
                 handle_stats(
                     req(Some(serde_json::json!({ "agent_id": "main__u-alice" }))),
+                    raw_store.clone(),
                     db,
                 )
                 .await
@@ -2067,7 +2153,7 @@ mod partition_union_tests {
     use super::*;
     use crate::memory::notes::store::NoteStore;
     use crate::memory::notes::KnowledgeNote;
-    use crate::memory::store::raw_memory::{RawMemory, RawMemorySource, RawMemoryStore};
+    use crate::memory::store::raw_memory::{RawMemory, RawMemorySource};
     use crate::memory::store::sqlite::SqliteMemoryBackend;
     use crate::sync_primitives::Arc;
     use serde_json::json;
@@ -2089,6 +2175,7 @@ mod partition_union_tests {
         let dir = tempfile::tempdir().unwrap();
         let db: crate::memory::store::MemoryBackend =
             Arc::new(SqliteMemoryBackend::new(&dir.path().join("m.db")).unwrap());
+        let (_raw_dir, raw_store) = raw_test_store().await;
 
         for (partition, title) in [("main", "org-tier-note"), ("main__u-alice", "alices-note")] {
             let note = KnowledgeNote {
@@ -2104,7 +2191,7 @@ mod partition_union_tests {
                 RawMemorySource::Transcript,
             );
             raw.agent_id = partition.into();
-            db.insert_raw_memory(&raw).await.unwrap();
+            raw_store.insert_raw_memory(&raw).await.unwrap();
         }
 
         let scope = crate::scope::ScopeAttribution::personal("u-alice");
@@ -2148,7 +2235,8 @@ mod partition_union_tests {
             json!(2),
         );
         let resp =
-            crate::scope::with_scope(Some(scope.clone()), handle_search(req, db.clone())).await;
+            crate::scope::with_scope(Some(scope.clone()), handle_search(req, raw_store.clone()))
+                .await;
         assert!(resp.is_success(), "{:?}", resp.error);
         let body = resp.result.unwrap();
         assert_eq!(
@@ -2162,8 +2250,11 @@ mod partition_union_tests {
             Some(json!({ "agent_id": "main" })),
             json!(3),
         );
-        let resp =
-            crate::scope::with_scope(Some(scope.clone()), handle_stats(req, db.clone())).await;
+        let resp = crate::scope::with_scope(
+            Some(scope.clone()),
+            handle_stats(req, raw_store.clone(), db.clone()),
+        )
+        .await;
         assert!(resp.is_success(), "{:?}", resp.error);
         let body = resp.result.unwrap();
         assert_eq!(body["totalFacts"], 2, "stat card must agree with the list");
@@ -2190,6 +2281,7 @@ mod partition_union_tests {
         let dir = tempfile::tempdir().unwrap();
         let db: crate::memory::store::MemoryBackend =
             Arc::new(SqliteMemoryBackend::new(&dir.path().join("m.db")).unwrap());
+        let (_raw_dir, _raw_store) = raw_test_store().await;
 
         for (partition, title) in [("main", "org-tier-note"), ("main__u-alice", "alices-note")] {
             let note = KnowledgeNote {
@@ -2230,6 +2322,7 @@ mod partition_union_tests {
         let dir = tempfile::tempdir().unwrap();
         let db: crate::memory::store::MemoryBackend =
             Arc::new(SqliteMemoryBackend::new(&dir.path().join("m.db")).unwrap());
+        let (_raw_dir, _raw_store) = raw_test_store().await;
 
         let note = KnowledgeNote {
             title: "alices-note".into(),

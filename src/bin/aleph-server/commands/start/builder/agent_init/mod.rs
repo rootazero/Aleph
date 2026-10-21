@@ -111,7 +111,7 @@ pub(in crate::commands::start) struct AgentHandlersResult {
     /// `with_memory_context_provider`; the orchestrator path needs its own
     /// reference because it does not hold an `ExecutionEngine`.
     pub memory_context_provider: Option<Arc<alephcore::thinker::MemoryContextProvider>>,
-    /// `SQLite` memory backend exposed for the orchestrator path so the per-run
+    /// Raw memory store exposed for the orchestrator path so the per-run
     /// `ContextCompactor` can reuse hierarchical session summaries for
     /// zero-API-cost compaction.
     pub memory_backend: Option<alephcore::memory::store::MemoryBackend>,
@@ -136,6 +136,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
     app_config: &alephcore::Config,
     app_config_arc: Arc<tokio::sync::RwLock<alephcore::Config>>,
     memory_db: &alephcore::memory::store::MemoryBackend,
+    raw_store: Arc<dyn alephcore::memory::store::raw_memory::RawMemoryStore>,
     workspace_manager: Option<Arc<alephcore::gateway::AgentEnvStore>>,
     agent_manager: Arc<alephcore::AgentManager>,
     acp_manager: Option<Arc<alephcore::acp::manager::AcpAdapterManager>>,
@@ -483,8 +484,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
         // CUT or CONNECT-at-the-projector is a pending product decision — see
         // the T17 report's FOLLOW-UP; do not read this call as capture.
         agent_registry
-            .set_raw_memory_writer(memory_db.clone()
-                as std::sync::Arc<dyn alephcore::memory::store::raw_memory::RawMemoryStore>)
+            .set_raw_memory_writer(raw_store.clone())
             .await;
 
         // Capture embedder before it's moved into tool_config
@@ -583,6 +583,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
         // Build tool config with memory backend, embedder, search API key, and agent management deps
         let tool_config = alephcore::executor::BuiltinToolConfig {
             memory_db: Some(memory_db.clone()),
+            raw_memory_store: Some(raw_store.clone()),
             embedder,
             tavily_api_key,
             search_handle: Some(search_handle.clone()),
@@ -845,6 +846,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
             // first is exactly how `[memory.curated]` went inert to begin with.
             let reflector_mcp = super::init_memory_context_provider(
                 memory_db,
+                raw_store.clone(),
                 Some(emb),
                 Some(prov.clone()),
                 app_config.memory.assembler_config(),
@@ -1033,6 +1035,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
             tools,
             Some(memory_db.clone()),
         )
+        .with_raw_memory_writer(raw_store.clone())
         .with_app_config(app_config_arc.clone())
         .with_tool_health(tool_health.clone())
         // Share the one parser cell with `chat.send` and `agent.run`, so the
@@ -1146,6 +1149,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
 
                 super::init_compression_service(
                     memory_db,
+                    raw_store.clone(),
                     prov.clone(),
                     emb.clone(),
                     &app_config.policies.memory.compression,
@@ -1190,6 +1194,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
             orientation.clone(),
             embedder_out.clone(),
             note_memory_dir.clone(),
+            Some(raw_store.clone()),
         );
 
         // Create session compactor for intra-session context compression
@@ -1197,7 +1202,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
             let sc_config = app_config.policies.memory.session_compactor.clone();
             if sc_config.enabled {
                 let mut compactor = alephcore::memory::session_compactor::SessionCompactor::new(
-                    memory_db.clone(),
+                    raw_store.clone(),
                     sc_config,
                 )
                 .with_project_scoping(app_config.memory.project_scoped);
@@ -1205,13 +1210,12 @@ pub(in crate::commands::start) async fn register_agent_handlers(
                     compactor = compactor.with_provider(prov.clone());
                 }
                 // Transcript indexing is unconditional: it writes plain
-                // raw_memories rows (no vectors), so gating it on an embedding
+                // Markdown-backed raw memories (no vectors), so gating it on an embedding
                 // provider — as the old `with_embedder` signature did — only
                 // starved embedder-less installs of transcript recall.
                 compactor = compactor.with_transcript_indexing();
                 // Spec 1 G1: wire pre-compress hook so chunks are captured before summarisation.
-                compactor = compactor.with_raw_memory_writer(memory_db.clone()
-                    as std::sync::Arc<dyn alephcore::memory::store::raw_memory::RawMemoryStore>);
+                compactor = compactor.with_raw_memory_writer(raw_store.clone());
                 // Spec 4 Task 11: wire capture-filter registry.
                 compactor = compactor.with_capture_registry(memory_ext_registry.clone());
                 let compactor = std::sync::Arc::new(compactor);
@@ -1224,7 +1228,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
             }
         }
 
-        // Wire memory context provider for SQLite-backed prompt augmentation.
+        // Wire memory context provider for Markdown-backed raw memory and metadata index augmentation.
         // When an AiProvider is available the assembler drives its LLM re-rank
         // path (Spec 1, B strategy); otherwise the deterministic skeleton runs.
         // Spec 4 Task 11: extension registry threaded in for on_retrieve dispatch.
@@ -1235,6 +1239,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
         {
             let mcp = super::init_memory_context_provider_with_extensions(
                 memory_db,
+                raw_store.clone(),
                 embedder_out.clone(),
                 default_prov.clone(),
                 app_config.memory.assembler_config(),
@@ -1306,14 +1311,12 @@ pub(in crate::commands::start) async fn register_agent_handlers(
                     dyn alephcore::memory::session_search_summary::synthesizer::SummaryLlm,
                 > = AiProviderSummaryLlm::new(prov.clone());
                 let synthesizer = std::sync::Arc::new(SummarySynthesizer::new(
-                    memory_db.clone()
-                        as std::sync::Arc<dyn alephcore::memory::store::raw_memory::RawMemoryStore>,
+                    raw_store.clone(),
                     session_store.clone(),
                     summary_llm.clone(),
                 ));
                 let summarizer = std::sync::Arc::new(SessionEndSummarizer {
-                    store: memory_db.clone()
-                        as std::sync::Arc<dyn alephcore::memory::store::raw_memory::RawMemoryStore>,
+                    store: raw_store.clone(),
                     synthesizer,
                 });
                 alephcore::thinker::memory_context_provider::register_session_end_summarizer(
@@ -1330,10 +1333,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
                     use alephcore::memory::session_reflection::SessionReflector;
                     let reflector = std::sync::Arc::new(
                         SessionReflector::new(
-                            memory_db.clone()
-                                as std::sync::Arc<
-                                    dyn alephcore::memory::store::raw_memory::RawMemoryStore,
-                                >,
+                            raw_store.clone(),
                             session_store.clone(),
                             summary_llm.clone(),
                             app_config.memory.reflection.clone(),
@@ -2115,7 +2115,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
             app_config,
             tool_reg_out.clone(),
             &command_parser_cell,
-            memory_db,
+            &raw_store,
             &memory_ext_registry,
             daemon,
             tool_catalog.clone(),

@@ -13,7 +13,6 @@ use crate::memory::namespace::NamespaceScope;
 use crate::memory::store::raw_memory::{
     RawMemory, RawMemorySource, RawMemoryStore, SessionEndReason,
 };
-use crate::memory::store::MemoryBackend;
 use crate::tools::AlephTool;
 
 // =============================================================================
@@ -48,7 +47,7 @@ pub struct SessionCompleteResult {
 /// end the conversation — it is a signal, not a teardown.
 #[derive(Clone)]
 pub struct SessionCompleteTool {
-    db: MemoryBackend,
+    store: Arc<dyn RawMemoryStore>,
     agent_id: String,
     /// Injected at agent-loop startup via `set_session_id`.
     /// Wrapped in Arc<`RwLock`<…>> so it can be updated without re-building
@@ -62,9 +61,14 @@ pub struct SessionCompleteTool {
 
 impl SessionCompleteTool {
     /// Create a new tool backed by the given memory store.
-    pub fn new(db: MemoryBackend, agent_id: impl Into<String>) -> Self {
+    pub fn new(db: Arc<dyn RawMemoryStore>, agent_id: impl Into<String>) -> Self {
+        Self::new_with_store(db, agent_id)
+    }
+
+    /// Construct with the authoritative raw-memory store.
+    pub fn new_with_store(store: Arc<dyn RawMemoryStore>, agent_id: impl Into<String>) -> Self {
         Self {
-            db,
+            store,
             agent_id: agent_id.into(),
             session_id: None,
             capture_registry: None,
@@ -147,7 +151,7 @@ impl AlephTool for SessionCompleteTool {
         }
 
         if let Some(ref registry) = self.capture_registry {
-            let store: Arc<dyn RawMemoryStore> = self.db.clone();
+            let store = self.store.clone();
             let ctx = CaptureCtx {
                 agent_id: actor.clone(),
                 namespace: NamespaceScope::Owner,
@@ -173,7 +177,7 @@ impl AlephTool for SessionCompleteTool {
                 }
             }
         } else {
-            self.db.insert_raw_memory(&raw).await?;
+            self.store.insert_raw_memory(&raw).await?;
         }
 
         Ok(SessionCompleteResult {

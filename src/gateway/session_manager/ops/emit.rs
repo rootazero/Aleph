@@ -89,7 +89,7 @@ pub(crate) fn emit_session_end_raw(
 /// here and lands seconds AFTER the handler has finished, so the only way not
 /// to leak the deleted conversation is not to write it. The `/end-summary` raw
 /// row itself is unaffected — capturing the dying session's tail into
-/// `raw_memories` is the delete handler's deliberate, documented behaviour.
+/// `RawMemoryStore` is the delete handler's deliberate, documented behaviour.
 pub(crate) fn emit_session_end_raw_without_resume(
     writer: std::sync::Arc<dyn crate::memory::store::raw_memory::RawMemoryStore>,
     agent_id: String,

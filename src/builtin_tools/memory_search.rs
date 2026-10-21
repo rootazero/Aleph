@@ -244,7 +244,7 @@ fn note_memory_dir() -> std::path::PathBuf {
 
 /// Memory search tool with hybrid retrieval
 pub struct MemorySearchTool {
-    database: MemoryBackend,
+    raw_store: Arc<dyn RawMemoryStore>,
     note_retrieval: Arc<NoteFactRetrieval<SqliteMemoryBackend>>,
     comptroller: Arc<ContextComptroller>,
     /// Shared default workspace ID, written per-request by the execution engine
@@ -295,6 +295,7 @@ impl MemorySearchTool {
     /// decay + MMR diversity. `None` / inactive leaves ranking unchanged.
     pub fn new_with_config(
         database: MemoryBackend,
+        raw_store: Arc<dyn RawMemoryStore>,
         embedder: Arc<dyn EmbeddingProvider>,
         rerank_config: Option<&crate::memory::rerank::RerankConfig>,
         scoring_config: Option<&crate::config::types::memory::RetrievalScoringConfig>,
@@ -319,7 +320,7 @@ impl MemorySearchTool {
         let comptroller = Arc::new(ContextComptroller::new(comptroller_config));
 
         Self {
-            database,
+            raw_store,
             note_retrieval,
             comptroller,
             default_workspace: Arc::new(RwLock::new(DEFAULT_AGENT.to_string())),
@@ -585,7 +586,7 @@ impl MemorySearchTool {
                 // huge value must not overflow-panic in debug builds.
                 let fetch_limit = args.max_results.saturating_mul(2);
                 let raws = self
-                    .database
+                    .raw_store
                     .get_raw_by_path_prefix(&path_prefix, agent_id, fetch_limit)
                     .await
                     .map_err(|e| {
@@ -840,7 +841,7 @@ impl MemorySearchTool {
                     break;
                 }
                 let raws = self
-                    .database
+                    .raw_store
                     .search_raw_by_path_prefix(
                         crate::memory::transcript_indexer::TRANSCRIPT_PATH_PREFIX,
                         agent,
@@ -905,7 +906,7 @@ impl MemorySearchTool {
 impl Clone for MemorySearchTool {
     fn clone(&self) -> Self {
         Self {
-            database: self.database.clone(),
+            raw_store: self.raw_store.clone(),
             note_retrieval: self.note_retrieval.clone(),
             comptroller: self.comptroller.clone(),
             default_workspace: self.default_workspace.clone(),
@@ -933,6 +934,7 @@ impl AlephTool for MemorySearchTool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::memory::store::markdown::MarkdownSessionStore;
 
     /// The flagship reader must compose the session's scope, and its second
     /// fan-out must reuse the narrowing the first one computed.
@@ -984,14 +986,14 @@ mod tests {
 
     /// Build the tool against a temp `ALEPH_HOME` + temp sqlite backend.
     /// Caller must hold `ALEPH_HOME_TEST_GUARD` for the env override.
-    fn build_tool_on(db: &MemoryBackend) -> MemorySearchTool {
+    fn build_tool_on(db: &MemoryBackend, raw_store: Arc<dyn RawMemoryStore>) -> MemorySearchTool {
         let embedder: Arc<dyn EmbeddingProvider> = Arc::new(
             crate::memory::embedding_provider::tests::MockEmbeddingProvider::new(
                 1024,
                 "mock-model",
             ),
         );
-        MemorySearchTool::new_with_config(db.clone(), embedder, None, None, None)
+        MemorySearchTool::new_with_config(db.clone(), raw_store, embedder, None, None, None)
     }
 
     fn default_args(query: &str) -> MemorySearchArgs {
@@ -1022,8 +1024,9 @@ mod tests {
 
         let db: MemoryBackend =
             Arc::new(SqliteMemoryBackend::new(&home.path().join("mem.db")).unwrap());
+        let raw_store = Arc::new(MarkdownSessionStore::new(home.path()).await.unwrap());
 
-        let indexer = crate::memory::transcript_indexer::TranscriptIndexer::new(db.clone());
+        let indexer = crate::memory::transcript_indexer::TranscriptIndexer::new(raw_store.clone());
         indexer
             .index_turn_text(
                 "sess-t",
@@ -1044,10 +1047,10 @@ mod tests {
             .with_agent("someone_else")
             .with_session("sess-x")
             .with_path("aleph://transcript/sess-x/0");
-            db.insert_raw_memory(&foreign).await.unwrap();
+            raw_store.insert_raw_memory(&foreign).await.unwrap();
         }
 
-        let tool = build_tool_on(&db);
+        let tool = build_tool_on(&db, raw_store);
         let out = tool
             .call_impl(default_args("quantum sprocket"))
             .await
@@ -1092,8 +1095,9 @@ mod tests {
 
         let db: MemoryBackend =
             Arc::new(SqliteMemoryBackend::new(&home.path().join("mem.db")).unwrap());
+        let raw_store = Arc::new(MarkdownSessionStore::new(home.path()).await.unwrap());
 
-        let indexer = crate::memory::transcript_indexer::TranscriptIndexer::new(db.clone());
+        let indexer = crate::memory::transcript_indexer::TranscriptIndexer::new(raw_store.clone());
         let long_tail = "x".repeat(1200);
         for seq in 0..(MAX_TRANSCRIPT_RESULTS as u32 + 3) {
             indexer
@@ -1108,7 +1112,7 @@ mod tests {
                 .await;
         }
 
-        let tool = build_tool_on(&db);
+        let tool = build_tool_on(&db, raw_store);
         let out = tool
             .call_impl(default_args("quantum sprocket"))
             .await

@@ -195,12 +195,20 @@ enum RoutingTarget {
 /// Only this module can construct the proof that all dispatch gates passed.
 /// No Default, serde, Clone, public field, or crate-wide naked mint exists.
 pub(in crate::tools) struct GateAdmissionToken {
-    _sealed: (),
+    operator_approval: Option<Arc<std::sync::atomic::AtomicBool>>,
 }
 
 impl GateAdmissionToken {
-    fn new() -> Self {
-        Self { _sealed: () }
+    fn new(operator_approved: bool) -> Self {
+        Self {
+            operator_approval: operator_approved
+                .then(|| Arc::new(std::sync::atomic::AtomicBool::new(false))),
+        }
+    }
+
+    /// Retries and readonly verdict clones share one consumption cell.
+    pub(in crate::tools) fn operator_approval(&self) -> Option<Arc<std::sync::atomic::AtomicBool>> {
+        self.operator_approval.clone()
     }
 }
 
@@ -432,7 +440,7 @@ impl ScopedToolService {
         }
 
         // Config-tier authorization gate — suspended for live operator approval.
-        let approved_by_operator_gate = self.check_operator_gate(name, &input).await?;
+        let mut approved_by_operator_gate = self.check_operator_gate(name, &input).await?;
 
         // Confirmation gate — user-approval for destructive / gated tools.
         // Skipped entirely when the operator gate above already approved this
@@ -503,11 +511,11 @@ impl ScopedToolService {
                     });
                 }
             }
-            let operator = self.check_operator_gate(name, &effective_input).await?;
+            approved_by_operator_gate = self.check_operator_gate(name, &effective_input).await?;
             self.check_confirmation_gate(
                 name,
                 &effective_input,
-                operator || hook_authorized,
+                approved_by_operator_gate || hook_authorized,
                 descriptor,
             )
             .await?;
@@ -599,7 +607,7 @@ impl ScopedToolService {
             });
         }
         *capture = Some(effective_input.clone());
-        let admission = GateAdmissionToken::new();
+        let admission = GateAdmissionToken::new(approved_by_operator_gate);
 
         let mut result = match tokio::time::timeout(
             budget,

@@ -350,8 +350,12 @@ pub struct SandboxConfig {
     /// lies within an otherwise-readable workspace root. A defence-in-depth
     /// security floor for secrets such as `**/.env`, `**/*.pem`,
     /// `**/.ssh/**`. Empty by default → no extra denies (boot unchanged).
-    /// Currently enforced by the macOS seatbelt driver; other platforms
-    /// ignore it until landlock/WFP glob enforcement lands.
+    ///
+    /// Enforced by macOS seatbelt (per-access SBPL deny rules) and Windows
+    /// (deny-read ACEs over enumerated matches). Linux/bwrap has no per-access
+    /// glob-deny primitive, so a non-empty list is rejected there with
+    /// `UnsupportedPolicy` (fail-closed) rather than silently ignored — the
+    /// floor is not enforced on Linux. See [`crate::sandbox::deny_globs`].
     #[serde(default)]
     pub deny_read_globs: Vec<String>,
 

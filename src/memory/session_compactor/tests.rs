@@ -46,7 +46,6 @@ async fn post_turn_compress_scopes_writes_by_the_explicit_project_root() {
     use crate::gateway::agent_instance::{AgentInstance, AgentInstanceConfig};
     use crate::gateway::session_manager::{SessionManager, SessionManagerConfig};
     use crate::memory::store::raw_memory::RawMemoryStore;
-    use crate::memory::store::MemoryBackend;
     use crate::routing::session_key::SessionKey;
     use crate::sync_primitives::Arc;
 
@@ -86,8 +85,11 @@ async fn post_turn_compress_scopes_writes_by_the_explicit_project_root() {
             .unwrap();
     }
 
-    let database: MemoryBackend =
-        Arc::new(crate::memory::store::sqlite::SqliteMemoryBackend::in_memory().unwrap());
+    let database = Arc::new(
+        crate::memory::store::markdown::MarkdownSessionStore::new(temp.path())
+            .await
+            .unwrap(),
+    );
     // No provider — the deterministic fallback summarizer is enough here.
     let compactor = SessionCompactor::new(
         database.clone(),
