@@ -41,7 +41,9 @@ struct Cli {
 enum Commands {
     /// Export sessions from SQLite to JSON
     Export {
-        /// Path to old SQLite database (default: <ALEPH_HOME>/data/memory.db)
+        /// Path to old SQLite database
+        ///
+        /// Defaults to the pre-`ALEPH_HOME` database location.
         #[arg(long)]
         db: Option<PathBuf>,
 
@@ -80,11 +82,11 @@ enum Commands {
         #[arg(long, short = 'i')]
         input: PathBuf,
 
-        /// Output sessions directory (default: <ALEPH_HOME>/raw/sessions)
+        /// Output sessions directory
         #[arg(long, short = 'o')]
         output: Option<PathBuf>,
 
-        /// Attachments directory (default: <ALEPH_HOME>/raw/attachments)
+        /// Attachments directory
         #[arg(long)]
         attachments_dir: Option<PathBuf>,
 
@@ -99,11 +101,11 @@ enum Commands {
 
     /// Build metadata.db from Markdown sessions
     Index {
-        /// Sessions directory to index (default: <ALEPH_HOME>/raw/sessions)
+        /// Sessions directory to index
         #[arg(long)]
         sessions_dir: Option<PathBuf>,
 
-        /// Output database path (default: <ALEPH_HOME>/metadata.db)
+        /// Output database path
         #[arg(long, short = 'o')]
         output: Option<PathBuf>,
 
@@ -114,11 +116,11 @@ enum Commands {
 
     /// Verify migration integrity
     Verify {
-        /// Sessions directory to verify (default: <ALEPH_HOME>/raw/sessions)
+        /// Sessions directory to verify
         #[arg(long)]
         sessions_dir: Option<PathBuf>,
 
-        /// Metadata database path (default: <ALEPH_HOME>/metadata.db)
+        /// Metadata database path
         #[arg(long)]
         metadata_db: Option<PathBuf>,
 
@@ -156,7 +158,7 @@ fn main() -> Result<()> {
             force,
         } => {
             export::run_export(
-                resolve_default_path(db, "data/memory.db")?,
+                expand_path(db.unwrap_or_else(default_legacy_memory_db))?,
                 expand_path(output)?,
                 agent_id,
                 start_date,
@@ -177,8 +179,8 @@ fn main() -> Result<()> {
         } => {
             transform::run_transform(
                 expand_path(input)?,
-                resolve_default_path(output, "raw/sessions")?,
-                resolve_default_path(attachments_dir, "raw/attachments")?,
+                expand_path(output.unwrap_or_else(default_sessions_dir))?,
+                expand_path(attachments_dir.unwrap_or_else(default_attachments_dir))?,
                 parallel,
                 overwrite,
             )
@@ -191,8 +193,8 @@ fn main() -> Result<()> {
             rebuild_fts,
         } => {
             index::run_index(
-                resolve_default_path(sessions_dir, "raw/sessions")?,
-                resolve_default_path(output, "metadata.db")?,
+                expand_path(sessions_dir.unwrap_or_else(default_sessions_dir))?,
+                expand_path(output.unwrap_or_else(default_metadata_db))?,
                 rebuild_fts,
             )
             .context("Index failed")?;
@@ -206,8 +208,8 @@ fn main() -> Result<()> {
             remove_orphans,
         } => {
             verify::run_verify(
-                resolve_default_path(sessions_dir, "raw/sessions")?,
-                resolve_default_path(metadata_db, "metadata.db")?,
+                expand_path(sessions_dir.unwrap_or_else(default_sessions_dir))?,
+                expand_path(metadata_db.unwrap_or_else(default_metadata_db))?,
                 original_db.map(expand_path).transpose()?,
                 fix,
                 remove_orphans,
@@ -219,15 +221,43 @@ fn main() -> Result<()> {
     Ok(())
 }
 
-/// Resolve defaults through the same Aleph home as the daemon.
-fn resolve_default_path(path: Option<PathBuf>, relative: &str) -> Result<PathBuf> {
-    match path {
-        Some(path) => expand_path(path),
-        None => Ok(alephcore::utils::paths::get_config_dir()?.join(relative)),
-    }
+/// The Aleph home this tool reads and writes, resolved through the one
+/// authority (`utils::paths::get_config_dir`) so a relocated `ALEPH_HOME` is
+/// honoured. A migration that wrote into the real home while the server ran
+/// elsewhere would look like a successful migration that changed nothing.
+///
+/// The fallback is the legacy home, and the last resort is the literal `~`,
+/// which `expand_path` resolves — so no path here is spelled by hand.
+fn default_aleph_home() -> PathBuf {
+    alephcore::utils::paths::get_config_dir()
+        .ok()
+        .or_else(|| alephcore::utils::paths::legacy_home_aleph_path(""))
+        .unwrap_or_else(|| PathBuf::from("~"))
 }
 
-/// Expand an explicit user-written ~ prefix in paths.
+/// The old SQLite database this tool exports from: the pre-`ALEPH_HOME`
+/// location, because that is where the database being migrated lived.
+fn default_legacy_memory_db() -> PathBuf {
+    alephcore::utils::paths::legacy_home_aleph_path("data/memory.db")
+        .unwrap_or_else(|| default_aleph_home().join("data").join("memory.db"))
+}
+
+/// The Markdown session directory of the current layout.
+fn default_sessions_dir() -> PathBuf {
+    default_aleph_home().join("raw").join("sessions")
+}
+
+/// The attachment directory of the current layout.
+fn default_attachments_dir() -> PathBuf {
+    default_aleph_home().join("raw").join("attachments")
+}
+
+/// The metadata index of the current layout.
+fn default_metadata_db() -> PathBuf {
+    default_aleph_home().join("metadata.db")
+}
+
+/// Expand ~ and environment variables in paths
 fn expand_path(path: PathBuf) -> Result<PathBuf> {
     let path_str = path.to_string_lossy();
 
@@ -242,7 +272,7 @@ fn expand_path(path: PathBuf) -> Result<PathBuf> {
         path
     };
 
-    // Canonicalize if exists, otherwise return as-is.
+    // Canonicalize if exists, otherwise return as-is
     if expanded.exists() {
         expanded
             .canonicalize()
@@ -256,31 +286,45 @@ fn expand_path(path: PathBuf) -> Result<PathBuf> {
 mod tests {
     use super::*;
 
+    /// The write targets follow the configured Aleph home.
+    ///
+    /// `get_config_dir` is a pure lookup, so this pins the layout the tool
+    /// writes into without touching the filesystem.
     #[test]
-    fn omitted_paths_follow_the_configured_aleph_home() {
-        let root = alephcore::utils::paths::get_config_dir().unwrap();
-        for relative in [
-            "data/memory.db",
-            "raw/sessions",
-            "raw/attachments",
-            "metadata.db",
-        ] {
-            assert_eq!(
-                resolve_default_path(None, relative).unwrap(),
-                root.join(relative)
-            );
-        }
+    fn omitted_write_targets_follow_the_configured_aleph_home() {
+        let Ok(root) = alephcore::utils::paths::get_config_dir() else {
+            // No home to configure: the fallback is the legacy home.
+            let legacy = alephcore::utils::paths::legacy_home_aleph_path("").unwrap();
+            assert_eq!(default_aleph_home(), legacy);
+            return;
+        };
+        assert_eq!(default_sessions_dir(), root.join("raw").join("sessions"));
+        assert_eq!(
+            default_attachments_dir(),
+            root.join("raw").join("attachments")
+        );
+        assert_eq!(default_metadata_db(), root.join("metadata.db"));
+
         let cli = Cli::try_parse_from(["aleph-migrate", "export"]).unwrap();
         assert!(matches!(cli.command, Commands::Export { db: None, .. }));
     }
 
+    /// The export source is the pre-`ALEPH_HOME` database.
+    ///
+    /// That is where the database being migrated lived, whatever the
+    /// configured home is — pointing the export at the configured home would
+    /// read the very layout this tool is meant to produce.
+    #[test]
+    fn the_export_source_is_the_legacy_database() {
+        let expected = alephcore::utils::paths::legacy_home_aleph_path("data/memory.db").unwrap();
+        assert_eq!(default_legacy_memory_db(), expected);
+    }
+
+    /// An explicit path overrides the default.
     #[test]
     fn explicit_paths_override_the_default() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("custom.db");
-        assert_eq!(
-            resolve_default_path(Some(path.clone()), "metadata.db").unwrap(),
-            path
-        );
+        assert_eq!(expand_path(path.clone()).unwrap(), path);
     }
 }

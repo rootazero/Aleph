@@ -390,12 +390,15 @@ mod tests {
 
     #[test]
     fn write_reports_failure_rather_than_silent_success() {
-        // `wl-copy` is "installed" but the binary does not exist, so every
-        // candidate fails. The old code returned Ok here.
-        let tb = ToolBox::from_names(&["wl-copy"]);
-        let err = write_text_with(SessionKind::Wayland, &tb, "hello").unwrap_err();
-        let msg = err.to_string();
-        assert!(msg.contains("wl-copy"), "must name what it tried: {msg}");
+        // Exercise the process-failure path with a deterministic missing binary.
+        // `ToolBox::from_names` describes candidates independently of PATH, so
+        // this remains stable on hosts that happen to have `wl-copy` installed.
+        let err = write_once("__aleph_missing_clipboard_tool__", &[], b"hello").unwrap_err();
+        assert!(!err.is_empty(), "must report the failed process");
+
+        let err =
+            write_text_with(SessionKind::Wayland, &ToolBox::from_names(&[]), "hello").unwrap_err();
+        assert!(err.to_string().contains("wl-copy"));
     }
 
     #[test]

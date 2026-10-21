@@ -1272,12 +1272,27 @@ mod tests {
     use crate::memory::extensions::MemoryExtension;
     use std::path::{Path, PathBuf};
 
+    /// `$HOME` and `$ALEPH_HOME`, both inside the fixture.
+    ///
+    /// A transition rescans the shared-agent skills dir, and that dir resolves
+    /// off `$HOME`. Left on the developer's real home, the rescan walks the
+    /// real `~/.agents/skills` — tens of thousands of files, tens of seconds —
+    /// and the watcher budgets below expire as if the watcher had hung. Both
+    /// locks come from `HomeEnvGuards` because taking the HOME and the
+    /// ALEPH_HOME lock by hand admits two orders, and two orders is an ABBA
+    /// deadlock (see `utils::paths::ALEPH_HOME_TEST_GUARD`).
+    fn isolated_home(dir: &Path) -> crate::runtimes::post_install::HomeEnvGuards {
+        let aleph_home = dir.join("aleph-state");
+        std::fs::create_dir_all(&aleph_home).unwrap();
+        crate::runtimes::post_install::HomeEnvGuards::acquire_and_set(&aleph_home, dir)
+    }
+
     /// Same shape as `mod.rs::tests::isolated_manager`, duplicated here rather
     /// than made `pub(super)` because the two test modules will diverge (this
     /// one grows the six-effect fixture in P1.13).
     async fn isolated_manager(dir: &Path) -> (ExtensionManager, PathBuf) {
         let cfg_path = dir.join("plugins.toml");
-        let manager = ExtensionManager::new(ExtensionConfig {
+        let mut manager = ExtensionManager::new(ExtensionConfig {
             discovery: DiscoveryConfig {
                 working_dir: dir.to_path_buf(),
                 scan_claude_dirs: false,
@@ -1293,6 +1308,12 @@ mod tests {
         })
         .await
         .unwrap();
+        // The process-global skill system keeps the base dirs earlier fixtures
+        // registered, and `init` only ever merges — so a rescan would keep
+        // walking those (the developer's real `~/.agents/skills`, among them).
+        // This manager gets a skill system of its own, so the rescan walks
+        // this fixture and nothing else.
+        manager.skill_system = crate::skill::SkillSystem::new();
         (manager, cfg_path)
     }
 
@@ -1332,20 +1353,14 @@ mod tests {
         use tokio::sync::oneshot;
 
         let tmp = tempfile::tempdir().unwrap();
-        // Keep the explicit state root separate from HOME/.aleph's protected config path.
-        let aleph_home = tmp.path().join("aleph-state");
-        std::fs::create_dir_all(&aleph_home).unwrap();
-        // A transition also rescans shared-agent skills, independently of the Claude knob.
-        let _home =
-            crate::runtimes::post_install::HomeEnvGuards::acquire_and_set(&aleph_home, tmp.path());
+        // A transition also rescans shared-agent skills, independently of the
+        // Claude knob, so `$HOME` points at the fixture.
+        let _home = isolated_home(tmp.path());
         assert_eq!(
             crate::discovery::agents_home_dir().unwrap(),
             tmp.path().join(".agents")
         );
-        let (mut manager, _) = isolated_manager(tmp.path()).await;
-        // The process singleton retains base dirs registered by earlier fixtures.
-        // Exercise the real rescan with only this fixture's owned skill state.
-        manager.skill_system = crate::skill::SkillSystem::new();
+        let (manager, _) = isolated_manager(tmp.path()).await;
         let (row, module_disposer) =
             real_guest_row_and_disposer(&manager, tmp.path(), "c2s-unmount", PluginStatus::Loaded)
                 .await;
@@ -1417,8 +1432,8 @@ mod tests {
     async fn c2s_fail_mount_closes_existing_row_before_cleanup_and_records_error() {
         use tokio::sync::oneshot;
 
-        let _home = crate::utils::paths::IsolatedAlephHome::new();
         let tmp = tempfile::tempdir().unwrap();
+        let _home = isolated_home(tmp.path());
         let (manager, _) = isolated_manager(tmp.path()).await;
         let (row, module_disposer) = real_guest_row_and_disposer(
             &manager,
@@ -1476,8 +1491,8 @@ mod tests {
 
     #[tokio::test]
     async fn c2s_unmount_all_closes_all_rows_before_first_disposer() {
-        let _home = crate::utils::paths::IsolatedAlephHome::new();
         let tmp = tempfile::tempdir().unwrap();
+        let _home = isolated_home(tmp.path());
         let (manager, _) = isolated_manager(tmp.path()).await;
         let (row_a, disposer_a) =
             real_guest_row_and_disposer(&manager, tmp.path(), "c2s-all-a", PluginStatus::Loaded)
@@ -1578,8 +1593,8 @@ mod tests {
         use std::future::Future;
         use std::task::{Context, Poll};
 
-        let _home = crate::utils::paths::IsolatedAlephHome::new();
         let tmp = tempfile::tempdir().unwrap();
+        let _home = isolated_home(tmp.path());
         let (manager, _) = isolated_manager(tmp.path()).await;
         let (row, _) = real_guest_row_and_disposer(
             &manager,
@@ -1628,8 +1643,8 @@ mod tests {
         use std::future::Future;
         use std::task::{Context, Poll};
 
-        let _home = crate::utils::paths::IsolatedAlephHome::new();
         let tmp = tempfile::tempdir().unwrap();
+        let _home = isolated_home(tmp.path());
         let (manager, _) = isolated_manager(tmp.path()).await;
         let (row, _) = real_guest_row_and_disposer(
             &manager,
@@ -1679,8 +1694,8 @@ mod tests {
     async fn c2s_pending_row_remains_active_for_guest_tool_and_hook() {
         use crate::extension::runtime::wasm::tests::guest_fixture::HANDLER;
 
-        let _home = crate::utils::paths::IsolatedAlephHome::new();
         let tmp = tempfile::tempdir().unwrap();
+        let _home = isolated_home(tmp.path());
         let (manager, _) = isolated_manager(tmp.path()).await;
         let (row, _) = real_guest_row_and_disposer(
             &manager,
@@ -1743,8 +1758,8 @@ mod tests {
 
     #[tokio::test]
     async fn load_all_mounts_enabled_plugins_and_records_their_scope() {
-        let _home = crate::utils::paths::IsolatedAlephHome::new();
         let tmp = tempfile::tempdir().unwrap();
+        let _home = isolated_home(tmp.path());
         write_static_plugin(tmp.path(), "alpha");
         let (manager, _) = isolated_manager(tmp.path()).await;
         let catalog = std::sync::Arc::new(crate::tool_metadata::ToolCatalog::new());
@@ -1785,8 +1800,8 @@ mod tests {
     /// unquoted (a YAML flow sequence), `Skill` among the tools.
     #[tokio::test]
     async fn a_mounted_commands_frontmatter_reaches_its_catalog_row() {
-        let _home = crate::utils::paths::IsolatedAlephHome::new();
         let tmp = tempfile::tempdir().unwrap();
+        let _home = isolated_home(tmp.path());
         write_static_plugin(tmp.path(), "alpha");
         std::fs::write(
             tmp.path().join("plugins/alpha/commands/review.md"),
@@ -1837,8 +1852,8 @@ mod tests {
     /// declare stays unknown, and the command naming it is refused.
     #[tokio::test]
     async fn a_command_may_name_its_own_plugins_declared_mcp_tool() {
-        let _home = crate::utils::paths::IsolatedAlephHome::new();
         let tmp = tempfile::tempdir().unwrap();
+        let _home = isolated_home(tmp.path());
         write_mcp_project_plugin(tmp.path(), "mcp-cmd");
         let cmds = tmp.path().join("plugins/mcp-cmd/commands");
         std::fs::create_dir_all(&cmds).unwrap();
@@ -1879,8 +1894,8 @@ mod tests {
 
     #[tokio::test]
     async fn mount_of_an_unknown_id_is_not_found_and_twice_is_already_mounted() {
-        let _home = crate::utils::paths::IsolatedAlephHome::new();
         let tmp = tempfile::tempdir().unwrap();
+        let _home = isolated_home(tmp.path());
         write_static_plugin(tmp.path(), "alpha");
         let (manager, _) = isolated_manager(tmp.path()).await;
         manager.load_all().await.unwrap();
@@ -1896,8 +1911,8 @@ mod tests {
 
     #[tokio::test]
     async fn unmount_disposes_and_leaves_a_listable_disabled_row() {
-        let _home = crate::utils::paths::IsolatedAlephHome::new();
         let tmp = tempfile::tempdir().unwrap();
+        let _home = isolated_home(tmp.path());
         write_static_plugin(tmp.path(), "alpha");
         let (manager, _) = isolated_manager(tmp.path()).await;
         let catalog = std::sync::Arc::new(crate::tool_metadata::ToolCatalog::new());
@@ -1952,8 +1967,8 @@ mod tests {
 
     #[tokio::test]
     async fn mount_refuses_a_plugin_the_operator_disabled_and_a_blocked_origin() {
-        let _home = crate::utils::paths::IsolatedAlephHome::new();
         let tmp = tempfile::tempdir().unwrap();
+        let _home = isolated_home(tmp.path());
         write_static_plugin(tmp.path(), "alpha");
         let (manager, cfg_path) = isolated_manager(tmp.path()).await;
         crate::extension::plugin_state::PluginsConfig {
@@ -1997,8 +2012,8 @@ mod tests {
 
     #[tokio::test]
     async fn a_failing_step_disposes_the_partial_scope_and_writes_the_error_row() {
-        let _home = crate::utils::paths::IsolatedAlephHome::new();
         let tmp = tempfile::tempdir().unwrap();
+        let _home = isolated_home(tmp.path());
         // A WASM plugin whose entry does not exist: registry_row succeeds,
         // wasm_module fails → all-or-none.
         let dir = tmp.path().join("plugins").join("broken");
@@ -2039,8 +2054,8 @@ mod tests {
 
     #[tokio::test]
     async fn reload_plugin_is_unmount_then_mount_and_reload_rebuilds_everything() {
-        let _home = crate::utils::paths::IsolatedAlephHome::new();
         let tmp = tempfile::tempdir().unwrap();
+        let _home = isolated_home(tmp.path());
         write_static_plugin(tmp.path(), "alpha");
         let (manager, _) = isolated_manager(tmp.path()).await;
         manager.load_all().await.unwrap();
@@ -2097,8 +2112,8 @@ mod tests {
 
     #[tokio::test]
     async fn activation_settled_returns_at_once_when_nothing_is_being_watched() {
-        let _home = crate::utils::paths::IsolatedAlephHome::new();
         let tmp = tempfile::tempdir().unwrap();
+        let _home = isolated_home(tmp.path());
         write_static_plugin(tmp.path(), "alpha");
         let (manager, _) = isolated_manager(tmp.path()).await;
         manager.load_all().await.unwrap();
@@ -2113,8 +2128,8 @@ mod tests {
 
     #[tokio::test]
     async fn a_missing_handle_is_a_recorded_skip_not_a_failure() {
-        let _home = crate::utils::paths::IsolatedAlephHome::new();
         let tmp = tempfile::tempdir().unwrap();
+        let _home = isolated_home(tmp.path());
         write_static_plugin(tmp.path(), "alpha");
         let (manager, _) = isolated_manager(tmp.path()).await;
         // No set_tool_catalog: the CLI shape.
@@ -2359,8 +2374,8 @@ priority = 60
     /// `mcp_server` is unobservable in-process — P1.15's integration test covers it.
     #[tokio::test]
     async fn g2_mount_then_unmount_returns_every_surface_to_its_baseline() {
-        let _home = crate::utils::paths::IsolatedAlephHome::new();
         let tmp = tempfile::tempdir().unwrap();
+        let _home = isolated_home(tmp.path());
         let (manager, memory, catalog) = six_effect_bench(tmp.path()).await;
 
         let before = snapshot(&manager, &memory, &catalog).await;
@@ -2466,8 +2481,8 @@ priority = 60
     /// registration, no doubled slash entries, no stale loader entry).
     #[tokio::test]
     async fn g2_reload_is_a_fixed_point_of_the_surfaces() {
-        let _home = crate::utils::paths::IsolatedAlephHome::new();
         let tmp = tempfile::tempdir().unwrap();
+        let _home = isolated_home(tmp.path());
         let (manager, memory, catalog) = six_effect_bench(tmp.path()).await;
         manager.set_plugin_enabled("qa-wasm", true).await;
         manager.set_plugin_enabled("qa-mcp", true).await;
@@ -2491,8 +2506,8 @@ priority = 60
     /// can see.
     #[tokio::test]
     async fn load_all_stamps_project_scope_key_from_the_discovery_root() {
-        let _home = crate::utils::paths::IsolatedAlephHome::new();
         let dir = tempfile::tempdir().unwrap();
+        let _home = isolated_home(dir.path());
         write_static_plugin(dir.path(), "p2-scoped");
         let (manager, _cfg) = isolated_manager(dir.path()).await;
         manager.load_all().await.unwrap();
@@ -2511,8 +2526,8 @@ priority = 60
     /// discovery hit, so the two facts cannot disagree on one row.
     #[tokio::test]
     async fn load_all_stamps_the_key_on_parse_error_rows_too() {
-        let _home = crate::utils::paths::IsolatedAlephHome::new();
         let dir = tempfile::tempdir().unwrap();
+        let _home = isolated_home(dir.path());
         let broken = dir.path().join("plugins/p2-broken");
         std::fs::create_dir_all(broken.join(".claude-plugin")).unwrap();
         std::fs::write(
@@ -2544,8 +2559,8 @@ priority = 60
     /// alone; P1 deleted it, and the new one is unmount+mount.)
     #[tokio::test]
     async fn mount_after_unmount_keeps_the_rows_scope_key() {
-        let _home = crate::utils::paths::IsolatedAlephHome::new();
         let dir = tempfile::tempdir().unwrap();
+        let _home = isolated_home(dir.path());
         write_static_plugin(dir.path(), "p2-cycle");
         let (manager, _cfg) = isolated_manager(dir.path()).await;
         manager.load_all().await.unwrap();
@@ -2577,8 +2592,8 @@ priority = 60
     /// shows `project_root: None` here exactly as it would to an operator.
     #[tokio::test]
     async fn plugin_hooks_inherit_the_owning_rows_scope_key() {
-        let _home = crate::utils::paths::IsolatedAlephHome::new();
         let dir = tempfile::tempdir().unwrap();
+        let _home = isolated_home(dir.path());
         // `write_static_plugin` ships a `hooks/hooks.json` (one PreToolUse
         // command hook) — what the TOML adapter reads when the manifest
         // names no hooks field.
@@ -2611,8 +2626,8 @@ priority = 60
     /// The sync step is the link that used to drop unlisted fields (`..`).
     #[tokio::test]
     async fn plugin_hooks_keep_the_event_spelling_their_hooks_json_wrote() {
-        let _home = crate::utils::paths::IsolatedAlephHome::new();
         let dir = tempfile::tempdir().unwrap();
+        let _home = isolated_home(dir.path());
         write_static_plugin(dir.path(), "p4-spelling");
         let (manager, _cfg) = isolated_manager(dir.path()).await;
         manager.load_all().await.unwrap();
@@ -2665,8 +2680,8 @@ priority = 60
     #[tokio::test(flavor = "current_thread")]
     async fn after_transition_installs_the_next_executor_in_one_write_a_reader_never_sees_it_torn()
     {
-        let _home = crate::utils::paths::IsolatedAlephHome::new();
         let dir = tempfile::tempdir().unwrap();
+        let _home = isolated_home(dir.path());
         write_static_plugin(dir.path(), "p3a-hooky");
         // A `user:global` hook alongside the plugin hook: without it, a body
         // that installs the plugin layer alone and refills `user:` hooks in
@@ -2791,8 +2806,8 @@ priority = 60
     /// §2.5 row "MCP servers").
     #[tokio::test]
     async fn mount_without_an_mcp_handle_is_pending_on_the_manager() {
-        let _home = crate::utils::paths::IsolatedAlephHome::new();
         let dir = tempfile::tempdir().unwrap();
+        let _home = isolated_home(dir.path());
         write_mcp_project_plugin(dir.path(), "p3-mcp");
         let (manager, _cfg) = isolated_manager(dir.path()).await;
         manager.load_all().await.unwrap();
@@ -2832,8 +2847,8 @@ priority = 60
         // `manifest::parse_manifest_from_dir_cached_global`) even on the
         // no-handle path this test exercises, and `cargo test` runs this
         // module's tests concurrently.
-        let _home = crate::utils::paths::IsolatedAlephHome::new();
         let dir = tempfile::tempdir().unwrap();
+        let _home = isolated_home(dir.path());
         write_mcp_project_plugin(dir.path(), "p3-patient");
         let (manager, _cfg) = isolated_manager(dir.path()).await;
         // No MCP handle: the mount records the `mcp_server` skip and the row
@@ -2882,8 +2897,8 @@ priority = 60
     /// A static plugin has no dependency to wait on: `Loaded` after mount.
     #[tokio::test]
     async fn mount_of_a_static_plugin_is_loaded() {
-        let _home = crate::utils::paths::IsolatedAlephHome::new();
         let dir = tempfile::tempdir().unwrap();
+        let _home = isolated_home(dir.path());
         write_project_plugin(dir.path(), "p3-static");
         let (manager, _cfg) = isolated_manager(dir.path()).await;
         manager.load_all().await.unwrap();
@@ -2904,8 +2919,8 @@ priority = 60
     async fn mount_with_a_silent_manager_is_pending_on_the_server_and_a_dropped_answer_stays_a_wait(
     ) {
         use crate::mcp::manager::McpManagerActor;
-        let _home = crate::utils::paths::IsolatedAlephHome::new();
         let dir = tempfile::tempdir().unwrap();
+        let _home = isolated_home(dir.path());
         write_mcp_project_plugin(dir.path(), "p3-quiet");
         let (manager, _cfg) = isolated_manager(dir.path()).await;
         let (actor, handle) = McpManagerActor::new(Some(dir.path().join("mcp.json")))
@@ -2939,8 +2954,8 @@ priority = 60
     #[tokio::test]
     async fn mount_with_a_running_manager_ends_terminal_when_the_actor_answers() {
         use crate::mcp::manager::McpManagerActor;
-        let _home = crate::utils::paths::IsolatedAlephHome::new();
         let dir = tempfile::tempdir().unwrap();
+        let _home = isolated_home(dir.path());
         write_mcp_project_plugin(dir.path(), "p3-live");
         let (manager, _cfg) = isolated_manager(dir.path()).await;
         let (actor, handle) = McpManagerActor::new(Some(dir.path().join("mcp.json")))
@@ -3006,8 +3021,8 @@ priority = 60
     /// would ever correct the row.
     #[tokio::test]
     async fn a_disposed_mounts_watcher_never_writes_onto_the_next_mounts_row() {
-        let _home = crate::utils::paths::IsolatedAlephHome::new();
         let dir = tempfile::tempdir().unwrap();
+        let _home = isolated_home(dir.path());
         write_mcp_project_plugin(dir.path(), "p3-stale");
         let (manager, _cfg) = isolated_manager(dir.path()).await;
         let (handle, mut starts) = scripted_mcp_actor();
@@ -3101,8 +3116,8 @@ priority = 60
     /// that republishes the process-global skill dirs.)
     #[tokio::test]
     async fn a_failed_server_start_takes_the_plugins_skills_and_hooks_off_the_views() {
-        let _home = crate::utils::paths::IsolatedAlephHome::new();
         let dir = tempfile::tempdir().unwrap();
+        let _home = isolated_home(dir.path());
         write_mcp_plugin_with_skill_and_hook(dir.path(), "p3-views");
         let (manager, _cfg) = isolated_manager(dir.path()).await;
         let (handle, mut starts) = scripted_mcp_actor();
@@ -3144,8 +3159,8 @@ priority = 60
     /// it: the lock is awaited, so aborting the parked task drops it.
     #[tokio::test]
     async fn a_watcher_parked_on_the_transition_lock_is_ended_by_the_transition_holding_it() {
-        let _home = crate::utils::paths::IsolatedAlephHome::new();
         let dir = tempfile::tempdir().unwrap();
+        let _home = isolated_home(dir.path());
         write_mcp_project_plugin(dir.path(), "p3-parked");
         let (manager, _cfg) = isolated_manager(dir.path()).await;
         let (handle, mut starts) = scripted_mcp_actor();
@@ -3196,8 +3211,8 @@ priority = 60
     /// row keeps the `Pending` it had when the scope was abandoned.
     #[tokio::test]
     async fn a_scope_dropped_without_dispose_still_ends_its_watcher() {
-        let _home = crate::utils::paths::IsolatedAlephHome::new();
         let dir = tempfile::tempdir().unwrap();
+        let _home = isolated_home(dir.path());
         write_mcp_project_plugin(dir.path(), "p3-dropped");
         let (manager, _cfg) = isolated_manager(dir.path()).await;
         let (handle, mut starts) = scripted_mcp_actor();
@@ -3246,7 +3261,6 @@ priority = 60
     /// the assertion below meaningless, not merely fail it).
     #[tokio::test]
     async fn after_transition_broadcasts_tools_list_changed_to_the_installed_face() {
-        let _home = crate::utils::paths::IsolatedAlephHome::new();
         use crate::gateway::mcp_face::{install_mcp_face, test_support, try_mcp_face};
 
         let face = Arc::new(test_support::face(&["echo"], true));
@@ -3263,6 +3277,7 @@ priority = 60
         );
 
         let dir = tempfile::tempdir().unwrap();
+        let _home = isolated_home(dir.path());
         let (manager, _cfg) = isolated_manager(dir.path()).await;
         manager.views().after_transition().await;
 

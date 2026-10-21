@@ -364,12 +364,22 @@ mod tests {
         };
 
         projector.on_appended(&session_id, &record);
-        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-
-        // Verify session directory exists
+        // The projector works through a background worker, so the write lands
+        // when the worker gets to it — a fixed delay would be a race with the
+        // scheduler. Wait for the effect instead of assuming a delay covers it.
         let session_dir = temp_dir.path().join("raw/sessions").join(
             crate::memory::store::markdown::session_directory_key(&session_id.to_string()),
         );
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
+        while !session_dir.exists() {
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "the projector never created {session_dir:?}"
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+
+        // Verify session directory exists
         assert!(session_dir.exists());
         let metadata = store
             .get_session_metadata(&session_id.to_string())
