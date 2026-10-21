@@ -12,10 +12,11 @@
 > [DESIGN_PATTERNS.md](../reference/DESIGN_PATTERNS.md) ·
 > [FEATURE_LOCATOR.md](../reference/FEATURE_LOCATOR.md) · [HARNESS_PHILOSOPHY.md](../reference/HARNESS_PHILOSOPHY.md)
 
+> **状态校正（2026-10-21）**：这里的“后端已 mount, UI 完全不可见”是 UI 范围结论，不是 runtime mount 缺口。生产启动已经挂载 `ProjectionHost`；`src/capability/provider.rs` 也已提供并接入 Tool registry 的 Provider lifecycle foundation。右栏 Capability body 仍未实现，Provider 的 ExtensionManager 副作用驱动、Bridge sidecar 和动态库卸载仍属于后续工作。
+
 ---
 
 ## 0. 摘要 (TL;DR)
-
 | 维度 | 当前状态 | 建议主轴 |
 |---|---|---|
 | 顶层布局 | 14.5rem 左侧栏 + main,无传统"右列" | 把"右列"从 absolute overlay 升级为 flex 列(可选宽度 0/默认/拖拽) |

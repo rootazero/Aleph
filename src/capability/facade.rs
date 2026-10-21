@@ -60,6 +60,10 @@ pub struct CapabilitySnapshot {
 pub struct BackendLease {
     pub descriptor: CapabilityDescriptor,
     pub owner_generation: OwnerGeneration,
+    /// Generation of the provider instance that resolved this lease. A
+    /// provider restart invalidates the lease even when the tool descriptor
+    /// itself has not changed.
+    pub provider_generation: u64,
 }
 
 /// Closed error set for `Zahir::resolve` / `Zahir::validate_lease`.
@@ -78,6 +82,8 @@ pub enum ResolveError {
     /// The lease's `owner_generation` lags the current per-binding generation
     /// (validate-only).
     StaleOwner,
+    /// The provider instance was stopped or replaced after this lease was minted.
+    StaleProvider,
 }
 
 /// A single capability change delivered to a subscriber.
@@ -459,6 +465,7 @@ mod tests {
             ResolveError::NotVisible,
             ResolveError::Revoked,
             ResolveError::StaleOwner,
+            ResolveError::StaleProvider,
         ];
         // Closed set: every variant compares equal only to itself, and cloning
         // preserves identity.

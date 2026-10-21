@@ -40,6 +40,7 @@ pub mod effect_claim;
 pub mod facade;
 pub mod ownership;
 pub mod projection_host;
+pub mod provider;
 pub(crate) mod versioned_registry;
 pub mod zahir_facade;
 

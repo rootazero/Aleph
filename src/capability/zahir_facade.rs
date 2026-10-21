@@ -21,6 +21,7 @@ use crate::capability::facade::{
 use crate::capability::ownership::{
     LifetimeScope, OwnerGeneration, OwnerRef, OwnershipTree, VisibilityScope,
 };
+use crate::capability::provider::{ProviderHandle, ProviderState};
 use crate::sync_primitives::Arc;
 use crate::tools::registry::{
     RegistryChange, RegistryEntry, RegistryPublication, RegistrySnapshot, ToolHandlerRegistry,
@@ -88,6 +89,12 @@ impl ZahirFacade {
             adapter: ToolBackendAdapter { registry },
             tree,
         })
+    }
+
+    /// The shared provider lifecycle gate for this facade's Tool surface.
+    #[must_use]
+    pub fn provider(&self) -> ProviderHandle {
+        self.adapter.registry.provider()
     }
 
     /// Idempotently register an ownership binding for every registry tool that
@@ -345,6 +352,7 @@ impl Zahir for ZahirFacade {
             Some(owner_generation) => Ok(BackendLease {
                 descriptor,
                 owner_generation,
+                provider_generation: self.adapter.registry.provider_generation(),
             }),
             None if self.tree.is_revoked(&reference.id) => Err(ResolveError::Revoked),
             None => Err(ResolveError::NotVisible),
@@ -352,6 +360,15 @@ impl Zahir for ZahirFacade {
     }
 
     fn validate_lease(&self, lease: &BackendLease) -> Result<(), ResolveError> {
+        let provider = self.adapter.registry.provider();
+        let (provider_state, provider_generation) = provider.snapshot();
+        if provider_state != ProviderState::Ready {
+            return Err(ResolveError::StaleProvider);
+        }
+        if lease.provider_generation != provider_generation {
+            return Err(ResolveError::StaleProvider);
+        }
+
         // ① binding location — the lease's own visibility selects the binding.
         match self
             .tree
@@ -414,6 +431,9 @@ mod tests {
     use super::*;
     use crate::capability::ownership::{
         ClaimState, LifetimeScope, OwnerGeneration, OwnerRef, TaskId, VisibilityScope,
+    };
+    use crate::capability::provider::{
+        ProviderHandle, ProviderId, ProviderLifecycle, ProviderState, ProviderTransport,
     };
     use crate::session::events::ToolOutput;
     use crate::tools::descriptor::ToolCapabilityDescriptor;
@@ -486,6 +506,44 @@ mod tests {
             namespace: None,
             visibility: VisibilityScope::default(),
         }
+    }
+
+    #[test]
+    fn provider_restart_invalidates_old_tool_leases_and_hides_projection() {
+        let provider = ProviderHandle::new(ProviderLifecycle::ready(
+            ProviderId::new("test/tools").unwrap(),
+            ProviderTransport::Bridge,
+        ));
+        let registry = ToolHandlerRegistry::new_with_provider(provider.clone());
+        registry
+            .register(
+                ToolCapabilityDescriptor::from_definition(&fake_def("a"), 0),
+                Arc::new(fake_handler("a")),
+            )
+            .unwrap();
+        let tree = Arc::new(OwnershipTree::new());
+        let facade = ZahirFacade::new(registry, tree);
+        let id = tool_id("a");
+        let lease = facade
+            .resolve(ref_for(&id))
+            .expect("initial provider is ready");
+        assert_eq!(lease.provider_generation, 1);
+
+        provider.transition(ProviderState::Stopping).unwrap();
+        assert!(facade.describe(scope_all()).capabilities.is_empty());
+        assert_eq!(
+            facade.validate_lease(&lease),
+            Err(ResolveError::StaleProvider)
+        );
+
+        provider.transition(ProviderState::Stopped).unwrap();
+        provider.transition(ProviderState::Starting).unwrap();
+        provider.transition(ProviderState::Ready).unwrap();
+        assert_eq!(
+            facade.validate_lease(&lease),
+            Err(ResolveError::StaleProvider)
+        );
+        assert!(facade.resolve(ref_for(&id)).is_ok());
     }
 
     #[test]

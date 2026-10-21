@@ -19,6 +19,9 @@ use std::sync::Weak;
 use crate::capability::versioned_registry::VersionedRegistry;
 use tokio::sync::{broadcast, Notify};
 
+use crate::capability::provider::{
+    ProviderHandle, ProviderId, ProviderLifecycle, ProviderState, ProviderTransport,
+};
 use crate::session::events::ToolOutput;
 use crate::tools::descriptor::{
     ReplayPolicyLookup, ToolCallIdentity, ToolCapabilityDescriptor, ToolDescriptorLookup,
@@ -117,6 +120,8 @@ pub struct RegistrySnapshot {
     entries: Arc<HashMap<String, RegistryEntry>>,
     revision: u64,
     closed: bool,
+    provider_state: ProviderState,
+    provider_generation: u64,
 }
 
 impl RegistrySnapshot {
@@ -128,6 +133,16 @@ impl RegistrySnapshot {
     #[must_use]
     pub fn is_closed(&self) -> bool {
         self.closed
+    }
+
+    #[must_use]
+    pub fn provider_state(&self) -> ProviderState {
+        self.provider_state
+    }
+
+    #[must_use]
+    pub fn provider_generation(&self) -> u64 {
+        self.provider_generation
     }
 
     #[must_use]
@@ -396,6 +411,7 @@ impl CanonicalToolState {
 #[derive(Clone)]
 pub struct ToolHandlerRegistry {
     shared: Arc<RegistryShared>,
+    provider: ProviderHandle,
 }
 
 impl ReplayPolicyLookup for ToolHandlerRegistry {
@@ -423,12 +439,37 @@ impl ToolDescriptorLookup for ToolHandlerRegistry {
 impl ToolHandlerRegistry {
     #[must_use]
     pub fn new() -> Self {
+        let provider_id = ProviderId::new("aleph/tools").expect("built-in provider id is valid");
+        Self::new_with_provider(ProviderHandle::new(ProviderLifecycle::ready(
+            provider_id,
+            ProviderTransport::InProcess,
+        )))
+    }
+
+    /// Create a registry whose callable surface is fenced by `provider`.
+    /// Registration state remains in the canonical registry; readiness only
+    /// controls whether snapshots and resolution expose it.
+    #[must_use]
+    pub fn new_with_provider(provider: ProviderHandle) -> Self {
         Self {
             shared: Arc::new(VersionedRegistry::new_with_projection(
                 CanonicalToolState::empty(),
                 project_registry_publication,
             )),
+            provider,
         }
+    }
+
+    /// Shared lifecycle handle for the provider that owns this registry.
+    #[must_use]
+    pub fn provider(&self) -> ProviderHandle {
+        self.provider.clone()
+    }
+
+    /// Current generation of the provider that owns this registry.
+    #[must_use]
+    pub fn provider_generation(&self) -> u64 {
+        self.provider.generation()
     }
 
     /// Register a new capability. Rejects a descriptor that fails validation, a
@@ -581,6 +622,9 @@ impl ToolHandlerRegistry {
     /// This is an exact canonical-name lookup, not dispatch authorization.
     #[must_use]
     pub fn resolve_entry(&self, name: &str) -> Option<RegistryEntry> {
+        if !self.provider.is_ready() {
+            return None;
+        }
         let state = self.shared.snapshot();
         state.value.entry(name).cloned()
     }
@@ -588,20 +632,13 @@ impl ToolHandlerRegistry {
     /// Resolve the live handler for `name`.
     #[must_use]
     pub fn resolve(&self, name: &str) -> Option<Arc<dyn ToolHandler>> {
-        self.shared
-            .snapshot()
-            .value
-            .entry(name)
-            .map(|entry| Arc::clone(&entry.handler))
+        self.resolve_entry(name).map(|entry| entry.handler)
     }
 
     /// Resolve the live descriptor for `name`.
     #[must_use]
     pub fn descriptor(&self, name: &str) -> Option<Arc<ToolCapabilityDescriptor>> {
-        self.shared
-            .snapshot()
-            .value
-            .entry(name)
+        self.resolve_entry(name)
             .map(|entry| Arc::clone(&entry.descriptor))
     }
 
@@ -673,11 +710,10 @@ impl ToolHandlerRegistry {
     /// Frozen handler view (compatibility projection).
     #[must_use]
     pub fn snapshot(&self) -> Arc<HashMap<String, Arc<dyn ToolHandler>>> {
-        let state = self.shared.snapshot();
+        let state = self.snapshot_state();
         Arc::new(
             state
-                .value
-                .callable_projection
+                .entries()
                 .iter()
                 .map(|(name, entry)| (name.clone(), Arc::clone(&entry.handler)))
                 .collect(),
@@ -689,10 +725,18 @@ impl ToolHandlerRegistry {
     #[must_use]
     pub fn snapshot_state(&self) -> RegistrySnapshot {
         let state = self.shared.snapshot();
+        let (provider_state, provider_generation) = self.provider.snapshot();
+        let entries = if provider_state == ProviderState::Ready {
+            Arc::clone(&state.value.callable_projection)
+        } else {
+            Arc::new(HashMap::new())
+        };
         RegistrySnapshot {
-            entries: Arc::clone(&state.value.callable_projection),
+            entries,
             revision: state.revision,
             closed: state.closed,
+            provider_state,
+            provider_generation,
         }
     }
 
@@ -706,11 +750,10 @@ impl ToolHandlerRegistry {
 
     #[must_use]
     pub fn descriptor_snapshot(&self) -> Arc<HashMap<String, Arc<ToolCapabilityDescriptor>>> {
-        let state = self.shared.snapshot();
+        let state = self.snapshot_state();
         Arc::new(
             state
-                .value
-                .callable_projection
+                .entries()
                 .iter()
                 .map(|(name, entry)| (name.clone(), Arc::clone(&entry.descriptor)))
                 .collect(),
@@ -1161,6 +1204,30 @@ mod tests {
         }
     }
 
+    #[test]
+    fn provider_not_ready_hides_callable_snapshots_until_ready() {
+        let provider = ProviderHandle::new(ProviderLifecycle::new(
+            ProviderId::new("test/tools").unwrap(),
+            ProviderTransport::Bridge,
+        ));
+        let registry = ToolHandlerRegistry::new_with_provider(provider.clone());
+        registry
+            .register(desc("lazy"), fake("lazy"))
+            .expect("registration is retained before provider start");
+
+        assert!(registry.snapshot_state().entries().is_empty());
+        assert!(registry.resolve_entry("lazy").is_none());
+
+        provider.transition(ProviderState::Starting).unwrap();
+        provider.transition(ProviderState::Ready).unwrap();
+        assert!(registry.snapshot_state().entry("lazy").is_some());
+        assert!(registry.resolve_entry("lazy").is_some());
+
+        provider.transition(ProviderState::Stopping).unwrap();
+        assert!(registry.snapshot_state().entries().is_empty());
+        assert!(registry.resolve_entry("lazy").is_none());
+    }
+
     fn fake(name: &str) -> Arc<dyn ToolHandler> {
         Arc::new(FakeHandler {
             name: name.into(),
@@ -1350,6 +1417,7 @@ mod tests {
                 },
                 project_registry_publication,
             )),
+            provider: ToolHandlerRegistry::new().provider(),
         });
         projection.bind_canonical_registry(frozen, Arc::new(|_| true));
         projection.register(Box::new(

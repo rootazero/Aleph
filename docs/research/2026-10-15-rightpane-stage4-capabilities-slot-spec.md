@@ -8,6 +8,8 @@
 
 ## §0 TL;DR
 
+> **状态校正（2026-10-21）**：本方案文档仍以 UI 只读展示为范围。后续实现已经把 `ProjectionHost` 的生产挂载接入启动路径，并新增了 `src/capability/provider.rs` 的 Provider lifecycle foundation；“UI 完全空缺”仍然是当前事实，不能理解为后端未挂载。Provider 状态机已接入 canonical Tool registry 的 callable snapshot、resolve 和 lease generation，但 ExtensionManager 的实际副作用驱动、Bridge sidecar 与动态卸载仍未实现。
+
 - **后端完整就绪,UI 完全空缺**:`ProjectionHost` 通过 `mount_with_diagnostics(registry, tree, true)` 在 `src/bin/aleph-server/commands/start/mod.rs:269` 挂载;`wait_until_ready()` + `set_projection_host(...)` + `startup_diagnostics_control(...)` 三步就位。`grep -rn 'ProjectionHost\|ZahirFacade\|DiagnosticControl' interfaces/` 全仓 0 处真使用(只有 LLM provider 的同名 `capabilities` 字段,不同事实)。
 - **9 种 capability kind,只 Tool 可执行**:其余 8 种 deferred;`EffectClaim` reducer 已 committed,**producer integration 明确 deferred**(AGENTS.md Tier 1 入口标注),右栏本阶段**只能做只读面板**,不能挂写入路径。
 - **3 个本阶段事实源**:

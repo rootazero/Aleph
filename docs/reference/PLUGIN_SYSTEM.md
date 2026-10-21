@@ -13,6 +13,16 @@ Aleph 插件系统实现了 **单向兼容 + 超集** 策略：
 
 **核心文件位置：** `src/extension/`
 
+## Provider lifecycle foundation / Provider 生命周期基础（2026-10-21）
+
+`src/capability/provider.rs` adds a pure state machine and shared handle for `InProcess` and future `Bridge` providers. It publishes lifecycle transitions and increments a generation for each restart. `ToolHandlerRegistry::new_with_provider` connects that handle to the canonical Tool registry: when the provider is not `Ready`, callable snapshots and resolution fail closed while registration data remains retained. `BackendLease.provider_generation` and `ResolveError::StaleProvider` fence old leases after stop or restart.
+
+The lifecycle contract does not create a second plugin manager. `src/extension/lifecycle.rs::ExtensionManager` still owns discovery, mount/unmount effects, and reload; `src/extension/plugin_state.rs` remains the durable enabled configuration. The Provider handle is the Core boundary those owners can drive later. This slice does not start sidecars, load dynamic libraries, or wire ExtensionManager side effects into the state machine.
+
+`src/capability/provider.rs` 为 `InProcess` 以及未来的 `Bridge` Provider 增加纯状态机和共享 handle。它发布生命周期 transition，并为每次重启递增 generation。`ToolHandlerRegistry::new_with_provider` 将该 handle 接到 canonical Tool registry：Provider 未处于 `Ready` 时，callable snapshot 和 resolve fail-closed，但注册数据保留；`BackendLease.provider_generation` 与 `ResolveError::StaleProvider` 会在停止或重启后隔离旧 lease。
+
+该生命周期契约不会新建第二个插件管理器。`src/extension/lifecycle.rs::ExtensionManager` 仍负责发现、mount/unmount effect 和 reload；`src/extension/plugin_state.rs` 仍是持久化 enabled 配置的事实源。Provider handle 是未来由这些 owner 驱动的 Core 边界。本切片尚未启动 sidecar、加载动态库，也未把 ExtensionManager 的副作用直接接入状态机。
+
 ---
 
 ## Context Capability 授权契约 / Context capability authorization
