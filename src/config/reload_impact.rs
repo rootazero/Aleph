@@ -44,8 +44,6 @@ pub enum ReloadImpact {
 /// without a daemon restart.
 ///
 /// Why each one qualifies:
-/// - `route` — the failover chain reads its route state from a boot-installed
-///   `ArcSwap`; storing into it is what makes a route change live.
 /// - `behavior` — `output_mode` is re-read fresh from the shared config on
 ///   every run by all channel paths (`server_init`, the `inbound_router`
 ///   executor, and the `agent` handler's `resolved_output_mode`), so the
@@ -70,7 +68,7 @@ pub enum ReloadImpact {
 /// `config.patch` of `route.mode` reported "no restart needed" and changed
 /// nothing. `live_apply`'s `every_live_section_has_an_apply_arm` fails if an
 /// entry here has no arm there, or vice versa.
-pub(crate) const LIVE_SECTIONS: &[&str] = &["route", "behavior", "execution", "search"];
+pub(crate) const LIVE_SECTIONS: &[&str] = &["behavior", "execution", "search"];
 
 /// Sub-sections applied live even though their *parent* top-level section is
 /// not — the parent has other fields with no live-apply wiring, so declaring
@@ -82,8 +80,8 @@ pub(crate) const LIVE_SECTIONS: &[&str] = &["route", "behavior", "execution", "s
 /// - `policies.spend` — the per-principal/machine USD ceiling is read fresh
 ///   on every call from a boot-installed `ArcSwap`
 ///   ([`crate::spend::current_policy`]); storing a patched policy into it
-///   (`crate::spend::update_policy`) is what makes a ceiling change live,
-///   exactly like `route`'s `ArcSwap`. `[policies]`'s other fields
+///   (`crate::spend::update_policy`) is what makes a ceiling change live.
+///   `[policies]`'s other fields
 ///   (`tool_permissions` and friends) have no such handle, hence the parent
 ///   section itself stays out of [`LIVE_SECTIONS`]. (Deliberately no count
 ///   here: a number in a comment is a list that rots. `PoliciesConfig` has
@@ -242,10 +240,10 @@ mod tests {
     }
 
     #[test]
-    fn route_is_live() {
-        assert_eq!(ReloadImpact::classify("route"), ReloadImpact::Live);
-        assert_eq!(ReloadImpact::classify("route.mode"), ReloadImpact::Live);
-        assert_eq!(
+    fn retired_route_is_not_live() {
+        assert_ne!(ReloadImpact::classify("route"), ReloadImpact::Live);
+        assert_ne!(ReloadImpact::classify("route.mode"), ReloadImpact::Live);
+        assert_ne!(
             ReloadImpact::classify("route.allow_cloud_escalation"),
             ReloadImpact::Live
         );

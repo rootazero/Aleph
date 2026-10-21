@@ -3707,7 +3707,10 @@ mod tests {
     /// 275, answer_call 194, and hangup 190. The guard's measured total is
     /// 107,406 B across 60 tools; the refreshed table below is copied from
     /// that same run so the ceiling and per-tool ledger remain one fact.
-    const REGISTRY_SCHEMA_CEILING_BYTES: usize = 107_406;
+    /// 2026-10-21: the stored per-tool ledger actually sums to 104,535 B;
+    /// restore its scalar ceiling to that value instead of widening the guard.
+    /// The current guard measures 103,865 B across 60 tools, below this ceiling.
+    const REGISTRY_SCHEMA_CEILING_BYTES: usize = 104_535;
 
     /// That same measurement, decomposed per tool.
     ///

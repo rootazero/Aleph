@@ -760,64 +760,73 @@ async fn a_declared_model_pins_this_turn_only_when_the_request_has_none() {
 #[tokio::test]
 #[cfg(unix)]
 async fn an_admitted_command_renders_for_the_transient_blocks_and_leaves_the_input_raw() {
-    let f = Fixture::new("Say hello to $1 from !`pwd -P`.", Some("claude-sonnet-5")).await;
-    f.approve("pwd -P");
-    let temp = TempDir::new().unwrap();
-    let agent = super::super::tests::gate_test_agent(&temp, "cmd-agent").await;
-    let mut request = f.request(f.work.clone()).await;
+    let snapshot = selectable_snapshot(
+        &[("anthropic", "claude-sonnet-5")],
+        &["anthropic"],
+        &["anthropic"],
+    );
+    with_test_selectable_models(Some(snapshot), async {
+        let f = Fixture::new("Say hello to $1 from !`pwd -P`.", Some("claude-sonnet-5")).await;
+        f.approve("pwd -P");
+        let temp = TempDir::new().unwrap();
+        let agent = super::super::tests::gate_test_agent(&temp, "cmd-agent").await;
+        let mut request = f.request(f.work.clone()).await;
 
-    let block = f
-        .admit_and_render(&mut request, &agent)
+        let block = f
+            .admit_and_render(&mut request, &agent)
+            .await
+            .expect("the command renders")
+            .expect("a command block");
+        assert!(
+            block.starts_with("<command name=\"greet\" plugin=\"plug\" invoked=\"/plug:greet\">"),
+            "{block}"
+        );
+        assert!(
+            block.contains(&format!("Say hello to World from {}.", canonical(&f.work))),
+            "{block}"
+        );
+        assert_eq!(
+            request.input, "/plug:greet World",
+            "the persisted turn is raw"
+        );
+        let carriers: Vec<&String> = request
+            .metadata
+            .iter()
+            .filter(|(_, value)| value.contains("Say hello to World"))
+            .map(|(key, _)| key)
+            .collect();
+        assert!(
+            carriers.is_empty(),
+            "the body rides in metadata: {carriers:?}"
+        );
+        assert_eq!(
+            request.metadata.get(ADMITTED_KEY).map(String::as_str),
+            Some("plug:greet")
+        );
+        assert_eq!(
+            request.model_override,
+            Some(ModelOverride::Qualified {
+                provider: "anthropic".into(),
+                model: "claude-sonnet-5".into(),
+            })
+        );
+
+        let kept = strip(&mut request.metadata, request.model_override.clone());
+        assert_eq!(kept, None, "the command's pin was for its own turn");
+        let run_dir = super::super::run_loop::run_workspace(&request, &agent);
+        let again = render_admitted(
+            &request,
+            &run_dir,
+            &turn_permissions(&request, &agent).await,
+            Some(&f.manager),
+            Arc::clone(&f.consent),
+            &CancellationToken::new(),
+        )
         .await
-        .expect("the command renders")
-        .expect("a command block");
-    assert!(
-        block.starts_with("<command name=\"greet\" plugin=\"plug\" invoked=\"/plug:greet\">"),
-        "{block}"
-    );
-    assert!(
-        block.contains(&format!("Say hello to World from {}.", canonical(&f.work))),
-        "{block}"
-    );
-    assert_eq!(
-        request.input, "/plug:greet World",
-        "the persisted turn is raw"
-    );
-    let carriers: Vec<&String> = request
-        .metadata
-        .iter()
-        .filter(|(_, value)| value.contains("Say hello to World"))
-        .map(|(key, _)| key)
-        .collect();
-    assert!(
-        carriers.is_empty(),
-        "the body rides in metadata: {carriers:?}"
-    );
-    assert_eq!(
-        request.metadata.get(ADMITTED_KEY).map(String::as_str),
-        Some("plug:greet")
-    );
-    assert_eq!(
-        request.model_override,
-        Some(ModelOverride::Raw {
-            model: "claude-sonnet-5".into()
-        })
-    );
-
-    let kept = strip(&mut request.metadata, request.model_override.clone());
-    assert_eq!(kept, None, "the command's pin was for its own turn");
-    let run_dir = super::super::run_loop::run_workspace(&request, &agent);
-    let again = render_admitted(
-        &request,
-        &run_dir,
-        &turn_permissions(&request, &agent).await,
-        Some(&f.manager),
-        Arc::clone(&f.consent),
-        &CancellationToken::new(),
-    )
-    .await
-    .unwrap();
-    assert_eq!(again, None, "a stripped request renders its command again");
+        .unwrap();
+        assert_eq!(again, None, "a stripped request renders its command again");
+    })
+    .await;
 }
 
 /// The composer's pick outranks the command's `model:`, and survives the

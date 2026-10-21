@@ -466,7 +466,7 @@ mod tests {
 
         let arms = body.matches("LoopTraceEvent::").count();
         assert_eq!(
-            arms, 15,
+            arms, 16,
             "found {arms} live LoopTraceEvent arms in mask_trace_event — the \
              source scan or live redaction set changed"
         );

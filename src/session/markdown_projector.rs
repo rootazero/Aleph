@@ -15,7 +15,7 @@
 //!         ↓
 //! MarkdownSessionStore (write)
 //!         ↓
-//! ~/.aleph/raw/sessions/{session_id}/
+//! ~/.aleph/raw/sessions/{sha256(session_id)}/
 //!   ├── transcript.md
 //!   ├── tool_outputs.md
 //!   └── metadata.json
@@ -367,10 +367,9 @@ mod tests {
         tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
 
         // Verify session directory exists
-        let session_dir = temp_dir
-            .path()
-            .join("raw/sessions")
-            .join(session_id.to_string());
+        let session_dir = temp_dir.path().join("raw/sessions").join(
+            crate::memory::store::markdown::session_directory_key(&session_id.to_string()),
+        );
         assert!(session_dir.exists());
         let metadata = store
             .get_session_metadata(&session_id.to_string())

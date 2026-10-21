@@ -142,9 +142,9 @@ pub struct SessionSearchResult {
 /// Storage abstraction for Markdown-based session data.
 ///
 /// Sessions are stored as:
-/// - `~/.aleph/raw/sessions/{session_id}/transcript.md`
-/// - `~/.aleph/raw/sessions/{session_id}/tool_outputs.md`
-/// - `~/.aleph/raw/sessions/{session_id}/metadata.json`
+/// - `~/.aleph/raw/sessions/{sha256(session_id)}/transcript.md`
+/// - `~/.aleph/raw/sessions/{sha256(session_id)}/tool_outputs.md`
+/// - `~/.aleph/raw/sessions/{sha256(session_id)}/metadata.json`
 /// - Attachments in `~/.aleph/raw/attachments/{type}/{hash}.{ext}`
 ///
 /// SQLite `metadata.db` stores only IDs, indexes, and derived data.

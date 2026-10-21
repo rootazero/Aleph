@@ -371,7 +371,7 @@ mod tests {
     #[test]
     fn a_landed_live_apply_keeps_the_live_verdict() {
         assert_eq!(
-            classify_verified("route.mode", &["route"]),
+            classify_verified("behavior.output_mode", &["behavior"]),
             ReloadImpact::Live
         );
     }
@@ -382,7 +382,7 @@ mod tests {
         // today (a patch carries one section), so only this assertion keeps the
         // predicate answering the question that was asked.
         assert_eq!(
-            classify_verified("route.mode", &["execution"]),
+            classify_verified("behavior.output_mode", &["execution"]),
             ReloadImpact::Restart
         );
         assert_eq!(

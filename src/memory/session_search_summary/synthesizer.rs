@@ -12,8 +12,22 @@
 //! 4. Strip the analysis block and write via `INSERT OR IGNORE` (first writer
 //!    wins in a concurrent race).
 //! 5. Re-read to return the winning row.
+//!
+//! Steps 1–5 are expensive (one LLM call) and must not run twice for the same
+//! session. They therefore run under a per-`(agent_id, session_id)` single
+//! flight: the first caller for a key is the *leader* and pays for the LLM
+//! call, concurrent callers for the same key are *followers* that wait for the
+//! leader's outcome instead of issuing their own LLM call. Without the flight,
+//! the Markdown-backed store (whose operations run on `spawn_blocking`) let
+//! every concurrent caller pass the fast-path read before the first writer
+//! committed, so N concurrent callers meant N LLM calls.
 
-use crate::sync_primitives::Arc;
+use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
+
+use tokio::sync::watch;
+
+use crate::sync_primitives::{Arc, Mutex as StdMutex, MutexGuard};
 
 use async_trait::async_trait;
 
@@ -48,6 +62,124 @@ pub trait SummaryLlm: Send + Sync {
 }
 
 // ---------------------------------------------------------------------------
+// In-flight single flight
+// ---------------------------------------------------------------------------
+
+/// Stable key of the in-flight table: the `(agent_id, session_id)` pair.
+///
+/// The agent id is part of the key because summary rows are unique per
+/// `(agent_id, path)`, while their canonical path omits the agent id.
+/// A tuple preserves both ids without assuming any reserved separator.
+fn flight_key(agent_id: &str, session_id: &str) -> (String, String) {
+    (agent_id.to_owned(), session_id.to_owned())
+}
+
+/// Terminal outcome of one synthesis flight, shared with the followers.
+#[derive(Clone)]
+enum FlightOutcome {
+    /// The leader found or wrote the summary row.
+    Ready(RawMemory),
+    /// The leader failed. Only the message is shared: `AlephError` is not
+    /// `Clone`, so the exact variant cannot be handed to the followers.
+    Failed(String),
+    /// The leader was cancelled (or panicked) before publishing an outcome.
+    Aborted,
+}
+
+/// One in-flight synthesis.
+///
+/// The leader owns the work; the followers wait on the `watch` channel for
+/// the terminal outcome. The outcome lives in the channel itself, so a
+/// follower that subscribes after the publish still observes it.
+struct InFlight {
+    /// Terminal outcome; `None` until the leader publishes.
+    outcome_tx: watch::Sender<Option<FlightOutcome>>,
+    /// Ensures the terminal outcome is published exactly once (leader
+    /// completion vs. leader drop).
+    published: AtomicBool,
+}
+
+impl InFlight {
+    fn new() -> Self {
+        let (outcome_tx, _rx) = watch::channel(None);
+        Self {
+            outcome_tx,
+            published: AtomicBool::new(false),
+        }
+    }
+
+    /// Publish the terminal outcome. The first publisher wins; later calls
+    /// are no-ops.
+    fn publish(&self, outcome: FlightOutcome) {
+        if self.published.swap(true, Ordering::SeqCst) {
+            return;
+        }
+        // `send_replace` stores the value even when no follower is subscribed
+        // yet, so a follower that subscribes later still sees the outcome.
+        self.outcome_tx.send_replace(Some(outcome));
+    }
+
+    /// Wait for the leader's outcome. `None` means the leader vanished
+    /// without publishing — the leader's drop guard prevents that, it
+    /// publishes `Aborted` first.
+    async fn wait(&self) -> Option<FlightOutcome> {
+        let mut rx = self.outcome_tx.subscribe();
+        // The borrow is dropped before the await below: a `watch::Ref` must
+        // not be held across an await point.
+        let current: Option<FlightOutcome> = rx.borrow().clone();
+        if current.is_some() {
+            return current;
+        }
+        match rx.changed().await {
+            Ok(()) => {
+                let current: Option<FlightOutcome> = rx.borrow().clone();
+                current
+            }
+            Err(_) => None,
+        }
+    }
+}
+
+/// In-flight synthesis table: flight key -> flight.
+type InFlightTable = HashMap<(String, String), Arc<InFlight>>;
+
+/// Lock the in-flight table. A poisoned mutex is recovered from rather than
+/// propagated: a panic in one flight must not turn every later lookup into a
+/// panic.
+fn lock_inflight(table: &StdMutex<InFlightTable>) -> MutexGuard<'_, InFlightTable> {
+    table
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+/// Removes the flight from the in-flight table and guarantees that the
+/// followers are woken — even when the leader task is cancelled mid-flight.
+struct LeaderGuard {
+    key: (String, String),
+    flight: Arc<InFlight>,
+    table: Arc<StdMutex<InFlightTable>>,
+}
+
+impl Drop for LeaderGuard {
+    fn drop(&mut self) {
+        // A cancelled leader never published: wake the followers instead of
+        // leaving them waiting forever. `publish` is a no-op when the leader
+        // already published a real outcome.
+        self.flight.publish(FlightOutcome::Aborted);
+
+        let mut table = lock_inflight(&self.table);
+        // Only drop our own entry — a later flight for the same key may have
+        // replaced it in the meantime.
+        if table
+            .get(&self.key)
+            .is_some_and(|current| Arc::ptr_eq(current, &self.flight))
+        {
+            table.remove(&self.key);
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // SummarySynthesizer
 // ---------------------------------------------------------------------------
 
@@ -56,6 +188,11 @@ pub struct SummarySynthesizer {
     store: Arc<dyn RawMemoryStore>,
     session_store: Arc<dyn SessionStore>,
     llm: Arc<dyn SummaryLlm>,
+    /// In-flight synthesis flights, keyed by `flight_key(agent_id, session_id)`.
+    ///
+    /// The lock is only ever held for a `HashMap` lookup or insert — never
+    /// across an `await`.
+    inflight: Arc<StdMutex<InFlightTable>>,
 }
 
 impl SummarySynthesizer {
@@ -69,19 +206,80 @@ impl SummarySynthesizer {
             store,
             session_store,
             llm,
+            inflight: Arc::new(StdMutex::new(HashMap::new())),
         }
     }
 
     /// Return the canonical `/end-summary` `RawMemory` for `(agent_id,
     /// session_id)`, synthesizing it from the live transcript if necessary.
     ///
-    /// The function is safe to call concurrently: `INSERT OR IGNORE` ensures
-    /// exactly one row survives, and the final re-read returns the winner.
+    /// The function is safe to call concurrently: the per-`(agent_id,
+    /// session_id)` single flight makes exactly one caller perform the
+    /// synthesis (one LLM call), and the followers share its outcome.
     pub async fn lazy_for(
         &self,
         agent_id: &str,
         session_id: &str,
     ) -> Result<RawMemory, AlephError> {
+        let key = flight_key(agent_id, session_id);
+
+        // Join the flight for this `(agent_id, session_id)` or start one. The
+        // lock is held for a map lookup/insert only — no `await` under it.
+        let (flight, is_leader) = {
+            let mut table = lock_inflight(&self.inflight);
+            match table.get(&key) {
+                Some(current) => (Arc::clone(current), false),
+                None => {
+                    let flight = Arc::new(InFlight::new());
+                    table.insert(key.clone(), Arc::clone(&flight));
+                    (flight, true)
+                }
+            }
+        };
+
+        if !is_leader {
+            // Follower: share the leader's outcome. No store read, no LLM call.
+            return match flight.wait().await {
+                Some(FlightOutcome::Ready(raw)) => Ok(raw),
+                Some(FlightOutcome::Failed(message)) => Err(AlephError::other(format!(
+                    "end-summary synthesis failed for session {session_id}: {message}"
+                ))),
+                Some(FlightOutcome::Aborted) => Err(AlephError::other(format!(
+                    "end-summary synthesis was aborted for session {session_id}"
+                ))),
+                None => Err(AlephError::other(format!(
+                    "end-summary synthesis for session {session_id} ended without a result"
+                ))),
+            };
+        }
+
+        // Leader: the guard wakes the followers and removes the in-flight
+        // entry even if this task is cancelled before the outcome is published.
+        let _guard = LeaderGuard {
+            key,
+            flight: Arc::clone(&flight),
+            table: Arc::clone(&self.inflight),
+        };
+
+        match self.synthesize(agent_id, session_id).await {
+            Ok(raw) => {
+                flight.publish(FlightOutcome::Ready(raw.clone()));
+                Ok(raw)
+            }
+            Err(err) => {
+                // The followers cannot receive the error value itself
+                // (`AlephError` is not `Clone`), only its message.
+                flight.publish(FlightOutcome::Failed(err.to_string()));
+                Err(err)
+            }
+        }
+    }
+
+    /// Produce the canonical `/end-summary` row for `(agent_id, session_id)`.
+    ///
+    /// Only the flight leader runs this — it is the only path that reads the
+    /// store or calls the LLM.
+    async fn synthesize(&self, agent_id: &str, session_id: &str) -> Result<RawMemory, AlephError> {
         // 1. Idempotent fast-path — a concurrent caller may have already written
         //    the summary since our last check.
         if let Some(existing) = retrieve_summary_fact(&self.store, agent_id, session_id).await? {
@@ -457,6 +655,91 @@ mod tests {
     use crate::gateway::session_store::SessionStore;
     use crate::memory::store::raw_memory::{RawMemory, RawMemorySource};
 
+    #[test]
+    fn flight_keys_preserve_both_ids() {
+        assert_ne!(flight_key("a\u{1f}b", "c"), flight_key("a", "b\u{1f}c"));
+        assert_ne!(
+            flight_key("agent-a", "session"),
+            flight_key("agent-b", "session")
+        );
+    }
+
+    struct GatedLlm {
+        calls: std::sync::atomic::AtomicUsize,
+        started: tokio::sync::Notify,
+        release: tokio::sync::Semaphore,
+    }
+
+    #[async_trait]
+    impl SummaryLlm for GatedLlm {
+        async fn complete(&self, _prompt: &str) -> Result<String, AlephError> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            self.started.notify_one();
+            self.release.acquire().await.unwrap().forget();
+            Ok("Retried summary".to_owned())
+        }
+    }
+
+    #[tokio::test]
+    async fn cancelling_the_leader_wakes_followers_and_allows_retry() {
+        let (_dir, store) = make_store().await;
+        let sessions = InMemorySessionStore::new().with_messages(
+            "agent",
+            "session",
+            &[("user", "Summarize this")],
+        );
+        let llm = Arc::new(GatedLlm {
+            calls: std::sync::atomic::AtomicUsize::new(0),
+            started: tokio::sync::Notify::new(),
+            release: tokio::sync::Semaphore::new(0),
+        });
+        let synthesizer = Arc::new(SummarySynthesizer::new(store, sessions, llm.clone()));
+        let leader = tokio::spawn({
+            let synthesizer = synthesizer.clone();
+            async move { synthesizer.lazy_for("agent", "session").await }
+        });
+        let timeout = std::time::Duration::from_secs(10);
+        tokio::time::timeout(timeout, llm.started.notified())
+            .await
+            .unwrap();
+        let follower = tokio::spawn({
+            let synthesizer = synthesizer.clone();
+            async move { synthesizer.lazy_for("agent", "session").await }
+        });
+        tokio::time::timeout(timeout, async {
+            loop {
+                let joined = lock_inflight(&synthesizer.inflight)
+                    .get(&flight_key("agent", "session"))
+                    .is_some_and(|flight| flight.outcome_tx.receiver_count() > 0);
+                if joined {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+
+        leader.abort();
+        assert!(leader.await.unwrap_err().is_cancelled());
+        let error = tokio::time::timeout(timeout, follower)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap_err();
+        assert!(error.to_string().contains("aborted"));
+        assert!(lock_inflight(&synthesizer.inflight).is_empty());
+
+        llm.release.add_permits(1);
+        let retried = tokio::time::timeout(timeout, synthesizer.lazy_for("agent", "session"))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(retried.content, "Retried summary");
+        assert_eq!(llm.calls.load(Ordering::SeqCst), 2);
+        assert!(lock_inflight(&synthesizer.inflight).is_empty());
+    }
+
     // -----------------------------------------------------------------------
     // Test 1: returns existing fact when summary already present
     // -----------------------------------------------------------------------
@@ -608,15 +891,11 @@ mod tests {
             exact.len()
         );
 
-        // With the UNIQUE(agent_id, path) partial index in place, the race
-        // window is genuinely small: only callers that pass the read fast-path
-        // before any writer commits will issue an LLM call. In a single-thread
-        // tokio runtime serving the Markdown-backed test store, the
-        // expected count is 1 (≤ 2 allows a tiny scheduling jitter cushion).
-        assert!(
-            llm.call_count() <= 2,
-            "too many LLM calls: {}",
-            llm.call_count()
+        assert_eq!(
+            llm.call_count(),
+            1,
+            "concurrent callers must share one LLM call"
         );
+        assert!(lock_inflight(&synthesizer.inflight).is_empty());
     }
 }

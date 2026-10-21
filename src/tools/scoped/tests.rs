@@ -4663,13 +4663,21 @@ fn every_production_approval_park_is_stamped_or_named_exempt() {
             sites.entry(rel.clone()).or_default().push((i + 1, stamped));
         }
     }
-    // The borrow-cloud card (`escalation_allowed`) is a THINK-phase park: it
-    // gates a provider route, not a tool call, so there is no `call_id` for a
-    // `ToolCallParked` to name — out of the event's scope by construction.
-    const EXEMPT: &str = "src/providers/failover/provider.rs";
+    // Exemptions: sites that park a call on a human but cannot stamp
+    // `ToolCallParked` first, each with the reason it cannot. The borrow-cloud
+    // card (`escalation_allowed`) was one — a THINK-phase park that gates a
+    // provider route, not a tool call, so it has no `call_id` for a stamp to
+    // name — but it lost that park in 54e757c88, so the record has to follow
+    // the code out. The table stays: a future park that cannot stamp has to be
+    // named here with its reason, not silently absorbed by loosening the
+    // equality below.
+    const EXEMPT: &[(&str, &str)] = &[];
+    let mut expected: Vec<&str> = EXEMPT.iter().map(|(file, _reason)| *file).collect();
+    expected.extend_from_slice(&APPROVAL_PARK_FILES);
+    expected.sort_unstable();
     assert_eq!(
         sites.keys().map(String::as_str).collect::<Vec<_>>(),
-        [EXEMPT, APPROVAL_PARK_FILES[0], APPROVAL_PARK_FILES[1]],
+        expected,
         "a new site that parks a call on a human must stamp `ToolCallParked` first, or be \
          named exempt here with its reason: {sites:?}"
     );
@@ -4682,12 +4690,19 @@ fn every_production_approval_park_is_stamped_or_named_exempt() {
             );
         }
     }
-    assert!(
-        sites[EXEMPT].iter().all(|(_, stamped)| !stamped),
-        "the borrow-cloud card has no call_id; a `ToolCallParked` there would always be \
-         dropped for a missing identity — classify it, do not stamp it: {:?}",
-        sites[EXEMPT]
-    );
+    for (file, reason) in EXEMPT {
+        assert!(
+            !reason.trim().is_empty(),
+            "{file} is named exempt with no reason; the reason is the record"
+        );
+        for (line, stamped) in sites.get(*file).into_iter().flatten() {
+            assert!(
+                !stamped,
+                "the exempt site {file}:{line} carries a `ToolCallParked` stamp it does not \
+                 need — classify it, do not stamp it: {reason}"
+            );
+        }
+    }
 }
 
 /// The production files that park a tool call on a human's approval — the

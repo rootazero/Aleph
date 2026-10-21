@@ -8,13 +8,19 @@ use std::time::{Duration, Instant};
 
 use tokio::sync::RwLock;
 
-use crate::capability::{CapabilitySlot, MissingSemantics};
+use crate::capability::{CapabilitySlot, MissingSemantics, SlotStatus};
 use crate::sync_primitives::Arc;
 
 static GLOBAL_FAILOVER_HEALTH: CapabilitySlot<FailoverHealth> = CapabilitySlot::new(
     "providers/failover-health",
     MissingSemantics::ConsumerDecides,
 );
+
+/// The handle above, type-erased for the roster — see
+/// [`crate::spend::global_ledger_slot`] for why this shape.
+pub(crate) const fn failover_health_slot() -> &'static dyn SlotStatus {
+    &GLOBAL_FAILOVER_HEALTH
+}
 
 /// Register the breaker state used by the boot-built failover chain.
 ///
@@ -311,5 +317,29 @@ impl ProviderCooldown {
             .collect();
         out.sort();
         out
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The variant is the severity of this handle going missing, DERIVED from
+    /// the consumers of `global_health()`. Pinned in the module that owns the
+    /// handle, because that is the only place a reclassification and a re-read
+    /// of those consumers can be made to happen together.
+    /// `census::every_slot_pins_its_own_missing_semantics` requires this by
+    /// slot id.
+    #[test]
+    fn the_failover_health_slot_pins_its_missing_semantics() {
+        assert_eq!(failover_health_slot().id(), "providers/failover-health");
+        assert!(
+            matches!(
+                failover_health_slot().missing(),
+                MissingSemantics::ConsumerDecides
+            ),
+            "`providers/failover-health` is classified ConsumerDecides from its consumers; \
+             changing that means re-reading them, not re-typing this line"
+        );
     }
 }

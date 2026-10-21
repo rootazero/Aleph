@@ -7,7 +7,7 @@ mod raw_memory;
 mod store_impl;
 mod utils;
 
-pub use store_impl::MarkdownSessionStore;
+pub use store_impl::{session_directory_key, MarkdownSessionStore};
 
 #[cfg(test)]
 mod raw_memory_tests;

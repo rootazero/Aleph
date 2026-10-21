@@ -320,6 +320,7 @@ pub static ALL_SLOTS: &[&'static dyn SlotStatus] = &[
     crate::looping::global_slot(),
     crate::providers::session_model_handle::pin_sink_slot(),
     crate::providers::session_model_handle::pinnable_providers_slot(),
+    crate::providers::failover::health::failover_health_slot(),
     crate::mcp::sampling_bridge::sampling_llm_slot(),
     crate::spend::global_ledger_slot(),
     crate::spend::global_policy_slot(),

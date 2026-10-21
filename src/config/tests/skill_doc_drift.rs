@@ -620,7 +620,7 @@ fn the_derived_section_set_survives_the_serde_attributes_that_distort_it() {
     // `skip_serializing_if = "Option::is_none"` / `"…is_empty"`: absent from a
     // serialized default, present in the schema. These are the sections a
     // `to_value(Config::default())` derivation would have called phantoms.
-    for hidden in ["guardrails", "stability", "moa", "profiles", "personas"] {
+    for hidden in ["guardrails", "stability", "profiles", "personas"] {
         assert!(
             truth.live.contains(hidden),
             "`{hidden}` vanished from the derived section set — the derivation regressed to \
@@ -647,7 +647,7 @@ fn the_derived_section_set_survives_the_serde_attributes_that_distort_it() {
     );
 
     // Whole-section retirements are known as retirements, not as live keys.
-    for retired in ["agent", "cowork", "secret_providers"] {
+    for retired in ["agent", "cowork", "secret_providers", "moa", "route"] {
         assert!(
             truth.retired.contains(retired),
             "retired: {:?}",

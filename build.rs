@@ -110,6 +110,13 @@ fn main() {
             "cargo:rustc-link-arg-bin=aleph-server=-Wl,-sectcreate,__TEXT,__info_plist,{}",
             staged.display()
         );
+        // Large Rust macOS server images can exceed ld's 16 MiB compact-
+        // unwind offset limit. Keep DWARF unwind data and disable only the
+        // compact-unwind emission for the production server binary. Test
+        // harnesses retain compact unwind because they exercise catch_unwind.
+        if std::env::var("PROFILE").as_deref() == Ok("release") {
+            println!("cargo:rustc-link-arg-bin=aleph-server=-Wl,-no_compact_unwind");
+        }
     }
 
     #[cfg(feature = "control-plane")]

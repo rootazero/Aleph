@@ -1132,7 +1132,7 @@ mod tests {
     /// first — and three clients rendered it as if it meant something.
     #[test]
     fn stats_no_longer_advertises_a_duplicate_fact_count() {
-        let src = std::fs::read_to_string("src/gateway/handlers/memory.rs").unwrap();
+        let src = std::fs::read_to_string("src/gateway/handlers/memory/mod.rs").unwrap();
         let production = crate::utils::source_scan::production_prefix(&src);
         assert!(
             !production.contains("validFacts"),

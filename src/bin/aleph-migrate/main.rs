@@ -41,9 +41,9 @@ struct Cli {
 enum Commands {
     /// Export sessions from SQLite to JSON
     Export {
-        /// Path to old SQLite database
-        #[arg(long, default_value = "~/.aleph/data/memory.db")]
-        db: PathBuf,
+        /// Path to old SQLite database (default: <ALEPH_HOME>/data/memory.db)
+        #[arg(long)]
+        db: Option<PathBuf>,
 
         /// Output JSON file path
         #[arg(long, short = 'o', default_value = "./export.json")]
@@ -80,13 +80,13 @@ enum Commands {
         #[arg(long, short = 'i')]
         input: PathBuf,
 
-        /// Output sessions directory
-        #[arg(long, short = 'o', default_value = "~/.aleph/raw/sessions")]
-        output: PathBuf,
+        /// Output sessions directory (default: <ALEPH_HOME>/raw/sessions)
+        #[arg(long, short = 'o')]
+        output: Option<PathBuf>,
 
-        /// Attachments directory
-        #[arg(long, default_value = "~/.aleph/raw/attachments")]
-        attachments_dir: PathBuf,
+        /// Attachments directory (default: <ALEPH_HOME>/raw/attachments)
+        #[arg(long)]
+        attachments_dir: Option<PathBuf>,
 
         /// Number of parallel workers
         #[arg(long, default_value = "1")]
@@ -99,13 +99,13 @@ enum Commands {
 
     /// Build metadata.db from Markdown sessions
     Index {
-        /// Sessions directory to index
-        #[arg(long, default_value = "~/.aleph/raw/sessions")]
-        sessions_dir: PathBuf,
+        /// Sessions directory to index (default: <ALEPH_HOME>/raw/sessions)
+        #[arg(long)]
+        sessions_dir: Option<PathBuf>,
 
-        /// Output database path
-        #[arg(long, short = 'o', default_value = "~/.aleph/metadata.db")]
-        output: PathBuf,
+        /// Output database path (default: <ALEPH_HOME>/metadata.db)
+        #[arg(long, short = 'o')]
+        output: Option<PathBuf>,
 
         /// Rebuild FTS5 index even if exists
         #[arg(long)]
@@ -114,13 +114,13 @@ enum Commands {
 
     /// Verify migration integrity
     Verify {
-        /// Sessions directory to verify
-        #[arg(long, default_value = "~/.aleph/raw/sessions")]
-        sessions_dir: PathBuf,
+        /// Sessions directory to verify (default: <ALEPH_HOME>/raw/sessions)
+        #[arg(long)]
+        sessions_dir: Option<PathBuf>,
 
-        /// Metadata database path
-        #[arg(long, default_value = "~/.aleph/metadata.db")]
-        metadata_db: PathBuf,
+        /// Metadata database path (default: <ALEPH_HOME>/metadata.db)
+        #[arg(long)]
+        metadata_db: Option<PathBuf>,
 
         /// Original SQLite database (for comparison)
         #[arg(long)]
@@ -156,7 +156,7 @@ fn main() -> Result<()> {
             force,
         } => {
             export::run_export(
-                expand_path(db)?,
+                resolve_default_path(db, "data/memory.db")?,
                 expand_path(output)?,
                 agent_id,
                 start_date,
@@ -177,8 +177,8 @@ fn main() -> Result<()> {
         } => {
             transform::run_transform(
                 expand_path(input)?,
-                expand_path(output)?,
-                expand_path(attachments_dir)?,
+                resolve_default_path(output, "raw/sessions")?,
+                resolve_default_path(attachments_dir, "raw/attachments")?,
                 parallel,
                 overwrite,
             )
@@ -191,8 +191,8 @@ fn main() -> Result<()> {
             rebuild_fts,
         } => {
             index::run_index(
-                expand_path(sessions_dir)?,
-                expand_path(output)?,
+                resolve_default_path(sessions_dir, "raw/sessions")?,
+                resolve_default_path(output, "metadata.db")?,
                 rebuild_fts,
             )
             .context("Index failed")?;
@@ -206,8 +206,8 @@ fn main() -> Result<()> {
             remove_orphans,
         } => {
             verify::run_verify(
-                expand_path(sessions_dir)?,
-                expand_path(metadata_db)?,
+                resolve_default_path(sessions_dir, "raw/sessions")?,
+                resolve_default_path(metadata_db, "metadata.db")?,
                 original_db.map(expand_path).transpose()?,
                 fix,
                 remove_orphans,
@@ -219,7 +219,15 @@ fn main() -> Result<()> {
     Ok(())
 }
 
-/// Expand ~ and environment variables in paths
+/// Resolve defaults through the same Aleph home as the daemon.
+fn resolve_default_path(path: Option<PathBuf>, relative: &str) -> Result<PathBuf> {
+    match path {
+        Some(path) => expand_path(path),
+        None => Ok(alephcore::utils::paths::get_config_dir()?.join(relative)),
+    }
+}
+
+/// Expand an explicit user-written ~ prefix in paths.
 fn expand_path(path: PathBuf) -> Result<PathBuf> {
     let path_str = path.to_string_lossy();
 
@@ -234,12 +242,45 @@ fn expand_path(path: PathBuf) -> Result<PathBuf> {
         path
     };
 
-    // Canonicalize if exists, otherwise return as-is
+    // Canonicalize if exists, otherwise return as-is.
     if expanded.exists() {
         expanded
             .canonicalize()
             .with_context(|| format!("Failed to canonicalize path: {}", expanded.display()))
     } else {
         Ok(expanded)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn omitted_paths_follow_the_configured_aleph_home() {
+        let root = alephcore::utils::paths::get_config_dir().unwrap();
+        for relative in [
+            "data/memory.db",
+            "raw/sessions",
+            "raw/attachments",
+            "metadata.db",
+        ] {
+            assert_eq!(
+                resolve_default_path(None, relative).unwrap(),
+                root.join(relative)
+            );
+        }
+        let cli = Cli::try_parse_from(["aleph-migrate", "export"]).unwrap();
+        assert!(matches!(cli.command, Commands::Export { db: None, .. }));
+    }
+
+    #[test]
+    fn explicit_paths_override_the_default() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("custom.db");
+        assert_eq!(
+            resolve_default_path(Some(path.clone()), "metadata.db").unwrap(),
+            path
+        );
     }
 }

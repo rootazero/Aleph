@@ -120,10 +120,13 @@ pub fn primary_read_partition(agent_id: &str) -> String {
 /// somebody else's row.
 #[cfg(test)]
 const ENUMERATING_MEMORY_READERS: &[(&str, &str)] = &[
-    ("memory.search", "src/gateway/handlers/memory.rs"),
-    ("memory.listFacts", "src/gateway/handlers/memory.rs"),
-    ("memory.stats", "src/gateway/handlers/memory.rs"),
-    ("memory.list_corrections", "src/gateway/handlers/memory.rs"),
+    ("memory.search", "src/gateway/handlers/memory/mod.rs"),
+    ("memory.listFacts", "src/gateway/handlers/memory/mod.rs"),
+    ("memory.stats", "src/gateway/handlers/memory/mod.rs"),
+    (
+        "memory.list_corrections",
+        "src/gateway/handlers/memory/mod.rs",
+    ),
     ("graph.search", "src/gateway/handlers/graph/search.rs"),
     ("graph.query", "src/gateway/handlers/graph/query.rs"),
     ("insights.tools", "src/gateway/handlers/insights.rs"),

@@ -1608,6 +1608,8 @@ mod tests {
             ("src/builtin_tools/sessions/send_tool.rs", 2, 0),
             ("src/builtin_tools/sessions/list_tool.rs", 1, 0),
             ("src/builtin_tools/terminal/capabilities.rs", 1, 0),
+            // COMPARE: the admission caller's actor, compared at consumption time.
+            ("src/tools/dispatch_verdict.rs", 1, 0),
         ];
         fn references_to_ambient_actor(code: &str) -> usize {
             const NAME: &str = "ambient_actor";

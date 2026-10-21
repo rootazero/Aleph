@@ -590,7 +590,7 @@ mod tests {
         let declared = variant_names_from_source();
         assert_eq!(
             declared.len(),
-            19,
+            20,
             "the enum-body walk found {declared:?} — it stopped matching `harness/trace.rs`"
         );
 
@@ -604,7 +604,7 @@ mod tests {
                         .to_string()
                 })
                 .collect();
-        assert_eq!(covered.len(), 15, "the live redaction fixture set changed");
+        assert_eq!(covered.len(), 16, "the live redaction fixture set changed");
         assert!(
             covered
                 .iter()

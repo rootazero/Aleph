@@ -1422,7 +1422,8 @@ async fn terminal_capability_canonical_handlers_refuse_non_operator_callers() {
     use crate::tools::turn_context::TURN_CONTEXT;
     use serde_json::json;
 
-    const LEGACY_REFUSAL: &str = "terminal requires operator; refused. An operator approving this call's own escalation card does not currently lift this refusal — nothing re-stamps the caller's role after approval.";
+    const LEGACY_REFUSAL: &str =
+        "terminal requires operator or an unused operator approval for this exact call; refused.";
 
     for name in TERMINAL_CAPABILITY_CANONICAL {
         for role in ["member", "guest"] {

@@ -138,10 +138,19 @@ fn is_ephemeral_notice(msg: &serde_json::Value) -> bool {
         Some(serde_json::Value::String(text)) => {
             crate::thinker::nudges::is_synthetic_reminder(text)
         }
-        Some(serde_json::Value::Array(blocks)) => blocks
-            .iter()
-            .filter_map(|block| block.get("text").and_then(|v| v.as_str()))
-            .any(crate::thinker::nudges::is_synthetic_reminder),
+        Some(serde_json::Value::Array(blocks)) => {
+            // A message is ephemeral only when EVERY block is a synthetic
+            // reminder. One block of real, persisted content (a question, a
+            // tool result) keeps the message anchored at the same index next
+            // turn, so the message keeps its cache breakpoint.
+            !blocks.is_empty()
+                && blocks.iter().all(|block| {
+                    block
+                        .get("text")
+                        .and_then(|v| v.as_str())
+                        .is_some_and(crate::thinker::nudges::is_synthetic_reminder)
+                })
+        }
         _ => false,
     }
 }

@@ -21,6 +21,8 @@ use alephcore::memory::assembler::{HybridAssembler, UserProfileLoader};
 use alephcore::memory::note_retrieval::NoteFactRetrieval;
 use alephcore::memory::notes::{KnowledgeNote, NoteIndexer};
 use alephcore::memory::session_resume::reader::SnapshotReader;
+use alephcore::memory::store::markdown::MarkdownSessionStore;
+use alephcore::memory::store::raw_memory::RawMemoryStore;
 use alephcore::memory::store::{MemoryBackend, SqliteMemoryBackend};
 use alephcore::memory::EmbeddingProvider;
 use alephcore::thinker::memory_context_provider::{MemoryContextConfig, MemoryContextProvider};
@@ -172,12 +174,19 @@ async fn build_pipeline(
     // Feedback-floor loader.
     let feedback_floor = alephcore::memory::assembler::FeedbackFloorLoader::new(memory_dir.clone());
 
+    // Raw transcript/fact store used by the assembler's gatherer.
+    let raw_dir = tmp.path().join("raw");
+    std::fs::create_dir_all(&raw_dir).unwrap();
+    let raw_store: Arc<dyn RawMemoryStore> =
+        Arc::new(MarkdownSessionStore::new(&raw_dir).await.unwrap());
+
     // HybridAssembler.
     let assembler: Arc<dyn alephcore::memory::assembler::WorkingMemoryAssembler> =
         Arc::new(HybridAssembler::new(
             retrieval,
             snapshots,
             backend_arc.clone() as MemoryBackend,
+            Arc::clone(&raw_store),
             profile,
             feedback_floor,
             reranker,
@@ -222,6 +231,7 @@ async fn build_pipeline(
         BuiltinToolRegistry::with_config(BuiltinToolConfig {
             injection_mode: mode,
             memory_db: Some(backend_arc.clone() as MemoryBackend),
+            raw_memory_store: Some(Arc::clone(&raw_store)),
             embedder: Some(Arc::clone(&embedder)),
             ..Default::default()
         })

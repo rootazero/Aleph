@@ -711,7 +711,7 @@ mod tests {
                 ReasoningReplay::Drop,
             ] {
                 assert_eq!(
-                    serde_json::to_value(policy.project(&[message.clone()])).unwrap(),
+                    serde_json::to_value(policy.project(std::slice::from_ref(&message))).unwrap(),
                     serde_json::to_value(vec![assistant(vec![tool()])]).unwrap(),
                     "foreign signature must not cross policies: {policy:?}",
                 );

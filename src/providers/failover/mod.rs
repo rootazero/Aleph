@@ -38,7 +38,7 @@ use crate::providers::AiProvider;
 use crate::sync_primitives::Arc;
 
 mod decision;
-mod health;
+pub(crate) mod health;
 mod provider;
 
 #[cfg(test)]

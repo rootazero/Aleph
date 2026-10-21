@@ -1,4 +1,4 @@
-// swift-tools-version: 5.9
+// swift-tools-version: 6.4
 import PackageDescription
 
 // No external dependencies: the helper is a pure JSON-RPC server over
@@ -27,5 +27,6 @@ let package = Package(
             path: "Tests/AlephBridgeTests",
             resources: [.copy("Fixtures")]
         ),
-    ]
+    ],
+    swiftLanguageModes: [.v5],
 )

@@ -790,7 +790,7 @@ impl RawSessionStore for MarkdownSessionStore {
 
 /// Full SHA-256 hex preserves case-sensitive ID distinctions without truncation
 /// or lossy sanitization, and contains no platform-specific path syntax.
-fn session_directory_key(session_id: &str) -> String {
+pub fn session_directory_key(session_id: &str) -> String {
     compute_sha256(session_id.as_bytes())
 }
 
