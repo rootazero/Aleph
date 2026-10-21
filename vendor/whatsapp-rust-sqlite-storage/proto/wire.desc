@@ -1,0 +1,24 @@
+
+Ô
+
+wire.protowire"Y
+	NoiseCert
+key (Rkey
+
+not_before (R	notBefore
+	not_after (RnotAfter"k
+ServerCertChain3
+intermediate (2.wire.NoiseCertRintermediate#
+leaf (2.wire.NoiseCertRleaf"p
+AppStateSyncKeyWire
+key_data (RkeyData 
+fingerprint (Rfingerprint
+	timestamp (R	timestamp"ý
+HashStateWire
+version (Rversion
+hash (RhashN
+index_value_map (2&.wire.HashStateWire.IndexValueMapEntryRindexValueMap,
+mac_mismatch_fatal (RmacMismatchFatal@
+IndexValueMapEntry
+key (	Rkey
+value (Rvalue:8bproto3

@@ -136,8 +136,8 @@ impl RealWaRuntime {
             let state = Arc::clone(&state_for_bot);
             let message_jids = Arc::clone(&message_jids_arc);
 
-            let mut bot = match whatsapp_rust::bot::Bot::builder()
-                .with_backend(backend)
+            let bot = match whatsapp_rust::bot::Bot::builder()
+                .with_backend_arc(backend)
                 .with_transport_factory(transport)
                 .with_http_client(http_client)
                 .with_runtime(whatsapp_rust::TokioRuntime)
@@ -147,7 +147,7 @@ impl RealWaRuntime {
                     let state = Arc::clone(&state);
                     let message_jids = Arc::clone(&message_jids);
                     async move {
-                        handle_bot_event(event, state, event_tx, message_jids).await;
+                        handle_bot_event((*event).clone(), state, event_tx, message_jids).await;
                     }
                 })
                 .build()
@@ -166,14 +166,7 @@ impl RealWaRuntime {
                 *guard = Some(bot.client());
             }
 
-            let handle = match bot.run().await {
-                Ok(h) => h,
-                Err(e) => {
-                    error!(error = %e, "Failed to run bot");
-                    state_for_bot.set(ConnectionState::Error);
-                    return;
-                }
-            };
+            let handle = bot.spawn();
 
             {
                 let mut guard = bot_handle_arc.lock().await;
@@ -244,13 +237,13 @@ impl RealWaRuntime {
                 ..Default::default()
             };
             whatsapp_rust::waproto::whatsapp::Message {
-                extended_text_message: Some(Box::new(
+                extended_text_message:
                     whatsapp_rust::waproto::whatsapp::message::ExtendedTextMessage {
                         text: Some(msg.text),
-                        context_info: Some(Box::new(context_info)),
+                        context_info: context_info.into(),
                         ..Default::default()
-                    },
-                )),
+                    }
+                    .into(),
                 ..Default::default()
             }
         } else {
@@ -265,7 +258,7 @@ impl RealWaRuntime {
             .await
             .map_err(|e| ChannelError::SendFailed(format!("Failed to send message: {e}")))?;
 
-        Ok(MessageId::new(msg_id))
+        Ok(MessageId::new(msg_id.message_id))
     }
 
     pub async fn send_reaction(&self, jid: &str, msg_id: &str, emoji: &str) -> ChannelResult<()> {
@@ -276,18 +269,19 @@ impl RealWaRuntime {
             .map_err(|e| ChannelError::Internal(format!("Invalid JID: {e}")))?;
 
         let reaction = whatsapp_rust::waproto::whatsapp::message::ReactionMessage {
-            key: Some(whatsapp_rust::waproto::whatsapp::MessageKey {
+            key: whatsapp_rust::waproto::whatsapp::MessageKey {
                 remote_jid: Some(jid.to_string()),
                 id: Some(msg_id.to_string()),
                 from_me: Some(false),
                 participant: None,
-            }),
+            }
+            .into(),
             text: Some(emoji.to_string()),
             ..Default::default()
         };
 
         let wa_msg = whatsapp_rust::waproto::whatsapp::Message {
-            reaction_message: Some(reaction),
+            reaction_message: reaction.into(),
             ..Default::default()
         };
 
@@ -310,7 +304,7 @@ impl RealWaRuntime {
         };
 
         client
-            .mark_as_read(&chat, None, vec![msg_id.to_string()])
+            .mark_as_read(&chat, None, &[msg_id])
             .await
             .map_err(|e| ChannelError::Internal(format!("Failed to send read receipt: {e}")))?;
 
@@ -492,21 +486,24 @@ async fn handle_bot_event(
             warn!("WhatsApp connection closed");
             state.set(ConnectionState::Disconnected);
         }
-        whatsapp_rust::types::events::Event::PairingQrCode { .. } => {
+        whatsapp_rust::types::events::Event::PairingQrCode(_) => {
             info!("QR code generated for pairing");
             state.set(ConnectionState::Pairing);
         }
         whatsapp_rust::types::events::Event::PairSuccess(_) => {
             info!("Pairing successful");
         }
-        whatsapp_rust::types::events::Event::Message(_, info) => {
+        whatsapp_rust::types::events::Event::Messages(batch) => {
             let mut guard = message_jids.lock().await;
-            // Bound the read-receipt lookup map: it is fed by every inbound
-            // message and otherwise never pruned until shutdown.
-            if guard.len() >= 10_000 {
-                guard.clear();
+            for message in batch {
+                // Bound the read-receipt lookup map per message, including
+                // messages delivered together by an offline drain.
+                if guard.len() >= 10_000 {
+                    guard.clear();
+                }
+                let info = &message.info;
+                guard.insert(info.id.to_string(), info.source.chat.clone());
             }
-            guard.insert(info.id.to_string(), info.source.chat.clone());
         }
         _ => {}
     }

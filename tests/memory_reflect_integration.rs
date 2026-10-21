@@ -15,7 +15,6 @@ use alephcore::memory::reflector::{
     fs_reflector::RecallWriter, recall_signals::SignalRow, MemoryReflector, ReflectOpts,
 };
 use alephcore::memory::session_resume::reader::SnapshotReader;
-use alephcore::memory::store::markdown::MarkdownSessionStore;
 use alephcore::memory::store::{MemoryBackend, SqliteMemoryBackend};
 use alephcore::memory::EmbeddingProvider;
 use alephcore::providers::recording_mock::RecordingMockProvider;
@@ -118,8 +117,6 @@ async fn build_reflector(
     std::fs::create_dir_all(&snap_dir).unwrap();
     let snapshots = Arc::new(SnapshotReader::new(&snap_dir));
 
-    let raw_store = Arc::new(MarkdownSessionStore::new(&memory_dir).await.unwrap());
-
     // User-profile loader.
     let profile = UserProfileLoader::new(memory_dir.clone());
 
@@ -135,6 +132,12 @@ async fn build_reflector(
 
     // Feedback-floor loader.
     let feedback_floor = alephcore::memory::assembler::FeedbackFloorLoader::new(memory_dir.clone());
+
+    let raw_store = Arc::new(
+        alephcore::memory::store::markdown::MarkdownSessionStore::new(memory_dir.as_path())
+            .await
+            .unwrap(),
+    );
 
     // HybridAssembler.
     let assembler_arc: Arc<dyn alephcore::memory::assembler::WorkingMemoryAssembler> =

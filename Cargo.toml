@@ -57,7 +57,7 @@ toml = "1.1"
 thiserror = "2.0"
 
 # Database
-rusqlite = { version = "0.37", features = ["bundled"] }
+rusqlite = { version = "0.40.2", features = ["bundled"] }
 
 # Utilities
 uuid = { version = "1.28", features = ["v4", "serde"] }
@@ -203,7 +203,7 @@ agent-detect = { path = "crates/agent-detect" }
 # the `[features] testkit` comment in crates/aleph-cdp/Cargo.toml for why the
 # dev-dependency below can turn it on without it reaching a production build.
 aleph-cdp = { path = "crates/aleph-cdp" }
-rusqlite = { version = "0.37", features = ["bundled"] }
+rusqlite = { version = "0.40.2", features = ["bundled"] }
 sqlite-vec = "0.1.9"
 uuid = { version = "1.28", features = ["v4", "serde"] }
 regex = "1.13"
@@ -346,15 +346,15 @@ cron = "0.17"
 extism = "1.41"
 inquire = "0.9"
 loom = { version = "0.7", optional = true }
-whatsapp-rust = { version = "0.5", default-features = false, features = ["tokio-runtime", "tokio-transport", "sqlite-storage"] }
-whatsapp-rust-tokio-transport = "0.5"
-# Pinned to the same version whatsapp-rust 0.5 depends on. Direct dep
+whatsapp-rust = { version = "0.7", default-features = false, features = ["tokio-runtime", "tokio-transport", "sqlite-storage"] }
+whatsapp-rust-tokio-transport = "0.7"
+# Pinned to the same version whatsapp-rust 0.7 depends on. Direct dep
 # because we need `wacore::iq::contacts::SetProfilePictureSpec` to set a
 # group's profile picture — whatsapp-rust only re-exports the
 # SetProfilePictureResponse (own profile), not the Spec. Bumping
 # whatsapp-rust without re-aligning this dep is a wire-format bug.
-wacore = { version = "=0.5.0", default-features = false }
-matrix-sdk = { version = "0.18", default-features = false, features = ["sqlite"] }
+wacore = { version = "=0.7.0", default-features = false }
+matrix-sdk = { version = "0.19.1", default-features = false, features = ["sqlite"] }
 mime = "0.3"
 aleph-logging = { path = "shared/logging" }
 aleph-desktop = { path = "desktop/shared" }
@@ -400,11 +400,15 @@ path = "src/bin/aleph-server/main.rs"
 # one and building it with `--test` — the whole binary plus its `#[cfg(test)]`
 # code, compiled as a bench harness that has no `#[bench]` fns to run. The
 # benches/ targets already cover what the bench job is for.
+# The binary has no independent test harness; skip it during `cargo test`.
+test = false
 bench = false
 
 [[bin]]
 name = "aleph-migrate"
 path = "src/bin/aleph-migrate/main.rs"
+# The binary has no independent test harness; skip it during `cargo test`.
+test = false
 bench = false
 
 [dev-dependencies]
@@ -691,6 +695,10 @@ name = "plugin_lifecycle_roundtrip"
 harness = false
 required-features = ["test-helpers"]
 
+# Development profile
+[profile.dev]
+incremental = false
+
 # Release profile
 [profile.release]
 strip = true
@@ -708,3 +716,10 @@ strip = false
 opt-level = "z"
 lto = true
 codegen-units = 1
+
+# Keep the WhatsApp SQLite backend on the same libsqlite3-sys release as
+# matrix-sdk-sqlite. The upstream 0.7.0 package still requires ^0.37, which
+# cannot coexist with matrix-sdk 0.19.1's ^0.38.2 requirement.
+[patch.crates-io]
+whatsapp-rust-sqlite-storage = { path = "vendor/whatsapp-rust-sqlite-storage" }
+proc-macro-error2 = { path = "vendor/proc-macro-error2" }

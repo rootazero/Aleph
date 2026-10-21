@@ -202,7 +202,7 @@ impl WhatsAppChannel {
         let driver = PairingStateDriver::new(Arc::clone(&pairing_state));
         let mut shutdown_rx = shutdown_rx;
         tokio::spawn(async move {
-            loop {
+            'events: loop {
                 tokio::select! {
                     Some(event) = event_rx.recv() => {
                         use whatsapp_rust::types::events::Event;
@@ -221,7 +221,7 @@ impl WhatsAppChannel {
                                 connected.store(false, Ordering::SeqCst);
                             }
                             _ => {
-                                if let Some(msg) = crate::gateway::interfaces::whatsapp::wa_inbound::mapper::map_event_to_inbound(&event, &channel_id, &history_buffer).await {
+                                for msg in crate::gateway::interfaces::whatsapp::wa_inbound::mapper::map_event_to_inbound(&event, &channel_id, &history_buffer).await {
                                     match policy.evaluate(&msg) {
                                         crate::gateway::interfaces::whatsapp::wa_inbound::policy::InboundPolicyResult::Accept => {
                                             if let Err(e) = reaction_handler.send_ack(&msg).await {
@@ -232,7 +232,7 @@ impl WhatsAppChannel {
                                                 );
                                             }
                                             if inbound_tx.send(msg).is_err() {
-                                                break;
+                                                break 'events;
                                             }
                                         }
                                         crate::gateway::interfaces::whatsapp::wa_inbound::policy::InboundPolicyResult::Block(reason) => {
@@ -241,7 +241,7 @@ impl WhatsAppChannel {
                                         crate::gateway::interfaces::whatsapp::wa_inbound::policy::InboundPolicyResult::NeedsPairing(sender) => {
                                             tracing::info!(channel = %channel_id, %sender, "Inbound DM needs pairing");
                                             if inbound_tx.send(msg).is_err() {
-                                                break;
+                                                break 'events;
                                             }
                                         }
                                     }
@@ -420,7 +420,7 @@ impl Channel for WhatsAppChannel {
         let driver = PairingStateDriver::new(Arc::clone(&pairing_state));
         let mut shutdown_rx = shutdown_rx;
         tokio::spawn(async move {
-            loop {
+            'events: loop {
                 tokio::select! {
                     Some(event) = event_rx.recv() => {
                         use whatsapp_rust::types::events::Event;
@@ -436,7 +436,7 @@ impl Channel for WhatsAppChannel {
                                 connected.store(false, Ordering::SeqCst);
                             }
                             _ => {
-                                if let Some(msg) = crate::gateway::interfaces::whatsapp::wa_inbound::mapper::map_event_to_inbound(&event, &channel_id, &history_buffer).await {
+                                for msg in crate::gateway::interfaces::whatsapp::wa_inbound::mapper::map_event_to_inbound(&event, &channel_id, &history_buffer).await {
                                     match policy.evaluate(&msg) {
                                         crate::gateway::interfaces::whatsapp::wa_inbound::policy::InboundPolicyResult::Accept => {
                                             // Spec §3.2 / Task 5: fire the configured
@@ -455,7 +455,7 @@ impl Channel for WhatsAppChannel {
                                                 );
                                             }
                                             if inbound_tx.send(msg).is_err() {
-                                                break;
+                                                break 'events;
                                             }
                                         }
                                         crate::gateway::interfaces::whatsapp::wa_inbound::policy::InboundPolicyResult::Block(reason) => {
@@ -464,7 +464,7 @@ impl Channel for WhatsAppChannel {
                                         crate::gateway::interfaces::whatsapp::wa_inbound::policy::InboundPolicyResult::NeedsPairing(sender) => {
                                             tracing::info!(channel = %channel_id, %sender, "Inbound DM needs pairing");
                                             if inbound_tx.send(msg).is_err() {
-                                                break;
+                                                break 'events;
                                             }
                                         }
                                     }
@@ -661,12 +661,12 @@ impl PairingStateDriver {
         use whatsapp_rust::types::events::Event;
         let mut s = self.state.write().await;
         match event {
-            Event::PairingQrCode { code, timeout } => {
+            Event::PairingQrCode(qr) => {
                 let expires_at = chrono::Utc::now()
-                    + chrono::Duration::from_std(*timeout)
+                    + chrono::Duration::from_std(qr.timeout)
                         .unwrap_or_else(|_| chrono::Duration::seconds(60));
                 *s = PairingState::WaitingQr {
-                    qr_data: code.clone(),
+                    qr_data: qr.code.clone(),
                     expires_at,
                 };
             }
@@ -754,10 +754,12 @@ mod tests {
 
         // QR ready: Idle → WaitingQr
         driver
-            .apply(&whatsapp_rust::types::events::Event::PairingQrCode {
-                code: "abc".to_string(),
-                timeout: std::time::Duration::from_secs(60),
-            })
+            .apply(&whatsapp_rust::types::events::Event::PairingQrCode(
+                whatsapp_rust::types::events::PairingQrCode::builder()
+                    .code("abc".to_string())
+                    .timeout(std::time::Duration::from_secs(60))
+                    .build(),
+            ))
             .await;
         assert!(
             matches!(*state.read().await, PairingState::WaitingQr { .. }),
@@ -766,12 +768,12 @@ mod tests {
         );
 
         // PairSuccess: WaitingQr → Connected
-        let pair_success = whatsapp_rust::types::events::PairSuccess {
-            id: whatsapp_rust::Jid::new("1234", "s.whatsapp.net"),
-            lid: whatsapp_rust::Jid::new("abcd", "lid"),
-            business_name: "My Phone".to_string(),
-            platform: "smba".to_string(),
-        };
+        let pair_success = whatsapp_rust::types::events::PairSuccess::builder()
+            .id(whatsapp_rust::Jid::new("1234", whatsapp_rust::Server::Pn))
+            .lid(whatsapp_rust::Jid::new("abcd", whatsapp_rust::Server::Lid))
+            .business_name("My Phone".to_string())
+            .platform("smba".to_string())
+            .build();
         driver
             .apply(&whatsapp_rust::types::events::Event::PairSuccess(
                 pair_success,
@@ -791,7 +793,9 @@ mod tests {
         // Disconnected: Connected → Disconnected
         driver
             .apply(&whatsapp_rust::types::events::Event::Disconnected(
-                whatsapp_rust::types::events::Disconnected,
+                whatsapp_rust::types::events::Disconnected::builder()
+                    .reason(wacore::net::DisconnectReason::Unknown)
+                    .build(),
             ))
             .await;
         assert!(matches!(
@@ -802,13 +806,13 @@ mod tests {
         // PairError: Disconnected → Failed
         driver
             .apply(&whatsapp_rust::types::events::Event::PairError(
-                whatsapp_rust::types::events::PairError {
-                    id: whatsapp_rust::Jid::new("1234", "s.whatsapp.net"),
-                    lid: whatsapp_rust::Jid::new("abcd", "lid"),
-                    business_name: String::new(),
-                    platform: String::new(),
-                    error: "401 logout".to_string(),
-                },
+                whatsapp_rust::types::events::PairError::builder()
+                    .id(whatsapp_rust::Jid::new("1234", whatsapp_rust::Server::Pn))
+                    .lid(whatsapp_rust::Jid::new("abcd", whatsapp_rust::Server::Lid))
+                    .business_name(String::new())
+                    .platform(String::new())
+                    .error("401 logout".to_string())
+                    .build(),
             ))
             .await;
         assert!(matches!(*state.read().await, PairingState::Failed { .. }));

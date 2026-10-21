@@ -180,10 +180,12 @@ impl FakeWaRuntime {
     pub async fn emit_qr(&self, code: impl Into<String>) -> Result<(), ()> {
         self.inner
             .event_tx
-            .send(WaEvent::PairingQrCode {
-                code: code.into(),
-                timeout: Duration::from_secs(60),
-            })
+            .send(WaEvent::PairingQrCode(
+                whatsapp_rust::types::events::PairingQrCode::builder()
+                    .code(code.into())
+                    .timeout(Duration::from_secs(60))
+                    .build(),
+            ))
             .await
             .map_err(|_| ())
     }
@@ -199,12 +201,12 @@ impl FakeWaRuntime {
         reason = "Synthetic event injection preserves the fixture success/failure marker rather than a production error API"
     )]
     pub async fn emit_pair_success(&self) -> Result<(), ()> {
-        let pair_success = whatsapp_rust::types::events::PairSuccess {
-            id: whatsapp_rust::Jid::new("1234", "s.whatsapp.net"),
-            lid: whatsapp_rust::Jid::new("abcd", "lid"),
-            business_name: "Fake Phone".to_string(),
-            platform: "fake".to_string(),
-        };
+        let pair_success = whatsapp_rust::types::events::PairSuccess::builder()
+            .id(whatsapp_rust::Jid::new("1234", whatsapp_rust::Server::Pn))
+            .lid(whatsapp_rust::Jid::new("abcd", whatsapp_rust::Server::Lid))
+            .business_name("Fake Phone".to_string())
+            .platform("fake".to_string())
+            .build();
         self.inner
             .event_tx
             .send(WaEvent::PairSuccess(pair_success))
@@ -214,9 +216,8 @@ impl FakeWaRuntime {
 
     /// Emit a `WaEvent::Disconnected`. The `PairingStateDriver` arm
     /// maps this to `PairingState::Disconnected { reason: "remote disconnected" }`
-    /// (the driver's reason string is fixed; the fake's `reason` arg is
-    /// kept for callers that want a record of why the disconnect was
-    /// simulated).
+    /// (the driver's reason string is fixed; the supplied reason is
+    /// retained in the synthetic transport event).
     ///
     /// # Errors
     ///
@@ -225,17 +226,22 @@ impl FakeWaRuntime {
         clippy::result_unit_err,
         reason = "Synthetic event injection preserves the fixture success/failure marker rather than a production error API"
     )]
-    pub async fn emit_disconnected(&self, _reason: impl Into<String>) -> Result<(), ()> {
+    pub async fn emit_disconnected(&self, reason: impl Into<String>) -> Result<(), ()> {
         self.inner
             .event_tx
             .send(WaEvent::Disconnected(
-                whatsapp_rust::types::events::Disconnected,
+                whatsapp_rust::types::events::Disconnected::builder()
+                    .reason(wacore::net::DisconnectReason::ServerClose {
+                        code: None,
+                        reason: reason.into(),
+                    })
+                    .build(),
             ))
             .await
             .map_err(|_| ())
     }
 
-    /// Emit a `WaEvent::Message` carrying a single text body. The event
+    /// Emit a `WaEvent::Messages` batch carrying a single text body. The event
     /// loop's inbound mapper (`map_event_to_inbound`) translates this
     /// into a generic `InboundMessage` and pushes it onto the channel's
     /// inbound broadcast.
@@ -254,8 +260,9 @@ impl FakeWaRuntime {
         text: &str,
     ) -> Result<(), ()> {
         let (user, server) = split_jid(chat_jid);
+        let server = whatsapp_rust::Server::try_from(server).map_err(|_| ())?;
         let chat = whatsapp_rust::Jid::new(user, server);
-        let sender_jid = whatsapp_rust::Jid::new(sender, "s.whatsapp.net");
+        let sender_jid = whatsapp_rust::Jid::new(sender, whatsapp_rust::Server::Pn);
         let msg = whatsapp_rust::waproto::whatsapp::Message {
             conversation: Some(text.to_string()),
             ..Default::default()
@@ -273,22 +280,25 @@ impl FakeWaRuntime {
                 recipient: None,
             },
             id: format!("fake-msg-{}", Utc::now().timestamp_millis()),
-            server_id: 0,
             r#type: "text".to_string(),
             push_name: sender.to_string(),
             timestamp: Utc::now(),
-            category: String::new(),
-            multicast: false,
-            media_type: String::new(),
-            edit: whatsapp_rust::types::message::EditAttribute::default(),
-            bot_info: None,
-            meta_info: whatsapp_rust::types::message::MsgMetaInfo::default(),
-            verified_name: None,
-            device_sent_meta: None,
+            ..Default::default()
         };
         self.inner
             .event_tx
-            .send(WaEvent::Message(Box::new(msg), info))
+            .send(WaEvent::Messages(
+                whatsapp_rust::types::events::MessageBatch::builder()
+                    .messages(
+                        vec![whatsapp_rust::types::events::InboundMessage::builder()
+                            .message(Arc::new(msg))
+                            .info(Arc::new(info))
+                            .build()]
+                        .into(),
+                    )
+                    .origin(whatsapp_rust::types::events::BatchOrigin::Live)
+                    .build(),
+            ))
             .await
             .map_err(|_| ())
     }

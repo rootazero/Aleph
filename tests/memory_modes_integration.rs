@@ -179,7 +179,6 @@ async fn build_pipeline(
     std::fs::create_dir_all(&raw_dir).unwrap();
     let raw_store: Arc<dyn RawMemoryStore> =
         Arc::new(MarkdownSessionStore::new(&raw_dir).await.unwrap());
-
     // HybridAssembler.
     let assembler: Arc<dyn alephcore::memory::assembler::WorkingMemoryAssembler> =
         Arc::new(HybridAssembler::new(

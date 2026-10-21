@@ -2312,7 +2312,7 @@ async fn an_unanswered_ordinary_seed_resumes_as_before() {
 async fn an_unanswered_public_seed_restores_public_into_the_dispatched_request() {
     for manual in [false, true] {
         let store = store();
-        let sid = SessionKey::main(&format!("carrier-public-{manual}"));
+        let sid = SessionKey::main(format!("carrier-public-{manual}"));
         let user_seq =
             seed_unanswered_with_carrier(&store, &sid, Some((None, public_marker_json()))).await;
         let (c, calls, telecom) = unanswered_coordinator(&store, &sid).await;
@@ -2357,7 +2357,7 @@ async fn an_unproven_seed_carrier_refuses_untouched() {
     for (name, carrier, word) in cases {
         for manual in [false, true] {
             let store = store();
-            let sid = SessionKey::main(&format!("carrier-refused-{name}-{manual}"));
+            let sid = SessionKey::main(format!("carrier-refused-{name}-{manual}"));
             seed_unanswered_with_carrier(&store, &sid, carrier.clone()).await;
             let before = store.load_all_events(&sid).await.unwrap().len();
             let (c, calls, telecom) = unanswered_coordinator(&store, &sid).await;
@@ -3092,7 +3092,7 @@ async fn coordinator_with(
 async fn boot_refuses_unproven_provenance_before_any_write() {
     for (name, marker, word) in refused_markers() {
         let store = store();
-        let sid = SessionKey::main(&format!("prov-boot-{name}"));
+        let sid = SessionKey::main(format!("prov-boot-{name}"));
         seed_interrupted_run_with(&store, &sid, None, marker).await;
         let before = store.load_all_events(&sid).await.unwrap().len();
         let (c, calls, telecom) = coordinator_with(&store, &sid).await;
@@ -3125,7 +3125,7 @@ async fn boot_refuses_unproven_provenance_before_any_write() {
 async fn manual_resume_refuses_unproven_provenance_before_any_write() {
     for (name, marker, word) in refused_markers() {
         let store = store();
-        let sid = SessionKey::main(&format!("prov-manual-{name}"));
+        let sid = SessionKey::main(format!("prov-manual-{name}"));
         seed_interrupted_run_with(&store, &sid, None, marker).await;
         let before = store.load_all_events(&sid).await.unwrap().len();
         let (c, calls, _telecom) = coordinator_with(&store, &sid).await;
