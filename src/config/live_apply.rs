@@ -103,8 +103,8 @@ pub fn apply_live_sections(cfg: &Config, top_sections: &[&str]) -> Vec<&'static 
             // (a CLI process, most tests, or any process before boot installs
             // it) makes `spend::update_policy` return `false`, so the
             // verdict downgrades to `Restart` honestly instead of claiming a
-            // store that did not happen — the same reasoning as `route`'s
-            // arm above.
+            // store that did not happen — the same reasoning as the
+            // `[search]` arm below.
             //
             // Note this arm can fire on a patch to a *sibling* of
             // `policies.spend` (e.g. `policies.tool_permissions.foo`, which
@@ -126,7 +126,8 @@ pub fn apply_live_sections(cfg: &Config, top_sections: &[&str]) -> Vec<&'static 
             // means. A rebuild that cannot resolve its secrets keeps the old
             // registry serving and returns `false` — the verdict downgrades
             // to `Restart` rather than claiming a swap that did not happen,
-            // the same honesty rule as `route`'s arm above. A missing handle
+            // the same honesty rule the `[policies.spend]` arm above uses. A
+            // missing handle
             // (CLI process, tests, or a boot without the agent stack) is the
             // other `false`.
             // `[policies.terminal]`'s handle is the process-global PTY
@@ -271,7 +272,7 @@ mod tests {
 
     #[test]
     fn search_without_a_registered_handle_downgrades_to_restart() {
-        // Same shape as `route` above: in a CLI process, a test, or a daemon
+        // In a CLI process, a test, or a daemon
         // whose boot never built the agent stack, no `SearchHandle` is
         // installed and nothing received the `[search]` change. The swap-side
         // failure (a rebuild that cannot resolve its secrets keeps the old
@@ -297,8 +298,8 @@ mod tests {
     /// ⚠️ Installs the process-global handle, which no test may un-install.
     /// That is safe only because nothing in this binary asserts the handle's
     /// ABSENCE through `apply_live_sections` — the no-handle half is pinned
-    /// against `classify_verified` directly, exactly like
-    /// `route_without_a_registered_chain_downgrades_to_restart` (see its doc).
+    /// against `classify_verified` directly, in
+    /// `search_without_a_registered_handle_downgrades_to_restart` (see its doc).
     /// Serialised so no second writer can race the install or the swap.
     #[test]
     #[serial_test::serial(search_live_handle)]
@@ -395,7 +396,7 @@ mod tests {
     fn classify_verified_never_upgrades_a_non_live_section() {
         // Restart verdicts are untouched by what did or did not apply.
         assert_eq!(
-            classify_verified("providers.openai", &["route"]),
+            classify_verified("providers.openai", &["behavior"]),
             ReloadImpact::Restart
         );
     }
@@ -460,9 +461,7 @@ mod tests {
     /// binary's other tests may already have installed by the time this test
     /// runs, in an order this crate does not control, and a slot cannot be
     /// uninstalled — see `spend::update_policy`'s doc. So this exercises the
-    /// downgrade decision the same way
-    /// `route_without_a_registered_chain_downgrades_to_restart`
-    /// does for `route`: directly, against a synthetic empty `live_applied`,
+    /// downgrade decision directly, against a synthetic empty `live_applied`,
     /// which is exactly what `apply_live_sections` produces when the arm's
     /// `update_policy` call returns `false` — pinned in isolation,
     /// independent of process-global ordering, by

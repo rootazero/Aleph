@@ -60,6 +60,17 @@ pub enum ReloadImpact {
 ///   its secrets keeps the old registry and the verdict downgrades to
 ///   `Restart` rather than claiming a swap that did not happen.
 ///
+/// `route` is deliberately **not** here. The whole `[route]` table was
+/// retired with the semantic-routing removal (2026-10-19) and is now a
+/// `dead_keys` `TOLERATED { retired: true }` entry: an old file still parses,
+/// but no route strategy is constructed, so no arm could make a change to it
+/// live. Declaring it live is precisely what `live_apply`'s
+/// `every_live_section_has_an_apply_arm` exists to catch — a "live" claim
+/// with no arm behind it is the silent failure this table was written to
+/// prevent. A retired table is reported by the `dead_keys` scan at load time
+/// instead, which is the same treatment `task_routing` got when it left
+/// `Config` in 2026-08-16 (see [`INERT_SECTIONS`]).
+///
 /// ⚠️ This is a **declaration**, and the code that executes it is
 /// [`crate::config::live_apply::apply_live_sections`] — one table, one
 /// executor, reached from the single write chokepoint (`ConfigPatcher`).
@@ -80,8 +91,8 @@ pub(crate) const LIVE_SECTIONS: &[&str] = &["behavior", "execution", "search"];
 /// - `policies.spend` — the per-principal/machine USD ceiling is read fresh
 ///   on every call from a boot-installed `ArcSwap`
 ///   ([`crate::spend::current_policy`]); storing a patched policy into it
-///   (`crate::spend::update_policy`) is what makes a ceiling change live.
-///   `[policies]`'s other fields
+///   (`crate::spend::update_policy`) is what makes a ceiling change live,
+///   exactly like every other `ArcSwap`-backed hot-swap. `[policies]`'s other fields
 ///   (`tool_permissions` and friends) have no such handle, hence the parent
 ///   section itself stays out of [`LIVE_SECTIONS`]. (Deliberately no count
 ///   here: a number in a comment is a list that rots. `PoliciesConfig` has
@@ -179,7 +190,7 @@ pub(crate) fn live_targets() -> Vec<&'static str> {
 
 impl ReloadImpact {
     /// Classify a dot-path config target (e.g. `"providers.openai"`,
-    /// `"route.mode"`, `"generation"`, `"policies.spend.per_user_usd"`) by
+    /// `"behavior.output_mode"`, `"generation"`, `"policies.spend.per_user_usd"`) by
     /// the most specific declared live target that covers it — see
     /// [`live_target_for`].
     ///
@@ -239,13 +250,21 @@ mod tests {
         );
     }
 
+    /// The retired `[route]` table is not a live section.
+    ///
+    /// It left `Config` with the 2026-10-19 semantic-routing removal and is
+    /// carried by `dead_keys` as `TOLERATED { retired: true }` — it still
+    /// parses, but nothing reads it. Declaring it live would advertise "no
+    /// restart needed" for a change that no arm can land, which is exactly
+    /// the unbacked claim `live_apply::every_live_section_has_an_apply_arm`
+    /// fails on.
     #[test]
-    fn retired_route_is_not_live() {
-        assert_ne!(ReloadImpact::classify("route"), ReloadImpact::Live);
-        assert_ne!(ReloadImpact::classify("route.mode"), ReloadImpact::Live);
-        assert_ne!(
+    fn the_retired_route_table_is_not_live() {
+        assert_eq!(ReloadImpact::classify("route"), ReloadImpact::Restart);
+        assert_eq!(ReloadImpact::classify("route.mode"), ReloadImpact::Restart);
+        assert_eq!(
             ReloadImpact::classify("route.allow_cloud_escalation"),
-            ReloadImpact::Live
+            ReloadImpact::Restart
         );
     }
 

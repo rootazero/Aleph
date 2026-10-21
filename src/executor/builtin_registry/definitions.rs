@@ -3704,13 +3704,29 @@ mod tests {
     /// misrouted calls.
     /// 2026-10-15 (offline telephone lifecycle tools): +1,225 B for five
     /// always-on schemas — initiate_call 288, call_status 278, cancel_output
-    /// 275, answer_call 194, and hangup 190. The guard's measured total is
-    /// 107,406 B across 60 tools; the refreshed table below is copied from
-    /// that same run so the ceiling and per-tool ledger remain one fact.
-    /// 2026-10-21: the stored per-tool ledger actually sums to 104,535 B;
-    /// restore its scalar ceiling to that value instead of widening the guard.
-    /// The current guard measures 103,865 B across 60 tools, below this ceiling.
-    const REGISTRY_SCHEMA_CEILING_BYTES: usize = 104_535;
+    /// 275, answer_call 194, and hangup 190. The guard's measured total was
+    /// 107,406 B across 60 tools; the refreshed table below was copied from
+    /// that same run so the ceiling and per-tool ledger remained one fact.
+    ///
+    /// 2026-10-21 (refresh after the routing removal): 107,406 -> 103,865 B
+    /// (-3,541) across 60 tools. Four rows had moved without the ledger
+    /// following, in BOTH directions at once — which is precisely the
+    /// failure the "one measurement, two halves" rule below exists to make
+    /// impossible:
+    /// * `moa` was deleted with the semantic-routing removal (2026-10-19)
+    ///   and its 2,871 B row stayed in the table, while the ceiling kept the
+    ///   number that included it;
+    /// * `context_plugin` was registered with the context fabric
+    ///   (2026-10-20) and never got a row at all;
+    /// * `desktop` -2, `plugin_manage` -684 and `self_config` -622 moved on
+    ///   their own, with no entry recording the move.
+    ///
+    /// Arithmetic: 107,406 - 2,871 + 638 - 2 - 684 - 622 = 103,865. The
+    /// refreshed table below is copied from one run of this guard's own
+    /// measurement (the same `unconditional_registry_map()` and the same
+    /// `schema.to_string().len()` the guard sums), so the ceiling and the
+    /// per-tool ledger are one fact again.
+    const REGISTRY_SCHEMA_CEILING_BYTES: usize = 103_865;
 
     /// That same measurement, decomposed per tool.
     ///
@@ -3753,8 +3769,9 @@ mod tests {
         ("channel_pairing", 743),
         ("code_check", 837),
         ("code_exec", 2128),
+        ("context_plugin", 638),
         ("ctx_search", 548),
-        ("desktop", 20275),
+        ("desktop", 20273),
         ("file_edit", 2480),
         ("file_ops", 2989),
         ("file_read", 594),
@@ -3780,14 +3797,14 @@ mod tests {
         ("pdf_generate", 2310),
         ("permission", 833),
         ("pim", 2801),
-        ("plugin_manage", 2992),
+        ("plugin_manage", 2308),
         ("read_config_guide", 854),
         ("recall_events", 553),
         ("remember", 1907),
         ("runtime_manage", 528),
         ("scratchpad", 4014),
         ("search", 2411),
-        ("self_config", 3553),
+        ("self_config", 2931),
         ("self_manage", 328),
         ("session_decompress", 996),
         ("session_list", 931),

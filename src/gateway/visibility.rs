@@ -1597,6 +1597,20 @@ mod tests {
             ("src/gateway/handlers/pty.rs", 4, 1),
             // COMPOSE: `namespace_explicit_project_id` builds a project id.
             ("src/builtin_tools/scratchpad.rs", 1, 1),
+            // COMPOSE: the admission proof's caller field.
+            //
+            // `tools::dispatch_verdict::AdmissionCaller::current()` BUILDS the
+            // `actor` field of the admission proof from the answer, and the
+            // verdict matches that field against a freshly computed one
+            // (`verdict.caller == AdmissionCaller::current()`) before an
+            // operator approval is consumed. It is COMPOSE in the recorded
+            // sense: a person-shaped field is recorded from the answer, and
+            // the answer's last arm is the turn's AGENT id, so the field can
+            // hold an agent id rather than a person. What it is NOT is a
+            // published person — the value stays in the process and is only
+            // compared, so the agent-id arm cannot reach a ledger, an owner
+            // column or a key the way the sites above can.
+            ("src/tools/dispatch_verdict.rs", 1, 1),
             // COMPARE only from here on.
             ("src/teams/dispatcher/runner.rs", 2, 0),
             ("src/teams/scoped.rs", 1, 0),
@@ -1608,8 +1622,6 @@ mod tests {
             ("src/builtin_tools/sessions/send_tool.rs", 2, 0),
             ("src/builtin_tools/sessions/list_tool.rs", 1, 0),
             ("src/builtin_tools/terminal/capabilities.rs", 1, 0),
-            // COMPARE: the admission caller's actor, compared at consumption time.
-            ("src/tools/dispatch_verdict.rs", 1, 0),
         ];
         fn references_to_ambient_actor(code: &str) -> usize {
             const NAME: &str = "ambient_actor";

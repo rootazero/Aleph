@@ -90,7 +90,7 @@ impl From<Locale> for aleph_protocol::terminate::UiLocale {
 /// `[general] language` does not reach these strings until the process
 /// restarts. That matches what the config system
 /// already promises: `general` is **not** in `reload_impact::LIVE_SECTIONS`
-/// (`route` / `behavior` / `execution`), so `ReloadImpact::classify` reports
+/// (`behavior` / `execution` / `search`), so `ReloadImpact::classify` reports
 /// `Restart` for it and `self_config` tells the user so. Note the gateway's
 /// *other* locale readers happen to be more live than that promise — they
 /// re-read config per run — so a hot language change moves them and not this.

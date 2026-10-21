@@ -16,7 +16,6 @@ use alephcore::memory::reflector::{
 };
 use alephcore::memory::session_resume::reader::SnapshotReader;
 use alephcore::memory::store::markdown::MarkdownSessionStore;
-use alephcore::memory::store::raw_memory::RawMemoryStore;
 use alephcore::memory::store::{MemoryBackend, SqliteMemoryBackend};
 use alephcore::memory::EmbeddingProvider;
 use alephcore::providers::recording_mock::RecordingMockProvider;
@@ -119,6 +118,8 @@ async fn build_reflector(
     std::fs::create_dir_all(&snap_dir).unwrap();
     let snapshots = Arc::new(SnapshotReader::new(&snap_dir));
 
+    let raw_store = Arc::new(MarkdownSessionStore::new(&memory_dir).await.unwrap());
+
     // User-profile loader.
     let profile = UserProfileLoader::new(memory_dir.clone());
 
@@ -135,19 +136,13 @@ async fn build_reflector(
     // Feedback-floor loader.
     let feedback_floor = alephcore::memory::assembler::FeedbackFloorLoader::new(memory_dir.clone());
 
-    // Raw transcript/fact store required by the current assembler contract.
-    let raw_dir = tmp.path().join("raw");
-    std::fs::create_dir_all(&raw_dir).unwrap();
-    let raw_store: Arc<dyn RawMemoryStore> =
-        Arc::new(MarkdownSessionStore::new(&raw_dir).await.unwrap());
-
     // HybridAssembler.
     let assembler_arc: Arc<dyn alephcore::memory::assembler::WorkingMemoryAssembler> =
         Arc::new(HybridAssembler::new(
             retrieval,
             snapshots,
             backend_arc.clone() as MemoryBackend,
-            Arc::clone(&raw_store),
+            raw_store,
             profile,
             feedback_floor,
             reranker,

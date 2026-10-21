@@ -1132,7 +1132,22 @@ mod tests {
     /// first — and three clients rendered it as if it meant something.
     #[test]
     fn stats_no_longer_advertises_a_duplicate_fact_count() {
-        let src = std::fs::read_to_string("src/gateway/handlers/memory/mod.rs").unwrap();
+        // These handlers moved into this directory module when the Markdown
+        // session store landed, so the old `memory.rs` path this guard used
+        // to read no longer exists — the file it has to read is THIS one.
+        // `file!()` is relative to the package root, which is where the test
+        // binary runs; the manifest path is the fallback for a runner that
+        // does not.
+        let src = std::fs::read_to_string(file!())
+            .or_else(|_| {
+                std::fs::read_to_string(concat!(
+                    env!("CARGO_MANIFEST_DIR"),
+                    "/src/gateway/handlers/memory/mod.rs"
+                ))
+            })
+            .expect("this file is readable")
+            .replace('\r', "");
+
         let production = crate::utils::source_scan::production_prefix(&src);
         assert!(
             !production.contains("validFacts"),

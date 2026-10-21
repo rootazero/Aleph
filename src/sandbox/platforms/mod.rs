@@ -197,8 +197,10 @@ mod tests {
         // Catches both "guard removed" and "factory stopped threading the
         // floor": without the wiring the driver would produce a profile and
         // run with the configured deny floor silently dropped.
-        let mut config = SandboxConfig::default();
-        config.deny_read_globs = vec!["**/.env".into()];
+        let config = SandboxConfig {
+            deny_read_globs: vec!["**/.env".into()],
+            ..SandboxConfig::default()
+        };
         let driver = create_platform_driver_from_config(&config);
         let ws = tempfile::tempdir().unwrap();
 

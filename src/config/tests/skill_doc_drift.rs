@@ -620,6 +620,11 @@ fn the_derived_section_set_survives_the_serde_attributes_that_distort_it() {
     // `skip_serializing_if = "Option::is_none"` / `"…is_empty"`: absent from a
     // serialized default, present in the schema. These are the sections a
     // `to_value(Config::default())` derivation would have called phantoms.
+    //
+    // `[moa]` is not in this list any more: it left `Config` with the
+    // 2026-10-19 semantic-routing removal, so the schema has no such
+    // property at all — it is a retired table, asserted below, not a
+    // `skip_serializing_if` case.
     for hidden in ["guardrails", "stability", "profiles", "personas"] {
         assert!(
             truth.live.contains(hidden),
@@ -647,7 +652,19 @@ fn the_derived_section_set_survives_the_serde_attributes_that_distort_it() {
     );
 
     // Whole-section retirements are known as retirements, not as live keys.
-    for retired in ["agent", "cowork", "secret_providers", "moa", "route"] {
+    // `[moa]`, `[route]` and `[routing]` left `Config` with the 2026-10-19
+    // semantic-routing removal and are carried by `dead_keys` as
+    // `TOLERATED { retired: true }` — they still parse, but nothing reads
+    // them, so the derivation must know them as retirements (the doc may
+    // not name them) rather than as live keys.
+    for retired in [
+        "agent",
+        "cowork",
+        "secret_providers",
+        "moa",
+        "route",
+        "routing",
+    ] {
         assert!(
             truth.retired.contains(retired),
             "retired: {:?}",
