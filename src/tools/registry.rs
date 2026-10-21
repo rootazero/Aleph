@@ -66,7 +66,8 @@ impl ToolHandler for AdmissionHandler {
                         .into(),
             });
         }
-        self.inner.invoke(input).await
+        crate::tools::dispatch_verdict::with_admitted_handler(identity, self.inner.invoke(input))
+            .await
     }
 
     fn definition(&self) -> ToolDefinition {

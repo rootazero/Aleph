@@ -60,10 +60,10 @@ impl ToolRegistry for BuiltinToolRegistry {
     ) -> Pin<Box<dyn std::future::Future<Output = Result<Value>> + Send + '_>> {
         debug!(tool = tool_name, "Executing builtin tool");
 
-        // Per-agent tool filtering happens before dispatch reaches here:
-        // AgentProfile whitelist at registry build (run_loop) and the
-        // src/tools/scoped/ enforcement point. (A parallel ToolPolicy rail
-        // that never had a writer was withdrawn — R10 YAGNI.)
+        // Authorization belongs to the caller: agent turns use the profile
+        // projection and src/tools/scoped/; ordinary tools.invoke instead
+        // enforces its narrower transport hard floors + agent allowlist.
+        // This raw dispatch is not itself a permission gate.
 
         // Use AlephTool::call_json directly for migrated tools
         // This simplifies the code by avoiding intermediate execute_* methods

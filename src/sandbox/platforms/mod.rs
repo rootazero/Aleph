@@ -76,13 +76,14 @@ pub fn create_platform_driver_with_config(
     #[cfg(target_os = "linux")]
     {
         use linux::bwrap::{BubblewrapDriver, LinuxSandboxOptions};
-        // `deny_read_globs` + unix-socket allowlist are macOS-seatbelt
-        // floors/widenings today; bwrap allows AF_UNIX for local IPC at the
-        // seccomp layer already (see sandbox_init.rs) and has no native
-        // glob-deny primitive (landlock enforcement deferred).
+        // `deny_read_globs` is threaded into the driver, which fails closed
+        // (`UnsupportedPolicy`) when it is non-empty: bwrap has no per-access
+        // glob-deny primitive, Landlock read grants are additive, and hiding
+        // an enumerated snapshot with mounts is unsound. The unix-socket
+        // allowlist remains a macOS-seatbelt widening: bwrap already allows
+        // AF_UNIX for local IPC at the seccomp layer (see sandbox_init.rs).
         let _ = (
             windows_config,
-            deny_read_globs,
             allow_unix_sockets,
             dangerously_allow_all_unix_sockets,
             allow_local_binding,
@@ -97,7 +98,10 @@ pub fn create_platform_driver_with_config(
             cpu_quota_percent: linux_config.cpu_quota_percent,
             max_pids: linux_config.max_pids,
         };
-        Arc::new(BubblewrapDriver::with_options(options))
+        Arc::new(BubblewrapDriver::with_options_and_deny_globs(
+            options,
+            deny_read_globs.to_vec(),
+        ))
     }
     #[cfg(target_os = "windows")]
     {
@@ -178,5 +182,57 @@ impl crate::sandbox::driver::OsSandboxDriverTrait for UnsupportedDriver {
         Err(crate::sandbox::command::SandboxError::Other(
             "sandbox not supported on this platform".into(),
         ))
+    }
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod tests {
+    use super::*;
+    use crate::sandbox::capabilities::SandboxCapabilities;
+    use crate::sandbox::command::SandboxError;
+    use crate::sandbox::config::SandboxConfig;
+
+    #[test]
+    fn configured_deny_read_globs_fail_closed_through_the_factory() {
+        // Catches both "guard removed" and "factory stopped threading the
+        // floor": without the wiring the driver would produce a profile and
+        // run with the configured deny floor silently dropped.
+        let mut config = SandboxConfig::default();
+        config.deny_read_globs = vec!["**/.env".into()];
+        let driver = create_platform_driver_from_config(&config);
+        let ws = tempfile::tempdir().unwrap();
+
+        let err = driver
+            .profile_for(&SandboxCapabilities::default(), ws.path())
+            .expect_err("a configured non-empty deny floor must refuse a Linux profile");
+        match err {
+            SandboxError::UnsupportedPolicy {
+                platform, feature, ..
+            } => {
+                assert_eq!(platform, "linux/bwrap");
+                assert_eq!(feature, "deny_read_globs");
+            }
+            other => panic!("expected UnsupportedPolicy, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn empty_deny_read_globs_still_produce_a_profile() {
+        // The factory must keep building a working driver when the floor is
+        // off. `include_platform_defaults: false` keeps this independent of
+        // which OS trees the host happens to have.
+        let mut config = SandboxConfig::default();
+        config.linux.include_platform_defaults = false;
+        let driver = create_platform_driver_from_config(&config);
+        let ws = tempfile::tempdir().unwrap();
+
+        let profile = driver
+            .profile_for(&SandboxCapabilities::default(), ws.path())
+            .expect("empty deny_read_globs must not refuse a profile");
+        assert!(
+            profile.contents.contains("--bind"),
+            "workspace bind must still be generated, got: {}",
+            profile.contents
+        );
     }
 }

@@ -501,11 +501,11 @@ global**.
   nobody recognizes means a caller we cannot place, and the two must not share
   an answer.
 
-### The three bypasses that were closed (do not re-open them)
+### Bypass mitigations and remaining raw boundaries / 绕过防护与 raw 边界
 
-Every one of these was a surface that could execute a tool **without passing
-through `ScopedToolService`**. When you add a new such surface, this is the
-question to ask first.
+These surfaces can execute tools **without passing through `ScopedToolService`**.
+Some route gated calls back into the loop; others retain a narrower hard floor.
+Do not mistake the latter for full scoped authorization when adding a surface.
 
 1. **Slash-command fast path** (`execution_engine/slash_command.rs`). `/bash`,
    `/file_ops` etc. dispatched straight into `BuiltinToolRegistry` — no tier, no
@@ -514,13 +514,21 @@ question to ask first.
    existing `ExecutionError::Fallthrough` for any gated call, routing it into the
    fully-gated agent loop; ungated slash commands keep their deterministic fast
    path.
-2. **`tools.invoke` RPC** (`gateway/handlers/tools_invoke.rs`). Its denylist
-   (`security/dangerous_tools.rs`) named 7 tools that **do not exist in this
-   repo** — it had been inert its entire life. It now names the real ones and
-   also refuses confirmation-gated tools (`is_confirmation_gated`, reading
-   `CONFIRMATION_REQUIRED_TOOLS`). *Known limitation*: argument-level asks (an
-   `Auto`-tier `file_ops delete`) are still ungated on this direct-invoke
-   surface — closing that needs an approval transport for the RPC.
+2. **`tools.invoke` RPC** (`gateway/handlers/tools_invoke.rs`) retains ordinary
+   raw `ToolRegistry` dispatch, not a unified `ScopedToolService` gate. Its hard
+   floor reuses `security/dangerous_tools.rs` (dangerous/static confirmation
+   names and `ExecTier::Auto::asks_for_arguments`), plus confirmation declarations
+   from the canonical descriptor and raw registry metadata. Argument-level
+   risks such as `file_ops delete` and `loop_graph` root mutations are refused,
+   not silently approved. Continuation, operator, member and agent allowlist
+   floors also apply. Exact `ALEPH_GATEWAY_TOOLS_ALLOW` opt-ins affect only the
+   dangerous/confirmation/argument and continuation floors, never identity or
+   agent scoping. Canonical terminal observations retain their separate scoped
+   route. **限制 / limitation:** ordinary RPC lacks real session, merged policy,
+   effective tier and routable approval context; it does not enforce all
+   configured `tool_permissions` or run agent-loop hooks/ledger. Supplying a
+   canonical registry alone does not fill that gap; do not generalize the
+   terminal helper with fabricated/default context.
 3. **Background runs** (goal / loop continuations, cron, heartbeat, a2a). A
    continuation used to drop both `caller_role` and the channel's
    `tool_permissions` layer — a chat-tier Telegram session escalated itself to
