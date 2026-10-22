@@ -696,8 +696,28 @@ harness = false
 required-features = ["test-helpers"]
 
 # Development profile
+#
+# `incremental = false` keeps the multi-gigabyte `target/debug/incremental`
+# tree off the data volume.
 [profile.dev]
 incremental = false
+# Keep debug info, but only line tables.
+#
+# Cargo's default (`debug = 2`, full debug info) made this workspace's dev
+# artifacts enormous: `libalephcore-*.rlib` reached 2.8G, and every
+# integration-test binary statically links a copy of it, so ~124 test binaries
+# at ~2.1G each filled the 469G `/home/zou/data` volume to 82% — all of it
+# produced by a single build session, so there was no stale-but-prunable
+# residue. `line-tables-only` keeps the symbol table and file:line mapping, so
+# `std::backtrace::Backtrace` output and panic messages still resolve function
+# names and line numbers; only local-variable inspection in a debugger is
+# lost. Artifacts drop by roughly an order of magnitude.
+debug = "line-tables-only"
+
+# Third-party crates: no reason to carry their debug info in a dev build.
+# Keeps the dependency half of every artifact small without touching ours.
+[profile.dev.package."*"]
+debug = 0
 
 # Release profile
 [profile.release]
