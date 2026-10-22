@@ -64,8 +64,7 @@ pub async fn handle_toggle(req: JsonRpcRequest, mcp: Option<McpManagerHandle>) -
         },
         "plugin" => match crate::extension::try_extension_manager() {
             Some(mgr) => {
-                mgr.set_plugin_enabled(backend, p.enabled).await;
-                Ok(())
+                return toggle_plugin(mgr, req.id, backend, p.enabled).await;
             }
             None => Err("extension manager unavailable".to_string()),
         },
@@ -82,6 +81,20 @@ pub async fn handle_toggle(req: JsonRpcRequest, mcp: Option<McpManagerHandle>) -
         Ok(()) => JsonRpcResponse::success(req.id, json!({ "ok": true })),
         Err(e) => JsonRpcResponse::error(req.id, INTERNAL_ERROR, e),
     }
+}
+
+/// Plugin arm with an explicit manager for isolated caller-propagation tests.
+/// Keep the wire projection shared with the plugin RPC; no Hub-owned state.
+pub(crate) async fn toggle_plugin(
+    manager: &crate::extension::ExtensionManager,
+    id: Option<serde_json::Value>,
+    backend: &str,
+    enabled: bool,
+) -> JsonRpcResponse {
+    crate::gateway::handlers::plugins::plugin_control_response(
+        id,
+        manager.set_plugin_enabled(backend, enabled).await,
+    )
 }
 
 /// extensions.uninstall — remove an installed extension, routed by kind.
@@ -172,6 +185,13 @@ async fn uninstall_plugin(plugin_id: &str) -> Result<(), String> {
             // Never mounted — nothing to tear down; the directory goes anyway.
             Err(crate::extension::UnmountError::NotMounted(_))
             | Err(crate::extension::UnmountError::NotFound(_)) => {}
+            // Fail closed: a retained runtime owner still holds this plugin's
+            // activation effects, so the directory must stay — removing it
+            // would strand those effects and report a teardown that did not
+            // happen (P3 owns stop/join recovery).
+            Err(e @ crate::extension::UnmountError::RuntimeOwnerResidual(_)) => {
+                return Err(format!("refusing to uninstall: {e}"));
+            }
         }
     }
     std::fs::remove_dir_all(&dir).map_err(|e| e.to_string())?;

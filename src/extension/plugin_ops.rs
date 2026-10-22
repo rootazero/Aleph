@@ -8,6 +8,86 @@ use crate::sync_primitives::Arc;
 use super::ExtensionManager;
 
 impl ExtensionManager {
+    /// Execute a plugin tool after an exact canonical dispatch admission.
+    ///
+    /// This is the only path that may activate a Cold tool-only WASM owner.
+    /// The authority is checked before activation and again after the retained
+    /// owner operation settles; direct transport callers must use
+    /// [`Self::call_plugin_tool`], which remains mounted-only.
+    pub(crate) async fn call_plugin_tool_with_authority(
+        self: &Arc<Self>,
+        authority: &crate::tools::dispatch_verdict::PluginActivationAuthority,
+        plugin_id: &str,
+        handler: &str,
+        args: serde_json::Value,
+    ) -> ExtensionResult<serde_json::Value> {
+        if !authority.validates(plugin_id, handler, &args) {
+            return Err(ExtensionError::Runtime(
+                "plugin activation authority does not match this exact call".into(),
+            ));
+        }
+        let admitted_input = args.clone();
+        let owner = self.runtime_owner(plugin_id).ok_or_else(|| {
+            ExtensionError::Runtime(format!(
+                "plugin '{plugin_id}' has no controlled runtime owner"
+            ))
+        })?;
+        if owner.record.id != plugin_id {
+            return Err(ExtensionError::Runtime(
+                "plugin runtime owner identity mismatch".into(),
+            ));
+        }
+        if owner.provider.state() == crate::capability::provider::ProviderState::Cold {
+            self.activate_owner(Arc::clone(&owner)).await?;
+        }
+        if !authority.validates(plugin_id, handler, &args)
+            || !self.owner_is_current(&owner)
+            || owner.provider.state() != crate::capability::provider::ProviderState::Ready
+        {
+            return Err(ExtensionError::Runtime(
+                "plugin activation became stale before execution".into(),
+            ));
+        }
+        let expected = owner.identity.lock().unwrap().clone().ok_or_else(|| {
+            ExtensionError::Runtime("ready plugin owner has no WASM identity".into())
+        })?;
+        let loader = self.plugin_loader.clone().write_owned().await;
+        let actual = loader.wasm_mount_identity(plugin_id).ok_or_else(|| {
+            ExtensionError::Runtime("plugin WASM identity disappeared before execution".into())
+        })?;
+        if !expected.same_instance(&actual) {
+            return Err(ExtensionError::Runtime(
+                "plugin WASM identity changed before execution".into(),
+            ));
+        }
+        self.ensure_plugin_active(plugin_id).await?;
+        let _permit = owner
+            .acquire_permit()
+            .await
+            .map_err(ExtensionError::Runtime)?;
+        let plugin_id_owned = plugin_id.to_owned();
+        let handler_owned = handler.to_owned();
+        let result = tokio::task::spawn_blocking(move || {
+            loader.call_tool(&plugin_id_owned, &handler_owned, args)
+        })
+        .await
+        .map_err(|e| ExtensionError::Runtime(format!("WASM task join failed: {e}")))?;
+        if !authority.validates(plugin_id, handler, &admitted_input)
+            || !self.owner_is_current(&owner)
+            || owner.provider.state() != crate::capability::provider::ProviderState::Ready
+            || self
+                .plugin_loader
+                .read()
+                .await
+                .wasm_mount_identity(plugin_id)
+                .is_none_or(|current| !expected.same_instance(&current))
+        {
+            return Err(ExtensionError::Runtime(
+                "plugin activation authority or WASM identity changed during execution".into(),
+            ));
+        }
+        result
+    }
     /// Call a tool on a runtime plugin (Node.js or WASM).
     ///
     /// The plugin's module must already be mounted (see
@@ -301,9 +381,10 @@ impl ExtensionManager {
     /// "an orphan sweep will catch it later" argument only covers things that
     /// changed name, and a same-id reinstall is never an orphan.
     pub async fn forget_plugin_preference(&self, plugin_id: &str) {
-        let mut cfg = self.plugins_config.write().await;
-        if cfg.forget(plugin_id) {
-            if let Err(e) = cfg.save(&self.plugins_config_path).await {
+        let _guard = self.load_guard.lock().await;
+        let mut candidate = self.plugins_config.read().await.clone();
+        if candidate.forget(plugin_id) {
+            if let Err(e) = self.commit_plugins_config_locked(candidate).await {
                 tracing::warn!(
                     plugin_id, error = %e,
                     "failed to persist plugin preference removal"
@@ -439,20 +520,14 @@ impl ExtensionManager {
             }
         }
 
-        let changed = {
-            let mut cfg = self.plugins_config.write().await;
-            let changed = cfg.set_settings(plugin_id, converted);
-            if changed {
-                if let Err(e) = cfg.save(&self.plugins_config_path).await {
-                    tracing::warn!(
-                        plugin_id, error = %e,
-                        "failed to persist plugin configuration; it will not survive a restart"
-                    );
-                    return Err(vec![format!("Failed to persist configuration: {e}")]);
-                }
-            }
-            changed
-        };
+        let _guard = self.load_guard.lock().await;
+        let mut candidate = self.plugins_config.read().await.clone();
+        let changed = candidate.set_settings(plugin_id, converted);
+        if changed {
+            self.commit_plugins_config_locked(candidate)
+                .await
+                .map_err(|e| vec![format!("Failed to persist configuration: {e}")])?;
+        }
         if changed {
             self.publish_plugin_settings().await;
         }
@@ -503,22 +578,17 @@ impl ExtensionManager {
     /// say so rather than letting a caller infer otherwise. `disable` is the
     /// verb that stops a running plugin now.
     pub async fn set_plugin_trusted(&self, plugin_id: &str, trusted: bool) -> bool {
-        let mut cfg = self.plugins_config.write().await;
-        let changed = cfg.set_trusted(plugin_id, trusted);
+        let _guard = self.load_guard.lock().await;
+        let mut candidate = self.plugins_config.read().await.clone();
+        let changed = candidate.set_trusted(plugin_id, trusted);
+        let policy = candidate.owner_trust_policy();
         if changed {
-            if let Err(e) = cfg.save(&self.plugins_config_path).await {
-                tracing::warn!(
-                    plugin_id, error = %e,
-                    "failed to persist plugin trust preference; \
-                     it will not survive a restart"
-                );
+            if let Err(e) = self.commit_plugins_config_locked(candidate).await {
+                tracing::warn!(plugin_id, error = %e, "failed to persist plugin trust preference");
+                return false;
             }
         }
-        // Re-derive from the document rather than mutating the live policy in
-        // parallel: `OwnerTrustPolicy::trust`/`untrust` exist, and using them
-        // here would make the in-memory allowlist a second copy that can drift
-        // from the file the next boot reads.
-        self.set_owner_trust_policy(cfg.owner_trust_policy());
+        self.set_owner_trust_policy(policy);
         changed
     }
 
@@ -528,18 +598,17 @@ impl ExtensionManager {
     /// Same load-gate semantics as [`Self::set_plugin_trusted`]: switching
     /// enforcement on does not unload the plugins that would now be refused.
     pub async fn set_trust_enforced(&self, enforce: bool) -> bool {
-        let mut cfg = self.plugins_config.write().await;
-        let changed = cfg.set_trust_enforced(enforce);
+        let _guard = self.load_guard.lock().await;
+        let mut candidate = self.plugins_config.read().await.clone();
+        let changed = candidate.set_trust_enforced(enforce);
+        let policy = candidate.owner_trust_policy();
         if changed {
-            if let Err(e) = cfg.save(&self.plugins_config_path).await {
-                tracing::warn!(
-                    error = %e,
-                    "failed to persist owner trust enforcement; \
-                     it will not survive a restart"
-                );
+            if let Err(e) = self.commit_plugins_config_locked(candidate).await {
+                tracing::warn!(error = %e, "failed to persist owner trust enforcement");
+                return false;
             }
         }
-        self.set_owner_trust_policy(cfg.owner_trust_policy());
+        self.set_owner_trust_policy(policy);
         changed
     }
 
@@ -557,60 +626,73 @@ impl ExtensionManager {
         (cfg.trust.enforce, ids)
     }
 
-    /// Enable or disable a plugin: record the operator's preference durably,
-    /// then reflect it in the live registry.
-    ///
-    /// The preference is written **whether or not the in-memory registry knows
-    /// this id**. A toggle issued before `load_all` has run (or against a
-    /// plugin whose manifest currently fails to parse) still has to stick —
-    /// keying persistence off "did the registry row change?" is how a disable
-    /// becomes a no-op that reports success.
-    ///
-    /// Returns whether anything changed at all (preference or live status).
-    pub async fn set_plugin_enabled(&self, plugin_id: &str, enabled: bool) -> bool {
-        let preference_changed = {
-            let mut cfg = self.plugins_config.write().await;
-            let changed = cfg.set_enabled(plugin_id, enabled);
-            if changed {
-                if let Err(e) = cfg.save(&self.plugins_config_path).await {
-                    tracing::warn!(
-                        plugin_id, error = %e,
-                        "failed to persist plugin activation preference; \
-                         it will not survive a restart"
-                    );
-                }
-            }
-            changed
+    /// Persist the candidate before publishing it. Caller MUST hold load_guard:
+    /// all writers of this document use that same sequence, including migration.
+    /// No config write guard crosses save or runtime reconciliation.
+    pub(super) async fn commit_plugins_config_locked(
+        &self,
+        candidate: super::plugin_state::PluginsConfig,
+    ) -> crate::error::Result<()> {
+        candidate.save(&self.plugins_config_path).await?;
+        *self.plugins_config.write().await = candidate;
+        Ok(())
+    }
+
+    /// Serialized candidate save -> live publication -> runtime reconciliation.
+    /// A runtime failure preserves the durable desired state and returns it in
+    /// the error. Repeating the same preference still reconciles the runtime.
+    pub async fn set_plugin_enabled(
+        &self,
+        plugin_id: &str,
+        enabled: bool,
+    ) -> Result<super::plugin_state::PluginControlOutcome, super::plugin_state::PluginControlError>
+    {
+        use super::plugin_state::{
+            PluginControlError, PluginControlOutcome, PluginControlPhase, PluginRuntimeOutcome,
         };
 
-        let changed = if enabled {
-            match self.mount(plugin_id).await {
-                Ok(_) => true,
-                Err(super::MountError::AlreadyMounted(_)) => false,
-                Err(e) => {
-                    // The row already says why (Blocked / Error / Disabled);
-                    // the preference is recorded regardless.
-                    tracing::warn!(plugin_id = %plugin_id, error = %e, "enable: mount failed");
-                    false
-                }
-            }
+        let _guard = self.load_guard.lock().await;
+        let mut candidate = self.plugins_config.read().await.clone();
+        let preference_changed = candidate.set_enabled(plugin_id, enabled);
+        let mut outcome = PluginControlOutcome {
+            plugin_id: plugin_id.to_owned(),
+            desired_enabled: enabled,
+            preference_changed,
+            persisted: false,
+            actual_state: self.control_actual_state(plugin_id).await,
+            provider_generation: None,
+            operation_id: uuid::Uuid::new_v4().to_string(),
+            runtime_outcome: PluginRuntimeOutcome::NotAttempted,
+            error_phase: None,
+            error: None,
+            cleanup_report: Vec::new(),
+        };
+        // Save even an unchanged candidate: durable success is a fact, not an
+        // inference from the in-memory value (the file could have been removed).
+        if let Err(error) = self.commit_plugins_config_locked(candidate).await {
+            outcome.error_phase = Some(PluginControlPhase::Persistence);
+            outcome.error = Some(error.to_string());
+            return Err(PluginControlError { outcome });
+        }
+        outcome.persisted = true;
+        self.reconcile_plugin_control_locked(plugin_id, enabled, &mut outcome)
+            .await;
+        self.publish_runtime_transition_views().await;
+        outcome.actual_state = self.control_actual_state(plugin_id).await;
+        if outcome.error.is_some() {
+            Err(PluginControlError { outcome })
         } else {
-            match self.unmount(plugin_id).await {
-                Ok(report) => {
-                    if !report.all_ok() {
-                        tracing::warn!(plugin_id = %plugin_id, ?report, "disable: some effects did not dispose cleanly");
-                    }
-                    true
-                }
-                // A row that was never mounted (Error / Blocked) still takes
-                // the operator's verdict on its status.
-                Err(super::UnmountError::NotMounted(_)) => {
-                    self.plugin_registry.write().await.disable_plugin(plugin_id)
-                }
-                Err(super::UnmountError::NotFound(_)) => false,
-            }
-        };
+            Ok(outcome)
+        }
+    }
 
-        changed || preference_changed
+    async fn control_actual_state(&self, plugin_id: &str) -> String {
+        match self.plugin_registry.read().await.get_plugin(plugin_id) {
+            Some(record) if matches!(record.status, super::PluginStatus::Error(_)) => {
+                "failed".to_owned()
+            }
+            Some(record) => record.status.label().to_owned(),
+            None => "not_discovered".to_owned(),
+        }
     }
 }

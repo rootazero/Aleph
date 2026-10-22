@@ -11,7 +11,7 @@ use crate::extension::capability::{CapabilityDeclaration, CapabilitySource};
 use crate::extension::manifest::PluginPermission;
 
 /// Output from a manifest adapter parse operation.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct AdapterOutput {
     /// Unique plugin identifier
     pub plugin_id: String,

@@ -835,7 +835,11 @@ mod tests {
             .handler_resolver(resolver.clone())
             .build();
         assert!(resolver("context-guest:fixture/context").is_none());
-        assert!(manager.set_plugin_enabled("context-guest", true).await);
+        assert!(manager
+            .set_plugin_enabled("context-guest", true)
+            .await
+            .unwrap()
+            .changed());
         assert_eq!(
             manager
                 .context_declarations("context-guest")

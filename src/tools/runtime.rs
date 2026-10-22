@@ -92,6 +92,25 @@ pub trait LoopTool: Send + Sync {
     /// cancellation propagates naturally.
     async fn execute(&self, input: Value, cancel: CancellationToken) -> ToolResult;
 
+    /// Execute the plugin-owned path with the sealed authority supplied by the
+    /// canonical dispatch gate. Non-plugin tools return an explicit refusal.
+    async fn execute_with_plugin_authority(
+        &self,
+        _input: Value,
+        _cancel: CancellationToken,
+        _authority: &crate::tools::dispatch_verdict::PluginActivationAuthority,
+    ) -> ToolResult {
+        ToolResult::Error {
+            error: "plugin activation requires a canonical admission".into(),
+            retryable: false,
+        }
+    }
+
+    /// Whether this adapter represents a plugin-owned tool.
+    fn plugin_id(&self) -> Option<&str> {
+        None
+    }
+
     /// Whether this tool can safely run concurrently with other concurrent-safe tools.
     ///
     /// Returns `false` by default — the fail-closed side, matching

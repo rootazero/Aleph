@@ -30,6 +30,7 @@ mod lifecycle;
 mod loader;
 pub mod marketplace;
 pub mod runtime;
+mod runtime_owner;
 pub mod validation;
 pub mod visibility;
 
@@ -302,6 +303,9 @@ pub struct ExtensionManager {
     /// under the lock and disposes it after.
     scopes: StdMutex<HashMap<String, effects::EffectScope>>,
 
+    /// Instance ownership, not a callable registry or a desired-state store.
+    runtime_owners: StdMutex<HashMap<String, Arc<runtime_owner::RuntimeOwner>>>,
+
     /// Join handles of the per-plugin server-start watchers
     /// (`lifecycle.rs::watch_server_starts`), so `activation_settled()` can
     /// wait for the MCP half of a mount to reach its verdict. Std mutex,
@@ -462,6 +466,7 @@ impl ExtensionManager {
             internal_writes: Arc::new(InternalWriteTracker::default()),
             reload_count: AtomicU64::new(0),
             scopes: StdMutex::new(HashMap::new()),
+            runtime_owners: StdMutex::new(HashMap::new()),
             activation_watchers: StdMutex::new(Vec::new()),
             owner_trust_policy: Arc::new(crate::sync_primitives::RwLock::new(owner_trust_policy)),
             plugins_config,
@@ -1664,7 +1669,11 @@ mod tests {
         );
 
         // Record the operator's preference the way every toggle face does.
-        assert!(manager.set_plugin_enabled("quiet-plugin", false).await);
+        assert!(manager
+            .set_plugin_enabled("quiet-plugin", false)
+            .await
+            .unwrap()
+            .changed());
         assert!(
             !crate::extension::plugin_state::PluginsConfig::load(&cfg_path)
                 .is_enabled_for("quiet-plugin", PluginOrigin::Workspace),
@@ -1726,7 +1735,7 @@ mod tests {
             .status
             .is_active());
 
-        manager2.set_plugin_enabled("wakeable", true).await;
+        let _ = manager2.set_plugin_enabled("wakeable", true).await.unwrap();
         assert!(
             manager2
                 .get_plugin_record("wakeable")

@@ -29,6 +29,22 @@ pub trait ToolRegistry: Send + Sync {
         arguments: Value,
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Value>> + Send + '_>>;
 
+    /// Execute a plugin tool only with an exact sealed canonical admission.
+    /// Implementations that do not own controlled plugin runtimes reject by
+    /// default; this hook is deliberately separate from ordinary dispatch.
+    fn execute_plugin_tool_with_authority<'a>(
+        &'a self,
+        _tool_name: &str,
+        _arguments: Value,
+        _authority: &'a crate::tools::dispatch_verdict::PluginActivationAuthority,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Value>> + Send + 'a>> {
+        Box::pin(async {
+            Err(crate::error::AlephError::tool(
+                "plugin activation requires a controlled canonical admission",
+            ))
+        })
+    }
+
     /// Get the shared workspace handle for workspace-aware tools (e.g., `memory_search`).
     ///
     /// The execution engine writes the active `workspace_id` to this handle after

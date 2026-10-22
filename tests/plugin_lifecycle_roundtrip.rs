@@ -319,7 +319,11 @@ async fn drive(aleph_home: &Path) -> usize {
     // ── disable: everything goes ──
     led.check(
         "disable reports a change",
-        manager.set_plugin_enabled(PLUGIN_ID, false).await,
+        manager
+            .set_plugin_enabled(PLUGIN_ID, false)
+            .await
+            .unwrap()
+            .changed(),
         "",
     );
     led.check(
@@ -343,7 +347,11 @@ async fn drive(aleph_home: &Path) -> usize {
     // ── enable again: everything comes back (the asymmetry this round fixes) ──
     led.check(
         "enable reports a change",
-        manager.set_plugin_enabled(PLUGIN_ID, true).await,
+        manager
+            .set_plugin_enabled(PLUGIN_ID, true)
+            .await
+            .unwrap()
+            .changed(),
         "",
     );
     led.check(
@@ -361,7 +369,11 @@ async fn drive(aleph_home: &Path) -> usize {
     // ── leave the fixture clean so the child does not outlive the test ──
     led.check(
         "final disable reports a change",
-        manager.set_plugin_enabled(PLUGIN_ID, false).await,
+        manager
+            .set_plugin_enabled(PLUGIN_ID, false)
+            .await
+            .unwrap()
+            .changed(),
         "",
     );
     led.check(

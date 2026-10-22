@@ -40,6 +40,103 @@ use serde::{Deserialize, Serialize};
 /// File name under `<data_dir>`; the twin is `skills.toml`.
 pub const PLUGINS_CONFIG_FILE: &str = "plugins.toml";
 
+/// Result of the runtime part of a serialized desired-state control operation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PluginRuntimeOutcome {
+    NotAttempted,
+    NotDiscovered,
+    NoChange,
+    /// The desired state was reconciled into a **cold declaration**: the
+    /// plugin's tool-only surface is published, but no runtime owner has been
+    /// activated, so nothing is callable yet (the runtime counterpart of
+    /// [`crate::extension::PluginStatus::Cold`]). Neither a failure nor a
+    /// no-op — the caller must still reach the exact-call activation path.
+    Cold,
+    Mounted,
+    Unmounted,
+    Failed,
+}
+
+impl PluginRuntimeOutcome {
+    /// Stable label, identical to the serde (`snake_case`) representation —
+    /// the same rule [`crate::extension::PluginStatus::label`] follows, so a
+    /// client can print this without inventing a second vocabulary.
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::NotAttempted => "not_attempted",
+            Self::NotDiscovered => "not_discovered",
+            Self::NoChange => "no_change",
+            Self::Cold => "cold",
+            Self::Mounted => "mounted",
+            Self::Unmounted => "unmounted",
+            Self::Failed => "failed",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PluginControlPhase {
+    Persistence,
+    Reconcile,
+    Cleanup,
+}
+
+/// One cleanup step, projected from the actual scope disposal report.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PluginCleanupStep {
+    pub step: String,
+    pub error: Option<String>,
+}
+
+/// A toggle is not an all-or-nothing runtime transaction: once `persisted`
+/// is true, desired remains committed even if reconciliation fails.
+/// `actual_state` currently uses the lifecycle row vocabulary (plus `failed`
+/// and `not_discovered`); it must never be inferred from desired alone.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[must_use]
+pub struct PluginControlOutcome {
+    pub plugin_id: String,
+    pub desired_enabled: bool,
+    pub preference_changed: bool,
+    pub persisted: bool,
+    pub actual_state: String,
+    /// No runtime-owner generation exists on the legacy mount path. Do not
+    /// substitute a registry revision or the global tools provider generation.
+    pub provider_generation: Option<u64>,
+    pub operation_id: String,
+    pub runtime_outcome: PluginRuntimeOutcome,
+    pub error_phase: Option<PluginControlPhase>,
+    pub error: Option<String>,
+    pub cleanup_report: Vec<PluginCleanupStep>,
+}
+
+impl PluginControlOutcome {
+    /// Compatibility meaning of change, without conflating failure with no-op.
+    #[must_use]
+    pub fn changed(&self) -> bool {
+        self.preference_changed
+            || matches!(
+                self.runtime_outcome,
+                // `Cold` is a real transition (disabled/unknown -> admitted
+                // declaration); omitting it would report an enable as "no
+                // change" while the durable preference and the row both moved.
+                PluginRuntimeOutcome::Cold
+                    | PluginRuntimeOutcome::Mounted
+                    | PluginRuntimeOutcome::Unmounted
+            )
+    }
+}
+
+/// Error keeps the full outcome so RPC/tool callers can report partial commit.
+#[derive(Debug, Clone, thiserror::Error)]
+#[error("plugin control failed: {outcome:?}")]
+pub struct PluginControlError {
+    pub outcome: PluginControlOutcome,
+}
+
 /// Whether a plugin loads, and why not — [`PluginsConfig::activation`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Activation {

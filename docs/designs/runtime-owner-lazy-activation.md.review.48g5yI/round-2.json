@@ -1,0 +1,46 @@
+{
+  "version": 2,
+  "round": 2,
+  "document": "/Volumes/TBU4/Workspace/Aleph/docs/designs/runtime-owner-lazy-activation.md",
+  "quality_score": 9,
+  "dimensions": {
+    "completeness": "PASS",
+    "consistency": "PASS",
+    "clarity": "PASS",
+    "scope": "PASS",
+    "feasibility": "PASS"
+  },
+  "findings": [],
+  "prior": [
+    {
+      "id": "R1-1",
+      "status": "resolved",
+      "evidence": "Current entry points identifies ExtensionManager::call_plugin_tool at src/extension/plugin_ops.rs:18 and explicitly distinguishes its current mounted-state checks from complete request authorization; the cited entry and missing context parameters are confirmed by reading that file. The minimum A integration is confined to this owner path, downstream of request authorization, while canonical producer reconciliation remains B. Request authorization and activation order requires retaining each request's context and arguments, then authorization -> shared mount-only activation -> independent current-policy/identity/generation/state revalidation -> individual admission and guest call. Cold executable leases and activation from discovery/describe/resolve are expressly forbidden. P0 must freeze the context carrier without fabricating authorization; this is an explicit prerequisite rather than a claim that the present signature already provides authorization.",
+      "current_id": null
+    },
+    {
+      "id": "R1-2",
+      "status": "resolved",
+      "evidence": "Premise 6, Recommended Approach, and Ready and business results consistently define Ready as identity-fenced mount/effects completion with callable admission possible, not successful guest execution. Activation shares only mount success/failure; every business request has independent authorization, arguments, admission, and payload/error evidence. The design forbids a readiness probe or replay using the first business request. An ordinary business trap preserves actual Ready and returns the concrete request error, while a proven unusable VM closes admission and exposes a separate lifecycle failure/recovery requirement.",
+      "current_id": null
+    },
+    {
+      "id": "R1-3",
+      "status": "resolved",
+      "evidence": "Starting versus stop requires stop/disable/reload/shutdown to invalidate the activation operation and close admission before waiting. A RuntimeOwner operation supervisor retains and joins activation and collects late-created VM, binding, scope, and partial mount effects. Stopped/unloaded and owner release are forbidden until activation joins, admitted work reaches its safe boundary, and cleanup completes. Identity + generation + operation fencing prevents invalidated Ready publication and deletion of a same-ID replacement. Waiting requests share only the mount outcome and must pass current owner-state revalidation before admission, so invalidated activation cannot authorize their calls. The Open Questions explicitly reserve concrete task/join ownership mechanics for P0 rather than relying on dropping handles or the existing lifecycle transitions unchanged.",
+      "current_id": null
+    },
+    {
+      "id": "R1-4",
+      "status": "resolved",
+      "evidence": "Failed activation and cleanup residual distinguishes fully rolled-back activation failure from residual cleanup failure. Clean rollback permits a new generation only on explicit retry. Residual failure remains Failed with detail, attempts remaining reverse-order disposers, and denies new activation until cleanup retry/explicit recovery completes reclamation and proves the old identity cannot execute. Generation rotation cannot hide residuals. Success Criteria requires tests for both branches, and the records remain in-memory under the existing authority with PluginsConfig as sole durable enabled intent.",
+      "current_id": null
+    },
+    {
+      "id": "R1-5",
+      "status": "resolved",
+      "evidence": "Non-returning guest/host execution identifies existing Extism timeout, context-conditional fuel, and HTTP timeout controls without asserting blanket interruption coverage. P0 must establish positive finite budgets, concrete call/stop deadlines, completion/join behavior, and recovery coverage before implementation/acceptance. Independently of successful interruption, an expired stop deadline closes admission, retains live permit/task/VM/scope and the supervised owner, reports Failed + stoppable residual, and forbids stopped/unloaded success or new activation. A late return must be joined and reclaimed before stop can complete. Real infinite-guest, blocked-host, non-returning activation/call, and controlled-late-return fixtures are explicit acceptance criteria; aborting spawn_blocking is expressly rejected as termination evidence.",
+      "current_id": null
+    }
+  ]
+}

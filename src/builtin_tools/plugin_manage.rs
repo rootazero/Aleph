@@ -276,15 +276,20 @@ impl PluginManageTool {
                 if enable {
                     Self::may_enable(manager, name).await?;
                 }
-                let changed = manager.set_plugin_enabled(name, enable).await;
-                let verb = if enable { "enabled" } else { "disabled" };
+                let (ok, outcome) = match manager.set_plugin_enabled(name, enable).await {
+                    Ok(outcome) => (true, outcome),
+                    Err(error) => (false, error.outcome),
+                };
                 Ok(PluginManageOutput {
-                    summary: if changed {
-                        format!("Plugin '{name}' {verb}")
+                    summary: if ok {
+                        format!(
+                            "Plugin '{name}': desired_enabled={enable} saved; actual_state={}",
+                            outcome.actual_state
+                        )
                     } else {
-                        format!("Plugin '{name}' was already {verb}")
+                        format!("Plugin '{name}' control failed: {}; desired persisted={}, actual_state={}", outcome.error.as_deref().unwrap_or("unknown error"), outcome.persisted, outcome.actual_state)
                     },
-                    data: serde_json::json!({ "name": name, "enabled": enable, "changed": changed }),
+                    data: serde_json::json!({ "ok": ok, "name": name, "enabled": enable, "changed": outcome.changed(), "outcome": outcome }),
                 })
             }
             PluginAction::Reload => {

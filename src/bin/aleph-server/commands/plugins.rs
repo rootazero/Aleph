@@ -223,8 +223,8 @@ pub async fn handle_plugins_disable(name: &str) -> Result<(), Box<dyn std::error
 /// `alephcore::extension::plugin_state`.
 ///
 /// No-lock path (Spec C): this only touches the plugin config document, and
-/// `PluginsConfig::save` is an atomic temp+rename. A running daemon re-reads
-/// the file on its next `load_all`.
+/// the manager's candidate save is an atomic temp+rename. This offline
+/// process has no daemon runtime to reconcile; restart the daemon to apply it.
 ///
 /// "Is this an installed plugin?" is answered by the same read-only walk a
 /// load makes (`ExtensionManager::discovered_plugin_ids`: the Aleph plugin
@@ -234,29 +234,23 @@ pub async fn handle_plugins_disable(name: &str) -> Result<(), Box<dyn std::error
 /// written.
 async fn set_enabled_locally(name: &str, enabled: bool) -> Result<(), Box<dyn std::error::Error>> {
     use alephcore::extension::default_plugins_dir;
-    use alephcore::extension::plugin_state::PluginsConfig;
     use alephcore::extension::ExtensionManager;
 
     alephcore::cli::policy::run_no_lock(|| Ok::<(), anyhow::Error>(()))?;
 
-    let discovered = ExtensionManager::with_defaults()
-        .await?
-        .discovered_plugin_ids()?;
+    let manager = ExtensionManager::with_defaults().await?;
+    let discovered = manager.discovered_plugin_ids()?;
     if !discovered.iter().any(|(id, _)| id == name) {
         eprintln!("Error: Plugin not found: {name}");
         std::process::exit(1);
     }
     let plugin_path = default_plugins_dir().join(name);
 
-    let path = PluginsConfig::default_path()?;
-    let mut config = PluginsConfig::load(&path);
-    let verb = if enabled { "enabled" } else { "disabled" };
-    if config.set_enabled(name, enabled) {
-        config.save(&path).await?;
-        println!("Plugin {verb}: {name}");
-    } else {
-        println!("Plugin is already {verb}: {name}");
-    }
+    // Do not load/mount plugins in an offline preference command. The manager
+    // commits desired and truthfully reports not_discovered in this process.
+    let outcome = manager.set_plugin_enabled(name, enabled).await?;
+    println!("{}", serde_json::to_string(&outcome)?);
+    println!("Preference saved; daemon runtime was not reconciled. Restart it to apply.");
 
     // A stale marker from an older build would be migrated (and removed) by the
     // daemon's next load; say so rather than leaving the operator to wonder why

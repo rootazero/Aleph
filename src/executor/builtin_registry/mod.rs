@@ -143,6 +143,7 @@ mod tests {
         // with_defaults() turns the Claude root on and resolves it off `$HOME`,
         // so `$HOME` must move with `$ALEPH_HOME` (P5.11).
         let tmp = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(tmp.path().join("aleph/data")).unwrap();
         let _home = crate::runtimes::post_install::HomeEnvGuards::acquire_and_set(
             tmp.path().join("aleph"),
             tmp.path().join("home"),
@@ -168,7 +169,10 @@ mod tests {
                 plugin_id: "disabled-plugin".to_string(),
             });
         }
-        manager.set_plugin_enabled("disabled-plugin", false).await;
+        let _ = manager
+            .set_plugin_enabled("disabled-plugin", false)
+            .await
+            .unwrap();
 
         assert_eq!(
             super::registry::resolve_plugin_handler_from_sources(

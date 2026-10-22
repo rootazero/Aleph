@@ -52,6 +52,8 @@ pub enum ProviderTransport {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ProviderState {
     Discovered,
+    /// Admitted declaration, no runtime effects and no executable lease.
+    Cold,
     Disabled,
     Starting,
     Ready,
@@ -202,7 +204,12 @@ impl ProviderLifecycle {
 fn is_allowed(from: ProviderState, to: ProviderState) -> bool {
     matches!(
         (from, to),
-        (ProviderState::Discovered, ProviderState::Disabled)
+        (ProviderState::Discovered, ProviderState::Cold)
+            | (ProviderState::Disabled, ProviderState::Cold)
+            | (ProviderState::Stopped, ProviderState::Cold)
+            | (ProviderState::Cold, ProviderState::Disabled)
+            | (ProviderState::Cold, ProviderState::Starting)
+            | (ProviderState::Discovered, ProviderState::Disabled)
             | (ProviderState::Discovered, ProviderState::Starting)
             | (ProviderState::Disabled, ProviderState::Starting)
             | (ProviderState::Starting, ProviderState::Ready)

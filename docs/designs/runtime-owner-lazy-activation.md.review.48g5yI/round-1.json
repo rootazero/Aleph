@@ -1,0 +1,56 @@
+{
+  "version": 2,
+  "round": 1,
+  "document": "/Volumes/TBU4/Workspace/Aleph/docs/designs/runtime-owner-lazy-activation.md",
+  "quality_score": 6,
+  "dimensions": {
+    "completeness": "ISSUES",
+    "consistency": "ISSUES",
+    "clarity": "ISSUES",
+    "scope": "PASS",
+    "feasibility": "ISSUES"
+  },
+  "findings": [
+    {
+      "id": "R1-1",
+      "dimension": "clarity",
+      "severity": "blocking",
+      "changed_text": null,
+      "problem": "Premises 将 existing authorized owner call path 作为成立前提，但文档没有指出该路径，也没有说明 Cold 不能签发 executable lease、resolve 不得激活、且不做 B producer wiring 的条件下，首次调用如何到达 RuntimeOwner。Open Questions 中仅说授权上下文需通过 scoped service 携带，尚未证明这个引导入口存在且不会绕过现有授权边界。这个缺口决定 A 是否能在其范围内独立交付，不只是参数类型待定。",
+      "remedy": "指出现存入口及其代码位置，并给出声明查询、逐次调用授权、owner 激活、Ready 后执行准入的顺序。明确等待同一次激活的调用各自保留授权与参数，不共享首个调用者的权限。若入口需要新接线，明确 A 的最小允许改动及其为何不属于延期的 B；resolve 仍保持无副作用。"
+    },
+    {
+      "id": "R1-2",
+      "dimension": "consistency",
+      "severity": "blocking",
+      "changed_text": null,
+      "problem": "Problem Statement 和 Premise 6 将 Ready 的证明范围包含 real WASM execution，Recommended Approach 又要求 Ready/call 前检查身份与代次，但没有决定首次 guest 执行是在 Ready 前还是之后。现有 /Volumes/TBU4/Workspace/Aleph/src/capability/provider.rs 的 ProviderLifecycle::acquire_call 只允许 Ready。若首次执行在 Ready 前，需要明确的引导执行边界；若先 Ready 再执行，Ready 本身就不能证明执行成功。也未说明激活 single-flight 共享的是 mount 还是首个业务调用，存在重复执行副作用或错误共享业务结果的风险。",
+      "remedy": "选定并统一 Ready 的语义：例如 Ready 只证明 mount 成功，真实业务执行由单独验收证据证明；或者明确一个不产生业务副作用的初始化探针及其 Starting 期执行权限。说明每个业务请求恰有自己的执行与结果，并决定 mount 成功但首次业务调用 trap/返回错误时 owner 的状态。不要通过重放首个业务请求来验证就绪。"
+    },
+    {
+      "id": "R1-3",
+      "dimension": "completeness",
+      "severity": "blocking",
+      "changed_text": null,
+      "problem": "文档承诺 activation 独立于首个 caller future，并承诺 stop/reload/shutdown 会 fence late completions，但没有定义 stop 在 Starting 期间发生时，由谁等待或收割仍在分配资源的 activation。仅拒绝迟到的 Ready 发布不能清理迟到创建的 VM。现有 /Volumes/TBU4/Workspace/Aleph/src/capability/provider.rs 的 is_allowed 也没有 Starting -> Stopping 路径，因此该行为不能直接沿用既有状态机。",
+      "remedy": "在设计层明确 Starting 与 stop/disable/reload/shutdown 的胜负规则、activation task 的监督与回收责任，以及等待 activation 的调用获得的结果。stop 成功必须覆盖仍在运行的启动工作和其迟到资源清理，不能只等待已准入 guest；同时明确不会发生旧 activation 将停止或替换后的 owner 重新发布为 Ready。具体同步原语可留给工程计划。"
+    },
+    {
+      "id": "R1-4",
+      "dimension": "completeness",
+      "severity": "blocking",
+      "changed_text": null,
+      "problem": "Success Criteria 要求 disposer 失败后保留 Failed/residual 状态，却没有决定该状态是否允许下一次调用重新激活。现有 ProviderLifecycle 允许 Failed -> Starting。如果仅按失败重试分配新 generation，尚未清理的旧资源可能与新实例并存；如果永久拒绝，又缺少用户恢复路径。状态 wire 表示待定不能替代这个行为决定。",
+      "remedy": "区分已清理的启动失败与存在 residual 的清理失败，说明各自的重试触发条件。对 residual 实例规定 fail-closed 的重新激活条件，以及清理重试或显式恢复操作；在旧资源未证明安全隔离/回收前，不得仅凭新 generation 宣告替换成功。无需新增持久 enabled 状态。"
+    },
+    {
+      "id": "R1-5",
+      "dimension": "feasibility",
+      "severity": "blocking",
+      "changed_text": null,
+      "problem": "Stop 被定义为等待 admitted work 到达 safe boundary 后 dispose，但没有说明 guest 永不返回或阻塞 host call 时 safe boundary 如何到达。Open Questions 覆盖 spawn_blocking cancellation、panic/join 和 disposer failure，却未覆盖不终止执行。取消等待 future 不会停止已运行的 spawn_blocking 工作；没有运行上界或明确的非成功结果，shutdown 可能无限等待，或实现者为满足完成语义而过早卸载。",
+      "remedy": "指出可复用的 WASM 中断/执行预算及其对 host call 的覆盖，或明确不能中断时 stop 的等待/超时行为。超时后必须保持资源存活并报告尚未停止的实际状态，不能报告已安全卸载；说明后续何时才能完成清理。将不返回 guest 和阻塞 host call 加入验收场景，具体超时数值可在 P0 冻结。"
+    }
+  ],
+  "prior": []
+}

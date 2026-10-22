@@ -53,6 +53,31 @@ impl ToolRegistry for BuiltinToolRegistry {
         self.memory_session_key_handle.clone()
     }
 
+    fn execute_plugin_tool_with_authority<'a>(
+        &'a self,
+        tool_name: &str,
+        arguments: Value,
+        authority: &'a crate::tools::dispatch_verdict::PluginActivationAuthority,
+    ) -> Pin<Box<dyn std::future::Future<Output = Result<Value>> + Send + 'a>> {
+        let plugin = self.resolve_plugin_handler(tool_name);
+        let ext_mgr = self.extension_manager.clone();
+        let tool_name = tool_name.to_owned();
+        Box::pin(async move {
+            let (plugin_id, handler) = plugin.ok_or_else(|| {
+                AlephError::tool(format!(
+                    "plugin tool '{tool_name}' has no live handler declaration"
+                ))
+            })?;
+            let ext_mgr = ext_mgr.ok_or_else(|| {
+                AlephError::tool("plugin activation unavailable: extension manager not configured")
+            })?;
+            ext_mgr
+                .call_plugin_tool_with_authority(authority, &plugin_id, &handler, arguments)
+                .await
+                .map_err(|e| AlephError::tool(format!("plugin tool '{handler}' failed: {e}")))
+        })
+    }
+
     fn execute_tool(
         &self,
         tool_name: &str,

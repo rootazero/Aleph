@@ -109,8 +109,15 @@ impl WasmBinding {
 /// instance's VM allocation alive until the holder releases it (the same
 /// trade-off [`WasmBinding`] already makes), but grants no execution after
 /// unmount and promises no immediate deallocation.
+#[derive(Clone)]
 pub(crate) struct WasmMountIdentity {
     instance: Arc<LoadedWasmPlugin>,
+}
+
+impl WasmMountIdentity {
+    pub(crate) fn same_instance(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.instance, &other.instance)
+    }
 }
 
 impl WasmRuntime {

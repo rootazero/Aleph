@@ -476,6 +476,45 @@ impl<R: ToolRegistry + ?Sized + 'static> LoopTool for RegistryToolAdapter<R> {
         crate::tools::retry::is_idempotent_builtin_name(&self.name)
     }
 
+    async fn execute_with_plugin_authority(
+        &self,
+        input: Value,
+        cancel: CancellationToken,
+        authority: &crate::tools::dispatch_verdict::PluginActivationAuthority,
+    ) -> ToolResult {
+        if self.plugin_id.is_none() {
+            return ToolResult::Error {
+                error: "plugin activation requested for a non-plugin tool".into(),
+                retryable: false,
+            };
+        }
+        let outcome = tokio::select! {
+            biased;
+            _ = cancel.cancelled() => {
+                return ToolResult::Error {
+                    error: format!("tool {} cancelled", self.name),
+                    retryable: false,
+                };
+            }
+            result = self.registry.execute_plugin_tool_with_authority(
+                &self.name,
+                input,
+                authority,
+            ) => result,
+        };
+        match outcome {
+            Ok(output) => ToolResult::Success { output },
+            Err(e) => ToolResult::Error {
+                error: e.to_string(),
+                retryable: false,
+            },
+        }
+    }
+
+    fn plugin_id(&self) -> Option<&str> {
+        self.plugin_id.as_deref()
+    }
+
     async fn execute(&self, input: Value, cancel: CancellationToken) -> ToolResult {
         tracing::debug!(tool = %self.name, args = %input, "Tool call raw arguments from LLM");
         // opencode-parity AbortSignal: when the harness cancels this call,

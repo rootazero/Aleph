@@ -1,7 +1,8 @@
 # Aleph 模块化第二阶段实施计划 / Modularization Phase 2 Implementation Plan
 
 > 状态 / Status：待实施的设计与验收契约，不是实现完成报告。
-> 已确认基线 / Verified baseline：2026-10-22，`HEAD = 0cc141a0d5ed4e81a18ffcaa2cb6d1c9c336d0b5`（简称 `0cc141a0d`）。第一阶段已提交，first-phase commit = `0cc141a0d`，不能描述为未提交变更。
+> 已确认基线 / Verified baseline：第一阶段提交为 `0cc141a0d5ed4e81a18ffcaa2cb6d1c9c336d0b5`（简称 `0cc141a0d`）；当前审查 HEAD 为 `589b424cc2febb21957b4d72cea932c0ad78ad1d`（简称 `589b424cc`），其新增内容是本阶段计划文档，不能把当前 HEAD 写成第一阶段基线。
+> 工作区实际状态：Rust/runtime 路径无已跟踪未提交变更；本会话新增的 office-hours 设计记录位于 `docs/designs/`，后续需单独纳入 diff 审查。
 > 工作目录 / Working directory：`/Volumes/TBU4/Workspace/Aleph`，共享工作区。本轮任务明确指定该检出；不要因旧路径说明切换到其他卷或复制仓库。
 > 下一会话默认工作包 / Default next-session package：**A：受控 WASM runtime-owner lazy activation**。**B：canonical plugin producer + per-provider entry fencing + long-lived projection** 独立 gate，不随 A 自动获准。
 > 续跑入口 / Resume prompt：[aleph_modularization_phase2_prompt.md](aleph_modularization_phase2_prompt.md)。总路线背景：[aleph_modularization_plan.md](aleph_modularization_plan.md)。
@@ -21,7 +22,7 @@
 
 ## 2. 已确认基线与接线 / Confirmed Baseline and Wiring
 
-以下均指 `0cc141a0d`；函数名优先于易漂移的行号。下一会话须复查 HEAD/diff，有变化先 review，不 reset 他人工作。
+以下运行时代码事实以第一阶段提交 `0cc141a0d5ed4e81a18ffcaa2cb6d1c9c336d0b5` 为基准；当前 `HEAD=589b424cc2febb21957b4d72cea932c0ad78ad1` 已复核，运行时代码没有已跟踪差异，新增的是计划/设计文档。函数名优先于易漂移的行号。下一会话须复查 HEAD/diff，有变化先 review，不 reset 他人工作。
 
 | 路径与准确符号 / Path and symbol | 当前事实 / Current behavior | 第二阶段含义 / Implication |
 |---|---|---|
@@ -164,9 +165,11 @@ P0 基线复核 + plan review + 契约冻结
 
 P2/P3 高耦合，优先顺序实施，不虚构并行。P0 后可双线进行 core owner 与只读 caller/测试调查，但文件写权限必须互斥；独立测试文件可并行编写，cargo 共用 target 时由一个验证 worker 串行运行。主 agent 负责分析、契约、编排与验收；实现与测试执行委派 subagent，收到结果后看实际 diff 和命令 exit 证据。
 
-## 8. 各阶段工作契约 / Phase Work Contracts
+- **P0 旁路冻结 / Bypass freeze**：实施前必须审计并统一所有会创建或销毁 WASM 实例的入口。当前 `ExtensionManager::mount` 是公共启动原语（`src/extension/lifecycle.rs:155-158`），`discover_and_mount` 先执行 `unmount_all`（`src/extension/lifecycle.rs:230-246`），`call_plugin_tool` 按 plugin id 获取并调用 loader（`src/extension/plugin_ops.rs:18-29`），`reload_plugin` 忽略除 NotFound 外的 unmount 结果（`src/extension/lifecycle.rs:175-180`）。A 必须明确这些路径是否属于显式管理 activation、如何纳入同一 RuntimeOwner，以及如何捕获并在 guest 边界重新验证 instance/mount identity/generation；读侧 discovery 不得为了刷新声明而停止既有实例，清理 residual 必须 fail-closed 保留所有权。
+- **P0 caller census 结论 / Caller census**：管理 list/read 当前仍可能触发启动：`src/gateway/handlers/plugins/handlers/manage.rs:23-72`、`src/builtin_tools/plugin_manage.rs:213-225` 调用 `ensure_loaded`，offline CLI `src/bin/aleph-server/commands/plugins.rs:17-69` 调用 `load_all`；A 必须将这些读路径改为纯 declaration discovery。`plugins.callTool`（`src/gateway/handlers/plugins/handlers/runtime.rs:8-42`）是现有 tool call owner path；`plugin.reload`（`:48-83`）和 enable/disable 属于显式管理控制。hook/service/context 调用（`src/extension/hooks/executor.rs:751-780`、`src/extension/service_ops.rs:13-57`、`src/extension/context_adapter.rs:228-375`）不扩大 A 的 tool-only eligibility，混合插件保留既有 eager 兼容；其中 context adapter 的 permit 持有至 native call 返回、调用前后重新验证 binding/grant，可作为 A lifetime/fencing 参考。offline uninstall `src/bin/aleph-server/commands/plugins.rs:175-204` 直接删除目录，必须在 P3 前纳入 lifecycle stop/unmount 或 fail-closed 阻止删除，不能留下运行中的 VM/binding/watcher。
+- **P0 RuntimeOwner 字段/锁序合同 / RuntimeOwner contract**：每个 mounted incarnation 绑定 `plugin_id + mount_id + generation`、共享 `ProviderHandle`、单飞 operation、open/closed admission、in-flight permit、现有 `EffectScope` ownership 和 exact-instance loader binding/disposer。`admit` 的 permit 覆盖整个 guest/native 执行和结果返回；`begin_stop` 先关闭新 admission，再等 permit 清零，之后才允许 exact disposer；旧 completion/disposer 只能 stale/no-op。建议锁序为 `load_guard → 短 registry/status 读取 → owner operation/admission → loader guard → guest mutex`，不得持有 registry/loader/lifecycle 锁跨越对方需要的 await，不得在 load_guard 内等待 watcher；既有 watcher cancel/join 先于 disposer。RuntimeOwner 不复制 durable enabled、callable registry、EffectScope disposer map。
 
-以下是改动上限，不是必须修改全部路径；新模块须先说明职责并更新契约，禁止跨入 `src/harness/`。同一文件一次只允许一个 writer。
+- **P0 资格与停止证据冻结 / Eligibility and stop proof**：tool-only 资格不能只看 WASM 类型，必须由 manifest 与 adapter 产生的 capabilities 共同证明，并在 P2 前冻结可执行 predicate。`spawn_blocking` waiter drop 不构成 guest 中断证据；P3 前必须证明 eligible guest 与相关 blocking host call 的预算/interruption/join 行为，无法证明时保留资源并报告实际 Failed/residual，不得报 Stopped/unloaded。
 
 ### P0：Review 与冻结 / Review and Freeze
 

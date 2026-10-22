@@ -101,6 +101,12 @@ pub async fn write_readiness(
     // stands. No wildcard, so a new variant does not build until it says
     // whether readiness may overwrite it.
     match row.status {
+        // Owner-published states are not readiness' to overwrite: `Cold` is a
+        // declaration with no callable runtime and `Starting` is an activation
+        // in flight. A dependency report may neither promote a cold row (that
+        // would claim callability nothing published) nor demote a row the
+        // runtime owner is still activating.
+        PluginStatus::Cold | PluginStatus::Starting => return false,
         PluginStatus::Disabled | PluginStatus::Blocked(_) => return false,
         PluginStatus::Loaded | PluginStatus::Error(_) | PluginStatus::Pending { .. } => {}
     }
@@ -118,6 +124,10 @@ pub async fn write_readiness(
             row.status = PluginStatus::Loaded;
         }
         other @ (PluginStatus::Disabled | PluginStatus::Blocked(_)) => row.status = other,
+        // Not derivable from a dependency report — `derive_readiness` never
+        // returns them, and `runtime_owner` is their only writer. Refuse the
+        // write rather than let readiness label an activation it did not do.
+        PluginStatus::Cold | PluginStatus::Starting => {}
     }
     was_active != row.status.is_active()
 }

@@ -162,6 +162,10 @@ pub struct PluginRow {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum PluginRuntimeStatus {
+    /// Admitted declaration without a mounted runtime.
+    Cold,
+    /// Runtime owner activation is in progress, not yet callable.
+    Starting,
     /// Active: capabilities registered and visible to the model.
     #[default]
     Loaded,
@@ -196,6 +200,8 @@ impl PluginRuntimeStatus {
     #[must_use]
     pub const fn label(self) -> &'static str {
         match self {
+            Self::Cold => "cold",
+            Self::Starting => "starting",
             Self::Loaded => "loaded",
             Self::Disabled => "disabled",
             Self::Error => "error",

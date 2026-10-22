@@ -95,6 +95,54 @@ impl DispatchVerdict {
     }
 }
 
+/// Exact canonical invocation proof carried only through the inner plugin route.
+/// No public fields, serde, or constructor: replay and transport RPC cannot mint it.
+pub struct PluginActivationAuthority {
+    verdict: DispatchVerdict,
+    plugin_id: String,
+    handler: String,
+}
+
+impl PluginActivationAuthority {
+    pub(crate) fn from_current(
+        canonical_name: &str,
+        plugin_id: &str,
+        handler: &str,
+        input: &Value,
+    ) -> Option<Self> {
+        let verdict = current_dispatch_verdict()?;
+        let call_id = crate::approval::current_tool_call_id()?;
+        let identity = current_admitted_handler_identity()?;
+        let actor = crate::identity::current_actor();
+        if !verdict.matches(&call_id, canonical_name, &identity, input, actor.as_deref()) {
+            return None;
+        }
+        Some(Self {
+            verdict,
+            plugin_id: plugin_id.to_owned(),
+            handler: handler.to_owned(),
+        })
+    }
+
+    /// Revalidate the whole admitted tuple after waiting. No authority crosses
+    /// task-local scope exit, nested dispatch, caller change, or replay scope.
+    pub(crate) fn validates(&self, plugin_id: &str, handler: &str, input: &Value) -> bool {
+        self.plugin_id == plugin_id
+            && self.handler == handler
+            && Self::from_current(&self.verdict.canonical_name, plugin_id, handler, input)
+                .is_some_and(|current| {
+                    current.verdict.caller == self.verdict.caller
+                        && current.verdict.matches(
+                            &self.verdict.call_id,
+                            &self.verdict.canonical_name,
+                            &self.verdict.identity,
+                            &self.verdict.input,
+                            self.verdict.actor.as_deref(),
+                        )
+                })
+    }
+}
+
 tokio::task_local! {
     static DISPATCH_VERDICT: Option<DispatchVerdict>;
     static SAFE_REPLAY_ADMISSION: Option<ReplayAdmissionToken>;
@@ -211,4 +259,33 @@ pub(super) fn invocation_admitted(
                         .is_some_and(|t| t.matches(call_id, name, identity, input, actor))
                 })
                 .unwrap_or(false))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn plugin_authority_cannot_be_derived_outside_gate_scope() {
+        let identity = ToolCallIdentity {
+            schema_version: 1,
+            revision: 0,
+            replay_policy: ReplayPolicy::Unsafe,
+            replay_contract_fingerprint: None,
+        };
+        assert!(PluginActivationAuthority::from_current(
+            "plugin_tool",
+            "plugin-id",
+            "tool_handler",
+            &serde_json::json!({"x": 1}),
+        )
+        .is_none());
+        assert!(!invocation_admitted(
+            "call-1",
+            "plugin_tool",
+            &identity,
+            &serde_json::json!({"x": 1}),
+            None,
+        ));
+    }
 }

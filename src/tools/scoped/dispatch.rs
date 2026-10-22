@@ -994,6 +994,21 @@ impl ScopedToolService {
         cancel: CancellationToken,
         admission: &'call GateAdmissionToken,
     ) -> Result<ToolOutput, ToolError> {
+        if matches!(&target, RoutingTarget::Inner)
+            && self
+                .inner
+                .resolve(&name)
+                .is_some_and(|tool| tool.plugin_id().is_some())
+        {
+            // Plugin metadata in the compatibility inner registry is not a
+            // canonical handler identity. Do not derive authority from a name,
+            // plugin id, role, or TurnContext; B must install the canonical
+            // producer before this path can activate a Cold owner.
+            return Err(ToolError::PermissionDenied {
+                name,
+                reason: "plugin activation requires an exact canonical admission".into(),
+            });
+        }
         if let RoutingTarget::Canonical(entry) = &target {
             let call_id = crate::approval::current_tool_call_id().ok_or_else(|| {
                 ToolError::PermissionDenied {

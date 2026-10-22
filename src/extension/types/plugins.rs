@@ -216,6 +216,10 @@ impl PluginKind {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum PluginStatus {
+    /// Admitted tool-only WASM declaration; no VM or executable admission.
+    Cold,
+    /// The runtime owner is mounting its current generation.
+    Starting,
     /// Plugin is loaded and active
     Loaded,
     /// Plugin is disabled by user
@@ -263,8 +267,8 @@ impl PluginStatus {
     #[must_use]
     pub const fn is_terminal(&self) -> bool {
         match self {
-            Self::Loaded | Self::Disabled | Self::Error(_) | Self::Blocked(_) => true,
-            Self::Pending { .. } => false,
+            Self::Cold | Self::Loaded | Self::Disabled | Self::Error(_) | Self::Blocked(_) => true,
+            Self::Starting | Self::Pending { .. } => false,
         }
     }
 
@@ -273,6 +277,8 @@ impl PluginStatus {
     #[must_use]
     pub const fn label(&self) -> &'static str {
         match self {
+            Self::Cold => "cold",
+            Self::Starting => "starting",
             Self::Loaded => "loaded",
             Self::Disabled => "disabled",
             Self::Error(_) => "error",
@@ -633,6 +639,8 @@ mod tests {
     #[test]
     fn g6_terminal_set_is_derived_from_the_enum() {
         let rows = [
+            (PluginStatus::Cold, true),
+            (PluginStatus::Starting, false),
             (PluginStatus::Loaded, true),
             (PluginStatus::Disabled, true),
             (PluginStatus::Error("e".into()), true),
@@ -647,11 +655,12 @@ mod tests {
         for (status, expected) in &rows {
             // The match is the census: every variant must appear.
             let by_match = match status {
-                PluginStatus::Loaded
+                PluginStatus::Cold
+                | PluginStatus::Loaded
                 | PluginStatus::Disabled
                 | PluginStatus::Error(_)
                 | PluginStatus::Blocked(_) => true,
-                PluginStatus::Pending { .. } => false,
+                PluginStatus::Starting | PluginStatus::Pending { .. } => false,
             };
             assert_eq!(status.is_terminal(), *expected, "{status:?}");
             assert_eq!(
@@ -661,7 +670,7 @@ mod tests {
         }
         assert_eq!(
             rows.len(),
-            5,
+            7,
             "one row per variant — update when the enum changes"
         );
     }

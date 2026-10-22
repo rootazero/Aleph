@@ -112,6 +112,17 @@ pub async fn handle_uninstall(request: JsonRpcRequest) -> JsonRpcResponse {
             // Never mounted (disabled / errored / unknown) — nothing to tear down.
             Err(crate::extension::UnmountError::NotMounted(_))
             | Err(crate::extension::UnmountError::NotFound(_)) => {}
+            // Fail closed: a retained runtime owner still holds activation/VM
+            // effects for this plugin, so its directory must survive — deleting
+            // it now would strand effects this build cannot stop and report a
+            // teardown that never happened (P3 owns stop/join recovery).
+            Err(e @ crate::extension::UnmountError::RuntimeOwnerResidual(_)) => {
+                return JsonRpcResponse::error(
+                    request.id,
+                    INTERNAL_ERROR,
+                    format!("Refusing to uninstall: {e}"),
+                );
+            }
         }
     }
 
@@ -198,9 +209,28 @@ pub async fn set_enabled_via_registry(
         return JsonRpcResponse::error(id, INVALID_PARAMS, format!("Plugin not found: {name}"));
     }
 
-    manager.set_plugin_enabled(name, enabled).await;
+    plugin_control_response(id, manager.set_plugin_enabled(name, enabled).await)
+}
 
-    let verb = if enabled { "enabled" } else { "disabled" };
-    tracing::info!(plugin = %name, "Plugin {verb}");
-    JsonRpcResponse::success(id, json!({ "ok": true }))
+/// Shared thin wire projection for both plugin RPC and the Hub facade.
+pub(crate) fn plugin_control_response(
+    id: Option<serde_json::Value>,
+    result: Result<
+        crate::extension::plugin_state::PluginControlOutcome,
+        crate::extension::plugin_state::PluginControlError,
+    >,
+) -> JsonRpcResponse {
+    match result {
+        Ok(outcome) => JsonRpcResponse::success(id, json!({ "ok": true, "outcome": outcome })),
+        Err(error) => JsonRpcResponse::error_with_data(
+            id,
+            INTERNAL_ERROR,
+            error
+                .outcome
+                .error
+                .as_deref()
+                .unwrap_or("Plugin control failed"),
+            json!({ "ok": false, "outcome": error.outcome }),
+        ),
+    }
 }

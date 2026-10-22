@@ -37,6 +37,7 @@ use super::plugin_state::Activation;
 use super::projection::Views;
 use super::registrar::mcp_registrar::ServerStartReceiver;
 use super::registry::{DiagnosticLevel, PluginDiagnostic};
+use super::runtime_owner::RuntimeOwner;
 use super::types::{LoadSummary, PluginKind, PluginOrigin, PluginRecord, PluginStatus};
 use super::visibility::ScopeKey;
 use super::{loader, manifest, mcp_config, readiness, registrar, slash_effect, ExtensionManager};
@@ -73,7 +74,19 @@ pub enum MountError {
         id: String,
         step: &'static str,
         reason: String,
+        cleanup_report: Vec<super::plugin_state::PluginCleanupStep>,
     },
+}
+
+fn cleanup_steps(report: &DisposeReport) -> Vec<super::plugin_state::PluginCleanupStep> {
+    report
+        .steps
+        .iter()
+        .map(|(step, result)| super::plugin_state::PluginCleanupStep {
+            step: (*step).to_owned(),
+            error: result.as_ref().err().cloned(),
+        })
+        .collect()
 }
 
 /// Why an unmount did not happen.
@@ -83,6 +96,8 @@ pub enum UnmountError {
     NotFound(String),
     #[error("plugin '{0}' is not mounted")]
     NotMounted(String),
+    #[error("plugin '{0}' runtime owner retains activation/VM effects; stop/join recovery is not proven (P3)")]
+    RuntimeOwnerResidual(String),
 }
 
 /// One discovered directory, as the load walk names it
@@ -144,6 +159,81 @@ pub(super) struct LoadOutcome {
 }
 
 impl ExtensionManager {
+    /// Reconcile under the caller's control sequence. Never call the public
+    /// mount/unmount wrappers here: they would re-enter load_guard.
+    pub(super) async fn reconcile_plugin_control_locked(
+        &self,
+        id: &str,
+        enabled: bool,
+        outcome: &mut super::plugin_state::PluginControlOutcome,
+    ) {
+        use super::plugin_state::{PluginControlPhase, PluginRuntimeOutcome};
+        if enabled {
+            match self.mount_inner(id).await {
+                Ok(PluginStatus::Cold) => outcome.runtime_outcome = PluginRuntimeOutcome::Cold,
+                Ok(_) => outcome.runtime_outcome = PluginRuntimeOutcome::Mounted,
+                Err(MountError::AlreadyMounted(_)) => {
+                    outcome.runtime_outcome = PluginRuntimeOutcome::NoChange
+                }
+                Err(MountError::NotFound(_)) => {
+                    outcome.runtime_outcome = PluginRuntimeOutcome::NotDiscovered
+                }
+                Err(error) => {
+                    if let MountError::Step { cleanup_report, .. } = &error {
+                        outcome.cleanup_report = cleanup_report.clone();
+                    }
+                    outcome.runtime_outcome = PluginRuntimeOutcome::Failed;
+                    outcome.error_phase = Some(PluginControlPhase::Reconcile);
+                    outcome.error = Some(error.to_string());
+                }
+            }
+        } else {
+            match self.unmount_inner(id).await {
+                Ok(report) => {
+                    outcome.cleanup_report = cleanup_steps(&report);
+                    if report.all_ok() {
+                        outcome.runtime_outcome = PluginRuntimeOutcome::Unmounted;
+                    } else {
+                        let message = report
+                            .failures()
+                            .map(|(step, error)| format!("{step}: {error}"))
+                            .collect::<Vec<_>>()
+                            .join("; ");
+                        outcome.runtime_outcome = PluginRuntimeOutcome::Failed;
+                        outcome.error_phase = Some(PluginControlPhase::Cleanup);
+                        outcome.error = Some(message.clone());
+                        if let Some(row) = self.plugin_registry.write().await.get_plugin_mut(id) {
+                            row.status = PluginStatus::Error(format!("cleanup: {message}"));
+                            row.error = Some(message);
+                        }
+                    }
+                }
+                Err(UnmountError::NotMounted(_)) => {
+                    let mut registry = self.plugin_registry.write().await;
+                    // A consumed failing scope cannot be proved cleaned by a
+                    // second disable. Keep its diagnostic rather than claiming
+                    // a successful stop; residual ownership is a P3 concern.
+                    if let Some(row) = registry.get_plugin(id).filter(|row| matches!(&row.status, PluginStatus::Error(message) if message.starts_with("cleanup: "))) {
+                        outcome.runtime_outcome = PluginRuntimeOutcome::Failed;
+                        outcome.error_phase = Some(PluginControlPhase::Cleanup);
+                        outcome.error = row.error.clone().or_else(|| Some("prior cleanup failed".to_owned()));
+                    } else {
+                        let changed = registry.disable_plugin(id);
+                        outcome.runtime_outcome = if changed { PluginRuntimeOutcome::Unmounted } else { PluginRuntimeOutcome::NoChange };
+                    }
+                }
+                Err(error @ UnmountError::RuntimeOwnerResidual(_)) => {
+                    outcome.runtime_outcome = PluginRuntimeOutcome::Failed;
+                    outcome.error_phase = Some(PluginControlPhase::Cleanup);
+                    outcome.error = Some(error.to_string());
+                }
+                Err(UnmountError::NotFound(_)) => {
+                    outcome.runtime_outcome = PluginRuntimeOutcome::NotDiscovered
+                }
+            }
+        }
+    }
+
     // ── Public primitives ─────────────────────────────────────────────────
 
     /// Mount one discovered plugin: admission gates, manifest parse, then
@@ -177,6 +267,12 @@ impl ExtensionManager {
         match self.unmount_inner(id).await {
             Ok(_) | Err(UnmountError::NotMounted(_)) => {}
             Err(UnmountError::NotFound(_)) => return Err(MountError::NotFound(id.to_string())),
+            Err(error @ UnmountError::RuntimeOwnerResidual(_)) => {
+                return Err(MountError::Parse {
+                    id: id.to_owned(),
+                    reason: error.to_string(),
+                })
+            }
         }
         let result = self.mount_inner(id).await;
         self.views().after_transition().await;
@@ -222,7 +318,12 @@ impl ExtensionManager {
         Ok(out)
     }
 
-    // ── Discovery ─────────────────────────────────────────────────────────
+    pub(super) async fn publish_runtime_transition_views(&self) {
+        // All control and owner transitions publish through this lifecycle
+        // boundary so projection has one author and one trigger.
+        self.views().after_transition().await;
+        self.sync_runtime_snapshots().await;
+    }
 
     /// One discovery pass: dispose whatever is mounted, rebuild the rows from
     /// disk, mount every plugin the gates admit. No view recomputation here —
@@ -232,7 +333,8 @@ impl ExtensionManager {
         let mut mounted: Vec<String> = Vec::new();
         let mut failed: Vec<(String, MountError)> = Vec::new();
 
-        self.unmount_all().await;
+        self.unmount_all().await?;
+        self.runtime_owners.lock().unwrap().clear();
 
         // The loader's copy of every plugin's stored configuration must be
         // current before anything loads — a plugin started with an empty
@@ -382,6 +484,10 @@ impl ExtensionManager {
                     // anything else is a bug in this file, not a plugin outcome.
                     unreachable!("admit returned {other:?}");
                 }
+                Ok(()) if super::runtime_owner::eligible(&output, manifest.as_ref()) => {
+                    self.declare_cold(output, record, manifest.expect("eligible manifest"))
+                        .await;
+                }
                 Ok(()) => match self.mount_parsed(output, record, manifest).await {
                     Ok(_) => mounted.push(plugin_id),
                     Err(e) => {
@@ -423,11 +529,13 @@ impl ExtensionManager {
         }
         let legacy_marker = dir_path.join(".disabled");
         {
-            let mut cfg = self.plugins_config.write().await;
-            if cfg.set_enabled(plugin_id, false) {
-                if let Err(e) = cfg.save(&self.plugins_config_path).await {
-                    tracing::warn!(error = %e, "failed to persist migrated plugin disable");
-                }
+            let mut candidate = self.plugins_config.read().await.clone();
+            candidate.set_enabled(plugin_id, false);
+            if let Err(e) = self.commit_plugins_config_locked(candidate).await {
+                // Keep the marker for a later retry. A failed save must not
+                // publish an uncommitted live preference or erase its source.
+                tracing::warn!(error = %e, "failed to persist migrated plugin disable");
+                return;
             }
         }
         match tokio::fs::remove_file(&legacy_marker).await {
@@ -601,7 +709,7 @@ impl ExtensionManager {
     /// origin-aware, so a Claude Code install with no preference stays off,
     /// and the refusal says whether an operator disabled it or nobody
     /// enabled it. Callers write the refusal onto the row.
-    async fn admit(&self, id: &str, origin: PluginOrigin) -> Result<(), MountError> {
+    pub(super) async fn admit(&self, id: &str, origin: PluginOrigin) -> Result<(), MountError> {
         let trust_allows = self
             .owner_trust_policy
             .read()
@@ -623,6 +731,15 @@ impl ExtensionManager {
     // ── Mount ─────────────────────────────────────────────────────────────
 
     async fn mount_inner(&self, id: &str) -> Result<PluginStatus, MountError> {
+        if let Some(owner) = self.runtime_owner(id) {
+            if owner.provider.state() == crate::capability::provider::ProviderState::Cold {
+                self.admit(id, owner.record.origin).await?;
+                return Ok(PluginStatus::Cold);
+            }
+            if owner.provider.state() != crate::capability::provider::ProviderState::Disabled {
+                return Err(MountError::AlreadyMounted(id.to_owned()));
+            }
+        }
         if self
             .scopes
             .lock()
@@ -697,13 +814,18 @@ impl ExtensionManager {
             }
         };
         let record = Self::build_record(&output, root_dir, origin, scope_key, manifest.as_ref());
+        if super::runtime_owner::eligible(&output, manifest.as_ref()) {
+            return Ok(self
+                .declare_cold(output, record, manifest.expect("eligible manifest"))
+                .await);
+        }
         self.mount_parsed(output, record, manifest).await
     }
 
     /// The six effects, in [`super::effects::STEP_LABELS`] order. `record`
     /// already carries root_dir / origin / kind. Returns the row's status
     /// after the effects (see [`Self::mount`]).
-    async fn mount_parsed(
+    pub(super) async fn mount_parsed(
         &self,
         output: AdapterOutput,
         record: PluginRecord,
@@ -938,7 +1060,12 @@ impl ExtensionManager {
             tracing::warn!(plugin_id = %id, ?report, "partial scope did not dispose cleanly after a failed mount");
         }
         self.write_failed_row(shell, step, &reason).await;
-        MountError::Step { id, step, reason }
+        MountError::Step {
+            id,
+            step,
+            reason,
+            cleanup_report: cleanup_steps(&report),
+        }
     }
 
     /// The ONE site that turns a mount-step failure into a status:
@@ -1086,12 +1213,51 @@ impl ExtensionManager {
     // ── Unmount ───────────────────────────────────────────────────────────
 
     async fn unmount_inner(&self, id: &str) -> Result<DisposeReport, UnmountError> {
+        use crate::capability::provider::ProviderState;
+        let owner = self.runtime_owner(id);
+        let drain = if let Some(owner) = &owner {
+            match owner.provider.state() {
+                ProviderState::Cold | ProviderState::Disabled => None,
+                ProviderState::Ready => {
+                    let drain = owner
+                        .admission
+                        .clone()
+                        .acquire_many_owned(RuntimeOwner::MAX_IN_FLIGHT)
+                        .await
+                        .map_err(|_| UnmountError::RuntimeOwnerResidual(id.to_owned()))?;
+                    owner.close_admission();
+                    owner
+                        .provider
+                        .transition(ProviderState::Stopping)
+                        .map_err(|_| UnmountError::RuntimeOwnerResidual(id.to_owned()))?;
+                    Some(drain)
+                }
+                _ => {
+                    return Err(UnmountError::RuntimeOwnerResidual(id.to_owned()));
+                }
+            }
+        } else {
+            None
+        };
+        if let Some(owner) = &owner {
+            let task = { owner.task.lock().unwrap().take() };
+            if let Some(task) = task {
+                task.await
+                    .map_err(|_| UnmountError::RuntimeOwnerResidual(id.to_owned()))?;
+            }
+        }
         let scope = self
             .scopes
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .remove(id);
         let Some(scope) = scope else {
+            if let Some(owner) = owner {
+                if owner.provider.state() == ProviderState::Cold {
+                    let _ = owner.provider.transition(ProviderState::Disabled);
+                }
+            }
+            drop(drain);
             return Err(
                 if self.plugin_registry.read().await.get_plugin(id).is_some() {
                     UnmountError::NotMounted(id.to_string())
@@ -1109,6 +1275,39 @@ impl ExtensionManager {
             shell
         };
         let report = scope.dispose().await;
+        drop(drain);
+        if !report.all_ok() {
+            if let Some(owner) = &owner {
+                let _ = owner.provider.transition(ProviderState::Failed);
+                if let Some(row) = self.plugin_registry.write().await.get_plugin_mut(id) {
+                    row.status = PluginStatus::Error("runtime owner residual after stop".into());
+                }
+                return Err(UnmountError::RuntimeOwnerResidual(id.to_owned()));
+            }
+            if let Some(mut row) = shell {
+                let message = report
+                    .failures()
+                    .map(|(step, error)| format!("{step}: {error}"))
+                    .collect::<Vec<_>>()
+                    .join("; ");
+                row.status = PluginStatus::Error(format!("cleanup: {message}"));
+                row.error = Some(message);
+                self.plugin_registry.write().await.register_plugin(row);
+            }
+            return Ok(report);
+        }
+        if let Some(owner) = owner {
+            if owner.provider.state() == ProviderState::Stopping {
+                let _ = owner.provider.transition(ProviderState::Stopped);
+                let _ = owner.provider.transition(ProviderState::Disabled);
+            } else if owner.provider.state() == ProviderState::Cold {
+                let _ = owner.provider.transition(ProviderState::Disabled);
+            }
+            self.runtime_owners
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .remove(id);
+        }
         if let Some(mut row) = shell {
             // The registry_row disposer removed the row and every capability
             // row; put back a Disabled record so the plugin stays listable and
@@ -1122,7 +1321,25 @@ impl ExtensionManager {
     }
 
     /// Dispose every scope without writing rows — discovery rebuilds them.
-    async fn unmount_all(&self) {
+    async fn unmount_all(&self) -> ExtensionResult<()> {
+        use crate::capability::provider::ProviderState;
+        let owners: Vec<_> = self
+            .runtime_owners
+            .lock()
+            .unwrap()
+            .values()
+            .cloned()
+            .collect();
+        if owners.iter().any(|owner| {
+            !matches!(
+                owner.provider.state(),
+                ProviderState::Cold | ProviderState::Disabled
+            )
+        }) {
+            return Err(super::error::ExtensionError::Runtime(
+                "reload refused: runtime owner effects/tasks require P3 stop recovery".into(),
+            ));
+        }
         let scopes: Vec<EffectScope> = self
             .scopes
             .lock()
@@ -1142,6 +1359,7 @@ impl ExtensionManager {
                 tracing::warn!(?report, "scope did not dispose cleanly during reload");
             }
         }
+        Ok(())
     }
 
     // ── Test-only introspection ───────────────────────────────────────────
@@ -1315,6 +1533,459 @@ mod tests {
         // this fixture and nothing else.
         manager.skill_system = crate::skill::SkillSystem::new();
         (manager, cfg_path)
+    }
+
+    fn write_p1_wasm_fixture(root: &Path) {
+        // P1 tests need a real guest, not a service whose stop export is absent.
+        write_wasm_fixture(root);
+        std::fs::write(
+            root.join("plugins/qa-wasm/aleph.plugin.toml"),
+            "[plugin]\nid = \"qa-wasm\"\nname = \"QA WASM\"\nkind = \"wasm\"\nentry = \"plugin.wasm\"\n",
+        )
+        .unwrap();
+    }
+
+    fn write_cold_tool_wasm_fixture(root: &Path) {
+        let dir = root.join("plugins").join("lazy-wasm");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("plugin.wasm"),
+            crate::extension::loader::EMPTY_WASM_MODULE,
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("aleph.plugin.toml"),
+            r#"[plugin]
+id = "lazy-wasm"
+name = "Lazy WASM"
+kind = "wasm"
+entry = "plugin.wasm"
+
+[[tools]]
+name = "lazy_tool"
+description = "A tool-only lazy fixture"
+handler = "handler"
+"#,
+        )
+        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn tool_only_wasm_discovery_stays_cold_without_mounting_a_vm() {
+        use crate::extension::plugin_state::PluginRuntimeOutcome;
+        let tmp = tempfile::tempdir().unwrap();
+        let _home = isolated_home(tmp.path());
+        write_cold_tool_wasm_fixture(tmp.path());
+        let (manager, _) = isolated_manager(tmp.path()).await;
+        let manager = Arc::new(manager);
+        // fixture is registered without an eager mount. The explicit enable
+        // below then exercises the Cold control transition.
+        let _ = manager
+            .set_plugin_enabled("lazy-wasm", false)
+            .await
+            .expect("pre-discovery disable must persist");
+        manager.load_all().await.unwrap();
+
+        let outcome = manager
+            .set_plugin_enabled("lazy-wasm", true)
+            .await
+            .expect("declaration discovery must succeed");
+        assert_eq!(outcome.runtime_outcome, PluginRuntimeOutcome::Cold);
+        assert_eq!(outcome.actual_state, "cold");
+        assert!(!manager.plugin_loader.read().await.is_loaded("lazy-wasm"));
+        let owner = manager
+            .runtime_owner("lazy-wasm")
+            .expect("tool-only declaration has a runtime owner");
+        assert_eq!(
+            owner.provider.state(),
+            crate::capability::provider::ProviderState::Cold
+        );
+        assert!(owner.identity.lock().unwrap().is_none());
+        assert!(manager
+            .call_plugin_tool("lazy-wasm", "handler", serde_json::json!({}))
+            .await
+            .is_err());
+        assert!(!manager.plugin_loader.read().await.is_loaded("lazy-wasm"));
+        assert!(manager
+            .get_plugin_registry()
+            .await
+            .list_tools_for_plugin("lazy-wasm")
+            .is_empty());
+
+        let (entered_tx, entered_rx) = tokio::sync::oneshot::channel();
+        let (release_tx, release_rx) = tokio::sync::oneshot::channel();
+        *owner.barrier.lock().unwrap() = Some((entered_tx, release_rx));
+        let activation_waiter = tokio::spawn({
+            let manager = Arc::clone(&manager);
+            let owner = Arc::clone(&owner);
+            async move { manager.activate_owner(owner).await }
+        });
+        entered_rx.await.unwrap();
+        activation_waiter.abort();
+        release_tx.send(()).unwrap();
+        manager
+            .activate_owner(Arc::clone(&owner))
+            .await
+            .expect("retained activation must outlive a cancelled waiter");
+        assert_eq!(
+            owner.provider.state(),
+            crate::capability::provider::ProviderState::Ready
+        );
+        assert!(manager.plugin_loader.read().await.is_loaded("lazy-wasm"));
+        assert_eq!(
+            manager
+                .get_plugin_registry()
+                .await
+                .list_tools_for_plugin("lazy-wasm")
+                .len(),
+            1
+        );
+        assert!(manager.reload().await.is_err());
+        assert!(manager.plugin_loader.read().await.is_loaded("lazy-wasm"));
+        let stale_owner = Arc::clone(&owner);
+        let report = manager
+            .unmount("lazy-wasm")
+            .await
+            .expect("stop must drain and dispose the exact owner scope");
+        assert!(report.all_ok(), "{report:?}");
+        assert!(!manager.plugin_loader.read().await.is_loaded("lazy-wasm"));
+        assert!(manager
+            .get_plugin_registry()
+            .await
+            .list_tools_for_plugin("lazy-wasm")
+            .is_empty());
+        assert!(manager.runtime_owner("lazy-wasm").is_none());
+        assert!(!manager.owner_is_current(&stale_owner));
+        let replacement = manager
+            .set_plugin_enabled("lazy-wasm", true)
+            .await
+            .expect("replacement declaration must remain cold")
+            .runtime_outcome;
+        assert_eq!(replacement, PluginRuntimeOutcome::Cold);
+        let replacement_owner = manager.runtime_owner("lazy-wasm").unwrap();
+        assert!(!Arc::ptr_eq(&stale_owner, &replacement_owner));
+        let _ = manager.set_plugin_enabled("lazy-wasm", false).await;
+        manager.runtime_owners.lock().unwrap().remove("lazy-wasm");
+        assert_eq!(
+            manager.get_plugin_record("lazy-wasm").await.unwrap().status,
+            PluginStatus::Disabled
+        );
+    }
+
+    #[tokio::test]
+    async fn p1_save_failure_leaves_disk_live_config_and_runtime_unchanged() {
+        use crate::extension::plugin_state::{PluginControlPhase, PluginRuntimeOutcome};
+        let tmp = tempfile::tempdir().unwrap();
+        let _home = isolated_home(tmp.path());
+        write_static_plugin(tmp.path(), "alpha");
+        let (mut manager, cfg_path) = isolated_manager(tmp.path()).await;
+        manager.load_all().await.unwrap();
+        let _ = manager.set_plugin_enabled("alpha", true).await.unwrap();
+        let disk = std::fs::read(&cfg_path).unwrap();
+        let live = toml::to_string(&*manager.plugins_config.read().await).unwrap();
+        let steps = manager.scope_steps("alpha");
+        // A file cannot be a parent directory: deterministic failure even as root.
+        manager.plugins_config_path = cfg_path.join("cannot-save.toml");
+        let outcome = manager
+            .set_plugin_enabled("alpha", false)
+            .await
+            .unwrap_err()
+            .outcome;
+        assert!(!outcome.persisted);
+        assert!(outcome.preference_changed);
+        assert_eq!(outcome.error_phase, Some(PluginControlPhase::Persistence));
+        assert_eq!(outcome.runtime_outcome, PluginRuntimeOutcome::NotAttempted);
+        assert_eq!(outcome.actual_state, "loaded");
+        assert!(outcome.error.is_some());
+        assert_eq!(std::fs::read(&cfg_path).unwrap(), disk);
+        assert_eq!(
+            toml::to_string(&*manager.plugins_config.read().await).unwrap(),
+            live
+        );
+        assert_eq!(manager.scope_steps("alpha"), steps);
+        assert!(manager
+            .get_plugin_record("alpha")
+            .await
+            .unwrap()
+            .status
+            .is_active());
+        assert!(!manager.get_plugin_registry().await.list_skills().is_empty());
+    }
+
+    #[tokio::test]
+    async fn p1_runtime_failure_keeps_committed_desired_and_same_value_retries() {
+        use crate::extension::plugin_state::{
+            PluginControlPhase, PluginRuntimeOutcome, PluginsConfig,
+        };
+        let tmp = tempfile::tempdir().unwrap();
+        let _home = isolated_home(tmp.path());
+        write_p1_wasm_fixture(tmp.path());
+        let module = tmp.path().join("plugins/qa-wasm/plugin.wasm");
+        std::fs::remove_file(&module).unwrap();
+        let (manager, cfg_path) = isolated_manager(tmp.path()).await;
+        manager.load_all().await.unwrap();
+        let failed = manager
+            .set_plugin_enabled("qa-wasm", true)
+            .await
+            .unwrap_err()
+            .outcome;
+        assert!(failed.persisted && failed.preference_changed);
+        assert_eq!(failed.error_phase, Some(PluginControlPhase::Reconcile));
+        assert_eq!(failed.runtime_outcome, PluginRuntimeOutcome::Failed);
+        assert_eq!(failed.actual_state, "failed");
+        assert!(failed.error.as_deref().unwrap().contains("wasm_module"));
+        assert!(failed
+            .cleanup_report
+            .iter()
+            .any(|s| s.step == "registry_row" && s.error.is_none()));
+        assert!(PluginsConfig::load(&cfg_path).is_enabled_for("qa-wasm", PluginOrigin::Workspace));
+        assert!(manager
+            .plugins_config
+            .read()
+            .await
+            .is_enabled_for("qa-wasm", PluginOrigin::Workspace));
+        assert!(manager.scope_steps("qa-wasm").is_none());
+        assert!(!manager.plugin_loader.read().await.is_loaded("qa-wasm"));
+        // Same desired value is a retry, not a bool no-op. Repair only the guest.
+        std::fs::write(&module, crate::extension::loader::EMPTY_WASM_MODULE).unwrap();
+        let retry = manager.set_plugin_enabled("qa-wasm", true).await.unwrap();
+        assert!(retry.persisted && !retry.preference_changed && retry.changed());
+        assert_eq!(retry.runtime_outcome, PluginRuntimeOutcome::Mounted);
+        assert_eq!(retry.actual_state, "loaded");
+        assert_ne!(retry.operation_id, failed.operation_id);
+        assert_eq!(retry.provider_generation, None);
+        assert!(manager.plugin_loader.read().await.is_loaded("qa-wasm"));
+        let _ = manager.set_plugin_enabled("qa-wasm", false).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn p1_not_discovered_is_durable_but_never_claims_mounted() {
+        use crate::extension::plugin_state::{PluginRuntimeOutcome, PluginsConfig};
+        let tmp = tempfile::tempdir().unwrap();
+        let _home = isolated_home(tmp.path());
+        let (manager, path) = isolated_manager(tmp.path()).await;
+        let outcome = manager.set_plugin_enabled("absent", false).await.unwrap();
+        assert!(outcome.persisted);
+        assert_eq!(outcome.runtime_outcome, PluginRuntimeOutcome::NotDiscovered);
+        assert_eq!(outcome.actual_state, "not_discovered");
+        assert!(!PluginsConfig::load(&path).is_enabled_for("absent", PluginOrigin::Global));
+        assert!(manager.get_plugin_record("absent").await.is_none());
+    }
+
+    #[tokio::test]
+    async fn p1_toggle_sequence_holds_through_dispose_before_next_save() {
+        use crate::extension::plugin_state::{PluginRuntimeOutcome, PluginsConfig};
+        use std::future::Future;
+        use std::task::Poll;
+        let tmp = tempfile::tempdir().unwrap();
+        let _home = isolated_home(tmp.path());
+        write_static_plugin(tmp.path(), "alpha");
+        let (manager, path) = isolated_manager(tmp.path()).await;
+        manager.load_all().await.unwrap();
+        let _ = manager.set_plugin_enabled("alpha", true).await.unwrap();
+        let (entered_tx, entered_rx) = tokio::sync::oneshot::channel();
+        let (release_tx, release_rx) = tokio::sync::oneshot::channel();
+        manager
+            .scopes
+            .lock()
+            .unwrap()
+            .get_mut("alpha")
+            .unwrap()
+            .effect(
+                "mcp_server",
+                async_disposer(move || async move {
+                    let _ = entered_tx.send(());
+                    release_rx.await.map_err(|e| e.to_string())?;
+                    Ok(())
+                }),
+            );
+        let disable = manager.set_plugin_enabled("alpha", false);
+        let enable = manager.set_plugin_enabled("alpha", true);
+        tokio::pin!(disable, enable);
+        tokio::select! {
+            entered = entered_rx => entered.unwrap(),
+            result = &mut disable => panic!("disable escaped the gated disposer: {result:?}"),
+        }
+        // Poll the next toggle while the first is inside runtime reconciliation.
+        // No sleeps/scheduler assumptions: it must actually wait on the sequence.
+        std::future::poll_fn(|cx| {
+            assert!(matches!(enable.as_mut().poll(cx), Poll::Pending));
+            Poll::Ready(())
+        })
+        .await;
+        assert!(!PluginsConfig::load(&path).is_enabled_for("alpha", PluginOrigin::Workspace));
+        assert!(!manager
+            .plugins_config
+            .read()
+            .await
+            .is_enabled_for("alpha", PluginOrigin::Workspace));
+        release_tx.send(()).unwrap();
+        let (disabled, enabled) = tokio::join!(disable, enable);
+        let disabled = disabled.unwrap();
+        let enabled = enabled.unwrap();
+        assert_eq!(disabled.runtime_outcome, PluginRuntimeOutcome::Unmounted);
+        assert_eq!(disabled.actual_state, "disabled");
+        assert_eq!(enabled.runtime_outcome, PluginRuntimeOutcome::Mounted);
+        assert_eq!(enabled.actual_state, "loaded");
+        assert_ne!(disabled.operation_id, enabled.operation_id);
+        assert!(PluginsConfig::load(&path).is_enabled_for("alpha", PluginOrigin::Workspace));
+        assert!(manager
+            .get_plugin_record("alpha")
+            .await
+            .unwrap()
+            .status
+            .is_active());
+        assert!(manager.scope_steps("alpha").is_some());
+        let _ = manager.set_plugin_enabled("alpha", false).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn p1_cleanup_failure_and_repeated_disable_do_not_claim_success() {
+        use crate::extension::plugin_state::{PluginControlPhase, PluginRuntimeOutcome};
+        let tmp = tempfile::tempdir().unwrap();
+        let _home = isolated_home(tmp.path());
+        write_static_plugin(tmp.path(), "alpha");
+        let (manager, _) = isolated_manager(tmp.path()).await;
+        manager.load_all().await.unwrap();
+        manager
+            .scopes
+            .lock()
+            .unwrap()
+            .get_mut("alpha")
+            .unwrap()
+            .effect(
+                "mcp_server",
+                async_disposer(|| async { Err("injected cleanup failure".to_owned()) }),
+            );
+        let failed = manager
+            .set_plugin_enabled("alpha", false)
+            .await
+            .unwrap_err()
+            .outcome;
+        assert!(failed.persisted);
+        assert_eq!(failed.error_phase, Some(PluginControlPhase::Cleanup));
+        assert_eq!(failed.runtime_outcome, PluginRuntimeOutcome::Failed);
+        assert_eq!(failed.actual_state, "failed");
+        assert!(failed
+            .cleanup_report
+            .iter()
+            .any(|s| s.step == "mcp_server"
+                && s.error.as_deref() == Some("injected cleanup failure")));
+        let repeated = manager
+            .set_plugin_enabled("alpha", false)
+            .await
+            .unwrap_err()
+            .outcome;
+        assert!(repeated.persisted && !repeated.preference_changed);
+        assert_eq!(repeated.error_phase, Some(PluginControlPhase::Cleanup));
+        assert_eq!(repeated.actual_state, "failed");
+        assert!(repeated
+            .error
+            .as_deref()
+            .unwrap()
+            .contains("injected cleanup failure"));
+        // This proves truthful reporting only, NOT retained/retryable P3 ownership.
+        assert!(manager.scope_steps("alpha").is_none());
+    }
+
+    /// Exercise the real RPC body, Hub plugin arm and builtin tool body with
+    /// isolated managers, without installing a process-global singleton.
+    async fn p1_caller_outcomes(
+        manager: &ExtensionManager,
+        enabled: bool,
+    ) -> Vec<serde_json::Value> {
+        use crate::builtin_tools::plugin_manage::{
+            PluginAction, PluginManageArgs, PluginManageTool,
+        };
+        use crate::gateway::handlers::{extensions, plugins};
+        let rpc = plugins::set_enabled_via_registry(
+            manager,
+            Some(serde_json::json!(71)),
+            "qa-wasm",
+            enabled,
+        )
+        .await;
+        let hub = extensions::lifecycle::toggle_plugin(
+            manager,
+            Some(serde_json::json!(72)),
+            "qa-wasm",
+            enabled,
+        )
+        .await;
+        let mut outcomes = Vec::new();
+        for (response, id) in [(rpc, 71), (hub, 72)] {
+            assert_eq!(response.id, Some(serde_json::json!(id)));
+            assert!(response.result.is_none());
+            let error = response.error.unwrap();
+            assert_eq!(error.code, crate::gateway::protocol::INTERNAL_ERROR);
+            let data = error.data.unwrap();
+            assert_eq!(data["ok"], false);
+            outcomes.push(data["outcome"].clone());
+        }
+        let tool = PluginManageTool::call_on(
+            manager,
+            PluginManageArgs {
+                action: if enabled {
+                    PluginAction::Enable
+                } else {
+                    PluginAction::Disable
+                },
+                name: Some("qa-wasm".to_owned()),
+                source: None,
+                query: None,
+                config: None,
+                enforce: None,
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(tool.data["ok"], false);
+        assert!(tool.summary.contains("control failed"));
+        outcomes.push(tool.data["outcome"].clone());
+        outcomes
+    }
+
+    #[tokio::test]
+    async fn p1_callers_propagate_save_failure_without_false_success() {
+        let tmp = tempfile::tempdir().unwrap();
+        let _home = isolated_home(tmp.path());
+        write_p1_wasm_fixture(tmp.path());
+        let (mut manager, path) = isolated_manager(tmp.path()).await;
+        manager.load_all().await.unwrap();
+        let _ = manager.set_plugin_enabled("qa-wasm", true).await.unwrap();
+        let disk = std::fs::read(&path).unwrap();
+        manager.plugins_config_path = path.join("cannot-save.toml");
+        for outcome in p1_caller_outcomes(&manager, false).await {
+            assert_eq!(outcome["persisted"], false);
+            assert_eq!(outcome["error_phase"], "persistence");
+            assert_eq!(outcome["runtime_outcome"], "not_attempted");
+            assert_eq!(outcome["actual_state"], "loaded");
+        }
+        assert_eq!(std::fs::read(&path).unwrap(), disk);
+        assert!(manager.plugin_loader.read().await.is_loaded("qa-wasm"));
+        manager.plugins_config_path = path;
+        let _ = manager.set_plugin_enabled("qa-wasm", false).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn p1_callers_propagate_partial_commit_without_false_success() {
+        use crate::extension::plugin_state::PluginsConfig;
+        let tmp = tempfile::tempdir().unwrap();
+        let _home = isolated_home(tmp.path());
+        write_p1_wasm_fixture(tmp.path());
+        std::fs::remove_file(tmp.path().join("plugins/qa-wasm/plugin.wasm")).unwrap();
+        let (manager, path) = isolated_manager(tmp.path()).await;
+        manager.load_all().await.unwrap();
+        for outcome in p1_caller_outcomes(&manager, true).await {
+            assert_eq!(outcome["persisted"], true);
+            assert_eq!(outcome["desired_enabled"], true);
+            assert_eq!(outcome["error_phase"], "reconcile");
+            assert_eq!(outcome["runtime_outcome"], "failed");
+            assert_eq!(outcome["actual_state"], "failed");
+            assert!(!outcome["cleanup_report"].as_array().unwrap().is_empty());
+        }
+        assert!(PluginsConfig::load(&path).is_enabled_for("qa-wasm", PluginOrigin::Workspace));
+        assert!(manager.scope_steps("qa-wasm").is_none());
     }
 
     async fn real_guest_row_and_disposer(
@@ -1578,7 +2249,7 @@ mod tests {
         .unwrap();
         assert_ne!(first, second);
         release.notify_one();
-        tokio::time::timeout(std::time::Duration::from_secs(5), &mut task)
+        let _ = tokio::time::timeout(std::time::Duration::from_secs(5), &mut task)
             .await
             .unwrap();
         assert!(manager.get_plugin_record(&first).await.is_none());
@@ -2393,8 +3064,16 @@ priority = 60
         );
         assert!(before.loaded.is_empty() && before.memory.is_empty() && before.services.is_empty());
 
-        assert!(manager.set_plugin_enabled("qa-wasm", true).await);
-        assert!(manager.set_plugin_enabled("qa-mcp", true).await);
+        assert!(manager
+            .set_plugin_enabled("qa-wasm", true)
+            .await
+            .unwrap()
+            .changed());
+        assert!(manager
+            .set_plugin_enabled("qa-mcp", true)
+            .await
+            .unwrap()
+            .changed());
         assert_eq!(
             manager.scope_steps("qa-wasm").unwrap(),
             vec![
@@ -2470,10 +3149,36 @@ priority = 60
         // `service` disposer's `forget_plugin` removes it.
         assert_eq!(during.services, vec!["qa-wasm:ticker".to_string()]);
 
-        assert!(manager.set_plugin_enabled("qa-wasm", false).await);
-        assert!(manager.set_plugin_enabled("qa-mcp", false).await);
+        // The empty fixture has no stop_ticker export: removal still runs,
+        // but the control result must expose its cleanup failure, not bool true.
+        let stopped = manager
+            .set_plugin_enabled("qa-wasm", false)
+            .await
+            .unwrap_err()
+            .outcome;
+        assert!(stopped.persisted);
+        assert_eq!(
+            stopped.error_phase,
+            Some(super::super::plugin_state::PluginControlPhase::Cleanup)
+        );
+        assert!(stopped
+            .cleanup_report
+            .iter()
+            .any(|step| step.step == "service" && step.error.is_some()));
+        assert!(manager
+            .set_plugin_enabled("qa-mcp", false)
+            .await
+            .unwrap()
+            .changed());
         let after = snapshot(&manager, &memory, &catalog).await;
-        assert_eq!(after, before, "an effect leaked past its unmount");
+        let mut expected = before;
+        expected
+            .rows
+            .iter_mut()
+            .find(|(id, _)| id == "qa-wasm")
+            .unwrap()
+            .1 = "error".to_owned();
+        assert_eq!(after, expected, "an effect leaked past its unmount");
     }
 
     /// `reload()` = unmount everything + mount everything: the surfaces
@@ -2484,8 +3189,8 @@ priority = 60
         let tmp = tempfile::tempdir().unwrap();
         let _home = isolated_home(tmp.path());
         let (manager, memory, catalog) = six_effect_bench(tmp.path()).await;
-        manager.set_plugin_enabled("qa-wasm", true).await;
-        manager.set_plugin_enabled("qa-mcp", true).await;
+        let _ = manager.set_plugin_enabled("qa-wasm", true).await.unwrap();
+        let _ = manager.set_plugin_enabled("qa-mcp", true).await.unwrap();
         // Settle before each snapshot: qa-mcp's row reads `pending` until the
         // actor answers and `error` after, and which one a bare snapshot sees
         // is the scheduler's choice.

@@ -61,6 +61,8 @@ pub fn plugin_row(info: PluginInfo) -> PluginRow {
 /// follow ("unknown may not be read as healthy").
 fn parse_status(label: &str) -> PluginRuntimeStatus {
     match label {
+        "cold" => PluginRuntimeStatus::Cold,
+        "starting" => PluginRuntimeStatus::Starting,
         "loaded" => PluginRuntimeStatus::Loaded,
         "disabled" => PluginRuntimeStatus::Disabled,
         "blocked" => PluginRuntimeStatus::Blocked,
@@ -161,6 +163,8 @@ mod tests {
     fn parse_status_covers_every_core_label() {
         use crate::extension::PluginStatus;
         let core = [
+            PluginStatus::Cold,
+            PluginStatus::Starting,
             PluginStatus::Loaded,
             PluginStatus::Disabled,
             PluginStatus::Error("e".into()),
