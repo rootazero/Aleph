@@ -10,9 +10,8 @@ use super::ExtensionManager;
 impl ExtensionManager {
     /// Execute a plugin tool after an exact canonical dispatch admission.
     ///
-    /// This is the only path that may activate a Cold tool-only WASM owner.
-    /// The authority is checked before activation and again after the retained
-    /// owner operation settles; direct transport callers must use
+    /// Authority carries an already-Ready producer binding, never a Cold
+    /// activation proxy. It is rechecked after waits; transport callers use
     /// [`Self::call_plugin_tool`], which remains mounted-only.
     pub(crate) async fn call_plugin_tool_with_authority(
         self: &Arc<Self>,
@@ -37,9 +36,6 @@ impl ExtensionManager {
                 "plugin runtime owner identity mismatch".into(),
             ));
         }
-        if owner.provider.state() == crate::capability::provider::ProviderState::Cold {
-            self.activate_owner(Arc::clone(&owner)).await?;
-        }
         if !authority.validates(plugin_id, handler, &args)
             || !self.owner_is_current(&owner)
             || owner.provider.state() != crate::capability::provider::ProviderState::Ready
@@ -51,6 +47,9 @@ impl ExtensionManager {
         let expected = owner.identity.lock().unwrap().clone().ok_or_else(|| {
             ExtensionError::Runtime("ready plugin owner has no WASM identity".into())
         })?;
+        let binding = authority
+            .binding_for(&owner.provider, owner.owner_generation)
+            .ok_or_else(|| ExtensionError::Runtime("plugin producer binding is stale".into()))?;
         let generation = owner.provider.generation();
         let permit = owner
             .acquire_permit()
@@ -61,7 +60,11 @@ impl ExtensionManager {
             .provider
             .acquire_call(generation)
             .map_err(|e| ExtensionError::Runtime(e.to_string()))?;
-        if !self.owner_is_current(&owner)
+        if !authority.validates(plugin_id, handler, &args)
+            || !authority
+                .binding_for(&owner.provider, owner.owner_generation)
+                .is_some_and(|current| binding.same_binding(&current))
+            || !self.owner_is_current(&owner)
             || !owner.output.capabilities.iter().any(|capability| {
                 matches!(
                     capability,
@@ -77,16 +80,45 @@ impl ExtensionManager {
         let actual = loader.wasm_mount_identity(plugin_id).ok_or_else(|| {
             ExtensionError::Runtime("plugin WASM identity disappeared before execution".into())
         })?;
-        if !expected.same_instance(&actual) {
+        if !expected.same_instance(&actual)
+            || !binding.matches_mount(&expected)
+            || !loader.wasm_binding_is_current(&binding)
+        {
             return Err(ExtensionError::Runtime(
                 "plugin WASM identity changed before execution".into(),
             ));
         }
         self.ensure_plugin_active(plugin_id).await?;
-        let binding = loader.bind_wasm(plugin_id, handler)?;
+        if !authority.validates(plugin_id, handler, &args)
+            || !authority
+                .binding_for(&owner.provider, owner.owner_generation)
+                .is_some_and(|current| binding.same_binding(&current))
+            || !self.owner_is_current(&owner)
+            || !loader.wasm_binding_is_current(&binding)
+        {
+            return Err(ExtensionError::Runtime(
+                "plugin activation authority or WASM identity changed before execution".into(),
+            ));
+        }
+        let operation = owner.clone();
+        let proof = authority.publication_proof();
         let result = tokio::task::spawn_blocking(move || {
             let _permit = permit;
-            loader.call_bound(&binding, args)
+            operation
+                .provider
+                .acquire_call(generation)
+                .map_err(|e| ExtensionError::Runtime(e.to_string()))?;
+            if !proof.is_current() {
+                return Err(ExtensionError::Runtime(
+                    "plugin activation authority or WASM identity changed before execution".into(),
+                ));
+            }
+            let result = loader.call_bound(&binding, args);
+            operation
+                .provider
+                .acquire_call(generation)
+                .map_err(|e| ExtensionError::Runtime(e.to_string()))?;
+            result
         })
         .await
         .map_err(|e| ExtensionError::Runtime(format!("WASM task join failed: {e}")))?;
@@ -122,6 +154,7 @@ impl ExtensionManager {
         self.ensure_runtime_mounted(plugin_id).await?;
 
         let owner = self.runtime_owner(plugin_id);
+        self.reject_ownerless_canonical_tool(plugin_id, owner.is_some())?;
         let admission = if let Some(owner) = &owner {
             let generation = owner.provider.generation();
             owner
@@ -140,6 +173,7 @@ impl ExtensionManager {
         };
         let loader = self.plugin_loader.clone().write_owned().await;
         self.ensure_plugin_active(plugin_id).await?;
+        self.reject_ownerless_canonical_tool(plugin_id, owner.is_some())?;
         let bound = if let Some(owner) = &owner {
             owner
                 .provider
@@ -200,6 +234,27 @@ impl ExtensionManager {
             }
         }
         result
+    }
+
+    fn reject_ownerless_canonical_tool(
+        &self,
+        plugin_id: &str,
+        has_captured_owner: bool,
+    ) -> ExtensionResult<()> {
+        if !has_captured_owner
+            && (self.runtime_owner(plugin_id).is_some()
+                || self
+                    .tool_handler_registry
+                    .read()
+                    .unwrap()
+                    .as_ref()
+                    .is_some_and(|registry| registry.has_plugin_publication(plugin_id)))
+        {
+            return Err(ExtensionError::Runtime(
+                "plugin tool has no current RuntimeOwner authority".into(),
+            ));
+        }
+        Ok(())
     }
 
     async fn ensure_plugin_active(&self, plugin_id: &str) -> ExtensionResult<()> {
