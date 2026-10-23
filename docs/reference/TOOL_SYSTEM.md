@@ -71,6 +71,37 @@ uses a request-local `ScopedToolService`; it is not general authorization wiring
 
 ---
 
+## B4 canonical plugin dispatch / 规范插件派发
+
+B4 (`d53821d7f`) seals the canonical plugin path. `ScopedToolService` captures
+`CanonicalEntryLease`; existing permission, visibility, trust, confirmation,
+actor, retry, Layer2, and before/after gates lead to an exact `DispatchVerdict`.
+`PluginActivationAuthority` derives only from the task-local sealed verdict plus
+registry-owned `ReadySnapshot` publication, not from discovery or caller claims.
+
+`PluginCanonicalHandler` and `ExtensionManager::call_plugin_tool_with_authority`
+revalidate provider generation, owner generation, mount identity, binding,
+descriptor, caller, input, and publication before/after waits and immediately
+before guest admission. Stale, replaced, or ownerless compatibility paths fail
+closed. Direct mounted-only RPC and the raw `tools.invoke` boundary above retain
+separate semantics; Cold tool-only WASM gains no activation proxy. B5 observer
+recovery and B6 full failure-matrix acceptance remain deferred.
+
+B4（`d53821d7f`）封闭 canonical plugin 派发链：`ScopedToolService` 捕获
+`CanonicalEntryLease`，既有 permission、visibility、trust、confirmation、actor、
+retry、Layer2 与 before/after gates 形成精确 `DispatchVerdict`。
+`PluginActivationAuthority` 只从 task-local sealed verdict 与 registry-owned
+`ReadySnapshot` publication 派生，发现结果或调用者声明不授予该 authority。
+
+`PluginCanonicalHandler` 与 `ExtensionManager::call_plugin_tool_with_authority`
+在等待前后及 guest admission 紧前复检 provider generation、owner generation、
+mount identity、binding、descriptor、caller、input 与 publication。陈旧、被替换或
+无 owner 的兼容路径 fail-closed。direct mounted-only RPC 与上方 raw `tools.invoke`
+边界仍保持独立语义；Cold tool-only WASM 不获 activation proxy。B5 observer recovery
+与 B6 full failure-matrix acceptance 仍 deferred。
+
+---
+
 ## Overview
 
 Aleph's tool system provides:

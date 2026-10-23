@@ -103,6 +103,34 @@ Tool registration
 
 The registry stores descriptor and handler together so a hot replacement cannot produce a mixed-generation projection. `ToolRegistrationScope` disposes registrations in reverse order and uses generation checks to protect replacements. Visibility (what a session may see) remains separate from lifecycle (when a registration is disposed). The process-global slots in `src/capability/mod.rs` remain boot-install diagnostics and are not this runtime registry.
 
+### B4 plugin authority chain / 插件权限链
+
+B4 (`d53821d7f`) binds canonical plugin execution to a captured
+`CanonicalEntryLease` and the exact `DispatchVerdict` from existing scoped gates.
+`PluginActivationAuthority` derives only from that task-local sealed verdict plus
+registry-owned `ReadySnapshot` publication. `PluginCanonicalHandler` and
+`ExtensionManager::call_plugin_tool_with_authority` revalidate provider/owner
+generations, mount identity, binding, descriptor/caller/input, and publication
+before/after waits and immediately before guest admission; stale, replaced, or
+ownerless compatibility paths fail closed.
+
+This does not unify direct mounted-only RPC with raw `tools.invoke` compatibility
+semantics or grant Cold tool-only WASM an activation proxy. B5 observer recovery
+and B6 full failure-matrix acceptance remain deferred. See
+[Tool System — B4](TOOL_SYSTEM.md#b4-canonical-plugin-dispatch--规范插件派发) for the dispatch boundary.
+
+B4（`d53821d7f`）把 canonical plugin 执行绑定到捕获的 `CanonicalEntryLease`
+与既有 scoped gates 形成的精确 `DispatchVerdict`。`PluginActivationAuthority`
+只从该 task-local sealed verdict 与 registry-owned `ReadySnapshot` publication
+派生。`PluginCanonicalHandler` 与 `ExtensionManager::call_plugin_tool_with_authority`
+在等待前后及 guest admission 紧前复检 provider/owner generation、mount identity、
+binding、descriptor/caller/input 与 publication；陈旧、被替换或无 owner 的兼容路径
+fail-closed。
+
+这不统一 direct mounted-only RPC 与 raw `tools.invoke` 的兼容语义，也不赋予 Cold
+tool-only WASM activation proxy。B5 observer recovery 与 B6 full failure-matrix
+acceptance 仍 deferred；派发边界详见上方 Tool System 链接。
+
 ### Provider lifecycle / Provider 生命周期
 
 `src/capability/provider.rs` supplies the shared lifecycle contract for an in-process provider and a future Bridge provider. `ProviderLifecycle` is a side-effect-free state machine: `Discovered`, `Disabled`, `Starting`, `Ready`, `Stopping`, `Stopped`, and `Failed`. Every new `Starting` transition increments the provider generation. `ProviderHandle` only publishes committed state and live notifications; it does not start threads, open IPC, load native libraries, or replace `ExtensionManager`.
