@@ -880,7 +880,7 @@ impl ExtensionManager {
             PluginControlError, PluginControlOutcome, PluginControlPhase, PluginRuntimeOutcome,
         };
 
-        let _guard = self.load_guard.lock().await;
+        let guard = self.load_guard.lock().await;
         let mut candidate = self.plugins_config.read().await.clone();
         let preference_changed = candidate.set_enabled(plugin_id, enabled);
         let mut outcome = PluginControlOutcome {
@@ -901,13 +901,106 @@ impl ExtensionManager {
         if let Err(error) = self.commit_plugins_config_locked(candidate).await {
             outcome.error_phase = Some(PluginControlPhase::Persistence);
             outcome.error = Some(error.to_string());
+            drop(guard);
             return Err(PluginControlError { outcome });
         }
         outcome.persisted = true;
         self.reconcile_plugin_control_locked(plugin_id, enabled, &mut outcome)
             .await;
+
+        // `mount_inner` deliberately stops at Cold for eligible tool-only WASM.
+        // Capture that exact incarnation while this same guard still excludes
+        // replacement and disable. Activation itself must run after releasing
+        // the guard: its retained task acquires the guard for mount effects.
+        let cold_declared = enabled && outcome.runtime_outcome == PluginRuntimeOutcome::Cold;
+        let activation_owner = if cold_declared {
+            self.runtime_owner(plugin_id)
+        } else {
+            None
+        };
+        // A Cold declaration whose runtime owner is gone is an unreachable
+        // state: the declaration and its owner are two facts about one
+        // incarnation. Fail closed instead of reporting a Cold success that no
+        // caller can reach.
+        let owner_missing = cold_declared && activation_owner.is_none();
+        let activation_manager = activation_owner.as_ref().map(|_| self.activation_manager());
+        // Only a declared Cold incarnation needs the guard released, because its
+        // retained activation task acquires that guard to mount effects. Every
+        // other control op keeps holding it: the guard is what makes the state
+        // this op reports at the end belong to its own transition instead of to
+        // a toggle queued behind it.
+        let retained_guard = if activation_owner.is_some() {
+            drop(guard);
+            None
+        } else {
+            Some(guard)
+        };
+
+        let activation_error = match (activation_owner.as_ref(), activation_manager) {
+            (None, _) => None,
+            (Some(owner), Some(Ok(manager))) => {
+                // Activation is deliberately outside `load_guard`; the retained
+                // task acquires that guard only when it begins mounting effects.
+                manager.activate_owner(Arc::clone(owner)).await.err()
+            }
+            (Some(_), Some(Err(error))) => Some(error),
+            (Some(_), None) => Some(ExtensionError::Runtime(
+                "extension manager activation context is not attached".to_owned(),
+            )),
+        };
+
+        let guard = match retained_guard {
+            Some(guard) => guard,
+            None => self.load_guard.lock().await,
+        };
+        if owner_missing {
+            // The Cold declaration has no owner left to activate, so there is
+            // no runtime behind it. Report the failure structurally instead
+            // of a Cold success.
+            outcome.runtime_outcome = PluginRuntimeOutcome::Failed;
+            outcome.error_phase = Some(PluginControlPhase::Reconcile);
+            outcome.error = Some(format!(
+                "runtime owner is missing for the cold declaration of plugin '{plugin_id}'"
+            ));
+        } else if let Some(owner) = activation_owner {
+            outcome.provider_generation = Some(owner.provider.generation());
+            let current = self.runtime_owner(plugin_id);
+            let row_loaded = self
+                .plugin_registry
+                .read()
+                .await
+                .get_plugin(plugin_id)
+                .is_some_and(|row| row.status == super::PluginStatus::Loaded);
+            let mounted = current
+                .as_ref()
+                .is_some_and(|current| Arc::ptr_eq(current, &owner))
+                && owner.provider.state() == crate::capability::provider::ProviderState::Ready
+                && row_loaded
+                && owner.identity.lock().unwrap().is_some()
+                && owner.receipt.lock().unwrap().is_some()
+                && self
+                    .scopes
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .contains_key(plugin_id);
+            if let Some(error) = activation_error {
+                outcome.runtime_outcome = PluginRuntimeOutcome::Failed;
+                outcome.error_phase = Some(PluginControlPhase::Reconcile);
+                outcome.error = Some(error.to_string());
+            } else if mounted {
+                outcome.runtime_outcome = PluginRuntimeOutcome::Mounted;
+            } else {
+                // A concurrent disable/reload may have fenced the owner after
+                // activation returned. Never report Ready from the stale proof.
+                outcome.runtime_outcome = PluginRuntimeOutcome::Failed;
+                outcome.error_phase = Some(PluginControlPhase::Reconcile);
+                outcome.error =
+                    Some("activation completed without a current Ready mounted owner".to_owned());
+            }
+        }
         self.publish_runtime_transition_views().await;
         outcome.actual_state = self.control_actual_state(plugin_id).await;
+        drop(guard);
         if outcome.error.is_some() {
             Err(PluginControlError { outcome })
         } else {

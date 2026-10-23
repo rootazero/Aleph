@@ -39,6 +39,7 @@ pub(crate) const fn extension_manager_slot() -> &'static dyn SlotStatus {
 /// Called once during server startup, before any plugin RPC handler or hook
 /// fire-site reads the manager. Returns `Err(manager)` if already initialized.
 pub fn init_extension_manager(manager: Arc<ExtensionManager>) -> Result<(), Arc<ExtensionManager>> {
+    let manager = ExtensionManager::attach_activation_manager(manager);
     // The clone keeps this signature: `CapabilitySlot::install` consumes the
     // value and answers a bool, while `Err(_)` here carries the REJECTED
     // manager back. Only `start/helpers.rs` reads it, and only as a

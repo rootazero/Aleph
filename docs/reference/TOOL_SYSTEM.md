@@ -84,8 +84,10 @@ revalidate provider generation, owner generation, mount identity, binding,
 descriptor, caller, input, and publication before/after waits and immediately
 before guest admission. Stale, replaced, or ownerless compatibility paths fail
 closed. Direct mounted-only RPC and the raw `tools.invoke` boundary above retain
-separate semantics; Cold tool-only WASM gains no activation proxy. B5 observer
-recovery and B6 full failure-matrix acceptance remain deferred.
+separate semantics; Cold tool-only WASM gains no activation proxy at discovery
+time. B5 (2026-10-23) adds the explicit enable-driven activation path without
+changing the callable authority; B6 full failure-matrix acceptance remains
+deferred.
 
 B4（`d53821d7f`）封闭 canonical plugin 派发链：`ScopedToolService` 捕获
 `CanonicalEntryLease`，既有 permission、visibility、trust、confirmation、actor、
@@ -97,8 +99,23 @@ retry、Layer2 与 before/after gates 形成精确 `DispatchVerdict`。
 在等待前后及 guest admission 紧前复检 provider generation、owner generation、
 mount identity、binding、descriptor、caller、input 与 publication。陈旧、被替换或
 无 owner 的兼容路径 fail-closed。direct mounted-only RPC 与上方 raw `tools.invoke`
-边界仍保持独立语义；Cold tool-only WASM 不获 activation proxy。B5 observer recovery
-与 B6 full failure-matrix acceptance 仍 deferred。
+边界仍保持独立语义；Cold tool-only WASM 在 discovery 期不获 activation proxy。B5
+（2026-10-23）补上显式 enable 驱动的激活路径，且不改变 callable 权威；B6 full
+failure-matrix acceptance 仍 deferred。
+
+## B5 plugin activation lifecycle / 插件激活生命周期
+
+B5 (2026-10-23) wires exactly one thing: the explicit activation of eligible tool-only WASM through the existing plugin-control path. Discovery declares `Cold` and nothing else — no VM, no published tool surface, no registry revision change. The single production entry is `ExtensionManager::set_plugin_enabled(id, true)` → `reconcile_plugin_control_locked` (under `load_guard`) → capture the exact `RuntimeOwner` incarnation → release the guard → `RuntimeOwner::activate_owner` → re-acquire the guard → re-verify current owner (`Arc::ptr_eq`), provider `Ready`, registry row `Loaded`, identity and receipt present, scope still held. Only then does the outcome become `Mounted`; anything else is `Failed` at the Reconcile phase.
+
+The process-global manager Arc installs a `Weak` activation context in `init_extension_manager` only; the retained activation task never strongly holds the manager, and an unattached context fails closed. `ToolHandlerRegistry` remains the sole callable authority, with the existing exact receipt / revision / generation fencing on Ready publication, revoke, and replacement. Disable revokes publication, drains and joins in-flight guest calls, then unloads and disposes the scope; stale owner, provider generation, mount identity, and lease all fail closed. Zahir observers subscribe before the snapshot, treat the snapshot as their anchor, receive live broadcast only, and resync through `Invalidated` on lag — there is no durable registry replay, and `SessionEventStore` remains the only session durability source.
+
+Verified this round: `cargo fmt --all --check` passed; `cargo check -p alephcore -p aleph-slot-api --all-targets` passed; targeted lib tests passed — extension lifecycle 57, tool registry 53, Zahir facade 23, session 352; `cargo test -p alephcore --lib` passed with 21488 passed, 0 failed, 20 ignored; `cargo clippy --workspace --all-targets` passed with warnings (a large `Result` `Err` variant at `src/extension/plugin_ops.rs:877` plus two pre-existing registry test lints). Deferred to B6 or later: boot auto-activation, MCP lazy semantics, EffectClaim producer, automatic Safe Replay, universal durable scheduler, remaining capability kinds, durable external-effect exactly-once, and `src/harness/`.
+
+B5（2026-10-23）只接一件事：eligible tool-only WASM 的**显式**激活，走既有 plugin control 路径。discovery 只声明 `Cold`：不启动 VM、不发布 tool surface、registry revision 不变。唯一生产入口是 `ExtensionManager::set_plugin_enabled(id, true)` → `reconcile_plugin_control_locked`（在 `load_guard` 内）→ 捕获 exact `RuntimeOwner` incarnation → 释放 guard → `RuntimeOwner::activate_owner` → 重新取回 guard → 复检 current owner（`Arc::ptr_eq`）、provider `Ready`、registry row `Loaded`、identity 与 receipt 齐备、scope 仍持有；全部成立才是 `Mounted`，否则 `Failed`（Reconcile 阶段）。
+
+进程级 manager Arc 只在 `init_extension_manager` 装 `Weak` 激活上下文；retained activation task 不强持 manager；未 attach 一律 fail-closed。`ToolHandlerRegistry` 仍是唯一 callable authority，Ready publication / revoke / replacement 沿用既有 exact receipt / revision / generation fencing。disable ⇒ revoke publication ⇒ drain/join 在途 guest 调用 ⇒ unload/dispose scope；陈旧 owner、provider generation、mount identity、lease 一律 fail-closed。Zahir observer 先 subscribe 再取 snapshot，snapshot 是锚点，broadcast 只是 live notification，lag 时以 `Invalidated` 触发 resync；**没有** durable registry replay，durable recovery 只认 `SessionEventStore`（session durability）。
+
+本轮已验证：`cargo fmt --all --check` 通过；`cargo check -p alephcore -p aleph-slot-api --all-targets` 通过；定向 lib 测试通过——extension lifecycle 57、tool registry 53、Zahir facade 23、session 352；`cargo test -p alephcore --lib` 通过：21488 passed / 0 failed / 20 ignored；`cargo clippy --workspace --all-targets` 通过但带 warnings（`src/extension/plugin_ops.rs:877` 的 large `Result` `Err` 变体，另有两处既有 registry 测试 lint）。deferred：boot 期 auto-activation、MCP lazy semantics、`EffectClaim` producer、automatic Safe Replay、universal durable scheduler、其余 Capability kinds、durable external-effect exactly-once、`src/harness/`。
 
 ---
 
