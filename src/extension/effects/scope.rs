@@ -128,7 +128,7 @@ fn panic_message(payload: &Box<dyn std::any::Any + Send>) -> String {
 }
 
 /// What `dispose` did, step by step, in the order it ran them.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct DisposeReport {
     pub plugin_id: PluginId,
     pub steps: Vec<(&'static str, DisposeOutcome)>,

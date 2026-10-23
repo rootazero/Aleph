@@ -301,10 +301,10 @@ pub struct ExtensionManager {
     /// the runtime, owned here so `unmount` can take it all back out. A std
     /// mutex, never held across an `await`: `lifecycle.rs` removes the scope
     /// under the lock and disposes it after.
-    scopes: StdMutex<HashMap<String, effects::EffectScope>>,
+    scopes: Arc<StdMutex<HashMap<String, effects::EffectScope>>>,
 
     /// Instance ownership, not a callable registry or a desired-state store.
-    runtime_owners: StdMutex<HashMap<String, Arc<runtime_owner::RuntimeOwner>>>,
+    runtime_owners: Arc<StdMutex<HashMap<String, Arc<runtime_owner::RuntimeOwner>>>>,
 
     /// Join handles of the per-plugin server-start watchers
     /// (`lifecycle.rs::watch_server_starts`), so `activation_settled()` can
@@ -465,8 +465,8 @@ impl ExtensionManager {
             watcher: StdMutex::new(None),
             internal_writes: Arc::new(InternalWriteTracker::default()),
             reload_count: AtomicU64::new(0),
-            scopes: StdMutex::new(HashMap::new()),
-            runtime_owners: StdMutex::new(HashMap::new()),
+            scopes: Arc::new(StdMutex::new(HashMap::new())),
+            runtime_owners: Arc::new(StdMutex::new(HashMap::new())),
             activation_watchers: StdMutex::new(Vec::new()),
             owner_trust_policy: Arc::new(crate::sync_primitives::RwLock::new(owner_trust_policy)),
             plugins_config,

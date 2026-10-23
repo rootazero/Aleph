@@ -326,24 +326,47 @@ fn guest_module_checked(handler: &str, payload: &str, expected_input: Option<&[u
     guest_module_with_probe(handler, payload, expected_input, &[])
 }
 
+/// Real guest calls a test-only host import before producing its JSON output.
+/// This lets lifecycle tests stop during a guest invocation, not a host mock.
+pub(crate) fn write_barrier_guest(path: &Path, payload: &str) {
+    std::fs::write(
+        path,
+        guest_module_with_import_probe(HANDLER, payload, None, &[0x10, 5], true),
+    )
+    .unwrap();
+}
+
 fn guest_module_with_probe(
     handler: &str,
     payload: &str,
     expected_input: Option<&[u8]>,
     probe: &[u8],
 ) -> Vec<u8> {
+    guest_module_with_import_probe(handler, payload, expected_input, probe, false)
+}
+
+fn guest_module_with_import_probe(
+    handler: &str,
+    payload: &str,
+    expected_input: Option<&[u8]>,
+    probe: &[u8],
+    barrier: bool,
+) -> Vec<u8> {
     let mut module = b"\0asm\x01\0\0\0".to_vec();
 
-    let mut types = vec![6];
+    let mut types = vec![if barrier { 7 } else { 6 }];
     types.extend_from_slice(&[0x60, 1, 0x7e, 1, 0x7e]); // (i64) -> i64
     types.extend_from_slice(&[0x60, 2, 0x7e, 0x7f, 0]); // (i64, i32) -> ()
     types.extend_from_slice(&[0x60, 2, 0x7e, 0x7e, 0]); // (i64, i64) -> ()
     types.extend_from_slice(&[0x60, 0, 1, 0x7f]); // () -> i32
     types.extend_from_slice(&[0x60, 0, 1, 0x7e]); // () -> i64
     types.extend_from_slice(&[0x60, 1, 0x7e, 1, 0x7f]); // (i64) -> i32
+    if barrier {
+        types.extend_from_slice(&[0x60, 0, 0]);
+    } // () -> ()
     append_section(&mut module, 1, types);
 
-    let mut imports = vec![5];
+    let mut imports = vec![if barrier { 6 } else { 5 }];
     for (name, type_index) in [
         ("alloc", 0),
         ("store_u8", 1),
@@ -356,6 +379,11 @@ fn guest_module_with_probe(
         imports.push(0); // Function import.
         append_uleb(&mut imports, type_index);
     }
+    if barrier {
+        append_name(&mut imports, "extism:host/user");
+        append_name(&mut imports, "b3_test_barrier");
+        imports.extend_from_slice(&[0, 6]);
+    }
     append_section(&mut module, 2, imports);
 
     append_section(&mut module, 3, vec![1, 3]); // One function, with type index 3.
@@ -363,7 +391,7 @@ fn guest_module_with_probe(
     let mut exports = vec![1];
     append_name(&mut exports, handler);
     exports.push(0); // Function export.
-    append_uleb(&mut exports, 5); // Imported functions occupy indices 0 through 4.
+    append_uleb(&mut exports, if barrier { 6 } else { 5 }); // Export follows the imports.
     append_section(&mut module, 7, exports);
 
     let mut body = guest_body(payload.as_bytes());

@@ -90,7 +90,7 @@ fn cleanup_steps(report: &DisposeReport) -> Vec<super::plugin_state::PluginClean
 }
 
 /// Why an unmount did not happen.
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug, Clone, thiserror::Error)]
 pub enum UnmountError {
     #[error("plugin not found: {0}")]
     NotFound(String),
@@ -254,10 +254,10 @@ impl ExtensionManager {
     /// `Disabled` row so the plugin stays listable and re-enablable.
     pub async fn unmount(&self, id: &str) -> Result<DisposeReport, UnmountError> {
         let _guard = self.load_guard.lock().await;
-        let report = self.unmount_inner(id).await?;
+        let result = self.unmount_inner(id).await;
         self.views().after_transition().await;
         self.sync_runtime_snapshots().await;
-        Ok(report)
+        result
     }
 
     /// unmount + mount. Replaces the narrower `reload_plugin` that refreshed
@@ -1213,116 +1213,141 @@ impl ExtensionManager {
     // ── Unmount ───────────────────────────────────────────────────────────
 
     async fn unmount_inner(&self, id: &str) -> Result<DisposeReport, UnmountError> {
-        use crate::capability::provider::ProviderState;
-        let owner = self.runtime_owner(id);
-        let drain = if let Some(owner) = &owner {
-            match owner.provider.state() {
-                ProviderState::Cold | ProviderState::Disabled => None,
-                ProviderState::Ready => {
-                    let drain = owner
-                        .admission
-                        .clone()
-                        .acquire_many_owned(RuntimeOwner::MAX_IN_FLIGHT)
-                        .await
-                        .map_err(|_| UnmountError::RuntimeOwnerResidual(id.to_owned()))?;
-                    owner.close_admission();
-                    owner
-                        .provider
-                        .transition(ProviderState::Stopping)
-                        .map_err(|_| UnmountError::RuntimeOwnerResidual(id.to_owned()))?;
-                    Some(drain)
-                }
-                _ => {
-                    return Err(UnmountError::RuntimeOwnerResidual(id.to_owned()));
-                }
-            }
-        } else {
-            None
-        };
-        if let Some(owner) = &owner {
-            let task = { owner.task.lock().unwrap().take() };
-            if let Some(task) = task {
-                task.await
-                    .map_err(|_| UnmountError::RuntimeOwnerResidual(id.to_owned()))?;
-            }
+        if let Some(owner) = self.runtime_owner(id) {
+            return self.retained_owner_stop(owner).await;
         }
+        // Compatibility scopes have no RuntimeOwner/canonical authority.
         let scope = self
             .scopes
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .remove(id);
         let Some(scope) = scope else {
-            if let Some(owner) = owner {
-                if owner.provider.state() == ProviderState::Cold {
-                    let _ = owner.provider.transition(ProviderState::Disabled);
-                }
-            }
-            drop(drain);
             return Err(
                 if self.plugin_registry.read().await.get_plugin(id).is_some() {
-                    UnmountError::NotMounted(id.to_string())
+                    UnmountError::NotMounted(id.to_owned())
                 } else {
-                    UnmountError::NotFound(id.to_string())
+                    UnmountError::NotFound(id.to_owned())
                 },
             );
         };
         let shell = {
             let mut registry = self.plugin_registry.write().await;
             let shell = registry.get_plugin(id).cloned();
-            if shell.is_some() {
-                registry.disable_plugin(id);
-            }
+            registry.disable_plugin(id);
             shell
         };
         let report = scope.dispose().await;
-        drop(drain);
-        if !report.all_ok() {
-            if let Some(owner) = &owner {
-                let _ = owner.provider.transition(ProviderState::Failed);
-                if let Some(row) = self.plugin_registry.write().await.get_plugin_mut(id) {
-                    row.status = PluginStatus::Error("runtime owner residual after stop".into());
-                }
-                return Err(UnmountError::RuntimeOwnerResidual(id.to_owned()));
-            }
-            if let Some(mut row) = shell {
+        if let Some(mut row) = shell {
+            if report.all_ok() {
+                row.status = PluginStatus::Disabled;
+                row.error = None;
+            } else {
                 let message = report
                     .failures()
-                    .map(|(step, error)| format!("{step}: {error}"))
+                    .map(|(s, e)| format!("{s}: {e}"))
                     .collect::<Vec<_>>()
                     .join("; ");
                 row.status = PluginStatus::Error(format!("cleanup: {message}"));
                 row.error = Some(message);
-                self.plugin_registry.write().await.register_plugin(row);
             }
-            return Ok(report);
-        }
-        if let Some(owner) = owner {
-            if owner.provider.state() == ProviderState::Stopping {
-                let _ = owner.provider.transition(ProviderState::Stopped);
-                let _ = owner.provider.transition(ProviderState::Disabled);
-            } else if owner.provider.state() == ProviderState::Cold {
-                let _ = owner.provider.transition(ProviderState::Disabled);
-            }
-            self.runtime_owners
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .remove(id);
-        }
-        if let Some(mut row) = shell {
-            // The registry_row disposer removed the row and every capability
-            // row; put back a Disabled record so the plugin stays listable and
-            // re-enablable. Counts from the manifest stay on it.
-            row.status = PluginStatus::Disabled;
-            row.error = None;
             self.plugin_registry.write().await.register_plugin(row);
         }
-        tracing::info!(plugin_id = %id, ok = report.all_ok(), "plugin unmounted");
         Ok(report)
+    }
+
+    /// The caller holds control, but owns no cleanup future or disposer.
+    /// Cancellation only drops a watch receiver. While control is released by
+    /// cancellation, the still-current Stopping owner rejects mount/activation;
+    /// all other stop/reload callers join this same operation.
+    async fn retained_owner_stop(
+        &self,
+        owner: Arc<RuntimeOwner>,
+    ) -> Result<DisposeReport, UnmountError> {
+        use super::runtime_owner::StopOperation;
+        use crate::capability::provider::ProviderState;
+        use futures::FutureExt;
+        let mut completion = {
+            let mut stop = owner.stop.lock().unwrap();
+            if let Some(operation) = &*stop {
+                operation.completion.subscribe()
+            } else {
+                let (completion, receiver) = tokio::sync::watch::channel(None);
+                let context = OwnerStopContext {
+                    views: self.views(),
+                    scopes: Arc::clone(&self.scopes),
+                    owners: Arc::clone(&self.runtime_owners),
+                    control: Arc::clone(&self.load_guard),
+                };
+                // Fence synchronously before the first suspension, including
+                // before the retained task can be scheduled.
+                owner.close_admission();
+                let initial = owner.provider.state();
+                let state_error = if !owner.failures.lock().unwrap().is_empty() {
+                    true
+                } else {
+                    match initial {
+                        ProviderState::Ready | ProviderState::Starting => {
+                            owner.provider.transition(ProviderState::Stopping).is_err()
+                        }
+                        ProviderState::Cold | ProviderState::Disabled => false,
+                        _ => true,
+                    }
+                };
+                let retained = Arc::clone(&owner);
+                let publish = completion.clone();
+                let task = tokio::spawn(async move {
+                    let result = std::panic::AssertUnwindSafe(context.finish(
+                        &retained,
+                        initial,
+                        state_error,
+                    ))
+                    .catch_unwind()
+                    .await
+                    .unwrap_or_else(|_| {
+                        retained.failures.lock().unwrap().push(
+                            super::runtime_owner::OwnerFailure::Stop(
+                                "retained stop panicked; exact owner requires recovery".into(),
+                            ),
+                        );
+                        let _ = retained.provider.transition(ProviderState::Failed);
+                        Err(UnmountError::RuntimeOwnerResidual(
+                            retained.record.id.clone(),
+                        ))
+                    });
+                    if matches!(result, Err(UnmountError::RuntimeOwnerResidual(_))) {
+                        context.write_residual(&retained).await;
+                    }
+                    // Waiters can hold load_guard. Publish cleanup completion
+                    // before taking it for convergence, never await control
+                    // with a waiter needing our completion.
+                    publish.send_replace(Some(result));
+                    let _control = context.control.lock().await;
+                    // Also runs when every waiter was cancelled. This is the
+                    // existing projection boundary, not an observer/authority.
+                    context.views.after_transition().await;
+                    context.views.refresh_active_plugin_tools().await;
+                });
+                *stop = Some(StopOperation {
+                    completion,
+                    _task: task,
+                });
+                receiver
+            }
+        };
+        loop {
+            if let Some(result) = completion.borrow().clone() {
+                return result;
+            }
+            completion
+                .changed()
+                .await
+                .map_err(|_| UnmountError::RuntimeOwnerResidual(owner.record.id.clone()))?;
+        }
     }
 
     /// Dispose every scope without writing rows — discovery rebuilds them.
     async fn unmount_all(&self) -> ExtensionResult<()> {
-        use crate::capability::provider::ProviderState;
         let owners: Vec<_> = self
             .runtime_owners
             .lock()
@@ -1330,15 +1355,11 @@ impl ExtensionManager {
             .values()
             .cloned()
             .collect();
-        if owners.iter().any(|owner| {
-            !matches!(
-                owner.provider.state(),
-                ProviderState::Cold | ProviderState::Disabled
-            )
-        }) {
-            return Err(super::error::ExtensionError::Runtime(
-                "reload refused: runtime owner effects/tasks require P3 stop recovery".into(),
-            ));
+        for owner in owners {
+            match self.unmount_inner(&owner.record.id).await {
+                Ok(_) | Err(UnmountError::NotMounted(_)) => {}
+                Err(error) => return Err(super::error::ExtensionError::Runtime(error.to_string())),
+            }
         }
         let scopes: Vec<EffectScope> = self
             .scopes
@@ -1380,6 +1401,157 @@ impl ExtensionManager {
             .unwrap_or_else(|e| e.into_inner())
             .get(id)
             .map(|s| s.skipped().to_vec())
+    }
+}
+
+/// Borrow-free handles to the existing authorities, not copies of their maps.
+/// Stop owns the one scope only after withdrawal/drain/join have succeeded.
+struct OwnerStopContext {
+    views: Views,
+    scopes: Arc<std::sync::Mutex<std::collections::HashMap<String, EffectScope>>>,
+    owners: Arc<std::sync::Mutex<std::collections::HashMap<String, Arc<RuntimeOwner>>>>,
+    control: Arc<tokio::sync::Mutex<()>>,
+}
+
+impl OwnerStopContext {
+    async fn write_residual(&self, owner: &Arc<RuntimeOwner>) {
+        let mut row = owner.record.clone();
+        row.status = PluginStatus::Error("runtime owner residual after stop".into());
+        row.error = Some(owner.failure_summary());
+        self.views
+            .plugin_registry
+            .write()
+            .await
+            .register_plugin(row);
+    }
+
+    async fn finish(
+        &self,
+        owner: &Arc<RuntimeOwner>,
+        initial: crate::capability::provider::ProviderState,
+        state_error: bool,
+    ) -> Result<DisposeReport, UnmountError> {
+        use super::runtime_owner::OwnerFailure;
+        use crate::capability::provider::ProviderState;
+        let id = &owner.record.id;
+        let residual = || UnmountError::RuntimeOwnerResidual(id.clone());
+        if state_error {
+            return Err(residual());
+        }
+        if matches!(initial, ProviderState::Cold | ProviderState::Disabled) {
+            if initial == ProviderState::Cold {
+                let _ = owner.provider.transition(ProviderState::Disabled);
+            }
+            self.views.plugin_registry.write().await.disable_plugin(id);
+            return Err(UnmountError::NotMounted(id.clone()));
+        }
+        let receipt = owner.receipt.lock().unwrap().clone();
+        if initial == ProviderState::Ready && receipt.is_none() {
+            owner
+                .failures
+                .lock()
+                .unwrap()
+                .push(OwnerFailure::MissingReceipt);
+            let _ = owner.provider.transition(ProviderState::Failed);
+            return Err(residual());
+        }
+        if let Some(receipt) = receipt {
+            if let Err(error) = receipt.revoke() {
+                owner
+                    .failures
+                    .lock()
+                    .unwrap()
+                    .push(OwnerFailure::Revoke(error));
+                let _ = owner.provider.transition(ProviderState::Failed);
+                return Err(residual());
+            }
+        }
+        let drain = match owner
+            .admission
+            .clone()
+            .acquire_many_owned(RuntimeOwner::MAX_IN_FLIGHT)
+            .await
+        {
+            Ok(drain) => drain,
+            Err(error) => {
+                owner
+                    .failures
+                    .lock()
+                    .unwrap()
+                    .push(OwnerFailure::Drain(error.to_string()));
+                let _ = owner.provider.transition(ProviderState::Failed);
+                return Err(residual());
+            }
+        };
+        let task = owner.task.lock().unwrap().take();
+        if let Some(task) = task {
+            #[cfg(test)]
+            if let Some(entered) = owner.stop_join_entered.lock().unwrap().take() {
+                let _ = entered.send(());
+            }
+            if let Err(error) = task.await {
+                owner
+                    .failures
+                    .lock()
+                    .unwrap()
+                    .push(OwnerFailure::Join(error.to_string()));
+                let _ = owner.provider.transition(ProviderState::Failed);
+                return Err(residual());
+            }
+        }
+        if !self
+            .owners
+            .lock()
+            .unwrap()
+            .get(id)
+            .is_some_and(|current| Arc::ptr_eq(current, owner))
+        {
+            owner.failures.lock().unwrap().push(OwnerFailure::Stop(
+                "owner incarnation changed before disposal".into(),
+            ));
+            let _ = owner.provider.transition(ProviderState::Failed);
+            return Err(residual());
+        }
+        let scope = self.scopes.lock().unwrap().remove(id);
+        if scope.is_none() && owner.identity.lock().unwrap().is_some() {
+            owner
+                .failures
+                .lock()
+                .unwrap()
+                .push(OwnerFailure::MissingScope);
+            let _ = owner.provider.transition(ProviderState::Failed);
+            return Err(residual());
+        }
+        self.views.plugin_registry.write().await.disable_plugin(id);
+        let report = match scope {
+            Some(scope) => scope.dispose().await,
+            None => DisposeReport::empty(id),
+        };
+        if !report.all_ok() {
+            owner
+                .failures
+                .lock()
+                .unwrap()
+                .push(OwnerFailure::Dispose(report));
+            let _ = owner.provider.transition(ProviderState::Failed);
+            return Err(residual());
+        }
+        // Nothing old can run or mutate a replacement after this point.
+        owner.identity.lock().unwrap().take();
+        owner.receipt.lock().unwrap().take();
+        let _ = owner.provider.transition(ProviderState::Stopped);
+        let _ = owner.provider.transition(ProviderState::Disabled);
+        let mut row = owner.record.clone();
+        row.status = PluginStatus::Disabled;
+        row.error = None;
+        self.views
+            .plugin_registry
+            .write()
+            .await
+            .register_plugin(row);
+        self.owners.lock().unwrap().remove(id);
+        drop(drain);
+        Ok(report)
     }
 }
 
@@ -1548,18 +1720,21 @@ mod tests {
     fn write_cold_tool_wasm_fixture(root: &Path) {
         let dir = root.join("plugins").join("lazy-wasm");
         std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(
-            dir.join("plugin.wasm"),
-            crate::extension::loader::EMPTY_WASM_MODULE,
-        )
-        .unwrap();
+        use crate::extension::runtime::wasm::tests::guest_fixture::{
+            manifest_with_guest, PAYLOAD_A,
+        };
+        let manifest = manifest_with_guest(&dir, "lazy-wasm", PAYLOAD_A);
+        crate::extension::runtime::wasm::tests::guest_fixture::write_barrier_guest(
+            &manifest.entry_path().unwrap(),
+            PAYLOAD_A,
+        );
         std::fs::write(
             dir.join("aleph.plugin.toml"),
             r#"[plugin]
 id = "lazy-wasm"
 name = "Lazy WASM"
 kind = "wasm"
-entry = "plugin.wasm"
+entry = "lazy-wasm.wasm"
 
 [[tools]]
 name = "lazy_tool"
@@ -1578,6 +1753,12 @@ handler = "handler"
         write_cold_tool_wasm_fixture(tmp.path());
         let (manager, _) = isolated_manager(tmp.path()).await;
         let manager = Arc::new(manager);
+        let canonical = Arc::new(crate::tools::ToolHandlerRegistry::new());
+        manager
+            .set_tool_handler_registry(canonical.clone())
+            .await
+            .unwrap();
+        let revision = canonical.revision();
         // fixture is registered without an eager mount. The explicit enable
         // below then exercises the Cold control transition.
         let _ = manager
@@ -1612,6 +1793,22 @@ handler = "handler"
             .list_tools_for_plugin("lazy-wasm")
             .is_empty());
 
+        assert_eq!(canonical.revision(), revision);
+        assert_eq!(
+            owner.provider.snapshot(),
+            (crate::capability::provider::ProviderState::Cold, 0)
+        );
+        assert!(canonical.canonical_publication().entries().is_empty());
+        assert!(canonical.capture_entry("lazy_tool").is_none());
+        assert!(canonical
+            .reconcile_plugin_tools(Default::default())
+            .is_err());
+        assert!(b3_call_canonical(canonical.clone(), "lazy_tool")
+            .await
+            .is_err());
+        assert_eq!(canonical.revision(), revision);
+        assert!(!manager.plugin_loader.read().await.is_loaded("lazy-wasm"));
+
         let (entered_tx, entered_rx) = tokio::sync::oneshot::channel();
         let (release_tx, release_rx) = tokio::sync::oneshot::channel();
         *owner.barrier.lock().unwrap() = Some((entered_tx, release_rx));
@@ -1640,8 +1837,6 @@ handler = "handler"
                 .len(),
             1
         );
-        assert!(manager.reload().await.is_err());
-        assert!(manager.plugin_loader.read().await.is_loaded("lazy-wasm"));
         let stale_owner = Arc::clone(&owner);
         let report = manager
             .unmount("lazy-wasm")
@@ -1670,6 +1865,749 @@ handler = "handler"
             manager.get_plugin_record("lazy-wasm").await.unwrap().status,
             PluginStatus::Disabled
         );
+    }
+
+    async fn b3_call_canonical(
+        registry: Arc<crate::tools::ToolHandlerRegistry>,
+        name: &str,
+    ) -> Result<crate::session::events::ToolOutput, crate::tools::service::ToolError> {
+        use crate::tools::service::ToolService;
+        let publication = registry.canonical_publication();
+        let mut projection = crate::tools::runtime::LoopToolRegistry::new();
+        projection.bind_canonical_registry(registry, Arc::new(|_| true));
+        if let Some(entry) = publication.entry(name) {
+            projection.register(Box::new(
+                crate::tools::adapters::McpRegistryTool::from_registry_entry(
+                    Arc::clone(&entry.handler),
+                    &entry.descriptor,
+                ),
+            ));
+        }
+        let service =
+            crate::tools::scoped::ScopedToolService::new(Arc::new(projection), Default::default());
+        let mut output = crate::approval::with_call_identity(
+            Some(crate::approval::CallIdentity {
+                turn_id: crate::session::events::TurnId::nil(),
+                call_id: "b3-real-guest".into(),
+            }),
+            service.execute(name, serde_json::json!({})),
+        )
+        .await?;
+        output.value = serde_json::from_str(output.value.as_str().unwrap())
+            .unwrap_or_else(|_| output.value.clone());
+        Ok(output)
+    }
+
+    async fn b3_cold_manager(
+        root: &Path,
+    ) -> (
+        Arc<ExtensionManager>,
+        Arc<crate::tools::ToolHandlerRegistry>,
+        Arc<RuntimeOwner>,
+    ) {
+        b3_cold_manager_with_registry(root, Arc::new(crate::tools::ToolHandlerRegistry::new()))
+            .await
+    }
+
+    async fn b3_cold_manager_with_registry(
+        root: &Path,
+        canonical: Arc<crate::tools::ToolHandlerRegistry>,
+    ) -> (
+        Arc<ExtensionManager>,
+        Arc<crate::tools::ToolHandlerRegistry>,
+        Arc<RuntimeOwner>,
+    ) {
+        write_cold_tool_wasm_fixture(root);
+        let manifest = root.join("plugins/lazy-wasm/aleph.plugin.toml");
+        std::fs::write(&manifest, format!("{}\n[[tools]]\nname = \"other_tool\"\ndescription = \"Second tool on the same owner\"\nhandler = \"handler\"\n", std::fs::read_to_string(&manifest).unwrap())).unwrap();
+        let (manager, _) = isolated_manager(root).await;
+        let manager = Arc::new(manager);
+        manager
+            .set_tool_handler_registry(canonical.clone())
+            .await
+            .unwrap();
+        let _ = manager
+            .set_plugin_enabled("lazy-wasm", false)
+            .await
+            .unwrap();
+        manager.load_all().await.unwrap();
+        let _ = manager.set_plugin_enabled("lazy-wasm", true).await.unwrap();
+        let owner = manager.runtime_owner("lazy-wasm").unwrap();
+        (manager, canonical, owner)
+    }
+
+    #[tokio::test]
+    async fn b3_ready_real_guest_reload_and_old_receipt_are_incarnation_fenced() {
+        use crate::extension::runtime::wasm::tests::guest_fixture::{
+            manifest_with_guest, PAYLOAD_B,
+        };
+        let tmp = tempfile::tempdir().unwrap();
+        let _home = isolated_home(tmp.path());
+        let (manager, canonical, owner) = b3_cold_manager(tmp.path()).await;
+        manager.activate_owner(owner.clone()).await.unwrap();
+        let publication = canonical.canonical_publication();
+        assert_eq!(publication.entries().len(), 2, "one complete owner batch");
+        assert_eq!(
+            publication.revision(),
+            1,
+            "both tools share one transaction"
+        );
+        assert_eq!(
+            b3_call_canonical(canonical.clone(), "other_tool")
+                .await
+                .unwrap()
+                .value,
+            serde_json::json!("A")
+        );
+        let old = publication.capture_entry("lazy_tool").unwrap();
+        let receipt = owner.receipt.lock().unwrap().clone().unwrap();
+        let binding = manager
+            .plugin_loader
+            .read()
+            .await
+            .bind_wasm("lazy-wasm", "handler")
+            .unwrap();
+        assert!(binding.matches_mount(&owner.identity.lock().unwrap().clone().unwrap()));
+        assert!(canonical.reconcile_plugin_tools(Default::default()).is_ok());
+        assert_eq!(
+            b3_call_canonical(canonical.clone(), "lazy_tool")
+                .await
+                .unwrap()
+                .value,
+            serde_json::json!("A")
+        );
+        assert!(old.validate(&publication));
+        manifest_with_guest(
+            &tmp.path().join("plugins/lazy-wasm"),
+            "lazy-wasm",
+            PAYLOAD_B,
+        );
+        assert_eq!(
+            manager.reload_plugin("lazy-wasm").await.unwrap(),
+            PluginStatus::Cold
+        );
+        assert!(canonical.capture_entry("lazy_tool").is_none());
+        let replacement = manager.runtime_owner("lazy-wasm").unwrap();
+        assert!(!Arc::ptr_eq(&owner, &replacement));
+        assert!(replacement.owner_generation > owner.owner_generation);
+        manager.activate_owner(replacement.clone()).await.unwrap();
+        let current = canonical.canonical_publication();
+        assert!(!old.validate(&current));
+        assert!(old
+            .entry()
+            .handler
+            .invoke(serde_json::json!({}))
+            .await
+            .is_err());
+        assert!(receipt.revoke().is_err());
+        assert_eq!(canonical.revision(), current.revision());
+        assert!(manager
+            .plugin_loader
+            .read()
+            .await
+            .call_bound(&binding, serde_json::json!({}))
+            .is_err());
+        assert_eq!(
+            b3_call_canonical(canonical.clone(), "lazy_tool")
+                .await
+                .unwrap()
+                .value,
+            serde_json::json!("B")
+        );
+        manager.unmount("lazy-wasm").await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn b3_stop_withdraws_before_draining_retained_guest_operation() {
+        use crate::capability::provider::ProviderState;
+        let tmp = tempfile::tempdir().unwrap();
+        let _home = isolated_home(tmp.path());
+        let (manager, canonical, owner) = b3_cold_manager(tmp.path()).await;
+        manager.activate_owner(owner.clone()).await.unwrap();
+        let old = canonical.capture_entry("lazy_tool").unwrap();
+        let receipt = owner.receipt.lock().unwrap().clone().unwrap();
+        let (entered, guest_entered) = tokio::sync::oneshot::channel();
+        let (release, guest_release) = std::sync::mpsc::channel();
+        manager
+            .plugin_loader
+            .read()
+            .await
+            .bind_wasm("lazy-wasm", "handler")
+            .unwrap()
+            .block_guest_for_test(entered, guest_release);
+        let call = tokio::spawn({
+            let canonical = canonical.clone();
+            async move { b3_call_canonical(canonical, "lazy_tool").await }
+        });
+        guest_entered.await.unwrap();
+        let mut events = canonical.subscribe_publications();
+        let stop = tokio::spawn({
+            let manager = manager.clone();
+            async move { manager.reload_plugin("lazy-wasm").await }
+        });
+        let withdrawn = events.recv().await.unwrap();
+        assert_eq!(withdrawn.tool_changes.len(), 2);
+        assert_eq!(owner.provider.state(), ProviderState::Stopping);
+        assert!(owner.acquire_permit().await.is_err());
+        assert!(canonical.capture_entry("lazy_tool").is_none());
+        assert!(!old.validate(&canonical.canonical_publication()));
+        assert!(manager.scope_steps("lazy-wasm").is_some());
+        assert!(
+            !stop.is_finished(),
+            "scope cannot be disposed while the blocking operation retains a permit"
+        );
+        release.send(()).unwrap();
+        assert!(
+            call.await.unwrap().is_err(),
+            "late guest output is rejected"
+        );
+        assert_eq!(stop.await.unwrap().unwrap(), PluginStatus::Cold);
+        assert!(!manager.plugin_loader.read().await.is_loaded("lazy-wasm"));
+        assert_eq!(owner.provider.state(), ProviderState::Disabled);
+        let replacement = manager.runtime_owner("lazy-wasm").unwrap();
+        assert!(!Arc::ptr_eq(&owner, &replacement));
+        manager.activate_owner(replacement).await.unwrap();
+        let revision = canonical.revision();
+        assert!(receipt.revoke().is_err());
+        assert!(!old.validate(&canonical.canonical_publication()));
+        assert_eq!(canonical.revision(), revision);
+        assert_eq!(
+            b3_call_canonical(canonical.clone(), "lazy_tool")
+                .await
+                .unwrap()
+                .value,
+            serde_json::json!("A")
+        );
+        manager.unmount("lazy-wasm").await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn b3_cancelled_waiter_does_not_release_guest_permit_and_starting_stop_joins_without_deadlock(
+    ) {
+        let tmp = tempfile::tempdir().unwrap();
+        let _home = isolated_home(tmp.path());
+        let (manager, canonical, owner) = b3_cold_manager(tmp.path()).await;
+        let (entered, waiting) = tokio::sync::oneshot::channel();
+        let (_release, blocked) = tokio::sync::oneshot::channel();
+        *owner.barrier.lock().unwrap() = Some((entered, blocked));
+        let first = tokio::spawn({
+            let manager = manager.clone();
+            let owner = owner.clone();
+            async move { manager.activate_owner(owner).await }
+        });
+        waiting.await.unwrap();
+        let second = tokio::spawn({
+            let manager = manager.clone();
+            let owner = owner.clone();
+            async move { manager.activate_owner(owner).await }
+        });
+        manager.unmount("lazy-wasm").await.unwrap();
+        assert!(first.await.unwrap().is_err());
+        assert!(second.await.unwrap().is_err());
+        assert!(!manager.plugin_loader.read().await.is_loaded("lazy-wasm"));
+        assert_eq!(canonical.revision(), 0);
+        let _ = manager.set_plugin_enabled("lazy-wasm", true).await.unwrap();
+        let owner = manager.runtime_owner("lazy-wasm").unwrap();
+        manager.activate_owner(owner.clone()).await.unwrap();
+        let (entered, waiting) = tokio::sync::oneshot::channel();
+        let (release, blocked) = std::sync::mpsc::channel();
+        manager
+            .plugin_loader
+            .read()
+            .await
+            .bind_wasm("lazy-wasm", "handler")
+            .unwrap()
+            .block_guest_for_test(entered, blocked);
+        let call = tokio::spawn({
+            let canonical = canonical.clone();
+            async move { b3_call_canonical(canonical, "lazy_tool").await }
+        });
+        waiting.await.unwrap();
+        call.abort();
+        let mut events = canonical.subscribe_publications();
+        let stop = tokio::spawn({
+            let manager = manager.clone();
+            async move { manager.unmount("lazy-wasm").await }
+        });
+        events.recv().await.unwrap();
+        assert!(!stop.is_finished());
+        assert!(owner.admission.available_permits() < RuntimeOwner::MAX_IN_FLIGHT as usize);
+        release.send(()).unwrap();
+        assert!(stop.await.unwrap().unwrap().all_ok());
+    }
+
+    #[tokio::test]
+    async fn b3_cancelled_stop_waiters_retain_drain_join_and_exact_dispose() {
+        use crate::capability::provider::ProviderState;
+        // Each cancellation lands at a proven, blocked cleanup boundary.
+        for stage in ["drain", "join", "dispose", "dispose-error"] {
+            let tmp = tempfile::tempdir().unwrap();
+            let _home = isolated_home(tmp.path());
+            let (manager, canonical, owner) = b3_cold_manager(tmp.path()).await;
+            manager.activate_owner(owner.clone()).await.unwrap();
+            let old = canonical.capture_entry("lazy_tool").unwrap();
+            let count = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+            let (entered, waiting) = tokio::sync::oneshot::channel();
+            let (release, released) = tokio::sync::oneshot::channel();
+            let mut release = Some(release);
+            let mut guest_release = None;
+            let mut call = None;
+            if stage == "drain" {
+                let (guest_entered, guest_waiting) = tokio::sync::oneshot::channel();
+                let (send, recv) = std::sync::mpsc::channel();
+                manager
+                    .plugin_loader
+                    .read()
+                    .await
+                    .bind_wasm("lazy-wasm", "handler")
+                    .unwrap()
+                    .block_guest_for_test(guest_entered, recv);
+                call = Some(tokio::spawn({
+                    let canonical = canonical.clone();
+                    async move { b3_call_canonical(canonical, "lazy_tool").await }
+                }));
+                guest_waiting.await.unwrap();
+                guest_release = Some(send);
+                drop(entered);
+                drop(released);
+            } else if stage == "join" {
+                // Replace only the finished activation task with a retained
+                // operation; observe stop immediately before its actual join.
+                let old_task = owner.task.lock().unwrap().take().unwrap();
+                old_task.await.unwrap();
+                *owner.task.lock().unwrap() = Some(tokio::spawn(async move {
+                    let _ = released.await;
+                }));
+                *owner.stop_join_entered.lock().unwrap() = Some(entered);
+            } else {
+                let count = count.clone();
+                let fails = stage == "dispose-error";
+                manager
+                    .scopes
+                    .lock()
+                    .unwrap()
+                    .get_mut("lazy-wasm")
+                    .unwrap()
+                    .effect(
+                        "service",
+                        super::super::effects::async_disposer(move || async move {
+                            count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                            entered.send(()).unwrap();
+                            released.await.unwrap();
+                            if fails {
+                                Err("cancelled waiter cleanup fault".into())
+                            } else {
+                                Ok(())
+                            }
+                        }),
+                    );
+            }
+            let mut events = canonical.subscribe_publications();
+            let first = tokio::spawn({
+                let manager = manager.clone();
+                async move { manager.unmount("lazy-wasm").await }
+            });
+            events.recv().await.unwrap();
+            if stage != "drain" {
+                waiting.await.unwrap();
+            }
+            assert_eq!(owner.provider.state(), ProviderState::Stopping);
+            assert!(!old.validate(&canonical.canonical_publication()));
+            assert!(canonical.capture_entry("lazy_tool").is_none());
+            assert!(owner.acquire_permit().await.is_err());
+            assert!(!first.is_finished());
+            if stage == "drain" {
+                assert!(owner.admission.available_permits() < RuntimeOwner::MAX_IN_FLIGHT as usize);
+                // Even a tool export cannot bypass stopping through hooks.
+                assert!(manager
+                    .execute_plugin_hook("lazy-wasm", "handler", serde_json::json!({}))
+                    .await
+                    .is_err());
+            }
+            first.abort();
+            assert!(first.await.unwrap_err().is_cancelled());
+            // A second caller joins the same operation (not a retry). Polling
+            // proves it joined before releasing the exact blocked boundary.
+            let mut second = Box::pin(manager.unmount("lazy-wasm"));
+            assert!(futures::poll!(second.as_mut()).is_pending());
+            if let Some(send) = guest_release {
+                send.send(()).unwrap();
+            } else {
+                release.take().unwrap().send(()).unwrap();
+            }
+            let result = second.await;
+            if let Some(call) = call {
+                assert!(call.await.unwrap().is_err());
+            }
+            if stage == "dispose-error" {
+                assert!(matches!(result, Err(UnmountError::RuntimeOwnerResidual(_))));
+                assert_eq!(owner.provider.state(), ProviderState::Failed);
+                assert!(manager.owner_is_current(&owner));
+                assert!(manager.unmount("lazy-wasm").await.is_err());
+                assert_eq!(count.load(std::sync::atomic::Ordering::SeqCst), 1);
+                assert!(owner.failures.lock().unwrap().iter().any(|failure| matches!(failure,
+                    super::super::runtime_owner::OwnerFailure::Dispose(report) if !report.all_ok())));
+            } else {
+                assert!(result.unwrap().all_ok());
+                assert_eq!(owner.provider.state(), ProviderState::Disabled);
+                assert!(!manager.owner_is_current(&owner));
+                if stage == "dispose" {
+                    assert_eq!(count.load(std::sync::atomic::Ordering::SeqCst), 1);
+                }
+            }
+            assert!(!manager.plugin_loader.read().await.is_loaded("lazy-wasm"));
+        }
+    }
+
+    #[tokio::test]
+    async fn b3_mounted_hook_without_runtime_owner_fails_closed_before_guest_execution() {
+        let tmp = tempfile::tempdir().unwrap();
+        let _home = isolated_home(tmp.path());
+        write_cold_tool_wasm_fixture(tmp.path());
+        let manifest = tmp.path().join("plugins/lazy-wasm/aleph.plugin.toml");
+        let manifest_text = std::fs::read_to_string(&manifest).unwrap();
+        std::fs::write(&manifest, manifest_text).unwrap();
+        let (manager, _) = isolated_manager(tmp.path()).await;
+        let manager = Arc::new(manager);
+        let canonical = Arc::new(crate::tools::ToolHandlerRegistry::new());
+        manager.set_tool_handler_registry(canonical).await.unwrap();
+        let _ = manager
+            .set_plugin_enabled("lazy-wasm", false)
+            .await
+            .unwrap();
+        manager.load_all().await.unwrap();
+        let _ = manager.set_plugin_enabled("lazy-wasm", true).await.unwrap();
+        let owner = manager.runtime_owner("lazy-wasm").unwrap();
+        manager.activate_owner(owner.clone()).await.unwrap();
+        assert!(manager.plugin_loader.read().await.is_loaded("lazy-wasm"));
+
+        let (entered, guest_entered) = tokio::sync::oneshot::channel();
+        let (release, guest_release) = std::sync::mpsc::channel();
+        manager
+            .plugin_loader
+            .read()
+            .await
+            .bind_wasm("lazy-wasm", "handler")
+            .unwrap()
+            .block_guest_for_test(entered, guest_release);
+        manager.runtime_owners.lock().unwrap().remove("lazy-wasm");
+
+        let call = tokio::spawn({
+            let manager = manager.clone();
+            async move {
+                manager
+                    .execute_plugin_hook("lazy-wasm", "handler", serde_json::json!({}))
+                    .await
+            }
+        });
+        let started =
+            tokio::time::timeout(std::time::Duration::from_millis(200), guest_entered).await;
+        if started.is_ok() {
+            release.send(()).unwrap();
+            let _ = call.await;
+            panic!("mounted hook executed without a current RuntimeOwner");
+        }
+        let result = tokio::time::timeout(std::time::Duration::from_secs(1), call)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(matches!(
+            result,
+            Err(crate::extension::error::ExtensionError::Runtime(message))
+                if message.contains("no current RuntimeOwner")
+        ));
+        assert!(manager.plugin_loader.read().await.is_loaded("lazy-wasm"));
+    }
+
+    #[tokio::test]
+    async fn b3_tool_only_owner_cannot_turn_its_export_into_a_hook() {
+        let tmp = tempfile::tempdir().unwrap();
+        let _home = isolated_home(tmp.path());
+        let (manager, canonical, owner) = b3_cold_manager(tmp.path()).await;
+        manager.activate_owner(owner.clone()).await.unwrap();
+        let revision = canonical.revision();
+        assert!(manager
+            .execute_plugin_hook("lazy-wasm", "handler", serde_json::json!({}))
+            .await
+            .is_err());
+        assert!(manager
+            .plugin_loader
+            .read()
+            .await
+            .execute_hook("lazy-wasm", "handler", serde_json::json!({}))
+            .is_err());
+        assert_eq!(
+            owner.admission.available_permits(),
+            RuntimeOwner::MAX_IN_FLIGHT as usize
+        );
+        assert_eq!(canonical.revision(), revision);
+        assert_eq!(
+            b3_call_canonical(canonical.clone(), "lazy_tool")
+                .await
+                .unwrap()
+                .value,
+            serde_json::json!("A")
+        );
+        manager.unmount("lazy-wasm").await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn b3_disposer_failure_keeps_structured_failed_owner_and_never_retries() {
+        use super::super::runtime_owner::OwnerFailure;
+        let tmp = tempfile::tempdir().unwrap();
+        let _home = isolated_home(tmp.path());
+        let (manager, canonical, owner) = b3_cold_manager(tmp.path()).await;
+        manager.activate_owner(owner.clone()).await.unwrap();
+        manager
+            .scopes
+            .lock()
+            .unwrap()
+            .get_mut("lazy-wasm")
+            .unwrap()
+            .effect(
+                "service",
+                super::super::effects::sync_disposer(|| Err("b3 disposer fault".into())),
+            );
+        assert!(matches!(
+            manager.unmount("lazy-wasm").await,
+            Err(UnmountError::RuntimeOwnerResidual(_))
+        ));
+        assert_eq!(
+            owner.provider.state(),
+            crate::capability::provider::ProviderState::Failed
+        );
+        assert!(manager.owner_is_current(&owner));
+        assert!(owner.acquire_permit().await.is_err());
+        assert!(canonical.capture_entry("lazy_tool").is_none());
+        assert!(owner.receipt.lock().unwrap().is_some());
+        assert!(owner.failures.lock().unwrap().iter().any(|failure| matches!(failure, OwnerFailure::Dispose(report) if report.failures().any(|(step, cause)| step == "service" && cause == "b3 disposer fault"))));
+        assert!(matches!(
+            manager.get_plugin_record("lazy-wasm").await.unwrap().status,
+            PluginStatus::Error(_)
+        ));
+        assert!(manager.reload_plugin("lazy-wasm").await.is_err());
+        assert_eq!(owner.failures.lock().unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn b3_duplicate_real_owner_keeps_incumbent_batch_and_disposes_only_loser() {
+        use super::super::runtime_owner::OwnerFailure;
+        use crate::tools::registry::PluginPublicationError;
+        let tmp = tempfile::tempdir().unwrap();
+        let _home = isolated_home(tmp.path());
+        let (manager, canonical, incumbent) = b3_cold_manager(tmp.path()).await;
+        manager.activate_owner(incumbent.clone()).await.unwrap();
+        let revision = canonical.revision();
+        let mut events = canonical.subscribe_publications();
+        let root = tmp.path().join("second-manager");
+        let (other, _, loser) = b3_cold_manager_with_registry(&root, canonical.clone()).await;
+        assert!(!incumbent.provider.same_instance(&loser.provider));
+        assert!(other.activate_owner(loser.clone()).await.is_err());
+        assert_eq!(
+            loser.provider.state(),
+            crate::capability::provider::ProviderState::Failed
+        );
+        assert!(loser
+            .failures
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|failure| matches!(
+                failure,
+                OwnerFailure::Publication(PluginPublicationError::ScopeOccupied)
+            )));
+        assert!(!other.plugin_loader.read().await.is_loaded("lazy-wasm"));
+        assert!(manager.plugin_loader.read().await.is_loaded("lazy-wasm"));
+        assert_eq!(canonical.revision(), revision);
+        assert!(matches!(
+            events.try_recv(),
+            Err(tokio::sync::broadcast::error::TryRecvError::Empty)
+        ));
+        assert_eq!(
+            b3_call_canonical(canonical.clone(), "lazy_tool")
+                .await
+                .unwrap()
+                .value,
+            serde_json::json!("A")
+        );
+        manager.unmount("lazy-wasm").await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn b3_stale_receipt_stop_retains_exact_new_scope_as_failed_residual() {
+        use super::super::runtime_owner::OwnerFailure;
+        let tmp = tempfile::tempdir().unwrap();
+        let _home = isolated_home(tmp.path());
+        let (manager, canonical, old) = b3_cold_manager(tmp.path()).await;
+        manager.activate_owner(old.clone()).await.unwrap();
+        let stale = old.receipt.lock().unwrap().clone().unwrap();
+        manager.reload_plugin("lazy-wasm").await.unwrap();
+        let current = manager.runtime_owner("lazy-wasm").unwrap();
+        manager.activate_owner(current.clone()).await.unwrap();
+        let revision = canonical.revision();
+        // Inject an incorrectly retained old receipt, not a name-based revoke.
+        // Failure must preserve the new owner's exact effects and proof.
+        *current.receipt.lock().unwrap() = Some(stale);
+        assert!(matches!(
+            manager.unmount("lazy-wasm").await,
+            Err(UnmountError::RuntimeOwnerResidual(_))
+        ));
+        assert_eq!(canonical.revision(), revision);
+        assert_eq!(
+            current.provider.state(),
+            crate::capability::provider::ProviderState::Failed
+        );
+        assert!(current
+            .failures
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|failure| matches!(failure, OwnerFailure::Revoke(_))));
+        assert!(current.acquire_permit().await.is_err());
+        assert!(manager.owner_is_current(&current));
+        assert!(manager.scope_steps("lazy-wasm").is_some());
+        assert!(manager.plugin_loader.read().await.is_loaded("lazy-wasm"));
+        assert!(canonical.capture_entry("lazy_tool").is_none());
+        assert!(matches!(
+            manager.get_plugin_record("lazy-wasm").await.unwrap().status,
+            PluginStatus::Error(_)
+        ));
+        assert!(manager.unmount("lazy-wasm").await.is_err());
+        assert_eq!(current.failures.lock().unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn b3_missing_ready_receipt_or_scope_cannot_report_noop_stop_success() {
+        use super::super::runtime_owner::OwnerFailure;
+        for missing_receipt in [true, false] {
+            let tmp = tempfile::tempdir().unwrap();
+            let _home = isolated_home(tmp.path());
+            let (manager, canonical, owner) = b3_cold_manager(tmp.path()).await;
+            manager.activate_owner(owner.clone()).await.unwrap();
+            let held_scope = if missing_receipt {
+                owner.receipt.lock().unwrap().take();
+                None
+            } else {
+                manager.scopes.lock().unwrap().remove("lazy-wasm")
+            };
+            assert!(matches!(
+                manager.unmount("lazy-wasm").await,
+                Err(UnmountError::RuntimeOwnerResidual(_))
+            ));
+            assert_eq!(
+                owner.provider.state(),
+                crate::capability::provider::ProviderState::Failed
+            );
+            assert!(owner
+                .failures
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|failure| matches!(
+                    (missing_receipt, failure),
+                    (true, OwnerFailure::MissingReceipt) | (false, OwnerFailure::MissingScope)
+                )));
+            assert!(owner.acquire_permit().await.is_err());
+            assert!(manager.owner_is_current(&owner));
+            assert!(manager.plugin_loader.read().await.is_loaded("lazy-wasm"));
+            assert!(canonical.capture_entry("lazy_tool").is_none());
+            if let Some(scope) = held_scope {
+                assert!(scope.dispose().await.all_ok());
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn b3_publication_cleanup_error_retains_exact_failed_owner_evidence() {
+        use super::super::runtime_owner::OwnerFailure;
+        let tmp = tempfile::tempdir().unwrap();
+        let _home = isolated_home(tmp.path());
+        let (manager, canonical, owner) = b3_cold_manager(tmp.path()).await;
+        canonical.close();
+        let (entered, mounted) = tokio::sync::oneshot::channel();
+        let (release, publish) = tokio::sync::oneshot::channel();
+        *owner.publication_barrier.lock().unwrap() = Some((entered, publish));
+        let task = tokio::spawn({
+            let manager = manager.clone();
+            let owner = owner.clone();
+            async move { manager.activate_owner(owner).await }
+        });
+        mounted.await.unwrap();
+        assert!(manager.plugin_loader.read().await.is_loaded("lazy-wasm"));
+        manager
+            .scopes
+            .lock()
+            .unwrap()
+            .get_mut("lazy-wasm")
+            .unwrap()
+            .effect(
+                "service",
+                super::super::effects::sync_disposer(|| Err("publish cleanup fault".into())),
+            );
+        release.send(()).unwrap();
+        assert!(task.await.unwrap().is_err());
+        assert_eq!(
+            owner.provider.state(),
+            crate::capability::provider::ProviderState::Failed
+        );
+        assert!(owner.acquire_permit().await.is_err());
+        assert!(
+            owner.identity.lock().unwrap().is_some(),
+            "residual retains exact mount evidence"
+        );
+        assert!(owner.receipt.lock().unwrap().is_none());
+        assert!(owner
+            .failures
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|failure| matches!(failure, OwnerFailure::Publication(_))));
+        assert!(owner.failures.lock().unwrap().iter().any(|failure| matches!(failure, OwnerFailure::Dispose(report) if report.failures().any(|(step, cause)| step == "service" && cause == "publish cleanup fault"))));
+        assert_eq!(canonical.revision(), 0);
+        assert!(canonical.canonical_publication().entries().is_empty());
+        assert!(manager.owner_is_current(&owner));
+        assert!(manager.unmount("lazy-wasm").await.is_err());
+    }
+
+    #[tokio::test]
+    async fn b3_publication_failure_and_missing_producer_cleanup_fail_closed() {
+        use super::super::runtime_owner::OwnerFailure;
+        for mounted in [true, false] {
+            let tmp = tempfile::tempdir().unwrap();
+            let _home = isolated_home(tmp.path());
+            let (manager, canonical, owner) = b3_cold_manager(tmp.path()).await;
+            if mounted {
+                canonical.close();
+            } else {
+                *manager.tool_handler_registry.write().unwrap() = None;
+            }
+            let before = canonical.revision();
+            let mut events = canonical.subscribe_publications();
+            assert!(manager.activate_owner(owner.clone()).await.is_err());
+            assert_eq!(
+                owner.provider.state(),
+                crate::capability::provider::ProviderState::Failed
+            );
+            assert!(owner.acquire_permit().await.is_err());
+            assert!(owner.receipt.lock().unwrap().is_none());
+            assert!(owner.identity.lock().unwrap().is_none());
+            assert!(owner
+                .failures
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|failure| matches!(failure, OwnerFailure::Publication(_))));
+            assert!(!manager.plugin_loader.read().await.is_loaded("lazy-wasm"));
+            assert!(manager.scope_steps("lazy-wasm").is_none());
+            assert_eq!(canonical.revision(), before);
+            assert!(matches!(
+                events.try_recv(),
+                Err(tokio::sync::broadcast::error::TryRecvError::Empty)
+            ));
+            assert!(canonical
+                .reconcile_plugin_tools(Default::default())
+                .is_err());
+        }
     }
 
     #[tokio::test]
@@ -2308,6 +3246,43 @@ handler = "handler"
         );
     }
 
+    async fn real_guest_hook_row_and_disposer(
+        manager: &ExtensionManager,
+        dir: &Path,
+        id: &str,
+        status: PluginStatus,
+    ) -> (PluginRecord, Disposer) {
+        use crate::extension::manifest::HookSection;
+        use crate::extension::runtime::wasm::tests::guest_fixture::{
+            manifest_with_guest, PAYLOAD_A,
+        };
+
+        let mut manifest = manifest_with_guest(dir, id, PAYLOAD_A);
+        manifest.hooks_v2 = Some(vec![HookSection {
+            event: "before_tool_call".into(),
+            kind: Some("interceptor".into()),
+            handler: Some("handler".into()),
+            priority: "normal".into(),
+            filter: None,
+        }]);
+        let loader = manager.get_plugin_loader_for_test();
+        let disposer = loader::load_wasm_effect(Arc::clone(&loader), &manifest)
+            .await
+            .unwrap();
+        let mut row = PluginRecord::new(
+            id.to_string(),
+            id.to_string(),
+            PluginKind::Wasm,
+            PluginOrigin::Global,
+        );
+        row.root_dir = dir.to_path_buf();
+        row.status = status;
+        manager
+            .get_plugin_registry_mut()
+            .await
+            .register_plugin(row.clone());
+        (row, disposer)
+    }
     #[tokio::test]
     async fn c2s_queued_hook_rechecks_status_after_loader_admission() {
         use crate::extension::runtime::wasm::tests::guest_fixture::HANDLER;
@@ -2317,7 +3292,7 @@ handler = "handler"
         let tmp = tempfile::tempdir().unwrap();
         let _home = isolated_home(tmp.path());
         let (manager, _) = isolated_manager(tmp.path()).await;
-        let (row, _) = real_guest_row_and_disposer(
+        let (row, _) = real_guest_hook_row_and_disposer(
             &manager,
             tmp.path(),
             "c2s-queued-hook",
@@ -2368,7 +3343,7 @@ handler = "handler"
         let tmp = tempfile::tempdir().unwrap();
         let _home = isolated_home(tmp.path());
         let (manager, _) = isolated_manager(tmp.path()).await;
-        let (row, _) = real_guest_row_and_disposer(
+        let (row, _) = real_guest_hook_row_and_disposer(
             &manager,
             tmp.path(),
             "c2s-pending",

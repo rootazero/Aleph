@@ -12,7 +12,7 @@
 //! fresh snapshot and emits [`CapabilityChange::Invalidated`] rather than
 //! pretending it delivered every event.
 
-use crate::capability::backend::{CapabilityBackend, ToolBackendAdapter, TOOL_NAMESPACE};
+use crate::capability::backend::{ToolBackendAdapter, TOOL_NAMESPACE};
 use crate::capability::descriptor::{CapabilityId, CapabilityRevision, ProjectionMetadata};
 use crate::capability::facade::{
     BackendLease, CapabilityChange, CapabilityChangeStream, CapabilitySnapshot, Cursor, Projection,
@@ -98,8 +98,8 @@ impl ZahirFacade {
     }
 
     /// Idempotently register an ownership binding for every registry tool that
-    /// has none (and is not revoked/disposed). Called at the top of
-    /// `describe`/`resolve` (`subscribe`/`project` reach it via `describe`).
+    /// has none (and is not revoked/disposed). Full projections reconcile all
+    /// entries; single-entry `resolve` reconciles only the captured target.
     ///
     /// Registration is atomic insert-if-absent: the observe and the insert
     /// happen under one lock, so a binding or claim minted by another caller
@@ -118,15 +118,17 @@ impl ZahirFacade {
     /// entries rather than two independent loads.
     fn reconcile_snapshot(&self, snap: &RegistrySnapshot) {
         for name in snap.entries().keys() {
-            let id = tool_id(name);
-            let visibility = VisibilityScope::default();
-            let _ = self.tree.register_if_absent(
-                id,
-                OwnerRef::Runtime,
-                LifetimeScope::Runtime,
-                visibility,
-            );
+            self.reconcile_entry_binding(name);
         }
+    }
+
+    fn reconcile_entry_binding(&self, name: &str) {
+        let _ = self.tree.register_if_absent(
+            tool_id(name),
+            OwnerRef::Runtime,
+            LifetimeScope::Runtime,
+            VisibilityScope::default(),
+        );
     }
 
     /// Project the live registry entries, owner generations, and registry state
@@ -339,12 +341,18 @@ impl Zahir for ZahirFacade {
 
     fn resolve(&self, reference: Reference) -> Result<BackendLease, ResolveError> {
         let provider = self.adapter.registry.provider();
-        let provider_generation = provider.generation();
-        self.reconcile_registry_bindings();
-        let mut descriptor = self
+        if reference.id.namespace != crate::capability::backend::TOOL_NAMESPACE {
+            return Err(ResolveError::Unknown);
+        }
+        let canonical_entry = self
             .adapter
-            .lookup(&reference.id)
+            .registry
+            .capture_entry(&reference.id.name)
             .ok_or(ResolveError::Unknown)?;
+        self.reconcile_entry_binding(&reference.id.name);
+        let provider_generation = canonical_entry.provider_generation();
+        let mut descriptor =
+            crate::capability::backend::to_descriptor(&canonical_entry.entry().descriptor);
         // The registry descriptor is identity-level; the facade binds the
         // resolved descriptor to the reference's visibility so `validate_lease`
         // checks against the same binding key (custom visibility never falls
@@ -359,6 +367,7 @@ impl Zahir for ZahirFacade {
                 descriptor,
                 owner_generation,
                 provider_generation,
+                canonical_entry,
             }),
             None if self.tree.is_revoked(&reference.id) => Err(ResolveError::Revoked),
             None => Err(ResolveError::NotVisible),
@@ -390,10 +399,25 @@ impl Zahir for ZahirFacade {
         // ③ descriptor freshness — the current descriptor must still match the
         // lease's (revision + schema fingerprint). A replacement or unregister
         // closes to `Unknown`.
-        match self.adapter.lookup(&lease.descriptor.id) {
-            Some(current)
-                if current.revision == lease.descriptor.revision
-                    && current.schema.fingerprint == lease.descriptor.schema.fingerprint =>
+        let current = self
+            .adapter
+            .registry
+            .capture_entry(&lease.descriptor.id.name);
+        if !current
+            .as_ref()
+            .is_some_and(|entry| lease.canonical_entry.validate_capture(entry))
+        {
+            return Err(ResolveError::Unknown);
+        }
+        match current {
+            Some(entry)
+                if {
+                    let current =
+                        crate::capability::backend::to_descriptor(&entry.entry().descriptor);
+                    current.id == lease.descriptor.id
+                        && current.revision == lease.descriptor.revision
+                        && current.schema.fingerprint == lease.descriptor.schema.fingerprint
+                } =>
             {
                 provider
                     .acquire_call(lease.provider_generation)

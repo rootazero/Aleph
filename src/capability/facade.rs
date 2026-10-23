@@ -64,6 +64,10 @@ pub struct BackendLease {
     /// provider restart invalidates the lease even when the tool descriptor
     /// itself has not changed.
     pub provider_generation: u64,
+    /// Captured by the canonical registry read boundary, including the producer
+    /// owner tuple when present. Visibility ownership still belongs to the tree;
+    /// this capture is not a transport authority.
+    pub(crate) canonical_entry: crate::tools::registry::CanonicalEntryLease,
 }
 
 /// Closed error set for `Zahir::resolve` / `Zahir::validate_lease`.
