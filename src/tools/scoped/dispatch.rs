@@ -299,7 +299,8 @@ impl ScopedToolService {
                 None
             } else if let Some(projection) = resolved {
                 let mut entry = registry
-                    .resolve_entry(name)
+                    .capture_entry(name)
+                    .map(crate::tools::registry::CanonicalEntryLease::into_entry)
                     .ok_or_else(|| ToolError::NotFound { name: name.into() })?;
                 let projected = projection.capability_descriptor().ok_or_else(|| {
                     ToolError::PermissionDenied {

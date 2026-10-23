@@ -435,26 +435,27 @@ impl PluginLoader {
         handler: &str,
         event_data: serde_json::Value,
     ) -> ExtensionResult<serde_json::Value> {
-        let kind = self
-            .loaded_plugins
-            .get(plugin_id)
-            .ok_or_else(|| ExtensionError::PluginNotFound(plugin_id.to_string()))?;
+        let binding = self.bind_wasm_hook(plugin_id, handler)?;
+        self.call_bound(&binding, event_data)
+    }
 
-        match kind {
-            PluginKind::Wasm => {
-                let runtime = self.wasm_runtime.as_ref().ok_or_else(|| {
-                    ExtensionError::Runtime("WASM runtime not initialized".to_string())
-                })?;
-                let input = crate::extension::runtime::WasmToolInput {
-                    name: handler.to_string(),
-                    arguments: event_data,
-                };
-                let output = runtime.call_tool(plugin_id, handler, input)?;
-                Self::map_wasm_output(output)
-            }
-            PluginKind::Mcp | PluginKind::Static => Err(ExtensionError::Runtime(format!(
+    /// Bind only a hook declared on the exact mounted instance. This carries
+    /// no canonical/owner authority; the manager adds its owner permit/fences.
+    pub(crate) fn bind_wasm_hook(
+        &self,
+        plugin_id: &str,
+        handler: &str,
+    ) -> ExtensionResult<crate::extension::runtime::wasm::WasmBinding> {
+        match self.loaded_plugins.get(plugin_id) {
+            Some(PluginKind::Wasm) => self
+                .wasm_runtime
+                .as_ref()
+                .ok_or_else(|| ExtensionError::Runtime("WASM runtime not initialized".into()))?
+                .bind_hook(plugin_id, handler),
+            Some(kind) => Err(ExtensionError::Runtime(format!(
                 "Plugin kind {kind:?} does not support hooks"
             ))),
+            None => Err(ExtensionError::PluginNotFound(plugin_id.into())),
         }
     }
 
@@ -687,7 +688,14 @@ mod tests {
     #[test]
     fn loader_binds_real_guest_and_preserves_legacy_tool_hook_calls() {
         let directory = TempDir::new().unwrap();
-        let manifest = manifest_with_guest(directory.path(), "loader-a", PAYLOAD_A);
+        let mut manifest = manifest_with_guest(directory.path(), "loader-a", PAYLOAD_A);
+        manifest.hooks_v2 = Some(vec![crate::extension::manifest::HookSection {
+            event: "before_tool_call".into(),
+            kind: None,
+            handler: Some(HANDLER.into()),
+            priority: "normal".into(),
+            filter: None,
+        }]);
         let mut loader = PluginLoader::new();
         loader.load_plugin(&manifest).unwrap();
 
@@ -855,7 +863,14 @@ mod tests {
         ];
         for (id, payload, expected) in cases {
             let directory = TempDir::new().unwrap();
-            let manifest = manifest_with_guest(directory.path(), id, payload);
+            let mut manifest = manifest_with_guest(directory.path(), id, payload);
+            manifest.hooks_v2 = Some(vec![crate::extension::manifest::HookSection {
+                event: "before_tool_call".into(),
+                kind: None,
+                handler: Some(HANDLER.into()),
+                priority: "normal".into(),
+                filter: None,
+            }]);
             let mut loader = PluginLoader::new();
             loader.load_plugin(&manifest).unwrap();
             let binding = loader.bind_wasm(id, HANDLER).unwrap();

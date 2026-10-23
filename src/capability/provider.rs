@@ -214,6 +214,7 @@ fn is_allowed(from: ProviderState, to: ProviderState) -> bool {
             | (ProviderState::Disabled, ProviderState::Starting)
             | (ProviderState::Starting, ProviderState::Ready)
             | (ProviderState::Starting, ProviderState::Failed)
+            | (ProviderState::Starting, ProviderState::Stopping)
             | (ProviderState::Ready, ProviderState::Stopping)
             | (ProviderState::Ready, ProviderState::Failed)
             | (ProviderState::Stopping, ProviderState::Stopped)
@@ -247,11 +248,61 @@ impl ProviderHandle {
 
     #[must_use]
     pub fn snapshot(&self) -> (ProviderState, u64) {
+        self.with_snapshot(|lifecycle| (lifecycle.state(), lifecycle.generation()))
+    }
+
+    /// Opaque instance identity; a matching textual provider id is not authority.
+    pub(crate) fn same_instance(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.lifecycle, &other.lifecycle)
+    }
+
+    /// Observe lifecycle state while transitions are excluded. Canonical plugin
+    /// publication holds this guard through its registry transaction: lock order
+    /// is provider -> registry mutation, never the reverse. The closure must not
+    /// re-enter this handle or invoke external/handler code.
+    pub(crate) fn with_snapshot<R>(&self, read: impl FnOnce(&ProviderLifecycle) -> R) -> R {
         let lifecycle = self
             .lifecycle
             .lock()
             .expect("provider lifecycle mutex poisoned");
-        (lifecycle.state(), lifecycle.generation())
+        read(&lifecycle)
+    }
+
+    /// Atomically commit Starting -> Ready with a canonical registry batch.
+    /// Only local state is prepared first. On callback error neither state nor
+    /// notifications change. The callback must not re-enter this provider or
+    /// call external code; lock order is lifecycle -> registry transaction.
+    pub(crate) fn with_ready_commit<R, E: From<ProviderCallError>>(
+        &self,
+        expected_generation: u64,
+        commit: impl FnOnce(&ProviderLifecycle) -> Result<R, E>,
+    ) -> Result<R, E> {
+        let mut lifecycle = self
+            .lifecycle
+            .lock()
+            .expect("provider lifecycle mutex poisoned");
+        if lifecycle.state() != ProviderState::Starting
+            || lifecycle.generation() != expected_generation
+        {
+            return Err(ProviderCallError {
+                provider_id: lifecycle.provider_id().clone(),
+                state: lifecycle.state(),
+                expected_generation,
+                actual_generation: lifecycle.generation(),
+            }
+            .into());
+        }
+        let mut prepared = lifecycle.clone();
+        let transition = prepared
+            .transition(ProviderState::Ready)
+            .expect("Starting -> Ready cannot fail or allocate a generation");
+        let result = commit(&prepared)?;
+        // Infallible local commit: readers of a frozen registry proof must
+        // acquire this same lifecycle mutex before accepting it as executable.
+        *lifecycle = prepared;
+        drop(lifecycle);
+        let _ = self.changes.send(transition);
+        Ok(result)
     }
 
     #[must_use]

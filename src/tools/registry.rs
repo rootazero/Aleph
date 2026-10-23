@@ -13,10 +13,10 @@
 //! so a stale handle can never remove a newer entry.
 
 use crate::sync_primitives::Arc;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Weak;
 
-use crate::capability::versioned_registry::VersionedRegistry;
+use crate::capability::versioned_registry::{VersionedRegistry, VersionedSnapshot};
 use tokio::sync::{broadcast, Notify};
 
 use crate::capability::provider::{
@@ -38,6 +38,157 @@ pub struct RegistryEntry {
     pub descriptor: Arc<ToolCapabilityDescriptor>,
     /// The producer-owned result budget admitted with this handler/descriptor pair.
     pub max_result_tokens: Option<usize>,
+    /// Constructed only by the crate-private atomic plugin producer.
+    /// `None` preserves legacy registrations; it never certifies plugin Ready.
+    pub(crate) ready: Option<Arc<ReadySnapshot>>,
+}
+
+/// Producer-owned immutable identity captured by the B2 transaction.
+/// Fields are private: independent provider/owner/loader reads cannot be joined
+/// by a consumer into a lease. Holding a binding is not permission to execute.
+#[derive(Clone)]
+pub(crate) struct ReadySnapshot {
+    plugin_id: String,
+    provider_state: ProviderState,
+    provider: ProviderHandle,
+    provider_generation: u64,
+    owner_generation: u64,
+    mount: crate::extension::runtime::wasm::WasmMountIdentity,
+    binding: WasmBinding,
+    canonical_name: String,
+    entry_revision: u64,
+    /// Revision of this producer publication, not the latest unrelated mutation.
+    canonical_revision: u64,
+    descriptor_fingerprint: [u8; 32],
+    handler: Arc<dyn ToolHandler>,
+}
+
+fn descriptor_fingerprint(descriptor: &ToolCapabilityDescriptor) -> [u8; 32] {
+    use sha2::{Digest, Sha256};
+    let value = serde_json::to_value(descriptor).expect("tool descriptor serializes");
+    let mut bytes = Vec::new();
+    crate::tools::descriptor::canonicalize_json(&value, &mut bytes);
+    Sha256::digest(bytes).into()
+}
+
+impl ReadySnapshot {
+    /// Read-side invalidation only, after capturing the immutable entry. Never
+    /// call under the registry mutation lock or join this into producer proof.
+    fn provider_is_current_ready(&self) -> bool {
+        self.provider_state == ProviderState::Ready
+            && self.provider.acquire_call(self.provider_generation).is_ok()
+    }
+
+    fn matches_entry(&self, entry: &RegistryEntry, revision: u64) -> bool {
+        self.provider_state == ProviderState::Ready
+            && self.provider_generation > 0
+            && self.owner_generation > 0
+            && self.entry_revision > 0
+            && self.canonical_revision == self.entry_revision
+            && self.canonical_revision <= revision
+            && self.canonical_name == entry.descriptor.name
+            && self.entry_revision == entry.descriptor.revision
+            && matches!(&entry.descriptor.source, ToolSource::Extension { plugin_id } if plugin_id == &self.plugin_id)
+            && self.binding.plugin_id() == self.plugin_id
+            && self.binding.matches_mount(&self.mount)
+            && self.descriptor_fingerprint == descriptor_fingerprint(&entry.descriptor)
+            && Arc::ptr_eq(&self.handler, &entry.handler)
+    }
+
+    fn same_lease(&self, other: &Self) -> bool {
+        self.plugin_id == other.plugin_id
+            && self.provider_state == other.provider_state
+            && self.provider.same_instance(&other.provider)
+            && self.provider_generation == other.provider_generation
+            && self.owner_generation == other.owner_generation
+            && self.mount.same_instance(&other.mount)
+            && self.binding.same_binding(&other.binding)
+            && self.canonical_name == other.canonical_name
+            && self.entry_revision == other.entry_revision
+            && self.canonical_revision == other.canonical_revision
+            && self.descriptor_fingerprint == other.descriptor_fingerprint
+            && Arc::ptr_eq(&self.handler, &other.handler)
+    }
+}
+
+/// A capture from one immutable publication, never from multiple lookups.
+/// Compatibility builtin/MCP entries retain their existing cached-call rules.
+/// Plugin producer captures additionally carry the full Ready identity tuple.
+#[derive(Clone)]
+pub struct CanonicalEntryLease {
+    entry: RegistryEntry,
+    revision: u64,
+    provider_generation: u64,
+}
+
+impl std::fmt::Debug for CanonicalEntryLease {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CanonicalEntryLease")
+            .field("name", &self.entry.descriptor.name)
+            .field("revision", &self.revision)
+            .field("provider_generation", &self.provider_generation)
+            .field("producer_ready", &self.entry.ready.is_some())
+            .finish()
+    }
+}
+
+impl PartialEq for CanonicalEntryLease {
+    fn eq(&self, other: &Self) -> bool {
+        self.revision == other.revision
+            && self.provider_generation == other.provider_generation
+            && self.entry.descriptor == other.entry.descriptor
+            && match (&self.entry.ready, &other.entry.ready) {
+                (Some(left), Some(right)) => left.same_lease(right),
+                (None, None) => true,
+                _ => false,
+            }
+    }
+}
+
+impl Eq for CanonicalEntryLease {}
+
+impl CanonicalEntryLease {
+    pub fn entry(&self) -> &RegistryEntry {
+        &self.entry
+    }
+
+    pub fn into_entry(self) -> RegistryEntry {
+        self.entry
+    }
+
+    pub fn revision(&self) -> u64 {
+        self.revision
+    }
+
+    pub fn provider_generation(&self) -> u64 {
+        self.provider_generation
+    }
+
+    /// Validate against a fresh publication without falling back to a handler
+    /// lookup. A changed producer tuple rejects even a same-name replacement.
+    pub fn validate(&self, current: &CanonicalPublication) -> bool {
+        current
+            .capture_entry(&self.entry.descriptor.name)
+            .is_some_and(|entry| self.validate_capture(&entry))
+    }
+
+    /// Both captures must come from registry-owned immutable read boundaries.
+    /// Unrelated registry mutations do not invalidate an unchanged entry; the
+    /// actual plugin provider must still admit its captured generation now.
+    pub(crate) fn validate_capture(&self, current: &Self) -> bool {
+        if self.provider_generation != current.provider_generation
+            || self.entry.descriptor != current.entry.descriptor
+        {
+            return false;
+        }
+        match (&self.entry.ready, &current.entry.ready) {
+            (Some(captured), Some(live)) => {
+                captured.same_lease(live) && live.provider_is_current_ready()
+            }
+            (None, None) => true,
+            _ => false,
+        }
+    }
 }
 
 /// Registry-owned invocation boundary. The raw handler is never returned by
@@ -100,6 +251,46 @@ struct ProviderCallHandler {
     provider: ProviderHandle,
     generation: u64,
     name: String,
+    ready: Option<Arc<ReadySnapshot>>,
+    shared: Weak<RegistryShared>,
+}
+
+impl ProviderCallHandler {
+    fn validate_ready(&self) -> Result<(), ToolError> {
+        if let Some(ready) = &self.ready {
+            ready
+                .provider
+                .acquire_call(ready.provider_generation)
+                .map_err(|error| ToolError::PermissionDenied {
+                    name: self.name.clone(),
+                    reason: format!("canonical producer lease is stale: {error}"),
+                })?;
+            self.provider
+                .acquire_call(self.generation)
+                .map_err(|error| ToolError::PermissionDenied {
+                    name: self.name.clone(),
+                    reason: error.to_string(),
+                })?;
+            let valid = self.shared.upgrade().is_some_and(|shared| {
+                let current = shared.snapshot();
+                current.value.entry(&self.name).is_some_and(|entry| {
+                    !current.closed
+                        && entry
+                            .ready
+                            .as_ref()
+                            .is_some_and(|live| ready.same_lease(live))
+                        && ready.matches_entry(entry, current.revision)
+                })
+            });
+            if !valid {
+                return Err(ToolError::PermissionDenied {
+                    name: self.name.clone(),
+                    reason: "canonical producer lease is stale or not mounted".into(),
+                });
+            }
+        }
+        Ok(())
+    }
 }
 
 #[async_trait::async_trait]
@@ -111,7 +302,11 @@ impl ToolHandler for ProviderCallHandler {
                 name: self.name.clone(),
                 reason: error.to_string(),
             })?;
-        self.inner.invoke(input).await
+        self.validate_ready()?;
+        let result = self.inner.invoke(input).await;
+        // Reject a late guest result after revoke/replacement, including errors.
+        self.validate_ready()?;
+        result
     }
 
     fn definition(&self) -> ToolDefinition {
@@ -133,22 +328,34 @@ impl ToolHandler for ProviderCallHandler {
                 provider: self.provider.clone(),
                 generation: self.generation,
                 name: self.name.clone(),
+                ready: self.ready.clone(),
+                shared: self.shared.clone(),
             }) as Arc<dyn ToolHandler>
         })
     }
 }
 
 impl RegistryEntry {
-    fn for_provider(&self, provider: &ProviderHandle, generation: u64) -> Self {
+    fn for_provider(
+        &self,
+        provider: &ProviderHandle,
+        generation: u64,
+        shared: &Arc<RegistryShared>,
+    ) -> Self {
+        #[cfg(test)]
+        tests::PROVIDER_VIEW_CONSTRUCTIONS.with(|count| count.set(count.get() + 1));
         Self {
             handler: Arc::new(ProviderCallHandler {
                 inner: Arc::clone(&self.handler),
                 provider: provider.clone(),
                 generation,
                 name: self.descriptor.name.clone(),
+                ready: self.ready.clone(),
+                shared: Arc::downgrade(shared),
             }),
             descriptor: Arc::clone(&self.descriptor),
             max_result_tokens: self.max_result_tokens,
+            ready: self.ready.clone(),
         }
     }
 
@@ -165,6 +372,7 @@ impl RegistryEntry {
             }),
             descriptor,
             max_result_tokens,
+            ready: None,
         }
     }
 }
@@ -174,7 +382,7 @@ impl RegistryEntry {
 /// adapter cannot pair a handler from one generation with a descriptor from
 /// another.
 #[derive(Clone)]
-pub struct RegistrySnapshot {
+pub struct CanonicalPublication {
     entries: Arc<HashMap<String, RegistryEntry>>,
     revision: u64,
     closed: bool,
@@ -182,7 +390,80 @@ pub struct RegistrySnapshot {
     provider_generation: u64,
 }
 
-impl RegistrySnapshot {
+/// One raw immutable registry cut plus the provider state captured at its
+/// ArcSwap load. Single-entry and full-map views share this boundary and gate.
+struct CanonicalRead {
+    state: Arc<VersionedSnapshot<CanonicalToolState>>,
+    provider_state: ProviderState,
+    provider_generation: u64,
+}
+
+impl CanonicalRead {
+    fn callable_entry(
+        &self,
+        registry: &ToolHandlerRegistry,
+        entry: &RegistryEntry,
+    ) -> Option<RegistryEntry> {
+        if self.provider_state != ProviderState::Ready
+            || entry.ready.as_ref().is_some_and(|ready| {
+                self.state.closed
+                    || !ready.matches_entry(entry, self.state.revision)
+                    || !ready.provider_is_current_ready()
+            })
+        {
+            return None;
+        }
+        Some(entry.for_provider(
+            &registry.provider,
+            self.provider_generation,
+            &registry.shared,
+        ))
+    }
+}
+
+/// Compatibility name; both APIs return the same immutable read boundary.
+pub type RegistrySnapshot = CanonicalPublication;
+
+impl CanonicalPublication {
+    /// Capture one frozen entry, then reject a stopped/restarted producer using
+    /// its own live provider. This read can invalidate, never create, authority.
+    pub fn capture_entry(&self, name: &str) -> Option<CanonicalEntryLease> {
+        if self.provider_state != ProviderState::Ready {
+            return None;
+        }
+        let entry = self.entry(name)?.clone();
+        // Legacy entries carry no producer proof; do not infer one from source.
+        if entry
+            .ready
+            .as_ref()
+            .is_some_and(|ready| !ready.provider_is_current_ready())
+        {
+            return None;
+        }
+        Some(CanonicalEntryLease {
+            entry,
+            revision: self.revision,
+            provider_generation: self.provider_generation,
+        })
+    }
+
+    /// Whether this immutable canonical cut contains a Ready producer entry for
+    /// the plugin. Compatibility callers use this only to reject an ownerless
+    /// path after canonical publication has taken authority for that plugin.
+    #[must_use]
+    pub fn has_ready_plugin(&self, plugin_id: &str) -> bool {
+        self.entries.values().any(|entry| {
+            matches!(&entry.descriptor.source, ToolSource::Extension { plugin_id: id } if id == plugin_id)
+                && entry.ready.is_some()
+        })
+    }
+
+    /// A legacy registration is not evidence of a Ready plugin publication.
+    /// B2 must install this proof atomically; B1 never manufactures one.
+    pub(crate) fn ready_snapshot(&self, name: &str) -> Option<&ReadySnapshot> {
+        self.entry(name)?.ready.as_deref()
+    }
+
     #[must_use]
     pub fn revision(&self) -> u64 {
         self.revision
@@ -319,7 +600,9 @@ impl RegistrationHandle {
                     return Ok(None);
                 };
                 // Generation guard stays in the Tool shell.
-                if entry.descriptor.revision != self.revision {
+                if entry.descriptor.revision != self.revision || entry.ready.is_some() {
+                    // Producer handles are private inside a batch receipt; even
+                    // an internal misuse cannot partially withdraw that scope.
                     return Ok(None);
                 }
                 let mut records = current.value.records.clone();
@@ -342,6 +625,152 @@ impl RegistrationHandle {
             Ok(result) => result.is_some(),
             Err(never) => match never {},
         }
+    }
+}
+
+/// Trusted B3 owner input, not public authority. The caller must hold the real
+/// owner admission fence and supply its actual provider, generation and mount.
+/// Nothing here activates a plugin or discovers authority from metadata.
+#[allow(dead_code)] // B3 runtime-owner wiring is deliberately not mounted.
+pub(crate) struct PluginBatch {
+    pub plugin_id: String,
+    pub provider: ProviderHandle,
+    pub provider_generation: u64,
+    pub owner_generation: u64,
+    pub mount: crate::extension::runtime::wasm::WasmMountIdentity,
+    pub entries: Vec<PluginBatchEntry>,
+}
+
+#[allow(dead_code)] // Constructed by the future B3 owner, never by a resolver.
+pub(crate) struct PluginBatchEntry {
+    /// Must be unversioned (revision zero); only this registry assigns identity.
+    pub descriptor: ToolCapabilityDescriptor,
+    pub handler: Arc<dyn ToolHandler>,
+    pub binding: WasmBinding,
+    pub max_result_tokens: Option<usize>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[allow(dead_code)]
+pub(crate) enum PluginPublicationError {
+    #[error("plugin batch is empty")]
+    EmptyBatch,
+    #[error("invalid plugin producer identity: {0}")]
+    InvalidIdentity(&'static str),
+    #[error(transparent)]
+    Provider(#[from] crate::capability::provider::ProviderCallError),
+    #[error("invalid plugin entry {name}: {reason}")]
+    InvalidEntry { name: String, reason: String },
+    #[error("callable name already registered or repeated: {name}")]
+    Duplicate { name: String },
+    #[error("canonical registry is closed")]
+    Closed,
+    #[error("plugin scope already has entries; exact batch replacement required")]
+    ScopeOccupied,
+    #[error("plugin batch receipt is stale or incomplete: {name}")]
+    Stale { name: String },
+    #[error("plugin batch registry is no longer available")]
+    RegistryGone,
+}
+
+/// Immutable withdrawal receipt, not another registry or disposer map. Existing
+/// RegistrationHandles supply name/revision/registry identity; the accompanying
+/// registry-created proofs seal the rest of the tuple. Per-entry handles stay
+/// private so a plugin batch cannot be partially disposed.
+#[derive(Clone)]
+#[allow(dead_code)]
+pub(crate) struct PluginBatchRegistration {
+    entries: Vec<(RegistrationHandle, Arc<ReadySnapshot>)>,
+}
+
+impl std::fmt::Debug for PluginBatchRegistration {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_list()
+            .entries(self.entries.iter().map(|(handle, _)| handle))
+            .finish()
+    }
+}
+
+#[allow(dead_code)] // B3 owns the receipt and invokes revoke during stop/replace.
+impl PluginBatchRegistration {
+    fn validate_current(
+        &self,
+        shared: &Arc<RegistryShared>,
+        current: &VersionedSnapshot<CanonicalToolState>,
+    ) -> Result<(), PluginPublicationError> {
+        let Some((_, first)) = self.entries.first() else {
+            return Err(PluginPublicationError::EmptyBatch);
+        };
+        let scope_count = current.value.records.values().filter(|entry| {
+            matches!(&entry.descriptor.source, ToolSource::Extension { plugin_id } if plugin_id == &first.plugin_id)
+        }).count();
+        if scope_count != self.entries.len() {
+            return Err(PluginPublicationError::Stale {
+                name: first.plugin_id.clone(),
+            });
+        }
+        for (handle, ready) in &self.entries {
+            let valid = Weak::ptr_eq(&handle.shared, &Arc::downgrade(shared))
+                && current.value.entry(&handle.name).is_some_and(|entry| {
+                    entry.descriptor.revision == handle.revision
+                        && ready.matches_entry(entry, current.revision)
+                        && entry
+                            .ready
+                            .as_ref()
+                            .is_some_and(|live| ready.same_lease(live))
+                });
+            if !valid {
+                return Err(PluginPublicationError::Stale {
+                    name: handle.name.clone(),
+                });
+            }
+        }
+        Ok(())
+    }
+
+    /// All-or-none exact withdrawal. Stale/missing/partial receipts are errors,
+    /// never successful no-ops. Any failure leaves the entire old snapshot and
+    /// this receipt intact for owner residual reporting/recovery. No external
+    /// disposer runs under the transaction; effect-scope cleanup belongs to B3.
+    pub(crate) fn revoke(&self) -> Result<u64, PluginPublicationError> {
+        let (first, _) = self
+            .entries
+            .first()
+            .ok_or(PluginPublicationError::EmptyBatch)?;
+        let shared = first
+            .shared
+            .upgrade()
+            .ok_or(PluginPublicationError::RegistryGone)?;
+        let result = shared.transact(|current, revision| -> Result<_, PluginPublicationError> {
+            self.validate_current(&shared, current)?;
+            let mut records = current.value.records.clone();
+            let mut changes = Vec::with_capacity(self.entries.len());
+            for (handle, ready) in &self.entries {
+                records.remove(&CallableRecordKey {
+                    source: ToolSource::Extension {
+                        plugin_id: ready.plugin_id.clone(),
+                    },
+                    provider_name: handle.name.clone(),
+                });
+                changes.push(RegistryChange::Unregistered {
+                    name: handle.name.clone(),
+                    revision,
+                    source: ToolSource::Extension {
+                        plugin_id: ready.plugin_id.clone(),
+                    },
+                });
+            }
+            Ok(Some((
+                current.value.rebuild_records(records),
+                RegistryPublication {
+                    revision,
+                    tool_changes: changes,
+                    catalog_changed: false,
+                },
+                revision,
+            )))
+        })?;
+        Ok(result.expect("exact batch withdrawal commits or errors"))
     }
 }
 
@@ -455,6 +884,14 @@ impl CanonicalToolState {
         self.callable_projection.get(name)
     }
 
+    fn has_ready_plugin_source(&self, source: &ToolSource) -> bool {
+        matches!(source, ToolSource::Extension { .. })
+            && self
+                .records
+                .values()
+                .any(|entry| entry.ready.is_some() && &entry.descriptor.source == source)
+    }
+
     /// Callable-only mutations must retain the catalog in the same generation.
     fn rebuild_records(&self, records: HashMap<CallableRecordKey, RegistryEntry>) -> Self {
         Self::from_records_with_declarations(records, self.plugin_declarations.clone())
@@ -530,6 +967,170 @@ impl ToolHandlerRegistry {
         self.provider.generation()
     }
 
+    /// Publish for an already Ready producer; shares the guarded-commit path's
+    /// preflight and single transaction. No caller can supply a ReadySnapshot.
+    #[allow(dead_code)] // Also exercised by producer contract tests.
+    pub(crate) fn publish_plugin_batch(
+        &self,
+        batch: PluginBatch,
+        replacing: Option<&PluginBatchRegistration>,
+    ) -> Result<PluginBatchRegistration, PluginPublicationError> {
+        let names = Self::preflight_plugin_batch(&batch)?;
+        batch
+            .provider
+            .with_snapshot(|provider| self.commit_plugin_batch(&batch, replacing, names, provider))
+    }
+
+    /// RuntimeOwner holds its control fence and has prepared all bindings and
+    /// definitions before this call. Ready state and the batch are committed
+    /// under the actual provider lifecycle guard, never independent snapshots.
+    pub(crate) fn publish_plugin_batch_with_ready_commit(
+        &self,
+        batch: PluginBatch,
+    ) -> Result<PluginBatchRegistration, PluginPublicationError> {
+        let names = Self::preflight_plugin_batch(&batch)?;
+        batch
+            .provider
+            .with_ready_commit(batch.provider_generation, |provider| {
+                self.commit_plugin_batch(&batch, None, names, provider)
+            })
+    }
+
+    fn preflight_plugin_batch(
+        batch: &PluginBatch,
+    ) -> Result<HashSet<String>, PluginPublicationError> {
+        if batch.entries.is_empty() {
+            return Err(PluginPublicationError::EmptyBatch);
+        }
+        if batch.plugin_id.trim().is_empty()
+            || batch.owner_generation == 0
+            || batch.provider_generation == 0
+        {
+            return Err(PluginPublicationError::InvalidIdentity(
+                "empty plugin or zero generation",
+            ));
+        }
+        let mut names = HashSet::new();
+        for entry in &batch.entries {
+            let descriptor = &entry.descriptor;
+            let invalid = |reason: String| PluginPublicationError::InvalidEntry {
+                name: descriptor.name.clone(),
+                reason,
+            };
+            if descriptor.revision != 0 {
+                return Err(invalid(
+                    "producer descriptor must have revision zero".into(),
+                ));
+            }
+            // Validate the unversioned input using a provisional nonzero value;
+            // the only authoritative revision is assigned under transact below.
+            ToolCapabilityDescriptor {
+                revision: 1,
+                ..descriptor.clone()
+            }
+            .validate()
+            .map_err(|error| invalid(error.to_string()))?;
+            let definition = entry.handler.definition();
+            if !descriptor.matches_definition(&definition) {
+                return Err(invalid(mismatch_reason(descriptor, &definition)));
+            }
+            if !matches!(&descriptor.source, ToolSource::Extension { plugin_id } if plugin_id == &batch.plugin_id)
+                || entry.binding.plugin_id() != batch.plugin_id
+                || !entry.binding.matches_mount(&batch.mount)
+            {
+                return Err(invalid("plugin source/binding/mount mismatch".into()));
+            }
+            if !names.insert(descriptor.name.clone()) {
+                return Err(PluginPublicationError::Duplicate {
+                    name: descriptor.name.clone(),
+                });
+            }
+        }
+        Ok(names)
+    }
+
+    fn commit_plugin_batch(
+        &self,
+        batch: &PluginBatch,
+        replacing: Option<&PluginBatchRegistration>,
+        names: HashSet<String>,
+        provider: &crate::capability::provider::ProviderLifecycle,
+    ) -> Result<PluginBatchRegistration, PluginPublicationError> {
+        if provider.provider_id().as_str() != format!("plugin/{}", batch.plugin_id) {
+            return Err(PluginPublicationError::InvalidIdentity(
+                "provider does not belong to plugin",
+            ));
+        }
+        provider.acquire_call(batch.provider_generation)?;
+        let result = self.shared.transact(|current, revision| {
+                if current.closed {
+                    return Err(PluginPublicationError::Closed);
+                }
+                if let Some(previous) = replacing {
+                    previous.validate_current(&self.shared, current)?;
+                    let old = &previous.entries[0].1;
+                    if old.plugin_id != batch.plugin_id
+                        || batch.owner_generation <= old.owner_generation
+                        || (old.provider.same_instance(&batch.provider)
+                            && batch.provider_generation < old.provider_generation)
+                    {
+                        return Err(PluginPublicationError::InvalidIdentity("replacement must advance the same plugin owner"));
+                    }
+                } else if current.value.records.values().any(|entry| {
+                    matches!(&entry.descriptor.source, ToolSource::Extension { plugin_id } if plugin_id == &batch.plugin_id)
+                }) {
+                    return Err(PluginPublicationError::ScopeOccupied);
+                }
+                let mut records = current.value.records.clone();
+                let mut changes = Vec::new();
+                if let Some(previous) = replacing {
+                    for (handle, old) in &previous.entries {
+                        records.remove(&CallableRecordKey {
+                            source: ToolSource::Extension { plugin_id: old.plugin_id.clone() },
+                            provider_name: handle.name.clone(),
+                        });
+                        changes.push(RegistryChange::Unregistered {
+                            name: handle.name.clone(), revision,
+                            source: ToolSource::Extension { plugin_id: old.plugin_id.clone() },
+                        });
+                    }
+                }
+                // Conflict checks happen before building any entry or proof.
+                for name in &names {
+                    if records.values().any(|entry| &entry.descriptor.name == name) {
+                        return Err(PluginPublicationError::Duplicate { name: name.clone() });
+                    }
+                }
+                let mut receipt = Vec::with_capacity(batch.entries.len());
+                for input in &batch.entries {
+                    let descriptor = ToolCapabilityDescriptor { revision, ..input.descriptor.clone() };
+                    let mut entry = RegistryEntry::admitted(
+                        Arc::clone(&input.handler), descriptor, input.max_result_tokens,
+                    );
+                    let ready = Arc::new(ReadySnapshot {
+                        plugin_id: batch.plugin_id.clone(), provider_state: ProviderState::Ready,
+                        provider: batch.provider.clone(), provider_generation: batch.provider_generation,
+                        owner_generation: batch.owner_generation, mount: batch.mount.clone(),
+                        binding: input.binding.clone(), canonical_name: entry.descriptor.name.clone(),
+                        entry_revision: revision, canonical_revision: revision,
+                        descriptor_fingerprint: descriptor_fingerprint(&entry.descriptor),
+                        handler: Arc::clone(&entry.handler),
+                    });
+                    entry.ready = Some(Arc::clone(&ready));
+                    let name = entry.descriptor.name.clone();
+                    changes.push(RegistryChange::Registered {
+                        name: name.clone(), revision, source: entry.descriptor.source.clone(),
+                    });
+                    records.insert(CallableRecordKey::from_descriptor(&entry.descriptor), entry);
+                    receipt.push((RegistrationHandle { shared: Arc::downgrade(&self.shared), name, revision }, ready));
+                }
+                Ok(Some((current.value.rebuild_records(records), RegistryPublication {
+                    revision, tool_changes: changes, catalog_changed: false,
+                }, PluginBatchRegistration { entries: receipt })))
+            })?;
+        Ok(result.expect("plugin publication commits or errors"))
+    }
+
     /// Register a new capability. Rejects a descriptor that fails validation, a
     /// descriptor that does not match its handler's own definition (ignoring
     /// the registry-assigned revision), a duplicate name, and a closed
@@ -550,8 +1151,8 @@ impl ToolHandlerRegistry {
         max_result_tokens: Option<usize>,
     ) -> Result<RegistrationHandle, ToolError> {
         let name = descriptor.name.clone();
+        let definition = handler.definition();
         let revision = self.shared.transact(|current, assigned| {
-            let definition = handler.definition();
             if current.closed {
                 return Err(ToolError::RegistryClosed { name: name.clone() });
             }
@@ -573,6 +1174,12 @@ impl ToolHandlerRegistry {
             }
             if current.value.entry(&name).is_some() {
                 return Err(ToolError::Duplicate { name: name.clone() });
+            }
+            if current.value.has_ready_plugin_source(&normalized.source) {
+                return Err(ToolError::Execution {
+                    name: name.clone(),
+                    cause: "canonical plugin scope requires batch registration".into(),
+                });
             }
             let mut records = current.value.records.clone();
             records.insert(
@@ -621,14 +1228,22 @@ impl ToolHandlerRegistry {
         max_result_tokens: Option<usize>,
     ) -> Result<RegistrationHandle, ToolError> {
         let name = descriptor.name.clone();
+        let definition = handler.definition();
         let revision = self.shared.transact(|current, assigned| {
-            let definition = handler.definition();
             if current.closed {
                 return Err(ToolError::RegistryClosed { name: name.clone() });
             }
             let Some(incumbent) = current.value.entry(&name) else {
                 return Err(ToolError::NotFound { name: name.clone() });
             };
+            if incumbent.ready.is_some()
+                || current.value.has_ready_plugin_source(&descriptor.source)
+            {
+                return Err(ToolError::Execution {
+                    name: name.clone(),
+                    cause: "canonical plugin replacement requires its batch receipt".into(),
+                });
+            }
             let normalized = ToolCapabilityDescriptor {
                 revision: assigned,
                 ..descriptor.clone()
@@ -681,15 +1296,21 @@ impl ToolHandlerRegistry {
     /// This is an exact canonical-name lookup, not dispatch authorization.
     #[must_use]
     pub fn resolve_entry(&self, name: &str) -> Option<RegistryEntry> {
-        let (provider_state, provider_generation) = self.provider.snapshot();
-        if provider_state != ProviderState::Ready {
-            return None;
-        }
-        let state = self.shared.snapshot();
-        state
-            .value
-            .entry(name)
-            .map(|entry| entry.for_provider(&self.provider, provider_generation))
+        self.capture_entry(name)
+            .map(CanonicalEntryLease::into_entry)
+    }
+
+    /// Capture only the requested entry from the same immutable read boundary
+    /// as `canonical_publication`, without wrapping or hashing unrelated entries.
+    #[must_use]
+    pub fn capture_entry(&self, name: &str) -> Option<CanonicalEntryLease> {
+        let read = self.canonical_read();
+        let entry = read.callable_entry(self, read.state.value.entry(name)?)?;
+        Some(CanonicalEntryLease {
+            entry,
+            revision: read.state.revision,
+            provider_generation: read.provider_generation,
+        })
     }
 
     /// Resolve the live handler for `name`.
@@ -709,7 +1330,8 @@ impl ToolHandlerRegistry {
     ///
     /// Unlike [`RegistrationHandle::dispose`] this is unguarded; it is the
     /// teardown path (`unregister_mcp_tools`) that removes by an externally
-    /// derived name set.
+    /// derived name set. Canonical plugin batches reject name-only withdrawal;
+    /// their owner must use the exact batch receipt's structured `revoke`.
     #[must_use]
     pub fn unregister(&self, name: &str) -> Option<Arc<dyn ToolHandler>> {
         let provider_generation = self.provider.generation();
@@ -718,6 +1340,9 @@ impl ToolHandlerRegistry {
                 let Some(entry) = current.value.entry(name) else {
                     return Ok(None);
                 };
+                if entry.ready.is_some() {
+                    return Ok(None);
+                }
                 let mut records = current.value.records.clone();
                 records.remove(&CallableRecordKey::from_descriptor(&entry.descriptor));
                 Ok(Some((
@@ -732,7 +1357,7 @@ impl ToolHandlerRegistry {
                         catalog_changed: false,
                     },
                     entry
-                        .for_provider(&self.provider, provider_generation)
+                        .for_provider(&self.provider, provider_generation, &self.shared)
                         .handler,
                 )))
             });
@@ -756,16 +1381,27 @@ impl ToolHandlerRegistry {
         self.shared.snapshot().value.plugin_declarations.clone()
     }
 
-    /// Task59 compatibility boundary; producer reconciliation is not mounted.
-    ///
-    /// Raw public state must not bypass handler admission. Task60/runtime
-    /// mounting requires separate approval; rejection never publishes a value.
+    /// Read-only compatibility acknowledgement, not a second publication API.
+    /// Supplied public state is never imported as authority. Success only means
+    /// a real producer has already committed a current Ready proof; Cold and
+    /// compatibility-only registries keep the producer-not-mounted boundary.
     pub fn reconcile_plugin_tools(&self, _state: CanonicalToolState) -> Result<(), ToolError> {
         let current = self.shared.snapshot();
         if current.closed {
             return Err(ToolError::RegistryClosed {
                 name: "reconcile_plugin_tools".into(),
             });
+        }
+        let publication = self.canonical_publication();
+        // canonical_publication already validated the exact raw entry proof
+        // before wrapping its handler. Do not compare that wrapper to the raw
+        // identity stored by the producer.
+        if publication
+            .entries()
+            .keys()
+            .any(|name| publication.ready_snapshot(name).is_some())
+        {
+            return Ok(());
         }
         Err(ToolError::Execution {
             name: "reconcile_plugin_tools".into(),
@@ -790,32 +1426,91 @@ impl ToolHandlerRegistry {
     /// Recovery adapters must use this instead of pairing independent reads.
     #[must_use]
     pub fn snapshot_state(&self) -> RegistrySnapshot {
-        let (provider_state, provider_generation) = self.provider.snapshot();
-        let state = self.shared.snapshot();
-        let entries = if provider_state == ProviderState::Ready {
-            Arc::new(
-                state
-                    .value
-                    .callable_projection
+        self.canonical_publication()
+    }
+
+    /// One canonical read boundary for dispatch and projection. Compatibility
+    /// provider state is captured while transitions are excluded; the registry
+    /// ArcSwap load is the read linearization point. Producer identity/binding
+    /// must already be frozen on each entry by B2, never joined on the read side.
+    /// The plugin's live provider can only invalidate that frozen proof; its
+    /// check runs after the default provider guard and outside mutation locks.
+    /// This does NOT make the independent legacy writes a publish transaction.
+    #[must_use]
+    pub fn canonical_publication(&self) -> CanonicalPublication {
+        self.canonical_publication_inner(
+            #[cfg(test)]
+            None,
+        )
+    }
+
+    fn canonical_publication_inner(
+        &self,
+        #[cfg(test)] after_producer_verdict: Option<&dyn Fn()>,
+    ) -> CanonicalPublication {
+        let read = self.canonical_read();
+        // One verdict from each actual provider instance, never one per entry.
+        // Textual provider/plugin names are not instance identity. Verdicts are
+        // local values for this immutable cut, not a second provider authority.
+        let mut producers: Vec<(ProviderHandle, (ProviderState, u64))> = Vec::new();
+        for entry in read.state.value.callable_projection.values() {
+            if let Some(ready) = &entry.ready {
+                if !producers
                     .iter()
-                    .map(|(name, entry)| {
-                        (
-                            name.clone(),
-                            entry.for_provider(&self.provider, provider_generation),
-                        )
-                    })
-                    .collect(),
-            )
-        } else {
-            Arc::new(HashMap::new())
-        };
-        RegistrySnapshot {
-            entries,
-            revision: state.revision,
-            closed: state.closed,
-            provider_state,
-            provider_generation,
+                    .any(|(provider, _)| provider.same_instance(&ready.provider))
+                {
+                    producers.push((ready.provider.clone(), ready.provider.snapshot()));
+                    #[cfg(test)]
+                    if let Some(after_verdict) = after_producer_verdict {
+                        after_verdict();
+                    }
+                }
+            }
         }
+        let entries = Arc::new(
+            read.state
+                .value
+                .callable_projection
+                .iter()
+                .filter_map(|(name, entry)| {
+                    if read.provider_state != ProviderState::Ready {
+                        return None;
+                    }
+                    if let Some(ready) = &entry.ready {
+                        let (_, verdict) = producers
+                            .iter()
+                            .find(|(provider, _)| provider.same_instance(&ready.provider))?;
+                        if read.state.closed
+                            || *verdict != (ProviderState::Ready, ready.provider_generation)
+                            || !ready.matches_entry(entry, read.state.revision)
+                        {
+                            return None;
+                        }
+                    }
+                    Some((
+                        name.clone(),
+                        entry.for_provider(&self.provider, read.provider_generation, &self.shared),
+                    ))
+                })
+                .collect(),
+        );
+        CanonicalPublication {
+            entries,
+            revision: read.state.revision,
+            closed: read.state.closed,
+            provider_state: read.provider_state,
+            provider_generation: read.provider_generation,
+        }
+    }
+
+    fn canonical_read(&self) -> CanonicalRead {
+        // Exclude provider transitions only across the ArcSwap load. Projection
+        // and target-only capture derive from this same frozen cut afterward.
+        self.provider.with_snapshot(|provider| CanonicalRead {
+            state: self.shared.snapshot(),
+            provider_state: provider.state(),
+            provider_generation: provider.generation(),
+        })
     }
 
     /// Frozen handler+descriptor view from one registry generation. Consumers
@@ -905,9 +1600,9 @@ impl ToolHandlerRegistry {
     ) -> Result<(RegistrationHandle, RegistrationHandle), ToolError> {
         let first_name = first.0.name.clone();
         let second_name = second.0.name.clone();
+        let first_definition = first.1.definition();
+        let second_definition = second.1.definition();
         let revision = self.shared.transact(|current, assigned| {
-            let first_definition = first.1.definition();
-            let second_definition = second.1.definition();
             if current.closed {
                 return Err(ToolError::RegistryClosed {
                     name: first_name.clone(),
@@ -1055,6 +1750,1259 @@ mod tests {
     use crate::tools::service::{ToolDefinition, ToolDefinitionMetadata, ToolSource};
     use async_trait::async_trait;
     use serde_json::Value;
+
+    // Count actual provider-wrapper constructions on this test's thread, not
+    // capture API calls. Production builds contain no instrumentation.
+    std::thread_local! {
+        pub(super) static PROVIDER_VIEW_CONSTRUCTIONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    }
+
+    // B1 fixtures exercise a real opaque mount/binding but do not claim guest
+    // execution or a production publish transaction (those belong to B2-B6).
+    mod b1 {
+        use super::*;
+        use crate::capability::versioned_registry::VersionedSnapshot;
+        use crate::extension::runtime::wasm::tests::guest_fixture::{
+            manifest_with_guest, HANDLER, PAYLOAD_A, PAYLOAD_B,
+        };
+        use crate::extension::runtime::wasm::WasmRuntime;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        struct Probe {
+            epoch: u64,
+            calls: Arc<AtomicUsize>,
+            pause: Option<(Arc<Notify>, Arc<Notify>)>,
+        }
+
+        #[async_trait]
+        impl ToolHandler for Probe {
+            async fn invoke(&self, _: Value) -> Result<ToolOutput, ToolError> {
+                self.calls.fetch_add(1, Ordering::SeqCst);
+                if let Some((entered, release)) = &self.pause {
+                    entered.notify_one();
+                    release.notified().await;
+                }
+                Ok(ToolOutput {
+                    value: serde_json::json!({"epoch": self.epoch}),
+                    metadata: Default::default(),
+                })
+            }
+
+            fn definition(&self) -> ToolDefinition {
+                ToolDefinition {
+                    name: "b1_probe".into(),
+                    description: format!("epoch {}", self.epoch),
+                    input_schema: serde_json::json!({"type": "object"}),
+                    source: ToolSource::Extension {
+                        plugin_id: "b1-plugin".into(),
+                    },
+                    metadata: Default::default(),
+                }
+            }
+        }
+
+        fn ready_provider(generation: u64) -> ProviderHandle {
+            let mut lifecycle = ProviderLifecycle::ready(
+                ProviderId::new("plugin/b1-plugin").unwrap(),
+                ProviderTransport::InProcess,
+            );
+            for _ in 1..generation {
+                lifecycle.transition(ProviderState::Stopping).unwrap();
+                lifecycle.transition(ProviderState::Stopped).unwrap();
+                lifecycle.transition(ProviderState::Starting).unwrap();
+                lifecycle.transition(ProviderState::Ready).unwrap();
+            }
+            ProviderHandle::new(lifecycle)
+        }
+
+        fn mounted_entry(epoch: u64, calls: Arc<AtomicUsize>) -> RegistryEntry {
+            let directory = tempfile::TempDir::new().unwrap();
+            let payload = if epoch == 1 { PAYLOAD_A } else { PAYLOAD_B };
+            let manifest = manifest_with_guest(directory.path(), "b1-plugin", payload);
+            let mut runtime = WasmRuntime::new();
+            runtime.load_plugin(&manifest).unwrap();
+            let raw: Arc<dyn ToolHandler> = Arc::new(Probe {
+                epoch,
+                calls,
+                pause: None,
+            });
+            let descriptor = ToolCapabilityDescriptor::from_definition(&raw.definition(), epoch);
+            let mut entry = RegistryEntry::admitted(raw, descriptor, Some(123));
+            entry.ready = Some(Arc::new(ReadySnapshot {
+                plugin_id: "b1-plugin".into(),
+                provider_state: ProviderState::Ready,
+                provider: ready_provider(epoch + 6),
+                provider_generation: epoch + 6,
+                owner_generation: epoch + 12,
+                mount: runtime.mounted_instance("b1-plugin").unwrap(),
+                binding: runtime.bind("b1-plugin", HANDLER).unwrap(),
+                canonical_name: entry.descriptor.name.clone(),
+                entry_revision: epoch,
+                canonical_revision: epoch,
+                descriptor_fingerprint: descriptor_fingerprint(&entry.descriptor),
+                handler: Arc::clone(&entry.handler),
+            }));
+            entry
+        }
+
+        fn registry_at(entry: RegistryEntry) -> ToolHandlerRegistry {
+            let revision = entry.descriptor.revision;
+            let records = [(CallableRecordKey::from_descriptor(&entry.descriptor), entry)].into();
+            ToolHandlerRegistry {
+                shared: Arc::new(VersionedRegistry::from_snapshot_with_projection(
+                    VersionedSnapshot {
+                        value: CanonicalToolState::from_records(records).unwrap(),
+                        revision,
+                        closed: false,
+                    },
+                    project_registry_publication,
+                )),
+                provider: ToolHandlerRegistry::new().provider(),
+            }
+        }
+
+        fn install_for_test(registry: &ToolHandlerRegistry, entry: RegistryEntry) {
+            registry
+                .shared
+                .transact(|current, revision| {
+                    let mut records = current.value.records.clone();
+                    records.insert(CallableRecordKey::from_descriptor(&entry.descriptor), entry);
+                    Ok::<_, ()>(Some((
+                        current.value.rebuild_records(records),
+                        RegistryPublication {
+                            revision,
+                            tool_changes: Vec::new(),
+                            catalog_changed: false,
+                        },
+                        (),
+                    )))
+                })
+                .unwrap()
+                .unwrap();
+        }
+
+        async fn call_through_service(
+            registry: ToolHandlerRegistry,
+        ) -> Result<ToolOutput, ToolError> {
+            call_through_service_named(registry, "b1_probe").await
+        }
+
+        pub(super) async fn call_through_service_named(
+            registry: ToolHandlerRegistry,
+            name: &str,
+        ) -> Result<ToolOutput, ToolError> {
+            use crate::tools::service::ToolService;
+            let registry = Arc::new(registry);
+            let publication = registry.canonical_publication();
+            let entry = publication.entry(name).unwrap();
+            let mut projection = crate::tools::runtime::LoopToolRegistry::new();
+            projection.bind_canonical_registry(registry, Arc::new(|_| true));
+            projection.register(Box::new(
+                crate::tools::adapters::McpRegistryTool::from_registry_entry(
+                    Arc::clone(&entry.handler),
+                    &entry.descriptor,
+                ),
+            ));
+            let service = crate::tools::scoped::ScopedToolService::new(
+                Arc::new(projection),
+                Default::default(),
+            );
+            let mut output = crate::approval::with_call_identity(
+                Some(crate::approval::CallIdentity {
+                    turn_id: crate::session::events::TurnId::nil(),
+                    call_id: "b1-live-fixture".into(),
+                }),
+                service.execute(name, serde_json::json!({})),
+            )
+            .await?;
+            output.value = serde_json::from_str(output.value.as_str().unwrap())
+                .unwrap_or_else(|_| output.value.clone());
+            Ok(output)
+        }
+
+        // Value: rejects remount/restart/same-name replacement and late effects;
+        // unlike provider-only tests, every owner/binding/descriptor field matters.
+        #[tokio::test]
+        async fn full_ready_tuple_changes_reject_lease_and_cached_handler() {
+            let calls = Arc::new(AtomicUsize::new(0));
+            let base = mounted_entry(1, Arc::clone(&calls));
+            let replacement = mounted_entry(2, Arc::clone(&calls));
+            let mut variants = Vec::new();
+            for field in [
+                "plugin_id",
+                "canonical_name",
+                "provider_state",
+                "provider",
+                "provider_generation",
+                "owner_generation",
+                "mount",
+                "binding",
+                "entry_revision",
+                "canonical_revision",
+                "fingerprint",
+                "handler",
+                "descriptor",
+            ] {
+                let mut entry = base.clone();
+                let ready = Arc::make_mut(entry.ready.as_mut().unwrap());
+                match field {
+                    "plugin_id" => ready.plugin_id = "replacement-plugin".into(),
+                    "canonical_name" => ready.canonical_name = "other-name".into(),
+                    "provider_state" => ready.provider_state = ProviderState::Starting,
+                    "provider" => {
+                        ready.provider = replacement.ready.as_ref().unwrap().provider.clone()
+                    }
+                    "provider_generation" => ready.provider_generation += 1,
+                    "owner_generation" => ready.owner_generation += 1,
+                    "mount" => ready.mount = replacement.ready.as_ref().unwrap().mount.clone(),
+                    "binding" => {
+                        ready.binding = replacement.ready.as_ref().unwrap().binding.clone()
+                    }
+                    "entry_revision" => ready.entry_revision += 1,
+                    "canonical_revision" => ready.canonical_revision += 1,
+                    "fingerprint" => ready.descriptor_fingerprint[0] ^= 1,
+                    "handler" => {
+                        entry.handler = Arc::clone(&replacement.handler);
+                        ready.handler = Arc::clone(&entry.handler);
+                    }
+                    "descriptor" => {
+                        Arc::make_mut(&mut entry.descriptor).requires_confirmation = true
+                    }
+                    _ => unreachable!(),
+                }
+                variants.push((field, entry));
+            }
+            for (field, changed) in variants {
+                let registry = registry_at(base.clone());
+                let publication = registry.canonical_publication();
+                let lease = registry.capture_entry("b1_probe").unwrap();
+                assert!(lease.validate(&publication));
+                assert_eq!(
+                    call_through_service(registry.clone()).await.unwrap().value,
+                    serde_json::json!({"epoch": 1})
+                );
+                let before = calls.load(Ordering::SeqCst);
+                install_for_test(&registry, changed);
+                assert!(
+                    !lease.validate(&registry.canonical_publication()),
+                    "{field}"
+                );
+                assert!(
+                    !registry
+                        .capture_entry("b1_probe")
+                        .as_ref()
+                        .is_some_and(|live| lease.validate_capture(live)),
+                    "single-entry capture accepted changed {field}"
+                );
+                assert!(
+                    matches!(lease.entry().handler.invoke(serde_json::json!({})).await,
+                    Err(ToolError::PermissionDenied { reason, .. }) if reason.contains("stale")),
+                    "{field}"
+                );
+                assert_eq!(
+                    calls.load(Ordering::SeqCst),
+                    before,
+                    "{field} executed a stale handler"
+                );
+                // A retained immutable version is not silently rewritten by stop/replacement.
+                assert!(
+                    lease.validate(&publication),
+                    "{field} mutated a held publication"
+                );
+            }
+        }
+
+        // Value: proves the output fence, not merely that a pre-call guard ran.
+        #[tokio::test]
+        async fn replacement_discards_output_from_an_already_admitted_handler() {
+            let calls = Arc::new(AtomicUsize::new(0));
+            let mut entry = mounted_entry(1, Arc::clone(&calls));
+            let entered = Arc::new(Notify::new());
+            let release = Arc::new(Notify::new());
+            let raw: Arc<dyn ToolHandler> = Arc::new(Probe {
+                epoch: 1,
+                calls: Arc::clone(&calls),
+                pause: Some((Arc::clone(&entered), Arc::clone(&release))),
+            });
+            let descriptor = ToolCapabilityDescriptor::from_definition(&raw.definition(), 1);
+            let ready = entry.ready.take().unwrap();
+            entry = RegistryEntry::admitted(raw, descriptor, None);
+            entry.ready = Some(ready);
+            Arc::make_mut(entry.ready.as_mut().unwrap()).handler = Arc::clone(&entry.handler);
+            let registry = registry_at(entry);
+            let pending = tokio::spawn(call_through_service(registry.clone()));
+            tokio::time::timeout(std::time::Duration::from_secs(10), entered.notified())
+                .await
+                .expect("real scoped dispatch reaches the original handler");
+            assert_eq!(calls.load(Ordering::SeqCst), 1);
+            install_for_test(&registry, mounted_entry(2, Arc::clone(&calls)));
+            release.notify_one();
+            assert!(
+                matches!(tokio::time::timeout(std::time::Duration::from_secs(10), pending).await.unwrap().unwrap(),
+                Err(ToolError::PermissionDenied { reason, .. }) if reason.contains("stale"))
+            );
+            assert_eq!(
+                calls.load(Ordering::SeqCst),
+                1,
+                "no replay or replacement invocation"
+            );
+        }
+
+        // Value: readers use the actual publication boundary during concurrent
+        // replacement, not a test-only reconstruction from several snapshots.
+        #[test]
+        fn publication_keeps_ready_binding_descriptor_and_revision_in_one_version() {
+            let calls = Arc::new(AtomicUsize::new(0));
+            let first = mounted_entry(1, Arc::clone(&calls));
+            let second = mounted_entry(2, calls);
+            let registry = registry_at(first.clone());
+            let frozen = registry.canonical_publication();
+            let old = frozen.capture_entry("b1_probe").unwrap();
+            let barrier = Arc::new(std::sync::Barrier::new(2));
+            let writer = {
+                let registry = registry.clone();
+                let barrier = Arc::clone(&barrier);
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    for revision in 2..=64 {
+                        let template = if revision % 2 == 0 { &second } else { &first };
+                        let raw: Arc<dyn ToolHandler> = Arc::new(Probe {
+                            epoch: revision,
+                            calls: Arc::new(AtomicUsize::new(0)),
+                            pause: None,
+                        });
+                        let descriptor =
+                            ToolCapabilityDescriptor::from_definition(&raw.definition(), revision);
+                        let mut entry = RegistryEntry::admitted(raw, descriptor, Some(123));
+                        let mut ready = template.ready.as_ref().unwrap().as_ref().clone();
+                        ready.provider_generation = revision + 6;
+                        ready.provider = ready_provider(revision + 6);
+                        ready.owner_generation = revision + 12;
+                        ready.entry_revision = revision;
+                        ready.canonical_revision = revision;
+                        ready.descriptor_fingerprint = descriptor_fingerprint(&entry.descriptor);
+                        ready.handler = Arc::clone(&entry.handler);
+                        entry.ready = Some(Arc::new(ready));
+                        install_for_test(&registry, entry);
+                    }
+                })
+            };
+            barrier.wait();
+            for _ in 0..128 {
+                let publication = registry.canonical_publication();
+                let lease = publication.capture_entry("b1_probe").unwrap();
+                let ready = publication.ready_snapshot("b1_probe").unwrap();
+                assert!(lease.validate(&publication));
+                assert_eq!(ready.entry_revision, publication.revision());
+                assert_eq!(ready.provider_generation, publication.revision() + 6);
+                assert_eq!(ready.owner_generation, publication.revision() + 12);
+                assert!(ready.binding.matches_mount(&ready.mount));
+            }
+            writer.join().unwrap();
+            assert_eq!(frozen.revision(), 1);
+            assert!(old.validate(&frozen));
+            assert!(!old.validate(&registry.canonical_publication()));
+            assert_eq!(registry.revision(), 64);
+        }
+    }
+
+    mod b2 {
+        use super::*;
+        use crate::extension::runtime::wasm::tests::guest_fixture::{
+            manifest_with_guest, HANDLER, PAYLOAD_A, PAYLOAD_B,
+        };
+        use crate::extension::runtime::wasm::{WasmMountIdentity, WasmRuntime, WasmToolInput};
+
+        // Test-only binding handler, not production activation authority. Calls
+        // use a real mounted guest through a captured binding and normal Scoped
+        // dispatch admission; B3 must supply its owner-fenced production handler.
+        struct GuestHandler {
+            runtime: Arc<WasmRuntime>,
+            binding: WasmBinding,
+            definition: ToolDefinition,
+        }
+
+        #[async_trait]
+        impl ToolHandler for GuestHandler {
+            async fn invoke(&self, arguments: Value) -> Result<ToolOutput, ToolError> {
+                let output = self
+                    .runtime
+                    .call_bound(
+                        &self.binding,
+                        WasmToolInput {
+                            name: self.definition.name.clone(),
+                            arguments,
+                        },
+                    )
+                    .map_err(|error| ToolError::Execution {
+                        name: self.definition.name.clone(),
+                        cause: error.to_string(),
+                    })?;
+                assert!(output.success);
+                Ok(ToolOutput {
+                    value: output.result.unwrap(),
+                    metadata: Default::default(),
+                })
+            }
+
+            fn definition(&self) -> ToolDefinition {
+                self.definition.clone()
+            }
+        }
+
+        struct Fixture {
+            runtime: Arc<WasmRuntime>,
+            provider: ProviderHandle,
+            mount: WasmMountIdentity,
+        }
+
+        fn provider(state: ProviderState) -> ProviderHandle {
+            let mut lifecycle = ProviderLifecycle::new(
+                ProviderId::new("plugin/b2-plugin").unwrap(),
+                ProviderTransport::InProcess,
+            );
+            lifecycle.transition(ProviderState::Starting).unwrap();
+            if state == ProviderState::Ready {
+                lifecycle.transition(state).unwrap();
+            }
+            ProviderHandle::new(lifecycle)
+        }
+
+        impl Fixture {
+            fn new(payload: &str) -> Self {
+                let directory = tempfile::TempDir::new().unwrap();
+                let manifest = manifest_with_guest(directory.path(), "b2-plugin", payload);
+                let mut runtime = WasmRuntime::new();
+                runtime.load_plugin(&manifest).unwrap();
+                let mount = runtime.mounted_instance("b2-plugin").unwrap();
+                Self {
+                    runtime: Arc::new(runtime),
+                    provider: provider(ProviderState::Ready),
+                    mount,
+                }
+            }
+
+            fn batch(&self, generation: u64, names: &[&str]) -> PluginBatch {
+                let entries = names
+                    .iter()
+                    .map(|name| {
+                        let binding = self.runtime.bind("b2-plugin", HANDLER).unwrap();
+                        let handler: Arc<dyn ToolHandler> = Arc::new(GuestHandler {
+                            runtime: Arc::clone(&self.runtime),
+                            binding: binding.clone(),
+                            definition: ToolDefinition {
+                                name: (*name).into(),
+                                description: "real bound guest".into(),
+                                input_schema: serde_json::json!({"type":"object"}),
+                                source: ToolSource::Extension {
+                                    plugin_id: "b2-plugin".into(),
+                                },
+                                metadata: Default::default(),
+                            },
+                        });
+                        PluginBatchEntry {
+                            descriptor: ToolCapabilityDescriptor::from_definition(
+                                &handler.definition(),
+                                0,
+                            ),
+                            handler,
+                            binding,
+                            max_result_tokens: Some(321),
+                        }
+                    })
+                    .collect();
+                PluginBatch {
+                    plugin_id: "b2-plugin".into(),
+                    provider: self.provider.clone(),
+                    provider_generation: 1,
+                    owner_generation: generation,
+                    mount: self.mount.clone(),
+                    entries,
+                }
+            }
+        }
+
+        fn no_event(events: &mut broadcast::Receiver<RegistryPublication>) {
+            assert!(matches!(
+                events.try_recv(),
+                Err(broadcast::error::TryRecvError::Empty)
+            ));
+        }
+
+        // Complete batch, frozen reader, observer revision AND actual guest
+        // output reach the canonical read/Scoped dispatch boundary together.
+        #[tokio::test]
+        async fn full_batch_one_publication_and_exact_revoke_preserve_mixed_semantics() {
+            let fixture = Fixture::new(PAYLOAD_A);
+            let registry = ToolHandlerRegistry::new();
+            let catalog = seed_catalog(&registry);
+            let mut legacy = Vec::new();
+            for (name, source) in [
+                ("builtin", ToolSource::Builtin),
+                (
+                    "mcp",
+                    ToolSource::Mcp {
+                        server_id: "mixed".into(),
+                    },
+                ),
+                (
+                    "static_plugin",
+                    ToolSource::Extension {
+                        plugin_id: "static".into(),
+                    },
+                ),
+            ] {
+                let handler: Arc<dyn ToolHandler> = Arc::new(FakeHandler {
+                    name: name.into(),
+                    source,
+                    idempotent: false,
+                });
+                legacy.push(
+                    registry
+                        .register(
+                            ToolCapabilityDescriptor::from_definition(&handler.definition(), 1),
+                            handler,
+                        )
+                        .unwrap(),
+                );
+            }
+            let frozen = registry.canonical_publication();
+            let before = frozen.revision();
+            let mut events = registry.subscribe_publications();
+            let receipt = registry
+                .publish_plugin_batch(fixture.batch(1, &["first", "second"]), None)
+                .unwrap();
+            let published = registry.canonical_publication();
+            assert_eq!(published.revision(), before + 1);
+            assert_eq!(published.entries().len(), 5);
+            assert_eq!(frozen.entries().len(), 3);
+            let event = events.try_recv().unwrap();
+            assert_eq!(event.revision, published.revision());
+            assert_eq!(event.tool_changes.len(), 2);
+            no_event(&mut events);
+            for name in ["first", "second"] {
+                let ready = published.ready_snapshot(name).unwrap();
+                assert!(ready.mount.same_instance(&fixture.mount));
+                assert!(ready.binding.matches_mount(&fixture.mount));
+                assert!(ready.provider.same_instance(&fixture.provider));
+                assert_eq!(ready.entry_revision, published.revision());
+                assert_eq!(ready.canonical_revision, published.revision());
+                assert_eq!(published.entry(name).unwrap().max_result_tokens, Some(321));
+                assert!(registry.capture_entry(name).unwrap().validate(&published));
+                assert_eq!(
+                    b1::call_through_service_named(registry.clone(), name)
+                        .await
+                        .unwrap()
+                        .value,
+                    Value::String("A".into())
+                );
+            }
+            let old = registry.capture_entry("first").unwrap();
+            fixture
+                .provider
+                .transition(ProviderState::Stopping)
+                .unwrap();
+            assert_eq!(receipt.revoke().unwrap(), before + 2);
+            assert_eq!(events.try_recv().unwrap().tool_changes.len(), 2);
+            no_event(&mut events);
+            assert!(registry.capture_entry("first").is_none());
+            assert!(registry.capture_entry("second").is_none());
+            assert!(!old.validate(&registry.canonical_publication()));
+            assert!(old
+                .entry()
+                .handler
+                .invoke(serde_json::json!({}))
+                .await
+                .is_err());
+            assert_eq!(
+                published.entries().len(),
+                5,
+                "held snapshot remains immutable"
+            );
+            assert!(matches!(
+                receipt.revoke(),
+                Err(PluginPublicationError::Stale { .. })
+            ));
+            assert_eq!(registry.revision(), before + 2);
+            no_event(&mut events);
+            assert!(registry.plugin_declarations().contains_key(&catalog));
+            for name in ["builtin", "mcp", "static_plugin"] {
+                assert!(registry
+                    .canonical_publication()
+                    .ready_snapshot(name)
+                    .is_none());
+                let value = b1::call_through_service_named(registry.clone(), name)
+                    .await
+                    .unwrap()
+                    .value;
+                if name == "mcp" {
+                    // MCP output keeps its existing untrusted-content boundary.
+                    let lines: Vec<_> = value.as_str().unwrap().lines().collect();
+                    assert_eq!(lines.len(), 3);
+                    let (id, source) = lines[0]
+                        .strip_prefix("<<<EXTERNAL_UNTRUSTED_CONTENT id=")
+                        .unwrap()
+                        .split_once(" source=")
+                        .unwrap();
+                    assert_eq!(source, "\"mcp_tool server=\"mixed\" tool=\"mcp\"\">");
+                    assert_eq!(
+                        serde_json::from_str::<serde_json::Value>(lines[1]).unwrap(),
+                        serde_json::json!({"tool": name})
+                    );
+                    assert_eq!(
+                        lines[2],
+                        format!("<<<END_EXTERNAL_UNTRUSTED_CONTENT id={id}>")
+                    );
+                } else {
+                    assert_eq!(value, serde_json::json!({"tool": name}));
+                }
+            }
+            assert!(legacy.iter().all(RegistrationHandle::dispose));
+        }
+
+        // Every invalid second entry / identity rejects the entire replacement,
+        // preserving even the Arc identity of the current publication.
+        #[tokio::test]
+        async fn invalid_batch_preflight_never_changes_old_snapshot_revision_or_events() {
+            let first = Fixture::new(PAYLOAD_A);
+            let next = Fixture::new(PAYLOAD_B);
+            let registry = ToolHandlerRegistry::new();
+            let receipt = registry
+                .publish_plugin_batch(first.batch(1, &["first", "second"]), None)
+                .unwrap();
+            let old = registry.capture_entry("first").unwrap();
+            let frozen = registry.shared.snapshot();
+            let mut events = registry.subscribe_publications();
+            let mut projected = registry.subscribe();
+            for case in [
+                "duplicate",
+                "definition",
+                "revision",
+                "source",
+                "binding",
+                "empty",
+                "owner_zero",
+                "owner_stale",
+                "generation_zero",
+                "generation_mismatch",
+                "provider_id",
+                "not_ready",
+            ] {
+                let mut batch = next.batch(2, &["first", "second"]);
+                match case {
+                    "duplicate" => {
+                        batch.entries[1].descriptor = batch.entries[0].descriptor.clone()
+                    }
+                    "definition" => batch.entries[1].descriptor.description = "different".into(),
+                    "revision" => batch.entries[1].descriptor.revision = 777,
+                    "source" => batch.plugin_id = "other".into(),
+                    "binding" => {
+                        batch.entries[1].binding = first.runtime.bind("b2-plugin", HANDLER).unwrap()
+                    }
+                    "empty" => batch.entries.clear(),
+                    "owner_zero" => batch.owner_generation = 0,
+                    "owner_stale" => batch.owner_generation = 1,
+                    "generation_zero" => batch.provider_generation = 0,
+                    "generation_mismatch" => batch.provider_generation = 2,
+                    "provider_id" => batch.provider = registry.provider(),
+                    "not_ready" => batch.provider = provider(ProviderState::Starting),
+                    _ => unreachable!(),
+                }
+                assert!(
+                    registry
+                        .publish_plugin_batch(batch, Some(&receipt))
+                        .is_err(),
+                    "{case}"
+                );
+                assert!(Arc::ptr_eq(&frozen, &registry.shared.snapshot()), "{case}");
+                assert_eq!(registry.revision(), frozen.revision, "{case}");
+                assert!(old.validate(&registry.canonical_publication()), "{case}");
+                no_event(&mut events);
+                assert!(matches!(
+                    projected.try_recv(),
+                    Err(broadcast::error::TryRecvError::Empty)
+                ));
+            }
+            // A matching repeated name is checked independently of definitions.
+            assert!(matches!(
+                registry.publish_plugin_batch(next.batch(2, &["same", "same"]), Some(&receipt)),
+                Err(PluginPublicationError::Duplicate { .. })
+            ));
+            assert!(Arc::ptr_eq(&frozen, &registry.shared.snapshot()));
+            assert_eq!(
+                b1::call_through_service_named(registry, "first")
+                    .await
+                    .unwrap()
+                    .value,
+                Value::String("A".into())
+            );
+        }
+
+        #[tokio::test]
+        async fn same_name_replacement_rejects_old_handles_receipts_and_cached_guest() {
+            let first = Fixture::new(PAYLOAD_A);
+            let next = Fixture::new(PAYLOAD_B);
+            let registry = ToolHandlerRegistry::new();
+            let receipt = registry
+                .publish_plugin_batch(first.batch(1, &["same", "old_only"]), None)
+                .unwrap();
+            let handles = receipt
+                .entries
+                .iter()
+                .map(|(handle, _)| handle.clone())
+                .collect::<Vec<_>>();
+            let lease = registry.capture_entry("same").unwrap();
+            let mut events = registry.subscribe_publications();
+            let new = registry
+                .publish_plugin_batch(next.batch(2, &["same", "new_only"]), Some(&receipt))
+                .unwrap();
+            let event = events.try_recv().unwrap();
+            assert_eq!(event.revision, 2);
+            assert_eq!(event.tool_changes.len(), 4);
+            no_event(&mut events);
+            assert!(registry.capture_entry("old_only").is_none());
+            assert!(registry.capture_entry("new_only").is_some());
+            assert!(!lease.validate(&registry.canonical_publication()));
+            assert!(
+                matches!(lease.entry().handler.invoke(serde_json::json!({})).await,
+                Err(ToolError::PermissionDenied { reason, .. }) if reason.contains("stale"))
+            );
+            let frozen = registry.shared.snapshot();
+            assert!(handles.iter().all(|handle| !handle.dispose()));
+            assert!(matches!(
+                receipt.revoke(),
+                Err(PluginPublicationError::Stale { .. })
+            ));
+            assert!(registry
+                .publish_plugin_batch(first.batch(3, &["same"]), Some(&receipt))
+                .is_err());
+            assert!(Arc::ptr_eq(&frozen, &registry.shared.snapshot()));
+            no_event(&mut events);
+            assert_eq!(
+                b1::call_through_service_named(registry.clone(), "same")
+                    .await
+                    .unwrap()
+                    .value,
+                Value::String("B".into())
+            );
+            // Name-only legacy APIs cannot split or replace a canonical batch.
+            assert!(registry.unregister("same").is_none());
+            let input = next.batch(3, &["same"]).entries.remove(0);
+            assert!(registry.replace(input.descriptor, input.handler).is_err());
+            let input = next.batch(3, &["extra"]).entries.remove(0);
+            assert!(registry.register(input.descriptor, input.handler).is_err());
+            assert!(Arc::ptr_eq(&frozen, &registry.shared.snapshot()));
+            assert_eq!(new.revoke().unwrap(), 3);
+            assert!(registry.canonical_publication().entries().is_empty());
+        }
+
+        #[test]
+        fn conflict_closed_and_cross_registry_receipt_are_zero_commit() {
+            let fixture = Fixture::new(PAYLOAD_A);
+            let registry = ToolHandlerRegistry::new();
+            let handler: Arc<dyn ToolHandler> = Arc::new(FakeHandler {
+                name: "occupied".into(),
+                source: ToolSource::Builtin,
+                idempotent: false,
+            });
+            let handle = registry
+                .register(
+                    ToolCapabilityDescriptor::from_definition(&handler.definition(), 1),
+                    handler,
+                )
+                .unwrap();
+            let frozen = registry.shared.snapshot();
+            let mut events = registry.subscribe_publications();
+            assert!(matches!(
+                registry.publish_plugin_batch(fixture.batch(1, &["free", "occupied"]), None),
+                Err(PluginPublicationError::Duplicate { .. })
+            ));
+            assert!(Arc::ptr_eq(&frozen, &registry.shared.snapshot()));
+            no_event(&mut events);
+            assert!(handle.dispose());
+            let receipt = registry
+                .publish_plugin_batch(fixture.batch(1, &["first", "second"]), None)
+                .unwrap();
+            let other = ToolHandlerRegistry::new();
+            other
+                .publish_plugin_batch(fixture.batch(1, &["first", "second"]), None)
+                .unwrap();
+            let cut = other.shared.snapshot();
+            assert!(matches!(
+                other.publish_plugin_batch(fixture.batch(2, &["first", "second"]), Some(&receipt)),
+                Err(PluginPublicationError::Stale { .. })
+            ));
+            assert!(Arc::ptr_eq(&cut, &other.shared.snapshot()));
+            registry.close();
+            let cut = registry.shared.snapshot();
+            let mut events = registry.subscribe_publications();
+            assert!(matches!(
+                registry
+                    .publish_plugin_batch(fixture.batch(2, &["first", "second"]), Some(&receipt)),
+                Err(PluginPublicationError::Closed)
+            ));
+            assert!(Arc::ptr_eq(&cut, &registry.shared.snapshot()));
+            no_event(&mut events);
+            assert!(registry.canonical_publication().entries().is_empty());
+            assert!(
+                receipt.revoke().is_ok(),
+                "exact cleanup is allowed after registry close"
+            );
+        }
+
+        #[tokio::test]
+        async fn b3_guarded_ready_commit_is_atomic_and_failure_keeps_starting() {
+            let fixture = Fixture::new(PAYLOAD_A);
+            for failure in [
+                "duplicate",
+                "provider",
+                "generation",
+                "closed",
+                "conflict",
+                "success",
+            ] {
+                let registry = ToolHandlerRegistry::new();
+                let provider = ProviderHandle::new(ProviderLifecycle::new(
+                    ProviderId::new(if failure == "provider" {
+                        "plugin/other"
+                    } else {
+                        "plugin/b2-plugin"
+                    })
+                    .unwrap(),
+                    ProviderTransport::InProcess,
+                ));
+                provider.transition(ProviderState::Starting).unwrap();
+                let mut transitions = provider.subscribe_changes();
+                let mut batch = fixture.batch(
+                    1,
+                    if failure == "duplicate" {
+                        &["first", "first"]
+                    } else {
+                        &["first", "second"]
+                    },
+                );
+                batch.provider = provider.clone();
+                if failure == "generation" {
+                    batch.provider_generation += 1;
+                }
+                let _conflict = if failure == "conflict" {
+                    let handler: Arc<dyn ToolHandler> = Arc::new(FakeHandler {
+                        name: "second".into(),
+                        source: ToolSource::Builtin,
+                        idempotent: false,
+                    });
+                    Some(
+                        registry
+                            .register(
+                                ToolCapabilityDescriptor::from_definition(&handler.definition(), 0),
+                                handler,
+                            )
+                            .unwrap(),
+                    )
+                } else {
+                    None
+                };
+                if failure == "closed" {
+                    registry.close();
+                }
+                let before = registry.shared.snapshot();
+                let mut events = registry.subscribe_publications();
+                let result = registry.publish_plugin_batch_with_ready_commit(batch);
+                if failure != "success" {
+                    let error = result.err().expect("must reject entire batch");
+                    match failure {
+                        "duplicate" | "conflict" => {
+                            assert!(matches!(error, PluginPublicationError::Duplicate { .. }))
+                        }
+                        "provider" => {
+                            assert!(matches!(error, PluginPublicationError::InvalidIdentity(_)))
+                        }
+                        "generation" => {
+                            assert!(matches!(error, PluginPublicationError::Provider(_)))
+                        }
+                        "closed" => assert!(matches!(error, PluginPublicationError::Closed)),
+                        _ => unreachable!(),
+                    }
+                    assert_eq!(provider.snapshot(), (ProviderState::Starting, 1));
+                    assert!(Arc::ptr_eq(&before, &registry.shared.snapshot()));
+                    no_event(&mut events);
+                    assert!(matches!(
+                        transitions.try_recv(),
+                        Err(broadcast::error::TryRecvError::Empty)
+                    ));
+                } else {
+                    let receipt = result.unwrap();
+                    assert_eq!(provider.snapshot(), (ProviderState::Ready, 1));
+                    let transition = transitions.try_recv().unwrap();
+                    assert_eq!(
+                        (transition.from, transition.to),
+                        (ProviderState::Starting, ProviderState::Ready)
+                    );
+                    assert!(matches!(
+                        transitions.try_recv(),
+                        Err(broadcast::error::TryRecvError::Empty)
+                    ));
+                    let publication = registry.canonical_publication();
+                    assert_eq!(publication.revision(), before.revision + 1);
+                    assert_eq!(publication.entries().len(), 2);
+                    assert_eq!(events.try_recv().unwrap().tool_changes.len(), 2);
+                    no_event(&mut events);
+                    assert!(publication
+                        .ready_snapshot("first")
+                        .unwrap()
+                        .provider
+                        .same_instance(&provider));
+                    assert_eq!(
+                        b1::call_through_service_named(registry.clone(), "first")
+                            .await
+                            .unwrap()
+                            .value,
+                        Value::String("A".into())
+                    );
+                    assert!(registry.reconcile_plugin_tools(Default::default()).is_ok());
+                    receipt.revoke().unwrap();
+                }
+            }
+        }
+
+        #[test]
+        fn b3_guarded_ready_reader_waits_for_complete_provider_registry_commit() {
+            let fixture = Fixture::new(PAYLOAD_A);
+            let registry = ToolHandlerRegistry::new();
+            let provider = ProviderHandle::new(ProviderLifecycle::new(
+                ProviderId::new("plugin/b2-plugin").unwrap(),
+                ProviderTransport::InProcess,
+            ));
+            provider.transition(ProviderState::Starting).unwrap();
+            let mut batch = fixture.batch(1, &["first", "second"]);
+            batch.provider = provider.clone();
+            let names = ToolHandlerRegistry::preflight_plugin_batch(&batch).unwrap();
+            let mut transitions = provider.subscribe_changes();
+            let (committed, at_commit) = std::sync::mpsc::channel();
+            let (release, released) = std::sync::mpsc::channel();
+            let (reading, at_read) = std::sync::mpsc::channel();
+            let (observed, observation) = std::sync::mpsc::channel();
+            std::thread::scope(|scope| {
+                let registry = &registry;
+                let provider = &provider;
+                let batch = &batch;
+                let writer = scope.spawn(move || {
+                    let result: Result<_, PluginPublicationError> =
+                        provider.with_ready_commit(1, |prepared| {
+                            let receipt =
+                                registry.commit_plugin_batch(batch, None, names, prepared)?;
+                            // Deliberately park after the registry transaction but
+                            // before the infallible Ready assignment, under guard.
+                            committed.send(()).unwrap();
+                            released.recv().unwrap();
+                            Ok(receipt)
+                        });
+                    result.unwrap()
+                });
+                at_commit.recv().unwrap();
+                let reader = scope.spawn(|| {
+                    reading.send(()).unwrap();
+                    observed.send(registry.canonical_publication()).unwrap();
+                });
+                at_read.recv().unwrap();
+                assert!(matches!(
+                    observation.try_recv(),
+                    Err(std::sync::mpsc::TryRecvError::Empty)
+                ));
+                assert!(matches!(
+                    transitions.try_recv(),
+                    Err(broadcast::error::TryRecvError::Empty)
+                ));
+                release.send(()).unwrap();
+                let receipt = writer.join().unwrap();
+                reader.join().unwrap();
+                let cut = observation.recv().unwrap();
+                assert_eq!(cut.entries().len(), 2);
+                assert_eq!(cut.revision(), 1);
+                assert_eq!(provider.snapshot(), (ProviderState::Ready, 1));
+                assert_eq!(transitions.try_recv().unwrap().to, ProviderState::Ready);
+                assert!(matches!(
+                    transitions.try_recv(),
+                    Err(broadcast::error::TryRecvError::Empty)
+                ));
+                receipt.revoke().unwrap();
+            });
+        }
+
+        #[test]
+        fn b3_full_publication_uses_one_verdict_for_the_complete_producer_batch() {
+            let fixture = Fixture::new(PAYLOAD_A);
+            let registry = ToolHandlerRegistry::new();
+            let receipt = registry
+                .publish_plugin_batch(fixture.batch(1, &["first", "second"]), None)
+                .unwrap();
+            let verdicts = std::cell::Cell::new(0);
+            let cut = registry.canonical_publication_inner(Some(&|| {
+                verdicts.set(verdicts.get() + 1);
+                // Stop after the captured verdict, before any entry is projected.
+                fixture
+                    .provider
+                    .transition(ProviderState::Stopping)
+                    .unwrap();
+            }));
+            assert_eq!(verdicts.get(), 1);
+            assert_eq!(cut.revision(), 1);
+            assert_eq!(
+                cut.entries().len(),
+                2,
+                "one historical producer verdict covers both entries"
+            );
+            assert!(
+                cut.capture_entry("first").is_none(),
+                "target capture still has a live fence"
+            );
+            assert!(cut.capture_entry("second").is_none());
+            assert!(registry.canonical_publication().entries().is_empty());
+            receipt.revoke().unwrap();
+        }
+
+        #[test]
+        fn concurrent_publications_never_expose_partial_or_mixed_generation_batches() {
+            let first = Fixture::new(PAYLOAD_A);
+            let next = Fixture::new(PAYLOAD_B);
+            let registry = ToolHandlerRegistry::new();
+            let receipt = registry
+                .publish_plugin_batch(first.batch(1, &["same", "a_only"]), None)
+                .unwrap();
+            let frozen = registry.canonical_publication();
+            let barrier = Arc::new(std::sync::Barrier::new(2));
+            let writer = {
+                let registry = registry.clone();
+                let barrier = Arc::clone(&barrier);
+                std::thread::spawn(move || {
+                    let mut receipt = receipt;
+                    barrier.wait();
+                    for generation in 2..=32 {
+                        let batch = if generation % 2 == 0 {
+                            next.batch(generation, &["same", "b_only"])
+                        } else {
+                            first.batch(generation, &["same", "a_only"])
+                        };
+                        receipt = registry
+                            .publish_plugin_batch(batch, Some(&receipt))
+                            .unwrap();
+                    }
+                })
+            };
+            barrier.wait();
+            for _ in 0..128 {
+                let publication = registry.canonical_publication();
+                assert_eq!(publication.entries().len(), 2);
+                let common = publication.ready_snapshot("same").unwrap();
+                let companion = if common.owner_generation % 2 == 0 {
+                    "b_only"
+                } else {
+                    "a_only"
+                };
+                let paired = publication.ready_snapshot(companion).unwrap();
+                assert_eq!(common.owner_generation, publication.revision());
+                assert_eq!(common.canonical_revision, paired.canonical_revision);
+                assert_eq!(common.entry_revision, publication.revision());
+                assert!(common.mount.same_instance(&paired.mount));
+                assert!(publication
+                    .capture_entry(companion)
+                    .unwrap()
+                    .validate(&publication));
+            }
+            writer.join().unwrap();
+            assert_eq!(registry.revision(), 32);
+            assert_eq!(frozen.revision(), 1);
+            assert!(frozen.entry("a_only").is_some());
+            assert!(registry.capture_entry("a_only").is_none());
+            assert!(registry.capture_entry("b_only").is_some());
+        }
+
+        #[tokio::test]
+        async fn plugin_provider_stop_and_restart_invalidate_captures_and_zahir_leases() {
+            use crate::capability::backend::TOOL_NAMESPACE;
+            use crate::capability::descriptor::CapabilityId;
+            use crate::capability::facade::{Reference, ResolveError, Scope, Zahir};
+            use crate::capability::ownership::OwnershipTree;
+            use crate::capability::zahir_facade::ZahirFacade;
+
+            let fixture = Fixture::new(PAYLOAD_A);
+            let registry = ToolHandlerRegistry::new();
+            for (name, source) in [
+                ("builtin", ToolSource::Builtin),
+                (
+                    "mcp",
+                    ToolSource::Mcp {
+                        server_id: "mixed".into(),
+                    },
+                ),
+                (
+                    "static_plugin",
+                    ToolSource::Extension {
+                        plugin_id: "static".into(),
+                    },
+                ),
+            ] {
+                let handler: Arc<dyn ToolHandler> = Arc::new(FakeHandler {
+                    name: name.into(),
+                    source,
+                    idempotent: false,
+                });
+                registry
+                    .register(
+                        ToolCapabilityDescriptor::from_definition(&handler.definition(), 0),
+                        handler,
+                    )
+                    .unwrap();
+            }
+            let receipt = registry
+                .publish_plugin_batch(fixture.batch(1, &["first", "second"]), None)
+                .unwrap();
+            let frozen = registry.canonical_publication();
+            let old = frozen.capture_entry("first").unwrap();
+            let cached = registry.capture_entry("first").unwrap();
+            let legacy: Vec<_> = ["builtin", "mcp", "static_plugin"]
+                .into_iter()
+                .map(|name| (name, frozen.capture_entry(name).unwrap()))
+                .collect();
+            let facade = ZahirFacade::new(registry.clone(), Arc::new(OwnershipTree::new()));
+            let reference = Reference {
+                id: CapabilityId {
+                    namespace: TOOL_NAMESPACE.into(),
+                    name: "first".into(),
+                },
+                visibility: Default::default(),
+            };
+            let zahir_lease = facade.resolve(reference.clone()).unwrap();
+            assert_eq!(facade.validate_lease(&zahir_lease), Ok(()));
+            assert!(old.validate(&frozen));
+            assert!(old.validate_capture(&cached));
+            assert_eq!(fixture.provider.snapshot(), (ProviderState::Ready, 1));
+            assert_eq!(
+                b1::call_through_service_named(registry.clone(), "first")
+                    .await
+                    .unwrap()
+                    .value,
+                Value::String("A".into())
+            );
+            let cut = registry.shared.snapshot();
+            let mut events = registry.subscribe_publications();
+            let mut stale_receipt = receipt.clone();
+            Arc::make_mut(&mut stale_receipt.entries[1].1).owner_generation += 1;
+
+            for state in [
+                ProviderState::Stopping,
+                ProviderState::Stopped,
+                ProviderState::Starting,
+                ProviderState::Ready,
+            ] {
+                fixture.provider.transition(state).unwrap();
+                if state == ProviderState::Stopping {
+                    // Withdrawal failure retains records, not callable authority.
+                    assert!(matches!(stale_receipt.revoke(),
+                        Err(PluginPublicationError::Stale { name }) if name == "second"));
+                }
+                assert_eq!(registry.provider().snapshot(), (ProviderState::Ready, 1));
+                assert!(Arc::ptr_eq(&cut, &registry.shared.snapshot()));
+                assert_eq!(registry.revision(), cut.revision);
+                no_event(&mut events);
+                assert!(registry.capture_entry("first").is_none(), "{state:?}");
+                assert!(frozen.capture_entry("first").is_none(), "{state:?}");
+                assert!(!old.validate(&frozen), "{state:?}");
+                assert!(!old.validate_capture(&cached), "{state:?}");
+                let current = registry.canonical_publication();
+                assert!(!old.validate(&current), "{state:?}");
+                assert!(current.entry("first").is_none());
+                assert!(current.entry("second").is_none());
+                assert_eq!(current.entries().len(), legacy.len());
+                for (name, lease) in &legacy {
+                    assert!(lease.validate(&frozen));
+                    assert!(lease.validate(&current));
+                    assert!(registry.capture_entry(name).is_some());
+                }
+                assert_eq!(
+                    facade.resolve(reference.clone()),
+                    Err(ResolveError::Unknown)
+                );
+                assert_eq!(
+                    facade.validate_lease(&zahir_lease),
+                    Err(ResolveError::Unknown)
+                );
+                let projected = facade.describe(Scope::default());
+                assert_eq!(projected.capabilities.len(), legacy.len());
+                assert!(projected
+                    .capabilities
+                    .iter()
+                    .all(|descriptor| legacy.iter().any(|(name, _)| *name == descriptor.id.name)));
+                assert!(old
+                    .entry()
+                    .handler
+                    .invoke(serde_json::json!({}))
+                    .await
+                    .is_err());
+            }
+            // Ready at generation 2 cannot resurrect generation 1. Only a new
+            // exact batch publication can expose that provider generation.
+            assert_eq!(fixture.provider.snapshot(), (ProviderState::Ready, 2));
+            let mut replacement = fixture.batch(2, &["first", "second"]);
+            replacement.provider_generation = 2;
+            registry
+                .publish_plugin_batch(replacement, Some(&receipt))
+                .unwrap();
+            assert!(registry.capture_entry("first").is_some());
+            assert!(!old.validate(&registry.canonical_publication()));
+            assert_eq!(
+                facade.validate_lease(&zahir_lease),
+                Err(ResolveError::Unknown)
+            );
+            let fresh = facade.resolve(reference).unwrap();
+            assert_eq!(facade.validate_lease(&fresh), Ok(()));
+            assert_eq!(
+                b1::call_through_service_named(registry, "first")
+                    .await
+                    .unwrap()
+                    .value,
+                Value::String("A".into())
+            );
+        }
+
+        #[tokio::test]
+        async fn partial_stale_disposer_preflight_retains_fail_closed_residual() {
+            let fixture = Fixture::new(PAYLOAD_A);
+            let registry = ToolHandlerRegistry::new();
+            let receipt = registry
+                .publish_plugin_batch(fixture.batch(1, &["first", "second"]), None)
+                .unwrap();
+            let lease = registry.capture_entry("first").unwrap();
+            let mut stale = receipt.clone();
+            Arc::make_mut(&mut stale.entries[1].1).owner_generation += 1;
+            // B3 closes provider admission before withdrawal; a stale second
+            // identity must not delete the first entry or reopen this residual.
+            fixture
+                .provider
+                .transition(ProviderState::Stopping)
+                .unwrap();
+            let frozen = registry.shared.snapshot();
+            let mut events = registry.subscribe_publications();
+            assert!(
+                matches!(stale.revoke(), Err(PluginPublicationError::Stale { name }) if name == "second")
+            );
+            assert!(Arc::ptr_eq(&frozen, &registry.shared.snapshot()));
+            assert_eq!(frozen.value.records.len(), 2);
+            no_event(&mut events);
+            assert!(lease
+                .entry()
+                .handler
+                .invoke(serde_json::json!({}))
+                .await
+                .is_err());
+            assert_eq!(
+                receipt.revoke().unwrap(),
+                2,
+                "the exact retained receipt can recover atomically"
+            );
+            assert!(registry.canonical_publication().entries().is_empty());
+        }
+    }
 
     struct FakeHandler {
         name: String,
@@ -1213,6 +3161,7 @@ mod tests {
                 handler: fake("injected"),
                 descriptor: Arc::new(desc("injected")),
                 max_result_tokens: Some(1),
+                ready: None,
             };
             let candidate = CanonicalToolState::from_records(
                 [(CallableRecordKey::from_descriptor(&entry.descriptor), entry)].into(),
@@ -1840,6 +3789,71 @@ mod tests {
             "identity must track the new generation"
         );
         assert_eq!(identity.replay_policy, ReplayPolicy::Safe);
+    }
+
+    #[test]
+    fn single_entry_capture_does_not_construct_unrelated_callable_views() {
+        use crate::capability::descriptor::CapabilityId;
+        use crate::capability::facade::{Reference, Zahir};
+        use crate::capability::ownership::{OwnershipTree, VisibilityScope};
+        use crate::capability::zahir_facade::ZahirFacade;
+
+        let registry = ToolHandlerRegistry::new();
+        for index in 0..32 {
+            let name = format!("tool_{index}");
+            registry.register(desc(&name), fake(&name)).unwrap();
+        }
+        PROVIDER_VIEW_CONSTRUCTIONS.with(|count| count.set(0));
+        let target = registry.capture_entry("tool_7").unwrap();
+        assert_eq!(target.revision(), 32);
+        assert_eq!(target.entry().descriptor.revision, 8);
+        assert_eq!(target.entry().descriptor.name, "tool_7");
+        assert_eq!(
+            PROVIDER_VIEW_CONSTRUCTIONS.with(|count| count.replace(0)),
+            1,
+            "target capture constructs only the requested callable view"
+        );
+        assert!(registry.capture_entry("missing").is_none());
+        assert_eq!(
+            PROVIDER_VIEW_CONSTRUCTIONS.with(|count| count.replace(0)),
+            0
+        );
+        assert!(registry.resolve("tool_7").is_some());
+        assert!(registry.descriptor("tool_7").is_some());
+        assert_eq!(
+            PROVIDER_VIEW_CONSTRUCTIONS.with(|count| count.replace(0)),
+            2
+        );
+
+        let facade = ZahirFacade::new(registry.clone(), Arc::new(OwnershipTree::new()));
+        let lease = facade
+            .resolve(Reference {
+                id: CapabilityId {
+                    namespace: crate::capability::backend::TOOL_NAMESPACE.into(),
+                    name: "tool_7".into(),
+                },
+                visibility: VisibilityScope::default(),
+            })
+            .unwrap();
+        assert_eq!(
+            PROVIDER_VIEW_CONSTRUCTIONS.with(|count| count.replace(0)),
+            1,
+            "single resolve must not reconcile a full callable projection"
+        );
+        facade.validate_lease(&lease).unwrap();
+        assert_eq!(
+            PROVIDER_VIEW_CONSTRUCTIONS.with(|count| count.replace(0)),
+            1
+        );
+
+        let publication = registry.canonical_publication();
+        assert_eq!(publication.entries().len(), 32);
+        assert!(target.validate(&publication));
+        assert_eq!(
+            PROVIDER_VIEW_CONSTRUCTIONS.with(|count| count.replace(0)),
+            32,
+            "full projection intentionally constructs all callable views"
+        );
     }
 
     #[test]

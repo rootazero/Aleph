@@ -1,38 +1,71 @@
-//! Canonical handlers for extension tools.
-//!
-//! A handler owns the binding captured at admission time. Invocation therefore
-//! calls the mounted guest through that binding and never performs a second
-//! name based registry lookup.
+//! Canonical handlers bound to one real RuntimeOwner and mounted export.
 
-use crate::extension::registry::ToolRegistration;
-use crate::extension::PluginLoader;
+use super::registry::ToolRegistration;
+use super::runtime::wasm::WasmBinding;
+use super::runtime_owner::RuntimeOwner;
+use super::PluginLoader;
 use crate::session::events::ToolOutput;
 use crate::sync_primitives::Arc;
 use crate::tools::handlers::ToolHandler;
 use crate::tools::service::{ToolDefinition, ToolDefinitionMetadata, ToolError, ToolSource};
 use serde_json::Value;
+use std::sync::Weak;
 
-/// A plugin tool admitted into the canonical registry.
-#[allow(dead_code)] // Added in Task59; wired in Task60
-pub(crate) struct PluginCanonicalHandler {
+/// Weak ownership avoids a receipt -> snapshot -> handler -> owner cycle.
+struct PluginCanonicalHandler {
     loader: Arc<tokio::sync::RwLock<PluginLoader>>,
-    plugin_id: String,
-    export: String,
+    owner: Weak<RuntimeOwner>,
+    generation: u64,
+    binding: WasmBinding,
     registration: ToolRegistration,
 }
 
 #[async_trait::async_trait]
 impl ToolHandler for PluginCanonicalHandler {
     async fn invoke(&self, input: Value) -> Result<ToolOutput, ToolError> {
-        let loader = self.loader.read().await;
-        let value = loader
-            .call_tool(&self.plugin_id, &self.export, input)
-            .map_err(|error| ToolError::Execution {
-                name: self.registration.name.clone(),
-                cause: error.to_string(),
-            })?;
+        let error = |cause: String| ToolError::Execution {
+            name: self.registration.name.clone(),
+            cause,
+        };
+        let owner = self
+            .owner
+            .upgrade()
+            .ok_or_else(|| error("runtime owner is gone".into()))?;
+        owner
+            .provider
+            .acquire_call(self.generation)
+            .map_err(|e| error(e.to_string()))?;
+        let permit = owner.acquire_permit().await.map_err(&error)?;
+        let loader = self.loader.clone().read_owned().await;
+        if !loader.wasm_binding_is_current(&self.binding) {
+            return Err(error("runtime owner binding is stale".into()));
+        }
+        owner
+            .provider
+            .acquire_call(self.generation)
+            .map_err(|e| error(e.to_string()))?;
+        let binding = self.binding.clone();
+        let operation = Arc::clone(&owner);
+        let generation = self.generation;
+        let result = tokio::task::spawn_blocking(move || {
+            // A cancelled caller cannot release admission while the guest is
+            // still running. Stop joins the permit, never cancels the guest.
+            let _permit = permit;
+            let result = loader.call_bound(&binding, input);
+            operation
+                .provider
+                .acquire_call(generation)
+                .map_err(|e| super::error::ExtensionError::Runtime(e.to_string()))?;
+            result
+        })
+        .await
+        .map_err(|e| error(format!("WASM task join failed: {e}")))?;
+        owner
+            .provider
+            .acquire_call(self.generation)
+            .map_err(|e| error(e.to_string()))?;
         Ok(ToolOutput {
-            value,
+            value: result.map_err(|e| error(e.to_string()))?,
             metadata: Default::default(),
         })
     }
@@ -50,39 +83,18 @@ impl ToolHandler for PluginCanonicalHandler {
     }
 }
 
-/// Build the handler used by the canonical registry for one bound declaration.
-#[must_use]
-#[allow(dead_code)] // Task59 infrastructure, wired in Task60
-pub(crate) fn build_canonical_handler(
+pub(super) fn build_canonical_handler(
     loader: Arc<tokio::sync::RwLock<PluginLoader>>,
-    plugin_id: String,
-    export: String,
+    owner: &Arc<RuntimeOwner>,
+    generation: u64,
+    binding: WasmBinding,
     registration: ToolRegistration,
 ) -> Arc<dyn ToolHandler> {
     Arc::new(PluginCanonicalHandler {
         loader,
-        plugin_id,
-        export,
+        owner: Arc::downgrade(owner),
+        generation,
+        binding,
         registration,
     })
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn canonical_handler_definition_uses_extension_identity() {
-        let registration = ToolRegistration {
-            name: "plugin_tool".into(),
-            description: "Plugin tool".into(),
-            parameters: serde_json::json!({"type": "object"}),
-            handler: "plugin_tool".into(),
-            plugin_id: "plugin".into(),
-        };
-        assert_eq!(registration.name, "plugin_tool");
-    }
-}
-
-// Keep the public builder name available to the extension module without
-// exposing the handler's binding internals to unrelated subsystems.

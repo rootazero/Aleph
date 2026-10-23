@@ -63,7 +63,7 @@ impl ToolBackendAdapter {
     /// `enumerate` + a separate `revision()` read (two loads can tear).
     #[must_use]
     pub fn snapshot_capabilities(&self, scope: &Scope) -> (Vec<CapabilityDescriptor>, u64) {
-        let snap = self.registry.snapshot_state();
+        let snap = self.registry.canonical_publication();
         let capabilities = snap
             .entries()
             .values()
@@ -101,7 +101,7 @@ impl CapabilityBackend for ToolBackendAdapter {
 }
 
 /// Fold a tool descriptor into the kind-agnostic [`CapabilityDescriptor`].
-fn to_descriptor(tool: &ToolCapabilityDescriptor) -> CapabilityDescriptor {
+pub(super) fn to_descriptor(tool: &ToolCapabilityDescriptor) -> CapabilityDescriptor {
     let mut schema_bytes = Vec::new();
     canonicalize_json(&tool.input_schema, &mut schema_bytes);
     let digest = Sha256::digest(&schema_bytes);

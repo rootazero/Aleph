@@ -51,7 +51,29 @@ impl ExtensionManager {
         let expected = owner.identity.lock().unwrap().clone().ok_or_else(|| {
             ExtensionError::Runtime("ready plugin owner has no WASM identity".into())
         })?;
+        let generation = owner.provider.generation();
+        let permit = owner
+            .acquire_permit()
+            .await
+            .map_err(ExtensionError::Runtime)?;
         let loader = self.plugin_loader.clone().write_owned().await;
+        owner
+            .provider
+            .acquire_call(generation)
+            .map_err(|e| ExtensionError::Runtime(e.to_string()))?;
+        if !self.owner_is_current(&owner)
+            || !owner.output.capabilities.iter().any(|capability| {
+                matches!(
+                    capability,
+                    crate::extension::capability::CapabilityDeclaration::Tool(tool)
+                        if tool.plugin_id == plugin_id && tool.handler == handler
+                )
+            })
+        {
+            return Err(ExtensionError::Runtime(
+                "owner tool binding is not declared/current".into(),
+            ));
+        }
         let actual = loader.wasm_mount_identity(plugin_id).ok_or_else(|| {
             ExtensionError::Runtime("plugin WASM identity disappeared before execution".into())
         })?;
@@ -61,20 +83,16 @@ impl ExtensionManager {
             ));
         }
         self.ensure_plugin_active(plugin_id).await?;
-        let _permit = owner
-            .acquire_permit()
-            .await
-            .map_err(ExtensionError::Runtime)?;
-        let plugin_id_owned = plugin_id.to_owned();
-        let handler_owned = handler.to_owned();
+        let binding = loader.bind_wasm(plugin_id, handler)?;
         let result = tokio::task::spawn_blocking(move || {
-            loader.call_tool(&plugin_id_owned, &handler_owned, args)
+            let _permit = permit;
+            loader.call_bound(&binding, args)
         })
         .await
         .map_err(|e| ExtensionError::Runtime(format!("WASM task join failed: {e}")))?;
         if !authority.validates(plugin_id, handler, &admitted_input)
             || !self.owner_is_current(&owner)
-            || owner.provider.state() != crate::capability::provider::ProviderState::Ready
+            || owner.provider.acquire_call(generation).is_err()
             || self
                 .plugin_loader
                 .read()
@@ -103,13 +121,85 @@ impl ExtensionManager {
     ) -> ExtensionResult<serde_json::Value> {
         self.ensure_runtime_mounted(plugin_id).await?;
 
+        let owner = self.runtime_owner(plugin_id);
+        let admission = if let Some(owner) = &owner {
+            let generation = owner.provider.generation();
+            owner
+                .provider
+                .acquire_call(generation)
+                .map_err(|e| ExtensionError::Runtime(e.to_string()))?;
+            Some((
+                owner
+                    .acquire_permit()
+                    .await
+                    .map_err(ExtensionError::Runtime)?,
+                generation,
+            ))
+        } else {
+            None
+        };
         let loader = self.plugin_loader.clone().write_owned().await;
         self.ensure_plugin_active(plugin_id).await?;
-        let plugin_id = plugin_id.to_string();
-        let handler = handler.to_string();
-        tokio::task::spawn_blocking(move || loader.call_tool(&plugin_id, &handler, args))
-            .await
-            .map_err(|e| ExtensionError::Runtime(format!("WASM task join failed: {e}")))?
+        let bound = if let Some(owner) = &owner {
+            owner
+                .provider
+                .acquire_call(admission.as_ref().unwrap().1)
+                .map_err(|e| ExtensionError::Runtime(e.to_string()))?;
+            if !self.owner_is_current(owner)
+                || !owner.output.capabilities.iter().any(|capability| {
+                    matches!(
+                        capability,
+                        crate::extension::capability::CapabilityDeclaration::Tool(tool)
+                            if tool.plugin_id == plugin_id && tool.handler == handler
+                    )
+                })
+            {
+                return Err(ExtensionError::Runtime(
+                    "owner tool binding is not declared/current".into(),
+                ));
+            }
+            let expected = owner.identity.lock().unwrap().clone().ok_or_else(|| {
+                ExtensionError::Runtime("ready owner has no mount identity".into())
+            })?;
+            let binding = loader.bind_wasm(plugin_id, handler)?;
+            if !binding.matches_mount(&expected) {
+                return Err(ExtensionError::Runtime(
+                    "owner mount identity changed".into(),
+                ));
+            }
+            Some(binding)
+        } else {
+            None
+        };
+        let plugin_id_owned = plugin_id.to_string();
+        let handler_owned = handler.to_string();
+        let operation = owner.clone();
+        let result = tokio::task::spawn_blocking(move || {
+            let generation = admission.as_ref().map(|(_, generation)| *generation);
+            let _admission = admission;
+            let result = if let Some(binding) = bound {
+                loader.call_bound(&binding, args)
+            } else {
+                loader.call_tool(&plugin_id_owned, &handler_owned, args)
+            };
+            if let (Some(owner), Some(generation)) = (operation, generation) {
+                owner
+                    .provider
+                    .acquire_call(generation)
+                    .map_err(|e| ExtensionError::Runtime(e.to_string()))?;
+            }
+            result
+        })
+        .await
+        .map_err(|e| ExtensionError::Runtime(format!("WASM task join failed: {e}")))?;
+        if let Some(owner) = owner {
+            if !self.owner_is_current(&owner) || !owner.provider.is_ready() {
+                return Err(ExtensionError::Runtime(
+                    "owner changed during execution".into(),
+                ));
+            }
+        }
+        result
     }
 
     async fn ensure_plugin_active(&self, plugin_id: &str) -> ExtensionResult<()> {
@@ -150,13 +240,97 @@ impl ExtensionManager {
     ) -> ExtensionResult<serde_json::Value> {
         self.ensure_runtime_mounted(plugin_id).await?;
 
+        let owner = self.runtime_owner(plugin_id);
+        if owner.is_none()
+            && self
+                .tool_handler_registry
+                .read()
+                .unwrap()
+                .as_ref()
+                .is_some_and(|registry| {
+                    registry.canonical_publication().has_ready_plugin(plugin_id)
+                })
+        {
+            return Err(ExtensionError::Runtime(
+                "plugin hook has no current RuntimeOwner authority".into(),
+            ));
+        }
+        if owner.is_none() {
+            // Legacy mounted plugins predate RuntimeOwner publication. Their
+            // compatibility hook path remains available until canonical
+            // publication takes authority for the plugin.
+            let loader = self.plugin_loader.clone().read_owned().await;
+            self.ensure_plugin_active(plugin_id).await?;
+            let plugin_id = plugin_id.to_owned();
+            let handler = handler.to_owned();
+            return tokio::task::spawn_blocking(move || {
+                loader.execute_hook(&plugin_id, &handler, event_data)
+            })
+            .await
+            .map_err(|e| ExtensionError::Runtime(format!("WASM task join failed: {e}")))?;
+        }
+        let owner = owner.expect("owner checked above");
+        // Tool-only owners must not turn an arbitrary export into a hook.
+        if !owner.output.capabilities.iter().any(|capability| {
+            matches!(
+                capability,
+                crate::extension::capability::CapabilityDeclaration::Hook(hook)
+                    if hook.plugin_id == plugin_id
+                        && hook.handler == handler
+                        && hook.actions.is_empty()
+            )
+        }) {
+            return Err(ExtensionError::Runtime(
+                "owner hook binding is not declared".into(),
+            ));
+        }
+        let generation = owner.provider.generation();
+        let admission = (
+            owner
+                .acquire_permit()
+                .await
+                .map_err(ExtensionError::Runtime)?,
+            generation,
+        );
+        owner
+            .provider
+            .acquire_call(generation)
+            .map_err(|e| ExtensionError::Runtime(e.to_string()))?;
         let loader = self.plugin_loader.clone().read_owned().await;
         self.ensure_plugin_active(plugin_id).await?;
-        let plugin_id = plugin_id.to_string();
-        let handler = handler.to_string();
-        tokio::task::spawn_blocking(move || loader.execute_hook(&plugin_id, &handler, event_data))
-            .await
-            .map_err(|e| ExtensionError::Runtime(format!("WASM task join failed: {e}")))?
+        let binding = loader.bind_wasm_hook(plugin_id, handler)?;
+        owner
+            .provider
+            .acquire_call(admission.1)
+            .map_err(|e| ExtensionError::Runtime(e.to_string()))?;
+        let identity = owner.identity.lock().unwrap().clone();
+        if !self.owner_is_current(&owner)
+            || identity
+                .as_ref()
+                .is_none_or(|mount| !binding.matches_mount(mount))
+        {
+            return Err(ExtensionError::Runtime(
+                "owner hook binding changed before execution".into(),
+            ));
+        }
+        let operation = owner.clone();
+        let result = tokio::task::spawn_blocking(move || {
+            let _admission = admission;
+            let result = loader.call_bound(&binding, event_data);
+            operation
+                .provider
+                .acquire_call(_admission.1)
+                .map_err(|e| ExtensionError::Runtime(e.to_string()))?;
+            result
+        })
+        .await
+        .map_err(|e| ExtensionError::Runtime(format!("WASM task join failed: {e}")))?;
+        if !self.owner_is_current(&owner) || !owner.provider.is_ready() {
+            return Err(ExtensionError::Runtime(
+                "owner changed during hook execution".into(),
+            ));
+        }
+        result
     }
 
     /// Get the plugin registry (read access).

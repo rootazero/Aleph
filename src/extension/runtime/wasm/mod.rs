@@ -56,14 +56,24 @@ pub struct WasmRuntime {
     plugins: HashMap<String, Arc<LoadedWasmPlugin>>,
 }
 
+#[cfg(test)]
+type GuestBarrier = (
+    tokio::sync::oneshot::Sender<()>,
+    std::sync::mpsc::Receiver<()>,
+);
+
 #[derive(Debug)]
 struct LoadedWasmPlugin {
     plugin: Mutex<extism::Plugin>,
+    #[cfg(test)]
+    guest_barrier: Arc<Mutex<Option<GuestBarrier>>>,
     // Captured from the effective configuration at build time, never from a
     // manifest supplied by a later binding caller. No per-call attenuation.
     context_effect_free: bool,
     // Immutable discovery facts of THIS incarnation, not active registrations.
     context_declarations: Vec<crate::extension::capability::ContextDeclaration>,
+    // Declaration facts captured from THIS mounted manifest, not call metadata.
+    hook_exports: std::collections::HashSet<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -74,12 +84,34 @@ pub(crate) struct WasmBinding {
 }
 
 impl WasmBinding {
+    /// Test-only host import blocks INSIDE the real guest invocation. Its state
+    /// belongs to this exact loaded instance, not a global name-based map.
+    #[cfg(test)]
+    pub(crate) fn block_guest_for_test(
+        &self,
+        entered: tokio::sync::oneshot::Sender<()>,
+        release: std::sync::mpsc::Receiver<()>,
+    ) {
+        *self.instance.guest_barrier.lock().unwrap() = Some((entered, release));
+    }
+
     pub(crate) fn plugin_id(&self) -> &str {
         &self.plugin_id
     }
 
     pub(crate) fn export(&self) -> &str {
         &self.export
+    }
+
+    /// Identity checks only; neither operation resolves a name or calls a guest.
+    pub(crate) fn matches_mount(&self, mount: &WasmMountIdentity) -> bool {
+        Arc::ptr_eq(&self.instance, &mount.instance)
+    }
+
+    pub(crate) fn same_binding(&self, other: &Self) -> bool {
+        self.plugin_id == other.plugin_id
+            && self.export == other.export
+            && Arc::ptr_eq(&self.instance, &other.instance)
     }
 
     pub(crate) fn context_effect_free(&self) -> bool {
@@ -361,6 +393,27 @@ impl WasmRuntime {
                 );
             }
         }
+        #[cfg(test)]
+        let guest_barrier: Arc<Mutex<Option<GuestBarrier>>> = Arc::new(Mutex::new(None));
+        #[cfg(test)]
+        {
+            builder = builder.with_function(
+                "b3_test_barrier",
+                [],
+                [],
+                UserData::new(guest_barrier.clone()),
+                |_, _, _, data| {
+                    let state = data.get()?;
+                    let gate = state.lock().unwrap().clone();
+                    let barrier = gate.lock().unwrap().take();
+                    if let Some((entered, release)) = barrier {
+                        let _ = entered.send(());
+                        release.recv()?;
+                    }
+                    Ok(())
+                },
+            );
+        }
         let plugin = builder
             .build()
             .map_err(|e| ExtensionError::Runtime(format!("Failed to load WASM: {e}")))?;
@@ -372,7 +425,15 @@ impl WasmRuntime {
             .unwrap_or_default();
         let loaded = Arc::new(LoadedWasmPlugin {
             plugin: Mutex::new(plugin),
+            #[cfg(test)]
+            guest_barrier,
             context_declarations,
+            hook_exports: manifest
+                .hooks_v2
+                .iter()
+                .flatten()
+                .filter_map(|hook| hook.handler.clone())
+                .collect(),
             context_effect_free: super::super::context_adapter::require_no_ambient_authority(
                 manifest,
             )
@@ -452,6 +513,23 @@ impl WasmRuntime {
             export: export.to_string(),
             instance: Arc::clone(instance),
         })
+    }
+
+    pub(crate) fn bind_hook(
+        &self,
+        plugin_id: &str,
+        export: &str,
+    ) -> Result<WasmBinding, ExtensionError> {
+        let instance = self
+            .plugins
+            .get(plugin_id)
+            .ok_or_else(|| ExtensionError::PluginNotFound(plugin_id.into()))?;
+        if !instance.hook_exports.contains(export) {
+            return Err(ExtensionError::Runtime(format!(
+                "undeclared WASM hook export: {export}"
+            )));
+        }
+        self.bind(plugin_id, export)
     }
 
     pub(crate) fn binding_is_current(&self, binding: &WasmBinding) -> bool {

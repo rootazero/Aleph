@@ -12,6 +12,27 @@ use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
 use super::manifest::{adapter::AdapterOutput, PluginManifest};
 use super::runtime::wasm::WasmMountIdentity;
+use crate::tools::descriptor::ToolCapabilityDescriptor;
+use crate::tools::registry::{
+    PluginBatch, PluginBatchEntry, PluginBatchRegistration, PluginPublicationError,
+};
+
+// Incarnation IDs, not OwnershipTree generations or canonical revisions. Only
+// declaration creation allocates one; describing a Cold owner allocates nothing.
+static NEXT_OWNER_GENERATION: Mutex<u64> = Mutex::new(1);
+
+#[derive(Debug)]
+pub(super) enum OwnerFailure {
+    Publication(PluginPublicationError),
+    Revoke(PluginPublicationError),
+    Drain(String),
+    Join(String),
+    Stop(String),
+    MissingReceipt,
+    MissingScope,
+    Dispose(super::effects::DisposeReport),
+}
+
 use super::types::{PluginKind, PluginRecord};
 use crate::capability::provider::{
     ProviderHandle, ProviderId, ProviderLifecycle, ProviderState, ProviderTransport,
@@ -26,12 +47,29 @@ pub(super) struct RuntimeOwner {
     pub manifest: PluginManifest,
     pub record: PluginRecord,
     pub identity: Mutex<Option<WasmMountIdentity>>,
+    pub owner_generation: u64,
+    pub receipt: Mutex<Option<PluginBatchRegistration>>,
+    /// Consumed FnOnce disposers cannot be retried: retain exact reports and
+    /// mount/receipt evidence on this owner, never silently remove a residual.
+    pub failures: Mutex<Vec<OwnerFailure>>,
+    stop_requested: tokio::sync::Notify,
     pub task: Mutex<Option<tokio::task::JoinHandle<()>>>,
+    /// One retained cleanup operation, not a second scope/disposer authority.
+    pub stop: Mutex<Option<StopOperation>>,
     pub completion: tokio::sync::watch::Sender<Option<Result<(), String>>>,
     /// Admission permits cover the complete guest call. Stop closes this
     /// semaphore and drains all permits before disposing the exact scope.
     pub admission: Arc<Semaphore>,
     pub admission_open: AtomicBool,
+    #[cfg(test)]
+    pub stop_join_entered: Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
+    #[cfg(test)]
+    pub publication_barrier: Mutex<
+        Option<(
+            tokio::sync::oneshot::Sender<()>,
+            tokio::sync::oneshot::Receiver<()>,
+        )>,
+    >,
     #[cfg(test)]
     pub barrier: Mutex<
         Option<(
@@ -41,11 +79,41 @@ pub(super) struct RuntimeOwner {
     >,
 }
 
+pub(super) struct StopOperation {
+    pub completion: tokio::sync::watch::Sender<
+        Option<Result<super::effects::DisposeReport, super::lifecycle::UnmountError>>,
+    >,
+    // Dropping the waiter or even this handle never aborts the operation.
+    pub _task: tokio::task::JoinHandle<()>,
+}
+
 impl RuntimeOwner {
     pub(super) const MAX_IN_FLIGHT: u32 = 1024;
 
+    pub fn failure_summary(&self) -> String {
+        self.failures
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|failure| match failure {
+                OwnerFailure::Publication(error) => format!("publication: {error}"),
+                OwnerFailure::Revoke(error) => format!("revoke: {error}"),
+                OwnerFailure::Drain(error) => format!("drain: {error}"),
+                OwnerFailure::Join(error) => format!("join: {error}"),
+                OwnerFailure::Stop(error) => format!("stop: {error}"),
+                OwnerFailure::MissingReceipt => "ready owner has no batch receipt".into(),
+                OwnerFailure::MissingScope => "mounted owner has no exact effect scope".into(),
+                OwnerFailure::Dispose(report) => {
+                    format!("dispose: {:?}", report.failures().collect::<Vec<_>>())
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("; ")
+    }
+
     pub fn close_admission(&self) {
         self.admission_open.store(false, Ordering::Release);
+        self.stop_requested.notify_waiters();
     }
 
     pub async fn acquire_permit(&self) -> Result<OwnedSemaphorePermit, String> {
@@ -80,12 +148,28 @@ impl RuntimeOwner {
             manifest,
             record,
             identity: Mutex::new(None),
+            owner_generation: {
+                let mut next = NEXT_OWNER_GENERATION.lock().unwrap();
+                let generation = *next;
+                *next = next
+                    .checked_add(1)
+                    .expect("plugin owner incarnation generation exhausted");
+                generation
+            },
+            receipt: Mutex::new(None),
+            failures: Mutex::new(Vec::new()),
+            stop_requested: tokio::sync::Notify::new(),
             task: Mutex::new(None),
+            stop: Mutex::new(None),
             completion,
             admission: Arc::new(Semaphore::new(Self::MAX_IN_FLIGHT as usize)),
             admission_open: AtomicBool::new(true),
             #[cfg(test)]
+            stop_join_entered: Mutex::new(None),
+            #[cfg(test)]
             barrier: Mutex::new(None),
+            #[cfg(test)]
+            publication_barrier: Mutex::new(None),
         }
     }
 }
@@ -143,11 +227,9 @@ impl ExtensionManager {
                         .unwrap_or_else(|_| {
                             Err("activation panicked; retained owner requires recovery".into())
                         });
-                        if result.is_ok() {
-                            manager.publish_runtime_transition_views().await;
-                        }
                         if result.is_err() && operation.provider.state() == ProviderState::Starting
                         {
+                            operation.close_admission();
                             let _ = operation.provider.transition(ProviderState::Failed);
                         }
                         operation.completion.send_replace(Some(result));
@@ -173,15 +255,29 @@ impl ExtensionManager {
     }
 
     async fn mount_owner(&self, owner: &Arc<RuntimeOwner>, generation: u64) -> Result<(), String> {
+        // Phase one: a retained task waiting for control has no effects yet.
+        // Stop fences it without joining a task blocked on the same load_guard.
+        let stopped = owner.stop_requested.notified();
+        tokio::pin!(stopped);
+        stopped.as_mut().enable();
+        if !owner.admission_open.load(Ordering::Acquire) {
+            return Err("activation admission is closed".into());
+        }
         #[cfg(test)]
         {
             let barrier = owner.barrier.lock().unwrap().take();
             if let Some((entered, release)) = barrier {
                 let _ = entered.send(());
-                let _ = release.await;
+                tokio::select! {
+                    _ = &mut stopped => return Err("activation fenced before mount".into()),
+                    _ = release => {},
+                }
             }
         }
-        let _control = self.load_guard.lock().await;
+        let _control = tokio::select! {
+            _ = &mut stopped => return Err("activation fenced before control".into()),
+            control = self.load_guard.lock() => control,
+        };
         let id = &owner.record.id;
         if !self.owner_is_current(owner)
             || owner.provider.snapshot() != (ProviderState::Starting, generation)
@@ -204,6 +300,14 @@ impl ExtensionManager {
         self.mount_parsed(owner.output.clone(), record, Some(owner.manifest.clone()))
             .await
             .map_err(|e| e.to_string())?;
+        #[cfg(test)]
+        {
+            let barrier = owner.publication_barrier.lock().unwrap().take();
+            if let Some((entered, release)) = barrier {
+                let _ = entered.send(());
+                let _ = release.await;
+            }
+        }
         let identity = self
             .plugin_loader
             .read()
@@ -220,16 +324,111 @@ impl ExtensionManager {
         self.admit(id, owner.record.origin)
             .await
             .map_err(|e| e.to_string())?;
-        *owner.identity.lock().unwrap() = Some(identity);
-        owner
-            .provider
-            .transition(ProviderState::Ready)
-            .map_err(|e| e.to_string())?;
+        *owner.identity.lock().unwrap() = Some(identity.clone());
+        let publication = self.prepare_owner_batch(owner, generation, identity).await;
+        let publication = match publication {
+            Ok(batch) => {
+                let canonical = self.tool_handler_registry.read().unwrap().clone();
+                match canonical {
+                    Some(canonical) => canonical.publish_plugin_batch_with_ready_commit(batch),
+                    None => Err(PluginPublicationError::InvalidIdentity(
+                        "plugin producer reconciliation is not mounted",
+                    )),
+                }
+            }
+            Err(error) => Err(error),
+        };
+        match publication {
+            Ok(receipt) => *owner.receipt.lock().unwrap() = Some(receipt),
+            Err(error) => {
+                let reason = error.to_string();
+                owner.close_admission();
+                owner
+                    .failures
+                    .lock()
+                    .unwrap()
+                    .push(OwnerFailure::Publication(error));
+                // No batch was committed. Dispose only this fenced mount. A
+                // failed disposer report remains on the owner, without retry.
+                let scope = self.scopes.lock().unwrap().remove(id);
+                if let Some(scope) = scope {
+                    let report = scope.dispose().await;
+                    if !report.all_ok() {
+                        owner
+                            .failures
+                            .lock()
+                            .unwrap()
+                            .push(OwnerFailure::Dispose(report));
+                        let _ = owner.provider.transition(ProviderState::Failed);
+                    } else {
+                        // The scope removed the VM; do not retain its Arc only
+                        // for a failed, never-published activation.
+                        owner.identity.lock().unwrap().take();
+                    }
+                }
+                // Activation has ended, whether or not disposal left effects.
+                // A clean failure is still Failed, never a stranded Starting.
+                let _ = owner.provider.transition(ProviderState::Failed);
+                let mut row = owner.record.clone();
+                row.status = PluginStatus::Error(format!("canonical publication: {reason}"));
+                row.error = Some(reason.clone());
+                self.plugin_registry.write().await.register_plugin(row);
+                self.publish_runtime_transition_views().await;
+                return Err(reason);
+            }
+        }
         if let Some(row) = self.plugin_registry.write().await.get_plugin_mut(id) {
             row.status = PluginStatus::Loaded;
         }
-        self.sync_runtime_snapshots().await;
+        // This is still under load_guard; stop cannot overtake the unique
+        // lifecycle projection boundary or join a task waiting to acquire it.
+        self.publish_runtime_transition_views().await;
         Ok(())
+    }
+
+    async fn prepare_owner_batch(
+        &self,
+        owner: &Arc<RuntimeOwner>,
+        generation: u64,
+        mount: WasmMountIdentity,
+    ) -> Result<PluginBatch, PluginPublicationError> {
+        let registry = self.plugin_registry.read().await;
+        let loader = self.plugin_loader.read().await;
+        let entries = registry
+            .list_tools_for_plugin(&owner.record.id)
+            .into_iter()
+            .map(|registration| {
+                let binding = loader
+                    .bind_wasm(&owner.record.id, &registration.handler)
+                    .map_err(|error| PluginPublicationError::InvalidEntry {
+                        name: registration.name.clone(),
+                        reason: error.to_string(),
+                    })?;
+                let handler = super::canonical_handler::build_canonical_handler(
+                    self.plugin_loader.clone(),
+                    owner,
+                    generation,
+                    binding.clone(),
+                    registration.clone(),
+                );
+                let descriptor =
+                    ToolCapabilityDescriptor::from_definition(&handler.definition(), 0);
+                Ok(PluginBatchEntry {
+                    descriptor,
+                    handler,
+                    binding,
+                    max_result_tokens: None,
+                })
+            })
+            .collect::<Result<Vec<_>, PluginPublicationError>>()?;
+        Ok(PluginBatch {
+            plugin_id: owner.record.id.clone(),
+            provider: owner.provider.clone(),
+            provider_generation: generation,
+            owner_generation: owner.owner_generation,
+            mount,
+            entries,
+        })
     }
 }
 
