@@ -1947,7 +1947,7 @@ handler = "handler"
             .entry("lazy_tool")
             .expect("published owner tool");
         projection.register(Box::new(
-            crate::tools::adapters::McpRegistryTool::from_canonical_entry(&entry, &visible),
+            crate::tools::adapters::McpRegistryTool::from_canonical_entry(entry, &visible),
         ));
         crate::tools::scoped::ScopedToolService::new(Arc::new(projection), Default::default())
     }

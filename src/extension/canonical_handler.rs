@@ -65,7 +65,7 @@ impl ToolHandler for PluginCanonicalHandler {
                 .map_err(|e| error(e.to_string()))
         };
         validate()?;
-        let permit = owner.acquire_permit().await.map_err(&error)?;
+        let permit = owner.acquire_permit().await.map_err(error)?;
         let loader = self.loader.clone().read_owned().await;
         if !loader.wasm_binding_is_current(&self.binding) {
             return Err(error("runtime owner binding is stale".into()));
