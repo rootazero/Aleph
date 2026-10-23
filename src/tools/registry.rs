@@ -61,6 +61,7 @@ pub(crate) struct ReadySnapshot {
     canonical_revision: u64,
     descriptor_fingerprint: [u8; 32],
     handler: Arc<dyn ToolHandler>,
+    registry: Weak<RegistryShared>,
 }
 
 fn descriptor_fingerprint(descriptor: &ToolCapabilityDescriptor) -> [u8; 32] {
@@ -95,7 +96,41 @@ impl ReadySnapshot {
             && Arc::ptr_eq(&self.handler, &entry.handler)
     }
 
-    fn same_lease(&self, other: &Self) -> bool {
+    pub(crate) fn authorizes(&self, name: &str, plugin_id: &str, handler: &str) -> bool {
+        self.canonical_name == name
+            && self.plugin_id == plugin_id
+            && self.binding.export() == handler
+            && self.provider_is_current_ready()
+    }
+
+    pub(crate) fn binding_for(
+        &self,
+        provider: &ProviderHandle,
+        owner_generation: u64,
+    ) -> Option<WasmBinding> {
+        (self.provider.same_instance(provider)
+            && self.owner_generation == owner_generation
+            && self.provider_is_current_ready())
+        .then(|| self.binding.clone())
+    }
+
+    pub(crate) fn is_current(&self) -> bool {
+        let Some(shared) = self.registry.upgrade() else {
+            return false;
+        };
+        let current = shared.snapshot();
+        !current.closed
+            && current
+                .value
+                .entry(&self.canonical_name)
+                .is_some_and(|entry| {
+                    entry.ready.as_ref().is_some_and(|live| {
+                        self.same_lease(live) && self.matches_entry(entry, current.revision)
+                    })
+                })
+    }
+
+    pub(crate) fn same_lease(&self, other: &Self) -> bool {
         self.plugin_id == other.plugin_id
             && self.provider_state == other.provider_state
             && self.provider.same_instance(&other.provider)
@@ -150,6 +185,10 @@ impl Eq for CanonicalEntryLease {}
 impl CanonicalEntryLease {
     pub fn entry(&self) -> &RegistryEntry {
         &self.entry
+    }
+
+    pub(crate) fn is_plugin_publication(&self) -> bool {
+        self.entry.ready.is_some()
     }
 
     pub fn into_entry(self) -> RegistryEntry {
@@ -303,7 +342,11 @@ impl ToolHandler for ProviderCallHandler {
                 reason: error.to_string(),
             })?;
         self.validate_ready()?;
-        let result = self.inner.invoke(input).await;
+        let result = crate::tools::dispatch_verdict::with_plugin_publication(
+            self.ready.clone(),
+            self.inner.invoke(input),
+        )
+        .await;
         // Reject a late guest result after revoke/replacement, including errors.
         self.validate_ready()?;
         result
@@ -1115,6 +1158,7 @@ impl ToolHandlerRegistry {
                         entry_revision: revision, canonical_revision: revision,
                         descriptor_fingerprint: descriptor_fingerprint(&entry.descriptor),
                         handler: Arc::clone(&entry.handler),
+                        registry: Arc::downgrade(&self.shared),
                     });
                     entry.ready = Some(Arc::clone(&ready));
                     let name = entry.descriptor.name.clone();
@@ -1295,6 +1339,17 @@ impl ToolHandlerRegistry {
     /// captured provider generation must still be Ready at invocation time.
     /// This is an exact canonical-name lookup, not dispatch authorization.
     #[must_use]
+    pub(crate) fn has_plugin_publication(&self, plugin_id: &str) -> bool {
+        // Inspect the producer record, not the filtered callable projection:
+        // a stopped provider cannot reopen an ownerless compatibility route.
+        self.shared.snapshot().value.records.values().any(|entry| {
+            entry
+                .ready
+                .as_ref()
+                .is_some_and(|ready| ready.plugin_id == plugin_id)
+        })
+    }
+
     pub fn resolve_entry(&self, name: &str) -> Option<RegistryEntry> {
         self.capture_entry(name)
             .map(CanonicalEntryLease::into_entry)
@@ -1841,6 +1896,7 @@ mod tests {
                 canonical_revision: epoch,
                 descriptor_fingerprint: descriptor_fingerprint(&entry.descriptor),
                 handler: Arc::clone(&entry.handler),
+                registry: Weak::new(),
             }));
             entry
         }

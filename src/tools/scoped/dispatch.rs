@@ -13,7 +13,7 @@ use crate::sandbox::exec_approval::{denial_ledger, grants, ApprovalAction, Grant
 use crate::session::events::ToolOutput;
 use crate::sync_primitives::Arc;
 use crate::tools::descriptor::{ReplayPolicy, ToolCallIdentity, ToolCapabilityDescriptor};
-use crate::tools::registry::RegistryEntry;
+use crate::tools::registry::{CanonicalEntryLease, RegistryEntry};
 use crate::tools::runtime::LoopTool;
 use crate::tools::service::{RefusedBy, ToolError};
 
@@ -186,7 +186,7 @@ impl ConfirmDenial {
 /// Arc pair keeps every attempt on the same captured generation.
 #[derive(Clone)]
 enum RoutingTarget {
-    Canonical(RegistryEntry),
+    Canonical(RegistryEntry, CanonicalEntryLease),
     Subagent,
     Inner,
     Missing,
@@ -294,14 +294,16 @@ impl ScopedToolService {
             .subagent_tool
             .as_ref()
             .is_some_and(|st| st.name() == name);
+        let mut captured_lease = None;
         let captured = if let Some(registry) = &self.canonical_registry {
             if is_subagent || self.inner.is_request_local(name) {
                 None
             } else if let Some(projection) = resolved {
-                let mut entry = registry
+                let lease = registry
                     .capture_entry(name)
-                    .map(crate::tools::registry::CanonicalEntryLease::into_entry)
                     .ok_or_else(|| ToolError::NotFound { name: name.into() })?;
+                let mut entry = lease.entry().clone();
+                captured_lease = Some(lease);
                 let projected = projection.capability_descriptor().ok_or_else(|| {
                     ToolError::PermissionDenied {
                         name: name.into(),
@@ -549,7 +551,10 @@ impl ScopedToolService {
         // inner LoopToolRegistry. Both paths share the retry/Layer 2/sanitize
         // pipeline below.
         let routing = if let Some(entry) = captured.as_ref() {
-            RoutingTarget::Canonical(entry.clone())
+            RoutingTarget::Canonical(
+                entry.clone(),
+                captured_lease.clone().expect("captured lease"),
+            )
         } else if self
             .subagent_tool
             .as_ref()
@@ -577,7 +582,7 @@ impl ScopedToolService {
         // declaration → the builtin table → the default), read straight off the
         // tool so the clock we enforce and the budget we advertise cannot drift.
         let declared_ms = match &routing {
-            RoutingTarget::Canonical(entry) => entry.descriptor.max_duration_ms,
+            RoutingTarget::Canonical(entry, _) => entry.descriptor.max_duration_ms,
             RoutingTarget::Subagent => self
                 .subagent_tool
                 .as_ref()
@@ -898,7 +903,7 @@ impl ScopedToolService {
                 // will be invoked. Canonical `None` is authoritative and must
                 // not fall back to a stale request-local projection hint.
                 let explicit = match &target {
-                    RoutingTarget::Canonical(entry) => entry.max_result_tokens,
+                    RoutingTarget::Canonical(entry, _) => entry.max_result_tokens,
                     _ => self.inner.max_result_tokens_for(name),
                 };
 
@@ -1010,7 +1015,8 @@ impl ScopedToolService {
                 reason: "plugin activation requires an exact canonical admission".into(),
             });
         }
-        if let RoutingTarget::Canonical(entry) = &target {
+        if let RoutingTarget::Canonical(entry, lease) = &target {
+            self.validate_plugin_lease(lease)?;
             let call_id = crate::approval::current_tool_call_id().ok_or_else(|| {
                 ToolError::PermissionDenied {
                     name: name.clone(),
@@ -1036,6 +1042,24 @@ impl ScopedToolService {
         }
     }
 
+    /// Legacy builtin/MCP/static captures keep their cached-call semantics.
+    /// A Ready plugin publication must still be the exact producer lease.
+    fn validate_plugin_lease(&self, lease: &CanonicalEntryLease) -> Result<(), ToolError> {
+        if lease.is_plugin_publication()
+            && !self.canonical_registry.as_ref().is_some_and(|registry| {
+                registry
+                    .capture_entry(&lease.entry().descriptor.name)
+                    .is_some_and(|current| lease.validate_capture(&current))
+            })
+        {
+            return Err(ToolError::PermissionDenied {
+                name: lease.entry().descriptor.name.clone(),
+                reason: "canonical plugin lease is stale or withdrawn".into(),
+            });
+        }
+        Ok(())
+    }
+
     /// Invoke the already chosen target, never resolve a canonical handler again.
     async fn invoke_target(
         &self,
@@ -1045,8 +1069,9 @@ impl ScopedToolService {
         cancel: CancellationToken,
     ) -> Result<ToolOutput, ToolError> {
         let raw = match target {
-            RoutingTarget::Canonical(entry) => {
-                return crate::tools::result_processing::with_recovery_tools(
+            RoutingTarget::Canonical(entry, lease) => {
+                self.validate_plugin_lease(&lease)?;
+                let result = crate::tools::result_processing::with_recovery_tools(
                     self.recovery_tools(),
                     crate::tools::adapters::mcp_adapter::invoke_handler(
                         &entry.handler,
@@ -1056,6 +1081,8 @@ impl ScopedToolService {
                     ),
                 )
                 .await;
+                self.validate_plugin_lease(&lease)?;
+                return result;
             }
             RoutingTarget::Subagent => {
                 let st = self

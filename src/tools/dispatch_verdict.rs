@@ -101,6 +101,7 @@ pub struct PluginActivationAuthority {
     verdict: DispatchVerdict,
     plugin_id: String,
     handler: String,
+    publication: Arc<crate::tools::registry::ReadySnapshot>,
 }
 
 impl PluginActivationAuthority {
@@ -111,17 +112,41 @@ impl PluginActivationAuthority {
         input: &Value,
     ) -> Option<Self> {
         let verdict = current_dispatch_verdict()?;
+        let publication = ADMITTED_PLUGIN.try_with(Clone::clone).ok().flatten()?;
+        if !publication.authorizes(canonical_name, plugin_id, handler) {
+            return None;
+        }
         let call_id = crate::approval::current_tool_call_id()?;
         let identity = current_admitted_handler_identity()?;
         let actor = crate::identity::current_actor();
-        if !verdict.matches(&call_id, canonical_name, &identity, input, actor.as_deref()) {
+        if verdict.caller != AdmissionCaller::current()
+            || !verdict.matches(&call_id, canonical_name, &identity, input, actor.as_deref())
+        {
             return None;
         }
         Some(Self {
             verdict,
             plugin_id: plugin_id.to_owned(),
             handler: handler.to_owned(),
+            publication,
         })
+    }
+
+    /// Return only the exact producer-captured binding, never resolve by name.
+    pub(crate) fn binding_for(
+        &self,
+        provider: &crate::capability::provider::ProviderHandle,
+        owner_generation: u64,
+    ) -> Option<crate::extension::runtime::wasm::WasmBinding> {
+        self.publication.binding_for(provider, owner_generation)
+    }
+
+    pub(crate) fn publication_proof(&self) -> Arc<crate::tools::registry::ReadySnapshot> {
+        Arc::clone(&self.publication)
+    }
+
+    pub(crate) fn publication_is_current(&self) -> bool {
+        self.publication.is_current()
     }
 
     /// Revalidate the whole admitted tuple after waiting. No authority crosses
@@ -129,9 +154,11 @@ impl PluginActivationAuthority {
     pub(crate) fn validates(&self, plugin_id: &str, handler: &str, input: &Value) -> bool {
         self.plugin_id == plugin_id
             && self.handler == handler
+            && self.publication_is_current()
             && Self::from_current(&self.verdict.canonical_name, plugin_id, handler, input)
                 .is_some_and(|current| {
                     current.verdict.caller == self.verdict.caller
+                        && self.publication.same_lease(&current.publication)
                         && current.verdict.matches(
                             &self.verdict.call_id,
                             &self.verdict.canonical_name,
@@ -147,6 +174,7 @@ tokio::task_local! {
     static DISPATCH_VERDICT: Option<DispatchVerdict>;
     static SAFE_REPLAY_ADMISSION: Option<ReplayAdmissionToken>;
     static ADMITTED_HANDLER_IDENTITY: Option<ToolCallIdentity>;
+    static ADMITTED_PLUGIN: Option<Arc<crate::tools::registry::ReadySnapshot>>;
 }
 
 /// Outside the invocation scope (including Tokio children), there is no proof.
@@ -164,7 +192,10 @@ where
         DISPATCH_VERDICT
             .scope(
                 None,
-                SAFE_REPLAY_ADMISSION.scope(None, ADMITTED_HANDLER_IDENTITY.scope(None, future)),
+                SAFE_REPLAY_ADMISSION.scope(
+                    None,
+                    ADMITTED_PLUGIN.scope(None, ADMITTED_HANDLER_IDENTITY.scope(None, future)),
+                ),
             )
             .await
     })
@@ -230,6 +261,15 @@ pub(super) fn current_admitted_handler_identity() -> Option<ToolCallIdentity> {
         .try_with(|identity| *identity)
         .ok()
         .flatten()
+}
+
+/// Only the registry-owned provider wrapper supplies immutable producer proof.
+/// Ordinary handlers, metadata and replay scopes cannot manufacture it.
+pub(super) async fn with_plugin_publication<F: Future>(
+    publication: Option<Arc<crate::tools::registry::ReadySnapshot>>,
+    future: F,
+) -> F::Output {
+    ADMITTED_PLUGIN.scope(publication, future).await
 }
 
 /// Publish only the descriptor identity checked by the registry boundary.
