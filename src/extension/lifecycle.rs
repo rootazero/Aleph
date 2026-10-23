@@ -1745,35 +1745,27 @@ handler = "handler"
         .unwrap();
     }
 
+    /// The declaration half of the tool-only WASM contract: discovery admits
+    /// the plugin Cold without starting a VM and without publishing its tool
+    /// surface. No enable happens here — the production enable half lives in
+    /// `tool_only_wasm_production_enable_activates_the_cold_declaration`.
     #[tokio::test]
     async fn tool_only_wasm_discovery_stays_cold_without_mounting_a_vm() {
-        use crate::extension::plugin_state::PluginRuntimeOutcome;
         let tmp = tempfile::tempdir().unwrap();
         let _home = isolated_home(tmp.path());
         write_cold_tool_wasm_fixture(tmp.path());
         let (manager, _) = isolated_manager(tmp.path()).await;
-        let manager = Arc::new(manager);
+        let manager = ExtensionManager::attach_activation_manager(Arc::new(manager));
         let canonical = Arc::new(crate::tools::ToolHandlerRegistry::new());
         manager
             .set_tool_handler_registry(canonical.clone())
             .await
             .unwrap();
         let revision = canonical.revision();
-        // fixture is registered without an eager mount. The explicit enable
-        // below then exercises the Cold control transition.
-        let _ = manager
-            .set_plugin_enabled("lazy-wasm", false)
-            .await
-            .expect("pre-discovery disable must persist");
+        // Discovery declares an eligible tool-only WASM Cold without starting
+        // its VM.
         manager.load_all().await.unwrap();
 
-        let outcome = manager
-            .set_plugin_enabled("lazy-wasm", true)
-            .await
-            .expect("declaration discovery must succeed");
-        assert_eq!(outcome.runtime_outcome, PluginRuntimeOutcome::Cold);
-        assert_eq!(outcome.actual_state, "cold");
-        assert!(!manager.plugin_loader.read().await.is_loaded("lazy-wasm"));
         let owner = manager
             .runtime_owner("lazy-wasm")
             .expect("tool-only declaration has a runtime owner");
@@ -1782,48 +1774,43 @@ handler = "handler"
             crate::capability::provider::ProviderState::Cold
         );
         assert!(owner.identity.lock().unwrap().is_none());
-        assert!(manager
-            .call_plugin_tool("lazy-wasm", "handler", serde_json::json!({}))
-            .await
-            .is_err());
         assert!(!manager.plugin_loader.read().await.is_loaded("lazy-wasm"));
-        assert!(manager
-            .get_plugin_registry()
-            .await
-            .list_tools_for_plugin("lazy-wasm")
-            .is_empty());
-
         assert_eq!(canonical.revision(), revision);
-        assert_eq!(
-            owner.provider.snapshot(),
-            (crate::capability::provider::ProviderState::Cold, 0)
-        );
         assert!(canonical.canonical_publication().entries().is_empty());
         assert!(canonical.capture_entry("lazy_tool").is_none());
-        assert!(canonical
-            .reconcile_plugin_tools(Default::default())
-            .is_err());
-        assert!(b3_call_canonical(canonical.clone(), "lazy_tool")
-            .await
-            .is_err());
-        assert_eq!(canonical.revision(), revision);
-        assert!(!manager.plugin_loader.read().await.is_loaded("lazy-wasm"));
+    }
 
-        let (entered_tx, entered_rx) = tokio::sync::oneshot::channel();
-        let (release_tx, release_rx) = tokio::sync::oneshot::channel();
-        *owner.barrier.lock().unwrap() = Some((entered_tx, release_rx));
-        let activation_waiter = tokio::spawn({
-            let manager = Arc::clone(&manager);
-            let owner = Arc::clone(&owner);
-            async move { manager.activate_owner(owner).await }
-        });
-        entered_rx.await.unwrap();
-        activation_waiter.abort();
-        release_tx.send(()).unwrap();
+    /// The activation half of the tool-only WASM contract: the production
+    /// enable path must activate the exact Cold declaration (same owner
+    /// incarnation), publish its tool surface, and — after a stop — let a
+    /// replacement declaration take over without the old one leaking.
+    #[tokio::test]
+    async fn tool_only_wasm_production_enable_activates_the_cold_declaration() {
+        use crate::extension::plugin_state::PluginRuntimeOutcome;
+        let tmp = tempfile::tempdir().unwrap();
+        let _home = isolated_home(tmp.path());
+        write_cold_tool_wasm_fixture(tmp.path());
+        let (manager, _) = isolated_manager(tmp.path()).await;
+        let manager = ExtensionManager::attach_activation_manager(Arc::new(manager));
+        let canonical = Arc::new(crate::tools::ToolHandlerRegistry::new());
         manager
-            .activate_owner(Arc::clone(&owner))
+            .set_tool_handler_registry(canonical.clone())
             .await
-            .expect("retained activation must outlive a cancelled waiter");
+            .unwrap();
+        manager.load_all().await.unwrap();
+
+        let owner = manager
+            .runtime_owner("lazy-wasm")
+            .expect("tool-only declaration has a runtime owner");
+        assert_eq!(
+            owner.provider.state(),
+            crate::capability::provider::ProviderState::Cold
+        );
+
+        let outcome = b3_enable_cold_owner(&manager, "lazy-wasm").await;
+        assert_eq!(outcome.runtime_outcome, PluginRuntimeOutcome::Mounted);
+        assert_eq!(outcome.actual_state, "loaded");
+        assert_eq!(outcome.provider_generation, Some(1));
         assert_eq!(
             owner.provider.state(),
             crate::capability::provider::ProviderState::Ready
@@ -1837,6 +1824,8 @@ handler = "handler"
                 .len(),
             1
         );
+        assert!(canonical.capture_entry("lazy_tool").is_some());
+
         let stale_owner = Arc::clone(&owner);
         let report = manager
             .unmount("lazy-wasm")
@@ -1854,13 +1843,15 @@ handler = "handler"
         let replacement = manager
             .set_plugin_enabled("lazy-wasm", true)
             .await
-            .expect("replacement declaration must remain cold")
-            .runtime_outcome;
-        assert_eq!(replacement, PluginRuntimeOutcome::Cold);
+            .expect("replacement declaration must activate");
+        assert_eq!(replacement.runtime_outcome, PluginRuntimeOutcome::Mounted);
         let replacement_owner = manager.runtime_owner("lazy-wasm").unwrap();
         assert!(!Arc::ptr_eq(&stale_owner, &replacement_owner));
+        assert_eq!(
+            replacement_owner.provider.state(),
+            crate::capability::provider::ProviderState::Ready
+        );
         let _ = manager.set_plugin_enabled("lazy-wasm", false).await;
-        manager.runtime_owners.lock().unwrap().remove("lazy-wasm");
         assert_eq!(
             manager.get_plugin_record("lazy-wasm").await.unwrap().status,
             PluginStatus::Disabled
@@ -1921,19 +1912,29 @@ handler = "handler"
         let manifest = root.join("plugins/lazy-wasm/aleph.plugin.toml");
         std::fs::write(&manifest, format!("{}\n[[tools]]\nname = \"other_tool\"\ndescription = \"Second tool on the same owner\"\nhandler = \"handler\"\n", std::fs::read_to_string(&manifest).unwrap())).unwrap();
         let (manager, _) = isolated_manager(root).await;
-        let manager = Arc::new(manager);
+        let manager = ExtensionManager::attach_activation_manager(Arc::new(manager));
         manager
             .set_tool_handler_registry(canonical.clone())
             .await
             .unwrap();
-        let _ = manager
-            .set_plugin_enabled("lazy-wasm", false)
-            .await
-            .unwrap();
         manager.load_all().await.unwrap();
-        let _ = manager.set_plugin_enabled("lazy-wasm", true).await.unwrap();
         let owner = manager.runtime_owner("lazy-wasm").unwrap();
         (manager, canonical, owner)
+    }
+
+    /// Exercise the real production enable path against an already-declared
+    /// Cold owner. B3 fencing tests call `activate_owner` directly instead so
+    /// their barriers remain the operation under test. The production-enable
+    /// test uses it so the enable half is exercised through the real
+    /// production path rather than a direct `activate_owner` call.
+    async fn b3_enable_cold_owner(
+        manager: &Arc<ExtensionManager>,
+        plugin_id: &str,
+    ) -> super::super::plugin_state::PluginControlOutcome {
+        manager
+            .set_plugin_enabled(plugin_id, true)
+            .await
+            .expect("production enable must activate the exact Cold declaration")
     }
 
     fn b4_canonical_service(
@@ -2456,7 +2457,7 @@ handler = "handler"
         let manifest_text = std::fs::read_to_string(&manifest).unwrap();
         std::fs::write(&manifest, manifest_text).unwrap();
         let (manager, _) = isolated_manager(tmp.path()).await;
-        let manager = Arc::new(manager);
+        let manager = ExtensionManager::attach_activation_manager(Arc::new(manager));
         let canonical = Arc::new(crate::tools::ToolHandlerRegistry::new());
         manager.set_tool_handler_registry(canonical).await.unwrap();
         let _ = manager

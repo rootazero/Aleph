@@ -106,6 +106,7 @@ use manifest::adapter::AdapterRegistry;
 use serde::{Deserialize, Serialize}; // for OwnerTrustPolicyConfig
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::Weak;
 use tokio::sync::{Mutex, RwLock};
 use watcher::{ExtensionChangeEvent, ExtensionChangeType, ExtensionWatcher, InternalWriteTracker};
 
@@ -306,6 +307,11 @@ pub struct ExtensionManager {
     /// Instance ownership, not a callable registry or a desired-state store.
     runtime_owners: Arc<StdMutex<HashMap<String, Arc<runtime_owner::RuntimeOwner>>>>,
 
+    /// Weak self-reference installed at the single Arc ownership boundary.
+    /// Retained activation work may borrow the live manager's authorities
+    /// without retaining the manager and creating a self-cycle.
+    activation_manager: StdMutex<Option<Weak<ExtensionManager>>>,
+
     /// Join handles of the per-plugin server-start watchers
     /// (`lifecycle.rs::watch_server_starts`), so `activation_settled()` can
     /// wait for the MCP half of a mount to reach its verdict. Std mutex,
@@ -467,6 +473,7 @@ impl ExtensionManager {
             reload_count: AtomicU64::new(0),
             scopes: Arc::new(StdMutex::new(HashMap::new())),
             runtime_owners: Arc::new(StdMutex::new(HashMap::new())),
+            activation_manager: StdMutex::new(None),
             activation_watchers: StdMutex::new(Vec::new()),
             owner_trust_policy: Arc::new(crate::sync_primitives::RwLock::new(owner_trust_policy)),
             plugins_config,
@@ -486,6 +493,33 @@ impl ExtensionManager {
         tree: Arc<crate::capability::ownership::OwnershipTree>,
     ) -> ExtensionResult<Self> {
         Self::new_with_ownership_tree(ExtensionConfig::default(), tree).await
+    }
+
+    /// Attach the one live manager Arc to its retained activation context.
+    ///
+    /// Constructors intentionally continue returning `Self`: many callers
+    /// configure the value before choosing its ownership boundary. Production
+    /// installs this at the process-global Arc boundary; tests that call
+    /// activation directly must do the same.
+    pub(crate) fn attach_activation_manager(manager: Arc<Self>) -> Arc<Self> {
+        *manager
+            .activation_manager
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = Some(Arc::downgrade(&manager));
+        manager
+    }
+
+    pub(crate) fn activation_manager(&self) -> ExtensionResult<Arc<Self>> {
+        self.activation_manager
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .as_ref()
+            .and_then(Weak::upgrade)
+            .ok_or_else(|| {
+                ExtensionError::Runtime(
+                    "extension manager activation context is not attached".to_owned(),
+                )
+            })
     }
 
     /// Inject the memory extension registry after construction (Spec 4 Task 11).

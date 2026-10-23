@@ -199,8 +199,9 @@ impl ExtensionManager {
         PluginStatus::Cold
     }
 
-    /// The task owns the manager and incarnation; cancelling a waiter does not
-    /// cancel mount, lose partial effects, or strand Starting.
+    /// The retained task owns only the exact incarnation and a weak manager
+    /// reference; cancelling a waiter does not cancel mount, lose partial
+    /// effects, or strand Starting.
     pub(super) async fn activate_owner(
         self: &Arc<Self>,
         owner: Arc<RuntimeOwner>,
@@ -216,17 +217,23 @@ impl ExtensionManager {
                         .transition(ProviderState::Starting)
                         .map_err(|e| ExtensionError::Runtime(e.to_string()))?;
                     let generation = owner.provider.generation();
-                    let manager = Arc::clone(self);
+                    let manager = std::sync::Arc::downgrade(self);
                     let operation = Arc::clone(&owner);
                     *task = Some(tokio::spawn(async move {
-                        let result = std::panic::AssertUnwindSafe(
-                            manager.mount_owner(&operation, generation),
-                        )
-                        .catch_unwind()
-                        .await
-                        .unwrap_or_else(|_| {
-                            Err("activation panicked; retained owner requires recovery".into())
-                        });
+                        let result = match manager.upgrade() {
+                            Some(manager) => std::panic::AssertUnwindSafe(
+                                manager.mount_owner(&operation, generation),
+                            )
+                            .catch_unwind()
+                            .await
+                            .unwrap_or_else(|_| {
+                                Err("activation panicked; retained owner requires recovery".into())
+                            }),
+                            None => Err(
+                                "activation manager was dropped; retained owner requires recovery"
+                                    .into(),
+                            ),
+                        };
                         if result.is_err() && operation.provider.state() == ProviderState::Starting
                         {
                             operation.close_admission();
