@@ -1936,6 +1936,194 @@ handler = "handler"
         (manager, canonical, owner)
     }
 
+    fn b4_canonical_service(
+        canonical: Arc<crate::tools::ToolHandlerRegistry>,
+    ) -> crate::tools::scoped::ScopedToolService {
+        let publication = canonical.canonical_publication();
+        let visible: crate::tools::handlers::McpServerFilter = Arc::new(|_| true);
+        let mut projection = crate::tools::runtime::LoopToolRegistry::new();
+        projection.bind_canonical_registry(canonical, visible.clone());
+        let entry = publication
+            .entry("lazy_tool")
+            .expect("published owner tool");
+        projection.register(Box::new(
+            crate::tools::adapters::McpRegistryTool::from_canonical_entry(&entry, &visible),
+        ));
+        crate::tools::scoped::ScopedToolService::new(Arc::new(projection), Default::default())
+    }
+
+    async fn b4_execute_canonical(
+        service: &crate::tools::scoped::ScopedToolService,
+        call_id: &str,
+    ) -> Result<crate::session::events::ToolOutput, crate::tools::service::ToolError> {
+        use crate::tools::service::ToolService;
+        // The production route already returns the processed guest value.
+        crate::approval::with_call_identity(
+            Some(crate::approval::CallIdentity {
+                turn_id: crate::session::events::TurnId::nil(),
+                call_id: call_id.into(),
+            }),
+            service.execute("lazy_tool", serde_json::json!({"probe": "b4"})),
+        )
+        .await
+    }
+
+    #[tokio::test]
+    async fn b4_production_canonical_route_returns_checked_real_guest_payload() {
+        use crate::extension::runtime::wasm::tests::guest_fixture::{
+            manifest_with_checked_input_guest, PAYLOAD_A,
+        };
+        use crate::tools::service::{ToolError, ToolService};
+
+        let tmp = tempfile::tempdir().unwrap();
+        let _home = isolated_home(tmp.path());
+        let (manager, canonical, owner) = b3_cold_manager(tmp.path()).await;
+        // The real guest traps unless the production JSON ABI carries these
+        // exact arguments to the bound export, not merely a matching tool name.
+        manifest_with_checked_input_guest(
+            &tmp.path().join("plugins/lazy-wasm"),
+            "lazy-wasm",
+            PAYLOAD_A,
+            r#"{"name":"handler","arguments":{"probe":"b4"}}"#,
+        );
+        manager.activate_owner(owner).await.unwrap();
+        let service = b4_canonical_service(canonical.clone());
+        let entry = canonical.capture_entry("lazy_tool").unwrap();
+
+        // Call identity alone cannot substitute for a verdict minted by the
+        // ScopedToolService gates, even on the actual published handler.
+        let unsealed = crate::approval::with_call_identity(
+            Some(crate::approval::CallIdentity {
+                turn_id: crate::session::events::TurnId::nil(),
+                call_id: "b4-unsealed".into(),
+            }),
+            entry
+                .entry()
+                .handler
+                .invoke(serde_json::json!({"probe": "b4"})),
+        )
+        .await;
+        assert!(matches!(unsealed, Err(ToolError::PermissionDenied { .. })));
+        assert!(matches!(
+            service
+                .execute("lazy_tool", serde_json::json!({"probe": "b4"}))
+                .await,
+            Err(ToolError::PermissionDenied { .. })
+        ));
+        let output = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            b4_execute_canonical(&service, "b4-positive"),
+        )
+        .await
+        .expect("sealed production call must complete")
+        .expect("sealed authority must admit the real guest");
+        assert_eq!(output.value, serde_json::json!("A"));
+        assert!(crate::tools::dispatch_verdict::current_dispatch_verdict().is_none());
+        assert!(manager.unmount("lazy-wasm").await.unwrap().all_ok());
+    }
+
+    #[tokio::test]
+    async fn b4_production_canonical_reload_rejects_admitted_a_before_guest_and_runs_b() {
+        use crate::capability::provider::ProviderState;
+        use crate::extension::runtime::wasm::tests::guest_fixture::{
+            manifest_with_guest, PAYLOAD_B,
+        };
+        use crate::tools::service::ToolError;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let _home = isolated_home(tmp.path());
+        let (manager, canonical, owner) = b3_cold_manager(tmp.path()).await;
+        manager.activate_owner(owner.clone()).await.unwrap();
+        let service = b4_canonical_service(canonical.clone());
+        assert_eq!(
+            b4_execute_canonical(&service, "b4-before-reload")
+                .await
+                .unwrap()
+                .value,
+            serde_json::json!("A")
+        );
+        let old = canonical.capture_entry("lazy_tool").unwrap();
+        let binding = manager
+            .plugin_loader
+            .read()
+            .await
+            .bind_wasm("lazy-wasm", "handler")
+            .unwrap();
+        let (entered, mut guest_entered) = tokio::sync::oneshot::channel();
+        let (release, guest_release) = std::sync::mpsc::channel();
+        // A regression must not hang the test: the real guest import reports
+        // entry, but its release is already queued if it is wrongly reached.
+        release.send(()).unwrap();
+        binding.block_guest_for_test(entered, guest_release);
+
+        let loader = manager.get_plugin_loader_for_test().write_owned().await;
+        let mut call = Box::pin(b4_execute_canonical(&service, "b4-admitted-a"));
+        assert!(futures::poll!(call.as_mut()).is_pending());
+        assert_eq!(
+            owner.admission.available_permits(),
+            RuntimeOwner::MAX_IN_FLIGHT as usize - 1,
+            "the production handler passed sealed authority and is waiting for the loader"
+        );
+        manifest_with_guest(
+            &tmp.path().join("plugins/lazy-wasm"),
+            "lazy-wasm",
+            PAYLOAD_B,
+        );
+        let mut events = canonical.subscribe_publications();
+        let stop = tokio::spawn({
+            let manager = manager.clone();
+            async move { manager.reload_plugin("lazy-wasm").await }
+        });
+        tokio::time::timeout(std::time::Duration::from_secs(5), events.recv())
+            .await
+            .expect("reload must withdraw before draining")
+            .unwrap();
+        assert_eq!(owner.provider.state(), ProviderState::Stopping);
+        assert!(canonical.capture_entry("lazy_tool").is_none());
+        assert!(!old.validate(&canonical.canonical_publication()));
+        assert!(!stop.is_finished(), "reload must drain the admitted call");
+        drop(loader);
+
+        let result = tokio::time::timeout(std::time::Duration::from_secs(5), call)
+            .await
+            .expect("withdrawn call must fail rather than enter guest A");
+        assert!(
+            matches!(&result, Err(ToolError::PermissionDenied { name, reason })
+                if name == "lazy_tool" && reason == "canonical plugin lease is stale or withdrawn"),
+            "expected stale plugin lease rejection, got {result:?}"
+        );
+        assert!(
+            matches!(
+                guest_entered.try_recv(),
+                Err(tokio::sync::oneshot::error::TryRecvError::Empty)
+            ),
+            "the real guest A import must not have been reached"
+        );
+        assert_eq!(
+            tokio::time::timeout(std::time::Duration::from_secs(5), stop)
+                .await
+                .expect("reload must finish after call rejection")
+                .unwrap()
+                .unwrap(),
+            PluginStatus::Cold
+        );
+        let replacement = manager.runtime_owner("lazy-wasm").unwrap();
+        assert!(!Arc::ptr_eq(&owner, &replacement));
+        manager.activate_owner(replacement).await.unwrap();
+        assert!(!old.validate(&canonical.canonical_publication()));
+        // Keep the same request projection: only the next canonical capture
+        // may obtain B's freshly published owner/mount/binding authority.
+        let output = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            b4_execute_canonical(&service, "b4-replacement-b"),
+        )
+        .await
+        .expect("replacement route must complete")
+        .unwrap();
+        assert_eq!(output.value, serde_json::json!("B"));
+        assert!(manager.unmount("lazy-wasm").await.unwrap().all_ok());
+    }
+
     #[tokio::test]
     async fn b3_ready_real_guest_reload_and_old_receipt_are_incarnation_fenced() {
         use crate::extension::runtime::wasm::tests::guest_fixture::{
