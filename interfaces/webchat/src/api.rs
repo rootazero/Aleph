@@ -39,7 +39,6 @@ pub mod memory_config;
 pub mod native_credentials;
 pub mod projects;
 pub mod providers;
-pub mod runtime_agents;
 pub mod runtimes;
 pub mod search;
 pub mod security;

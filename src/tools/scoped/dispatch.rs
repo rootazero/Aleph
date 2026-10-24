@@ -2659,7 +2659,7 @@ mod tests {
             .scope(
                 turn,
                 svc.apply_layer_two(
-                    "terminal_sessions_read",
+                    "file_read",
                     ToolOutput {
                         value: value.clone(),
                         metadata: Default::default(),
@@ -2679,7 +2679,7 @@ mod tests {
         let svc = bare_service().with_structured_rpc_transport();
         let out = svc
             .apply_layer_two(
-                "terminal_sessions_read",
+                "file_read",
                 ToolOutput {
                     value: serde_json::json!({
                         "ok": true,

@@ -25,11 +25,6 @@ async fn subscribed_reply_reaches_screen_after_startup_and_reconnect() {
             client.close().await.expect("close old socket");
             client.reconnect(&config).await.expect("replace socket");
         }
-        // These are the production subscriptions, including their narrowing
-        // effect on the Gateway's default receive-all connection policy.
-        subscribe_runtime_agents(&mut state, &client)
-            .await
-            .expect("runtime subscription");
         subscribe_browser_live_topics(&client)
             .await
             .expect("browser subscription");

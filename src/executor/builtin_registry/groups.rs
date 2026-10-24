@@ -114,20 +114,6 @@ pub static TOOL_CATEGORIES: &[ToolCategory] = &[
             // doc), so its authorization lives in
             // `method_authz::OPERATOR_TOOLS`, not here.
             "runtime_manage",
-            // Read-only agent panel over PTY sessions the caller owns on
-            // this server, one canonical capability per verb (registered by
-            // `builtin_tools::terminal::capabilities`, not by
-            // `BUILTIN_TOOL_DEFINITIONS`). No PTY-ish group exists, so they
-            // are filed under this heading for lack of a group of their own.
-            // This category list is display-only and carries no
-            // authorization meaning (see this file's module doc): their
-            // operator gate lives in `method_authz::OPERATOR_TOOLS`.
-            "terminal_sessions_list",
-            "terminal_sessions_read",
-            "terminal_sessions_status",
-            "terminal_sessions_wait",
-            "terminal_sessions_explain",
-            "terminal_sessions_attach",
             "select_model",
             "list_models",
             "vault_store",

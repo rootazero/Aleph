@@ -411,7 +411,7 @@ identifier 形状的字段只花一次不会命中的正则，比一条需要人
 > 保留原文是因为它是一次带谓词和 commit 的测量，不是一句会过期的断言（判据 §18）。
 
 **测量（2026-09-07，在本分支 HEAD 上）**：`transcript::` 在 `interfaces/` 里**一次都没有出现**；
-`aleph-tui` 与 `aleph-panel` 都依赖这个 crate，但用的是它的**别的**模块（`state::agent_panel`、`markdown_stream`、
+`aleph-tui` 与 `aleph-panel` 都依赖这个 crate，但用的是它的**别的**模块（`markdown_stream`、
 `connection`、`state::SessionKnobs`、`state::chat_scroll`），从来不是这一个。
 `src/` 那侧唯一的引用是 `src/tools/presentation_census.rs` 里的一条 `#[cfg(test)]` 依赖
 （它调真的 `display_name`，见 §5.4）。整棵树 11 个模块 / 2 272 行 / **60 条 `#[test]`**，**零调用者**。

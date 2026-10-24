@@ -1,48 +1,18 @@
 //! The terminal's tab strip: a pure model, and the component that draws it.
 //!
-//! D2: this view could only ever show ONE terminal — whichever session
-//! `pty.list` happened to name first — so a user running three agents had no
-//! way to reach the other two from here at all. The model below is what makes
-//! "which session am I looking at" a thing the page can answer, and the agent
-//! panel's row click is what makes it answerable from the place a user
-//! notices the problem (spec R2-4, D3).
-//!
-//! Model and component are separated for the usual reason: everything
-//! interesting here is a merge and a selection rule, and a Leptos effect
-//! cannot be asked about either in a unit test.
-//!
-//! # What this model is NOT allowed to do
-//!
-//! It never orders agent entries. Ordering for the agent PANEL lives in
-//! `shared_ui_logic::state::agent_panel::sort_entries` and nowhere else (R2),
-//! and a source-level guard in `alephcore` enforces that on both frontends'
-//! `agent_panel.rs`. Tab order is a different question with a different
-//! answer — it is the order the sessions were opened in, which is the order
-//! `pty.list` returns them in and which must stay stable across refreshes so
-//! tabs do not swap places under the pointer. So this file joins agent state
-//! onto tabs BY `session_id` and takes its order from the session list.
+//! Session order follows `pty.list` and remains stable across refreshes.
 
 use aleph_protocol::pty::PtySessionInfo;
-use aleph_protocol::runtime::{RuntimeAgentEntry, RuntimeAgentState};
 use leptos::prelude::*;
-use shared_ui_logic::state::agent_panel::state_glyph;
 
 use crate::i18n::{t_string, use_i18n};
 
-/// One tab: a session, plus whatever the runtime sampler knows about it.
-///
-/// `state` and `program` are `Option` because the two lists are independent:
-/// `pty.list` answers "which sessions exist" and `runtime.agents.list`
-/// answers "what is running in them", and the second can be silent about a
-/// session the first knows perfectly well. `None` there means the sampler has
-/// nothing to say — never `Idle`, which is a claim (判据 §8).
+/// One tab: a PTY session and its locally derived title.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TabEntry {
     pub session_id: String,
     /// What the tab shows. Derived by `derive_title` and never empty.
     pub title: String,
-    pub state: Option<RuntimeAgentState>,
-    pub program: Option<String>,
     /// Set by [`TabModel::on_exit`] and by nothing else: a session the server
     /// reports closed in `pty.list` is dropped outright by
     /// [`TabModel::reconcile`], so this only ever means "we saw `pty.exit`
@@ -68,17 +38,11 @@ pub struct TabEntry {
 /// `""` for "no title" and for "the spawn inherited the server's shell", and
 /// rendering that as a name would make an empty tab look like a bug in the
 /// terminal rather than a gap in what we know.
-fn derive_title(
-    osc_title: Option<&str>,
-    program: Option<&str>,
-    shell: &str,
-    session_id: &str,
-) -> String {
+fn derive_title(osc_title: Option<&str>, shell: &str, session_id: &str) -> String {
     fn present(value: Option<&str>) -> Option<&str> {
         value.filter(|v| !v.is_empty())
     }
     present(osc_title)
-        .or_else(|| present(program))
         .or_else(|| present(Some(shell)))
         .unwrap_or(session_id)
         .to_string()
@@ -169,12 +133,7 @@ impl TabModel {
     pub fn on_title(&mut self, session_id: &str, title: &str) {
         if let Some(tab) = self.tabs.iter_mut().find(|t| t.session_id == session_id) {
             tab.osc_title = Some(title.to_string());
-            tab.title = derive_title(
-                tab.osc_title.as_deref(),
-                tab.program.as_deref(),
-                &tab.shell,
-                &tab.session_id,
-            );
+            tab.title = derive_title(tab.osc_title.as_deref(), &tab.shell, &tab.session_id);
         }
     }
 
@@ -206,7 +165,7 @@ impl TabModel {
             .map(|t| t.session_id.clone())
     }
 
-    /// Merge a fresh `pty.list` and `runtime.agents.list` into the tab strip.
+    /// Merge a fresh `pty.list` into the tab strip.
     ///
     /// Order: tabs already on screen keep their positions, then sessions this
     /// model has not seen are appended in the order the server listed them.
@@ -214,23 +173,22 @@ impl TabModel {
     ///
     /// The agent list is joined BY `session_id` and its order is never read —
     /// ordering agent entries belongs to
-    /// `shared_ui_logic::state::agent_panel::sort_entries` (R2), and this
     /// file has no business having an opinion about it.
-    pub fn reconcile(&mut self, sessions: &[PtySessionInfo], agents: &[RuntimeAgentEntry]) {
+    pub fn reconcile(&mut self, sessions: &[PtySessionInfo]) {
         let mut next: Vec<TabEntry> = Vec::with_capacity(sessions.len());
         for tab in &self.tabs {
             if let Some(session) = sessions
                 .iter()
                 .find(|s| s.session_id == tab.session_id && !s.closed)
             {
-                next.push(Self::merged(Some(tab), session, agents));
+                next.push(Self::merged(Some(tab), session));
             }
         }
         for session in sessions.iter().filter(|s| !s.closed) {
             if next.iter().any(|t| t.session_id == session.session_id) {
                 continue;
             }
-            next.push(Self::merged(None, session, agents));
+            next.push(Self::merged(None, session));
         }
         self.tabs = next;
 
@@ -266,18 +224,11 @@ impl TabModel {
         if let Some(tab) = self.tabs.iter_mut().find(|t| t.session_id == session_id) {
             tab.closed = false;
             tab.shell = shell.to_string();
-            tab.title = derive_title(
-                tab.osc_title.as_deref(),
-                tab.program.as_deref(),
-                &tab.shell,
-                &tab.session_id,
-            );
+            tab.title = derive_title(tab.osc_title.as_deref(), &tab.shell, &tab.session_id);
         } else {
             self.tabs.push(TabEntry {
                 session_id: session_id.to_string(),
-                title: derive_title(None, None, shell, session_id),
-                state: None,
-                program: None,
+                title: derive_title(None, shell, session_id),
                 closed: false,
                 osc_title: None,
                 shell: shell.to_string(),
@@ -286,27 +237,13 @@ impl TabModel {
         self.selected = Some(session_id.to_string());
     }
 
-    /// One session's row, carrying forward whatever the previous tab for it
-    /// already knew (its OSC title) and re-reading everything else.
-    fn merged(
-        previous: Option<&TabEntry>,
-        session: &PtySessionInfo,
-        agents: &[RuntimeAgentEntry],
-    ) -> TabEntry {
-        let agent = agents.iter().find(|a| a.session_id == session.session_id);
+    /// Build one tab row while retaining the last OSC title.
+    fn merged(previous: Option<&TabEntry>, session: &PtySessionInfo) -> TabEntry {
         let osc_title = previous.and_then(|p| p.osc_title.clone());
-        let program = agent.and_then(|a| a.program.clone());
-        let title = derive_title(
-            osc_title.as_deref(),
-            program.as_deref(),
-            &session.shell,
-            &session.session_id,
-        );
+        let title = derive_title(osc_title.as_deref(), &session.shell, &session.session_id);
         TabEntry {
             session_id: session.session_id.clone(),
             title,
-            state: agent.map(|a| a.state),
-            program,
             closed: false,
             osc_title,
             shell: session.shell.clone(),
@@ -322,7 +259,6 @@ impl TabModel {
 /// parent (判据 §6).
 ///
 /// Rebuilt wholesale on every change to `tabs`, the same idiom
-/// `components/sidebar/agent_panel.rs` uses for its rows — this crate has no
 /// keyed-`<For>` usage anywhere, and a strip of at most a handful of tabs is
 /// not where that would start.
 #[component]
@@ -381,7 +317,6 @@ fn TerminalTab(
     let i18n = use_i18n();
     let select_id = tab.session_id.clone();
     let close_id = tab.session_id.clone();
-    let glyph = tab.state.map(state_glyph);
     let border = if is_selected {
         "border-primary"
     } else {
@@ -400,10 +335,9 @@ fn TerminalTab(
                 role="tab"
                 aria-selected=is_selected.to_string()
                 class="flex items-center gap-1 min-w-0 outline-none"
-                title=tab.program.clone().unwrap_or_default()
+                title=tab.title.clone()
                 on:click=move |_| on_select.run(select_id.clone())
             >
-                {glyph.map(|g| view! { <span class="shrink-0 text-text-tertiary">{g}</span> })}
                 <span class="truncate max-w-[12rem] text-text-primary">{tab.title.clone()}</span>
             </button>
             <button
@@ -416,400 +350,5 @@ fn TerminalTab(
                 "\u{00d7}"
             </button>
         </div>
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn session(session_id: &str, shell: &str, closed: bool) -> PtySessionInfo {
-        PtySessionInfo {
-            session_id: session_id.to_string(),
-            shell: shell.to_string(),
-            cwd: String::new(),
-            created_at: 0,
-            closed,
-        }
-    }
-
-    fn agent(
-        session_id: &str,
-        state: RuntimeAgentState,
-        program: Option<&str>,
-    ) -> RuntimeAgentEntry {
-        RuntimeAgentEntry {
-            session_id: session_id.to_string(),
-            label: "zsh".to_string(),
-            cwd: String::new(),
-            agent: None,
-            program: program.map(str::to_string),
-            state,
-            updated_at: 0,
-            quiet_since: None,
-        }
-    }
-
-    /// The join is BY `session_id`, not by position. The two lists come from
-    /// two different server tables with no shared ordering guarantee, so a
-    /// positional merge would paint one session's state onto another's tab
-    /// the first time they disagreed — and a wrong state glyph reads as a
-    /// fact (判据 §17). The fixture deliberately gives the agent list the
-    /// OPPOSITE order and one MISSING member, so a positional merge cannot
-    /// pass it.
-    #[test]
-    fn reconcile_joins_agent_state_by_session_id() {
-        let mut model = TabModel::default();
-        model.reconcile(
-            &[
-                session("a", "zsh", false),
-                session("b", "zsh", false),
-                session("c", "zsh", false),
-            ],
-            &[
-                agent("c", RuntimeAgentState::Blocked, Some("claude")),
-                agent("a", RuntimeAgentState::Working, Some("codex")),
-            ],
-        );
-
-        let tabs = model.tabs();
-        assert_eq!(
-            tabs.iter()
-                .map(|t| t.session_id.as_str())
-                .collect::<Vec<_>>(),
-            vec!["a", "b", "c"],
-            "tab order comes from the session list, not the agent list"
-        );
-        assert_eq!(tabs[0].state, Some(RuntimeAgentState::Working));
-        assert_eq!(tabs[0].program.as_deref(), Some("codex"));
-        assert_eq!(tabs[2].state, Some(RuntimeAgentState::Blocked));
-        // No agent row for "b". `None` means "the sampler has nothing to say
-        // about this session", which is not the same fact as any of the four
-        // states — least of all Idle (判据 §8).
-        assert_eq!(tabs[1].state, None);
-        assert_eq!(tabs[1].program, None);
-    }
-
-    /// A brand-new shell must be reachable the instant it exists. Re-listing
-    /// to learn about a session we just created is a round trip that can fail
-    /// on its own, and a running shell with no tab pointing at it is D2.
-    #[test]
-    fn a_spawned_session_gets_a_tab_without_waiting_for_a_list() {
-        let mut model = TabModel::default();
-        model.adopt_spawned("fresh", "zsh");
-
-        assert_eq!(model.tabs().len(), 1);
-        assert_eq!(model.tabs()[0].title, "zsh");
-        assert_eq!(model.selected_id(), Some("fresh"));
-
-        // A retry that lands twice must not grow a second tab.
-        model.adopt_spawned("fresh", "zsh");
-        assert_eq!(model.tabs().len(), 1);
-    }
-
-    /// I1's first half. The tab strip's decoration is a JOIN, and a join is
-    /// only as fresh as its last run — a session that goes Blocked after the
-    /// view mounted has to reach the glyph. Before the fix `reconcile` had one
-    /// caller (the mount effect), so the glyph froze at whatever the sampler
-    /// happened to be saying at mount and then rendered a state that was no
-    /// longer true. A wrong label costs more than a missing one (判据 §17).
-    ///
-    /// This is the model half; the wire is pinned by
-    /// `the_view_reconciles_on_runtime_agents_changed_and_on_exit` in
-    /// `views/terminal/mod.rs`, because a model that reconciles correctly on
-    /// demand proves nothing about whether anything demands it.
-    #[test]
-    fn a_state_change_after_the_first_reconcile_reaches_the_tab() {
-        let mut model = TabModel::default();
-        let sessions = [session("a", "zsh", false)];
-
-        model.reconcile(
-            &sessions,
-            &[agent("a", RuntimeAgentState::Working, Some("claude"))],
-        );
-        assert_eq!(model.tabs()[0].state, Some(RuntimeAgentState::Working));
-        assert_eq!(model.tabs()[0].program.as_deref(), Some("claude"));
-
-        model.reconcile(
-            &sessions,
-            &[agent("a", RuntimeAgentState::Blocked, Some("codex"))],
-        );
-        assert_eq!(
-            model.tabs()[0].state,
-            Some(RuntimeAgentState::Blocked),
-            "a later sample must replace the earlier one, not be ignored"
-        );
-        assert_eq!(model.tabs()[0].program.as_deref(), Some("codex"));
-
-        // The sampler going silent about a session is "I have nothing to say",
-        // and it must not leave the previous state on screen as if it were
-        // still being asserted (判据 §8).
-        model.reconcile(&sessions, &[]);
-        assert_eq!(model.tabs()[0].state, None);
-        assert_eq!(model.tabs()[0].program, None);
-    }
-
-    /// I1's second half. `on_exit` only MARKS a tab closed; `reconcile` is
-    /// what drops it, and `on_exit`'s own doc promised exactly that. Nothing
-    /// scheduled a reconcile, so the promise described behaviour that did not
-    /// exist and the dimmed dead tab survived for the life of the mount
-    /// (判据 §1).
-    #[test]
-    fn an_exited_tab_is_dropped_by_the_next_reconcile() {
-        let mut model = TabModel::default();
-        model.reconcile(
-            &[session("a", "zsh", false), session("gone", "zsh", false)],
-            &[],
-        );
-        assert!(model.select("gone"));
-
-        model.on_exit("gone");
-        assert!(
-            model
-                .tabs()
-                .iter()
-                .any(|t| t.session_id == "gone" && t.closed),
-            "still listed, marked closed, for the one round trip it takes to confirm"
-        );
-        assert_eq!(model.selected().map(|t| t.session_id.as_str()), Some("a"));
-
-        // The server no longer lists it — `pty.exit` fires after
-        // `manager().remove()`, so the very next list omits it entirely.
-        model.reconcile(&[session("a", "zsh", false)], &[]);
-        assert!(
-            !model.tabs().iter().any(|t| t.session_id == "gone"),
-            "the next reconcile drops it, which is what `on_exit`'s doc claims"
-        );
-        assert_eq!(model.selected().map(|t| t.session_id.as_str()), Some("a"));
-    }
-
-    /// A session the server reports as closed is gone; it must not occupy a
-    /// tab that clicking would attach to.
-    #[test]
-    fn reconcile_drops_sessions_the_server_reports_closed() {
-        let mut model = TabModel::default();
-        model.reconcile(
-            &[session("dead", "zsh", true), session("live", "zsh", false)],
-            &[],
-        );
-        assert_eq!(
-            model
-                .tabs()
-                .iter()
-                .map(|t| t.session_id.as_str())
-                .collect::<Vec<_>>(),
-            vec!["live"]
-        );
-    }
-
-    /// `pty.exit` arrives before the next `pty.list`, and the tab that just
-    /// died may be the one the user is looking at. Selection must land on a
-    /// neighbour rather than on nothing — an empty terminal pane with tabs
-    /// still on screen reads as a broken page, and "the session you were in
-    /// exited" is not a reason to show no session at all (判据 §14: what does
-    /// the person who was blocked do next).
-    #[test]
-    fn closing_the_selected_tab_falls_to_a_neighbour() {
-        let mut model = TabModel::default();
-        model.reconcile(
-            &[
-                session("a", "zsh", false),
-                session("b", "zsh", false),
-                session("c", "zsh", false),
-            ],
-            &[],
-        );
-        assert!(model.select("b"));
-
-        model.on_exit("b");
-        assert_eq!(
-            model.selected().map(|t| t.session_id.as_str()),
-            Some("c"),
-            "the next open tab is the neighbour"
-        );
-        assert!(
-            model.tabs().iter().any(|t| t.session_id == "b" && t.closed),
-            "the exited tab stays listed, marked closed, until the next \
-             reconcile — vanishing mid-keystroke hides WHY it went away"
-        );
-
-        // The last open tab: there is no next, so fall back to the previous.
-        model.on_exit("c");
-        assert_eq!(model.selected().map(|t| t.session_id.as_str()), Some("a"));
-
-        // Nothing left open at all: `None` is the honest answer, not a
-        // pointer at a dead session.
-        model.on_exit("a");
-        assert_eq!(model.selected().map(|t| t.session_id.as_str()), None);
-    }
-
-    /// Selecting a session this model has never heard of must be REFUSED,
-    /// not silently turned into a tab. The id comes from outside (the agent
-    /// panel's row click, and a stale row is exactly the case that matters),
-    /// and inventing a tab for it would produce a tab pointing at a session
-    /// that may not exist — the page would then attach to nothing and show
-    /// an empty screen with no explanation (判据 §8).
-    #[test]
-    fn select_an_unknown_session_is_refused_not_silently_added() {
-        let mut model = TabModel::default();
-        model.reconcile(&[session("a", "zsh", false)], &[]);
-        assert!(model.select("a"));
-
-        assert!(!model.select("ghost"), "an unknown id must be refused");
-        assert_eq!(model.tabs().len(), 1, "and must not create a tab");
-        assert_eq!(
-            model.selected().map(|t| t.session_id.as_str()),
-            Some("a"),
-            "a refused select must not move the selection either"
-        );
-    }
-
-    /// Three sources can name a tab and they are not equally good: the
-    /// program's own OSC title is what the user set, the foreground program
-    /// is what is actually running, and the shell is only what the session
-    /// was STARTED as. Each falls through to the next only when the one
-    /// above is absent — an empty string is absent, not a title (判据 §17: a
-    /// blank tab is a label that says nothing).
-    #[test]
-    fn title_prefers_osc_then_program_then_shell() {
-        assert_eq!(
-            derive_title(Some("build: web"), Some("claude"), "zsh", "s1"),
-            "build: web"
-        );
-        assert_eq!(derive_title(None, Some("claude"), "zsh", "s1"), "claude");
-        assert_eq!(derive_title(None, None, "zsh", "s1"), "zsh");
-        // Empty is not a value at any level.
-        assert_eq!(
-            derive_title(Some(""), Some("claude"), "zsh", "s1"),
-            "claude"
-        );
-        assert_eq!(derive_title(Some(""), Some(""), "zsh", "s1"), "zsh");
-        // Nothing at all still has to render something clickable.
-        assert_eq!(derive_title(None, None, "", "s1"), "s1");
-    }
-
-    /// The OSC title arrives on a screen frame, long after the tab was built
-    /// from `pty.list`, and a later `pty.list` refresh must not throw it
-    /// away — otherwise the tab's name flickers back to the shell every time
-    /// an agent starts or stops anywhere on the server.
-    #[test]
-    fn a_reconcile_keeps_a_title_the_program_already_set() {
-        let mut model = TabModel::default();
-        model.reconcile(&[session("a", "zsh", false)], &[]);
-        model.on_title("a", "build: web");
-        assert_eq!(model.tabs()[0].title, "build: web");
-
-        model.reconcile(&[session("a", "zsh", false)], &[]);
-        assert_eq!(model.tabs()[0].title, "build: web");
-    }
-
-    /// Tabs must keep their positions across refreshes: a session list that
-    /// comes back in a different order (or with a new session in it) must
-    /// not shuffle the tabs a user is pointing at.
-    #[test]
-    fn reconcile_keeps_existing_tabs_in_place_and_appends_new_ones() {
-        let mut model = TabModel::default();
-        model.reconcile(
-            &[session("a", "zsh", false), session("b", "zsh", false)],
-            &[],
-        );
-        model.reconcile(
-            &[
-                session("b", "zsh", false),
-                session("c", "zsh", false),
-                session("a", "zsh", false),
-            ],
-            &[],
-        );
-        assert_eq!(
-            model
-                .tabs()
-                .iter()
-                .map(|t| t.session_id.as_str())
-                .collect::<Vec<_>>(),
-            vec!["a", "b", "c"]
-        );
-    }
-
-    /// A selection naming a session that is no longer listed cannot survive
-    /// a reconcile: it would leave `selected()` answering `None` while
-    /// `selected_id()` still named the dead session, and the view attaching
-    /// to neither.
-    #[test]
-    fn a_reconcile_that_drops_the_selected_session_reselects() {
-        let mut model = TabModel::default();
-        model.reconcile(
-            &[session("a", "zsh", false), session("b", "zsh", false)],
-            &[],
-        );
-        assert!(model.select("b"));
-        model.reconcile(&[session("a", "zsh", false)], &[]);
-        assert_eq!(model.selected().map(|t| t.session_id.as_str()), Some("a"));
-
-        model.reconcile(&[], &[]);
-        assert_eq!(model.selected_id(), None);
-    }
-
-    /// The sequence M1 was about, end to end: a program whose OSC title is
-    /// exactly what the tab already derived must still be RECORDED.
-    ///
-    /// `claude` names its own window `claude`, and the tab's derived title is
-    /// already `claude` because the sampler reported `program`. The old change
-    /// guard compared the incoming raw title against that DERIVED title, saw
-    /// no difference, and never called `on_title` — so `osc_title` stayed
-    /// `None`. The loss only shows up one reconcile later, when `program` goes
-    /// quiet (the agent exits, or the probe cannot answer) and the title falls
-    /// all the way back to the shell, discarding a name the program really did
-    /// set for itself.
-    ///
-    /// Reddens if the change predicate goes back to comparing derived against
-    /// raw: the second assertion fails outright, and with `on_title` never
-    /// reached the last one reads `zsh`.
-    #[test]
-    fn a_title_equal_to_the_derived_name_is_still_recorded() {
-        let mut model = TabModel::default();
-        model.reconcile(
-            &[session("a", "zsh", false)],
-            &[agent("a", RuntimeAgentState::Working, Some("claude"))],
-        );
-        assert_eq!(
-            model.tabs()[0].title,
-            "claude",
-            "the probed program names the tab before any OSC title arrives"
-        );
-
-        // The frame handler's gate. It must fire here even though the derived
-        // title and the incoming title are the same string.
-        assert!(
-            model.osc_title_differs("a", "claude"),
-            "an unrecorded OSC title differs from `None`, whatever the derived \
-             title happens to read"
-        );
-        model.on_title("a", "claude");
-
-        // Idempotent once recorded: the same title on the next frame is not a
-        // change, which is what keeps the strip from re-rendering at the frame
-        // rate.
-        assert!(!model.osc_title_differs("a", "claude"));
-
-        // The agent exits, so nothing reports a foreground program any more.
-        // The title the program set for itself must survive that.
-        model.reconcile(&[session("a", "zsh", false)], &[]);
-        assert_eq!(
-            model.tabs()[0].title,
-            "claude",
-            "a recorded OSC title outlives the program that set it; falling \
-             back to the shell here is the loss M1 named"
-        );
-    }
-
-    /// The complement, so the fix is not "always record": an id with no tab
-    /// answers `false`, because `on_title` would ignore it. "I have no row for
-    /// this" must not read as "this is a change" (判据 §8).
-    #[test]
-    fn an_unknown_session_reports_no_title_change() {
-        let mut model = TabModel::default();
-        model.reconcile(&[session("a", "zsh", false)], &[]);
-        assert!(!model.osc_title_differs("nope", "anything"));
     }
 }

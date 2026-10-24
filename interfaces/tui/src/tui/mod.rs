@@ -52,14 +52,11 @@ use aleph_protocol::browser_live::{
     CLOSED_TOPIC as BROWSER_LIVE_CLOSED_TOPIC, RESOURCE_TOPIC as BROWSER_LIVE_RESOURCE_TOPIC,
 };
 use aleph_protocol::providers::ProviderListResult;
-use aleph_protocol::runtime::{
-    RuntimeAgentsListResponse, RUNTIME_AGENTS_CHANGED_TOPIC, RUNTIME_AGENTS_LIST_METHOD,
-};
 use aleph_protocol::{ClarificationResolveResponse, PendingListResponse, StreamEvent};
 
 use aleph_client::{AlephClient, CliConfig, CliError, CliResult};
 
-use app::{Action, AgentPanelData, AppState, Focus};
+use app::{Action, AppState, Focus};
 use commands::{
     btw_abort_or_close, confirm_provider_pick, dispatch_gateway_text, execute_local_command,
     fetch_gateway_commands, fetch_my_user_id, open_agent_detail, refresh_picker_provider,
@@ -122,89 +119,12 @@ fn default_provider_model(result: &Value) -> Option<String> {
         .filter(|model| !model.is_empty())
 }
 
-/// Map a `runtime.agents.list` outcome into [`AgentPanelData`].
-///
-/// Same shape as [`model_caption`]: a pure function over a `CliResult`, so
-/// it is testable with a canned `Ok`/`Err` and needs no live socket —
-/// `client.call`'s own correctness is `shared/client`'s test suite's job,
-/// not this crate's. `CliError::Rpc { code, .. }` is how an operator-gate
-/// refusal actually reaches this layer (`AUTH_REQUIRED`, per
-/// `gateway::server::connection::dispatch::process_request`'s admin gate) — distinguished
-/// by that CODE, never by matching words in the message (P8).
-fn agent_panel_data(result: CliResult<RuntimeAgentsListResponse>) -> AgentPanelData {
-    match result {
-        Ok(resp) => AgentPanelData::Ready(resp.agents),
-        Err(CliError::Rpc { code, message }) if code == aleph_protocol::jsonrpc::AUTH_REQUIRED => {
-            AgentPanelData::Refused(message)
-        }
-        Err(e) => AgentPanelData::Unavailable(e.to_string()),
-    }
-}
-
-/// Subscribe to the agent panel's topic and mark a re-fetch as due.
-///
-/// Startup uses this helper; runtime refresh uses the bounded RPC queue.
-///
-/// One derivation, two callers (判据 §9/§1) — `run()` at startup, and the
-/// reconnect-success arm in `main_loop`, beside `reconcile_side_question`.
-/// Both need it: `events.subscribe` registers PER-CONNECTION server state
-/// (`subscription_manager.remove_connection` drops it on close), so
-/// `AlephClient::reconnect`'s new socket starts subscribed to nothing.
-/// Without re-subscribing there, the first reconnect silently and
-/// permanently kills this screen's agent-panel data path — R8-5 waives only
-/// *unsubscribe* for the process's life, not *re-subscribe* after a socket
-/// the gateway itself dropped.
-///
-/// Sets the flag rather than awaiting [`refresh_runtime_agents`] directly:
-/// the subscribe must complete before this screen can miss a notification
-/// (so it stays awaited), but the fetch itself does not need to block the
-/// caller — `main_loop`'s existing flag-check performs it on its next
-/// iteration, and doing it this way is also what makes
-/// [`app::AgentPanelData::Loading`] observable at all (awaiting the fetch
-/// here left it permanently unreachable before the first frame ever drew).
-async fn subscribe_runtime_agents(state: &mut AppState, client: &AlephClient) -> CliResult<()> {
-    // A non-operator's subscribe still "succeeds" as an RPC — the operator
-    // gate lives on the event's publish side (`EventScopeGuard`), not on
-    // `events.subscribe` itself — so its result is not worth failing on;
-    // the eventual `runtime.agents.list` fetch this triggers is what
-    // actually reports the gate's answer.
-    //
-    // The result is still surfaced (T1.8): the previous `let _ =` swallowed
-    // transport errors silently, and a failed subscribe on a freshly
-    // re-opened socket was the path that froze the panel after the first
-    // reconnect — no warn, no retry, the gateway had already dropped the
-    // subscription and there was no log line to look at. A failed call now
-    // warns AND still arms the re-fetch flag, so the next `main_loop` tick
-    // picks it up the same way a `runtime.agents.changed` topic event does.
-    let result = client
-        .call::<_, Value>("events.subscribe", Some(tui_event_subscribe_params()))
-        .await;
-    if let Err(e) = &result {
-        tracing::warn!(
-            error = %e,
-            "events.subscribe for runtime.agents.changed failed; \
-             the next main_loop tick will retry the subscribe and \
-             the re-fetch"
-        );
-        // Arm the re-fetch flag ONLY on failure. On a successful
-        // subscribe, the call sites that wanted a refresh anyway
-        // (`run()` at startup, the reconnect-success arm in
-        // `main_loop`) set it themselves — and `main_loop`'s flag-check
-        // block now ALSO calls this helper, so setting the flag on
-        // success here would create a feedback loop (clear → refresh
-        // → subscribe → set → clear → refresh → …).
-        state.runtime_agents_refetch_due = true;
-    }
-    result.map(|_| ())
-}
-
 /// Every subscription preserves the chat stream as well as both topic planes.
 /// The first explicit filter replaces the Gateway's receive-all default, so
 /// even a runtime-only retry must retain `stream.*` on a fresh connection.
 fn tui_event_subscribe_params() -> Value {
     json!({ "topics": [
         "stream.*",
-        RUNTIME_AGENTS_CHANGED_TOPIC,
         BROWSER_LIVE_RESOURCE_TOPIC,
         BROWSER_LIVE_CLOSED_TOPIC,
     ] })
@@ -381,26 +301,6 @@ pub async fn run(
         );
     }
 
-    // 3b-iii. Agent panel (Task 8a): subscribe once for the life of this
-    // process, then mark a fetch as due — main_loop's first iteration
-    // performs it, so this does not block startup on a second round trip
-    // and AgentPanelData::Loading is briefly observable, as R8-6 intended.
-    // The reconnect arm calls this same helper again — see its own doc.
-    //
-    // The result is deliberately not surfaced (T1.8): a failed subscribe on
-    // startup already logs a warn inside the helper AND arms the re-fetch
-    // flag, and `run()` is the wrong place to bubble the failure — the rest
-    // of the launch (status bar, transcript attach) is still wanted.
-    //
-    // The helper now arms the re-fetch flag ONLY on failure. On a
-    // successful subscribe, set it ourselves so `main_loop`'s first
-    // iteration actually does the re-fetch (the previous "always-arm"
-    // helper behavior was masking this need, and was the reason adding
-    // a subscribe call to `main_loop`'s flag-check would otherwise
-    // create an infinite loop).
-    let _ = subscribe_runtime_agents(&mut state, &client).await;
-    state.runtime_agents_refetch_due = true;
-    // Browser live topics: per-connection, fail-soft, once at startup.
     let _ = subscribe_browser_live_topics(&client).await;
 
     // 3c. Attach to the named conversation: transcript + the settings that
@@ -613,7 +513,6 @@ async fn main_loop<'c>(
     let mut needs_redraw = true;
     let mut last_welcome_layout = None;
     let mut rpc_jobs = rpc_jobs::RpcJobs::default();
-    let mut runtime_refresh_after = std::time::Instant::now();
     let mut continuity = client.stream_continuity();
     let mut recovery_after = std::time::Instant::now();
     let mut run_probe_after = std::time::Instant::now();
@@ -815,11 +714,6 @@ async fn main_loop<'c>(
             completed = rpc_jobs.next() => {
                 if completed.tag.scope == rpc_scope {
                     match completed.tag.method {
-                        RUNTIME_AGENTS_LIST_METHOD => {
-                            state.runtime_agents = agent_panel_data(completed.result.and_then(|value| {
-                                serde_json::from_value(value).map_err(CliError::from)
-                            }));
-                        }
                         "session.snapshot" => {
                             recovery_after = std::time::Instant::now() + Duration::from_secs(5);
                             match completed.result.and_then(|v| serde_json::from_value(v).map_err(CliError::from)) {
@@ -827,11 +721,6 @@ async fn main_loop<'c>(
                                     commands::apply_acquired_session(state, snapshot, AttachMode::Replace);
                                 }
                                 Err(_) => state.add_system_message("Conversation recovery failed; keeping the current view and retrying.".into()),
-                            }
-                        }
-                        "events.subscribe" => {
-                            if completed.result.is_err() {
-                                state.runtime_agents_refetch_due = true;
                             }
                         }
                         "agent.status" => {
@@ -963,7 +852,6 @@ async fn main_loop<'c>(
                     // completed, and a peer can have spoken, while this client
                     // was away.
                     state.begin_reattach();
-                    state.runtime_agents_refetch_due = true;
                     state.browser_resources.clear_for_reconnect();
                     browser_subscribe_due = true;
                     side_recovery_due = true;
@@ -984,42 +872,6 @@ async fn main_loop<'c>(
                     reconnecting = Some(reconnect_after(client, config, backoff));
                 }
             }
-        }
-
-        // A pending agent-panel re-fetch is STATE
-        // (`state.runtime_agents_refetch_due`), checked and cleared once per
-        // iteration here — not an `Action`, and not folded into the match
-        // below. See the field's own doc: the burst-coalescing drain in the
-        // `gateway_events` branch above keeps only the LAST non-`None`
-        // action from a drained burst, so an `Action` that meant "go
-        // re-fetch the agent table" could be silently overwritten by a later
-        // frame in the same burst and never happen — and `runtime.agents.changed`
-        // fires exactly when `stream.*` chunks are also flying, which is not
-        // a rare shape for this loop to see. A `bool` on `AppState` cannot be
-        // coalesced away by a later frame the way a returned `Action` could.
-        if state.runtime_agents_refetch_due && std::time::Instant::now() >= runtime_refresh_after {
-            let fetch = rpc_jobs.enqueue(
-                client,
-                rpc_jobs::RpcTag {
-                    scope: rpc_scope.clone(),
-                    method: RUNTIME_AGENTS_LIST_METHOD,
-                    identity: String::new(),
-                },
-                None,
-            );
-            let subscribe = rpc_jobs.enqueue(
-                client,
-                rpc_jobs::RpcTag {
-                    scope: rpc_scope.clone(),
-                    method: "events.subscribe",
-                    identity: "runtime-agents".into(),
-                },
-                Some(tui_event_subscribe_params()),
-            );
-            if fetch && subscribe {
-                state.runtime_agents_refetch_due = false;
-            }
-            runtime_refresh_after = std::time::Instant::now() + Duration::from_secs(1);
         }
 
         // Recovery is a durable due flag: a full worker queue cannot discard
@@ -1188,7 +1040,6 @@ async fn main_loop<'c>(
                     state.transcript_needs_resync = true;
                     pending_refresh_due = true;
                     recovery_after = std::time::Instant::now();
-                    state.runtime_agents_refetch_due = true;
                 }
                 needs_redraw |= should_redraw_after_tick(
                     // `state.dialog` (the AskUser overlay) is OR'd in for the
@@ -1536,15 +1387,9 @@ mod theme_render_tests;
 #[cfg(test)]
 mod tests {
     use super::{
-        agent_panel_data, model_caption, should_redraw_after_tick, tui_event_subscribe_params,
-        AgentPanelData, AppState, ModelCaption, RUNTIME_AGENTS_CHANGED_TOPIC,
+        model_caption, should_redraw_after_tick, tui_event_subscribe_params, AppState, ModelCaption,
     };
-    use aleph_client::CliError;
-    use aleph_protocol::jsonrpc::{ADMIN_REQUIRED_MESSAGE, AUTH_REQUIRED};
     use aleph_protocol::providers::ProviderInfo;
-    use aleph_protocol::runtime::{
-        RuntimeAgentEntry, RuntimeAgentState, RuntimeAgentsListResponse,
-    };
     use serde_json::json;
 
     /// Keep output-mode changes inside the alternate-screen lifetime, including
@@ -1656,189 +1501,6 @@ mod tests {
     #[test]
     fn tick_with_a_connection_state_change_redraws_even_when_idle() {
         assert!(should_redraw_after_tick(false, true));
-    }
-
-    fn agent_entry(session_id: &str) -> RuntimeAgentEntry {
-        RuntimeAgentEntry {
-            session_id: session_id.to_string(),
-            label: "claude".into(),
-            cwd: "/tmp".into(),
-            agent: Some("claude".into()),
-            program: None,
-            state: RuntimeAgentState::Working,
-            updated_at: 1,
-            quiet_since: None,
-        }
-    }
-
-    /// `agent_panel_data`'s mapping, mirroring `a_refusal_is_not_an_empty_install`
-    /// above for the exact same reason: a `runtime.agents.list` refusal and an
-    /// install with nothing running must not collapse into the same shape.
-    #[test]
-    fn a_runtime_agents_refusal_is_distinguished_from_every_other_failure() {
-        let ready = agent_panel_data(Ok(RuntimeAgentsListResponse {
-            agents: vec![agent_entry("s1")],
-        }));
-        let refused = agent_panel_data(Err(CliError::Rpc {
-            code: AUTH_REQUIRED,
-            message: ADMIN_REQUIRED_MESSAGE.to_string(),
-        }));
-        let unavailable = agent_panel_data(Err(CliError::Timeout("no response in 30s".into())));
-
-        assert!(matches!(ready, AgentPanelData::Ready(ref v) if v.len() == 1));
-        match refused {
-            // The mapping passes the message through untouched — assert
-            // equality with the shared constant, not a substring of its
-            // wording, so this test stays green if that wording ever
-            // changes (another page keys off it too — see
-            // `ADMIN_REQUIRED_MESSAGE`'s own doc) and only reddens if the
-            // pass-through itself breaks.
-            AgentPanelData::Refused(msg) => assert_eq!(msg, ADMIN_REQUIRED_MESSAGE),
-            other => panic!("AUTH_REQUIRED must map to Refused, not {other:?}"),
-        }
-        match unavailable {
-            AgentPanelData::Unavailable(msg) => assert!(msg.contains("no response in 30s")),
-            other => panic!("a non-gate failure must map to Unavailable, not {other:?}"),
-        }
-    }
-
-    /// The round trip R8-7 asks for: a `runtime.agents.changed` topic event
-    /// arriving ends with `runtime_agents` holding entries it did not have
-    /// before — not merely a flag having flipped (判据 §4). A flag DOES flip
-    /// here (`runtime_agents_refetch_due` — see its doc for why the fix-round-1
-    /// design deliberately makes the pending re-fetch state, not an `Action`
-    /// that a burst-coalescing drain could silently lose), but this test does
-    /// not stop at that: it drives the REAL functions production uses
-    /// (`AppState::handle_topic_event`, `agent_panel_data` — the same mapping
-    /// `refresh_runtime_agents` applies to a real RPC reply) in the sequence
-    /// the main loop drives them, and asserts the state that comes out the
-    /// other end. The one link this cannot exercise without a live socket is
-    /// `client.call` itself, already covered by `shared/client`'s own test
-    /// suite; `a_runtime_agents_refetch_flag_is_wired_to_the_refetch_call`
-    /// below closes the remaining gap — that `main_loop` actually acts on the
-    /// flag this test sets.
-    #[test]
-    fn a_runtime_agents_changed_topic_ends_with_new_entries_in_state() {
-        let mut state = AppState::new("s".into(), "m".into());
-        assert!(
-            matches!(state.runtime_agents, AgentPanelData::Loading),
-            "must start with no answer yet"
-        );
-        assert!(
-            !state.runtime_agents_refetch_due,
-            "must start with nothing pending"
-        );
-
-        state.handle_topic_event(RUNTIME_AGENTS_CHANGED_TOPIC, serde_json::json!({}));
-        assert!(
-            state.runtime_agents_refetch_due,
-            "the one topic this phase understands must set the re-fetch flag"
-        );
-
-        let fixture = RuntimeAgentsListResponse {
-            agents: vec![agent_entry("s1"), agent_entry("s2")],
-        };
-        // What `refresh_runtime_agents` does with a real RPC reply, called
-        // directly here instead of over a socket — see this test's doc.
-        state.runtime_agents = agent_panel_data(Ok(fixture.clone()));
-
-        match &state.runtime_agents {
-            AgentPanelData::Ready(entries) => assert_eq!(
-                entries, &fixture.agents,
-                "state must hold the NEW entries, not the Loading it started with"
-            ),
-            other => panic!("expected Ready(entries), got {other:?}"),
-        }
-    }
-
-    /// Every subscription entry point keeps chat frames and both topic planes.
-    #[test]
-    fn subscriptions_keep_chat_stream_and_browser_runtime_topics() {
-        use aleph_protocol::browser_live::{CLOSED_TOPIC, RESOURCE_TOPIC};
-        assert_eq!(
-            tui_event_subscribe_params(),
-            json!({ "topics": ["stream.*", RUNTIME_AGENTS_CHANGED_TOPIC, RESOURCE_TOPIC, CLOSED_TOPIC] })
-        );
-        assert_eq!(RESOURCE_TOPIC, "browser.live.resource");
-        assert_eq!(CLOSED_TOPIC, "browser.live.closed");
-    }
-
-    /// On T1.8's bug shape: a `subscribe_runtime_agents` whose `events.subscribe`
-    /// RPC fails on a freshly re-opened socket must NOT silently freeze the
-    /// panel — the next `main_loop` tick has to retry the re-fetch via the
-    /// same flag the topic-event path already uses (`runtime_agents_refetch_due`).
-    ///
-    /// `AlephClient::connect` opens a real TCP socket and `events.subscribe`
-    /// goes through `client.call`, so an in-process "connect, then break the
-    /// socket" fixture exists in principle (`shared/client`'s tests do it for
-    /// other arms) but spinning one up here would land a multi-hundred-line
-    /// server in an L1 fix whose job is the failure-path shape, not the
-    /// transport. Source-level, for the same reason the wiring tests above are:
-    /// a runtime call cannot tell "subscribed successfully" from "subscribed
-    /// and the result was discarded", and a `match` arm the source no longer
-    /// contains cannot satisfy the assertion. Comment lines are stripped
-    /// first so a comment naming `tracing::warn!` cannot satisfy the
-    /// "emits a warn" check.
-    #[test]
-    fn subscribe_runtime_agents_failure_path_sets_refetch_due_and_warns() {
-        let src = include_str!("mod.rs").replace('\r', "");
-        let production = src.split("#[cfg(test)]").next().expect("split yields one");
-        let code: String = production
-            .lines()
-            .filter(|l| !l.trim_start().starts_with("//"))
-            .collect::<Vec<_>>()
-            .join("\n");
-
-        // Bounded to `subscribe_runtime_agents`'s body — a `Result`-returning
-        // function named something else in this file would otherwise satisfy
-        // the shape assertions below while the actual function still has the
-        // pre-T1.8 `let _ =` swallow.
-        let fn_start = code
-            .find("async fn subscribe_runtime_agents")
-            .expect("subscribe_runtime_agents must still exist");
-        let fn_open_brace = code[fn_start..]
-            .find('{')
-            .map(|i| fn_start + i)
-            .expect("subscribe_runtime_agents must have a body");
-        let fn_close_brace = code[fn_open_brace..]
-            .find("\n}")
-            .map(|i| fn_open_brace + i)
-            .expect("subscribe_runtime_agents must close");
-        let body = &code[fn_open_brace..fn_close_brace];
-
-        // 1. The signature must surface the failure, not swallow it the way
-        //    the pre-T1.8 `let _ = client.call(...).await;` did. Either spelling
-        //    counts — `-> Result<…>` directly or `-> CliResult<…>` (the type
-        //    alias this crate imports) — but a bare `-> ()` or a missing
-        //    return type does NOT.
-        let signature_end = code[fn_start..]
-            .find('{')
-            .expect("signature must terminate");
-        let signature = &code[fn_start..fn_start + signature_end];
-        assert!(
-            signature.contains("-> Result") || signature.contains("-> CliResult"),
-            "subscribe_runtime_agents must return a Result so the reconnect arm \
-             can observe a failed subscribe — got signature: `{}`",
-            signature.trim(),
-        );
-
-        // 2. The failure branch must (a) log a warn so a frozen-looking panel
-        //    leaves a breadcrumb in `RUST_LOG`, and (b) set the flag the
-        //    existing `main_loop` retry hook already polls on.
-        assert!(
-            body.contains("tracing::warn"),
-            "a failed subscribe must produce a warn-level log entry; without \
-             one, the panel going dark on a re-opened socket is invisible. \
-             Got body:\n{}",
-            body,
-        );
-        assert!(
-            body.contains("runtime_agents_refetch_due = true"),
-            "a failed subscribe must mark a re-fetch as due so the next \
-             `main_loop` tick retries — that is the existing retry hook the \
-             topic-event path already rides. Got body:\n{}",
-            body,
-        );
     }
 }
 

@@ -414,7 +414,7 @@ mod tests {
     fn other_topics_are_ignored() {
         let mut cat = BrowserResourceCatalog::new();
         assert_eq!(
-            cat.apply_topic("runtime.agents.changed", &json!({})),
+            cat.apply_topic("connection.warning", &json!({})),
             CatalogUpdate::NotBrowserTopic
         );
         assert!(cat.is_empty());

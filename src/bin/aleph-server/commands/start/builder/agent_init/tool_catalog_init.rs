@@ -300,12 +300,9 @@ pub(super) async fn init_tool_catalog(
         server.handlers_mut().register("tools.invoke", move |req| {
             let registry = reg.clone();
             let agents = Some(agents_for_invoke.clone());
-            let canonical = Some(canonical_tools.clone());
             async move {
-                alephcore::gateway::handlers::tools_invoke::handle_invoke_with_canonical(
-                    req, registry, agents, canonical,
-                )
-                .await
+                alephcore::gateway::handlers::tools_invoke::handle_invoke(req, registry, agents)
+                    .await
             }
         });
         if !daemon {

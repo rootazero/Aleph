@@ -19,7 +19,6 @@ members = [
     "interfaces/tui",
     "interfaces/webchat",
 
-    "crates/agent-detect",
     "crates/aleph-cdp",
     "crates/aleph-slot-api",
 ]
@@ -196,9 +195,6 @@ aleph-protocol = { path = "shared/protocol" }
 # reverse edge in `src/utils/text_format.rs` (it becomes a re-export shim,
 # not a second definition).
 aleph-slot-api = { path = "crates/aleph-slot-api" }
-# Screen-text agent-state detection (ported from herdr, Apache-2.0). Consumed
-# by `gateway::runtime`, which samples PTY screens on the diff-frame cadence.
-agent-detect = { path = "crates/agent-detect" }
 # The CDP transport (spec §3.1). Its `testkit` feature is NOT enabled here — see
 # the `[features] testkit` comment in crates/aleph-cdp/Cargo.toml for why the
 # dev-dependency below can turn it on without it reaching a production build.

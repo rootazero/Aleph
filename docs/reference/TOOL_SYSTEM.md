@@ -60,8 +60,8 @@ contract, not the unified scoped gate**. It reuses existing predicates to refuse
 
 `ALEPH_GATEWAY_TOOLS_ALLOW` remains an exact-name, operator-configured override
 for the first two floors only; it does not bypass operator/member/agent checks.
-The canonical terminal observation route is a narrow existing exception that
-uses a request-local `ScopedToolService`; it is not general authorization wiring.
+PTY interaction stays on the dedicated `pty.*` capability surface; this raw
+invocation boundary does not provide a second terminal route.
 
 普通 RPC 没有真实 session、有效 exec tier、合并后的 global/agent/channel
 `tool_permissions` 或可路由的 approval context，也不经过 agent-loop hooks / ledger。
@@ -352,36 +352,11 @@ Gateway owns CDP; Panel/TUI are I/O only; opt-in only for an explicit valid `[ga
 | `sessions_send` | Send to sub-agent | `session_key`, `message` |
 | `sessions_list` | List sub-agents | - |
 
-### Embedded Terminal (read-only)
+### Embedded Terminal
 
-Observes the PTY sessions the caller owns — the same data `pty.*` and `runtime.*` gate
-operator-only on their RPC and event faces, so this tool is gated the same way
-(`method_authz::OPERATOR_TOOLS` **and** `builtin_tools/terminal/capabilities.rs::require_operator_caller`).
-六个 canonical handlers 从 registry 派生 schema/catalog；旧 `terminal {action}` 仅在 `tools.invoke` ingress 转换后走 scoped dispatch，不注册第二个身份。 / Six canonical handlers own their schemas and catalog metadata; the legacy RPC shape is ingress-only compatibility, not a second callable.
-`tools.invoke` 调 canonical `terminal_sessions_*` 时，经每请求一个 `ScopedToolService` 并 opt-in `ResultTransport::StructuredRpc`：成功值保持完整类型化 JSON，仅旁路面向模型的 ingress 清洗 / 结果预算 / offload / flatten / prompt tally；captured-entry 与 proof 闸及 metadata hoist 不变；未新增 transport 大小上限。详见 [TERMINAL_RUNTIME.md §3.3](TERMINAL_RUNTIME.md)。 / `tools.invoke` dispatches canonical terminal tools through a per-request `ScopedToolService` opted into `StructuredRpc`: the success value stays full typed JSON; only model-facing cleaning/budget/offload/flatten/prompt tally are bypassed; gates and metadata hoists are unchanged; no transport-size cap.
-**No write verb**: a PTY passes neither `[sandbox.command_policy]` nor the exec tier, so typing
-into one would hand the model a shell that bypasses every command gate — an authorization
-decision, not a feature (round-2 spec §7.1 holds the shape it would take if that is ever decided).
+终端是纯 PTY 能力面。`pty.*` RPC 负责 session 生命周期、输入、resize、attach 和 screen；不存在 runtime agent 状态表、进程探测、`terminal_sessions_*` 观察工具或 agent panel。
 
-| Tool | Description | Args |
-|------|-------------|------|
-| `terminal_sessions_list` | The caller's own PTY sessions: `session_id`, `shell`, `cwd` (the SPAWN dir), `created_at`, `closed` | none |
-| `terminal_sessions_read` | One session's current visible screen, no scrollback | `session_id` |
-| `terminal_sessions_status` | Each session's detected agent state (`working`/`blocked`/`idle`/`unknown`) — the table `runtime.agents.list` serves | none |
-| `terminal_sessions_wait` | Block until one session's state enters `until`, then return the entry. Answers `timeout` with the CURRENT entry, `gone` if the session ends first. Never polls the screen | `session_id`, `until?` (default `["blocked","idle"]`), `timeout_ms?` (default 60000, **clamped** to 150000) |
-| `terminal_sessions_explain` | Why a state was reported: which manifest rule matched, at which manifest version, over which screen text and title | `session_id` |
-| `terminal_sessions_attach` | Read-only attach snapshot of an owned session | `session_id` |
-
-⚠️ **`explain`'s state may legitimately differ from `status`'s, and that is not a bug.** `explain`
-re-runs the detection engine over a FRESH read of the live screen; `status` reports the table, which
-carries the sampler's idle-hold damping (`gateway::runtime::IDLE_HOLD_MS`). A session that just went
-idle reads `working` in `status` and `idle` in `explain` for the length of the hold. `explain` is the
-instrument for "is this detection wrong", so it deliberately answers about the screen as it is now.
-
-A session the caller does not own answers `no such session`, byte for byte the same as one that
-never existed. An actor-less caller (cron / A2A / internal wiring) sees only sessions nobody owns,
-which in production means none — the intended fail-closed, see
-[SECURITY.md](SECURITY.md) 内嵌终端 and [TERMINAL_RUNTIME.md](TERMINAL_RUNTIME.md) §4.
+客户端通过 `pty.list`、`pty.screen`、`pty.exit` 维护终端 tabs 和画面。PTY 输入仍受 `pty` ownership 与连接权限约束；写入路径不自动获得 exec/sandbox 命令策略权限。详见 [TERMINAL_RUNTIME.md](TERMINAL_RUNTIME.md)。 / The embedded terminal is a pure PTY surface. Its RPCs own session lifecycle, input, resize, attach, and screen delivery; runtime agent detection, observation tools, and the agent panel are removed.
 
 ### Memory Tools
 

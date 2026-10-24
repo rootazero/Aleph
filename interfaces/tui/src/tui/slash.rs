@@ -97,8 +97,6 @@ pub enum LocalCommand {
     /// Browse providers and their models (opens the provider picker).
     /// `query` pre-filters both levels through the shared ranker.
     Providers { query: String },
-    /// Toggle the agent-panel column (live `runtime.agents.list` sidebar).
-    AgentPanel,
     /// Browse this session's background sub-agents (opens the agents overlay;
     /// Enter opens one agent's run view).
     Agents,
@@ -247,10 +245,6 @@ const LOCAL_COMMAND_CATALOG: &[(&str, &str)] = &[
         "Browse providers & models and pick one (/providers [query])",
     ),
     (
-        "/agentpanel",
-        "Toggle the agent panel (live runtime agents sidebar)",
-    ),
-    (
         "/agents",
         "Browse this session's sub-agents; Enter opens an agent's run view",
     ),
@@ -391,7 +385,6 @@ pub fn parse_input(input: &str) -> ParsedInput {
         "/browser" => ParsedInput::Local(LocalCommand::Browser {
             resource_id: args.to_string(),
         }),
-        "/agentpanel" => ParsedInput::Local(LocalCommand::AgentPanel),
         "/jump-user" => ParsedInput::Local(LocalCommand::JumpUser),
         "/requests" => ParsedInput::Local(LocalCommand::Requests),
         "/tool-output" => ParsedInput::Local(LocalCommand::ToolOutput {

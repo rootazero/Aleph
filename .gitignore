@@ -165,6 +165,8 @@ archive/
 !docs/archive/
 !docs/archive/removed-model-routing-moa/
 !docs/archive/removed-model-routing-moa/**
+!docs/archive/removed-terminal-agent-moa/
+!docs/archive/removed-terminal-agent-moa/**
 _bmad/
 
 # Examples — track curated subdirs only

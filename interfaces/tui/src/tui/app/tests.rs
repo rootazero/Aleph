@@ -1,5 +1,4 @@
 use super::*;
-use aleph_protocol::runtime::RUNTIME_AGENTS_CHANGED_TOPIC;
 use aleph_protocol::terminate::{self, UiLocale};
 use aleph_protocol::{
     AgentTraceEvent, AgentTraceReplay, AgentTraceSessionOutcome, AgentTraceTextKind,
@@ -348,33 +347,6 @@ fn an_in_place_change_does_not_raise_the_unseen_marker() {
 }
 
 #[test]
-fn toggle_verbose() {
-    let mut state = AppState::new("s".into(), "m".into());
-    assert!(!state.verbose);
-
-    state.toggle_verbose();
-    assert!(state.verbose);
-
-    state.toggle_verbose();
-    assert!(!state.verbose);
-}
-
-/// R8-9: the agent panel starts hidden — it is a new, opt-in surface, not
-/// on screen until `/agents` asks for it — and `toggle_agent_panel` flips
-/// exactly that one flag.
-#[test]
-fn agent_panel_starts_hidden_and_toggles() {
-    let mut state = AppState::new("s".into(), "m".into());
-    assert!(!state.agent_panel_visible);
-
-    state.toggle_agent_panel();
-    assert!(state.agent_panel_visible);
-
-    state.toggle_agent_panel();
-    assert!(!state.agent_panel_visible);
-}
-
-#[test]
 fn ensure_assistant_message_creates_one() {
     let mut state = AppState::new("s".into(), "m".into());
     // A fresh transcript is empty: the header is derived, not stored.
@@ -633,69 +605,6 @@ fn provider_usage_cache_stat_matches_canonical_formula() {
         thinking_tokens: None,
     });
     assert_eq!(state.cache_stat, Some(90));
-}
-
-#[test]
-fn clear_screen_restores_startup_view_but_keeps_session_facts() {
-    use ratatui::{backend::TestBackend, Terminal};
-    use tui_textarea::TextArea;
-
-    let mut state = AppState::new("s1".into(), "m".into());
-    state.add_user_message("OLD_TRANSCRIPT".into(), vec![]);
-    state.add_system_message("New conversation started".into());
-    state.total_tokens = 500;
-    state.push_send_history("old prompt".into());
-    state.history_index = Some(0);
-    state.scroll_up(20);
-    state.unseen_below = true;
-    state.sticky_user.jump_to_entry("s1", "old-entry".into());
-    state.open_tool_output("old-tool".into());
-    state.open_theme_picker(vec!["amber".into()], vec![]);
-    state.btw.composer = "side draft".into();
-    state.agent_panel_visible = true;
-    state.ctrl_c_count = 1;
-    let generation = state.transcript_generation;
-
-    state.clear_screen();
-    assert_eq!(state.session_key, "s1");
-    assert_eq!(state.total_tokens, 500);
-    assert_eq!(state.model_name, "m");
-    assert!(state.messages.is_empty());
-    assert_eq!(state.transcript_generation, generation.wrapping_add(1));
-    assert!(state.stuck_to_bottom());
-    assert!(!state.unseen_below);
-    assert!(state.sticky_user.anchor.is_none());
-    assert!(state.send_history.is_empty());
-    assert!(state.history_index.is_none());
-    assert!(state.theme_picker.is_none());
-    assert!(state.tool_output.is_none());
-    assert!(state.btw.composer.is_empty());
-    assert!(!state.btw.open);
-    assert!(!state.agent_panel_visible);
-    assert_eq!(state.ctrl_c_count, 0);
-    assert_eq!(state.focus, Focus::Input);
-
-    let mut terminal = Terminal::new(TestBackend::new(100, 30)).unwrap();
-    terminal
-        .draw(|frame| crate::tui::render::render(frame, &mut state, &TextArea::default()))
-        .unwrap();
-    let text: String = terminal
-        .backend()
-        .buffer()
-        .content
-        .iter()
-        .map(|cell| cell.symbol())
-        .collect();
-    assert!(text.contains("Welcome to Aleph"), "{text}");
-    assert!(text.contains("Ask a question to begin"), "{text}");
-    for stale in [
-        "OLD_TRANSCRIPT",
-        "New conversation started",
-        "新对话已开始",
-        "Screen cleared",
-    ] {
-        assert!(!text.contains(stale), "{text}");
-    }
 }
 
 #[test]
@@ -3263,73 +3172,6 @@ fn beginning_a_reattach_resets_the_run_but_not_the_transcript() {
         state.frame_belongs_here("run-elsewhere"),
         "nothing has been asked about this session yet — the guard must be disarmed \
          until the attach answers"
-    );
-}
-
-/// Unlike `switch_session`, a reattach keeps the `/btw` overlay: the side
-/// thread belongs to the SAME conversation, which has not changed, and its
-/// derived key is still addressable server-side.
-#[test]
-fn beginning_a_reattach_keeps_the_side_question() {
-    let mut state = AppState::new("agent:main:main:s1".into(), "m".into());
-    state.btw.begin("what does this flag do?".into());
-    state.btw.claim_run("run-side".into());
-
-    state.begin_reattach();
-
-    assert_eq!(
-        state.btw.active_run_id(),
-        Some("run-side"),
-        "the side question outlives a reconnect on the same conversation"
-    );
-}
-
-/// `handle_topic_event` is the sync half of Task 8a's wire: it recognises
-/// `runtime.agents.changed` and sets `runtime_agents_refetch_due` for the
-/// main loop to act on, but does not itself touch `runtime_agents` — a
-/// change notification carries no agent data, only word that a re-fetch is
-/// due, and clobbering still-valid data with `Loading` on every
-/// notification would flash the panel for no reason.
-///
-/// Fix round 1: this is a `bool` on `AppState`, not a returned `Action` —
-/// see `AppState::runtime_agents_refetch_due`'s doc for why a returned
-/// `Action` here was a defect (the main loop's burst-coalescing drain keeps
-/// only the LAST non-`None` action, so an `Action` naming this re-fetch
-/// could be silently overwritten and lost).
-#[test]
-fn a_runtime_agents_changed_topic_sets_the_refetch_flag_without_touching_state() {
-    let mut state = AppState::new("s".into(), "m".into());
-    state.runtime_agents = AgentPanelData::Ready(vec![]);
-
-    state.handle_topic_event(RUNTIME_AGENTS_CHANGED_TOPIC, serde_json::json!({}));
-
-    assert!(
-        state.runtime_agents_refetch_due,
-        "the one topic this phase understands must set the re-fetch flag"
-    );
-    assert!(
-        matches!(state.runtime_agents, AgentPanelData::Ready(ref v) if v.is_empty()),
-        "a change notification must not overwrite still-valid data before the \
-         re-fetch answers"
-    );
-}
-
-/// A topic this client did not subscribe to (or does not yet understand)
-/// must be a no-op, not a wildcard trigger — proves this is a recognised
-/// topic, not a catch-all that sets the re-fetch flag for anything.
-#[test]
-fn an_unrelated_topic_is_a_no_op() {
-    let mut state = AppState::new("s".into(), "m".into());
-
-    state.handle_topic_event("connection.warning", serde_json::json!({}));
-
-    assert!(
-        !state.runtime_agents_refetch_due,
-        "an unrelated topic must not set the agent-panel re-fetch flag"
-    );
-    assert!(
-        matches!(state.runtime_agents, AgentPanelData::Loading),
-        "an unrelated topic must not touch runtime_agents at all"
     );
 }
 

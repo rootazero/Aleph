@@ -40,7 +40,6 @@ fn selected_slot(
 fn slot_label(key: &str, i18n: I18nCtx) -> String {
     match key {
         "slot.rps.subagent_tree" => t_string!(i18n, slot.rps.subagent_tree).to_string(),
-        "slot.rps.runtime_agents" => t_string!(i18n, slot.rps.runtime_agents).to_string(),
         "slot.rps.artifacts" => t_string!(i18n, slot.rps.artifacts).to_string(),
         "slot.rps.tray" => t_string!(i18n, slot.rps.tray).to_string(),
         "slot.rps.capabilities" => t_string!(i18n, slot.rps.capabilities).to_string(),
@@ -164,15 +163,10 @@ mod tests {
             selected_slot(&registry, &ctx, Some("rps.browser")),
             Some("rps.subagent_tree")
         );
-        ctx.user_opened.insert("rps.runtime_agents");
-        assert_eq!(
-            selected_slot(&registry, &ctx, Some("rps.runtime_agents")),
-            Some("rps.runtime_agents")
-        );
         ctx.user_closed.insert("rps.subagent_tree");
         assert_eq!(
             selected_slot(&registry, &ctx, Some("rps.subagent_tree")),
-            Some("rps.runtime_agents")
+            Some("rps.artifacts")
         );
         ctx.user_opened.clear();
         assert_eq!(selected_slot(&registry, &ctx, None), Some("rps.artifacts"));

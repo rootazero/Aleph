@@ -3,10 +3,9 @@
 
 use super::Performer;
 
-/// Cap on a retained OSC payload, in chars. Same number and same reason as
-/// upstream herdr's `AGENT_OSC_MAX_CHARS` (`src/pane/osc.rs`): the payload is
-/// untrusted child-process output held for the lifetime of the session, so it
-/// is bounded before it is stored.
+/// Cap on a retained OSC payload, in chars. OSC is untrusted child-process
+/// output held for the lifetime of the session, so it is bounded before it is
+/// stored.
 pub(super) const OSC_PAYLOAD_MAX_CHARS: usize = 256;
 
 /// `OSC 7`'s payload: a `file://` URI naming the shell's working directory.
@@ -55,7 +54,7 @@ fn parse_osc7_cwd(payload: &str) -> Option<String> {
 /// a URI, which is a platform-independent spelling (a Unix Aleph attached to a
 /// remote Windows shell sees the same bytes), and a branch that compiles on no
 /// machine the developer runs is a branch nobody can falsify — the same
-/// reasoning `foreground::foreground_fact_for_shell` records.
+///
 ///
 /// The test is narrow on purpose: `/` + one ASCII letter + `:` + a separator.
 /// A Unix directory literally called `/C:` exists in principle, and requiring
@@ -122,17 +121,14 @@ impl Performer<'_> {
     ///
     /// `vte` splits an OSC on `;`, so `\e]9;4;3;50\a` arrives as
     /// `["9", "4", "3", "50"]`; rejoining `params[1..]` reproduces the
-    /// `"4;3;50"` form the manifests match. Rejoining rather than reading
+    /// raw `"4;3;50"` payload form. Rejoining rather than reading
     /// `params[1]` is also what keeps this correct if `vte` ever stops
     /// splitting -- a single `"4;3;50"` element rejoins to itself.
     ///
     /// Only `9;4` is retained. OSC 9 is a shared namespace: `9;9;<path>` is
     /// ConEmu's cwd report and a bare `9;<text>` is an iTerm2 notification.
-    /// Storing those here would overwrite a live progress level with a value
-    /// no rule can ever match -- turning "working" into "no evidence" with
-    /// nothing on screen to show for it (判据 §8). Upstream herdr does NOT
-    /// filter (`herdr src/pane/osc.rs` retains every OSC 9 payload); this
-    /// divergence is deliberate, not a porting slip.
+    /// Storing those here would overwrite a progress level with a payload
+    /// from a different OSC 9 subcommand, so only the progress form is kept.
     fn retain_osc_progress(&mut self, rest: &[&[u8]]) {
         let payload: String = join_payload(rest)
             .chars()

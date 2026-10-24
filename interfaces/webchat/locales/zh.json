@@ -301,7 +301,6 @@
   "slot": {
     "rps": {
       "subagent_tree": "子代理",
-      "runtime_agents": "运行时代理",
       "artifacts": "产物",
       "tray": "已固定文件",
       "capabilities": "能力",
@@ -1816,18 +1815,6 @@
       "leader": "队长",
       "members": "成员"
     }
-  },
-  "agent_panel": {
-    "title": "运行中的智能体",
-    "state_blocked": "阻塞",
-    "state_working": "运行中",
-    "state_idle": "空闲",
-    "state_unknown": "未知",
-    "empty": "没有正在运行的智能体",
-    "quiet_seconds": "静默 {{ n }} 秒",
-    "quiet_minutes": "静默 {{ n }} 分钟",
-    "quiet_hours": "静默 {{ n }} 小时",
-    "quiet_days": "静默 {{ n }} 天"
   },
   "cron": {
     "title": "定时任务",

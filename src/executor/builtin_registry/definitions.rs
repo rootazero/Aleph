@@ -1625,37 +1625,6 @@ const REG_INSERTED_NAMES: &[&str] = &["acp_session_control"];
 mod tests {
     use super::*;
 
-    fn observation_descriptors() -> Vec<crate::tools::ToolCapabilityDescriptor> {
-        let registry = crate::tools::ToolHandlerRegistry::new();
-        let mut scope = crate::tools::ToolRegistrationScope::new("test:canonical-measurement");
-        crate::builtin_tools::terminal::capabilities::register_observation_capabilities(
-            &registry, &mut scope,
-        )
-        .unwrap();
-        registry
-            .descriptor_snapshot()
-            .values()
-            .map(|d| (**d).clone())
-            .collect()
-    }
-
-    /// A4 RED: legacy `terminal` has no executor descriptor or dispatch arm —
-    /// the canonical `terminal_sessions_*` capabilities are the only callable
-    /// identity (the legacy name is an ingress-only adapter).
-    #[test]
-    fn terminal_capability_legacy_terminal_is_not_a_builtin_definition() {
-        assert!(
-            !BUILTIN_TOOL_DEFINITIONS
-                .iter()
-                .any(|d| d.name == "terminal"),
-            "legacy `terminal` descriptor must be removed from BUILTIN_TOOL_DEFINITIONS"
-        );
-        assert!(
-            create_tool_boxed("terminal", None).is_none(),
-            "legacy `terminal` dispatch arm must be removed from create_tool_boxed"
-        );
-    }
-
     /// Every tool the per-request tool service injects is measured.
     ///
     /// Like `every_registered_core_tool_is_accounted`, this has to read the
@@ -2615,7 +2584,7 @@ mod tests {
     /// printed total, not compute it from prior deltas.
     ///
     /// 2026-09-02: 112_772 -> 113_089 B (+317), all of it `TerminalTool`'s
-    /// `DESCRIPTION` (herdr runtime port, phase 1, Task 11 fix round 1). This
+    /// `DESCRIPTION` of a retired terminal entry. This
     /// tool's catalog row shipped in `ab30a9f1c` without this constant moving
     /// — the merge-base 112_772 was flush BEFORE that commit's 255 B, so the
     /// tree went red the moment the ratchet was actually run instead of only
@@ -3181,8 +3150,6 @@ mod tests {
     /// measured by this test's own failure line on Linux (96_901 catalog +
     /// 16_613 registry-only + 1_039 injected + 1_944 bridge + 1_368
     /// canonical). The legacy `terminal` catalog description (677 B) is gone;
-    /// six `terminal_sessions_*` canonical descriptions (1_368 B, now
-    /// measured through `observation_descriptors()` so the ratchet does not
     /// go blind to them) replace it: +691 B. Three questions: (1) each verb's
     /// existence, its `session_id` requirement and its read-only guarantee
     /// are not inferable from a bare name — and `attach` is a verb the single
@@ -3230,10 +3197,8 @@ mod tests {
             .iter()
             .map(|(_, desc, _)| desc.len())
             .sum();
-        let observations = observation_descriptors();
-        let canonical: usize = observations.iter().map(|d| d.description.len()).sum();
-        let total = catalog + registry_only + injected + bridge + canonical;
-        println!("description measurement: total={total}, canonical={canonical}");
+        let total = catalog + registry_only + injected + bridge;
+        println!("description measurement: total={total}");
 
         let mut largest: Vec<(&str, usize)> = BUILTIN_TOOL_DEFINITIONS
             .iter()
@@ -3260,7 +3225,7 @@ mod tests {
         assert!(
             total <= CATALOG_DESCRIPTION_CEILING_BYTES,
             "builtin tool descriptions total {total} B ({catalog} B catalog + {registry_only} B \
-             registry-only + {injected} B injected + {bridge} B bridge + {canonical} B canonical), over the ceiling of \
+             registry-only + {injected} B injected + {bridge} B bridge), over the ceiling of \
              {CATALOG_DESCRIPTION_CEILING_BYTES} B. These \
              bytes ship in every request that lists these tools. Largest: {largest:?}. Answer \
              the three questions documented on CATALOG_DESCRIPTION_CEILING_BYTES before \
@@ -3334,11 +3299,9 @@ mod tests {
     ///
     /// 2026-10-06 (terminal capability parity A4): 8_834 -> 10_253 B,
     /// measured by this test's own failure line. The six canonical
-    /// `terminal_sessions_*` handlers ship their input schemas directly (no
     /// BUILTIN_TOOL_DEFINITIONS row owns their schemas; boot's
     /// `tool_catalog_init.rs` derives the runtime catalog rows from the
     /// canonical registry descriptors), and the ratchet now measures them via
-    /// `observation_descriptors()` (+1_419 B: `wait` 707, `read`/`explain`/
     /// `attach` 196 each, `list`/`status` 62 each). Three questions: (1) the
     /// `until` / `timeout_ms` semantics (defaults, clamp, never refused) are
     /// runtime facts the model cannot infer; (2) argument prose is already
@@ -3352,12 +3315,6 @@ mod tests {
             .chain(BRIDGE_TOOL_DESCRIPTIONS.iter())
             .map(|(name, _, schema)| (*name, schema().to_string().len()))
             .collect();
-        let observations = observation_descriptors();
-        sizes.extend(
-            observations
-                .iter()
-                .map(|d| (d.name.as_str(), d.input_schema.to_string().len())),
-        );
         let total: usize = sizes.iter().map(|(_, len)| len).sum();
         println!("non-catalog schema measurement: total={total}");
         sizes.sort_by_key(|(_, len)| std::cmp::Reverse(*len));
@@ -3993,8 +3950,8 @@ mod tests {
     /// has no instance to ask for a schema. In a wired deployment the tool
     /// does carry one.)
     ///
-    /// 2026-09-02: 132 (+1: `terminal`, herdr runtime port phase 1, Task 11
-    /// fix round 1). This test was already red the moment `terminal` was
+    /// 2026-09-02: 132 (+1: a retired terminal entry
+    /// fix round). This test was already red the moment `terminal` was
     /// added to `BUILTIN_TOOL_DEFINITIONS` (`ab30a9f1c`) — missed there for
     /// the same reason F0 (`CATALOG_DESCRIPTION_CEILING_BYTES`) was: the
     /// task's own verification ran name-filtered subsets, never this whole

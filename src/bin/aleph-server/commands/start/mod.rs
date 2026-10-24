@@ -1472,15 +1472,6 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
             None
         };
 
-    // Register observations before catalog construction; metadata is projected
-    // from these entries rather than from a second terminal name list.
-    let mut terminal_registration_scope =
-        alephcore::tools::ToolRegistrationScope::new("capability:terminal-observation");
-    alephcore::builtin_tools::terminal::capabilities::register_observation_capabilities(
-        &tool_registry_phase2,
-        &mut terminal_registration_scope,
-    )?;
-
     // P4 T5: open the CatalogCache early so hub tools (hub_catalog_sync
     // and T6–T8) can be wired into BuiltinToolConfig. Uses the same path as
     // the extensions.* gateway handlers below — both share the same SQLite
@@ -4131,16 +4122,6 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
                 owner = %report.owner,
                 failures = ?report.failures().collect::<Vec<_>>(),
                 "failed to dispose builtin tool router scope"
-            );
-        }
-    }
-    {
-        let report = terminal_registration_scope.dispose().await;
-        if !report.all_ok() {
-            tracing::warn!(
-                owner = %report.owner,
-                failures = ?report.failures().collect::<Vec<_>>(),
-                "failed to dispose terminal observation capability scope"
             );
         }
     }
