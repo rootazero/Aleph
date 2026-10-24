@@ -902,7 +902,9 @@ impl ExtensionManager {
             outcome.error_phase = Some(PluginControlPhase::Persistence);
             outcome.error = Some(error.to_string());
             drop(guard);
-            return Err(PluginControlError { outcome });
+            return Err(PluginControlError {
+                outcome: Box::new(outcome),
+            });
         }
         outcome.persisted = true;
         self.reconcile_plugin_control_locked(plugin_id, enabled, &mut outcome)
@@ -984,7 +986,9 @@ impl ExtensionManager {
         outcome.actual_state = self.control_actual_state(plugin_id).await;
         drop(guard);
         if outcome.error.is_some() {
-            Err(PluginControlError { outcome })
+            Err(PluginControlError {
+                outcome: Box::new(outcome),
+            })
         } else {
             Ok(outcome)
         }
