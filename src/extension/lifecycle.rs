@@ -286,6 +286,7 @@ impl ExtensionManager {
     pub async fn reload(&self) -> ExtensionResult<ReloadReport> {
         self.reload_count
             .fetch_add(1, crate::sync_primitives::Ordering::SeqCst);
+        let _boot = self.boot_guard.lock().await;
         let _guard = self.load_guard.lock().await;
         self.cache_state.write().await.loaded = false;
         let out = self.load_all_locked().await?;
@@ -299,15 +300,33 @@ impl ExtensionManager {
     /// Discover and mount everything. Public for the CLI (`aleph-server
     /// plugins list`) and tests; boot goes through `ensure_loaded`.
     pub async fn load_all(&self) -> ExtensionResult<LoadSummary> {
+        let _boot = self.boot_guard.lock().await;
         let _guard = self.load_guard.lock().await;
         Ok(self.load_all_locked().await?.summary)
     }
 
     /// `load_all` for a caller that already holds `load_guard`.
     pub(super) async fn load_all_locked(&self) -> ExtensionResult<LoadOutcome> {
+        self.load_all_locked_inner(true).await
+    }
+
+    /// The discovery pass, with an explicit choice of whether this pass
+    /// publishes the `loaded` cache flag.
+    ///
+    /// `load_all` and `reload` keep publishing it here — their published
+    /// semantics are unchanged. `ensure_loaded` passes `false` and publishes
+    /// the flag itself, after its Cold-owner activation pass settles: a flag
+    /// published at the end of discovery would let a concurrent caller take
+    /// the fast path on a half-activated cache.
+    pub(super) async fn load_all_locked_inner(
+        &self,
+        publish_loaded: bool,
+    ) -> ExtensionResult<LoadOutcome> {
         let out = self.discover_and_mount().await?;
         self.views().after_transition().await;
-        self.cache_state.write().await.loaded = true;
+        if publish_loaded {
+            self.cache_state.write().await.loaded = true;
+        }
         tracing::info!(
             "Extension loading complete: {} skills, {} agents, {} plugins, {} hooks",
             out.summary.skills_loaded,
@@ -1778,6 +1797,136 @@ handler = "handler"
         assert_eq!(canonical.revision(), revision);
         assert!(canonical.canonical_publication().entries().is_empty());
         assert!(canonical.capture_entry("lazy_tool").is_none());
+    }
+
+    /// Explicitly record "the operator wants `lazy-wasm` loaded" in the
+    /// manager's own `PluginsConfig`, using the one state API that owns that
+    /// document.
+    ///
+    /// Deliberately NOT `set_plugin_enabled`: that call is the production
+    /// enable path and activates the Cold owner itself. These tests are about
+    /// the boot path activating it, so the preference is written and the
+    /// activation is left to `ensure_loaded`.
+    async fn b6_set_desired_enabled(manager: &Arc<ExtensionManager>, plugin_id: &str) {
+        let mut candidate = manager.plugins_config.read().await.clone();
+        candidate.set_enabled(plugin_id, true);
+        *manager.plugins_config.write().await = candidate;
+    }
+
+    /// The boot acceptance half of the tool-only WASM contract: a single
+    /// `ensure_loaded` over a REAL wasm fixture must take the Cold owner all
+    /// the way to Ready and publish its tool surface.
+    ///
+    /// This asserts effects, not call counts: the owner provider reaches
+    /// `Ready`, the plugin loader holds a loaded runtime, the canonical
+    /// publication contains `lazy_tool`, the registry row reads
+    /// `PluginStatus::Loaded`, and the owner carries a mount identity, a
+    /// batch receipt and the effect scope for its id.
+    #[tokio::test]
+    async fn real_wasm_boot_ensure_loaded_activates_cold_tool_owner_and_publishes_tool() {
+        use crate::capability::provider::ProviderState;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let _home = isolated_home(tmp.path());
+        write_cold_tool_wasm_fixture(tmp.path());
+        let (manager, _) = isolated_manager(tmp.path()).await;
+        let manager = ExtensionManager::attach_activation_manager(Arc::new(manager));
+        let canonical = Arc::new(crate::tools::ToolHandlerRegistry::new());
+        manager
+            .set_tool_handler_registry(canonical.clone())
+            .await
+            .unwrap();
+        b6_set_desired_enabled(&manager, "lazy-wasm").await;
+
+        manager.ensure_loaded().await.unwrap();
+
+        let owner = manager
+            .runtime_owner("lazy-wasm")
+            .expect("boot must leave exactly one runtime owner for the plugin");
+        assert_eq!(owner.provider.state(), ProviderState::Ready);
+        assert!(manager.plugin_loader.read().await.is_loaded("lazy-wasm"));
+
+        let publication = canonical.canonical_publication();
+        assert_eq!(publication.entries().len(), 1, "one complete owner batch");
+        assert!(
+            publication.entry("lazy_tool").is_some(),
+            "the activated owner must publish its tool surface"
+        );
+        assert!(canonical.capture_entry("lazy_tool").is_some());
+
+        assert_eq!(
+            manager.get_plugin_record("lazy-wasm").await.unwrap().status,
+            PluginStatus::Loaded
+        );
+
+        assert!(
+            owner.identity.lock().unwrap().is_some(),
+            "the Ready owner must carry a WASM mount identity"
+        );
+        assert!(
+            owner.receipt.lock().unwrap().is_some(),
+            "the Ready owner must carry a batch registration receipt"
+        );
+        assert!(
+            manager.scope_steps("lazy-wasm").is_some(),
+            "the Ready owner must own the effect scope for its id"
+        );
+    }
+
+    /// The concurrent boot acceptance half: two racing `ensure_loaded` calls
+    /// over the SAME real wasm fixture must agree on ONE outcome.
+    ///
+    /// Both calls succeed, exactly one owner incarnation exists (the same
+    /// allocation is read back twice), the canonical publication is a single
+    /// complete publication, and the final state is the same Ready-and-
+    /// published state the single-call boot produces. No sleeps, no mocks.
+    #[tokio::test]
+    async fn real_wasm_boot_concurrent_ensure_loaded_yields_one_owner_and_one_publication() {
+        use crate::capability::provider::ProviderState;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let _home = isolated_home(tmp.path());
+        write_cold_tool_wasm_fixture(tmp.path());
+        let (manager, _) = isolated_manager(tmp.path()).await;
+        let manager = ExtensionManager::attach_activation_manager(Arc::new(manager));
+        let canonical = Arc::new(crate::tools::ToolHandlerRegistry::new());
+        manager
+            .set_tool_handler_registry(canonical.clone())
+            .await
+            .unwrap();
+        b6_set_desired_enabled(&manager, "lazy-wasm").await;
+
+        let (left, right) = tokio::join!(manager.ensure_loaded(), manager.ensure_loaded());
+        left.expect("the first racing boot must succeed");
+        right.expect("the second racing boot must succeed");
+
+        let owner = manager
+            .runtime_owner("lazy-wasm")
+            .expect("boot must leave exactly one runtime owner for the plugin");
+        let same_owner = manager
+            .runtime_owner("lazy-wasm")
+            .expect("the owner must still be readable after the racing boot");
+        assert!(
+            Arc::ptr_eq(&owner, &same_owner),
+            "the racing boot must not create a second owner incarnation"
+        );
+        assert_eq!(owner.provider.state(), ProviderState::Ready);
+        assert!(manager.plugin_loader.read().await.is_loaded("lazy-wasm"));
+
+        let publication = canonical.canonical_publication();
+        assert_eq!(publication.entries().len(), 1, "one complete owner batch");
+        assert!(
+            publication.entry("lazy_tool").is_some(),
+            "the activated owner must publish its tool surface"
+        );
+        assert_eq!(publication.revision(), 1, "one canonical publication");
+        assert_eq!(
+            manager.get_plugin_record("lazy-wasm").await.unwrap().status,
+            PluginStatus::Loaded
+        );
+        assert!(owner.identity.lock().unwrap().is_some());
+        assert!(owner.receipt.lock().unwrap().is_some());
+        assert!(manager.scope_steps("lazy-wasm").is_some());
     }
 
     /// The activation half of the tool-only WASM contract: the production

@@ -964,25 +964,7 @@ impl ExtensionManager {
             ));
         } else if let Some(owner) = activation_owner {
             outcome.provider_generation = Some(owner.provider.generation());
-            let current = self.runtime_owner(plugin_id);
-            let row_loaded = self
-                .plugin_registry
-                .read()
-                .await
-                .get_plugin(plugin_id)
-                .is_some_and(|row| row.status == super::PluginStatus::Loaded);
-            let mounted = current
-                .as_ref()
-                .is_some_and(|current| Arc::ptr_eq(current, &owner))
-                && owner.provider.state() == crate::capability::provider::ProviderState::Ready
-                && row_loaded
-                && owner.identity.lock().unwrap().is_some()
-                && owner.receipt.lock().unwrap().is_some()
-                && self
-                    .scopes
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner())
-                    .contains_key(plugin_id);
+            let mounted = self.owner_activation_proof(plugin_id, &owner).await;
             if let Some(error) = activation_error {
                 outcome.runtime_outcome = PluginRuntimeOutcome::Failed;
                 outcome.error_phase = Some(PluginControlPhase::Reconcile);
@@ -1006,6 +988,46 @@ impl ExtensionManager {
         } else {
             Ok(outcome)
         }
+    }
+
+    /// The one proof that an owner is mounted, current and published.
+    ///
+    /// Extracted from the B5 inline check without changing what it asserts:
+    /// the same owner instance is current for the id, its provider is
+    /// `Ready`, its row reads `Loaded`, it holds a WASM mount identity and a
+    /// batch receipt, and it owns the exact effect scope for the id.
+    pub(super) async fn owner_activation_proof(
+        &self,
+        plugin_id: &str,
+        owner: &Arc<crate::extension::runtime_owner::RuntimeOwner>,
+    ) -> bool {
+        let current = self.runtime_owner(plugin_id);
+        let row_loaded = self
+            .plugin_registry
+            .read()
+            .await
+            .get_plugin(plugin_id)
+            .is_some_and(|row| row.status == super::PluginStatus::Loaded);
+        current
+            .as_ref()
+            .is_some_and(|current| Arc::ptr_eq(current, owner))
+            && owner.provider.state() == crate::capability::provider::ProviderState::Ready
+            && row_loaded
+            && owner
+                .identity
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .is_some()
+            && owner
+                .receipt
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .is_some()
+            && self
+                .scopes
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .contains_key(plugin_id)
     }
 
     async fn control_actual_state(&self, plugin_id: &str) -> String {
