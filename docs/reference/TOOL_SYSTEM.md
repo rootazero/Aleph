@@ -86,8 +86,7 @@ before guest admission. Stale, replaced, or ownerless compatibility paths fail
 closed. Direct mounted-only RPC and the raw `tools.invoke` boundary above retain
 separate semantics; Cold tool-only WASM gains no activation proxy at discovery
 time. B5 (2026-10-23) adds the explicit enable-driven activation path without
-changing the callable authority; B6 full failure-matrix acceptance remains
-deferred.
+changing the callable authority; B6 now adds the real boot activation pass and full Tool/Plugin lifecycle acceptance; see the B6 addendum below.
 
 B4（`d53821d7f`）封闭 canonical plugin 派发链：`ScopedToolService` 捕获
 `CanonicalEntryLease`，既有 permission、visibility、trust、confirmation、actor、
@@ -100,8 +99,9 @@ retry、Layer2 与 before/after gates 形成精确 `DispatchVerdict`。
 mount identity、binding、descriptor、caller、input 与 publication。陈旧、被替换或
 无 owner 的兼容路径 fail-closed。direct mounted-only RPC 与上方 raw `tools.invoke`
 边界仍保持独立语义；Cold tool-only WASM 在 discovery 期不获 activation proxy。B5
-（2026-10-23）补上显式 enable 驱动的激活路径，且不改变 callable 权威；B6 full
-failure-matrix acceptance 仍 deferred。
+（2026-10-23）补上显式 enable 驱动的激活路径，且不改变 callable 权威；B6
+现在补上真实 boot activation pass 与 Tool/Plugin lifecycle 验收；详见下方 B6
+addendum。
 
 ## B5 plugin activation lifecycle / 插件激活生命周期
 
@@ -109,13 +109,23 @@ B5 (2026-10-23) wires exactly one thing: the explicit activation of eligible too
 
 The process-global manager Arc installs a `Weak` activation context in `init_extension_manager` only; the retained activation task never strongly holds the manager, and an unattached context fails closed. `ToolHandlerRegistry` remains the sole callable authority, with the existing exact receipt / revision / generation fencing on Ready publication, revoke, and replacement. Disable revokes publication, drains and joins in-flight guest calls, then unloads and disposes the scope; stale owner, provider generation, mount identity, and lease all fail closed. Zahir observers subscribe before the snapshot, treat the snapshot as their anchor, receive live broadcast only, and resync through `Invalidated` on lag — there is no durable registry replay, and `SessionEventStore` remains the only session durability source.
 
-Verified this round: `cargo fmt --all --check` passed; `cargo check -p alephcore -p aleph-slot-api --all-targets` passed; targeted lib tests passed — extension lifecycle 57, tool registry 53, Zahir facade 23, session 352; `cargo test -p alephcore --lib` passed with 21488 passed, 0 failed, 20 ignored; `cargo clippy --workspace --all-targets` passed with warnings (a large `Result` `Err` variant at `src/extension/plugin_ops.rs:877` plus two pre-existing registry test lints). Deferred to B6 or later: boot auto-activation, MCP lazy semantics, EffectClaim producer, automatic Safe Replay, universal durable scheduler, remaining capability kinds, durable external-effect exactly-once, and `src/harness/`.
+Historical B5 validation: `cargo fmt --all --check` passed; `cargo check -p alephcore -p aleph-slot-api --all-targets` passed; targeted lib tests passed — extension lifecycle 57, tool registry 53, Zahir facade 23, session 352; `cargo test -p alephcore --lib` passed with 21488 passed, 0 failed, 20 ignored; `cargo clippy --workspace --all-targets` passed with warnings (a large `Result` `Err` variant at `src/extension/plugin_ops.rs:877` plus two pre-existing registry test lints). Historical B5 deferred scope: boot auto-activation, MCP lazy semantics, EffectClaim producer, automatic Safe Replay, universal durable scheduler, remaining capability kinds, durable external-effect exactly-once, and `src/harness/`.
 
 B5（2026-10-23）只接一件事：eligible tool-only WASM 的**显式**激活，走既有 plugin control 路径。discovery 只声明 `Cold`：不启动 VM、不发布 tool surface、registry revision 不变。唯一生产入口是 `ExtensionManager::set_plugin_enabled(id, true)` → `reconcile_plugin_control_locked`（在 `load_guard` 内）→ 捕获 exact `RuntimeOwner` incarnation → 释放 guard → `RuntimeOwner::activate_owner` → 重新取回 guard → 复检 current owner（`Arc::ptr_eq`）、provider `Ready`、registry row `Loaded`、identity 与 receipt 齐备、scope 仍持有；全部成立才是 `Mounted`，否则 `Failed`（Reconcile 阶段）。
 
 进程级 manager Arc 只在 `init_extension_manager` 装 `Weak` 激活上下文；retained activation task 不强持 manager；未 attach 一律 fail-closed。`ToolHandlerRegistry` 仍是唯一 callable authority，Ready publication / revoke / replacement 沿用既有 exact receipt / revision / generation fencing。disable ⇒ revoke publication ⇒ drain/join 在途 guest 调用 ⇒ unload/dispose scope；陈旧 owner、provider generation、mount identity、lease 一律 fail-closed。Zahir observer 先 subscribe 再取 snapshot，snapshot 是锚点，broadcast 只是 live notification，lag 时以 `Invalidated` 触发 resync；**没有** durable registry replay，durable recovery 只认 `SessionEventStore`（session durability）。
 
-本轮已验证：`cargo fmt --all --check` 通过；`cargo check -p alephcore -p aleph-slot-api --all-targets` 通过；定向 lib 测试通过——extension lifecycle 57、tool registry 53、Zahir facade 23、session 352；`cargo test -p alephcore --lib` 通过：21488 passed / 0 failed / 20 ignored；`cargo clippy --workspace --all-targets` 通过但带 warnings（`src/extension/plugin_ops.rs:877` 的 large `Result` `Err` 变体，另有两处既有 registry 测试 lint）。deferred：boot 期 auto-activation、MCP lazy semantics、`EffectClaim` producer、automatic Safe Replay、universal durable scheduler、其余 Capability kinds、durable external-effect exactly-once、`src/harness/`。
+B5 历史基线验证：`cargo fmt --all --check` 通过；`cargo check -p alephcore -p aleph-slot-api --all-targets` 通过；定向 lib 测试通过——extension lifecycle 57、tool registry 53、Zahir facade 23、session 352；`cargo test -p alephcore --lib` 通过：21488 passed / 0 failed / 20 ignored；`cargo clippy --workspace --all-targets` 通过但带 warnings（`src/extension/plugin_ops.rs:877` 的 large `Result` `Err` 变体，另有两处既有 registry 测试 lint）。deferred：boot 期 auto-activation、MCP lazy semantics、`EffectClaim` producer、automatic Safe Replay、universal durable scheduler、其余 Capability kinds、durable external-effect exactly-once、`src/harness/`。
+
+### B6 Tool/Plugin boot activation / B6 Tool/Plugin 启动激活
+
+B6 keeps B5 discovery Cold and connects enabled, eligible tool-only WASM to the real `ExtensionManager::ensure_loaded` path. Discovery runs under `load_guard` with `loaded` unpublished; the exact Cold owners are captured, activation runs outside that guard, and a final guard-held proof settles each owner before `cache_state.loaded=true`. `boot_guard` serializes the whole pass. Boot and explicit enable share `owner_activation_proof`, which verifies the current owner incarnation, provider `Ready`, row `Loaded`, mount identity, batch receipt, and effect scope. An unattached activation context fails closed and leaves the provider `Failed`; one plugin failure does not abort other plugin activations.
+
+Public `load_all` and `reload` remain discovery/mount primitives and do not implicitly activate Cold owners; they are serialized against the boot pass. Read-side catalog, describe, resolve, `plugins.list`, observer, and doctor paths have no activation entry. D-C therefore keeps Cold observable on those discovery-only paths, after an unattached-context failure, and during explicit control races. B6 proves only the Tool/Plugin slice. The full failure matrix is represented by the existing B5 lifecycle tests plus real WASM boot tests for single and concurrent `ensure_loaded`; channel, terminal, memory, MCP, replay, scheduler, EffectClaim, and other Capability kinds remain deferred.
+
+B6（Tool/Plugin 启动激活）保持 B5 的 Cold discovery 语义，把 enabled 且 eligible 的 tool-only WASM 接入真实 `ExtensionManager::ensure_loaded`。discovery 在 `load_guard` 内执行但不发布 `loaded`；捕获 exact Cold owner 后释放 guard，在 guard 外激活，再重新取 guard 用 proof settle 每个 owner，最后才写入 `cache_state.loaded=true`。`boot_guard` 串行化整个 pass。boot 与显式 enable 共用 `owner_activation_proof`，统一检查 current owner incarnation、provider `Ready`、row `Loaded`、mount identity、batch receipt 与 effect scope。未 attach activation context 时 fail-closed，provider 进入 `Failed`；单个插件失败不会阻断其他插件。
+
+public `load_all` 与 `reload` 仍是 discovery/mount 原语，不隐式激活 Cold，并与 boot pass 互斥。catalog、describe、resolve、`plugins.list`、observer、doctor 等读侧没有 activation 入口。D-C 因此保留这些 discovery-only 路径、未 attach 失败和显式 control 竞态中的 Cold 可见性。B6 只证明 Tool/Plugin slice；channel、terminal、memory、MCP、replay、scheduler、EffectClaim 及其他 Capability kinds 仍 deferred。
 
 ---
 

@@ -223,6 +223,16 @@ pub struct ExtensionManager {
     /// (`lifecycle.rs::watch_server_starts`) — which is why it is shared.
     load_guard: Arc<Mutex<()>>,
 
+    /// Serialises the whole boot pass of [`Self::ensure_loaded`].
+    ///
+    /// A separate mutex from `load_guard` because the boot pass must give
+    /// `load_guard` up while it activates Cold owners: the retained
+    /// activation task acquires `load_guard` itself for its mount effects.
+    /// Without this second mutex, a concurrent `ensure_loaded` caller would
+    /// see `loaded == false` during the activation window and start a second
+    /// discovery pass in the middle of the first one.
+    boot_guard: Arc<Mutex<()>>,
+
     /// Memory extension registry (Spec 4 Task 11).
     /// When set, `mount` registers a plugin's `[memory]` section as a
     /// `McpMemoryExtension` (`memory_extension` step); `None` records a skip.
@@ -464,6 +474,7 @@ impl ExtensionManager {
             plugin_scope_keys: Arc::new(StdRwLock::new(HashMap::new())),
             plugin_tool_revision: Arc::new(AtomicU64::new(0)),
             load_guard: Arc::new(Mutex::new(())),
+            boot_guard: Arc::new(Mutex::new(())),
             memory_registry: crate::sync_primitives::RwLock::new(None),
             mcp_handle: crate::sync_primitives::RwLock::new(None),
             tool_catalog: crate::sync_primitives::RwLock::new(None),
@@ -670,29 +681,139 @@ impl ExtensionManager {
 
     // ── Lifecycle ─────────────────────────────────────────────────────────────
 
-    /// Ensure extensions are loaded (lazy-loading entry point).
+    /// Boot-load discovery and activate every eligible tool-only WASM owner.
     ///
-    /// Uses a Mutex guard to serialize concurrent calls — concurrent callers
-    /// wait for the first load to complete rather than seeing partial data.
+    /// Three phases, in this order, under two different guards:
+    ///
+    /// 1. Discovery runs under `load_guard` and publishes declarations only.
+    ///    The `loaded` cache flag stays **false** for the whole pass: it is
+    ///    the flag the fast path reads, and a flag published here would let a
+    ///    concurrent caller return while the Cold owners below are still
+    ///    half-activated.
+    /// 2. Activation runs **outside** `load_guard`. The retained activation
+    ///    task acquires `load_guard` itself for its mount effects, so holding
+    ///    it across `activate_owner` would deadlock the mount against the
+    ///    boot pass that started it.
+    /// 3. Publication runs under `load_guard` again: every Cold owner's
+    ///    outcome is settled, and only then is `loaded` published.
+    ///
+    /// Activation is per-plugin fail-closed: a failing owner records its
+    /// failure on the owner and on its row, and the remaining Cold owners
+    /// still get their chance.
     pub async fn ensure_loaded(&self) -> ExtensionResult<()> {
-        // Fast path: already loaded (no lock contention)
         if self.cache_state.read().await.loaded {
             return Ok(());
         }
 
-        // Serialize concurrent loads — other callers block here until first load completes
-        let _guard = self.load_guard.lock().await;
-
-        // Re-check after acquiring guard (another task may have loaded while we waited)
+        // One boot pass at a time. `loaded` is false for the whole pass, so
+        // without this a concurrent caller would start a second discovery
+        // pass in the middle of the first one's activation.
+        let _boot = self.boot_guard.lock().await;
         if self.cache_state.read().await.loaded {
             return Ok(());
         }
 
-        // `load_guard` is held above; `load_all` would take it again.
-        self.load_all_locked().await?;
+        let cold_owners: Vec<Arc<crate::extension::runtime_owner::RuntimeOwner>> = {
+            let guard = self.load_guard.lock().await;
+            // Discovery only: this method publishes `loaded` itself, after
+            // the activation pass settles.
+            self.load_all_locked_inner(false).await?;
+            let desired_enabled = self.plugins_config.read().await;
+            let owners = self
+                .runtime_owners
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .values()
+                .filter(|owner| {
+                    owner.provider.state() == crate::capability::provider::ProviderState::Cold
+                        && crate::extension::runtime_owner::eligible(
+                            &owner.output,
+                            Some(&owner.manifest),
+                        )
+                        && desired_enabled.is_enabled_for(&owner.record.id, owner.record.origin)
+                })
+                .cloned()
+                .collect();
+            drop(guard);
+            owners
+        };
+
+        // Phase two: activation, deliberately outside `load_guard`.
+        let activation_manager = self.activation_manager();
+        let mut failed: Vec<String> = Vec::new();
+        for owner in &cold_owners {
+            let attempt = match &activation_manager {
+                Ok(manager) => manager
+                    .activate_owner(Arc::clone(owner))
+                    .await
+                    .map_err(|error| error.to_string()),
+                Err(error) => {
+                    owner.close_admission();
+                    let _ = owner
+                        .provider
+                        .transition(crate::capability::provider::ProviderState::Failed);
+                    Err(error.to_string())
+                }
+            };
+            if let Err(reason) = attempt {
+                failed.push(owner.record.id.clone());
+                owner
+                    .failures
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .push(crate::extension::runtime_owner::OwnerFailure::Join(
+                        reason.clone(),
+                    ));
+                let reason = format!("owner activation failed: {reason}");
+                self.record_owner_failure(owner, &reason).await;
+            }
+        }
+
+        // Phase three: settle every owner, then publish the cache flag.
+        let guard = self.load_guard.lock().await;
+        for owner in &cold_owners {
+            if failed.contains(&owner.record.id) {
+                // Already reported by the activation phase above; do not
+                // record the same owner twice.
+                continue;
+            }
+            if !self.owner_activation_proof(&owner.record.id, owner).await {
+                let reason = "owner activation completed without a current Ready mounted owner";
+                owner
+                    .failures
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .push(crate::extension::runtime_owner::OwnerFailure::Join(
+                        reason.to_owned(),
+                    ));
+                self.record_owner_failure(owner, reason).await;
+            }
+        }
+        self.cache_state.write().await.loaded = true;
+        self.publish_runtime_transition_views().await;
+        drop(guard);
         Ok(())
     }
 
+    /// Write an activation failure onto the owner's plugin row.
+    ///
+    /// Skipped when the owner is no longer the current owner for that id: a
+    /// newer discovery pass owns that row now, and this pass must not
+    /// overwrite its state with a stale verdict.
+    async fn record_owner_failure(
+        &self,
+        owner: &Arc<crate::extension::runtime_owner::RuntimeOwner>,
+        reason: &str,
+    ) {
+        if !self.owner_is_current(owner) {
+            return;
+        }
+        let mut registry = self.plugin_registry.write().await;
+        if let Some(row) = registry.get_plugin_mut(&owner.record.id) {
+            row.status = PluginStatus::Error(reason.to_owned());
+            row.error = Some(reason.to_owned());
+        }
+    }
     /// Record that Aleph itself just wrote `path`. The hot-reload watcher
     /// will skip events for this path within the suppression TTL, preventing
     /// a write→reload→write feedback loop.

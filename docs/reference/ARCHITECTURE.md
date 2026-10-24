@@ -117,7 +117,7 @@ ownerless compatibility paths fail closed.
 This does not unify direct mounted-only RPC with raw `tools.invoke` compatibility
 semantics or grant Cold tool-only WASM an activation proxy at discovery time.
 B5 (2026-10-23) adds the explicit enable-driven activation path without changing
-the callable authority; B6 full failure-matrix acceptance remains deferred. See
+the callable authority; B6 adds the real boot activation pass and Tool/Plugin lifecycle acceptance; see the B6 addendum below. See
 [Tool System — B4](TOOL_SYSTEM.md#b4-canonical-plugin-dispatch--规范插件派发) for the dispatch boundary.
 
 B4（`d53821d7f`）把 canonical plugin 执行绑定到捕获的 `CanonicalEntryLease`
@@ -130,8 +130,8 @@ fail-closed。
 
 这不统一 direct mounted-only RPC 与 raw `tools.invoke` 的兼容语义，也不赋予 Cold
 tool-only WASM 在 discovery 期的 activation proxy。B5（2026-10-23）补上显式 enable
-驱动的激活路径，且不改变 callable 权威；B6 full failure-matrix acceptance 仍
-deferred；派发边界详见上方 Tool System 链接。
+驱动的激活路径，且不改变 callable 权威；B6 现在补上真实 boot activation pass 与
+Tool/Plugin lifecycle 验收；派发边界详见上方 Tool System 链接。
 
 ### B5 plugin activation lifecycle / 插件激活生命周期
 
@@ -139,13 +139,36 @@ B5 (2026-10-23) wires exactly one thing: the explicit activation of eligible too
 
 The process-global manager Arc installs a `Weak` activation context in `init_extension_manager` only; the retained activation task never strongly holds the manager, and an unattached context fails closed. `ToolHandlerRegistry` remains the sole callable authority, with the existing exact receipt / revision / generation fencing on Ready publication, revoke, and replacement. Disable revokes publication, drains and joins in-flight guest calls, then unloads and disposes the scope; stale owner, provider generation, mount identity, and lease all fail closed. Zahir observers subscribe before the snapshot, treat the snapshot as their anchor, receive live broadcast only, and resync through `Invalidated` on lag — there is no durable registry replay, and `SessionEventStore` remains the only session durability source.
 
-Verified this round: `cargo fmt --all --check` passed; `cargo check -p alephcore -p aleph-slot-api --all-targets` passed; targeted lib tests passed — extension lifecycle 57, tool registry 53, Zahir facade 23, session 352; `cargo test -p alephcore --lib` passed with 21488 passed, 0 failed, 20 ignored; `cargo clippy --workspace --all-targets` passed with warnings (a large `Result` `Err` variant at `src/extension/plugin_ops.rs:877` plus two pre-existing registry test lints). Deferred to B6 or later: boot auto-activation, MCP lazy semantics, EffectClaim producer, automatic Safe Replay, universal durable scheduler, remaining capability kinds, durable external-effect exactly-once, and `src/harness/`.
+Historical B5 validation: `cargo fmt --all --check` passed; `cargo check -p alephcore -p aleph-slot-api --all-targets` passed; targeted lib tests passed — extension lifecycle 57, tool registry 53, Zahir facade 23, session 352; `cargo test -p alephcore --lib` passed with 21488 passed, 0 failed, 20 ignored; `cargo clippy --workspace --all-targets` passed with warnings (a large `Result` `Err` variant at `src/extension/plugin_ops.rs:877` plus two pre-existing registry test lints). Historical B5 deferred scope: boot auto-activation, MCP lazy semantics, EffectClaim producer, automatic Safe Replay, universal durable scheduler, remaining capability kinds, durable external-effect exactly-once, and `src/harness/`.
 
 B5（2026-10-23）只接一件事：eligible tool-only WASM 的**显式**激活，走既有 plugin control 路径。discovery 只声明 `Cold`：不启动 VM、不发布 tool surface、registry revision 不变。唯一生产入口是 `ExtensionManager::set_plugin_enabled(id, true)` → `reconcile_plugin_control_locked`（在 `load_guard` 内）→ 捕获 exact `RuntimeOwner` incarnation → 释放 guard → `RuntimeOwner::activate_owner` → 重新取回 guard → 复检 current owner（`Arc::ptr_eq`）、provider `Ready`、registry row `Loaded`、identity 与 receipt 齐备、scope 仍持有；全部成立才是 `Mounted`，否则 `Failed`（Reconcile 阶段）。
 
 进程级 manager Arc 只在 `init_extension_manager` 装 `Weak` 激活上下文；retained activation task 不强持 manager；未 attach 一律 fail-closed。`ToolHandlerRegistry` 仍是唯一 callable authority，Ready publication / revoke / replacement 沿用既有 exact receipt / revision / generation fencing。disable ⇒ revoke publication ⇒ drain/join 在途 guest 调用 ⇒ unload/dispose scope；陈旧 owner、provider generation、mount identity、lease 一律 fail-closed。Zahir observer 先 subscribe 再取 snapshot，snapshot 是锚点，broadcast 只是 live notification，lag 时以 `Invalidated` 触发 resync；**没有** durable registry replay，durable recovery 只认 `SessionEventStore`（session durability）。
 
-本轮已验证：`cargo fmt --all --check` 通过；`cargo check -p alephcore -p aleph-slot-api --all-targets` 通过；定向 lib 测试通过——extension lifecycle 57、tool registry 53、Zahir facade 23、session 352；`cargo test -p alephcore --lib` 通过：21488 passed / 0 failed / 20 ignored；`cargo clippy --workspace --all-targets` 通过但带 warnings（`src/extension/plugin_ops.rs:877` 的 large `Result` `Err` 变体，另有两处既有 registry 测试 lint）。deferred：boot 期 auto-activation、MCP lazy semantics、`EffectClaim` producer、automatic Safe Replay、universal durable scheduler、其余 Capability kinds、durable external-effect exactly-once、`src/harness/`。
+B5 历史基线验证：`cargo fmt --all --check` 通过；`cargo check -p alephcore -p aleph-slot-api --all-targets` 通过；定向 lib 测试通过——extension lifecycle 57、tool registry 53、Zahir facade 23、session 352；`cargo test -p alephcore --lib` 通过：21488 passed / 0 failed / 20 ignored；`cargo clippy --workspace --all-targets` 通过但带 warnings（`src/extension/plugin_ops.rs:877` 的 large `Result` `Err` 变体，另有两处既有 registry 测试 lint）。deferred：boot 期 auto-activation、MCP lazy semantics、`EffectClaim` producer、automatic Safe Replay、universal durable scheduler、其余 Capability kinds、durable external-effect exactly-once、`src/harness/`。
+
+### B6 Tool/Plugin boot activation / B6 Tool/Plugin 启动激活
+
+B6 connects enabled, eligible tool-only WASM to the real `ExtensionManager::ensure_loaded` path. Discovery remains Cold under `load_guard`; exact owners activate outside that guard; a shared proof checks current owner incarnation, provider `Ready`, row `Loaded`, mount identity, receipt, and effect scope before publishing `cache_state.loaded=true`. `boot_guard` serializes the whole pass, and public `load_all`/`reload` remain discovery-only primitives that are mutually exclusive with boot. Per-plugin failures close admission, leave the provider `Failed`, record the owner/row failure, and allow other owners to settle. Read-side catalog/describe/resolve/`plugins.list`/observer/doctor paths do not activate.
+
+D-A selects the `ensure_loaded` two-phase entry; D-B is the user-confirmed per-plugin fail-closed policy; D-C lists the remaining legal Cold paths; D-D keeps public load/reload discovery-only. Real WASM tests cover single and concurrent boot ensure effects, while existing B5 lifecycle tests cover publication, revoke, drain/join/dispose, replacement, stale handles, and observer behavior. B6 remains limited to the Tool/Plugin slice; channel, terminal, memory, MCP, replay, scheduler, EffectClaim, external exactly-once, and other Capability kinds remain deferred. The current validation is recorded in `docs/reference/FEATURE_LOCATOR.md` §3.5f.
+
+B6（Tool/Plugin 启动激活）把 enabled 且 eligible 的 tool-only WASM 接入真实
+`ExtensionManager::ensure_loaded`：discovery 在 `load_guard` 内保持 Cold，exact owner
+在 guard 外激活，共享 proof 统一检查 current owner incarnation、provider `Ready`、row
+`Loaded`、mount identity、receipt 与 effect scope，全部成立后才发布
+`cache_state.loaded=true`。`boot_guard` 串行化整个 pass；public `load_all`/`reload` 仍是
+与 boot 互斥的 discovery-only 原语。单插件失败会 close admission、使 provider 进入
+`Failed`、记录 owner/row failure，并继续 settle 其他 owner。catalog/describe/resolve/
+`plugins.list`/observer/doctor 等读侧不触发 activation。
+
+D-A 选择 `ensure_loaded` 两段式入口；D-B 是用户确认的 per-plugin fail-closed；D-C
+列出仍可见 Cold 的合法路径；D-D 保持 public load/reload discovery-only。真实 WASM 测试
+覆盖单次与并发 boot ensure 的效果，既有 B5 lifecycle 测试覆盖 publication、revoke、
+drain/join/dispose、replacement、stale handle 与 observer。B6 只覆盖 Tool/Plugin slice；
+channel、terminal、memory、MCP、replay、scheduler、EffectClaim、external exactly-once
+与其他 Capability kinds 仍 deferred。当前验证见 `docs/reference/FEATURE_LOCATOR.md`
+§3.5f。
 
 ### Provider lifecycle / Provider 生命周期
 
