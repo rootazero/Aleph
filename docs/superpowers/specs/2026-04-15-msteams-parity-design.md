@@ -838,6 +838,6 @@ secret = "your-secret"
 ## 9. References
 
 - [OpenClaw MS Teams Plugin](file:///Volumes/TBU4/Github/openclaw/extensions/msteams)
-- [Aleph MS Teams Module](file:///Volumes/TBU4/Workspace/Aleph/src/gateway/interfaces/msteams)
+- [Aleph MS Teams Module](src/gateway/interfaces/msteams)
 - [Microsoft Graph RSC Documentation](https://learn.microsoft.com/en-us/microsoftteams/platform/graph-api/rsc/)
 - [Azure Managed Identity](https://learn.microsoft.com/en-us/azure/active-directory/managed-identities-azure-resources/)

@@ -201,7 +201,7 @@ Expected (post-merge): 3 tests pass. Skip executing this now.
 - [ ] **Step 6: Commit**
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph-wt-channel-perm-guard
+cd ../Aleph-wt-channel-perm-guard
 git add src/gateway/inbound_router/executor.rs
 git commit -m "gateway: guard channel→caller_role/workspace executor wiring
 

@@ -1,7 +1,7 @@
 # exec-approval 通道审批闭环 — 设计文档
 
 - **日期**: 2026-05-19
-- **分支**: `feat/exec-approval-channel-wiring`（worktree `/Volumes/TBU4/Workspace/Aleph-exec-approval`）
+- **分支**: `feat/exec-approval-channel-wiring`（worktree `../Aleph-exec-approval`）
 - **状态**: 设计待用户确认 → 之后 writing-plans → 实现
 - **前置**: commit `189b7a459`（`ApprovalGate::set_requester` 后置注入原语，已在 main）
 

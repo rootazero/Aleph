@@ -96,8 +96,8 @@ The `manifest.source` field must therefore reliably distinguish **Official / Com
 ## 5. Components & Changes
 
 ### A. Migration (one-time, executed during plan)
-1. Copy current `skills/` contents → `/Volumes/TBU4/Workspace/Aleph-skills/` → `git init` → `gh repo create rootazero/Aleph-skills --public --source=. --push`.
-2. Copy current `plugins/` contents (incl. `.claude-plugin/marketplace.toml`, `.gitignore`) → `/Volumes/TBU4/Workspace/Aleph-plugins/` → same.
+1. Copy current `skills/` contents → `../Aleph-skills/` → `git init` → `gh repo create rootazero/Aleph-skills --public --source=. --push`.
+2. Copy current `plugins/` contents (incl. `.claude-plugin/marketplace.toml`, `.gitignore`) → `../Aleph-plugins/` → same.
 3. Main repo: `git rm -r --cached skills plugins` then re-add at the **same paths** as submodules (`git submodule add <url> skills`, `… plugins`). `include_dir!` paths are unchanged.
 
 ### B. Build / release

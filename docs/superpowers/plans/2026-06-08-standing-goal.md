@@ -8,7 +8,7 @@
 
 **Tech Stack:** Rust, Tokio, `async_trait`, `rusqlite` via `crate::utils::sqlite_open::open_sqlite_safe`, `schemars`/`serde`, the `AlephTool` static-dispatch trait, the `PromptLayer` pipeline.
 
-**Worktree:** `/Volumes/TBU4/Workspace/Aleph-wt-standing-goal` (branch `feat/standing-goal`). **Do not touch main.** **Do not run `cargo check`/`cargo test`** — task-protocol constraint; commit directly. (Plan steps still *write* tests as code; they are the deliverable + future-runnable, just not executed in this session.)
+**Worktree:** `../Aleph-wt-standing-goal` (branch `feat/standing-goal`). **Do not touch main.** **Do not run `cargo check`/`cargo test`** — task-protocol constraint; commit directly. (Plan steps still *write* tests as code; they are the deliverable + future-runnable, just not executed in this session.)
 
 **Spec:** `docs/superpowers/specs/2026-06-08-standing-goal-design.md`
 
@@ -241,7 +241,7 @@ Expected (by inspection): all 5 tests pass.
 - [ ] **Step 5: Commit**
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph-wt-standing-goal
+cd ../Aleph-wt-standing-goal
 git add src/goal/types.rs
 git commit -m "goal: standing-goal entity with immutable updaters"
 ```
@@ -1289,14 +1289,14 @@ git commit -m "goal: clarify ScratchpadGoalVerifier covers only the within-turn 
 - [ ] Verify worktree commit history is clean:
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph-wt-standing-goal
+cd ../Aleph-wt-standing-goal
 git --no-pager log --oneline feat/standing-goal ^main | head -20
 ```
 
 - [ ] Per task protocol: do **not** run `cargo check`/`cargo test`. Integrate to main via `--no-ff` merge (isolated development ≠ no integration) from a fresh session/main checkout:
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph
+cd .
 git merge --no-ff feat/standing-goal -m "Merge standing-goal: persistent objective + goal tool + cross-turn surfacing"
 ```
 

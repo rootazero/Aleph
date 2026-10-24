@@ -13,7 +13,7 @@
 ## Global Constraints
 
 - **分支隔离**：全程在 worktree `../Aleph-run-reduction`、分支 `run-reduction`。**严禁触碰 `main`**。
-- **worktree 必须自带 target dir**：`.cargo/config.toml` 钉了一个共享绝对 target dir。每次跑 cargo 前确保 `export CARGO_TARGET_DIR=/Volumes/TBU4/Workspace/Aleph-run-reduction/target`，否则「我测过了」测的是另一棵 worktree 的字节。
+- **worktree 必须自带 target dir**：`.cargo/config.toml` 钉了一个共享绝对 target dir。每次跑 cargo 前确保 `export CARGO_TARGET_DIR=../Aleph-run-reduction/target`，否则「我测过了」测的是另一棵 worktree 的字节。
 - **R10**：`src/harness/` 一个字节都不改。归约住在 `src/session/`。
 - **R7**：归约只陈述事实，**不得**用进展证据替模型做重跑决策。
 - 提交信息格式 `<scope>: <description>`，英文。例：`session: add RunReduction pure reducer`。
@@ -479,7 +479,7 @@ mod tests {
 - [ ] **Step 4: 跑测试确认它先红**
 
 ```bash
-export CARGO_TARGET_DIR=/Volumes/TBU4/Workspace/Aleph-run-reduction/target
+export CARGO_TARGET_DIR=../Aleph-run-reduction/target
 cargo test -p alephcore --lib session::reduction 2>&1 | tail -20
 ```
 
@@ -513,7 +513,7 @@ Expected: PASS，含 `reduce_run_asks_reduce_disposition` 与六条单测。
 - [ ] **Step 7: 提交**
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph-run-reduction
+cd ../Aleph-run-reduction
 git add src/session/reduction.rs src/session/mod.rs
 git commit -m "session: add RunReduction pure reducer (disposition, anchor, dangling provenance)"
 ```
@@ -1560,7 +1560,7 @@ esac
 - [ ] **Step 6: 先在父提交上跑 `attribute`，它必须 FAIL**
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph-run-reduction
+cd ../Aleph-run-reduction
 # The true pre-round state, resolved from the branch point rather than counted
 # back N commits: a task that needed an extra fixup commit would silently make
 # `HEAD~N` point at the wrong tree, and the arm would then measure the fix.
@@ -1579,8 +1579,8 @@ Expected: **FAIL**，报「the dangle left by the EARLIER run was blamed on this
 - [ ] **Step 7: 在本分支上跑两个阶段，都必须 PASS**
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph-run-reduction
-export CARGO_TARGET_DIR=/Volumes/TBU4/Workspace/Aleph-run-reduction/target
+cd ../Aleph-run-reduction
+export CARGO_TARGET_DIR=../Aleph-run-reduction/target
 ./qa/resume_boundary/run.sh crash
 ./qa/resume_boundary/run.sh attribute
 ```
@@ -1611,8 +1611,8 @@ git commit -m "qa: resume_boundary fixture asserts the repair text reaches the m
 - [ ] **Step 1: 跑最小可信验证集的四条**
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph-run-reduction
-export CARGO_TARGET_DIR=/Volumes/TBU4/Workspace/Aleph-run-reduction/target
+cd ../Aleph-run-reduction
+export CARGO_TARGET_DIR=../Aleph-run-reduction/target
 cargo test -p alephcore --lib 2>&1 | tail -20
 cargo test -p alephcore --bins 2>&1 | tail -20
 cargo test -p alephcore --features test-helpers --test '*' --no-run 2>&1 | tail -20

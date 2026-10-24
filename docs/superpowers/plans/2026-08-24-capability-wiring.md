@@ -102,7 +102,7 @@
 - [ ] **Step 1: Create the worktree**
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph
+cd .
 git worktree add ../Aleph-capability-wiring -b capability-wiring
 cd ../Aleph-capability-wiring
 ```

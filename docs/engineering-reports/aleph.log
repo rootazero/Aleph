@@ -142,18 +142,18 @@ Warning: Artifact store migration failed: Configuration/Database error: Artifact
 2026-04-29 09:40:32.202 INFO  alephcore::builtin_tools::file_ops::write: FileWriteTool: initialized, denied_paths_count=11
 2026-04-29 09:40:32.202 INFO  alephcore::builtin_tools::file_ops::path_utils: FileOpsTool: config_dir for denied_paths, config_dir=/Users/zouguojun/.aleph
 2026-04-29 09:40:32.202 INFO  alephcore::builtin_tools::file_ops::edit: FileEditTool: initialized, denied_paths_count=11
-2026-04-29 09:40:32.203 INFO  alephcore::utils::paths: get_all_skills_dirs: Starting discovery, start_dir=/Volumes/TBU4/Workspace/Aleph
-2026-04-29 09:40:32.203 INFO  alephcore::utils::paths: Found project-level .claude/skills, path=/Volumes/TBU4/Workspace/Aleph/.claude/skills
+2026-04-29 09:40:32.203 INFO  alephcore::utils::paths: get_all_skills_dirs: Starting discovery, start_dir=.
+2026-04-29 09:40:32.203 INFO  alephcore::utils::paths: Found project-level .claude/skills, path=.claude/skills
 2026-04-29 09:40:32.203 INFO  alephcore::utils::paths: Checking global directories, home=/Users/zouguojun
 2026-04-29 09:40:32.203 INFO  alephcore::utils::paths: Found global ~/.aleph/skills, path=/Users/zouguojun/.aleph/skills
 2026-04-29 09:40:32.203 INFO  alephcore::utils::paths: Found global ~/.claude/skills, path=/Users/zouguojun/.claude/skills
-2026-04-29 09:40:32.203 INFO  alephcore::utils::paths: get_all_skills_dirs: Discovery complete, total_dirs=3, dirs=["/Volumes/TBU4/Workspace/Aleph/.claude/skills", "/Users/zouguojun/.aleph/skills", "/Users/zouguojun/.claude/skills"]
-2026-04-29 09:40:32.203 INFO  alephcore::utils::paths: get_all_skills_dirs: Starting discovery, start_dir=/Volumes/TBU4/Workspace/Aleph
-2026-04-29 09:40:32.203 INFO  alephcore::utils::paths: Found project-level .claude/skills, path=/Volumes/TBU4/Workspace/Aleph/.claude/skills
+2026-04-29 09:40:32.203 INFO  alephcore::utils::paths: get_all_skills_dirs: Discovery complete, total_dirs=3, dirs=[".claude/skills", "/Users/zouguojun/.aleph/skills", "/Users/zouguojun/.claude/skills"]
+2026-04-29 09:40:32.203 INFO  alephcore::utils::paths: get_all_skills_dirs: Starting discovery, start_dir=.
+2026-04-29 09:40:32.203 INFO  alephcore::utils::paths: Found project-level .claude/skills, path=.claude/skills
 2026-04-29 09:40:32.203 INFO  alephcore::utils::paths: Checking global directories, home=/Users/zouguojun
 2026-04-29 09:40:32.203 INFO  alephcore::utils::paths: Found global ~/.aleph/skills, path=/Users/zouguojun/.aleph/skills
 2026-04-29 09:40:32.203 INFO  alephcore::utils::paths: Found global ~/.claude/skills, path=/Users/zouguojun/.claude/skills
-2026-04-29 09:40:32.203 INFO  alephcore::utils::paths: get_all_skills_dirs: Discovery complete, total_dirs=3, dirs=["/Volumes/TBU4/Workspace/Aleph/.claude/skills", "/Users/zouguojun/.aleph/skills", "/Users/zouguojun/.claude/skills"]
+2026-04-29 09:40:32.203 INFO  alephcore::utils::paths: get_all_skills_dirs: Discovery complete, total_dirs=3, dirs=[".claude/skills", "/Users/zouguojun/.aleph/skills", "/Users/zouguojun/.claude/skills"]
 2026-04-29 09:40:32.203 INFO  alephcore::executor::builtin_registry::builder: Creating VaultStoreTool
 2026-04-29 09:40:32.203 INFO  alephcore::executor::builtin_registry::builder: Created memory_search, memory_browse, and memory_explore tools
 2026-04-29 09:40:32.203 INFO  alephcore::executor::builtin_registry::builder: Creating ImageGenerateTool with generation registry

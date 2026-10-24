@@ -8,7 +8,7 @@
 
 **Tech Stack:** Rust, `cargo test`, `serde_json`, `reqwest`, `async-trait`, `futures`.
 
-**Worktree:** `/Volumes/TBU4/Workspace/Aleph-gemini-wt` (branch `gemini-protocol-opt`). All paths below are relative to that root. Run all `cargo`/`git` commands from there.
+**Worktree:** `../Aleph-gemini-wt` (branch `gemini-protocol-opt`). All paths below are relative to that root. Run all `cargo`/`git` commands from there.
 
 **Reference spec:** `docs/superpowers/specs/2026-05-19-gemini-protocol-hardening-design.md`
 

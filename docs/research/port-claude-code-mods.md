@@ -147,7 +147,7 @@ CC 2.1.296 是 230MB 的 Mach-O arm64（Bun 编译），`strings` 抓出以下 m
 
 ## 3. Aleph 现状盘点（看代码不是看 README）
 
-### 3.1 已经存在的（`/Volumes/TBU4/Workspace/Aleph/src/extension/...`）
+### 3.1 已经存在的（`src/extension/...`）
 
 | 现状 | 路径 | 行数 | 备注 |
 |---|---|---|---|
@@ -449,8 +449,8 @@ CC plugin 装到 Aleph 上的实际行为：
 |---|---|
 | 2.1 | Claude Code 2.1.296 二进制 `strings` 输出（`/Users/zouguojun/.local/share/claude/versions/2.1.296`） |
 | 2.2-2.5 | `https://docs.claude.com/en/docs/claude-code/plugins.md` 和子页 mods/overview、manifest-reference、components、api、events、interface、create、test |
-| 3.1 | `/Volumes/TBU4/Workspace/Aleph/src/extension/manifest/cc_plugin_json.rs` (795 行)<br>`/Volumes/TBU4/Workspace/Aleph/src/extension/manifest/cc_plugin_toml.rs` (857 行)<br>`/Volumes/TBU4/Workspace/Aleph/src/extension/manifest/adapter.rs` (628 行)<br>`/Volumes/TBU4/Workspace/Aleph/src/extension/manifest/component_source.rs` (226 行)<br>`/Volumes/TBU4/Workspace/Aleph/src/extension/types/hooks.rs`<br>`/Volumes/TBU4/Workspace/Aleph/src/extension/types/plugins.rs` (PluginKind)<br>`/Volumes/TBU4/Workspace/Aleph/src/extension/registry/plugin_registry/mod.rs`<br>`/Volumes/TBU4/Workspace/Aleph/src/extension/plugin_trust.rs`<br>`/Volumes/TBU4/Workspace/Aleph/src/extension/manifest/mod.rs:280` (auto-discover) |
-| 3.2 | `/Users/zouguojun/.aleph/plugins/cache/aleph-official/{diagnostics,llm-task,phone-control,media-office,voice-call, ...}/`<br>`/Volumes/TBU4/Workspace/Aleph-plugins/` |
+| 3.1 | `src/extension/manifest/cc_plugin_json.rs` (795 行)<br>`src/extension/manifest/cc_plugin_toml.rs` (857 行)<br>`src/extension/manifest/adapter.rs` (628 行)<br>`src/extension/manifest/component_source.rs` (226 行)<br>`src/extension/types/hooks.rs`<br>`src/extension/types/plugins.rs` (PluginKind)<br>`src/extension/registry/plugin_registry/mod.rs`<br>`src/extension/plugin_trust.rs`<br>`src/extension/manifest/mod.rs:280` (auto-discover) |
+| 3.2 | `/Users/zouguojun/.aleph/plugins/cache/aleph-official/{diagnostics,llm-task,phone-control,media-office,voice-call, ...}/`<br>`../Aleph-plugins/` |
 
 ---
 

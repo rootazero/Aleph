@@ -8,7 +8,7 @@
 
 **Tech Stack:** Rust、Leptos(WASM,crate `aleph-panel`)、`include_str!` 编译期嵌入、serde/schemars。
 
-工作目录:worktree `/Volumes/TBU4/Workspace/Aleph-wt-service-cluster`,分支 `feat/service-cluster-guides`(已从 main `f97b2b94f` 切出)。所有命令均在此目录运行。
+工作目录:worktree `../Aleph-wt-service-cluster`,分支 `feat/service-cluster-guides`(已从 main `f97b2b94f` 切出)。所有命令均在此目录运行。
 
 ---
 

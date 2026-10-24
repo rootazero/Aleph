@@ -40,7 +40,7 @@
 只为坐实 §A 里 F5/F12/F6 三条 ⚠️ 裁定的锚点真实性。运行：
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph
+cd .
 ls src/harness/agent/prompt.rs src/harness/trait_def.rs src/gateway/cancellation.rs src/gateway/resume_coordinator.rs src/gateway/execution_engine/steering.rs
 ls -d src/looping src/goal src/agents/swarm/tasks/store src/workflow
 grep -n "TurnState" src/harness/trait_def.rs | head
@@ -161,7 +161,7 @@ Expected: 上述文件/目录均存在；`TurnState` 在 `trait_def.rs` 有定�
 Run:
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph
+cd .
 grep -nE '^## (A|B|C)\.' docs/reference/TWELVE_FACTOR_AUDIT.md
 grep -c '### F' docs/reference/TWELVE_FACTOR_AUDIT.md
 ```
@@ -171,7 +171,7 @@ Expected: §A/§B/§C 三个二级标题都在；`### F` 计数 = 13（F1–F13�
 - [ ] **Step 4: Commit**
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph
+cd .
 git add -f docs/reference/TWELVE_FACTOR_AUDIT.md
 git commit -m "docs: add 12-factor conformance audit reference (F1-F13 + module backlog)"
 ```
@@ -192,7 +192,7 @@ git commit -m "docs: add 12-factor conformance audit reference (F1-F13 + module 
 Run:
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph
+cd .
 grep -n '^## 🛠 技术栈与禁用清单\|^## 🧬 设计原则\|^## 📚 文档索引' CLAUDE.md
 ```
 
@@ -265,7 +265,7 @@ Expected: 拿到三个节的行号。新节插在「🧬 设计原则」节内�
 Run:
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph
+cd .
 git diff CLAUDE.md | grep '^-' | grep -v '^---'
 ```
 
@@ -277,7 +277,7 @@ Expected: **空输出**（无任何删除行）——证明 R1–R10 / P1–P8 �
 Run:
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph
+cd .
 grep -n '🧭 12-Factor 对照与采纳\|🛠 技术栈与禁用清单\|🧬 设计原则' CLAUDE.md
 grep -c '↳ 采纳·非红线' CLAUDE.md
 grep -c 'TWELVE_FACTOR_AUDIT.md' CLAUDE.md
@@ -290,7 +290,7 @@ Expected: 行号顺序为「🧬 设计原则 < 🧭 12-Factor < 🛠 技术栈�
 人工核对 spec §8 七条全绿：① 新节位置/映射表/4 条款/指针 ✅；② R 零 diff（Step 4 已验）；③ AUDIT 含 §A/§B/§C（Task 1 已验）；④ ⚠️ 裁定锚点可佐证（Task 1 Step 1 已复核）；⑤ 索引登记（Step 5 已验）；⑥ 零 Rust 改动、零 cargo（`git status` 确认只动两份 md）；⑦ 风格对齐 FEATURE_LOCATOR。
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph
+cd .
 git status --short
 ```
 
@@ -299,7 +299,7 @@ Expected: 仅 `CLAUDE.md`（已跟踪，M）+（Task 1 已提交，故此处不�
 - [ ] **Step 7: Commit**
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph
+cd .
 git add CLAUDE.md
 git commit -m "docs: add 12-Factor Conformance & Adoption section to constitution (A1-A4, redlines untouched)"
 ```

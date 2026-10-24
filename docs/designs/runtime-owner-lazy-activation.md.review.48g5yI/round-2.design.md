@@ -10,8 +10,8 @@ Mode: Builder
 Phase 2 A separates declaration discovery from runtime activation for eligible tool-only WASM plugins. Startup, catalog, diagnostic, describe, and resolve must discover declarations without creating a WASM VM. A legitimate, already-authorized plugin invocation may activate the runtime owner, execute a real WASM guest call, and clean up safely. Canonical plugin producer wiring, per-entry fencing, and long-lived canonical projections remain Phase 2 B.
 
 Current entry points / 现状入口:
-- `/Volumes/TBU4/Workspace/Aleph/src/extension/plugin_ops.rs:18` defines the existing `ExtensionManager::call_plugin_tool` entry. Today it requires an already-mounted runtime through `ensure_runtime_mounted` at `/Volumes/TBU4/Workspace/Aleph/src/extension/plugin_ops.rs:46-59`; that helper checks active/mounted state, not lazy activation or a complete request authorization decision.
-- `/Volumes/TBU4/Workspace/Aleph/src/tools/registry.rs:747-773` contains the declaration projection and `reconcile_plugin_tools` compatibility boundary, which still rejects with `plugin producer reconciliation is not mounted`. Mounting that canonical producer remains B, not an alternative A activation entry.
+- `src/extension/plugin_ops.rs:18` defines the existing `ExtensionManager::call_plugin_tool` entry. Today it requires an already-mounted runtime through `ensure_runtime_mounted` at `src/extension/plugin_ops.rs:46-59`; that helper checks active/mounted state, not lazy activation or a complete request authorization decision.
+- `src/tools/registry.rs:747-773` contains the declaration projection and `reconcile_plugin_tools` compatibility boundary, which still rejects with `plugin producer reconciliation is not mounted`. Mounting that canonical producer remains B, not an alternative A activation entry.
 - A's minimum integration is inside the existing `call_plugin_tool` owner path, downstream of existing request authorization. It must retain each request's permission/visibility/trust/confirmation context and arguments before requesting per-instance activation, then independently revalidate/admit/call after activation. The current signature carries only plugin ID, handler, and arguments; P0 must freeze how the existing scoped service context reaches this path without fabricating authorization or adding a bypass.
 
 A 的最小入口沿用既有调用链，不经 describe/resolve 或 B 的 producer reconciliation 激活。共享 activation 只共享挂载结果，不共享调用者授权或业务结果。
@@ -20,7 +20,7 @@ A 的最小入口沿用既有调用链，不经 describe/resolve 或 B 的 produ
 A plugin can remain a declared, inspectable capability while its runtime does not exist. The first real authorized use crosses a visible Cold → Starting → Ready boundary, executes a real guest, and leaves identity-fenced cleanup behind it. The system becomes inspectable without paying startup cost or pretending a catalog row is callable.
 
 ## Constraints
-- Work only in `/Volumes/TBU4/Workspace/Aleph`; preserve the committed Phase 1 baseline and current HEAD.
+- Work only in `.`; preserve the committed Phase 1 baseline and current HEAD.
 - A is limited to manifest-proven tool-only WASM. Mixed WASM/MCP/static plugins retain existing eager behavior.
 - `ProviderHandle` is the actual instance state authority. Add no second callable registry or durable enabled state.
 - Existing permission, visibility, trust, confirmation, and sandbox boundaries remain authoritative.
@@ -71,9 +71,9 @@ Distinguish activation failure with fully rolled-back effects from cleanup failu
 
 ### Non-returning guest/host execution / 永不返回调用
 A must use the existing WASM interruption/execution budget rather than assume that dropping/aborting `spawn_blocking` stops work. Current evidence:
-- `/Volumes/TBU4/Workspace/Aleph/src/extension/plugin_ops.rs:24-32` runs tool calls on `spawn_blocking` and awaits the join result.
-- `/Volumes/TBU4/Workspace/Aleph/src/extension/runtime/wasm/mod.rs:212-216` derives the execution limits; `/Volumes/TBU4/Workspace/Aleph/src/extension/runtime/wasm/mod.rs:247-253` installs `ExtismManifest::with_timeout(call_timeout)` and documents interruption requiring reload. `/Volumes/TBU4/Workspace/Aleph/src/extension/runtime/wasm/limits.rs:14-20` defaults `timeout_secs` to 60; this is not a frozen owner stop deadline.
-- Fuel enforcement at `/Volumes/TBU4/Workspace/Aleph/src/extension/runtime/wasm/mod.rs:321-328` is conditional on `has_contexts`; it is not evidence that all A tool-only guests have a fuel budget. `/Volumes/TBU4/Workspace/Aleph/src/extension/runtime/wasm/host_functions.rs:158` and `/Volumes/TBU4/Workspace/Aleph/src/extension/runtime/wasm/host_functions.rs:235-248` apply an HTTP client timeout inside a scoped thread; this alone does not prove interruption of every blocking host import.
+- `src/extension/plugin_ops.rs:24-32` runs tool calls on `spawn_blocking` and awaits the join result.
+- `src/extension/runtime/wasm/mod.rs:212-216` derives the execution limits; `src/extension/runtime/wasm/mod.rs:247-253` installs `ExtismManifest::with_timeout(call_timeout)` and documents interruption requiring reload. `src/extension/runtime/wasm/limits.rs:14-20` defaults `timeout_secs` to 60; this is not a frozen owner stop deadline.
+- Fuel enforcement at `src/extension/runtime/wasm/mod.rs:321-328` is conditional on `has_contexts`; it is not evidence that all A tool-only guests have a fuel budget. `src/extension/runtime/wasm/host_functions.rs:158` and `src/extension/runtime/wasm/host_functions.rs:235-248` apply an HTTP client timeout inside a scoped thread; this alone does not prove interruption of every blocking host import.
 
 P0 必须先证明/冻结 interruption and execution-budget coverage for eligible guest loops, activation work, and blocking host calls, including positive finite limits and completion/join behavior. Reuse the existing controls where proven; do not claim an async timeout can kill an uninterruptible host call. Freeze the concrete call/stop deadlines and any required recovery contract before A implementation/acceptance.
 

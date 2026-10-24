@@ -3,7 +3,7 @@
 > 状态 / Status：待实施的设计与验收契约，不是实现完成报告。
 > 已确认基线 / Verified baseline：第一阶段提交为 `0cc141a0d5ed4e81a18ffcaa2cb6d1c9c336d0b5`（简称 `0cc141a0d`）；当前审查 HEAD 为 `589b424cc2febb21957b4d72cea932c0ad78ad1d`（简称 `589b424cc`），其新增内容是本阶段计划文档，不能把当前 HEAD 写成第一阶段基线。
 > 工作区实际状态：Rust/runtime 路径无已跟踪未提交变更；本会话新增的 office-hours 设计记录位于 `docs/designs/`，后续需单独纳入 diff 审查。
-> 工作目录 / Working directory：`/Volumes/TBU4/Workspace/Aleph`，共享工作区。本轮任务明确指定该检出；不要因旧路径说明切换到其他卷或复制仓库。
+> 工作目录 / Working directory：`.`，共享工作区。本轮任务明确指定该检出；不要因旧路径说明切换到其他卷或复制仓库。
 > 下一会话默认工作包 / Default next-session package：**A：受控 WASM runtime-owner lazy activation**。**B：canonical plugin producer + per-provider entry fencing + long-lived projection** 独立 gate，不随 A 自动获准。
 > 续跑入口 / Resume prompt：[aleph_modularization_phase2_prompt.md](aleph_modularization_phase2_prompt.md)。总路线背景：[aleph_modularization_plan.md](aleph_modularization_plan.md)。
 
@@ -282,7 +282,7 @@ P2/P3 高耦合，优先顺序实施，不虚构并行。P0 后可双线进行 c
 ### 11.1 每次 cargo 前 / Before Every Cargo Invocation
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph
+cd .
 /usr/bin/vm_stat
 python qa/browser_live/check_memory.py --self-test
 python qa/browser_live/check_memory.py

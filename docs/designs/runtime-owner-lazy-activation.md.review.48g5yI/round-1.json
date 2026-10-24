@@ -1,7 +1,7 @@
 {
   "version": 2,
   "round": 1,
-  "document": "/Volumes/TBU4/Workspace/Aleph/docs/designs/runtime-owner-lazy-activation.md",
+  "document": "docs/designs/runtime-owner-lazy-activation.md",
   "quality_score": 6,
   "dimensions": {
     "completeness": "ISSUES",
@@ -24,7 +24,7 @@
       "dimension": "consistency",
       "severity": "blocking",
       "changed_text": null,
-      "problem": "Problem Statement 和 Premise 6 将 Ready 的证明范围包含 real WASM execution，Recommended Approach 又要求 Ready/call 前检查身份与代次，但没有决定首次 guest 执行是在 Ready 前还是之后。现有 /Volumes/TBU4/Workspace/Aleph/src/capability/provider.rs 的 ProviderLifecycle::acquire_call 只允许 Ready。若首次执行在 Ready 前，需要明确的引导执行边界；若先 Ready 再执行，Ready 本身就不能证明执行成功。也未说明激活 single-flight 共享的是 mount 还是首个业务调用，存在重复执行副作用或错误共享业务结果的风险。",
+      "problem": "Problem Statement 和 Premise 6 将 Ready 的证明范围包含 real WASM execution，Recommended Approach 又要求 Ready/call 前检查身份与代次，但没有决定首次 guest 执行是在 Ready 前还是之后。现有 src/capability/provider.rs 的 ProviderLifecycle::acquire_call 只允许 Ready。若首次执行在 Ready 前，需要明确的引导执行边界；若先 Ready 再执行，Ready 本身就不能证明执行成功。也未说明激活 single-flight 共享的是 mount 还是首个业务调用，存在重复执行副作用或错误共享业务结果的风险。",
       "remedy": "选定并统一 Ready 的语义：例如 Ready 只证明 mount 成功，真实业务执行由单独验收证据证明；或者明确一个不产生业务副作用的初始化探针及其 Starting 期执行权限。说明每个业务请求恰有自己的执行与结果，并决定 mount 成功但首次业务调用 trap/返回错误时 owner 的状态。不要通过重放首个业务请求来验证就绪。"
     },
     {
@@ -32,7 +32,7 @@
       "dimension": "completeness",
       "severity": "blocking",
       "changed_text": null,
-      "problem": "文档承诺 activation 独立于首个 caller future，并承诺 stop/reload/shutdown 会 fence late completions，但没有定义 stop 在 Starting 期间发生时，由谁等待或收割仍在分配资源的 activation。仅拒绝迟到的 Ready 发布不能清理迟到创建的 VM。现有 /Volumes/TBU4/Workspace/Aleph/src/capability/provider.rs 的 is_allowed 也没有 Starting -> Stopping 路径，因此该行为不能直接沿用既有状态机。",
+      "problem": "文档承诺 activation 独立于首个 caller future，并承诺 stop/reload/shutdown 会 fence late completions，但没有定义 stop 在 Starting 期间发生时，由谁等待或收割仍在分配资源的 activation。仅拒绝迟到的 Ready 发布不能清理迟到创建的 VM。现有 src/capability/provider.rs 的 is_allowed 也没有 Starting -> Stopping 路径，因此该行为不能直接沿用既有状态机。",
       "remedy": "在设计层明确 Starting 与 stop/disable/reload/shutdown 的胜负规则、activation task 的监督与回收责任，以及等待 activation 的调用获得的结果。stop 成功必须覆盖仍在运行的启动工作和其迟到资源清理，不能只等待已准入 guest；同时明确不会发生旧 activation 将停止或替换后的 owner 重新发布为 Ready。具体同步原语可留给工程计划。"
     },
     {

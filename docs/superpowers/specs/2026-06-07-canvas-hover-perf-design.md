@@ -1,7 +1,7 @@
 # Memory Canvas — Hover 稳定 / 性能空转 / 死代码清理
 
 Date: 2026-06-07
-Branch: `feat/canvas-hover-perf` (worktree `/Volumes/TBU4/Workspace/Aleph-wt-canvas`)
+Branch: `feat/canvas-hover-perf` (worktree `../Aleph-wt-canvas`)
 Status: Design approved, ready for implementation plan.
 
 ## 背景

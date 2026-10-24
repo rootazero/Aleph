@@ -95,7 +95,7 @@
 
 Run:
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph
+cd .
 A="docs/design-system/aleph-mobile/screens/exported/styles/aleph.css"
 B="interfaces/webchat/styles/ios.css"
 for c in '\.list ' '\.cell ' '\.cell-leading' '\.tabbar ' '\.tabitem ' '\.swatch ' '\.mono'; do
@@ -238,7 +238,7 @@ pub mod viewport;
 
 Run:
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph
+cd .
 test -f interfaces/webchat/src/state/viewport.rs && echo "viewport.rs OK"
 grep -n 'pub mod viewport;' interfaces/webchat/src/state/mod.rs
 grep -n 'fn from_width' interfaces/webchat/src/state/viewport.rs
@@ -468,7 +468,7 @@ pub mod settings;
 
 Run:
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph
+cd .
 test -f interfaces/webchat/src/platform/phone/settings.rs && echo "settings.rs OK"
 grep -n 'pub mod settings;' interfaces/webchat/src/platform/phone/mod.rs
 echo -n "leading icons (期望 7): "; grep -c 'class="cell-leading"' interfaces/webchat/src/platform/phone/settings.rs
@@ -555,7 +555,7 @@ fn SettingsRouter() -> impl IntoView {
 
 Run:
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph
+cd .
 grep -n 'use crate::platform::phone::settings::PhoneSettings;' interfaces/webchat/src/app.rs
 grep -n 'use crate::state::viewport::{FormFactor, FormFactorState};' interfaces/webchat/src/app.rs
 grep -n 'provide_context(FormFactorState::new());' interfaces/webchat/src/app.rs
@@ -583,7 +583,7 @@ git commit -m "panel(phone): route /settings to PhoneSettings on Phone form-fact
 
 优先(符合"至多一次 `cargo check --lib`"):
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph
+cd .
 cargo check -p aleph-panel --lib
 ```
 Expected: `Finished`。若想同时运行 `from_width` 单测(`#[cfg(test)]`,`cargo check --lib` 不编译它),改跑等价的单次命令:
@@ -596,7 +596,7 @@ Expected: `test classifies_widths_at_band_boundaries ... ok`。
 - [ ] **Step 2: 重建 dist(WASM + ios.css 内联进 tailwind.css)**
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph
+cd .
 just wasm
 ```
 Expected: `✓ WASM: …/dist/`。`npm run build:css` 会把 `@import "./ios.css"` 内联进 `dist/tailwind.css`。
@@ -622,7 +622,7 @@ cargo run -p alephcore --bin aleph-server   # 或复用用户已有 daemon
 - [ ] **Step 5: 验证 served wasm == 磁盘**
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph
+cd .
 echo "served: $(curl -s http://127.0.0.1:18790/aleph_panel_bg.wasm | wc -c)"
 echo "disk  : $(wc -c < interfaces/webchat/dist/aleph_panel_bg.wasm)"
 ```

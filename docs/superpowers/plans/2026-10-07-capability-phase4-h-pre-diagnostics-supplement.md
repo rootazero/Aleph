@@ -12,7 +12,7 @@
 
 **Parent Spec:** `docs/superpowers/specs/2026-10-07-capability-phase4-h-pre-runtime-mount-design.md`
 
-**Worktree:** `/Volumes/TBU4/Workspace/Aleph-capability-phase4-follow-up`
+**Worktree:** `../Aleph-capability-phase4-follow-up`
 
 ## Global Constraints
 

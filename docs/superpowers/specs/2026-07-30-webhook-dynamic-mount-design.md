@@ -273,7 +273,7 @@ async fn webhook_endpoint(
 **环境**：`ALEPH_HOME` 隔离数据目录/vault/锁（不动 `~/.aleph/`），QA daemon 绑
 `127.0.0.1:8787`，与用户真实 daemon（PID 17978，`127.0.0.1:18790`）并存、互不干扰。
 
-**被测二进制**：`/Volumes/TBU4/Workspace/Aleph/target/debug/aleph-server`
+**被测二进制**：`target/debug/aleph-server`
 （workspace 共享 target dir，由仓库根 `.cargo/config.toml` 的 `target-dir` 钉死，
 各 worktree 共用，用意是避免并发全量构建把机器打满）。构建于 `cargo build --bin
 aleph-server` 后 `ls -l` 确认时间戳 `7 30 11:56`，晚于本轮构建起始时间

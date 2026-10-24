@@ -43,7 +43,7 @@ Phase 3 之后，仓库中同时存在以下「看起来都是 capability」但*
 | --- | --- | --- | --- |
 | A | **Zahir facade + CapabilityDescriptor** | 新增 `src/capability/{descriptor,facade}.rs`；`CapabilityKind` 9 种；`describe / resolve / subscribe / project` 四方法；不改任何现有事实源 | Gate A |
 | B | **Ownership tree** | `src/capability/ownership.rs`；`Runtime → Session → Run → Task → effect claim`；`VisibilityScope` / `LifetimeScope` 分离；`generation / revoke / dispose` | Gate B |
-| C | **Session event store 作为 recovery source** | 收敛/标记现有 `/Volumes/TBU4/Workspace/Aleph-capability-phase4/src/session/store.rs` 的 `SessionEventStore`/`SqliteEventStore` 为 recovery source；不新增事件存储子模块/目录；对 `StateDatabase` 加 projection-only 语义标记，对 `GlobalBus` 加 notification-only 语义标记；不改变其现有行为；`effect sandwich`、`fencing token`、`ReplayPermit`/`ReplayPreparer`/闭包校验到位 | Gate C |
+| C | **Session event store 作为 recovery source** | 收敛/标记现有 `../Aleph-capability-phase4/src/session/store.rs` 的 `SessionEventStore`/`SqliteEventStore` 为 recovery source；不新增事件存储子模块/目录；对 `StateDatabase` 加 projection-only 语义标记，对 `GlobalBus` 加 notification-only 语义标记；不改变其现有行为；`effect sandwich`、`fencing token`、`ReplayPermit`/`ReplayPreparer`/闭包校验到位 | Gate C |
 | D | **ACP / MCP projection 收紧** | `acp/manager/persistence.rs` 与新 `MCP projection` 模块都标记为「projection-only」；`to_metadata_form` 只能 wrapper | Gate D |
 
 非本期范围见 §12。
@@ -132,15 +132,15 @@ deepseek-harness 的 ACP 把 server 视为有状态的协议端，状态变更�
 
 | 路径 | 角色 | 既有事实 | 缺口 |
 | --- | --- | --- | --- |
-| `/Volumes/TBU4/Workspace/Aleph-capability-phase4/src/tools/registry.rs` | Tool handler 注册 | 已有 ToolCapabilityDescriptor、revision、ArcSwap snapshot / change feed、generation-safe disposal | 缺口是跨 kind facade / owner / recovery |
-| `/Volumes/TBU4/Workspace/Aleph-capability-phase4/src/extension/registry/plugin_registry/mod.rs` | Plugin 加载 | 模块装载 + 钩子 | 与 Tool registry 不互通 |
-| `/Volumes/TBU4/Workspace/Aleph-capability-phase4/src/gateway/execution_engine/session_run_registry.rs` | Gateway Run | Run ID 索引 | 不记录 capability 用量 |
-| `/Volumes/TBU4/Workspace/Aleph-capability-phase4/src/session/service.rs` | SessionService event-log facade | actor/store 已有 `emit_event`/`emit_batch`/`get_events`；Session 生命周期 + 关联 Run | 缺口是不把 capability 作为 first-class resource |
-| `/Volumes/TBU4/Workspace/Aleph-capability-phase4/src/resilience/database/state_database/mod.rs` | 操作型投影 | 多张 SQLite 表 + vec index | Recovery 未与 Session event store 对齐 |
-| `/Volumes/TBU4/Workspace/Aleph-capability-phase4/src/acp/manager/persistence.rs` | ACP session JSON | best-effort ACP session JSON persistence | 不是事实源，缺 recovery 路径 |
-| `/Volumes/TBU4/Workspace/Aleph-capability-phase4/src/event/global_bus.rs` | 通知 | 跨 region 推送 | 无 cursor、无 generation |
-| `/Volumes/TBU4/Workspace/Aleph-capability-phase4/src/capability/mod.rs` | 启动期 CapabilitySlot | 启动期固化能力槽，不是动态 facade | 跨 kind facade / owner / recovery 缺失 |
-| `/Volumes/TBU4/Workspace/Aleph-capability-phase4/src/runtimes/ensure.rs` | Runtime 装配 | 启动时初始化 | 不感知 capability generation |
+| `../Aleph-capability-phase4/src/tools/registry.rs` | Tool handler 注册 | 已有 ToolCapabilityDescriptor、revision、ArcSwap snapshot / change feed、generation-safe disposal | 缺口是跨 kind facade / owner / recovery |
+| `../Aleph-capability-phase4/src/extension/registry/plugin_registry/mod.rs` | Plugin 加载 | 模块装载 + 钩子 | 与 Tool registry 不互通 |
+| `../Aleph-capability-phase4/src/gateway/execution_engine/session_run_registry.rs` | Gateway Run | Run ID 索引 | 不记录 capability 用量 |
+| `../Aleph-capability-phase4/src/session/service.rs` | SessionService event-log facade | actor/store 已有 `emit_event`/`emit_batch`/`get_events`；Session 生命周期 + 关联 Run | 缺口是不把 capability 作为 first-class resource |
+| `../Aleph-capability-phase4/src/resilience/database/state_database/mod.rs` | 操作型投影 | 多张 SQLite 表 + vec index | Recovery 未与 Session event store 对齐 |
+| `../Aleph-capability-phase4/src/acp/manager/persistence.rs` | ACP session JSON | best-effort ACP session JSON persistence | 不是事实源，缺 recovery 路径 |
+| `../Aleph-capability-phase4/src/event/global_bus.rs` | 通知 | 跨 region 推送 | 无 cursor、无 generation |
+| `../Aleph-capability-phase4/src/capability/mod.rs` | 启动期 CapabilitySlot | 启动期固化能力槽，不是动态 facade | 跨 kind facade / owner / recovery 缺失 |
+| `../Aleph-capability-phase4/src/runtimes/ensure.rs` | Runtime 装配 | 启动时初始化 | 不感知 capability generation |
 
 ### 3.2 关键耦合
 
@@ -223,7 +223,7 @@ src/event/global_bus.rs ────────┘
 | `Plugin` | 复合能力包 | extension/registry/plugin_registry | composition、entry |
 | `Hook` | 生命周期钩子 | plugin_registry 的 hook 类 | phase、priority |
 
-> 现有 `/Volumes/TBU4/Workspace/Aleph-capability-phase4/src/extension/plugin_trust.rs` 已有对 `CapabilityKind` 的文档/引用；本期落地必须统一该名称或调整引用，不能留下第二定义。
+> 现有 `../Aleph-capability-phase4/src/extension/plugin_trust.rs` 已有对 `CapabilityKind` 的文档/引用；本期落地必须统一该名称或调整引用，不能留下第二定义。
 
 ### 5.2 Service、ACP、MCP 的角色
 
@@ -389,11 +389,11 @@ Zahir-facade ──▶ ToolHandlerRegistry (本期 backend #1, Tool kind, 完整
 
 | 类型 | 来源 | 角色 |
 | --- | --- | --- |
-| `ReplayPermit` | 既有（`/Volumes/TBU4/Workspace/Aleph-capability-phase4/src/session/replay.rs`） | 一次性「允许 replay」的票，由 owner 签名；含 scope + fence |
-| `ReplayPreparer` | 既有（`/Volumes/TBU4/Workspace/Aleph-capability-phase4/src/session/replay.rs`） | 把历史 event 流 prepare 成可重放序列；只读 event store |
-| `EffectClaimReconciliation` | **本期适配/对账** | 本 spec 定义的「replay / crash 还原后 effect-claim 对账结果」；与 `/Volumes/TBU4/Workspace/Aleph-capability-phase4/src/session/store.rs` 既有 `ReplayClaimResult` **不等价**——后者是既有 replay claim 尝试结果（`HeadChanged` / `GenerationChanged` / `NotDangling` / `LeaseHeld` / `BudgetExhausted` / `Claimed` 等），其语义是「这次 claim 是否被采纳」；`EffectClaimReconciliation` 的语义是「按闭包对账后 effect-claim 收敛到哪个终态」，两者职责不同。`EffectClaimClosure` 校验（见下）的产物即为 `EffectClaimReconciliation`，两者绑定使用，不相互替代。 |
+| `ReplayPermit` | 既有（`../Aleph-capability-phase4/src/session/replay.rs`） | 一次性「允许 replay」的票，由 owner 签名；含 scope + fence |
+| `ReplayPreparer` | 既有（`../Aleph-capability-phase4/src/session/replay.rs`） | 把历史 event 流 prepare 成可重放序列；只读 event store |
+| `EffectClaimReconciliation` | **本期适配/对账** | 本 spec 定义的「replay / crash 还原后 effect-claim 对账结果」；与 `../Aleph-capability-phase4/src/session/store.rs` 既有 `ReplayClaimResult` **不等价**——后者是既有 replay claim 尝试结果（`HeadChanged` / `GenerationChanged` / `NotDangling` / `LeaseHeld` / `BudgetExhausted` / `Claimed` 等），其语义是「这次 claim 是否被采纳」；`EffectClaimReconciliation` 的语义是「按闭包对账后 effect-claim 收敛到哪个终态」，两者职责不同。`EffectClaimClosure` 校验（见下）的产物即为 `EffectClaimReconciliation`，两者绑定使用，不相互替代。 |
 
-> 术语区分：本节所谓 `EffectClaimClosure` 指本 spec 定义的「合法状态迁移闭包」，与 `/Volumes/TBU4/Workspace/Aleph-capability-phase4/src/session/marker_balance.rs` 既有的「`RunStarted` / `RunFinished` run 范围闭合」**不是同一个东西**——后者是 run-anchor 配对的尾部 close，前者是 effect-claim 的状态迁移闭包。本 spec 不把 `marker_balance` 的 `RunStarted`/`RunFinished` 等式当作 effect-claim 不变量来源；任何「三行计数等式」式的简化都是不充分不变量。
+> 术语区分：本节所谓 `EffectClaimClosure` 指本 spec 定义的「合法状态迁移闭包」，与 `../Aleph-capability-phase4/src/session/marker_balance.rs` 既有的「`RunStarted` / `RunFinished` run 范围闭合」**不是同一个东西**——后者是 run-anchor 配对的尾部 close，前者是 effect-claim 的状态迁移闭包。本 spec 不把 `marker_balance` 的 `RunStarted`/`RunFinished` 等式当作 effect-claim 不变量来源；任何「三行计数等式」式的简化都是不充分不变量。
 
 **EffectClaimClosure 规则**（合法状态迁移闭包）：
 
@@ -465,10 +465,10 @@ Subscriber  ◀── snapshot_at(gen) + deltas(cursor→HEAD) ──▶ event s
 | 2 | 新增 `src/capability/facade.rs` + backend trait | +1 文件 | 完全兼容；backend 暂不挂载 |
 | 3 | 把 `ToolHandlerRegistry` 适配为 backend #1 | `src/tools/registry.rs` 加适配层 | 完全兼容；既有 handler 注册路径不回归 |
 | 4 | 新增 `src/capability/ownership.rs` | +1 文件 | 不影响既有事实源 |
-| 5 | 适配现有 `/Volumes/TBU4/Workspace/Aleph-capability-phase4/src/session/store.rs` + `SessionService::emit_batch` / actor committed batch（本期不新增事件存储子模块/目录；既有 store / replay / resume 测试不回归） | 0 新文件；仅在既有 store.rs + service.rs 上加适配注释 / marker | 默认 shadow write；既有 store/replay/resume 测试不回归 |
+| 5 | 适配现有 `../Aleph-capability-phase4/src/session/store.rs` + `SessionService::emit_batch` / actor committed batch（本期不新增事件存储子模块/目录；既有 store / replay / resume 测试不回归） | 0 新文件；仅在既有 store.rs + service.rs 上加适配注释 / marker | 默认 shadow write；既有 store/replay/resume 测试不回归 |
 | 6 | `StateDatabase` 标 `projection_only`，`ACP persistence` 标 `projection_only` | 注释 + 类型 marker | 完全兼容 |
 | 7 | `GlobalBus` / `Gateway bus` 标 `notification_only` | 注释 + 类型 marker | 完全兼容 |
-| 8 | 对接现有 `/Volumes/TBU4/Workspace/Aleph-capability-phase4/src/session/replay.rs` 的 `ReplayPermit` / `ReplayPreparer`、`src/session/store.rs` 的 `ReplayClaimResult`、`src/gateway/resume_coordinator.rs`；本期不新增事件存储子模块/目录，也不开启自动 replay | 0 新文件；现有三处既有 API 仅加 marker / 调用点适配 | 完全兼容；不开启自动 replay |
+| 8 | 对接现有 `../Aleph-capability-phase4/src/session/replay.rs` 的 `ReplayPermit` / `ReplayPreparer`、`src/session/store.rs` 的 `ReplayClaimResult`、`src/gateway/resume_coordinator.rs`；本期不新增事件存储子模块/目录，也不开启自动 replay | 0 新文件；现有三处既有 API 仅加 marker / 调用点适配 | 完全兼容；不开启自动 replay |
 | 9 | gate A → B → C → D 顺序执行 | 见 §11.5 | 每 gate 之间不破坏既有路径 |
 
 约束：每一步必须可独立 revert；如果某一步破坏既有契约，回滚并重写。

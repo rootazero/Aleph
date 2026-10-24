@@ -1,6 +1,6 @@
 # Aleph COMMAND + CONFIG + OBSERVABILITY surface for a hermes-style MoA port
 
-All paths relative to `/Volumes/TBU4/Workspace/Aleph`.
+All paths relative to `.`.
 
 ## 1. Slash commands
 

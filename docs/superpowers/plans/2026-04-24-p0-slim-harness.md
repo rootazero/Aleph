@@ -24,8 +24,8 @@
 
 Run:
 ```bash
-git -C /Volumes/TBU4/Workspace/Aleph status --short
-git -C /Volumes/TBU4/Workspace/Aleph diff --stat
+git -C . status --short
+git -C . diff --stat
 ```
 Expected: 4 modified files + 2 untracked docs.
 
@@ -35,7 +35,7 @@ The 4 modified files are pre-existing work unrelated to P0. Default action: stas
 
 Run:
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph
+cd .
 git stash push -m "pre-P0 uncommitted work (restore after P0)" -- \
   interfaces/webchat/src/views/home.rs \
   src/gateway/inbound_router/command_handler.rs \
@@ -51,7 +51,7 @@ The 2 untracked docs (`docs/plans/2026-04-24-001-feat-linux-desktop-capability-e
 
 After disposition decision, run:
 ```bash
-git -C /Volumes/TBU4/Workspace/Aleph status --short
+git -C . status --short
 ```
 Expected: empty output (or only untracked files explicitly kept untracked).
 
@@ -59,7 +59,7 @@ Expected: empty output (or only untracked files explicitly kept untracked).
 
 Run:
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph
+cd .
 cargo check -p alephcore
 ```
 Expected: no errors. **If this fails, STOP — fix the baseline before starting P0.**
@@ -68,7 +68,7 @@ Expected: no errors. **If this fails, STOP — fix the baseline before starting 
 
 Run:
 ```bash
-git -C /Volumes/TBU4/Workspace/Aleph rev-parse HEAD
+git -C . rev-parse HEAD
 ```
 Write the commit SHA into a scratch note — this is the revert target if all of P0 needs to be rolled back.
 
@@ -88,7 +88,7 @@ Write the commit SHA into a scratch note — this is the revert target if all of
 
 Run:
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph
+cd .
 grep -rln "harness::context_budget\|harness::context_compactor" src/
 ```
 Record the file list. Expected at least: `memory/compaction/orchestrator.rs`, `memory/compaction/session_summary_source.rs`, `memory/compaction/types.rs`, `harness/agent.rs`, `harness/deps.rs`, `harness/tests/task10_wiring.rs`.
@@ -97,7 +97,7 @@ Record the file list. Expected at least: `memory/compaction/orchestrator.rs`, `m
 
 Run:
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph
+cd .
 mkdir -p src/context/compact
 ```
 (`src/context/budget/` is created implicitly by the `git mv` in Step 3.)
@@ -106,7 +106,7 @@ mkdir -p src/context/compact
 
 Run:
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph
+cd .
 git mv src/harness/context_budget src/context/budget
 git mv src/harness/context_compactor.rs src/context/compact/compactor.rs
 ```
@@ -157,7 +157,7 @@ Apply to every file from Step 1.
 
 Run:
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph
+cd .
 cargo check -p alephcore
 ```
 Expected: no errors. **If errors, fix import paths and re-check. Do not commit until green.**
@@ -166,7 +166,7 @@ Expected: no errors. **If errors, fix import paths and re-check. Do not commit u
 
 Run:
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph
+cd .
 git status --short
 git diff --stat
 ```
@@ -176,7 +176,7 @@ Expected: `context_budget/*` and `context_compactor.rs` appear as `R` (renamed) 
 
 Run:
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph
+cd .
 git add -A
 git commit -m "harness: relocate context_budget/ + context_compactor → src/context/
 
@@ -205,7 +205,7 @@ Spec: docs/superpowers/specs/2026-04-24-p0-slim-harness-design.md"
 
 Run:
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph
+cd .
 grep -rln "harness::sections\|harness::stop_hooks\|harness::verify_stop_hook" src/
 ```
 Record the file list.
@@ -214,7 +214,7 @@ Record the file list.
 
 Run:
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph
+cd .
 mkdir -p src/prompt_assembly
 mkdir -p src/verification
 ```
@@ -223,7 +223,7 @@ mkdir -p src/verification
 
 Run:
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph
+cd .
 git mv src/harness/sections src/prompt_assembly/sections
 git mv src/harness/stop_hooks.rs src/verification/stop_hooks.rs
 git mv src/harness/verify_stop_hook.rs src/verification/verify_stop_hook.rs
@@ -301,7 +301,7 @@ Apply to every file from Step 1.
 
 Run:
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph
+cd .
 cargo check -p alephcore
 ```
 Expected: no errors.
@@ -310,7 +310,7 @@ Expected: no errors.
 
 Run:
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph
+cd .
 git add -A
 git commit -m "harness: carve out prompt_assembly/ + verification/ skeletons
 
@@ -342,7 +342,7 @@ Spec: docs/superpowers/specs/2026-04-24-p0-slim-harness-design.md"
 
 Run:
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph
+cd .
 grep -rln "harness::skill_prefetch\|harness::provider_bridge\|harness::tool_execution_context\|harness::tool_summary\|harness::adapters" src/
 ```
 Record the file list.
@@ -351,7 +351,7 @@ Record the file list.
 
 Run:
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph
+cd .
 git mv src/harness/skill_prefetch.rs src/skill/prefetch.rs
 git mv src/harness/provider_bridge.rs src/providers/bridge.rs
 git mv src/harness/tool_execution_context.rs src/tools/execution_context.rs
@@ -423,7 +423,7 @@ Apply to every file from Step 1.
 
 Run:
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph
+cd .
 cargo check -p alephcore
 ```
 Expected: no errors.
@@ -432,7 +432,7 @@ Expected: no errors.
 
 Run:
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph
+cd .
 ls src/harness/*.rs
 ```
 Expected output (exactly 9 files):
@@ -452,7 +452,7 @@ src/harness/trait_def.rs
 
 Run:
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph
+cd .
 git add -A
 git commit -m "harness: relocate remaining to existing homes — P0 target reached
 
@@ -484,7 +484,7 @@ Spec: docs/superpowers/specs/2026-04-24-p0-slim-harness-design.md"
 
 Run:
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph
+cd .
 grep -rln "crate::supervisor\|use crate::supervisor" src/ | grep -v "^src/supervisor/"
 ```
 Expected: empty output (only the supervisor module's own files reference it).
@@ -493,7 +493,7 @@ Expected: empty output (only the supervisor module's own files reference it).
 
 Run:
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph
+cd .
 git mv src/supervisor src/process_supervisor
 ```
 
@@ -501,7 +501,7 @@ git mv src/supervisor src/process_supervisor
 
 Run:
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph
+cd .
 grep -rln "crate::supervisor" src/process_supervisor/
 ```
 For each match, replace `crate::supervisor` → `crate::process_supervisor` using sed or manual edit.
@@ -521,7 +521,7 @@ pub mod process_supervisor;
 
 Run:
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph
+cd .
 cargo check -p alephcore
 ```
 Expected: no errors.
@@ -530,7 +530,7 @@ Expected: no errors.
 
 Run:
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph
+cd .
 git add -A
 git commit -m "process_supervisor: rename src/supervisor/ → src/process_supervisor/
 
@@ -556,7 +556,7 @@ Spec: docs/superpowers/specs/2026-04-24-p0-slim-harness-design.md"
 
 Run:
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph
+cd .
 grep -rln "crate::resilient\|use crate::resilient" src/ | grep -v "^src/resilient/"
 ```
 Record the file list (may be small — resilient is a task-level retry framework).
@@ -565,7 +565,7 @@ Record the file list (may be small — resilient is a task-level retry framework
 
 Run:
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph
+cd .
 git mv src/resilient src/task_resilience
 ```
 
@@ -573,7 +573,7 @@ git mv src/resilient src/task_resilience
 
 Run:
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph
+cd .
 grep -rln "crate::resilient" src/task_resilience/
 ```
 Replace `crate::resilient` → `crate::task_resilience` for every match.
@@ -600,7 +600,7 @@ sed -i '' 's|crate::resilient|crate::task_resilience|g' <file>
 
 Run:
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph
+cd .
 cargo check -p alephcore
 ```
 Expected: no errors.
@@ -609,7 +609,7 @@ Expected: no errors.
 
 Run:
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph
+cd .
 git add -A
 git commit -m "task_resilience: rename src/resilient/ → src/task_resilience/
 
@@ -647,7 +647,7 @@ to (fill in today's date and plan link):
 
 Run:
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph
+cd .
 just test-all
 ```
 Expected: all tests pass. **If any test fails, diagnose — failures at this point usually mean an import path was missed or a `pub(crate)` visibility broke.**
@@ -656,7 +656,7 @@ Expected: all tests pass. **If any test fails, diagnose — failures at this poi
 
 Run:
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph
+cd .
 cargo clippy -p alephcore -- -D warnings
 ```
 Expected: no warnings.
@@ -676,7 +676,7 @@ Expected: no aleph-server processes listed.
 
 Run in one terminal (or as background process):
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph
+cd .
 cargo build -p aleph-server --release
 ./target/release/aleph-server start &
 SERVER_PID=$!
@@ -687,7 +687,7 @@ sleep 10
 
 First, discover the gateway's listen port and an unauthenticated GET route:
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph
+cd .
 grep -rn "bind\|listen\|SocketAddr::" src/gateway/ src/bin/ | grep -iE "8080|3000|port" | head -5
 grep -rn "\.route(" src/gateway/ | grep -iE "get\(|/health|/status|/version" | head -10
 ```
@@ -714,7 +714,7 @@ Expected: no aleph-server processes.
 
 Run:
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph
+cd .
 git add docs/superpowers/specs/2026-04-24-harness-dissolution-roadmap.md
 git commit -m "docs(spec): mark P0 slim-harness complete in roadmap
 
@@ -735,7 +735,7 @@ Spec: docs/superpowers/specs/2026-04-24-p0-slim-harness-design.md"
 
 Run:
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph
+cd .
 git log --oneline e33d22f73..HEAD
 ```
 Expected: 6 commits with the prefixes `harness:` (×3), `process_supervisor:`, `task_resilience:`, `docs(spec):`.
@@ -754,8 +754,8 @@ Report success with:
 If the phase needs to be abandoned mid-flight:
 
 1. Identify the last green commit SHA (from Task 0 Step 5 or any intermediate green).
-2. Reset: `git -C /Volumes/TBU4/Workspace/Aleph reset --hard <SHA>` (destructive — confirm no uncommitted work will be lost).
-3. Or, for surgical rollback of one commit: `git -C /Volumes/TBU4/Workspace/Aleph revert <SHA>` (preserves history).
+2. Reset: `git -C . reset --hard <SHA>` (destructive — confirm no uncommitted work will be lost).
+3. Or, for surgical rollback of one commit: `git -C . revert <SHA>` (preserves history).
 
 Commits 1-3 (harness relocations) have order dependencies — revert in reverse order (3 → 2 → 1). Commits 4, 5, 6 are independent and revertible individually.
 

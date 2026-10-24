@@ -14,7 +14,7 @@
 
 ## Global Constraints
 
-- All work remains on worktree `/Volumes/TBU4/Workspace/Aleph-phase3`, branch `phase3-capability-architecture`; never edit `main`.
+- All work remains on worktree `../Aleph-phase3`, branch `phase3-capability-architecture`; never edit `main`.
 - `src/harness/` remains free of new registry, policy, lifecycle, or replay logic; existing `ToolCallRequested` and effective-input field wiring may only be changed to correct a proven field-plumbing defect.
 - Phase 2B production recovery remains VerifyOnly; do not add permit consumption, handler recovery invocation, durable replay claim, per-call crash budget, or recovery outcome writes.
 - `ToolCallEffectiveInput` is already represented in current source; verify its existing contract and do not treat it as Phase 3 implementation work.

@@ -32,7 +32,7 @@
 - [ ] **Step 1: 字节级还原 3 个完全回退的前端文件**
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph
+cd .
 git checkout 87cd90138 -- \
   interfaces/webchat/src/components/nav_menu.rs \
   interfaces/webchat/src/components/mode_sidebar.rs \
@@ -101,7 +101,7 @@ separate round."
 这 9 个文件的全部分支新增都只关于 `set_pinned`/`set_project_root`/`project_root` 持久化，且合并后从未被改动，可干净反向移除。
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph
+cd .
 git diff 87cd90138 eaa595ac0 -- \
   src/gateway/handlers/session/db_handlers/modify.rs \
   src/gateway/handlers/session/db_handlers/mod.rs \

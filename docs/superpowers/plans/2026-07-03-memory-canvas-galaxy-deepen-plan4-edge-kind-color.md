@@ -312,7 +312,7 @@ Expected: 全绿（新增 edge_kind_* + 改后的 dedup_* + 既有回归），�
 - [ ] **Step 6: Commit**
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph
+cd .
 git add interfaces/webchat/src/platform/wide/views/canvas/
 git commit -m "canvas: tint edges by relation kind (semantic/related/co_recalled/keyword vs wikilink backbone)"
 ```

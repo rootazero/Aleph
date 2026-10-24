@@ -6,7 +6,7 @@ English summary: Adapted exactly eleven provider-side exhaustive match sites (si
 
 ## 1. Boundary and approach / 边界与方案
 
-- Root: `/Volumes/TBU4/Workspace/Aleph`; branch: `refactor/modularization-p0`.
+- Root: `.`; branch: `refactor/modularization-p0`.
 - Read the Task 7 brief, match-boundary document, source-review §10 under `.superpowers/sdd/2026-10-14-modularization-p0-implementation/`, actual API helper signatures and `task-7-phase-a-report.md`. Phase A's final repair addendum records 261 passed / 0 failed API-lib tests; this is prior-phase evidence, not a B1 execution or Core proof.
 - Changed only the five authorized Rust files below and this report. No API/helper/DTO definition, dependency, runtime provider trait, HTTP policy or context/moa source change.
 - Used existing Core compatibility reexports of `dispatch_unified_message`, `dispatch_think_level` and `select_think_level_copy`. Callbacks share a mutable accumulator; ThinkLevel value maps use unit context, with model policy captured only by the selected adaptive callback. Anthropic's const mapping retains its const signature via the Copy selector.

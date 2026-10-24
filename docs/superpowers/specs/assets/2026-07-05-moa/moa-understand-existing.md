@@ -1,6 +1,6 @@
 # Aleph MoA-Capability Inventory (pre-port audit vs hermes-agent MoA)
 
-Scope: what already exists in Aleph resembling Mixture-of-Agents (parallel multi-model consultation feeding one acting model), to avoid duplicating it in the hermes MoA port. All paths absolute under `/Volumes/TBU4/Workspace/Aleph`.
+Scope: what already exists in Aleph resembling Mixture-of-Agents (parallel multi-model consultation feeding one acting model), to avoid duplicating it in the hermes MoA port. All paths absolute under `.`.
 
 **Headline finding: Aleph already ships a one-shot MoA implementation** — the `subagent` tool has `proposer_models` / `synthesize` / `aggregator_model` / `synthesis_instruction` arguments that fan the same task out across models in parallel and reduce via an aggregator sub-agent, explicitly citing the MoA paper (Wang et al. 2406.04692). It is **undocumented** in `docs/reference/` (grep for `MoA|Mixture|proposer` returns nothing). What it is NOT: hermes-style continuous per-iteration advisory injection on the live conversation.
 

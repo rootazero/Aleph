@@ -44,7 +44,7 @@ cd .claude/worktrees/aleph-security-wiring
 
 Expected: New branch `aleph-security-wiring` checked out at `.claude/worktrees/aleph-security-wiring/`, based on `main` (currently `1bd69da6a`).
 
-All subsequent task files paths assume the worktree as CWD. When writing files via Write/Edit tools, paths must be absolute and prefixed with `/Volumes/TBU4/Workspace/Aleph/.claude/worktrees/aleph-security-wiring/` (per saved feedback: shell `cd` is ignored by Write/Edit; absolute paths are required).
+All subsequent task files paths assume the worktree as CWD. When writing files via Write/Edit tools, paths must be absolute and prefixed with `.claude/worktrees/aleph-security-wiring/` (per saved feedback: shell `cd` is ignored by Write/Edit; absolute paths are required).
 
 ---
 
@@ -1418,11 +1418,11 @@ Per saved memory `feedback_worktree_for_implementation.md`: do not `git worktree
 From a fresh session (outside the worktree's enforced CWD):
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph
+cd .
 git checkout main
 git merge --no-ff aleph-security-wiring -m "merge: aleph security wiring cycle (worktree aleph-security-wiring)"
 # Optionally then:
-# git worktree remove /Volumes/TBU4/Workspace/Aleph/.claude/worktrees/aleph-security-wiring
+# git worktree remove .claude/worktrees/aleph-security-wiring
 # git branch -d aleph-security-wiring
 ```
 

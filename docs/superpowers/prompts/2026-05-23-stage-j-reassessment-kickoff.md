@@ -2,7 +2,7 @@
 
 > **Intended for use:** 2026-05-23 (or later). Authored 2026-05-09 immediately after Stage J-pre ship.
 >
-> **How to use:** open a new Claude Code session at `/Volumes/TBU4/Workspace/Aleph` (Aleph project root) and paste **this entire file** as your first message. The session's Claude executes the steps below autonomously and ends in either:
+> **How to use:** open a new Claude Code session at `.` (Aleph project root) and paste **this entire file** as your first message. The session's Claude executes the steps below autonomously and ends in either:
 > - Path A: a Stage J implementation plan + SDD execution kicked off; OR
 > - Path B: roadmap updated to mark Stage J ❌ Indefinitely Deferred + brief retro committed.
 
@@ -10,13 +10,13 @@
 
 ## Read this first (no skipping)
 
-You are Claude Code resuming work on **Aleph**, a self-hosted personal AI assistant (Rust core + multi-channel architecture). Project root: `/Volumes/TBU4/Workspace/Aleph`. Branch: `main` (single-branch model — commit directly).
+You are Claude Code resuming work on **Aleph**, a self-hosted personal AI assistant (Rust core + multi-channel architecture). Project root: `.`. Branch: `main` (single-branch model — commit directly).
 
 **Your mission this session:** decide whether to implement **Stage J** (fork-subagent prompt cache reuse) of the subagent uplift roadmap, based on the cache-token observability data that **Stage J-pre** has been silently collecting since 2026-05-09. Then either ship Stage J via SDD, or close it out with a retro.
 
 **Hard project rules (architectural redlines)** — never violate:
 - **R10 thin-harness redline**: `git diff f891cc71b -- src/harness/agent.rs | wc -l` MUST be `0`. Harness file count `ls src/harness/*.rs | wc -l` MUST be `10`. (`f891cc71b` is the Stage I closure SHA — Stage J-pre preserved it through 9 commits, so will you.)
-- All other redlines (R1–R9) per `/Volumes/TBU4/Workspace/Aleph/CLAUDE.md`. Worth re-reading.
+- All other redlines (R1–R9) per `CLAUDE.md`. Worth re-reading.
 
 **Project conventions:**
 - 中文 conversation, English code/comments, English commit messages
@@ -31,7 +31,7 @@ You are Claude Code resuming work on **Aleph**, a self-hosted personal AI assist
 
 The subagent-uplift roadmap's master spec is at:
 ```
-/Volumes/TBU4/Workspace/Aleph/docs/superpowers/specs/2026-05-08-subagent-uplift-roadmap-design.md
+docs/superpowers/specs/2026-05-08-subagent-uplift-roadmap-design.md
 ```
 
 By 2026-05-09 the following had shipped on `main`:
@@ -86,8 +86,8 @@ find /Users/zouguojun/.aleph/data/ -name "*trace*" -o -name "*.log" -o -name "*.
 find /Users/zouguojun/.aleph/data/ -name "*.db" -o -name "*.sqlite*" 2>/dev/null | head -5
 
 # 4. Check if any test or dev run captured them
-ls -la /Volumes/TBU4/Workspace/Aleph/.omc/state/ 2>/dev/null | head -10
-find /Volumes/TBU4/Workspace/Aleph -name "*provider_usage*" -not -path "*/target/*" -not -path "*/.git/*" 2>/dev/null | head -20
+ls -la .omc/state/ 2>/dev/null | head -10
+find . -name "*provider_usage*" -not -path "*/target/*" -not -path "*/.git/*" 2>/dev/null | head -20
 
 # 5. Confirm the ship code is still live (no regressions since 2026-05-09)
 git log --oneline fd673742c..HEAD | head -20
@@ -262,13 +262,13 @@ These are documented gaps from earlier stages. Touch them ONLY if Path A's plan 
 
 | Doc | Path |
 |---|---|
-| Project rules | `/Volumes/TBU4/Workspace/Aleph/CLAUDE.md` |
-| Master roadmap (subagent uplift) | `/Volumes/TBU4/Workspace/Aleph/docs/superpowers/specs/2026-05-08-subagent-uplift-roadmap-design.md` |
-| P3 design (Stage H + I + J context) | `/Volumes/TBU4/Workspace/Aleph/docs/superpowers/specs/2026-05-09-subagent-uplift-p3-design.md` |
-| P3 Stage I plan (executed) | `/Volumes/TBU4/Workspace/Aleph/docs/superpowers/plans/2026-05-09-subagent-uplift-p3-stage-i-plan.md` |
-| Stage J-pre plan (executed) | `/Volumes/TBU4/Workspace/Aleph/docs/superpowers/plans/2026-05-09-subagent-uplift-stage-j-pre-plan.md` |
-| Multi-agent reference docs (cache observability section) | `/Volumes/TBU4/Workspace/Aleph/docs/reference/MULTI_AGENT_SYSTEM.md` |
-| Harness philosophy | `/Volumes/TBU4/Workspace/Aleph/docs/reference/HARNESS_PHILOSOPHY.md` |
+| Project rules | `CLAUDE.md` |
+| Master roadmap (subagent uplift) | `docs/superpowers/specs/2026-05-08-subagent-uplift-roadmap-design.md` |
+| P3 design (Stage H + I + J context) | `docs/superpowers/specs/2026-05-09-subagent-uplift-p3-design.md` |
+| P3 Stage I plan (executed) | `docs/superpowers/plans/2026-05-09-subagent-uplift-p3-stage-i-plan.md` |
+| Stage J-pre plan (executed) | `docs/superpowers/plans/2026-05-09-subagent-uplift-stage-j-pre-plan.md` |
+| Multi-agent reference docs (cache observability section) | `docs/reference/MULTI_AGENT_SYSTEM.md` |
+| Harness philosophy | `docs/reference/HARNESS_PHILOSOPHY.md` |
 
 ## Key code paths (absolute)
 

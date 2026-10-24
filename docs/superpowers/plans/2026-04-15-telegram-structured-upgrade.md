@@ -1559,7 +1559,7 @@ Expected: 0 warnings
 
 Run:
 ```bash
-grep -r "gateway::bridge\|bridge::\|BridgedChannel\|BridgeClient" /Volumes/TBU4/Workspace/Aleph/src --include="*.rs"
+grep -r "gateway::bridge\|bridge::\|BridgedChannel\|BridgeClient" src --include="*.rs"
 ```
 
 Expected: 仅 `src/gateway/bridge/` 自身和 `src/gateway/handlers/approval_bridge.rs` 有引用。
@@ -1568,7 +1568,7 @@ Expected: 仅 `src/gateway/bridge/` 自身和 `src/gateway/handlers/approval_bri
 
 Run:
 ```bash
-grep -r "whatsapp-bridge\|bridge" /Volumes/TBU4/Workspace/Aleph/Cargo.toml /Volumes/TBU4/Workspace/Aleph/justfile /Volumes/TBU4/Workspace/Aleph/.github/workflows/ 2>/dev/null || true
+grep -r "whatsapp-bridge\|bridge" Cargo.toml justfile .github/workflows/ 2>/dev/null || true
 ```
 
 Expected: 确认没有残留的 workspace member 或 CI build step。
@@ -1591,7 +1591,7 @@ Expected: 确认没有残留的 workspace member 或 CI build step。
 - [ ] **Step 1: 删除文件**
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph
+cd .
 rm -f src/gateway/bridge/bridged_channel.rs
 rm -f src/gateway/bridge/supervisor.rs
 rm -f src/gateway/bridge/types.rs

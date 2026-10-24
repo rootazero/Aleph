@@ -426,7 +426,7 @@ git commit -m "panel: reduced-transparency fallback + remove dead translucent CS
 
 Run:
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph
+cd .
 just wasm
 cargo build --release -p alephcore --bin aleph-server 2>&1 | tail -5
 ```
@@ -436,7 +436,7 @@ Expected: WASM 构建成功、`aleph-server` release 编译成功（`rust_embed`
 
 dev daemon：
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph
+cd .
 ./target/release/aleph-server stop || true
 cargo run --release -p alephcore --bin aleph-server start
 ```

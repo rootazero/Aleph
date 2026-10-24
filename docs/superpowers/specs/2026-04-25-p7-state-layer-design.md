@@ -267,7 +267,7 @@ exposure).
 **Rollback**:
 
 ```bash
-git -C /Volumes/TBU4/Workspace/Aleph.harness-dissolution revert <commit-sha>
+git -C ../Aleph.harness-dissolution revert <commit-sha>
 ```
 
 This restores the roadmap §7 P7 row to 📋 Planned and deletes

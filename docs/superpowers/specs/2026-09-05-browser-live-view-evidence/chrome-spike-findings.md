@@ -389,7 +389,7 @@ Confirmed with `pgrep`, all zero: `chrome-udd` 0, `chrome-udd2` 0,
 `playwright_chromiumdev_profile` 0, `Google Chrome` 0, `http.server 18999` 0, `cliDaemon` 0.
 
 `playwright-cli list` shows only `alephprobe5` (status closed), which pre-dated this spike.
-Nothing under `/Volumes/TBU4/Workspace/Aleph` was read, written, or built.
+Nothing under `.` was read, written, or built.
 
 ---
 

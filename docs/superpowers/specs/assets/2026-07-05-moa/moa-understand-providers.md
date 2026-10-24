@@ -1,6 +1,6 @@
 # Aleph Provider Layer Map — for a Virtual MoA Provider Design
 
-All paths relative to `/Volumes/TBU4/Workspace/Aleph`. Line numbers verified against working tree on 2026-07-05 (branch `main`).
+All paths relative to `.`. Line numbers verified against working tree on 2026-07-05 (branch `main`).
 
 ---
 

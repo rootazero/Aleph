@@ -347,7 +347,7 @@ codex 的 `REDUCED_STATE_FILE_NAME` + `REDUCED_TRACE_SCHEMA_VERSION`。marker �
 
 ## 9. 环境假设（明确记录）
 
-1. **`/Volumes/TBU` 当前未挂载**（`ls /Volumes/` 只有 `TBU4`）。CLAUDE.md 记着会话检出应在 `/Volumes/TBU/Workspace/Aleph`，该路径不存在，故本轮在 `/Volumes/TBU4/Workspace/Aleph` 就地开 worktree。
+1. **`/Volumes/TBU` 当前未挂载**（`ls /Volumes/` 只有 `TBU4`）。CLAUDE.md 记着会话检出应在 `.`，该路径不存在，故本轮在 `.` 就地开 worktree。
 2. **worktree 必须自带 `CARGO_TARGET_DIR`**。`.cargo/config.toml` 钉了一个共享绝对 target dir（`qa/session_order/run.sh` 就是因此才用 `cargo metadata` 问真实路径）。不隔离的话「我测过了」测的是另一棵 worktree 的字节。
 3. 全程不碰 `main`。
 

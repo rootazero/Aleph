@@ -10,7 +10,7 @@
 
 ## 背景(必读,别重蹈覆辙)
 
-- 项目:`/Volumes/TBU4/Workspace/Aleph`,单分支 `main`。Panel = crate `aleph-panel`,在 `interfaces/webchat/`,Leptos 0.7 + WASM + Tailwind v4。
+- 项目:`.`,单分支 `main`。Panel = crate `aleph-panel`,在 `interfaces/webchat/`,Leptos 0.7 + WASM + Tailwind v4。
 - iPhone/iPad **只做纯壳 Panel 版(连远程 core,零 core 代码)**,所有工作只在 `interfaces/webchat/`。
 - **此前的教训(务必避免)**:之前的移动适配是"把桌面 master-detail 双栏用 `max-sm:` 藏一栏"硬塞,**完全偏离了设计**、还把 iPhone 样式焊进桌面组件干扰桌面。那批工作已 `git reset` 回退、存档在分支 `archive/mobile-reflow-20260625`。**这次必须以设计稿为唯一规格,iOS 原生重建,不要 reflow 桌面。**
 - 已完成的架构重组(HEAD `ce9afb6ca`):UI 按平台分层

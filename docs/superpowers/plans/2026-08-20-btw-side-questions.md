@@ -12,7 +12,7 @@
 
 ## Global Constraints
 
-- **Worktree:** all work happens in `/Volumes/TBU/Workspace/Aleph/.claude/worktrees/btw-side-questions` on branch `worktree-btw-side-questions`. Never touch `main`.
+- **Worktree:** all work happens in `.claude/worktrees/btw-side-questions` on branch `worktree-btw-side-questions`. Never touch `main`.
 - **MSRV 1.95**, toolchain pinned by `rust-toolchain.toml` (1.96.0). Do not run `rustup default` or `cargo +<ver>`.
 - **Redlines:** R10 — nothing in this plan adds a line to `src/harness/`. R7 — no regex/keyword intent classification anywhere. R3 — no new third-party crates.
 - **Commit style:** `<scope>: <description>`, English, e.g. `gateway: derive btw turns at the shared slash chokepoint`.

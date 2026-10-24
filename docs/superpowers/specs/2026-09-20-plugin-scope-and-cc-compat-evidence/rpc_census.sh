@@ -1,5 +1,5 @@
 #!/bin/zsh
-cd /Volumes/TBU4/Workspace/Aleph
+cd .
 PAT='"(plugin|plugins|extensions|hooks|skills|mcp_config|mcp|services)\.[a-zA-Z_.]+"'
 rg --no-filename --no-line-number -o -e "(register|reg!)\\($PAT" src/gateway/handlers/mod.rs src/bin/aleph-server/commands/start/builder/handlers/ src/bin/aleph-server/commands/start/builder/ | rg --no-filename -o -e '"[^"]+"' | sort -u > /tmp/srv.txt
 rg --no-filename --no-line-number -o -e "$PAT" interfaces/webchat/src interfaces/tui/src interfaces/cli/src qa shared | sort -u > /tmp/cli.txt

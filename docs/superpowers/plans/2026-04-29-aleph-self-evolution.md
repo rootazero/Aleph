@@ -47,14 +47,14 @@ Goal: net negative diff (~-800 lines), bugs D3/D4/D5 closed, all existing tests 
 
 - [ ] **Step 1: Confirm zero callers outside the file itself**
 ```bash
-rg "RuleLearner|rule_learner::" /Volumes/TBU4/Workspace/Aleph/src/ \
+rg "RuleLearner|rule_learner::" src/ \
   | rg -v "src/engine/rule_learner.rs|src/engine/mod.rs|src/engine/learning_agent.rs"
 ```
 Expected: empty output. If anything else returns, STOP and inspect — there may be a hidden caller.
 
 - [ ] **Step 2: Delete the file**
 ```bash
-rm /Volumes/TBU4/Workspace/Aleph/src/engine/rule_learner.rs
+rm src/engine/rule_learner.rs
 ```
 
 - [ ] **Step 3: Verify build still passes after removing the module declaration (do this in Task 3, not yet — file is now orphaned but module is still declared)**
@@ -70,14 +70,14 @@ rm /Volumes/TBU4/Workspace/Aleph/src/engine/rule_learner.rs
 
 - [ ] **Step 1: Confirm zero callers outside the file itself**
 ```bash
-rg "LearningAgent|LearningCallback|learning_agent::" /Volumes/TBU4/Workspace/Aleph/src/ \
+rg "LearningAgent|LearningCallback|learning_agent::" src/ \
   | rg -v "src/engine/learning_agent.rs|src/engine/mod.rs|src/harness/loop_callback.rs"
 ```
 Expected: empty output. The `loop_callback.rs` reference is the dead stub — handled in Task 4.
 
 - [ ] **Step 2: Delete the file**
 ```bash
-rm /Volumes/TBU4/Workspace/Aleph/src/engine/learning_agent.rs
+rm src/engine/learning_agent.rs
 ```
 
 (No commit yet — wait for Task 3.)
@@ -92,7 +92,7 @@ rm /Volumes/TBU4/Workspace/Aleph/src/engine/learning_agent.rs
 
 - [ ] **Step 1: Read current state**
 ```bash
-cat /Volumes/TBU4/Workspace/Aleph/src/engine/mod.rs
+cat src/engine/mod.rs
 ```
 
 - [ ] **Step 2: Remove the two `pub mod` lines using Edit tool**
@@ -109,16 +109,16 @@ Remove both.
 
 - [ ] **Step 3: Check whether `src/engine/` is now empty/trivial**
 ```bash
-ls /Volumes/TBU4/Workspace/Aleph/src/engine/
-cat /Volumes/TBU4/Workspace/Aleph/src/engine/mod.rs
+ls src/engine/
+cat src/engine/mod.rs
 ```
 
 If `mod.rs` is now empty (or contains only `// empty` or whitespace) AND no other `.rs` files exist in `src/engine/`, then:
 
 - [ ] **Step 4 (conditional — only if engine/ is fully empty): Delete the engine module entirely**
 ```bash
-rm /Volumes/TBU4/Workspace/Aleph/src/engine/mod.rs
-rmdir /Volumes/TBU4/Workspace/Aleph/src/engine/
+rm src/engine/mod.rs
+rmdir src/engine/
 ```
 Then in `src/lib.rs` (or wherever modules are declared), remove:
 ```rust
@@ -129,13 +129,13 @@ If `mod.rs` still has other content, leave it and move on.
 
 - [ ] **Step 5: Build to confirm clean**
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph && cargo check -p alephcore 2>&1 | tail -30
+cd . && cargo check -p alephcore 2>&1 | tail -30
 ```
 Expected: no errors. Warnings about unused items are OK at this stage.
 
 - [ ] **Step 6: Commit Tasks 1–3 together**
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph
+cd .
 git add -A src/engine/ src/lib.rs
 git commit -m "engine: delete RuleLearner and LearningAgent (orphan code, TODO #1819)"
 ```
@@ -149,7 +149,7 @@ git commit -m "engine: delete RuleLearner and LearningAgent (orphan code, TODO #
 
 - [ ] **Step 1: Read the file**
 ```bash
-cat /Volumes/TBU4/Workspace/Aleph/src/harness/loop_callback.rs
+cat src/harness/loop_callback.rs
 ```
 
 - [ ] **Step 2: Remove the `LearningCallback` struct, impl, and any imports referring to the deleted modules**
@@ -158,19 +158,19 @@ Use Edit to remove every block referencing `LearningCallback`, `LearningAgent`, 
 
 - [ ] **Step 3: Verify build is clean**
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph && cargo check -p alephcore 2>&1 | tail -10
+cd . && cargo check -p alephcore 2>&1 | tail -10
 ```
 Expected: 0 errors, 0 new warnings.
 
 - [ ] **Step 4: Verify `src/harness/` line count is at or below the pre-task line count (R11 — thin harness must stay thin)**
 ```bash
-find /Volumes/TBU4/Workspace/Aleph/src/harness -name "*.rs" -exec wc -l {} + | tail -1
+find src/harness -name "*.rs" -exec wc -l {} + | tail -1
 ```
 Record the number; it must be ≤ what it was before Task 4. (We are only deleting in this task.)
 
 - [ ] **Step 5: Commit**
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph
+cd .
 git add src/harness/loop_callback.rs
 git commit -m "harness: remove dead LearningCallback stub"
 ```
@@ -202,7 +202,7 @@ These let dreams write to any free-form `KnowledgeNote.category` value without t
 
 - [ ] **Step 1: Read current state of the lint stage**
 ```bash
-cat /Volumes/TBU4/Workspace/Aleph/<LINT_STAGE_PATH>
+cat .<LINT_STAGE_PATH>
 ```
 Identify where the stage processes notes (likely `async fn execute(&self, ctx: &mut DreamContext) -> StageResult`).
 
@@ -256,7 +256,7 @@ fn make_test_note(id: &str, category: &str, content: &str, links: Vec<&str>) -> 
 
 - [ ] **Step 3: Run test — it MUST fail**
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph && cargo test -p alephcore --lib lint_drops_stale_wikilink -- --nocapture 2>&1 | tail -15
+cd . && cargo test -p alephcore --lib lint_drops_stale_wikilink -- --nocapture 2>&1 | tail -15
 ```
 Expected: FAIL.
 
@@ -291,19 +291,19 @@ If `ctx.notes.iter_mut().await?` or `all_note_ids()` doesn't exist verbatim, ada
 
 - [ ] **Step 5: Run test — it MUST pass**
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph && cargo test -p alephcore --lib lint_drops_stale_wikilink -- --nocapture 2>&1 | tail -15
+cd . && cargo test -p alephcore --lib lint_drops_stale_wikilink -- --nocapture 2>&1 | tail -15
 ```
 Expected: PASS.
 
 - [ ] **Step 6: Run all lint tests to confirm no regression**
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph && cargo test -p alephcore --lib lint 2>&1 | tail -15
+cd . && cargo test -p alephcore --lib lint 2>&1 | tail -15
 ```
 Expected: all green.
 
 - [ ] **Step 7: Commit**
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph
+cd .
 git add <LINT_STAGE_PATH>
 git commit -m "memory/dream: lint stage drops stale wikilinks (D4)"
 ```
@@ -358,12 +358,12 @@ fn dream_config_defaults_include_distill_caps() {
 
 - [ ] **Step 3: Run test — should now PASS** (the defaults you just added make it pass)
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph && cargo test -p alephcore --lib dream_config_defaults_include_distill_caps 2>&1 | tail -10
+cd . && cargo test -p alephcore --lib dream_config_defaults_include_distill_caps 2>&1 | tail -10
 ```
 
 - [ ] **Step 4: Read `skill_distill.rs` to find the hardcoded "0–3" prompt fragment**
 ```bash
-grep -n "0-3\|0–3\|three\|3 " /Volumes/TBU4/Workspace/Aleph/src/memory/dreaming/stages/skill_distill.rs
+grep -n "0-3\|0–3\|three\|3 " src/memory/dreaming/stages/skill_distill.rs
 ```
 Around line 109 per spec evidence.
 
@@ -392,7 +392,7 @@ And update its constructor + every place it's instantiated.
 
 - [ ] **Step 6: Run skill distill tests — must still pass**
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph && cargo test -p alephcore --lib skill_distill 2>&1 | tail -15
+cd . && cargo test -p alephcore --lib skill_distill 2>&1 | tail -15
 ```
 If snapshot tests fail because the prompt now interpolates a number, accept the snapshot if and only if the new prompt is correct:
 ```bash
@@ -401,7 +401,7 @@ cargo insta accept  # or whatever snapshot tool the project uses
 
 - [ ] **Step 7: Commit**
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph
+cd .
 git add <DREAM_CONFIG_PATH> src/memory/dreaming/stages/skill_distill.rs
 git commit -m "memory/dream: move skill_distill cap to config (D5)"
 ```
@@ -412,25 +412,25 @@ git commit -m "memory/dream: move skill_distill cap to config (D5)"
 
 - [ ] **Step 1: Library tests green**
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph && cargo test -p alephcore --lib 2>&1 | tail -10
+cd . && cargo test -p alephcore --lib 2>&1 | tail -10
 ```
 Expected: 0 failures.
 
 - [ ] **Step 2: Clippy clean — no NEW warnings**
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph && cargo clippy -p alephcore --lib 2>&1 | grep -E "warning|error" | tail -30
+cd . && cargo clippy -p alephcore --lib 2>&1 | grep -E "warning|error" | tail -30
 ```
 Expected: zero new warnings about dead enum / unused module.
 
 - [ ] **Step 3: Net diff is negative**
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph && git diff --stat $(git log --before="2026-04-29 00:00" -n1 --format=%H)..HEAD | tail -5
+cd . && git diff --stat $(git log --before="2026-04-29 00:00" -n1 --format=%H)..HEAD | tail -5
 ```
 Expected: insertions much less than deletions; ballpark −800 LOC.
 
 - [ ] **Step 4: `src/harness/` line count UNCHANGED or DECREASED (R11)**
 ```bash
-find /Volumes/TBU4/Workspace/Aleph/src/harness -name "*.rs" -exec wc -l {} + | tail -1
+find src/harness -name "*.rs" -exec wc -l {} + | tail -1
 ```
 Compare with the value recorded at Task 4 Step 4. Must be ≤.
 
@@ -440,7 +440,7 @@ Optional but encouraged: run the binary briefly with a tiny corpus and confirm `
 
 If all gates pass, Phase 1 is complete. Tag the commit:
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph
+cd .
 git tag self-evolution-phase1
 ```
 
@@ -500,7 +500,7 @@ fn severity_serde_roundtrip_all_variants() {
 
 - [ ] **Step 2: Run — should FAIL (Severity not defined)**
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph && cargo test -p alephcore --lib severity 2>&1 | tail -10
+cd . && cargo test -p alephcore --lib severity 2>&1 | tail -10
 ```
 Expected: compile error / FAIL.
 
@@ -526,12 +526,12 @@ pub use note::{sanitize_title, KnowledgeNote, Severity};
 
 - [ ] **Step 4: Run tests — PASS**
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph && cargo test -p alephcore --lib severity 2>&1 | tail -10
+cd . && cargo test -p alephcore --lib severity 2>&1 | tail -10
 ```
 
 - [ ] **Step 5: Commit**
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph
+cd .
 git add src/memory/notes/note.rs src/memory/notes/mod.rs
 git commit -m "memory/notes: add Severity enum (Low/Med/High/Critical, default Low)"
 ```
@@ -569,7 +569,7 @@ fn knowledge_note_new_markdown_roundtrips_new_fields() {
 
 - [ ] **Step 2: Run — must FAIL (fields missing)**
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph && cargo test -p alephcore --lib knowledge_note 2>&1 | tail -15
+cd . && cargo test -p alephcore --lib knowledge_note 2>&1 | tail -15
 ```
 
 - [ ] **Step 3: Add fields to `Frontmatter` AND `KnowledgeNote` with serde defaults**
@@ -636,23 +636,23 @@ Ok(Self {
 
 - [ ] **Step 4: Run roundtrip tests — PASS**
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph && cargo test -p alephcore --lib knowledge_note 2>&1 | tail -15
+cd . && cargo test -p alephcore --lib knowledge_note 2>&1 | tail -15
 ```
 
 - [ ] **Step 5: Update every `KnowledgeNote { ... }` literal in the codebase**
 ```bash
-rg "KnowledgeNote \{" /Volumes/TBU4/Workspace/Aleph/src/ /Volumes/TBU4/Workspace/Aleph/tests/
+rg "KnowledgeNote \{" src/ tests/
 ```
 Each construction site needs the three new fields. For legacy callers, add `confidence: 1.0, severity: Severity::Low, source_facts: vec![]`. Notable site: `src/memory/dreaming/stages/skill_distill.rs:85` (the current `let note = KnowledgeNote { ... }` block — Task 15 will rewrite this entirely, but the build must pass in the meantime).
 
 - [ ] **Step 6: Build clean**
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph && cargo check -p alephcore 2>&1 | tail -10
+cd . && cargo check -p alephcore 2>&1 | tail -10
 ```
 
 - [ ] **Step 7: Commit**
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph
+cd .
 git add src/memory/notes/note.rs src/memory/dreaming/stages/skill_distill.rs
 git commit -m "memory/notes: KnowledgeNote gains confidence/severity/source_facts (backward-compat)"
 ```
@@ -723,7 +723,7 @@ fn to_markdown_legacy_defaults_roundtrip() {
 
 - [ ] **Step 2: Run — must FAIL**
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph && cargo test -p alephcore --lib to_markdown 2>&1 | tail -15
+cd . && cargo test -p alephcore --lib to_markdown 2>&1 | tail -15
 ```
 
 - [ ] **Step 3: Update `to_markdown` to emit new fields**
@@ -747,7 +747,7 @@ if self.source_facts.is_empty() {
 
 - [ ] **Step 4: Run — must PASS**
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph && cargo test -p alephcore --lib to_markdown 2>&1 | tail -15
+cd . && cargo test -p alephcore --lib to_markdown 2>&1 | tail -15
 ```
 
 - [ ] **Step 5: Manual sanity — read a real existing note from disk**
@@ -758,7 +758,7 @@ If a real note exists, write a one-off test that loads it via `KnowledgeNote::fr
 
 - [ ] **Step 6: Commit**
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph
+cd .
 git add src/memory/notes/note.rs
 git commit -m "memory/notes: to_markdown serializes new frontmatter fields (backward-compat)"
 ```
@@ -775,7 +775,7 @@ Per Phase 2 Decision 3: the helper is a thin wrapper over the existing `NoteStor
 
 - [ ] **Step 1: Inspect existing `vector_search` signature**
 ```bash
-sed -n '600,680p' /Volumes/TBU4/Workspace/Aleph/src/memory/store/sqlite/notes.rs
+sed -n '600,680p' src/memory/store/sqlite/notes.rs
 ```
 Record: parameter shape (`embedding: &[f32]`, `dim: u32`, `agent_id: &str`, `limit: usize`?) and return type (likely `Vec<(String, f32)>`).
 
@@ -885,13 +885,13 @@ pub use dedup::find_similar_notes;
 
 - [ ] **Step 3: Run tests**
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph && cargo test -p alephcore --lib dedup 2>&1 | tail -20
+cd . && cargo test -p alephcore --lib dedup 2>&1 | tail -20
 ```
 If `vector_search`'s actual signature differs from the assumed shape (Step 1), adjust the helper body — do NOT modify `vector_search` itself.
 
 - [ ] **Step 4: Commit**
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph
+cd .
 git add src/memory/notes/dedup.rs src/memory/notes/mod.rs
 git commit -m "memory/notes: add find_similar_notes helper (sqlite-vec KNN wrapper)"
 ```
@@ -943,7 +943,7 @@ fn rerank_boosts_higher_severity() {
 
 - [ ] **Step 2: Run — must FAIL**
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph && cargo test -p alephcore --lib rerank 2>&1 | tail -15
+cd . && cargo test -p alephcore --lib rerank 2>&1 | tail -15
 ```
 
 - [ ] **Step 3: Add helpers and integrate into `retrieve`**
@@ -1007,17 +1007,17 @@ pub async fn retrieve(
 
 - [ ] **Step 4: Run — must PASS**
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph && cargo test -p alephcore --lib rerank 2>&1 | tail -15
+cd . && cargo test -p alephcore --lib rerank 2>&1 | tail -15
 ```
 
 - [ ] **Step 5: Run all retrieval tests — no regression**
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph && cargo test -p alephcore --lib retrieval 2>&1 | tail -10
+cd . && cargo test -p alephcore --lib retrieval 2>&1 | tail -10
 ```
 
 - [ ] **Step 6: Commit**
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph
+cd .
 git add src/memory/notes/retrieval.rs
 git commit -m "memory/retrieval: internal re-rank by confidence × severity_boost (α=3 overfetch, backward-compat)"
 ```
@@ -1128,7 +1128,7 @@ pub use distill_action::DistillAction;
 
 - [ ] **Step 2: Run — must PASS** (fresh module)
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph && cargo test -p alephcore --lib distill_action 2>&1 | tail -10
+cd . && cargo test -p alephcore --lib distill_action 2>&1 | tail -10
 ```
 
 - [ ] **Step 3: Add `apply_distill_action` to `NoteIndexer`**
@@ -1225,7 +1225,7 @@ impl NoteIndexer {
 
 Discovery step: before writing the Supersede branch, locate the existing note-deletion path:
 ```bash
-rg -n "delete_note|remove_note|fn delete" /Volumes/TBU4/Workspace/Aleph/src/memory/notes/ | head
+rg -n "delete_note|remove_note|fn delete" src/memory/notes/ | head
 ```
 Use the existing API. Do NOT create a new `delete_note` public method speculatively (R3/R11).
 
@@ -1247,12 +1247,12 @@ async fn apply_strengthen_appends_source_facts_and_bumps_updated() {
 
 - [ ] **Step 5: Run — must PASS**
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph && cargo test -p alephcore --lib apply_distill_action 2>&1 | tail -10
+cd . && cargo test -p alephcore --lib apply_distill_action 2>&1 | tail -10
 ```
 
 - [ ] **Step 6: Commit**
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph
+cd .
 git add src/memory/dreaming/distill_action.rs src/memory/dreaming/mod.rs src/memory/notes/indexer.rs
 git commit -m "memory/dream: shared DistillAction enum + NoteIndexer::apply_distill_action (pure plumbing)"
 ```
@@ -1314,7 +1314,7 @@ fn parse_distill_response_invalid_returns_empty() {
 
 - [ ] **Step 2: Run — must FAIL** (functions don't exist yet)
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph && cargo test -p alephcore --lib skill_distill 2>&1 | tail -20
+cd . && cargo test -p alephcore --lib skill_distill 2>&1 | tail -20
 ```
 
 - [ ] **Step 3: Refactor `SkillDistill` to candidate-aware 4-action contract**
@@ -1470,17 +1470,17 @@ Replace the `system` prompt accordingly, and ensure `RequestPayload` / `UnifiedM
 
 - [ ] **Step 4: Run — must PASS**
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph && cargo test -p alephcore --lib skill_distill 2>&1 | tail -15
+cd . && cargo test -p alephcore --lib skill_distill 2>&1 | tail -15
 ```
 
 - [ ] **Step 5: Snapshot review (if any)** — old prompt snapshots will diff:
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph && cargo insta review 2>&1 | tail -10
+cd . && cargo insta review 2>&1 | tail -10
 ```
 
 - [ ] **Step 6: Commit**
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph
+cd .
 git add src/memory/dreaming/stages/skill_distill.rs
 git commit -m "memory/dream: SkillDistill emits 4-action contract with code-injected candidates"
 ```
@@ -1491,7 +1491,7 @@ git commit -m "memory/dream: SkillDistill emits 4-action contract with code-inje
 
 - [ ] **Step 1: Library tests green**
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph && cargo test -p alephcore --lib 2>&1 | tail -10
+cd . && cargo test -p alephcore --lib 2>&1 | tail -10
 ```
 
 - [ ] **Step 2: Old `~/.aleph/memory/note/` files still parse** (manual)
@@ -1499,13 +1499,13 @@ If real notes exist, run a binary tool that loads them. If none exist, skip — 
 
 - [ ] **Step 3: Retrieval p95 latency check** (only if a benchmark harness exists)
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph && cargo bench -p alephcore --bench retrieval 2>/dev/null || echo "no bench — skip"
+cd . && cargo bench -p alephcore --bench retrieval 2>/dev/null || echo "no bench — skip"
 ```
 Compare with last known number. Allow ≤5% regression.
 
 - [ ] **Step 4: Tag**
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph && git tag self-evolution-phase2
+cd . && git tag self-evolution-phase2
 ```
 
 ---
@@ -1649,7 +1649,7 @@ async fn facts_by_tag_respects_limit() {
 
 - [ ] **Step 2: Run — must FAIL**
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph && cargo test -p alephcore --lib facts_by_tag 2>&1 | tail -10
+cd . && cargo test -p alephcore --lib facts_by_tag 2>&1 | tail -10
 ```
 
 - [ ] **Step 3: Implement**
@@ -1667,7 +1667,7 @@ impl NoteIndexer {
 - [ ] **Step 4: Run — PASS**
 - [ ] **Step 5: Commit**
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph
+cd .
 git add src/memory/notes/indexer.rs
 git commit -m "memory/notes: NoteIndexer::facts_by_tag for tag-filtered fact retrieval"
 ```
@@ -1778,7 +1778,7 @@ pub mod flag_user_correction;
 
 - [ ] **Step 2: Run — must FAIL** (likely missing helpers `RawMemoryEntry::builder`, `InMemoryRawStore`)
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph && cargo test -p alephcore --lib flag_user_correction 2>&1 | tail -20
+cd . && cargo test -p alephcore --lib flag_user_correction 2>&1 | tail -20
 ```
 
 - [ ] **Step 3: Implement missing scaffolding**
@@ -1794,7 +1794,7 @@ If `InMemoryRawStore` doesn't exist, add a simple `Vec`-backed test store under 
 - [ ] **Step 4: Run — PASS**
 - [ ] **Step 5: Commit**
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph
+cd .
 git add src/agents/tools/ src/memory/raw/
 git commit -m "agents/tools: add flag_user_correction tool (R9 — everything is a tool)"
 ```
@@ -1808,7 +1808,7 @@ git commit -m "agents/tools: add flag_user_correction tool (R9 — everything is
 
 - [ ] **Step 1: Read current registry to understand pattern**
 ```bash
-cat /Volumes/TBU4/Workspace/Aleph/<TOOLS_REG_PATH> | head -120
+cat .<TOOLS_REG_PATH> | head -120
 ```
 Note how other tools are constructed and registered.
 
@@ -1830,7 +1830,7 @@ async fn flag_user_correction_is_registered() {
 
 - [ ] **Step 3: Run — must FAIL**
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph && cargo test --test agents_tools flag_user_correction_is_registered 2>&1 | tail -10
+cd . && cargo test --test agents_tools flag_user_correction_is_registered 2>&1 | tail -10
 ```
 
 - [ ] **Step 4: Register the tool in the registry constructor**
@@ -1842,12 +1842,12 @@ tools.push(Arc::new(FlagUserCorrectionTool { raw: raw_store.clone() }));
 
 - [ ] **Step 5: Run — PASS**
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph && cargo test --test agents_tools flag_user_correction_is_registered 2>&1 | tail -10
+cd . && cargo test --test agents_tools flag_user_correction_is_registered 2>&1 | tail -10
 ```
 
 - [ ] **Step 6: Commit**
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph
+cd .
 git add <TOOLS_REG_PATH> tests/agents_tools.rs
 git commit -m "agents: register flag_user_correction tool"
 ```
@@ -1861,7 +1861,7 @@ git commit -m "agents: register flag_user_correction tool"
 
 - [ ] **Step 1: Read current prompt template**
 ```bash
-cat /Volumes/TBU4/Workspace/Aleph/<SYS_PROMPT_PATH>
+cat .<SYS_PROMPT_PATH>
 ```
 
 - [ ] **Step 2: Write failing test that asserts the section is present**
@@ -1884,7 +1884,7 @@ fn system_prompt_contains_self_correction_logging() {
 
 - [ ] **Step 3: Run — must FAIL**
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph && cargo test -p alephcore --lib system_prompt_contains_self_correction_logging 2>&1 | tail -10
+cd . && cargo test -p alephcore --lib system_prompt_contains_self_correction_logging 2>&1 | tail -10
 ```
 
 - [ ] **Step 4: Append the section to the template**
@@ -1909,7 +1909,7 @@ that you logged the correction.
 - [ ] **Step 5: Run — PASS**
 - [ ] **Step 6: Commit**
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph
+cd .
 git add <SYS_PROMPT_PATH>
 git commit -m "agents: system prompt instructs self-correction logging via tool"
 ```
@@ -2078,7 +2078,7 @@ Create `src/memory/dreaming/stages/prompts/feedback_distill.tmpl` with the promp
 
 - [ ] **Step 2: Run — must FAIL**
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph && cargo test -p alephcore --lib feedback_distill 2>&1 | tail -25
+cd . && cargo test -p alephcore --lib feedback_distill 2>&1 | tail -25
 ```
 
 - [ ] **Step 3: Implement everything until tests pass** (the implementation is mostly written above; you may need to add `feedback_lookback` to DreamConfig, default 50)
@@ -2093,12 +2093,12 @@ fn default_feedback_lookback() -> u32 { 50 }
 
 - [ ] **Step 4: Run — PASS**
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph && cargo test -p alephcore --lib feedback_distill 2>&1 | tail -15
+cd . && cargo test -p alephcore --lib feedback_distill 2>&1 | tail -15
 ```
 
 - [ ] **Step 5: Commit**
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph
+cd .
 git add src/memory/dreaming/
 git commit -m "memory/dream: add FeedbackDistill stage (mirrors SkillDistill)"
 ```
@@ -2112,7 +2112,7 @@ git commit -m "memory/dream: add FeedbackDistill stage (mirrors SkillDistill)"
 
 - [ ] **Step 1: Read current strategy**
 ```bash
-cat /Volumes/TBU4/Workspace/Aleph/src/memory/dreaming/strategy.rs
+cat src/memory/dreaming/strategy.rs
 ```
 Find where `SkillDistill` is added to the stage pipeline.
 
@@ -2135,11 +2135,11 @@ fn synthesize_strategy_includes_feedback_distill() {
 - [ ] **Step 5: Run — PASS**
 - [ ] **Step 6: Run all dream tests — no regression**
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph && cargo test -p alephcore --lib dream 2>&1 | tail -15
+cd . && cargo test -p alephcore --lib dream 2>&1 | tail -15
 ```
 - [ ] **Step 7: Commit**
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph
+cd .
 git add src/memory/dreaming/strategy.rs
 git commit -m "memory/dream: schedule FeedbackDistill alongside SkillDistill"
 ```
@@ -2194,12 +2194,12 @@ async fn injection_in_correction_does_not_escape_fence() {
 
 - [ ] **Step 2: Run — must PASS** (the implementation in Task 21 already wrote the fence into the template; if the test fails, the template is wrong — fix the template to wrap candidates in the fence and prepend the data-only header)
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph && cargo test --test feedback_distill_prompt_injection 2>&1 | tail -15
+cd . && cargo test --test feedback_distill_prompt_injection 2>&1 | tail -15
 ```
 
 - [ ] **Step 3: Commit**
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph
+cd .
 git add tests/feedback_distill_prompt_injection.rs src/memory/dreaming/stages/prompts/
 git commit -m "test: feedback distill resists prompt injection within candidate fence"
 ```
@@ -2271,12 +2271,12 @@ async fn feedback_loop_end_to_end() {
 
 - [ ] **Step 2: Run — must PASS** (TestEnv must already exist or be a thin wrapper over existing test helpers — extend if needed)
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph && cargo test --test feedback_loop_e2e 2>&1 | tail -20
+cd . && cargo test --test feedback_loop_e2e 2>&1 | tail -20
 ```
 
 - [ ] **Step 3: Commit**
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph
+cd .
 git add tests/feedback_loop_e2e.rs
 git commit -m "test: end-to-end feedback loop (tool → raw → dream → feedback note)"
 ```
@@ -2287,13 +2287,13 @@ git commit -m "test: end-to-end feedback loop (tool → raw → dream → feedba
 
 - [ ] **Step 1: Full library + integration tests green**
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph && cargo test -p alephcore 2>&1 | tail -10
+cd . && cargo test -p alephcore 2>&1 | tail -10
 ```
 
 - [ ] **Step 2: Live smoke test — manual**
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph
+cd .
 # Kill any stale instance per CLAUDE.md process-management rule
 pkill -f "target/release/aleph-server" 2>/dev/null
 pkill -f "target/debug/aleph-server" 2>/dev/null
@@ -2321,7 +2321,7 @@ If any of these are off, capture observations and tune `severity_boost` / thresh
 
 - [ ] **Step 4: Coverage check on new modules**
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph
+cd .
 cargo tarpaulin -p alephcore --lib --out Stdout \
   --packages alephcore \
   -- src/memory/dreaming/stages/feedback_distill.rs \
@@ -2332,18 +2332,18 @@ Threshold: ≥ 80%. If lower, add tests until it passes.
 
 - [ ] **Step 5: Confirm `src/harness/` line count UNCHANGED**
 ```bash
-find /Volumes/TBU4/Workspace/Aleph/src/harness -name "*.rs" -exec wc -l {} + | tail -1
+find src/harness -name "*.rs" -exec wc -l {} + | tail -1
 ```
 Compare with the value recorded at Task 4 Step 4 / Task 8 Step 4. Must still be ≤.
 
 - [ ] **Step 6: Tag**
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph && git tag self-evolution-phase3
+cd . && git tag self-evolution-phase3
 ```
 
 - [ ] **Step 7: Open PR with summary**
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph
+cd .
 git log --oneline self-evolution-phase1^..HEAD
 gh pr create --title "Aleph self-evolution: dual-loop memory learning" \
   --body "$(cat <<'EOF'

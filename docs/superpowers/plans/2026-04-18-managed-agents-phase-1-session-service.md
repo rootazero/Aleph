@@ -18,7 +18,7 @@
 
 Run (from the main repo root, NOT from inside another worktree):
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph
+cd .
 git worktree add -b feat/managed-agents-phase-1 ../Aleph-phase-1 main
 cd ../Aleph-phase-1
 git status
@@ -2363,7 +2363,7 @@ Phase 1 is code-complete. Do NOT auto-release. Present the option to the user:
 
 > "Phase 1 implementation complete on branch `feat/managed-agents-phase-1`. All commits green, no new test failures beyond the 2 pre-existing on main. Ready to:
 >
-> 1. **Merge to main** — `git -C /Volumes/TBU4/Workspace/Aleph merge feat/managed-agents-phase-1 --no-ff`
+> 1. **Merge to main** — `git -C . merge feat/managed-agents-phase-1 --no-ff`
 > 2. **Release** — `just release $(date +%Y.%m.%d)` (check CHANGELOG entry first)
 > 3. **Both**
 > 4. **Start Phase 2 brainstorm** (Tools unified execute() interface)

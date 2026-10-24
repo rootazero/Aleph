@@ -64,7 +64,7 @@ cargo test -p alephcore --lib --no-fail-fast
 
 Both must pass. If either is red on `main`, fix that first — this plan assumes a green baseline.
 
-Run all grep/verification commands from the repo root (`/Volumes/TBU4/Workspace/Aleph`).
+Run all grep/verification commands from the repo root (`.`).
 
 ---
 

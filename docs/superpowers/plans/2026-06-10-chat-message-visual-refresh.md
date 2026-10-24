@@ -658,7 +658,7 @@ cargo run --release -p alephcore --bin aleph-server start
 - [ ] **Step 4: 合并回 main（worktree 会话内只合并）**
 
 ```bash
-git -C /Volumes/TBU4/Workspace/Aleph merge --no-ff chat-message-visual-refresh -m "panel: chat message flow visual refresh (glass language)"
+git -C . merge --no-ff chat-message-visual-refresh -m "panel: chat message flow visual refresh (glass language)"
 ```
 
 合并前先 `git log --oneline main..chat-message-visual-refresh` 与 `git diff main...chat-message-visual-refresh --stat` 核对范围；若 main 有并发推进，先 merge main 入分支解冲突再 --no-ff 回 main。

@@ -1,6 +1,6 @@
 # Aleph plugin subsystem scan — 2026-09-20 (read-only scout)
 
-Repo: `/Volumes/TBU4/Workspace/Aleph` @ `3ddc1f2e7` (main, clean). All `file:line` cites are against that commit.
+Repo: `.` @ `3ddc1f2e7` (main, clean). All `file:line` cites are against that commit.
 Method note (判据 §18): LOC = `wc -l` on `*.rs`; hit counts = `rg -i -c` and are **per-line**, not per-token. Grep results only vouch for the shapes I enumerated (`openclaw|clawhub|claw`, RPC method string literals, `HookEvent::` call sites).
 
 ## 1. Inventory of the plugin subsystem today

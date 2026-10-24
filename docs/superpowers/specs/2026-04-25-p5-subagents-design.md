@@ -145,7 +145,7 @@ Visual verification only: `git diff` review confirms each of the 5 edits lands a
 
 ### Constraints
 
-- Worktree: `/Volumes/TBU4/Workspace/Aleph.harness-dissolution`. Branch: `harness-dissolution`. Do NOT push. Do NOT merge to main. User decides merge timing.
+- Worktree: `../Aleph.harness-dissolution`. Branch: `harness-dissolution`. Do NOT push. Do NOT merge to main. User decides merge timing.
 - Commit messages: single-line `-m "..."` only (multi-line bodies trip the `block-no-verify@1.1.2` hook false-positive).
 - Do NOT use `--no-verify` even if hooks complain — investigate the hook's underlying complaint.
 

@@ -52,7 +52,7 @@ This is the verification anchor — the committed plist must end up differing fr
 
 Run:
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph/mobile/ios
+cd mobile/ios
 git show HEAD:mobile/ios/AlephPaneliOS/Resources/Info.plist | grep -n 'UIRequiresFullScreen\|ALEPH_VERSION\|ALEPH_BUILD'
 ```
 Expected output (the key is present at HEAD; both placeholders present):
@@ -87,7 +87,7 @@ Env vars MUST be unset so `${ALEPH_VERSION}`/`${ALEPH_BUILD}` stay literal in th
 
 Run:
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph/mobile/ios
+cd mobile/ios
 unset ALEPH_VERSION ALEPH_BUILD PANEL_URL
 xcodegen generate
 ```
@@ -98,7 +98,7 @@ Expected: `Loaded project ... Created project at .../AlephPaneliOS.xcodeproj` wi
 Run each check; all must pass.
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph/mobile/ios
+cd mobile/ios
 # (a) flag gone from BOTH source and generated plist
 grep -c UIRequiresFullScreen project.yml                              # expect: 0
 grep -c UIRequiresFullScreen AlephPaneliOS/Resources/Info.plist       # expect: 0
@@ -106,7 +106,7 @@ grep -c UIRequiresFullScreen AlephPaneliOS/Resources/Info.plist       # expect: 
 grep -c '${ALEPH_VERSION}' AlephPaneliOS/Resources/Info.plist         # expect: 1
 grep -c '${ALEPH_BUILD}'  AlephPaneliOS/Resources/Info.plist          # expect: 1
 # (c) the committed plist differs from HEAD by ONLY the removed key
-git -C /Volumes/TBU4/Workspace/Aleph diff --no-color -- mobile/ios/AlephPaneliOS/Resources/Info.plist
+git -C . diff --no-color -- mobile/ios/AlephPaneliOS/Resources/Info.plist
 ```
 Expected `git diff` (exactly two removed lines, nothing else — no added/changed lines):
 ```
@@ -121,7 +121,7 @@ A build-only sanity check that the regen produced a valid project (no run, no PA
 
 Run:
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph/mobile/ios
+cd mobile/ios
 xcodebuild build \
   -project AlephPaneliOS.xcodeproj \
   -scheme AlephPaneliOS \
@@ -133,7 +133,7 @@ Expected: ends with `** BUILD SUCCEEDED **`. (SourceKit/editor diagnostics are n
 - [ ] **Step 6: Commit (project.yml + Info.plist ONLY — never the `.xcodeproj`)**
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph
+cd .
 git add mobile/ios/project.yml mobile/ios/AlephPaneliOS/Resources/Info.plist
 git status --short          # verify ONLY those two paths are staged; .xcodeproj must NOT appear
 git commit -m "ios: enable iPad multitasking (remove UIRequiresFullScreen)"

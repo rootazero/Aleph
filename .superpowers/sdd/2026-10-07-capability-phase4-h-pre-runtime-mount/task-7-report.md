@@ -10,13 +10,13 @@ The fixture does not add a diagnostic/admin route and does not claim unsupported
 
 ## Exact build and tree
 
-- Repository: `/Volumes/TBU4/Workspace/Aleph-capability-phase4-follow-up`
+- Repository: `../Aleph-capability-phase4-follow-up`
 - QA HEAD before guarded build: `ea8d567ca69b724c2506921185d78aed7ca0ebd0`
 - QA HEAD after guarded build: `ea8d567ca69b724c2506921185d78aed7ca0ebd0`
 - Guard command: `.superpowers/sdd/2026-10-07-capability-phase4-h-pre-runtime-mount/cargo-guard.py build --bin aleph-server`
 - Guard result: `CARGO_EXIT: 0`
 - Memory gate: `PASS`, `page_bytes=16384`, `available_KiB=7280992`, `threshold_KiB=4194304`
-- Binary: `/Volumes/TBU4/Workspace/Aleph-capability-phase4-follow-up/target/debug/aleph-server`
+- Binary: `../Aleph-capability-phase4-follow-up/target/debug/aleph-server`
 - Binary SHA-256: `27db0fe1703e4f76fc03e8d38845043d6e71302110575f70b6cb8e4068ae59fa`
 - Binary guard: `Fresh artifact (mtime=1791401683 build_started=1791402359)`
 - Runtime mode: `Mode: Real AgentLoop (config provider)`
@@ -26,7 +26,7 @@ The fixture does not add a diagnostic/admin route and does not claim unsupported
 Command:
 
 ```text
-cd /Volumes/TBU4/Workspace/Aleph-capability-phase4-follow-up
+cd ../Aleph-capability-phase4-follow-up
 KEEP=1 GATEWAY_PORT=18847 MOCK_PORT=18848 ./qa/capability_hpre/run.sh
 ```
 

@@ -40,7 +40,7 @@ Smallest change; do it first. `QueueMode` (`config/types/general.rs:11-21`) and 
 
 Run:
 ```bash
-cd /Volumes/TBU/Workspace/Aleph
+cd .
 grep -rn "QueueMode\|queue_mode\|collect_window_ms" src/ | grep -v "src/config/types/general.rs"
 ```
 Expected: **no output** (every reference is inside `general.rs`). If any consumer prints, STOP — this is no longer a pure dead-code cut; report the consumer and hold. Also check for a re-export:

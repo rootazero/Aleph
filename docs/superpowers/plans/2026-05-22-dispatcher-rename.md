@@ -32,7 +32,7 @@
 - [ ] **Step 1: Rename directory with git**
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph
+cd .
 git mv src/dispatcher src/tool_metadata
 ```
 
@@ -122,7 +122,7 @@ git commit -m "refactor: update lib.rs module declaration for tool_metadata"
 Use ast-grep to safely replace all `crate::dispatcher` with `crate::tool_metadata`:
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph
+cd .
 
 # Replace in src/ directory
 ast-grep replace --lang rust \

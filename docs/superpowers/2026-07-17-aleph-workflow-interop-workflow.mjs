@@ -8,7 +8,7 @@ export const meta = {
   ],
 }
 
-const WT = '/Volumes/TBU/Workspace/Aleph/.claude/worktrees/workflow-interop-mjs-compat'
+const WT = '.claude/worktrees/workflow-interop-mjs-compat'
 const FILES = 'src/workflow/interop/manifest.rs, src/workflow/interop/export.rs, src/workflow/interop/import.rs, src/workflow/store.rs, src/builtin_tools/workflow_tool.rs'
 
 const FINDINGS_SCHEMA = {

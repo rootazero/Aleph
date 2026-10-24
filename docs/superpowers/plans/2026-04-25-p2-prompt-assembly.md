@@ -16,7 +16,7 @@ This plan implements `docs/superpowers/specs/2026-04-25-p2-prompt-assembly-desig
 
 ## Operating Constraints
 
-- **Worktree**: All work happens in `/Volumes/TBU4/Workspace/Aleph.harness-dissolution`. Do NOT touch `/Volumes/TBU4/Workspace/Aleph` (main repo).
+- **Worktree**: All work happens in `../Aleph.harness-dissolution`. Do NOT touch `.` (main repo).
 - **Branch**: `harness-dissolution` (long-lived, P0–P7). Do NOT push. Do NOT merge to main. User decides merge timing later.
 - **Commit message**: Single-line `-m` only. Multi-line HEREDOC bodies trip `block-no-verify@1.1.2` hook false-positives.
 - **Verification bar** (inherit from P0): `cargo check -p alephcore` green + `cargo clippy -- -D warnings` green after each commit. P0 already accepted 7 pre-existing alephcore lib warnings + 8 pre-existing clippy errors in `tool_output/summary.rs` and `thinker/soul.rs`; those exemptions stay. New warnings introduced by P2 work are NOT acceptable.
@@ -31,11 +31,11 @@ This plan implements `docs/superpowers/specs/2026-04-25-p2-prompt-assembly-desig
 
 Run:
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph.harness-dissolution && pwd && git branch --show-current
+cd ../Aleph.harness-dissolution && pwd && git branch --show-current
 ```
 Expected output:
 ```
-/Volumes/TBU4/Workspace/Aleph.harness-dissolution
+../Aleph.harness-dissolution
 harness-dissolution
 ```
 
@@ -43,7 +43,7 @@ harness-dissolution
 
 Run:
 ```bash
-git -C /Volumes/TBU4/Workspace/Aleph.harness-dissolution status --short
+git -C ../Aleph.harness-dissolution status --short
 ```
 Expected output: empty (no changes).
 
@@ -51,7 +51,7 @@ Expected output: empty (no changes).
 
 Run:
 ```bash
-grep -rn "use crate::prompt::\|use crate::prompt;\|use crate::payload::\|use crate::payload;\|use crate::capability::\|use crate::capability;\|use crate::prompt_assembly::\|use crate::prompt_assembly;" /Volumes/TBU4/Workspace/Aleph.harness-dissolution/src --include="*.rs" | grep -v "src/prompt/" | grep -v "src/payload/" | grep -v "src/capability/" | grep -v "src/prompt_assembly/"
+grep -rn "use crate::prompt::\|use crate::prompt;\|use crate::payload::\|use crate::payload;\|use crate::capability::\|use crate::capability;\|use crate::prompt_assembly::\|use crate::prompt_assembly;" ../Aleph.harness-dissolution/src --include="*.rs" | grep -v "src/prompt/" | grep -v "src/payload/" | grep -v "src/capability/" | grep -v "src/prompt_assembly/"
 ```
 Expected output: empty (no external consumers — the four modules import each other but nothing else imports them).
 
@@ -59,7 +59,7 @@ Expected output: empty (no external consumers — the four modules import each o
 
 Run:
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph.harness-dissolution && cargo check -p alephcore 2>&1 | tail -5
+cd ../Aleph.harness-dissolution && cargo check -p alephcore 2>&1 | tail -5
 ```
 Expected output: `Finished` line (warnings allowed; the 7 pre-existing alephcore lib warnings inherited from P0 are fine).
 
@@ -79,14 +79,14 @@ Expected output: `Finished` line (warnings allowed; the 7 pre-existing alephcore
 
 Run:
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph.harness-dissolution && rm -rf src/prompt src/payload src/capability src/prompt_assembly
+cd ../Aleph.harness-dissolution && rm -rf src/prompt src/payload src/capability src/prompt_assembly
 ```
 
 - [ ] **Step 2: Verify directories are gone**
 
 Run:
 ```bash
-ls /Volumes/TBU4/Workspace/Aleph.harness-dissolution/src/prompt /Volumes/TBU4/Workspace/Aleph.harness-dissolution/src/payload /Volumes/TBU4/Workspace/Aleph.harness-dissolution/src/capability /Volumes/TBU4/Workspace/Aleph.harness-dissolution/src/prompt_assembly 2>&1
+ls ../Aleph.harness-dissolution/src/prompt ../Aleph.harness-dissolution/src/payload ../Aleph.harness-dissolution/src/capability ../Aleph.harness-dissolution/src/prompt_assembly 2>&1
 ```
 Expected output: 4 lines of `ls: ...: No such file or directory` — this is the desired post-deletion state.
 
@@ -167,7 +167,7 @@ new_string:
 
 Run:
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph.harness-dissolution && cargo check -p alephcore 2>&1 | tail -10
+cd ../Aleph.harness-dissolution && cargo check -p alephcore 2>&1 | tail -10
 ```
 Expected output: `Finished` line. Pre-existing alephcore warnings (≤7) are fine. NO new errors. If `cargo check` fails with `unresolved import` or similar, do not proceed — investigate the failure (most likely a hidden consumer the brainstorm missed; spec §6 risk 1 says revert and report).
 
@@ -175,7 +175,7 @@ Expected output: `Finished` line. Pre-existing alephcore warnings (≤7) are fin
 
 Run:
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph.harness-dissolution && cargo clippy -p alephcore --lib -- -D warnings 2>&1 | tail -10
+cd ../Aleph.harness-dissolution && cargo clippy -p alephcore --lib -- -D warnings 2>&1 | tail -10
 ```
 Expected output: `Finished` (with the 8 pre-existing P0 clippy errors in `tool_output/summary.rs` and `thinker/soul.rs` — those are inherited exemptions and are tolerated by P0/P1/P3/P4 precedent). No NEW clippy errors introduced by P2 work.
 
@@ -185,7 +185,7 @@ If clippy reports new errors that didn't exist before P2 (i.e., not in the P0-in
 
 Run:
 ```bash
-grep -rn "crate::prompt::\|crate::payload::\|crate::capability::\|crate::prompt_assembly::" /Volumes/TBU4/Workspace/Aleph.harness-dissolution/src --include="*.rs"
+grep -rn "crate::prompt::\|crate::payload::\|crate::capability::\|crate::prompt_assembly::" ../Aleph.harness-dissolution/src --include="*.rs"
 ```
 Expected output: empty (or only matches inside `src/extension/capability::*` paths, which are unrelated — those are paths into `src/extension/capability.rs`, the live enum, NOT the deleted `src/capability/` module).
 
@@ -193,13 +193,13 @@ Expected output: empty (or only matches inside `src/extension/capability::*` pat
 
 Run:
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph.harness-dissolution && git add -A src/ && git status --short
+cd ../Aleph.harness-dissolution && git add -A src/ && git status --short
 ```
 Expected output: D-prefixed lines for all deleted files in the four directories, plus M lines for `src/lib.rs` and `src/search/provider.rs`. Should be roughly 38 deletions + 2 modifications.
 
 Then commit:
 ```bash
-git -C /Volumes/TBU4/Workspace/Aleph.harness-dissolution commit -m "cleanup: delete dead prompt/payload/capability/prompt_assembly modules (~5,200 LOC)"
+git -C ../Aleph.harness-dissolution commit -m "cleanup: delete dead prompt/payload/capability/prompt_assembly modules (~5,200 LOC)"
 ```
 Expected output: `[harness-dissolution <sha>] cleanup: delete dead prompt/payload/capability/prompt_assembly modules (~5,200 LOC)` followed by file change summary.
 
@@ -292,7 +292,7 @@ new_string:
 
 Run:
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph.harness-dissolution && git diff docs/superpowers/specs/2026-04-24-harness-dissolution-roadmap.md
+cd ../Aleph.harness-dissolution && git diff docs/superpowers/specs/2026-04-24-harness-dissolution-roadmap.md
 ```
 Expected: 5 distinct hunks corresponding to Steps 1–5. Read each hunk and confirm:
 1. §3.3 row 5: "Final Directory" cell now shows `src/thinker/ (kept in place)⁴` and "Action" cell describes deletion + retraction
@@ -305,13 +305,13 @@ Expected: 5 distinct hunks corresponding to Steps 1–5. Read each hunk and conf
 
 Run:
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph.harness-dissolution && git add docs/superpowers/specs/2026-04-24-harness-dissolution-roadmap.md && git status --short
+cd ../Aleph.harness-dissolution && git add docs/superpowers/specs/2026-04-24-harness-dissolution-roadmap.md && git status --short
 ```
 Expected output: `M  docs/superpowers/specs/2026-04-24-harness-dissolution-roadmap.md` (single staged modification).
 
 Then commit:
 ```bash
-git -C /Volumes/TBU4/Workspace/Aleph.harness-dissolution commit -m "docs(spec): mark P2 complete; record YAGNI retraction in roadmap"
+git -C ../Aleph.harness-dissolution commit -m "docs(spec): mark P2 complete; record YAGNI retraction in roadmap"
 ```
 Expected output: `[harness-dissolution <sha>] docs(spec): mark P2 complete; record YAGNI retraction in roadmap` with `1 file changed, ...`.
 
@@ -325,7 +325,7 @@ Expected output: `[harness-dissolution <sha>] docs(spec): mark P2 complete; reco
 
 Run:
 ```bash
-git -C /Volumes/TBU4/Workspace/Aleph.harness-dissolution log --oneline -3
+git -C ../Aleph.harness-dissolution log --oneline -3
 ```
 Expected output: 3 lines, with the top two being:
 ```
@@ -338,7 +338,7 @@ The third line should be the P2 spec commit `4c4fc0503 docs(spec): P2 prompt-ass
 
 Run:
 ```bash
-git -C /Volumes/TBU4/Workspace/Aleph.harness-dissolution status --short
+git -C ../Aleph.harness-dissolution status --short
 ```
 Expected output: empty.
 
@@ -346,7 +346,7 @@ Expected output: empty.
 
 Run:
 ```bash
-git -C /Volumes/TBU4/Workspace/Aleph.harness-dissolution log main..harness-dissolution --oneline
+git -C ../Aleph.harness-dissolution log main..harness-dissolution --oneline
 ```
 Expected output: list of commits ahead of main on `harness-dissolution`. Should INCLUDE the two P2 commits from Task 1 + Task 2 plus the P2 spec commit, plus all P1/P3/P4 commits not yet merged. Should NOT be empty (means everything stayed on the branch).
 
@@ -354,7 +354,7 @@ Expected output: list of commits ahead of main on `harness-dissolution`. Should 
 
 Run:
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph.harness-dissolution && cargo check -p alephcore 2>&1 | tail -3 && cargo clippy -p alephcore --lib -- -D warnings 2>&1 | tail -3
+cd ../Aleph.harness-dissolution && cargo check -p alephcore 2>&1 | tail -3 && cargo clippy -p alephcore --lib -- -D warnings 2>&1 | tail -3
 ```
 Expected: both end in `Finished ...`. Pre-existing P0 alephcore warnings + P0 clippy exemptions are tolerated; no NEW issues.
 
@@ -380,12 +380,12 @@ After all tasks complete:
 
 If anything goes wrong after Commit 1:
 ```bash
-git -C /Volumes/TBU4/Workspace/Aleph.harness-dissolution revert <commit-1-sha>
+git -C ../Aleph.harness-dissolution revert <commit-1-sha>
 ```
 This restores all four deleted directories + the lib.rs lines + the search/provider.rs comment line exactly.
 
 If anything goes wrong after Commit 2:
 ```bash
-git -C /Volumes/TBU4/Workspace/Aleph.harness-dissolution revert <commit-2-sha>
+git -C ../Aleph.harness-dissolution revert <commit-2-sha>
 ```
 This restores the roadmap to its pre-Commit-2 state (P2 row still `📋 Planned`, no footnote ⁴).

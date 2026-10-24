@@ -1028,7 +1028,7 @@ git commit -m "webchat: remove dead ToolRendererRegistry abstraction (zero consu
 
 Run:
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph/interfaces/webchat
+cd interfaces/webchat
 rustfmt --edition 2021 src/components/tool_card.rs src/components/workspace_panel.rs src/views/chat/messages.rs src/app.rs src/components/mod.rs
 ```
 Expected: 无报错（文件被规范化）。若有改动，`git add` 这些文件并 `git commit -m "webchat: rustfmt tool-card touched files"`。
@@ -1039,7 +1039,7 @@ Expected: 无报错（文件被规范化）。若有改动，`git add` 这些文
 
 Run:
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph
+cd .
 just wasm
 cargo build --release -p alephcore --bin aleph-server
 ```
@@ -1069,7 +1069,7 @@ Expected: Tauri supervisor 自动 relaunch 新 binary 并 reload webview。
 - [ ] **Step 5: 最终提交（若 Step 1 产生格式化改动且未提交）**
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph
+cd .
 git status --short
 # 若有未提交的本次相关改动：
 git add -p

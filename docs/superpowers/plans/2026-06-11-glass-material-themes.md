@@ -17,9 +17,9 @@
 **工作区**：用手动 worktree，**禁用 EnterWorktree**（本地 main 领先 origin，fresh-base 会丢提交）：
 
 ```bash
-git -C /Volumes/TBU4/Workspace/Aleph worktree add /Volumes/TBU4/Workspace/aleph-glass-material -b glass-material-themes HEAD
+git -C . worktree add ../aleph-glass-material -b glass-material-themes HEAD
 # wasm/CSS 构建需要 node_modules（worktree 不继承）：
-ln -s /Volumes/TBU4/Workspace/Aleph/interfaces/webchat/node_modules /Volumes/TBU4/Workspace/aleph-glass-material/interfaces/webchat/node_modules
+ln -s interfaces/webchat/node_modules ../aleph-glass-material/interfaces/webchat/node_modules
 ```
 
 **构建/验证命令**（worktree 内运行；共享 target-dir 有 flock，与并行任务排队属预期，勿设独立 CARGO_TARGET_DIR）：
@@ -327,7 +327,7 @@ fn legacy_glass_migration(raw_mode: Option<&str>) -> Option<(&'static str, &'sta
 - [ ] **Step 4: 清扫引用**——`ThemeMode::Glass` 的其他使用点会编译失败；全仓核对：
 
 ```bash
-grep -rn "ThemeMode::Glass" /Volumes/TBU4/Workspace/aleph-glass-material --include="*.rs"
+grep -rn "ThemeMode::Glass" ../aleph-glass-material --include="*.rs"
 ```
 Expected: 零匹配（`theme_toggle.rs` / `settings/appearance.rs` 都只迭代 `ALL`，自动收缩为 3 项）。若有匹配逐一删除该分支。
 
@@ -856,8 +856,8 @@ git add -A && git commit -m "panel/css: liquid-glass + aurora-frost material pri
 - [ ] **Step 3: 全仓清点**
 
 ```bash
-grep -rn "html\.glass\|\"glass\"\|'glass'" /Volumes/TBU4/Workspace/aleph-glass-material/interfaces/webchat/styles/tailwind.css
-grep -rn "html\.glass" /Volumes/TBU4/Workspace/aleph-glass-material/interfaces/webchat/src --include="*.rs"
+grep -rn "html\.glass\|\"glass\"\|'glass'" ../aleph-glass-material/interfaces/webchat/styles/tailwind.css
+grep -rn "html\.glass" ../aleph-glass-material/interfaces/webchat/src --include="*.rs"
 ```
 Expected: CSS 零命中 `html.glass`；Rust 侧仅 `appearance.rs` 的迁移字符串（`"glass"`/`"translucent"`，合法保留）与 `apply_mode` 的 DOM 清洗 `remove_4`。`theme-picker-popover` 等处的 `.glass` **类**（瞬态弹层）属正常使用，不动。
 

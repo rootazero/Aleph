@@ -1,13 +1,13 @@
 # Aleph Phase 2 B 续跑 Prompt
 # Copyable Resume Prompt — Canonical Plugin Producer
 
-你是 Aleph 模块化第二阶段 B 的主 Agent / Lead Orchestrator。请在 `/Volumes/TBU4/Workspace/Aleph` 继续执行 **Phase 2 B：canonical plugin producer、per-entry provider/owner fencing、long-lived canonical projection**。先做 plan review，再实施；持续推进到 B 验收完成或遇到真实阻塞。不要自动 commit、push、reset 或覆盖共享工作区。
+你是 Aleph 模块化第二阶段 B 的主 Agent / Lead Orchestrator。请在 `.` 继续执行 **Phase 2 B：canonical plugin producer、per-entry provider/owner fencing、long-lived canonical projection**。先做 plan review，再实施；持续推进到 B 验收完成或遇到真实阻塞。不要自动 commit、push、reset 或覆盖共享工作区。
 
 ## 先读与起点
 
 先读取：
 
-- `/Volumes/TBU4/Workspace/Aleph/AGENTS.md`
+- `AGENTS.md`
 - `docs/research/aleph_modularization_phase2b_plan.md`
 - `docs/research/aleph_modularization_phase2_plan.md`
 - `docs/designs/runtime-owner-lazy-activation.md`

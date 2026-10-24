@@ -123,7 +123,7 @@ pub enum GateOutcome {
 - [ ] **Step 7: Commit**
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph-loop-gate
+cd ../Aleph-loop-gate
 git add src/goal/types.rs
 git commit -m "feat(goal): add GateOutcome type-state for maker/checker completion split"
 ```
@@ -705,7 +705,7 @@ git commit -m "feat(boot): wire global stop_hooks as goal-loop objective gate"
 - [ ] **Step 1: 扫描遗留 goal-verification 死桩 / orphan import**
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph-loop-gate
+cd ../Aleph-loop-gate
 grep -rn "ArcHook" src/verification/        # 应仅剩 stop_hooks.rs 一处
 grep -rn "cont_deps.0\|cont_deps.1\|\.continuation_deps.get" src/gateway/  # 应无元组下标残留
 grep -rn "execute_stop_hooks\b" src/verification/stop_hook_verifier.rs     # 应已改为 _arc

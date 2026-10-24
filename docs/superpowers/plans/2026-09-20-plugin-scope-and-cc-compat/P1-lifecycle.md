@@ -2,7 +2,7 @@
 
 Base: `3ddc1f2e7` (+ spec commit `35e5f8bca`). Every `path:line` below is at `3ddc1f2e7`.
 Spec: `docs/superpowers/specs/2026-09-20-plugin-scope-and-cc-compat-design.md` §3.1, §3.2, §3.5 G1–G3, §4, §5, §6.
-Repo (worktree): `/Volumes/TBU4/Workspace/Aleph/.claude/worktrees/plugin-scope-round`.
+Repo (worktree): `.claude/worktrees/plugin-scope-round`.
 
 ## Facts verified in code before planning (things the brief assumed differently)
 

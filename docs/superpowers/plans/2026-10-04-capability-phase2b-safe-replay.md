@@ -2,7 +2,7 @@
 
 > Design: `docs/superpowers/specs/2026-10-04-capability-phase2b-safe-replay-design.md`
 >
-> Worktree: `/Volumes/TBU4/Workspace/Aleph-capability-phase2-durable`
+> Worktree: `../Aleph-capability-phase2-durable`
 >
 > Branch: `feature/capability-phase2-durable`
 >

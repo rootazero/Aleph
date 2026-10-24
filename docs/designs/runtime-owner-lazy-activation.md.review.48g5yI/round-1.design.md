@@ -13,7 +13,7 @@ Phase 2 A separates declaration discovery from runtime activation for eligible t
 A plugin can remain a declared, inspectable capability while its runtime does not exist. The first real authorized use crosses a visible Cold → Starting → Ready boundary, executes a real guest, and leaves identity-fenced cleanup behind it. The system becomes inspectable without paying startup cost or pretending a catalog row is callable.
 
 ## Constraints
-- Work only in `/Volumes/TBU4/Workspace/Aleph`; preserve the committed Phase 1 baseline and current HEAD.
+- Work only in `.`; preserve the committed Phase 1 baseline and current HEAD.
 - A is limited to manifest-proven tool-only WASM. Mixed WASM/MCP/static plugins retain existing eager behavior.
 - `ProviderHandle` is the actual instance state authority. Add no second callable registry or durable enabled state.
 - Existing permission, visibility, trust, confirmation, and sandbox boundaries remain authoritative.

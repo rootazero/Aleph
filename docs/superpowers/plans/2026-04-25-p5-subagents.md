@@ -16,7 +16,7 @@ This plan implements `docs/superpowers/specs/2026-04-25-p5-subagents-design.md` 
 
 ## Operating Constraints
 
-- **Worktree**: All work happens in `/Volumes/TBU4/Workspace/Aleph.harness-dissolution`. Do NOT touch `/Volumes/TBU4/Workspace/Aleph` (main repo).
+- **Worktree**: All work happens in `../Aleph.harness-dissolution`. Do NOT touch `.` (main repo).
 - **Branch**: `harness-dissolution` (long-lived, P0–P7). Do NOT push. Do NOT merge to main. User decides merge timing later.
 - **Commit message**: Single-line `-m` only. Multi-line HEREDOC bodies trip `block-no-verify@1.1.2` hook false-positives.
 - **Verification bar**: No source-code change → no cargo check / clippy required. Visual `git diff` review is the only gate.
@@ -108,7 +108,7 @@ new_string:
 
 Run:
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph.harness-dissolution && git diff docs/superpowers/specs/2026-04-24-harness-dissolution-roadmap.md
+cd ../Aleph.harness-dissolution && git diff docs/superpowers/specs/2026-04-24-harness-dissolution-roadmap.md
 ```
 
 Expected: 5 distinct hunks corresponding to Steps 1–5. Read each hunk and confirm:
@@ -122,13 +122,13 @@ Expected: 5 distinct hunks corresponding to Steps 1–5. Read each hunk and conf
 
 Run:
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph.harness-dissolution && git add docs/superpowers/specs/2026-04-24-harness-dissolution-roadmap.md && git status --short
+cd ../Aleph.harness-dissolution && git add docs/superpowers/specs/2026-04-24-harness-dissolution-roadmap.md && git status --short
 ```
 Expected output: `M  docs/superpowers/specs/2026-04-24-harness-dissolution-roadmap.md` (single staged modification).
 
 Then commit:
 ```bash
-git -C /Volumes/TBU4/Workspace/Aleph.harness-dissolution commit -m "docs(spec): mark P5 retracted; document subagent dirs healthy as-is"
+git -C ../Aleph.harness-dissolution commit -m "docs(spec): mark P5 retracted; document subagent dirs healthy as-is"
 ```
 Expected output: `[harness-dissolution <sha>] docs(spec): mark P5 retracted; document subagent dirs healthy as-is` with `1 file changed, ...`.
 
@@ -152,6 +152,6 @@ After Task 1 completes:
 
 If anything goes wrong after the commit:
 ```bash
-git -C /Volumes/TBU4/Workspace/Aleph.harness-dissolution revert <commit-sha>
+git -C ../Aleph.harness-dissolution revert <commit-sha>
 ```
 This restores the roadmap to its pre-commit state (P5 row still `📋 Planned`, no footnote ⁵).

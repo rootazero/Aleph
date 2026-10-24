@@ -24,111 +24,111 @@ not committed). Re-run: `bash probes/t0-run.sh`.
   "wsUrl": "ws://127.0.0.1:52783/devtools/browser/a20ed41f-e159-4ee6-a5f1-f25f1515d40c",
   "files": [
     {
-      "path": "/Volumes/TBU4/Workspace/Aleph/.claude/worktrees/browser-dual-engine/crates/aleph-cdp/tests/fixtures/chrome-Browser.getVersion.json",
+      "path": ".claude/worktrees/browser-dual-engine/crates/aleph-cdp/tests/fixtures/chrome-Browser.getVersion.json",
       "bytes": 301
     },
     {
-      "path": "/Volumes/TBU4/Workspace/Aleph/.claude/worktrees/browser-dual-engine/crates/aleph-cdp/tests/fixtures/chrome-Target.getTargets.json",
+      "path": ".claude/worktrees/browser-dual-engine/crates/aleph-cdp/tests/fixtures/chrome-Target.getTargets.json",
       "bytes": 1943
     },
     {
-      "path": "/Volumes/TBU4/Workspace/Aleph/.claude/worktrees/browser-dual-engine/crates/aleph-cdp/tests/fixtures/chrome-Target.createTarget.json",
+      "path": ".claude/worktrees/browser-dual-engine/crates/aleph-cdp/tests/fixtures/chrome-Target.createTarget.json",
       "bytes": 53
     },
     {
-      "path": "/Volumes/TBU4/Workspace/Aleph/.claude/worktrees/browser-dual-engine/crates/aleph-cdp/tests/fixtures/chrome-Target.closeTarget.json",
+      "path": ".claude/worktrees/browser-dual-engine/crates/aleph-cdp/tests/fixtures/chrome-Target.closeTarget.json",
       "bytes": 22
     },
     {
-      "path": "/Volumes/TBU4/Workspace/Aleph/.claude/worktrees/browser-dual-engine/crates/aleph-cdp/tests/fixtures/chrome-Page.navigate.json",
+      "path": ".claude/worktrees/browser-dual-engine/crates/aleph-cdp/tests/fixtures/chrome-Page.navigate.json",
       "bytes": 125
     },
     {
-      "path": "/Volumes/TBU4/Workspace/Aleph/.claude/worktrees/browser-dual-engine/crates/aleph-cdp/tests/fixtures/chrome-Page.getFrameTree.json",
+      "path": ".claude/worktrees/browser-dual-engine/crates/aleph-cdp/tests/fixtures/chrome-Page.getFrameTree.json",
       "bytes": 1319
     },
     {
-      "path": "/Volumes/TBU4/Workspace/Aleph/.claude/worktrees/browser-dual-engine/crates/aleph-cdp/tests/fixtures/chrome-Page.getLayoutMetrics.json",
+      "path": ".claude/worktrees/browser-dual-engine/crates/aleph-cdp/tests/fixtures/chrome-Page.getLayoutMetrics.json",
       "bytes": 750
     },
     {
-      "path": "/Volumes/TBU4/Workspace/Aleph/.claude/worktrees/browser-dual-engine/crates/aleph-cdp/tests/fixtures/chrome-Page.getNavigationHistory.json",
+      "path": ".claude/worktrees/browser-dual-engine/crates/aleph-cdp/tests/fixtures/chrome-Page.getNavigationHistory.json",
       "bytes": 408
     },
     {
-      "path": "/Volumes/TBU4/Workspace/Aleph/.claude/worktrees/browser-dual-engine/crates/aleph-cdp/tests/fixtures/chrome-DOM.getDocument.json",
+      "path": ".claude/worktrees/browser-dual-engine/crates/aleph-cdp/tests/fixtures/chrome-DOM.getDocument.json",
       "bytes": 51235
     },
     {
-      "path": "/Volumes/TBU4/Workspace/Aleph/.claude/worktrees/browser-dual-engine/crates/aleph-cdp/tests/fixtures/chrome-DOM.querySelector.json",
+      "path": ".claude/worktrees/browser-dual-engine/crates/aleph-cdp/tests/fixtures/chrome-DOM.querySelector.json",
       "bytes": 19
     },
     {
-      "path": "/Volumes/TBU4/Workspace/Aleph/.claude/worktrees/browser-dual-engine/crates/aleph-cdp/tests/fixtures/chrome-DOM.querySelector.miss.json",
+      "path": ".claude/worktrees/browser-dual-engine/crates/aleph-cdp/tests/fixtures/chrome-DOM.querySelector.miss.json",
       "bytes": 18
     },
     {
-      "path": "/Volumes/TBU4/Workspace/Aleph/.claude/worktrees/browser-dual-engine/crates/aleph-cdp/tests/fixtures/chrome-DOM.querySelectorAll.json",
+      "path": ".claude/worktrees/browser-dual-engine/crates/aleph-cdp/tests/fixtures/chrome-DOM.querySelectorAll.json",
       "bytes": 38
     },
     {
-      "path": "/Volumes/TBU4/Workspace/Aleph/.claude/worktrees/browser-dual-engine/crates/aleph-cdp/tests/fixtures/chrome-DOM.describeNode.json",
+      "path": ".claude/worktrees/browser-dual-engine/crates/aleph-cdp/tests/fixtures/chrome-DOM.describeNode.json",
       "bytes": 260
     },
     {
-      "path": "/Volumes/TBU4/Workspace/Aleph/.claude/worktrees/browser-dual-engine/crates/aleph-cdp/tests/fixtures/chrome-DOM.getBoxModel.json",
+      "path": ".claude/worktrees/browser-dual-engine/crates/aleph-cdp/tests/fixtures/chrome-DOM.getBoxModel.json",
       "bytes": 713
     },
     {
-      "path": "/Volumes/TBU4/Workspace/Aleph/.claude/worktrees/browser-dual-engine/crates/aleph-cdp/tests/fixtures/chrome-DOM.resolveNode.json",
+      "path": ".claude/worktrees/browser-dual-engine/crates/aleph-cdp/tests/fixtures/chrome-DOM.resolveNode.json",
       "bytes": 180
     },
     {
-      "path": "/Volumes/TBU4/Workspace/Aleph/.claude/worktrees/browser-dual-engine/crates/aleph-cdp/tests/fixtures/chrome-DOM.getBoxModel.hidden.json",
+      "path": ".claude/worktrees/browser-dual-engine/crates/aleph-cdp/tests/fixtures/chrome-DOM.getBoxModel.hidden.json",
       "bytes": 87
     },
     {
-      "path": "/Volumes/TBU4/Workspace/Aleph/.claude/worktrees/browser-dual-engine/crates/aleph-cdp/tests/fixtures/chrome-DOM.getBoxModel.badnode.json",
+      "path": ".claude/worktrees/browser-dual-engine/crates/aleph-cdp/tests/fixtures/chrome-DOM.getBoxModel.badnode.json",
       "bytes": 93
     },
     {
-      "path": "/Volumes/TBU4/Workspace/Aleph/.claude/worktrees/browser-dual-engine/crates/aleph-cdp/tests/fixtures/chrome-Runtime.evaluate.json",
+      "path": ".claude/worktrees/browser-dual-engine/crates/aleph-cdp/tests/fixtures/chrome-Runtime.evaluate.json",
       "bytes": 83
     },
     {
-      "path": "/Volumes/TBU4/Workspace/Aleph/.claude/worktrees/browser-dual-engine/crates/aleph-cdp/tests/fixtures/chrome-Runtime.evaluate.throws.json",
+      "path": ".claude/worktrees/browser-dual-engine/crates/aleph-cdp/tests/fixtures/chrome-Runtime.evaluate.throws.json",
       "bytes": 759
     },
     {
-      "path": "/Volumes/TBU4/Workspace/Aleph/.claude/worktrees/browser-dual-engine/crates/aleph-cdp/tests/fixtures/chrome-Runtime.callFunctionOn.json",
+      "path": ".claude/worktrees/browser-dual-engine/crates/aleph-cdp/tests/fixtures/chrome-Runtime.callFunctionOn.json",
       "bytes": 62
     },
     {
-      "path": "/Volumes/TBU4/Workspace/Aleph/.claude/worktrees/browser-dual-engine/crates/aleph-cdp/tests/fixtures/chrome-Network.getAllCookies.json",
+      "path": ".claude/worktrees/browser-dual-engine/crates/aleph-cdp/tests/fixtures/chrome-Network.getAllCookies.json",
       "bytes": 329
     },
     {
-      "path": "/Volumes/TBU4/Workspace/Aleph/.claude/worktrees/browser-dual-engine/crates/aleph-cdp/tests/fixtures/chrome-Network.getCookies.json",
+      "path": ".claude/worktrees/browser-dual-engine/crates/aleph-cdp/tests/fixtures/chrome-Network.getCookies.json",
       "bytes": 329
     },
     {
-      "path": "/Volumes/TBU4/Workspace/Aleph/.claude/worktrees/browser-dual-engine/crates/aleph-cdp/tests/fixtures/chrome-DOMSnapshot.captureSnapshot.json",
+      "path": ".claude/worktrees/browser-dual-engine/crates/aleph-cdp/tests/fixtures/chrome-DOMSnapshot.captureSnapshot.json",
       "bytes": 45048
     },
     {
-      "path": "/Volumes/TBU4/Workspace/Aleph/.claude/worktrees/browser-dual-engine/crates/aleph-cdp/tests/fixtures/chrome-Page.captureScreenshot.json",
+      "path": ".claude/worktrees/browser-dual-engine/crates/aleph-cdp/tests/fixtures/chrome-Page.captureScreenshot.json",
       "bytes": 301
     },
     {
-      "path": "/Volumes/TBU4/Workspace/Aleph/.claude/worktrees/browser-dual-engine/crates/aleph-cdp/tests/fixtures/chrome-Page.printToPDF.json",
+      "path": ".claude/worktrees/browser-dual-engine/crates/aleph-cdp/tests/fixtures/chrome-Page.printToPDF.json",
       "bytes": 1445
     },
     {
-      "path": "/Volumes/TBU4/Workspace/Aleph/.claude/worktrees/browser-dual-engine/crates/aleph-cdp/tests/fixtures/chrome-void.json",
+      "path": ".claude/worktrees/browser-dual-engine/crates/aleph-cdp/tests/fixtures/chrome-void.json",
       "bytes": 894
     },
     {
-      "path": "/Volumes/TBU4/Workspace/Aleph/.claude/worktrees/browser-dual-engine/src/browser/engine/fixtures/t0-support-matrix.json",
+      "path": ".claude/worktrees/browser-dual-engine/src/browser/engine/fixtures/t0-support-matrix.json",
       "bytes": 10024
     }
   ],
@@ -166,35 +166,35 @@ not committed). Re-run: `bash probes/t0-run.sh`.
   "wsUrl": "ws://127.0.0.1:55108/devtools/browser",
   "files": [
     {
-      "path": "/Volumes/TBU4/Workspace/Aleph/.claude/worktrees/browser-dual-engine/crates/aleph-cdp/tests/fixtures/obscura-Browser.getVersion.json",
+      "path": ".claude/worktrees/browser-dual-engine/crates/aleph-cdp/tests/fixtures/obscura-Browser.getVersion.json",
       "bytes": 270
     },
     {
-      "path": "/Volumes/TBU4/Workspace/Aleph/.claude/worktrees/browser-dual-engine/crates/aleph-cdp/tests/fixtures/obscura-Target.getTargets.json",
+      "path": ".claude/worktrees/browser-dual-engine/crates/aleph-cdp/tests/fixtures/obscura-Target.getTargets.json",
       "bytes": 271
     },
     {
-      "path": "/Volumes/TBU4/Workspace/Aleph/.claude/worktrees/browser-dual-engine/crates/aleph-cdp/tests/fixtures/obscura-Page.navigate.json",
+      "path": ".claude/worktrees/browser-dual-engine/crates/aleph-cdp/tests/fixtures/obscura-Page.navigate.json",
       "bytes": 87
     },
     {
-      "path": "/Volumes/TBU4/Workspace/Aleph/.claude/worktrees/browser-dual-engine/crates/aleph-cdp/tests/fixtures/obscura-DOM.getDocument.json",
+      "path": ".claude/worktrees/browser-dual-engine/crates/aleph-cdp/tests/fixtures/obscura-DOM.getDocument.json",
       "bytes": 34808
     },
     {
-      "path": "/Volumes/TBU4/Workspace/Aleph/.claude/worktrees/browser-dual-engine/crates/aleph-cdp/tests/fixtures/obscura-DOM.getBoxModel.json",
+      "path": ".claude/worktrees/browser-dual-engine/crates/aleph-cdp/tests/fixtures/obscura-DOM.getBoxModel.json",
       "bytes": 497
     },
     {
-      "path": "/Volumes/TBU4/Workspace/Aleph/.claude/worktrees/browser-dual-engine/crates/aleph-cdp/tests/fixtures/obscura-Runtime.evaluate.json",
+      "path": ".claude/worktrees/browser-dual-engine/crates/aleph-cdp/tests/fixtures/obscura-Runtime.evaluate.json",
       "bytes": 85
     },
     {
-      "path": "/Volumes/TBU4/Workspace/Aleph/.claude/worktrees/browser-dual-engine/crates/aleph-cdp/tests/fixtures/obscura-Network.getAllCookies.json",
+      "path": ".claude/worktrees/browser-dual-engine/crates/aleph-cdp/tests/fixtures/obscura-Network.getAllCookies.json",
       "bytes": 380
     },
     {
-      "path": "/Volumes/TBU4/Workspace/Aleph/.claude/worktrees/browser-dual-engine/src/browser/engine/fixtures/t0-support-matrix.json",
+      "path": ".claude/worktrees/browser-dual-engine/src/browser/engine/fixtures/t0-support-matrix.json",
       "bytes": 10062
     }
   ],
@@ -262,7 +262,7 @@ not committed). Re-run: `bash probes/t0-run.sh`.
   "capturedAt": "2026-09-06T12:41:37.942Z",
   "files": [
     {
-      "path": "/Volumes/TBU4/Workspace/Aleph/.claude/worktrees/browser-dual-engine/src/browser/page_state/fixtures/hn-chromium.domsnapshot.json",
+      "path": ".claude/worktrees/browser-dual-engine/src/browser/page_state/fixtures/hn-chromium.domsnapshot.json",
       "bytes": 798060
     }
   ],

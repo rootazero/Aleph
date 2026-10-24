@@ -1,7 +1,7 @@
 # Task 2 Report — Capability Phase 4 (Gate B)
 
 - Date: 2026-10-06
-- Workdir: `/Volumes/TBU4/Workspace/Aleph-capability-phase4`
+- Workdir: `../Aleph-capability-phase4`
 - Branch: `capability-phase4`
 - Package: `alephcore`
 - Status: COMPLETE

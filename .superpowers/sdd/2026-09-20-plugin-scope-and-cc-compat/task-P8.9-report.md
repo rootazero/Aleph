@@ -4,7 +4,7 @@
 - **File modified**: `qa/README.md` (only this; zero code, zero scripts, zero docs outside `qa/`)
 - **HEAD at start**: `11cb0eb58` clean, `git diff 11cb0eb58 -- src/harness/` empty
 - **HEAD at end**: `11cb0eb58 + 1 commit` clean after commit (see "Commit" section below)
-- **Worktree**: `/Volumes/TBU4/Workspace/Aleph/.claude/worktrees/plugin-scope-round` (branch `worktree-plugin-scope-round`)
+- **Worktree**: `.claude/worktrees/plugin-scope-round` (branch `worktree-plugin-scope-round`)
 
 ## Drift between the plan and the current tree
 

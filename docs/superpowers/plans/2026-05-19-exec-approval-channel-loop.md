@@ -10,7 +10,7 @@
 
 **Spec:** `docs/superpowers/specs/2026-05-19-exec-approval-channel-loop-design.md`
 
-**工作目录:** worktree `/Volumes/TBU4/Workspace/Aleph-exec-approval`，分支 `feat/exec-approval-channel-wiring`。所有命令在该目录执行。
+**工作目录:** worktree `../Aleph-exec-approval`，分支 `feat/exec-approval-channel-wiring`。所有命令在该目录执行。
 
 ---
 

@@ -358,7 +358,7 @@ prune-the-prompt 是 R7（LLM 主权）/ R9（智慧在 Prompt）/ R10（薄 Har
 
 ## 9. 参考文献
 
-- 行业原文：`/Volumes/TBU4/Workspace/Agent-Harness.md`（12 模块框架，中文）
+- 行业原文：`../Agent-Harness.md`（12 模块框架，中文）
 - Anthropic Managed Agents 工程博客：https://www.anthropic.com/engineering/managed-agents
 - Beren Millidge, *AI 的脚手架* (2023) — 把 Agent Harness 类比为冯·诺依曼架构
 - Aleph 重构原始 spec：[2026-04-24-harness-dissolution-roadmap.md](../superpowers/specs/2026-04-24-harness-dissolution-roadmap.md)

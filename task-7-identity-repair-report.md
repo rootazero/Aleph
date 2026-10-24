@@ -4,7 +4,7 @@
 
 ## 1. Root cause and authority / 根因与权威
 
-- Root: `/Volumes/TBU4/Workspace/Aleph`; branch: `refactor/modularization-p0`; HEAD: `fac11b6de66b7051f9aa102428170f4fd6c59cfe`.
+- Root: `.`; branch: `refactor/modularization-p0`; HEAD: `fac11b6de66b7051f9aa102428170f4fd6c59cfe`.
 - Supplied read-only diagnosis inspected: `/var/folders/qt/d007hr751cl59b3_8sptd8fr0000gp/T/acp-delegate/del_mv978ieq_pdwz.out`. No subagent was dispatched by this repair.
 - Original failed run: `.superpowers/sdd/2026-10-14-modularization-p0-implementation/repair-logs/20261015-150800-task7-core-check-b1b2.log`: `cargo check -p alephcore --lib --bins`, probe exit 0, `available_bytes=6639403008 required_bytes=4294967296 ALLOW`, cargo exit 101, 11 errors (5 E0308 and 6 E0609), no timeout or surviving descendants.
 - Verified original HEAD `src/providers/adapter.rs:10` imports `crate::tool_metadata::ToolDefinition`; original `RequestPayload<'a>` has ten fields and borrowed tools. Current `src/tool_metadata/types/definition.rs:20` reexports `aleph_slot_api::metadata::ToolDefinition` (LLM schema `parameters`). Current `src/providers/adapter.rs:14` reexports API `RequestPayload`.

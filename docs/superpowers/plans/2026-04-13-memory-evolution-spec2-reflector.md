@@ -47,7 +47,7 @@
 
 - [ ] **Step 0.1: Confirm green baseline**
 
-Run: `cd /Volumes/TBU4/Workspace/Aleph && cargo check -p alephcore 2>&1 | tail -5`
+Run: `cd . && cargo check -p alephcore 2>&1 | tail -5`
 Expected: `Finished \`dev\` profile ... 0 errors`.
 
 If fails, STOP and fix first.
@@ -168,7 +168,7 @@ pub mod reflector;
 
 - [ ] **Step 1.2: Run tests**
 
-`cd /Volumes/TBU4/Workspace/Aleph && cargo test -p alephcore reflector::types -- --nocapture 2>&1 | tail -10`
+`cd . && cargo test -p alephcore reflector::types -- --nocapture 2>&1 | tail -10`
 Expected: 2 tests pass.
 
 `cargo check -p alephcore 2>&1 | tail -5`
@@ -196,7 +196,7 @@ source hallucination."
 
 - [ ] **Step 2.1: Write snapshot file**
 
-Create directory: `cd /Volumes/TBU4/Workspace/Aleph && mkdir -p src/memory/reflector/prompts/snapshots`
+Create directory: `cd . && mkdir -p src/memory/reflector/prompts/snapshots`
 
 Create `src/memory/reflector/prompts/snapshots/synthesis.txt`:
 
@@ -286,7 +286,7 @@ goes in the text, not separate JSON keys."
 
 - [ ] **Step 3.1: Locate `HybridAssembler::assemble` signature**
 
-Run: `cd /Volumes/TBU4/Workspace/Aleph && grep -n "pub async fn assemble\|pub fn assemble\|struct AssembledPacket\|struct MemoryPacket\|pub struct MemoryEnvelope" src/memory/assembler/*.rs`
+Run: `cd . && grep -n "pub async fn assemble\|pub fn assemble\|struct AssembledPacket\|struct MemoryPacket\|pub struct MemoryEnvelope" src/memory/assembler/*.rs`
 
 Record the names. The current shape (confirmed at design time) is:
 - `HybridAssembler::assemble(query, opts) -> Result<AssembledPacket, AlephError>` (or similar)
@@ -426,7 +426,7 @@ cite output."
 
 - [ ] **Step 4.1: Inspect assembler constructor + assemble signature**
 
-Run: `cd /Volumes/TBU4/Workspace/Aleph && grep -n "pub fn new\|pub async fn assemble\|pub fn assemble" src/memory/assembler/hybrid.rs`
+Run: `cd . && grep -n "pub fn new\|pub async fn assemble\|pub fn assemble" src/memory/assembler/hybrid.rs`
 
 Record the full `assemble` signature — what does it take (query, opts) and return (`AssembledPacket` / `Result<X>`)? Use that shape in the reflector.
 
@@ -803,7 +803,7 @@ Malformed JSON degrades gracefully to a text-only Synthesis."
 
 Run:
 ```
-cd /Volumes/TBU4/Workspace/Aleph
+cd .
 grep -n "pub fn record_signals\|pub fn query_hash\|record_signal\b" src/memory/store/sqlite/recall_signals.rs | head
 grep -n "recall_signals\|RecallSignal" src/memory/store/sqlite/mod.rs | head -15
 ```
@@ -1003,7 +1003,7 @@ issues never fail a reflect() call."
 Grep the registry for an existing memory-side tool that takes a service handle and emits JSON. `note_manage` is the closest pattern (commit `d094d033+` landed it during Spec 1).
 
 ```
-cd /Volumes/TBU4/Workspace/Aleph
+cd .
 grep -n "session_complete\|memory_search\|register_tool\|note_manage" src/executor/builtin_registry/registry.rs | head -20
 grep -n "session_complete\|memory_search\|register_tool\|note_manage" src/executor/builtin_registry/builder.rs | head -20
 ```
@@ -1122,7 +1122,7 @@ reflector does the retrieval + synthesis + recall-signal write."
 - [ ] **Step 8.1: Locate the assembly point**
 
 ```
-cd /Volumes/TBU4/Workspace/Aleph
+cd .
 grep -rn "HybridAssembler::new\|FactExtractor::new" src/bin/ | head -10
 ```
 

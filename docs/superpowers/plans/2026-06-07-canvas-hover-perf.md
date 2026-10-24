@@ -8,7 +8,7 @@
 
 **Tech Stack:** Rust + Leptos 0.8 (wasm32), web-sys (Canvas2D, IntersectionObserver, ResizeObserver), Tailwind CSS.
 
-**Session constraint:** Per user mandate, do **NOT** run `cargo check` / tests this session. Unit tests are authored and committed for later (CI / next session). Each "run" step records the expected result but is explicitly deferred. All work happens in worktree `/Volumes/TBU4/Workspace/Aleph-wt-canvas` (branch `feat/canvas-hover-perf`); commit after each task.
+**Session constraint:** Per user mandate, do **NOT** run `cargo check` / tests this session. Unit tests are authored and committed for later (CI / next session). Each "run" step records the expected result but is explicitly deferred. All work happens in worktree `../Aleph-wt-canvas` (branch `feat/canvas-hover-perf`); commit after each task.
 
 **Spec:** `docs/superpowers/specs/2026-06-07-canvas-hover-perf-design.md`
 
@@ -24,7 +24,7 @@
 | `interfaces/webchat/src/views/canvas/node_card.rs` | overlay card component | remove `on_click` prop + handlers |
 | `interfaces/webchat/styles/tailwind.css` | canvas card styling | mode-swap fade-in keyframe |
 
-All edits are inside the `webchat` panel crate. Working directory for every command: `/Volumes/TBU4/Workspace/Aleph-wt-canvas`.
+All edits are inside the `webchat` panel crate. Working directory for every command: `../Aleph-wt-canvas`.
 
 ---
 
@@ -45,7 +45,7 @@ In `interfaces/webchat/Cargo.toml`, find the `web-sys` features array (the line 
 - [ ] **Step 2: Commit**
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph-wt-canvas
+cd ../Aleph-wt-canvas
 git add interfaces/webchat/Cargo.toml
 git commit -m "webchat: enable web-sys ResizeObserver features"
 ```
@@ -145,7 +145,7 @@ Expected: PASS (all `hover_retains_*` + existing `hit_test_*`).
 - [ ] **Step 5: Commit**
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph-wt-canvas
+cd ../Aleph-wt-canvas
 git add interfaces/webchat/src/canvas_engine/viewport.rs
 git commit -m "canvas: add hover_retains hysteresis to viewport"
 ```
@@ -239,7 +239,7 @@ Expected when built: no borrow errors — `state.hovered_node.as_deref()` and `s
 - [ ] **Step 4: Commit**
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph-wt-canvas
+cd ../Aleph-wt-canvas
 git add interfaces/webchat/src/views/canvas/graph_canvas.rs
 git commit -m "canvas: hover hysteresis + freeze hover during tween"
 ```
@@ -357,7 +357,7 @@ Expected when built: `raf_c`/`raf_h` are still in scope at the observer setup (c
 - [ ] **Step 6: Commit**
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph-wt-canvas
+cd ../Aleph-wt-canvas
 git add interfaces/webchat/src/views/canvas/graph_canvas.rs
 git commit -m "canvas: park rAF when hidden, resume via IntersectionObserver"
 ```
@@ -482,7 +482,7 @@ Expected when built: `Cell::<Option<(f64,f64)>>::take()` resolves (Option is Def
 - [ ] **Step 5: Commit**
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph-wt-canvas
+cd ../Aleph-wt-canvas
 git add interfaces/webchat/src/views/canvas/graph_canvas.rs
 git commit -m "canvas: ResizeObserver replaces per-frame layout read"
 ```
@@ -584,7 +584,7 @@ Expected when built: no unused-variable / unused-import warnings — `Callback` 
 - [ ] **Step 6: Commit**
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph-wt-canvas
+cd ../Aleph-wt-canvas
 git add interfaces/webchat/src/views/canvas/graph_canvas.rs interfaces/webchat/src/views/canvas/node_card.rs
 git commit -m "canvas: remove dead on_card_click handler"
 ```
@@ -626,7 +626,7 @@ In `styles/tailwind.css`, immediately after the `.node-card-dot:hover { ... }` r
 - [ ] **Step 2: Commit**
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph-wt-canvas
+cd ../Aleph-wt-canvas
 git add interfaces/webchat/styles/tailwind.css
 git commit -m "canvas: fade-in card on mode swap"
 ```
@@ -638,7 +638,7 @@ git commit -m "canvas: fade-in card on mode swap"
 - [ ] **Step 1: Review the branch diff**
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph-wt-canvas
+cd ../Aleph-wt-canvas
 git log --oneline main..HEAD
 git diff main..HEAD --stat
 ```

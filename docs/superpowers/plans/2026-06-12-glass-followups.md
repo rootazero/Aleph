@@ -10,7 +10,7 @@
 
 **Environment hard rules (every implementer):**
 
-- Work ONLY in the worktree `/Volumes/TBU4/Workspace/aleph-glass-material` (branch `aleph-glass-material`). The shell cwd RESETS to the main repo between Bash calls — every command must be `cd /Volumes/TBU4/Workspace/aleph-glass-material && …` in the SAME call. Before claiming any test/build result, confirm with `pwd`.
+- Work ONLY in the worktree `../aleph-glass-material` (branch `aleph-glass-material`). The shell cwd RESETS to the main repo between Bash calls — every command must be `cd ../aleph-glass-material && …` in the SAME call. Before claiming any test/build result, confirm with `pwd`.
 - Test baseline in this worktree: **352 passed** (`cargo test -p aleph-panel --lib`). If you see 349, you are in the wrong directory — stop.
 - Panel Rust changes MUST pass the wasm gate: `cargo build -p aleph-panel --lib --target wasm32-unknown-unknown` (native check alone is insufficient — cfg(wasm32)-gated code exists).
 - Never `git add -A` / `git add .` (untracked `node_modules` symlink + target/ artifacts). Stage explicit paths only.
@@ -155,16 +155,16 @@ Add the `SwatchButton` import. Known accepted DOM deltas (document in the commit
 - [ ] **Step 6: Verify**
 
 ```bash
-cd /Volumes/TBU4/Workspace/aleph-glass-material && cargo build -p aleph-panel --lib --target wasm32-unknown-unknown
-cd /Volumes/TBU4/Workspace/aleph-glass-material && cargo test -p aleph-panel --lib
+cd ../aleph-glass-material && cargo build -p aleph-panel --lib --target wasm32-unknown-unknown
+cd ../aleph-glass-material && cargo test -p aleph-panel --lib
 ```
 Expected: build OK, **352 passed** (no new host tests — view-only change; host tests cannot render Leptos DOM).
 
 - [ ] **Step 7: fmt + clippy spot + commit**
 
 ```bash
-cd /Volumes/TBU4/Workspace/aleph-glass-material && cargo fmt -p aleph-panel && cargo clippy -p aleph-panel --lib -- -D warnings 2>&1 | tail -3
-cd /Volumes/TBU4/Workspace/aleph-glass-material && git add interfaces/webchat/src/components/ui/swatch_button.rs interfaces/webchat/src/components/ui/mod.rs interfaces/webchat/src/views/settings/appearance.rs interfaces/webchat/src/components/theme_toggle.rs && git commit -m "panel: extract SwatchButton primitive for the three appearance pickers"
+cd ../aleph-glass-material && cargo fmt -p aleph-panel && cargo clippy -p aleph-panel --lib -- -D warnings 2>&1 | tail -3
+cd ../aleph-glass-material && git add interfaces/webchat/src/components/ui/swatch_button.rs interfaces/webchat/src/components/ui/mod.rs interfaces/webchat/src/views/settings/appearance.rs interfaces/webchat/src/components/theme_toggle.rs && git commit -m "panel: extract SwatchButton primitive for the three appearance pickers"
 ```
 
 ### Task 2: `aria-pressed` on the remaining toggle buttons
@@ -192,8 +192,8 @@ aria-pressed=move || is_active().to_string()
 - [ ] **Step 4: Verify + commit**
 
 ```bash
-cd /Volumes/TBU4/Workspace/aleph-glass-material && cargo build -p aleph-panel --lib --target wasm32-unknown-unknown && cargo test -p aleph-panel --lib 2>&1 | tail -2
-cd /Volumes/TBU4/Workspace/aleph-glass-material && cargo fmt -p aleph-panel && git add interfaces/webchat/src/views/settings/appearance.rs interfaces/webchat/src/components/theme_toggle.rs && git commit -m "panel: expose aria-pressed on every appearance toggle button"
+cd ../aleph-glass-material && cargo build -p aleph-panel --lib --target wasm32-unknown-unknown && cargo test -p aleph-panel --lib 2>&1 | tail -2
+cd ../aleph-glass-material && cargo fmt -p aleph-panel && git add interfaces/webchat/src/views/settings/appearance.rs interfaces/webchat/src/components/theme_toggle.rs && git commit -m "panel: expose aria-pressed on every appearance toggle button"
 ```
 Expected: 352 passed.
 
@@ -274,7 +274,7 @@ fn token_mirror_blocks_are_verbatim_copies() {
 
 Also update the `css_block_body` doc comment's last sentence: callers pass one banner-delimited SECTION (token layer = before the banner, material primitives = after); the exactly-once assertion holds within each slice.
 
-Run: `cd /Volumes/TBU4/Workspace/aleph-glass-material && cargo test -p aleph-panel --lib token_mirror` — Expected: **FAIL** on the ocean pair (whitespace drift), proving the test sees what the pre-check saw.
+Run: `cd ../aleph-glass-material && cargo test -p aleph-panel --lib token_mirror` — Expected: **FAIL** on the ocean pair (whitespace drift), proving the test sees what the pre-check saw.
 
 - [ ] **Step 2 (GREEN): Re-align the four mirror blocks** in `styles/tailwind.css` — inside the `@media (prefers-color-scheme: dark)` block near line 389, pad each property's value column to match the dark block exactly (e.g. `--color-primary:          oklch(0.68 0.130 250);` — trimmed content identical to `html.dark[data-accent="ocean"]`'s line). 7 lines × 4 accents. Whitespace-only change; values must NOT change.
 
@@ -283,14 +283,14 @@ Run the test again — Expected: PASS, and the full suite `cargo test -p aleph-p
 - [ ] **Step 3: Confirm dist is byte-stable** (minifier swallows whitespace):
 
 ```bash
-cd /Volumes/TBU4/Workspace/aleph-glass-material/interfaces/webchat && npm run build:css >/dev/null 2>&1; cd /Volumes/TBU4/Workspace/aleph-glass-material && git status --short interfaces/webchat/dist/
+cd ../aleph-glass-material/interfaces/webchat && npm run build:css >/dev/null 2>&1; cd ../aleph-glass-material && git status --short interfaces/webchat/dist/
 ```
 Expected: no output (dist unchanged). If `dist/tailwind.css` shows modified, inspect the diff — only whitespace-derived changes are acceptable; include it in the commit.
 
 - [ ] **Step 4: fmt + commit**
 
 ```bash
-cd /Volumes/TBU4/Workspace/aleph-glass-material && cargo fmt -p aleph-panel && git add interfaces/webchat/styles/tailwind.css interfaces/webchat/src/appearance.rs && git commit -m "panel: extend mirror parity test to the colour-token layer"
+cd ../aleph-glass-material && cargo fmt -p aleph-panel && git add interfaces/webchat/styles/tailwind.css interfaces/webchat/src/appearance.rs && git commit -m "panel: extend mirror parity test to the colour-token layer"
 ```
 (Stage `interfaces/webchat/dist/tailwind.css` too only if Step 3 showed a diff.)
 
@@ -326,6 +326,6 @@ Live-panel pass: bootstrap-URL auth + real panel composition rendered correctly 
 
 1. Rebuild dist on the branch (worktree caveat: run wasm-bindgen with absolute paths if `just wasm` misroutes): wasm build → `wasm-bindgen` → `npm run build:css`; commit `dist/aleph_panel.js`, `dist/aleph_panel_bg.wasm` (tracked artifacts must ship with the branch).
 2. Final whole-branch review (spec coverage + quality), fix loop if needed.
-3. Verify zero-overlap vs main (`git diff` both sides from merge-base), then `git -C /Volumes/TBU4/Workspace/Aleph merge --no-ff aleph-glass-material`.
+3. Verify zero-overlap vs main (`git diff` both sides from merge-base), then `git -C . merge --no-ff aleph-glass-material`.
 4. Rebuild `aleph-server` (rust_embed burn-in), redeploy to `/Applications/Aleph.app` (mv → .bak, cp, supervisor relaunch), live-verify aria-pressed + swatch visual parity via chrome-devtools.
 5. NOT pushed (repo convention). Clean worktree in a later session or leave for user.

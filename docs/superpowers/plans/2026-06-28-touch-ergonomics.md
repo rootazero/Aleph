@@ -80,7 +80,7 @@ Expected: the `@media (hover:none)` block with `.group-hover\:opacity-100,.hover
 
 Run from `interfaces/webchat`:
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph/interfaces/webchat
+cd interfaces/webchat
 grep -rn 'group-hover/[a-z]*:opacity-100' src/                 # named-group reveals — expect NONE
 grep -rn 'group-hover:opacity-[4-9]0' src/ | grep -v 'hover:opacity-100'   # partial-only — expect NONE
 grep -rn 'group-hover:visible\|group-hover:block\|group-hover:flex' src/   # visibility/display toggles — expect NONE
@@ -90,7 +90,7 @@ Expected: all three return nothing — confirming the single foundation rule cov
 - [ ] **Step 4: Commit (source + regenerated dist)**
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph
+cd .
 git add interfaces/webchat/styles/tailwind.css interfaces/webchat/dist/tailwind.css
 git status --short          # verify ONLY those two paths are staged; never the concurrent build.rs/justfile/harness/Info.plist work
 git commit -m "panel: reveal hover-gated action affordances on touch (@media hover:none)"

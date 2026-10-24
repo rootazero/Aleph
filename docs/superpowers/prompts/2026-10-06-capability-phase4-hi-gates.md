@@ -1,6 +1,6 @@
 # Phase 4 Gate H（ACP 入站最小 server）/ I（Effect claim 安全恢复）— 续作
 
-工作目录：`/Volumes/TBU4/Workspace/Aleph-capability-phase4-follow-up`
+工作目录：`../Aleph-capability-phase4-follow-up`
 Worktree 基线：`947e1895130bfc84abca7f1dd7733b07e30519fb`（capability-phase4-follow-up 分支，未合入 main）。
 main HEAD：`7f4bdfb8bade0861f92478d103822e8866b3a72d`（**历史观测值，非永恒权威**，本期不 merge，禁 main 写入）。
 
@@ -18,7 +18,7 @@ main HEAD：`7f4bdfb8bade0861f92478d103822e8866b3a72d`（**历史观测值，非
 
 ## 2. Baseline verify（执行前必跑）
 
-- `ls /Volumes/TBU4/Workspace/Aleph` 与本 worktree 路径分清；main 权威在 Aleph，本期基点在 follow-up worktree。**从含 follow-up 的新 worktree 确认起点，禁 main 写入**。
+- `ls .` 与本 worktree 路径分清；main 权威在 Aleph，本期基点在 follow-up worktree。**从含 follow-up 的新 worktree 确认起点，禁 main 写入**。
 - `git status --short`：`docs/superpowers/prompts/2026-10-06-capability-phase4-hi-gates.md` 是 untracked 的本期 prompt（**不假设其未来位置 / 状态永不改变**）；旧 `phase4-follow-up-gates.md` prompt 与 untracked plan 保留，不 `git add -f`。
 - `git log --oneline -5` 与 `git reflog` 验证 HEAD 与 worktree ancestry；如有未审变化以 `git diff HEAD` 实际为准，禁自动 merge / cherry-pick 到 main，新 feature worktree 由用户确认起点。
 - **VCS 检查纪律**：`git diff` 只能覆盖 tracked 差异，**看不到 untracked 内容**；不得宣称「git diff check 能查 untracked」。校验 = tracked diff + 实际 read。

@@ -15,7 +15,7 @@
 
 **Spec:** `docs/superpowers/specs/2026-04-22-whatsapp-arch-r1-design.md`（本 plan 与 spec 同看；spec 是 vision，本 plan 是 bite-sized tasks）
 
-**Worktree:** `/Volumes/TBU4/Workspace/Aleph/.claude/worktrees/whatsapp-arch-r1`，分支 `whatsapp-arch-r1`
+**Worktree:** `.claude/worktrees/whatsapp-arch-r1`，分支 `whatsapp-arch-r1`
 
 ---
 

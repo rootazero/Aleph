@@ -94,7 +94,7 @@
 
 Run:
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph
+cd .
 grep -n "nav-tile" interfaces/webchat/styles/tailwind.css
 ```
 Expected: 至少 6 处命中（`.nav-tile,` / `.nav-tile-active` 分组、`.nav-tile {` color、`.nav-tile:hover`、`.nav-tile-active {` 主定义、回退块里的 `.nav-tile-active`）。确认主定义在 `@layer components` 内、回退在 `prefers-reduced-transparency` media 内。
@@ -102,7 +102,7 @@ Expected: 至少 6 处命中（`.nav-tile,` / `.nav-tile-active` 分组、`.nav-
 - [ ] **Step 4: Commit**
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph
+cd .
 git add interfaces/webchat/styles/tailwind.css
 git commit -m "panel: add .nav-tile/.nav-tile-active frosted sidebar tile classes"
 ```
@@ -459,7 +459,7 @@ git commit -m "panel: unify teams sidebar to nav-tile"
 
 Run:
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph
+cd .
 grep -rnE "bg-sidebar-active|bg-primary/1[02]" \
   interfaces/webchat/src/components/sidebar/sidebar_item.rs \
   interfaces/webchat/src/components/mode_sidebar.rs \
@@ -474,7 +474,7 @@ Expected: 无输出（空）。`text-sidebar-accent` 仅应在 mode_sidebar.rs �
 
 Run:
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph
+cd .
 cargo build -p aleph-panel --lib --target wasm32-unknown-unknown
 ```
 Expected: 编译通过，无 error。（`--lib` 必需——`just wasm` 同款；否则 cdylib/残留 bin 会触发 bitcode 加载错。若 worktree 共享 target-dir 报路径异常，按 CLAUDE.md "Panel↔Daemon 资源嵌入链" 用绝对 target 路径。）
@@ -499,7 +499,7 @@ Expected: 全部通过（349+ 测试，0 失败）。纯视觉改动不应影响
 
 Run:
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph
+cd .
 just wasm
 ```
 Expected: `interfaces/webchat/dist/{tailwind.css, aleph_panel.js, aleph_panel_bg.wasm, index.html}` 更新。`git status` 应显示 dist 下文件变更。
@@ -518,7 +518,7 @@ Expected: `interfaces/webchat/dist/{tailwind.css, aleph_panel.js, aleph_panel_bg
 - [ ] **Step 7: Commit 生成物**
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph
+cd .
 git add interfaces/webchat/dist
 git commit -m "panel: rebuild dist with unified nav-tile sidebar material"
 ```

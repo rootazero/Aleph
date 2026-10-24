@@ -11,8 +11,8 @@
 
 ## Verification
 
-- `cd /Volumes/TBU4/Workspace/Aleph-capability-phase4 && cargo test -p alephcore --lib capability::facade --no-fail-fast`: 5 passed.
-- `cd /Volumes/TBU4/Workspace/Aleph-capability-phase4 && cargo check -p alephcore`: passed.
+- `cd ../Aleph-capability-phase4 && cargo test -p alephcore --lib capability::facade --no-fail-fast`: 5 passed.
+- `cd ../Aleph-capability-phase4 && cargo check -p alephcore`: passed.
 - `git diff --check`: passed.
 
 ## Deferred

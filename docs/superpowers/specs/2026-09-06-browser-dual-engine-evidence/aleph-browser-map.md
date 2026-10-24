@@ -1,6 +1,6 @@
 # Aleph browser subsystem — current shape (map for a dual-engine design)
 
-- Repo scanned: `/Volumes/TBU4/Workspace/Aleph` (as instructed). **Caveat:** global memory records that the canonical session checkout / git root is `/Volumes/TBU/Workspace/Aleph` and TBU4 is a second checkout. Everything below is read at TBU4 `HEAD = c049ef1ed` ("Merge remote-tracking branch 'origin/main'"), whose parent is `5a4a15bf1 census+chromium_resolve: close M3's residual risk`, i.e. the tip of plan 1's Task-9 work. If TBU has moved past that, re-verify.
+- Repo scanned: `.` (as instructed). **Caveat:** global memory records that the canonical session checkout / git root is `.` and TBU4 is a second checkout. Everything below is read at TBU4 `HEAD = c049ef1ed` ("Merge remote-tracking branch 'origin/main'"), whose parent is `5a4a15bf1 census+chromium_resolve: close M3's residual risk`, i.e. the tip of plan 1's Task-9 work. If TBU has moved past that, re-verify.
 - Read-only pass. No file modified.
 - Orientation: `graphify query` run first (three queries: "browser backend trait and its implementations", "how browser tools reach the browser process", "snapshot refs element ref_id playwright aria snapshot"). The graph's browser coverage is thin — it surfaced only `src/browser/{playwright_cli,chromium_launch,playwright_launch,playwright_cli_backend}.rs` as nodes and otherwise returned the *desktop* `WindowBackend` (a different subsystem). All claims below are from reading the files.
 
@@ -490,7 +490,7 @@ My own assessment. Ordered by ratio of value to churn.
 10. **Two things I could not verify, stated plainly.**
     - **I ran no builds and no tests.** Every claim here is from reading files at `c049ef1ed`. §3.12's own verification line records **one red test at `775fbd48f`** — `capability::census::tests::no_conditional_capability_install_is_silent`, a false positive naming `runtime_manage.rs:753`, plan-introduced and unfixed as of that entry. I did not check whether it is still red.
     - **I could not verify obscura's capabilities at all** — it is not in this repo, and §3.12 ㉑ says explicitly that generalising the engine seam before obscura is re-measured at HEAD "amounts to drawing it from guesswork". That measurement is still the correct first task, and nothing in this map substitutes for it.
-    - **Repo caveat, repeated:** I read `/Volumes/TBU4/Workspace/Aleph` as instructed, but global memory records `/Volumes/TBU/Workspace/Aleph` as the canonical session checkout. Line numbers should be re-confirmed there before anyone edits.
+    - **Repo caveat, repeated:** I read `.` as instructed, but global memory records `.` as the canonical session checkout. Line numbers should be re-confirmed there before anyone edits.
 
 ### One-line summary
 

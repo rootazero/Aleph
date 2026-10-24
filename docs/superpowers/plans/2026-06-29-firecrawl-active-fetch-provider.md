@@ -584,7 +584,7 @@ Delete that entire block from the crawl4ai card. Then add a new section-header `
 - [ ] **Step 6: Build the WASM panel — verify it compiles**
 
 Run: `just wasm` (foreground, timeout 540000ms)
-Expected: build succeeds (exit 0). If the worktree lacks `interfaces/webchat/node_modules`, symlink the main checkout's first: `ln -sfn /Volumes/TBU4/Workspace/Aleph/interfaces/webchat/node_modules interfaces/webchat/node_modules` (gitignored), build, then leave the symlink for later tasks.
+Expected: build succeeds (exit 0). If the worktree lacks `interfaces/webchat/node_modules`, symlink the main checkout's first: `ln -sfn interfaces/webchat/node_modules interfaces/webchat/node_modules` (gitignored), build, then leave the symlink for later tasks.
 
 - [ ] **Step 7: Run the panel api round-trip test — verify it still PASSES**
 

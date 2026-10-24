@@ -469,5 +469,5 @@ ecb = "0.1"  # for AES-ECB mode
 ## 10. Reference
 
 - hermes-agent Weixin: `/Volumes/TBU4/Github/hermes-agent/gateway/platforms/weixin.py`
-- Aleph Channel trait: `/Volumes/TBU4/Workspace/Aleph/src/gateway/channel.rs`
-- Original design: `/Volumes/TBU4/Workspace/Aleph/docs/superpowers/specs/2026-04-16-wechat-channel-design.md`
+- Aleph Channel trait: `src/gateway/channel.rs`
+- Original design: `docs/superpowers/specs/2026-04-16-wechat-channel-design.md`

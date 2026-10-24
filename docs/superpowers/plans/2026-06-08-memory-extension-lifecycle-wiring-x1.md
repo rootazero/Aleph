@@ -219,7 +219,7 @@ impl McpCaller for ManagerBackedMcpCaller {
 - [ ] **Step 5: Grep guards (compiler substitute)**
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph
+cd .
 # All 6 hook calls go through .load() — must be 6, zero bare self.caller.call(
 grep -c "self.caller.load().call(" src/memory/extensions/mcp_adapter.rs   # expect 6
 grep -c "self.caller.call(" src/memory/extensions/mcp_adapter.rs           # expect 0
@@ -386,7 +386,7 @@ Replace the doc comment above `dispatch_on_session_switch` (currently lines 166-
 - [ ] **Step 5: Grep guards**
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph
+cd .
 grep -n "fn register_mcp\|fn mcp_bindings_snapshot\|mcp_bindings:" src/memory/extensions/registry.rs   # expect 3 defs + field
 grep -c "mcp_bindings: RwLock::new" src/memory/extensions/registry.rs   # expect 2 (new + Clone)
 grep -n "No Aleph-side producer" src/memory/extensions/registry.rs       # expect 1
@@ -469,7 +469,7 @@ The test at line ~534 calls `register_memory_extension_if_declared`. Find it and
 - [ ] **Step 4: Grep guards (every caller updated to 3 args)**
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph
+cd .
 # Free-function definition takes server_id
 grep -n "fn register_memory_extension_if_declared" src/extension/loader.rs
 # No caller still uses the old 2-arg form (manifest, registry) — every call has the server_id middle arg.
@@ -538,7 +538,7 @@ Add a method on `impl ExtensionManager` (near `set_mcp_handle`, after ~line 285)
 - [ ] **Step 2: Grep guards**
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph
+cd .
 grep -n "fn bind_memory_callers" src/extension/mod.rs            # expect 1
 grep -n "mcp_bindings_snapshot\|ManagerBackedMcpCaller\|\.rebind(" src/extension/mod.rs   # expect each present
 ```
@@ -604,7 +604,7 @@ In `src/extension/plugin_ops.rs`, the `load_runtime_plugin` method calls `load_p
 - [ ] **Step 4: Grep guards**
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph
+cd .
 grep -n "bind_memory_callers().await" src/bin/aleph-server/commands/start/mod.rs   # expect 1
 grep -c "bind_memory_callers().await" src/extension/plugin_ops.rs                  # expect 2
 ```
@@ -668,7 +668,7 @@ In the same file, the spawned future builds `outcome` then calls `tracker.mark_c
 - [ ] **Step 3: Grep guards**
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph
+cd .
 grep -n "dispatch_on_delegation\|DelegationCtx\|deleg_registry" src/agents/subagent_tool/spawn.rs   # expect present
 # Inputs cloned before spawn (must appear before the tokio::spawn line)
 grep -n "let deleg_task = task.clone();\|tokio::spawn" src/agents/subagent_tool/spawn.rs
@@ -758,7 +758,7 @@ and immediately after `let user = build_user_prompt(raws, related, &observation_
 - [ ] **Step 5: Grep guard — EVERY `ingest_batch` impl/def has the new param**
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph
+cd .
 # Every fn ingest_batch site (trait def + real impl + ingestor mock + 3 service mocks)
 grep -rn "fn ingest_batch" src --include="*.rs"
 # Every plan() call must pass the new 5th arg (real impl x2 + plan() unit tests)
@@ -932,7 +932,7 @@ Then update the single call site at `src/bin/aleph-server/commands/start/builder
 - [ ] **Step 5: Grep guards**
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph
+cd .
 grep -n "with_extension_registry\|extension_registry:" src/memory/compression/service.rs   # field + builder + init
 grep -c "extension_registry: None" src/memory/compression/service.rs                       # expect 1 (new_with_backend)
 # ingest_batch call now passes 3 args incl extra_context
@@ -958,7 +958,7 @@ git commit -m "memory: fire on_pre_compress and fold contribution into ingest (C
 ## Final Verification (grep-only, NO cargo)
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph
+cd .
 # C1: all hook calls swapped; binding path complete
 grep -c "self.caller.load().call(" src/memory/extensions/mcp_adapter.rs        # 6
 grep -rn "register_mcp\|mcp_bindings_snapshot\|bind_memory_callers\|new_unbound\|ManagerBackedMcpCaller" src --include="*.rs" | grep -v test

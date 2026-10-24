@@ -48,7 +48,7 @@
 
 - [ ] **Step 0.1: Confirm baseline**
 
-Run: `cd /Volumes/TBU4/Workspace/Aleph && cargo check -p alephcore 2>&1 | tail -5`
+Run: `cd . && cargo check -p alephcore 2>&1 | tail -5`
 Expected: clean `Finished dev profile` with 0 errors.
 
 - [ ] **Step 0.2: Scout infra**
@@ -56,7 +56,7 @@ Expected: clean `Finished dev profile` with 0 errors.
 Run and record paths (used by later tasks):
 
 ```
-cd /Volumes/TBU4/Workspace/Aleph
+cd .
 grep -rln "McpClient\|call_tool\|impl MCPClient" src/extension/runtime/ src/mcp/ 2>/dev/null
 grep -n "pub struct .*Manifest\|pub fn parse_manifest\|TomlManifest" src/extension/manifest/*.rs 2>/dev/null
 grep -rn "insert_raw_memory" src/ --include='*.rs' | grep -v tests | head -15
@@ -1240,7 +1240,7 @@ producer-generated memories."
 
 Run:
 ```
-cd /Volumes/TBU4/Workspace/Aleph
+cd .
 grep -rn "pub struct.*Client\|pub fn call_tool\|pub async fn call_tool" src/extension/runtime/ src/mcp/ 2>/dev/null
 ```
 

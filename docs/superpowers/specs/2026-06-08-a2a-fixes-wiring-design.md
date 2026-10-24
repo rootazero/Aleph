@@ -1,7 +1,7 @@
 # A2A 模块:聚焦修复 + 连线 + 熵减
 
 **日期**: 2026-06-08
-**分支**: `feat/a2a-fixes-wiring`(worktree `/Volumes/TBU4/Workspace/Aleph-wt-a2a`)
+**分支**: `feat/a2a-fixes-wiring`(worktree `../Aleph-wt-a2a`)
 **参考项目**: `/Volumes/TBU4/Github/{a2a, a2a-python, ra2a}`
 
 ## 背景

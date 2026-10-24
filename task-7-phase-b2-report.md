@@ -2,7 +2,7 @@
 
 ## Status and boundary / 状态与边界
 
-- Root: `/Volumes/TBU4/Workspace/Aleph`; branch: `refactor/modularization-p0`.
+- Root: `.`; branch: `refactor/modularization-p0`.
 - B2 source edits and requested static checks are complete; compilation, behavioral tests and final integration acceptance remain Main-owned. / B2 源码改写与指定静态检查已完成，不代表编译或行为验收通过。
 - Read `task-7-source-review.md` §10 and `task-7-match-boundary.md` under `.superpowers/sdd/2026-10-14-modularization-p0-implementation/`, then actual API helper/accessor definitions and Core caller bodies.
 - Scope: only the four requested source files plus this report. Existing unrelated staged/unstaged/untracked work was preserved. No subagents.

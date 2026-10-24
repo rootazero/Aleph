@@ -8,7 +8,7 @@
 
 Karpathy's *llm-wiki* (April 2026) describes a memory pattern where an LLM incrementally compiles raw sources into a persistent, interlinked markdown wiki rather than re-deriving knowledge per query. Aleph's L1 note layer is already structured along these lines (`~/.aleph/memory/note/{agent_id}/{category}/*.md` + rebuildable SQLite indexes; index.md + log.md control plane via `notes/orientation/`; two-pass compound ingest via `notes/ingest/`; lint pipeline via `dreaming/stages/`).
 
-A deeper analysis (`/Volumes/TBU4/Workspace/llm-wiki2.md`) surfaces five risks the bare pattern leaves unaddressed:
+A deeper analysis (`../llm-wiki2.md`) surfaces five risks the bare pattern leaves unaddressed:
 
 1. **Hallucination feedback loop** — the LLM reads its own past wiki pages as background and re-promotes its own claims to "fact" on the next ingest (llm-wiki2 §31).
 2. **Partial-context updates** — ingests see only a few related pages, producing locally consistent but globally contradictory output (llm-wiki2 §32).
@@ -675,8 +675,8 @@ These intentionally-unsettled choices belong in their respective phase plans rat
 
 ## 10. References
 
-- Karpathy's LLM-wiki gist: `/Volumes/TBU4/Workspace/llm-wiki.md` (April 2026).
-- Deep analysis of LLM-wiki: `/Volumes/TBU4/Workspace/llm-wiki2.md`.
+- Karpathy's LLM-wiki gist: `../llm-wiki.md` (April 2026).
+- Deep analysis of LLM-wiki: `../llm-wiki2.md`.
 - `docs/reference/memory/NOTES.md` — current note layer reference (will be updated post-implementation).
 - `docs/reference/memory/RAW_MEMORY.md` — raw layer reference.
 - `docs/reference/memory/RETRIEVAL.md` — retrieval pipeline reference.

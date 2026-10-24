@@ -16,7 +16,7 @@
 
 - 每个 task 仍**先写测试**（红-绿结构保留，测试随代码提交供后续 CI/人工验证）。
 - "运行测试验证失败/通过" 步骤一律替换为 **静态自审**：用 `grep`/`Read` 核对 match 臂穷尽、trait 新方法的所有 impl、enum 新变体的所有匹配点、类型签名一致性。**绝不运行 cargo。**
-- 每 task 末尾 `git commit`（worktree `/Volumes/TBU4/Workspace/Aleph-wt-note`，分支 `note-protocol-graph`）。
+- 每 task 末尾 `git commit`（worktree `../Aleph-wt-note`，分支 `note-protocol-graph`）。
 - 提交信息用英文，格式 `<scope>: <desc>`，**不加 Co-Authored-By**（用户全局禁用归属）。
 - 所有路径以 worktree 为根。
 
@@ -69,7 +69,7 @@
 - [ ] **Step 2: 静态自审（无 cargo）**
 
 ```bash
-WT=/Volumes/TBU4/Workspace/Aleph-wt-note
+WT=../Aleph-wt-note
 grep -rn "frontmatter_template" "$WT/src/"   # 期望：0 结果
 ```
 确认无其它调用点（应为空）。再 `Read` `note_manage.rs` 确认 `mod tests` 仍有保留的 `validate_category_*` / `create_surfaces_related_notes` 等测试、`use super::*;` 未被误删。

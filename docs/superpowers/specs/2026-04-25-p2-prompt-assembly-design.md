@@ -2,7 +2,7 @@
 
 **Status**: Design approved 2026-04-25
 **Phase**: P2 of harness-dissolution roadmap
-**Branch**: `harness-dissolution` (worktree at `/Volumes/TBU4/Workspace/Aleph.harness-dissolution`)
+**Branch**: `harness-dissolution` (worktree at `../Aleph.harness-dissolution`)
 **Parent roadmap**: `docs/superpowers/specs/2026-04-24-harness-dissolution-roadmap.md`
 **Predecessors**: P0 (slim harness, merged), P1 (context consolidation), P3 (guardrails retraction), P4 (verification minimization)
 

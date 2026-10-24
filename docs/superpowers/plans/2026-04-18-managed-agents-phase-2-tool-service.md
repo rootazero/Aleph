@@ -1866,7 +1866,7 @@ Phase 2 is code-complete. Do NOT auto-release. Present to the user:
 
 > "Phase 2 implementation complete on branch `worktree-managed-agents-phase-2`. All commits green, no new test failures beyond the 2 pre-existing on main. Next step options:
 >
-> 1. **Merge to main** — `git -C /Volumes/TBU4/Workspace/Aleph merge worktree-managed-agents-phase-2 --no-ff`
+> 1. **Merge to main** — `git -C . merge worktree-managed-agents-phase-2 --no-ff`
 > 2. **Release** — `just release $(date +%Y.%m.%d)`
 > 3. **Both**
 > 4. **Start Phase 3 brainstorm** (Sandbox trait — workspace sandbox)

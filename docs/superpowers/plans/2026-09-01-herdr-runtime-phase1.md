@@ -226,7 +226,7 @@ grep -c "#\[test\]" src/detect/*.rs src/pane/agent_detection.rs
 - [ ] **Step 2: 复制并改根**
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph
+cd .
 cp /Volumes/TBU4/Github/herdr/src/detect/mod.rs           crates/agent-detect/src/engine.rs
 cp /Volumes/TBU4/Github/herdr/src/detect/manifest.rs       crates/agent-detect/src/manifest.rs
 cp /Volumes/TBU4/Github/herdr/src/detect/manifest_update.rs crates/agent-detect/src/manifest_update.rs

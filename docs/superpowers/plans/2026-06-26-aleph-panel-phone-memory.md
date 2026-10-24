@@ -724,7 +724,7 @@ Expected: fresh `dist/aleph_panel_bg.wasm` (size changes vs. prior).
 - [ ] **Step 2: Launch a local fresh-dist core**
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph
+cd .
 ./target/debug/aleph-server -d --bind 127.0.0.1 --port 18790 --log-file /tmp/aleph-local.log start
 ```
 (Build it first if stale: `cargo build --bin aleph-server`. Don't run the desktop GUI app simultaneously — it contends for `:18790` + flock.)

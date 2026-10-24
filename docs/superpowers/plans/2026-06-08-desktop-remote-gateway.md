@@ -190,7 +190,7 @@ mod tests {
 
 Run:
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph && cargo test -p aleph-desktop-shell connection 2>&1 | tail -20
+cd . && cargo test -p aleph-desktop-shell connection 2>&1 | tail -20
 ```
 Expected: 6 个 connection 测试通过。若 `url`/`dirs` crate 未在 `desktop/shell/Cargo.toml` 依赖里，先确认（`notify.rs`/`external_link.rs` 已用 `url`，`daemon.rs` 已用 `dirs` → 应已有；若缺则加入 `[dependencies]`，并在 commit 里显式 add `Cargo.toml`）。
 
@@ -198,14 +198,14 @@ Expected: 6 个 connection 测试通过。若 `url`/`dirs` crate 未在 `desktop
 
 Run:
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph && cargo fmt -p aleph-desktop-shell && cargo clippy -p aleph-desktop-shell 2>&1 | grep -A3 connection.rs | head
+cd . && cargo fmt -p aleph-desktop-shell && cargo clippy -p aleph-desktop-shell 2>&1 | grep -A3 connection.rs | head
 ```
 Expected: 无残留、无新警告。
 
 - [ ] **Step 5: 提交（显式路径）**
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph
+cd .
 git status
 git add desktop/shell/src/connection.rs desktop/shell/src/main.rs
 git commit -m "desktop: ConnectionTarget abstraction + persisted target marker"
@@ -244,7 +244,7 @@ git show --stat HEAD
 
 Run:
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph && cargo test -p aleph-desktop-shell external_link 2>&1 | tail -15
+cd . && cargo test -p aleph-desktop-shell external_link 2>&1 | tail -15
 ```
 Expected: 编译失败（`set_remote_host` 未定义）。
 
@@ -293,7 +293,7 @@ pub fn set_remote_host(url: Option<url::Url>) {
 
 Run:
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph && cargo test -p aleph-desktop-shell external_link 2>&1 | tail -15
+cd . && cargo test -p aleph-desktop-shell external_link 2>&1 | tail -15
 ```
 Expected: 新测试 + 既有 `loopback_panel_origins_are_internal` / `outside_origins_are_external` 全绿。
 > 注意测试间共享全局 `REMOTE_HOST`——新测试结尾 `set_remote_host(None)` 复位，避免污染其它测试（Rust 测试默认多线程，但本测试自洽地设/清；若出现 flaky 用 `serial_test` 或把断言收进单一测试，本计划已合进一个测试避免跨测试顺序依赖）。
@@ -301,7 +301,7 @@ Expected: 新测试 + 既有 `loopback_panel_origins_are_internal` / `outside_or
 - [ ] **Step 5: fmt + clippy + 提交**
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph && cargo fmt -p aleph-desktop-shell && cargo clippy -p aleph-desktop-shell 2>&1 | grep -A3 external_link | head
+cd . && cargo fmt -p aleph-desktop-shell && cargo clippy -p aleph-desktop-shell 2>&1 | grep -A3 external_link | head
 git status
 git add desktop/shell/src/external_link.rs
 git commit -m "desktop: external_link allows the configured remote origin"
@@ -347,7 +347,7 @@ git show --stat HEAD
 
 Run:
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph && cargo test -p aleph-desktop-shell notify 2>&1 | tail -15
+cd . && cargo test -p aleph-desktop-shell notify 2>&1 | tail -15
 ```
 Expected: 编译失败（`connect_request` 现无参数）。
 
@@ -411,14 +411,14 @@ fn ws_url(target: &crate::connection::ConnectionTarget) -> String {
 
 Run:
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph && cargo test -p aleph-desktop-shell notify 2>&1 | tail -20
+cd . && cargo test -p aleph-desktop-shell notify 2>&1 | tail -20
 ```
 Expected: 新 2 测 + 既有 `connect_request_is_well_formed`（现需传 `&ConnectionTarget::Local`——一并更新该既有测试调用）/ `subscribe_request_carries_notify_topics` 全绿。
 
 - [ ] **Step 6: fmt + clippy + 提交**
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph && cargo fmt -p aleph-desktop-shell && cargo clippy -p aleph-desktop-shell 2>&1 | grep -A3 notify.rs | head
+cd . && cargo fmt -p aleph-desktop-shell && cargo clippy -p aleph-desktop-shell 2>&1 | grep -A3 notify.rs | head
 git status
 git add desktop/shell/src/notify.rs
 git commit -m "desktop: notify omits local token + targets remote WS in Remote mode"
@@ -472,7 +472,7 @@ git show --stat HEAD
 
 Run:
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph && cargo test -p aleph-desktop-shell supervisor 2>&1 | tail -15
+cd . && cargo test -p aleph-desktop-shell supervisor 2>&1 | tail -15
 ```
 Expected: 编译失败（`new_remote`、`ShowConnectionError` 未定义）。
 
@@ -530,14 +530,14 @@ impl Supervisor {
 
 Run:
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph && cargo test -p aleph-desktop-shell supervisor 2>&1 | tail -20
+cd . && cargo test -p aleph-desktop-shell supervisor 2>&1 | tail -20
 ```
 Expected: 新 3 测 + 既有 4 个 supervisor 测试全绿。
 
 - [ ] **Step 5: fmt + clippy + 提交**
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph && cargo fmt -p aleph-desktop-shell && cargo clippy -p aleph-desktop-shell 2>&1 | grep -A3 "main.rs" | head
+cd . && cargo fmt -p aleph-desktop-shell && cargo clippy -p aleph-desktop-shell 2>&1 | grep -A3 "main.rs" | head
 git status
 git add desktop/shell/src/main.rs
 git commit -m "desktop: Supervisor remote mode surfaces connection error, no relaunch"
@@ -670,14 +670,14 @@ Read `daemon::build_panel_url`（grep 确认签名）。Local 档保持现有本
 
 Run:
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph && cargo check -p aleph-desktop-shell 2>&1 | tail -20
+cd . && cargo check -p aleph-desktop-shell 2>&1 | tail -20
 ```
 Expected: 整 crate 编译通过（含 invoke_handler 宏展开、命令签名）。Tauri 命令的运行时行为本步不验证（无 Tauri runtime）。
 
 - [ ] **Step 6: fmt + clippy + 提交**
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph && cargo fmt -p aleph-desktop-shell && cargo clippy -p aleph-desktop-shell 2>&1 | tail -15
+cd . && cargo fmt -p aleph-desktop-shell && cargo clippy -p aleph-desktop-shell 2>&1 | tail -15
 git status
 git add desktop/shell/src/connection.rs desktop/shell/src/main.rs desktop/shell/src/daemon.rs desktop/shell/splash/connect.html
 git commit -m "desktop: connection-config Tauri commands + shell connect page"
@@ -782,16 +782,16 @@ pub(crate) fn reroute_for_target(app: &tauri::AppHandle, target: connection::Con
 
 Run:
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph && cargo check -p aleph-desktop-shell 2>&1 | tail -10
-cd /Volumes/TBU4/Workspace/Aleph && cargo test -p aleph-desktop-shell 2>&1 | tail -20
-cd /Volumes/TBU4/Workspace/Aleph && cargo clippy -p aleph-desktop-shell 2>&1 | tail -10
+cd . && cargo check -p aleph-desktop-shell 2>&1 | tail -10
+cd . && cargo test -p aleph-desktop-shell 2>&1 | tail -20
+cd . && cargo clippy -p aleph-desktop-shell 2>&1 | tail -10
 ```
 Expected: 编译通过；Task 1-4 的所有单测全绿；clippy 无新警告。
 
 - [ ] **Step 8: 提交（显式路径）**
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph
+cd .
 git status
 git add desktop/shell/src/main.rs desktop/shell/src/daemon.rs desktop/shell/src/tray.rs desktop/shell/src/menu.rs
 git commit -m "desktop: route background+tray+menu by connection target (local/remote)"

@@ -14,7 +14,7 @@
 
 ## 全局约定
 
-- 仓库根：`/Volumes/TBU4/Workspace/Aleph`，单分支 main 直接开发
+- 仓库根：`.`，单分支 main 直接开发
 - 每个 task 结束必须 `cargo check -p alephcore` 绿（涉及别的 crate 时检查对应 crate）
 - 共享 target-dir 有 flock 串行化，编译排队是预期，**严禁设置独立 `CARGO_TARGET_DIR`**
 - 提交格式 `<scope>: <description>`（英文），不加 attribution

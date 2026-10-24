@@ -1,6 +1,6 @@
 # Task 28 Independent SPEC + QUALITY Review
 
-**Review scope:** `/Volumes/TBU4/Workspace/Aleph` five-file Task28 repair only. Read-only review/verification; the only file written by this review is `task-28-review.md`. No source, Cargo, QA, test, runner, stage, commit, reset, checkout, install, graph, or nested-agent action was performed.
+**Review scope:** `.` five-file Task28 repair only. Read-only review/verification; the only file written by this review is `task-28-review.md`. No source, Cargo, QA, test, runner, stage, commit, reset, checkout, install, graph, or nested-agent action was performed.
 
 ## Verdicts
 

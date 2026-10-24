@@ -112,17 +112,17 @@ fn compound_ingest_config_parses_without_dedup_noop_key() {
 - [ ] **Step 4: Grep guard**
 
 ```bash
-grep -n "pub fn default_dedup_enabled" -A3 /Volumes/TBU4/Workspace/Aleph-wt-dedup-gap-b/src/config/types/memory/defaults.rs   # returns true
-grep -n "default_dedup_noop_threshold" /Volumes/TBU4/Workspace/Aleph-wt-dedup-gap-b/src/config/types/memory/defaults.rs        # defined
-grep -n "dedup_noop_threshold\|dedup_enabled" /Volumes/TBU4/Workspace/Aleph-wt-dedup-gap-b/src/config/types/memory/ingest.rs    # field + serde default + Default line; dedup_enabled: true in Default
+grep -n "pub fn default_dedup_enabled" -A3 ../Aleph-wt-dedup-gap-b/src/config/types/memory/defaults.rs   # returns true
+grep -n "default_dedup_noop_threshold" ../Aleph-wt-dedup-gap-b/src/config/types/memory/defaults.rs        # defined
+grep -n "dedup_noop_threshold\|dedup_enabled" ../Aleph-wt-dedup-gap-b/src/config/types/memory/ingest.rs    # field + serde default + Default line; dedup_enabled: true in Default
 ```
 Expected: `default_dedup_enabled` body is `true`; `default_dedup_noop_threshold` defined returning 0.985; `ingest.rs` has the new field with serde default, `dedup_enabled: true` and `dedup_noop_threshold: 0.985` in the `Default` impl.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git -C /Volumes/TBU4/Workspace/Aleph-wt-dedup-gap-b add src/config/types/memory/defaults.rs src/config/types/memory/ingest.rs
-git -C /Volumes/TBU4/Workspace/Aleph-wt-dedup-gap-b commit -m "feat(memory): activate write-time dedup by default + add dedup_noop_threshold config (Gap B)"
+git -C ../Aleph-wt-dedup-gap-b add src/config/types/memory/defaults.rs src/config/types/memory/ingest.rs
+git -C ../Aleph-wt-dedup-gap-b commit -m "feat(memory): activate write-time dedup by default + add dedup_noop_threshold config (Gap B)"
 ```
 
 ---
@@ -159,7 +159,7 @@ In `src/bin/aleph-server/commands/start/builder/agent_init/mod.rs`, the `Related
 
 A new struct field breaks any `RelatedBudget { ... }` literal that does NOT end with `..RelatedBudget::default()` / `..Default::default()`. Run:
 ```bash
-grep -rn "RelatedBudget {" /Volumes/TBU4/Workspace/Aleph-wt-dedup-gap-b/src/
+grep -rn "RelatedBudget {" ../Aleph-wt-dedup-gap-b/src/
 ```
 Classify each hit:
 - `pub struct RelatedBudget {` (definition) — N/A.
@@ -169,16 +169,16 @@ Classify each hit:
 
 Then confirm:
 ```bash
-grep -n "dedup_noop_threshold" /Volumes/TBU4/Workspace/Aleph-wt-dedup-gap-b/src/memory/notes/ingest/retrieve.rs   # field + Default line (2 hits)
-grep -n "dedup_noop_threshold: cfg.dedup_noop_threshold" /Volumes/TBU4/Workspace/Aleph-wt-dedup-gap-b/src/bin/aleph-server/commands/start/builder/agent_init/mod.rs  # wiring (1 hit)
+grep -n "dedup_noop_threshold" ../Aleph-wt-dedup-gap-b/src/memory/notes/ingest/retrieve.rs   # field + Default line (2 hits)
+grep -n "dedup_noop_threshold: cfg.dedup_noop_threshold" ../Aleph-wt-dedup-gap-b/src/bin/aleph-server/commands/start/builder/agent_init/mod.rs  # wiring (1 hit)
 ```
 Expected: `retrieve.rs` has the field + the `Default` line; `agent_init` wires it; every other `RelatedBudget` literal either spreads Default or has the field.
 
 - [ ] **Step 4: Commit**
 
 ```bash
-git -C /Volumes/TBU4/Workspace/Aleph-wt-dedup-gap-b add src/memory/notes/ingest/retrieve.rs src/bin/aleph-server/commands/start/builder/agent_init/mod.rs
-git -C /Volumes/TBU4/Workspace/Aleph-wt-dedup-gap-b commit -m "feat(memory): RelatedBudget.dedup_noop_threshold field + agent_init wiring (Gap B)"
+git -C ../Aleph-wt-dedup-gap-b add src/memory/notes/ingest/retrieve.rs src/bin/aleph-server/commands/start/builder/agent_init/mod.rs
+git -C ../Aleph-wt-dedup-gap-b commit -m "feat(memory): RelatedBudget.dedup_noop_threshold field + agent_init wiring (Gap B)"
 ```
 
 ---
@@ -345,17 +345,17 @@ async fn dedup_noop_floor_never_below_merge() {
 - [ ] **Step 4: Grep guard**
 
 ```bash
-grep -n "noop_threshold\|drop_noop\|filter_map" /Volumes/TBU4/Workspace/Aleph-wt-dedup-gap-b/src/memory/notes/ingest/ingestor.rs   # decision present
-grep -n "use std::collections::{HashMap, HashSet}" /Volumes/TBU4/Workspace/Aleph-wt-dedup-gap-b/src/memory/notes/ingest/ingestor.rs  # combined import inside method
-grep -c "use std::collections::HashMap;" /Volumes/TBU4/Workspace/Aleph-wt-dedup-gap-b/src/memory/notes/ingest/ingestor.rs            # no leftover duplicate single import in this method
+grep -n "noop_threshold\|drop_noop\|filter_map" ../Aleph-wt-dedup-gap-b/src/memory/notes/ingest/ingestor.rs   # decision present
+grep -n "use std::collections::{HashMap, HashSet}" ../Aleph-wt-dedup-gap-b/src/memory/notes/ingest/ingestor.rs  # combined import inside method
+grep -c "use std::collections::HashMap;" ../Aleph-wt-dedup-gap-b/src/memory/notes/ingest/ingestor.rs            # no leftover duplicate single import in this method
 ```
 Expected: `noop_threshold` computed with `.max(dedup_threshold)`; `drop_noop` HashSet + `filter_map` rewrite present; the method's import is the combined `{HashMap, HashSet}` (no orphaned `use std::collections::HashMap;` left in the method body — note other methods in the file may legitimately have their own `HashMap` import, so this grep may show hits elsewhere; just confirm the dedup method's local import was converted).
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git -C /Volumes/TBU4/Workspace/Aleph-wt-dedup-gap-b add src/memory/notes/ingest/ingestor.rs
-git -C /Volumes/TBU4/Workspace/Aleph-wt-dedup-gap-b commit -m "feat(memory): three-tier ADD/MERGE/NOOP dedup decision (Gap B)"
+git -C ../Aleph-wt-dedup-gap-b add src/memory/notes/ingest/ingestor.rs
+git -C ../Aleph-wt-dedup-gap-b commit -m "feat(memory): three-tier ADD/MERGE/NOOP dedup decision (Gap B)"
 ```
 
 ---
@@ -364,19 +364,19 @@ git -C /Volumes/TBU4/Workspace/Aleph-wt-dedup-gap-b commit -m "feat(memory): thr
 
 ```bash
 # Activation: default true in both the serde-default fn AND the Default impl
-grep -A2 "pub fn default_dedup_enabled" /Volumes/TBU4/Workspace/Aleph-wt-dedup-gap-b/src/config/types/memory/defaults.rs    # → true
-grep -n "dedup_enabled: true" /Volumes/TBU4/Workspace/Aleph-wt-dedup-gap-b/src/config/types/memory/ingest.rs                 # Default impl flipped
+grep -A2 "pub fn default_dedup_enabled" ../Aleph-wt-dedup-gap-b/src/config/types/memory/defaults.rs    # → true
+grep -n "dedup_enabled: true" ../Aleph-wt-dedup-gap-b/src/config/types/memory/ingest.rs                 # Default impl flipped
 
 # NOOP threshold defined + plumbed end-to-end
-grep -rn "dedup_noop_threshold" /Volumes/TBU4/Workspace/Aleph-wt-dedup-gap-b/src/ | grep -v test
+grep -rn "dedup_noop_threshold" ../Aleph-wt-dedup-gap-b/src/ | grep -v test
 #   → defaults.rs (fn), ingest.rs (field + serde + Default), retrieve.rs (field + Default),
 #     agent_init (wiring), ingestor.rs (decision .max + clamp)
 
 # Three-tier decision wired
-grep -n "drop_noop\|noop_threshold" /Volumes/TBU4/Workspace/Aleph-wt-dedup-gap-b/src/memory/notes/ingest/ingestor.rs
+grep -n "drop_noop\|noop_threshold" ../Aleph-wt-dedup-gap-b/src/memory/notes/ingest/ingestor.rs
 
 # No RelatedBudget full literal left without the new field
-grep -rn "RelatedBudget {" /Volumes/TBU4/Workspace/Aleph-wt-dedup-gap-b/src/ | grep -v "::default() }" | grep -v "struct RelatedBudget" | grep -v "impl Default"
+grep -rn "RelatedBudget {" ../Aleph-wt-dedup-gap-b/src/ | grep -v "::default() }" | grep -v "struct RelatedBudget" | grep -v "impl Default"
 #   → only literals that DO contain dedup_noop_threshold (agent_init) should remain.
 ```
 

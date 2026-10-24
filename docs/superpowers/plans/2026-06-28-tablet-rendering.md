@@ -126,7 +126,7 @@ Expected: ends successfully (WASM compiled, `dist/` regenerated). If the Leptos 
 - [ ] **Step 5: Commit (source + regenerated dist)**
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph
+cd .
 git add interfaces/webchat/src/app.rs interfaces/webchat/styles/tailwind.css \
         interfaces/webchat/dist/aleph_panel.js interfaces/webchat/dist/aleph_panel_bg.wasm interfaces/webchat/dist/tailwind.css
 git status --short            # verify ONLY those paths are staged
@@ -212,7 +212,7 @@ Expected: succeeds, `dist/` regenerated. (Marker-class string edits cannot break
 - [ ] **Step 8: Commit (source + regenerated dist)**
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph
+cd .
 git add interfaces/webchat/src/platform/wide/views/settings/ interfaces/webchat/styles/tailwind.css \
         interfaces/webchat/dist/aleph_panel.js interfaces/webchat/dist/aleph_panel_bg.wasm interfaces/webchat/dist/tailwind.css
 git status --short            # verify only the settings views + tailwind.css + dist are staged

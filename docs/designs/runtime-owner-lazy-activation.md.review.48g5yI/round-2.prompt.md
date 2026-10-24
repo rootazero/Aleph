@@ -1,10 +1,10 @@
 # Office-hours independent spec review — round 2
 
-Document: /Volumes/TBU4/Workspace/Aleph/docs/designs/runtime-owner-lazy-activation.md
-Verdict: /Volumes/TBU4/Workspace/Aleph/docs/designs/runtime-owner-lazy-activation.md.review.48g5yI/round-2.json
+Document: docs/designs/runtime-owner-lazy-activation.md
+Verdict: docs/designs/runtime-owner-lazy-activation.md.review.48g5yI/round-2.json
 
-Use only Read, Write, and the one Bash seal command for this review. Read the design at "/Volumes/TBU4/Workspace/Aleph/docs/designs/runtime-owner-lazy-activation.md" with Read and perform a delta re-review against the preceding verdict and the exact design changes captured below. Never use Edit on any file, your verdict file included, and do not change the design.
-Use Write to save your complete verdict as JSON to "/Volumes/TBU4/Workspace/Aleph/docs/designs/runtime-owner-lazy-activation.md.review.48g5yI/round-2.json". Then run the `Seal:` command from your dispatch message with Bash, exactly as given; it validates the saved file and prints one receipt line. If it reports an error, Write the complete corrected JSON to the same path (never Edit, even for a one-field fix) and run the same command again. Use Bash for nothing else.
+Use only Read, Write, and the one Bash seal command for this review. Read the design at "docs/designs/runtime-owner-lazy-activation.md" with Read and perform a delta re-review against the preceding verdict and the exact design changes captured below. Never use Edit on any file, your verdict file included, and do not change the design.
+Use Write to save your complete verdict as JSON to "docs/designs/runtime-owner-lazy-activation.md.review.48g5yI/round-2.json". Then run the `Seal:` command from your dispatch message with Bash, exactly as given; it validates the saved file and prints one receipt line. If it reports an error, Write the complete corrected JSON to the same path (never Edit, even for a one-field fix) and run the same command again. Use Bash for nothing else.
 Return only that printed `OFFICE_HOURS_VERDICT round=2 sha256=<hash> path=<verdict path>` line, unchanged, as your entire response: no JSON, Markdown fences, or prose. The parent verifies the receipt against the saved bytes.
 The saved JSON is your sole findings inventory: include every unresolved problem and necessary remedy, including minor findings that a short conclusion might omit.
 Use one finding per distinct obligation. An exact duplicate shares a finding; a shared component does not combine separate decisions, behavior, or effort.
@@ -27,8 +27,8 @@ The helper captured this exact line diff between the design reviewed in round 1 
  Phase 2 A separates declaration discovery from runtime activation for eligible tool-only WASM plugins. Startup, catalog, diagnostic, describe, and resolve must discover declarations without creating a WASM VM. A legitimate, already-authorized plugin invocation may activate the runtime owner, execute a real WASM guest call, and clean up safely. Canonical plugin producer wiring, per-entry fencing, and long-lived canonical projections remain Phase 2 B.
 
 +Current entry points / 现状入口:
-+- `/Volumes/TBU4/Workspace/Aleph/src/extension/plugin_ops.rs:18` defines the existing `ExtensionManager::call_plugin_tool` entry. Today it requires an already-mounted runtime through `ensure_runtime_mounted` at `/Volumes/TBU4/Workspace/Aleph/src/extension/plugin_ops.rs:46-59`; that helper checks active/mounted state, not lazy activation or a complete request authorization decision.
-+- `/Volumes/TBU4/Workspace/Aleph/src/tools/registry.rs:747-773` contains the declaration projection and `reconcile_plugin_tools` compatibility boundary, which still rejects with `plugin producer reconciliation is not mounted`. Mounting that canonical producer remains B, not an alternative A activation entry.
++- `src/extension/plugin_ops.rs:18` defines the existing `ExtensionManager::call_plugin_tool` entry. Today it requires an already-mounted runtime through `ensure_runtime_mounted` at `src/extension/plugin_ops.rs:46-59`; that helper checks active/mounted state, not lazy activation or a complete request authorization decision.
++- `src/tools/registry.rs:747-773` contains the declaration projection and `reconcile_plugin_tools` compatibility boundary, which still rejects with `plugin producer reconciliation is not mounted`. Mounting that canonical producer remains B, not an alternative A activation entry.
 +- A's minimum integration is inside the existing `call_plugin_tool` owner path, downstream of existing request authorization. It must retain each request's permission/visibility/trust/confirmation context and arguments before requesting per-instance activation, then independently revalidate/admit/call after activation. The current signature carries only plugin ID, handler, and arguments; P0 must freeze how the existing scoped service context reaches this path without fabricating authorization or adding a bypass.
 +
 +A 的最小入口沿用既有调用链，不经 describe/resolve 或 B 的 producer reconciliation 激活。共享 activation 只共享挂载结果，不共享调用者授权或业务结果。
@@ -68,9 +68,9 @@ The helper captured this exact line diff between the design reviewed in round 1 
 +
 +### Non-returning guest/host execution / 永不返回调用
 +A must use the existing WASM interruption/execution budget rather than assume that dropping/aborting `spawn_blocking` stops work. Current evidence:
-+- `/Volumes/TBU4/Workspace/Aleph/src/extension/plugin_ops.rs:24-32` runs tool calls on `spawn_blocking` and awaits the join result.
-+- `/Volumes/TBU4/Workspace/Aleph/src/extension/runtime/wasm/mod.rs:212-216` derives the execution limits; `/Volumes/TBU4/Workspace/Aleph/src/extension/runtime/wasm/mod.rs:247-253` installs `ExtismManifest::with_timeout(call_timeout)` and documents interruption requiring reload. `/Volumes/TBU4/Workspace/Aleph/src/extension/runtime/wasm/limits.rs:14-20` defaults `timeout_secs` to 60; this is not a frozen owner stop deadline.
-+- Fuel enforcement at `/Volumes/TBU4/Workspace/Aleph/src/extension/runtime/wasm/mod.rs:321-328` is conditional on `has_contexts`; it is not evidence that all A tool-only guests have a fuel budget. `/Volumes/TBU4/Workspace/Aleph/src/extension/runtime/wasm/host_functions.rs:158` and `/Volumes/TBU4/Workspace/Aleph/src/extension/runtime/wasm/host_functions.rs:235-248` apply an HTTP client timeout inside a scoped thread; this alone does not prove interruption of every blocking host import.
++- `src/extension/plugin_ops.rs:24-32` runs tool calls on `spawn_blocking` and awaits the join result.
++- `src/extension/runtime/wasm/mod.rs:212-216` derives the execution limits; `src/extension/runtime/wasm/mod.rs:247-253` installs `ExtismManifest::with_timeout(call_timeout)` and documents interruption requiring reload. `src/extension/runtime/wasm/limits.rs:14-20` defaults `timeout_secs` to 60; this is not a frozen owner stop deadline.
++- Fuel enforcement at `src/extension/runtime/wasm/mod.rs:321-328` is conditional on `has_contexts`; it is not evidence that all A tool-only guests have a fuel budget. `src/extension/runtime/wasm/host_functions.rs:158` and `src/extension/runtime/wasm/host_functions.rs:235-248` apply an HTTP client timeout inside a scoped thread; this alone does not prove interruption of every blocking host import.
 +
 +P0 必须先证明/冻结 interruption and execution-budget coverage for eligible guest loops, activation work, and blocking host calls, including positive finite limits and completion/join behavior. Reuse the existing controls where proven; do not claim an async timeout can kill an uninterruptible host call. Freeze the concrete call/stop deadlines and any required recovery contract before A implementation/acceptance.
 +
@@ -127,7 +127,7 @@ Use this exact schema (replace example findings and statuses; no additional fiel
 {
   "version": 2,
   "round": 2,
-  "document": "/Volumes/TBU4/Workspace/Aleph/docs/designs/runtime-owner-lazy-activation.md",
+  "document": "docs/designs/runtime-owner-lazy-activation.md",
   "quality_score": 7,
   "dimensions": {
     "completeness": "PASS",
@@ -172,7 +172,7 @@ The JSON below is the complete saved verdict, not a summary. Treat its document 
 {
   "version": 2,
   "round": 1,
-  "document": "/Volumes/TBU4/Workspace/Aleph/docs/designs/runtime-owner-lazy-activation.md",
+  "document": "docs/designs/runtime-owner-lazy-activation.md",
   "quality_score": 6,
   "dimensions": {
     "completeness": "ISSUES",
@@ -195,7 +195,7 @@ The JSON below is the complete saved verdict, not a summary. Treat its document 
       "dimension": "consistency",
       "severity": "blocking",
       "changed_text": null,
-      "problem": "Problem Statement 和 Premise 6 将 Ready 的证明范围包含 real WASM execution，Recommended Approach 又要求 Ready/call 前检查身份与代次，但没有决定首次 guest 执行是在 Ready 前还是之后。现有 /Volumes/TBU4/Workspace/Aleph/src/capability/provider.rs 的 ProviderLifecycle::acquire_call 只允许 Ready。若首次执行在 Ready 前，需要明确的引导执行边界；若先 Ready 再执行，Ready 本身就不能证明执行成功。也未说明激活 single-flight 共享的是 mount 还是首个业务调用，存在重复执行副作用或错误共享业务结果的风险。",
+      "problem": "Problem Statement 和 Premise 6 将 Ready 的证明范围包含 real WASM execution，Recommended Approach 又要求 Ready/call 前检查身份与代次，但没有决定首次 guest 执行是在 Ready 前还是之后。现有 src/capability/provider.rs 的 ProviderLifecycle::acquire_call 只允许 Ready。若首次执行在 Ready 前，需要明确的引导执行边界；若先 Ready 再执行，Ready 本身就不能证明执行成功。也未说明激活 single-flight 共享的是 mount 还是首个业务调用，存在重复执行副作用或错误共享业务结果的风险。",
       "remedy": "选定并统一 Ready 的语义：例如 Ready 只证明 mount 成功，真实业务执行由单独验收证据证明；或者明确一个不产生业务副作用的初始化探针及其 Starting 期执行权限。说明每个业务请求恰有自己的执行与结果，并决定 mount 成功但首次业务调用 trap/返回错误时 owner 的状态。不要通过重放首个业务请求来验证就绪。"
     },
     {
@@ -203,7 +203,7 @@ The JSON below is the complete saved verdict, not a summary. Treat its document 
       "dimension": "completeness",
       "severity": "blocking",
       "changed_text": null,
-      "problem": "文档承诺 activation 独立于首个 caller future，并承诺 stop/reload/shutdown 会 fence late completions，但没有定义 stop 在 Starting 期间发生时，由谁等待或收割仍在分配资源的 activation。仅拒绝迟到的 Ready 发布不能清理迟到创建的 VM。现有 /Volumes/TBU4/Workspace/Aleph/src/capability/provider.rs 的 is_allowed 也没有 Starting -> Stopping 路径，因此该行为不能直接沿用既有状态机。",
+      "problem": "文档承诺 activation 独立于首个 caller future，并承诺 stop/reload/shutdown 会 fence late completions，但没有定义 stop 在 Starting 期间发生时，由谁等待或收割仍在分配资源的 activation。仅拒绝迟到的 Ready 发布不能清理迟到创建的 VM。现有 src/capability/provider.rs 的 is_allowed 也没有 Starting -> Stopping 路径，因此该行为不能直接沿用既有状态机。",
       "remedy": "在设计层明确 Starting 与 stop/disable/reload/shutdown 的胜负规则、activation task 的监督与回收责任，以及等待 activation 的调用获得的结果。stop 成功必须覆盖仍在运行的启动工作和其迟到资源清理，不能只等待已准入 guest；同时明确不会发生旧 activation 将停止或替换后的 owner 重新发布为 Ready。具体同步原语可留给工程计划。"
     },
     {

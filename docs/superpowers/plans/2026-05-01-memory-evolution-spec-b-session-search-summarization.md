@@ -57,8 +57,8 @@
 
 Run:
 ```bash
-grep -A 8 "trait WorkingMemoryAssembler" /Volumes/TBU4/Workspace/Aleph/src/memory/assembler/mod.rs
-grep -A 30 "impl WorkingMemoryAssembler for HybridAssembler" /Volumes/TBU4/Workspace/Aleph/src/memory/assembler/hybrid.rs
+grep -A 8 "trait WorkingMemoryAssembler" src/memory/assembler/mod.rs
+grep -A 30 "impl WorkingMemoryAssembler for HybridAssembler" src/memory/assembler/hybrid.rs
 ```
 
 Expected: confirm signature `assemble(&self, query: &str, agent_id: &str, session_id: Option<&str>, budget: AssemblyBudget) -> Result<MemoryEnvelope, AlephError>`. Record any deviation.
@@ -67,7 +67,7 @@ Expected: confirm signature `assemble(&self, query: &str, agent_id: &str, sessio
 
 Run:
 ```bash
-sed -n '175,210p' /Volumes/TBU4/Workspace/Aleph/src/memory/context/enums.rs
+sed -n '175,210p' src/memory/context/enums.rs
 ```
 
 Expected: confirm `SessionCompressed` is one of the variants. Record the full variant list — Task 2's filter enum will need to handle each.
@@ -76,7 +76,7 @@ Expected: confirm `SessionCompressed` is one of the variants. Record the full va
 
 Run:
 ```bash
-sed -n '30,55p' /Volumes/TBU4/Workspace/Aleph/src/gateway/session_store/mod.rs
+sed -n '30,55p' src/gateway/session_store/mod.rs
 ```
 
 Expected: confirm whether `search_messages` accepts a `session_id` filter. Record the answer — Task 12 picks between adding the parameter vs post-filtering in Rust.
@@ -85,8 +85,8 @@ Expected: confirm whether `search_messages` accepts a `session_id` filter. Recor
 
 Run:
 ```bash
-grep -rn "fn write_fact\|fn upsert_fact\|fn insert_fact" /Volumes/TBU4/Workspace/Aleph/src/memory/store --include="*.rs" | head -10
-grep -rn "MemoryFact" /Volumes/TBU4/Workspace/Aleph/src/memory/store/sqlite --include="*.rs" | grep -i "insert\|write\|upsert" | head -10
+grep -rn "fn write_fact\|fn upsert_fact\|fn insert_fact" src/memory/store --include="*.rs" | head -10
+grep -rn "MemoryFact" src/memory/store/sqlite --include="*.rs" | grep -i "insert\|write\|upsert" | head -10
 ```
 
 Expected: locate the canonical write entry-point used by `summary_to_fact` consumers. Record its name + signature. The lazy + session_end paths will both call this. If `INSERT OR IGNORE` is not the default, record what flag/option enables it.
@@ -95,8 +95,8 @@ Expected: locate the canonical write entry-point used by `summary_to_fact` consu
 
 Run:
 ```bash
-sed -n '660,700p' /Volumes/TBU4/Workspace/Aleph/src/thinker/memory_context_provider.rs
-grep -n "session_end_mcp\|SESSION_END_MCP" /Volumes/TBU4/Workspace/Aleph/src/gateway/session_manager/ops.rs
+sed -n '660,700p' src/thinker/memory_context_provider.rs
+grep -n "session_end_mcp\|SESSION_END_MCP" src/gateway/session_manager/ops.rs
 ```
 
 Expected: confirm the process-wide `OnceCell<Arc<MemoryContextProvider>>` slot pattern. Record whether the slot accepts a single registration or a vec. Task 10 will either reuse it or add a parallel slot.
@@ -105,7 +105,7 @@ Expected: confirm the process-wide `OnceCell<Arc<MemoryContextProvider>>` slot p
 
 Run:
 ```bash
-sed -n '25,55p' /Volumes/TBU4/Workspace/Aleph/src/memory/compression/service.rs
+sed -n '25,55p' src/memory/compression/service.rs
 ```
 
 Expected: confirm trait shape: `fn on_compression_complete<'a>(&'a self, agent_id: &'a str) -> BoxFuture<'a, ()>`. We do NOT need to implement this trait in Spec B — recorded for context only.
@@ -169,7 +169,7 @@ Expected: clean compile. The 5 sub-modules don't exist yet, but `mod.rs` declare
 
 ```bash
 for f in dedup end_hook filter lookup synthesizer; do
-  echo "//! Spec B — placeholder. See task plan." > /Volumes/TBU4/Workspace/Aleph/src/memory/session_search_summary/${f}.rs
+  echo "//! Spec B — placeholder. See task plan." > src/memory/session_search_summary/${f}.rs
 done
 ```
 
@@ -359,8 +359,8 @@ The `todo!()` is **explicitly part of the discovery**. The implementer's first a
 
 Run:
 ```bash
-grep -rn "HybridAssembler::new\|build_test_hybrid\|assembler_test" /Volumes/TBU4/Workspace/Aleph/src/memory --include="*.rs" | head -15
-ls /Volumes/TBU4/Workspace/Aleph/src/memory/integration_tests/ 2>/dev/null
+grep -rn "HybridAssembler::new\|build_test_hybrid\|assembler_test" src/memory --include="*.rs" | head -15
+ls src/memory/integration_tests/ 2>/dev/null
 ```
 
 Expected: identify the helper or pattern. If no test helper exists, write one inline in this test file (build a minimal HybridAssembler using a fresh sqlite in-memory backend + stub reranker that returns its input verbatim).
@@ -429,7 +429,7 @@ git commit -m "spec-b: pin pre-change note-retrieval baseline snapshot"
 
 Run:
 ```bash
-grep -rn "\.assemble(" /Volumes/TBU4/Workspace/Aleph/src --include="*.rs" | grep -v "test\|assembler/" | head -20
+grep -rn "\.assemble(" src --include="*.rs" | grep -v "test\|assembler/" | head -20
 ```
 
 Record the list of call sites. Each gets `FactSourceFilter::Any` injected.
@@ -671,7 +671,7 @@ Expected: tests pass IF `find_fact_by_path` already exists on `SqliteMemoryBacke
 Locate the existing fact-store API:
 
 ```bash
-grep -n "fn find_fact\|fn get_fact\|fn fact_by_id" /Volumes/TBU4/Workspace/Aleph/src/memory/store/sqlite/*.rs | head
+grep -n "fn find_fact\|fn get_fact\|fn fact_by_id" src/memory/store/sqlite/*.rs | head
 ```
 
 If a path-based lookup doesn't exist, add one in the appropriate sub-module of `src/memory/store/sqlite/`:
@@ -1135,8 +1135,8 @@ mod tests {
 
 Run:
 ```bash
-grep -rn "MockAiProvider\|fn complete" /Volumes/TBU4/Workspace/Aleph/src/memory/compression --include="*.rs" | head -10
-grep -rn "InMemorySessionStore\|impl SessionStore for" /Volumes/TBU4/Workspace/Aleph/src --include="*.rs" | head -10
+grep -rn "MockAiProvider\|fn complete" src/memory/compression --include="*.rs" | head -10
+grep -rn "InMemorySessionStore\|impl SessionStore for" src --include="*.rs" | head -10
 ```
 
 If neither exists publicly, write minimal helpers in `src/memory/session_search_summary/synthesizer.rs` test module:
@@ -1174,7 +1174,7 @@ The `InMemorySessionStore` similarly: a minimal `HashMap<(agent, sid), Vec<(role
 
 Run:
 ```bash
-grep -n "write_fact_or_ignore\|INSERT OR IGNORE.*memory_facts" /Volumes/TBU4/Workspace/Aleph/src/memory/store/sqlite/*.rs
+grep -n "write_fact_or_ignore\|INSERT OR IGNORE.*memory_facts" src/memory/store/sqlite/*.rs
 ```
 
 If not present, add to the appropriate file (likely `src/memory/store/sqlite/facts.rs` or wherever `write_fact` lives):
@@ -1204,7 +1204,7 @@ impl SqliteMemoryBackend {
 
 Run:
 ```bash
-grep -n "load_window\|load_messages\|fn load" /Volumes/TBU4/Workspace/Aleph/src/gateway/session_store/mod.rs
+grep -n "load_window\|load_messages\|fn load" src/gateway/session_store/mod.rs
 ```
 
 If not present, add to the `SessionStore` trait:
@@ -1475,7 +1475,7 @@ mod tests {
 
 Run:
 ```bash
-grep -n "find_facts_by_path_prefix\|path LIKE" /Volumes/TBU4/Workspace/Aleph/src/memory/store/sqlite/*.rs
+grep -n "find_facts_by_path_prefix\|path LIKE" src/memory/store/sqlite/*.rs
 ```
 
 If not present, add to the same file as `find_fact_by_path`:
@@ -1954,7 +1954,7 @@ git commit -m "spec-b: rewrite session_search.call_impl — summary-driven hits 
 
 Run:
 ```bash
-grep -n "session_search\|search past conversations\|跨会话" /Volumes/TBU4/Workspace/Aleph/src/config/agent_resolver.rs
+grep -n "session_search\|search past conversations\|跨会话" src/config/agent_resolver.rs
 ```
 
 Record the section.

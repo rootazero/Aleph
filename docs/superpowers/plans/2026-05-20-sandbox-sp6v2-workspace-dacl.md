@@ -8,7 +8,7 @@
 
 **Tech Stack:** Rust, `windows-sys 0.61` (already on; no upgrade), unsafe Win32 (`GetNamedSecurityInfoW`, `SetEntriesInAclW`, `SetNamedSecurityInfoW`, `EXPLICIT_ACCESS_W`).
 
-**Working directory:** `/Volumes/TBU4/Workspace/Aleph-sp6-workspace-dacl/` (git worktree on branch `feat/sandbox-sp6-workspace-dacl`).
+**Working directory:** `../Aleph-sp6-workspace-dacl/` (git worktree on branch `feat/sandbox-sp6-workspace-dacl`).
 
 **Spec:** `docs/superpowers/specs/2026-05-20-sandbox-sp6v2-workspace-dacl-design.md` (committed at `fdecfb1c5`).
 
@@ -28,13 +28,13 @@ No new files; no driver, config, or platforms/mod.rs changes (the `workspace_pat
 ## Task 1: Add inherit-flags constant + unit test (TDD)
 
 **Files:**
-- Modify: `/Volumes/TBU4/Workspace/Aleph-sp6-workspace-dacl/src/sandbox/windows_init.rs` (insert after `capability_names_for_network` at line ~74; add test in existing `mod tests` near line ~944)
+- Modify: `../Aleph-sp6-workspace-dacl/src/sandbox/windows_init.rs` (insert after `capability_names_for_network` at line ~74; add test in existing `mod tests` near line ~944)
 
 The constant is cross-platform so the test runs on macOS dev box. We hard-code the MSDN-documented bit values rather than referencing `windows_sys` constants (which only exist behind `cfg(target_os = "windows")`); the test acts as a regression net if anyone refactors the constant.
 
 - [ ] **Step 1.1: Write the failing test in `mod tests`**
 
-In `/Volumes/TBU4/Workspace/Aleph-sp6-workspace-dacl/src/sandbox/windows_init.rs`, locate the existing `#[cfg(test)] mod tests { ... }` block (starts at line ~825, closes at line ~945). Add this test as the last test inside the module, just before the closing `}`:
+In `../Aleph-sp6-workspace-dacl/src/sandbox/windows_init.rs`, locate the existing `#[cfg(test)] mod tests { ... }` block (starts at line ~825, closes at line ~945). Add this test as the last test inside the module, just before the closing `}`:
 
 ```rust
     #[test]
@@ -51,7 +51,7 @@ In `/Volumes/TBU4/Workspace/Aleph-sp6-workspace-dacl/src/sandbox/windows_init.rs
 - [ ] **Step 1.2: Run test to verify it fails (constant doesn't exist yet)**
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph-sp6-workspace-dacl && cargo test -p alephcore --lib sandbox::windows_init::tests::dacl_inherit_flags_matches_msdn_documented_bits 2>&1 | tail -15
+cd ../Aleph-sp6-workspace-dacl && cargo test -p alephcore --lib sandbox::windows_init::tests::dacl_inherit_flags_matches_msdn_documented_bits 2>&1 | tail -15
 ```
 
 Expected: compile error similar to `cannot find value DACL_INHERIT_FLAGS_FOR_APPCONTAINER in this scope`.
@@ -77,7 +77,7 @@ pub(crate) const DACL_INHERIT_FLAGS_FOR_APPCONTAINER: u32 = 0x2 | 0x1;
 - [ ] **Step 1.4: Run test to verify it passes**
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph-sp6-workspace-dacl && cargo test -p alephcore --lib sandbox::windows_init::tests::dacl_inherit_flags_matches_msdn_documented_bits 2>&1 | tail -5
+cd ../Aleph-sp6-workspace-dacl && cargo test -p alephcore --lib sandbox::windows_init::tests::dacl_inherit_flags_matches_msdn_documented_bits 2>&1 | tail -5
 ```
 
 Expected: `test result: ok. 1 passed; 0 failed`.
@@ -85,7 +85,7 @@ Expected: `test result: ok. 1 passed; 0 failed`.
 - [ ] **Step 1.5: Run the full sandbox::windows_init test module to confirm no regression**
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph-sp6-workspace-dacl && cargo test -p alephcore --lib sandbox::windows_init 2>&1 | tail -5
+cd ../Aleph-sp6-workspace-dacl && cargo test -p alephcore --lib sandbox::windows_init 2>&1 | tail -5
 ```
 
 Expected: all existing windows_init tests still pass (10 from SP-6 v1 + 1 new = 11 passed).
@@ -97,13 +97,13 @@ Expected: all existing windows_init tests still pass (10 from SP-6 v1 + 1 new = 
 ## Task 2: Add `LocalFreeGuard` RAII helper + `set_workspace_dacl_entry` Win32 helper
 
 **Files:**
-- Modify: `/Volumes/TBU4/Workspace/Aleph-sp6-workspace-dacl/src/sandbox/windows_init.rs` inside `#[cfg(target_os = "windows")] mod imp { ... }` — add the guard after the `use` statements (around line 263, before the `LaunchError` enum at line ~266) and add the helper after `cleanup_sids` (ends line ~583, before `open_self_token` at line ~585).
+- Modify: `../Aleph-sp6-workspace-dacl/src/sandbox/windows_init.rs` inside `#[cfg(target_os = "windows")] mod imp { ... }` — add the guard after the `use` statements (around line 263, before the `LaunchError` enum at line ~266) and add the helper after `cleanup_sids` (ends line ~583, before `open_self_token` at line ~585).
 
 This is pure unsafe Win32 plumbing. There's no cross-platform behavior we can TDD here; correctness is verified via `cargo check -p alephcore` on macOS (catches signature mismatches and import errors via windows-sys' cfg-gated types) and via Windows CI for runtime behavior (per spec § 6.3 — same posture as SP-6 v1).
 
 - [ ] **Step 2.1: Add `LocalFreeGuard` struct inside `mod imp`**
 
-In `/Volumes/TBU4/Workspace/Aleph-sp6-workspace-dacl/src/sandbox/windows_init.rs`, locate the `mod imp {` block. After the existing `use` statements (last `use` is `STARTUPINFOW,` at line 262, closing `};` at line 263), and before the `LaunchError` enum (`#[derive(Debug)] pub(super) enum LaunchError {` at line ~266), insert:
+In `../Aleph-sp6-workspace-dacl/src/sandbox/windows_init.rs`, locate the `mod imp {` block. After the existing `use` statements (last `use` is `STARTUPINFOW,` at line 262, closing `};` at line 263), and before the `LaunchError` enum (`#[derive(Debug)] pub(super) enum LaunchError {` at line ~266), insert:
 
 ```rust
 
@@ -242,7 +242,7 @@ Add a new `use` line directly after it:
 - [ ] **Step 2.4: Verify cargo check compiles on macOS dev box**
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph-sp6-workspace-dacl && cargo check -p alephcore 2>&1 | tail -10
+cd ../Aleph-sp6-workspace-dacl && cargo check -p alephcore 2>&1 | tail -10
 ```
 
 Expected: clean compile. Since the `mod imp` block is `#[cfg(target_os = "windows")]`-gated, macOS doesn't compile the new helper directly — but the surrounding cross-platform code (including the new `pub(crate) const DACL_INHERIT_FLAGS_FOR_APPCONTAINER` from Task 1) must compile.
@@ -256,7 +256,7 @@ If you see a compile error citing `DACL_INHERIT_FLAGS_FOR_APPCONTAINER` not foun
 ## Task 3: Wire grant + revoke into `launch_with_app_container` lifecycle
 
 **Files:**
-- Modify: `/Volumes/TBU4/Workspace/Aleph-sp6-workspace-dacl/src/sandbox/windows_init.rs` — two insertions inside `pub(super) fn launch_with_app_container` (starts line ~317).
+- Modify: `../Aleph-sp6-workspace-dacl/src/sandbox/windows_init.rs` — two insertions inside `pub(super) fn launch_with_app_container` (starts line ~317).
 
 Step 3.5 (grant) goes after `CreateAppContainerProfile` succeeds and ac_sid is populated. Step 6.5 (revoke) goes after `WaitForSingleObject + GetExitCodeProcess` complete and before `cleanup` runs `DeleteAppContainerProfile`.
 
@@ -315,7 +315,7 @@ Locate the section labeled `// ---------- 6. Wait + GetExitCode ----------` (aro
 - [ ] **Step 3.3: Verify cargo check still compiles**
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph-sp6-workspace-dacl && cargo check -p alephcore 2>&1 | tail -10
+cd ../Aleph-sp6-workspace-dacl && cargo check -p alephcore 2>&1 | tail -10
 ```
 
 Expected: clean compile on macOS. The fully-qualified `windows_sys::Win32::Security::Authorization::GRANT_ACCESS` / `REVOKE_ACCESS` paths are gated by the surrounding `#[cfg(target_os = "windows")] mod imp` block, so macOS doesn't compile them.
@@ -323,7 +323,7 @@ Expected: clean compile on macOS. The fully-qualified `windows_sys::Win32::Secur
 - [ ] **Step 3.4: Run full sandbox lib test suite to verify no regression**
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph-sp6-workspace-dacl && cargo test -p alephcore --lib sandbox 2>&1 | tail -5
+cd ../Aleph-sp6-workspace-dacl && cargo test -p alephcore --lib sandbox 2>&1 | tail -5
 ```
 
 Expected: all 159 existing sandbox lib tests pass + 1 new test from Task 1 = 160 passed.
@@ -337,12 +337,12 @@ If the count differs from 160, diff the failing tests against `[[project_baselin
 ## Task 4: Update SANDBOX.md + clippy + final commit
 
 **Files:**
-- Modify: `/Volumes/TBU4/Workspace/Aleph-sp6-workspace-dacl/docs/reference/SANDBOX.md` — append one paragraph to the existing SP-6 / Windows defense surface subsection.
+- Modify: `../Aleph-sp6-workspace-dacl/docs/reference/SANDBOX.md` — append one paragraph to the existing SP-6 / Windows defense surface subsection.
 
 - [ ] **Step 4.1: Read the current SANDBOX.md to locate the SP-6 section**
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph-sp6-workspace-dacl && grep -n "AppContainer\|SP-6" docs/reference/SANDBOX.md | head -20
+cd ../Aleph-sp6-workspace-dacl && grep -n "AppContainer\|SP-6" docs/reference/SANDBOX.md | head -20
 ```
 
 Expected: the grep prints line numbers of "AppContainer" and "SP-6" mentions. Use the topmost line in the "Current Windows defense surface" subsection (or the closest equivalent) to anchor the edit. The SP-6 v1 commit added a multi-line block describing the AppContainer tier.
@@ -370,7 +370,7 @@ The Edit tool invocation (adjust `old_string` to match an existing nearby line i
 ```python
 # Example shape — actual old_string must be exact from your file
 Edit(
-    file_path="/Volumes/TBU4/Workspace/Aleph-sp6-workspace-dacl/docs/reference/SANDBOX.md",
+    file_path="../Aleph-sp6-workspace-dacl/docs/reference/SANDBOX.md",
     old_string="<exact final line of existing SP-6 paragraph from your file>",
     new_string="<that same line>\n\n**SP-6 v2 (2026-05-20)**: ..."
 )
@@ -381,7 +381,7 @@ Edit(
 Per memory `[[project_fmt_clippy_baseline_drift]]`: main is NOT clippy-clean overall; only the files we touched must pass `-D warnings`.
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph-sp6-workspace-dacl && cargo clippy -p alephcore --lib --tests -- -A clippy::all -W clippy::correctness -W clippy::suspicious -W clippy::perf 2>&1 | grep -E "windows_init|warning|error" | head -30
+cd ../Aleph-sp6-workspace-dacl && cargo clippy -p alephcore --lib --tests -- -A clippy::all -W clippy::correctness -W clippy::suspicious -W clippy::perf 2>&1 | grep -E "windows_init|warning|error" | head -30
 ```
 
 Expected: zero warnings/errors mentioning `windows_init`. If a real correctness/suspicious warning fires on the new code, fix it inline; pre-existing warnings on other files are tolerated.
@@ -389,7 +389,7 @@ Expected: zero warnings/errors mentioning `windows_init`. If a real correctness/
 If you want stricter coverage scoped to the touched file:
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph-sp6-workspace-dacl && cargo clippy -p alephcore --lib --tests -- -D warnings 2>&1 | grep -B 1 -A 5 "windows_init"
+cd ../Aleph-sp6-workspace-dacl && cargo clippy -p alephcore --lib --tests -- -D warnings 2>&1 | grep -B 1 -A 5 "windows_init"
 ```
 
 Expected: no output (no warnings from the touched file).
@@ -397,7 +397,7 @@ Expected: no output (no warnings from the touched file).
 - [ ] **Step 4.4: Final test sweep before commit**
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph-sp6-workspace-dacl && cargo test -p alephcore --lib sandbox 2>&1 | tail -5
+cd ../Aleph-sp6-workspace-dacl && cargo test -p alephcore --lib sandbox 2>&1 | tail -5
 ```
 
 Expected: `test result: ok. 160 passed; 0 failed`.
@@ -405,7 +405,7 @@ Expected: `test result: ok. 160 passed; 0 failed`.
 - [ ] **Step 4.5: Commit (single commit per spec § 9)**
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph-sp6-workspace-dacl && git status
+cd ../Aleph-sp6-workspace-dacl && git status
 ```
 
 Expected output (unstaged):
@@ -415,7 +415,7 @@ modified:   docs/reference/SANDBOX.md
 ```
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph-sp6-workspace-dacl && git add src/sandbox/windows_init.rs docs/reference/SANDBOX.md && git commit -m "$(cat <<'EOF'
+cd ../Aleph-sp6-workspace-dacl && git add src/sandbox/windows_init.rs docs/reference/SANDBOX.md && git commit -m "$(cat <<'EOF'
 sandbox: SP-6 v2 — wire workspace DACL grant for AppContainer SID
 
 Closes the gap left by SP-6 v1: launch_with_app_container accepted a
@@ -457,7 +457,7 @@ EOF
 - [ ] **Step 4.6: Verify final state**
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph-sp6-workspace-dacl && git log --oneline -3
+cd ../Aleph-sp6-workspace-dacl && git log --oneline -3
 ```
 
 Expected (newest at top):

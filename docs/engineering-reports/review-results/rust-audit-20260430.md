@@ -1,6 +1,6 @@
 🦀 Rust Logic Audit (Portable Engine)
 Target: alephcore
-Project Root: /Volumes/TBU4/Workspace/Aleph
+Project Root: .
 Date: Thu Apr 30 11:47:55 CST 2026
 ---------------------------------------
 --- [L0] Static Analysis ---

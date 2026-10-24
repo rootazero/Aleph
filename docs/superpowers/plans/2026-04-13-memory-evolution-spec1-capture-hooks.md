@@ -248,7 +248,7 @@ detail column. Legacy variants round-trip unchanged."
 
 - [ ] **Step 2.1: Locate the current SQLite impl**
 
-Run: `grep -rn 'impl RawMemoryStore for' /Volumes/TBU4/Workspace/Aleph/src/memory/store/sqlite/`
+Run: `grep -rn 'impl RawMemoryStore for' src/memory/store/sqlite/`
 Record the file path reported. Below, the placeholder `RAW_IMPL_FILE` refers to that file.
 
 - [ ] **Step 2.2: Write failing test — column exists and stores detail**
@@ -812,7 +812,7 @@ system-prompt assertions."
 
 - [ ] **Step 5.1: Inspect current `process_batch` shape**
 
-Run: `grep -n 'fn process_batch\|fn process\|extract_note_updates' /Volumes/TBU4/Workspace/Aleph/src/memory/compression/service.rs | head -20`
+Run: `grep -n 'fn process_batch\|fn process\|extract_note_updates' src/memory/compression/service.rs | head -20`
 Record the function names. Below, the main processing function is referred to as `process_batch`. Rename if different.
 
 - [ ] **Step 5.2: Write failing test — service groups by source**
@@ -1594,7 +1594,7 @@ conversation — a signal, not a teardown."
 
 Run:
 ```
-grep -rn 'SessionCompactor::new\|A2ASubAgent::new\|SessionManager::new' /Volumes/TBU4/Workspace/Aleph/src/bin/ /Volumes/TBU4/Workspace/Aleph/src/
+grep -rn 'SessionCompactor::new\|A2ASubAgent::new\|SessionManager::new' src/bin/ src/
 ```
 Record each hit.
 

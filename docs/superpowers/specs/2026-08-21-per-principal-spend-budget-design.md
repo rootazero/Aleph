@@ -3,7 +3,7 @@
 
 - **Date**: 2026-08-21
 - **Status**: Approved design (brainstorming complete; awaiting implementation plan)
-- **Branch**: `multiuser-round7`, worktree `/Volumes/TBU4/Workspace/Aleph-mu7`, based on `multiuser-round6` (unmerged)
+- **Branch**: `multiuser-round7`, worktree `../Aleph-mu7`, based on `multiuser-round6` (unmerged)
 - **Reference**: qm (`/Volumes/TBU4/Github/qm`) — `src/ratelimit/budget.ts` + `src/ratelimit/postgres-budget.ts`
 - **Origin**: 多用户 §5.22 round-6 的显式遗留项。Round-6 修的是**请求**轴（`RateLimitLayer` 从字面量 `"rpc"` 改成 per-principal）；花费轴当时刻意未做，因为它需要新配置 + 聚合 + 拒绝路径，是独立一轮。
 

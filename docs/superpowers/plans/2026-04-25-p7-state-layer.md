@@ -16,7 +16,7 @@ This plan implements `docs/superpowers/specs/2026-04-25-p7-state-layer-design.md
 
 ## Operating Constraints
 
-- **Worktree**: All work happens in `/Volumes/TBU4/Workspace/Aleph.harness-dissolution`. Do NOT touch `/Volumes/TBU4/Workspace/Aleph` (main repo).
+- **Worktree**: All work happens in `../Aleph.harness-dissolution`. Do NOT touch `.` (main repo).
 - **Branch**: `harness-dissolution` (long-lived, P0–P7). Do NOT push. Do NOT merge to main. User decides merge timing later.
 - **Commit message**: Single-line `-m` only. Multi-line HEREDOC bodies trip `block-no-verify@1.1.2` hook false-positives.
 - **Verification bar**: No source-code change → no cargo check / clippy required. Visual `git diff` review is the only gate.
@@ -30,7 +30,7 @@ This plan implements `docs/superpowers/specs/2026-04-25-p7-state-layer-design.md
 
 - [ ] **Step 1: Write the full doc**
 
-Use the Write tool with `file_path` = `/Volumes/TBU4/Workspace/Aleph.harness-dissolution/docs/reference/STATE_LAYER.md` and `content` = the literal markdown below (do not modify a single character — this is the agreed scope under spec D6 option β):
+Use the Write tool with `file_path` = `../Aleph.harness-dissolution/docs/reference/STATE_LAYER.md` and `content` = the literal markdown below (do not modify a single character — this is the agreed scope under spec D6 option β):
 
 ````markdown
 # State Layer Reference
@@ -167,7 +167,7 @@ with zero architectural improvement.
 
 Run:
 ```
-wc -l /Volumes/TBU4/Workspace/Aleph.harness-dissolution/docs/reference/STATE_LAYER.md
+wc -l ../Aleph.harness-dissolution/docs/reference/STATE_LAYER.md
 ```
 Expected: ~110–135 lines (allow ±15 for fenced-block / blank-line variation; the embedded literal block above is ~120 lines including blank lines).
 
@@ -182,7 +182,7 @@ If significantly outside this range, re-Read the file and diff against the liter
 
 - [ ] **Step 1: Read the roadmap once**
 
-`Read` `/Volumes/TBU4/Workspace/Aleph.harness-dissolution/docs/superpowers/specs/2026-04-24-harness-dissolution-roadmap.md` so subsequent Edits are allowed by the harness.
+`Read` `../Aleph.harness-dissolution/docs/superpowers/specs/2026-04-24-harness-dissolution-roadmap.md` so subsequent Edits are allowed by the harness.
 
 - [ ] **Step 2: Update §3.3 row 8 (Module 8 — Error Handling)**
 
@@ -254,7 +254,7 @@ new_string (same ⁶ paragraph, then blank line, then ⁷ paragraph, then blank 
 
 Run:
 ```bash
-git -C /Volumes/TBU4/Workspace/Aleph.harness-dissolution diff docs/superpowers/specs/2026-04-24-harness-dissolution-roadmap.md
+git -C ../Aleph.harness-dissolution diff docs/superpowers/specs/2026-04-24-harness-dissolution-roadmap.md
 ```
 
 Expected: 4 distinct hunks (or fewer if rows are adjacent and collapse under git's default 3-line context window) corresponding to Steps 2–5 of Task 2. Read each hunk and confirm:
@@ -267,7 +267,7 @@ Expected: 4 distinct hunks (or fewer if rows are adjacent and collapse under git
 
 Run:
 ```bash
-git -C /Volumes/TBU4/Workspace/Aleph.harness-dissolution status --short
+git -C ../Aleph.harness-dissolution status --short
 ```
 
 Expected output:
@@ -282,8 +282,8 @@ Expected output:
 
 Run:
 ```bash
-git -C /Volumes/TBU4/Workspace/Aleph.harness-dissolution add docs/reference/STATE_LAYER.md docs/superpowers/specs/2026-04-24-harness-dissolution-roadmap.md
-git -C /Volumes/TBU4/Workspace/Aleph.harness-dissolution status --short
+git -C ../Aleph.harness-dissolution add docs/reference/STATE_LAYER.md docs/superpowers/specs/2026-04-24-harness-dissolution-roadmap.md
+git -C ../Aleph.harness-dissolution status --short
 ```
 
 Expected output:
@@ -298,7 +298,7 @@ M  docs/superpowers/specs/2026-04-24-harness-dissolution-roadmap.md
 
 Run:
 ```bash
-git -C /Volumes/TBU4/Workspace/Aleph.harness-dissolution commit -m "docs: P7 — retract resilience deletion + add STATE_LAYER.md doc"
+git -C ../Aleph.harness-dissolution commit -m "docs: P7 — retract resilience deletion + add STATE_LAYER.md doc"
 ```
 
 Expected output: `[harness-dissolution <sha>] docs: P7 — retract resilience deletion + add STATE_LAYER.md doc` with `2 files changed, ...`.
@@ -309,9 +309,9 @@ If the commit hook complains (`block-no-verify`, etc.), do NOT use `--no-verify`
 
 Run:
 ```bash
-git -C /Volumes/TBU4/Workspace/Aleph.harness-dissolution log -1 --format='%H %s' && \
-git -C /Volumes/TBU4/Workspace/Aleph.harness-dissolution status --short && \
-git -C /Volumes/TBU4/Workspace/Aleph.harness-dissolution show --stat HEAD
+git -C ../Aleph.harness-dissolution log -1 --format='%H %s' && \
+git -C ../Aleph.harness-dissolution status --short && \
+git -C ../Aleph.harness-dissolution show --stat HEAD
 ```
 
 Expected:
@@ -340,6 +340,6 @@ After Tasks 1–3 complete:
 
 If anything goes wrong after the commit:
 ```bash
-git -C /Volumes/TBU4/Workspace/Aleph.harness-dissolution revert <commit-sha>
+git -C ../Aleph.harness-dissolution revert <commit-sha>
 ```
 This restores the roadmap to its pre-commit state (P7 row still `📋 Planned`, no footnote ⁷) and deletes `STATE_LAYER.md`. No source-code side effects.

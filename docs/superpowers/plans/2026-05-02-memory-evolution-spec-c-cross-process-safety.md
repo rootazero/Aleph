@@ -106,7 +106,7 @@ If anything else appears, stop and ask. These 5 must remain untouched throughout
 
 Run:
 ```bash
-sed -n '53,127p' /Volumes/TBU4/Workspace/Aleph/src/bin/aleph-server/daemon.rs
+sed -n '53,127p' src/bin/aleph-server/daemon.rs
 grep -rn "acquire_instance_lock\|aleph\\.lock" src/ --include="*.rs"
 ```
 

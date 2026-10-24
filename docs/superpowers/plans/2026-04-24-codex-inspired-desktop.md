@@ -241,7 +241,7 @@ pub fn default_socket_path() -> std::path::PathBuf {
 - [ ] **Step 7: 删除旧单文件**
 
 ```bash
-rm /Volumes/TBU4/Workspace/Aleph/shared/protocol/src/desktop_bridge.rs
+rm shared/protocol/src/desktop_bridge.rs
 ```
 
 - [ ] **Step 8: 更新 lib.rs**
@@ -249,7 +249,7 @@ rm /Volumes/TBU4/Workspace/Aleph/shared/protocol/src/desktop_bridge.rs
 Verify `shared/protocol/src/lib.rs` has `pub mod desktop_bridge;` (Rust will auto-discover the directory form). Grep for uses of old types (`BridgeRequest`/`BridgeSuccessResponse`/`CapabilityRegistration`):
 
 ```bash
-grep -rn 'BridgeRequest\|BridgeSuccessResponse\|BridgeErrorResponse\|BridgeRpcError\|CapabilityRegistration\|BridgeCapabilityInfo' /Volumes/TBU4/Workspace/Aleph/src /Volumes/TBU4/Workspace/Aleph/desktop
+grep -rn 'BridgeRequest\|BridgeSuccessResponse\|BridgeErrorResponse\|BridgeRpcError\|CapabilityRegistration\|BridgeCapabilityInfo' src desktop
 ```
 
 For each hit: if used, add type alias in `envelope.rs` temporarily (`pub type BridgeRequest = Request;` etc.) **only** to keep compile; these aliases get **deleted in Stage 6**.
@@ -257,7 +257,7 @@ For each hit: if used, add type alias in `envelope.rs` temporarily (`pub type Br
 - [ ] **Step 9: 运行测试**
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph && cargo test -p aleph-protocol --lib
+cd . && cargo test -p aleph-protocol --lib
 ```
 
 Expected: PASS.
@@ -451,7 +451,7 @@ git commit -m "protocol(desktop_bridge): add screen/window/input/bridge method s
 - [ ] **Step 1: grep 旧方法常数使用**
 
 ```bash
-grep -rn 'METHOD_SCREENSHOT\|METHOD_OCR\|METHOD_CLICK\|METHOD_TYPE_TEXT\|METHOD_KEY_COMBO\|METHOD_SCROLL\|METHOD_LAUNCH_APP\|METHOD_WINDOW_LIST\|METHOD_FOCUS_WINDOW\|METHOD_AX_TREE\|METHOD_PING\|METHOD_CANVAS_SHOW\|METHOD_CANVAS_HIDE\|METHOD_CANVAS_UPDATE\|METHOD_WEBVIEW_SHOW\|METHOD_WEBVIEW_HIDE\|METHOD_WEBVIEW_NAVIGATE\|METHOD_TRAY_UPDATE_STATUS\|METHOD_BRIDGE_SHUTDOWN\|METHOD_HANDSHAKE\|METHOD_SYSTEM_PING\|METHOD_CAPABILITY_REGISTER\|CanvasPosition\|ScreenRegion' /Volumes/TBU4/Workspace/Aleph/src /Volumes/TBU4/Workspace/Aleph/desktop /Volumes/TBU4/Workspace/Aleph/interfaces
+grep -rn 'METHOD_SCREENSHOT\|METHOD_OCR\|METHOD_CLICK\|METHOD_TYPE_TEXT\|METHOD_KEY_COMBO\|METHOD_SCROLL\|METHOD_LAUNCH_APP\|METHOD_WINDOW_LIST\|METHOD_FOCUS_WINDOW\|METHOD_AX_TREE\|METHOD_PING\|METHOD_CANVAS_SHOW\|METHOD_CANVAS_HIDE\|METHOD_CANVAS_UPDATE\|METHOD_WEBVIEW_SHOW\|METHOD_WEBVIEW_HIDE\|METHOD_WEBVIEW_NAVIGATE\|METHOD_TRAY_UPDATE_STATUS\|METHOD_BRIDGE_SHUTDOWN\|METHOD_HANDSHAKE\|METHOD_SYSTEM_PING\|METHOD_CAPABILITY_REGISTER\|CanvasPosition\|ScreenRegion' src desktop interfaces
 ```
 
 - [ ] **Step 2: 分类处理命中**
@@ -1003,7 +1003,7 @@ git commit -m "bridge: parent death safety — setpgid on spawn + Swift-side ppi
 - [ ] **Step 1: 清理旧 CLI 入口**
 
 ```bash
-grep -lrn 'ArgumentParser\|@main struct' /Volumes/TBU4/Workspace/Aleph/desktop/macos/bridge/Sources/
+grep -lrn 'ArgumentParser\|@main struct' desktop/macos/bridge/Sources/
 ```
 
 记录所有旧 CLI 文件路径。后续 steps 用 RPC 风格替换；若是小文件直接删，若是有用逻辑暂留到 Stage 1 再迁。
@@ -1217,7 +1217,7 @@ let package = Package(
 - [ ] **Step 8: 编译 helper**
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph/desktop/macos/bridge && swift build -c release
+cd desktop/macos/bridge && swift build -c release
 ```
 
 Expected: PASS，`.build/release/AlephBridge` 产出。
@@ -1226,7 +1226,7 @@ Expected: PASS，`.build/release/AlephBridge` 产出。
 
 ```bash
 echo '{"jsonrpc":"2.0","id":1,"method":"bridge.ping","params":{}}' | \
-  /Volumes/TBU4/Workspace/Aleph/desktop/macos/bridge/.build/release/AlephBridge
+  desktop/macos/bridge/.build/release/AlephBridge
 ```
 
 Expected: 一行 `{"jsonrpc":"2.0","id":1,"result":{"pong":true}}`.
@@ -1469,7 +1469,7 @@ git commit -m "bridge(ci): golden fixtures double-validated by Rust snapshot + S
 - [ ] **Step 1: grep 找到 SwiftBridge 注入位置**
 
 ```bash
-grep -rn 'SwiftBridge::default\|SwiftBridge::new' /Volumes/TBU4/Workspace/Aleph/src /Volumes/TBU4/Workspace/Aleph/desktop
+grep -rn 'SwiftBridge::default\|SwiftBridge::new' src desktop
 ```
 
 - [ ] **Step 2: 在 aleph-server 启动流程里预热握手**
@@ -1604,7 +1604,7 @@ git commit -m "protocol: add media.camera_snap/clip schema"
 - [ ] **Step 1: 参考原 `desktop/macos/src/media.rs` 里 camera 相关 block，提取出逻辑**
 
 ```bash
-grep -n 'camera\|Camera\|AVCaptureSession' /Volumes/TBU4/Workspace/Aleph/desktop/macos/src/media.rs
+grep -n 'camera\|Camera\|AVCaptureSession' desktop/macos/src/media.rs
 ```
 
 注意：现存 Rust 代码用 `objc2-av-foundation` 风格；Swift 代码会简洁得多。
@@ -1716,7 +1716,7 @@ Note: Define `CameraSnapParams`/`CameraClipParams` Swift Codable structs matchin
 ```bash
 # 识别 camera_snap / camera_clip 相关函数及其支持代码
 grep -n 'camera_snap\|camera_clip\|AVCapturePhoto\|AVCaptureMovieFile' \
-  /Volumes/TBU4/Workspace/Aleph/desktop/macos/src/media.rs
+  desktop/macos/src/media.rs
 ```
 
 删除这些行，保留 audio/speech 部分（Stage 1b/1c 处理）。验证 `cargo check -p aleph-desktop-macos` 通过。
@@ -1783,8 +1783,8 @@ git commit -m "media(stage 1a): migrate camera snap/clip from Rust AVFoundation 
 - [ ] **Step 4 (1c.3 额外)：验证 `media.rs` 归零**
 
 ```bash
-ls /Volumes/TBU4/Workspace/Aleph/desktop/macos/src/media.rs 2>/dev/null && echo "FAIL: still exists" || echo "OK: deleted"
-grep -n 'mod media' /Volumes/TBU4/Workspace/Aleph/desktop/macos/src/lib.rs && echo "FAIL: module still declared" || echo "OK: removed"
+ls desktop/macos/src/media.rs 2>/dev/null && echo "FAIL: still exists" || echo "OK: deleted"
+grep -n 'mod media' desktop/macos/src/lib.rs && echo "FAIL: module still declared" || echo "OK: removed"
 ```
 
 - [ ] **Step 5：MediaCapability trait 同步清理**
@@ -2644,7 +2644,7 @@ git commit -m "perm(stage 4): self-describing PermissionDenied — error.data ca
 - [ ] **Step 1: 定位 hotkey 启动入口**
 
 ```bash
-grep -n 'pub fn\|pub async fn' /Volumes/TBU4/Workspace/Aleph/desktop/macos/src/hotkey.rs | head -20
+grep -n 'pub fn\|pub async fn' desktop/macos/src/hotkey.rs | head -20
 ```
 
 - [ ] **Step 2: 在启动前调 perm.check**
@@ -2935,7 +2935,7 @@ git commit -m "power(stage 5): IOPMAssertion-based sleep inhibitor + Windows ref
 
 ```bash
 grep -rn 'pub async fn run_turn\|pub(crate) async fn run_turn\|async fn run(' \
-  /Volumes/TBU4/Workspace/Aleph/src/agent /Volumes/TBU4/Workspace/Aleph/src/harness
+  src/agent src/harness
 ```
 
 - [ ] **Step 2: acquire guard in run_turn**
@@ -2990,7 +2990,7 @@ git commit -m "agent-loop(stage 5): inhibit system sleep for the duration of eac
 
 ```bash
 grep -n 'pub type BridgeRequest\|pub type BridgeSuccessResponse\|pub type CapabilityRegistration' \
-  /Volumes/TBU4/Workspace/Aleph/shared/protocol/src/desktop_bridge/
+  shared/protocol/src/desktop_bridge/
 ```
 
 - [ ] **Step 2: 删除 alias + 修复所有 caller**
@@ -3007,7 +3007,7 @@ grep -n 'pub type BridgeRequest\|pub type BridgeSuccessResponse\|pub type Capabi
 
 ```bash
 grep -rn 'handshake.*fallback\|if !bridge.*in_process' \
-  /Volumes/TBU4/Workspace/Aleph/desktop
+  desktop
 ```
 
 - [ ] **Step 5: cargo udeps**

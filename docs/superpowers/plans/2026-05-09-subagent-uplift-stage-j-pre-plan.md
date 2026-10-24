@@ -115,7 +115,7 @@ Expected: PASS for `token_usage_carries_cache_creation_tokens`.
 
 Run:
 ```bash
-grep -rn "TokenUsage {" /Volumes/TBU4/Workspace/Aleph/src 2>/dev/null
+grep -rn "TokenUsage {" src 2>/dev/null
 ```
 
 Add `cache_creation_tokens: None,` to every literal that compiler errors point at. Expect ~5–8 sites (delta.rs tests, openai_chat.rs, gemini.rs, openai_responses.rs, anthropic protocol). Run:
@@ -192,7 +192,7 @@ pub struct AnthropicUsage {
 - [ ] **Step 4: Find the `AnthropicUsage → TokenUsage` mapping**
 
 ```bash
-grep -rn "cache_read_input_tokens\|AnthropicUsage" /Volumes/TBU4/Workspace/Aleph/src/providers/anthropic 2>/dev/null
+grep -rn "cache_read_input_tokens\|AnthropicUsage" src/providers/anthropic 2>/dev/null
 ```
 
 Identify the conversion point (likely a `From<AnthropicUsage>` impl or a parse function in `src/providers/anthropic/parser.rs` or `src/providers/anthropic/mod.rs`). Add `cache_creation_tokens: usage.cache_creation_input_tokens` to that mapping.
@@ -738,7 +738,7 @@ git commit -m "agents/spawner: wrap subagent provider with MeteringProvider (Sta
 - [ ] **Step 1: Locate the construction site**
 
 ```bash
-grep -n "default_provider" /Volumes/TBU4/Workspace/Aleph/src/bin/aleph-server/commands/start/orchestrator_init.rs
+grep -n "default_provider" src/bin/aleph-server/commands/start/orchestrator_init.rs
 ```
 
 The first match (line 47) is the field declaration. Search for where `default_provider:` is assigned in a struct literal — that is the wrap site. There may be multiple branches (anthropic / mock / fallback); wrap each.

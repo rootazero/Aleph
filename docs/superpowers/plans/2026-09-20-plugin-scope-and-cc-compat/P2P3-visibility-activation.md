@@ -1,6 +1,6 @@
 # Plan — P2 spatial composability (visibility) + P3 terminal status & activation gate
 
-Base: `3ddc1f2e7` (+ spec commit `35e5f8bca`). Worktree `/Volumes/TBU4/Workspace/Aleph/.claude/worktrees/plugin-scope-round`.
+Base: `3ddc1f2e7` (+ spec commit `35e5f8bca`). Worktree `.claude/worktrees/plugin-scope-round`.
 Every `file:line` below was read at that commit. `src/harness/` diff is 0 lines in every task.
 
 **Orientation facts the tasks rely on (verified in code, not in the spec):**

@@ -139,7 +139,7 @@ sqlite3 ~/Library/Application\ Support/aleph/aleph.db '.tables'
 ---
 
 ## [18:06:15] read
-**File**: `/Volumes/TBU4/Workspace/Aleph/src/memory/store/raw_memory.rs`
+**File**: `src/memory/store/raw_memory.rs`
 **Lines**: 1-150
 
 **Content**:

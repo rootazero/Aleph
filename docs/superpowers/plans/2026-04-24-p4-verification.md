@@ -8,7 +8,7 @@
 
 **Tech Stack:** Rust / cargo workspace (`alephcore`). Verification via `cargo check`, `cargo clippy -- -D warnings`, `just test-all`. No HTTP smoke test needed (deleted code was never in the runtime path).
 
-**Worktree:** All work in `/Volumes/TBU4/Workspace/Aleph.harness-dissolution` on branch `harness-dissolution`. Do NOT operate in `/Volumes/TBU4/Workspace/Aleph` (main repo).
+**Worktree:** All work in `../Aleph.harness-dissolution` on branch `harness-dissolution`. Do NOT operate in `.` (main repo).
 
 ---
 
@@ -39,8 +39,8 @@
 
 Run:
 ```bash
-git -C /Volumes/TBU4/Workspace/Aleph.harness-dissolution branch --show-current
-git -C /Volumes/TBU4/Workspace/Aleph.harness-dissolution status --porcelain
+git -C ../Aleph.harness-dissolution branch --show-current
+git -C ../Aleph.harness-dissolution status --porcelain
 ```
 
 Expected: branch `harness-dissolution`; working tree clean. If dirty with unrelated work, STOP and escalate.
@@ -49,7 +49,7 @@ Expected: branch `harness-dissolution`; working tree clean. If dirty with unrela
 
 Run:
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph.harness-dissolution
+cd ../Aleph.harness-dissolution
 cargo check -p alephcore 2>&1 | tail -5
 ```
 
@@ -59,7 +59,7 @@ Expected: PASS. Record the current HEAD SHA (should be `ea2c6827d` — the P4 sp
 
 Run:
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph.harness-dissolution
+cd ../Aleph.harness-dissolution
 grep -rn "VerifyStopHook" --include="*.rs" src/ | grep -v "^src/verification/verify_stop_hook.rs"
 ```
 
@@ -69,7 +69,7 @@ Expected: NO output. If any line appears, STOP — the spec assumption is wrong 
 
 Run:
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph.harness-dissolution
+cd ../Aleph.harness-dissolution
 ls src/verification/*.rs | wc -l                        # expect 3 (mod.rs + stop_hooks.rs + verify_stop_hook.rs)
 wc -l src/verification/verify_stop_hook.rs              # expect ≈ 194
 ```
@@ -88,7 +88,7 @@ Record these numbers as the baseline for final reconciliation.
 
 Run:
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph.harness-dissolution
+cd ../Aleph.harness-dissolution
 git rm src/verification/verify_stop_hook.rs
 ```
 
@@ -127,7 +127,7 @@ Verify the file now contains exactly that content — no leftover `pub mod verif
 
 Run:
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph.harness-dissolution
+cd ../Aleph.harness-dissolution
 grep -rn "VerifyStopHook\|verify_stop_hook" --include="*.rs" src/
 ```
 
@@ -137,7 +137,7 @@ Expected: NO output at all — not as import, not as file path, not as module de
 
 Run:
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph.harness-dissolution
+cd ../Aleph.harness-dissolution
 cargo check -p alephcore 2>&1 | tail -10
 ```
 
@@ -147,7 +147,7 @@ Expected: PASS. If any error mentions `unresolved import` or `cannot find Verify
 
 Run:
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph.harness-dissolution
+cd ../Aleph.harness-dissolution
 cargo clippy -p alephcore -- -D warnings 2>&1 | tail -10
 ```
 
@@ -157,7 +157,7 @@ Expected: same level as Task 0 baseline — the 8 pre-existing P0-inherited erro
 
 Run:
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph.harness-dissolution
+cd ../Aleph.harness-dissolution
 just test-all 2>&1 | tail -20
 ```
 
@@ -167,7 +167,7 @@ Expected: all tests green. Test count will drop by ~11 relative to the pre-P4 ba
 
 Run:
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph.harness-dissolution
+cd ../Aleph.harness-dissolution
 ls src/verification/*.rs              # expect exactly: mod.rs  stop_hooks.rs
 git status --short                    # expect exactly: D verify_stop_hook.rs + M mod.rs
 ```
@@ -175,7 +175,7 @@ git status --short                    # expect exactly: D verify_stop_hook.rs + 
 - [ ] **Step 8: Commit**
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph.harness-dissolution
+cd ../Aleph.harness-dissolution
 git add -A src/verification/
 git commit -m "$(cat <<'EOF'
 verification: delete orphan VerifyStopHook (0 consumers)
@@ -246,7 +246,7 @@ Replace with:
 
 Run:
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph.harness-dissolution
+cd ../Aleph.harness-dissolution
 grep -n "^| P4 " docs/superpowers/specs/2026-04-24-harness-dissolution-roadmap.md
 grep -n "^| \*\*P4\*\*" docs/superpowers/specs/2026-04-24-harness-dissolution-roadmap.md
 grep -n "^² " docs/superpowers/specs/2026-04-24-harness-dissolution-roadmap.md
@@ -262,7 +262,7 @@ If any grep returns unexpected output, re-check the edits.
 - [ ] **Step 5: Commit**
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph.harness-dissolution
+cd ../Aleph.harness-dissolution
 git add docs/superpowers/specs/2026-04-24-harness-dissolution-roadmap.md
 git commit -m "$(cat <<'EOF'
 docs(spec): mark P4 complete in roadmap; record YAGNI + orphan deletion
@@ -283,7 +283,7 @@ EOF
 
 Run:
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph.harness-dissolution
+cd ../Aleph.harness-dissolution
 echo "=== P4 commits on harness-dissolution ==="
 git log --oneline ea2c6827d^..HEAD
 echo "=== Final file state ==="

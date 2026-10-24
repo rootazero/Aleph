@@ -2078,7 +2078,7 @@ Note: This requires adding `use js_sys;` to the imports if not already present. 
 
 - [ ] **Step 5: Build WASM to verify**
 
-Run: `cd /Volumes/TBU4/Workspace/Aleph && just build-wasm` (or the project's WASM build command)
+Run: `cd . && just build-wasm` (or the project's WASM build command)
 Expected: PASS
 
 - [ ] **Step 6: Commit**
@@ -2248,7 +2248,7 @@ In `views/canvas/mod.rs`, update the `node_detail` signal type from `NodeDetailR
 
 - [ ] **Step 6: Build WASM to verify**
 
-Run: `cd /Volumes/TBU4/Workspace/Aleph && just build-wasm`
+Run: `cd . && just build-wasm`
 Expected: PASS
 
 - [ ] **Step 7: Commit**

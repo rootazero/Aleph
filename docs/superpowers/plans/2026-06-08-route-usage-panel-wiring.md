@@ -10,7 +10,7 @@
 
 **Standing constraint (overrides TDD "run" steps):** Per project rule, **do not run `cargo check` / `just wasm` / host build** in this session. The panel is wasm32-target and cannot be blind-checked — this is the exact reason this form was deferred originally. Tests are authored as the post-merge regression guard; correctness in-session comes from mirroring the proven idioms already in `route.rs`. Each "run" step below notes this explicitly.
 
-**Worktree:** `/Volumes/TBU4/Workspace/Aleph-wt-route-panel` (branch `feat/route-usage-panel-wiring`). All `git`/file paths below are relative to this worktree root.
+**Worktree:** `../Aleph-wt-route-panel` (branch `feat/route-usage-panel-wiring`). All `git`/file paths below are relative to this worktree root.
 
 ---
 
@@ -165,7 +165,7 @@ Expected when a human runs it post-merge: 3 passed. In-session: skip; the tests 
 - [ ] **Step 7: Commit**
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph-wt-route-panel
+cd ../Aleph-wt-route-panel
 git add interfaces/webchat/src/api/settings.rs
 git commit -m "panel(api): add load_balance + rate_limits to route_config DTOs"
 ```
@@ -223,7 +223,7 @@ In `interfaces/webchat/locales/zh.json`, inside the `settings.route` object, aft
 Run (pure host tooling — allowed, no cargo/wasm):
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph-wt-route-panel
+cd ../Aleph-wt-route-panel
 python3 -c "import json; a=json.load(open('interfaces/webchat/locales/en.json'))['settings']['route']; b=json.load(open('interfaces/webchat/locales/zh.json'))['settings']['route']; assert set(a)==set(b), set(a)^set(b); print('key parity OK', len(a), 'keys')"
 ```
 
@@ -539,7 +539,7 @@ git commit -m "panel(route): add per-provider rpm/tpm rate-limit editor"
 - [ ] **Step 1: Diff the whole branch against main**
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph-wt-route-panel
+cd ../Aleph-wt-route-panel
 git diff f858a23b0...HEAD --stat
 ```
 

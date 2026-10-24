@@ -18,14 +18,14 @@
 - **Model names:** never hardcode an authoritative model list; provide sensible defaults + rely on `list_models` for discovery.
 - **Endpoints (verified vs official docs 2026-06-23):** image gen+edit share `POST /v1/images/generations`; video `POST /v1/video/submit` then poll `POST /v1/video/status` (status value `Succeed`, urls at `results.videos[].url`); TTS `POST /v1/audio/speech` (binary; voice is `model:voice_id`); `GET /v1/models`; `GET /v1/user/info`.
 - **Python style:** `from __future__ import annotations` where needed; `str | None` hints; no import-time env reads (lazy `get_client()`); every tool function has a one-line docstring (FastMCP turns it into the tool description).
-- **All work in `/Volumes/TBU4/Workspace/Aleph-mcp`** except Task 10 (main repo `/Volumes/TBU4/Workspace/Aleph`). Run commands with `git -C <dir>` / `uv run --directory <dir>` to avoid `cd`.
+- **All work in `../Aleph-mcp`** except Task 10 (main repo `.`). Run commands with `git -C <dir>` / `uv run --directory <dir>` to avoid `cd`.
 
 ---
 
 ## File Structure
 
 ```
-/Volumes/TBU4/Workspace/Aleph-mcp/
+../Aleph-mcp/
 ├── README.md                       # repo charter + server index + credits (Task 8)
 ├── LICENSE                         # MIT (Task 1)
 ├── .gitignore                      # Python (Task 1)
@@ -51,7 +51,7 @@
         ├── test_audio.py           # (Task 5)
         └── test_user.py            # (Task 6)
 
-/Volumes/TBU4/Workspace/Aleph/
+.
 ├── src/mcp/presets/catalog.json    # +1 preset (Task 10)
 └── src/mcp/presets/mod.rs          # +1 test id assertion (Task 10)
 ```
@@ -72,14 +72,14 @@
 - [ ] **Step 1: Create the directory tree and git init**
 
 ```bash
-mkdir -p /Volumes/TBU4/Workspace/Aleph-mcp/siliconflow/src/aleph_siliconflow_mcp
-mkdir -p /Volumes/TBU4/Workspace/Aleph-mcp/siliconflow/tests
-git -C /Volumes/TBU4/Workspace/Aleph-mcp init -q
+mkdir -p ../Aleph-mcp/siliconflow/src/aleph_siliconflow_mcp
+mkdir -p ../Aleph-mcp/siliconflow/tests
+git -C ../Aleph-mcp init -q
 ```
 
 - [ ] **Step 2: Write `LICENSE` (MIT) and `.gitignore`**
 
-`/Volumes/TBU4/Workspace/Aleph-mcp/.gitignore`:
+`../Aleph-mcp/.gitignore`:
 ```
 __pycache__/
 *.py[cod]
@@ -92,7 +92,7 @@ build/
 uv.lock
 ```
 
-`/Volumes/TBU4/Workspace/Aleph-mcp/LICENSE`: standard MIT License text, copyright line: `Copyright (c) 2026 Aleph (rootazero)`.
+`../Aleph-mcp/LICENSE`: standard MIT License text, copyright line: `Copyright (c) 2026 Aleph (rootazero)`.
 
 - [ ] **Step 3: Write `siliconflow/pyproject.toml`**
 
@@ -164,7 +164,7 @@ def test_video_size_unknown_raises():
 
 - [ ] **Step 5: Run the test to verify it fails**
 
-Run: `uv run --directory /Volumes/TBU4/Workspace/Aleph-mcp/siliconflow --extra dev pytest tests/test_ratios.py -v`
+Run: `uv run --directory ../Aleph-mcp/siliconflow --extra dev pytest tests/test_ratios.py -v`
 Expected: FAIL — `ModuleNotFoundError: No module named 'aleph_siliconflow_mcp.ratios'`
 
 - [ ] **Step 6: Implement `ratios.py`**
@@ -211,14 +211,14 @@ def video_size_for(aspect_ratio: str) -> str:
 
 - [ ] **Step 7: Run the test to verify it passes**
 
-Run: `uv run --directory /Volumes/TBU4/Workspace/Aleph-mcp/siliconflow --extra dev pytest tests/test_ratios.py -v`
+Run: `uv run --directory ../Aleph-mcp/siliconflow --extra dev pytest tests/test_ratios.py -v`
 Expected: PASS (4 passed)
 
 - [ ] **Step 8: Commit**
 
 ```bash
-git -C /Volumes/TBU4/Workspace/Aleph-mcp add -A
-git -C /Volumes/TBU4/Workspace/Aleph-mcp commit -q -m "feat: scaffold aleph-siliconflow-mcp + ratio mappings"
+git -C ../Aleph-mcp add -A
+git -C ../Aleph-mcp commit -q -m "feat: scaffold aleph-siliconflow-mcp + ratio mappings"
 ```
 
 ---
@@ -330,7 +330,7 @@ def test_to_image_field_local_file(tmp_path):
 
 - [ ] **Step 2: Run the test to verify it fails**
 
-Run: `uv run --directory /Volumes/TBU4/Workspace/Aleph-mcp/siliconflow --extra dev pytest tests/test_client.py -v`
+Run: `uv run --directory ../Aleph-mcp/siliconflow --extra dev pytest tests/test_client.py -v`
 Expected: FAIL — `ModuleNotFoundError: No module named 'aleph_siliconflow_mcp.client'`
 
 - [ ] **Step 3: Implement `client.py`**
@@ -517,14 +517,14 @@ async def render_assets(
 
 - [ ] **Step 4: Run the test to verify it passes**
 
-Run: `uv run --directory /Volumes/TBU4/Workspace/Aleph-mcp/siliconflow --extra dev pytest tests/test_client.py -v`
+Run: `uv run --directory ../Aleph-mcp/siliconflow --extra dev pytest tests/test_client.py -v`
 Expected: PASS (10 passed)
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git -C /Volumes/TBU4/Workspace/Aleph-mcp add -A
-git -C /Volumes/TBU4/Workspace/Aleph-mcp commit -q -m "feat: client config, http, error parsing, asset saving"
+git -C ../Aleph-mcp add -A
+git -C ../Aleph-mcp commit -q -m "feat: client config, http, error parsing, asset saving"
 ```
 
 ---
@@ -596,7 +596,7 @@ def test_parse_image_response_empty():
 
 - [ ] **Step 2: Run the test to verify it fails**
 
-Run: `uv run --directory /Volumes/TBU4/Workspace/Aleph-mcp/siliconflow --extra dev pytest tests/test_images.py -v`
+Run: `uv run --directory ../Aleph-mcp/siliconflow --extra dev pytest tests/test_images.py -v`
 Expected: FAIL — `ModuleNotFoundError: No module named 'aleph_siliconflow_mcp.images'`
 
 - [ ] **Step 3: Implement `images.py`**
@@ -708,14 +708,14 @@ async def edit_image(
 
 - [ ] **Step 4: Run the test to verify it passes**
 
-Run: `uv run --directory /Volumes/TBU4/Workspace/Aleph-mcp/siliconflow --extra dev pytest tests/test_images.py -v`
+Run: `uv run --directory ../Aleph-mcp/siliconflow --extra dev pytest tests/test_images.py -v`
 Expected: PASS (5 passed)
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git -C /Volumes/TBU4/Workspace/Aleph-mcp add -A
-git -C /Volumes/TBU4/Workspace/Aleph-mcp commit -q -m "feat: generate_image and edit_image tools"
+git -C ../Aleph-mcp add -A
+git -C ../Aleph-mcp commit -q -m "feat: generate_image and edit_image tools"
 ```
 
 ---
@@ -794,7 +794,7 @@ def test_parse_status_in_progress():
 
 - [ ] **Step 2: Run the test to verify it fails**
 
-Run: `uv run --directory /Volumes/TBU4/Workspace/Aleph-mcp/siliconflow --extra dev pytest tests/test_videos.py -v`
+Run: `uv run --directory ../Aleph-mcp/siliconflow --extra dev pytest tests/test_videos.py -v`
 Expected: FAIL — `ModuleNotFoundError: No module named 'aleph_siliconflow_mcp.videos'`
 
 - [ ] **Step 3: Implement `videos.py`**
@@ -927,14 +927,14 @@ async def generate_video(
 
 - [ ] **Step 4: Run the test to verify it passes**
 
-Run: `uv run --directory /Volumes/TBU4/Workspace/Aleph-mcp/siliconflow --extra dev pytest tests/test_videos.py -v`
+Run: `uv run --directory ../Aleph-mcp/siliconflow --extra dev pytest tests/test_videos.py -v`
 Expected: PASS (7 passed)
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git -C /Volumes/TBU4/Workspace/Aleph-mcp add -A
-git -C /Volumes/TBU4/Workspace/Aleph-mcp commit -q -m "feat: video submit/status/generate tools"
+git -C ../Aleph-mcp add -A
+git -C ../Aleph-mcp commit -q -m "feat: video submit/status/generate tools"
 ```
 
 ---
@@ -989,7 +989,7 @@ def test_ext_for_format():
 
 - [ ] **Step 2: Run the test to verify it fails**
 
-Run: `uv run --directory /Volumes/TBU4/Workspace/Aleph-mcp/siliconflow --extra dev pytest tests/test_audio.py -v`
+Run: `uv run --directory ../Aleph-mcp/siliconflow --extra dev pytest tests/test_audio.py -v`
 Expected: FAIL — `ModuleNotFoundError: No module named 'aleph_siliconflow_mcp.audio'`
 
 - [ ] **Step 3: Implement `audio.py`**
@@ -1058,14 +1058,14 @@ async def generate_speech(
 
 - [ ] **Step 4: Run the test to verify it passes**
 
-Run: `uv run --directory /Volumes/TBU4/Workspace/Aleph-mcp/siliconflow --extra dev pytest tests/test_audio.py -v`
+Run: `uv run --directory ../Aleph-mcp/siliconflow --extra dev pytest tests/test_audio.py -v`
 Expected: PASS (3 passed)
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git -C /Volumes/TBU4/Workspace/Aleph-mcp add -A
-git -C /Volumes/TBU4/Workspace/Aleph-mcp commit -q -m "feat: generate_speech (TTS) tool"
+git -C ../Aleph-mcp add -A
+git -C ../Aleph-mcp commit -q -m "feat: generate_speech (TTS) tool"
 ```
 
 ---
@@ -1115,7 +1115,7 @@ def test_parse_model_list():
 
 - [ ] **Step 2: Run the test to verify it fails**
 
-Run: `uv run --directory /Volumes/TBU4/Workspace/Aleph-mcp/siliconflow --extra dev pytest tests/test_user.py -v`
+Run: `uv run --directory ../Aleph-mcp/siliconflow --extra dev pytest tests/test_user.py -v`
 Expected: FAIL — `ModuleNotFoundError: No module named 'aleph_siliconflow_mcp.user'`
 
 - [ ] **Step 3: Implement `user.py`**
@@ -1175,14 +1175,14 @@ async def list_models(type: str | None = None, sub_type: str | None = None) -> s
 
 - [ ] **Step 4: Run the test to verify it passes**
 
-Run: `uv run --directory /Volumes/TBU4/Workspace/Aleph-mcp/siliconflow --extra dev pytest tests/test_user.py -v`
+Run: `uv run --directory ../Aleph-mcp/siliconflow --extra dev pytest tests/test_user.py -v`
 Expected: PASS (3 passed)
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git -C /Volumes/TBU4/Workspace/Aleph-mcp add -A
-git -C /Volumes/TBU4/Workspace/Aleph-mcp commit -q -m "feat: get_user_info and list_models tools"
+git -C ../Aleph-mcp add -A
+git -C ../Aleph-mcp commit -q -m "feat: get_user_info and list_models tools"
 ```
 
 ---
@@ -1231,7 +1231,7 @@ def test_main_is_exported():
 
 - [ ] **Step 2: Run the test to verify it fails**
 
-Run: `uv run --directory /Volumes/TBU4/Workspace/Aleph-mcp/siliconflow --extra dev pytest tests/test_server.py -v`
+Run: `uv run --directory ../Aleph-mcp/siliconflow --extra dev pytest tests/test_server.py -v`
 Expected: FAIL — `ModuleNotFoundError: No module named 'aleph_siliconflow_mcp.server'`
 
 - [ ] **Step 3: Implement `server.py` and `main.py`**
@@ -1272,21 +1272,21 @@ if __name__ == "__main__":
 
 - [ ] **Step 4: Run the test to verify it passes**
 
-Run: `uv run --directory /Volumes/TBU4/Workspace/Aleph-mcp/siliconflow --extra dev pytest tests/test_server.py -v`
+Run: `uv run --directory ../Aleph-mcp/siliconflow --extra dev pytest tests/test_server.py -v`
 Expected: PASS (2 passed)
 
 > If `mcp.list_tools()` is not the public API in the installed `mcp` version, the test will error on that line; in that case replace the body of `test_server_imports_and_registers_eight_tools` after the `name` assertion with `asyncio.run(server.mcp.list_tools())` adapted to the actual method (check `dir(server.mcp)`), keeping the eight-name set assertion.
 
 - [ ] **Step 5: Run the full test suite**
 
-Run: `uv run --directory /Volumes/TBU4/Workspace/Aleph-mcp/siliconflow --extra dev pytest -v`
+Run: `uv run --directory ../Aleph-mcp/siliconflow --extra dev pytest -v`
 Expected: PASS (all tests across the six test files green)
 
 - [ ] **Step 6: Commit**
 
 ```bash
-git -C /Volumes/TBU4/Workspace/Aleph-mcp add -A
-git -C /Volumes/TBU4/Workspace/Aleph-mcp commit -q -m "feat: FastMCP server registration + entry point"
+git -C ../Aleph-mcp add -A
+git -C ../Aleph-mcp commit -q -m "feat: FastMCP server registration + entry point"
 ```
 
 ---
@@ -1337,15 +1337,15 @@ Note: media URLs expire quickly; set `SILICONFLOW_IMAGE_DIR` to keep assets.
 
 Run (builds the package from the local checkout and runs the MCP handshake; requires a key in env for tools to execute, but listing works without calls):
 ```bash
-SILICONFLOW_API_KEY=dummy uvx --from /Volumes/TBU4/Workspace/Aleph-mcp/siliconflow aleph-siliconflow-mcp --help 2>&1 | head -5 || echo "server starts (stdio MCP has no --help; Ctrl-C expected)"
+SILICONFLOW_API_KEY=dummy uvx --from ../Aleph-mcp/siliconflow aleph-siliconflow-mcp --help 2>&1 | head -5 || echo "server starts (stdio MCP has no --help; Ctrl-C expected)"
 ```
 Expected: the package builds without error (a stdio MCP server has no `--help`; the goal is to confirm `uvx` can build and launch the entry point). If it builds and blocks waiting for stdio, that is success — interrupt it.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git -C /Volumes/TBU4/Workspace/Aleph-mcp add -A
-git -C /Volumes/TBU4/Workspace/Aleph-mcp commit -q -m "docs: repo charter, server README, env example"
+git -C ../Aleph-mcp add -A
+git -C ../Aleph-mcp commit -q -m "docs: repo charter, server README, env example"
 ```
 
 ---
@@ -1359,15 +1359,15 @@ git -C /Volumes/TBU4/Workspace/Aleph-mcp commit -q -m "docs: repo charter, serve
 - [ ] **Step 1: Verify clean tree and review log**
 
 ```bash
-git -C /Volumes/TBU4/Workspace/Aleph-mcp status
-git -C /Volumes/TBU4/Workspace/Aleph-mcp log --oneline
+git -C ../Aleph-mcp status
+git -C ../Aleph-mcp log --oneline
 ```
 Expected: clean working tree; ~8 commits from Tasks 1–8.
 
 - [ ] **Step 2: Create the public repo and push (after user confirmation)**
 
 ```bash
-gh repo create rootazero/Aleph-mcp --public --source=/Volumes/TBU4/Workspace/Aleph-mcp --remote=origin --push \
+gh repo create rootazero/Aleph-mcp --public --source=../Aleph-mcp --remote=origin --push \
   --description "Aleph official MCP servers — fills gaps where vendors ship no official MCP (first: SiliconFlow media generation)"
 ```
 Expected: repo created at `https://github.com/rootazero/Aleph-mcp`; default branch pushed.
@@ -1387,10 +1387,10 @@ Expected: `uvx` clones the repo, builds the subdir package, and launches the std
 > **"Default-mounted" clarification (verified):** Aleph has NO runtime auto-mount of MCP servers. The four existing entries (context7, amap, minimax, volcengine-veimagex) are *built-in preset catalog* entries surfaced in Panel settings for one-click install via the `mcp.install_preset` RPC (the user supplies the API key). Adding `siliconflow` to `catalog.json` makes it the **5th built-in preset, on identical footing with veImageX and Amap** — which is exactly the user's "默认挂载第五个 MCP" requirement. No separate default-registration mechanism exists or is needed.
 
 **Files (NOTE: edit the WORKTREE, not main — see footgun guard):**
-- Modify: `/Volumes/TBU4/Workspace/Aleph/.claude/worktrees/siliconflow-mcp/src/mcp/presets/catalog.json` (append one preset → 5 total)
-- Modify: `/Volumes/TBU4/Workspace/Aleph/.claude/worktrees/siliconflow-mcp/src/mcp/presets/mod.rs` (add `"siliconflow"` to the parse-test id list + update its comment, ~line 241-242)
+- Modify: `.claude/worktrees/siliconflow-mcp/src/mcp/presets/catalog.json` (append one preset → 5 total)
+- Modify: `.claude/worktrees/siliconflow-mcp/src/mcp/presets/mod.rs` (add `"siliconflow"` to the parse-test id list + update its comment, ~line 241-242)
 
-> **🔴 Footgun guard:** This work runs in the git worktree `worktree-siliconflow-mcp` at `/Volumes/TBU4/Workspace/Aleph/.claude/worktrees/siliconflow-mcp`. Editing the main-repo absolute path (`/Volumes/TBU4/Workspace/Aleph/src/...`) would silently bypass the worktree and land on `main`, breaking branch isolation. Always use the worktree path above.
+> **🔴 Footgun guard:** This work runs in the git worktree `worktree-siliconflow-mcp` at `.claude/worktrees/siliconflow-mcp`. Editing the main-repo absolute path (`src/...`) would silently bypass the worktree and land on `main`, breaking branch isolation. Always use the worktree path above.
 
 **Interfaces:**
 - Consumes: the published repo URL from Task 9.
@@ -1443,7 +1443,7 @@ Expected: PASS, including `bundled_catalog_parses_and_has_first_batch` (now asse
 - [ ] **Step 4: Commit (main repo)**
 
 ```bash
-WT=/Volumes/TBU4/Workspace/Aleph/.claude/worktrees/siliconflow-mcp
+WT=.claude/worktrees/siliconflow-mcp
 git -C "$WT" add src/mcp/presets/catalog.json src/mcp/presets/mod.rs
 git -C "$WT" commit -m "mcp: add SiliconFlow preset (Aleph-mcp self-built)"
 ```

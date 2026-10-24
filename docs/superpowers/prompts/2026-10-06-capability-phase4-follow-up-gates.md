@@ -4,7 +4,7 @@
 
 ## 当前仓库状态
 
-- canonical checkout：`/Volumes/TBU4/Workspace/Aleph`
+- canonical checkout：`.`
 - 当前分支：`main`
 - 当前 HEAD：`1ea05b1ce86d35b64384d8157f015fd68224cdf6`
 - Phase 4 基座已从 `capability-phase4` fast-forward 合并到 `main`。
@@ -16,8 +16,8 @@
 
 开始工作前必须读取：
 
-1. `/Volumes/TBU4/Workspace/Aleph/AGENTS.md`
-2. `/Volumes/TBU4/Workspace/Aleph/docs/reference/FEATURE_LOCATOR.md`
+1. `AGENTS.md`
+2. `docs/reference/FEATURE_LOCATOR.md`
 3. `docs/superpowers/specs/2026-10-06-capability-phase4-design.md`
 4. `docs/superpowers/plans/2026-10-06-capability-phase4.md`
 5. `.superpowers/sdd/2026-10-06-capability-phase4/task-*-report.md`

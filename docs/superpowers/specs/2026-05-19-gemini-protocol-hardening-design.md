@@ -1,7 +1,7 @@
 # Gemini Protocol Hardening — Design Spec
 
 - **Date**: 2026-05-19
-- **Branch**: `gemini-protocol-opt` (worktree `/Volumes/TBU4/Workspace/Aleph-gemini-wt`)
+- **Branch**: `gemini-protocol-opt` (worktree `../Aleph-gemini-wt`)
 - **Status**: Approved for planning
 - **Scope decision**: This cycle ships **G1, G2a, G3, G4, G5, G6, G7** — every change confined to
   `src/providers/gemini/**` and `src/providers/protocols/gemini/**`, with zero overlap with the

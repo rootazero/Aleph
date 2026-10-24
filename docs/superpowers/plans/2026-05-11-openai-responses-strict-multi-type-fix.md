@@ -28,7 +28,7 @@ Files touched (1):
 
 - [ ] **Step 1.1: Read current header + first function**
 
-Run: `sed -n '1,20p' /Volumes/TBU4/Workspace/Aleph/src/providers/protocols/openai_common/openai_strict_schema.rs`
+Run: `sed -n '1,20p' src/providers/protocols/openai_common/openai_strict_schema.rs`
 
 Expected: Module docstring + `use serde_json::Value;` + `pub fn normalize_strict_schema(...)`.
 
@@ -55,7 +55,7 @@ pub enum StrictResult {
 
 - [ ] **Step 1.3: Verify compile (lib only)**
 
-Run: `cd /Volumes/TBU4/Workspace/Aleph && cargo check -p alephcore 2>&1 | tail -3`
+Run: `cd . && cargo check -p alephcore 2>&1 | tail -3`
 
 Expected: 0 errors. `StrictResult` is dead-code-warned until Task 2 uses it — fine.
 
@@ -66,7 +66,7 @@ Expected: 0 errors. `StrictResult` is dead-code-warned until Task 2 uses it — 
 
 - [ ] **Step 2.1: Read current function bodies**
 
-Run: `sed -n '15,57p' /Volumes/TBU4/Workspace/Aleph/src/providers/protocols/openai_common/openai_strict_schema.rs`
+Run: `sed -n '15,57p' src/providers/protocols/openai_common/openai_strict_schema.rs`
 
 Expected: `pub fn normalize_strict_schema(schema: &mut Value, set_top_level_strict: bool)` calling `normalize_node(schema, set_top_level_strict, true)`. `normalize_node` returns `()`.
 
@@ -163,7 +163,7 @@ This restructures the body to:
 
 - [ ] **Step 2.4: Update existing 8 test call sites in `mod tests`**
 
-Run: `grep -n 'normalize_strict_schema(' /Volumes/TBU4/Workspace/Aleph/src/providers/protocols/openai_common/openai_strict_schema.rs`
+Run: `grep -n 'normalize_strict_schema(' src/providers/protocols/openai_common/openai_strict_schema.rs`
 
 Expected: 9 call sites total — 1 in production, 8 in mod tests.
 
@@ -184,19 +184,19 @@ assert_eq!(
 
 - [ ] **Step 2.5: Verify compile**
 
-Run: `cd /Volumes/TBU4/Workspace/Aleph && cargo check -p alephcore --lib 2>&1 | tail -3`
+Run: `cd . && cargo check -p alephcore --lib 2>&1 | tail -3`
 
 Expected: 0 errors.
 
 Also check production call site in `shared.rs`:
 
-Run: `cd /Volumes/TBU4/Workspace/Aleph && cargo check -p alephcore 2>&1 | grep -E 'normalize_strict_schema|shared\.rs' | head -5`
+Run: `cd . && cargo check -p alephcore 2>&1 | grep -E 'normalize_strict_schema|shared\.rs' | head -5`
 
 Expected: a compile error in `shared.rs:168` because `normalize_strict_schema` now returns `StrictResult` not `()`. Acceptable — fixed in Commit 2.
 
 To unblock Commit 1, **temporarily** add `let _ =` in `shared.rs` to consume the return:
 
-Run: `sed -i '' 's|crate::providers::protocols::openai_common::openai_strict_schema::normalize_strict_schema(\&mut params, true);|let _ = crate::providers::protocols::openai_common::openai_strict_schema::normalize_strict_schema(\&mut params, true);|' /Volumes/TBU4/Workspace/Aleph/src/providers/responses/shared.rs`
+Run: `sed -i '' 's|crate::providers::protocols::openai_common::openai_strict_schema::normalize_strict_schema(\&mut params, true);|let _ = crate::providers::protocols::openai_common::openai_strict_schema::normalize_strict_schema(\&mut params, true);|' src/providers/responses/shared.rs`
 
 Then re-run: `cargo check -p alephcore 2>&1 | tail -3`. Expected: 0 errors.
 
@@ -232,7 +232,7 @@ Append inside `mod tests { ... }` (before the closing brace) — the existing te
 
 - [ ] **Step 3.2: Verify red**
 
-Run: `cd /Volumes/TBU4/Workspace/Aleph && cargo check -p alephcore --lib --tests 2>&1 | grep -E 'multi_type_null_pair_becomes_anyof|FAILED' | head -3`
+Run: `cd . && cargo check -p alephcore --lib --tests 2>&1 | grep -E 'multi_type_null_pair_becomes_anyof|FAILED' | head -3`
 
 If it compiles, the test runs but fails at the `any_of` line (since current code doesn't transform multi-type).
 
@@ -300,11 +300,11 @@ fn normalize_node(
 
 - [ ] **Step 3.4: Verify green**
 
-Run: `cd /Volumes/TBU4/Workspace/Aleph && cargo check -p alephcore --lib --tests 2>&1 | grep -E 'error\[|warning: unused' | head -5`
+Run: `cd . && cargo check -p alephcore --lib --tests 2>&1 | grep -E 'error\[|warning: unused' | head -5`
 
 Expected: 0 errors. Then run mod test (if 484 baseline doesn't block):
 
-Run: `cd /Volumes/TBU4/Workspace/Aleph && cargo test -p alephcore --lib openai_strict_schema::tests::multi_type_null_pair_becomes_anyof 2>&1 | tail -10`
+Run: `cd . && cargo test -p alephcore --lib openai_strict_schema::tests::multi_type_null_pair_becomes_anyof 2>&1 | tail -10`
 
 Expected: 1 passed. If baseline 484 errors block, that's documented OOS — skip this run, trust the cargo check.
 
@@ -338,7 +338,7 @@ Append to `mod tests`:
 
 The Task 3 implementation already copies sibling keys (`map_clone` filters out `"type"` and keeps the rest, inserts them onto the non-null branch). So this test should pass on the first run.
 
-Run: `cd /Volumes/TBU4/Workspace/Aleph && cargo test -p alephcore --lib openai_strict_schema::tests::null_pair_preserves_sibling_keywords 2>&1 | tail -3` (or skip if baseline blocks).
+Run: `cd . && cargo test -p alephcore --lib openai_strict_schema::tests::null_pair_preserves_sibling_keywords 2>&1 | tail -3` (or skip if baseline blocks).
 
 Cargo check: `cargo check -p alephcore --lib --tests 2>&1 | tail -3` → 0 errors.
 
@@ -378,7 +378,7 @@ Append to `mod tests`:
 
 - [ ] **Step 5.2: Verify red**
 
-Run: `cd /Volumes/TBU4/Workspace/Aleph && cargo check -p alephcore --lib --tests 2>&1 | tail -3`
+Run: `cd . && cargo check -p alephcore --lib --tests 2>&1 | tail -3`
 
 Expected: 0 errors (Task 3's `["null", X]` branch doesn't match these cases, so they currently fall through to `Ok`, failing the assertions).
 
@@ -414,7 +414,7 @@ In `normalize_node`, extend the `Some(Value::Array(types))` arm. Replace the inn
 
 - [ ] **Step 5.4: Verify green**
 
-Run: `cd /Volumes/TBU4/Workspace/Aleph && cargo check -p alephcore --lib --tests 2>&1 | tail -3`
+Run: `cd . && cargo check -p alephcore --lib --tests 2>&1 | tail -3`
 
 Expected: 0 errors.
 
@@ -464,7 +464,7 @@ Append to `mod tests`:
 
 The path prefixing logic was already added in Task 2 (each recursive call computes `child_path = format!("{path}.properties.{k}")` etc.), and the Task 5 reason string uses `path`. So the short-circuit + path prefix should already work.
 
-Run: `cd /Volumes/TBU4/Workspace/Aleph && cargo check -p alephcore --lib --tests 2>&1 | tail -3`
+Run: `cd . && cargo check -p alephcore --lib --tests 2>&1 | tail -3`
 
 Expected: 0 errors.
 
@@ -476,7 +476,7 @@ Expected: 1 passed.
 
 - [ ] **Step 7.1: Full clippy on touched file**
 
-Run: `cd /Volumes/TBU4/Workspace/Aleph && cargo clippy -p alephcore --lib --no-deps 2>&1 | grep -E 'openai_strict_schema\.rs' | head -10`
+Run: `cd . && cargo clippy -p alephcore --lib --no-deps 2>&1 | grep -E 'openai_strict_schema\.rs' | head -10`
 
 Expected: no new lints attributable to the changes (pre-existing warnings allowed).
 
@@ -490,7 +490,7 @@ Expected: `Finished dev` 0 errors.
 
 - [ ] **Step 8.1: Review diff**
 
-Run: `cd /Volumes/TBU4/Workspace/Aleph && git diff --stat`
+Run: `cd . && git diff --stat`
 
 Expected:
 - `src/providers/protocols/openai_common/openai_strict_schema.rs` ~120 insertions (enum + new branches + 5 new tests + 8 updated assertions)
@@ -499,7 +499,7 @@ Expected:
 - [ ] **Step 8.2: Stage + commit**
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph
+cd .
 git add src/providers/protocols/openai_common/openai_strict_schema.rs \
         src/providers/responses/shared.rs
 git commit -m "$(cat <<'EOF'
@@ -556,13 +556,13 @@ Files touched (2):
 
 - [ ] **Step 9.1: Locate existing tests in shared.rs**
 
-Run: `grep -n '#\[cfg(test)\]\|fn build_tools\|fn ensure_properties' /Volumes/TBU4/Workspace/Aleph/src/providers/responses/shared.rs | head -10`
+Run: `grep -n '#\[cfg(test)\]\|fn build_tools\|fn ensure_properties' src/providers/responses/shared.rs | head -10`
 
 Expected: `pub(crate) fn build_tools(...)` around line 154; possibly an existing `#[cfg(test)] mod tests`. If no mod tests exists, this task adds one.
 
 - [ ] **Step 9.2: Identify `ToolDefinition` and `FunctionToolDef` imports**
 
-Run: `grep -n 'use crate.*ToolDefinition\|use.*FunctionToolDef\|FunctionToolDef\b' /Volumes/TBU4/Workspace/Aleph/src/providers/responses/shared.rs | head -10`
+Run: `grep -n 'use crate.*ToolDefinition\|use.*FunctionToolDef\|FunctionToolDef\b' src/providers/responses/shared.rs | head -10`
 
 Note the imports for use in the test.
 
@@ -609,7 +609,7 @@ If `ToolDefinition` doesn't derive `Default`, replace the `..Default::default()`
 
 - [ ] **Step 9.4: Verify compile**
 
-Run: `cd /Volumes/TBU4/Workspace/Aleph && cargo check -p alephcore --lib --tests 2>&1 | tail -3`
+Run: `cd . && cargo check -p alephcore --lib --tests 2>&1 | tail -3`
 
 Expected: 0 errors (if `ToolDefinition` construction is correct).
 
@@ -652,7 +652,7 @@ Append to `mod tests`:
 
 - [ ] **Step 10.2: Verify red**
 
-Run: `cd /Volumes/TBU4/Workspace/Aleph && cargo check -p alephcore --lib --tests 2>&1 | tail -3`
+Run: `cd . && cargo check -p alephcore --lib --tests 2>&1 | tail -3`
 
 Expected: 0 errors. If `cargo test` works, this test fails because current code still uses `let _ =` and sets `strict: Some(true)` unconditionally.
 
@@ -703,13 +703,13 @@ with:
 
 Add the `tracing` import at the top of `shared.rs` if not already there:
 
-Run: `grep -n '^use tracing' /Volumes/TBU4/Workspace/Aleph/src/providers/responses/shared.rs`
+Run: `grep -n '^use tracing' src/providers/responses/shared.rs`
 
 If absent, add `use tracing;` near the other `use` statements (or just qualify as `tracing::warn!` which works without `use` when `tracing` is in the crate's dependencies).
 
 - [ ] **Step 10.4: Verify green**
 
-Run: `cd /Volumes/TBU4/Workspace/Aleph && cargo check -p alephcore 2>&1 | tail -3`
+Run: `cd . && cargo check -p alephcore 2>&1 | tail -3`
 
 Expected: 0 errors.
 
@@ -724,7 +724,7 @@ Expected: 2 passed.
 
 - [ ] **Step 11.1: Read current Unreleased section**
 
-Run: `head -30 /Volumes/TBU4/Workspace/Aleph/CHANGELOG.md`
+Run: `head -30 CHANGELOG.md`
 
 Locate `[Unreleased]` + its subsections.
 
@@ -740,13 +740,13 @@ Add to `[Unreleased]` → `### Fixed` (create the subsection if it doesn't exist
 
 - [ ] **Step 12.1: Full check**
 
-Run: `cd /Volumes/TBU4/Workspace/Aleph && cargo check -p alephcore 2>&1 | tail -3`
+Run: `cd . && cargo check -p alephcore 2>&1 | tail -3`
 
 Expected: `Finished dev` 0 errors.
 
 - [ ] **Step 12.2: Clippy on touched files**
 
-Run: `cd /Volumes/TBU4/Workspace/Aleph && cargo clippy -p alephcore --lib --no-deps 2>&1 | grep -E 'shared\.rs|openai_strict_schema\.rs' | head -20`
+Run: `cd . && cargo clippy -p alephcore --lib --no-deps 2>&1 | grep -E 'shared\.rs|openai_strict_schema\.rs' | head -20`
 
 Expected: no NEW lints on touched lines (pre-existing import warnings allowed).
 
@@ -754,14 +754,14 @@ Expected: no NEW lints on touched lines (pre-existing import warnings allowed).
 
 - [ ] **Step 13.1: Diff stat**
 
-Run: `cd /Volumes/TBU4/Workspace/Aleph && git diff --stat`
+Run: `cd . && git diff --stat`
 
 Expected: 2 files modified (`shared.rs` + `CHANGELOG.md`), ~40 insertions, ~5 deletions.
 
 - [ ] **Step 13.2: Stage + commit**
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph
+cd .
 git add CHANGELOG.md src/providers/responses/shared.rs
 git commit -m "$(cat <<'EOF'
 providers/openai: per-tool strict downgrade for incompatible schemas
@@ -820,7 +820,7 @@ if [ -n "$PID" ]; then kill "$PID"; sleep 2; fi
 
 # Restart with verbose logging on the responses path
 RUST_LOG=alephcore::providers::responses=debug,alephcore::providers::protocols::openai_common::openai_strict_schema=debug,alephcore::gateway=info,alephcore=info \
-  /Volumes/TBU4/Workspace/Aleph/target/release/aleph-server start \
+  target/release/aleph-server start \
   > /tmp/aleph-server-step3.out 2>&1 &
 echo "spawned pid=$!"
 sleep 6
@@ -878,13 +878,13 @@ grep -n '^default_provider' /Users/zouguojun/.aleph/config.toml
 
 - [ ] **Step 17.1: Verify git status is clean**
 
-Run: `cd /Volumes/TBU4/Workspace/Aleph && git status --short`
+Run: `cd . && git status --short`
 
 Expected: empty (or only this plan doc as untracked, which will be committed separately).
 
 - [ ] **Step 17.2: Verify commit chain**
 
-Run: `cd /Volumes/TBU4/Workspace/Aleph && git log --oneline -8`
+Run: `cd . && git log --oneline -8`
 
 Expected (most recent first):
 - `<sha>` providers/openai: per-tool strict downgrade for incompatible schemas (Commit 2)
@@ -898,7 +898,7 @@ Expected (most recent first):
 If the project convention is to commit plan docs (Step 1 + Step 2 did):
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph
+cd .
 git add docs/superpowers/plans/2026-05-11-openai-responses-strict-multi-type-fix.md
 git commit -m "docs: anthropic step 3 implementation plan"
 ```

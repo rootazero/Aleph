@@ -1,5 +1,5 @@
 🔍 Starting Deep Logic Audit for --dry-run...
-Project Root: /Volumes/TBU4/Workspace/Aleph
+Project Root: .
 Date: Thu Apr 30 11:23:21 CST 2026
 ---------------------------------------
 --- [L0] Static Analysis ---

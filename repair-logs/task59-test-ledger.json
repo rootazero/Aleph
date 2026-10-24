@@ -19,9 +19,9 @@
       "failed_suites": 0,
       "test_counts_applicable": false,
       "status": "failed",
-      "raw_log": "/Volumes/TBU4/Workspace/Aleph/.superpowers/sdd/2026-10-14-modularization-p0-implementation/repair-logs/20261017-164931-task59-fmt.log",
-      "stdout_capture": "/Volumes/TBU4/Workspace/Aleph/repair-logs/task59-guard-01-fmt.stdout.log",
-      "stderr_capture": "/Volumes/TBU4/Workspace/Aleph/repair-logs/task59-guard-01-fmt.stderr.log",
+      "raw_log": ".superpowers/sdd/2026-10-14-modularization-p0-implementation/repair-logs/20261017-164931-task59-fmt.log",
+      "stdout_capture": "repair-logs/task59-guard-01-fmt.stdout.log",
+      "stderr_capture": "repair-logs/task59-guard-01-fmt.stderr.log",
       "format_violations": [
         "src/extension/canonical_handler.rs:38",
         "src/extension/mod.rs:24",

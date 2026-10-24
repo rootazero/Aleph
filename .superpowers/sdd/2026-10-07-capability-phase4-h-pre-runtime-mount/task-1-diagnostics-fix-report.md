@@ -323,7 +323,7 @@ tests, the `DiagnosticHoldState` machinery, the alarm spawn, and the
 
 ```bash
 # Cleanup (idempotent: no-op if the 153 files were never modified)
-cd /Volumes/TBU4/Workspace/Aleph-capability-phase4-follow-up
+cd ../Aleph-capability-phase4-follow-up
 git diff --name-only \
   | grep -vE '^src/capability/(diagnostic_control|projection_host)\.rs$' \
   | xargs git restore --worktree --

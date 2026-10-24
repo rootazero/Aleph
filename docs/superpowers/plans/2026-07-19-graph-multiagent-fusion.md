@@ -918,7 +918,7 @@ git commit -m "teams: grounding evidence gate on task_review approvals"
 - Modify: `src/teams/leader_prompt.rs`
 - Modify: `docs/reference/GRAPH_LAYER.md`
 - Modify: `docs/reference/MULTI_AGENT_SYSTEM.md`
-- Modify: `/Volumes/TBU4/Workspace/Aleph-skills/loop-governance/SKILL.md`（兄弟仓）+ 同步 `~/.aleph/skills/loop-governance/SKILL.md`
+- Modify: `../Aleph-skills/loop-governance/SKILL.md`（兄弟仓）+ 同步 `~/.aleph/skills/loop-governance/SKILL.md`
 
 **Interfaces:**
 - Consumes: Task 1 `loop-auditor`、Task 7 `require_grounding`/`grounding`（prompt 文本引用它们，须与实现名精确一致）。
@@ -1021,7 +1021,7 @@ measure-only builtin). See `docs/reference/GRAPH_LAYER.md` §多智能体融合.
 
 - [ ] **Step 7: Update loop-governance skill (sibling repo)**
 
-在 `/Volumes/TBU4/Workspace/Aleph-skills/loop-governance/SKILL.md` 末尾追加一节：
+在 `../Aleph-skills/loop-governance/SKILL.md` 末尾追加一节：
 
 ```markdown
 ## Graph × 多智能体（何时上 team，怎样独立取证）
@@ -1040,8 +1040,8 @@ measure-only builtin). See `docs/reference/GRAPH_LAYER.md` §多智能体融合.
 然后同步运行时 skill 副本并提交兄弟仓：
 
 ```bash
-cp /Volumes/TBU4/Workspace/Aleph-skills/loop-governance/SKILL.md ~/.aleph/skills/loop-governance/SKILL.md
-cd /Volumes/TBU4/Workspace/Aleph-skills && git add loop-governance/SKILL.md && git commit -m "loop-governance: add graph x multi-agent section" && cd /Volumes/TBU4/Workspace/Aleph
+cp ../Aleph-skills/loop-governance/SKILL.md ~/.aleph/skills/loop-governance/SKILL.md
+cd ../Aleph-skills && git add loop-governance/SKILL.md && git commit -m "loop-governance: add graph x multi-agent section" && cd .
 ```
 
 - [ ] **Step 8: Commit（主仓）**

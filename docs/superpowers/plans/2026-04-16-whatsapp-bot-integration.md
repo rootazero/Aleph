@@ -96,7 +96,7 @@ mod tests {
 - [ ] **Step 1.2: 运行测试**
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph
+cd .
 cargo test -p alephcore wa_runtime::state::tests --lib
 ```
 

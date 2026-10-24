@@ -41,7 +41,7 @@
 - [ ] **Step 1: 删除 7 个死文件（含 json_canvas 整目录）**
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph/interfaces/webchat/src/canvas_engine
+cd interfaces/webchat/src/canvas_engine
 rm -rf json_canvas
 rm -f prefetch.rs scatter.rs layout.rs cluster.rs types.rs
 ```
@@ -79,7 +79,7 @@ Expected: 编译通过，**无 `unused` / `dead_code` 警告**（若仍有 unuse
 - [ ] **Step 6: Commit**
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph
+cd .
 git add interfaces/webchat/src/canvas_engine interfaces/webchat/src/api/graph.rs
 git commit -m "canvas: purge dead 2D canvas engine (json_canvas/prefetch/scatter/layout/cluster/types + neighbors)"
 ```
@@ -100,7 +100,7 @@ git commit -m "canvas: purge dead 2D canvas engine (json_canvas/prefetch/scatter
 - [ ] **Step 1: 删除死组件文件**
 
 ```bash
-rm -f /Volumes/TBU4/Workspace/Aleph/interfaces/webchat/src/platform/wide/views/canvas/node_card.rs
+rm -f interfaces/webchat/src/platform/wide/views/canvas/node_card.rs
 ```
 
 - [ ] **Step 2: `views/canvas/mod.rs` 移除 `node_card` 模块声明**
@@ -155,7 +155,7 @@ Expected: 通过、无 unused 警告。
 - [ ] **Step 6: Commit**
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph
+cd .
 git add interfaces/webchat/src/platform/wide/views/canvas/mod.rs \
         interfaces/webchat/src/state/memory.rs
 git rm interfaces/webchat/src/platform/wide/views/canvas/node_card.rs
@@ -195,7 +195,7 @@ Expected: 通过。
 - [ ] **Step 4: Commit**
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph
+cd .
 git add interfaces/webchat/src/platform/wide/views/canvas/mod.rs
 git commit -m "canvas: rename RadialCanvasView -> GalaxyCanvasView, drop stale radial comments"
 ```
@@ -239,7 +239,7 @@ Expected: 通过。
 - [ ] **Step 4: Commit**
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph
+cd .
 git add interfaces/webchat/src/platform/wide/views/canvas/mod.rs
 git commit -m "canvas: populate Recently-visited on node select (push_recent was never called)"
 ```
@@ -334,7 +334,7 @@ Expected: 通过。
 - [ ] **Step 5: Commit**
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph
+cd .
 git add interfaces/webchat/src/platform/wide/views/canvas/node_detail_panel.rs
 git commit -m "canvas: render node backlinks in detail panel (were fetched but dropped)"
 ```
@@ -420,7 +420,7 @@ Expected: 通过。
 - [ ] **Step 7: Commit**
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph
+cd .
 git add interfaces/webchat/src/platform/wide/views/canvas/node_detail_panel.rs
 git commit -m "canvas: fill detail-panel breadcrumb from note path (was always empty)"
 ```

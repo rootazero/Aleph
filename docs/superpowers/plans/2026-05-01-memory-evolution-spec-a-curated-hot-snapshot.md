@@ -24,7 +24,7 @@
 
 - [ ] **Step 1: Read current implementation**
 
-Run: `sed -n '645,690p' /Volumes/TBU4/Workspace/Aleph/src/memory/notes/indexer.rs`
+Run: `sed -n '645,690p' src/memory/notes/indexer.rs`
 Expected: see the private `async fn atomic_write_file(path: &Path, content: &str)` body. Note signature, return type (`Result<(), AlephError>`), and tempfile crate usage.
 
 - [ ] **Step 2: Write the failing test for the new util location**
@@ -125,7 +125,7 @@ git commit -m "utils: lift atomic_write_file from notes/indexer for shared use"
 
 - [ ] **Step 1: Inspect current dependency list**
 
-Run: `grep -n "^fs2\|^libc\|^nix" /Volumes/TBU4/Workspace/Aleph/Cargo.toml`
+Run: `grep -n "^fs2\|^libc\|^nix" Cargo.toml`
 Expected: no `fs2` line
 
 - [ ] **Step 2: Add fs2 to dependencies**

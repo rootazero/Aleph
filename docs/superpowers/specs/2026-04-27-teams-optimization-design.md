@@ -861,11 +861,11 @@ struct AgentProcessRegistry {
 
 ### 7.2 参考文档
 
-- [Aleph Event System](/Volumes/TBU4/Workspace/Aleph/src/event/mod.rs)
-- [Aleph Sandbox](/Volumes/TBU4/Workspace/Aleph/src/sandbox/mod.rs)
-- [Aleph Process Supervisor](/Volumes/TBU4/Workspace/Aleph/src/process_supervisor/mod.rs)
+- [Aleph Event System](src/event/mod.rs)
+- [Aleph Sandbox](src/sandbox/mod.rs)
+- [Aleph Process Supervisor](src/process_supervisor/mod.rs)
 - [ClawTeam Event Bus](/Volumes/TBU4/Github/ClawTeam/clawteam/events/bus.py)
-- [Aleph Teams 模块现状](/Volumes/TBU4/Workspace/Aleph/src/teams/mod.rs)
+- [Aleph Teams 模块现状](src/teams/mod.rs)
 
 ---
 

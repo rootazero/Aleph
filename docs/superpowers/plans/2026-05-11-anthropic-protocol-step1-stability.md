@@ -64,7 +64,7 @@ This commit's blast radius is ~5 lines of production code + ~50 lines of test co
 
 - [ ] **Step 1.1: Locate or create the test module**
 
-Run: `grep -n '#\[cfg(test)\]' /Volumes/TBU4/Workspace/Aleph/src/providers/delta.rs`
+Run: `grep -n '#\[cfg(test)\]' src/providers/delta.rs`
 
 If output shows an existing `#[cfg(test)] mod tests { ... }`, append inside it (above the closing `}`).
 If output is empty, append this scaffold at the bottom of the file:
@@ -521,7 +521,7 @@ Expected: `Finished ... dev [...]`. If `tokio_stream::StreamExt::timeout` is rep
 
 - [ ] **Step 10.1: Locate or create the tests module**
 
-Run: `grep -n '#\[cfg(test)\]' /Volumes/TBU4/Workspace/Aleph/src/providers/protocols/anthropic/adapter.rs`
+Run: `grep -n '#\[cfg(test)\]' src/providers/protocols/anthropic/adapter.rs`
 
 If the file has no `#[cfg(test)] mod tests`, append this scaffold at the bottom:
 
@@ -580,7 +580,7 @@ Run: `cargo test -p alephcore --lib wrap_idle_timeout_fires_after_threshold -- -
 Expected: **PASS**. If it fails with a compile error about `start_paused`, check that the project's `tokio` dependency has the `test-util` feature. Search:
 
 ```bash
-grep -E 'tokio\s*=' /Volumes/TBU4/Workspace/Aleph/Cargo.toml
+grep -E 'tokio\s*=' Cargo.toml
 ```
 
 If `test-util` is missing, the test setup needs the feature in `[dev-dependencies]`. Append a `dev-dependencies` entry:
@@ -630,7 +630,7 @@ async fn wrap_idle_timeout_resets_on_event() {
 }
 ```
 
-> **`async_stream::stream!`**: A crate already in Aleph's dep tree (verify with `grep async_stream /Volumes/TBU4/Workspace/Aleph/Cargo.toml`). If not present, add to `[dev-dependencies]`: `async-stream = "0.3"`.
+> **`async_stream::stream!`**: A crate already in Aleph's dep tree (verify with `grep async_stream Cargo.toml`). If not present, add to `[dev-dependencies]`: `async-stream = "0.3"`.
 
 - [ ] **Step 11.2: Run the test and verify it passes**
 
@@ -744,7 +744,7 @@ Expected: zero new warnings. If clippy complains about unused imports in `adapte
 
 - [ ] **Step 15.1: Find the unreleased / next-version section**
 
-Run: `head -30 /Volumes/TBU4/Workspace/Aleph/CHANGELOG.md`
+Run: `head -30 CHANGELOG.md`
 
 Identify the topmost section. If it has an `Unreleased` heading or a date-stamped section for the next release, append entries there. Otherwise, follow the existing pattern (most projects: `## [Unreleased] — Added / Fixed / Changed` subsections).
 

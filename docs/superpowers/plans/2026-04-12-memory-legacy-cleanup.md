@@ -27,7 +27,7 @@
   Output must be empty before launching. Concurrent instances destroy the vault via `.shared_token` race.
 - No tooling skips: don't use `--no-verify`, `--no-gpg-sign`, or similar.
 
-**Working directory:** `/Volumes/TBU4/Workspace/Aleph`
+**Working directory:** `.`
 
 **Key commands:**
 - `cargo check -p alephcore` — compile check for the Core crate.

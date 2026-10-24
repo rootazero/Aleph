@@ -373,6 +373,6 @@ async_trait = "0.1"
 
 - hermes-agent: `/Volumes/TBU4/Github/hermes-agent/gateway/platforms/weixin.py`
 - hermes-agent tests: `/Volumes/TBU4/Github/hermes-agent/tests/gateway/test_weixin.py`
-- Aleph Channel trait: `/Volumes/TBU4/Workspace/Aleph/src/gateway/channel.rs`
-- Aleph ChannelRegistry: `/Volumes/TBU4/Workspace/Aleph/src/gateway/channel_registry.rs`
-- Aleph WhatsApp (similar pattern): `/Volumes/TBU4/Workspace/Aleph/src/gateway/interfaces/whatsapp/mod.rs`
+- Aleph Channel trait: `src/gateway/channel.rs`
+- Aleph ChannelRegistry: `src/gateway/channel_registry.rs`
+- Aleph WhatsApp (similar pattern): `src/gateway/interfaces/whatsapp/mod.rs`

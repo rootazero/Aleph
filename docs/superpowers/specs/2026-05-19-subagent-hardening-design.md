@@ -5,7 +5,7 @@ date: 2026-05-19
 authors: ["claude-opus-4-7"]
 scope: design-only — no code, no plan
 follows: 2026-05-09-subagent-uplift-p3-design.md
-branch: subagent-hardening (worktree /Volumes/TBU4/Workspace/Aleph-wt-subagent)
+branch: subagent-hardening (worktree ../Aleph-wt-subagent)
 ---
 
 # Subagent Hardening — Production Wiring Closure + Bug Fixes
@@ -67,7 +67,7 @@ well-built**, but disconnected at the production boundary.
 
 ## 2. Worktree & branch
 
-All work happens in worktree `/Volumes/TBU4/Workspace/Aleph-wt-subagent`, branch
+All work happens in worktree `../Aleph-wt-subagent`, branch
 `subagent-hardening`, already created from `e0e29d886` — which **already
 includes** the `src/scheduler/` deletion (`main` committed it between sessions
 as `ae4f05532` + `e0e29d886`). No deletion replication needed. `main` is

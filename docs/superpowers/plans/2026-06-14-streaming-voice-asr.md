@@ -429,7 +429,7 @@ git commit -m "feat(voice): WhisperLive segments[].completed delta normalizer"
 
 - [ ] **Step 1: 确认/添加 WS 客户端依赖**
 
-Run: `grep -n "tokio-tungstenite\|tungstenite" /Volumes/TBU4/Workspace/Aleph/Cargo.toml`
+Run: `grep -n "tokio-tungstenite\|tungstenite" Cargo.toml`
 若无,在 `[dependencies]` 加(标准 WS 客户端,属 I/O 基础设施,符合 R3):
 ```toml
 tokio-tungstenite = { version = "0.24", features = ["rustls-tls-webpki-roots"] }

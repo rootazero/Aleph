@@ -14,7 +14,7 @@
 
 - 用户已批准完整实施清单及 Task 0 QA 范围，先修复可信 macOS 内存探针，再按 P0→P6 推进；文档未提交，源码/行为各自的 review 与验收门不因批准而解除。 / Approved for staged implementation; evidence gates remain binding.
 - 基线 `main@fac11b6de`，当前专用分支 `refactor/modularization-p0`；保留三个未跟踪用户文档，不 stage、commit 或擅自安装工具链。构建仅在真实内存门通过后执行，计划修订阶段未运行 cargo。
-- `/Volumes/TBU/Workspace/Aleph` 已由主 agent 实测不存在；本次唯一授权落点 `/Volumes/TBU4/Workspace/Aleph`，旧文档挂载点不是可切换仓库。以后实施先确认 git root，不复制或切换检出。
+- `.` 已由主 agent 实测不存在；本次唯一授权落点 `.`，旧文档挂载点不是可切换仓库。以后实施先确认 git root，不复制或切换检出。
 - 包名与目录沿原方案：`aleph-slot-api` / `crates/aleph-slot-api`；Rust import `aleph_slot_api`。不要另造 `aleph-api` 同义包。
 - API 不依赖 alephcore、registry、config 编排、数据库、reqwest、axum、extism 或具体后端。新增非已批准依赖须先证明必要闭包并重新批准。
 - 用户已选扩展轻量依赖；保留已有字段、serde、错误文本、固有方法和调用语义，不借迁移重新设计契约。代价：公开类型绑定第三方版本，未来升级需兼容审查。

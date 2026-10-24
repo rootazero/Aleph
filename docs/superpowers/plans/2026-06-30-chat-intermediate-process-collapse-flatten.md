@@ -117,7 +117,7 @@
 
 - [ ] **Step 5: 编译校验 + 提交**
 
-Run: `cd /Volumes/TBU4/Workspace/Aleph && cargo check -p aleph-panel --lib 2>&1 | tail -5`
+Run: `cd . && cargo check -p aleph-panel --lib 2>&1 | tail -5`
 Expected: 编译通过（leptos_i18n 生成模块成功，无 "missing key in locale" 报错）。若报某 locale 缺 key，补齐再校验。
 
 ```bash

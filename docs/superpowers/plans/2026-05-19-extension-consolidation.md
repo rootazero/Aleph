@@ -10,7 +10,7 @@
 
 **Spec:** `docs/superpowers/specs/2026-05-19-extension-consolidation-design.md`
 
-**Worktree:** `.worktrees/extension-consolidation` (branch `extension-consolidation`). All commands run from the worktree root: `/Volumes/TBU4/Workspace/Aleph/.worktrees/extension-consolidation`.
+**Worktree:** `.worktrees/extension-consolidation` (branch `extension-consolidation`). All commands run from the worktree root: `.worktrees/extension-consolidation`.
 
 **Baseline note:** `main` has 8 lib + 4 integration pre-existing test failures (project memory). Verification asserts **no new failures**, not zero failures.
 
@@ -24,7 +24,7 @@
 
 - [ ] **Step 1: Confirm worktree + branch**
 
-Run: `git -C /Volumes/TBU4/Workspace/Aleph/.worktrees/extension-consolidation branch --show-current`
+Run: `git -C .worktrees/extension-consolidation branch --show-current`
 Expected: `extension-consolidation`
 
 - [ ] **Step 2: Recheck for consumers OUTSIDE `src/extension/`**

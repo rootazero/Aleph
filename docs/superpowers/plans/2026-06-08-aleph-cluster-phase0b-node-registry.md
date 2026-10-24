@@ -10,7 +10,7 @@
 
 **Spec:** `docs/superpowers/specs/2026-06-08-aleph-cluster-phase0b-node-registry.md`
 
-**Worktree/branch:** Grow on the existing `feat/cluster-phase0a-reverse-rpc` worktree (`/Volumes/TBU4/Workspace/Aleph-wt-cluster-phase0a`). Do NOT `git worktree remove` in-session (shell-corruption hazard). Commit on this branch; do not merge to main this phase.
+**Worktree/branch:** Grow on the existing `feat/cluster-phase0a-reverse-rpc` worktree (`../Aleph-wt-cluster-phase0a`). Do NOT `git worktree remove` in-session (shell-corruption hazard). Commit on this branch; do not merge to main this phase.
 
 **Spec deviation already recorded:** enroll/list are gateway RPCs (not builtin tools) because no builtin tool holds a `TokenManager`; the LLM-facing tool surface ships with `node_invoke` in 0c. The full-stack WS smoke test is deferred to 0c (a bare `GatewayServer::with_config` has `token_manager: None`).
 
@@ -344,7 +344,7 @@ Expected: PASS — 6 tests ok.
 - [ ] **Step 6: Commit**
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph-wt-cluster-phase0a
+cd ../Aleph-wt-cluster-phase0a
 git add src/cluster/registry.rs src/cluster/mod.rs
 git commit -m "cluster: NodeRegistry + node-session registry + maybe_register_node glue"
 ```

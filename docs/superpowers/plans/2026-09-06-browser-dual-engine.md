@@ -12,8 +12,8 @@
 
 ## Global Constraints
 
-- **Worktree**: all work in `/Volumes/TBU4/Workspace/Aleph/.claude/worktrees/browser-dual-engine` on branch `worktree-browser-dual-engine`. Never `cd` to the main checkout. Submodules `skills/`, `plugins/` are initialised (needed by `include_dir!`).
-- **Cargo target dir**: every cargo invocation MUST be prefixed `CARGO_TARGET_DIR=/Volumes/TBU4/Workspace/aleph-target-dual-engine` (the main checkout's per-machine `.cargo/config.toml` points at an absolute shared target; sharing it with another session's builds is the phantom-binary hazard recorded in memory). Long builds (>3 min) run in the background with output to a log file; never rely on the tool timeout.
+- **Worktree**: all work in `.claude/worktrees/browser-dual-engine` on branch `worktree-browser-dual-engine`. Never `cd` to the main checkout. Submodules `skills/`, `plugins/` are initialised (needed by `include_dir!`).
+- **Cargo target dir**: every cargo invocation MUST be prefixed `CARGO_TARGET_DIR=../aleph-target-dual-engine` (the main checkout's per-machine `.cargo/config.toml` points at an absolute shared target; sharing it with another session's builds is the phantom-binary hazard recorded in memory). Long builds (>3 min) run in the background with output to a log file; never rely on the tool timeout.
 - **Verification set** (CLAUDE.md "最小可信验证集"), run at the end of every task that touches Rust, all with the target-dir prefix:
   `cargo test -p alephcore --lib --no-run` · `cargo test -p alephcore --bins` · `cargo test -p alephcore --features test-helpers --test '*' --no-run` · `cargo test -p aleph-panel --lib --no-run` · `cargo check -p aleph-desktop-macos` (and `-windows`/`-linux` for any `cfg` change) · `cargo clippy --workspace --all-targets` (needs `just _stage-shell-placeholders` first). Plus the named unit tests of the task, run unfiltered for the crate at least once per stage.
 - **Redlines**: R1 (no platform API in `src/`), R3 (no new heavy crate — `chromiumoxide` is explicitly rejected), R7/R10 (no deterministic engine routing, no auto-escalation, `src/harness/` untouched — measure `src/harness/tests/budget.rs::CEILING` before and after the branch and record both numbers), R8 (every knob is a tool), R9 (capability prose lives in the owning tool's `DESCRIPTION`, derived from the capability constant).
@@ -403,7 +403,7 @@ Stage gates: S2 must leave `qa/browser_managed/run.sh` (all TEN scenarios, R23) 
 
 ---
 
-> Written against worktree `/Volumes/TBU4/Workspace/Aleph/.claude/worktrees/browser-dual-engine`,
+> Written against worktree `.claude/worktrees/browser-dual-engine`,
 > branch `worktree-browser-dual-engine`, HEAD `0a3e8a48a`. Every existing identifier cited below was
 > re-verified at HEAD with `rg`; line numbers are HEAD's, not the evidence map's.
 
@@ -2979,7 +2979,7 @@ where
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `CARGO_TARGET_DIR=/Volumes/TBU4/Workspace/aleph-target-dual-engine cargo test -p aleph-cdp --test smoke -- --nocapture`
+Run: `CARGO_TARGET_DIR=../aleph-target-dual-engine cargo test -p aleph-cdp --test smoke -- --nocapture`
 Expected: FAIL to compile with
 `error[E0432]: unresolved imports 'aleph_cdp::CdpError', 'aleph_cdp::CloseReason', 'aleph_cdp::SessionId', 'aleph_cdp::TargetId'` and
 ``error[E0433]: failed to resolve: could not find `testkit` in `aleph_cdp` ``.
@@ -3611,17 +3611,17 @@ binary-count check in Step 4 below, which is written to catch exactly it.
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `CARGO_TARGET_DIR=/Volumes/TBU4/Workspace/aleph-target-dual-engine cargo test -p aleph-cdp --test smoke -- --nocapture`
+Run: `CARGO_TARGET_DIR=../aleph-target-dual-engine cargo test -p aleph-cdp --test smoke -- --nocapture`
 Expected: PASS (`test result: ok. 9 passed; 0 failed`).
 
 Then the crate as a whole and the workspace lint:
 
-Run: `CARGO_TARGET_DIR=/Volumes/TBU4/Workspace/aleph-target-dual-engine cargo test -p aleph-cdp`
+Run: `CARGO_TARGET_DIR=../aleph-target-dual-engine cargo test -p aleph-cdp`
 Expected: PASS (`test result: ok. 9 passed`, plus `0 passed` for the lib target, which has no unit tests of its own).
 
 Then prove the test target was actually built and run, not silently filtered out:
 
-Run: `CARGO_TARGET_DIR=/Volumes/TBU4/Workspace/aleph-target-dual-engine cargo test -p aleph-cdp 2>&1 | rg -c '^\s+Running (tests|unittests)'`
+Run: `CARGO_TARGET_DIR=../aleph-target-dual-engine cargo test -p aleph-cdp 2>&1 | rg -c '^\s+Running (tests|unittests)'`
 Expected: `2` at this task (the lib's unittests target plus `tests/smoke.rs`). By Task 4 this must
 be `6` (lib + smoke + connection + session + events + methods). A number lower than expected means
 a test binary was not run — which, with `required-features`, looks identical to everything passing.
@@ -3629,12 +3629,12 @@ Record the number in each task's report.
 
 Finally, prove the feature really is off in a normal build, so nothing ships the fake:
 
-Run: `CARGO_TARGET_DIR=/Volumes/TBU4/Workspace/aleph-target-dual-engine cargo build -p aleph-cdp 2>&1 | rg -c 'testkit' ; CARGO_TARGET_DIR=/Volumes/TBU4/Workspace/aleph-target-dual-engine cargo tree -p aleph-cdp -e features -i aleph-cdp`
+Run: `CARGO_TARGET_DIR=../aleph-target-dual-engine cargo build -p aleph-cdp 2>&1 | rg -c 'testkit' ; CARGO_TARGET_DIR=../aleph-target-dual-engine cargo tree -p aleph-cdp -e features -i aleph-cdp`
 Expected: no `testkit` in the build output, and `cargo tree` shows the `testkit` feature only on
 the dev edge. If `cargo tree` shows `testkit` on the normal edge, the feature gate is decorative
 and Task 9 would ship `FakeCdpServer` inside `aleph-server` — stop and report.
 
-Run: `just _stage-shell-placeholders && CARGO_TARGET_DIR=/Volumes/TBU4/Workspace/aleph-target-dual-engine cargo clippy --workspace --all-targets`
+Run: `just _stage-shell-placeholders && CARGO_TARGET_DIR=../aleph-target-dual-engine cargo clippy --workspace --all-targets`
 Expected: no new warnings attributable to `crates/aleph-cdp` (record the total diagnostic count as
 the S1 baseline; Task 20 compares against it).
 
@@ -4184,7 +4184,7 @@ async fn connecting_to_a_dead_port_is_a_transport_error_naming_the_url() {
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `CARGO_TARGET_DIR=/Volumes/TBU4/Workspace/aleph-target-dual-engine cargo test -p aleph-cdp --test connection -- --nocapture`
+Run: `CARGO_TARGET_DIR=../aleph-target-dual-engine cargo test -p aleph-cdp --test connection -- --nocapture`
 Expected: FAIL to compile with
 `error[E0432]: unresolved imports 'aleph_cdp::CdpConnection', 'aleph_cdp::ConnectOptions'`.
 
@@ -4574,13 +4574,13 @@ pub use ids::{SessionId, TargetId};
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `CARGO_TARGET_DIR=/Volumes/TBU4/Workspace/aleph-target-dual-engine cargo test -p aleph-cdp --test connection -- --nocapture`
+Run: `CARGO_TARGET_DIR=../aleph-target-dual-engine cargo test -p aleph-cdp --test connection -- --nocapture`
 Expected: PASS (`test result: ok. 11 passed; 0 failed`).
 
-Run: `CARGO_TARGET_DIR=/Volumes/TBU4/Workspace/aleph-target-dual-engine cargo test -p aleph-cdp`
+Run: `CARGO_TARGET_DIR=../aleph-target-dual-engine cargo test -p aleph-cdp`
 Expected: PASS (smoke 9 + connection 11).
 
-Run: `just _stage-shell-placeholders && CARGO_TARGET_DIR=/Volumes/TBU4/Workspace/aleph-target-dual-engine cargo clippy --workspace --all-targets`
+Run: `just _stage-shell-placeholders && CARGO_TARGET_DIR=../aleph-target-dual-engine cargo clippy --workspace --all-targets`
 Expected: no new warnings from `crates/aleph-cdp`.
 
 Format the files this task touched. `aleph-cdp` is NOT in the repo's formatting gate
@@ -5083,11 +5083,11 @@ async fn the_event_stream_ends_when_the_connection_is_gone() {
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `CARGO_TARGET_DIR=/Volumes/TBU4/Workspace/aleph-target-dual-engine cargo test -p aleph-cdp --test session -- --nocapture`
+Run: `CARGO_TARGET_DIR=../aleph-target-dual-engine cargo test -p aleph-cdp --test session -- --nocapture`
 Expected: FAIL to compile with
 ``error[E0599]: no method named `attach` found for struct `CdpConnection```.
 
-Run: `CARGO_TARGET_DIR=/Volumes/TBU4/Workspace/aleph-target-dual-engine cargo test -p aleph-cdp --test events -- --nocapture`
+Run: `CARGO_TARGET_DIR=../aleph-target-dual-engine cargo test -p aleph-cdp --test events -- --nocapture`
 Expected: FAIL to compile with
 ``error[E0599]: no method named `events` found for struct `CdpConnection```.
 
@@ -5274,16 +5274,16 @@ pub use ids::{SessionId, TargetId};
 
 - [ ] **Step 4: Run tests to verify they pass**
 
-Run: `CARGO_TARGET_DIR=/Volumes/TBU4/Workspace/aleph-target-dual-engine cargo test -p aleph-cdp --test session -- --nocapture`
+Run: `CARGO_TARGET_DIR=../aleph-target-dual-engine cargo test -p aleph-cdp --test session -- --nocapture`
 Expected: PASS (`test result: ok. 7 passed; 0 failed`).
 
-Run: `CARGO_TARGET_DIR=/Volumes/TBU4/Workspace/aleph-target-dual-engine cargo test -p aleph-cdp --test events -- --nocapture`
+Run: `CARGO_TARGET_DIR=../aleph-target-dual-engine cargo test -p aleph-cdp --test events -- --nocapture`
 Expected: PASS (`test result: ok. 5 passed; 0 failed`).
 
-Run: `CARGO_TARGET_DIR=/Volumes/TBU4/Workspace/aleph-target-dual-engine cargo test -p aleph-cdp`
+Run: `CARGO_TARGET_DIR=../aleph-target-dual-engine cargo test -p aleph-cdp`
 Expected: PASS (smoke 9 + connection 11 + session 7 + events 5 = 32).
 
-Run: `just _stage-shell-placeholders && CARGO_TARGET_DIR=/Volumes/TBU4/Workspace/aleph-target-dual-engine cargo clippy --workspace --all-targets`
+Run: `just _stage-shell-placeholders && CARGO_TARGET_DIR=../aleph-target-dual-engine cargo clippy --workspace --all-targets`
 Expected: no new warnings from `crates/aleph-cdp`.
 
 Format the files this task touched. `aleph-cdp` is NOT in the repo's formatting gate
@@ -6748,7 +6748,7 @@ fn the_support_matrix_records_both_engines() {
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `CARGO_TARGET_DIR=/Volumes/TBU4/Workspace/aleph-target-dual-engine cargo test -p aleph-cdp --test methods -- --nocapture`
+Run: `CARGO_TARGET_DIR=../aleph-target-dual-engine cargo test -p aleph-cdp --test methods -- --nocapture`
 Expected: FAIL to compile with
 ``error[E0432]: unresolved import `aleph_cdp::methods` `` — `could not find `methods` in `aleph_cdp` ``.
 
@@ -7883,13 +7883,13 @@ pub use ids::{SessionId, TargetId};
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `CARGO_TARGET_DIR=/Volumes/TBU4/Workspace/aleph-target-dual-engine cargo test -p aleph-cdp --test methods -- --nocapture`
+Run: `CARGO_TARGET_DIR=../aleph-target-dual-engine cargo test -p aleph-cdp --test methods -- --nocapture`
 Expected: PASS (`test result: ok. 33 passed; 0 failed`).
 
-Run: `CARGO_TARGET_DIR=/Volumes/TBU4/Workspace/aleph-target-dual-engine cargo test -p aleph-cdp`
+Run: `CARGO_TARGET_DIR=../aleph-target-dual-engine cargo test -p aleph-cdp`
 Expected: PASS (smoke 9 + connection 11 + session 7 + events 5 + methods 33 = 65).
 
-Run: `just _stage-shell-placeholders && CARGO_TARGET_DIR=/Volumes/TBU4/Workspace/aleph-target-dual-engine cargo clippy --workspace --all-targets`
+Run: `just _stage-shell-placeholders && CARGO_TARGET_DIR=../aleph-target-dual-engine cargo clippy --workspace --all-targets`
 Expected: no new warnings from `crates/aleph-cdp`. If clippy flags `clippy::too_many_arguments` on
 `set_device_metrics_override` (6) or `capture_snapshot` (5), leave the signatures as the skeleton
 defines them and add `#[allow(clippy::too_many_arguments)]` with a one-line reason — these mirror
@@ -7899,12 +7899,12 @@ protocol message.
 Run the whole verification set once at the end of the stage (S1 gate):
 
 ```
-CARGO_TARGET_DIR=/Volumes/TBU4/Workspace/aleph-target-dual-engine cargo test -p alephcore --lib --no-run
-CARGO_TARGET_DIR=/Volumes/TBU4/Workspace/aleph-target-dual-engine cargo test -p alephcore --bins
-CARGO_TARGET_DIR=/Volumes/TBU4/Workspace/aleph-target-dual-engine cargo test -p alephcore --features test-helpers --test '*' --no-run
-CARGO_TARGET_DIR=/Volumes/TBU4/Workspace/aleph-target-dual-engine cargo test -p aleph-panel --lib --no-run
-CARGO_TARGET_DIR=/Volumes/TBU4/Workspace/aleph-target-dual-engine cargo check -p aleph-desktop-macos
-CARGO_TARGET_DIR=/Volumes/TBU4/Workspace/aleph-target-dual-engine cargo clippy --workspace --all-targets
+CARGO_TARGET_DIR=../aleph-target-dual-engine cargo test -p alephcore --lib --no-run
+CARGO_TARGET_DIR=../aleph-target-dual-engine cargo test -p alephcore --bins
+CARGO_TARGET_DIR=../aleph-target-dual-engine cargo test -p alephcore --features test-helpers --test '*' --no-run
+CARGO_TARGET_DIR=../aleph-target-dual-engine cargo test -p aleph-panel --lib --no-run
+CARGO_TARGET_DIR=../aleph-target-dual-engine cargo check -p aleph-desktop-macos
+CARGO_TARGET_DIR=../aleph-target-dual-engine cargo clippy --workspace --all-targets
 ```
 
 Nothing in S1 touches `alephcore`, so the first five must be unchanged from the pre-branch state;
@@ -8277,7 +8277,7 @@ pub mod error;
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `CARGO_TARGET_DIR=/Volumes/TBU4/Workspace/aleph-target-dual-engine cargo test -p alephcore --lib engine:: -- --nocapture`
+Run: `CARGO_TARGET_DIR=../aleph-target-dual-engine cargo test -p alephcore --lib engine:: -- --nocapture`
 
 Expected: FAIL to compile with ``error[E0432]: unresolved import `crate::browser::engine::process` `` and ``error[E0433]: failed to resolve: could not find `Engine` in `engine` ``.
 
@@ -9272,7 +9272,7 @@ pub(crate) use super::engine::process::*;
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `CARGO_TARGET_DIR=/Volumes/TBU4/Workspace/aleph-target-dual-engine cargo test -p alephcore --lib engine:: -- --nocapture`
+Run: `CARGO_TARGET_DIR=../aleph-target-dual-engine cargo test -p alephcore --lib engine:: -- --nocapture`
 
 Expected: PASS — the 22 moved tests plus these 11 added, **read the names, not the number** (four are `#[cfg(unix)]`, so the count differs by platform):
 `each_engine_names_its_data_directory_with_its_own_switch`,
@@ -9291,15 +9291,15 @@ Expected: PASS — the 22 moved tests plus these 11 added, **read the names, not
 Then the full verification set, because this task moves a module every launch path imports:
 
 ```
-CARGO_TARGET_DIR=/Volumes/TBU4/Workspace/aleph-target-dual-engine cargo test -p alephcore --lib --no-run
-CARGO_TARGET_DIR=/Volumes/TBU4/Workspace/aleph-target-dual-engine cargo test -p alephcore --bins
-CARGO_TARGET_DIR=/Volumes/TBU4/Workspace/aleph-target-dual-engine cargo test -p alephcore --features test-helpers --test '*' --no-run
-CARGO_TARGET_DIR=/Volumes/TBU4/Workspace/aleph-target-dual-engine cargo test -p aleph-panel --lib --no-run
-CARGO_TARGET_DIR=/Volumes/TBU4/Workspace/aleph-target-dual-engine cargo check -p aleph-desktop-macos
-CARGO_TARGET_DIR=/Volumes/TBU4/Workspace/aleph-target-dual-engine cargo clippy --workspace --all-targets
+CARGO_TARGET_DIR=../aleph-target-dual-engine cargo test -p alephcore --lib --no-run
+CARGO_TARGET_DIR=../aleph-target-dual-engine cargo test -p alephcore --bins
+CARGO_TARGET_DIR=../aleph-target-dual-engine cargo test -p alephcore --features test-helpers --test '*' --no-run
+CARGO_TARGET_DIR=../aleph-target-dual-engine cargo test -p aleph-panel --lib --no-run
+CARGO_TARGET_DIR=../aleph-target-dual-engine cargo check -p aleph-desktop-macos
+CARGO_TARGET_DIR=../aleph-target-dual-engine cargo clippy --workspace --all-targets
 ```
 
-and the whole browser module unfiltered once: `CARGO_TARGET_DIR=/Volumes/TBU4/Workspace/aleph-target-dual-engine cargo test -p alephcore --lib browser::`.
+and the whole browser module unfiltered once: `CARGO_TARGET_DIR=../aleph-target-dual-engine cargo test -p alephcore --lib browser::`.
 
 Format only what you touched: `rustfmt src/browser/engine/mod.rs src/browser/engine/process.rs src/browser/engine/chromium.rs src/browser/chromium_launch.rs src/browser/mod.rs` — never `cargo fmt -p alephcore`. Note `rustfmt src/browser/engine/mod.rs` recurses into its declared children, so listing them again is harmless but not required.
 
@@ -9808,7 +9808,7 @@ Append to `src/gateway/handlers/browser_config.rs`'s `mod tests`:
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `CARGO_TARGET_DIR=/Volumes/TBU4/Workspace/aleph-target-dual-engine cargo test -p alephcore --lib browser::profile -- --nocapture`
+Run: `CARGO_TARGET_DIR=../aleph-target-dual-engine cargo test -p alephcore --lib browser::profile -- --nocapture`
 
 Expected: FAIL to compile with ``error[E0599]: no variant or associated item named `Cdp` found for enum `BrowserDriver` `` and ``error[E0425]: cannot find function `validate_engine_driver` in this scope``.
 
@@ -10405,7 +10405,7 @@ and the method itself, next to `validate_policies` (`:653`):
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `CARGO_TARGET_DIR=/Volumes/TBU4/Workspace/aleph-target-dual-engine cargo test -p alephcore --lib browser::profile -- --nocapture`
+Run: `CARGO_TARGET_DIR=../aleph-target-dual-engine cargo test -p alephcore --lib browser::profile -- --nocapture`
 
 Expected: PASS (`test result: ok.`) covering these ten new names —
 `the_driver_axis_gains_cdp_without_moving_the_two_legacy_spellings`,
@@ -10422,10 +10422,10 @@ Expected: PASS (`test result: ok.`) covering these ten new names —
 
 Then:
 ```
-CARGO_TARGET_DIR=/Volumes/TBU4/Workspace/aleph-target-dual-engine cargo test -p alephcore --lib browser::
-CARGO_TARGET_DIR=/Volumes/TBU4/Workspace/aleph-target-dual-engine cargo test -p alephcore --lib config::
-CARGO_TARGET_DIR=/Volumes/TBU4/Workspace/aleph-target-dual-engine cargo test -p alephcore --lib browser_config
-CARGO_TARGET_DIR=/Volumes/TBU4/Workspace/aleph-target-dual-engine cargo test -p alephcore --lib dead_keys
+CARGO_TARGET_DIR=../aleph-target-dual-engine cargo test -p alephcore --lib browser::
+CARGO_TARGET_DIR=../aleph-target-dual-engine cargo test -p alephcore --lib config::
+CARGO_TARGET_DIR=../aleph-target-dual-engine cargo test -p alephcore --lib browser_config
+CARGO_TARGET_DIR=../aleph-target-dual-engine cargo test -p alephcore --lib dead_keys
 ```
 plus the six-command verification set from Task 5.
 
@@ -10653,7 +10653,7 @@ And one new test in the same module, which is the reason this refactor is worth 
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `CARGO_TARGET_DIR=/Volumes/TBU4/Workspace/aleph-target-dual-engine cargo test -p alephcore --lib tab_registry -- --nocapture`
+Run: `CARGO_TARGET_DIR=../aleph-target-dual-engine cargo test -p alephcore --lib tab_registry -- --nocapture`
 
 Expected: FAIL to compile with ``error[E0425]: cannot find function `parse_tab_lines` in this scope`` and ``error[E0308]: mismatched types: expected `&str`, found `&Vec<TabLine>` `` at the `tab_ids` / `active_tab_id` calls.
 
@@ -11053,13 +11053,13 @@ The rename from `parse_tab_listing` to `tab_listing_rows` is for the same reason
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `CARGO_TARGET_DIR=/Volumes/TBU4/Workspace/aleph-target-dual-engine cargo test -p alephcore --lib tab_registry -- --nocapture`
+Run: `CARGO_TARGET_DIR=../aleph-target-dual-engine cargo test -p alephcore --lib tab_registry -- --nocapture`
 
 Expected: PASS (`test result: ok.`), then the whole blast radius unfiltered:
 
 ```
-CARGO_TARGET_DIR=/Volumes/TBU4/Workspace/aleph-target-dual-engine cargo test -p alephcore --lib browser
-CARGO_TARGET_DIR=/Volumes/TBU4/Workspace/aleph-target-dual-engine cargo test -p alephcore --lib browser_tools
+CARGO_TARGET_DIR=../aleph-target-dual-engine cargo test -p alephcore --lib browser
+CARGO_TARGET_DIR=../aleph-target-dual-engine cargo test -p alephcore --lib browser_tools
 ```
 
 The tool-layer call-log assertions must be **unchanged**, and that is the acceptance criterion for "tools compile unchanged": `exec.rs:1338`, `:1523`, `:1564`, `:1756`, `:1810` all assert the string `"list_tabs"` in `FakeBackend::calls()`, and none of them may need editing. If one does, the sequencing changed and that is a defect in this task, not in the test.
@@ -11364,7 +11364,7 @@ mod tests {
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `CARGO_TARGET_DIR=/Volumes/TBU4/Workspace/aleph-target-dual-engine cargo test -p alephcore --lib browser::error -- --nocapture`
+Run: `CARGO_TARGET_DIR=../aleph-target-dual-engine cargo test -p alephcore --lib browser::error -- --nocapture`
 
 Expected: FAIL to compile with ``error[E0599]: no variant or associated item named `EngineBusy` found for enum `BrowserError` `` and ``error[E0425]: cannot find function `engine_unavailable` in this scope``.
 
@@ -11673,15 +11673,15 @@ Their assertions on `check_id`, `title` and `severity` are unchanged, and `class
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `CARGO_TARGET_DIR=/Volumes/TBU4/Workspace/aleph-target-dual-engine cargo test -p alephcore --lib browser::error -- --nocapture`
+Run: `CARGO_TARGET_DIR=../aleph-target-dual-engine cargo test -p alephcore --lib browser::error -- --nocapture`
 
 Expected: PASS (`test result: ok. 5 passed`).
 
 Then:
 ```
-CARGO_TARGET_DIR=/Volumes/TBU4/Workspace/aleph-target-dual-engine cargo test -p alephcore --lib browser
-CARGO_TARGET_DIR=/Volumes/TBU4/Workspace/aleph-target-dual-engine cargo test -p alephcore --lib chromium_missing
-CARGO_TARGET_DIR=/Volumes/TBU4/Workspace/aleph-target-dual-engine cargo test -p alephcore --lib dead_keys
+CARGO_TARGET_DIR=../aleph-target-dual-engine cargo test -p alephcore --lib browser
+CARGO_TARGET_DIR=../aleph-target-dual-engine cargo test -p alephcore --lib chromium_missing
+CARGO_TARGET_DIR=../aleph-target-dual-engine cargo test -p alephcore --lib dead_keys
 ```
 plus the six-command verification set from Task 5.
 
@@ -13002,7 +13002,7 @@ mod tests {
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `CARGO_TARGET_DIR=/Volumes/TBU4/Workspace/aleph-target-dual-engine cargo test -p alephcore engine_handle -- --nocapture`
+Run: `CARGO_TARGET_DIR=../aleph-target-dual-engine cargo test -p alephcore engine_handle -- --nocapture`
 
 Expected: FAIL to compile with ``error[E0433]: failed to resolve: could not find `registry` in `engine` `` and ``error[E0599]: no method named `launch_request_for` found for struct `ProfileManager` ``.
 
@@ -14211,19 +14211,19 @@ impl super::engine::EngineProcess for FakeEngineProcess {
 
 - [ ] **Step 4: Run tests to verify they pass**
 
-Run: `CARGO_TARGET_DIR=/Volumes/TBU4/Workspace/aleph-target-dual-engine cargo test -p alephcore engine_handle -- --nocapture`
+Run: `CARGO_TARGET_DIR=../aleph-target-dual-engine cargo test -p alephcore engine_handle -- --nocapture`
 Expected: PASS (`test result: ok. 2 passed`)
 
 Then the registry, readiness, testkit and shutdown groups, and the whole browser module unfiltered:
 ```
-CARGO_TARGET_DIR=/Volumes/TBU4/Workspace/aleph-target-dual-engine cargo test -p alephcore engine::registry
-CARGO_TARGET_DIR=/Volumes/TBU4/Workspace/aleph-target-dual-engine cargo test -p alephcore is_live
-CARGO_TARGET_DIR=/Volumes/TBU4/Workspace/aleph-target-dual-engine cargo test -p alephcore ready_gate
-CARGO_TARGET_DIR=/Volumes/TBU4/Workspace/aleph-target-dual-engine cargo test -p alephcore fake_engine_process
-CARGO_TARGET_DIR=/Volumes/TBU4/Workspace/aleph-target-dual-engine cargo test -p alephcore shutdown_browsers
-CARGO_TARGET_DIR=/Volumes/TBU4/Workspace/aleph-target-dual-engine cargo test -p alephcore launch_request_for
-CARGO_TARGET_DIR=/Volumes/TBU4/Workspace/aleph-target-dual-engine cargo test -p alephcore browser::
-CARGO_TARGET_DIR=/Volumes/TBU4/Workspace/aleph-target-dual-engine cargo test -p alephcore --bins
+CARGO_TARGET_DIR=../aleph-target-dual-engine cargo test -p alephcore engine::registry
+CARGO_TARGET_DIR=../aleph-target-dual-engine cargo test -p alephcore is_live
+CARGO_TARGET_DIR=../aleph-target-dual-engine cargo test -p alephcore ready_gate
+CARGO_TARGET_DIR=../aleph-target-dual-engine cargo test -p alephcore fake_engine_process
+CARGO_TARGET_DIR=../aleph-target-dual-engine cargo test -p alephcore shutdown_browsers
+CARGO_TARGET_DIR=../aleph-target-dual-engine cargo test -p alephcore launch_request_for
+CARGO_TARGET_DIR=../aleph-target-dual-engine cargo test -p alephcore browser::
+CARGO_TARGET_DIR=../aleph-target-dual-engine cargo test -p alephcore --bins
 ```
 The `--bins` run is the one that covers `both_daemon_exit_paths_reap_background_jobs_and_browsers` (`start/helpers.rs:671`) and `the_browser_stop_precedes_the_kill_on_drop_sleep` (`:642`) — `--lib` never reaches `src/bin/`.
 
@@ -15905,7 +15905,7 @@ mod census {
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `CARGO_TARGET_DIR=/Volumes/TBU4/Workspace/aleph-target-dual-engine cargo test -p alephcore page_state -- --nocapture`
+Run: `CARGO_TARGET_DIR=../aleph-target-dual-engine cargo test -p alephcore page_state -- --nocapture`
 
 Expected: FAIL to compile with ``error[E0433]: failed to resolve: could not find `page_state` in `browser` ``.
 
@@ -17482,13 +17482,13 @@ and in `TabEntry::new`, after `session,`:
 
 - [ ] **Step 4: Run tests to verify they pass**
 
-Run: `CARGO_TARGET_DIR=/Volumes/TBU4/Workspace/aleph-target-dual-engine cargo test -p alephcore page_state -- --nocapture`
+Run: `CARGO_TARGET_DIR=../aleph-target-dual-engine cargo test -p alephcore page_state -- --nocapture`
 Expected: PASS (`test result: ok. 37 passed`)
 
 Then unfiltered for the module and the crate lib:
 ```
-CARGO_TARGET_DIR=/Volumes/TBU4/Workspace/aleph-target-dual-engine cargo test -p alephcore browser::page_state
-CARGO_TARGET_DIR=/Volumes/TBU4/Workspace/aleph-target-dual-engine cargo test -p alephcore --lib
+CARGO_TARGET_DIR=../aleph-target-dual-engine cargo test -p alephcore browser::page_state
+CARGO_TARGET_DIR=../aleph-target-dual-engine cargo test -p alephcore --lib
 ```
 Then the six-command verification set. Format with `rustfmt src/browser/page_state/*.rs` only — never `cargo fmt -p alephcore`, which rewrites ~100 unrelated files and destroys the `src/harness/` ratchet's attribution.
 
@@ -18080,7 +18080,7 @@ mod tests {
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `CARGO_TARGET_DIR=/Volumes/TBU4/Workspace/aleph-target-dual-engine cargo test -p alephcore fetch_chromium -- --nocapture`
+Run: `CARGO_TARGET_DIR=../aleph-target-dual-engine cargo test -p alephcore fetch_chromium -- --nocapture`
 
 Expected: FAIL to compile with ``error[E0433]: failed to resolve: could not find `fetch_chromium` in `page_state` `` (and, before that, `couldn't read src/browser/page_state/fixtures/hn-chromium.domsnapshot.json` if Task 0's captures have not landed — that file and `local-oopif.domsnapshot.json` are Task 0 deliverables and this task cannot start without both).
 
@@ -18596,14 +18596,14 @@ pub use fetch_chromium::{fetch_chromium, parse_snapshot, COMPUTED_STYLES};
 
 - [ ] **Step 4: Run tests to verify they pass**
 
-Run: `CARGO_TARGET_DIR=/Volumes/TBU4/Workspace/aleph-target-dual-engine cargo test -p alephcore fetch_chromium -- --nocapture`
+Run: `CARGO_TARGET_DIR=../aleph-target-dual-engine cargo test -p alephcore fetch_chromium -- --nocapture`
 Expected: PASS (`test result: ok. 11 passed`)
 
 Then the module and the crate:
 ```
-CARGO_TARGET_DIR=/Volumes/TBU4/Workspace/aleph-target-dual-engine cargo test -p alephcore browser::page_state
-CARGO_TARGET_DIR=/Volumes/TBU4/Workspace/aleph-target-dual-engine cargo test -p aleph-cdp
-CARGO_TARGET_DIR=/Volumes/TBU4/Workspace/aleph-target-dual-engine cargo test -p alephcore --lib
+CARGO_TARGET_DIR=../aleph-target-dual-engine cargo test -p alephcore browser::page_state
+CARGO_TARGET_DIR=../aleph-target-dual-engine cargo test -p aleph-cdp
+CARGO_TARGET_DIR=../aleph-target-dual-engine cargo test -p alephcore --lib
 ```
 Then the six-command verification set. `rustfmt src/browser/page_state/fetch_chromium.rs` only.
 
@@ -19047,7 +19047,7 @@ mod tests {
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
-Run: `CARGO_TARGET_DIR=/Volumes/TBU4/Workspace/aleph-target-dual-engine cargo test -p alephcore cdp_backend -- --nocapture`
+Run: `CARGO_TARGET_DIR=../aleph-target-dual-engine cargo test -p alephcore cdp_backend -- --nocapture`
 Expected: FAIL with ``error[E0433]: failed to resolve: use of undeclared crate or module `cdp_backend` `` from `src/browser/mod.rs` (the module is not declared yet); after declaring it, ``cannot find struct, variant or union type `CdpBackend` in this scope`` and ``cannot find function `map_cdp_err` in this scope``.
 
 - [ ] **Step 3: Write minimal implementation**
@@ -21136,19 +21136,19 @@ aleph-cdp = { path = "crates/aleph-cdp", features = ["testkit"] }
 ```
 
 - [ ] **Step 4: Run test to verify it passes**
-Run: `CARGO_TARGET_DIR=/Volumes/TBU4/Workspace/aleph-target-dual-engine cargo test -p alephcore cdp_backend -- --nocapture`
+Run: `CARGO_TARGET_DIR=../aleph-target-dual-engine cargo test -p alephcore cdp_backend -- --nocapture`
 Expected: PASS (`test result: ok. 15 passed`) — four in `mod.rs`, two in `tabs.rs`, two in `navigate.rs`, one in `snapshot.rs`, four in `evaluate.rs`, two in `screenshot.rs`. The `cdp_backend` filter does **not** reach `types.rs`'s two tests or `engine::capability`'s two; run them with `cargo test -p alephcore --lib browser` below. Adjust the number only if a test is dropped, never by relaxing one.
 
 Then the crate slice and the six-command verification set. The prefix is written on every line, not described above them: a block that is copy-pasteable without it is exactly how the shared-target phantom-binary hazard recurs.
 ```
-export CARGO_TARGET_DIR=/Volumes/TBU4/Workspace/aleph-target-dual-engine
-CARGO_TARGET_DIR=/Volumes/TBU4/Workspace/aleph-target-dual-engine cargo test -p alephcore --lib browser
-CARGO_TARGET_DIR=/Volumes/TBU4/Workspace/aleph-target-dual-engine cargo test -p alephcore --lib --no-run
-CARGO_TARGET_DIR=/Volumes/TBU4/Workspace/aleph-target-dual-engine cargo test -p alephcore --bins
-CARGO_TARGET_DIR=/Volumes/TBU4/Workspace/aleph-target-dual-engine cargo test -p alephcore --features test-helpers --test '*' --no-run
-CARGO_TARGET_DIR=/Volumes/TBU4/Workspace/aleph-target-dual-engine cargo test -p aleph-panel --lib --no-run
-CARGO_TARGET_DIR=/Volumes/TBU4/Workspace/aleph-target-dual-engine cargo check -p aleph-desktop-macos
-CARGO_TARGET_DIR=/Volumes/TBU4/Workspace/aleph-target-dual-engine cargo clippy --workspace --all-targets
+export CARGO_TARGET_DIR=../aleph-target-dual-engine
+CARGO_TARGET_DIR=../aleph-target-dual-engine cargo test -p alephcore --lib browser
+CARGO_TARGET_DIR=../aleph-target-dual-engine cargo test -p alephcore --lib --no-run
+CARGO_TARGET_DIR=../aleph-target-dual-engine cargo test -p alephcore --bins
+CARGO_TARGET_DIR=../aleph-target-dual-engine cargo test -p alephcore --features test-helpers --test '*' --no-run
+CARGO_TARGET_DIR=../aleph-target-dual-engine cargo test -p aleph-panel --lib --no-run
+CARGO_TARGET_DIR=../aleph-target-dual-engine cargo check -p aleph-desktop-macos
+CARGO_TARGET_DIR=../aleph-target-dual-engine cargo clippy --workspace --all-targets
 ```
 (The `export` on the first line is belt-and-braces for an interactive shell; the per-line prefixes are what make each command safe to copy on its own.)
 Expected: all green. `types.rs`'s round-trip test plus the three construction-site edits are what keep `--lib browser` green after the `Option<String>` change; `cargo clippy --workspace --all-targets` needs `just _stage-shell-placeholders` first.
@@ -21733,7 +21733,7 @@ Add to `src/browser/cdp_backend/mod.rs`'s `mod tests`:
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
-Run: `CARGO_TARGET_DIR=/Volumes/TBU4/Workspace/aleph-target-dual-engine cargo test -p alephcore cdp_backend -- --nocapture`
+Run: `CARGO_TARGET_DIR=../aleph-target-dual-engine cargo test -p alephcore cdp_backend -- --nocapture`
 Expected: FAIL with ``cannot find function `press_key_event` in this scope``; once the module compiles, four red tests reporting `expected StaleRef, got ActionFailed("CDP_VERB_NOT_WIRED: click …")` and `no_verb_is_left_unwired` red listing the 16 placeholder lines.
 
 - [ ] **Step 3: Write minimal implementation**
@@ -23854,7 +23854,7 @@ Keeping it a parameter preserves what makes this function testable — it stays 
 **The ceiling.** This `DESCRIPTION` grows, which moves `CATALOG_DESCRIPTION_CEILING_BYTES`. **Task 13 does not touch that scalar.** Task 14 step 3f-ter re-measures it and sets it to what the guard prints, and its cross-task rule already says the task that lands last re-measures rather than summing deltas — this delta is one of the ones that rule exists for. If Task 13 is run standalone, `catalog_description_bytes_ratchet` will be red until Task 14 lands; that is the ratchet working, not a failure of this step.
 
 - [ ] **Step 4: Run test to verify it passes**
-Run: `CARGO_TARGET_DIR=/Volumes/TBU4/Workspace/aleph-target-dual-engine cargo test -p alephcore cdp_backend -- --nocapture`
+Run: `CARGO_TARGET_DIR=../aleph-target-dual-engine cargo test -p alephcore cdp_backend -- --nocapture`
 Expected: PASS (`test result: ok. 34 passed`) — Task 12's 15 plus eleven in `actions.rs`, two in `dialog.rs`, one in `cookies.rs`, four in `events.rs`, and `no_verb_is_left_unwired` (19 new). Step 3i's two `click.rs` tests are outside the `cdp_backend` filter; reach them with `cargo test -p alephcore browser_click`.
 
 Then the six-command verification set — the prefixed block written out in Task 12 Step 4, copied line for line.
@@ -24322,7 +24322,7 @@ In `src/builtin_tools/browser_tools/snapshot.rs`'s `mod tests`:
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
-Run: `CARGO_TARGET_DIR=/Volumes/TBU4/Workspace/aleph-target-dual-engine cargo test -p alephcore browser -- --nocapture`
+Run: `CARGO_TARGET_DIR=../aleph-target-dual-engine cargo test -p alephcore browser -- --nocapture`
 Expected: FAIL with ``no method named `as_any` found for reference `&dyn BrowserBackend` ``, ``cannot find function `render_snapshot_message` in module `super` `` and ``cannot find function `resolve_format` in module `super` ``.
 
 - [ ] **Step 3: Write minimal implementation**
@@ -24892,9 +24892,9 @@ with the rest of the arm unchanged — `ref_count` still counts `REF_TOKEN` on t
 **3f-ter. The catalog byte ratchets.** `definitions.rs` carries measured ceilings on what every request pays for tool prose and schemas. Run both guards **before** editing either number — the failure message prints the live measurement, and the raise is by that number, never by arithmetic:
 
 ```
-CARGO_TARGET_DIR=/Volumes/TBU4/Workspace/aleph-target-dual-engine \
+CARGO_TARGET_DIR=../aleph-target-dual-engine \
   cargo test -p alephcore catalog_description_bytes_ratchet -- --nocapture
-CARGO_TARGET_DIR=/Volumes/TBU4/Workspace/aleph-target-dual-engine \
+CARGO_TARGET_DIR=../aleph-target-dual-engine \
   cargo test -p alephcore registry_schema_bytes_ratchet -- --nocapture
 ```
 
@@ -25218,15 +25218,15 @@ and re-state each CLI-specific claim rather than skipping it:
 
 Unit first:
 ```
-CARGO_TARGET_DIR=/Volumes/TBU4/Workspace/aleph-target-dual-engine cargo test -p alephcore browser -- --nocapture
+CARGO_TARGET_DIR=../aleph-target-dual-engine cargo test -p alephcore browser -- --nocapture
 ```
 Expected: PASS, including `test_get_backend_routes_cdp_profile_to_cdp_backend`, `the_snapshot_output_names_the_page_and_counts_only_visible_refs`, `an_unknown_page_url_is_said_rather_than_left_blank`, `the_json_format_returns_the_page_state_tree_and_parses`, `json_on_a_text_driver_is_refused_and_names_the_cdp_driver`, `an_unknown_format_is_refused_rather_than_defaulted`, `a_coordinate_double_click_reaches_the_page_on_a_cdp_profile` (Task 13 step 3i's falsifier), and `the_boot_hook_still_calls_the_orphan_sweep` (with its new path string).
 
 Then the two catalog ratchets, which the `DESCRIPTION` change pushes against (step 3f-ter):
 ```
-CARGO_TARGET_DIR=/Volumes/TBU4/Workspace/aleph-target-dual-engine \
+CARGO_TARGET_DIR=../aleph-target-dual-engine \
   cargo test -p alephcore catalog_description_bytes_ratchet -- --nocapture
-CARGO_TARGET_DIR=/Volumes/TBU4/Workspace/aleph-target-dual-engine \
+CARGO_TARGET_DIR=../aleph-target-dual-engine \
   cargo test -p alephcore registry_schema_bytes_ratchet -- --nocapture
 ```
 Expected: `catalog_description_bytes_ratchet` goes green only after the ceiling is raised by the delta it printed **and** the dated ledger entry is written; `registry_schema_bytes_ratchet` is green unchanged, because browser tools are absent from `unconditional_registry_map()`. Both must be green before the commit — a raised ceiling with no ledger entry is a number nobody can re-derive, which is the state the ledger exists to prevent.
@@ -26081,13 +26081,13 @@ New test in `src/config/dead_keys.rs`'s `mod tests`:
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `CARGO_TARGET_DIR=/Volumes/TBU4/Workspace/aleph-target-dual-engine cargo test -p alephcore --lib github_release -- --nocapture`
+Run: `CARGO_TARGET_DIR=../aleph-target-dual-engine cargo test -p alephcore --lib github_release -- --nocapture`
 Expected: FAIL with ``error[E0583]: file not found for module `github_release` `` (before the module is declared) and then `` error[E0425]: cannot find function `api_url` in this scope `` / `` cannot find function `install_release` in this scope ``.
 
-Run: `CARGO_TARGET_DIR=/Volumes/TBU4/Workspace/aleph-target-dual-engine cargo test -p alephcore --lib obscura -- --nocapture`
+Run: `CARGO_TARGET_DIR=../aleph-target-dual-engine cargo test -p alephcore --lib obscura -- --nocapture`
 Expected: FAIL with `` error[E0425]: cannot find value `OBSCURA_RUNTIME` in this scope ``.
 
-Run: `CARGO_TARGET_DIR=/Volumes/TBU4/Workspace/aleph-target-dual-engine cargo test -p alephcore --lib engine_missing -- --nocapture`
+Run: `CARGO_TARGET_DIR=../aleph-target-dual-engine cargo test -p alephcore --lib engine_missing -- --nocapture`
 Expected: FAIL with `` error[E0433]: failed to resolve: could not find `engine_missing` in `checks` ``.
 
 - [ ] **Step 3: Write minimal implementation**
@@ -27522,11 +27522,11 @@ The `found.len() >= 7` floor at `:527` only grows (`engine_missing.rs` states `[
 - [ ] **Step 4: Run test to verify it passes**
 
 ```
-CARGO_TARGET_DIR=/Volumes/TBU4/Workspace/aleph-target-dual-engine cargo test -p alephcore --lib github_release -- --nocapture
-CARGO_TARGET_DIR=/Volumes/TBU4/Workspace/aleph-target-dual-engine cargo test -p alephcore --lib obscura -- --nocapture
-CARGO_TARGET_DIR=/Volumes/TBU4/Workspace/aleph-target-dual-engine cargo test -p alephcore --lib engine_missing -- --nocapture
-CARGO_TARGET_DIR=/Volumes/TBU4/Workspace/aleph-target-dual-engine cargo test -p alephcore --lib dead_keys -- --nocapture
-CARGO_TARGET_DIR=/Volumes/TBU4/Workspace/aleph-target-dual-engine cargo test -p alephcore --lib runtime_manage -- --nocapture
+CARGO_TARGET_DIR=../aleph-target-dual-engine cargo test -p alephcore --lib github_release -- --nocapture
+CARGO_TARGET_DIR=../aleph-target-dual-engine cargo test -p alephcore --lib obscura -- --nocapture
+CARGO_TARGET_DIR=../aleph-target-dual-engine cargo test -p alephcore --lib engine_missing -- --nocapture
+CARGO_TARGET_DIR=../aleph-target-dual-engine cargo test -p alephcore --lib dead_keys -- --nocapture
+CARGO_TARGET_DIR=../aleph-target-dual-engine cargo test -p alephcore --lib runtime_manage -- --nocapture
 ```
 Expected: PASS (`test result: ok. N passed`) for each.
 
@@ -27535,7 +27535,7 @@ used to sit under prose saying "all with the same `CARGO_TARGET_DIR`", which a
 copy-paste silently ignores, sending the build into the machine-wide shared
 target the Global Constraints name as the phantom-binary hazard:
 ```
-export CARGO_TARGET_DIR=/Volumes/TBU4/Workspace/aleph-target-dual-engine
+export CARGO_TARGET_DIR=../aleph-target-dual-engine
 cargo test -p alephcore --lib --no-run
 cargo test -p alephcore --bins
 cargo test -p alephcore --features test-helpers --test '*' --no-run
@@ -28555,14 +28555,14 @@ mod tests {
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `CARGO_TARGET_DIR=/Volumes/TBU4/Workspace/aleph-target-dual-engine cargo test -p alephcore --lib obscura_argv -- --nocapture`
+Run: `CARGO_TARGET_DIR=../aleph-target-dual-engine cargo test -p alephcore --lib obscura_argv -- --nocapture`
 Expected: FAIL with `` error[E0433]: failed to resolve: could not find `obscura` in `engine` `` and then `` cannot find function `obscura_argv` in this scope ``.
 
-Run: `CARGO_TARGET_DIR=/Volumes/TBU4/Workspace/aleph-target-dual-engine cargo test -p alephcore --lib capability -- --nocapture
-CARGO_TARGET_DIR=/Volumes/TBU4/Workspace/aleph-target-dual-engine cargo test -p alephcore --lib capability_table_agrees_with_the_t0_support_matrix -- --nocapture`
+Run: `CARGO_TARGET_DIR=../aleph-target-dual-engine cargo test -p alephcore --lib capability -- --nocapture
+CARGO_TARGET_DIR=../aleph-target-dual-engine cargo test -p alephcore --lib capability_table_agrees_with_the_t0_support_matrix -- --nocapture`
 Expected: FAIL with `` cannot find function `capabilities` in this scope ``.
 
-Run: `CARGO_TARGET_DIR=/Volumes/TBU4/Workspace/aleph-target-dual-engine cargo test -p alephcore --lib the_default_profile_is_obscura -- --nocapture`
+Run: `CARGO_TARGET_DIR=../aleph-target-dual-engine cargo test -p alephcore --lib the_default_profile_is_obscura -- --nocapture`
 Expected: FAIL with `` no variant or associated item named `Cdp` found for enum `BrowserDriver` `` if Task 6 is not yet merged, otherwise `assertion `left == right` failed: left: Managed, right: Cdp`.
 
 - [ ] **Step 3: Write minimal implementation**
@@ -29509,7 +29509,7 @@ total. **Run the guard BEFORE editing the constant**: the number is measured,
 never computed, and the failure message prints the live total.
 
 ```
-CARGO_TARGET_DIR=/Volumes/TBU4/Workspace/aleph-target-dual-engine \
+CARGO_TARGET_DIR=../aleph-target-dual-engine \
   cargo test -p alephcore --lib catalog_description_bytes_ratchet -- --nocapture
 ```
 Expected: FAIL, with `builtin tool descriptions total <N> B (… catalog + … registry-only + … injected + … bridge), over the ceiling of 114393 B`. The delta is `N - 114_393`.
@@ -29548,9 +29548,9 @@ platforms, so the entry has to say which one produced the number.
 **The other two ratchets are confirmed, not raised.** Run them and expect green:
 
 ```
-CARGO_TARGET_DIR=/Volumes/TBU4/Workspace/aleph-target-dual-engine \
+CARGO_TARGET_DIR=../aleph-target-dual-engine \
   cargo test -p alephcore --lib registry_schema_bytes_ratchet -- --nocapture
-CARGO_TARGET_DIR=/Volumes/TBU4/Workspace/aleph-target-dual-engine \
+CARGO_TARGET_DIR=../aleph-target-dual-engine \
   cargo test -p alephcore --lib non_catalog_tool_schema_bytes_ratchet -- --nocapture
 ```
 `SessionAction::Capabilities` and `name: Option<String>` enlarge
@@ -29568,11 +29568,11 @@ anything is raised — the guard prints a signed per-tool list for exactly that.
 - [ ] **Step 4: Run test to verify it passes**
 
 ```
-CARGO_TARGET_DIR=/Volumes/TBU4/Workspace/aleph-target-dual-engine cargo test -p alephcore --lib obscura -- --nocapture
-CARGO_TARGET_DIR=/Volumes/TBU4/Workspace/aleph-target-dual-engine cargo test -p alephcore --lib capability -- --nocapture
-CARGO_TARGET_DIR=/Volumes/TBU4/Workspace/aleph-target-dual-engine cargo test -p alephcore --lib browser_session -- --nocapture
-CARGO_TARGET_DIR=/Volumes/TBU4/Workspace/aleph-target-dual-engine cargo test -p alephcore --lib profile -- --nocapture
-CARGO_TARGET_DIR=/Volumes/TBU4/Workspace/aleph-target-dual-engine cargo test -p alephcore --lib ratchet -- --nocapture
+CARGO_TARGET_DIR=../aleph-target-dual-engine cargo test -p alephcore --lib obscura -- --nocapture
+CARGO_TARGET_DIR=../aleph-target-dual-engine cargo test -p alephcore --lib capability -- --nocapture
+CARGO_TARGET_DIR=../aleph-target-dual-engine cargo test -p alephcore --lib browser_session -- --nocapture
+CARGO_TARGET_DIR=../aleph-target-dual-engine cargo test -p alephcore --lib profile -- --nocapture
+CARGO_TARGET_DIR=../aleph-target-dual-engine cargo test -p alephcore --lib ratchet -- --nocapture
 ```
 Expected: PASS (`test result: ok. N passed`) for each. Then the six-command verification set from Task 15 Step 4 (with its `export CARGO_TARGET_DIR=…` first line), plus — because the driver default moved — both of Task 14's `qa/browser_managed` runs: the regression one, which must stay green with the OLD driver explicitly pinned (`driver = "managed"` written into the fixture config, not merely inherited), and the parity one on `driver = "cdp"` + `engine = "chromium"`. **Confirm the env-var spelling with Task 14's writer before citing it here** — the skeleton says `ALEPH_QA_DRIVER=playwright_cli`, R16 fixes what gets WRITTEN rather than what the variable is called, and a value restated from the skeleton breaks silently if that task named it `managed`.
 
@@ -30042,7 +30042,7 @@ mod tests {
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `CARGO_TARGET_DIR=/Volumes/TBU4/Workspace/aleph-target-dual-engine cargo test -p alephcore --lib fetch_obscura -- --nocapture`
+Run: `CARGO_TARGET_DIR=../aleph-target-dual-engine cargo test -p alephcore --lib fetch_obscura -- --nocapture`
 Expected: FAIL with `` error[E0433]: failed to resolve: could not find `fetch_obscura` in `page_state` ``, then `` cannot find function `fetch_obscura` in this scope `` and `` cannot find function `parse_computed_rows` in this scope ``.
 
 - [ ] **Step 3: Write minimal implementation**
@@ -30496,7 +30496,7 @@ carry the fake server.
 - [ ] **Step 4: Run test to verify it passes**
 
 ```
-CARGO_TARGET_DIR=/Volumes/TBU4/Workspace/aleph-target-dual-engine cargo test -p alephcore --lib fetch_obscura -- --nocapture
+CARGO_TARGET_DIR=../aleph-target-dual-engine cargo test -p alephcore --lib fetch_obscura -- --nocapture
 ```
 Expected: PASS (`test result: ok. 8 passed`). Then the six-command verification set from Task 15 Step 4 (with its `export CARGO_TARGET_DIR=…` first line).
 
@@ -32137,7 +32137,7 @@ Append to `src/browser/manager.rs`'s existing `#[cfg(test)] mod tests`:
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `CARGO_TARGET_DIR=/Volumes/TBU4/Workspace/aleph-target-dual-engine cargo test -p alephcore --lib migration -- --nocapture`
+Run: `CARGO_TARGET_DIR=../aleph-target-dual-engine cargo test -p alephcore --lib migration -- --nocapture`
 
 Expected: FAIL to compile with ``error[E0433]: failed to resolve: could not find `migration` in `cdp_backend` `` and
 ``error[E0425]: cannot find function `export_state` in this scope``.
@@ -33441,17 +33441,17 @@ trusting this list.
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `CARGO_TARGET_DIR=/Volumes/TBU4/Workspace/aleph-target-dual-engine cargo test -p alephcore --lib migration -- --nocapture`
+Run: `CARGO_TARGET_DIR=../aleph-target-dual-engine cargo test -p alephcore --lib migration -- --nocapture`
 
 Expected: PASS (`test result: ok. 5 passed`)
 
 Then each of these once, unfiltered for its module:
 
 ```
-CARGO_TARGET_DIR=/Volumes/TBU4/Workspace/aleph-target-dual-engine cargo test -p alephcore --lib browser_tools::session
-CARGO_TARGET_DIR=/Volumes/TBU4/Workspace/aleph-target-dual-engine cargo test -p alephcore --lib browser_tools::open
-CARGO_TARGET_DIR=/Volumes/TBU4/Workspace/aleph-target-dual-engine cargo test -p alephcore --lib approval
-CARGO_TARGET_DIR=/Volumes/TBU4/Workspace/aleph-target-dual-engine cargo test -p alephcore --lib browser::manager
+CARGO_TARGET_DIR=../aleph-target-dual-engine cargo test -p alephcore --lib browser_tools::session
+CARGO_TARGET_DIR=../aleph-target-dual-engine cargo test -p alephcore --lib browser_tools::open
+CARGO_TARGET_DIR=../aleph-target-dual-engine cargo test -p alephcore --lib approval
+CARGO_TARGET_DIR=../aleph-target-dual-engine cargo test -p alephcore --lib browser::manager
 ```
 
 Then the six-command verification set (CLAUDE.md 最小可信验证集) — **every line carries the target-dir
@@ -33459,7 +33459,7 @@ prefix**, because the main checkout's `.cargo/config.toml` points at an absolute
 sharing it with another session is this repo's recorded phantom-binary hazard:
 
 ```
-export CTD=/Volumes/TBU4/Workspace/aleph-target-dual-engine
+export CTD=../aleph-target-dual-engine
 CARGO_TARGET_DIR=$CTD cargo test -p alephcore --lib --no-run
 CARGO_TARGET_DIR=$CTD cargo test -p alephcore --bins
 CARGO_TARGET_DIR=$CTD cargo test -p alephcore --features test-helpers --test '*' --no-run
@@ -33541,7 +33541,7 @@ the slack it opens is credit already extended (判据 §13).
 The protocol, in the order `definitions.rs:1891-1899` states it:
 
 ```bash
-export CTD=/Volumes/TBU4/Workspace/aleph-target-dual-engine
+export CTD=../aleph-target-dual-engine
 # 1. BEFORE this task's append, on this branch's HEAD:
 CARGO_TARGET_DIR=$CTD cargo test -p alephcore --lib catalog_description_bytes_ratchet -- --nocapture 2>&1 | tee /tmp/ratchet-before.log
 # 2. make the append, then again:
@@ -33790,9 +33790,9 @@ substitutes once at the top and nowhere else.
 ```bash
 SESSION=cfd2843f-43bd-4fe1-9d69-577277c06fcb
 BASE=/private/tmp/claude-502/-Volumes-TBU4-Workspace-Aleph/$SESSION/scratchpad/baseline
-BCTD=/Volumes/TBU4/Workspace/aleph-target-dual-engine-baseline
+BCTD=../aleph-target-dual-engine-baseline
 
-cd /Volumes/TBU4/Workspace/Aleph/.claude/worktrees/browser-dual-engine
+cd .claude/worktrees/browser-dual-engine
 git worktree add "$BASE" 0a3e8a48a
 cd "$BASE"
 # REQUIRED, and not a formality: `skills/` and `plugins/` are submodules that
@@ -34652,7 +34652,7 @@ All with the target-dir prefix. Anything over ~3 minutes runs in the background 
 log file; never rely on the tool timeout.
 
 ```bash
-export CTD=/Volumes/TBU4/Workspace/aleph-target-dual-engine
+export CTD=../aleph-target-dual-engine
 just _stage-shell-placeholders
 
 CARGO_TARGET_DIR=$CTD cargo test -p alephcore --lib --no-run
@@ -34715,7 +34715,7 @@ Acceptance, stated so it can fail:
 - [ ] **Step 9: Leave the handoff note in the SDD ledger**
 
 Append to `.superpowers/sdd/<plan-name>/progress.md`. Its header mirrors plan 1's
-(`/Volumes/TBU4/Workspace/Aleph/.superpowers/sdd/2026-09-05-browser-live-view-plan1-launch-chain/progress.md:1-6`):
+(`.superpowers/sdd/2026-09-05-browser-live-view-plan1-launch-chain/progress.md:1-6`):
 
 ```markdown
 # SDD ledger — plan: docs/superpowers/plans/<plan-file>.md
@@ -35988,7 +35988,7 @@ Four of the twelve HIGHs were one shape: **a seam chosen so the test could stay 
 `docs/superpowers/specs/2026-09-06-browser-dual-engine-design.md:217-265, 342, 381, 403` ·
 `docs/superpowers/specs/2026-09-06-browser-dual-engine-evidence/obscura-source-survey.md:1-30, 243-310, 308-435, 552-600` ·
 `docs/superpowers/specs/2026-09-06-browser-dual-engine-evidence/obscura-spike-v022.md:490-590` ·
-`/Volumes/TBU4/Workspace/Aleph/.superpowers/sdd/2026-09-05-browser-live-view-plan1-launch-chain/progress.md:1-6`
+`.superpowers/sdd/2026-09-05-browser-live-view-plan1-launch-chain/progress.md:1-6`
 
 ### Controller rulings absorbed after the first draft
 

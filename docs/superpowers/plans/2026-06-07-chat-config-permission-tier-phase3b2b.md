@@ -38,7 +38,7 @@
 
 Run:
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph && rg -n "TurnContext\s*\{" --type rust
+cd . && rg -n "TurnContext\s*\{" --type rust
 ```
 Expected: 列出全部字面量构造站点（生产 1 处 + 测试若干）。记下每一处，Step 4 逐一补字段。若出现快照之外的新站点，一并处理。
 
@@ -115,7 +115,7 @@ pub struct TurnContext {
 
 Run:
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph && cargo check -p alephcore --all-targets 2>&1 | tail -30
+cd . && cargo check -p alephcore --all-targets 2>&1 | tail -30
 ```
 Expected: 编译通过，零错误。若报 `missing field run_id`，说明漏了某个构造点——回 Step 1 的列表补齐（`--all-targets` 才编译 `tests/` 集成测试，确保不漏）。
 
@@ -123,14 +123,14 @@ Expected: 编译通过，零错误。若报 `missing field run_id`，说明漏�
 
 Run:
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph && cargo test -p alephcore --lib turn_context 2>&1 | tail -15
+cd . && cargo test -p alephcore --lib turn_context 2>&1 | tail -15
 ```
 Expected: `turn_context` 相关测试（`operator_and_local_are_operator`、`chat_tier_is_not_operator`）通过。
 
 - [ ] **Step 7: 提交（显式路径）**
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph
+cd .
 git status
 git add src/tools/turn_context.rs src/gateway/execution_engine/run_loop.rs src/tools/scoped/tests.rs src/builtin_tools/select_model.rs src/builtin_tools/ask_user.rs src/builtin_tools/desktop/tests.rs src/approval/adapters.rs
 git commit -m "harness: add run_id to TurnContext for run-scoped approval notice"
@@ -270,7 +270,7 @@ git show --stat HEAD
 
 Run:
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph && cargo test -p alephcore --lib operator_requester 2>&1 | tail -25
+cd . && cargo test -p alephcore --lib operator_requester 2>&1 | tail -25
 ```
 Expected: `emits_waiting_notice_when_run_id_present` **失败**（断言 `saw_notice` 为 false，因为提示尚未实现）；`no_notice_when_run_id_empty` 通过（本就不发）；`decision_mapping` 通过。
 
@@ -311,7 +311,7 @@ Expected: `emits_waiting_notice_when_run_id_present` **失败**（断言 `saw_no
 
 Run:
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph && cargo test -p alephcore --lib operator_requester 2>&1 | tail -25
+cd . && cargo test -p alephcore --lib operator_requester 2>&1 | tail -25
 ```
 Expected: 三个测试全部 PASS（`emits_waiting_notice_when_run_id_present`、`no_notice_when_run_id_empty`、`decision_mapping`）。
 
@@ -319,14 +319,14 @@ Expected: 三个测试全部 PASS（`emits_waiting_notice_when_run_id_present`�
 
 Run:
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph && cargo fmt -p alephcore && cargo clippy -p alephcore --lib 2>&1 | grep -A3 "operator_requester" | head -20
+cd . && cargo fmt -p alephcore && cargo clippy -p alephcore --lib 2>&1 | grep -A3 "operator_requester" | head -20
 ```
 Expected: fmt 无改动残留；clippy 对 `operator_requester.rs` 无新警告。
 
 - [ ] **Step 6: 提交（显式路径）**
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph
+cd .
 git status
 git add src/approval/operator_requester.rs
 git commit -m "approval: in-band waiting-for-approval notice on requester run stream"

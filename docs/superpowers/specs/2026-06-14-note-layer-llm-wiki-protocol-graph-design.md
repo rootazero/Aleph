@@ -1,7 +1,7 @@
 # Note 层 llm_wiki 协议标准化 + 图智能增强 — 设计
 
 - **日期**: 2026-06-14
-- **分支**: `note-protocol-graph`（worktree `/Volumes/TBU4/Workspace/Aleph-wt-note`，隔离于 main）
+- **分支**: `note-protocol-graph`（worktree `../Aleph-wt-note`，隔离于 main）
 - **参考项目**: `/Volumes/TBU4/Github/llm_wiki`（nashsu 实现的 Karpathy "LLM Wiki" 模式 → Tauri 桌面应用 + 本地 HTTP/MCP 协议）
 - **目标**: 对 Aleph 记忆管理 note 层进行 ① 协议标准化（Vault 级字节兼容）② 图智能架构增强（全盘移植参考算法）③ 错误修复与功能连线
 - **强制约束**: 完成后**不跑 cargo check/test**，直接提交（用户资源治理约束）；严禁触碰 main 分支。

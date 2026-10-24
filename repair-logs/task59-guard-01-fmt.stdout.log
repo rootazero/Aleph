@@ -1,4 +1,4 @@
-Diff in /Volumes/TBU4/Workspace/Aleph/src/extension/canonical_handler.rs:38:
+Diff in src/extension/canonical_handler.rs:38:
  impl ToolHandler for PluginCanonicalHandler {
      async fn invoke(&self, input: Value) -> Result<ToolOutput, ToolError> {
          let loader = self.loader.read().await;
@@ -18,7 +18,7 @@ Diff in /Volumes/TBU4/Workspace/Aleph/src/extension/canonical_handler.rs:38:
 (B[m         Ok(ToolOutput {
              value,
              metadata: Default::default(),
-Diff in /Volumes/TBU4/Workspace/Aleph/src/extension/mod.rs:24:
+Diff in src/extension/mod.rs:24:
  //! ```
 
  pub mod activation_gate;
@@ -28,7 +28,7 @@ Diff in /Volumes/TBU4/Workspace/Aleph/src/extension/mod.rs:24:
 (B[m mod lifecycle;
  mod loader;
  pub mod marketplace;
-Diff in /Volumes/TBU4/Workspace/Aleph/src/tools/registry.rs:613:
+Diff in src/tools/registry.rs:613:
                  return Ok(None);
              }
              Ok(Some((
@@ -40,7 +40,7 @@ Diff in /Volumes/TBU4/Workspace/Aleph/src/tools/registry.rs:613:
 (B[m                 RegistryPublication {
                      revision,
                      tool_changes: Vec::new(),
-Diff in /Volumes/TBU4/Workspace/Aleph/src/tools/scoped/dispatch.rs:300:
+Diff in src/tools/scoped/dispatch.rs:300:
                      }
                  })?;
                  if projected.source != entry.descriptor.source {

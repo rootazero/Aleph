@@ -226,7 +226,7 @@ pub mod shell;
 - [ ] **Step 6: 非 cargo 自检**
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph
+cd .
 test -f interfaces/webchat/src/platform/phone/shell.rs && echo "shell.rs OK"
 test -f interfaces/webchat/src/platform/phone/settings/mod.rs && echo "settings/mod.rs OK"
 test ! -f interfaces/webchat/src/platform/phone/settings.rs && echo "old settings.rs moved OK"
@@ -338,7 +338,7 @@ import 区加:`use crate::platform::phone::settings::connection::PhoneConnection
 
 - [ ] **Step 4: 非 cargo 自检**
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph
+cd .
 grep -n 'pub mod connection;' interfaces/webchat/src/platform/phone/settings/mod.rs
 grep -n 'PhoneConnection' interfaces/webchat/src/app.rs   # import + 分支 共 2
 grep -c 'PhoneShell title="Connection" back="/settings"' interfaces/webchat/src/platform/phone/settings/connection.rs  # 1
@@ -633,7 +633,7 @@ grep -c 'EmbeddingProvidersApi::add\|presets\|reembed\|::test' interfaces/webcha
 
 - [ ] **Step 1: 单次编译/构建门**
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph
+cd .
 just wasm
 ```
 Expected: Tailwind Done + `wasm-release ... Finished` 无错 + `✓ panel dist OK` + `✓ WASM`。
@@ -667,7 +667,7 @@ xcrun simctl boot "$UDID"; xcrun simctl bootstatus "$UDID" -b
 for r in settings settings/network settings/appearance settings/model-route settings/providers settings/embedding-providers; do
   xcrun simctl openurl "$UDID" "http://localhost:18790/$r"
   # 等 WASM 加载后:
-  xcrun simctl io "$UDID" screenshot "/Volumes/TBU4/Workspace/Aleph/.superpowers/sdd/sim-$(echo $r|tr / -).png"
+  xcrun simctl io "$UDID" screenshot ".superpowers/sdd/sim-$(echo $r|tr / -).png"
 done
 ```
 逐屏对照:`‹ Settings` 返回 + 居中标题 + iOS list/控件 + **底部 TabBar 可见(dvh 生效)** + 无桌面左右分栏。验毕 `xcrun simctl shutdown "$UDID"`。

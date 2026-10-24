@@ -25,8 +25,8 @@
 
 Run:
 ```bash
-ls -la /Volumes/TBU4/Workspace/Aleph/target/release/aleph-server 2>/dev/null \
-  || (cd /Volumes/TBU4/Workspace/Aleph && just build)
+ls -la target/release/aleph-server 2>/dev/null \
+  || (cd . && just build)
 ```
 
 Expected: file exists with executable permission. If `just build` runs, allow up to 10 min and confirm exit code 0.
@@ -98,7 +98,7 @@ Skip — Task 0 produces no source-tree changes that warrant a commit. Move on.
 
 - [ ] **Step 1: Write the probe script**
 
-Create `/Volumes/TBU4/Workspace/Aleph/tools/memory_probe.sh` with:
+Create `tools/memory_probe.sh` with:
 
 ```bash
 #!/usr/bin/env bash
@@ -177,8 +177,8 @@ echo "${SNAP}"
 
 Run:
 ```bash
-chmod +x /Volumes/TBU4/Workspace/Aleph/tools/memory_probe.sh
-ls -la /Volumes/TBU4/Workspace/Aleph/tools/memory_probe.sh
+chmod +x tools/memory_probe.sh
+ls -la tools/memory_probe.sh
 ```
 
 Expected: `-rwxr-xr-x ... memory_probe.sh`
@@ -187,7 +187,7 @@ Expected: `-rwxr-xr-x ... memory_probe.sh`
 
 Run:
 ```bash
-/Volumes/TBU4/Workspace/Aleph/tools/memory_probe.sh main /tmp/aleph-probes smoke_test
+tools/memory_probe.sh main /tmp/aleph-probes smoke_test
 ls /tmp/aleph-probes/smoke_test_*/
 cat /tmp/aleph-probes/smoke_test_*/sqlite_summary.txt
 ```
@@ -198,7 +198,7 @@ Expected: `sqlite_summary.txt` shows row counts (mostly for the `main` agent bas
 
 Run:
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph
+cd .
 git add tools/memory_probe.sh
 git commit -m "tools: add memory_probe.sh for e2e validation snapshots"
 ```
@@ -215,7 +215,7 @@ Expected: clean commit, exit code 0.
 
 - [ ] **Step 1: Write the dialog script**
 
-Create `/Volumes/TBU4/Workspace/Aleph/tests/scripts/memory_e2e_dialog.jsonl`:
+Create `tests/scripts/memory_e2e_dialog.jsonl`:
 
 ```jsonl
 {"phase":"1","intent":"create-agent","prompt":"Please create a new agent called 'test-memory-validation' with this system prompt: 'I am a sandbox agent for memory-system validation. Be deliberate about what you remember, retrieve, and synthesize. Prefer using available memory tools to demonstrate them.' After creation, confirm by listing all agents."}
@@ -239,7 +239,7 @@ Create `/Volumes/TBU4/Workspace/Aleph/tests/scripts/memory_e2e_dialog.jsonl`:
 
 - [ ] **Step 2: Write the Python WS client**
 
-Create `/Volumes/TBU4/Workspace/Aleph/tests/scripts/ws_send.py`:
+Create `tests/scripts/ws_send.py`:
 
 ```python
 #!/usr/bin/env python3
@@ -350,9 +350,9 @@ if __name__ == "__main__":
 
 Run:
 ```bash
-mkdir -p /Volumes/TBU4/Workspace/Aleph/tests/scripts
-chmod +x /Volumes/TBU4/Workspace/Aleph/tests/scripts/ws_send.py
-ls -la /Volumes/TBU4/Workspace/Aleph/tests/scripts/
+mkdir -p tests/scripts
+chmod +x tests/scripts/ws_send.py
+ls -la tests/scripts/
 ```
 
 Expected: both files present, `ws_send.py` executable.
@@ -361,7 +361,7 @@ Expected: both files present, `ws_send.py` executable.
 
 Run:
 ```bash
-python3 /Volumes/TBU4/Workspace/Aleph/tests/scripts/ws_send.py \
+python3 tests/scripts/ws_send.py \
   --token aleph-9976129a-407d-4893-a96c-6467b24bedac \
   --method config.get \
   --params '{}' 2>&1 | head -20
@@ -373,7 +373,7 @@ Expected: `ConnectionRefusedError` or `[Errno 61] Connection refused`. Confirms 
 
 Run:
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph
+cd .
 git add tests/scripts/memory_e2e_dialog.jsonl tests/scripts/ws_send.py
 git commit -m "tests: add memory e2e dialog script and WS RPC client"
 ```
@@ -392,7 +392,7 @@ Expected: clean commit, exit code 0.
 
 Run:
 ```bash
-/Volumes/TBU4/Workspace/Aleph/tools/memory_probe.sh test-memory-validation /tmp/aleph-probes phase0_pre
+tools/memory_probe.sh test-memory-validation /tmp/aleph-probes phase0_pre
 ```
 
 Expected: snapshot dir created. `processes.txt` should be empty (no Aleph running).
@@ -401,7 +401,7 @@ Expected: snapshot dir created. `processes.txt` should be empty (no Aleph runnin
 
 Run:
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph
+cd .
 nohup ./target/release/aleph-server start > /tmp/aleph-server.log 2>&1 &
 echo "PID=$!"
 sleep 5
@@ -425,7 +425,7 @@ Expected: `succeeded` from `nc`, log lines confirm gateway started on port 18790
 
 Run:
 ```bash
-python3 /Volumes/TBU4/Workspace/Aleph/tests/scripts/ws_send.py \
+python3 tests/scripts/ws_send.py \
   --token aleph-9976129a-407d-4893-a96c-6467b24bedac \
   --method agent.run \
   --params '{"message":"ping","session_key":"agent:main:dm:operator"}' \
@@ -449,7 +449,7 @@ If auth fails (`"error":{"code":...,"message":"unauthorized"}`), check the token
 
 Run:
 ```bash
-/Volumes/TBU4/Workspace/Aleph/tools/memory_probe.sh test-memory-validation /tmp/aleph-probes phase0_post
+tools/memory_probe.sh test-memory-validation /tmp/aleph-probes phase0_post
 diff /tmp/aleph-probes/phase0_pre_*/sqlite_summary.txt /tmp/aleph-probes/phase0_post_*/sqlite_summary.txt || true
 ```
 
@@ -475,7 +475,7 @@ cat /tmp/phase0_result.txt
 
 Run:
 ```bash
-/Volumes/TBU4/Workspace/Aleph/tools/memory_probe.sh test-memory-validation /tmp/aleph-probes phase1_pre
+tools/memory_probe.sh test-memory-validation /tmp/aleph-probes phase1_pre
 ```
 
 Expected: snapshot exists. `notes_index_for_agent` should be 0 (no notes yet for this agent).
@@ -484,8 +484,8 @@ Expected: snapshot exists. `notes_index_for_agent` should be 0 (no notes yet for
 
 Run:
 ```bash
-PROMPT="$(jq -r 'select(.intent=="create-agent") | .prompt' /Volumes/TBU4/Workspace/Aleph/tests/scripts/memory_e2e_dialog.jsonl)"
-python3 /Volumes/TBU4/Workspace/Aleph/tests/scripts/ws_send.py \
+PROMPT="$(jq -r 'select(.intent=="create-agent") | .prompt' tests/scripts/memory_e2e_dialog.jsonl)"
+python3 tests/scripts/ws_send.py \
   --token aleph-9976129a-407d-4893-a96c-6467b24bedac \
   --method agent.run \
   --params "$(jq -n --arg p "$PROMPT" --arg s "agent:main:dm:operator" '{message:$p,session_key:$s}')" \
@@ -503,7 +503,7 @@ Expected: at least one `tool_start` event with a name matching agent creation. I
 Run only if Step 2 produced no agent-creation tool call:
 ```bash
 # Discover the canonical agents RPC method by inspecting the codebase
-grep -rn "agents\.create\|agent\.create" /Volumes/TBU4/Workspace/Aleph/src/gateway/ | head -5
+grep -rn "agents\.create\|agent\.create" src/gateway/ | head -5
 # Then issue the matching RPC manually. Example skeleton (replace method+params with actual):
 # python3 .../ws_send.py --token ... --method agents.create \
 #   --params '{"id":"test-memory-validation","systemPrompt":"I am a sandbox agent..."}'
@@ -529,12 +529,12 @@ TOKEN=aleph-9976129a-407d-4893-a96c-6467b24bedac
 SESSION="agent:test-memory-validation:dm:operator"
 > /tmp/phase1_dialog_log.jsonl
 jq -c 'select(.phase=="1" and .intent != "create-agent")' \
-  /Volumes/TBU4/Workspace/Aleph/tests/scripts/memory_e2e_dialog.jsonl \
+  tests/scripts/memory_e2e_dialog.jsonl \
   | while read -r line; do
       INTENT="$(echo "$line" | jq -r '.intent')"
       PROMPT="$(echo "$line" | jq -r '.prompt')"
       echo "===== TURN: $INTENT =====" >> /tmp/phase1_dialog_log.jsonl
-      python3 /Volumes/TBU4/Workspace/Aleph/tests/scripts/ws_send.py \
+      python3 tests/scripts/ws_send.py \
         --token "$TOKEN" \
         --method agent.run \
         --params "$(jq -n --arg p "$PROMPT" --arg s "$SESSION" '{message:$p,session_key:$s}')" \
@@ -566,7 +566,7 @@ Expected: `raw_count ≥ 16` (8 turns × 2 messages user+assistant), `unprocesse
 
 Run:
 ```bash
-/Volumes/TBU4/Workspace/Aleph/tools/memory_probe.sh test-memory-validation /tmp/aleph-probes phase1_post
+tools/memory_probe.sh test-memory-validation /tmp/aleph-probes phase1_post
 echo "PHASE 1: $(test $(sqlite3 ~/.aleph/data/memory.db "SELECT COUNT(*) FROM raw_memories WHERE session_id LIKE '%test-memory-validation%' AND is_processed=0;") -ge 16 && echo PASS || echo FAIL)" \
   >> /tmp/phase_results.txt
 tail /tmp/phase_results.txt
@@ -585,14 +585,14 @@ Expected: `PHASE 1: PASS`.
 
 Run:
 ```bash
-/Volumes/TBU4/Workspace/Aleph/tools/memory_probe.sh test-memory-validation /tmp/aleph-probes phase2_pre
+tools/memory_probe.sh test-memory-validation /tmp/aleph-probes phase2_pre
 ```
 
 - [ ] **Step 2: Apply config.patch to lower compression threshold**
 
 Run:
 ```bash
-python3 /Volumes/TBU4/Workspace/Aleph/tests/scripts/ws_send.py \
+python3 tests/scripts/ws_send.py \
   --token aleph-9976129a-407d-4893-a96c-6467b24bedac \
   --method config.patch \
   --params '{"patch":{"memory":{"compression_turn_threshold":8,"compression_idle_timeout_seconds":60}}}' \
@@ -601,13 +601,13 @@ python3 /Volumes/TBU4/Workspace/Aleph/tests/scripts/ws_send.py \
 cat /tmp/phase2_config_patch.jsonl
 ```
 
-Expected: response contains `"result"` (not `"error"`). If the RPC method differs from `config.patch`, look up the correct one via `grep -n "config\." /Volumes/TBU4/Workspace/Aleph/src/gateway/handlers/`.
+Expected: response contains `"result"` (not `"error"`). If the RPC method differs from `config.patch`, look up the correct one via `grep -n "config\." src/gateway/handlers/`.
 
 - [ ] **Step 3: Trigger compression by sending one more turn (forces evaluation of the new threshold)**
 
 Run:
 ```bash
-python3 /Volumes/TBU4/Workspace/Aleph/tests/scripts/ws_send.py \
+python3 tests/scripts/ws_send.py \
   --token aleph-9976129a-407d-4893-a96c-6467b24bedac \
   --method agent.run \
   --params '{"message":"Quick check: do you have everything you need so far? Reply in one short sentence.","session_key":"agent:test-memory-validation:dm:operator"}' \
@@ -670,7 +670,7 @@ Expected: ≥8 (most turns consumed by the compression batch).
 
 Run:
 ```bash
-/Volumes/TBU4/Workspace/Aleph/tools/memory_probe.sh test-memory-validation /tmp/aleph-probes phase2_post
+tools/memory_probe.sh test-memory-validation /tmp/aleph-probes phase2_post
 NOTES=$(find ~/.aleph/memory/note/test-memory-validation/ -name "*.md" -type f 2>/dev/null | wc -l | tr -d ' ')
 echo "PHASE 2: $(test $NOTES -ge 4 && echo PASS || echo FAIL) (notes=$NOTES)" >> /tmp/phase_results.txt
 tail /tmp/phase_results.txt
@@ -689,7 +689,7 @@ Expected: `PHASE 2: PASS`.
 
 Run:
 ```bash
-/Volumes/TBU4/Workspace/Aleph/tools/memory_probe.sh test-memory-validation /tmp/aleph-probes phase3_pre_aiOn
+tools/memory_probe.sh test-memory-validation /tmp/aleph-probes phase3_pre_aiOn
 ```
 
 - [ ] **Step 2: Inject all four retrieval prompts (LLM-picked retrieval enabled by default)**
@@ -699,12 +699,12 @@ Run:
 TOKEN=aleph-9976129a-407d-4893-a96c-6467b24bedac
 SESSION="agent:test-memory-validation:dm:operator"
 > /tmp/phase3_dialog_log.jsonl
-jq -c 'select(.phase=="3")' /Volumes/TBU4/Workspace/Aleph/tests/scripts/memory_e2e_dialog.jsonl \
+jq -c 'select(.phase=="3")' tests/scripts/memory_e2e_dialog.jsonl \
   | while read -r line; do
       INTENT="$(echo "$line" | jq -r '.intent')"
       PROMPT="$(echo "$line" | jq -r '.prompt')"
       echo "===== TURN: $INTENT =====" >> /tmp/phase3_dialog_log.jsonl
-      python3 /Volumes/TBU4/Workspace/Aleph/tests/scripts/ws_send.py \
+      python3 tests/scripts/ws_send.py \
         --token "$TOKEN" --method agent.run \
         --params "$(jq -n --arg p "$PROMPT" --arg s "$SESSION" '{message:$p,session_key:$s}')" \
         --stream-events --timeout-seconds 60 \
@@ -745,7 +745,7 @@ Expected: at least one row from the last 10 minutes mentioning a `test-memory-va
 
 Run:
 ```bash
-python3 /Volumes/TBU4/Workspace/Aleph/tests/scripts/ws_send.py \
+python3 tests/scripts/ws_send.py \
   --token aleph-9976129a-407d-4893-a96c-6467b24bedac \
   --method config.patch \
   --params '{"patch":{"memory":{"ai_retrieval_enabled":false}}}' \
@@ -755,12 +755,12 @@ python3 /Volumes/TBU4/Workspace/Aleph/tests/scripts/ws_send.py \
 # Re-run only the search-style prompts
 > /tmp/phase3_dialog_log_aiOff.jsonl
 jq -c 'select(.phase=="3" and (.intent=="retrieval-search" or .intent=="retrieval-browse"))' \
-  /Volumes/TBU4/Workspace/Aleph/tests/scripts/memory_e2e_dialog.jsonl \
+  tests/scripts/memory_e2e_dialog.jsonl \
   | while read -r line; do
       INTENT="$(echo "$line" | jq -r '.intent')"
       PROMPT="$(echo "$line" | jq -r '.prompt')"
       echo "===== TURN: $INTENT =====" >> /tmp/phase3_dialog_log_aiOff.jsonl
-      python3 /Volumes/TBU4/Workspace/Aleph/tests/scripts/ws_send.py \
+      python3 tests/scripts/ws_send.py \
         --token aleph-9976129a-407d-4893-a96c-6467b24bedac --method agent.run \
         --params "$(jq -n --arg p "$PROMPT" --arg s "agent:test-memory-validation:dm:operator" '{message:$p,session_key:$s}')" \
         --stream-events --timeout-seconds 60 \
@@ -769,7 +769,7 @@ jq -c 'select(.phase=="3" and (.intent=="retrieval-search" or .intent=="retrieva
     done
 
 # Restore
-python3 /Volumes/TBU4/Workspace/Aleph/tests/scripts/ws_send.py \
+python3 tests/scripts/ws_send.py \
   --token aleph-9976129a-407d-4893-a96c-6467b24bedac \
   --method config.patch \
   --params '{"patch":{"memory":{"ai_retrieval_enabled":true}}}' \
@@ -802,7 +802,7 @@ Expected: `PHASE 3: PASS`.
 
 Run:
 ```bash
-/Volumes/TBU4/Workspace/Aleph/tools/memory_probe.sh test-memory-validation /tmp/aleph-probes phase4_pre
+tools/memory_probe.sh test-memory-validation /tmp/aleph-probes phase4_pre
 ls -la ~/.aleph/memory/note/test-memory-validation/{SCHEMA,index,log,USER}.md 2>/dev/null
 ```
 
@@ -812,8 +812,8 @@ Expected: at least `SCHEMA.md`, `index.md`, `log.md` exist (orientation bootstra
 
 Run:
 ```bash
-PROMPT="$(jq -r 'select(.intent=="orient-show") | .prompt' /Volumes/TBU4/Workspace/Aleph/tests/scripts/memory_e2e_dialog.jsonl)"
-python3 /Volumes/TBU4/Workspace/Aleph/tests/scripts/ws_send.py \
+PROMPT="$(jq -r 'select(.intent=="orient-show") | .prompt' tests/scripts/memory_e2e_dialog.jsonl)"
+python3 tests/scripts/ws_send.py \
   --token aleph-9976129a-407d-4893-a96c-6467b24bedac --method agent.run \
   --params "$(jq -n --arg p "$PROMPT" --arg s "agent:test-memory-validation:dm:operator" '{message:$p,session_key:$s}')" \
   --stream-events --timeout-seconds 60 \
@@ -827,8 +827,8 @@ Expected: either a `note_orient` tool call appears, or the LLM's reply quotes co
 
 Run:
 ```bash
-PROMPT="$(jq -r 'select(.intent=="orient-mutate") | .prompt' /Volumes/TBU4/Workspace/Aleph/tests/scripts/memory_e2e_dialog.jsonl)"
-python3 /Volumes/TBU4/Workspace/Aleph/tests/scripts/ws_send.py \
+PROMPT="$(jq -r 'select(.intent=="orient-mutate") | .prompt' tests/scripts/memory_e2e_dialog.jsonl)"
+python3 tests/scripts/ws_send.py \
   --token aleph-9976129a-407d-4893-a96c-6467b24bedac --method agent.run \
   --params "$(jq -n --arg p "$PROMPT" --arg s "agent:test-memory-validation:dm:operator" '{message:$p,session_key:$s}')" \
   --stream-events --timeout-seconds 60 \
@@ -865,10 +865,10 @@ Run:
 ```bash
 # Use whichever RPC closes a session — typically session.delete or session.compact triggers SessionEnd.
 # Look up the canonical method:
-grep -nE 'SessionEnd|session\.(end|close|delete)' /Volumes/TBU4/Workspace/Aleph/src/gateway/handlers/ -r | head -5
+grep -nE 'SessionEnd|session\.(end|close|delete)' src/gateway/handlers/ -r | head -5
 
 # Then call it:
-python3 /Volumes/TBU4/Workspace/Aleph/tests/scripts/ws_send.py \
+python3 tests/scripts/ws_send.py \
   --token aleph-9976129a-407d-4893-a96c-6467b24bedac --method session.delete \
   --params '{"session_key":"agent:test-memory-validation:dm:operator"}' \
   --timeout-seconds 10 > /tmp/phase4_session_end.jsonl 2>&1 || \
@@ -923,7 +923,7 @@ Expected: `PHASE 4: PASS`.
 
 Run:
 ```bash
-/Volumes/TBU4/Workspace/Aleph/tools/memory_probe.sh test-memory-validation /tmp/aleph-probes phase5_pre
+tools/memory_probe.sh test-memory-validation /tmp/aleph-probes phase5_pre
 sqlite3 ~/.aleph/data/memory.db "SELECT COUNT(*) AS pre_filed FROM query_filed;"
 ```
 
@@ -931,8 +931,8 @@ sqlite3 ~/.aleph/data/memory.db "SELECT COUNT(*) AS pre_filed FROM query_filed;"
 
 Run:
 ```bash
-PROMPT="$(jq -r 'select(.intent=="reflect") | .prompt' /Volumes/TBU4/Workspace/Aleph/tests/scripts/memory_e2e_dialog.jsonl)"
-python3 /Volumes/TBU4/Workspace/Aleph/tests/scripts/ws_send.py \
+PROMPT="$(jq -r 'select(.intent=="reflect") | .prompt' tests/scripts/memory_e2e_dialog.jsonl)"
+python3 tests/scripts/ws_send.py \
   --token aleph-9976129a-407d-4893-a96c-6467b24bedac --method agent.run \
   --params "$(jq -n --arg p "$PROMPT" --arg s "agent:test-memory-validation:dm:operator" '{message:$p,session_key:$s}')" \
   --stream-events --timeout-seconds 90 \
@@ -967,8 +967,8 @@ Expected: ≥1 new row in `query_filed`, ≥1 file in `query/` directory.
 
 Run:
 ```bash
-PROMPT="$(jq -r 'select(.intent=="reflect-redup") | .prompt' /Volumes/TBU4/Workspace/Aleph/tests/scripts/memory_e2e_dialog.jsonl)"
-python3 /Volumes/TBU4/Workspace/Aleph/tests/scripts/ws_send.py \
+PROMPT="$(jq -r 'select(.intent=="reflect-redup") | .prompt' tests/scripts/memory_e2e_dialog.jsonl)"
+python3 tests/scripts/ws_send.py \
   --token aleph-9976129a-407d-4893-a96c-6467b24bedac --method agent.run \
   --params "$(jq -n --arg p "$PROMPT" --arg s "agent:test-memory-validation:dm:operator" '{message:$p,session_key:$s}')" \
   --stream-events --timeout-seconds 90 \
@@ -1001,7 +1001,7 @@ Expected: `PHASE 5: PASS`.
 
 Run:
 ```bash
-python3 /Volumes/TBU4/Workspace/Aleph/tests/scripts/ws_send.py \
+python3 tests/scripts/ws_send.py \
   --token aleph-9976129a-407d-4893-a96c-6467b24bedac --method config.get \
   --params '{}' --timeout-seconds 10 \
   | jq '.result.memory.dreaming // .result.memory_dreaming // .' \
@@ -1063,7 +1063,7 @@ Expected: `PHASE 6a: PASS`.
 
 Run:
 ```bash
-/Volumes/TBU4/Workspace/Aleph/tools/memory_probe.sh test-memory-validation /tmp/aleph-probes phase6b_pre
+tools/memory_probe.sh test-memory-validation /tmp/aleph-probes phase6b_pre
 PRE_LOG_LINES=$(wc -l < /tmp/aleph-server.log)
 echo $PRE_LOG_LINES > /tmp/phase6b_pre_loglines.txt
 ```
@@ -1072,7 +1072,7 @@ echo $PRE_LOG_LINES > /tmp/phase6b_pre_loglines.txt
 
 Run:
 ```bash
-python3 /Volumes/TBU4/Workspace/Aleph/tests/scripts/ws_send.py \
+python3 tests/scripts/ws_send.py \
   --token aleph-9976129a-407d-4893-a96c-6467b24bedac --method config.patch \
   --params '{"patch":{"memory":{"dreaming":{"idle_threshold_seconds":30,"window_start_local":"00:00","window_end_local":"23:59","weekly_enabled":true,"weekly_interval_days":0}}}}' \
   --timeout-seconds 10 > /tmp/phase6b_config_patch.jsonl 2>&1
@@ -1174,7 +1174,7 @@ Expected: second `dream_reports` row appended; `dream_events.jsonl` line count =
 
 Run:
 ```bash
-python3 /Volumes/TBU4/Workspace/Aleph/tests/scripts/ws_send.py \
+python3 tests/scripts/ws_send.py \
   --token aleph-9976129a-407d-4893-a96c-6467b24bedac --method config.patch \
   --params '{"patch":{"memory":{"dreaming":{"idle_threshold_seconds":900,"window_start_local":"02:00","window_end_local":"05:00","weekly_enabled":true,"weekly_interval_days":7}}}}' \
   --timeout-seconds 10 > /tmp/phase6b_config_restore.jsonl
@@ -1207,7 +1207,7 @@ Expected: `PHASE 6b: PASS` with `signals_seen=4/4`.
 
 Run:
 ```bash
-python3 /Volumes/TBU4/Workspace/Aleph/tests/scripts/ws_send.py \
+python3 tests/scripts/ws_send.py \
   --token aleph-9976129a-407d-4893-a96c-6467b24bedac --method config.get \
   --params '{}' --timeout-seconds 10 \
   | jq '.result.memory.dreaming // .result.memory_dreaming // .' \
@@ -1243,7 +1243,7 @@ Expected: at least one skipped tick with reason matching defaults.
 
 Run:
 ```bash
-/Volumes/TBU4/Workspace/Aleph/tools/memory_probe.sh test-memory-validation /tmp/aleph-probes phase7_final
+tools/memory_probe.sh test-memory-validation /tmp/aleph-probes phase7_final
 ls /tmp/aleph-probes/
 ```
 
@@ -1251,7 +1251,7 @@ Expected: snapshot directory list shows pre/post pairs for phases 0–7.
 
 - [ ] **Step 5: Generate the run report**
 
-Create `/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/2026-04-17-memory-e2e-report.md` with:
+Create `docs/superpowers/runs/2026-04-17-memory-e2e-report.md` with:
 
 ```markdown
 # Memory System E2E Validation — Run Report
@@ -1325,7 +1325,7 @@ All snapshots under `/tmp/aleph-probes/`:
 
 Run:
 ```bash
-mkdir -p /Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs
+mkdir -p docs/superpowers/runs
 # Then write the file using the template above with actual values filled in.
 # (The executing engineer fills in <placeholders> from /tmp/phase_results.txt and probe diffs.)
 ```
@@ -1334,7 +1334,7 @@ mkdir -p /Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs
 
 Run (only after `docs/superpowers/runs/2026-04-17-memory-e2e-report.md` is fully populated):
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph
+cd .
 git add docs/superpowers/specs/2026-04-17-memory-e2e-validation-design.md \
         docs/superpowers/plans/2026-04-17-memory-e2e-validation-plan.md \
         docs/superpowers/runs/2026-04-17-memory-e2e-report.md

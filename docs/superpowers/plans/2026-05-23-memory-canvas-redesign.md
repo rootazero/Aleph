@@ -78,7 +78,7 @@
 Run this command once at the start of Phase 4 to locate the stylesheet:
 
 ```bash
-grep -rln "aleph-sidebar\|aleph-shell" /Volumes/TBU4/Workspace/Aleph/interfaces/webchat --include="*.css"
+grep -rln "aleph-sidebar\|aleph-shell" interfaces/webchat --include="*.css"
 ```
 
 Use the path it prints in subsequent CSS tasks.
@@ -99,7 +99,7 @@ Use the path it prints in subsequent CSS tasks.
 Write the file with this exact content (30 nodes, 45 edges, deterministic categories — no need to dump from a real vault for Phase 0):
 
 ```bash
-cat > /Volumes/TBU4/Workspace/Aleph/interfaces/webchat/tests/fixtures/canvas_30nodes.json <<'JSON'
+cat > interfaces/webchat/tests/fixtures/canvas_30nodes.json <<'JSON'
 {
   "center": { "id": "n00", "name": "Center memory", "path": "n00.md", "category": "user", "tags": ["pivot"], "link_count": 8 },
   "nodes": [
@@ -354,7 +354,7 @@ If fps < 55:
 - [ ] **Step 5: Delete the spike + commit**
 
 ```bash
-rm /Volumes/TBU4/Workspace/Aleph/interfaces/webchat/src/views/canvas/_perf_spike.rs
+rm interfaces/webchat/src/views/canvas/_perf_spike.rs
 # Revert mod.rs to its pre-spike form (remove the mod line and the query-string branch).
 git add interfaces/webchat/src/views/canvas/mod.rs interfaces/webchat/src/views/canvas/_perf_spike.rs
 git commit -m "canvas: perf gate confirmed (300 DOM nodes @ <fps>); remove spike"
@@ -671,7 +671,7 @@ git commit -m "canvas: add markdown_excerpt whitelist renderer (bold/code/link/b
 - [ ] **Step 1: Survey existing call sites**
 
 ```bash
-grep -rn "PrefetchCache" /Volumes/TBU4/Workspace/Aleph/interfaces/webchat/src --include="*.rs"
+grep -rn "PrefetchCache" interfaces/webchat/src --include="*.rs"
 ```
 
 Record every line. Each one is an `impl-driven` use of `PrefetchCache::new()` / `.put` / `.get` / `.has` / `.len`. We will preserve all method signatures, only the carried type changes.
@@ -1137,7 +1137,7 @@ git commit -m "canvas: implement Poisson-disk-like scatter for orphan placement"
 - [ ] **Step 1: Read both functions and identify the boundary**
 
 ```bash
-grep -n "fn compute_target_positions\|fn populate_orphans" /Volumes/TBU4/Workspace/Aleph/interfaces/webchat/src/canvas_engine/layout.rs /Volumes/TBU4/Workspace/Aleph/interfaces/webchat/src/canvas_engine/adapter.rs
+grep -n "fn compute_target_positions\|fn populate_orphans" interfaces/webchat/src/canvas_engine/layout.rs interfaces/webchat/src/canvas_engine/adapter.rs
 ```
 
 Read the surrounding code (~50 lines around each). The new flow must:
@@ -1193,7 +1193,7 @@ The simpler option: leave orphan positions as `(0, 0)` in `populate_orphans` and
 - [ ] **Step 4: Delete the now-unused `r_orphan` if nothing references it**
 
 ```bash
-grep -rn "r_orphan\b" /Volumes/TBU4/Workspace/Aleph/interfaces/webchat/src
+grep -rn "r_orphan\b" interfaces/webchat/src
 ```
 
 If only the `layout.rs` definition + its self-test reference it, delete `r_orphan` and its self-test (`r_orphan_outside_two_hop` at line 388). Otherwise leave it.
@@ -1283,7 +1283,7 @@ BLESS_LAYOUT_SNAPSHOTS=1 cargo test -p aleph-panel --target wasm32-unknown-unkno
 Confirm the baseline file was written:
 
 ```bash
-ls -l /Volumes/TBU4/Workspace/Aleph/interfaces/webchat/tests/fixtures/layout_baseline_30nodes.json
+ls -l interfaces/webchat/tests/fixtures/layout_baseline_30nodes.json
 ```
 
 - [ ] **Step 3: Re-run without the env var → must pass against the baseline**
@@ -1474,7 +1474,7 @@ git commit -m "canvas: add edge_curve module with Bézier helpers and hop-layer 
 - [ ] **Step 1: Read the existing function**
 
 ```bash
-sed -n '427,530p' /Volumes/TBU4/Workspace/Aleph/interfaces/webchat/src/canvas_engine/renderer.rs
+sed -n '427,530p' interfaces/webchat/src/canvas_engine/renderer.rs
 ```
 
 Identify the `set_stroke_style_canvas_gradient` / `set_line_width` / `move_to` / `line_to` calls (around lines 507–512). These are the lines to replace.
@@ -1556,7 +1556,7 @@ git commit -m "canvas: render edges as α-gradient Bézier curves with hop-layer
 - [ ] **Step 1: Locate the hover / selected signal source**
 
 ```bash
-grep -n "hovered\|selected\|hovered_id\|selected_id" /Volumes/TBU4/Workspace/Aleph/interfaces/webchat/src/canvas_engine/renderer.rs | head -10
+grep -n "hovered\|selected\|hovered_id\|selected_id" interfaces/webchat/src/canvas_engine/renderer.rs | head -10
 ```
 
 The function probably already receives `hovered: Option<&str>` and `selected: Option<&str>` parameters (or they come from a context). Confirm before writing the implementation.
@@ -1626,7 +1626,7 @@ git commit -m "canvas: highlight edges adjacent to hovered/selected node in gold
 - [ ] **Step 1: Verify the module home**
 
 ```bash
-grep -rn "^mod state\|^pub mod state" /Volumes/TBU4/Workspace/Aleph/interfaces/webchat/src --include="*.rs" | head -3
+grep -rn "^mod state\|^pub mod state" interfaces/webchat/src --include="*.rs" | head -3
 ```
 
 If a `state` module already exists, write into it; if not, create `interfaces/webchat/src/state/mod.rs` and register it in `lib.rs`:
@@ -1821,7 +1821,7 @@ git commit -m "canvas: add category_color helper (curated vars + HSL fallback)"
 - [ ] **Step 1: Find the right file**
 
 ```bash
-grep -rln "aleph-sidebar\|aleph-shell" /Volumes/TBU4/Workspace/Aleph/interfaces/webchat --include="*.css" --include="*.scss"
+grep -rln "aleph-sidebar\|aleph-shell" interfaces/webchat --include="*.css" --include="*.scss"
 ```
 
 Use the most relevant hit (probably a single file).
@@ -2116,7 +2116,7 @@ git commit -m "canvas: add NodeCard Leptos component with FULL/MINI/DOT modes"
 - [ ] **Step 1: Map the rAF loop**
 
 ```bash
-grep -n "request_animation_frame\|rAF\|raf" /Volumes/TBU4/Workspace/Aleph/interfaces/webchat/src/views/canvas/graph_canvas.rs | head -10
+grep -n "request_animation_frame\|rAF\|raf" interfaces/webchat/src/views/canvas/graph_canvas.rs | head -10
 ```
 
 Find the closure that calls `draw_nodes` / `draw_edges_for_node` each frame. That closure also computes `screen_pos` for each node (world → screen via the viewport transform).
@@ -2460,7 +2460,7 @@ git commit -m "canvas: add NodeDetailPanel for sidebar with recent-5 empty state
 - [ ] **Step 1: Read the current placeholder**
 
 ```bash
-sed -n '95,115p' /Volumes/TBU4/Workspace/Aleph/interfaces/webchat/src/components/mode_sidebar.rs
+sed -n '95,115p' interfaces/webchat/src/components/mode_sidebar.rs
 ```
 
 - [ ] **Step 2: Rewrite**
@@ -2655,7 +2655,7 @@ git commit -m "canvas: move agent/search/fold/detail widgets from canvas view to
 - [ ] **Step 1: Confirm zero remaining references**
 
 ```bash
-grep -rn "AgentSelectorBar\|CanvasToolbar\|use.*::breadcrumb::Breadcrumb" /Volumes/TBU4/Workspace/Aleph/interfaces/webchat/src --include="*.rs"
+grep -rn "AgentSelectorBar\|CanvasToolbar\|use.*::breadcrumb::Breadcrumb" interfaces/webchat/src --include="*.rs"
 ```
 
 The only remaining hits should be the module declarations themselves in `views/canvas/mod.rs`. If there are leftover imports anywhere else, fix those first.
@@ -2663,9 +2663,9 @@ The only remaining hits should be the module declarations themselves in `views/c
 - [ ] **Step 2: Delete and clean up**
 
 ```bash
-rm /Volumes/TBU4/Workspace/Aleph/interfaces/webchat/src/views/canvas/agent_selector.rs
-rm /Volumes/TBU4/Workspace/Aleph/interfaces/webchat/src/views/canvas/toolbar.rs
-rm /Volumes/TBU4/Workspace/Aleph/interfaces/webchat/src/views/canvas/breadcrumb.rs
+rm interfaces/webchat/src/views/canvas/agent_selector.rs
+rm interfaces/webchat/src/views/canvas/toolbar.rs
+rm interfaces/webchat/src/views/canvas/breadcrumb.rs
 ```
 
 Edit `views/canvas/mod.rs`: remove the `mod agent_selector;`, `mod toolbar;`, `mod breadcrumb;` lines and any `use …` re-exports they enabled.

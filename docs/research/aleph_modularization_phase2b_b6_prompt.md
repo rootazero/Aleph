@@ -1,7 +1,7 @@
 # Aleph Phase 2B — B6 实施 Prompt
 # Copyable Prompt — Boot Activation and Full Lifecycle Failure Matrix
 
-你是 Aleph 模块化第二阶段 B6 的主 Agent / Lead Orchestrator。工作目录：`/Volumes/TBU4/Workspace/Aleph`。
+你是 Aleph 模块化第二阶段 B6 的主 Agent / Lead Orchestrator。工作目录：`.`。
 
 本阶段只做 **Tool/Plugin vertical slice** 的两件事：把 eligible tool-only WASM 的 activation 接到真实 boot/`ensure_loaded` 路径上；把完整 lifecycle failure matrix 与真实边界验收做完。持续推进到验收完成或遇到真实阻塞。**不要自动 pull / push / reset / rebase；提交与 merge 由用户另行要求。**
 
@@ -38,7 +38,7 @@ git diff --stat
 
 ## 2. 先读（按顺序，读实际内容）
 
-1. `/Volumes/TBU4/Workspace/Aleph/AGENTS.md`
+1. `AGENTS.md`
 2. `docs/research/aleph_modularization_phase2b_b6_plan.md` ← 本阶段契约，逐节遵守
 3. `docs/research/aleph_modularization_phase2b_plan.md`（B0 六条决策 R1–R6 仍是冻结契约）
 4. `docs/research/aleph_modularization_phase2b_prompt.md`

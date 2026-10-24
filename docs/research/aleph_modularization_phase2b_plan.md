@@ -11,7 +11,7 @@
 
 ## 2. 当前起点 / Starting State
 
-- 工作目录：`/Volumes/TBU4/Workspace/Aleph`。
+- 工作目录：`.`。
 - A 的实现仍是共享工作区未提交变更；新 session 必须先读取 `git status --short` 和实际 diff，不能 reset、checkout 旧提交、覆盖共享修改或自动提交/推送。
 - `RuntimeOwner` 已负责 tool-only WASM 的 Cold → Starting → Ready、single-flight activation、generation、WASM identity、admission permits、exact scope disposer 和 stop residual。
 - `PluginActivationAuthority` 只能从 sealed canonical gate verdict 派生；不能从 plugin id、角色、`TurnContext`、metadata 或 direct RPC 合成。

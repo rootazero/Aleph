@@ -3,5 +3,5 @@ probe_exit=0 probe_out=available_bytes=5996544000 required_bytes=4294967296 ALLO
 argv=['cargo', 'fmt', '--all', '--', '--check']
 jobs=2 timeout_s=900
 cargo_exit=1 timed_out=False descendants_remaining=0 elapsed_s=8.8
-log=/Volumes/TBU4/Workspace/Aleph/.superpowers/sdd/2026-10-14-modularization-p0-implementation/repair-logs/20261017-164931-task59-fmt.log
+log=.superpowers/sdd/2026-10-14-modularization-p0-implementation/repair-logs/20261017-164931-task59-fmt.log
 tests_passed=0 tests_failed=0 failed_suites=0

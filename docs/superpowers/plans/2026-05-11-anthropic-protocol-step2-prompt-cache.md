@@ -35,7 +35,7 @@ Files touched (10):
 
 - [ ] **Step 1.1: Read current state**
 
-Run: `sed -n '29,35p' /Volumes/TBU4/Workspace/Aleph/src/providers/message.rs`
+Run: `sed -n '29,35p' src/providers/message.rs`
 
 Expected:
 ```rust
@@ -77,7 +77,7 @@ pub enum EphemeralTtl {
 
 - [ ] **Step 1.3: Verify compile (lib only)**
 
-Run: `cd /Volumes/TBU4/Workspace/Aleph && cargo check -p alephcore 2>&1 | tail -5`
+Run: `cd . && cargo check -p alephcore 2>&1 | tail -5`
 
 Expected: 0 errors. Possible warning: `unused variant EphemeralTtl::OneHour` — fine, used by tests in next task.
 
@@ -90,7 +90,7 @@ If `cargo check` fails with "no variant Ephemeral" in the existing `cache_contro
 
 - [ ] **Step 2.1: Locate existing test**
 
-Run: `grep -n 'cache_control_serializes\|cache_control_none_omitted' /Volumes/TBU4/Workspace/Aleph/src/providers/message.rs`
+Run: `grep -n 'cache_control_serializes\|cache_control_none_omitted' src/providers/message.rs`
 
 Expected: 2 lines around 537 and 551.
 
@@ -122,7 +122,7 @@ Append inside the `mod tests { ... }` block, before the closing `}`:
 
 - [ ] **Step 2.4: Verify compile**
 
-Run: `cd /Volumes/TBU4/Workspace/Aleph && cargo check -p alephcore 2>&1 | tail -5`
+Run: `cd . && cargo check -p alephcore 2>&1 | tail -5`
 
 Expected: 0 errors.
 
@@ -133,7 +133,7 @@ Expected: 0 errors.
 
 - [ ] **Step 3.1: Locate existing ProviderConfig**
 
-Run: `grep -n 'pub struct ProviderConfig\|stream_idle_timeout_secs' /Volumes/TBU4/Workspace/Aleph/src/config/types/provider.rs`
+Run: `grep -n 'pub struct ProviderConfig\|stream_idle_timeout_secs' src/config/types/provider.rs`
 
 Expected: ProviderConfig struct around line 1-50; `stream_idle_timeout_secs` field around line 50–65 (from Step 1).
 
@@ -176,7 +176,7 @@ Note: if the file already imports `serde::{Serialize, Deserialize}` and `schemar
 
 - [ ] **Step 3.4: Verify compile**
 
-Run: `cd /Volumes/TBU4/Workspace/Aleph && cargo check -p alephcore 2>&1 | tail -5`
+Run: `cd . && cargo check -p alephcore 2>&1 | tail -5`
 
 Expected: 0 errors. `CacheRetention` will be `dead_code`-warned until Task 4 adds a field — fine.
 
@@ -187,7 +187,7 @@ Expected: 0 errors. `CacheRetention` will be `dead_code`-warned until Task 4 add
 
 - [ ] **Step 4.1: Locate stream_idle_timeout_secs field**
 
-Run: `grep -n 'stream_idle_timeout_secs' /Volumes/TBU4/Workspace/Aleph/src/config/types/provider.rs`
+Run: `grep -n 'stream_idle_timeout_secs' src/config/types/provider.rs`
 
 Expected: 2 lines — one in struct definition, one in `Default`/`new` impl.
 
@@ -216,7 +216,7 @@ Find the Default/new construction site (around line 195-200 based on Step 1 hist
 
 - [ ] **Step 4.4: Verify compile**
 
-Run: `cd /Volumes/TBU4/Workspace/Aleph && cargo check -p alephcore 2>&1 | tail -5`
+Run: `cd . && cargo check -p alephcore 2>&1 | tail -5`
 
 Expected: Multiple errors from production literal sites missing `cache_retention`. This is expected — Task 5 fixes them.
 
@@ -231,7 +231,7 @@ Expected: Multiple errors from production literal sites missing `cache_retention
 
 - [ ] **Step 5.1: Locate all literal sites**
 
-Run: `grep -rn 'stream_idle_timeout_secs: None,' /Volumes/TBU4/Workspace/Aleph/src/ 2>/dev/null`
+Run: `grep -rn 'stream_idle_timeout_secs: None,' src/ 2>/dev/null`
 
 Expected: 6 hits (the 5 production sites + ProviderConfig::default). Each site has `stream_idle_timeout_secs: None,` from Step 1.
 
@@ -248,7 +248,7 @@ Specifically:
 
 - [ ] **Step 5.3: Verify compile**
 
-Run: `cd /Volumes/TBU4/Workspace/Aleph && cargo check -p alephcore 2>&1 | tail -5`
+Run: `cd . && cargo check -p alephcore 2>&1 | tail -5`
 
 Expected: `Finished dev` 0 errors. `CacheRetention` no longer `dead_code` (used in field type), but `EphemeralTtl::OneHour` still dead-coded until Commit 2 — fine.
 
@@ -259,7 +259,7 @@ Expected: `Finished dev` 0 errors. `CacheRetention` no longer `dead_code` (used 
 
 - [ ] **Step 6.1: Read current Unreleased section**
 
-Run: `head -20 /Volumes/TBU4/Workspace/Aleph/CHANGELOG.md`
+Run: `head -20 CHANGELOG.md`
 
 Locate the `[Unreleased]` block and its `### Added` / `### Fixed` / `### Changed` subsections.
 
@@ -283,26 +283,26 @@ Append to the `### Added` subsection:
 
 - [ ] **Step 7.1: Final compile check**
 
-Run: `cd /Volumes/TBU4/Workspace/Aleph && cargo check -p alephcore 2>&1 | tail -3`
+Run: `cd . && cargo check -p alephcore 2>&1 | tail -3`
 
 Expected: `Finished dev` 0 errors.
 
 - [ ] **Step 7.2: Clippy check on touched files**
 
-Run: `cd /Volumes/TBU4/Workspace/Aleph && cargo clippy -p alephcore --lib --no-deps 2>&1 | grep -E 'message\.rs|provider\.rs|provider_factory\.rs|oauth\.rs|handlers\.rs|helpers\.rs|auth_profile_registry\.rs' | head -20`
+Run: `cd . && cargo clippy -p alephcore --lib --no-deps 2>&1 | grep -E 'message\.rs|provider\.rs|provider_factory\.rs|oauth\.rs|handlers\.rs|helpers\.rs|auth_profile_registry\.rs' | head -20`
 
 Expected: No new lints on the touched lines (pre-existing import warnings allowed; ignore).
 
 - [ ] **Step 7.3: Review diff**
 
-Run: `cd /Volumes/TBU4/Workspace/Aleph && git diff --stat`
+Run: `cd . && git diff --stat`
 
 Expected: 8 files modified, ~30 insertions, ~5 deletions.
 
 - [ ] **Step 7.4: Stage + commit**
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph
+cd .
 git add CHANGELOG.md \
         src/providers/message.rs \
         src/config/types/provider.rs \
@@ -358,7 +358,7 @@ Files touched (4):
 
 - [ ] **Step 8.1: Find the existing beta header code**
 
-Run: `grep -rn 'anthropic-beta\|oauth-2025-04-20' /Volumes/TBU4/Workspace/Aleph/src/providers/protocols/anthropic/ 2>/dev/null`
+Run: `grep -rn 'anthropic-beta\|oauth-2025-04-20' src/providers/protocols/anthropic/ 2>/dev/null`
 
 Expected: Hits in either `adapter.rs` or `proto_impl.rs`. Note the file and line.
 
@@ -425,7 +425,7 @@ Find the `#[cfg(test)] mod tests { ... }` block in `adapter.rs` (around line 250
 
 - [ ] **Step 9.2: Verify tests fail to compile (red phase)**
 
-Run: `cd /Volumes/TBU4/Workspace/Aleph && cargo check -p alephcore --lib --tests 2>&1 | grep "cannot find function \`effective_cache_retention\`" | head -3`
+Run: `cd . && cargo check -p alephcore --lib --tests 2>&1 | grep "cannot find function \`effective_cache_retention\`" | head -3`
 
 Expected: at least 4 hits.
 
@@ -472,13 +472,13 @@ fn effective_cache_retention(
 Imports needed at top of `adapter.rs` (verify, add if absent):
 - `use crate::config::ProviderConfig;` (probably already there)
 - `use crate::config::CacheRetention;` (new; or use full path `crate::config::types::provider::CacheRetention`)
-- `url` crate must already be a dep — verify with `grep '^url' /Volumes/TBU4/Workspace/Aleph/Cargo.toml`
+- `url` crate must already be a dep — verify with `grep '^url' Cargo.toml`
 
 If `CacheRetention` is not re-exported from `crate::config`, either re-export it in `src/config/mod.rs` or use the deep path. Pick whichever matches local convention (grep for `use crate::config::` patterns in `adapter.rs`).
 
 - [ ] **Step 9.4: Verify compile + 4 tests in test names**
 
-Run: `cd /Volumes/TBU4/Workspace/Aleph && cargo check -p alephcore --lib --tests 2>&1 | grep -E 'error\[|effective_cache_retention' | head -5`
+Run: `cd . && cargo check -p alephcore --lib --tests 2>&1 | grep -E 'error\[|effective_cache_retention' | head -5`
 
 Expected: 0 errors related to `effective_cache_retention` or `CacheRetention`. Baseline 484 pre-existing errors unchanged.
 
@@ -514,7 +514,7 @@ Append inside `mod tests`:
 
 - [ ] **Step 10.2: Verify red**
 
-Run: `cd /Volumes/TBU4/Workspace/Aleph && cargo check -p alephcore --lib --tests 2>&1 | grep "cannot find function \`inject_cache_control_into_system_array\`" | head -2`
+Run: `cd . && cargo check -p alephcore --lib --tests 2>&1 | grep "cannot find function \`inject_cache_control_into_system_array\`" | head -2`
 
 Expected: at least 1 hit.
 
@@ -569,7 +569,7 @@ fn inject_cache_control_into_system_array(
 
 - [ ] **Step 10.4: Verify green**
 
-Run: `cd /Volumes/TBU4/Workspace/Aleph && cargo check -p alephcore --lib --tests 2>&1 | tail -3`
+Run: `cd . && cargo check -p alephcore --lib --tests 2>&1 | tail -3`
 
 Expected: 0 errors related to the new helper.
 
@@ -629,7 +629,7 @@ Append inside `mod tests`:
 
 - [ ] **Step 11.2: Verify red**
 
-Run: `cd /Volumes/TBU4/Workspace/Aleph && cargo check -p alephcore --lib --tests 2>&1 | grep "inject_cache_control_into_last_user_message" | head -2`
+Run: `cd . && cargo check -p alephcore --lib --tests 2>&1 | grep "inject_cache_control_into_last_user_message" | head -2`
 
 Expected: at least 1 "cannot find" hit.
 
@@ -694,7 +694,7 @@ fn inject_cache_control_into_last_user_message(
 
 - [ ] **Step 11.4: Verify green**
 
-Run: `cd /Volumes/TBU4/Workspace/Aleph && cargo check -p alephcore --lib --tests 2>&1 | tail -3`
+Run: `cd . && cargo check -p alephcore --lib --tests 2>&1 | tail -3`
 
 Expected: 0 errors.
 
@@ -737,7 +737,7 @@ Adapt the surrounding signature: add a `extended_cache_ttl: bool` parameter to w
 
 - [ ] **Step 12.3: Verify compile**
 
-Run: `cd /Volumes/TBU4/Workspace/Aleph && cargo check -p alephcore 2>&1 | tail -3`
+Run: `cd . && cargo check -p alephcore 2>&1 | tail -3`
 
 Expected: 0 errors (or errors localized to the unimplemented caller — fix in Task 13).
 
@@ -842,7 +842,7 @@ Append inside `mod tests`:
 
 - [ ] **Step 13.4: Verify compile**
 
-Run: `cd /Volumes/TBU4/Workspace/Aleph && cargo check -p alephcore 2>&1 | tail -3`
+Run: `cd . && cargo check -p alephcore 2>&1 | tail -3`
 
 Expected: 0 errors.
 
@@ -850,13 +850,13 @@ Expected: 0 errors.
 
 - [ ] **Step 14.1: Full check**
 
-Run: `cd /Volumes/TBU4/Workspace/Aleph && cargo check -p alephcore 2>&1 | tail -5`
+Run: `cd . && cargo check -p alephcore 2>&1 | tail -5`
 
 Expected: 0 errors. Warnings should match Task 7 levels (`EphemeralTtl::OneHour` no longer dead-coded; `effective_cache_retention` / injectors used).
 
 - [ ] **Step 14.2: Clippy on touched paths**
 
-Run: `cd /Volumes/TBU4/Workspace/Aleph && cargo clippy -p alephcore --lib --no-deps 2>&1 | grep -E 'adapter\.rs|proto_impl\.rs' | head -20`
+Run: `cd . && cargo clippy -p alephcore --lib --no-deps 2>&1 | grep -E 'adapter\.rs|proto_impl\.rs' | head -20`
 
 Expected: No new lints on touched lines. Pre-existing warnings allowed.
 
@@ -877,14 +877,14 @@ In `[Unreleased]` → `### Added` (same section that already has Step 1 + Commit
 
 - [ ] **Step 16.1: Diff stat**
 
-Run: `cd /Volumes/TBU4/Workspace/Aleph && git diff --stat`
+Run: `cd . && git diff --stat`
 
 Expected: 3–4 files modified (adapter.rs, possibly proto_impl.rs, CHANGELOG.md), substantial insertions (~250 lines new code + tests).
 
 - [ ] **Step 16.2: Stage + commit**
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph
+cd .
 git add CHANGELOG.md \
         src/providers/protocols/anthropic/adapter.rs
 # If proto_impl.rs was modified for the beta-header refactor:
@@ -947,7 +947,7 @@ Verify `aleph.toml` either has `[providers.claude]` without `cache_retention` (h
 
 - [ ] **Step 17.2: Start server**
 
-Run: `cd /Volumes/TBU4/Workspace/Aleph && cargo run --bin aleph-server` (let it run, observe boot logs for any errors).
+Run: `cd . && cargo run --bin aleph-server` (let it run, observe boot logs for any errors).
 
 - [ ] **Step 17.3: Send a multi-turn conversation**
 
@@ -1001,13 +1001,13 @@ Revert the toml change after verification.
 
 - [ ] **Step 20.1: Verify git status is clean**
 
-Run: `cd /Volumes/TBU4/Workspace/Aleph && git status --short`
+Run: `cd . && git status --short`
 
 Expected: empty (or only this plan doc as untracked, which will be committed separately).
 
 - [ ] **Step 20.2: Verify commit chain**
 
-Run: `cd /Volumes/TBU4/Workspace/Aleph && git log --oneline -8`
+Run: `cd . && git log --oneline -8`
 
 Expected (most recent first):
 - `<sha>` providers/anthropic: wire prompt cache injection + 1h beta header (Commit 2)
@@ -1023,7 +1023,7 @@ Expected (most recent first):
 If the project convention is to commit plan docs (Step 1 did, see `e0ca8107d`):
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph
+cd .
 git add docs/superpowers/plans/2026-05-11-anthropic-protocol-step2-prompt-cache.md
 git commit -m "docs: anthropic protocol step 2 implementation plan
 

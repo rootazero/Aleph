@@ -17,10 +17,10 @@
 Create a worktree from `main` (which already contains 0a + 0b + 0c-core):
 
 ```bash
-git -C /Volumes/TBU4/Workspace/Aleph worktree add /Volumes/TBU4/Workspace/Aleph-wt-cluster-phase0c-pairing -b feat/cluster-phase0c-pairing main
+git -C . worktree add ../Aleph-wt-cluster-phase0c-pairing -b feat/cluster-phase0c-pairing main
 ```
 
-All task commands run from `/Volumes/TBU4/Workspace/Aleph-wt-cluster-phase0c-pairing`. A bare `cargo` from the parent dir resolves to the main workspace (wrong `target/`, lacks this branch) — always `cd` into the worktree first.
+All task commands run from `../Aleph-wt-cluster-phase0c-pairing`. A bare `cargo` from the parent dir resolves to the main workspace (wrong `target/`, lacks this branch) — always `cd` into the worktree first.
 
 ---
 
@@ -124,7 +124,7 @@ In the `#[cfg(test)] mod tests` of `pairing.rs`, add:
 - [ ] **Step 4: Run the test to verify it fails to compile**
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph-wt-cluster-phase0c-pairing
+cd ../Aleph-wt-cluster-phase0c-pairing
 cargo test -p alephcore --lib node_row_maps_to_node_variant 2>&1 | tail -20
 ```
 Expected: compile error — `From<PairingRequestRow>` does not yet handle `"node"` (it falls into the `_ => Channel` arm, so the `matches!` assertion fails).
@@ -363,7 +363,7 @@ In the `#[cfg(test)] mod tests` block of `src/gateway/handlers/auth/pairing.rs` 
 - [ ] **Step 12: Run the full center-side test set**
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph-wt-cluster-phase0c-pairing
+cd ../Aleph-wt-cluster-phase0c-pairing
 cargo test -p alephcore --lib node_row_maps_to_node_variant node_pairing_mints_node_role_token_single_use 2>&1 | tail -20
 ```
 Expected: both PASS.
@@ -399,7 +399,7 @@ In `src/gateway/server/handler.rs`, find the existing test (around line 1657) as
 - [ ] **Step 2: Run it to verify failure**
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph-wt-cluster-phase0c-pairing
+cd ../Aleph-wt-cluster-phase0c-pairing
 cargo test -p alephcore --lib allow_unauth_browser_pairing 2>&1 | tail -15
 ```
 Expected: FAIL — `pairing.start_node` is not yet in the `matches!`.
@@ -691,7 +691,7 @@ Add `#[derive(Debug)]` to `PairingOutcome` (the test's `{other:?}` needs it).
 - [ ] **Step 4: Run the tests to verify they fail to compile**
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph-wt-cluster-phase0c-pairing
+cd ../Aleph-wt-cluster-phase0c-pairing
 cargo test -p alephcore --bin aleph-server node_credential_round_trips_through_disk 2>&1 | tail -15
 ```
 Expected: compile error — `NodeCredential`, `write_credential`, `parse_pairing_outcome`, etc. undefined.
@@ -1010,7 +1010,7 @@ git commit -m "cluster: node-side interactive pairing + credential persistence +
 ## Final verification (controller, after all tasks)
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph-wt-cluster-phase0c-pairing
+cd ../Aleph-wt-cluster-phase0c-pairing
 cargo test -p alephcore --lib pairing 2>&1 | tail -15
 cargo test -p alephcore --bin aleph-server 2>&1 | tail -15
 cargo clippy -p alephcore 2>&1 | tail -8

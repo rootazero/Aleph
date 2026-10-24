@@ -12,7 +12,7 @@
 
 ## Global Constraints
 
-- **Branch/worktree:** `multiuser-round7` in `/Volumes/TBU4/Workspace/Aleph-mu7`, based on `multiuser-round6` (still unmerged to `main`). Do not merge to `main` in this round.
+- **Branch/worktree:** `multiuser-round7` in `../Aleph-mu7`, based on `multiuser-round6` (still unmerged to `main`). Do not merge to `main` in this round.
 - **Naming:** the module, the config section and every type use the word **`spend`**, never `budget` — `src/context/budget/` and `TerminateReason::BudgetExhaustedPartialResult` already own that word for two different things.
 - **Config section:** `[policies.spend]` with exactly three keys — `per_user_usd`, `total_usd`, `period` (`"month"` | `"day"`, default `"month"`).
 - **Both limits absent ⇒ the ledger is never consulted and never written.** A single-user box must be byte-identical. This is asserted, not assumed (guard G8).

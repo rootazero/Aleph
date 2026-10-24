@@ -10,7 +10,7 @@
 
 **Spec:** `docs/superpowers/specs/2026-10-06-capability-phase4-follow-up-gates-design.md`（同目录）。spec commit `15032e2679ee3c3abdf95eb07e123e0881932351`；用户 m00471 已确认 spec。
 
-**Worktree:** `/Volumes/TBU4/Workspace/Aleph-capability-phase4-follow-up`，分支 `capability-phase4-follow-up`。所有命令从该 worktree root 显式 `cd` 后运行；**不是** `/Volumes/TBU4/Workspace/Aleph` 的 `main`。
+**Worktree:** `../Aleph-capability-phase4-follow-up`，分支 `capability-phase4-follow-up`。所有命令从该 worktree root 显式 `cd` 后运行；**不是** `.` 的 `main`。
 
 ---
 

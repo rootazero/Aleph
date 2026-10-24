@@ -8,7 +8,7 @@
 
 **Tech Stack:** Rust (cargo check + cargo clippy). Markdown for roadmap.
 
-**Worktree:** `/Volumes/TBU4/Workspace/Aleph.harness-dissolution` (branch `harness-dissolution`).
+**Worktree:** `../Aleph.harness-dissolution` (branch `harness-dissolution`).
 
 **Verification bar:** `cargo check -p alephcore` + `cargo clippy -- -D warnings` after each commit. Inherits pre-existing P0 clippy exemptions (8 warnings in `tool_output/summary.rs` + `thinker/soul.rs`); do not treat them as new regressions.
 
@@ -24,7 +24,7 @@
 
 Run:
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph.harness-dissolution
+cd ../Aleph.harness-dissolution
 git status --short
 git log --oneline -5
 ```
@@ -39,7 +39,7 @@ If status is dirty, stop and resolve before proceeding.
 
 Run:
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph.harness-dissolution
+cd ../Aleph.harness-dissolution
 grep -rn --include='*.rs' "crate::permission" src/ | grep -v "^src/permission/"
 ```
 
@@ -51,7 +51,7 @@ If any match appears, **stop**: the orphan claim is false, escalate to controlle
 
 Run:
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph.harness-dissolution
+cd ../Aleph.harness-dissolution
 cargo check -p alephcore 2>&1 | tail -10
 ```
 
@@ -74,7 +74,7 @@ Expected: `Finished \`dev\` profile` — green. Ignore the 7 pre-existing warnin
 
 Run:
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph.harness-dissolution
+cd ../Aleph.harness-dissolution
 git rm -r src/permission/
 ```
 
@@ -120,7 +120,7 @@ Expected: zero output.
 
 Run:
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph.harness-dissolution
+cd ../Aleph.harness-dissolution
 grep -rn --include='*.rs' "crate::permission" src/
 ```
 Expected: zero output.
@@ -137,7 +137,7 @@ If either grep returns matches, **stop**: there is a hidden consumer that must b
 
 Run:
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph.harness-dissolution
+cd ../Aleph.harness-dissolution
 cargo check -p alephcore
 ```
 
@@ -147,7 +147,7 @@ Expected: `Finished \`dev\` profile`. Same 7 pre-existing warnings as baseline; 
 
 Run:
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph.harness-dissolution
+cd ../Aleph.harness-dissolution
 cargo clippy -p alephcore -- -D warnings 2>&1 | tail -20
 ```
 
@@ -159,7 +159,7 @@ If a new warning appears that was not present at baseline, fix it before commit.
 
 Run:
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph.harness-dissolution
+cd ../Aleph.harness-dissolution
 git add src/lib.rs
 git status --short
 ```
@@ -185,7 +185,7 @@ Expected:
 
 Run:
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph.harness-dissolution
+cd ../Aleph.harness-dissolution
 git log --oneline -3
 git show --stat HEAD | head -15
 cargo check -p alephcore 2>&1 | tail -5
@@ -263,7 +263,7 @@ Use Edit tool on `docs/superpowers/specs/2026-04-24-harness-dissolution-roadmap.
 
 Run:
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph.harness-dissolution
+cd ../Aleph.harness-dissolution
 git diff docs/superpowers/specs/2026-04-24-harness-dissolution-roadmap.md | head -80
 ```
 
@@ -276,7 +276,7 @@ Expected:
 
 Run:
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph.harness-dissolution
+cd ../Aleph.harness-dissolution
 git add docs/superpowers/specs/2026-04-24-harness-dissolution-roadmap.md
 git commit -m "docs(spec): mark P3 complete; record YAGNI retraction and orphan deletion"
 ```
@@ -291,7 +291,7 @@ Expected:
 
 Run:
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph.harness-dissolution
+cd ../Aleph.harness-dissolution
 git log --oneline -5
 git status --short
 ```
@@ -303,7 +303,7 @@ Expected:
 
 Run:
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph.harness-dissolution
+cd ../Aleph.harness-dissolution
 cargo check -p alephcore 2>&1 | tail -3
 ```
 

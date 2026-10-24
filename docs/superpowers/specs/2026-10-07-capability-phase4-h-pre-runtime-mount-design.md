@@ -3,7 +3,7 @@
 - **状态 / Status:** Written spec approved by user; implementation-plan review and execution-method selection pending
 - **基点 / Baseline:** `947e1895130bfc84abca7f1dd7733b07e30519fb`
 - **范围 / Scope:** Gate H-pre only; Gate H ACP inbound server and Gate I implementation are excluded
-- **工作树 / Worktree:** `/Volumes/TBU4/Workspace/Aleph-capability-phase4-follow-up`
+- **工作树 / Worktree:** `../Aleph-capability-phase4-follow-up`
 
 ## 1. 目的与成功标准 / Purpose and success criteria
 

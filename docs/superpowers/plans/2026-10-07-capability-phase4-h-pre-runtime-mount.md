@@ -10,7 +10,7 @@
 
 **Spec:** `docs/superpowers/specs/2026-10-07-capability-phase4-h-pre-runtime-mount-design.md`（approved and committed at `052d434f3`, factual path correction committed before implementation starts）
 
-**Worktree:** `/Volumes/TBU4/Workspace/Aleph-capability-phase4-follow-up`
+**Worktree:** `../Aleph-capability-phase4-follow-up`
 
 ## Global Constraints
 

@@ -280,7 +280,7 @@ Expected: 全绿——新增 `recency_scale_*` / `same_community_settles_closer_
 - [ ] **Step 8: Commit**
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph
+cd .
 git add interfaces/webchat/src/platform/wide/views/canvas/
 git commit -m "canvas: cluster galaxy by community centroid gravity + brighten by note recency"
 ```

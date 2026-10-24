@@ -2,7 +2,7 @@
 
 **Date**: 2026-04-25
 **Phase**: P6 (`P6-checkpoint-boot`)
-**Worktree**: `/Volumes/TBU4/Workspace/Aleph.harness-dissolution`
+**Worktree**: `../Aleph.harness-dissolution`
 **Branch**: `harness-dissolution` (long-lived, P0–P7)
 **Status**: Spec ready for review
 
@@ -229,7 +229,7 @@ docs: P6 — retract session checkpoint trait + add BOOT_ASSEMBLY.md doc
 ### Rollback
 
 ```bash
-git -C /Volumes/TBU4/Workspace/Aleph.harness-dissolution revert <commit-sha>
+git -C ../Aleph.harness-dissolution revert <commit-sha>
 ```
 
 Restores roadmap to pre-P6 state and deletes `BOOT_ASSEMBLY.md`. No source-code side effects.

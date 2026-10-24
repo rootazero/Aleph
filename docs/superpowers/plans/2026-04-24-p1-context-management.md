@@ -8,7 +8,7 @@
 
 **Tech Stack:** Rust / cargo workspace (`alephcore`). Verification via `cargo check`, `cargo clippy -- -D warnings`, `just test-all`, and one HTTP smoke test against `aleph-server`.
 
-**Worktree:** All work happens in `/Volumes/TBU4/Workspace/Aleph.harness-dissolution` on branch `harness-dissolution`. Do NOT operate in `/Volumes/TBU4/Workspace/Aleph` (main repo).
+**Worktree:** All work happens in `../Aleph.harness-dissolution` on branch `harness-dissolution`. Do NOT operate in `.` (main repo).
 
 ---
 
@@ -64,8 +64,8 @@
 
 Run:
 ```bash
-git -C /Volumes/TBU4/Workspace/Aleph.harness-dissolution branch --show-current
-git -C /Volumes/TBU4/Workspace/Aleph.harness-dissolution status --porcelain
+git -C ../Aleph.harness-dissolution branch --show-current
+git -C ../Aleph.harness-dissolution status --porcelain
 ```
 
 Expected: branch `harness-dissolution`; working tree clean (only possibly the spec/plan docs from the brainstorm session, which is OK). If dirty with unrelated work, STOP and escalate.
@@ -74,7 +74,7 @@ Expected: branch `harness-dissolution`; working tree clean (only possibly the sp
 
 Run:
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph.harness-dissolution
+cd ../Aleph.harness-dissolution
 cargo check -p alephcore 2>&1 | tail -20
 ```
 
@@ -84,7 +84,7 @@ Expected: PASS (compiles cleanly; warnings OK, errors = STOP). Record the git SH
 
 Run:
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph.harness-dissolution
+cd ../Aleph.harness-dissolution
 ls src/compressor/ | wc -l                         # expect 8 (7 files + tests_integration dir)
 ls src/memory/compaction/ | wc -l                  # expect 9 (mod.rs + 8 files)
 ls src/context/compact/ | wc -l                    # expect 2 (mod.rs + compactor.rs from P0)
@@ -106,7 +106,7 @@ Record these numbers as the baseline. Final checks must reconcile.
 
 Run:
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph.harness-dissolution
+cd ../Aleph.harness-dissolution
 grep -rn "crate::compressor\|use alephcore::compressor" --include="*.rs" \
   | grep -v "^src/compressor/"
 ```
@@ -132,7 +132,7 @@ After edit: expected output is blank (no compressor references remain).
 
 Run:
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph.harness-dissolution
+cd ../Aleph.harness-dissolution
 git rm -r src/compressor/
 ```
 
@@ -142,7 +142,7 @@ Expected: ~8 file deletions listed (7 `.rs` files + test integration dir content
 
 Run:
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph.harness-dissolution
+cd ../Aleph.harness-dissolution
 cargo check -p alephcore 2>&1 | tail -20
 ```
 
@@ -152,7 +152,7 @@ Expected: PASS. If any error mentions `compressor`, it means something still imp
 
 Run:
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph.harness-dissolution
+cd ../Aleph.harness-dissolution
 cargo clippy -p alephcore -- -D warnings 2>&1 | tail -30
 ```
 
@@ -161,7 +161,7 @@ Expected: PASS (same level as P0 baseline — pre-existing clippy issues from P0
 - [ ] **Step 6: Commit**
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph.harness-dissolution
+cd ../Aleph.harness-dissolution
 git add -A src/lib.rs src/compressor/
 git commit -m "$(cat <<'EOF'
 context: delete src/compressor/ (dead code, zero consumers)
@@ -198,7 +198,7 @@ Confirm `git status` shows clean tree.
 
 Run:
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph.harness-dissolution
+cd ../Aleph.harness-dissolution
 git mv src/memory/compaction/types.rs                src/context/compact/types.rs
 git mv src/memory/compaction/orchestrator.rs         src/context/compact/orchestrator.rs
 git mv src/memory/compaction/micro_compactor.rs      src/context/compact/micro_compactor.rs
@@ -225,7 +225,7 @@ Files `src/context/compact/{constraint_injector,file_content_tracker,summary_uti
 - Already use `use super::*` (for tests) and `use super::types::*` / `use super::constraint_injector::*` (for non-test code) — NO CHANGE needed. Verify with:
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph.harness-dissolution
+cd ../Aleph.harness-dissolution
 grep -n "crate::memory::compaction" src/context/compact/*.rs
 ```
 
@@ -270,7 +270,7 @@ use super::{
 **Critical**: this file has not moved yet (it moves in Commit 3), but its siblings have. Its `use super::*` references in the `mod tests` block will now point to an empty parent module. Inspect the file first:
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph.harness-dissolution
+cd ../Aleph.harness-dissolution
 grep -n "use " src/memory/compaction/session_summary_source.rs
 ```
 
@@ -460,7 +460,7 @@ use crate::context::compact::{CompactionResult, PostCompactCleanup};
 
 Run:
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph.harness-dissolution
+cd ../Aleph.harness-dissolution
 cargo check -p alephcore 2>&1 | tail -30
 ```
 
@@ -477,7 +477,7 @@ Expected output: **one remaining line** — `src/context/compact/compactor.rs:8:
 
 Run:
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph.harness-dissolution
+cd ../Aleph.harness-dissolution
 cargo clippy -p alephcore -- -D warnings 2>&1 | tail -30
 ```
 
@@ -486,7 +486,7 @@ Expected: PASS (same level as baseline; no new warnings).
 - [ ] **Step 15: Commit**
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph.harness-dissolution
+cd ../Aleph.harness-dissolution
 git add -A
 git commit -m "$(cat <<'EOF'
 context: relocate compaction framework memory/compaction → context/compact
@@ -526,7 +526,7 @@ EOF
 - [ ] **Step 1: Move the file via `git mv`**
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph.harness-dissolution
+cd ../Aleph.harness-dissolution
 git mv src/memory/compaction/session_summary_source.rs \
        src/memory/session_compactor/summary_source.rs
 ```
@@ -536,7 +536,7 @@ Confirm `git status` shows a rename.
 - [ ] **Step 2: Delete the now-empty `memory/compaction/` directory**
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph.harness-dissolution
+cd ../Aleph.harness-dissolution
 git rm src/memory/compaction/mod.rs
 rmdir src/memory/compaction/  # fails if anything else lingers — investigate if so
 ```
@@ -584,7 +584,7 @@ use crate::memory::session_compactor::summary_source::SessionSummarySource;
 
 Run:
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph.harness-dissolution
+cd ../Aleph.harness-dissolution
 grep -n "^use " src/memory/session_compactor/summary_source.rs
 ```
 
@@ -593,7 +593,7 @@ Expected: every `use crate::...` line points at an existing module. If any line 
 - [ ] **Step 7: Verify no stale references to `memory::compaction`**
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph.harness-dissolution
+cd ../Aleph.harness-dissolution
 grep -rn "crate::memory::compaction\|memory::compaction::" --include="*.rs" src/
 ```
 
@@ -603,7 +603,7 @@ Expected: ZERO matches. If any remain, rewrite them to the new paths.
 
 Run:
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph.harness-dissolution
+cd ../Aleph.harness-dissolution
 cargo check -p alephcore 2>&1 | tail -30
 ```
 
@@ -612,7 +612,7 @@ Expected: PASS.
 - [ ] **Step 9: Verify `cargo clippy` passes**
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph.harness-dissolution
+cd ../Aleph.harness-dissolution
 cargo clippy -p alephcore -- -D warnings 2>&1 | tail -30
 ```
 
@@ -621,7 +621,7 @@ Expected: PASS.
 - [ ] **Step 10: Commit**
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph.harness-dissolution
+cd ../Aleph.harness-dissolution
 git add -A
 git commit -m "$(cat <<'EOF'
 memory: relocate session_summary_source → session_compactor/summary_source.rs
@@ -654,7 +654,7 @@ This task is primarily verification. It produces a commit only if any cleanup is
 Run each and confirm expected result:
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph.harness-dissolution
+cd ../Aleph.harness-dissolution
 
 # Check 1: No compressor references
 grep -rn "crate::compressor\|use alephcore::compressor" --include="*.rs" src/
@@ -692,7 +692,7 @@ Open `src/context/compact/mod.rs` and cross-reference its `pub use` block agains
 
 Run:
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph.harness-dissolution
+cd ../Aleph.harness-dissolution
 git show HEAD~2:src/memory/compaction/mod.rs | grep "pub use"
 echo "---"
 grep "pub use" src/context/compact/mod.rs
@@ -703,7 +703,7 @@ The two lists should contain the same identifiers (module-level prefixes differ)
 - [ ] **Step 3: Compile + clippy one more time**
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph.harness-dissolution
+cd ../Aleph.harness-dissolution
 cargo check -p alephcore 2>&1 | tail -15
 cargo clippy -p alephcore -- -D warnings 2>&1 | tail -15
 ```
@@ -713,7 +713,7 @@ Expected: both PASS.
 - [ ] **Step 4: Run `just test-all` to catch anything the compiler missed**
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph.harness-dissolution
+cd ../Aleph.harness-dissolution
 just test-all 2>&1 | tail -40
 ```
 
@@ -724,7 +724,7 @@ Expected: all tests green (baseline ≥ 9098 unit tests from P0). If any test fa
 Start the server in background:
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph.harness-dissolution
+cd ../Aleph.harness-dissolution
 cargo run --bin aleph-server -- start > /tmp/aleph-p1-smoke.log 2>&1 &
 SMOKE_PID=$!
 sleep 10   # give it time to bind
@@ -742,7 +742,7 @@ Expected: HTTP 200 or similar "alive" response. Kill the server. If startup pani
 - [ ] **Step 6: If any adjustments were made in Steps 1–5, commit them**
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph.harness-dissolution
+cd ../Aleph.harness-dissolution
 git status
 ```
 
@@ -817,7 +817,7 @@ Change to:
 
 Run:
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph.harness-dissolution
+cd ../Aleph.harness-dissolution
 grep -n "P1" docs/superpowers/specs/2026-04-24-harness-dissolution-roadmap.md | head -10
 ```
 
@@ -826,7 +826,7 @@ Expected: see the updated "✅ Complete" row and the YAGNI footnote reference.
 - [ ] **Step 5: Commit**
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph.harness-dissolution
+cd ../Aleph.harness-dissolution
 git add docs/superpowers/specs/2026-04-24-harness-dissolution-roadmap.md
 git commit -m "$(cat <<'EOF'
 docs(spec): mark P1 complete in roadmap; record YAGNI downscoping
@@ -846,7 +846,7 @@ EOF
 
 Run:
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph.harness-dissolution
+cd ../Aleph.harness-dissolution
 echo "=== Final file counts ==="
 ls src/context/compact/*.rs | wc -l                # expect 9 (mod + 8 modules)
 ls src/memory/session_compactor/*.rs | wc -l       # expect ≥ 5 (prior 4 + summary_source)
@@ -874,7 +874,7 @@ After all 5 tasks complete, the P1 worktree state is ready for merge to `main`:
 
 1. **User decides** whether to merge `harness-dissolution` → `main` now (as was done for P0) or defer until P2 also completes.
 2. The branch `harness-dissolution` stays alive for P2–P7.
-3. Note to the user: `/Volumes/TBU4/Workspace/Aleph` (main repo) may have unrelated dirty state from the prior P0 merge; use `git stash`/`pop` if fast-forward merge is blocked (P0 handoff pattern).
+3. Note to the user: `.` (main repo) may have unrelated dirty state from the prior P0 merge; use `git stash`/`pop` if fast-forward merge is blocked (P0 handoff pattern).
 
 ---
 

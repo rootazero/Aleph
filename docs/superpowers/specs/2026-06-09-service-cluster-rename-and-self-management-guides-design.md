@@ -2,7 +2,7 @@
 
 **Date:** 2026-06-09
 **Status:** Approved (brainstorming)
-**Branch / Worktree:** `feat/service-cluster-guides` @ `/Volumes/TBU4/Workspace/Aleph-wt-service-cluster` (from `main` `f97b2b94f`)
+**Branch / Worktree:** `feat/service-cluster-guides` @ `../Aleph-wt-service-cluster` (from `main` `f97b2b94f`)
 
 ## Problem
 

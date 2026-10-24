@@ -8,7 +8,7 @@
 
 **Tech Stack:** Rust, Tokio, `once_cell::sync::OnceCell`, `serde`/`schemars`, `rusqlite` (NOT used here — in-memory only), existing `AlephTool` trait + `ContinuationDeps`.
 
-**Branch / worktree:** `loop-command` at `/Volumes/TBU4/Workspace/Aleph-wt-loop` (already created from `main` HEAD `3b1b19d4e`). All work happens here. Do NOT touch `main`.
+**Branch / worktree:** `loop-command` at `../Aleph-wt-loop` (already created from `main` HEAD `3b1b19d4e`). All work happens here. Do NOT touch `main`.
 
 **Build constraint (project rule):** Per the task protocol AND the global cargo-lock rule, do NOT run `cargo check`/`test`/`clippy`/`build` during this task — only ONE cargo process may run machine-wide and the user asked to skip verification and commit directly. Each task's "verify" step is satisfied by careful inspection, not compilation. Commit after each task.
 
@@ -250,7 +250,7 @@ Confirm every type/method referenced in the Step-1 tests now exists with matchin
 - [ ] **Step 5: Commit**
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph-wt-loop
+cd ../Aleph-wt-loop
 git add src/looping/types.rs
 git commit -m "feat(looping): add LoopState in-memory data model"
 ```
@@ -406,7 +406,7 @@ Confirm `LoopRegistry`, `put`/`get`/`get_active`/`remove`, `init_global`/`global
 - [ ] **Step 5: Commit**
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph-wt-loop
+cd ../Aleph-wt-loop
 git add src/looping/mod.rs
 git commit -m "feat(looping): add in-memory LoopRegistry + global singleton"
 ```
@@ -612,7 +612,7 @@ Confirm each tested function name + signature matches. Confirm `now_ms == 0` gua
 - [ ] **Step 5: Commit**
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph-wt-loop
+cd ../Aleph-wt-loop
 git add src/looping/pursuit.rs
 git commit -m "feat(looping): add pure loop-pursuit gate functions"
 ```
@@ -643,7 +643,7 @@ Confirm `src/lib.rs` now declares `pub mod looping;` exactly once and that `src/
 - [ ] **Step 4: Commit**
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph-wt-loop
+cd ../Aleph-wt-loop
 git add src/lib.rs
 git commit -m "feat(looping): register looping module in lib.rs"
 ```
@@ -1026,7 +1026,7 @@ Confirm `parse_interval_ms`, `LoopTool::{new,with_session_key_handle,with_sessio
 - [ ] **Step 6: Commit**
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph-wt-loop
+cd ../Aleph-wt-loop
 git add src/builtin_tools/loop_manage.rs
 git commit -m "feat(looping): add loop builtin tool (start/stop/status/update)"
 ```
@@ -1094,7 +1094,7 @@ Confirm: `loop_manage` declared + re-exported; `"loop"` name-arm added in defini
 - [ ] **Step 5: Commit**
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph-wt-loop
+cd ../Aleph-wt-loop
 git add src/builtin_tools/mod.rs src/executor/builtin_registry/definitions.rs src/executor/builtin_registry/builder/constructor.rs
 git commit -m "feat(looping): register and boot-wire the loop tool"
 ```
@@ -1170,7 +1170,7 @@ Confirm the function has the new `delay_ms: Option<u64>` param, the sleep is the
 - [ ] **Step 5: Commit**
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph-wt-loop
+cd ../Aleph-wt-loop
 git add src/gateway/execution_engine/execute.rs
 git commit -m "refactor(execution): add delay_ms to spawn_continuation_run
 
@@ -1253,7 +1253,7 @@ Confirm: the loop branch is inside the `if let Some(cont_deps)` block (so `cont_
 - [ ] **Step 4: Commit**
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph-wt-loop
+cd ../Aleph-wt-loop
 git add src/gateway/execution_engine/execute.rs
 git commit -m "feat(looping): re-fire loops via the continuation hook"
 ```
@@ -1359,7 +1359,7 @@ Confirm `DEFAULT_SOFT_MAX_ITERATIONS` exists; `start` applies it only when both 
 - [ ] **Step 5: Commit**
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph-wt-loop
+cd ../Aleph-wt-loop
 git add src/builtin_tools/loop_manage.rs
 git commit -m "feat(looping): apply default soft iteration cap to uncapped loops"
 ```

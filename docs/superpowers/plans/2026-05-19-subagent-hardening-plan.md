@@ -10,7 +10,7 @@
 
 **Spec:** `docs/superpowers/specs/2026-05-19-subagent-hardening-design.md`
 
-**Worktree:** `/Volumes/TBU4/Workspace/Aleph-wt-subagent`, branch `subagent-hardening`. All `cargo`/`git` commands run from the worktree root.
+**Worktree:** `../Aleph-wt-subagent`, branch `subagent-hardening`. All `cargo`/`git` commands run from the worktree root.
 
 ---
 

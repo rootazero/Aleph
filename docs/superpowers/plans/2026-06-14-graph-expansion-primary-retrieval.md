@@ -12,7 +12,7 @@
 
 ## GLOBAL EXECUTION CONSTRAINTS (every task)
 
-- **Worktree:** `/Volumes/TBU4/Workspace/Aleph-wt-graphexp`, branch `graph-expansion-retrieval`. All paths below are relative to it. Bash resets cwd to the main repo after each command — **always `cd /Volumes/TBU4/Workspace/Aleph-wt-graphexp` first** and use absolute paths.
+- **Worktree:** `../Aleph-wt-graphexp`, branch `graph-expansion-retrieval`. All paths below are relative to it. Bash resets cwd to the main repo after each command — **always `cd ../Aleph-wt-graphexp` first** and use absolute paths.
 - **NEVER touch `main`.** Commit only on `graph-expansion-retrieval`.
 - **NO cargo.** Do **not** run `cargo check/test/clippy/build`. Verification is **static audit** (grep match-arms, field counts, type/signature parity). Tests are written (TDD red→green discipline preserved in code) and **ship with the change**; the user runs the suite later.
 - **Commits:** English, format `<scope>: <desc>`, **no** `Co-Authored-By` trailer. One commit per task. `git commit --no-verify` to skip hooks.
@@ -148,7 +148,7 @@ Find the `#[cfg(test)] mod tests` block in `src/memory/store/sqlite/notes.rs` (s
 - [ ] **Step 4: Static audit (no cargo)**
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph-wt-graphexp
+cd ../Aleph-wt-graphexp
 grep -n "async fn get_notes_with_content" src/memory/notes/store.rs src/memory/store/sqlite/notes.rs
 ```
 Expected: exactly **2** hits (one trait default, one impl). Confirm both signatures are character-for-character identical (`agent_id: &str, paths: &[String]) -> Result<Vec<crate::memory::notes::NoteSearchResult>, AlephError>`).
@@ -156,7 +156,7 @@ Expected: exactly **2** hits (one trait default, one impl). Confirm both signatu
 - [ ] **Step 5: Commit**
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph-wt-graphexp
+cd ../Aleph-wt-graphexp
 git add src/memory/notes/store.rs src/memory/store/sqlite/notes.rs
 git commit --no-verify -m "feat(memory): add NoteStore::get_notes_with_content batch fetch"
 ```
@@ -273,7 +273,7 @@ pub use retrieval::{ExpansionConfig, RetrievalScoringConfig};
 - [ ] **Step 4: Static audit**
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph-wt-graphexp
+cd ../Aleph-wt-graphexp
 grep -n "pub struct ExpansionConfig\|pub use retrieval::{ExpansionConfig" src/config/types/memory/retrieval.rs src/config/types/memory/mod.rs
 ```
 Expected: struct defined once; re-export present.
@@ -281,7 +281,7 @@ Expected: struct defined once; re-export present.
 - [ ] **Step 5: Commit**
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph-wt-graphexp
+cd ../Aleph-wt-graphexp
 git add src/config/types/memory/retrieval.rs src/config/types/memory/mod.rs
 git commit --no-verify -m "feat(config): add ExpansionConfig for graph retrieval expansion"
 ```
@@ -558,7 +558,7 @@ mod tests {
 - [ ] **Step 3: Static audit**
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph-wt-graphexp
+cd ../Aleph-wt-graphexp
 grep -n "pub async fn graph_expand\|fn is_active\|related_peers\|get_notes_with_content" src/memory/note_retrieval/expansion.rs
 ```
 Expected: `graph_expand` defined; calls `cfg.is_active()`, `store.related_peers`, `store.get_notes_with_content`. Confirm the propagation line reads `seed.score * cfg.weight * (edge / seed_top_edge)` and the `seed_top_edge <= 0.0` guard is present.
@@ -572,7 +572,7 @@ pub mod expansion;
 ```
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph-wt-graphexp
+cd ../Aleph-wt-graphexp
 git add src/memory/note_retrieval/expansion.rs src/memory/note_retrieval/mod.rs
 git commit --no-verify -m "feat(memory): add graph_expand 4-signal associative recall"
 ```
@@ -755,7 +755,7 @@ with:
 - [ ] **Step 6: Static audit**
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph-wt-graphexp
+cd ../Aleph-wt-graphexp
 grep -n "expansion::graph_expand\|with_expansion_config\|expansion: ExpansionConfig" src/memory/note_retrieval/mod.rs
 ```
 Expected: field present; builder present; `graph_expand` called in **2** places (`retrieve` + `retrieve_multi_agent`). Confirm both call sites pass `self.indexer.store().as_ref()`.
@@ -763,7 +763,7 @@ Expected: field present; builder present; `graph_expand` called in **2** places 
 - [ ] **Step 7: Commit**
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph-wt-graphexp
+cd ../Aleph-wt-graphexp
 git add src/memory/note_retrieval/mod.rs
 git commit --no-verify -m "feat(memory): wire graph expansion into primary retrieval path"
 ```
@@ -874,7 +874,7 @@ Then update the `new_with_config` call (lines 328–334) to pass the new arg:
 - [ ] **Step 4: Static audit**
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph-wt-graphexp
+cd ../Aleph-wt-graphexp
 echo "--- new_with_config arity (def + 2 callers must all be 6 args) ---"
 grep -n "new_with_config" src/builtin_tools/memory_search.rs src/executor/builtin_registry/builder/constructor.rs
 echo "--- expansion field present ---"
@@ -885,7 +885,7 @@ Expected: `new()` passes 6 args (4× `None`); `constructor.rs` passes `expansion
 - [ ] **Step 5: Commit**
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph-wt-graphexp
+cd ../Aleph-wt-graphexp
 git add src/config/types/memory/mod.rs src/builtin_tools/memory_search.rs src/executor/builtin_registry/builder/constructor.rs
 git commit --no-verify -m "feat(config): thread ExpansionConfig through memory_search tool"
 ```
@@ -952,7 +952,7 @@ In `impl Default for AssemblerConfig` (after `rerank: crate::memory::rerank::Rer
 - [ ] **Step 5: Static audit** — every `AssemblerConfig` literal must now list `expansion`; field count parity.
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph-wt-graphexp
+cd ../Aleph-wt-graphexp
 echo "--- field + Default + sync ---"
 grep -n "pub expansion: super::ExpansionConfig\|expansion: super::ExpansionConfig::default()\|cfg.expansion = self.expansion" src/config/types/memory/assembler.rs src/config/types/memory/mod.rs
 echo "--- builder call ---"
@@ -967,7 +967,7 @@ Expected: field/Default/sync present; one `with_expansion_config` in the provide
 - [ ] **Step 6: Commit**
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph-wt-graphexp
+cd ../Aleph-wt-graphexp
 git add src/config/types/memory/assembler.rs src/config/types/memory/mod.rs src/thinker/memory_context_provider/constructor.rs src/memory/session_search_summary/filter.rs src/memory/assembler/tests.rs
 git commit --no-verify -m "feat(config): thread ExpansionConfig through proactive memory context"
 ```
@@ -1010,7 +1010,7 @@ Also update the `retrieve` row note or §1 prose if it enumerates pipeline stage
 - [ ] **Step 2: Static audit**
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph-wt-graphexp
+cd ../Aleph-wt-graphexp
 grep -n "Associative Graph Expansion\|graph_expand\|memory.expansion" docs/reference/memory/RETRIEVAL.md
 ```
 Expected: the new subsection present.
@@ -1018,7 +1018,7 @@ Expected: the new subsection present.
 - [ ] **Step 3: Commit**
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph-wt-graphexp
+cd ../Aleph-wt-graphexp
 git add docs/reference/memory/RETRIEVAL.md
 git commit --no-verify -m "docs(memory): document graph expansion retrieval stage"
 ```
@@ -1030,7 +1030,7 @@ git commit --no-verify -m "docs(memory): document graph expansion retrieval stag
 No cargo. Static audit of the whole change:
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph-wt-graphexp
+cd ../Aleph-wt-graphexp
 echo "=== commits on branch ===" && git log --oneline main..HEAD
 echo "=== get_notes_with_content: 2 defs (trait + impl) ===" && grep -rc "async fn get_notes_with_content" src/memory/notes/store.rs src/memory/store/sqlite/notes.rs
 echo "=== graph_expand call sites: 2 (retrieve + multi_agent) ===" && grep -c "expansion::graph_expand" src/memory/note_retrieval/mod.rs

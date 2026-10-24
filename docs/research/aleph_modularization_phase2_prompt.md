@@ -9,7 +9,7 @@
 
 ### 1. 目标、目录与已提交基线 / Goal, Directory, Committed Baseline
 
-- 工作目录明确指定为 `/Volumes/TBU4/Workspace/Aleph`，共享工作区。先验证 `pwd`、`git rev-parse --show-toplevel`、HEAD、status，不静默跳转其他卷或建立另一份检出。项目旧路径说明若与本请求冲突，以本次指定工作目录为准，并报告实际 root。
+- 工作目录明确指定为 `.`，共享工作区。先验证 `pwd`、`git rev-parse --show-toplevel`、HEAD、status，不静默跳转其他卷或建立另一份检出。项目旧路径说明若与本请求冲突，以本次指定工作目录为准，并报告实际 root。
 - 第一阶段已完成且已提交：first-phase commit = `0cc141a0d`，完整 SHA `0cc141a0d5ed4e81a18ffcaa2cb6d1c9c336d0b5`；文档编写时 HEAD 同为该提交。不能写成“第一阶段还有未提交变更”。
 - 第一阶段已经有 provider lifecycle fencing、generation、调用点 admission；但生产 transition 仍 dormant。不要重复实现第一阶段，也不要把测试里的 Starting 迁移说成生产启动已接线。
 - 若当前 HEAD 已前进，先核实该基线仍在历史、查看相关差异，再做 plan review；不要 checkout/reset 到旧提交覆盖别人的工作。基线漂移改变关键契约时暂停说明。

@@ -12,7 +12,7 @@
 
 ## Global Constraints
 
-- 工作树：`/Volumes/TBU4/Workspace/Aleph-capability-phase4`，分支 `capability-phase4`。会话工作检出与编辑落点一律是此 worktree（AGENTS.md WORKSPACE 警告）。
+- 工作树：`../Aleph-capability-phase4`，分支 `capability-phase4`。会话工作检出与编辑落点一律是此 worktree（AGENTS.md WORKSPACE 警告）。
 - 事实源分层不变量（spec §4.1）：event store 是唯一 recovery source；StateDatabase / ACP JSON / MCP JSON 是 projection；GlobalBus / Gateway bus 是 notification。**不得**让 projection 或 bus 冒充 recovery source。
 - 不得合并存储；不得建 universal scheduler；不引入 `Box<dyn Any>`、巨大 enum payload、或 `dyn Trait` 作为 descriptor 字段（spec §5.5）。
 - `src/harness/` 不新增任何业务文件（R10 棘轮，spec §11.3）；Gate 由 review 检查 diff，不以文件计数守门。

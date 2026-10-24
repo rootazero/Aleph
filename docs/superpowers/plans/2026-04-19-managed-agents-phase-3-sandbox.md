@@ -1666,7 +1666,7 @@ Phase 3 is code-complete. Do NOT auto-release. Present to user:
 
 > "Phase 3 implementation complete on branch `worktree-managed-agents-phase-3`. All commits green, no new test failures beyond the 2 pre-existing. Next step options:
 >
-> 1. **Merge to main** — `git -C /Volumes/TBU4/Workspace/Aleph merge worktree-managed-agents-phase-3 --no-ff`
+> 1. **Merge to main** — `git -C . merge worktree-managed-agents-phase-3 --no-ff`
 > 2. **Release** — `just release $(date +%Y.%m.%d)`
 > 3. **Both**
 > 4. **Start Phase 4 brainstorm** (Harness — Think→Act loop rewrite)

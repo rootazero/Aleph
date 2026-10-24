@@ -1,10 +1,10 @@
 # Office-hours independent spec review — round 1
 
-Document: /Volumes/TBU4/Workspace/Aleph/docs/designs/runtime-owner-lazy-activation.md
-Verdict: /Volumes/TBU4/Workspace/Aleph/docs/designs/runtime-owner-lazy-activation.md.review.48g5yI/round-1.json
+Document: docs/designs/runtime-owner-lazy-activation.md
+Verdict: docs/designs/runtime-owner-lazy-activation.md.review.48g5yI/round-1.json
 
-Use only Read, Write, and the one Bash seal command for this review. Read the design at "/Volumes/TBU4/Workspace/Aleph/docs/designs/runtime-owner-lazy-activation.md" with Read and review all 5 dimensions independently, including new defects. Never use Edit on any file, your verdict file included, and do not change the design.
-Use Write to save your complete verdict as JSON to "/Volumes/TBU4/Workspace/Aleph/docs/designs/runtime-owner-lazy-activation.md.review.48g5yI/round-1.json". Then run the `Seal:` command from your dispatch message with Bash, exactly as given; it validates the saved file and prints one receipt line. If it reports an error, Write the complete corrected JSON to the same path (never Edit, even for a one-field fix) and run the same command again. Use Bash for nothing else.
+Use only Read, Write, and the one Bash seal command for this review. Read the design at "docs/designs/runtime-owner-lazy-activation.md" with Read and review all 5 dimensions independently, including new defects. Never use Edit on any file, your verdict file included, and do not change the design.
+Use Write to save your complete verdict as JSON to "docs/designs/runtime-owner-lazy-activation.md.review.48g5yI/round-1.json". Then run the `Seal:` command from your dispatch message with Bash, exactly as given; it validates the saved file and prints one receipt line. If it reports an error, Write the complete corrected JSON to the same path (never Edit, even for a one-field fix) and run the same command again. Use Bash for nothing else.
 Return only that printed `OFFICE_HOURS_VERDICT round=1 sha256=<hash> path=<verdict path>` line, unchanged, as your entire response: no JSON, Markdown fences, or prose. The parent verifies the receipt against the saved bytes.
 The saved JSON is your sole findings inventory: include every unresolved problem and necessary remedy, including minor findings that a short conclusion might omit.
 Use one finding per distinct obligation. An exact duplicate shares a finding; a shared component does not combine separate decisions, behavior, or effort.
@@ -31,7 +31,7 @@ Use this exact schema (replace example findings and statuses; no additional fiel
 {
   "version": 2,
   "round": 1,
-  "document": "/Volumes/TBU4/Workspace/Aleph/docs/designs/runtime-owner-lazy-activation.md",
+  "document": "docs/designs/runtime-owner-lazy-activation.md",
   "quality_score": 7,
   "dimensions": {
     "completeness": "PASS",

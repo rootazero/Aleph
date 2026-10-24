@@ -478,7 +478,7 @@ cargo check --target wasm32-unknown-unknown -p aleph-panel
 
 - [ ] **Step 1: 复跑权威 grep（确认无漂移）** — 在 `interfaces/webchat/src/views/settings`：
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph/interfaces/webchat/src/views/settings && \
+cd interfaces/webchat/src/views/settings && \
   find . -name '*.rs' | xargs grep -nE 'grid-cols-2|grid-cols-3|px-8|px-6|max-w-' | grep -v 'max-sm' | sort
 ```
 - [ ] **Step 2: 与下表核对（actual audit output）** — 若 grep 行号与下表不符则以新 grep 为准更新 T②.2，否则照表执行。**审计全集**（已分类，✅=种子已含，🆕=spec 种子遗漏，⏭=容器内边距非内容宽度=低优先/可选）：
@@ -706,7 +706,7 @@ pub use mobile_landing::MobileSettingsLanding;
   - `channels/overview.rs:67`（`grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3` 已响应 → 仅校验 gap，必要时追加 `max-sm:gap-2`；默认不改，browser QA 时定）。
 - [ ] **Step 5: grep lint（不变量校验）** — settings 内不得残留未降级的 2/3 列网格：
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph/interfaces/webchat/src/views/settings && \
+cd interfaces/webchat/src/views/settings && \
   find . -name '*.rs' | xargs grep -nE 'grid-cols-2|grid-cols-3' \
   | grep -v 'max-sm' | grep -v 'grid-responsive'
 ```

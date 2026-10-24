@@ -5,7 +5,7 @@ If the real codebase forces a deviation (e.g. `PluginId` is actually `String`, o
 methods take `&mut self`), KEEP the contract name and record the deviation in a final
 `## Contract deltas` section of your output so the lead can reconcile across phases.
 
-Repo root (worktree): `/Volumes/TBU4/Workspace/Aleph/.claude/worktrees/plugin-scope-round`
+Repo root (worktree): `.claude/worktrees/plugin-scope-round`
 Spec: `docs/superpowers/specs/2026-09-20-plugin-scope-and-cc-compat-design.md`
 Evidence: `docs/superpowers/specs/2026-09-20-plugin-scope-and-cc-compat-evidence/scan-*.md`
 Base commit: `3ddc1f2e7` (+ `35e5f8bca` spec commit). All `file:line` cites in the spec are against `3ddc1f2e7`.

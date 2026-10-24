@@ -50,7 +50,7 @@
 - `src/gateway/handlers/mod.rs` — add `gateway.flow.reload` RPC
 - `Cargo.toml` (alephcore) — `arc_swap = "1"` if not already present
 
-**Sanity before starting:** confirm worktree is at `/Volumes/TBU4/Workspace/Aleph/.claude/worktrees/managed-agents-phase-4a`, branch is `worktree-managed-agents-phase-4a`, Phase 4 spec `ALEPH_HARNESS_V2` discoverability fix (commit `af19d58d1`) is present in HEAD.
+**Sanity before starting:** confirm worktree is at `.claude/worktrees/managed-agents-phase-4a`, branch is `worktree-managed-agents-phase-4a`, Phase 4 spec `ALEPH_HARNESS_V2` discoverability fix (commit `af19d58d1`) is present in HEAD.
 
 ---
 

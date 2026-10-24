@@ -1,7 +1,7 @@
 {
   "version": 2,
   "round": 2,
-  "document": "/Volumes/TBU4/Workspace/Aleph/docs/designs/runtime-owner-lazy-activation.md",
+  "document": "docs/designs/runtime-owner-lazy-activation.md",
   "quality_score": 9,
   "dimensions": {
     "completeness": "PASS",

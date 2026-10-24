@@ -30,8 +30,8 @@ Operational phase. Establishes the two repos as the source of truth and re-wires
 ### Task A1: Create and push `Aleph-skills`
 
 **Files:**
-- Source: `/Volumes/TBU4/Workspace/Aleph/skills/` (37 leaves + `.gitignore`)
-- Target: `/Volumes/TBU4/Workspace/Aleph-skills/` (existing empty sibling dir)
+- Source: `skills/` (37 leaves + `.gitignore`)
+- Target: `../Aleph-skills/` (existing empty sibling dir)
 
 **Interfaces:**
 - Produces: GitHub repo `rootazero/Aleph-skills` whose **root** = current `skills/` contents.
@@ -40,21 +40,21 @@ Operational phase. Establishes the two repos as the source of truth and re-wires
 
 Run:
 ```bash
-gh auth status && ls -A /Volumes/TBU4/Workspace/Aleph-skills
+gh auth status && ls -A ../Aleph-skills
 ```
 Expected: authenticated as an account that can create repos under `rootazero`; target dir empty.
 
 - [ ] **Step 2: Copy current skills content into the target (exclude any VCS cruft)**
 
 ```bash
-rsync -a --exclude='.git' /Volumes/TBU4/Workspace/Aleph/skills/ /Volumes/TBU4/Workspace/Aleph-skills/
-ls -A /Volumes/TBU4/Workspace/Aleph-skills | head
+rsync -a --exclude='.git' skills/ ../Aleph-skills/
+ls -A ../Aleph-skills | head
 ```
 Expected: 37 skill dirs + `.gitignore` present at the target root.
 
 - [ ] **Step 3: Add a minimal README so the repo root is self-describing**
 
-Create `/Volumes/TBU4/Workspace/Aleph-skills/README.md`:
+Create `../Aleph-skills/README.md`:
 ```markdown
 # Aleph Skills
 
@@ -66,7 +66,7 @@ catalog and installable via `aleph skills sync` or the Hub.
 - [ ] **Step 4: Init, commit, create remote, push**
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph-skills
+cd ../Aleph-skills
 git init -b main
 git add -A
 git commit -m "skills: initial import from Aleph main repo snapshot"
@@ -82,8 +82,8 @@ Expected: `name=Aleph-skills`, `visibility=PUBLIC`, default branch `main`.
 ### Task A2: Create and push `Aleph-plugins`
 
 **Files:**
-- Source: `/Volumes/TBU4/Workspace/Aleph/plugins/` (8 plugin leaves + `.claude-plugin/marketplace.toml` + `.gitignore`)
-- Target: `/Volumes/TBU4/Workspace/Aleph-plugins/`
+- Source: `plugins/` (8 plugin leaves + `.claude-plugin/marketplace.toml` + `.gitignore`)
+- Target: `../Aleph-plugins/`
 
 **Interfaces:**
 - Produces: GitHub repo `rootazero/Aleph-plugins` whose **root** = current `plugins/` contents (including `.claude-plugin/marketplace.toml`).
@@ -91,15 +91,15 @@ Expected: `name=Aleph-skills`, `visibility=PUBLIC`, default branch `main`.
 - [ ] **Step 1: Copy current plugins content into the target**
 
 ```bash
-rsync -a --exclude='.git' /Volumes/TBU4/Workspace/Aleph/plugins/ /Volumes/TBU4/Workspace/Aleph-plugins/
-ls -A /Volumes/TBU4/Workspace/Aleph-plugins
-test -f /Volumes/TBU4/Workspace/Aleph-plugins/.claude-plugin/marketplace.toml && echo "marketplace.toml OK"
+rsync -a --exclude='.git' plugins/ ../Aleph-plugins/
+ls -A ../Aleph-plugins
+test -f ../Aleph-plugins/.claude-plugin/marketplace.toml && echo "marketplace.toml OK"
 ```
 Expected: 8 plugin dirs + `.claude-plugin/` + `.gitignore`; `marketplace.toml OK`.
 
 - [ ] **Step 2: Add README**
 
-Create `/Volumes/TBU4/Workspace/Aleph-plugins/README.md`:
+Create `../Aleph-plugins/README.md`:
 ```markdown
 # Aleph Plugins
 
@@ -111,7 +111,7 @@ top-level directory is one plugin. Listed in the Aleph Hub catalog.
 - [ ] **Step 3: Init, commit, create remote, push**
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph-plugins
+cd ../Aleph-plugins
 git init -b main
 git add -A
 git commit -m "plugins: initial import from Aleph main repo snapshot"
@@ -126,8 +126,8 @@ Expected: public repo, default branch `main`.
 ### Task A3: Replace main-repo `skills/`+`plugins/` with submodules; fix `build.rs` rerun triggers
 
 **Files:**
-- Modify: `/Volumes/TBU4/Workspace/Aleph/.gitmodules` (create)
-- Modify: `/Volumes/TBU4/Workspace/Aleph/build.rs` (add rerun-if-changed)
+- Modify: `.gitmodules` (create)
+- Modify: `build.rs` (add rerun-if-changed)
 - Replace (as submodules): `skills/`, `plugins/`
 
 **Interfaces:**
@@ -136,7 +136,7 @@ Expected: public repo, default branch `main`.
 - [ ] **Step 1: Remove the now-duplicated dirs from the main repo index (keep working tree until submodule re-adds)**
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph
+cd .
 git rm -r --cached skills plugins
 rm -rf skills plugins
 ```
@@ -153,7 +153,7 @@ Expected: `.gitmodules` created; `skills/` and `plugins/` populated from the new
 
 - [ ] **Step 3: Add `rerun-if-changed` for the embedded trees in `build.rs`**
 
-In `/Volumes/TBU4/Workspace/Aleph/build.rs`, inside `fn main()` right after the `VERSION` rerun line, add:
+In `build.rs`, inside `fn main()` right after the `VERSION` rerun line, add:
 ```rust
     // Re-embed bundled skills/plugins (include_dir!) when their submodule
     // checkouts change — without this, edits land only after a clean build.
@@ -183,9 +183,9 @@ git commit -m "build: source bundled skills/plugins from submodules + rerun trig
 **Rationale (corrected from initial draft):** the release builds in a 3-platform matrix job (`desktop-app`), so a bump+commit+push *inside* CI would race across the parallel jobs and also miss the triggering checkout ref. Instead the bump runs **once, locally, in the `just release` recipe** (a single recorded commit pushed to `main` before the workflow triggers), and CI only needs `submodules: recursive` on every checkout. Without `submodules: recursive`, CI checks out empty `skills/`/`plugins/` → `include_dir!` embeds nothing → broken release. That checkout flag is the real must-have; the local bump is the D5 recorded-pointer guarantee.
 
 **Files:**
-- Modify: `/Volumes/TBU4/Workspace/Aleph/justfile` (`release` recipe; `verify-build` recipe)
-- Modify: `/Volumes/TBU4/Workspace/Aleph/.github/workflows/aleph-app-release.yml` (checkouts at lines ~41, ~228)
-- Modify: `/Volumes/TBU4/Workspace/Aleph/.github/workflows/aleph-core-ci.yml` (checkouts at lines ~41, ~82, ~130, ~160, ~186)
+- Modify: `justfile` (`release` recipe; `verify-build` recipe)
+- Modify: `.github/workflows/aleph-app-release.yml` (checkouts at lines ~41, ~228)
+- Modify: `.github/workflows/aleph-core-ci.yml` (checkouts at lines ~41, ~82, ~130, ~160, ~186)
 
 **Interfaces:**
 - Produces: each release embeds latest-at-release official content via a recorded submodule-pointer bump (D5); every CI/release build fetches submodule content so `include_dir!` is non-empty.
@@ -254,7 +254,7 @@ Rust TDD phase. Adds: a filesystem-source extraction path symmetric to the embed
 ### Task B1: Filesystem-source extraction (symmetric to the embedded `Dir` path)
 
 **Files:**
-- Modify: `/Volumes/TBU4/Workspace/Aleph/src/bundled/extractor.rs`
+- Modify: `src/bundled/extractor.rs`
 - Test: same file, `#[cfg(test)] mod tests`
 
 **Interfaces:**
@@ -445,8 +445,8 @@ git commit -m "bundled: add filesystem-source extraction symmetric to embedded p
 ### Task B2: git2 sync module (clone-or-hard-reset isolated checkout)
 
 **Files:**
-- Create: `/Volumes/TBU4/Workspace/Aleph/src/bundled/sync.rs`
-- Modify: `/Volumes/TBU4/Workspace/Aleph/src/bundled/mod.rs` (add `mod sync;` + URL/path constants + re-export)
+- Create: `src/bundled/sync.rs`
+- Modify: `src/bundled/mod.rs` (add `mod sync;` + URL/path constants + re-export)
 - Test: `sync.rs` `#[cfg(test)] mod tests`
 
 **Interfaces:**
@@ -590,8 +590,8 @@ git commit -m "bundled: add git2 clone/hard-reset sync for official content"
 ### Task B3: Orchestrate first-run clone-with-fallback; add explicit re-extract entry point
 
 **Files:**
-- Modify: `/Volumes/TBU4/Workspace/Aleph/src/bundled/extractor.rs`
-- Modify: `/Volumes/TBU4/Workspace/Aleph/src/bin/aleph-server/commands/start/helpers.rs:259`
+- Modify: `src/bundled/extractor.rs`
+- Modify: `src/bin/aleph-server/commands/start/helpers.rs:259`
 - Test: `extractor.rs` tests
 
 **Interfaces:**
@@ -771,10 +771,10 @@ git commit -m "bundled: first-run clone-with-fallback + explicit sync entry poin
 ### Task B4: `bundled.sync` RPC handler
 
 **Files:**
-- Create: `/Volumes/TBU4/Workspace/Aleph/src/gateway/handlers/bundled_sync.rs`
-- Modify: `/Volumes/TBU4/Workspace/Aleph/src/gateway/handlers/mod.rs` (register + `mod`)
-- Modify: `/Volumes/TBU4/Workspace/Aleph/src/gateway/rate_limiter.rs` (RpcWrite scope + list)
-- Modify: `/Volumes/TBU4/Workspace/Aleph/src/gateway/lane.rs` (System lane)
+- Create: `src/gateway/handlers/bundled_sync.rs`
+- Modify: `src/gateway/handlers/mod.rs` (register + `mod`)
+- Modify: `src/gateway/rate_limiter.rs` (RpcWrite scope + list)
+- Modify: `src/gateway/lane.rs` (System lane)
 
 **Interfaces:**
 - Consumes: `alephcore::bundled::{sync_official_now, SyncKind}`, `alephcore::utils::paths::get_config_dir`.
@@ -891,9 +891,9 @@ git commit -m "gateway: add bundled.sync RPC for explicit official-content refre
 ### Task B5: CLI `aleph skills sync` / `aleph plugins sync`
 
 **Files:**
-- Modify: `/Volumes/TBU4/Workspace/Aleph/interfaces/cli/src/commands/skills_cmd.rs` (add `sync` fn)
-- Modify: `/Volumes/TBU4/Workspace/Aleph/interfaces/cli/src/commands/cli_args.rs` (add `Sync` to `enum SkillsAction` ~line 761 AND `enum PluginAction` ~line 628)
-- Modify: `/Volumes/TBU4/Workspace/Aleph/interfaces/cli/src/main.rs` (dispatch arms: `dispatch_skills` ~lines 707-709 and `dispatch_plugin` ~lines 579-640)
+- Modify: `interfaces/cli/src/commands/skills_cmd.rs` (add `sync` fn)
+- Modify: `interfaces/cli/src/commands/cli_args.rs` (add `Sync` to `enum SkillsAction` ~line 761 AND `enum PluginAction` ~line 628)
+- Modify: `interfaces/cli/src/main.rs` (dispatch arms: `dispatch_skills` ~lines 707-709 and `dispatch_plugin` ~lines 579-640)
 
 **Interfaces:**
 - Consumes: `bundled.sync` RPC; `AlephClient`.
@@ -965,7 +965,7 @@ Adds the missing `GitDir → skill` install branch in the client (so the Hub can
 ### Task C1: `GitDir → skill` install branch in the hub installer
 
 **Files:**
-- Modify: `/Volumes/TBU4/Workspace/Aleph/src/hub/install.rs`
+- Modify: `src/hub/install.rs`
 - Test: `src/hub/install.rs` `#[cfg(test)] mod tests`
 
 **Interfaces:**
@@ -1115,7 +1115,7 @@ git commit -m "hub: install GitDir skills into ~/.aleph/skills (close skill-inst
 
 ### Task C2: Re-point the Aleph-Hub first-party seed at the new repos
 
-**Files (in `/Volumes/TBU4/Workspace/Aleph-Hub`):**
+**Files (in `../Aleph-Hub`):**
 - Modify: `data/seeds/aleph-official.json`
 - Regenerate: `public/catalog.json`, `data/site-catalog.json`
 
@@ -1156,7 +1156,7 @@ Read `scripts/pipeline/firstParty.ts`: `toFinal` builds `subdir = `${g.subdir_pr
 
 Run (in Aleph-Hub):
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph-Hub
+cd ../Aleph-Hub
 npx tsx scripts/pipeline/regen-firstparty.ts
 ```
 Expected: `regen-firstparty: N entries (43 official + … )`.

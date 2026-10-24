@@ -1,6 +1,6 @@
 # Plan — P6 MCP server face + `packages/pi-aleph/` · P7 `qa/mcp_face/run.sh`
 
-Base: `3ddc1f2e7` (+ `35e5f8bca` spec). Worktree: `/Volumes/TBU4/Workspace/Aleph/.claude/worktrees/plugin-scope-round`.
+Base: `3ddc1f2e7` (+ `35e5f8bca` spec). Worktree: `.claude/worktrees/plugin-scope-round`.
 Spec sections covered: §3.7 (MCP face), §3.8 (`pi-aleph`), §3.5 G5, §4 MCP error rows, §6 `qa/mcp_face`.
 
 ## Facts established from the worktree (every task below cites these)

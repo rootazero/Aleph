@@ -6,7 +6,7 @@ English summary: Restored the single-owner pure AI contracts and their original 
 
 ## 1. Authority and boundary / 依据与边界
 
-- Root: `/Volumes/TBU4/Workspace/Aleph`; branch: `refactor/modularization-p0`.
+- Root: `.`; branch: `refactor/modularization-p0`.
 - Read and used `.superpowers/sdd/2026-10-14-modularization-p0-implementation/task-7-brief.md`, `task-7-source-review.md`, and `task-7-match-boundary.md`. Rejected `task-7-source-closure.md` was not used as authority. Original source wins over report typos.
 - Recovered the four existing untracked `crates/aleph-slot-api/src/{ai,ai_message,ai_response,ai_delta}.rs` files in place; did not delete/reset/recreate the partial work as a baseline implementation. Compared them with the original Core definitions before relying on them.
 - Phase A deliberately does not adapt callers or add/edit external tests/examples. Moving the three non-exhaustive enums makes existing external exhaustive matches temporarily invalid; preserving reexport identity alone does not solve that.

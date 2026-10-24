@@ -54,7 +54,7 @@
 ### Task A1: Strategy artifact type + self-gate (`src/strategy/types.rs`)
 
 **Files:**
-- Create: `/Volumes/TBU4/Workspace/Aleph/src/strategy/types.rs`
+- Create: `src/strategy/types.rs`
 - Test: same file, `#[cfg(test)] mod tests` (mirrors `goal/types.rs`)
 
 **Interfaces:**
@@ -193,8 +193,8 @@ Note: this command requires `src/strategy/` to be a module. If `mod.rs` does not
 ### Task A2: `src/strategy/mod.rs` — composite-key helpers + process-global
 
 **Files:**
-- Create/Modify: `/Volumes/TBU4/Workspace/Aleph/src/strategy/mod.rs`
-- Modify: `/Volumes/TBU4/Workspace/Aleph/src/lib.rs` (add `pub mod strategy;` if not already present)
+- Create/Modify: `src/strategy/mod.rs`
+- Modify: `src/lib.rs` (add `pub mod strategy;` if not already present)
 - Test: `src/strategy/mod.rs` `#[cfg(test)] mod tests` (mirrors `goal/mod.rs`)
 
 **Interfaces:**
@@ -321,7 +321,7 @@ git commit -m "strategy: add composite-key helpers and process-global store"
 ### Task A3: `StrategyStore` — composite-keyed SQLite persistence
 
 **Files:**
-- Create: `/Volumes/TBU4/Workspace/Aleph/src/strategy/store.rs`
+- Create: `src/strategy/store.rs`
 - Test: same file, `#[cfg(test)] mod tests` (mirrors `goal/store.rs`)
 
 **Interfaces:**
@@ -538,8 +538,8 @@ git commit -m "strategy: add composite-keyed StrategyStore with fail-safe get"
 ### Task A4: `src/strategy/render.rs` — pure, deterministic renderers
 
 **Files:**
-- Create: `/Volumes/TBU4/Workspace/Aleph/src/strategy/render.rs`
-- Modify: `/Volumes/TBU4/Workspace/Aleph/src/strategy/mod.rs` (add `pub mod render;` + re-export the three fns)
+- Create: `src/strategy/render.rs`
+- Modify: `src/strategy/mod.rs` (add `pub mod render;` + re-export the three fns)
 - Test: same file, `#[cfg(test)] mod tests`
 
 **Interfaces:**
@@ -805,8 +805,8 @@ git commit -m "strategy: add pure deterministic strategy renderers"
 ### Task B1: Add `StrategyToml` config struct
 
 **Files:**
-- Modify: `/Volumes/TBU4/Workspace/Aleph/src/config/types/phase6_wiring.rs` (add struct after `ModelThresholdToml` impl block, ~line 199; add tests in the existing `#[cfg(test)] mod tests`)
-- Test: `/Volumes/TBU4/Workspace/Aleph/src/config/types/phase6_wiring.rs` (same `mod tests`)
+- Modify: `src/config/types/phase6_wiring.rs` (add struct after `ModelThresholdToml` impl block, ~line 199; add tests in the existing `#[cfg(test)] mod tests`)
+- Test: `src/config/types/phase6_wiring.rs` (same `mod tests`)
 
 **Interfaces:**
 - Consumes: existing `phase6_wiring` serde/derive conventions (`#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema, PartialEq)]`, `#[serde(default, skip_serializing_if = "Option::is_none")]`).
@@ -930,8 +930,8 @@ impl Default for StrategyToml {
 ### Task B2: Wire `Config.strategy` field + `lib.rs` re-export
 
 **Files:**
-- Modify: `/Volumes/TBU4/Workspace/Aleph/src/config/structs.rs` (add field after `context_budget` at line 233)
-- Modify: `/Volumes/TBU4/Workspace/Aleph/src/lib.rs` (add `StrategyToml` to the `types::phase6_wiring::{...}` re-export at lines 153-155)
+- Modify: `src/config/structs.rs` (add field after `context_budget` at line 233)
+- Modify: `src/lib.rs` (add `StrategyToml` to the `types::phase6_wiring::{...}` re-export at lines 153-155)
 - Test: covered indirectly by B3's builder tests (a `Config { strategy: ... }` literal must compile); no standalone test needed here — this is pure plumbing that the compiler verifies, and B3's `cargo` run exercises the new field. (Per the E0063 convention, B3 tests use `..Config::default()` so adding an `Option` field is non-breaking.)
 
 **Interfaces:**
@@ -970,9 +970,9 @@ impl Default for StrategyToml {
 ### Task B3: `build_strategy_planner_provider` (tier-1 only, fail-soft) + orchestrator re-export
 
 **Files:**
-- Modify: `/Volumes/TBU4/Workspace/Aleph/src/orchestrator/deps_builder.rs` (add fn after `build_cheap_summary_provider` at line 863; add tests in the existing `#[cfg(test)] mod tests`)
-- Modify: `/Volumes/TBU4/Workspace/Aleph/src/orchestrator/mod.rs` (add `build_strategy_planner_provider` to the `deps_builder::{...}` re-export at lines 20-23)
-- Test: `/Volumes/TBU4/Workspace/Aleph/src/orchestrator/deps_builder.rs` (same `mod tests`)
+- Modify: `src/orchestrator/deps_builder.rs` (add fn after `build_cheap_summary_provider` at line 863; add tests in the existing `#[cfg(test)] mod tests`)
+- Modify: `src/orchestrator/mod.rs` (add `build_strategy_planner_provider` to the `deps_builder::{...}` re-export at lines 20-23)
+- Test: `src/orchestrator/deps_builder.rs` (same `mod tests`)
 
 **Interfaces:**
 - Consumes: `StrategyToml` / `Config.strategy` (B1/B2); `crate::providers::{create_provider, AiProvider}`, `crate::config::Config`, `crate::sync_primitives::Arc` (all already imported at the top of `deps_builder.rs`); test helper `cfg_with_fallback` + `ProviderConfig::test_config` (already in this test module).
@@ -1185,7 +1185,7 @@ pub use deps_builder::{
 
 **Files:**
 - Modify: the **builder-config struct** the constructor consumes (the `config:` param at `src/executor/builtin_registry/builder/constructor/mod.rs` — grep its type with `rg "struct .*Config" src/executor/builtin_registry/builder/constructor/`; it already carries `team_store`, `dispatch_signal`, `browser_profile_manager`). Add a `pub planner_provider: Option<Arc<dyn AiProvider>>` field (default `None` in its `Default`/construction).
-- Modify: `/Volumes/TBU4/Workspace/Aleph/src/bin/aleph-server/commands/start/orchestrator_init.rs` (import at line 24; compute `effective` planner provider inside `initialize_orchestrator` where that builder-config is assembled and the primary provider Arc is in scope, before the constructor runs).
+- Modify: `src/bin/aleph-server/commands/start/orchestrator_init.rs` (import at line 24; compute `effective` planner provider inside `initialize_orchestrator` where that builder-config is assembled and the primary provider Arc is in scope, before the constructor runs).
 - Test: none added here — bin construction-site plumbing (`orchestrator_init.rs` is not covered by `-p alephcore --lib`); B3 unit-tests the builder. Compiler-verified via the scoped `cargo check --bin aleph-server`.
 
 **Interfaces:**
@@ -1243,8 +1243,8 @@ use alephcore::orchestrator::{
 ### Task C1: Planner node (`plan_strategy`, tool-free, self-gating, fail-soft)
 
 **Files:**
-- Create: `/Volumes/TBU4/Workspace/Aleph/src/strategy/planner.rs`
-- Modify: `/Volumes/TBU4/Workspace/Aleph/src/strategy/mod.rs` (add `pub mod planner;` — Group A creates this file; this task only appends the module decl)
+- Create: `src/strategy/planner.rs`
+- Modify: `src/strategy/mod.rs` (add `pub mod planner;` — Group A creates this file; this task only appends the module decl)
 - Test: in-file `#[cfg(test)] mod tests` in `planner.rs`
 
 **Interfaces:**
@@ -1469,7 +1469,7 @@ fn parse_strategy(text: &str) -> Option<Strategy> {
 }
 ```
 
-- [ ] **Step 3: Add the module declaration** to `/Volumes/TBU4/Workspace/Aleph/src/strategy/mod.rs` (Group A owns this file; insert near the other `pub mod` lines, mirroring `src/goal/mod.rs` ordering):
+- [ ] **Step 3: Add the module declaration** to `src/strategy/mod.rs` (Group A owns this file; insert near the other `pub mod` lines, mirroring `src/goal/mod.rs` ordering):
 
 ```rust
 pub mod planner;
@@ -1489,9 +1489,9 @@ git commit -m "strategy: tool-free fail-soft planner node (plan_strategy + Plann
 ### Task C2: Inject `Option<Arc<dyn AiProvider>>` into GoalTool / LoopTool / WorkflowTool
 
 **Files:**
-- Modify: `/Volumes/TBU4/Workspace/Aleph/src/builtin_tools/goal.rs` (struct fields 79-84, `new` 86-91, add builder)
-- Modify: `/Volumes/TBU4/Workspace/Aleph/src/builtin_tools/loop_manage.rs` (struct fields 103-108, `new` 110-119, add builder)
-- Modify: `/Volumes/TBU4/Workspace/Aleph/src/builtin_tools/workflow_tool.rs` (struct fields 181-192, `new` 194-204, add builder)
+- Modify: `src/builtin_tools/goal.rs` (struct fields 79-84, `new` 86-91, add builder)
+- Modify: `src/builtin_tools/loop_manage.rs` (struct fields 103-108, `new` 110-119, add builder)
+- Modify: `src/builtin_tools/workflow_tool.rs` (struct fields 181-192, `new` 194-204, add builder)
 - Test: in-file test modules of all three (one builder smoke test each)
 
 **Interfaces:**
@@ -1687,8 +1687,8 @@ git commit -m "builtin_tools: inject optional strategy planner provider into goa
 ### Task C3: Wire the planner provider at the construction sites
 
 **Files:**
-- Modify: `/Volumes/TBU4/Workspace/Aleph/src/executor/builtin_registry/builder/constructor/mod.rs` (struct field assignment 724-725)
-- Modify: `/Volumes/TBU4/Workspace/Aleph/src/executor/builtin_registry/builder/constructor/coord_team_tools.rs` (WorkflowTool build 383-384)
+- Modify: `src/executor/builtin_registry/builder/constructor/mod.rs` (struct field assignment 724-725)
+- Modify: `src/executor/builtin_registry/builder/constructor/coord_team_tools.rs` (WorkflowTool build 383-384)
 - Test: none new (covered by C2 builder tests + C4/C5 integration); this is plumbing verified by `cargo check`.
 
 **Interfaces:**
@@ -1730,8 +1730,8 @@ git commit -m "executor: wire strategy planner provider into goal/loop/workflow 
 ### Task C4: Fire `plan_strategy` once at goal `Set` and loop `start`
 
 **Files:**
-- Modify: `/Volumes/TBU4/Workspace/Aleph/src/builtin_tools/goal.rs` (`GoalAction::Set` arm, after `self.store.put(&goal)?` at line 250)
-- Modify: `/Volumes/TBU4/Workspace/Aleph/src/builtin_tools/loop_manage.rs` (`start`, after `self.registry.put(state)` at line 185) — `start` is sync, so factor the planner fire into the async `run`/`call` path; see Step 2 note.
+- Modify: `src/builtin_tools/goal.rs` (`GoalAction::Set` arm, after `self.store.put(&goal)?` at line 250)
+- Modify: `src/builtin_tools/loop_manage.rs` (`start`, after `self.registry.put(state)` at line 185) — `start` is sync, so factor the planner fire into the async `run`/`call` path; see Step 2 note.
 - Test: in-file test modules (fire-once guard + provider-None still succeeds)
 
 **Interfaces:**
@@ -1951,7 +1951,7 @@ git commit -m "builtin_tools: fire strategy planner once at goal set and loop st
 ### Task C5: Fire `plan_strategy` at workflow `Run` + expose result to Group E's `materialize`
 
 **Files:**
-- Modify: `/Volumes/TBU4/Workspace/Aleph/src/builtin_tools/workflow_tool.rs` (`WorkflowArgs::Run` arm 529-592; plan before `materialize` call at 569, store after `mat.run_id` is known)
+- Modify: `src/builtin_tools/workflow_tool.rs` (`WorkflowArgs::Run` arm 529-592; plan before `materialize` call at 569, store after `mat.run_id` is known)
 - Test: in-file test module (provider-None Run still succeeds; provider-present stores under `workflow_key(run_id)`)
 
 **Interfaces:**
@@ -2054,10 +2054,10 @@ git commit -m "workflow: fire strategy planner once at run and thread Strategy i
 - **C5** depends on Group A (`workflow_key`) + C2 + **Group E** (extended `materialize` signature `strategy: Option<&Strategy>`). **Order Group E's materialize-signature change before C5** or C5 will not compile.
 
 **Relevant absolute paths:**
-- `/Volumes/TBU4/Workspace/Aleph/src/strategy/planner.rs` (new), `/Volumes/TBU4/Workspace/Aleph/src/strategy/mod.rs`
-- `/Volumes/TBU4/Workspace/Aleph/src/builtin_tools/goal.rs`, `/Volumes/TBU4/Workspace/Aleph/src/builtin_tools/loop_manage.rs`, `/Volumes/TBU4/Workspace/Aleph/src/builtin_tools/workflow_tool.rs`
-- `/Volumes/TBU4/Workspace/Aleph/src/executor/builtin_registry/builder/constructor/mod.rs`, `/Volumes/TBU4/Workspace/Aleph/src/executor/builtin_registry/builder/constructor/coord_team_tools.rs`
-- Reference (read-only): `/Volumes/TBU4/Workspace/Aleph/src/memory/dreaming/stages/skill_distill.rs` (tool-free call + tolerant JSON parse), `/Volumes/TBU4/Workspace/Aleph/src/context/compact/compactor.rs:526-533` (call_llm), `/Volumes/TBU4/Workspace/Aleph/src/providers/mod.rs:232-274` (AiProvider trait), `/Volumes/TBU4/Workspace/Aleph/src/providers/adapter.rs:90-165` (RequestPayload), `/Volumes/TBU4/Workspace/Aleph/src/goal/{store.rs,mod.rs}` (store/global shape), `/Volumes/TBU4/Workspace/Aleph/src/workflow/compile.rs:102-115` (materialize mints run_id internally).
+- `src/strategy/planner.rs` (new), `src/strategy/mod.rs`
+- `src/builtin_tools/goal.rs`, `src/builtin_tools/loop_manage.rs`, `src/builtin_tools/workflow_tool.rs`
+- `src/executor/builtin_registry/builder/constructor/mod.rs`, `src/executor/builtin_registry/builder/constructor/coord_team_tools.rs`
+- Reference (read-only): `src/memory/dreaming/stages/skill_distill.rs` (tool-free call + tolerant JSON parse), `src/context/compact/compactor.rs:526-533` (call_llm), `src/providers/mod.rs:232-274` (AiProvider trait), `src/providers/adapter.rs:90-165` (RequestPayload), `src/goal/{store.rs,mod.rs}` (store/global shape), `src/workflow/compile.rs:102-115` (materialize mints run_id internally).
 
 
 ---
@@ -2068,8 +2068,8 @@ git commit -m "workflow: fire strategy planner once at run and thread Strategy i
 ### Task D1: ResolvedContext gains `strategy` + `strategy_guardrails` fields
 
 **Files:**
-- Modify `/Volumes/TBU4/Workspace/Aleph/src/thinker/context.rs:177-191` (add two fields after `standing_goal`/before `voice_mode_active`) and `:258-268` (add to the exhaustive `resolve()` literal — missing this is a hard E0063)
-- Test `/Volumes/TBU4/Workspace/Aleph/src/thinker/context.rs` (`#[cfg(test)]` at bottom; if none exists, add one)
+- Modify `src/thinker/context.rs:177-191` (add two fields after `standing_goal`/before `voice_mode_active`) and `:258-268` (add to the exhaustive `resolve()` literal — missing this is a hard E0063)
+- Test `src/thinker/context.rs` (`#[cfg(test)]` at bottom; if none exists, add one)
 
 **Interfaces:**
 - Produces: `ResolvedContext.strategy: Option<String>` (full `<strategy>` body) and `ResolvedContext.strategy_guardrails: Option<String>` (guardrail lines), both `#[serde(skip, default)]`. Consumed by D4/D5 layers and D6 (`prompt_build`).
@@ -2134,7 +2134,7 @@ mod strategy_field_tests {
 ### Task D2: `StrategyLayer` (Stable, priority 70, `<strategy>` envelope)
 
 **Files:**
-- Create `/Volumes/TBU4/Workspace/Aleph/src/thinker/layers/strategy.rs`
+- Create `src/thinker/layers/strategy.rs`
 - Test: inline `#[cfg(test)]` in the same file (mirrors `standing_goal.rs:59-124`)
 
 **Interfaces:**
@@ -2287,7 +2287,7 @@ impl PromptLayer for StrategyLayer {
 ### Task D3: `StrategyPointerLayer` (Dynamic, priority 1756, `<strategy_reminder>`)
 
 **Files:**
-- Create `/Volumes/TBU4/Workspace/Aleph/src/thinker/layers/strategy_pointer.rs`
+- Create `src/thinker/layers/strategy_pointer.rs`
 - Test: inline `#[cfg(test)]` (mirrors `execution_plan.rs:83-165`)
 
 **Interfaces:**
@@ -2452,8 +2452,8 @@ impl PromptLayer for StrategyPointerLayer {
 ### Task D4: Register both layers in the pipeline + bump count asserts
 
 **Files:**
-- Modify `/Volumes/TBU4/Workspace/Aleph/src/thinker/layers/mod.rs` (add `mod` + `pub use` near the standing_goal block, `:37-43`)
-- Modify `/Volumes/TBU4/Workspace/Aleph/src/thinker/prompt_pipeline.rs` — import block (`:6-17`), `default_layers()` (`:319-365`), priority doc (`:274-317`), `layer_count` assert (`:557`), `dynamic_names.len()` assert (`:930-934`)
+- Modify `src/thinker/layers/mod.rs` (add `mod` + `pub use` near the standing_goal block, `:37-43`)
+- Modify `src/thinker/prompt_pipeline.rs` — import block (`:6-17`), `default_layers()` (`:319-365`), priority doc (`:274-317`), `layer_count` assert (`:557`), `dynamic_names.len()` assert (`:930-934`)
 - Test: the two existing assert tests in `prompt_pipeline.rs` (`test_default_layers_count`, `dynamic_layers_are_correctly_classified`)
 
 **Interfaces:**
@@ -2545,8 +2545,8 @@ pub use strategy_pointer::StrategyPointerLayer;
 ### Task D5: `active_strategy` fetch (goal_key first, else loop_key) + re-export
 
 **Files:**
-- Modify `/Volumes/TBU4/Workspace/Aleph/src/orchestrator/harness_bridge/context_blocks.rs` (add `active_strategy`, mirroring `active_standing_goal` `:34-44`)
-- Modify `/Volumes/TBU4/Workspace/Aleph/src/orchestrator/harness_bridge/mod.rs:44-46` (add to the `pub use context_blocks::{…}` re-export)
+- Modify `src/orchestrator/harness_bridge/context_blocks.rs` (add `active_strategy`, mirroring `active_standing_goal` `:34-44`)
+- Modify `src/orchestrator/harness_bridge/mod.rs:44-46` (add to the `pub use context_blocks::{…}` re-export)
 - Test: inline `#[cfg(test)]` in `context_blocks.rs`
 
 **Interfaces:**
@@ -2607,7 +2607,7 @@ pub use context_blocks::{
 ### Task D6: 3-way `tokio::join!` in `prompt_build` + render both strategy surfaces
 
 **Files:**
-- Modify `/Volumes/TBU4/Workspace/Aleph/src/orchestrator/harness_bridge/prompt_build.rs:388-393` (extend the existing 2-way `join!` to 3-way; render both `ResolvedContext` strategy fields)
+- Modify `src/orchestrator/harness_bridge/prompt_build.rs:388-393` (extend the existing 2-way `join!` to 3-way; render both `ResolvedContext` strategy fields)
 
 **Interfaces:**
 - Consumes: `active_strategy(&str) -> Option<Strategy>` (D5); `crate::strategy::{render_strategy_summary, render_guardrails_only}` (Group A render.rs); `ResolvedContext.strategy` / `.strategy_guardrails` (D1)
@@ -2657,7 +2657,7 @@ pub use context_blocks::{
 ### Task D7: Production-path integration test (Strategy welds into stable prefix + dynamic tail)
 
 **Files:**
-- Modify `/Volumes/TBU4/Workspace/Aleph/src/thinker/prompt_builder/cache.rs` (`#[cfg(test)] mod tests`, after `cached_full_prompt_carries_role_and_citation_standards` at `:187-206`)
+- Modify `src/thinker/prompt_builder/cache.rs` (`#[cfg(test)] mod tests`, after `cached_full_prompt_carries_role_and_citation_standards` at `:187-206`)
 
 **Interfaces:**
 - Consumes: `StrategyLayer` + `StrategyPointerLayer` on the default pipeline (D4); `ResolvedContext.strategy` / `.strategy_guardrails` (D1). Catches both the missing-`Cached` vanish bug and wrong-stability in one test (§11).
@@ -2734,14 +2734,14 @@ pub use context_blocks::{
 ### Task E1: Thread `strategy` through the subagent SpawnRequest into the inline prompt
 
 **Files:**
-- Modify `/Volumes/TBU4/Workspace/Aleph/src/thinker/prompt_builder/mod.rs` (add `strategy` field + `with_strategy` builder + append in `build_system_prompt`)
-- Modify `/Volumes/TBU4/Workspace/Aleph/src/agents/runtime.rs` (`AgentRuntimeConfig.strategy` field 49-60; new `AgentRuntime.strategy` field + `with_strategy` builder; pass into `SpawnRequest` at 437-445)
-- Modify `/Volumes/TBU4/Workspace/Aleph/src/agents/subagent_spawner/mod.rs` (`SpawnRequest.strategy` field 99-119; `PromptBuilder::with_strategy` call at 269)
-- Modify `/Volumes/TBU4/Workspace/Aleph/src/agents/subagent_tool/mod.rs` (`SubagentTool.strategy` field + `with_strategy` builder)
-- Modify `/Volumes/TBU4/Workspace/Aleph/src/agents/subagent_tool/spawn.rs` (`build_runtime` applies `with_strategy`; `spawn_background`'s `AgentRuntimeConfig` carries strategy)
-- Modify `/Volumes/TBU4/Workspace/Aleph/src/agents/subagent_tool/loop_tool.rs` (3 `AgentRuntimeConfig {}` sites carry `strategy`)
-- Test `/Volumes/TBU4/Workspace/Aleph/src/thinker/prompt_builder/tests/build_tests.rs` (unit test on `with_strategy`)
-- Test `/Volumes/TBU4/Workspace/Aleph/src/agents/subagent_spawner/tests.rs` (end-to-end capture test)
+- Modify `src/thinker/prompt_builder/mod.rs` (add `strategy` field + `with_strategy` builder + append in `build_system_prompt`)
+- Modify `src/agents/runtime.rs` (`AgentRuntimeConfig.strategy` field 49-60; new `AgentRuntime.strategy` field + `with_strategy` builder; pass into `SpawnRequest` at 437-445)
+- Modify `src/agents/subagent_spawner/mod.rs` (`SpawnRequest.strategy` field 99-119; `PromptBuilder::with_strategy` call at 269)
+- Modify `src/agents/subagent_tool/mod.rs` (`SubagentTool.strategy` field + `with_strategy` builder)
+- Modify `src/agents/subagent_tool/spawn.rs` (`build_runtime` applies `with_strategy`; `spawn_background`'s `AgentRuntimeConfig` carries strategy)
+- Modify `src/agents/subagent_tool/loop_tool.rs` (3 `AgentRuntimeConfig {}` sites carry `strategy`)
+- Test `src/thinker/prompt_builder/tests/build_tests.rs` (unit test on `with_strategy`)
+- Test `src/agents/subagent_spawner/tests.rs` (end-to-end capture test)
 
 **Interfaces:**
 - Consumes: `SpawnRequest` struct fields (subagent_spawner/mod.rs:99-119); `AgentRuntimeConfig` (runtime.rs:49-60); `PromptBuilder::new(PromptConfig)` + `build_system_prompt(&[ToolInfo])`.
@@ -2749,7 +2749,7 @@ pub use context_blocks::{
 
 Note on design: the subagent inline prompt builds on the `Basic` path with **no `ResolvedContext`**, so Group D's `StrategyLayer` (which reads `ResolvedContext.strategy`) never fires here. `PromptBuilder::with_strategy` therefore appends the wrapped `<strategy>` block **post-pipeline**, byte-for-byte matching the StrategyLayer wrap (`<strategy>\n{body}\n</strategy>\n\n`). When `strategy` is `None`, nothing is appended → byte-identical to today.
 
-- [ ] **Step 1: Write the failing unit test** for `PromptBuilder::with_strategy` in `/Volumes/TBU4/Workspace/Aleph/src/thinker/prompt_builder/tests/build_tests.rs` (append at the end of the existing `#[cfg(test)] mod` — match the file's existing `use super::super::*;` style; read the file's existing imports first and reuse them):
+- [ ] **Step 1: Write the failing unit test** for `PromptBuilder::with_strategy` in `src/thinker/prompt_builder/tests/build_tests.rs` (append at the end of the existing `#[cfg(test)] mod` — match the file's existing `use super::super::*;` style; read the file's existing imports first and reuse them):
 
 ```rust
 #[test]
@@ -2803,7 +2803,7 @@ fn without_strategy_is_byte_identical() {
 }
 ```
 
-- [ ] **Step 2: Add the `strategy` field + `with_strategy` builder to `PromptBuilder`** in `/Volumes/TBU4/Workspace/Aleph/src/thinker/prompt_builder/mod.rs`.
+- [ ] **Step 2: Add the `strategy` field + `with_strategy` builder to `PromptBuilder`** in `src/thinker/prompt_builder/mod.rs`.
 
 Add the field to the struct (after the `extra_files` field at line 191):
 
@@ -2853,7 +2853,7 @@ Append the block at the end of `build_system_prompt`. Replace the final line of 
         prompt
 ```
 
-- [ ] **Step 3: Add `strategy` to `AgentRuntimeConfig` + `AgentRuntime`** in `/Volumes/TBU4/Workspace/Aleph/src/agents/runtime.rs`.
+- [ ] **Step 3: Add `strategy` to `AgentRuntimeConfig` + `AgentRuntime`** in `src/agents/runtime.rs`.
 
 In `AgentRuntimeConfig` (after `timeout_secs` at line 59):
 
@@ -2897,7 +2897,7 @@ Thread it into `SpawnRequest` at the `let req = SpawnRequest { … }` literal (l
             strategy: config.strategy.as_deref(),
 ```
 
-- [ ] **Step 4: Add `strategy` to `SpawnRequest` and inject it at mod.rs:269** in `/Volumes/TBU4/Workspace/Aleph/src/agents/subagent_spawner/mod.rs`.
+- [ ] **Step 4: Add `strategy` to `SpawnRequest` and inject it at mod.rs:269** in `src/agents/subagent_spawner/mod.rs`.
 
 Add the field to `SpawnRequest<'a>` (after `isolation` at line 118):
 
@@ -2923,7 +2923,7 @@ Thread it into the inline prompt build (the `PromptBuilder::new(…)…build_sys
         let system_prompt = builder.build_system_prompt(&[]);
 ```
 
-- [ ] **Step 5: Add `strategy` field + builder to `SubagentTool`** in `/Volumes/TBU4/Workspace/Aleph/src/agents/subagent_tool/mod.rs`.
+- [ ] **Step 5: Add `strategy` field + builder to `SubagentTool`** in `src/agents/subagent_tool/mod.rs`.
 
 Add the field to the struct (after `guardrails` at line 103):
 
@@ -2956,7 +2956,7 @@ Add the builder (after `with_cancel_token` ends, near line 264):
 
 - [ ] **Step 6: Apply the strategy in `build_runtime` and carry it in every `AgentRuntimeConfig`.**
 
-In `/Volumes/TBU4/Workspace/Aleph/src/agents/subagent_tool/spawn.rs`, in `build_runtime`, add after the `with_guardrails` block (after line 225, before `runtime`):
+In `src/agents/subagent_tool/spawn.rs`, in `build_runtime`, add after the `with_guardrails` block (after line 225, before `runtime`):
 
 ```rust
         if let Some(s) = self.strategy.clone() {
@@ -2980,7 +2980,7 @@ In `spawn_background` (spawn.rs), the `AgentRuntimeConfig { … }` literal at li
             };
 ```
 
-In `/Volumes/TBU4/Workspace/Aleph/src/agents/subagent_tool/loop_tool.rs`, add `strategy: None,` to all three `AgentRuntimeConfig { … }` literals (sync batch at 523-529, MoA aggregator at 636-642, foreground at 780-786), each after its `timeout_secs` field. Example for the foreground site:
+In `src/agents/subagent_tool/loop_tool.rs`, add `strategy: None,` to all three `AgentRuntimeConfig { … }` literals (sync batch at 523-529, MoA aggregator at 636-642, foreground at 780-786), each after its `timeout_secs` field. Example for the foreground site:
 
 ```rust
             let runtime_config = AgentRuntimeConfig {
@@ -3002,7 +3002,7 @@ Rationale for `strategy: None` at every `AgentRuntimeConfig` site: the run-globa
 
 This keeps the contract's `AgentRuntimeConfig.strategy` honored (an explicit per-config strategy still works) while letting the `SubagentTool::with_strategy` builder set it run-wide without touching call sites beyond a `None` default.
 
-- [ ] **Step 7: Write the end-to-end capture test** in `/Volumes/TBU4/Workspace/Aleph/src/agents/subagent_spawner/tests.rs`. Add a capturing provider + test inside the existing `mod tests` (reuse existing imports: `RequestPayload`, `ProviderResponse`, `StopReason`, `AgentDef`, `AgentMode`, `ChainContext`, `Arc`, `Mutex`, the in-process session service, and `agent_with_allowed`). Mirror `SpawnerBase` construction from an existing spawn test in this file (read one near line 475 to copy the exact `SpawnerBase { … }` field set and session/tool wiring):
+- [ ] **Step 7: Write the end-to-end capture test** in `src/agents/subagent_spawner/tests.rs`. Add a capturing provider + test inside the existing `mod tests` (reuse existing imports: `RequestPayload`, `ProviderResponse`, `StopReason`, `AgentDef`, `AgentMode`, `ChainContext`, `Arc`, `Mutex`, the in-process session service, and `agent_with_allowed`). Mirror `SpawnerBase` construction from an existing spawn test in this file (read one near line 475 to copy the exact `SpawnerBase { … }` field set and session/tool wiring):
 
 ```rust
     /// Provider that records the system prompt of the first request, then
@@ -3093,12 +3093,12 @@ git commit -m "subagent: thread welded strategy through SpawnRequest into inline
 ### Task E2: Stamp `WORKFLOW_STRATEGY_KEY` into CoordTask metadata and render `## Global Strategy` in handoff
 
 **Files:**
-- Modify `/Volumes/TBU4/Workspace/Aleph/src/workflow/compile.rs` (add `WORKFLOW_STRATEGY_KEY` const near 41; add `strategy: Option<&Strategy>` param to `materialize` at 102-109; stamp into agent-step metadata at 171-196; update test call sites)
-- Modify `/Volumes/TBU4/Workspace/Aleph/src/workflow/mod.rs` (re-export `WORKFLOW_STRATEGY_KEY` in the `pub use` at 30-31)
-- Modify `/Volumes/TBU4/Workspace/Aleph/src/builtin_tools/workflow_tool.rs` (pass `None` at the `materialize(...)` call, line 569-577)
-- Modify `/Volumes/TBU4/Workspace/Aleph/src/teams/dispatcher/handoff.rs` (render `## Global Strategy` after the `## Task` block, ~line 179)
-- Test `/Volumes/TBU4/Workspace/Aleph/src/teams/dispatcher/handoff.rs` (handoff render test, in the existing `mod tests`)
-- Test `/Volumes/TBU4/Workspace/Aleph/src/workflow/compile.rs` (materialize stamp test, in the existing `mod tests`)
+- Modify `src/workflow/compile.rs` (add `WORKFLOW_STRATEGY_KEY` const near 41; add `strategy: Option<&Strategy>` param to `materialize` at 102-109; stamp into agent-step metadata at 171-196; update test call sites)
+- Modify `src/workflow/mod.rs` (re-export `WORKFLOW_STRATEGY_KEY` in the `pub use` at 30-31)
+- Modify `src/builtin_tools/workflow_tool.rs` (pass `None` at the `materialize(...)` call, line 569-577)
+- Modify `src/teams/dispatcher/handoff.rs` (render `## Global Strategy` after the `## Task` block, ~line 179)
+- Test `src/teams/dispatcher/handoff.rs` (handoff render test, in the existing `mod tests`)
+- Test `src/workflow/compile.rs` (materialize stamp test, in the existing `mod tests`)
 
 **Interfaces:**
 - Consumes: `crate::strategy::Strategy` + `crate::strategy::render_workflow_global_frame(&Strategy) -> String` (Group A); `WORKFLOW_MODEL_KEY`/`WORKFLOW_RUN_ID_KEY` (compile.rs:35,41); `build_handoff_context(coord_store, team_store, inbox, task)` (handoff.rs:164); `task.metadata` (`serde_json::Value`).
@@ -3106,7 +3106,7 @@ git commit -m "subagent: thread welded strategy through SpawnRequest into inline
 
 Design: weld **GLOBAL-FRAME ONLY** (objective + cross-cutting guardrails, no phases) via `render_workflow_global_frame`. The section is labeled `## Global Strategy (context — your specific task is below)` and placed **after** the `## Task` block so the per-node task description (already assembled from `step.prompt` into `task.description`) stays authoritative — it is read first and dominates.
 
-- [ ] **Step 1: Write the failing handoff render test** in `/Volumes/TBU4/Workspace/Aleph/src/teams/dispatcher/handoff.rs` `mod tests` (reuse the existing `coord_store`, `team_store`, `plain_task` helpers; add `WORKFLOW_STRATEGY_KEY` to the test imports from `crate::workflow`):
+- [ ] **Step 1: Write the failing handoff render test** in `src/teams/dispatcher/handoff.rs` `mod tests` (reuse the existing `coord_store`, `team_store`, `plain_task` helpers; add `WORKFLOW_STRATEGY_KEY` to the test imports from `crate::workflow`):
 
 ```rust
     #[tokio::test]
@@ -3147,7 +3147,7 @@ Design: weld **GLOBAL-FRAME ONLY** (objective + cross-cutting guardrails, no pha
     }
 ```
 
-- [ ] **Step 2: Add the const, the `materialize` param, and the metadata stamp** in `/Volumes/TBU4/Workspace/Aleph/src/workflow/compile.rs`.
+- [ ] **Step 2: Add the const, the `materialize` param, and the metadata stamp** in `src/workflow/compile.rs`.
 
 Add the const after `WORKFLOW_MODEL_KEY` (after line 41):
 
@@ -3201,7 +3201,7 @@ Stamp it in the agent-step `else` branch, right after the model-override stamp (
 
 - [ ] **Step 3: Update all `materialize` call sites to pass the new arg.**
 
-Production caller in `/Volumes/TBU4/Workspace/Aleph/src/builtin_tools/workflow_tool.rs` (line 569-577) — append `None` after the `models` arg (Group C later replaces this `None` with the planned `Some(&strategy)`):
+Production caller in `src/builtin_tools/workflow_tool.rs` (line 569-577) — append `None` after the `models` arg (Group C later replaces this `None` with the planned `Some(&strategy)`):
 
 ```rust
                 let mat = workflow::materialize(
@@ -3218,7 +3218,7 @@ Production caller in `/Volumes/TBU4/Workspace/Aleph/src/builtin_tools/workflow_t
 
 Every test call site in `compile.rs` `mod tests` (lines 299, 308-block, 336, 351, 360, 401, 415, 433, 464, 490, and any others) — append `, None` as the final argument. For the multi-line `materialize(` at ~308 and ~464, add `None,` on its own line before the closing `)`. (Mechanical: each existing `materialize(…, None)` / `materialize(…, Some(&ctx), None)` gains one more trailing `None`.)
 
-Re-export the const in `/Volumes/TBU4/Workspace/Aleph/src/workflow/mod.rs` — add `WORKFLOW_STRATEGY_KEY` to the existing `pub use` list (lines 30-31):
+Re-export the const in `src/workflow/mod.rs` — add `WORKFLOW_STRATEGY_KEY` to the existing `pub use` list (lines 30-31):
 
 ```rust
     materialize, workflow_model_override, MaterializedWorkflow, WORKFLOW_MODEL_KEY,
@@ -3227,7 +3227,7 @@ Re-export the const in `/Volumes/TBU4/Workspace/Aleph/src/workflow/mod.rs` — a
 
 (Preserve the existing trailing items on the next line of that `pub use` block; only add the new identifier in alpha-adjacent order.)
 
-- [ ] **Step 4: Write the failing materialize stamp test** in `/Volumes/TBU4/Workspace/Aleph/src/workflow/compile.rs` `mod tests` (reuse `setup_store`, `linear_def`, `clarify_step`; build a `Strategy` inline):
+- [ ] **Step 4: Write the failing materialize stamp test** in `src/workflow/compile.rs` `mod tests` (reuse `setup_store`, `linear_def`, `clarify_step`; build a `Strategy` inline):
 
 ```rust
     #[tokio::test]
@@ -3284,7 +3284,7 @@ Re-export the const in `/Volumes/TBU4/Workspace/Aleph/src/workflow/mod.rs` — a
 
 > Note: confirm the `CoordTaskStore` read method name when reading back (`get_task` is used elsewhere in this repo; if the store exposes a different accessor in this test module, mirror the one the sibling `materialize_*` tests already use — read lines 296-340 of compile.rs first and copy their read pattern). If sibling tests don't read tasks back, they fetch via the store; use the same `store.get_task(id)` the dispatcher path uses.
 
-- [ ] **Step 5: Render the `## Global Strategy` section after the `## Task` block** in `/Volumes/TBU4/Workspace/Aleph/src/teams/dispatcher/handoff.rs`.
+- [ ] **Step 5: Render the `## Global Strategy` section after the `## Task` block** in `src/teams/dispatcher/handoff.rs`.
 
 Insert immediately after the Task block (after line 179, `out.push('\n');`, before the acceptance-criteria section at line 181):
 

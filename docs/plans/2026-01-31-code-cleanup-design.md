@@ -2,7 +2,7 @@
 
 > 日期: 2026-01-31
 > 状态: 待实施
-> 参考: OpenClaw (`/Volumes/TBU4/Workspace/openclaw/`)
+> 参考: OpenClaw (`../openclaw/`)
 
 ## 背景
 

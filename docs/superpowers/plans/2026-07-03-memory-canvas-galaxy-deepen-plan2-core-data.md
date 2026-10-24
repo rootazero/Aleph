@@ -378,7 +378,7 @@ Expected: 新增 4 个测试 + 既有 graph 测试全 PASS，编译无警告。
 - [ ] **Step 6: Commit（Core 侧）**
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph
+cd .
 git add src/memory/notes/store.rs src/memory/store/sqlite/notes/ src/gateway/handlers/graph.rs src/gateway/handlers/graph_types.rs
 git commit -m "gateway: enrich graph.query with edge kind, node community_id/updated_at, agent total"
 ```
@@ -484,7 +484,7 @@ Expected: 通过。
 - [ ] **Step 4: Commit（面板侧）**
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph
+cd .
 git add interfaces/webchat/src/canvas_engine/adapter.rs \
         interfaces/webchat/src/platform/wide/views/canvas/mod.rs
 git commit -m "canvas: consume enriched graph.query DTOs + show node-cap truncation badge"

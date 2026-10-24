@@ -132,18 +132,18 @@ pub enum PollState {
 
 Run:
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph && cargo check -p alephcore --lib 2>&1 | tail -20
+cd . && cargo check -p alephcore --lib 2>&1 | tail -20
 ```
 Expected: 编译失败仅来自 `record_browser_session`/`fetch_browser_session`/`PollState::Approved{session_id}` 的旧调用点（`handlers/auth/pairing.rs`、`auth_middleware.rs`）——这些在 Task 2/3 修。**本步只需 `pairing.rs` 自身无语法错**；若 `--lib` 因下游调用点报错，改用：
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph && cargo test -p alephcore --lib gateway::security::pairing 2>&1 | tail -25
+cd . && cargo test -p alephcore --lib gateway::security::pairing 2>&1 | tail -25
 ```
 Expected: `pairing` 模块单测通过（`*_pending_then_approved`、reject、expired、six_digit_code 等）。若因下游 crate 编译失败而测试跑不起来，记录为"待 Task 2/3 修复的预期下游断裂"，继续。
 
 - [ ] **Step 8: 提交（显式路径）**
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph
+cd .
 git status
 git add src/gateway/security/pairing.rs
 git commit -m "pairing: browser side-table stores chat-tier credential, poll drains single-use"
@@ -258,7 +258,7 @@ git show --stat HEAD
 
 Run:
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph && cargo test -p alephcore --lib browser_pairing_mints_chat_tier_device 2>&1 | tail -25
+cd . && cargo test -p alephcore --lib browser_pairing_mints_chat_tier_device 2>&1 | tail -25
 ```
 Expected: 编译失败或断言失败——当前 Browser 分支铸 operator 会话、poll 返回 session_id，故 `token`/`device_id`/role=guest 断言不满足。
 
@@ -392,7 +392,7 @@ Expected: 编译失败或断言失败——当前 Browser 分支铸 operator 会
 
 Run:
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph && cargo test -p alephcore --lib 'gateway::handlers::auth::pairing' 2>&1 | tail -30
+cd . && cargo test -p alephcore --lib 'gateway::handlers::auth::pairing' 2>&1 | tail -30
 ```
 Expected: 新增 e2e + 既有 browser 测试全绿。
 
@@ -400,14 +400,14 @@ Expected: 新增 e2e + 既有 browser 测试全绿。
 
 Run:
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph && cargo fmt -p alephcore && cargo clippy -p alephcore --lib 2>&1 | grep -A3 "handlers/auth/pairing" | head -20
+cd . && cargo fmt -p alephcore && cargo clippy -p alephcore --lib 2>&1 | grep -A3 "handlers/auth/pairing" | head -20
 ```
 Expected: fmt 无残留；clippy 对本文件无新警告。`cargo fmt -p alephcore` 会格式化整个 crate——提交只 add 本文件。
 
 - [ ] **Step 8: 提交（显式路径）**
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph
+cd .
 git status
 git add src/gateway/handlers/auth/pairing.rs
 git commit -m "pairing: browser approval mints chat-tier device, poll returns its token"
@@ -425,7 +425,7 @@ git show --stat HEAD
 
 Run:
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph && rg -n "from_pairing|fetch_browser_session|bootstrap/from_pairing|handle_bootstrap_from_pairing|BootstrapFromPairingQuery" --type rust
+cd . && rg -n "from_pairing|fetch_browser_session|bootstrap/from_pairing|handle_bootstrap_from_pairing|BootstrapFromPairingQuery" --type rust
 ```
 Expected: 命中应仅在 `auth_middleware.rs`（handler + route 注册 + query struct + 可能的测试）与本计划已删的 `pairing.rs::fetch_browser_session`（Task 1 已删）。**若出现任何其它消费者**（如 desktop shell、CLI、别的 handler），则 from_pairing 仍在用 → **不删**，只改 /pair JS（Step 2），跳过 Step 3 的删除，并在提交信息注明保留原因。
 
@@ -452,7 +452,7 @@ Expected: 命中应仅在 `auth_middleware.rs`（handler + route 注册 + query 
 
 Run:
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph && cargo check -p alephcore --all-targets 2>&1 | tail -20
+cd . && cargo check -p alephcore --all-targets 2>&1 | tail -20
 ```
 Expected: 整 crate + 测试目标编译通过零错误（Task 1/2/3 的所有调用点已对齐）。
 
@@ -460,8 +460,8 @@ Expected: 整 crate + 测试目标编译通过零错误（Task 1/2/3 的所有�
 
 Run:
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph && cargo test -p alephcore --lib 'gateway::security::pairing' 2>&1 | tail -15
-cd /Volumes/TBU4/Workspace/Aleph && cargo test -p alephcore --lib 'gateway::handlers::auth::pairing' 2>&1 | tail -20
+cd . && cargo test -p alephcore --lib 'gateway::security::pairing' 2>&1 | tail -15
+cd . && cargo test -p alephcore --lib 'gateway::handlers::auth::pairing' 2>&1 | tail -20
 ```
 Expected: 两组 pairing 测试全绿。
 
@@ -469,14 +469,14 @@ Expected: 两组 pairing 测试全绿。
 
 Run:
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph && cargo fmt -p alephcore && cargo fmt -p alephcore --check 2>&1 | grep auth_middleware | head
+cd . && cargo fmt -p alephcore && cargo fmt -p alephcore --check 2>&1 | grep auth_middleware | head
 ```
 Expected: 无残留。
 
 - [ ] **Step 7: 提交（显式路径）**
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph
+cd .
 git status
 git add src/gateway/auth_middleware.rs
 git commit -m "pairing: /pair page stores chat-tier device token, drop dead from_pairing cookie route"

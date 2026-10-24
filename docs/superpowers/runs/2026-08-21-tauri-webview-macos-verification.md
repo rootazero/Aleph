@@ -682,7 +682,7 @@ Unknown option '--enable-call-indirect-overlong'
 ### 11.1 `cargo check -p aleph-desktop-shell` — **PASSED（史上第一次在 macOS 上编译）**
 
 ```
-   Compiling aleph-desktop-shell v26.7.31 (/Volumes/TBU4/Workspace/Aleph/desktop/shell)
+   Compiling aleph-desktop-shell v26.7.31 (desktop/shell)
     Checking window-vibrancy v0.5.3
     Finished `dev` profile [unoptimized + debuginfo] target(s) in 24m 06s
 [exited with code 0]

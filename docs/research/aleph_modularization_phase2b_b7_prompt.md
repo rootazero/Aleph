@@ -2,7 +2,7 @@
 
 你是 Aleph 模块化 Phase 2B B7 的主 Agent / Lead Orchestrator。
 
-工作目录：`/Volumes/TBU4/Workspace/Aleph`。
+工作目录：`.`。
 
 目标：在已经合并 B5/B6 的干净 `main` 上，把同一 lifecycle contract 接入**一个真实 Gateway capability provider vertical slice**。完整契约见：
 

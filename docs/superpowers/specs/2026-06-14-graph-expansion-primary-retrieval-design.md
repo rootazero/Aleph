@@ -2,7 +2,7 @@
 
 **Date:** 2026-06-14
 **Status:** Approved (design); pending spec review
-**Branch / worktree:** `graph-expansion-retrieval` @ `/Volumes/TBU4/Workspace/Aleph-wt-graphexp`
+**Branch / worktree:** `graph-expansion-retrieval` @ `../Aleph-wt-graphexp`
 **Predecessor:** [2026-06-14-note-layer-llm-wiki-protocol-graph-design.md](./2026-06-14-note-layer-llm-wiki-protocol-graph-design.md) — that work built and materialized the 4-signal scorer and wired it into *ingest-time* `gather_related`. This spec is the explicitly-deferred follow-up: inject the same signal into the **primary recall path**.
 
 ---

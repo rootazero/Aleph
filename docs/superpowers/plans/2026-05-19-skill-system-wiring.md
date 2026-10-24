@@ -53,7 +53,7 @@
 
 运行并阅读:
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph
+cd .
 grep -n "system_prompt\|HarnessDeps\|build_system_prompt\|PromptBuilder\|PromptConfig" src/gateway/execution_engine/run_loop.rs
 sed -n '130,330p' src/gateway/execution_engine/run_loop.rs
 ```
@@ -369,7 +369,7 @@ git commit -m "skill: wire eligible-skill snapshot into harness system prompt"
 - [ ] **Step 1: 定位所有引用**
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph
+cd .
 grep -rn "skill_prefetcher\|SkillPrefetcher\|SkillDiscoverySource\|SkillInfo\|prefetch::" src/ --include="*.rs"
 ```
 记录全部命中点。
@@ -1823,7 +1823,7 @@ git commit -m "skill: deduplicate divergent NAME/DESCRIPTION constants"
 
 Run:
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph/.worktrees/skill-system-wiring
+cd .worktrees/skill-system-wiring
 cargo check -p alephcore --tests 2>&1 | tail -20
 cargo test -p alephcore skill 2>&1 | tail -30
 cargo test -p alephcore --test '*' 2>&1 | tail -30

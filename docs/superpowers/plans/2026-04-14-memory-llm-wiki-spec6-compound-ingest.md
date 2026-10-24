@@ -125,7 +125,7 @@ async fn append_to_note_also_indexes_to_sqlite() {
 - [ ] **Step 2: Run tests — expect FAIL**
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph
+cd .
 cargo test -p alephcore --lib memory::notes::indexer -- write_note_also_indexes_to_sqlite append_to_note_also_indexes_to_sqlite
 ```
 
@@ -2241,7 +2241,7 @@ git commit -m "feat(ingest): route CompressionService through CompoundIngestor"
 - [ ] **Step 1: Grep for the construction site**
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph
+cd .
 rg -n "CompressionService::new\b|CompressionService::new_with_backend" src/
 ```
 
@@ -2314,7 +2314,7 @@ git commit -m "feat(ingest): construct DefaultCompoundIngestor at app startup"
 - [ ] **Step 1: Find all references**
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph
+cd .
 rg -n "ConflictDetector|ConflictConfig|conflict::" src/
 ```
 
@@ -2723,7 +2723,7 @@ git commit -m "test(ingest): end-to-end compound ingest integration"
 - [ ] **Step 1: Run the full validation suite**
 
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph
+cd .
 cargo fmt --check -p alephcore
 cargo test -p alephcore --lib
 cargo test -p alephcore --test memory_note_orientation

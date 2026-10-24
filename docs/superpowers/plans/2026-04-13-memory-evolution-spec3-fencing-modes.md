@@ -43,14 +43,14 @@
 
 - [ ] **Step 0.1: Confirm baseline**
 
-Run: `cd /Volumes/TBU4/Workspace/Aleph && cargo check -p alephcore 2>&1 | tail -5`
+Run: `cd . && cargo check -p alephcore 2>&1 | tail -5`
 Expected: `Finished \`dev\` profile ... 0 errors`.
 
 - [ ] **Step 0.2: Map `MemoryContext` consumers**
 
 Run (record output):
 ```
-cd /Volumes/TBU4/Workspace/Aleph
+cd .
 grep -rn "MemoryContext\b" src/ --include='*.rs' | grep -v '//' | head -30
 grep -rn "memory_context_from_envelope" src/ --include='*.rs'
 ```
@@ -550,7 +550,7 @@ MemoryContext wiring removed from the layer."
 - [ ] **Step 5.1: Final grep**
 
 ```
-cd /Volumes/TBU4/Workspace/Aleph
+cd .
 grep -rn "MemoryContext\b" src/ --include='*.rs' | grep -v '//' | grep -v test | head -30
 ```
 
@@ -618,7 +618,7 @@ is a different concept and is preserved."
 - [ ] **Step 6.1: Locate memory-tool registrations**
 
 ```
-cd /Volumes/TBU4/Workspace/Aleph
+cd .
 grep -n "memory_search\|memory_reflect\|recall_context\|memory_browse\|memory_explore\|memory_timeline" src/executor/builtin_registry/builder.rs | head -30
 ```
 
