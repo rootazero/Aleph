@@ -32,6 +32,14 @@ use feishu_outbound::FeishuSender;
 use feishu_runtime::FeishuRuntime;
 use message_ops::MessageOps;
 
+#[derive(Debug, thiserror::Error)]
+enum WebhookShutdownResidual {
+    #[error("webhook serve failed: {0}")]
+    Serve(#[source] std::io::Error),
+    #[error("webhook join failed; accepted handlers may remain: {0}")]
+    Join(#[source] tokio::task::JoinError),
+}
+
 pub struct FeishuChannel {
     info: ChannelInfo,
     config: FeishuConfig,
@@ -40,7 +48,10 @@ pub struct FeishuChannel {
     runtime: Option<FeishuRuntime>,
     message_ops: Option<MessageOps>,
     shutdown_tx: Option<watch::Sender<bool>>,
-    webhook_handle: Option<tokio::task::JoinHandle<()>>,
+    webhook_handle: Option<tokio::task::JoinHandle<std::io::Result<()>>>,
+    // Retain failure evidence after taking the task; repeated stop must not
+    // turn an unproven handler join into a successful disposal.
+    webhook_shutdown_residual: Option<WebhookShutdownResidual>,
     test_mode: bool,
     provider: ProviderHandle,
     refresh_handle: Option<tokio::task::JoinHandle<()>>,
@@ -82,6 +93,7 @@ impl FeishuChannel {
             message_ops: None,
             shutdown_tx: None,
             webhook_handle: None,
+            webhook_shutdown_residual: None,
             test_mode,
             provider: ProviderHandle::new(lifecycle),
             refresh_handle: None,
@@ -110,10 +122,14 @@ impl FeishuChannel {
         if let Some(tx) = self.shutdown_tx.take() {
             let _ = tx.send(true);
         }
-        for task in [self.webhook_handle.take(), self.refresh_handle.take()]
-            .into_iter()
-            .flatten()
-        {
+        if let Some(task) = self.webhook_handle.take() {
+            self.webhook_shutdown_residual = match task.await {
+                Ok(Ok(())) => None,
+                Ok(Err(error)) => Some(WebhookShutdownResidual::Serve(error)),
+                Err(error) => Some(WebhookShutdownResidual::Join(error)),
+            };
+        }
+        if let Some(task) = self.refresh_handle.take() {
             task.abort();
             let _ = task.await;
         }
@@ -172,7 +188,7 @@ impl FeishuChannel {
 
         let (shutdown_tx, shutdown_rx) = watch::channel(false);
         self.shutdown_tx = Some(shutdown_tx);
-        self.refresh_handle = Some(auth.spawn_token_refresh(shutdown_rx));
+        self.refresh_handle = Some(auth.spawn_token_refresh(shutdown_rx.clone()));
 
         if self.config.is_webhook_mode() {
             tracing::info!(
@@ -202,7 +218,11 @@ impl FeishuChannel {
                 dedup: Arc::new(StdMutex::new(MessageDedup::new())),
                 policy: Arc::new(InboundPolicy::new(self.config.clone(), bot_open_id)),
             };
-            self.webhook_handle = Some(tokio::spawn(run_webhook_server(webhook_state, listener)));
+            self.webhook_handle = Some(tokio::spawn(run_webhook_server(
+                webhook_state,
+                listener,
+                shutdown_rx,
+            )));
         } else {
             let mut runtime = FeishuRuntime::new(api.clone(), self.config.clone(), bot_open_id);
             runtime
@@ -273,6 +293,9 @@ impl Channel for FeishuChannel {
     }
 
     async fn start(&mut self) -> ChannelResult<()> {
+        if let Some(residual) = &self.webhook_shutdown_residual {
+            return Err(ChannelError::Internal(residual.to_string()));
+        }
         match self.provider.state() {
             ProviderState::Ready => return Ok(()),
             ProviderState::Disabled => {
@@ -306,7 +329,10 @@ impl Channel for FeishuChannel {
             self.revoke();
             self.cleanup().await;
             let _ = self.provider.transition(ProviderState::Failed);
-            return Err(error);
+            return Err(match &self.webhook_shutdown_residual {
+                Some(residual) => ChannelError::Internal(format!("{error}; {residual}")),
+                None => error,
+            });
         }
         self.channel_state
             .set_status(ChannelStatus::Connected)
@@ -317,6 +343,12 @@ impl Channel for FeishuChannel {
     async fn stop(&mut self) -> ChannelResult<()> {
         self.revoke();
         self.cleanup().await;
+        if let Some(residual) = &self.webhook_shutdown_residual {
+            if self.provider.state() == ProviderState::Stopping {
+                let _ = self.provider.transition(ProviderState::Failed);
+            }
+            return Err(ChannelError::Internal(residual.to_string()));
+        }
         if matches!(
             self.provider.state(),
             ProviderState::Stopping | ProviderState::Failed
@@ -478,6 +510,24 @@ mod lifecycle_tests {
         let err = channel.start().await.unwrap_err();
         assert!(matches!(err, ChannelError::NotConnected(_)));
         assert_eq!(channel.status(), ChannelStatus::Disconnected);
+    }
+
+    #[tokio::test]
+    async fn failed_webhook_join_is_retained_and_blocks_restart() {
+        let mut channel =
+            FeishuChannel::for_test("feishu-webhook-residual", test_config()).unwrap();
+        channel.webhook_handle = Some(tokio::spawn(async {
+            panic!("simulated webhook task failure");
+            #[allow(unreachable_code)]
+            Ok::<(), std::io::Error>(())
+        }));
+
+        channel.cleanup().await;
+
+        assert!(channel.webhook_shutdown_residual.is_some());
+        let error = channel.start().await.unwrap_err();
+        assert!(matches!(error, ChannelError::Internal(_)));
+        assert_eq!(channel.provider.state(), ProviderState::Cold);
     }
 
     #[tokio::test]

@@ -2665,7 +2665,7 @@ mod tests {
                 let mut events = registry.subscribe_publications();
                 let result = registry.publish_plugin_batch_with_ready_commit(batch);
                 if failure != "success" {
-                    let error = result.err().expect("must reject entire batch");
+                    let error = result.expect_err("must reject entire batch");
                     match failure {
                         "duplicate" | "conflict" => {
                             assert!(matches!(error, PluginPublicationError::Duplicate { .. }))
@@ -2850,7 +2850,7 @@ mod tests {
                 let publication = registry.canonical_publication();
                 assert_eq!(publication.entries().len(), 2);
                 let common = publication.ready_snapshot("same").unwrap();
-                let companion = if common.owner_generation % 2 == 0 {
+                let companion = if common.owner_generation.is_multiple_of(2) {
                     "b_only"
                 } else {
                     "a_only"

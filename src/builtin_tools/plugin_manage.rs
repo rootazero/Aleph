@@ -278,7 +278,7 @@ impl PluginManageTool {
                 }
                 let (ok, outcome) = match manager.set_plugin_enabled(name, enable).await {
                     Ok(outcome) => (true, outcome),
-                    Err(error) => (false, error.outcome),
+                    Err(error) => (false, *error.outcome),
                 };
                 Ok(PluginManageOutput {
                     summary: if ok {

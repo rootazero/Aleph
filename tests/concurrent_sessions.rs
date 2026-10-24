@@ -3,6 +3,7 @@
 //! This test verifies that the Markdown session store can handle multiple
 //! concurrent sessions without race conditions, data corruption, or cross-contamination.
 
+use alephcore::memory::store::markdown::session_directory_key;
 use alephcore::memory::store::markdown::MarkdownSessionStore;
 use alephcore::memory::store::session::{CompressionStatus, RawSessionStore};
 use alephcore::session::events::{
@@ -22,6 +23,41 @@ const NUM_SESSIONS: usize = 10;
 
 /// Number of events per session (must be even for balanced message pairs).
 const EVENTS_PER_SESSION: usize = 100;
+
+/// Wait until the background projector has finalized every session.
+///
+/// The projector writes through a background worker, so "the producers
+/// finished" is not "the writes landed": a fixed sleep is a race with the
+/// scheduler, and a slow disk loses it. `RunFinished` is what finalizes a
+/// session, so an `ended_at` on every session's metadata is the effect to
+/// wait for — the same wait-for-the-effect idiom the projector's own unit
+/// test uses.
+async fn wait_for_projection(store: &MarkdownSessionStore, session_ids: &[SessionId]) {
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(120);
+    loop {
+        let mut pending = Vec::new();
+        for session_id in session_ids {
+            let finalized = store
+                .get_session_metadata(&session_id.to_string())
+                .await
+                .ok()
+                .and_then(|metadata| metadata.ended_at)
+                .is_some();
+            if !finalized {
+                pending.push(session_id.to_string());
+            }
+        }
+        if pending.is_empty() {
+            return;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "the projection worker did not finalize these sessions within the \
+             deadline: {pending:?}",
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+}
 
 /// Helper to create a message content structure.
 fn make_content(text: &str) -> MessageContent {
@@ -233,8 +269,10 @@ async fn test_concurrent_sessions_stress() {
     }
 
     // Wait for background projection to complete
-    // Longer wait time for concurrent operations
-    tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+    // The projector works through a background worker, so the writes land
+    // when the worker gets to them — a fixed delay would be a race with the
+    // scheduler. Wait for the effect instead.
+    wait_for_projection(&store, &completed_sessions).await;
 
     println!(
         "All {} sessions completed. Verifying results...",
@@ -249,7 +287,11 @@ async fn test_concurrent_sessions_stress() {
     let mut total_tool_calls = 0;
 
     for (idx, session_id) in completed_sessions.iter().enumerate() {
-        let session_dir = sessions_dir.join(session_id.to_string());
+        // The store keys a session's directory by the hash of its id, not by
+        // the id itself — `session_directory_key` is the one owner of that
+        // mapping. Addressing the directory by the raw id looks for a
+        // directory that was never written.
+        let session_dir = sessions_dir.join(session_directory_key(&session_id.to_string()));
         assert!(
             session_dir.exists(),
             "Session {} directory should exist at {:?}",
@@ -490,7 +532,7 @@ async fn test_concurrent_sessions_repeated() {
             result.expect("Task should not panic");
         }
 
-        tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+        wait_for_projection(&store, &session_ids).await;
 
         // Quick verification: all sessions have metadata
         for session_id in session_ids.iter() {
