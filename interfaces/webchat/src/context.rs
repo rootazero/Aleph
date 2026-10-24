@@ -2436,12 +2436,13 @@ impl DashboardState {
     ///
     /// # Implementation Note
     ///
-    /// Currently uses direct `rpc_call()` methods instead of `AlertsApi` from `shared_ui_logic`.
-    /// This is because the `AlertsApi` in `/Volumes/TBU4/Workspace/Aleph/shared_ui_logic/` uses
-    /// a different `RpcClient` implementation that is incompatible with the current architecture.
+    /// Currently uses direct `rpc_call()` methods instead of a shared alerts API.
+    /// The old `AlertsApi` lived in a `shared_ui_logic` crate that no longer exists in this tree
+    /// (the shared crates now live under `shared/`), and it used a different `RpcClient`
+    /// implementation that is incompatible with the current architecture.
     ///
-    /// **TODO**: Refactor to use `AlertsApi::get_system_health()` and `AlertsApi::get_memory_status()`
-    /// once the `shared_ui_logic` crate is unified and the `RpcClient` implementations are aligned.
+    /// **TODO**: Refactor to a shared alerts API once the shared crates are unified and the
+    /// `RpcClient` implementations are aligned.
     async fn load_initial_alerts(&self) -> Result<(), String> {
         web_sys::console::log_1(&"Loading initial alert states...".into());
 

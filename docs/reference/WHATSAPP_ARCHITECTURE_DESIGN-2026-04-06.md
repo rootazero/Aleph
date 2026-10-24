@@ -1312,5 +1312,5 @@ src/gateway/interfaces/whatsapp/
 
 - OpenClaw WhatsApp implementation: `/Volumes/TBU4/Github/openclaw/src/channels/plugins/whatsapp-*.ts`
 - OpenClaw channel adapter interface: `/Volumes/TBU4/Github/openclaw/src/channels/plugins/types.adapters.ts`
-- Aleph current WhatsApp: `/Volumes/TBU4/Workspace/Aleph/src/gateway/interfaces/whatsapp/mod.rs`
-- Aleph Channel trait: `/Volumes/TBU4/Workspace/Aleph/src/gateway/channel.rs`
+- Aleph current WhatsApp: `src/gateway/interfaces/whatsapp/mod.rs`
+- Aleph Channel trait: `src/gateway/channel.rs`

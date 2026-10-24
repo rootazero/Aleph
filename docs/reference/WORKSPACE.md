@@ -26,13 +26,13 @@ interfaces/webchat   # Web chat interface
 
 ## Official Repositories
 
-| 仓库 | 路径 |
+| 仓库 | 位置 |
 |------|------|
-| **Aleph（主项目）** — Rust Core + 多端架构 | `/Volumes/TBU/Workspace/Aleph` |
-| Aleph-Hub（扩展目录中心）· Aleph-homepage（Next.js 首页）· Aleph-docs · Aleph-mcp · Aleph-plugins · Aleph-skills | `/Volumes/TBU4/Workspace/`（Hub 与 homepage 在 TBU 上另有检出） |
+| **Aleph（主项目）** — Rust Core + 多端架构 | 当前检出（会话内以 `git rev-parse --show-toplevel` 为准） |
+| Aleph-Hub（扩展目录中心）· Aleph-homepage（Next.js 首页）· Aleph-docs · Aleph-mcp · Aleph-plugins · Aleph-skills | 主项目的同级兄弟目录，具体路径在当前机器上定位 |
 
-> ⚠️ **挂载点**：`/Volumes/TBU4` **经常未挂载**。**会话工作检出、git root、编辑落点一律是 `/Volumes/TBU/Workspace/Aleph`**——`TBU4/Workspace/Aleph` 是第二份检出，别跨盘编辑。动周边仓前先 `ls /Volumes/`，别从一次 TBU4 miss 得出"参考项目不可用"。
-> 7 仓为同级兄弟目录，远端均在 `github.com/rootazero/`。**始终从主项目 `Aleph/` 启动会话**，周边仓作为兄弟目录就地操作——这样跨会话记忆统一沉淀到主项目的全局 memory 库，spec/plan 统一落在 `docs/superpowers/{specs,plans}`（`docs/` 树已纳入 git）。周边仓的 spec 以子项目名作文件名前缀。
+> ⚠️ **路径纪律**：本项目在多台机器、不同检出位置开发，**本仓库不记录任何绝对路径**。会话工作检出、git root、编辑落点一律以当前仓库的 git root 为准（`git rev-parse --show-toplevel`）；周边仓先在当前机器定位（`ls`）再操作，别把一次"没找到"写成"参考项目不可用"，也别跨检出编辑同一个仓。
+> 7 仓为同级兄弟目录，远端均在 `github.com/rootazero/`。**始终从主项目检出启动会话**，周边仓作为兄弟目录就地操作——这样跨会话记忆统一沉淀到主项目的全局 memory 库，spec/plan 统一落在 `docs/superpowers/{specs,plans}`（`docs/` 树已纳入 git）。周边仓的 spec 以子项目名作文件名前缀。
 
 ---
 

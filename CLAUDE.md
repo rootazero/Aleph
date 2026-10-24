@@ -118,7 +118,7 @@
 
 [→ docs/reference/WORKSPACE.md](docs/reference/WORKSPACE.md)
 
-**TBU4 警告**：周边仓在 `/Volumes/TBU4/Workspace/`，**经常未挂载**；会话工作检出、git root、编辑落点一律是 `/Volumes/TBU/Workspace/Aleph`。
+**路径纪律**：本项目在多台机器、不同检出位置开发，**宪法与文档一律不写死仓库绝对路径**。会话工作检出、git root、编辑落点以当前仓库的 git root 为准（`git rev-parse --show-toplevel`）；周边仓先在当前机器定位再引用，别把一次"没找到"写成"不可用"。
 
 ---
 

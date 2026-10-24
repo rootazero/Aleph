@@ -109,7 +109,7 @@ cargo build --lib --target wasm32-unknown-unknown --release
 wasm-bindgen --target web \
   --out-dir dist \
   --out-name aleph-panel \
-  /Volumes/TBU4/Workspace/Aleph/target/wasm32-unknown-unknown/release/aleph_panel.wasm
+  "$(git rev-parse --show-toplevel)/target/wasm32-unknown-unknown/release/aleph_panel.wasm"
 
 # 3. 编译 Tailwind CSS
 npm run build:css  # 编译 styles/tailwind.css -> dist/tailwind.css
@@ -132,7 +132,7 @@ cargo build --bin aleph-server
 cd apps/panel && \
 cargo build --lib --target wasm32-unknown-unknown --release && \
 wasm-bindgen --target web --out-dir dist --out-name aleph-panel \
-  /Volumes/TBU4/Workspace/Aleph/target/wasm32-unknown-unknown/release/aleph_panel.wasm && \
+  "$(git rev-parse --show-toplevel)/target/wasm32-unknown-unknown/release/aleph_panel.wasm" && \
 npm run build:css && \
 cd ../../.. && \
 cargo build --bin aleph-server
