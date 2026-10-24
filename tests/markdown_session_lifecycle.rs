@@ -3,6 +3,7 @@
 //! This test verifies the complete flow from session event creation through
 //! background projection to Markdown file generation.
 
+use alephcore::memory::store::markdown::session_directory_key;
 use alephcore::memory::store::markdown::MarkdownSessionStore;
 use alephcore::memory::store::session::{CompressionStatus, RawSessionStore};
 use alephcore::session::events::{
@@ -214,14 +215,37 @@ async fn test_markdown_session_lifecycle() {
     projector.on_appended(&session_id, &run_finished);
 
     // Wait for background projection to complete
-    // The projector uses an unbounded channel and processes events asynchronously
-    tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+    // The projector uses an unbounded channel and processes events
+    // asynchronously, so "the events were enqueued" is not "the writes
+    // landed" — a fixed delay is a race with the scheduler. `RunFinished` is
+    // what finalizes a session, so wait for that effect instead.
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(60);
+    loop {
+        let finalized = store
+            .get_session_metadata(&session_id.to_string())
+            .await
+            .ok()
+            .and_then(|metadata| metadata.ended_at)
+            .is_some();
+        if finalized {
+            break;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "the projection worker did not finalize the session within the deadline",
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
 
     // Verify: Check session directory exists
+    // The store keys a session's directory by the hash of its id, not by the
+    // id itself — `session_directory_key` is the one owner of that mapping.
+    // Addressing the directory by the raw id looks for a directory that was
+    // never written.
     let session_dir = temp_dir
         .path()
         .join("raw/sessions")
-        .join(session_id.to_string());
+        .join(session_directory_key(&session_id.to_string()));
     assert!(
         session_dir.exists(),
         "Session directory should exist at {:?}",
