@@ -11,6 +11,9 @@ pub mod feishu_outbound;
 pub mod feishu_policy;
 pub mod feishu_runtime;
 
+use crate::capability::provider::{
+    ProviderHandle, ProviderId, ProviderLifecycle, ProviderState, ProviderTransport,
+};
 use crate::sync_primitives::{Arc, Mutex as StdMutex};
 use async_trait::async_trait;
 use tokio::sync::watch;
@@ -29,6 +32,14 @@ use feishu_outbound::FeishuSender;
 use feishu_runtime::FeishuRuntime;
 use message_ops::MessageOps;
 
+#[derive(Debug, thiserror::Error)]
+enum WebhookShutdownResidual {
+    #[error("webhook serve failed: {0}")]
+    Serve(#[source] std::io::Error),
+    #[error("webhook join failed; accepted handlers may remain: {0}")]
+    Join(#[source] tokio::task::JoinError),
+}
+
 pub struct FeishuChannel {
     info: ChannelInfo,
     config: FeishuConfig,
@@ -37,8 +48,13 @@ pub struct FeishuChannel {
     runtime: Option<FeishuRuntime>,
     message_ops: Option<MessageOps>,
     shutdown_tx: Option<watch::Sender<bool>>,
-    webhook_handle: Option<tokio::task::JoinHandle<()>>,
+    webhook_handle: Option<tokio::task::JoinHandle<std::io::Result<()>>>,
+    // Retain failure evidence after taking the task; repeated stop must not
+    // turn an unproven handler join into a successful disposal.
+    webhook_shutdown_residual: Option<WebhookShutdownResidual>,
     test_mode: bool,
+    provider: ProviderHandle,
+    refresh_handle: Option<tokio::task::JoinHandle<()>>,
 }
 
 impl FeishuChannel {
@@ -61,6 +77,13 @@ impl FeishuChannel {
             capabilities: Self::capabilities(),
         };
 
+        let mut lifecycle = ProviderLifecycle::new(
+            ProviderId::new(format!("gateway.feishu:{}", info.id)).expect("nonempty provider id"),
+            ProviderTransport::InProcess,
+        );
+        lifecycle
+            .transition(ProviderState::Cold)
+            .expect("discovery admission");
         Ok(Self {
             info,
             config,
@@ -70,12 +93,150 @@ impl FeishuChannel {
             message_ops: None,
             shutdown_tx: None,
             webhook_handle: None,
+            webhook_shutdown_residual: None,
             test_mode,
+            provider: ProviderHandle::new(lifecycle),
+            refresh_handle: None,
         })
     }
 
     pub fn for_test(id: impl Into<String>, config: FeishuConfig) -> Result<Self, ChannelError> {
         Self::with_mode(id, config, true)
+    }
+
+    pub(crate) fn revoke(&self) {
+        if matches!(
+            self.provider.state(),
+            ProviderState::Starting | ProviderState::Ready
+        ) {
+            let _ = self.provider.transition(ProviderState::Stopping);
+        }
+        api_handle::withdraw(
+            self.info.id.as_str(),
+            &self.provider,
+            self.provider.generation(),
+        );
+    }
+
+    async fn cleanup(&mut self) {
+        if let Some(tx) = self.shutdown_tx.take() {
+            let _ = tx.send(true);
+        }
+        if let Some(task) = self.webhook_handle.take() {
+            self.webhook_shutdown_residual = match task.await {
+                Ok(Ok(())) => None,
+                Ok(Err(error)) => Some(WebhookShutdownResidual::Serve(error)),
+                Err(error) => Some(WebhookShutdownResidual::Join(error)),
+            };
+        }
+        if let Some(task) = self.refresh_handle.take() {
+            task.abort();
+            let _ = task.await;
+        }
+        if let Some(mut runtime) = self.runtime.take() {
+            runtime.stop().await;
+        }
+        if let Some(api) = &self.api {
+            api.drain().await;
+        }
+        self.message_ops = None;
+        self.api = None;
+        self.channel_state
+            .set_status(ChannelStatus::Disconnected)
+            .await;
+    }
+
+    fn admit_call(&self) -> ChannelResult<()> {
+        self.provider
+            .acquire_call(self.provider.generation())
+            .map_err(|e| ChannelError::NotConnected(e.to_string()))
+    }
+    async fn start_runtime(&mut self, generation: u64) -> ChannelResult<()> {
+        if self.test_mode {
+            return Ok(());
+        }
+
+        self.channel_state
+            .set_status(ChannelStatus::Connecting)
+            .await;
+
+        let http = reqwest::Client::new();
+        let base_url = self.config.base_url();
+
+        let auth = Arc::new(TokenManager::new(
+            &self.config.app_id,
+            &self.config.app_secret,
+            &base_url,
+            http.clone(),
+        ));
+        auth.refresh_token()
+            .await
+            .map_err(|e| ChannelError::AuthFailed(format!("Token acquisition failed: {e}")))?;
+
+        let api = Arc::new(
+            FeishuApi::new(auth.clone(), &base_url, http.clone())
+                .with_provider(self.provider.clone(), generation),
+        );
+        self.api = Some(api.clone());
+        let bot_info = api
+            .get_bot_info()
+            .await
+            .map_err(|e| ChannelError::AuthFailed(format!("Bot info failed: {e}")))?;
+        tracing::info!("Feishu bot connected: {:?}", bot_info.app_name);
+
+        let bot_open_id = api.bot_open_id().await.unwrap_or_default();
+
+        let (shutdown_tx, shutdown_rx) = watch::channel(false);
+        self.shutdown_tx = Some(shutdown_tx);
+        self.refresh_handle = Some(auth.spawn_token_refresh(shutdown_rx.clone()));
+
+        if self.config.is_webhook_mode() {
+            tracing::info!(
+                "Starting Feishu webhook server on {}:{}{}",
+                self.config.webhook_host,
+                self.config.webhook_port,
+                self.config.webhook_path
+            );
+
+            use crate::gateway::interfaces::feishu::feishu_inbound::webhook_server::{
+                run_webhook_server, WebhookState,
+            };
+
+            let listener = tokio::net::TcpListener::bind((
+                self.config.webhook_host.as_str(),
+                self.config.webhook_port,
+            ))
+            .await
+            .map_err(|e| ChannelError::Internal(format!("Feishu webhook bind failed: {e}")))?;
+            let webhook_state = WebhookState {
+                config: self.config.clone(),
+                channel_id: self.info.id.clone(),
+                bot_open_id: bot_open_id.clone(),
+                sender: self.channel_state.sender(),
+                api: api.clone(),
+                user_cache: Arc::new(UserProfileCache::new()),
+                dedup: Arc::new(StdMutex::new(MessageDedup::new())),
+                policy: Arc::new(InboundPolicy::new(self.config.clone(), bot_open_id)),
+            };
+            self.webhook_handle = Some(tokio::spawn(run_webhook_server(
+                webhook_state,
+                listener,
+                shutdown_rx,
+            )));
+        } else {
+            let mut runtime = FeishuRuntime::new(api.clone(), self.config.clone(), bot_open_id);
+            runtime
+                .start(
+                    ChannelId::new(&self.config.app_id),
+                    self.channel_state.sender(),
+                )
+                .await?;
+            self.runtime = Some(runtime);
+        }
+
+        self.api = Some(api.clone());
+        self.message_ops = Some(MessageOps::new(api));
+        Ok(())
     }
 
     fn capabilities() -> ChannelCapabilities {
@@ -124,132 +285,83 @@ impl Channel for FeishuChannel {
     }
 
     fn status(&self) -> ChannelStatus {
-        if self.test_mode {
-            return self.channel_state.status();
+        match self.provider.state() {
+            ProviderState::Ready => self.channel_state.status(),
+            ProviderState::Starting => ChannelStatus::Connecting,
+            _ => ChannelStatus::Disconnected,
         }
-        // **Audit fix**: the previous implementation read `self.runtime` to
-        // report the connection state, but the webhook branch of `start()`
-        // never constructs a `FeishuRuntime` (it just spawns the webhook
-        // server) — `self.runtime` stays `None`. The fall-through `_` arm
-        // reports `Disconnected` for a webhook-started feishu channel that
-        // is genuinely serving HTTP traffic, hiding the live webhook from
-        // `channels.list` and confusing the health monitor. Prefer the
-        // canonical channel_state, which is set in both branches.
-        self.channel_state.status()
     }
 
     async fn start(&mut self) -> ChannelResult<()> {
-        if self.test_mode {
-            self.channel_state
-                .set_status(ChannelStatus::Connected)
-                .await;
-            tracing::info!("Feishu channel started in test mode");
-            return Ok(());
+        if let Some(residual) = &self.webhook_shutdown_residual {
+            return Err(ChannelError::Internal(residual.to_string()));
         }
-
-        self.channel_state
-            .set_status(ChannelStatus::Connecting)
-            .await;
-
-        let http = reqwest::Client::new();
-        let base_url = self.config.base_url();
-
-        let auth = Arc::new(TokenManager::new(
-            &self.config.app_id,
-            &self.config.app_secret,
-            &base_url,
-            http.clone(),
-        ));
-        auth.refresh_token()
-            .await
-            .map_err(|e| ChannelError::AuthFailed(format!("Token acquisition failed: {e}")))?;
-
-        let api = Arc::new(FeishuApi::new(auth.clone(), &base_url, http.clone()));
-        // The inbound path builds one emitter per message and needs this exact
-        // client; without it it builds a second TokenManager per message. See
-        // `api_handle`.
-        api_handle::publish(self.info.id.as_str(), &api, &self.config);
-
-        // **Audit fix**: the previous code published the api_handle then
-        // returned the bare `?` from `get_bot_info` without withdrawing the
-        // handle. A failed start() left a `Weak<FeishuApi>` + `FeishuConfig`
-        // entry pinned in the static TABLE — `get()` would either return a
-        // stale config snapshot or a never-refreshed token for the next
-        // `try_create_feishu_emitter`. Mirror `stop()`'s withdraw-on-error
-        // contract here.
-        let bot_info = match api.get_bot_info().await {
-            Ok(info) => info,
-            Err(e) => {
-                api_handle::withdraw(self.info.id.as_str());
-                return Err(ChannelError::AuthFailed(format!("Bot info failed: {e}")));
+        match self.provider.state() {
+            ProviderState::Ready => return Ok(()),
+            ProviderState::Disabled => {
+                return Err(ChannelError::NotConnected(
+                    "Feishu provider disabled/retired".into(),
+                ))
             }
-        };
-        tracing::info!("Feishu bot connected: {:?}", bot_info.app_name);
-
-        let bot_open_id = api.bot_open_id().await.unwrap_or_default();
-
-        let (shutdown_tx, shutdown_rx) = watch::channel(false);
-        self.shutdown_tx = Some(shutdown_tx);
-        auth.spawn_token_refresh(shutdown_rx);
-
-        if self.config.is_webhook_mode() {
-            tracing::info!(
-                "Starting Feishu webhook server on {}:{}{}",
-                self.config.webhook_host,
-                self.config.webhook_port,
-                self.config.webhook_path
-            );
-
-            use crate::gateway::interfaces::feishu::feishu_inbound::webhook_server::{
-                run_webhook_server, WebhookState,
-            };
-
-            let webhook_state = WebhookState {
-                config: self.config.clone(),
-                channel_id: self.info.id.clone(),
-                bot_open_id: bot_open_id.clone(),
-                sender: self.channel_state.sender(),
-                api: api.clone(),
-                user_cache: Arc::new(UserProfileCache::new()),
-                dedup: Arc::new(StdMutex::new(MessageDedup::new())),
-                policy: Arc::new(InboundPolicy::new(self.config.clone(), bot_open_id)),
-            };
-            self.webhook_handle = Some(tokio::spawn(run_webhook_server(webhook_state)));
-        } else {
-            let mut runtime = FeishuRuntime::new(api.clone(), self.config.clone(), bot_open_id);
-            runtime.start(self.channel_state.sender()).await?;
-            self.runtime = Some(runtime);
+            _ => {}
         }
-
-        self.api = Some(api.clone());
-        self.message_ops = Some(MessageOps::new(api));
+        self.provider
+            .transition(ProviderState::Starting)
+            .map_err(|e| ChannelError::Internal(e.to_string()))?;
+        let generation = self.provider.generation();
+        let result = self.start_runtime(generation).await.and_then(|()| {
+            self.provider
+                .with_ready_commit(generation, |_| {
+                    if let Some(api) = &self.api {
+                        api_handle::publish(
+                            self.info.id.as_str(),
+                            api,
+                            &self.config,
+                            &self.provider,
+                            generation,
+                        );
+                    }
+                    Ok::<_, crate::capability::provider::ProviderCallError>(())
+                })
+                .map_err(|e| ChannelError::NotConnected(e.to_string()))
+        });
+        if let Err(error) = result {
+            self.revoke();
+            self.cleanup().await;
+            let _ = self.provider.transition(ProviderState::Failed);
+            return Err(match &self.webhook_shutdown_residual {
+                Some(residual) => ChannelError::Internal(format!("{error}; {residual}")),
+                None => error,
+            });
+        }
         self.channel_state
             .set_status(ChannelStatus::Connected)
             .await;
-
         Ok(())
     }
 
     async fn stop(&mut self) -> ChannelResult<()> {
-        if let Some(tx) = self.shutdown_tx.take() {
-            let _ = tx.send(true);
+        self.revoke();
+        self.cleanup().await;
+        if let Some(residual) = &self.webhook_shutdown_residual {
+            if self.provider.state() == ProviderState::Stopping {
+                let _ = self.provider.transition(ProviderState::Failed);
+            }
+            return Err(ChannelError::Internal(residual.to_string()));
         }
-        if let Some(handle) = self.webhook_handle.take() {
-            handle.abort();
+        if matches!(
+            self.provider.state(),
+            ProviderState::Stopping | ProviderState::Failed
+        ) {
+            self.provider
+                .transition(ProviderState::Stopped)
+                .map_err(|e| ChannelError::Internal(e.to_string()))?;
         }
-        if let Some(mut runtime) = self.runtime.take() {
-            runtime.stop().await;
-        }
-        api_handle::withdraw(self.info.id.as_str());
-        self.api = None;
-        self.message_ops = None;
-        self.channel_state
-            .set_status(ChannelStatus::Disconnected)
-            .await;
         Ok(())
     }
 
     async fn send(&self, message: OutboundMessage) -> ChannelResult<SendResult> {
+        self.admit_call()?;
         if self.test_mode {
             return Ok(SendResult {
                 message_id: MessageId::new(format!(
@@ -273,6 +385,7 @@ impl Channel for FeishuChannel {
         _message_id: &MessageId,
         _reaction: &str,
     ) -> ChannelResult<()> {
+        self.admit_call()?;
         if self.test_mode {
             return Ok(());
         }
@@ -290,6 +403,7 @@ impl Channel for FeishuChannel {
         message_id: &MessageId,
         new_text: &str,
     ) -> ChannelResult<()> {
+        self.admit_call()?;
         if self.test_mode {
             return Ok(());
         }
@@ -306,6 +420,7 @@ impl Channel for FeishuChannel {
         conversation_id: &ConversationId,
         message_id: &MessageId,
     ) -> ChannelResult<()> {
+        self.admit_call()?;
         if self.test_mode {
             return Ok(());
         }
@@ -345,5 +460,97 @@ impl ChannelFactory for FeishuChannelFactory {
             .map_err(|e| ChannelError::ConfigError(format!("Invalid Feishu config: {e}")))?;
 
         Ok(Box::new(FeishuChannel::new("feishu", config)?))
+    }
+}
+
+#[cfg(test)]
+mod lifecycle_tests {
+    use super::*;
+    use crate::gateway::interfaces::feishu::api_handle;
+
+    fn test_config() -> FeishuConfig {
+        serde_json::from_value(serde_json::json!({
+            "app_id": "test-app",
+            "app_secret": "test-secret"
+        }))
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn start_stop_cycles_provider_and_leaves_no_stale_publication() {
+        let mut channel = FeishuChannel::for_test("feishu-lifecycle", test_config()).unwrap();
+        assert_eq!(channel.provider.state(), ProviderState::Cold);
+        assert_eq!(channel.status(), ChannelStatus::Disconnected);
+
+        channel.start().await.unwrap();
+        assert_eq!(channel.provider.state(), ProviderState::Ready);
+        assert_eq!(channel.status(), ChannelStatus::Connected);
+
+        channel.stop().await.unwrap();
+        assert_eq!(channel.provider.state(), ProviderState::Stopped);
+        assert_eq!(channel.status(), ChannelStatus::Disconnected);
+
+        // The registry's restart path is stop→start on the same channel; the
+        // provider machine must allow Stopped→Starting.
+        channel.start().await.unwrap();
+        assert_eq!(channel.status(), ChannelStatus::Connected);
+        channel.stop().await.unwrap();
+
+        // Test mode never publishes, and the read side must not fabricate one.
+        assert!(api_handle::get("feishu-lifecycle").is_none());
+    }
+
+    #[tokio::test]
+    async fn disabled_provider_refuses_start() {
+        let mut channel = FeishuChannel::for_test("feishu-disabled", test_config()).unwrap();
+        channel
+            .provider
+            .transition(ProviderState::Disabled)
+            .unwrap();
+        let err = channel.start().await.unwrap_err();
+        assert!(matches!(err, ChannelError::NotConnected(_)));
+        assert_eq!(channel.status(), ChannelStatus::Disconnected);
+    }
+
+    #[tokio::test]
+    async fn failed_webhook_join_is_retained_and_blocks_restart() {
+        let mut channel =
+            FeishuChannel::for_test("feishu-webhook-residual", test_config()).unwrap();
+        channel.webhook_handle = Some(tokio::spawn(async {
+            panic!("simulated webhook task failure");
+            #[allow(unreachable_code)]
+            Ok::<(), std::io::Error>(())
+        }));
+
+        channel.cleanup().await;
+
+        assert!(channel.webhook_shutdown_residual.is_some());
+        let error = channel.start().await.unwrap_err();
+        assert!(matches!(error, ChannelError::Internal(_)));
+        assert_eq!(channel.provider.state(), ProviderState::Cold);
+    }
+
+    #[tokio::test]
+    async fn send_without_ready_provider_is_refused() {
+        let channel = FeishuChannel::for_test("feishu-cold", test_config()).unwrap();
+        let err = channel
+            .send(OutboundMessage::text("ou_1", "hi"))
+            .await
+            .unwrap_err();
+        assert!(matches!(err, ChannelError::NotConnected(_)));
+    }
+
+    #[tokio::test]
+    async fn generation_fences_stale_admission_after_restart() {
+        let mut channel = FeishuChannel::for_test("feishu-gen", test_config()).unwrap();
+        channel.start().await.unwrap();
+        let first = channel.provider.generation();
+        channel.stop().await.unwrap();
+        channel.start().await.unwrap();
+        let second = channel.provider.generation();
+        assert!(second > first, "restart must allocate a new generation");
+        // A caller holding the previous generation is refused.
+        assert!(channel.provider.acquire_call(first).is_err());
+        channel.stop().await.unwrap();
     }
 }

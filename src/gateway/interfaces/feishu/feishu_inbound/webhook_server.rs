@@ -26,26 +26,21 @@ pub struct WebhookState {
     pub policy: Arc<InboundPolicy>,
 }
 
-pub async fn run_webhook_server(state: WebhookState) {
-    let addr = format!(
-        "{}:{}",
-        state.config.webhook_host, state.config.webhook_port
-    );
+pub async fn run_webhook_server(
+    state: WebhookState,
+    listener: tokio::net::TcpListener,
+    mut shutdown: tokio::sync::watch::Receiver<bool>,
+) -> std::io::Result<()> {
     let app = Router::new()
         .route(&state.config.webhook_path, post(handle_webhook))
         .with_state(state);
-
-    let listener = match tokio::net::TcpListener::bind(&addr).await {
-        Ok(l) => l,
-        Err(e) => {
-            tracing::error!("Feishu webhook server failed to bind {}: {e}", addr);
-            return;
-        }
-    };
-    tracing::info!("Feishu webhook server listening on {}", addr);
-    if let Err(e) = axum::serve(listener, app).await {
-        tracing::error!("Feishu webhook server error: {e}");
-    }
+    // Axum owns the accepted connections and waits for their response tails.
+    // Check the current value too: stop may precede the first task poll.
+    axum::serve(listener, app)
+        .with_graceful_shutdown(async move {
+            let _ = shutdown.wait_for(|stopping| *stopping).await;
+        })
+        .await
 }
 
 async fn handle_webhook(
@@ -53,6 +48,9 @@ async fn handle_webhook(
     headers: HeaderMap,
     body: Bytes,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
+    if !state.api.is_admitted() {
+        return Err(StatusCode::SERVICE_UNAVAILABLE);
+    }
     let body_str = String::from_utf8_lossy(&body);
 
     // Resolve the real event payload: when an Encrypt Key is configured Feishu
@@ -79,12 +77,19 @@ async fn handle_webhook(
                 &state.user_cache,
                 &state.api,
             ) {
-                let mut dedup = state.dedup.lock().unwrap_or_else(|e| e.into_inner());
-                if !dedup.is_duplicate(inbound.id.as_str()) {
-                    drop(dedup);
+                let is_duplicate = state
+                    .dedup
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .is_duplicate(inbound.id.as_str());
+                if !is_duplicate {
                     match state.policy.evaluate(&inbound) {
                         crate::gateway::interfaces::feishu::feishu_inbound::InboundPolicyResult::Accept => {
-                            let _ = state.sender.send(inbound);
+                            // Hold the drain guard through the send: a revoke
+                            // racing us fails this admission, and cleanup's
+                            // drain() cannot complete while the guard lives, so
+                            // no enqueue lands after revoke+drain.
+                            if let Some(_admission) = state.api.admit_inbound().await { let _ = state.sender.send(inbound); }
                         }
                         crate::gateway::interfaces::feishu::feishu_inbound::InboundPolicyResult::Block(reason) => {
                             tracing::debug!(reason, "Inbound webhook blocked by policy");
@@ -253,6 +258,22 @@ mod tests {
                 "bot".into(),
             )),
         }
+    }
+
+    #[tokio::test]
+    async fn graceful_shutdown_observes_signal_before_accepting_again() {
+        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .unwrap();
+        let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
+        let task = tokio::spawn(run_webhook_server(make_state(), listener, shutdown_rx));
+
+        shutdown_tx.send(true).unwrap();
+        let result = tokio::time::timeout(std::time::Duration::from_secs(1), task)
+            .await
+            .expect("graceful shutdown must finish")
+            .unwrap();
+        assert!(result.is_ok(), "serve task failed: {result:?}");
     }
 
     #[tokio::test]
