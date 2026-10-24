@@ -20,6 +20,7 @@ pub struct FeishuRuntime {
     bot_open_id: String,
     user_cache: Arc<UserProfileCache>,
     shutdown_tx: Option<watch::Sender<bool>>,
+    task: Option<tokio::task::JoinHandle<()>>,
 }
 
 impl FeishuRuntime {
@@ -31,6 +32,7 @@ impl FeishuRuntime {
             bot_open_id,
             user_cache: Arc::new(UserProfileCache::new()),
             shutdown_tx: None,
+            task: None,
         }
     }
 
@@ -44,7 +46,11 @@ impl FeishuRuntime {
         Arc::clone(&self.state)
     }
 
-    pub async fn start(&mut self, sender: InboundMessageSender) -> ChannelResult<()> {
+    pub async fn start(
+        &mut self,
+        channel_id: crate::gateway::channel::ChannelId,
+        sender: InboundMessageSender,
+    ) -> ChannelResult<()> {
         self.state.set(RuntimeState::Connecting);
 
         let (shutdown_tx, shutdown_rx) = watch::channel(false);
@@ -56,7 +62,7 @@ impl FeishuRuntime {
 
         let ctx = WsLoopContext {
             initial_ws_url: ws_url,
-            channel_id: crate::gateway::channel::ChannelId::new(&self.config.app_id),
+            channel_id,
             config: self.config.clone(),
             bot_open_id: self.bot_open_id.clone(),
             sender,
@@ -66,7 +72,7 @@ impl FeishuRuntime {
             user_cache: Arc::clone(&self.user_cache),
         };
 
-        tokio::spawn(run_ws_loop(ctx));
+        self.task = Some(tokio::spawn(run_ws_loop(ctx)));
         Ok(())
     }
 
@@ -74,6 +80,18 @@ impl FeishuRuntime {
         if let Some(tx) = self.shutdown_tx.take() {
             let _ = tx.send(true);
         }
+        if let Some(task) = self.task.take() {
+            task.abort();
+            let _ = task.await;
+        }
         self.state.set(RuntimeState::Disconnected);
+    }
+}
+
+impl Drop for FeishuRuntime {
+    fn drop(&mut self) {
+        if let Some(task) = &self.task {
+            task.abort();
+        }
     }
 }

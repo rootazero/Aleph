@@ -65,12 +65,18 @@ pub async fn run_ws_loop(ctx: WsLoopContext) {
                                                 &ctx.user_cache,
                                                 &ctx.api,
                                             ) {
-                                                let mut dedup_guard = dedup.lock().unwrap_or_else(|e| e.into_inner());
-                                                if !dedup_guard.is_duplicate(inbound.id.as_str()) {
-                                                    drop(dedup_guard);
+                                                let is_duplicate = dedup
+                                                    .lock()
+                                                    .unwrap_or_else(|e| e.into_inner())
+                                                    .is_duplicate(inbound.id.as_str());
+                                                if !is_duplicate {
                                                     match policy.evaluate(&inbound) {
                                                         crate::gateway::interfaces::feishu::feishu_inbound::InboundPolicyResult::Accept => {
-                                                            let _ = ctx.sender.send(inbound);
+                                                            // Hold the drain guard through the send: a revoke
+                                                            // racing us fails this admission, and cleanup's
+                                                            // drain() cannot complete while the guard lives, so
+                                                            // no enqueue lands after revoke+drain.
+                                                            if let Some(_admission) = ctx.api.admit_inbound().await { let _ = ctx.sender.send(inbound); }
                                                         }
                                                         crate::gateway::interfaces::feishu::feishu_inbound::InboundPolicyResult::Block(reason) => {
                                                             tracing::debug!(reason, "Inbound message blocked by policy");

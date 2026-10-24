@@ -635,74 +635,13 @@ impl InboundMessageRouter {
         pending_media: crate::gateway::media::PendingMedia,
     ) -> Option<crate::gateway::interfaces::feishu::feishu_outbound::streaming::FeishuEventEmitter>
     {
-        use crate::gateway::interfaces::feishu::api::FeishuApi;
         use crate::gateway::interfaces::feishu::api_handle;
-        use crate::gateway::interfaces::feishu::auth::TokenManager;
         use crate::gateway::interfaces::feishu::feishu_outbound::streaming::FeishuEventEmitter;
-        use crate::gateway::interfaces::feishu::FeishuConfig;
 
         let channel_id = ctx.reply_route.channel_id.as_str();
 
-        // Take the client AND the config from the started channel. Both, and in
-        // this order, for two different reasons:
-        //
-        //  * the client, because this runs once per inbound message and
-        //    building a second `TokenManager` here meant a token round-trip per
-        //    message while the channel's own refresher kept a valid one warm;
-        //  * the config, because rebuilding it from `Config.channels` is
-        //    *impossible* once a channel has been saved — the secret migration
-        //    moves `app_secret` to the vault and `FeishuConfig` requires it, so
-        //    the parse below returns `None` and takes the whole emitter with
-        //    it, silently, on every real deployment.
-        //
-        // See `feishu::api_handle`.
-        let (client, feishu_cfg) = match api_handle::get(channel_id) {
-            Some(live) => live,
-            None => {
-                // No started channel published anything: test mode, or a
-                // message racing boot. The file is then the only source, and it
-                // still carries its secret in exactly the case that matters
-                // (nothing has migrated it yet).
-                let feishu_cfg = {
-                    let cfg = self.app_config.as_ref()?.read().await;
-                    let raw = cfg.channels.get(channel_id)?;
-                    // A parse failure here is vocal on purpose. The two `?`
-                    // above are ordinary absences (no app config, channel not
-                    // configured); this one means the block *is* there and does
-                    // not fit, which is how the whole emitter disappeared
-                    // without a word for months.
-                    match serde_json::from_value::<FeishuConfig>(raw.clone()) {
-                        Ok(cfg) => cfg,
-                        Err(e) => {
-                            tracing::warn!(
-                                channel = channel_id,
-                                error = %e,
-                                "feishu emitter disabled: [channels.<id>] did not parse. If \
-                                 `app_secret` is missing it is in the vault, which means the \
-                                 channel never started — the emitter takes its config from the \
-                                 running channel."
-                            );
-                            return None;
-                        }
-                    }
-                };
-                // `get_token`, not `refresh_token`: the manager is fresh so it
-                // fetches once, and a cached token is never thrown away.
-                let http = reqwest::Client::new();
-                let base_url = feishu_cfg.base_url();
-                let auth = Arc::new(TokenManager::new(
-                    &feishu_cfg.app_id,
-                    &feishu_cfg.app_secret,
-                    &base_url,
-                    http.clone(),
-                ));
-                if let Err(e) = auth.get_token().await {
-                    tracing::warn!("Failed to create feishu emitter client: {e}");
-                    return None;
-                }
-                (Arc::new(FeishuApi::new(auth, &base_url, http)), feishu_cfg)
-            }
-        };
+        // Read-only projection: absence must never authenticate or start a provider.
+        let (client, feishu_cfg) = api_handle::get(channel_id)?;
 
         let inner = ReplyEmitter::with_config(
             self.channel_registry.clone(),

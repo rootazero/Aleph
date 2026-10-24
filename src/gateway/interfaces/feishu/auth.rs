@@ -94,7 +94,10 @@ impl TokenManager {
     }
 
     /// Spawn a background task that refreshes the token before expiry.
-    pub fn spawn_token_refresh(&self, shutdown: tokio::sync::watch::Receiver<bool>) {
+    pub fn spawn_token_refresh(
+        &self,
+        shutdown: tokio::sync::watch::Receiver<bool>,
+    ) -> tokio::task::JoinHandle<()> {
         let app_id = self.app_id.clone();
         let app_secret = self.app_secret.clone();
         let base_url = self.base_url.clone();
@@ -163,6 +166,6 @@ impl TokenManager {
                     Err(e) => tracing::warn!("Token refresh request error: {e}"),
                 }
             }
-        });
+        })
     }
 }

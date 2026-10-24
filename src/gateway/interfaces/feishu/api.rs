@@ -30,6 +30,8 @@ pub struct FeishuApi {
     base_url: String,
     http: reqwest::Client,
     bot_open_id: tokio::sync::RwLock<Option<String>>,
+    scope: Option<(crate::capability::provider::ProviderHandle, u64)>,
+    calls: Arc<tokio::sync::RwLock<()>>,
 }
 
 impl FeishuApi {
@@ -39,7 +41,67 @@ impl FeishuApi {
             base_url: base_url.to_string(),
             http,
             bot_open_id: tokio::sync::RwLock::new(None),
+            scope: None,
+            calls: Arc::new(tokio::sync::RwLock::new(())),
         }
+    }
+
+    pub(crate) fn with_provider(
+        mut self,
+        provider: crate::capability::provider::ProviderHandle,
+        generation: u64,
+    ) -> Self {
+        self.scope = Some((provider, generation));
+        self
+    }
+
+    // The read guard spans the complete HTTP operation, including token awaits.
+    // Starting admits only bootstrap reads; retained streaming clients need Ready.
+    async fn admit(
+        &self,
+        bootstrap: bool,
+    ) -> Result<tokio::sync::OwnedRwLockReadGuard<()>, String> {
+        let guard = self.calls.clone().read_owned().await;
+        if let Some((provider, generation)) = &self.scope {
+            let (state, actual) = provider.snapshot();
+            if !(bootstrap
+                && state == crate::capability::provider::ProviderState::Starting
+                && actual == *generation)
+            {
+                provider
+                    .acquire_call(*generation)
+                    .map_err(|e| e.to_string())?;
+            }
+        }
+        Ok(guard)
+    }
+
+    pub(crate) fn is_admitted(&self) -> bool {
+        self.scope
+            .as_ref()
+            .is_none_or(|(provider, generation)| provider.acquire_call(*generation).is_ok())
+    }
+
+    /// Admit one inbound enqueue and hand back the drain guard.
+    ///
+    /// The returned guard must stay alive until the caller's `send` finishes.
+    /// Guard order is read-guard-then-provider-check (the same order `admit`
+    /// uses), which closes the TOCTOU a bare `is_admitted()` check leaves open:
+    ///
+    ///  * revoke first — `acquire_call` sees Stopping and refuses, so nothing
+    ///    is enqueued after the provider is withdrawn;
+    ///  * admission first — the held read guard blocks `drain()`'s write, so
+    ///    the send lands *before* cleanup's drain completes.
+    ///
+    /// Inbound requires `Ready` (bootstrap `Starting` admission is for startup
+    /// probe calls only). The guard is the same `calls` RwLock outbound calls
+    /// use, so no second authority is introduced.
+    pub(crate) async fn admit_inbound(&self) -> Option<tokio::sync::OwnedRwLockReadGuard<()>> {
+        self.admit(false).await.ok()
+    }
+
+    pub(crate) async fn drain(&self) {
+        drop(self.calls.write().await);
     }
 
     pub async fn bot_open_id(&self) -> Option<String> {
@@ -49,6 +111,7 @@ impl FeishuApi {
     // ── Bot Info ──
 
     pub async fn get_bot_info(&self) -> Result<BotInfo, String> {
+        let _call = self.admit(true).await?;
         let token = self.auth.get_token().await?;
         let url = format!("{}/open-apis/bot/v3/info", self.base_url);
 
@@ -76,6 +139,7 @@ impl FeishuApi {
     // ── WebSocket Endpoint ──
 
     pub async fn get_ws_endpoint(&self) -> Result<String, String> {
+        let _call = self.admit(true).await?;
         let token = self.auth.get_token().await?;
         let url = format!("{}/open-apis/callback/ws/endpoint", self.base_url);
 
@@ -115,6 +179,7 @@ impl FeishuApi {
                 .await;
         }
 
+        let _call = self.admit(false).await?;
         let token = self.auth.get_token().await?;
         let url = format!(
             "{}/open-apis/im/v1/messages?receive_id_type=chat_id",
@@ -156,6 +221,7 @@ impl FeishuApi {
                 .await;
         }
 
+        let _call = self.admit(false).await?;
         let token = self.auth.get_token().await?;
         let url = format!(
             "{}/open-apis/im/v1/messages?receive_id_type=chat_id",
@@ -187,6 +253,7 @@ impl FeishuApi {
         msg_type: &str,
         content: &str,
     ) -> Result<String, FeishuSendError> {
+        let _call = self.admit(false).await?;
         let token = self.auth.get_token().await?;
         let url = format!(
             "{}/open-apis/im/v1/messages/{}/reply",
@@ -270,6 +337,7 @@ impl FeishuApi {
     // ── Media ──
 
     pub async fn upload_image(&self, data: Vec<u8>, filename: &str) -> Result<String, String> {
+        let _call = self.admit(false).await?;
         let token = self.auth.get_token().await?;
         let url = format!("{}/open-apis/im/v1/images", self.base_url);
 
@@ -303,6 +371,7 @@ impl FeishuApi {
 
     /// Create a streaming card and return the `card_id`.
     pub async fn create_streaming_card(&self, initial_text: &str) -> Result<String, String> {
+        let _call = self.admit(false).await?;
         let token = self.auth.get_token().await?;
         let url = format!("{}/open-apis/cardkit/v1/cards", self.base_url);
 
@@ -364,6 +433,7 @@ impl FeishuApi {
                 .await;
         }
 
+        let _call = self.admit(false).await?;
         let token = self.auth.get_token().await?;
         let url = format!(
             "{}/open-apis/im/v1/messages?receive_id_type=chat_id",
@@ -396,6 +466,7 @@ impl FeishuApi {
         content: &str,
         sequence: u32,
     ) -> Result<(), String> {
+        let _call = self.admit(false).await?;
         let token = self.auth.get_token().await?;
         let url = format!(
             "{}/open-apis/cardkit/v1/cards/{}/elements/content/content",
@@ -431,6 +502,7 @@ impl FeishuApi {
         summary: &str,
         sequence: u32,
     ) -> Result<(), String> {
+        let _call = self.admit(false).await?;
         let token = self.auth.get_token().await?;
         let url = format!(
             "{}/open-apis/cardkit/v1/cards/{}/settings",
@@ -491,6 +563,7 @@ impl FeishuApi {
                 .await;
         }
 
+        let _call = self.admit(false).await?;
         let token = self.auth.get_token().await?;
         let url = format!(
             "{}/open-apis/im/v1/messages?receive_id_type=chat_id",
@@ -520,6 +593,7 @@ impl FeishuApi {
 
     /// Add an emoji reaction to a message. Returns `reaction_id`.
     pub async fn add_reaction(&self, message_id: &str, emoji_type: &str) -> Result<String, String> {
+        let _call = self.admit(false).await?;
         let token = self.auth.get_token().await?;
         let url = format!(
             "{}/open-apis/im/v1/messages/{}/reactions",
@@ -550,6 +624,7 @@ impl FeishuApi {
 
     /// Remove an emoji reaction from a message.
     pub async fn remove_reaction(&self, message_id: &str, reaction_id: &str) -> Result<(), String> {
+        let _call = self.admit(false).await?;
         let token = self.auth.get_token().await?;
         let url = format!(
             "{}/open-apis/im/v1/messages/{}/reactions/{}",
@@ -574,6 +649,7 @@ impl FeishuApi {
 
     /// Fetch user info by `open_id`. Returns name if available.
     pub async fn get_user_info(&self, open_id: &str) -> Result<Option<String>, String> {
+        let _call = self.admit(false).await?;
         let token = self.auth.get_token().await?;
         let url = format!("{}/open-apis/contact/v3/users/{}", self.base_url, open_id);
 
@@ -610,5 +686,169 @@ impl FeishuApi {
             .and_then(|d| d.user)
             .ok_or_else(|| "No user data".to_string())?;
         Ok(user.name.or(user.english_name))
+    }
+}
+
+#[cfg(test)]
+mod inbound_admission_tests {
+    use super::*;
+    use crate::capability::provider::{
+        ProviderHandle, ProviderId, ProviderLifecycle, ProviderState, ProviderTransport,
+    };
+    use crate::gateway::channel::{
+        ChannelId, ChannelState, ConversationId, InboundMessage, MessageId, UserId,
+    };
+    use crate::gateway::interfaces::feishu::auth::TokenManager;
+    use futures_util::FutureExt;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    fn ready_api(id: &str) -> (Arc<FeishuApi>, ProviderHandle) {
+        let provider = ProviderHandle::new(ProviderLifecycle::new(
+            ProviderId::new(id).unwrap(),
+            ProviderTransport::InProcess,
+        ));
+        provider.transition(ProviderState::Cold).unwrap();
+        provider.transition(ProviderState::Starting).unwrap();
+        provider.transition(ProviderState::Ready).unwrap();
+        let http = reqwest::Client::new();
+        let api = Arc::new(
+            FeishuApi::new(
+                Arc::new(TokenManager::new(
+                    id,
+                    "secret",
+                    "http://127.0.0.1:1",
+                    http.clone(),
+                )),
+                "http://127.0.0.1:1",
+                http,
+            )
+            .with_provider(provider.clone(), provider.generation()),
+        );
+        (api, provider)
+    }
+
+    fn inbound(id: &str) -> InboundMessage {
+        InboundMessage {
+            id: MessageId::new(id),
+            channel_id: ChannelId::new("feishu"),
+            conversation_id: ConversationId::new("chat"),
+            sender_id: UserId::new("user"),
+            sender_name: None,
+            text: "hi".into(),
+            attachments: vec![],
+            timestamp: chrono::Utc::now(),
+            reply_to: None,
+            is_group: false,
+            raw: None,
+            metadata: vec![],
+        }
+    }
+
+    /// Mirror of FeishuChannel::revoke's fencing half: Stopping refuses new calls.
+    fn revoke(provider: &ProviderHandle) {
+        provider.transition(ProviderState::Stopping).unwrap();
+    }
+
+    #[tokio::test]
+    async fn revoke_blocks_new_inbound_admission() {
+        let (api, provider) = ready_api("inbound-revoke-first");
+        assert!(api.admit_inbound().await.is_some());
+        revoke(&provider);
+        assert!(
+            api.admit_inbound().await.is_none(),
+            "inbound admission must fail after revoke"
+        );
+    }
+
+    #[tokio::test]
+    async fn drain_waits_for_an_admitted_inbound_send() {
+        let (api, provider) = ready_api("inbound-drain-waits");
+        let channel_state = ChannelState::new(8);
+        let sender = channel_state.sender();
+        let mut rx = channel_state.inbound_subscribe();
+
+        let acquired = Arc::new(tokio::sync::Notify::new());
+        let release = Arc::new(tokio::sync::Notify::new());
+        let enqueuer = {
+            let api = api.clone();
+            let acquired = acquired.clone();
+            let release = release.clone();
+            tokio::spawn(async move {
+                let guard = api.admit_inbound().await.expect("admitted while Ready");
+                acquired.notify_one();
+                release.notified().await;
+                let _ = sender.send(inbound("m-inflight"));
+                drop(guard);
+            })
+        };
+        acquired.notified().await;
+
+        revoke(&provider);
+
+        // A single poll must not complete: the held read guard blocks the
+        // write half of the drain lock. (Dropping the pending future cancels
+        // only this attempt; the real drain runs below.)
+        assert!(
+            api.drain().now_or_never().is_none(),
+            "drain completed while an admitted inbound send was in flight"
+        );
+
+        release.notify_one();
+        enqueuer.await.unwrap();
+        api.drain().await;
+
+        // The send admitted before revoke was allowed to finish, and it landed
+        // before drain completed.
+        assert_eq!(rx.try_recv().unwrap().id.as_str(), "m-inflight");
+        assert!(
+            api.admit_inbound().await.is_none(),
+            "admission after revoke+drain must fail"
+        );
+    }
+
+    #[tokio::test]
+    async fn revoke_racing_enqueue_never_enqueues_after_drain() {
+        for _ in 0..64 {
+            let (api, provider) = ready_api("inbound-race");
+            let channel_state = ChannelState::new(256);
+            let sender = channel_state.sender();
+            let mut rx = channel_state.inbound_subscribe();
+            let sent = Arc::new(AtomicUsize::new(0));
+
+            let enqueuers: Vec<_> = (0..8)
+                .map(|i| {
+                    let api = api.clone();
+                    let sender = sender.clone();
+                    let sent = sent.clone();
+                    tokio::spawn(async move {
+                        tokio::task::yield_now().await;
+                        if let Some(_guard) = api.admit_inbound().await {
+                            let _ = sender.send(inbound(&format!("m{i}")));
+                            sent.fetch_add(1, Ordering::Relaxed);
+                        }
+                    })
+                })
+                .collect();
+
+            revoke(&provider);
+            api.drain().await;
+            for enqueuer in enqueuers {
+                enqueuer.await.unwrap();
+            }
+
+            let mut received = 0;
+            while rx.try_recv().is_ok() {
+                received += 1;
+            }
+            assert_eq!(
+                received,
+                sent.load(Ordering::Relaxed),
+                "every admitted send must land exactly once"
+            );
+            assert!(
+                api.admit_inbound().await.is_none(),
+                "no inbound admission may succeed after revoke+drain"
+            );
+        }
     }
 }
