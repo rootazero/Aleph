@@ -45,6 +45,10 @@ pub mod teams;
 /// `components/theme_toggle.rs`, `views/settings/appearance.rs`) all write the
 /// bare `aria-pressed=`; these three were the only ones that did not.
 ///
+/// One of the three has since been deleted (`ui: remove model routing and
+/// moa settings`), so the guard below derives the number of call sites
+/// instead of freezing the one this paragraph was written against.
+///
 /// The guard is source-level because the runtime cannot tell the two apart:
 /// an element that never sets the attribute and an element whose state is
 /// genuinely `false` produce byte-identical DOM.
@@ -111,6 +115,44 @@ mod switch_state {
         );
     }
 
+    /// Production lines that name the switch class, counted by the bare
+    /// token instead of the structured `class="…"` predicate.
+    ///
+    /// This is the floor the guard below used to freeze as a number, and it
+    /// is derived instead for a reason that is now on the record: the guard
+    /// was written when the crate had three call sites, `ui: remove model
+    /// routing and moa settings` deleted one of them, and the frozen
+    /// `seen >= 3` went on asserting a call site that no longer existed — a
+    /// red test whose message blamed the scan for a product change.
+    ///
+    /// The token count is deliberately the *looser* predicate, so the two
+    /// counts can disagree: the structured scan recognises one exact
+    /// spelling, this one recognises the class wherever it is named. That
+    /// disagreement is the signal — it is what catches the scan drifting away
+    /// from the markup (an attribute built at runtime, a different quoting
+    /// style) without freezing a number that adding or removing a switch
+    /// would move.
+    ///
+    /// Comment lines are skipped: this module's own prose names the class,
+    /// and prose is not a call site.
+    fn named_switch_sites() -> usize {
+        let mut count = 0usize;
+        for path in rust_sources(&src_dir()) {
+            let Ok(src) = std::fs::read_to_string(&path) else {
+                continue;
+            };
+            for (_, text) in crate::i18n_census::production_lines(&src) {
+                if text.trim_start().starts_with("//") {
+                    continue;
+                }
+                if text.contains("ios-switch") {
+                    count += 1;
+                }
+            }
+        }
+        count
+    }
+
     /// Falsified by restoring the `attr:` prefix on any one call site: this
     /// reddens naming that file and line.
     #[test]
@@ -137,9 +179,16 @@ mod switch_state {
                 }
             }
         }
+        let named = named_switch_sites();
         assert!(
-            seen >= 3,
-            "found {seen} `.ios-switch` call sites; the scan is broken, not the \
+            named >= 1,
+            "no production line names the `.ios-switch` class; the guard below \
+             would match nothing and pass for the wrong reason",
+        );
+        assert_eq!(
+            seen, named,
+            "the scan found {seen} `.ios-switch` call sites but {named} \
+             production lines name the class: the scan is broken, not the \
              crate — a guard that matches nothing passes for the wrong reason",
         );
         assert!(
