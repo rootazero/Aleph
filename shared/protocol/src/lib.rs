@@ -38,6 +38,7 @@ pub mod json_canvas;
 pub mod jsonrpc;
 pub mod metrics;
 pub mod native_credentials;
+pub mod panel;
 pub mod paths;
 pub mod plan;
 pub mod plugins;
@@ -90,6 +91,7 @@ pub use jsonrpc::{
 pub use metrics::{
     AgentSlotUsage, BusyQueueMetrics, RunConcurrency, RunConcurrencyMetrics, SessionQueueDepth,
 };
+pub use panel::{PanelTabDescriptor, PanelTabKey, PanelTabStatus, PanelUiTrust, PANEL_UI_API_MAJOR};
 pub use resume::{RefusedEntry, ResumeReceipt, ResumeStatus};
 pub use session_thread::{
     AgentRunAccepted, AgentRunRequest, AgentRunStatusReport, AgentRunStatusRequest,
