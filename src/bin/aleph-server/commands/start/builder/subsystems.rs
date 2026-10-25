@@ -393,7 +393,7 @@ pub(in crate::commands::start) async fn initialize_channels(
                                             bb_channel.set_offset_tracker(Arc::new(tracker));
                                         }
                                         let cid = channel_registry
-                                            .register(Box::new(bb_channel))
+                                            .register_for_boot(Box::new(bb_channel), true)
                                             .await;
                                         if !daemon {
                                             println!(
@@ -421,8 +421,9 @@ pub(in crate::commands::start) async fn initialize_channels(
                                         OffsetTracker::new(db.clone(), inst.id.clone()).await;
                                     imessage_channel.set_offset_tracker(Arc::new(tracker));
                                 }
-                                let cid =
-                                    channel_registry.register(Box::new(imessage_channel)).await;
+                                let cid = channel_registry
+                                    .register_for_boot(Box::new(imessage_channel), true)
+                                    .await;
                                 if !daemon {
                                     println!("Registered channel: {cid} (iMessage/local)");
                                 }
@@ -549,7 +550,22 @@ pub(in crate::commands::start) async fn initialize_channels(
                 }
             }
 
-            let channel_id = channel_registry.register(channel).await;
+            // `enabled` is a boot request owned by the registry. An explicit
+            // false leaves the channel registered but prevents `Channel::start`;
+            // token requests, listener/WS/emitter runtime, webhook mounts, and
+            // API-handle publication therefore remain absent until explicit
+            // lifecycle activation.
+            let boot_enabled = if inst.channel_type == "feishu" {
+                config_with_secrets
+                    .get("enabled")
+                    .and_then(serde_json::Value::as_bool)
+                    .unwrap_or(true)
+            } else {
+                true
+            };
+            let channel_id = channel_registry
+                .register_for_boot(channel, boot_enabled)
+                .await;
             if !daemon {
                 println!("Registered channel: {} ({})", channel_id, inst.channel_type);
             }
