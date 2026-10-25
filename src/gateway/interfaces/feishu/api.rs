@@ -55,6 +55,18 @@ impl FeishuApi {
         self
     }
 
+    pub(crate) fn has_scope(
+        &self,
+        provider: &crate::capability::provider::ProviderHandle,
+        generation: u64,
+    ) -> bool {
+        self.scope
+            .as_ref()
+            .is_some_and(|(bound, bound_generation)| {
+                bound.same_instance(provider) && *bound_generation == generation
+            })
+    }
+
     // The read guard spans the complete HTTP operation, including token awaits.
     // Starting admits only bootstrap reads; retained streaming clients need Ready.
     async fn admit(
@@ -76,17 +88,11 @@ impl FeishuApi {
         Ok(guard)
     }
 
-    pub(crate) fn is_admitted(&self) -> bool {
-        self.scope
-            .as_ref()
-            .is_none_or(|(provider, generation)| provider.acquire_call(*generation).is_ok())
-    }
-
     /// Admit one inbound enqueue and hand back the drain guard.
     ///
     /// The returned guard must stay alive until the caller's `send` finishes.
     /// Guard order is read-guard-then-provider-check (the same order `admit`
-    /// uses), which closes the TOCTOU a bare `is_admitted()` check leaves open:
+    /// uses), which closes the TOCTOU window:
     ///
     ///  * revoke first — `acquire_call` sees Stopping and refuses, so nothing
     ///    is enqueued after the provider is withdrawn;
@@ -100,6 +106,16 @@ impl FeishuApi {
         self.admit(false).await.ok()
     }
 
+    /// Recheck provider admission immediately before returning a successful
+    /// response. The handler keeps its original drain guard separately; this
+    /// check fences a provider revoked while the request was being processed.
+    pub(crate) async fn is_admitted(&self) -> bool {
+        self.admit(false).await.is_ok()
+    }
+
+    /// Wait for admitted HTTP operations and inbound enqueue guards to finish.
+    /// The owner must revoke first. This does not join accepted HTTP handlers,
+    /// queued agent work, token refresh tasks, or effects already sent upstream.
     pub(crate) async fn drain(&self) {
         drop(self.calls.write().await);
     }
@@ -804,6 +820,67 @@ mod inbound_admission_tests {
             api.admit_inbound().await.is_none(),
             "admission after revoke+drain must fail"
         );
+    }
+
+    #[tokio::test]
+    async fn revoke_drains_an_admitted_http_effect_and_refuses_later_sends() {
+        use axum::{routing::post, Json, Router};
+        let entered = Arc::new(tokio::sync::Notify::new());
+        let release = Arc::new(tokio::sync::Notify::new());
+        let requests = Arc::new(AtomicUsize::new(0));
+        let app = Router::new()
+            .route("/open-apis/auth/v3/app_access_token/internal", post(|| async {
+                Json(serde_json::json!({"code": 0, "msg": "ok", "app_access_token": "token", "expire": 7200}))
+            }))
+            .route("/open-apis/im/v1/messages", post({
+                let entered = entered.clone();
+                let release = release.clone();
+                let requests = requests.clone();
+                move || {
+                    let entered = entered.clone();
+                    let release = release.clone();
+                    let requests = requests.clone();
+                    async move {
+                        requests.fetch_add(1, Ordering::SeqCst);
+                        entered.notify_one();
+                        release.notified().await;
+                        Json(serde_json::json!({"code": 0, "msg": "ok", "data": {"message_id": "admitted-message"}}))
+                    }
+                }
+            }));
+        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let (_, provider) = ready_api("outbound-drain-effect");
+        let http = reqwest::Client::new();
+        let api = Arc::new(
+            FeishuApi::new(
+                Arc::new(TokenManager::new("id", "secret", &base, http.clone())),
+                &base,
+                http,
+            )
+            .with_provider(provider.clone(), provider.generation()),
+        );
+        let send = tokio::spawn({
+            let api = api.clone();
+            async move { api.send_text("chat", "admitted", None).await }
+        });
+        tokio::time::timeout(std::time::Duration::from_secs(2), entered.notified())
+            .await
+            .unwrap();
+        revoke(&provider);
+        assert!(api.send_text("chat", "late", None).await.is_err());
+        assert!(api.drain().now_or_never().is_none());
+        release.notify_one();
+        assert_eq!(send.await.unwrap().unwrap(), "admitted-message");
+        api.drain().await;
+        assert_eq!(requests.load(Ordering::SeqCst), 1);
+        assert!(api.send_text("chat", "after drain", None).await.is_err());
+        assert_eq!(requests.load(Ordering::SeqCst), 1);
+        server.abort();
+        let _ = server.await;
     }
 
     #[tokio::test]
