@@ -244,8 +244,20 @@ pub struct LoopToolRegistry {
     tools: HashMap<String, Box<dyn LoopTool>>,
     canonical_registry:
         Option<crate::sync_primitives::Arc<crate::tools::registry::ToolHandlerRegistry>>,
+    canonical_facade:
+        Option<crate::sync_primitives::Arc<crate::capability::zahir_facade::ZahirFacade>>,
     visible_mcp_servers: Option<crate::tools::handlers::McpServerFilter>,
     request_local: std::collections::HashSet<String>,
+}
+
+fn mounted_facade_for_registry(
+    registry: &crate::tools::registry::ToolHandlerRegistry,
+    host: Option<&crate::sync_primitives::Arc<crate::capability::projection_host::ProjectionHost>>,
+) -> Option<crate::sync_primitives::Arc<crate::capability::zahir_facade::ZahirFacade>> {
+    host.and_then(|host| {
+        let facade = host.facade();
+        facade.is_backed_by_registry(registry).then_some(facade)
+    })
 }
 
 impl LoopToolRegistry {
@@ -255,6 +267,7 @@ impl LoopToolRegistry {
         Self {
             tools: HashMap::new(),
             canonical_registry: None,
+            canonical_facade: None,
             visible_mcp_servers: None,
             request_local: Default::default(),
         }
@@ -272,8 +285,38 @@ impl LoopToolRegistry {
         registry: crate::sync_primitives::Arc<crate::tools::registry::ToolHandlerRegistry>,
         visible: crate::tools::handlers::McpServerFilter,
     ) {
-        self.canonical_registry = Some(registry);
+        self.canonical_registry = Some(registry.clone());
+        self.canonical_facade = mounted_facade_for_registry(
+            &registry,
+            crate::capability::projection_host::projection_host(),
+        );
         self.visible_mcp_servers = Some(visible);
+    }
+
+    /// Bind an explicitly mounted facade to the registry it claims to back.
+    #[allow(dead_code)] // used by tests only — the production path binds the
+                        // facade through `bind_canonical_registry`, so a
+                        // non-test build sees no caller for this setter.
+    pub(crate) fn bind_canonical_facade(
+        &mut self,
+        facade: crate::sync_primitives::Arc<crate::capability::zahir_facade::ZahirFacade>,
+    ) -> bool {
+        if !self
+            .canonical_registry
+            .as_ref()
+            .is_some_and(|registry| facade.is_backed_by_registry(registry))
+        {
+            self.canonical_facade = None;
+            return false;
+        }
+        self.canonical_facade = Some(facade);
+        true
+    }
+
+    pub(crate) fn canonical_facade(
+        &self,
+    ) -> Option<crate::sync_primitives::Arc<crate::capability::zahir_facade::ZahirFacade>> {
+        self.canonical_facade.clone()
     }
 
     pub(crate) fn canonical_registry(
@@ -502,6 +545,40 @@ mod tests {
         }
     }
 
+    #[tokio::test]
+    async fn mounted_facade_matches_only_its_canonical_registry() {
+        let registry =
+            crate::sync_primitives::Arc::new(crate::tools::registry::ToolHandlerRegistry::new());
+        let host = crate::capability::projection_host::ProjectionHost::mount(
+            registry.as_ref().clone(),
+            crate::sync_primitives::Arc::new(crate::capability::ownership::OwnershipTree::new()),
+        );
+        let unrelated = crate::tools::registry::ToolHandlerRegistry::new();
+
+        assert!(mounted_facade_for_registry(registry.as_ref(), Some(&host)).is_some());
+        assert!(mounted_facade_for_registry(&unrelated, Some(&host)).is_none());
+
+        let mut projection = LoopToolRegistry::new();
+        projection.bind_canonical_registry(
+            crate::sync_primitives::Arc::clone(&registry),
+            crate::sync_primitives::Arc::new(|_| true),
+        );
+        assert!(projection.canonical_registry().is_some());
+
+        let matching_facade = crate::capability::zahir_facade::ZahirFacade::new(
+            registry.as_ref().clone(),
+            crate::sync_primitives::Arc::new(crate::capability::ownership::OwnershipTree::new()),
+        );
+        assert!(projection.bind_canonical_facade(matching_facade));
+        assert!(projection.canonical_facade().is_some());
+
+        let unrelated_facade = crate::capability::zahir_facade::ZahirFacade::new(
+            unrelated,
+            crate::sync_primitives::Arc::new(crate::capability::ownership::OwnershipTree::new()),
+        );
+        assert!(!projection.bind_canonical_facade(unrelated_facade));
+        assert!(projection.canonical_facade().is_none());
+    }
     #[tokio::test]
     async fn test_minimal_tool_execute() {
         let tool = EchoTool;

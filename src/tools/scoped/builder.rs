@@ -28,6 +28,7 @@ impl ScopedToolService {
     pub fn new(inner: Arc<LoopToolRegistry>, allowed: BTreeSet<String>) -> Self {
         Self {
             canonical_registry: inner.canonical_registry(),
+            canonical_facade: inner.canonical_facade(),
             visible_mcp_servers: inner.visible_mcp_servers(),
             inner,
             allowed,

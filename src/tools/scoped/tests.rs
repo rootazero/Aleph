@@ -5004,7 +5004,8 @@ mod a3 {
     use crate::tools::registry::ToolHandlerRegistry;
     use crate::tools::service::ToolDefinitionMetadata;
     use std::collections::VecDeque;
-    use tokio::sync::Barrier;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use tokio::sync::{Barrier, Notify};
     // Planned readonly gate API, not a fixture-produced or writable verdict.
     use super::super::current_dispatch_verdict;
 
@@ -5195,6 +5196,310 @@ mod a3 {
         overlap: Option<StdArc<Barrier>>,
     }
 
+    #[tokio::test]
+    async fn fresh_canonical_entry_runs_real_handler_effect() {
+        let registry = StdArc::new(ToolHandlerRegistry::new());
+        let invoked = StdArc::new(StdMutex::new(Vec::new()));
+        register(
+            &registry,
+            RecordingHandler {
+                definition: definition("terminal", false),
+                tag: "handler1",
+                invoked: invoked.clone(),
+                partial_write: None,
+                own_identity: unsafe_identity(1),
+                overlap: None,
+            },
+        );
+        let svc = service(&registry).with_confirmation(StdArc::new(SequenceRequester::new([
+            ApprovalOutcome::Approved,
+        ])));
+        let result = with_call_identity(
+            Some(identity("fresh-success")),
+            svc.execute("terminal", json!({"action": "write"})),
+        )
+        .await
+        .expect("fresh canonical lease must succeed");
+        assert_eq!(
+            parse_tool_output(&result.value),
+            json!({"handler": "handler1"})
+        );
+        assert_eq!(invoked.lock().unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn missing_canonical_facade_fails_closed_before_handler_effect() {
+        let registry = StdArc::new(ToolHandlerRegistry::new());
+        let invoked = StdArc::new(StdMutex::new(Vec::new()));
+        register(
+            &registry,
+            RecordingHandler {
+                definition: definition("terminal", false),
+                tag: "handler1",
+                invoked: invoked.clone(),
+                partial_write: None,
+                own_identity: unsafe_identity(1),
+                overlap: None,
+            },
+        );
+        let mut inner = LoopToolRegistry::new();
+        inner.bind_canonical_registry(registry.clone(), StdArc::new(|_| true));
+        assert!(inner.canonical_registry().is_some());
+        let entry = registry.resolve_entry("terminal").unwrap();
+        inner.register(Box::new(
+            crate::tools::adapters::McpRegistryTool::from_registry_entry(
+                entry.handler,
+                &entry.descriptor,
+            ),
+        ));
+        let svc = ScopedToolService::new(StdArc::new(inner), BTreeSet::new()).with_confirmation(
+            StdArc::new(SequenceRequester::new([ApprovalOutcome::Approved])),
+        );
+        let result = with_call_identity(
+            Some(identity("missing-facade")),
+            svc.execute("terminal", json!({"action": "write"})),
+        )
+        .await;
+        assert!(matches!(result, Err(ToolError::PermissionDenied { .. })));
+        assert!(invoked.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn provider_generation_stale_fails_before_handler_effect() {
+        let registry = StdArc::new(ToolHandlerRegistry::new());
+        let invoked = StdArc::new(StdMutex::new(Vec::new()));
+        register(
+            &registry,
+            RecordingHandler {
+                definition: definition("terminal", false),
+                tag: "handler1",
+                invoked: invoked.clone(),
+                partial_write: None,
+                own_identity: unsafe_identity(1),
+                overlap: None,
+            },
+        );
+        let svc = service(&registry);
+        let first = svc.with_confirmation(StdArc::new(SequenceRequester::new([
+            ApprovalOutcome::Approved,
+        ])));
+        with_call_identity(
+            Some(identity("provider-seed")),
+            first.execute("terminal", json!({"action": "seed"})),
+        )
+        .await
+        .expect("initial call must establish the binding");
+
+        let arrived = StdArc::new(Barrier::new(2));
+        let release = StdArc::new(Barrier::new(2));
+        let requester = StdArc::new(BoundaryRequester {
+            registry: registry.clone(),
+            arrived: arrived.clone(),
+            release: release.clone(),
+            seen: StdMutex::new(Vec::new()),
+        });
+        let second_svc = StdArc::new(service(&registry).with_confirmation(requester));
+        let second = tokio::spawn(with_call_identity(
+            Some(identity("provider-stale")),
+            async move {
+                second_svc
+                    .execute("terminal", json!({"action": "stale"}))
+                    .await
+            },
+        ));
+        tokio::time::timeout(std::time::Duration::from_secs(5), arrived.wait())
+            .await
+            .expect("second call must reach approval");
+        let provider = registry.provider();
+        provider
+            .transition(crate::capability::provider::ProviderState::Stopping)
+            .unwrap();
+        provider
+            .transition(crate::capability::provider::ProviderState::Stopped)
+            .unwrap();
+        provider
+            .transition(crate::capability::provider::ProviderState::Starting)
+            .unwrap();
+        provider
+            .transition(crate::capability::provider::ProviderState::Ready)
+            .unwrap();
+        release.wait().await;
+        let result = tokio::time::timeout(std::time::Duration::from_secs(5), second)
+            .await
+            .expect("provider-stale dispatch must complete")
+            .unwrap();
+        assert!(matches!(result, Err(ToolError::PermissionDenied { .. })));
+        assert_eq!(invoked.lock().unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn owner_bump_fails_before_handler_effect() {
+        let registry = StdArc::new(ToolHandlerRegistry::new());
+        let invoked = StdArc::new(StdMutex::new(Vec::new()));
+        register(
+            &registry,
+            RecordingHandler {
+                definition: definition("terminal", false),
+                tag: "handler1",
+                invoked: invoked.clone(),
+                partial_write: None,
+                own_identity: unsafe_identity(1),
+                overlap: None,
+            },
+        );
+        let (svc, host) = canonical_service(&registry);
+        let first = svc.with_confirmation(StdArc::new(SequenceRequester::new([
+            ApprovalOutcome::Approved,
+        ])));
+        with_call_identity(
+            Some(identity("owner-seed")),
+            first.execute("terminal", json!({"action": "seed"})),
+        )
+        .await
+        .expect("initial call must establish the owner binding");
+
+        let arrived = StdArc::new(Barrier::new(2));
+        let release = StdArc::new(Barrier::new(2));
+        let requester = StdArc::new(BoundaryRequester {
+            registry: registry.clone(),
+            arrived: arrived.clone(),
+            release: release.clone(),
+            seen: StdMutex::new(Vec::new()),
+        });
+        let second_svc =
+            StdArc::new(service_with_facade(&registry, host.facade()).with_confirmation(requester));
+        let second = tokio::spawn(with_call_identity(
+            Some(identity("owner-stale")),
+            async move {
+                second_svc
+                    .execute("terminal", json!({"action": "stale"}))
+                    .await
+            },
+        ));
+        tokio::time::timeout(std::time::Duration::from_secs(5), arrived.wait())
+            .await
+            .expect("second call must reach approval");
+        host.owner_tree()
+            .bump(crate::capability::ownership::LifetimeScope::Runtime)
+            .unwrap();
+        release.wait().await;
+        let result = tokio::time::timeout(std::time::Duration::from_secs(5), second)
+            .await
+            .expect("owner-stale dispatch must complete")
+            .unwrap();
+        assert!(matches!(result, Err(ToolError::PermissionDenied { .. })));
+        assert_eq!(invoked.lock().unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn unregister_between_gate_and_dispatch_fails_before_handler_effect() {
+        let registry = StdArc::new(ToolHandlerRegistry::new());
+        let invoked = StdArc::new(StdMutex::new(Vec::new()));
+        register(
+            &registry,
+            RecordingHandler {
+                definition: definition("terminal", false),
+                tag: "handler1",
+                invoked: invoked.clone(),
+                partial_write: None,
+                own_identity: unsafe_identity(1),
+                overlap: None,
+            },
+        );
+        let arrived = StdArc::new(Barrier::new(2));
+        let release = StdArc::new(Barrier::new(2));
+        let requester = StdArc::new(BoundaryRequester {
+            registry: registry.clone(),
+            arrived: arrived.clone(),
+            release: release.clone(),
+            seen: StdMutex::new(Vec::new()),
+        });
+        let (svc, _host) = canonical_service(&registry);
+        let svc = StdArc::new(svc.with_confirmation(requester));
+        let call_svc = svc.clone();
+        let call = tokio::spawn(with_call_identity(
+            Some(identity("unregister-stale")),
+            async move {
+                call_svc
+                    .execute("terminal", json!({"action": "remove"}))
+                    .await
+            },
+        ));
+        tokio::time::timeout(std::time::Duration::from_secs(5), arrived.wait())
+            .await
+            .expect("capture must reach approval");
+        assert!(registry.unregister("terminal").is_some());
+        release.wait().await;
+        let result = tokio::time::timeout(std::time::Duration::from_secs(5), call)
+            .await
+            .expect("unregister-stale dispatch must complete")
+            .unwrap();
+        assert!(matches!(result, Err(ToolError::PermissionDenied { .. })));
+        assert!(invoked.lock().unwrap().is_empty());
+    }
+    #[tokio::test]
+    async fn stale_canonical_entry_fails_before_handler_effect() {
+        let registry = StdArc::new(ToolHandlerRegistry::new());
+        let invoked = StdArc::new(StdMutex::new(Vec::new()));
+        register(
+            &registry,
+            RecordingHandler {
+                definition: definition("terminal", false),
+                tag: "handler1",
+                invoked: invoked.clone(),
+                partial_write: None,
+                own_identity: unsafe_identity(1),
+                overlap: None,
+            },
+        );
+        let arrived = StdArc::new(Barrier::new(2));
+        let release = StdArc::new(Barrier::new(2));
+        let requester = StdArc::new(BoundaryRequester {
+            registry: registry.clone(),
+            arrived: arrived.clone(),
+            release: release.clone(),
+            seen: StdMutex::new(Vec::new()),
+        });
+        let (svc, _host) = canonical_service(&registry);
+        let svc = StdArc::new(
+            svc.with_turn_context(turn_ctx("a3-stale-before-effect"))
+                .with_confirmation(requester),
+        );
+        let first_svc = svc.clone();
+        let first = tokio::spawn(with_call_identity(
+            Some(identity("stale-before-effect")),
+            async move {
+                first_svc
+                    .execute("terminal", json!({"action": "write"}))
+                    .await
+            },
+        ));
+        tokio::time::timeout(std::time::Duration::from_secs(5), arrived.wait())
+            .await
+            .expect("capture must reach the approval barrier");
+        let replacement = RecordingHandler {
+            definition: definition("terminal", false),
+            tag: "handler2",
+            invoked: invoked.clone(),
+            partial_write: None,
+            own_identity: unsafe_identity(2),
+            overlap: None,
+        };
+        registry
+            .replace(
+                ToolCapabilityDescriptor::from_definition(&replacement.definition(), 0),
+                StdArc::new(replacement),
+            )
+            .unwrap();
+        release.wait().await;
+        let result = tokio::time::timeout(std::time::Duration::from_secs(5), first)
+            .await
+            .expect("stale dispatch must complete")
+            .unwrap();
+        assert!(matches!(result, Err(ToolError::PermissionDenied { .. })));
+        assert!(invoked.lock().unwrap().is_empty());
+    }
+
     #[async_trait::async_trait]
     impl ToolHandler for RecordingHandler {
         fn definition(&self) -> ToolDefinition {
@@ -5240,6 +5545,81 @@ mod a3 {
         }
     }
 
+    struct BlockingHandler {
+        definition: ToolDefinition,
+        effects: StdArc<AtomicUsize>,
+        entered: StdArc<Notify>,
+        release: StdArc<Notify>,
+    }
+
+    #[async_trait::async_trait]
+    impl ToolHandler for BlockingHandler {
+        fn definition(&self) -> ToolDefinition {
+            self.definition.clone()
+        }
+
+        async fn invoke(&self, _input: Value) -> Result<ToolOutput, ToolError> {
+            self.effects.fetch_add(1, Ordering::SeqCst);
+            self.entered.notify_one();
+            self.release.notified().await;
+            Ok(ToolOutput {
+                value: json!({"handler": "blocking"}),
+                metadata: Default::default(),
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn post_effect_stale_result_does_not_touch_successor() {
+        let registry = StdArc::new(ToolHandlerRegistry::new());
+        let old_effects = StdArc::new(AtomicUsize::new(0));
+        let entered = StdArc::new(Notify::new());
+        let release = StdArc::new(Notify::new());
+        register(
+            &registry,
+            BlockingHandler {
+                definition: definition("terminal", false),
+                effects: old_effects.clone(),
+                entered: entered.clone(),
+                release: release.clone(),
+            },
+        );
+        let successor_effects = StdArc::new(AtomicUsize::new(0));
+        let svc = StdArc::new(service(&registry).with_confirmation(StdArc::new(
+            SequenceRequester::new([ApprovalOutcome::Approved]),
+        )));
+        let call_svc = svc.clone();
+        let call = tokio::spawn(with_call_identity(
+            Some(identity("post-effect-stale")),
+            async move {
+                call_svc
+                    .execute("terminal", json!({"action": "write"}))
+                    .await
+            },
+        ));
+        entered.notified().await;
+        let successor = BlockingHandler {
+            definition: definition("terminal", false),
+            effects: successor_effects.clone(),
+            entered: StdArc::new(Notify::new()),
+            release: StdArc::new(Notify::new()),
+        };
+        registry
+            .replace(
+                ToolCapabilityDescriptor::from_definition(&successor.definition(), 0),
+                StdArc::new(successor),
+            )
+            .unwrap();
+        release.notify_one();
+        let result = tokio::time::timeout(std::time::Duration::from_secs(5), call)
+            .await
+            .expect("post-effect stale dispatch must complete")
+            .unwrap();
+        assert!(matches!(result, Err(ToolError::PermissionDenied { .. })));
+        assert_eq!(old_effects.load(Ordering::SeqCst), 1);
+        assert_eq!(successor_effects.load(Ordering::SeqCst), 0);
+    }
+
     fn definition(name: &str, idempotent: bool) -> ToolDefinition {
         ToolDefinition {
             name: name.into(),
@@ -5260,15 +5640,18 @@ mod a3 {
         registry.register(descriptor, StdArc::new(handler)).unwrap();
     }
 
-    // The projection remains the real production adapter, for discovery.
-    // PLANNED INTERNAL SEAM / COMPILE RED: ScopedToolService needs a retained
-    // Arc<ToolHandlerRegistry> to resolve_entry ONCE before gates, then dispatch
-    // that captured entry. This test-only helper assumes private storage named
-    // `canonical_registry`; no new public builder or fake live adapter is used.
-    // Today neither LoopToolRegistry nor McpRegistryTool retains that link or
-    // a full RegistryEntry, so fixing only resolve_entry cannot make this green.
+    // The projection remains the real production adapter, for discovery. This
+    // fixture binds the canonical registry and the existing facade handle; the
+    // mounted-host binding path is exercised separately by canonical_service.
     fn service(registry: &StdArc<ToolHandlerRegistry>) -> ScopedToolService {
         let mut inner = LoopToolRegistry::new();
+        inner.bind_canonical_registry(registry.clone(), StdArc::new(|_| true));
+        assert!(
+            inner.bind_canonical_facade(crate::capability::zahir_facade::ZahirFacade::new(
+                registry.as_ref().clone(),
+                StdArc::new(crate::capability::ownership::OwnershipTree::new()),
+            ),)
+        );
         for entry in registry.entries_snapshot().values() {
             inner.register(Box::new(
                 crate::tools::adapters::McpRegistryTool::from_registry_entry(
@@ -5277,9 +5660,40 @@ mod a3 {
                 ),
             ));
         }
-        let mut svc = ScopedToolService::new(StdArc::new(inner), BTreeSet::new());
-        svc.canonical_registry = Some(StdArc::clone(registry));
-        svc
+        ScopedToolService::new(StdArc::new(inner), BTreeSet::new())
+    }
+
+    fn service_with_facade(
+        registry: &StdArc<ToolHandlerRegistry>,
+        facade: StdArc<crate::capability::zahir_facade::ZahirFacade>,
+    ) -> ScopedToolService {
+        let mut inner = LoopToolRegistry::new();
+        inner.bind_canonical_registry(registry.clone(), StdArc::new(|_| true));
+        assert!(inner.bind_canonical_facade(facade));
+        for entry in registry.entries_snapshot().values() {
+            inner.register(Box::new(
+                crate::tools::adapters::McpRegistryTool::from_registry_entry(
+                    StdArc::clone(&entry.handler),
+                    &entry.descriptor,
+                ),
+            ));
+        }
+        ScopedToolService::new(StdArc::new(inner), BTreeSet::new())
+    }
+
+    fn canonical_service(
+        registry: &StdArc<ToolHandlerRegistry>,
+    ) -> (
+        ScopedToolService,
+        StdArc<crate::capability::projection_host::ProjectionHost>,
+    ) {
+        let tree = StdArc::new(crate::capability::ownership::OwnershipTree::new());
+        let host = crate::capability::projection_host::ProjectionHost::mount(
+            registry.as_ref().clone(),
+            tree,
+        );
+        let service = service_with_facade(registry, host.facade());
+        (service, host)
     }
 
     fn identity(id: &str) -> CallIdentity {
@@ -5347,12 +5761,10 @@ mod a3 {
         }
     }
 
-    // Break caught: re-resolving by name after approval executes rev2 under
-    // rev1 authority instead of the captured handler.
-    // The same service must refresh only the NEXT call. Authority is observed
-    // inside the real handlers, not inferred from ambient ID or registry reads.
+    // A replacement after capture invalidates the old BackendLease before the
+    // handler effect; the next call captures and executes the successor.
     #[tokio::test]
-    async fn replacement_between_gate_and_dispatch_uses_captured_entry() {
+    async fn replacement_between_gate_and_dispatch_rejects_stale_capture() {
         let registry = StdArc::new(ToolHandlerRegistry::new());
         let invoked = StdArc::new(StdMutex::new(Vec::new()));
         register(
@@ -5408,17 +5820,16 @@ mod a3 {
         tokio::time::timeout(std::time::Duration::from_secs(5), release.wait())
             .await
             .expect("replacement must release the in-flight gate");
-        let first_output = tokio::time::timeout(std::time::Duration::from_secs(5), first)
+        let first_result = tokio::time::timeout(std::time::Duration::from_secs(5), first)
             .await
             .expect("captured rev1 dispatch must complete")
-            .unwrap()
-            .expect("in-flight approval was granted");
-        assert_eq!(
-            parse_tool_output(&first_output.value),
-            json!({"handler": "handler1"})
-        );
+            .unwrap();
+        assert!(matches!(
+            first_result,
+            Err(ToolError::PermissionDenied { .. })
+        ));
         assert_eq!(requester.seen.lock().unwrap()[0].1.revision, 1);
-        assert_eq!(invoked.lock().unwrap()[0].handler, "handler1");
+        assert!(invoked.lock().unwrap().is_empty());
 
         // Deliberately no service rebuild: stale request projection is not
         // an acceptable substitute for the canonical next-call snapshot.
@@ -5437,13 +5848,10 @@ mod a3 {
             vec![("replace-a", 1), ("replace-b", 2)]
         );
         let calls = invoked.lock().unwrap();
-        assert_eq!(calls.len(), 2);
-        assert_eq!(calls[0].call_id.as_deref(), Some("replace-a"));
-        assert_eq!(calls[1].call_id.as_deref(), Some("replace-b"));
-        assert_eq!(calls[0].identity, unsafe_identity(1));
-        assert_eq!(calls[1].identity, unsafe_identity(2));
-        assert_eq!(calls[0].input, json!({"action": "write", "data": "one"}));
-        assert_eq!(calls[1].input, json!({"action": "write", "data": "two"}));
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].call_id.as_deref(), Some("replace-b"));
+        assert_eq!(calls[0].identity, unsafe_identity(2));
+        assert_eq!(calls[0].input, json!({"action": "write", "data": "two"}));
         for call in calls.iter() {
             assert_bound_verdict(&call.before_yield);
             assert_bound_verdict(&call.after_yield);
@@ -5453,7 +5861,7 @@ mod a3 {
             "proof must leave the dispatch scope"
         );
         assert_eq!(
-            calls[1].handler, "handler2",
+            calls[0].handler, "handler2",
             "rev2 boundary identity must name the executed handler"
         );
         assert_eq!(
@@ -6207,6 +6615,12 @@ mod a3 {
             StdArc::new(move |_| switch.load(Ordering::SeqCst));
         let mut inner = LoopToolRegistry::new();
         inner.bind_canonical_registry(registry.clone(), visible);
+        assert!(
+            inner.bind_canonical_facade(crate::capability::zahir_facade::ZahirFacade::new(
+                registry.as_ref().clone(),
+                StdArc::new(crate::capability::ownership::OwnershipTree::new()),
+            ),)
+        );
         let entry = registry.resolve_entry("server__write").unwrap();
         inner.register(Box::new(
             crate::tools::adapters::McpRegistryTool::from_registry_entry(
@@ -6331,6 +6745,12 @@ mod a3 {
             let visible = all_visible();
             let mut inner = LoopToolRegistry::new();
             inner.bind_canonical_registry(StdArc::clone(registry), visible.clone());
+            assert!(inner.bind_canonical_facade(
+                crate::capability::zahir_facade::ZahirFacade::new(
+                    registry.as_ref().clone(),
+                    StdArc::new(crate::capability::ownership::OwnershipTree::new()),
+                ),
+            ));
             let entry = registry.resolve_entry(NAME).expect("entry published");
             inner.register(Box::new(
                 crate::tools::adapters::McpRegistryTool::from_canonical_entry(&entry, &visible),
@@ -6365,18 +6785,6 @@ mod a3 {
                 "fixture size {produced} must discriminate {SMALL} from {LARGE}/{default}"
             );
             produced
-        }
-
-        fn assert_offloaded(text: &str, tag: &str, produced: usize) {
-            assert!(
-                text.contains("[Full output persisted: "),
-                "small budget must offload {tag}'s result:\n{text}"
-            );
-            let inline = crate::context::budget::pressure::estimate_tokens_smart(text);
-            assert!(
-                inline < produced,
-                "offloaded result must be smaller inline ({inline} >= {produced})"
-            );
         }
 
         fn assert_inline_whole(text: &str, tag: &str) {
@@ -6440,7 +6848,7 @@ mod a3 {
         // gate suspends, or the next call keeps the stale rev1 budget.
         #[tokio::test]
         async fn gate_held_capture_keeps_old_budget_and_next_call_uses_new() {
-            let produced = assert_discriminating_size();
+            assert_discriminating_size();
             let registry = StdArc::new(ToolHandlerRegistry::new());
             let calls: Calls = StdArc::new(StdMutex::new(Vec::new()));
             let a = handler("budgetA", 1, &calls);
@@ -6476,20 +6884,15 @@ mod a3 {
             tokio::time::timeout(std::time::Duration::from_secs(5), release.wait())
                 .await
                 .expect("replacement must release the in-flight gate");
-            let first_out = tokio::time::timeout(std::time::Duration::from_secs(5), first)
+            let first_result = tokio::time::timeout(std::time::Duration::from_secs(5), first)
                 .await
                 .expect("captured rev1 dispatch completes")
-                .unwrap()
-                .expect("in-flight approval was granted");
-            let first_text = first_out.value.as_str().expect("flattened");
-            assert_offloaded(first_text, "budgetA", produced);
-            let persisted_path = crate::tools::result_store::extract_persisted_path(first_text)
-                .expect("offload must name an actual recovery file");
-            let persisted = store
-                .read_call_blob(std::path::Path::new(persisted_path), "r0-held-a")
-                .expect("the captured call must own a readable persisted result");
-            assert_eq!(persisted, body("budgetA"));
-            assert!(!first_text.contains("budgetB"), "{first_text}");
+                .unwrap();
+            assert!(matches!(
+                first_result,
+                Err(ToolError::PermissionDenied { .. })
+            ));
+            assert!(calls.lock().unwrap().is_empty());
 
             // Same service, no rebuild: projection still says SMALL.
             let next_out = with_call_identity(
@@ -6515,10 +6918,7 @@ mod a3 {
                     .iter()
                     .map(|(tag, id, _)| (*tag, id.as_deref()))
                     .collect::<Vec<_>>(),
-                vec![
-                    ("budgetA", Some("r0-held-a")),
-                    ("budgetB", Some("r0-held-b"))
-                ]
+                vec![("budgetB", Some("r0-held-b"))]
             );
         }
 
@@ -6732,6 +7132,16 @@ mod r1a {
         let mut inner = LoopToolRegistry::new();
         let visible: crate::tools::handlers::McpServerFilter = StdArc::new(|_| true);
         inner.bind_canonical_registry(StdArc::clone(registry), visible);
+        // Canonical dispatch validates the captured backend lease through the
+        // mounted facade, so the fixture binds one backed by this registry —
+        // otherwise every canonical call fails closed with "facade is not
+        // mounted" before the handler runs.
+        assert!(
+            inner.bind_canonical_facade(crate::capability::zahir_facade::ZahirFacade::new(
+                registry.as_ref().clone(),
+                StdArc::new(crate::capability::ownership::OwnershipTree::new()),
+            ),)
+        );
         inner.register(Box::new(projection));
         ScopedToolService::new(StdArc::new(inner), BTreeSet::new())
     }

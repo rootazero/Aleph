@@ -203,12 +203,30 @@ impl CanonicalEntryLease {
         self.provider_generation
     }
 
-    /// Validate against a fresh publication without falling back to a handler
-    /// lookup. A changed producer tuple rejects even a same-name replacement.
+    /// Validate directly against one immutable publication snapshot. A changed
+    /// producer tuple rejects even a same-name replacement.
     pub fn validate(&self, current: &CanonicalPublication) -> bool {
-        current
-            .capture_entry(&self.entry.descriptor.name)
-            .is_some_and(|entry| self.validate_capture(&entry))
+        if current.provider_state() != ProviderState::Ready
+            || current.provider_generation() != self.provider_generation
+        {
+            return false;
+        }
+        let Some(entry) = current.entry(&self.entry.descriptor.name) else {
+            return false;
+        };
+        if self.entry.descriptor != entry.descriptor {
+            return false;
+        }
+        match (
+            &self.entry.ready,
+            current.ready_snapshot(&self.entry.descriptor.name),
+        ) {
+            (Some(captured), Some(live)) => {
+                captured.same_lease(live) && live.provider_is_current_ready()
+            }
+            (None, None) => true,
+            _ => false,
+        }
     }
 
     /// Both captures must come from registry-owned immutable read boundaries.
@@ -1002,6 +1020,12 @@ impl ToolHandlerRegistry {
     #[must_use]
     pub fn provider(&self) -> ProviderHandle {
         self.provider.clone()
+    }
+
+    /// Compare registry identity without exposing any registry state.
+    #[must_use]
+    pub(crate) fn same_instance(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.shared, &other.shared)
     }
 
     /// Current generation of the provider that owns this registry.
@@ -1952,7 +1976,12 @@ mod tests {
             let publication = registry.canonical_publication();
             let entry = publication.entry(name).unwrap();
             let mut projection = crate::tools::runtime::LoopToolRegistry::new();
-            projection.bind_canonical_registry(registry, Arc::new(|_| true));
+            let facade = crate::capability::zahir_facade::ZahirFacade::new(
+                registry.as_ref().clone(),
+                Arc::new(crate::capability::ownership::OwnershipTree::new()),
+            );
+            projection.bind_canonical_registry(Arc::clone(&registry), Arc::new(|_| true));
+            assert!(projection.bind_canonical_facade(facade));
             projection.register(Box::new(
                 crate::tools::adapters::McpRegistryTool::from_registry_entry(
                     Arc::clone(&entry.handler),
@@ -2550,6 +2579,27 @@ mod tests {
             assert!(Arc::ptr_eq(&frozen, &registry.shared.snapshot()));
             assert_eq!(new.revoke().unwrap(), 3);
             assert!(registry.canonical_publication().entries().is_empty());
+        }
+
+        #[test]
+        fn canonical_plugin_lease_validation_rejects_withdrawal_from_one_publication() {
+            let fixture = Fixture::new(PAYLOAD_A);
+            let registry = ToolHandlerRegistry::new();
+            let receipt = registry
+                .publish_plugin_batch(fixture.batch(1, &["withdrawn"]), None)
+                .unwrap();
+            let lease = registry.capture_entry("withdrawn").unwrap();
+            let published = registry.canonical_publication();
+            assert!(lease.validate(&published));
+
+            fixture
+                .provider
+                .transition(ProviderState::Stopping)
+                .unwrap();
+            receipt.revoke().unwrap();
+            let withdrawn = registry.canonical_publication();
+            assert!(withdrawn.entry("withdrawn").is_none());
+            assert!(!lease.validate(&withdrawn));
         }
 
         #[test]
@@ -3638,7 +3688,12 @@ mod tests {
             )),
             provider: ToolHandlerRegistry::new().provider(),
         });
-        projection.bind_canonical_registry(frozen, Arc::new(|_| true));
+        projection.bind_canonical_registry(Arc::clone(&frozen), Arc::new(|_| true));
+        let facade = crate::capability::zahir_facade::ZahirFacade::new(
+            frozen.as_ref().clone(),
+            Arc::new(crate::capability::ownership::OwnershipTree::new()),
+        );
+        assert!(projection.bind_canonical_facade(facade));
         projection.register(Box::new(
             crate::tools::adapters::McpRegistryTool::from_registry_entry(
                 entry.handler.clone(),

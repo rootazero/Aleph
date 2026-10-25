@@ -19,12 +19,13 @@ use crate::capability::facade::{
     Reference, ResolveError, Scope, TransportTarget, Zahir,
 };
 use crate::capability::ownership::{
-    LifetimeScope, OwnerGeneration, OwnerRef, OwnershipTree, VisibilityScope,
+    LifetimeScope, OwnerGeneration, OwnerRef, OwnershipTree, RegisterError, VisibilityScope,
 };
 use crate::capability::provider::ProviderHandle;
 use crate::sync_primitives::Arc;
 use crate::tools::registry::{
-    RegistryChange, RegistryEntry, RegistryPublication, RegistrySnapshot, ToolHandlerRegistry,
+    CanonicalEntryLease, RegistryChange, RegistryEntry, RegistryPublication, RegistrySnapshot,
+    ToolHandlerRegistry,
 };
 use std::collections::HashMap;
 use tokio::sync::broadcast::{self, error::TryRecvError};
@@ -97,6 +98,13 @@ impl ZahirFacade {
         self.adapter.registry.provider()
     }
 
+    /// Compare the mounted facade's canonical registry identity without
+    /// exposing registry state or callable authority.
+    #[must_use]
+    pub(crate) fn is_backed_by_registry(&self, registry: &ToolHandlerRegistry) -> bool {
+        self.adapter.registry.same_instance(registry)
+    }
+
     /// Idempotently register an ownership binding for every registry tool that
     /// has none (and is not revoked/disposed). Full projections reconcile all
     /// entries; single-entry `resolve` reconciles only the captured target.
@@ -107,6 +115,8 @@ impl ZahirFacade {
     /// active claims survive). `unregister` does NOT revoke a binding, so a
     /// later re-register of the same name resolves again. A revoked/disposed
     /// id makes `tree.register_if_absent` return `Err` — treated as a no-op.
+    /// Generation exhaustion also leaves the binding absent, so the capability
+    /// remains unavailable because this reconciliation API has no error channel.
     pub fn reconcile_registry_bindings(&self) {
         let snap = self.adapter.registry.snapshot_state();
         self.reconcile_snapshot(&snap);
@@ -123,12 +133,18 @@ impl ZahirFacade {
     }
 
     fn reconcile_entry_binding(&self, name: &str) {
-        let _ = self.tree.register_if_absent(
+        match self.tree.register_if_absent(
             tool_id(name),
             OwnerRef::Runtime,
             LifetimeScope::Runtime,
             VisibilityScope::default(),
-        );
+        ) {
+            Ok(()) | Err(RegisterError::Revoked) | Err(RegisterError::Disposed) => {}
+            Err(RegisterError::GenerationExhausted) => {
+                // The public reconciliation API has no error channel. Leaving
+                // the binding absent keeps this capability unavailable.
+            }
+        }
     }
 
     /// Project the live registry entries, owner generations, and registry state
@@ -323,32 +339,18 @@ impl ZahirFacade {
         }
         stream
     }
-}
-
-impl Zahir for ZahirFacade {
-    fn describe(&self, scope: Scope) -> CapabilitySnapshot {
-        self.reconcile_registry_bindings();
-        let (capabilities, revision) = self.adapter.snapshot_capabilities(&scope);
-        let capabilities = capabilities
-            .into_iter()
-            .filter(|d| self.tree.generation(&d.id, &scope.visibility).is_some())
-            .collect();
-        CapabilitySnapshot {
-            capabilities,
-            committed_cursor: Cursor(revision),
-        }
-    }
-
-    fn resolve(&self, reference: Reference) -> Result<BackendLease, ResolveError> {
+    pub(crate) fn resolve_with_capture(
+        &self,
+        reference: Reference,
+        canonical_entry: CanonicalEntryLease,
+    ) -> Result<BackendLease, ResolveError> {
         let provider = self.adapter.registry.provider();
         if reference.id.namespace != crate::capability::backend::TOOL_NAMESPACE {
             return Err(ResolveError::Unknown);
         }
-        let canonical_entry = self
-            .adapter
-            .registry
-            .capture_entry(&reference.id.name)
-            .ok_or(ResolveError::Unknown)?;
+        if canonical_entry.entry().descriptor.name != reference.id.name {
+            return Err(ResolveError::Unknown);
+        }
         self.reconcile_entry_binding(&reference.id.name);
         let provider_generation = canonical_entry.provider_generation();
         let mut descriptor =
@@ -372,6 +374,33 @@ impl Zahir for ZahirFacade {
             None if self.tree.is_revoked(&reference.id) => Err(ResolveError::Revoked),
             None => Err(ResolveError::NotVisible),
         }
+    }
+}
+
+impl Zahir for ZahirFacade {
+    fn describe(&self, scope: Scope) -> CapabilitySnapshot {
+        self.reconcile_registry_bindings();
+        let (capabilities, revision) = self.adapter.snapshot_capabilities(&scope);
+        let capabilities = capabilities
+            .into_iter()
+            .filter(|d| self.tree.generation(&d.id, &scope.visibility).is_some())
+            .collect();
+        CapabilitySnapshot {
+            capabilities,
+            committed_cursor: Cursor(revision),
+        }
+    }
+
+    fn resolve(&self, reference: Reference) -> Result<BackendLease, ResolveError> {
+        if reference.id.namespace != crate::capability::backend::TOOL_NAMESPACE {
+            return Err(ResolveError::Unknown);
+        }
+        let canonical_entry = self
+            .adapter
+            .registry
+            .capture_entry(&reference.id.name)
+            .ok_or(ResolveError::Unknown)?;
+        self.resolve_with_capture(reference, canonical_entry)
     }
 
     fn validate_lease(&self, lease: &BackendLease) -> Result<(), ResolveError> {
@@ -608,6 +637,53 @@ mod tests {
     }
 
     #[test]
+    fn resolve_with_capture_uses_supplied_canonical_entry() {
+        let (host, registry, _tree) = host_parts(&["a"]);
+        let id = tool_id("a");
+        let captured = registry
+            .capture_entry("a")
+            .expect("capture initial canonical entry");
+
+        let mut replacement = fake_def("a");
+        replacement.input_schema = json!({
+            "type": "object",
+            "properties": {"changed": {"type": "boolean"}}
+        });
+        registry
+            .replace(
+                ToolCapabilityDescriptor::from_definition(&replacement, 0),
+                Arc::new(FakeHandler {
+                    definition: replacement,
+                }),
+            )
+            .expect("replace test tool");
+        let current = registry
+            .capture_entry("a")
+            .expect("capture replacement canonical entry");
+        assert_ne!(captured, current);
+
+        let lease = host
+            .resolve_with_capture(ref_for(&id), captured.clone())
+            .expect("resolve supplied canonical entry");
+
+        assert_eq!(lease.canonical_entry, captured);
+        assert_eq!(
+            lease.descriptor.revision.0,
+            captured.entry().descriptor.revision
+        );
+        assert_ne!(
+            lease.descriptor.revision.0,
+            current.entry().descriptor.revision
+        );
+        assert_eq!(
+            lease.descriptor.schema.fingerprint,
+            crate::capability::backend::to_descriptor(&captured.entry().descriptor)
+                .schema
+                .fingerprint,
+        );
+    }
+
+    #[test]
     fn resolve_fails_closed_for_unknown_not_visible_revoked() {
         // Lookup miss → Unknown.
         let (host, _reg, _tree) = host_parts(&["a"]);
@@ -640,7 +716,8 @@ mod tests {
         let (host, _reg, tree) = host_parts(&["a"]);
         let id = tool_id("a");
         let lease = host.resolve(ref_for(&id)).expect("resolve succeeds");
-        tree.bump(LifetimeScope::Runtime);
+        tree.bump(LifetimeScope::Runtime)
+            .expect("runtime bump succeeds");
         assert_eq!(host.validate_lease(&lease), Err(ResolveError::StaleOwner));
     }
 
@@ -1036,7 +1113,8 @@ mod tests {
         );
 
         // Bump ownership WITHOUT any registry mutation.
-        tree.bump(LifetimeScope::Runtime);
+        tree.bump(LifetimeScope::Runtime)
+            .expect("runtime bump succeeds");
         let after = host.snapshot_entries_in_scope(&scope_all());
 
         // Registry cursor unchanged: no registry mutation happened.

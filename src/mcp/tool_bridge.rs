@@ -800,9 +800,20 @@ mod tests {
     fn scoped_service(
         registry: Arc<ToolHandlerRegistry>,
         visible: McpServerFilter,
-    ) -> crate::tools::ScopedToolService {
+    ) -> (
+        crate::tools::ScopedToolService,
+        Arc<crate::capability::projection_host::ProjectionHost>,
+    ) {
         let mut inner = crate::tools::runtime::LoopToolRegistry::new();
         inner.bind_canonical_registry(registry.clone(), visible);
+        let host = crate::capability::projection_host::ProjectionHost::mount(
+            registry.as_ref().clone(),
+            Arc::new(crate::capability::ownership::OwnershipTree::new()),
+        );
+        assert!(
+            inner.bind_canonical_facade(host.facade()),
+            "canonical facade must be backed by the scoped registry"
+        );
         for entry in registry.entries_snapshot().values() {
             inner.register(Box::new(
                 crate::tools::adapters::McpRegistryTool::from_registry_entry(
@@ -811,7 +822,13 @@ mod tests {
                 ),
             ));
         }
-        crate::tools::ScopedToolService::new(Arc::new(inner), std::collections::BTreeSet::new())
+        (
+            crate::tools::ScopedToolService::new(
+                Arc::new(inner),
+                std::collections::BTreeSet::new(),
+            ),
+            host,
+        )
     }
 
     fn strip_output_fence(value: serde_json::Value) -> serde_json::Value {
@@ -860,8 +877,8 @@ mod tests {
         let (registry_a, in_a) = bound_builtins(&a, &hide).await;
         let (registry_b, _in_b) = bound_builtins(&b, &all).await;
         assert_eq!(in_a.len(), 6, "all six builtins: {:?}", in_a.keys());
-        let svc_a = scoped_service(registry_a, hide.clone());
-        let svc_b = scoped_service(registry_b, all.clone());
+        let (svc_a, _host_a) = scoped_service(registry_a, hide.clone());
+        let (svc_b, _host_b) = scoped_service(registry_b, all.clone());
         for (name, args) in [
             (
                 RESOURCE_TOOL,

@@ -2995,6 +2995,14 @@ async fn the_mcp_join_gates_owned_tools_and_binds_capability_builtins_to_the_run
         let mut allowed: std::collections::BTreeSet<String> = ["file_read".to_string()].into();
         let visible = visible_mcp_servers(ctx, Some(Arc::clone(&manager)));
         registry.bind_canonical_registry(bridged.clone(), visible.clone());
+        let host = crate::capability::projection_host::ProjectionHost::mount(
+            bridged.as_ref().clone(),
+            crate::sync_primitives::Arc::new(crate::capability::ownership::OwnershipTree::new()),
+        );
+        assert!(
+            registry.bind_canonical_facade(host.facade()),
+            "canonical facade must be backed by the joined registry"
+        );
         let joined = join_canonical_tools(
             &bridged.entries_snapshot(),
             &mut registry,

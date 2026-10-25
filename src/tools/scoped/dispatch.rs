@@ -4,6 +4,10 @@
 use serde_json::Value;
 use tokio_util::sync::CancellationToken;
 
+use crate::capability::backend::TOOL_NAMESPACE;
+use crate::capability::descriptor::CapabilityId;
+use crate::capability::facade::{BackendLease, Reference, Zahir};
+use crate::capability::ownership::VisibilityScope;
 use crate::extension::hooks::{
     budget_hook_contexts, HookContext, HookExecutor, PermissionDecision,
 };
@@ -184,9 +188,15 @@ impl ConfirmDenial {
 
 /// Which dispatch branch `execute_gated` is routing into. Cloning the owned
 /// Arc pair keeps every attempt on the same captured generation.
+// The `Canonical` arm carries the backend lease by value so the lease that
+// cleared the gate is the same one the effect validates — a swap between the
+// two is not expressible. That makes the arm large; the enum is built once per
+// dispatch and never lives in a long-lived collection, so the size costs one
+// stack slot, and boxing it would add an allocation to the dispatch path.
+#[allow(clippy::large_enum_variant)]
 #[derive(Clone)]
 enum RoutingTarget {
-    Canonical(RegistryEntry, CanonicalEntryLease),
+    Canonical(RegistryEntry, CanonicalEntryLease, BackendLease),
     Subagent,
     Inner,
     Missing,
@@ -295,6 +305,7 @@ impl ScopedToolService {
             .as_ref()
             .is_some_and(|st| st.name() == name);
         let mut captured_lease = None;
+        let mut captured_backend_lease = None;
         let captured = if let Some(registry) = &self.canonical_registry {
             if is_subagent || self.inner.is_request_local(name) {
                 None
@@ -303,7 +314,7 @@ impl ScopedToolService {
                     .capture_entry(name)
                     .ok_or_else(|| ToolError::NotFound { name: name.into() })?;
                 let mut entry = lease.entry().clone();
-                captured_lease = Some(lease);
+                captured_lease = Some(lease.clone());
                 let projected = projection.capability_descriptor().ok_or_else(|| {
                     ToolError::PermissionDenied {
                         name: name.into(),
@@ -338,6 +349,29 @@ impl ScopedToolService {
                         reason: "canonical MCP visibility is not bound".into(),
                     });
                 }
+                let facade =
+                    self.canonical_facade
+                        .as_ref()
+                        .ok_or_else(|| ToolError::PermissionDenied {
+                            name: name.into(),
+                            reason: "canonical capability facade is not mounted".into(),
+                        })?;
+                let backend_lease = facade
+                    .resolve_with_capture(
+                        Reference {
+                            id: CapabilityId {
+                                namespace: TOOL_NAMESPACE.into(),
+                                name: entry.descriptor.name.clone(),
+                            },
+                            visibility: VisibilityScope::default(),
+                        },
+                        lease,
+                    )
+                    .map_err(|error| ToolError::PermissionDenied {
+                        name: name.into(),
+                        reason: format!("canonical capability lease cannot be resolved: {error:?}"),
+                    })?;
+                captured_backend_lease = Some(backend_lease);
                 Some(entry)
             } else {
                 return Err(ToolError::NotFound { name: name.into() });
@@ -554,6 +588,9 @@ impl ScopedToolService {
             RoutingTarget::Canonical(
                 entry.clone(),
                 captured_lease.clone().expect("captured lease"),
+                captured_backend_lease
+                    .clone()
+                    .expect("captured backend lease"),
             )
         } else if self
             .subagent_tool
@@ -582,7 +619,7 @@ impl ScopedToolService {
         // declaration → the builtin table → the default), read straight off the
         // tool so the clock we enforce and the budget we advertise cannot drift.
         let declared_ms = match &routing {
-            RoutingTarget::Canonical(entry, _) => entry.descriptor.max_duration_ms,
+            RoutingTarget::Canonical(entry, _, _) => entry.descriptor.max_duration_ms,
             RoutingTarget::Subagent => self
                 .subagent_tool
                 .as_ref()
@@ -903,7 +940,7 @@ impl ScopedToolService {
                 // will be invoked. Canonical `None` is authoritative and must
                 // not fall back to a stale request-local projection hint.
                 let explicit = match &target {
-                    RoutingTarget::Canonical(entry, _) => entry.max_result_tokens,
+                    RoutingTarget::Canonical(entry, _, _) => entry.max_result_tokens,
                     _ => self.inner.max_result_tokens_for(name),
                 };
 
@@ -1015,7 +1052,7 @@ impl ScopedToolService {
                 reason: "plugin activation requires an exact canonical admission".into(),
             });
         }
-        if let RoutingTarget::Canonical(entry, lease) = &target {
+        if let RoutingTarget::Canonical(entry, lease, _) = &target {
             self.validate_plugin_lease(lease)?;
             let call_id = crate::approval::current_tool_call_id().ok_or_else(|| {
                 ToolError::PermissionDenied {
@@ -1046,11 +1083,10 @@ impl ScopedToolService {
     /// A Ready plugin publication must still be the exact producer lease.
     fn validate_plugin_lease(&self, lease: &CanonicalEntryLease) -> Result<(), ToolError> {
         if lease.is_plugin_publication()
-            && !self.canonical_registry.as_ref().is_some_and(|registry| {
-                registry
-                    .capture_entry(&lease.entry().descriptor.name)
-                    .is_some_and(|current| lease.validate_capture(&current))
-            })
+            && !self
+                .canonical_registry
+                .as_ref()
+                .is_some_and(|registry| lease.validate(&registry.canonical_publication()))
         {
             return Err(ToolError::PermissionDenied {
                 name: lease.entry().descriptor.name.clone(),
@@ -1069,8 +1105,21 @@ impl ScopedToolService {
         cancel: CancellationToken,
     ) -> Result<ToolOutput, ToolError> {
         let raw = match target {
-            RoutingTarget::Canonical(entry, lease) => {
+            RoutingTarget::Canonical(entry, lease, backend_lease) => {
                 self.validate_plugin_lease(&lease)?;
+                let facade =
+                    self.canonical_facade
+                        .as_ref()
+                        .ok_or_else(|| ToolError::PermissionDenied {
+                            name: entry.descriptor.name.clone(),
+                            reason: "canonical capability facade is not mounted".into(),
+                        })?;
+                facade.validate_lease(&backend_lease).map_err(|error| {
+                    ToolError::PermissionDenied {
+                        name: entry.descriptor.name.clone(),
+                        reason: format!("canonical capability lease is stale: {error:?}"),
+                    }
+                })?;
                 let result = crate::tools::result_processing::with_recovery_tools(
                     self.recovery_tools(),
                     crate::tools::adapters::mcp_adapter::invoke_handler(
@@ -1081,7 +1130,18 @@ impl ScopedToolService {
                     ),
                 )
                 .await;
+                // The plugin lease is the primary withdrawal guard: a withdrawn
+                // plugin publication must report its own reason instead of the
+                // generic capability one. The capability lease stays the last
+                // gate before the result leaves the dispatch, so a lease that
+                // went stale while the effect ran still fails closed.
                 self.validate_plugin_lease(&lease)?;
+                facade.validate_lease(&backend_lease).map_err(|error| {
+                    ToolError::PermissionDenied {
+                        name: entry.descriptor.name.clone(),
+                        reason: format!("canonical capability lease became stale: {error:?}"),
+                    }
+                })?;
                 return result;
             }
             RoutingTarget::Subagent => {

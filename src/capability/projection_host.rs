@@ -770,6 +770,13 @@ impl ProjectionHost {
         &self.inner.tree
     }
 
+    /// The existing facade mounted with this host. This is a handle-only
+    /// bridge; the host does not expose any callable registry or owner state.
+    #[must_use]
+    pub(crate) fn facade(&self) -> Arc<ZahirFacade> {
+        Arc::clone(&self.inner.facade)
+    }
+
     /// `true` once the host has been requested to close or has reached its
     /// shared completion boundary. The diagnostic control uses this gate to
     /// refuse further mutations on a closed host.
@@ -1759,6 +1766,7 @@ mod tests {
 
         let mut projection = LoopToolRegistry::new();
         projection.bind_canonical_registry(canonical_registry, Arc::new(|_| true));
+        assert!(projection.bind_canonical_facade(Arc::clone(&facade)));
         let descriptor = entry.descriptor.clone();
         projection.register(Box::new(McpRegistryTool::from_registry_entry(
             entry.handler,
@@ -2332,7 +2340,8 @@ mod tests {
         };
         assert_eq!(snap.registry_cursor, Cursor(1));
 
-        tree.bump(LifetimeScope::Runtime);
+        tree.bump(LifetimeScope::Runtime)
+            .expect("runtime bump succeeds");
 
         match recv_bounded(&mut handle).await {
             ProjectionEvent::Invalidated => {}
@@ -2904,7 +2913,8 @@ mod tests {
         let outcome = host.clone().close_and_await().await;
         assert!(outcome.source_joined && outcome.applier_joined);
         reg.register(desc("after"), fake("after")).unwrap();
-        tree.bump(LifetimeScope::Runtime);
+        tree.bump(LifetimeScope::Runtime)
+            .expect("runtime bump succeeds");
 
         let received = tokio::time::timeout(std::time::Duration::from_secs(1), handle.recv())
             .await
@@ -3026,7 +3036,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn already_running_invocation_is_not_cut() {
+    async fn revoked_lease_fails_closed_on_late_completion() {
         tokio::time::timeout(std::time::Duration::from_secs(10), async {
             let entered = Arc::new(Notify::new());
             let release = Arc::new(Notify::new());
@@ -3097,12 +3107,27 @@ mod tests {
             assert_eq!(calls.load(Ordering::SeqCst), 1);
 
             release.notify_one();
-            let output = tokio::time::timeout(std::time::Duration::from_secs(5), first)
+            let first_result = tokio::time::timeout(std::time::Duration::from_secs(5), first)
                 .await
                 .expect("first invocation did not complete within bound")
-                .expect("first invocation task panicked")
-                .expect("first invocation failed");
-            assert_eq!(output.value["tool"], "a");
+                .expect("first invocation task panicked");
+            match first_result {
+                Err(ProjectionCallError::Dispatch(ToolError::PermissionDenied {
+                    reason, ..
+                })) => {
+                    assert!(
+                        reason.contains("canonical capability lease became stale"),
+                        "late completion denial must identify a stale lease: {reason}"
+                    );
+                    assert!(
+                        reason.contains("Revoked"),
+                        "late completion denial must identify the revoked owner: {reason}"
+                    );
+                }
+                other => panic!(
+                    "late completion must fail closed with stale-lease permission denial, got {other:?}"
+                ),
+            }
             assert_eq!(calls.load(Ordering::SeqCst), 1);
         })
         .await
