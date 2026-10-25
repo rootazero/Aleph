@@ -10,9 +10,11 @@ use serde_json::{json, Value};
 use wasm_bindgen::prelude::*;
 use web_sys::Element;
 
-#[wasm_bindgen(module = "/panel_loader.js")]
+// index.html publishes this lazy bridge using Trunk's explicit public root.
+// A module import here would create a second loader under wasm-bindgen snippets.
+#[wasm_bindgen]
 extern "C" {
-    #[wasm_bindgen(catch, js_name = loadPanelModule)]
+    #[wasm_bindgen(catch, js_namespace = globalThis, js_name = __alephLoadPanelModule)]
     async fn load_module(entry: &str) -> Result<JsValue, JsValue>;
 
     type Module;

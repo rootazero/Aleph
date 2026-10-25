@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { spawnSync } from 'node:child_process';
-import { copyFile, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { copyFile, cp, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -56,6 +56,84 @@ test('relative entries use the copied loader URL and preserve its deployment pre
         assert.equal(sidebar.value, '');
     `], { encoding: 'utf8' });
     assert.equal(result.status, 0, result.stderr);
+});
+
+// Run with ALEPH_PANEL_BRIDGE_GLUE=<wasm-bindgen output>/aleph_panel.js to
+// additionally exercise the real generated WASM import, not a hand-written shim.
+for (const generated of [false, true]) test(`HTML public-root bridge${generated ? ' via generated WASM glue' : ''} stays lazy on nested routes`, {
+    skip: generated && !process.env.ALEPH_PANEL_BRIDGE_GLUE ? 'set ALEPH_PANEL_BRIDGE_GLUE to generated feature glue' : false,
+}, async (t) => {
+    const html = await readFile(new URL('../index.html', import.meta.url), 'utf8');
+    const base = html.match(/<base\b[^>]*data-trunk-public-url[^>]*>/)?.[0];
+    assert.ok(base, 'Trunk must publish its configured public URL as an explicit base');
+    const bootstrap = html.match(/<script\b[^>]*id="panel-loader-bridge"[^>]*>([\s\S]*?)<\/script>/)?.[1];
+    assert.ok(bootstrap, 'HTML must synchronously publish the loader bridge before WASM starts');
+    const root = await mkdtemp(join(tmpdir(), 'panel-bridge-'));
+    t.after(() => rm(root, { recursive: true, force: true }));
+    // Model Trunk's documented base-href substitution and copy-file output.
+    // The document itself is a deep SPA route, never the deployment root.
+    for (const prefix of ['', 'nested/panel/']) {
+        const deployed = join(root, prefix);
+        await mkdir(join(deployed, 'tabs'), { recursive: true });
+        await writeFile(join(deployed, 'package.json'), '{"type":"module"}');
+        await copyFile(new URL('../panel_loader.js', import.meta.url), join(deployed, 'panel_loader.js'));
+        await writeFile(join(deployed, 'tabs', 'pilot.mjs'), `${valid}
+            export function mount(sidebar) {
+                sidebar.value = 'root pilot';
+                return { unmount() { sidebar.value = ''; } };
+            }
+        `);
+        if (generated) {
+            const glue = process.env.ALEPH_PANEL_BRIDGE_GLUE;
+            await cp(new URL('./snippets/', pathToFileURL(glue)), join(deployed, 'snippets'), { recursive: true });
+            // Expose only a test adapter for wasm-bindgen's private imports and
+            // UTF-8 linear memory. The generated bridge callback is unmodified;
+            // do not initialize the full Leptos app (that needs a browser DOM).
+            await writeFile(join(deployed, 'glue.mjs'), `${await readFile(glue, 'utf8')}
+                export function callLoader(entry) {
+                    const bytes = new TextEncoder().encode(entry);
+                    wasm ??= { memory: new WebAssembly.Memory({ initial: 1 }) };
+                    new Uint8Array(wasm.memory.buffer).set(bytes);
+                    const binding = Object.values(__wbg_get_imports()).flatMap(Object.entries)
+                        .find(([name]) => /loadPanelModule|__alephLoadPanelModule/.test(name));
+                    if (!binding) throw Error('missing generated loader binding');
+                    return binding[1](0, bytes.length);
+                }
+            `);
+        }
+        const publicUrl = pathToFileURL(`${deployed}/`).href;
+        const result = spawnSync(process.execPath, ['--experimental-vm-modules', '--input-type=module', '-e', `
+            import assert from 'node:assert/strict';
+            import { runInThisContext } from 'node:vm';
+            const publicUrl = ${JSON.stringify(publicUrl)};
+            globalThis.document = {
+                baseURI: new URL('sessions/deep/route', publicUrl).href,
+                querySelector(selector) {
+                    assert.equal(selector, 'base');
+                    return { href: publicUrl };
+                },
+            };
+            const imports = [];
+            runInThisContext(${JSON.stringify(bootstrap)}, {
+                importModuleDynamically(url) { imports.push(String(url)); return import(String(url)); },
+            });
+            assert.equal(typeof globalThis.__alephLoadPanelModule, 'function');
+            assert.deepEqual(imports, [], 'bootstrap must not import even the loader before activation');
+            const load = ${generated
+                ? `(await import(${JSON.stringify(pathToFileURL(join(deployed, 'glue.mjs')).href)})).callLoader`
+                : 'globalThis.__alephLoadPanelModule'};
+            const module = await load('tabs/pilot.mjs');
+            assert.deepEqual(imports, [publicUrl + 'panel_loader.js']);
+            assert.deepEqual(JSON.parse(module.descriptorJson), { api_major: 1 });
+            const sidebar = {};
+            const handle = module.mount(sidebar, {}, {});
+            assert.equal(sidebar.value, 'root pilot');
+            handle.unmount();
+            assert.equal(sidebar.value, '');
+            await assert.rejects(load('tabs/missing.mjs'), error => error.code === 'ImportFailed');
+        `], { encoding: 'utf8' });
+        assert.equal(result.status, 0, result.stderr);
+    }
 });
 
 test('maps import and initializer failures to ImportFailed', async () => {
