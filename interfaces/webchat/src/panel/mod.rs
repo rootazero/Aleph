@@ -1,7 +1,11 @@
 //! Feature-gated Panel projection and browser-only lifecycle boundary.
 
+pub mod loader;
 pub mod registry;
 pub mod sdk;
+mod shell;
+
+pub use shell::PanelShell;
 
 use aleph_protocol::panel::PanelTabKey;
 use leptos::prelude::RwSignal;

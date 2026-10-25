@@ -10,6 +10,13 @@
     "projects": "项目",
     "terminal": "终端"
   },
+  "panel_spike": {
+    "tabs": "面板标签",
+    "pilot": "终端试验",
+    "close": "关闭标签",
+    "select": "请选择标签",
+    "failed": "标签加载失败"
+  },
   "session": {
     "healthy": "正常",
     "degraded": "降级",

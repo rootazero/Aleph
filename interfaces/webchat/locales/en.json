@@ -10,6 +10,13 @@
     "projects": "Projects",
     "terminal": "Terminal"
   },
+  "panel_spike": {
+    "tabs": "Panel tabs",
+    "pilot": "Terminal pilot",
+    "close": "Close tab",
+    "select": "Select a tab",
+    "failed": "Tab failed"
+  },
   "session": {
     "healthy": "Healthy",
     "degraded": "Degraded",
