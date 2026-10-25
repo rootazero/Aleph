@@ -94,6 +94,7 @@ fn canonical_scope(scope: &ScopeKey) -> ScopeKey {
 enum OwnershipRefusal {
     Revoked,
     Disposed,
+    GenerationExhausted,
 }
 
 /// Immutable lookup reference; the tree remains the sole owner authority.
@@ -149,6 +150,9 @@ impl HookMetadata {
         match self.ownership_refusal {
             Some(OwnershipRefusal::Revoked) => Some("Hook ownership revoked".into()),
             Some(OwnershipRefusal::Disposed) => Some("Hook ownership disposed lifetime".into()),
+            Some(OwnershipRefusal::GenerationExhausted) => {
+                Some("Hook ownership generation exhausted".into())
+            }
             None => None,
         }
     }
@@ -340,6 +344,7 @@ fn bind(
                 let cause = match error {
                     RegisterError::Revoked => "revoked capability",
                     RegisterError::Disposed => "disposed lifetime",
+                    RegisterError::GenerationExhausted => "ownership generation exhausted",
                 };
                 registration.metadata.effective_priority = None;
                 registration.metadata.admission = "rejected";
@@ -348,6 +353,7 @@ fn bind(
                 registration.metadata.ownership_refusal = Some(match error {
                     RegisterError::Revoked => OwnershipRefusal::Revoked,
                     RegisterError::Disposed => OwnershipRefusal::Disposed,
+                    RegisterError::GenerationExhausted => OwnershipRefusal::GenerationExhausted,
                 });
             }
         }

@@ -2014,7 +2014,12 @@ handler = "handler"
         use crate::tools::service::ToolService;
         let publication = registry.canonical_publication();
         let mut projection = crate::tools::runtime::LoopToolRegistry::new();
-        projection.bind_canonical_registry(registry, Arc::new(|_| true));
+        projection.bind_canonical_registry(Arc::clone(&registry), Arc::new(|_| true));
+        let facade = crate::capability::zahir_facade::ZahirFacade::new(
+            registry.as_ref().clone(),
+            Arc::new(crate::capability::ownership::OwnershipTree::new()),
+        );
+        assert!(projection.bind_canonical_facade(Arc::clone(&facade)));
         if let Some(entry) = publication.entry(name) {
             projection.register(Box::new(
                 crate::tools::adapters::McpRegistryTool::from_registry_entry(

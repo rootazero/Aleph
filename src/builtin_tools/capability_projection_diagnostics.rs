@@ -345,6 +345,9 @@ impl From<DiagnosticError> for DiagnosticToolError {
             DiagnosticError::AuthorityMismatch => Self::Denied {
                 reason: "diagnostic control authority mismatch".to_string(),
             },
+            DiagnosticError::GenerationExhausted => Self::Denied {
+                reason: "ownership generation exhausted".to_string(),
+            },
         }
     }
 }

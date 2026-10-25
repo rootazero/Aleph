@@ -212,12 +212,23 @@ pub enum ClaimState {
     Unknown,
 }
 
+/// Why an ownership generation mutation was refused.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+pub enum OwnershipError {
+    /// The owner generation counter reached its terminal value.
+    #[error("ownership generation exhausted")]
+    GenerationExhausted,
+}
+
 /// Why `register` refused to install a binding.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RegisterError {
     /// The id has been revoked in this tree; new bindings for it are refused
     /// permanently.
     Revoked,
+    /// The owner generation counter is exhausted; registering would reuse
+    /// `u64::MAX` and is therefore refused.
+    GenerationExhausted,
     /// The requested lifetime has been disposed; new bindings at it (or below)
     /// are refused permanently.
     Disposed,
@@ -329,6 +340,9 @@ impl OwnershipTree {
     ) -> Result<(), RegisterError> {
         let mut inner = self.inner.lock().expect("ownership mutex poisoned");
         Self::guard(&inner, &capability, lifetime)?;
+        if inner.nonce == u64::MAX {
+            return Err(RegisterError::GenerationExhausted);
+        }
         let key = Self::key(&capability, &visibility);
         let generation = OwnerGeneration(inner.nonce);
         inner.bindings.insert(
@@ -355,6 +369,12 @@ impl OwnershipTree {
         let mut inner = self.inner.lock().expect("ownership mutex poisoned");
         Self::guard(&inner, &capability, lifetime)?;
         let key = Self::key(&capability, &visibility);
+        if inner.bindings.contains_key(&key) {
+            return Ok(());
+        }
+        if inner.nonce == u64::MAX {
+            return Err(RegisterError::GenerationExhausted);
+        }
         let generation = OwnerGeneration(inner.nonce);
         inner.bindings.entry(key).or_insert_with(|| Binding {
             owner,
@@ -488,9 +508,13 @@ impl OwnershipTree {
             .contains(&scope)
     }
 
-    pub fn bump(&self, scope: LifetimeScope) -> OwnerGeneration {
+    pub fn bump(&self, scope: LifetimeScope) -> Result<OwnerGeneration, OwnershipError> {
         let mut inner = self.inner.lock().expect("ownership mutex poisoned");
-        inner.nonce = inner.nonce.saturating_add(1);
+        let next_nonce = inner
+            .nonce
+            .checked_add(1)
+            .ok_or(OwnershipError::GenerationExhausted)?;
+        inner.nonce = next_nonce;
         let generation = OwnerGeneration(inner.nonce);
         for binding in inner.bindings.values_mut() {
             if rank(binding.lifetime) <= rank(scope) {
@@ -504,7 +528,7 @@ impl OwnershipTree {
         let _ = inner
             .changes
             .send(OwnershipChange::Bumped { generation, scope });
-        generation
+        Ok(generation)
     }
 
     pub fn revoke(&self, capability: &CapabilityId) -> bool {
@@ -654,7 +678,9 @@ mod tests {
             "freshly-minted claim is Active"
         );
 
-        let new_gen = tree.bump(LifetimeScope::Session);
+        let new_gen = tree
+            .bump(LifetimeScope::Session)
+            .expect("session bump succeeds");
         assert!(
             new_gen.0 > 0,
             "bump returns the monotonic generation it just minted"
@@ -665,6 +691,132 @@ mod tests {
             ClaimState::Unknown,
             "bump(Session) invalidates the Task-bounded child binding"
         );
+    }
+
+    #[test]
+    fn bump_overflow_fails_closed_without_reusing_generation() {
+        let tree = OwnershipTree::new();
+        let cap = cap_id("overflow");
+        let vis = full_vis();
+        let owner = OwnerRef::Runtime;
+        tree.register(
+            cap.clone(),
+            owner.clone(),
+            LifetimeScope::Runtime,
+            vis.clone(),
+        )
+        .expect("register succeeds");
+
+        // Move the test fixture to the last two representable generation steps
+        // without exercising the production mutation path under test.
+        {
+            let mut inner = tree.inner.lock().expect("ownership mutex poisoned");
+            inner.nonce = u64::MAX - 2;
+            let binding = inner
+                .bindings
+                .get_mut(&OwnershipTree::key(&cap, &vis))
+                .expect("binding exists");
+            binding.generation = OwnerGeneration(u64::MAX - 2);
+        }
+        let old_lease = tree
+            .claim(&cap, &vis, owner.clone(), "old-lease".into())
+            .expect("claim succeeds before exhaustion");
+        assert_eq!(tree.claim_state(&old_lease, &cap, &vis), ClaimState::Active);
+
+        let mut changes = tree.subscribe_changes();
+        let bumped = tree
+            .bump(LifetimeScope::Runtime)
+            .expect("the final representable bump succeeds");
+        assert_eq!(bumped, OwnerGeneration(u64::MAX));
+        assert!(bumped > OwnerGeneration(u64::MAX - 2));
+        assert!(matches!(
+            wait_for_change(&mut changes, TEST_WAIT),
+            OwnershipChange::Bumped {
+                generation: OwnerGeneration(u64::MAX),
+                scope: LifetimeScope::Runtime,
+            }
+        ));
+        assert_eq!(
+            tree.claim_state(&old_lease, &cap, &vis),
+            ClaimState::Unknown,
+            "the old lease remains invalid after the final successful bump"
+        );
+
+        let old_lease_state_before_failed_bump = tree.claim_state(&old_lease, &cap, &vis);
+        let generation_before = tree.generation(&cap, &vis);
+        let binding_before = {
+            let inner = tree.inner.lock().expect("ownership mutex poisoned");
+            let binding = inner
+                .bindings
+                .get(&OwnershipTree::key(&cap, &vis))
+                .expect("binding exists");
+            (
+                binding.owner.clone(),
+                binding.lifetime,
+                binding.generation,
+                binding.claims.clone(),
+            )
+        };
+        assert_eq!(
+            tree.bump(LifetimeScope::Runtime),
+            Err(OwnershipError::GenerationExhausted)
+        );
+        assert_eq!(tree.generation(&cap, &vis), generation_before);
+        assert_eq!(tree.resolve(&cap, &vis), Some(()));
+        let binding_after = {
+            let inner = tree.inner.lock().expect("ownership mutex poisoned");
+            let binding = inner
+                .bindings
+                .get(&OwnershipTree::key(&cap, &vis))
+                .expect("binding exists");
+            (
+                binding.owner.clone(),
+                binding.lifetime,
+                binding.generation,
+                binding.claims.clone(),
+            )
+        };
+        assert_eq!(binding_after, binding_before);
+        assert_eq!(
+            tree.claim_state(&old_lease, &cap, &vis),
+            old_lease_state_before_failed_bump,
+            "a failed bump does not restore or otherwise change the old lease"
+        );
+        assert_no_change(&mut changes, TEST_QUIET);
+        assert_eq!(
+            tree.register_if_absent(
+                cap.clone(),
+                OwnerRef::Task(TaskId("incumbent-retry".into())),
+                LifetimeScope::Task,
+                vis.clone(),
+            ),
+            Ok(()),
+            "an exhausted generation still preserves an incumbent binding"
+        );
+        assert_eq!(tree.generation(&cap, &vis), generation_before);
+        let new_cap = cap_id("new-after-exhaustion");
+        assert_eq!(
+            tree.register_if_absent(
+                new_cap.clone(),
+                OwnerRef::Task(TaskId("new-binding".into())),
+                LifetimeScope::Task,
+                vis.clone(),
+            ),
+            Err(RegisterError::GenerationExhausted),
+            "an exhausted generation cannot create a new binding"
+        );
+        assert_eq!(tree.resolve(&new_cap, &vis), None);
+        assert_eq!(
+            tree.register(
+                cap.clone(),
+                OwnerRef::Task(TaskId("replacement".into())),
+                LifetimeScope::Task,
+                vis.clone(),
+            ),
+            Err(RegisterError::GenerationExhausted),
+            "an exhausted generation cannot be reused by a replacement"
+        );
+        assert_eq!(tree.generation(&cap, &vis), generation_before);
     }
 
     #[test]
@@ -745,7 +897,7 @@ mod tests {
         let claim = tree
             .claim(&cap, &vis, OwnerRef::Runtime, "parent".into())
             .expect("claim");
-        tree.bump(LifetimeScope::Task);
+        tree.bump(LifetimeScope::Task).expect("task bump succeeds");
         assert_eq!(tree.claim_state(&claim, &cap, &vis), ClaimState::Active);
     }
 
@@ -769,7 +921,8 @@ mod tests {
                 "child".into(),
             )
             .expect("claim");
-        tree.bump(LifetimeScope::Runtime);
+        tree.bump(LifetimeScope::Runtime)
+            .expect("runtime bump succeeds");
         assert_eq!(tree.claim_state(&claim, &cap, &vis), ClaimState::Unknown);
     }
 
@@ -868,7 +1021,9 @@ mod tests {
         )
         .expect("register succeeds");
         assert_eq!(tree.generation(&cap, &vis), Some(OwnerGeneration(0)));
-        let bumped = tree.bump(LifetimeScope::Task);
+        let bumped = tree
+            .bump(LifetimeScope::Task)
+            .expect("normal bump succeeds");
         assert_eq!(bumped, OwnerGeneration(1));
         assert_eq!(tree.generation(&cap, &vis), Some(OwnerGeneration(1)));
     }
@@ -949,7 +1104,9 @@ mod tests {
         let bumper = thread::spawn(move || {
             start_rx.recv().expect("start");
             loop {
-                bumper_tree.bump(LifetimeScope::Runtime);
+                bumper_tree
+                    .bump(LifetimeScope::Runtime)
+                    .expect("bump before overflow");
                 if stop_rx.try_recv().is_ok() {
                     break;
                 }
@@ -1374,7 +1531,9 @@ mod tests {
             tx.send((change, gen_a, gen_b)).expect("send to main");
         });
 
-        let new_gen = tree.bump(LifetimeScope::Runtime);
+        let new_gen = tree
+            .bump(LifetimeScope::Runtime)
+            .expect("runtime bump succeeds");
 
         let (change, observed_gen_a, observed_gen_b) = rx_chan
             .recv_timeout(TEST_WAIT)
@@ -1550,7 +1709,9 @@ mod tests {
         );
 
         // Bump: the event carries the bumped generation and the scope bumped.
-        let new_gen = tree.bump(LifetimeScope::Runtime);
+        let new_gen = tree
+            .bump(LifetimeScope::Runtime)
+            .expect("runtime bump succeeds");
         let change3 = wait_for_change(&mut rx, TEST_WAIT);
         match change3 {
             OwnershipChange::Bumped { generation, scope } => {
@@ -1610,7 +1771,9 @@ mod tests {
         // matches the generation carried in the event payload.
         let mut rx1 = tree.subscribe_changes();
         let mut rx2 = tree.subscribe_changes();
-        let new_gen = tree.bump(LifetimeScope::Runtime);
+        let new_gen = tree
+            .bump(LifetimeScope::Runtime)
+            .expect("runtime bump succeeds");
 
         let change1 = match rx1.try_recv() {
             Ok(c) => c,

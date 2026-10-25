@@ -142,7 +142,8 @@ async fn publication_and_rebuild_preserve_incumbent_owner_generation_claim_and_l
         visibility.clone(),
     )
     .unwrap();
-    tree.bump(LifetimeScope::Runtime);
+    tree.bump(LifetimeScope::Runtime)
+        .expect("runtime bump succeeds");
     let generation = tree.generation(&id, &visibility).unwrap();
     let claim = tree
         .claim(&id, &visibility, owner.clone(), "incumbent-request".into())

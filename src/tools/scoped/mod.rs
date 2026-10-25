@@ -107,7 +107,10 @@ pub struct ScopedToolService {
     /// Optional link to the unique canonical capability store, not a second map.
     /// `None` is projection-only fixture construction; production must bind the
     /// store before building either primary or subagent parent views.
-    canonical_registry: Option<Arc<crate::tools::registry::ToolHandlerRegistry>>,
+    pub(super) canonical_registry: Option<Arc<crate::tools::registry::ToolHandlerRegistry>>,
+    /// Handle to the mounted Zahir facade for canonical lease validation.
+    /// This is a reference to the existing authority, never a second source.
+    pub(super) canonical_facade: Option<Arc<crate::capability::zahir_facade::ZahirFacade>>,
     visible_mcp_servers: Option<crate::tools::handlers::McpServerFilter>,
     pub(super) allowed: BTreeSet<String>,
     pub(super) subagent_tool: Option<Arc<SubagentTool>>,

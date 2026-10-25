@@ -27,7 +27,7 @@ use std::time::Duration;
 
 use crate::capability::descriptor::CapabilityId;
 use crate::capability::facade::Cursor;
-use crate::capability::ownership::{BoundRevoke, OwnerGeneration, OwnershipTree};
+use crate::capability::ownership::{BoundRevoke, OwnerGeneration, OwnershipError, OwnershipTree};
 use crate::capability::projection_host::{ProjectionHost, ProjectionShutdownOutcome};
 
 /// Which production-path block to hold. Re-exported from [`ProjectionHost`]
@@ -97,6 +97,8 @@ pub enum DiagnosticError {
     CloseTimeout { elapsed_ms: u64 },
     /// Operation attempted on a host that has reached its completion boundary.
     Closed,
+    /// The ownership generation counter has reached its terminal value.
+    GenerationExhausted,
     /// `revoke_tool` could not find a binding for the named tool.
     UnknownTool { name: String },
     /// The supplied owner tree is not (by `Arc` identity) the tree the host
@@ -149,9 +151,11 @@ impl DiagnosticControl {
         {
             return Err(DiagnosticError::Closed);
         }
-        Ok(self
-            .tree
-            .bump(crate::capability::ownership::LifetimeScope::Runtime))
+        self.tree
+            .bump(crate::capability::ownership::LifetimeScope::Runtime)
+            .map_err(|error| match error {
+                OwnershipError::GenerationExhausted => DiagnosticError::GenerationExhausted,
+            })
     }
 
     /// Revoke the tool binding for `tool_name` on the SAME tree. The
@@ -357,7 +361,9 @@ mod tests {
         // The tree nonce is per-instance: a control bump followed by a direct
         // bump on the caller's tree is consecutive only if both hit one tree.
         let via_ctrl = ctrl.bump_runtime().unwrap();
-        let direct = tree.bump(crate::capability::ownership::LifetimeScope::Runtime);
+        let direct = tree
+            .bump(crate::capability::ownership::LifetimeScope::Runtime)
+            .expect("direct bump succeeds");
         assert_eq!(
             direct.0,
             via_ctrl.0 + 1,
