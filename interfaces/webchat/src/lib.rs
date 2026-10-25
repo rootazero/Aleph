@@ -33,6 +33,8 @@ mod i18n_census;
 pub mod memory_graph;
 pub mod models;
 pub mod panic_overlay;
+#[cfg(feature = "panel-tab-spike")]
+pub mod panel;
 pub mod platform;
 pub mod platform_host;
 pub mod preset_providers;
