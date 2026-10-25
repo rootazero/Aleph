@@ -338,9 +338,18 @@ pub fn TerminalView() -> impl IntoView {
                 })));
             }
 
-            let allow_spawn = first_load.get_value();
+            // This read happens AFTER two awaits, so the owning view may
+            // already be disposed — a plain `get_value()` panics the whole
+            // panel there. `try_get_value()` is the sanctioned form (see
+            // `disposed_reads`): a disposed owner means this mount is gone,
+            // so there is nothing left to refresh.
+            let Some(allow_spawn) = first_load.try_get_value() else {
+                return;
+            };
             refresh_tabs(allow_spawn, !allow_spawn);
-            first_load.set_value(false);
+            // Same reason for the write: `set_value()` panics on a disposed
+            // owner, and `try_update_value()` is the no-panic form.
+            first_load.try_update_value(|first| *first = false);
         });
     });
 
