@@ -188,6 +188,12 @@ impl ConfirmDenial {
 
 /// Which dispatch branch `execute_gated` is routing into. Cloning the owned
 /// Arc pair keeps every attempt on the same captured generation.
+// The `Canonical` arm carries the backend lease by value so the lease that
+// cleared the gate is the same one the effect validates — a swap between the
+// two is not expressible. That makes the arm large; the enum is built once per
+// dispatch and never lives in a long-lived collection, so the size costs one
+// stack slot, and boxing it would add an allocation to the dispatch path.
+#[allow(clippy::large_enum_variant)]
 #[derive(Clone)]
 enum RoutingTarget {
     Canonical(RegistryEntry, CanonicalEntryLease, BackendLease),
@@ -1124,13 +1130,18 @@ impl ScopedToolService {
                     ),
                 )
                 .await;
+                // The plugin lease is the primary withdrawal guard: a withdrawn
+                // plugin publication must report its own reason instead of the
+                // generic capability one. The capability lease stays the last
+                // gate before the result leaves the dispatch, so a lease that
+                // went stale while the effect ran still fails closed.
+                self.validate_plugin_lease(&lease)?;
                 facade.validate_lease(&backend_lease).map_err(|error| {
                     ToolError::PermissionDenied {
                         name: entry.descriptor.name.clone(),
                         reason: format!("canonical capability lease became stale: {error:?}"),
                     }
                 })?;
-                self.validate_plugin_lease(&lease)?;
                 return result;
             }
             RoutingTarget::Subagent => {

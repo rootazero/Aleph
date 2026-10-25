@@ -2097,7 +2097,16 @@ handler = "handler"
         let publication = canonical.canonical_publication();
         let visible: crate::tools::handlers::McpServerFilter = Arc::new(|_| true);
         let mut projection = crate::tools::runtime::LoopToolRegistry::new();
-        projection.bind_canonical_registry(canonical, visible.clone());
+        projection.bind_canonical_registry(Arc::clone(&canonical), visible.clone());
+        // Canonical dispatch validates the captured backend lease through the
+        // mounted facade; without one every canonical call fails closed before
+        // the guest runs.
+        assert!(projection.bind_canonical_facade(
+            crate::capability::zahir_facade::ZahirFacade::new(
+                canonical.as_ref().clone(),
+                Arc::new(crate::capability::ownership::OwnershipTree::new()),
+            ),
+        ));
         let entry = publication
             .entry("lazy_tool")
             .expect("published owner tool");

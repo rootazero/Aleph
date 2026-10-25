@@ -702,7 +702,15 @@ mod tests {
         assert_eq!(calls.load(Ordering::SeqCst), 0);
 
         let mut projection = crate::tools::runtime::LoopToolRegistry::new();
-        projection.bind_canonical_registry(registry, Arc::clone(&visible));
+        projection.bind_canonical_registry(Arc::clone(&registry), Arc::clone(&visible));
+        // Canonical dispatch validates the captured backend lease through the
+        // mounted facade; without one the call fails closed before the handler.
+        assert!(projection.bind_canonical_facade(
+            crate::capability::zahir_facade::ZahirFacade::new(
+                registry.as_ref().clone(),
+                Arc::new(crate::capability::ownership::OwnershipTree::new()),
+            ),
+        ));
         projection.register(Box::new(tool));
         let service =
             crate::tools::scoped::ScopedToolService::new(Arc::new(projection), Default::default())
@@ -774,7 +782,15 @@ mod tests {
         assert_eq!(calls.load(Ordering::SeqCst), 0);
 
         let mut projection = crate::tools::runtime::LoopToolRegistry::new();
-        projection.bind_canonical_registry(registry, Arc::clone(&visible));
+        projection.bind_canonical_registry(Arc::clone(&registry), Arc::clone(&visible));
+        // Canonical dispatch validates the captured backend lease through the
+        // mounted facade; without one the call fails closed before the handler.
+        assert!(projection.bind_canonical_facade(
+            crate::capability::zahir_facade::ZahirFacade::new(
+                registry.as_ref().clone(),
+                Arc::new(crate::capability::ownership::OwnershipTree::new()),
+            ),
+        ));
         projection.register(Box::new(tool));
         let service =
             crate::tools::scoped::ScopedToolService::new(Arc::new(projection), Default::default())

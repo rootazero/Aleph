@@ -5660,8 +5660,7 @@ mod a3 {
                 ),
             ));
         }
-        let svc = ScopedToolService::new(StdArc::new(inner), BTreeSet::new());
-        svc
+        ScopedToolService::new(StdArc::new(inner), BTreeSet::new())
     }
 
     fn service_with_facade(
@@ -7133,6 +7132,16 @@ mod r1a {
         let mut inner = LoopToolRegistry::new();
         let visible: crate::tools::handlers::McpServerFilter = StdArc::new(|_| true);
         inner.bind_canonical_registry(StdArc::clone(registry), visible);
+        // Canonical dispatch validates the captured backend lease through the
+        // mounted facade, so the fixture binds one backed by this registry —
+        // otherwise every canonical call fails closed with "facade is not
+        // mounted" before the handler runs.
+        assert!(
+            inner.bind_canonical_facade(crate::capability::zahir_facade::ZahirFacade::new(
+                registry.as_ref().clone(),
+                StdArc::new(crate::capability::ownership::OwnershipTree::new()),
+            ),)
+        );
         inner.register(Box::new(projection));
         ScopedToolService::new(StdArc::new(inner), BTreeSet::new())
     }

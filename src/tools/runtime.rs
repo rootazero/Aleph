@@ -293,6 +293,10 @@ impl LoopToolRegistry {
         self.visible_mcp_servers = Some(visible);
     }
 
+    /// Bind an explicitly mounted facade to the registry it claims to back.
+    #[allow(dead_code)] // used by tests only — the production path binds the
+                        // facade through `bind_canonical_registry`, so a
+                        // non-test build sees no caller for this setter.
     pub(crate) fn bind_canonical_facade(
         &mut self,
         facade: crate::sync_primitives::Arc<crate::capability::zahir_facade::ZahirFacade>,
