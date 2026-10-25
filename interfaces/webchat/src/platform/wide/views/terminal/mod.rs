@@ -338,7 +338,9 @@ pub fn TerminalView() -> impl IntoView {
                 })));
             }
 
-            let allow_spawn = first_load.get_value();
+            let Some(allow_spawn) = first_load.try_get_value() else {
+                return;
+            };
             refresh_tabs(allow_spawn, !allow_spawn);
             first_load.set_value(false);
         });
