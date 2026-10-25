@@ -1386,11 +1386,10 @@ mod theme_render_tests;
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        model_caption, should_redraw_after_tick, tui_event_subscribe_params, AppState, ModelCaption,
-    };
+    use super::{model_caption, should_redraw_after_tick, ModelCaption};
+    use aleph_client::CliError;
+    use aleph_protocol::jsonrpc::{ADMIN_REQUIRED_MESSAGE, AUTH_REQUIRED};
     use aleph_protocol::providers::ProviderInfo;
-    use serde_json::json;
 
     /// Keep output-mode changes inside the alternate-screen lifetime, including
     /// setup failures and panics. This contract needs no live terminal.
