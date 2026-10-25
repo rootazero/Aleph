@@ -76,15 +76,21 @@ impl FeishuRuntime {
         Ok(())
     }
 
-    pub async fn stop(&mut self) {
+    pub async fn stop(&mut self) -> Result<(), tokio::task::JoinError> {
         if let Some(tx) = self.shutdown_tx.take() {
             let _ = tx.send(true);
         }
-        if let Some(task) = self.task.take() {
+        let result = if let Some(task) = self.task.take() {
             task.abort();
-            let _ = task.await;
-        }
+            match task.await {
+                Err(error) if !error.is_cancelled() => Err(error),
+                _ => Ok(()),
+            }
+        } else {
+            Ok(())
+        };
         self.state.set(RuntimeState::Disconnected);
+        result
     }
 }
 
@@ -93,5 +99,97 @@ impl Drop for FeishuRuntime {
         if let Some(task) = &self.task {
             task.abort();
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::gateway::interfaces::feishu::auth::TokenManager;
+    use futures_util::StreamExt;
+    use wiremock::{matchers::path, Mock, MockServer, ResponseTemplate};
+
+    #[tokio::test]
+    async fn stop_joins_the_websocket_loop_and_closes_its_socket() {
+        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .unwrap();
+        let ws_url = format!("ws://{}", listener.local_addr().unwrap());
+        let peer = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            tokio_tungstenite::accept_async(stream).await.unwrap()
+        });
+        let server = MockServer::start().await;
+        Mock::given(path("/open-apis/auth/v3/app_access_token/internal"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "code": 0, "msg": "ok", "app_access_token": "token", "expire": 7200
+            })))
+            .mount(&server)
+            .await;
+        Mock::given(path("/open-apis/callback/ws/endpoint"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "code": 0, "msg": "ok", "data": {"URL": ws_url}
+            })))
+            .mount(&server)
+            .await;
+        let http = reqwest::Client::new();
+        let api = Arc::new(FeishuApi::new(
+            Arc::new(TokenManager::new(
+                "id",
+                "secret",
+                &server.uri(),
+                http.clone(),
+            )),
+            &server.uri(),
+            http,
+        ));
+        let config = serde_json::from_value(serde_json::json!({
+            "app_id": "id", "app_secret": "secret"
+        }))
+        .unwrap();
+        let mut runtime = FeishuRuntime::new(api, config, "bot".into());
+        runtime
+            .start(
+                crate::gateway::channel::ChannelId::new("ws-stop"),
+                crate::gateway::channel::ChannelState::new(8).sender(),
+            )
+            .await
+            .unwrap();
+        let mut socket = tokio::time::timeout(std::time::Duration::from_secs(2), peer)
+            .await
+            .unwrap()
+            .unwrap();
+        let task = runtime.task.as_ref().unwrap().abort_handle();
+        runtime.stop().await.unwrap();
+        assert!(task.is_finished());
+        assert_eq!(runtime.connection_state(), RuntimeState::Disconnected);
+        let closed = tokio::time::timeout(std::time::Duration::from_secs(2), socket.next())
+            .await
+            .expect("joined WS loop must close its socket");
+        assert!(closed.is_none() || closed.unwrap().is_err());
+    }
+
+    #[tokio::test]
+    async fn stop_reports_a_panicked_ws_task() {
+        let http = reqwest::Client::new();
+        let api = Arc::new(FeishuApi::new(
+            Arc::new(TokenManager::new(
+                "id",
+                "secret",
+                "http://127.0.0.1:1",
+                http.clone(),
+            )),
+            "http://127.0.0.1:1",
+            http,
+        ));
+        let config = serde_json::from_value(serde_json::json!({
+            "app_id": "id", "app_secret": "secret"
+        }))
+        .unwrap();
+        let mut runtime = FeishuRuntime::new(api, config, "bot".into());
+        runtime.task = Some(tokio::spawn(async { panic!("simulated WS panic") }));
+        tokio::task::yield_now().await;
+        assert!(runtime.stop().await.unwrap_err().is_panic());
+        assert_eq!(runtime.connection_state(), RuntimeState::Disconnected);
     }
 }

@@ -6,7 +6,7 @@
 
 use super::api::FeishuApi;
 use super::config::FeishuConfig;
-use crate::capability::provider::ProviderHandle;
+use crate::capability::provider::{ProviderCallError, ProviderHandle};
 use crate::sync_primitives::{Arc, Mutex as StdMutex};
 use std::collections::HashMap;
 use std::sync::{OnceLock, Weak};
@@ -28,23 +28,46 @@ fn lock() -> std::sync::MutexGuard<'static, HashMap<String, Live>> {
         .unwrap_or_else(|e| e.into_inner())
 }
 
-// Called only inside ProviderHandle::with_ready_commit (provider -> cache).
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum PublicationError {
+    #[error(transparent)]
+    Provider(#[from] ProviderCallError),
+    #[error("Feishu API instance/generation does not match publication")]
+    ApiScopeMismatch,
+    #[error("Feishu publication still belongs to another instance/generation")]
+    Occupied,
+}
+
+/// Commit publication and Starting -> Ready under the same provider lock.
+/// Lock order is provider -> cache; the old owner must withdraw before replacement.
 pub(crate) fn publish(
     channel_id: &str,
     api: &Arc<FeishuApi>,
     config: &FeishuConfig,
     provider: &ProviderHandle,
     generation: u64,
-) {
-    lock().insert(
-        channel_id.to_owned(),
-        Live {
-            api: Arc::downgrade(api),
-            config: config.clone(),
-            provider: provider.clone(),
-            generation,
-        },
-    );
+) -> Result<(), PublicationError> {
+    provider.with_ready_commit(generation, |_| {
+        if !api.has_scope(provider, generation) {
+            return Err(PublicationError::ApiScopeMismatch);
+        }
+        let mut table = lock();
+        if table.get(channel_id).is_some_and(|live| {
+            !live.provider.same_instance(provider) || live.generation != generation
+        }) {
+            return Err(PublicationError::Occupied);
+        }
+        table.insert(
+            channel_id.to_owned(),
+            Live {
+                api: Arc::downgrade(api),
+                config: config.clone(),
+                provider: provider.clone(),
+                generation,
+            },
+        );
+        Ok(())
+    })
 }
 
 /// An outgoing instance/generation cannot withdraw its replacement.
@@ -62,6 +85,10 @@ pub(crate) fn get(channel_id: &str) -> Option<(Arc<FeishuApi>, FeishuConfig)> {
     // Never hold cache -> provider locks: publication takes the reverse order.
     let live = lock().get(channel_id).cloned()?;
     if live.provider.acquire_call(live.generation).is_err() {
+        // Remove only this exact provider instance/generation. If a replacement
+        // won the publication slot while the stale entry was being inspected,
+        // `withdraw` leaves that replacement intact.
+        withdraw(channel_id, &live.provider, live.generation);
         return None;
     }
     if let Some(api) = live.api.upgrade() {
@@ -76,7 +103,7 @@ pub(crate) fn get(channel_id: &str) -> Option<(Arc<FeishuApi>, FeishuConfig)> {
 mod tests {
     use super::*;
     use crate::capability::provider::{
-        ProviderCallError, ProviderId, ProviderLifecycle, ProviderState, ProviderTransport,
+        ProviderId, ProviderLifecycle, ProviderState, ProviderTransport,
     };
     use crate::gateway::interfaces::feishu::auth::TokenManager;
 
@@ -114,11 +141,7 @@ mod tests {
         assert!(get("publication-fenced").is_none());
         // Capture outside the commit callback: it must not re-enter the handle.
         let generation = p.generation();
-        p.with_ready_commit(generation, |_| {
-            publish("publication-fenced", &api, &cfg, &p, generation);
-            Ok::<_, ProviderCallError>(())
-        })
-        .unwrap();
+        publish("publication-fenced", &api, &cfg, &p, generation).unwrap();
         let (_, found) = get("publication-fenced").unwrap();
         assert_eq!(found.app_secret, "hydrated-from-vault");
         assert!(!found.streaming);
@@ -132,28 +155,132 @@ mod tests {
     }
 
     #[test]
+    fn publication_rejects_wrong_api_scope_and_live_incumbent() {
+        let (api, cfg, provider) = fixture("publication-scope");
+        let (other_api, _, other) = fixture("publication-scope");
+        let generation = provider.generation();
+        assert!(matches!(
+            publish("publication-scope", &other_api, &cfg, &provider, generation),
+            Err(PublicationError::ApiScopeMismatch)
+        ));
+        assert_eq!(provider.state(), ProviderState::Starting);
+        assert!(get("publication-scope").is_none());
+        publish("publication-scope", &api, &cfg, &provider, generation).unwrap();
+        assert!(matches!(
+            publish(
+                "publication-scope",
+                &other_api,
+                &cfg,
+                &other,
+                other.generation()
+            ),
+            Err(PublicationError::Occupied)
+        ));
+        assert_eq!(other.state(), ProviderState::Starting);
+        assert!(Arc::ptr_eq(&get("publication-scope").unwrap().0, &api));
+        withdraw("publication-scope", &other, other.generation());
+        assert!(get("publication-scope").is_some());
+        withdraw("publication-scope", &provider, generation);
+    }
+
+    #[test]
+    fn old_generation_cannot_publish_or_withdraw_after_restart() {
+        let (old, cfg, provider) = fixture("publication-restart");
+        let first = provider.generation();
+        publish("publication-restart", &old, &cfg, &provider, first).unwrap();
+        provider.transition(ProviderState::Stopping).unwrap();
+        withdraw("publication-restart", &provider, first);
+        provider.transition(ProviderState::Stopped).unwrap();
+        provider.transition(ProviderState::Starting).unwrap();
+        let next = provider.generation();
+        assert!(publish("publication-restart", &old, &cfg, &provider, first).is_err());
+        assert!(matches!(
+            publish("publication-restart", &old, &cfg, &provider, next),
+            Err(PublicationError::ApiScopeMismatch)
+        ));
+        let http = reqwest::Client::new();
+        let new = Arc::new(
+            FeishuApi::new(
+                Arc::new(TokenManager::new(
+                    "id",
+                    "secret",
+                    "http://127.0.0.1:1",
+                    http.clone(),
+                )),
+                "http://127.0.0.1:1",
+                http,
+            )
+            .with_provider(provider.clone(), next),
+        );
+        publish("publication-restart", &new, &cfg, &provider, next).unwrap();
+        assert!(publish("publication-restart", &old, &cfg, &provider, first).is_err());
+        withdraw("publication-restart", &provider, first);
+        assert!(Arc::ptr_eq(&get("publication-restart").unwrap().0, &new));
+        withdraw("publication-restart", &provider, next);
+    }
+
+    #[test]
+    fn late_publish_cannot_overwrite_replacement() {
+        let (old, cfg, provider) = fixture("late-publication-provider");
+        let generation = provider.generation();
+        publish("late-publication", &old, &cfg, &provider, generation).unwrap();
+        provider.transition(ProviderState::Stopping).unwrap();
+        withdraw("late-publication", &provider, generation);
+        let (new, cfg, replacement) = fixture("late-publication-provider");
+        let next = replacement.generation();
+        publish("late-publication", &new, &cfg, &replacement, next).unwrap();
+
+        // Both instances deliberately have the same textual id and generation.
+        assert!(publish("late-publication", &old, &cfg, &provider, generation).is_err());
+        withdraw("late-publication", &provider, generation);
+        assert!(Arc::ptr_eq(&get("late-publication").unwrap().0, &new));
+        withdraw("late-publication", &replacement, next);
+    }
+
+    #[test]
+    fn stale_get_removes_only_its_publication_and_allows_republish() {
+        let (old, cfg, provider) = fixture("stale-get-old");
+        let generation = provider.generation();
+        publish("stale-get", &old, &cfg, &provider, generation).unwrap();
+        provider.transition(ProviderState::Stopping).unwrap();
+
+        // The stale lookup must clear the old publication so the channel can be
+        // published again, while retaining instance/generation fencing for
+        // late cleanup from the old owner.
+        assert!(get("stale-get").is_none());
+        assert!(!lock().contains_key("stale-get"));
+
+        let (replacement, replacement_cfg, replacement_provider) = fixture("stale-get-new");
+        let replacement_generation = replacement_provider.generation();
+        publish(
+            "stale-get",
+            &replacement,
+            &replacement_cfg,
+            &replacement_provider,
+            replacement_generation,
+        )
+        .unwrap();
+        withdraw("stale-get", &provider, generation);
+        assert!(Arc::ptr_eq(&get("stale-get").unwrap().0, &replacement));
+        withdraw("stale-get", &replacement_provider, replacement_generation);
+    }
+    #[test]
     fn late_withdraw_and_dead_weak_cannot_remove_replacement() {
         let (old, cfg, p) = fixture("old-provider");
         let generation = p.generation();
-        p.with_ready_commit(generation, |_| {
-            publish("replacement-publication", &old, &cfg, &p, generation);
-            Ok::<_, ProviderCallError>(())
-        })
-        .unwrap();
+        publish("replacement-publication", &old, &cfg, &p, generation).unwrap();
+        p.transition(ProviderState::Stopping).unwrap();
+        withdraw("replacement-publication", &p, generation);
         let (new, cfg, replacement) = fixture("new-provider");
         let new_generation = replacement.generation();
-        replacement
-            .with_ready_commit(new_generation, |_| {
-                publish(
-                    "replacement-publication",
-                    &new,
-                    &cfg,
-                    &replacement,
-                    new_generation,
-                );
-                Ok::<_, ProviderCallError>(())
-            })
-            .unwrap();
+        publish(
+            "replacement-publication",
+            &new,
+            &cfg,
+            &replacement,
+            new_generation,
+        )
+        .unwrap();
         withdraw("replacement-publication", &p, generation);
         assert!(Arc::ptr_eq(
             &get("replacement-publication").unwrap().0,

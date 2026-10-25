@@ -27,7 +27,7 @@
 use crate::sync_primitives::{Arc, Mutex};
 use std::collections::HashMap;
 use std::time::Duration;
-use tokio::sync::{broadcast, RwLock};
+use tokio::sync::{broadcast, Mutex as AsyncMutex, RwLock};
 use tracing::{error, info, warn};
 
 use super::channel::CoreSmsChannelExt;
@@ -95,6 +95,9 @@ pub(crate) struct Attempt {
 /// registry can actually own.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DesiredChannelState {
+    /// Configured enabled at boot, but the first start has not yet committed.
+    /// This is an internal boot intent and is not a restart candidate.
+    Enabled,
     /// `start_channel` / `restart_channel` succeeded and nothing stopped it
     /// since: the channel owes us traffic.
     Running,
@@ -205,6 +208,10 @@ pub struct ChannelRegistry {
     /// `stop` / `delete` / runtime `create` change what HTTP actually serves.
     /// Handed to `GatewayServer::set_webhook_mounts` at boot.
     webhook_mounts: Arc<super::webhook_receiver::WebhookMountTable>,
+    /// Serializes registration/replacement with lifecycle snapshots and starts.
+    /// This is a synchronization boundary only; channel maps remain the sole
+    /// instance authority and desired_state remains the sole intent authority.
+    lifecycle_sync: AsyncMutex<()>,
     /// Per-channel *intent* (see [`DesiredChannelState`]). Written only by the
     /// lifecycle methods on this type, read by the health monitor.
     desired_state: RwLock<HashMap<ChannelId, DesiredChannelState>>,
@@ -225,6 +232,7 @@ impl ChannelRegistry {
             send_retry: SendRetryPolicy::default(),
             delivery_store: None,
             webhook_mounts: Arc::new(super::webhook_receiver::WebhookMountTable::new()),
+            lifecycle_sync: AsyncMutex::new(()),
             desired_state: RwLock::new(HashMap::new()),
         }
     }
@@ -285,6 +293,7 @@ impl ChannelRegistry {
     /// `handlers::channel::create_channel_from_config`.
     #[allow(dead_code)]
     pub async fn create_channel(&self, config: ChannelConfig) -> ChannelResult<ChannelId> {
+        let _lifecycle = self.lifecycle_sync.lock().await;
         let factories = self.factories.read().await;
         let factory = factories.get(&config.channel_type).ok_or_else(|| {
             ChannelError::ConfigError(format!(
@@ -300,14 +309,46 @@ impl ChannelRegistry {
 
         drop(factories);
 
+        // Observe the replacement policy before touching the outgoing Feishu
+        // runtime, webhook mount, or publication. DeliveryStore deliberately
+        // latches observation failures fail closed; returning here therefore
+        // retains the incumbent's live state while preserving that durable
+        // safety fence.
+        if let Err(error) =
+            self.observe_delivery_policy(&channel_id, channel.outbound_delivery_policy())
+        {
+            warn!(
+                channel = %channel_id,
+                phase = "replacement_policy_observation",
+                incumbent = "retained",
+                runtime = "untouched",
+                publication = "untouched",
+                admission = "fail_closed_by_delivery_store",
+                %error,
+                "channel replacement refused before Feishu teardown"
+            );
+            return Err(error);
+        }
+
+        self.stop_outgoing_feishu(&channel_id).await?;
+
         // Same reasoning as `register`: the freshly-created instance has not
         // started, so drop whatever the outgoing instance at this id left
         // mounted before the replacement lands.
         self.webhook_mounts.unmount_channel(&channel_id).await;
 
         let mut channels = self.channels.write().await;
-        self.observe_delivery_policy(&channel_id, channel.outbound_delivery_policy())?;
         channels.insert(channel_id.clone(), Arc::new(RwLock::new(channel)));
+        drop(channels);
+
+        // Preserve the configured boot intent: a successful replacement is
+        // selected by `start_all` only when its config explicitly enables it.
+        let boot_intent = if config.enabled {
+            DesiredChannelState::Enabled
+        } else {
+            DesiredChannelState::Stopped
+        };
+        self.set_desired(&channel_id, boot_intent).await;
 
         info!(
             "Created channel: {} (type: {})",
@@ -316,9 +357,66 @@ impl ChannelRegistry {
         Ok(channel_id)
     }
 
-    /// Register an existing channel instance
+    /// Register an existing channel instance with the normal boot-enabled intent.
+    ///
+    /// Public callers historically relied on `start_all` starting every channel
+    /// they registered. Always writing `Enabled` preserves that contract and
+    /// deliberately does not inherit a replaced instance's prior intent.
     pub async fn register(&self, channel: Box<dyn Channel>) -> ChannelId {
+        self.register_with_boot_intent(channel, DesiredChannelState::Enabled)
+            .await
+    }
+
+    /// Register a channel with an explicit boot-time enabled decision owned by
+    /// this registry. The requested intent is written in the same registration
+    /// operation, so a disabled boot registration is never briefly enabled.
+    pub async fn register_for_boot(&self, channel: Box<dyn Channel>, enabled: bool) -> ChannelId {
+        self.register_with_boot_intent(
+            channel,
+            if enabled {
+                DesiredChannelState::Enabled
+            } else {
+                DesiredChannelState::Stopped
+            },
+        )
+        .await
+    }
+
+    async fn register_with_boot_intent(
+        &self,
+        channel: Box<dyn Channel>,
+        boot_intent: DesiredChannelState,
+    ) -> ChannelId {
+        let _lifecycle = self.lifecycle_sync.lock().await;
         let channel_id = channel.id().clone();
+
+        // Observe the replacement policy before touching the outgoing Feishu
+        // runtime, webhook mount, or publication. DeliveryStore deliberately
+        // latches observation failures fail closed; returning here therefore
+        // retains the incumbent's live state while preserving that durable
+        // safety fence.
+        if let Err(error) =
+            self.observe_delivery_policy(&channel_id, channel.outbound_delivery_policy())
+        {
+            warn!(
+                channel = %channel_id,
+                phase = "replacement_policy_observation",
+                incumbent = "retained",
+                runtime = "untouched",
+                publication = "untouched",
+                admission = "fail_closed_by_delivery_store",
+                %error,
+                "channel replacement refused before Feishu teardown"
+            );
+            return channel_id;
+        }
+
+        if let Err(error) = self.stop_outgoing_feishu(&channel_id).await {
+            // This legacy API returns only an id. Preserve the failed owner and
+            // its structured residual instead of dropping failure evidence.
+            warn!(channel = %channel_id, %error, "Feishu replacement refused; incumbent retained");
+            return channel_id;
+        }
 
         // A replacement instance has not started, so it owns no handler. Drop
         // whatever the outgoing instance left mounted, or the route keeps
@@ -326,18 +424,34 @@ impl ChannelRegistry {
         self.webhook_mounts.unmount_channel(&channel_id).await;
 
         let mut channels = self.channels.write().await;
-        if self
-            .observe_delivery_policy(&channel_id, channel.outbound_delivery_policy())
-            .is_err()
-        {
-            // The public registration signature is unchanged. A failed store
-            // observation latches the channel closed in the store; replay and
-            // fresh admission still refuse it after unregister.
-            warn!(channel = %channel_id, "delivery policy observation failed; replay/admission fenced");
-        }
         channels.insert(channel_id.clone(), Arc::new(RwLock::new(channel)));
+        drop(channels);
+
+        // This unconditional write is intentional: replacement gets the new
+        // registration's boot intent rather than inheriting the old instance's.
+        self.desired_state
+            .write()
+            .await
+            .insert(channel_id.clone(), boot_intent);
         info!("Registered channel: {}", channel_id);
         channel_id
+    }
+
+    /// Tear down only the concrete Feishu slice before replacing/removing it.
+    /// Called with lifecycle_sync held; never hold the channel map across I/O.
+    async fn stop_outgoing_feishu(&self, channel_id: &ChannelId) -> ChannelResult<()> {
+        let Some(handle) = self.get(channel_id).await else {
+            return Ok(());
+        };
+        let is_feishu = handle
+            .read()
+            .await
+            .as_any()
+            .is_some_and(|value| value.is::<super::interfaces::feishu::FeishuChannel>());
+        if is_feishu {
+            self.stop_channel_inner(channel_id).await?;
+        }
+        Ok(())
     }
 
     /// Unregister a channel
@@ -357,7 +471,13 @@ impl ChannelRegistry {
     /// require the forwarder to hold a `Weak` reference instead — a
     /// lifecycle-semantics change deferred to a dedicated batch (it changes
     /// who keeps the adapter alive while the forwarder runs).
+
     pub async fn unregister(&self, channel_id: &ChannelId) -> Option<Box<dyn Channel>> {
+        let _lifecycle = self.lifecycle_sync.lock().await;
+        if let Err(error) = self.stop_outgoing_feishu(channel_id).await {
+            warn!(channel = %channel_id, %error, "Feishu removal refused; incumbent retained");
+            return None;
+        }
         // Drop the HTTP surface before the instance leaves the registry —
         // including when `Arc::try_unwrap` below fails and this returns None.
         // `channel.delete` otherwise leaves an authenticated endpoint the
@@ -478,6 +598,11 @@ impl ChannelRegistry {
 
     /// Start a channel
     pub async fn start_channel(&self, channel_id: &ChannelId) -> ChannelResult<()> {
+        let _lifecycle = self.lifecycle_sync.lock().await;
+        self.start_channel_inner(channel_id).await
+    }
+
+    async fn start_channel_inner(&self, channel_id: &ChannelId) -> ChannelResult<()> {
         let channel_arc = self.get(channel_id).await.ok_or_else(|| {
             ChannelError::NotConnected(format!("Channel not found: {channel_id}"))
         })?;
@@ -512,6 +637,11 @@ impl ChannelRegistry {
 
     /// Stop a channel
     pub async fn stop_channel(&self, channel_id: &ChannelId) -> ChannelResult<()> {
+        let _lifecycle = self.lifecycle_sync.lock().await;
+        self.stop_channel_inner(channel_id).await
+    }
+
+    async fn stop_channel_inner(&self, channel_id: &ChannelId) -> ChannelResult<()> {
         let channel_arc = self.get(channel_id).await.ok_or_else(|| {
             ChannelError::NotConnected(format!("Channel not found: {channel_id}"))
         })?;
@@ -535,15 +665,25 @@ impl ChannelRegistry {
         Ok(())
     }
 
-    /// Start all registered channels
+    /// Start all configured-enabled channels.
+    ///
+    /// Boot intent is recorded by [`Self::register_for_boot`]. Disabled
+    /// channels remain available for an explicit `start_channel` request but
+    /// are never started as a boot side effect.
     pub async fn start_all(&self) -> Vec<(ChannelId, ChannelResult<()>)> {
-        let channels = self.channels.read().await;
-        let channel_ids: Vec<ChannelId> = channels.keys().cloned().collect();
-        drop(channels);
+        let _lifecycle = self.lifecycle_sync.lock().await;
+        let desired = self.desired_state.read().await;
+        let channel_ids: Vec<ChannelId> = desired
+            .iter()
+            .filter_map(|(id, state)| {
+                (*state == DesiredChannelState::Enabled).then_some(id.clone())
+            })
+            .collect();
+        drop(desired);
 
         let mut results = Vec::with_capacity(channel_ids.len());
         for channel_id in channel_ids {
-            let result = self.start_channel(&channel_id).await;
+            let result = self.start_channel_inner(&channel_id).await;
             results.push((channel_id, result));
         }
         results
@@ -1318,13 +1458,26 @@ impl ChannelRegistry {
     /// duplicate-delivery that a second `start_channel` would cause. This is
     /// the recovery primitive used by the health monitor for wedged channels.
     pub async fn restart_channel(&self, channel_id: &ChannelId) -> ChannelResult<()> {
+        let _lifecycle = self.lifecycle_sync.lock().await;
+        self.restart_channel_inner(channel_id).await
+    }
+
+    async fn restart_channel_inner(&self, channel_id: &ChannelId) -> ChannelResult<()> {
         let channel_arc = self.get(channel_id).await.ok_or_else(|| {
             ChannelError::NotConnected(format!("Channel not found: {channel_id}"))
         })?;
 
         let mut channel = channel_arc.write().await;
         channel.stop().await?;
-        channel.start().await?;
+        if let Err(error) = channel.start().await {
+            drop(channel);
+            // A successful stop leaves the live transport disconnected, so a
+            // failed replacement start must clear Running intent. Only a stop
+            // error above preserves the prior intent and returns unchanged.
+            self.set_desired(channel_id, DesiredChannelState::Stopped)
+                .await;
+            return Err(error);
+        }
 
         // This path does NOT go through stop_channel/start_channel, so it needs
         // its own refresh: `start()` builds a NEW handler and the table would
@@ -1341,6 +1494,12 @@ impl ChannelRegistry {
                 self.webhook_mounts.unmount_channel(channel_id).await;
             }
         }
+
+        // Only a complete stop+start is a successful restart. Keeping this
+        // write after both fallible lifecycle calls preserves the prior intent
+        // on failure and prevents a failed restart from fabricating Running.
+        self.set_desired(channel_id, DesiredChannelState::Running)
+            .await;
 
         info!("Restarted channel in place: {}", channel_id);
         Ok(())
@@ -1524,7 +1683,7 @@ mod tests {
     use super::*;
     use crate::gateway::channel::{ChannelState, MessageId};
     use chrono::Utc;
-    use std::sync::atomic::{AtomicU32, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
     #[tokio::test]
     async fn test_registry_creation() {
@@ -1539,6 +1698,443 @@ mod tests {
         let summary = registry.status_summary().await;
         assert_eq!(summary.total, 0);
         assert_eq!(summary.connected, 0);
+    }
+
+    #[tokio::test]
+    async fn create_channel_is_started_by_start_all() {
+        let registry = ChannelRegistry::new();
+        registry
+            .register_factory(Arc::new(
+                crate::gateway::interfaces::webhook::WebhookChannelFactory,
+            ))
+            .await;
+        let id = registry
+            .create_channel(ChannelConfig {
+                id: "created-webhook".to_string(),
+                channel_type: "webhook".to_string(),
+                enabled: true,
+                config: serde_json::json!({
+                    "secret": "test-secret",
+                    "callback_url": "https://example.com/callback",
+                    "path": "/webhook/created"
+                }),
+            })
+            .await
+            .unwrap();
+
+        let results = registry.start_all().await;
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].0, id);
+        assert!(results[0].1.is_ok());
+        let snapshot = registry
+            .health_states()
+            .await
+            .into_iter()
+            .find(|snapshot| snapshot.id == id)
+            .expect("created channel remains observable");
+        assert_eq!(snapshot.desired, DesiredChannelState::Running);
+        assert_eq!(snapshot.status, ChannelStatus::Connected);
+    }
+
+    #[tokio::test]
+    async fn disabled_create_config_stays_stopped_across_start_all() {
+        let registry = ChannelRegistry::new();
+        registry
+            .register_factory(Arc::new(
+                crate::gateway::interfaces::webhook::WebhookChannelFactory,
+            ))
+            .await;
+        let id = registry
+            .create_channel(ChannelConfig {
+                id: "created-disabled-webhook".to_string(),
+                channel_type: "webhook".to_string(),
+                enabled: false,
+                config: serde_json::json!({
+                    "secret": "test-secret",
+                    "callback_url": "https://example.com/callback",
+                    "path": "/webhook/created-disabled"
+                }),
+            })
+            .await
+            .unwrap();
+
+        assert!(registry.start_all().await.is_empty());
+        let snapshot = registry
+            .health_states()
+            .await
+            .into_iter()
+            .find(|snapshot| snapshot.id == id)
+            .expect("disabled created channel remains observable");
+        assert_eq!(snapshot.desired, DesiredChannelState::Stopped);
+        assert_eq!(snapshot.status, ChannelStatus::Disconnected);
+    }
+
+    #[tokio::test]
+    async fn create_policy_failure_retains_active_feishu_incumbent() {
+        use super::super::delivery_queue::{DeliveryQueueConfig, DeliveryStore};
+
+        let temp = tempfile::tempdir().unwrap();
+        let store_path = temp.path().join("delivery.sqlite");
+        let store =
+            Arc::new(DeliveryStore::open(&store_path, DeliveryQueueConfig::default()).unwrap());
+        let registry = ChannelRegistry::new().with_delivery_store(store.clone());
+        let id = ChannelId::new("create-policy-failure-feishu");
+        let feishu_config = serde_json::from_value::<
+            crate::gateway::interfaces::feishu::FeishuConfig,
+        >(serde_json::json!({
+            "app_id": "create-policy-failure-feishu",
+            "app_secret": "test-secret"
+        }))
+        .unwrap();
+
+        registry
+            .register(Box::new(
+                crate::gateway::interfaces::feishu::FeishuChannel::for_test(
+                    id.as_str(),
+                    feishu_config,
+                )
+                .unwrap(),
+            ))
+            .await;
+        registry.start_channel(&id).await.unwrap();
+        let incumbent = registry.get(&id).await.unwrap();
+        assert_eq!(incumbent.read().await.status(), ChannelStatus::Connected);
+        assert_eq!(registry.webhook_mounts().mounted_count().await, 0);
+        assert!(
+            crate::gateway::interfaces::feishu::api_handle::get(id.as_str()).is_none(),
+            "for_test Feishu has no publication before replacement"
+        );
+
+        // The store is the existing delivery-policy test double. The trigger
+        // fails the replacement's ExplicitOnly observation after the store has
+        // latched its fail-closed policy-failure witness, but before teardown.
+        rusqlite::Connection::open(&store_path)
+            .unwrap()
+            .execute_batch(
+                "CREATE TRIGGER reject_policy_observation
+                 BEFORE INSERT ON explicit_only_channels
+                 BEGIN SELECT RAISE(ABORT, 'fixture policy observation rejected'); END;",
+            )
+            .unwrap();
+        registry
+            .register_factory(Arc::new(PolicyTestChannelFactory {
+                policy: OutboundDeliveryPolicy::ExplicitOnly,
+            }))
+            .await;
+
+        let result = registry
+            .create_channel(ChannelConfig {
+                id: id.to_string(),
+                channel_type: "policy-test-webhook".to_string(),
+                enabled: false,
+                config: serde_json::json!({
+                    "path": "/webhook/create-policy-failure"
+                }),
+            })
+            .await;
+        assert!(result.is_err());
+
+        assert!(
+            Arc::ptr_eq(&incumbent, &registry.get(&id).await.unwrap()),
+            "policy preflight failure must retain the incumbent registration"
+        );
+        let snapshot = registry
+            .health_states()
+            .await
+            .into_iter()
+            .find(|snapshot| snapshot.id == id)
+            .expect("incumbent remains observable after refused replacement");
+        assert_eq!(snapshot.desired, DesiredChannelState::Running);
+        assert_eq!(snapshot.status, ChannelStatus::Connected);
+        assert_eq!(incumbent.read().await.status(), ChannelStatus::Connected);
+        assert_eq!(registry.webhook_mounts().mounted_count().await, 0);
+        assert!(
+            crate::gateway::interfaces::feishu::api_handle::get(id.as_str()).is_none(),
+            "the pre-existing test-mode publication state remains unchanged"
+        );
+        assert!(
+            store.is_explicit_only_channel(id.as_str()).is_err(),
+            "the delivery store's failed observation remains a structured fail-closed admission residual"
+        );
+    }
+
+    #[tokio::test]
+    async fn register_policy_failure_retains_active_feishu_incumbent() {
+        use super::super::delivery_queue::{DeliveryQueueConfig, DeliveryStore};
+
+        let temp = tempfile::tempdir().unwrap();
+        let store_path = temp.path().join("delivery.sqlite");
+        let store =
+            Arc::new(DeliveryStore::open(&store_path, DeliveryQueueConfig::default()).unwrap());
+        let registry = ChannelRegistry::new().with_delivery_store(store.clone());
+        let id = ChannelId::new("register-policy-failure-feishu");
+        let feishu_config = serde_json::from_value::<
+            crate::gateway::interfaces::feishu::FeishuConfig,
+        >(serde_json::json!({
+            "app_id": "register-policy-failure-feishu",
+            "app_secret": "test-secret"
+        }))
+        .unwrap();
+
+        registry
+            .register_for_boot(
+                Box::new(
+                    crate::gateway::interfaces::feishu::FeishuChannel::for_test(
+                        id.as_str(),
+                        feishu_config,
+                    )
+                    .unwrap(),
+                ),
+                true,
+            )
+            .await;
+        registry.start_all().await;
+        let incumbent = registry.get(&id).await.unwrap();
+        assert_eq!(incumbent.read().await.status(), ChannelStatus::Connected);
+        assert_eq!(registry.webhook_mounts().mounted_count().await, 0);
+        assert!(
+            crate::gateway::interfaces::feishu::api_handle::get(id.as_str()).is_none(),
+            "for_test Feishu has no publication before replacement"
+        );
+
+        // Reuse the delivery-policy failure fixture: the store latches its
+        // fail-closed witness before SQLite rejects the incoming observation.
+        rusqlite::Connection::open(&store_path)
+            .unwrap()
+            .execute_batch(
+                "CREATE TRIGGER reject_policy_observation
+                 BEFORE INSERT ON explicit_only_channels
+                 BEGIN SELECT RAISE(ABORT, 'fixture policy observation rejected'); END;",
+            )
+            .unwrap();
+        let replacement = WebhookyChannel::new(id.as_str(), "/webhook/register-policy-failure")
+            .with_delivery_policy(OutboundDeliveryPolicy::ExplicitOnly);
+
+        let returned_id = registry
+            .register_for_boot(Box::new(replacement), false)
+            .await;
+        assert_eq!(returned_id, id);
+        assert!(
+            Arc::ptr_eq(&incumbent, &registry.get(&id).await.unwrap()),
+            "policy preflight failure must retain the incumbent registration"
+        );
+        let snapshot = registry
+            .health_states()
+            .await
+            .into_iter()
+            .find(|snapshot| snapshot.id == id)
+            .expect("incumbent remains observable after refused replacement");
+        assert_eq!(snapshot.desired, DesiredChannelState::Running);
+        assert_eq!(snapshot.status, ChannelStatus::Connected);
+        assert_eq!(incumbent.read().await.status(), ChannelStatus::Connected);
+        assert_eq!(registry.webhook_mounts().mounted_count().await, 0);
+        assert!(
+            crate::gateway::interfaces::feishu::api_handle::get(id.as_str()).is_none(),
+            "the pre-existing test-mode publication state remains unchanged"
+        );
+        assert!(
+            store.is_explicit_only_channel(id.as_str()).is_err(),
+            "the delivery store's failed observation remains a structured fail-closed admission residual"
+        );
+    }
+
+    #[tokio::test]
+    async fn registration_waits_for_lifecycle_serialization_boundary() {
+        use std::future::{poll_fn, Future};
+        use std::task::Poll;
+
+        let registry = ChannelRegistry::new();
+        let id = ChannelId::new("register-lifecycle-boundary");
+        let lifecycle = registry.lifecycle_sync.lock().await;
+        let mut registration = Box::pin(registry.register(Box::new(WebhookyChannel::new(
+            id.as_str(),
+            "/webhook/register-lifecycle-boundary",
+        ))));
+
+        // Hold the same boundary used by start/stop/restart/unregister while
+        // polling the public registration path. This is deterministic: without
+        // its lock, register would complete here and mutate the live registry.
+        poll_fn(|cx| {
+            assert!(registration.as_mut().poll(cx).is_pending());
+            Poll::Ready(())
+        })
+        .await;
+
+        drop(lifecycle);
+        assert_eq!(registration.await, id);
+        assert!(registry.get(&id).await.is_some());
+    }
+
+    #[tokio::test]
+    async fn public_register_remains_start_all_compatible() {
+        let registry = ChannelRegistry::new();
+        let id = registry
+            .register(Box::new(FlakyChannel::new(
+                0,
+                false,
+                Arc::new(AtomicU32::new(0)),
+            )))
+            .await;
+
+        let results = registry.start_all().await;
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].0, id);
+        assert!(results[0].1.is_ok());
+    }
+
+    #[tokio::test]
+    async fn disabled_feishu_boot_has_no_runtime_effects_and_explicit_start_works() {
+        let registry = ChannelRegistry::new();
+        let config = serde_json::from_value::<crate::gateway::interfaces::feishu::FeishuConfig>(
+            serde_json::json!({
+                "app_id": "registry-disabled-feishu",
+                "app_secret": "test-secret"
+            }),
+        )
+        .unwrap();
+        let id = ChannelId::new("registry-disabled-feishu");
+        registry
+            .register_for_boot(
+                Box::new(
+                    crate::gateway::interfaces::feishu::FeishuChannel::for_test(
+                        id.as_str(),
+                        config,
+                    )
+                    .unwrap(),
+                ),
+                false,
+            )
+            .await;
+
+        let boot_results = registry.start_all().await;
+        assert!(
+            boot_results.is_empty(),
+            "disabled boot must not start Feishu"
+        );
+        assert_eq!(registry.webhook_mounts().mounted_count().await, 0);
+        assert!(
+            crate::gateway::interfaces::feishu::api_handle::get(id.as_str()).is_none(),
+            "disabled boot must not publish a Feishu API handle"
+        );
+        let snapshot = registry
+            .health_states()
+            .await
+            .into_iter()
+            .find(|snapshot| snapshot.id == id)
+            .expect("registered disabled channel remains observable");
+        assert_eq!(snapshot.desired, DesiredChannelState::Stopped);
+        assert_eq!(snapshot.status, ChannelStatus::Disconnected);
+
+        // Explicit enable uses the registry-owned start path and is allowed to
+        // start a channel whose boot request was disabled.
+        registry.start_channel(&id).await.unwrap();
+        assert_eq!(
+            registry.get(&id).await.unwrap().read().await.status(),
+            ChannelStatus::Connected
+        );
+        registry.stop_channel(&id).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn enabled_feishu_boot_uses_the_same_registry_lifecycle_path() {
+        let registry = ChannelRegistry::new();
+        let config = serde_json::from_value::<crate::gateway::interfaces::feishu::FeishuConfig>(
+            serde_json::json!({
+                "app_id": "registry-enabled-feishu",
+                "app_secret": "test-secret"
+            }),
+        )
+        .unwrap();
+        let id = ChannelId::new("registry-enabled-feishu");
+        registry
+            .register_for_boot(
+                Box::new(
+                    crate::gateway::interfaces::feishu::FeishuChannel::for_test(
+                        id.as_str(),
+                        config,
+                    )
+                    .unwrap(),
+                ),
+                true,
+            )
+            .await;
+
+        let boot_results = registry.start_all().await;
+        assert_eq!(boot_results.len(), 1);
+        assert!(boot_results[0].1.is_ok());
+        let snapshot = registry
+            .health_states()
+            .await
+            .into_iter()
+            .find(|snapshot| snapshot.id == id)
+            .expect("registered enabled channel remains observable");
+        assert_eq!(snapshot.desired, DesiredChannelState::Running);
+        assert_eq!(snapshot.status, ChannelStatus::Connected);
+
+        registry.stop_channel(&id).await.unwrap();
+        assert_eq!(registry.webhook_mounts().mounted_count().await, 0);
+        assert!(
+            crate::gateway::interfaces::feishu::api_handle::get(id.as_str()).is_none(),
+            "test mode must not fabricate a publication"
+        );
+    }
+
+    #[tokio::test]
+    async fn disabled_replacement_stays_stopped_across_repeated_start_all() {
+        let registry = ChannelRegistry::new();
+        let config = || {
+            serde_json::from_value::<crate::gateway::interfaces::feishu::FeishuConfig>(
+                serde_json::json!({
+                    "app_id": "registry-replacement-feishu",
+                    "app_secret": "test-secret"
+                }),
+            )
+            .unwrap()
+        };
+        let id = ChannelId::new("registry-replacement-feishu");
+
+        registry
+            .register_for_boot(
+                Box::new(
+                    crate::gateway::interfaces::feishu::FeishuChannel::for_test(
+                        id.as_str(),
+                        config(),
+                    )
+                    .unwrap(),
+                ),
+                true,
+            )
+            .await;
+        assert_eq!(registry.start_all().await.len(), 1);
+
+        for _ in 0..3 {
+            registry
+                .register_for_boot(
+                    Box::new(
+                        crate::gateway::interfaces::feishu::FeishuChannel::for_test(
+                            id.as_str(),
+                            config(),
+                        )
+                        .unwrap(),
+                    ),
+                    false,
+                )
+                .await;
+
+            assert!(
+                registry.start_all().await.is_empty(),
+                "a disabled replacement must not be selected by start_all"
+            );
+            let snapshot = registry
+                .health_states()
+                .await
+                .into_iter()
+                .find(|snapshot| snapshot.id == id)
+                .expect("replacement remains registered");
+            assert_eq!(snapshot.desired, DesiredChannelState::Stopped);
+            assert_eq!(snapshot.status, ChannelStatus::Disconnected);
+            assert_eq!(registry.webhook_mounts().mounted_count().await, 0);
+        }
     }
 
     /// Test channel whose `send` returns `RateLimited` for the first
@@ -2485,6 +3081,39 @@ mod tests {
         state: ChannelState,
         path: String,
         handler: Option<Arc<TestHandler>>,
+        fail_start: Arc<AtomicBool>,
+        delivery_policy: OutboundDeliveryPolicy,
+    }
+
+    struct PolicyTestChannelFactory {
+        policy: OutboundDeliveryPolicy,
+    }
+
+    #[async_trait::async_trait]
+    impl ChannelFactory for PolicyTestChannelFactory {
+        fn channel_type(&self) -> &str {
+            "policy-test-webhook"
+        }
+
+        async fn create(&self, _config: serde_json::Value) -> ChannelResult<Box<dyn Channel>> {
+            Err(ChannelError::ConfigError(
+                "test factory requires an instance id".to_string(),
+            ))
+        }
+
+        async fn create_with_id(
+            &self,
+            id: &str,
+            config: serde_json::Value,
+        ) -> ChannelResult<Box<dyn Channel>> {
+            let path = config
+                .get("path")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("/webhook/policy-test");
+            Ok(Box::new(
+                WebhookyChannel::new(id, path).with_delivery_policy(self.policy),
+            ))
+        }
     }
 
     struct TestHandler {
@@ -2521,7 +3150,23 @@ mod tests {
                 state: ChannelState::new(8),
                 path: path.to_string(),
                 handler: None,
+                fail_start: Arc::new(AtomicBool::new(false)),
+                delivery_policy: OutboundDeliveryPolicy::Automatic,
             }
+        }
+
+        fn with_delivery_policy(mut self, policy: OutboundDeliveryPolicy) -> Self {
+            self.delivery_policy = policy;
+            self
+        }
+
+        fn with_start_failure(self) -> Self {
+            self.fail_start.store(true, Ordering::SeqCst);
+            self
+        }
+
+        fn start_failure_control(&self) -> Arc<AtomicBool> {
+            self.fail_start.clone()
         }
     }
 
@@ -2534,6 +3179,9 @@ mod tests {
             &self.state
         }
         async fn start(&mut self) -> ChannelResult<()> {
+            if self.fail_start.load(Ordering::SeqCst) {
+                return Err(ChannelError::Internal("test start failure".to_string()));
+            }
             self.handler = Some(Arc::new(TestHandler {
                 path: self.path.clone(),
             }));
@@ -2551,6 +3199,9 @@ mod tests {
             self.handler
                 .clone()
                 .map(|h| h as Arc<dyn crate::gateway::webhook_receiver::WebhookHandler>)
+        }
+        fn outbound_delivery_policy(&self) -> OutboundDeliveryPolicy {
+            self.delivery_policy
         }
         async fn send(&self, _message: OutboundMessage) -> ChannelResult<SendResult> {
             Ok(SendResult {
@@ -2607,6 +3258,75 @@ mod tests {
             0,
             "channel.delete must remove the endpoint even when the Arc is still held"
         );
+    }
+
+    #[tokio::test]
+    async fn restart_updates_health_state_to_running_after_success() {
+        let registry = ChannelRegistry::new();
+        let id = registry
+            .register(Box::new(WebhookyChannel::new(
+                "restart-health",
+                "/webhook/restart-health",
+            )))
+            .await;
+        registry.start_channel(&id).await.unwrap();
+
+        registry.restart_channel(&id).await.unwrap();
+        let snapshot = registry
+            .health_states()
+            .await
+            .into_iter()
+            .find(|snapshot| snapshot.id == id)
+            .expect("restarted channel remains observable");
+        assert_eq!(snapshot.desired, DesiredChannelState::Running);
+        assert_eq!(snapshot.status, ChannelStatus::Connected);
+    }
+
+    #[tokio::test]
+    async fn failed_restart_preserves_prior_desired_state() {
+        let registry = ChannelRegistry::new();
+        let id = registry
+            .register(Box::new(
+                WebhookyChannel::new("restart-fails", "/webhook/restart-fails")
+                    .with_start_failure(),
+            ))
+            .await;
+
+        let result = registry.restart_channel(&id).await;
+        assert!(result.is_err());
+        let snapshot = registry
+            .health_states()
+            .await
+            .into_iter()
+            .find(|snapshot| snapshot.id == id)
+            .expect("failed restart leaves channel observable");
+        assert_eq!(snapshot.desired, DesiredChannelState::Stopped);
+        assert_eq!(snapshot.status, ChannelStatus::Disconnected);
+    }
+
+    #[tokio::test]
+    async fn failed_restart_after_running_clears_running_intent() {
+        let registry = ChannelRegistry::new();
+        let channel = WebhookyChannel::new(
+            "restart-fails-after-running",
+            "/webhook/restart-fails-after-running",
+        );
+        let fail_start = channel.start_failure_control();
+        let id = registry.register(Box::new(channel)).await;
+
+        registry.start_channel(&id).await.unwrap();
+        fail_start.store(true, Ordering::SeqCst);
+
+        let result = registry.restart_channel(&id).await;
+        assert!(result.is_err());
+        let snapshot = registry
+            .health_states()
+            .await
+            .into_iter()
+            .find(|snapshot| snapshot.id == id)
+            .expect("failed restart leaves channel observable");
+        assert_eq!(snapshot.desired, DesiredChannelState::Stopped);
+        assert_eq!(snapshot.status, ChannelStatus::Disconnected);
     }
 
     #[tokio::test]
