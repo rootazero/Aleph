@@ -288,8 +288,9 @@ impl PanelLoader {
             // A synchronous mount may navigate via the SDK. Dispose that late
             // handle instead of publishing it as the newly selected tab.
             if !current(&state, &host, generation, &descriptor) {
-                drop(result);
+                let cleanup = result.map_or(Ok(()), |mut handle| handle.dispose());
                 cancel(&state, generation);
+                cleanup?;
                 return Err(PanelLoadError::Cancelled);
             }
             match result {
@@ -748,6 +749,79 @@ mod tests {
                 current_sdk.navigate(descriptor("two").key),
                 Err(crate::panel::sdk::PanelSdkError::Disposed)
             );
+        });
+    }
+
+    #[test]
+    fn navigation_during_mount_reports_unmount_failure_once_without_changing_new_state() {
+        Owner::new().with(|| {
+            for activate_new in [false, true] {
+                let loader = Rc::new(RefCell::new(fixture()));
+                let events = Rc::new(RefCell::new(vec![]));
+                let recorded = events.clone();
+                let next_loader = loader.clone();
+                let current_sdk = sdk("one");
+                let next_sdk = sdk("two");
+                let mounted_sdk = next_sdk.clone();
+                let module = LoadedModule {
+                    descriptor: serde_json::to_value(descriptor("one")).unwrap(),
+                    mount: Box::new(move |sdk| {
+                        sdk.navigate(descriptor("two").key).unwrap();
+                        if activate_new {
+                            let next = module(
+                                serde_json::to_value(descriptor("two")).unwrap(),
+                                recorded.clone(),
+                                false,
+                            );
+                            let future = next_loader.borrow_mut().activate_with(
+                                descriptor("two").key,
+                                mounted_sdk,
+                                move |_| async { Ok(next) }.boxed_local(),
+                            );
+                            future.now_or_never().unwrap().unwrap();
+                        }
+                        Ok(MountedTab::new(move || {
+                            recorded.borrow_mut().push("late unmount");
+                            Err(PanelLoadError::UnmountFailed)
+                        }))
+                    }),
+                };
+                let future = loader.borrow_mut().activate_with(
+                    descriptor("one").key,
+                    current_sdk.clone(),
+                    move |_| async { Ok(module) }.boxed_local(),
+                );
+                assert_eq!(block_on(future), Err(PanelLoadError::UnmountFailed));
+                assert_eq!(
+                    loader.borrow().status(),
+                    if activate_new {
+                        PanelLoadStatus::Mounted {
+                            key: descriptor("two").key,
+                        }
+                    } else {
+                        PanelLoadStatus::Idle
+                    }
+                );
+                assert_eq!(
+                    current_sdk.navigate(descriptor("two").key),
+                    Err(crate::panel::sdk::PanelSdkError::Disposed)
+                );
+                if activate_new {
+                    assert_eq!(*events.borrow(), ["mount", "late unmount"]);
+                    next_sdk.navigate(descriptor("two").key).unwrap();
+                }
+                loader.borrow_mut().deactivate().unwrap();
+                loader.borrow_mut().deactivate().unwrap();
+                drop(loader);
+                assert_eq!(
+                    *events.borrow(),
+                    if activate_new {
+                        vec!["mount", "late unmount", "unmount"]
+                    } else {
+                        vec!["late unmount"]
+                    }
+                );
+            }
         });
     }
 

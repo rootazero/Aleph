@@ -11,8 +11,8 @@ const requireSync = (value) => {
 export async function loadPanelModule(entry) {
     let module;
     try {
-        // Resolve relative entries against the host page, not a wasm-bindgen snippet.
-        module = await import(new URL(entry, globalThis.document?.baseURI ?? import.meta.url).href);
+        // Keep deployment prefixes by resolving against this copied loader module.
+        module = await import(new URL(entry, import.meta.url).href);
         if (typeof module.default === 'function') await module.default();
     } catch (cause) {
         throw failure('ImportFailed', cause);
