@@ -45,6 +45,8 @@ pub fn TerminalView() -> impl IntoView {
     // subscriber 60 times a second for a canvas that repaints itself anyway.
     let screen = StoredValue::new(None::<ClientScreen>);
     let session_id = StoredValue::new(None::<String>);
+    let attach_generation = RwSignal::new(0_u64);
+    let first_load = StoredValue::new(true);
     // A signal, unlike `screen`: the tab strip is a view of it, so a change
     // here has to re-render. It changes on a session list, an exit and a
     // title — human-paced events, not the 60/s frame rate that made `screen`
@@ -68,18 +70,41 @@ pub fn TerminalView() -> impl IntoView {
     // Re-attach: the one recovery path. A gap means the bounded broadcast
     // dropped a frame for this subscriber; the screen is on the server, so the
     // fix is to ask for it again rather than to guess.
-    let resync = move |sid: String| {
+    let resync = move |sid: String, generation: u64| {
         let state = state;
         spawn_local(async move {
+            let (Some(current_generation), Some(current_session)) = (
+                attach_generation.try_get_untracked(),
+                session_id.try_get_value(),
+            ) else {
+                return;
+            };
+            if current_generation != generation || current_session.as_deref() != Some(sid.as_str())
+            {
+                return;
+            }
             screen.update_value(|s| {
                 if let Some(s) = s {
                     s.begin_attach();
                 }
             });
-            match state
-                .rpc_call("pty.attach", serde_json::json!({ "session_id": sid }))
-                .await
+            let result = state
+                .rpc_call(
+                    "pty.attach",
+                    serde_json::json!({ "session_id": sid.clone() }),
+                )
+                .await;
+            let (Some(current_generation), Some(current_session)) = (
+                attach_generation.try_get_untracked(),
+                session_id.try_get_value(),
+            ) else {
+                return;
+            };
+            if current_generation != generation || current_session.as_deref() != Some(sid.as_str())
             {
+                return;
+            }
+            match result {
                 Ok(v) => match serde_json::from_value::<PtyAttachResponse>(v) {
                     Ok(resp) => {
                         // `finish_attach` reports whether the replay of
@@ -110,11 +135,18 @@ pub fn TerminalView() -> impl IntoView {
                             );
                         }
                     }
-                    Err(e) => error.set(Some(admin_refusal::settings_load_error(
-                        i18n,
-                        &e.to_string(),
-                        |e| format!("attach decode failed: {e}"),
-                    ))),
+                    Err(e) => {
+                        screen.update_value(|s| {
+                            if let Some(s) = s {
+                                s.abort_attach();
+                            }
+                        });
+                        error.set(Some(admin_refusal::settings_load_error(
+                            i18n,
+                            &e.to_string(),
+                            |e| format!("attach decode failed: {e}"),
+                        )));
+                    }
                 },
                 // An Err is never read as an empty screen: the server said
                 // something, and what it said is not "the terminal is idle".
@@ -123,9 +155,16 @@ pub fn TerminalView() -> impl IntoView {
                 // every other message -- including the policy gate's own
                 // "[policies.terminal] enabled = false" text -- passes
                 // through verbatim, which is what names the remedy.
-                Err(e) => error.set(Some(admin_refusal::settings_load_error(i18n, &e, |e| {
-                    e.to_string()
-                }))),
+                Err(e) => {
+                    screen.update_value(|s| {
+                        if let Some(s) = s {
+                            s.abort_attach();
+                        }
+                    });
+                    error.set(Some(admin_refusal::settings_load_error(i18n, &e, |e| {
+                        e.to_string()
+                    })));
+                }
             }
         });
     };
@@ -133,10 +172,12 @@ pub fn TerminalView() -> impl IntoView {
     // Point this view at one session: seat a fresh `ClientScreen` for it,
     // report our viewport, and attach.
     //
-    // A no-op when it is already the showing session, which is what makes it
-    // safe to call from every place that can settle on a selection (mount, a
-    // tab click, an agent-panel request, an exit falling to a neighbour)
-    // without any of them having to know what the others did.
+    // A no-op when it is already the showing session unless the caller is
+    // recovering a connection, which must refresh the server-side attach
+    // state even when the selected id did not change. That makes it safe to
+    // call from every place that can settle on a selection (mount, a tab
+    // click, an exit falling to a neighbour, or a reconnect) without any of
+    // them having to know what the others did.
     //
     // The 24x80 is a placeholder that is never observed: `finish_attach`
     // re-seats both the geometry and `seq` from the attach response, and
@@ -150,10 +191,9 @@ pub fn TerminalView() -> impl IntoView {
     // exit event's callback. `StoredValue::get_value` unwraps, so a disposed
     // owner panics and the whole page goes to the recovery overlay
     // (`crate::disposed_reads`). The window is ordinary — the user leaves this
-    // view while the RPC is in flight. Same rule and the same `None` arm as
-    // `publish_selection` below: the scope that owns these is gone, so there
-    // is no view left to point at a session.
-    let attach_to = move |sid: String| {
+    // view while the RPC is in flight. The scope that owns these is gone, so
+    // there is no view left to point at a session.
+    let attach_to = move |sid: String, force: bool| {
         let (Some(current), Some(family), Some(size)) = (
             session_id.try_get_value(),
             font_family.try_get_value(),
@@ -161,9 +201,11 @@ pub fn TerminalView() -> impl IntoView {
         ) else {
             return;
         };
-        if current.as_deref() == Some(sid.as_str()) {
+        if !force && current.as_deref() == Some(sid.as_str()) {
             return;
         }
+        attach_generation.update(|generation| *generation = generation.wrapping_add(1));
+        let generation = attach_generation.get_untracked();
         screen.set_value(Some(ClientScreen::new(24, 80, 0, sid.clone())));
         session_id.set_value(Some(sid.clone()));
         measure_and_report(
@@ -174,7 +216,7 @@ pub fn TerminalView() -> impl IntoView {
             size,
             repaint_tick,
         );
-        resync(sid);
+        resync(sid, generation);
     };
 
     // Open a new shell.
@@ -192,8 +234,7 @@ pub fn TerminalView() -> impl IntoView {
                 Ok(v) => match serde_json::from_value::<PtySpawnResponse>(v) {
                     Ok(resp) => {
                         tabs.update(|m| m.adopt_spawned(&resp.session_id, &resp.shell));
-                        publish_selection(state, tabs);
-                        attach_to(resp.session_id);
+                        attach_to(resp.session_id, false);
                     }
                     Err(e) => error.set(Some(admin_refusal::settings_write_error(
                         i18n,
@@ -220,7 +261,7 @@ pub fn TerminalView() -> impl IntoView {
     // `allow_spawn` is only true on the first pass. A later refresh that finds
     // nothing open means the user closed everything, and re-opening a shell
     // they just closed would be the page arguing with them.
-    let refresh_tabs = move |allow_spawn: bool| {
+    let refresh_tabs = move |allow_spawn: bool, force_attach: bool| {
         spawn_local(async move {
             // "Nothing to adopt" and "I could not get an answer" are different
             // facts, and only the first may create a shell. The classification
@@ -241,22 +282,11 @@ pub fn TerminalView() -> impl IntoView {
 
             tabs.update(|m| m.reconcile(&sessions));
 
-            // Honour a request another surface left behind before this view
-            // had a session list to check it against: the agent panel writes
-            // `terminal_selection` and then navigates here, so the write can
-            // easily land before this view has ever listed anything.
-            if let Some(requested) = state.terminal_selection.try_get_untracked().flatten() {
-                tabs.update(|m| {
-                    m.select(&requested);
-                });
-            }
-            publish_selection(state, tabs);
-
             match tabs
                 .try_with_untracked(|m| m.selected_id().map(str::to_string))
                 .flatten()
             {
-                Some(sid) => attach_to(sid),
+                Some(sid) => attach_to(sid, force_attach),
                 None if allow_spawn && session::should_spawn(&sessions) => spawn_new(),
                 None => {}
             }
@@ -282,9 +312,14 @@ pub fn TerminalView() -> impl IntoView {
         });
     };
 
-    // Mount: subscribe BEFORE listing. Whatever a shell prints on startup then
-    // cannot land in the gap between spawn and subscribe.
+    // Subscribe before listing on mount and after every reconnect. Whatever a
+    // shell prints on startup then cannot land in the gap between spawn and
+    // subscribe.
     Effect::new(move |_| {
+        let _epoch = state.connection_epoch.get();
+        if !state.is_connected.get() {
+            return;
+        }
         let state = state;
         spawn_local(async move {
             if let Err(e) = state.subscribe_topic_ephemeral(PTY_SCREEN_TOPIC).await {
@@ -303,23 +338,10 @@ pub fn TerminalView() -> impl IntoView {
                 })));
             }
 
-            refresh_tabs(true);
+            let allow_spawn = first_load.get_value();
+            refresh_tabs(allow_spawn, !allow_spawn);
+            first_load.set_value(false);
         });
-    });
-
-    // Another surface asked for a session (the agent panel's row click).
-    //
-    // A request naming a session this view has no open tab for is REFUSED by
-    // the model and nothing happens — the strip keeps showing what it was
-    // showing rather than blanking the canvas for a session that is gone.
-    Effect::new(move |_| {
-        let Some(requested) = state.terminal_selection.get() else {
-            return;
-        };
-        let accepted = tabs.try_update(|m| m.select(&requested)).unwrap_or(false);
-        if accepted {
-            attach_to(requested);
-        }
     });
 
     // `pty.exit` is the session lifecycle edge for the tab strip.
@@ -342,12 +364,11 @@ pub fn TerminalView() -> impl IntoView {
                 return;
             };
             tabs.update(|m| m.on_exit(&sid));
-            publish_selection(state, tabs);
             if let Some(next) = tabs
                 .try_with_untracked(|m| m.selected_id().map(str::to_string))
                 .flatten()
             {
-                attach_to(next);
+                attach_to(next, false);
             }
             // `on_exit` only MARKS the tab closed; `reconcile` is what drops
             // it, and until this call nothing ever scheduled one, so the
@@ -355,7 +376,7 @@ pub fn TerminalView() -> impl IntoView {
             // method's own doc described behaviour that did not exist
             // (判据 §1). The row stays visible for exactly one round trip —
             // long enough to see WHY it went away, not longer.
-            refresh_tabs(false);
+            refresh_tabs(false, false);
         });
         on_cleanup(move || state.unsubscribe_events(handler_id));
     });
@@ -464,8 +485,11 @@ pub fn TerminalView() -> impl IntoView {
                     }
                 }
                 Some(ApplyOutcome::Gap { .. }) => {
-                    if let Some(mine) = session_id.get_value() {
-                        resync(mine);
+                    if let (Some(mine), Some(generation)) = (
+                        session_id.try_get_value().flatten(),
+                        attach_generation.try_get_untracked(),
+                    ) {
+                        resync(mine, generation);
                     }
                 }
                 // Buffered / Discarded / WrongSession: nothing to draw and
@@ -633,12 +657,13 @@ pub fn TerminalView() -> impl IntoView {
             <TabBar
                 tabs=Signal::derive(move || tabs.get().tabs().to_vec())
                 selected=Signal::derive(move || tabs.get().selected_id().map(str::to_string))
-                // A click REQUESTS a session; it does not select one directly.
-                // Everything that changes what is showing goes through
-                // `terminal_selection` and the effect above it, so there is one
-                // path into the model and not one per control (判据 §6).
+                // Selection belongs to the local tab model. A click is accepted
+                // only when the existing tab is open, then the view attaches to it.
                 on_select=Callback::new(move |sid: String| {
-                    state.terminal_selection.set(Some(sid));
+                    let accepted = tabs.try_update(|m| m.select(&sid)).unwrap_or(false);
+                    if accepted {
+                        attach_to(sid, false);
+                    }
                 })
                 on_close=Callback::new(move |sid: String| close_tab(sid))
                 on_new=Callback::new(move |(): ()| spawn_new())
@@ -654,33 +679,6 @@ pub fn TerminalView() -> impl IntoView {
                 on:paste=on_paste
             />
         </div>
-    }
-}
-
-/// Publish the model's selection to `DashboardState`, so other surfaces can
-/// see what the terminal settled on and re-request it later.
-///
-/// The ONLY writer of `terminal_selection` inside this view: every other place
-/// that changes the selection changes the model and then calls this, so the
-/// published copy can never disagree with the authority (判据 §1).
-///
-/// Skips the write when nothing changed. `RwSignal::set` notifies on every
-/// call, same value or not, and the effect that reads this signal calls back
-/// into the model — a same-value write would be a round of work per event for
-/// no change.
-fn publish_selection(state: DashboardState, tabs: RwSignal<TabModel>) {
-    // `try_` on both reads: every caller is on the far side of an `.await` or
-    // inside an event callback, and the plain forms panic on a disposed
-    // signal (`crate::disposed_reads`). A `None` from either means the scope
-    // that owns them is gone, and there is nobody left to publish to.
-    let Some(current) = tabs.try_with_untracked(|m| m.selected_id().map(str::to_string)) else {
-        return;
-    };
-    let Some(published) = state.terminal_selection.try_get_untracked() else {
-        return;
-    };
-    if published != current {
-        state.terminal_selection.set(current);
     }
 }
 

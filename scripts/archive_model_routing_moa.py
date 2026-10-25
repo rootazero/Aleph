@@ -534,7 +534,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument(
         "--output-dir",
         type=Path,
-        default=Path(__file__).resolve().parents[1] / "docs/archive/removed-model-routing-moa",
+        default=Path(__file__).resolve().parents[1] / "archive/removed-model-routing-moa",
     )
     parser.add_argument(
         "--recorded-root",
@@ -564,7 +564,7 @@ class ArchiveHelperTests(unittest.TestCase):
         self.git(root, "config", "user.email", "test@example.invalid")
         self.git(root, "config", "user.name", "Archive Test")
         (root / "src/nested").mkdir(parents=True)
-        (root / "src/nested/z.rs").write_text("MoaProvider\n", encoding="utf-8")
+        (root / "src/nested/z.rs").write_bytes(b"MoaProvider\n")
         (root / "src/a.rs").write_text("effective_model_directive\n", encoding="utf-8")
         self.git(root, "add", ".")
         self.git(root, "commit", "-qm", "fixture")

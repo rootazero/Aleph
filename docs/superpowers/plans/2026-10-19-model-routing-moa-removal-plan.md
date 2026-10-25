@@ -43,10 +43,10 @@
 
 **Files:**
 - Create: `scripts/archive_model_routing_moa.py`
-- Create: `docs/archive/removed-model-routing-moa/aleph-model-routing-moa-pre-removal-2026-10-19.tar.gz`
-- Create: `docs/archive/removed-model-routing-moa/MANIFEST.json`
-- Create: `docs/archive/removed-model-routing-moa/SHA256SUMS`
-- Create: `docs/archive/removed-model-routing-moa/README.md`
+- Create: `archive/removed-model-routing-moa/aleph-model-routing-moa-pre-removal-2026-10-19.tar.gz`
+- Create: `archive/removed-model-routing-moa/MANIFEST.json`
+- Create: `archive/removed-model-routing-moa/SHA256SUMS`
+- Create: `archive/removed-model-routing-moa/README.md`
 - Reference: `docs/superpowers/specs/2026-10-19-model-routing-moa-removal-design.md`
 
 **Interfaces:**
@@ -57,9 +57,9 @@
 - [ ] **Step 1: Add failing archive-helper tests** for dirty worktree refusal, deterministic manifest ordering, preservation of original paths, SHA mismatch detection, and unresolved dynamic-reference reporting. Put tests next to the helper using Python `unittest`; do not invoke Cargo.
 - [ ] **Step 2: Run `python3 -m unittest scripts/archive_model_routing_moa.py`** and verify the new tests fail because the helper does not exist.
 - [ ] **Step 3: Implement the stdlib-only helper** using `pathlib`, `subprocess`, `tarfile`, `hashlib`, and JSON. Capture `git rev-parse HEAD`, branch, repository root, Cargo.lock hash, and tool version. Recursively search the fixed symbol seed set and write the dynamic-reference review list before creating the archive.
-- [ ] **Step 4: Run the helper against the clean pre-removal tree** and verify the tarball, manifest, checksum file, and README are created under `docs/archive/removed-model-routing-moa/`; extract to a temporary directory and compare every manifest hash.
+- [ ] **Step 4: Run the helper against the clean pre-removal tree** and verify the tarball, manifest, checksum file, and README are created under `archive/removed-model-routing-moa/`; extract to a temporary directory and compare every manifest hash.
 - [ ] **Step 5: Run `python3 -m unittest scripts/archive_model_routing_moa.py`** and `git diff --check`; expected: all helper tests pass and no whitespace errors.
-- [ ] **Step 6: Commit archive and helper** with `git add scripts/archive_model_routing_moa.py docs/archive/removed-model-routing-moa` and message `chore: archive model routing and moa before removal`.
+- [ ] **Step 6: Commit archive and helper** with `git add scripts/archive_model_routing_moa.py archive/removed-model-routing-moa` and message `chore: archive model routing and moa before removal`.
 
 ### Task 2: Remove MoA provider, configuration, builtin, and gateway execution
 
@@ -273,7 +273,7 @@
 
 **Files:**
 - Modify: no production files unless a verification failure identifies a concrete missing reference
-- Verify: `docs/archive/removed-model-routing-moa/*`, all workspace crates and affected test targets
+- Verify: `archive/removed-model-routing-moa/*`, all workspace crates and affected test targets
 
 **Interfaces:**
 - Final proof must demonstrate the archive can restore every deleted source file and that the production tree has no live MoA/strategy routing path.

@@ -137,7 +137,9 @@ English mirror: one screen of "who borrows from whom, at which layer, and what i
 | Claude Code hook 输出兼容 | `src/extension/hooks/json_output.rs` | 解析 `hookSpecificOutput`，保证 Claude Code 的 Command hook 原样可用 |
 | 插件市场 | `src/extension/marketplace/{github_source,local_source,installer}.rs` | 社区模块的发现与安装；npm 源在此新增 |
 | 运行时下载 | `src/runtimes/` | 按需准备 Node / Bun 等外部运行时 |
-| 已独立的 crate | `shared/protocol`、`shared/logging`、`shared/client`、`crates/aleph-cdp`、`crates/agent-detect` | 依赖 DAG 的底层 |
+| 已独立的 crate | `shared/protocol`、`shared/logging`、`shared/client`、`crates/aleph-cdp` | 依赖 DAG 的底层 |
+
+> 历史说明 / Historical note：`crates/agent-detect` 已移除，不属于当前 crate inventory。其移除前代码保存在仓库根目录 `archive/removed-terminal-agent-moa/` 中。
 
 ---
 

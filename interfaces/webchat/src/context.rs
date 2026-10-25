@@ -763,25 +763,6 @@ pub struct DashboardState {
     /// truth; `connection_error` (String) is derived from it for legacy readers.
     pub connection_failure: RwSignal<Option<ConnectionFailure>>,
 
-    /// Which PTY session the terminal view is showing, by `session_id`.
-    ///
-    /// The cross-component ADDRESS of that answer, not the answer itself:
-    /// `views::terminal::tabs::TabModel` owns the tab order and the selection
-    /// rules, and the terminal view publishes what it settled on here.
-    /// Surfaces outside that view WRITE this to request a session — the agent
-    /// panel's row click is the reason it exists (D3: the panel that tells you
-    /// an agent is blocked had no way to show you its terminal).
-    ///
-    /// A request naming a session the terminal has no open tab for is refused
-    /// by the model and simply does not take effect; nothing here may create a
-    /// tab. `None` means "no request; show whatever the tab model selects".
-    ///
-    /// Session-scoped by design: which terminal THIS browser tab is looking at
-    /// is not a fact about the account, so it is neither persisted to
-    /// `localStorage` nor sent to the server. A second device on the same
-    /// gateway is looking at its own terminal.
-    pub terminal_selection: RwSignal<Option<String>>,
-
     /// Gateway-verified User of the current native connection. Set only by a
     /// `NativeOutcome::Protected` of the *current* connect attempt (after the
     /// Gateway accepted `connect` and the credential was stored). `None` in a
@@ -1041,7 +1022,6 @@ impl DashboardState {
             needs_token: RwSignal::new(false),
             token_was_rejected: RwSignal::new(false),
             connection_failure: RwSignal::new(None),
-            terminal_selection: RwSignal::new(None),
             protected_user: RwSignal::new(None),
             native_auth: StoredValue::new(Arc::new(NativeAuthState::default())),
         }
@@ -1814,9 +1794,18 @@ impl DashboardState {
                                 ).await;
                             }
 
-                            // Handle incoming WebSocket messages
-                            msg = stream.select_next_some() => {
+                            // Handle incoming WebSocket messages. `next()` preserves
+                            // the stream-end signal; `select_next_some()` turns a clean
+                            // remote close into a permanently pending/panicking branch,
+                            // which leaves `is_connected` true and prevents reconnect.
+                            msg = stream.next() => {
                                 if !attempt_current(&loop_receipt) || state.gateway_url.try_get_untracked().as_deref() != Some(loop_url.as_str()) { break; }
+                                let Some(msg) = msg else {
+                                    drop_reason = Some(
+                                        "WebSocket stream ended".to_string(),
+                                    );
+                                    break;
+                                };
                                 match msg {
                                     Ok(value) => {
                                         // Never log per-frame breadcrumbs here: a streaming run

@@ -1,3 +1,7 @@
+> **历史状态说明 / Historical status (2026-10-25)**：本 2026-10-15 方案早于 2026-10-24 runtime-agent/agent-panel 移除；文中关于 sidebar/agent_panel.rs、runtime agents 和 live-agent rows 的引用均为历史规划材料，不构成当前产品契约。当前 terminal 边界见 [`docs/reference/TERMINAL_RUNTIME.md`](../reference/TERMINAL_RUNTIME.md)。
+>
+> This 2026-10-15 plan predates the 2026-10-24 removal of runtime agents and the agent panel. References to sidebar/agent_panel.rs, runtime agents, and live-agent rows are historical planning material, not current product contracts. The current terminal boundary is [`docs/reference/TERMINAL_RUNTIME.md`](../reference/TERMINAL_RUNTIME.md).
+>
 # Aleph 右侧栏优化方案 (2026-10-15)
 
 > **任务边界** — 本文是一次**调研 + 方案**交付,**不实施代码重构**。所有 Aleph 现状

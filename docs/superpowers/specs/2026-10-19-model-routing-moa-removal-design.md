@@ -198,7 +198,7 @@ UI 验收要求：用户在 Panel 或 chat selector 中做出的普通模型选�
 归档必须在删除前生成，且与删除提交分开可审查。建议路径：
 
 ```text
-docs/archive/removed-model-routing-moa/
+archive/removed-model-routing-moa/
   aleph-model-routing-moa-pre-removal-2026-10-19.tar.gz
   MANIFEST.json
   SHA256SUMS

@@ -161,12 +161,13 @@ newinstall*.txt
 test-results/
 playwright-report/
 agentstructure/
-archive/
+archive/*
+!/archive/
+!/archive/removed-model-routing-moa/
+!/archive/removed-model-routing-moa/**
+!/archive/removed-terminal-agent-moa/
+!/archive/removed-terminal-agent-moa/**
 !docs/archive/
-!docs/archive/removed-model-routing-moa/
-!docs/archive/removed-model-routing-moa/**
-!docs/archive/removed-terminal-agent-moa/
-!docs/archive/removed-terminal-agent-moa/**
 _bmad/
 
 # Examples — track curated subdirs only

@@ -1,3 +1,7 @@
+> **历史状态 / Historical status — pre-removal exploration/spec**：本文件记录的是移除前的探索与方案。文中描述的 `runtime.agents.*` 与 `agent_panel` surfaces 属于历史内容，不是当前产品契约；当前终端边界请以 [`TERMINAL_RUNTIME.md`](../reference/TERMINAL_RUNTIME.md) 为准。
+>
+> **Historical status — pre-removal exploration/spec**: This document records a pre-removal exploration and proposal. The `runtime.agents.*` and `agent_panel` surfaces described here are historical and are not current product contracts; use [`TERMINAL_RUNTIME.md`](../reference/TERMINAL_RUNTIME.md) for the current terminal boundary.
+
 # 阶段 3 Spec — 子代理右栏 Slot
 
 > **任务边界**:本文件是**探索 + 方案**,**不**写实际重构代码。落地属于阶段 1+ 实施,待用户独立批准。

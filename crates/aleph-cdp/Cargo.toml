@@ -11,7 +11,7 @@ description = "Chrome DevTools Protocol transport: one websocket, many sessions,
 # tokio-tungstenite and futures-util are NOT in [workspace.dependencies]; alephcore declares them
 # in its own [dependencies] (Cargo.toml:286-287). base64 IS a workspace dependency (Cargo.toml:79,
 # consumed by alephcore at :205 as { workspace = true }) but is written out here too, so this
-# manifest reads like crates/agent-detect/Cargo.toml, which takes every dependency literally.
+# manifest keeps the direct dependency versions explicit for the standalone CDP transport.
 # Matching the exact version strings is what keeps one copy of each in the lockfile.
 [dependencies]
 tokio = { version = "1.53", features = ["rt", "sync", "time", "macros", "net", "io-util"] }

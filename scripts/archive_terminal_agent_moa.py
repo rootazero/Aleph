@@ -16,7 +16,7 @@ import tarfile
 from pathlib import Path
 from typing import Iterable
 
-ARCHIVE_ROOT = Path("docs/archive/removed-terminal-agent-moa")
+ARCHIVE_ROOT = Path("archive/removed-terminal-agent-moa")
 ARCHIVE_PREFIX = "aleph-terminal-agent-moa-pre-removal-"
 
 EXPLICIT_SEEDS = {

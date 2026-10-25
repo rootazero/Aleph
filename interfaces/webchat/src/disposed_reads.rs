@@ -157,7 +157,7 @@ const PANICKING_READS: [&str; 2] = [".get_untracked()", ".get_value()"];
 /// from two `spawn_local` continuations and from an event callback). Closing it
 /// needs a call graph, which a textual scanner does not have. Until then, a
 /// helper reachable from a continuation carries the rule in its own doc, the
-/// way `publish_selection` and `canvas_ctx` in that file do.
+/// way `canvas_ctx` in that file does.
 fn late_untracked_reads(src: &str) -> Vec<(usize, String)> {
     let lines: Vec<&str> = src.lines().collect();
     let mut out: Vec<(usize, String)> = Vec::new();

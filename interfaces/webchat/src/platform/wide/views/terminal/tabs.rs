@@ -26,8 +26,8 @@ pub struct TabEntry {
 }
 
 /// A tab's display name, in falling order of how much it actually knows:
-/// the title the program set for itself, then the foreground program, then
-/// the shell the session was started as, then the session id.
+/// the OSC title, then the shell the session was started as, then the session
+/// id.
 ///
 /// The last fallback is not decoration. A tab has to be clickable, and a tab
 /// with no text is a control the user cannot see or describe — 判据 §17 says
@@ -87,9 +87,8 @@ impl TabModel {
     /// Point at `session_id`. Answers `false` — and changes nothing — when
     /// no open tab has that id.
     ///
-    /// Refusing rather than creating is the whole point: the id arrives from
-    /// outside (an agent-panel row that may be a refresh behind), and a tab
-    /// invented for a session that no longer exists would attach to nothing
+    /// Refusing rather than creating is the whole point: the id must name an
+    /// existing tab, and a tab invented for a session that no longer exists
     /// and show a blank screen with no explanation of why.
     pub fn select(&mut self, session_id: &str) -> bool {
         if !self
@@ -109,11 +108,11 @@ impl TabModel {
     ///
     /// It compares against `osc_title`, the field that HOLDS this fact, and
     /// not against `title`, which is DERIVED. The frame handler used to ask
-    /// `t.title != title`, and a program whose OSC title equals the name the
-    /// tab already derived — `claude` setting its title to `claude`, the
-    /// common case — read as unchanged. `osc_title` then stayed `None`, and
-    /// the next [`Self::reconcile`] that lost `program` re-derived down to the
-    /// shell, discarding a title the program really had set (判据 §1: the
+    /// `t.title != title`, and an OSC title equal to the name the tab already
+    /// derived — `claude` setting its title to `claude`, the common case — read
+    /// as unchanged. `osc_title` then stayed `None`, and the next
+    /// [`Self::reconcile`] re-derived down to the shell, discarding a title
+    /// the session really had set (判据 §1: the derived value and the raw fact
     /// derived value and the raw fact are two statements, and only one of them
     /// is what the question is about).
     ///
@@ -170,10 +169,6 @@ impl TabModel {
     /// Order: tabs already on screen keep their positions, then sessions this
     /// model has not seen are appended in the order the server listed them.
     /// Sessions the server reports `closed` are dropped.
-    ///
-    /// The agent list is joined BY `session_id` and its order is never read —
-    /// ordering agent entries belongs to
-    /// file has no business having an opinion about it.
     pub fn reconcile(&mut self, sessions: &[PtySessionInfo]) {
         let mut next: Vec<TabEntry> = Vec::with_capacity(sessions.len());
         for tab in &self.tabs {
@@ -299,14 +294,7 @@ pub fn TabBar(
     }
 }
 
-/// One tab: the state glyph, the title, and a close button.
-///
-/// The glyph comes from `shared_ui_logic` — the same table the agent panel
-/// draws — so a blocked agent looks blocked in both places without this file
-/// having an opinion about what the symbols are. A tab with no agent row
-/// carries NO glyph rather than a placeholder: `state: None` means the sampler
-/// said nothing about this session, and any glyph there would be a claim
-/// (判据 §8).
+/// One tab: the title and a close button.
 #[component]
 fn TerminalTab(
     tab: TabEntry,

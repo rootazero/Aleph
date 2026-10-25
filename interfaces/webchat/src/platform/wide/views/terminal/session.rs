@@ -301,6 +301,11 @@ impl ClientScreen {
         self.pending.get_or_insert_with(Vec::new);
     }
 
+    /// Abort an in-flight attach and discard frames buffered for its snapshot.
+    pub fn abort_attach(&mut self) {
+        self.pending = None;
+    }
+
     /// Adopt the snapshot, then replay every buffered frame newer than it —
     /// stopping at the first hole rather than skipping over it. See
     /// [`AttachOutcome`] for what the caller should do with the result.
@@ -725,6 +730,24 @@ mod tests {
             "",
             "a different session's frame must not be replayed"
         );
+    }
+
+    #[test]
+    fn aborting_an_attach_allows_later_frames_to_apply() {
+        let mut s = ClientScreen::new(4, 20, 0, SID);
+        s.begin_attach();
+        assert!(matches!(
+            s.apply(frame(1, 0, "buffered")),
+            ApplyOutcome::Buffered
+        ));
+
+        s.abort_attach();
+
+        assert!(matches!(
+            s.apply(frame(1, 0, "applied")),
+            ApplyOutcome::Applied
+        ));
+        assert_eq!(s.row_text(0), "applied");
     }
 
     /// The snapshot is taken at seq N while frames N+1.. are already in
