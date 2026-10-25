@@ -203,11 +203,11 @@ B7（2026-10-24，未提交）把已冻结的 provider lifecycle contract 复用
 
 ### Provider lifecycle / Provider 生命周期
 
-`src/capability/provider.rs` supplies the shared lifecycle contract for an in-process provider and a future Bridge provider. `ProviderLifecycle` is a side-effect-free state machine: `Discovered`, `Disabled`, `Starting`, `Ready`, `Stopping`, `Stopped`, and `Failed`. Every new `Starting` transition increments the provider generation. `ProviderHandle` only publishes committed state and live notifications; it does not start threads, open IPC, load native libraries, or replace `ExtensionManager`.
+`src/capability/provider.rs` supplies the shared lifecycle contract for an in-process provider and a future Bridge provider. `ProviderLifecycle` is a side-effect-free state machine: `Discovered`, `Cold`, `Disabled`, `Starting`, `Ready`, `Stopping`, `Stopped`, and `Failed`. Every new `Starting` transition increments the provider generation. `ProviderHandle` only publishes committed state and live notifications; it does not start threads, open IPC, load native libraries, or replace `ExtensionManager`.
 
 `ToolHandlerRegistry` owns the shared provider handle for its callable surface. While the provider is not `Ready`, callable snapshots and resolution are empty while the registered state is retained. `BackendLease` records both the ownership generation and provider generation, so a stop or restart makes an old lease fail closed as `StaleProvider`. `ExtensionManager` and `plugin_state.rs` remain the discovery, effect, and durable enabled-state authorities. A future Bridge supervisor may drive the same contract around a sidecar; native Rust dynamic-library unloading is deliberately outside this foundation.
 
-`src/capability/provider.rs` 为进程内 Provider 与未来 Bridge Provider 提供共享生命周期契约。`ProviderLifecycle` 是无副作用状态机，覆盖 `Discovered`、`Disabled`、`Starting`、`Ready`、`Stopping`、`Stopped`、`Failed`；每次新的 `Starting` 都递增 Provider generation。`ProviderHandle` 只发布已提交状态和 live notification，不启动线程、不建立 IPC、不加载原生动态库，也不替代 `ExtensionManager`。
+`src/capability/provider.rs` 为进程内 Provider 与未来 Bridge Provider 提供共享生命周期契约。`ProviderLifecycle` 是无副作用状态机，覆盖 `Discovered`、`Cold`、`Disabled`、`Starting`、`Ready`、`Stopping`、`Stopped`、`Failed`；每次新的 `Starting` 都递增 Provider generation。`ProviderHandle` 只发布已提交状态和 live notification，不启动线程、不建立 IPC、不加载原生动态库，也不替代 `ExtensionManager`。
 
 `ToolHandlerRegistry` 为自己的 callable surface 持有共享 Provider handle。Provider 未处于 `Ready` 时，callable snapshot 和 resolve 为空，但已注册状态保留；`BackendLease` 同时记录 ownership generation 与 provider generation，因此停止或重启会让旧 lease 以 `StaleProvider` fail-closed。发现、效果执行和持久化 enabled 状态仍由 `ExtensionManager` 与 `plugin_state.rs` 负责。未来 Bridge supervisor 可以围绕同一契约驱动 sidecar；原生 Rust 动态库卸载不属于本基础切片。
 
