@@ -91,7 +91,9 @@ pub use jsonrpc::{
 pub use metrics::{
     AgentSlotUsage, BusyQueueMetrics, RunConcurrency, RunConcurrencyMetrics, SessionQueueDepth,
 };
-pub use panel::{PanelTabDescriptor, PanelTabKey, PanelTabStatus, PanelUiTrust, PANEL_UI_API_MAJOR};
+pub use panel::{
+    PanelTabDescriptor, PanelTabKey, PanelTabStatus, PanelUiTrust, PANEL_UI_API_MAJOR,
+};
 pub use resume::{RefusedEntry, ResumeReceipt, ResumeStatus};
 pub use session_thread::{
     AgentRunAccepted, AgentRunRequest, AgentRunStatusReport, AgentRunStatusRequest,
