@@ -10,6 +10,7 @@ use futures::future::LocalBoxFuture;
 use futures::FutureExt;
 use leptos::prelude::{on_cleanup, use_context, GetUntracked, Set};
 use serde_json::Value;
+use std::collections::VecDeque;
 use std::fmt;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, Weak};
@@ -147,9 +148,11 @@ impl PanelSdk {
             sdk.require_permission(&format!("events.subscribe:{topic}"))
                 .map_err(|error| error.to_string())?;
             let inner = Arc::new(SubscriptionState {
+                sdk: sdk.clone(),
+                permission: format!("events.subscribe:{topic}"),
                 resources: Mutex::new(SubscriptionResources {
                     cleanup: None,
-                    pending: Vec::new(),
+                    pending: VecDeque::new(),
                 }),
             });
             let weak = Arc::downgrade(&inner);
@@ -158,10 +161,7 @@ impl PanelSdk {
                     return;
                 }
                 if let Some(inner) = weak.upgrade() {
-                    let mut resources = inner.resources.lock().unwrap();
-                    if resources.cleanup.is_some() {
-                        resources.pending.push(event);
-                    }
+                    inner.enqueue(event);
                 }
             });
             let state = sdk.state;
@@ -262,16 +262,49 @@ impl PanelSdk {
     }
 }
 
+// Local notifications are lossy: retain the newest 64 events per subscription,
+// dropping the oldest on overflow. This is not a durable replay queue.
+const SUBSCRIPTION_PENDING_CAPACITY: usize = 64;
+
 struct SubscriptionResources {
     cleanup: Option<Box<dyn FnOnce() + Send + Sync>>,
-    pending: Vec<GatewayEvent>,
+    pending: VecDeque<GatewayEvent>,
 }
 
 struct SubscriptionState {
+    sdk: PanelSdk,
+    permission: String,
     resources: Mutex<SubscriptionResources>,
 }
 
 impl SubscriptionState {
+    fn enqueue(&self, event: GatewayEvent) {
+        if !self.authorize() {
+            return;
+        }
+        let mut resources = self.resources.lock().unwrap();
+        if resources.cleanup.is_some() {
+            if resources.pending.len() == SUBSCRIPTION_PENDING_CAPACITY {
+                resources.pending.pop_front();
+            }
+            resources.pending.push_back(event);
+        }
+    }
+
+    fn authorize(&self) -> bool {
+        if self
+            .sdk
+            .authorize()
+            .and_then(|()| self.sdk.require_permission(&self.permission))
+            .is_ok()
+        {
+            return true;
+        }
+        // Drop queued data and release the listener before exposing any events.
+        self.dispose();
+        false
+    }
+
     fn dispose(&self) {
         let cleanup = {
             let mut resources = self.resources.lock().unwrap();
@@ -291,7 +324,9 @@ impl Drop for SubscriptionState {
 }
 
 /// Clones share one registration. Consuming either clone disposes it for all;
-/// dropping the last clone also releases the listener.
+/// dropping the last clone also releases the listener. The pending buffer keeps
+/// at most 64 events, dropping the oldest on overflow. Revoked authority clears
+/// the buffer and unregisters the listener on the next matching event or drain.
 #[derive(Clone)]
 pub struct PanelSubscription {
     inner: Arc<SubscriptionState>,
@@ -307,14 +342,23 @@ impl PanelSubscription {
     }
 
     pub fn drain(&self) -> Vec<GatewayEvent> {
-        std::mem::take(&mut self.inner.resources.lock().unwrap().pending)
+        if !self.inner.authorize() {
+            return Vec::new();
+        }
+        self.inner
+            .resources
+            .lock()
+            .unwrap()
+            .pending
+            .drain(..)
+            .collect()
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::{PanelSdk, PanelSdkError};
-    use crate::context::DashboardState;
+    use crate::context::{DashboardState, GatewayEvent};
     use crate::panel::registry::TabRegistry;
     use crate::panel::{PanelHostState, PanelModuleHandle, PanelMountState};
     use aleph_protocol::panel::{
@@ -494,6 +538,87 @@ mod tests {
             assert_eq!(block_on(sdk.invoke("sessions.list", json!({}))), Err(PanelSdkError::Denied.to_string()));
             assert!(matches!(block_on(sdk.subscribe("session.updated")), Err(error) if error == PanelSdkError::Denied.to_string()));
             assert!(calls.lock().unwrap().is_empty());
+        });
+    }
+
+    #[test]
+    fn subscription_revocation_fences_enqueue_and_drain() {
+        // Each boundary must independently detect all current-authority failures.
+        for change in ["permission", "disabled", "removed"] {
+            for enqueue_after_revocation in [false, true] {
+                Owner::new().with(|| {
+                    let (sdk, host, calls) = fixture();
+                    let subscription = block_on(sdk.subscribe("session.updated")).unwrap();
+                    let event = GatewayEvent {
+                        topic: "session.updated".into(),
+                        data: json!({"sequence": 0}),
+                    };
+                    subscription.inner.enqueue(event.clone());
+                    assert_eq!(
+                        subscription.inner.resources.lock().unwrap().pending.len(),
+                        1
+                    );
+                    {
+                        let mut registry = host.registry.lock().unwrap();
+                        let mut row = registry.get(&key("home")).unwrap().clone();
+                        match change {
+                            "permission" => {
+                                row.permissions.clear();
+                                registry.insert_or_replace(row).unwrap();
+                            }
+                            "disabled" => {
+                                row.status = PanelTabStatus::Disabled;
+                                registry.insert_or_replace(row).unwrap();
+                            }
+                            "removed" => assert!(registry.remove(&key("home"))),
+                            _ => unreachable!(),
+                        }
+                    }
+                    if enqueue_after_revocation {
+                        subscription.inner.enqueue(event.clone());
+                        assert!(subscription.is_disposed(), "enqueue: {change}");
+                        assert!(subscription
+                            .inner
+                            .resources
+                            .lock()
+                            .unwrap()
+                            .pending
+                            .is_empty());
+                    }
+                    assert!(subscription.drain().is_empty(), "drain: {change}");
+                    assert!(subscription.is_disposed());
+                    // Fail-closed cleanup releases only the local listener slot.
+                    assert_eq!(sdk.state.subscribe_events(|_| {}), 0);
+                    subscription.inner.enqueue(event);
+                    assert!(subscription.drain().is_empty());
+                    assert_eq!(sdk.state.subscribe_events(|_| {}), 1);
+                    assert!(calls.lock().unwrap().is_empty());
+                });
+            }
+        }
+    }
+
+    #[test]
+    fn subscription_buffer_retains_newest_events_in_order() {
+        Owner::new().with(|| {
+            let (sdk, _, _) = fixture();
+            let subscription = block_on(sdk.subscribe("session.updated")).unwrap();
+            for sequence in 0..70 {
+                subscription.inner.enqueue(GatewayEvent {
+                    topic: "session.updated".into(),
+                    data: json!({"sequence": sequence}),
+                });
+            }
+            let events = subscription.drain();
+            assert_eq!(events.len(), 64);
+            assert_eq!(events.first().unwrap().data, json!({"sequence": 6}));
+            assert_eq!(events.last().unwrap().data, json!({"sequence": 69}));
+            assert!(events.windows(2).all(|pair| {
+                pair[1].data["sequence"].as_u64().unwrap()
+                    == pair[0].data["sequence"].as_u64().unwrap() + 1
+            }));
+            assert!(subscription.drain().is_empty());
+            assert!(!subscription.is_disposed());
         });
     }
 
