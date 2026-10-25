@@ -33,6 +33,60 @@ pub enum CapabilityKind {
     Hook,
 }
 
+/// A behavior axis orthogonal to [`CapabilityKind`].
+///
+/// A kind is the primary classification of a capability; facets describe the
+/// externally composable behavior that consumers may discover, invoke,
+/// subscribe to, or manage. Keeping the axes separate lets one provider expose
+/// both an event source and callable operations without pretending that the
+/// whole provider is a `Tool`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum CapabilityFacet {
+    Callable,
+    EventSource,
+    Subscription,
+    ProviderLifecycle,
+    ExternalEffect,
+}
+
+/// A compact, copyable set of behavior facets carried by a descriptor.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
+pub struct CapabilityFacets(u8);
+
+impl CapabilityFacets {
+    const CALLABLE: u8 = 1 << 0;
+    const EVENT_SOURCE: u8 = 1 << 1;
+    const SUBSCRIPTION: u8 = 1 << 2;
+    const PROVIDER_LIFECYCLE: u8 = 1 << 3;
+    const EXTERNAL_EFFECT: u8 = 1 << 4;
+
+    #[must_use]
+    pub const fn new() -> Self {
+        Self(0)
+    }
+
+    #[must_use]
+    pub const fn with(self, facet: CapabilityFacet) -> Self {
+        Self(self.0 | Self::bit(facet))
+    }
+
+    #[must_use]
+    pub const fn contains(self, facet: CapabilityFacet) -> bool {
+        self.0 & Self::bit(facet) != 0
+    }
+
+    #[must_use]
+    const fn bit(facet: CapabilityFacet) -> u8 {
+        match facet {
+            CapabilityFacet::Callable => Self::CALLABLE,
+            CapabilityFacet::EventSource => Self::EVENT_SOURCE,
+            CapabilityFacet::Subscription => Self::SUBSCRIPTION,
+            CapabilityFacet::ProviderLifecycle => Self::PROVIDER_LIFECYCLE,
+            CapabilityFacet::ExternalEffect => Self::EXTERNAL_EFFECT,
+        }
+    }
+}
+
 /// A namespaced capability identifier, e.g. `aleph/tools/<name>`.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct CapabilityId {
@@ -102,4 +156,14 @@ pub struct CapabilityDescriptor {
     pub owner: OwnerRef,
     pub services: Vec<Service>,
     pub metadata: ProjectionMetadata,
+    /// Orthogonal behavior facets. This is descriptive metadata only; provider,
+    /// owner, and descriptor authorities remain in their existing sources.
+    pub facets: CapabilityFacets,
+}
+
+impl CapabilityDescriptor {
+    #[must_use]
+    pub const fn supports(&self, facet: CapabilityFacet) -> bool {
+        self.facets.contains(facet)
+    }
 }

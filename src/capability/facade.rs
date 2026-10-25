@@ -9,7 +9,8 @@
 //! in Task 2 (lease staleness) and Task 4 (subscription state machine).
 
 use crate::capability::descriptor::{
-    CapabilityDescriptor, CapabilityId, CapabilityKind, CapabilityRevision, ProjectionMetadata,
+    CapabilityDescriptor, CapabilityFacet, CapabilityId, CapabilityKind, CapabilityRevision,
+    ProjectionMetadata,
 };
 use crate::capability::ownership::{OwnerGeneration, VisibilityScope};
 
@@ -20,6 +21,8 @@ pub struct Scope {
     pub kind: Option<CapabilityKind>,
     /// Restrict to a namespace prefix; `None` = all namespaces.
     pub namespace: Option<String>,
+    /// Restrict to one behavior facet; `None` = all facets.
+    pub facet: Option<CapabilityFacet>,
     /// The visibility envelope to describe/project/subscribe under.
     /// `VisibilityScope::default()` = unrestricted.
     pub visibility: VisibilityScope,

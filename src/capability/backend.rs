@@ -6,10 +6,10 @@
 //! as a capability source of truth without duplicating it.
 
 use crate::capability::descriptor::{
-    CapabilityDescriptor, CapabilityId, CapabilityKind, CapabilityRevision, ProjectionMetadata,
-    SchemaRef,
+    CapabilityDescriptor, CapabilityFacet, CapabilityFacets, CapabilityId, CapabilityKind,
+    CapabilityRevision, ProjectionMetadata, SchemaRef,
 };
-use crate::capability::facade::Scope;
+use crate::capability::facade::{CapabilitySnapshot, Cursor, Scope};
 use crate::capability::ownership::{LifetimeScope, OwnerRef, VisibilityScope};
 use crate::tools::descriptor::{canonicalize_json, ToolCapabilityDescriptor};
 use sha2::{Digest, Sha256};
@@ -26,6 +26,7 @@ pub const TOOL_NAMESPACE: &str = "aleph/tools";
 pub trait CapabilityBackend: Send + Sync {
     fn lookup(&self, id: &CapabilityId) -> Option<CapabilityDescriptor>;
     fn enumerate(&self, scope: &Scope) -> Vec<CapabilityDescriptor>;
+    fn snapshot(&self, scope: &Scope) -> CapabilitySnapshot;
 }
 
 /// The one live backend: adapts [`crate::tools::registry::ToolHandlerRegistry`]
@@ -55,6 +56,12 @@ impl ToolBackendAdapter {
         true
     }
 
+    /// Whether a descriptor falls inside `scope`, including its behavior facet.
+    pub(super) fn descriptor_in_scope(descriptor: &CapabilityDescriptor, scope: &Scope) -> bool {
+        Self::in_scope(&descriptor.id, scope)
+            && scope.facet.is_none_or(|facet| descriptor.supports(facet))
+    }
+
     /// `(descriptors, revision)` from ONE registry generation.
     ///
     /// Both halves come from a single `snapshot_state()` load, so a caller can
@@ -74,7 +81,7 @@ impl ToolBackendAdapter {
                 descriptor.visibility = scope.visibility.clone();
                 descriptor
             })
-            .filter(|d| Self::in_scope(&d.id, scope))
+            .filter(|d| Self::descriptor_in_scope(d, scope))
             .collect();
         (capabilities, snap.revision())
     }
@@ -95,8 +102,16 @@ impl CapabilityBackend for ToolBackendAdapter {
         snapshot
             .values()
             .map(|desc| to_descriptor(desc))
-            .filter(|d| Self::in_scope(&d.id, scope))
+            .filter(|d| Self::descriptor_in_scope(d, scope))
             .collect()
+    }
+
+    fn snapshot(&self, scope: &Scope) -> CapabilitySnapshot {
+        let (capabilities, revision) = self.snapshot_capabilities(scope);
+        CapabilitySnapshot {
+            capabilities,
+            committed_cursor: Cursor(revision),
+        }
     }
 }
 
@@ -124,13 +139,19 @@ pub(super) fn to_descriptor(tool: &ToolCapabilityDescriptor) -> CapabilityDescri
         owner: OwnerRef::Runtime,
         services: Vec::new(),
         metadata: ProjectionMetadata::default(),
+        facets: tool_facets(),
     }
+}
+
+pub(super) fn tool_facets() -> CapabilityFacets {
+    CapabilityFacets::new().with(CapabilityFacet::Callable)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::capability::descriptor::{CapabilityId, CapabilityKind};
+    use crate::capability::descriptor::{CapabilityFacet, CapabilityId, CapabilityKind};
+    use crate::capability::facade::Cursor;
     use crate::session::events::ToolOutput;
     use crate::sync_primitives::Arc;
     use crate::tools::descriptor::ToolCapabilityDescriptor;
@@ -189,6 +210,71 @@ mod tests {
         assert_eq!(d.revision.0, 1);
     }
 
+    #[test]
+    fn tool_descriptor_exposes_orthogonal_behavior_facets() {
+        let descriptor = to_descriptor(&ToolCapabilityDescriptor::from_definition(
+            &fake_def("facets"),
+            0,
+        ));
+
+        assert!(descriptor.supports(CapabilityFacet::Callable));
+        assert!(!descriptor.supports(CapabilityFacet::ProviderLifecycle));
+        assert!(!descriptor.supports(CapabilityFacet::EventSource));
+        assert!(!descriptor.supports(CapabilityFacet::ExternalEffect));
+    }
+
+    #[test]
+    fn snapshot_returns_descriptors_and_revision_from_one_publication() {
+        let reg = ToolHandlerRegistry::new();
+        reg.register(
+            ToolCapabilityDescriptor::from_definition(&fake_def("snapshot"), 0),
+            Arc::new(fake_handler("snapshot")),
+        )
+        .unwrap();
+        let backend = ToolBackendAdapter { registry: reg };
+        let callable = Scope {
+            facet: Some(CapabilityFacet::Callable),
+            ..Scope::default()
+        };
+        let events = Scope {
+            facet: Some(CapabilityFacet::EventSource),
+            ..Scope::default()
+        };
+
+        let snapshot = CapabilityBackend::snapshot(&backend, &callable);
+        assert_eq!(snapshot.capabilities.len(), 1);
+        assert_eq!(snapshot.capabilities[0].kind, CapabilityKind::Tool);
+        assert_eq!(snapshot.committed_cursor, Cursor(1));
+        assert!(CapabilityBackend::snapshot(&backend, &events)
+            .capabilities
+            .is_empty());
+    }
+
+    #[test]
+    fn snapshot_filters_by_behavior_facet_without_changing_kind() {
+        let reg = ToolHandlerRegistry::new();
+        reg.register(
+            ToolCapabilityDescriptor::from_definition(&fake_def("callable"), 0),
+            Arc::new(fake_handler("callable")),
+        )
+        .unwrap();
+        let backend = ToolBackendAdapter { registry: reg };
+        let callable = Scope {
+            facet: Some(CapabilityFacet::Callable),
+            ..Scope::default()
+        };
+        let events = Scope {
+            facet: Some(CapabilityFacet::EventSource),
+            ..Scope::default()
+        };
+
+        assert_eq!(backend.snapshot_capabilities(&callable).0.len(), 1);
+        assert!(backend.snapshot_capabilities(&events).0.is_empty());
+        assert_eq!(
+            backend.snapshot_capabilities(&callable).0[0].kind,
+            CapabilityKind::Tool
+        );
+    }
     #[test]
     fn to_descriptor_fingerprint_is_canonical_and_stable() {
         let a = ToolCapabilityDescriptor::from_definition(

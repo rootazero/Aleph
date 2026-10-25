@@ -366,6 +366,28 @@ mod tests {
     }
 
     #[test]
+    fn explicit_start_is_the_only_transition_that_allocates_fixture_resources() {
+        let provider = ProviderHandle::new(provider());
+        provider.transition(ProviderState::Cold).unwrap();
+        let resources = std::sync::atomic::AtomicUsize::new(0);
+
+        assert_eq!(provider.snapshot(), (ProviderState::Cold, 0));
+        assert_eq!(resources.load(std::sync::atomic::Ordering::SeqCst), 0);
+
+        provider.transition(ProviderState::Starting).unwrap();
+        resources.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        provider.transition(ProviderState::Ready).unwrap();
+        assert_eq!(resources.load(std::sync::atomic::Ordering::SeqCst), 1);
+
+        provider.transition(ProviderState::Stopping).unwrap();
+        provider.transition(ProviderState::Stopped).unwrap();
+        provider.transition(ProviderState::Starting).unwrap();
+        resources.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        provider.transition(ProviderState::Ready).unwrap();
+        assert_eq!(resources.load(std::sync::atomic::Ordering::SeqCst), 2);
+    }
+
+    #[test]
     fn lifecycle_allocates_a_new_generation_on_each_start() {
         let mut lifecycle = provider();
         assert_eq!(lifecycle.generation(), 0);

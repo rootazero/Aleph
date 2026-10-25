@@ -101,7 +101,10 @@ Tool registration
   -> recovery ReplayPolicy lookup (fail-closed until call-time revision exists)
 ```
 
-The registry stores descriptor and handler together so a hot replacement cannot produce a mixed-generation projection. `ToolRegistrationScope` disposes registrations in reverse order and uses generation checks to protect replacements. Visibility (what a session may see) remains separate from lifecycle (when a registration is disposed). The process-global slots in `src/capability/mod.rs` remain boot-install diagnostics and are not this runtime registry.
+A capability may also declare orthogonal behavior facets in `CapabilityDescriptor::facets`: `Callable`, `EventSource`, `Subscription`, `ProviderLifecycle`, and `ExternalEffect`. `CapabilityKind` remains a primary classification, while facets describe composable behavior; a future Gateway provider can therefore combine inbound events, outbound calls, lifecycle control, and external effects without masquerading as `Tool` or adding another kind. `Scope::facet` filters discovery, projection, and live change visibility through the same descriptor predicate. Facets are descriptive metadata only: provider instance/generation, owner generation, descriptor revision, leases, effect claims, and durability remain owned by their existing authorities. The current Tool backend declares `Callable` only; Feishu has no descriptor, resolver, or production mount in this change.
+
+能力还可以在 `CapabilityDescriptor::facets` 中声明正交行为 facet：`Callable`、`EventSource`、`Subscription`、`ProviderLifecycle` 与 `ExternalEffect`。`CapabilityKind` 仍是主分类，facet 描述可组合行为；未来 Gateway provider 可以组合入站事件、出站调用、生命周期控制与外部 effect，而不必伪装成 `Tool` 或新增 kind。`Scope::facet` 通过同一个 descriptor predicate 过滤 discovery、projection 与 live change visibility。facet 只是描述性元数据：provider instance/generation、owner generation、descriptor revision、lease、effect claim 与 durability 仍由既有 authority 单独拥有。本次修改中 Tool backend 只声明 `Callable`；Feishu 仍没有 descriptor、resolver 或 production mount。
+
 
 ### B4 plugin authority chain / 插件权限链
 

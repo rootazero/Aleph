@@ -12,7 +12,7 @@
 //! fresh snapshot and emits [`CapabilityChange::Invalidated`] rather than
 //! pretending it delivered every event.
 
-use crate::capability::backend::{ToolBackendAdapter, TOOL_NAMESPACE};
+use crate::capability::backend::{CapabilityBackend, ToolBackendAdapter, TOOL_NAMESPACE};
 use crate::capability::descriptor::{CapabilityId, CapabilityRevision, ProjectionMetadata};
 use crate::capability::facade::{
     BackendLease, CapabilityChange, CapabilityChangeStream, CapabilitySnapshot, Cursor, Projection,
@@ -184,13 +184,17 @@ impl ZahirFacade {
         let registry_closed = snap.is_closed();
 
         // Candidate ids: registry entries passing the shared kind/namespace
-        // filter (`in_scope` does NOT check visibility — the owner map below
-        // supplies that half).
+        // and behavior-facet filter (`in_scope` does NOT check visibility —
+        // the owner map below supplies that half).
         let in_scope_ids: Vec<CapabilityId> = snap
             .entries()
-            .keys()
-            .map(|name| tool_id(name))
-            .filter(|id| ToolBackendAdapter::in_scope(id, scope))
+            .iter()
+            .filter(|(_, entry)| {
+                let descriptor =
+                    crate::capability::backend::to_descriptor(entry.descriptor.as_ref());
+                ToolBackendAdapter::descriptor_in_scope(&descriptor, scope)
+            })
+            .map(|(name, _)| tool_id(name))
             .collect();
 
         // ONE bulk owner observation under ONE mutex. Membership is the live
@@ -261,7 +265,11 @@ impl ZahirFacade {
             | CapabilityChange::Unregistered { id, .. } => id,
             CapabilityChange::Invalidated => return true,
         };
-        if !ToolBackendAdapter::in_scope(id, scope) {
+        if !ToolBackendAdapter::in_scope(id, scope)
+            || !scope
+                .facet
+                .is_none_or(|facet| crate::capability::backend::tool_facets().contains(facet))
+        {
             return false;
         }
         self.tree.generation(id, &scope.visibility).is_some()
@@ -380,14 +388,15 @@ impl ZahirFacade {
 impl Zahir for ZahirFacade {
     fn describe(&self, scope: Scope) -> CapabilitySnapshot {
         self.reconcile_registry_bindings();
-        let (capabilities, revision) = self.adapter.snapshot_capabilities(&scope);
-        let capabilities = capabilities
+        let source_snapshot = CapabilityBackend::snapshot(&self.adapter, &scope);
+        let capabilities = source_snapshot
+            .capabilities
             .into_iter()
             .filter(|d| self.tree.generation(&d.id, &scope.visibility).is_some())
             .collect();
         CapabilitySnapshot {
             capabilities,
-            committed_cursor: Cursor(revision),
+            committed_cursor: source_snapshot.committed_cursor,
         }
     }
 
@@ -486,6 +495,7 @@ impl Zahir for ZahirFacade {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::capability::backend::CapabilityBackend;
     use crate::capability::ownership::{
         ClaimState, LifetimeScope, OwnerGeneration, OwnerRef, TaskId, VisibilityScope,
     };
@@ -550,6 +560,23 @@ mod tests {
         (facade, registry, tree)
     }
 
+    fn cold_host() -> (Arc<ZahirFacade>, ProviderHandle) {
+        let provider = ProviderHandle::new(ProviderLifecycle::new(
+            ProviderId::new("test/cold-tools").unwrap(),
+            ProviderTransport::InProcess,
+        ));
+        provider.transition(ProviderState::Cold).unwrap();
+        let registry = ToolHandlerRegistry::new_with_provider(provider.clone());
+        registry
+            .register(
+                ToolCapabilityDescriptor::from_definition(&fake_def("cold"), 0),
+                Arc::new(fake_handler("cold")),
+            )
+            .unwrap();
+        let tree = Arc::new(OwnershipTree::new());
+        (ZahirFacade::new(registry, tree), provider)
+    }
+
     fn ref_for(id: &CapabilityId) -> Reference {
         Reference {
             id: id.clone(),
@@ -561,8 +588,49 @@ mod tests {
         Scope {
             kind: None,
             namespace: None,
+            facet: None,
             visibility: VisibilityScope::default(),
         }
+    }
+
+    #[test]
+    fn describe_uses_backend_snapshot_contract() {
+        let (host, registry, _tree) = host_parts(&["snapshot"]);
+        let scope = scope_all();
+        let source_snapshot = CapabilityBackend::snapshot(&host.adapter, &scope);
+        let facade_snapshot = host.describe(scope);
+
+        assert_eq!(facade_snapshot, source_snapshot);
+        assert_eq!(facade_snapshot.committed_cursor.0, registry.revision());
+    }
+
+    #[test]
+    fn describe_does_not_start_a_cold_provider() {
+        let (host, provider) = cold_host();
+
+        let snapshot = host.describe(scope_all());
+
+        assert!(snapshot.capabilities.is_empty());
+        assert_eq!(provider.snapshot(), (ProviderState::Cold, 0));
+    }
+
+    #[test]
+    fn project_does_not_start_a_cold_provider() {
+        let (host, provider) = cold_host();
+
+        let projection = host.project(TransportTarget::AcpJson, scope_all());
+
+        assert!(projection.capabilities.is_empty());
+        assert_eq!(provider.snapshot(), (ProviderState::Cold, 0));
+    }
+
+    #[test]
+    fn resolve_fails_closed_without_starting_a_cold_provider() {
+        let (host, provider) = cold_host();
+        let id = tool_id("cold");
+
+        assert_eq!(host.resolve(ref_for(&id)), Err(ResolveError::Unknown));
+        assert_eq!(provider.snapshot(), (ProviderState::Cold, 0));
     }
 
     #[test]
@@ -623,6 +691,74 @@ mod tests {
             facade.validate_lease(&fresh),
             Err(ResolveError::StaleProvider)
         );
+    }
+
+    #[test]
+    fn provider_restart_rejects_old_generation_without_owner_mutation() {
+        let (host, registry, tree) = host_parts(&["a"]);
+        let provider = host.provider();
+        let id = tool_id("a");
+        let lease = host.resolve(ref_for(&id)).expect("resolve succeeds");
+        let owner_generation = tree.generation(&id, &VisibilityScope::default());
+        let source_revision = registry.revision();
+
+        provider.transition(ProviderState::Stopping).unwrap();
+        provider.transition(ProviderState::Stopped).unwrap();
+        provider.transition(ProviderState::Starting).unwrap();
+        provider.transition(ProviderState::Ready).unwrap();
+
+        assert_eq!(provider.generation(), lease.provider_generation + 1);
+        assert_eq!(
+            tree.generation(&id, &VisibilityScope::default()),
+            owner_generation
+        );
+        assert_eq!(registry.revision(), source_revision);
+        assert_eq!(
+            host.validate_lease(&lease),
+            Err(ResolveError::StaleProvider)
+        );
+    }
+
+    #[test]
+    fn owner_bump_rejects_old_lease_without_provider_restart() {
+        let (host, registry, tree) = host_parts(&["a"]);
+        let provider = host.provider();
+        let id = tool_id("a");
+        let lease = host.resolve(ref_for(&id)).expect("resolve succeeds");
+        let provider_generation = provider.generation();
+        let source_revision = registry.revision();
+
+        tree.bump(LifetimeScope::Runtime)
+            .expect("runtime bump succeeds");
+
+        assert_eq!(provider.generation(), provider_generation);
+        assert_eq!(registry.revision(), source_revision);
+        assert_eq!(host.validate_lease(&lease), Err(ResolveError::StaleOwner));
+    }
+
+    #[test]
+    fn late_completion_from_replaced_generation_is_rejected() {
+        let (host, _registry, _tree) = host_parts(&["a"]);
+        let provider = host.provider();
+        let id = tool_id("a");
+        let lease = host.resolve(ref_for(&id)).expect("resolve succeeds");
+        let receipt = std::sync::Mutex::new(None);
+
+        provider.transition(ProviderState::Stopping).unwrap();
+        provider.transition(ProviderState::Stopped).unwrap();
+        provider.transition(ProviderState::Starting).unwrap();
+        provider.transition(ProviderState::Ready).unwrap();
+
+        if provider.acquire_call(lease.provider_generation).is_ok() {
+            *receipt.lock().unwrap() = Some(lease.provider_generation);
+        }
+        assert_eq!(*receipt.lock().unwrap(), None);
+
+        let fresh = host.resolve(ref_for(&id)).expect("fresh resolve succeeds");
+        if provider.acquire_call(fresh.provider_generation).is_ok() {
+            *receipt.lock().unwrap() = Some(fresh.provider_generation);
+        }
+        assert_eq!(*receipt.lock().unwrap(), Some(fresh.provider_generation));
     }
 
     #[test]
@@ -844,6 +980,7 @@ mod tests {
         let ws_scope = Scope {
             kind: None,
             namespace: None,
+            facet: None,
             visibility: ws.clone(),
         };
         let id_b = tool_id("b");
@@ -901,6 +1038,7 @@ mod tests {
         let ws_scope = Scope {
             kind: None,
             namespace: None,
+            facet: None,
             visibility: ws.clone(),
         };
 
@@ -950,6 +1088,7 @@ mod tests {
         let skill_scope = Scope {
             kind: Some(crate::capability::descriptor::CapabilityKind::Skill),
             namespace: None,
+            facet: None,
             visibility: VisibilityScope::default(),
         };
         assert!(!host.change_in_scope(&change, &skill_scope));
@@ -958,12 +1097,35 @@ mod tests {
         let foreign_ns_scope = Scope {
             kind: None,
             namespace: Some("aleph/skills".to_string()),
+            facet: None,
             visibility: VisibilityScope::default(),
         };
         assert!(!host.change_in_scope(&change, &foreign_ns_scope));
 
         // Control: the unfiltered scope still admits it.
         assert!(host.change_in_scope(&change, &scope_all()));
+    }
+
+    #[test]
+    fn facet_scope_filters_tool_snapshots_and_changes() {
+        let (host, _reg, _tree) = host_parts(&["a"]);
+        let callable = Scope {
+            facet: Some(crate::capability::descriptor::CapabilityFacet::Callable),
+            ..scope_all()
+        };
+        let events = Scope {
+            facet: Some(crate::capability::descriptor::CapabilityFacet::EventSource),
+            ..scope_all()
+        };
+        let change = CapabilityChange::Registered {
+            id: tool_id("a"),
+            revision: CapabilityRevision(1),
+        };
+
+        assert_eq!(host.describe(callable.clone()).capabilities.len(), 1);
+        assert!(host.describe(events.clone()).capabilities.is_empty());
+        assert!(host.change_in_scope(&change, &callable));
+        assert!(!host.change_in_scope(&change, &events));
     }
 
     #[test]
@@ -1148,6 +1310,7 @@ mod tests {
         let skill_scope = Scope {
             kind: Some(CapabilityKind::Skill),
             namespace: None,
+            facet: None,
             visibility: VisibilityScope::default(),
         };
         assert!(host
@@ -1159,6 +1322,7 @@ mod tests {
         let foreign = Scope {
             kind: None,
             namespace: Some("aleph/skills".to_string()),
+            facet: None,
             visibility: VisibilityScope::default(),
         };
         assert!(host.snapshot_entries_in_scope(&foreign).entries.is_empty());
@@ -1172,6 +1336,7 @@ mod tests {
         let ws_scope = Scope {
             kind: None,
             namespace: None,
+            facet: None,
             visibility: ws,
         };
         assert!(host.snapshot_entries_in_scope(&ws_scope).entries.is_empty());
