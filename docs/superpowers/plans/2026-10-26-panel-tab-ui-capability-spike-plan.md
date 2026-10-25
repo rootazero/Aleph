@@ -128,7 +128,7 @@
 
 - [ ] **Step 2: Run the focused registry tests before implementation**
 
-  Run: `cargo test -p aleph-panel panel::registry`
+  Run: `cargo test -p aleph-panel --lib --features panel-tab-spike panel::registry`
 
   Expected: FAIL because the registry module and feature-gated panel module do not exist.
 
@@ -142,7 +142,7 @@
 
 - [ ] **Step 5: Run the focused registry tests after implementation**
 
-  Run: `cargo test -p aleph-panel panel::registry`
+  Run: `cargo test -p aleph-panel --lib --features panel-tab-spike panel::registry`
 
   Expected: PASS, including deterministic ordering and namespace collision behavior.
 
