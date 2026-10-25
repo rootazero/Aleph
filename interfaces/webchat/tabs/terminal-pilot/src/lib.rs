@@ -206,7 +206,11 @@ mod tests {
         let descriptor = describe();
         assert_eq!(descriptor.key.qualified(), "aleph:terminal-pilot");
         assert_eq!(descriptor.api_major, 1);
-        assert_eq!(descriptor.entry, "tabs/terminal-pilot/terminal-pilot.js");
+        assert_eq!(
+            descriptor.entry,
+            option_env!("ALEPH_PANEL_PILOT_ENTRY")
+                .unwrap_or("tabs/terminal-pilot/terminal-pilot.js")
+        );
         assert_eq!(descriptor.permissions, ["sessions.list"]);
         assert_eq!(descriptor.trust, PanelUiTrust::Verified);
         assert_eq!(descriptor.status, PanelTabStatus::Enabled);
