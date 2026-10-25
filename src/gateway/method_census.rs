@@ -359,7 +359,6 @@ pub(crate) mod tests {
         ("rerank_config.get", Class::Admin),
         ("rerank_config.test", Class::Admin),
         ("rerank_config.update", Class::Admin),
-        ("runtime.agents.list", Class::Admin),
         ("runtimes.install", Class::Admin),
         ("runtimes.list", Class::Admin),
         ("runtimes.refresh", Class::Admin),

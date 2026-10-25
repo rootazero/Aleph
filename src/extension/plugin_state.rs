@@ -131,10 +131,19 @@ impl PluginControlOutcome {
 }
 
 /// Error keeps the full outcome so RPC/tool callers can report partial commit.
+///
+/// The outcome is boxed. [`PluginControlOutcome`] is 144 bytes on its own, so
+/// an inline field pushed the `Err` variant of every
+/// `Result<_, PluginControlError>` in the control path past
+/// `clippy::result_large_err`'s threshold, and that lint is a hard error in
+/// CI (`cargo clippy -p alephcore -p aleph-desktop -- -D warnings`). Boxing
+/// keeps `error.outcome` readable — field access auto-derefs — and leaves the
+/// wire projection in `plugin_control_response` byte-identical, because
+/// `Box<T>` serializes exactly like `T`.
 #[derive(Debug, Clone, thiserror::Error)]
 #[error("plugin control failed: {outcome:?}")]
 pub struct PluginControlError {
-    pub outcome: PluginControlOutcome,
+    pub outcome: Box<PluginControlOutcome>,
 }
 
 /// Whether a plugin loads, and why not — [`PluginsConfig::activation`].

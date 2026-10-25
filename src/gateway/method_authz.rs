@@ -145,45 +145,6 @@ const OPERATOR_TOOLS: &[&str] = &[
     // other arms rewrite install-wide trust.
     "plugin_manage",
     "context_plugin",
-    // `terminal` LOOKS like the `*_list`/`*_status`/`*_read` shape this
-    // list's own doc comment says is deliberately absent — it is not one of
-    // those. Read-only self-management (`config_audit`, `gateway_route`)
-    // discloses THIS server's own config; `terminal` discloses *another
-    // principal's* live terminal screen. The repo already made this exact
-    // call one face over: `"runtime."` sits in `method_admin::ADMIN_PREFIXES`
-    // with the reasoning "read-only agent panel over the same PTY sessions
-    // `pty.` gates — a session id, its cwd, and what is running in it, seen
-    // through a different lens. Same disclosure, same gate." `terminal` is a
-    // THIRD lens on that identical disclosure (herdr runtime port, phase 1,
-    // Task 11) — leaving it open would make the tool face a lower-privilege
-    // bypass of a decision `pty.*`/`runtime.*` already made twice.
-    // Before deleting this entry to "clean up" an apparent `*_read`
-    // exception: re-read the paragraph above, not just this line.
-    //
-    // ⚠️ The escalation card that membership here triggers
-    // (`gate_chain::GateRule::OperatorRequired::reason`, in
-    // `tools/scoped/gate_chain.rs`) reads "… which changes Aleph's own
-    // configuration. Approve to allow this change." That sentence is false
-    // for `terminal` — a read-only tool that changes nothing. Nothing is
-    // disclosed by it today only because `terminal`'s own inline gate
-    // refuses the call anyway even after a human approves that card
-    // (`require_operator_caller()` reads an unchanged `TurnContext` — see
-    // `terminal/capabilities.rs`). The card's TEXT is still wrong for a
-    // read-only tool, and the fix belongs in `gate_chain.rs`, not in this
-    // list or in `terminal.rs` (task-11 review F1).
-    //
-    // The six canonical `terminal_sessions_*` capabilities (one per verb)
-    // are the real tool identities; bare `terminal` is kept only because the
-    // `tools.invoke` compat rewrite and old operator allow-lists still name
-    // it. `capabilities::invoke_observation` repeats the operator check
-    // inline for the same reason as above.
-    "terminal",
-    "terminal_sessions_list",
-    "terminal_sessions_read",
-    "terminal_sessions_status",
-    "terminal_sessions_wait",
-    "terminal_sessions_explain",
-    "terminal_sessions_attach",
 ];
 
 /// True when `tool` mutates Aleph's own configuration and therefore requires an
@@ -230,7 +191,6 @@ mod tests {
         // contents). Deleting this entry would not redden any `pty.*` or
         // `runtime.*` test — it would silently expose another principal's
         // terminal content through the one face nothing else gates.
-        "terminal",
         // Writes `allowed_users` — the list the run-start gate
         // (`caller_may_act_as_agent`) reads. Ungated, the people that gate
         // refuses could add themselves to it, and nothing in `handlers::agent`
@@ -345,30 +305,6 @@ mod tests {
                  refused over JSON-RPC"
             );
         }
-    }
-
-    /// A4 RED: the six canonical terminal observation capabilities are the
-    /// tool face of the operator-only `pty.`/`runtime.` disclosure; the legacy
-    /// `terminal` entry stays until the compat ingress is gone.
-    #[test]
-    fn terminal_capability_canonical_read_names_require_operator() {
-        for name in [
-            "terminal_sessions_list",
-            "terminal_sessions_read",
-            "terminal_sessions_status",
-            "terminal_sessions_wait",
-            "terminal_sessions_explain",
-            "terminal_sessions_attach",
-        ] {
-            assert!(
-                tool_requires_operator(name),
-                "`{name}` exposes another principal's terminal content and must be OPERATOR_TOOLS"
-            );
-        }
-        assert!(
-            tool_requires_operator("terminal"),
-            "legacy `terminal` stays operator-gated (compat ingress)"
-        );
     }
 
     #[test]

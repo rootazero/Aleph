@@ -38,7 +38,6 @@ use tokio::sync::RwLock;
 
 use super::super::protocol::{JsonRpcRequest, JsonRpcResponse, INVALID_PARAMS};
 use crate::config::Config;
-use crate::gateway::pty::runtime::{ObservationCaller, TerminalRuntime};
 use crate::gateway::pty::{self, SpawnOptions};
 use crate::sync_primitives::Arc;
 
@@ -260,23 +259,12 @@ pub async fn handle_attach(request: JsonRpcRequest) -> JsonRpcResponse {
     if let Err(resp) = require_owned(&request, &params.session_id) {
         return resp;
     }
-    // Observation of a live screen goes through the one runtime adapter that
-    // the terminal tool face and `runtime.*` also use; `require_owned` above
-    // stays as the transport's own ownership refusal.
-    let caller = ObservationCaller::Gateway {
-        actor: crate::gateway::visibility::ambient_actor(),
-    };
-    let runtime = TerminalRuntime::new(pty::manager(), crate::gateway::runtime::agents());
-    match runtime.attach(&caller, &params.session_id) {
+    match pty::manager().attach_snapshot(&params.session_id) {
         Ok(snapshot) => match serde_json::to_value(&snapshot) {
             Ok(v) => JsonRpcResponse::success(id, v),
             Err(e) => JsonRpcResponse::error(id, INVALID_PARAMS, format!("encode failed: {e}")),
         },
-        Err(
-            crate::tools::service::ToolError::Execution { cause, .. }
-            | crate::tools::service::ToolError::ValidationFailed { cause, .. },
-        ) => JsonRpcResponse::error(id, INVALID_PARAMS, cause),
-        Err(other) => JsonRpcResponse::error(id, INVALID_PARAMS, other.to_string()),
+        Err(e) => JsonRpcResponse::error(id, INVALID_PARAMS, e),
     }
 }
 
@@ -1566,18 +1554,13 @@ mod tests {
         );
     }
 
-    /// A4: the production `pty.attach` RPC is served by the A2
-    /// `TerminalRuntime::attach` seam. This drives the real `handle_attach`
-    /// on a spawned session and pins what the runtime-backed handler must
-    /// still return: the typed `PtyAttachResponse` (exact key set, geometry,
-    /// full-row snapshot, a seq no older than the spawn cursor), the request
-    /// id echoed in the envelope, and the unknown / removed refusal in the
-    /// manager's own words (`no_such_session`, not a runtime-flavoured text).
+    /// The production `pty.attach` RPC returns the typed attach snapshot for
+    /// an owned session. The handler and manager share the same ownership
+    /// predicate, so an unknown or foreign session is refused with the
+    /// manager's `no_such_session` response.
     ///
-    /// Limitation: the runtime and the manager return the same snapshot, so
-    /// a black-box test cannot tell WHICH owner path produced it; the path
-    /// itself is held by the runtime's own `attach` tests (A2) and by review
-    /// of `handle_attach`.
+    /// The snapshot includes the request id, geometry, full-row screen data,
+    /// and a sequence no older than the spawn cursor.
     #[tokio::test]
     #[serial_test::parallel(pty_global_manager)]
     async fn terminal_capability_pty_attach_rpc_calls_terminal_runtime_attach() {

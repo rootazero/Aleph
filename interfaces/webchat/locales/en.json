@@ -301,7 +301,6 @@
   "slot": {
     "rps": {
       "subagent_tree": "Sub-agents",
-      "runtime_agents": "Runtime agents",
       "artifacts": "Artifacts",
       "tray": "Pinned files",
       "capabilities": "Capabilities",
@@ -1816,18 +1815,6 @@
       "leader": "Leader",
       "members": "members"
     }
-  },
-  "agent_panel": {
-    "title": "Running Agents",
-    "state_blocked": "Blocked",
-    "state_working": "Working",
-    "state_idle": "Idle",
-    "state_unknown": "Unknown",
-    "empty": "No agents running",
-    "quiet_seconds": "quiet {{ n }}s",
-    "quiet_minutes": "quiet {{ n }}m",
-    "quiet_hours": "quiet {{ n }}h",
-    "quiet_days": "quiet {{ n }}d"
   },
   "cron": {
     "title": "Scheduled Tasks",

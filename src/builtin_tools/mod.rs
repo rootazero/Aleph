@@ -126,7 +126,6 @@ pub mod strategy_manage;
 pub mod system_tool;
 pub mod task_manage;
 pub mod team;
-pub mod terminal;
 pub mod tool_usage;
 pub mod user_profile;
 pub mod vault_store;
@@ -290,7 +289,6 @@ pub use strategy_manage::{StrategyAction, StrategyArgs, StrategyOutput, Strategy
 pub use system_tool::{SystemArgs, SystemOutput, SystemTool};
 pub use task_manage::*;
 pub use team::*;
-pub use terminal::TerminalOutput;
 pub use vault_store::{VaultAction, VaultStoreArgs, VaultStoreOutput, VaultStoreTool};
 pub use voice_tools::{
     LocalVoiceArgs, LocalVoiceOutput, LocalVoiceTool, VoiceModeSetArgs, VoiceModeSetOutput,

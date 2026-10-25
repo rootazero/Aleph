@@ -252,7 +252,7 @@ pub(crate) enum ArgvProbe {
 ///   therefore kills the neighbouring profile's browser — the exact case the
 ///   argv check was added to prevent, failing on its most likely neighbour.
 /// * **The macOS argv/env bleed, already measured and pinned in this repo.**
-///   `crates/agent-detect/src/engine.rs:427-431` records it verbatim: a process
+///   The process-table fixture records it verbatim: a process
 ///   that rewrites its title (every Node CLI does) leaves `sysinfo::cmd()`
 ///   reading past the argv region into the environment, and `:938-957` pins a
 ///   real reading in which an exported variable whose value contained spaces
@@ -1036,7 +1036,7 @@ mod tests {
     /// scan over a joined line, and both halves of that sentence are load-bearing
     /// because the action this predicate authorises is SIGKILL.
     ///
-    /// The junk in these vectors is not invented. `crates/agent-detect/src/engine.rs:938-957`
+    /// The junk in these vectors is not invented. A captured process-table fixture
     /// pins a VERBATIM reading from this machine in which an exported variable
     /// whose value contains spaces scattered the bare words `prefer`, `modern`
     /// and `like` into `sysinfo::cmd()` — macOS lets a process that rewrites

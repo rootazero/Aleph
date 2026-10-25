@@ -62,15 +62,12 @@ struct ScreenState {
     attrs: Attrs,
     title: Option<String>,
     /// Latest ConEmu `OSC 9;4` progress payload -- everything after `9;`,
-    /// e.g. `"4;3;"` or `"4;0;0"`. That is the exact shape the detection
-    /// manifests' `osc_progress` region regexes are written against
-    /// (`crates/agent-detect/src/manifests/grok.toml` matches `^4;1;-1$`),
-    /// so this field's format is owned by those rules, not chosen here.
+    /// e.g. `"4;3;"` or `"4;0;0"`. The value is retained as the terminal's
+    /// raw progress level so clients that understand the OSC sequence can
+    /// interpret it without the screen parser inventing a higher-level state.
     ///
     /// A LEVEL, not an edge: a program sets it and leaves it until it sets
-    /// something else, and the manifests are written for exactly that --
-    /// Claude's rules assume `4;3` stays painted while it waits for
-    /// permission, which is why no rule reads `4;3` alone as working.
+    /// something else.
     osc_progress: Option<String>,
     /// DECTCEM (`CSI ?25 h/l`). Visible unless a program says otherwise.
     cursor_visible: bool,

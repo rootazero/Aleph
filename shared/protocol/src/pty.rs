@@ -22,9 +22,9 @@ pub const PTY_EXIT_TOPIC: &str = "pty.exit";
 /// (`gateway::method_census::sweep_rpc_methods`) requires a STRING LITERAL as
 /// the first argument to add a method to its census, so passing this constant
 /// there would make the registration invisible to the sweep and redden the
-/// census's staleness check. Same reasoning, same shape, as
-/// [`crate::runtime::RUNTIME_AGENTS_LIST_METHOD`] — see its doc for the full
-/// account of why the server's literal stays independently written.
+/// census's staleness check. Same reasoning, same shape, as other server-side
+/// method literals — the full account of why the server's literal stays
+/// independently written.
 pub const PTY_LIST_METHOD: &str = "pty.list";
 
 /// A cell (or run) colour. Deliberately *not* internally tagged: an

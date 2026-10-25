@@ -34,7 +34,6 @@ use web_sys::HtmlInputElement;
 /// carried no dials, so tapping a row there restored the folder and dropped the
 /// tier and the mode while the server kept enforcing them.
 use crate::api::sessions::{SessionListRow as SessionEntry, SessionRowKnobs};
-use crate::components::sidebar::AgentPanel;
 use crate::components::team_chat_entry::{enter_team_chat, AgentEntry};
 
 /// Should a `run.session_updated` frame re-hydrate the open transcript from
@@ -1428,11 +1427,6 @@ pub fn ChatSidebar() -> impl IntoView {
                 }
             }}
 
-            // Agent panel (Task 9) + session list share the remaining
-            // vertical space; the divider between them lives inside
-            // `<AgentPanel />` itself (`components/sidebar/agent_panel.rs`).
-            <div class="flex-1 flex flex-col min-h-0">
-            <AgentPanel />
             // Session list + group section (single scroll container)
             <div class="flex-1 overflow-y-auto px-2.5 py-1.5 space-y-0.5 min-h-0">
 
@@ -2003,8 +1997,6 @@ pub fn ChatSidebar() -> impl IntoView {
                     .into_any()
                 }}
             </div>
-            </div>
-
             // Bottom status bar — gateway state + active run count.
             <crate::components::sidebar::SessionStatusBar />
         </div>

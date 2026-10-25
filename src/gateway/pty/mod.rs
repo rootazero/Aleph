@@ -17,14 +17,11 @@
 //! that used to stand here (claiming the surface was open to all connections)
 //! survived one face going admin-only while the other didn't.
 
-pub mod foreground;
 pub mod jail;
 pub mod manager;
-pub(crate) mod runtime;
 pub mod screen;
 pub mod session;
 
-pub use foreground::ForegroundFact;
 pub(crate) use manager::no_such_session;
 pub use manager::{
     attach_event_bus, manager, owner_admits, PtyManager, SessionInfo, SessionOwner, SpawnResult,

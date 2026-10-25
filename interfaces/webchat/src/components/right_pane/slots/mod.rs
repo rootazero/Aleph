@@ -2,7 +2,6 @@
 
 mod artifacts;
 mod browser;
-mod runtime_agents;
 mod subagent_tree;
 mod tray;
 
@@ -54,14 +53,6 @@ pub(super) fn register_stage_one_slots(registry: &mut RightPaneRegistry) {
             default_open: true,
             visible: |_| true,
             render: subagent_tree::render,
-        },
-        SlotDescriptor {
-            id: "rps.runtime_agents",
-            label: "slot.rps.runtime_agents",
-            order: 150,
-            default_open: false,
-            visible: |_| true,
-            render: runtime_agents::render,
         },
         SlotDescriptor {
             id: "rps.artifacts",
@@ -147,13 +138,6 @@ mod tests {
                     true,
                     None
                 ),
-                (
-                    "rps.runtime_agents",
-                    "slot.rps.runtime_agents",
-                    150,
-                    false,
-                    None
-                ),
                 ("rps.artifacts", "slot.rps.artifacts", 200, true, None),
                 ("rps.tray", "slot.rps.tray", 250, false, None),
                 (
@@ -171,6 +155,5 @@ mod tests {
             registry.default_open().into_iter().collect::<Vec<_>>(),
             ["rps.artifacts", "rps.subagent_tree"]
         );
-        assert!(registry.get("rps.runtime_agents").is_some());
     }
 }

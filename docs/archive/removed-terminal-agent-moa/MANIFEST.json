@@ -1,0 +1,982 @@
+{
+  "format": 1,
+  "archive": "removed-terminal-agent-moa",
+  "source_head": "6087431474d0d2501fd2bcf141f77aa306d8dd2d",
+  "source_date_utc": "2026-10-24",
+  "selection": {
+    "seed": "tracked files under crates/agent-detect plus explicit mixed-module seeds",
+    "dynamic_references": [
+      "RuntimeAgents",
+      "RuntimeAgentState",
+      "terminal_sessions_list",
+      "terminal_sessions_read",
+      "terminal_sessions_status",
+      "terminal_sessions_wait",
+      "terminal_sessions_explain",
+      "terminal_sessions_attach",
+      "normalize_terminal_compat_call",
+      "DetectionInputs",
+      "agent-detect",
+      "runtime.agents.changed",
+      "runtime_agents",
+      "AgentPanel",
+      "foreground::"
+    ],
+    "dynamic_reference_decision": "Include tracked source, protocol, UI/TUI, QA, and current reference files containing deletion symbols; preserve complete snapshots of mixed files.",
+    "excluded": [
+      "target/",
+      "databases",
+      "credentials",
+      "temporary files",
+      "archive sidecars"
+    ]
+  },
+  "counts": {
+    "files": 91,
+    "production": 73,
+    "test": 5,
+    "qa": 8,
+    "documentation": 5,
+    "bytes": 7551215
+  },
+  "files": [
+    {
+      "path": "Cargo.lock",
+      "category": "workspace-manifest",
+      "sha256": "81d04e5831f9531114760922fc5d234c6713069b39d914ec3a93149b60dcb816",
+      "reason": [
+        "dynamic deletion reference: agent-detect"
+      ],
+      "complete_snapshot": true,
+      "production_or_test": "production"
+    },
+    {
+      "path": "Cargo.toml",
+      "category": "workspace-manifest",
+      "sha256": "09cc76fa8286ea285b3baca485157c794b023a2613c2f34823965e2833b6b8b3",
+      "reason": [
+        "dynamic deletion reference: agent-detect"
+      ],
+      "complete_snapshot": true,
+      "production_or_test": "production"
+    },
+    {
+      "path": "crates/agent-detect/Cargo.toml",
+      "category": "crate",
+      "sha256": "54bafc4321f66335ada0b68cac91e533166f3ebef16ca9ec30b0bb0988e2f303",
+      "reason": [
+        "complete crates/agent-detect snapshot",
+        "explicit seed: crates/agent-detect"
+      ],
+      "complete_snapshot": true,
+      "production_or_test": "production"
+    },
+    {
+      "path": "crates/agent-detect/NOTICE",
+      "category": "crate",
+      "sha256": "ed0ee6e1ab16a99d93e461bf25fcda5d64432c3a670e264cfe4ebf34047f46ba",
+      "reason": [
+        "complete crates/agent-detect snapshot",
+        "explicit seed: crates/agent-detect"
+      ],
+      "complete_snapshot": true,
+      "production_or_test": "production"
+    },
+    {
+      "path": "crates/agent-detect/src/engine.rs",
+      "category": "crate",
+      "sha256": "e689d0c74a53a8dd4b9503510dee46c65b1346a859eb7bb58c4725479e94337f",
+      "reason": [
+        "complete crates/agent-detect snapshot",
+        "explicit seed: crates/agent-detect"
+      ],
+      "complete_snapshot": true,
+      "production_or_test": "production"
+    },
+    {
+      "path": "crates/agent-detect/src/lib.rs",
+      "category": "crate",
+      "sha256": "8941bda6d0f6849f7ce997cc200e6d88e8bfd45d906d75b5fcb03e6f40d91df0",
+      "reason": [
+        "complete crates/agent-detect snapshot",
+        "explicit seed: crates/agent-detect"
+      ],
+      "complete_snapshot": true,
+      "production_or_test": "production"
+    },
+    {
+      "path": "crates/agent-detect/src/manifest.rs",
+      "category": "crate",
+      "sha256": "6707b5986b250d637106db00aa8183c0803991171c272014b0e07a40ce072dfb",
+      "reason": [
+        "complete crates/agent-detect snapshot",
+        "explicit seed: crates/agent-detect"
+      ],
+      "complete_snapshot": true,
+      "production_or_test": "production"
+    },
+    {
+      "path": "crates/agent-detect/src/manifest/tests.rs",
+      "category": "crate",
+      "sha256": "3cb2a4606650250a70c648d4c69a1744c2973b22449fb747cb64730003924cec",
+      "reason": [
+        "complete crates/agent-detect snapshot",
+        "explicit seed: crates/agent-detect"
+      ],
+      "complete_snapshot": true,
+      "production_or_test": "test"
+    },
+    {
+      "path": "crates/agent-detect/src/manifests/amp.toml",
+      "category": "crate",
+      "sha256": "031162fdb8fb9b9abfdb5fcdc7d76afa405b61d112bba8d43f50d694ad64c43b",
+      "reason": [
+        "complete crates/agent-detect snapshot",
+        "explicit seed: crates/agent-detect"
+      ],
+      "complete_snapshot": true,
+      "production_or_test": "production"
+    },
+    {
+      "path": "crates/agent-detect/src/manifests/antigravity.toml",
+      "category": "crate",
+      "sha256": "ecb172d5df6f2740cc5df24a0355a4cf0937abeb2b1bb3ba43027e705a57f927",
+      "reason": [
+        "complete crates/agent-detect snapshot",
+        "explicit seed: crates/agent-detect"
+      ],
+      "complete_snapshot": true,
+      "production_or_test": "production"
+    },
+    {
+      "path": "crates/agent-detect/src/manifests/claude.toml",
+      "category": "crate",
+      "sha256": "72b0704e9ecc96c6a441a8e74838681fe0116b639fd9176c9dd7452b271c7ab2",
+      "reason": [
+        "complete crates/agent-detect snapshot",
+        "explicit seed: crates/agent-detect"
+      ],
+      "complete_snapshot": true,
+      "production_or_test": "production"
+    },
+    {
+      "path": "crates/agent-detect/src/manifests/cline.toml",
+      "category": "crate",
+      "sha256": "76543248e927104cfdb7db8968f5a3f5ed5b0e5f722c3f1fe6507a7dbbdd26cf",
+      "reason": [
+        "complete crates/agent-detect snapshot",
+        "explicit seed: crates/agent-detect"
+      ],
+      "complete_snapshot": true,
+      "production_or_test": "production"
+    },
+    {
+      "path": "crates/agent-detect/src/manifests/codex.toml",
+      "category": "crate",
+      "sha256": "d1538ef9d11bfe005784dfaea51afd70e5c0480a4cf9f828a6bd5c904de97326",
+      "reason": [
+        "complete crates/agent-detect snapshot",
+        "explicit seed: crates/agent-detect"
+      ],
+      "complete_snapshot": true,
+      "production_or_test": "production"
+    },
+    {
+      "path": "crates/agent-detect/src/manifests/cursor.toml",
+      "category": "crate",
+      "sha256": "58d9db4d9bbd3924eae2f37a5af06a8fa4fa81a8b6d991776cf807189b796c05",
+      "reason": [
+        "complete crates/agent-detect snapshot",
+        "explicit seed: crates/agent-detect"
+      ],
+      "complete_snapshot": true,
+      "production_or_test": "production"
+    },
+    {
+      "path": "crates/agent-detect/src/manifests/devin.toml",
+      "category": "crate",
+      "sha256": "e7f8186cd48297e0642d65ced118ff305f1568f35078044d5ccde0b66166f43a",
+      "reason": [
+        "complete crates/agent-detect snapshot",
+        "explicit seed: crates/agent-detect"
+      ],
+      "complete_snapshot": true,
+      "production_or_test": "production"
+    },
+    {
+      "path": "crates/agent-detect/src/manifests/droid.toml",
+      "category": "crate",
+      "sha256": "0e1a2e069454d0009fc3f406b82882839155cc9e2945b76172195123796ae4dc",
+      "reason": [
+        "complete crates/agent-detect snapshot",
+        "explicit seed: crates/agent-detect"
+      ],
+      "complete_snapshot": true,
+      "production_or_test": "production"
+    },
+    {
+      "path": "crates/agent-detect/src/manifests/gemini.toml",
+      "category": "crate",
+      "sha256": "fd0562a30f7f5d99ba0a5ace1c285421ce6f9839c2e108f7ed4aa971c32ee7c8",
+      "reason": [
+        "complete crates/agent-detect snapshot",
+        "explicit seed: crates/agent-detect"
+      ],
+      "complete_snapshot": true,
+      "production_or_test": "production"
+    },
+    {
+      "path": "crates/agent-detect/src/manifests/github-copilot.toml",
+      "category": "crate",
+      "sha256": "5593637bebf80b4196445968d644a7263627282b069d8929218d1a84982ec360",
+      "reason": [
+        "complete crates/agent-detect snapshot",
+        "explicit seed: crates/agent-detect"
+      ],
+      "complete_snapshot": true,
+      "production_or_test": "production"
+    },
+    {
+      "path": "crates/agent-detect/src/manifests/grok.toml",
+      "category": "crate",
+      "sha256": "751f4ca97ed59b93eb34c2c6a3bd9da99da248303b19ce8946dcf7b7bd66db73",
+      "reason": [
+        "complete crates/agent-detect snapshot",
+        "explicit seed: crates/agent-detect"
+      ],
+      "complete_snapshot": true,
+      "production_or_test": "production"
+    },
+    {
+      "path": "crates/agent-detect/src/manifests/hermes.toml",
+      "category": "crate",
+      "sha256": "07623a5b80cb66bf5bee0202e4e115b7571a1d97ff3553fdc6d2909a568a3c16",
+      "reason": [
+        "complete crates/agent-detect snapshot",
+        "explicit seed: crates/agent-detect"
+      ],
+      "complete_snapshot": true,
+      "production_or_test": "production"
+    },
+    {
+      "path": "crates/agent-detect/src/manifests/kilo.toml",
+      "category": "crate",
+      "sha256": "456eca87914e4028c443145bcd5b4802bd073761af270a386e3e06e8c29f9436",
+      "reason": [
+        "complete crates/agent-detect snapshot",
+        "explicit seed: crates/agent-detect"
+      ],
+      "complete_snapshot": true,
+      "production_or_test": "production"
+    },
+    {
+      "path": "crates/agent-detect/src/manifests/kimi.toml",
+      "category": "crate",
+      "sha256": "48db831630511c6ea4ccbed3b52aa060b99b6ff00f568f03baf0c737d730326e",
+      "reason": [
+        "complete crates/agent-detect snapshot",
+        "explicit seed: crates/agent-detect"
+      ],
+      "complete_snapshot": true,
+      "production_or_test": "production"
+    },
+    {
+      "path": "crates/agent-detect/src/manifests/kiro.toml",
+      "category": "crate",
+      "sha256": "52aa41a74ad820bfd1a518c6d0abb7d931217a59921df2a783aab0f9c7ec4862",
+      "reason": [
+        "complete crates/agent-detect snapshot",
+        "explicit seed: crates/agent-detect"
+      ],
+      "complete_snapshot": true,
+      "production_or_test": "production"
+    },
+    {
+      "path": "crates/agent-detect/src/manifests/maki.toml",
+      "category": "crate",
+      "sha256": "6939d171863305ccd45f5c88ac8f72c66270262b64653c565c879959174ad39e",
+      "reason": [
+        "complete crates/agent-detect snapshot",
+        "explicit seed: crates/agent-detect"
+      ],
+      "complete_snapshot": true,
+      "production_or_test": "production"
+    },
+    {
+      "path": "crates/agent-detect/src/manifests/muse.toml",
+      "category": "crate",
+      "sha256": "deb8dcc3512a515a0c63452e7e0f976aef695611b60b751198670091a143a510",
+      "reason": [
+        "complete crates/agent-detect snapshot",
+        "explicit seed: crates/agent-detect"
+      ],
+      "complete_snapshot": true,
+      "production_or_test": "production"
+    },
+    {
+      "path": "crates/agent-detect/src/manifests/opencode.toml",
+      "category": "crate",
+      "sha256": "6eb100a74f2798bb738765e332da78e24b270f2c65076c32f639674cd7595121",
+      "reason": [
+        "complete crates/agent-detect snapshot",
+        "explicit seed: crates/agent-detect"
+      ],
+      "complete_snapshot": true,
+      "production_or_test": "production"
+    },
+    {
+      "path": "crates/agent-detect/src/manifests/pi.toml",
+      "category": "crate",
+      "sha256": "4bb85b8411cf82f332789396419655e564c178121d1a96af5dc1f4ff1752cd34",
+      "reason": [
+        "complete crates/agent-detect snapshot",
+        "explicit seed: crates/agent-detect"
+      ],
+      "complete_snapshot": true,
+      "production_or_test": "production"
+    },
+    {
+      "path": "crates/agent-detect/src/manifests/qodercli.toml",
+      "category": "crate",
+      "sha256": "ae5667ee4c4a8e1b9486315c6bd1dce279036baaaa9fcd82785b07b267d4fc6a",
+      "reason": [
+        "complete crates/agent-detect snapshot",
+        "explicit seed: crates/agent-detect"
+      ],
+      "complete_snapshot": true,
+      "production_or_test": "production"
+    },
+    {
+      "path": "crates/agent-detect/src/manifests/qwen.toml",
+      "category": "crate",
+      "sha256": "a975826cc7313a757e3c590e64e5bfe9799f9d1d4ca1a788a5a66f69efa343ff",
+      "reason": [
+        "complete crates/agent-detect snapshot",
+        "explicit seed: crates/agent-detect"
+      ],
+      "complete_snapshot": true,
+      "production_or_test": "production"
+    },
+    {
+      "path": "crates/agent-detect/src/screen_rules.rs",
+      "category": "crate",
+      "sha256": "82b5562cc80bcd601b666b7555b74f054002642dd1d54b86b311ecdb7f8d0b41",
+      "reason": [
+        "complete crates/agent-detect snapshot",
+        "explicit seed: crates/agent-detect"
+      ],
+      "complete_snapshot": true,
+      "production_or_test": "production"
+    },
+    {
+      "path": "docs/reference/FEATURE_LOCATOR.md",
+      "category": "reference-document",
+      "sha256": "8e469812ea537ae07c22ff66ee4df1efbb671007315e2df9f5dbe6f36ccac6c6",
+      "reason": [
+        "dynamic deletion reference: RuntimeAgents, agent-detect, runtime.agents.changed, runtime_agents, AgentPanel, foreground::"
+      ],
+      "complete_snapshot": true,
+      "production_or_test": "documentation"
+    },
+    {
+      "path": "docs/reference/SECURITY.md",
+      "category": "reference-document",
+      "sha256": "feff8b69da1f0a1b3dc35e4f32a17d8ce2512e9211170d65ff1636e32c5b284e",
+      "reason": [
+        "dynamic deletion reference: RuntimeAgents"
+      ],
+      "complete_snapshot": true,
+      "production_or_test": "documentation"
+    },
+    {
+      "path": "docs/reference/SUBSYSTEM_ROUTING.md",
+      "category": "reference-document",
+      "sha256": "06cc55d72d5eb4b84ee854576479120c033dc5206088d405f4f78d3fb55ac346",
+      "reason": [
+        "dynamic deletion reference: agent-detect"
+      ],
+      "complete_snapshot": true,
+      "production_or_test": "documentation"
+    },
+    {
+      "path": "docs/reference/TERMINAL_RUNTIME.md",
+      "category": "reference-document",
+      "sha256": "9607407374c004635f308ca8c301dabf185d6c01a942502da0666618341776d9",
+      "reason": [
+        "dynamic deletion reference: RuntimeAgents, agent-detect, runtime.agents.changed, AgentPanel, foreground::"
+      ],
+      "complete_snapshot": true,
+      "production_or_test": "documentation"
+    },
+    {
+      "path": "docs/reference/TOOL_SYSTEM.md",
+      "category": "reference-document",
+      "sha256": "c2998b259822b9fdb9bfbf42a7bfc3b39a59c2f511f28358db5662c138654ec3",
+      "reason": [
+        "dynamic deletion reference: terminal_sessions_list, terminal_sessions_read, terminal_sessions_status, terminal_sessions_wait, terminal_sessions_explain, terminal_sessions_attach"
+      ],
+      "complete_snapshot": true,
+      "production_or_test": "documentation"
+    },
+    {
+      "path": "interfaces/tui/src/tui/app/browser_catalog.rs",
+      "category": "interface-ui",
+      "sha256": "65427215ec9529718149acdb7732a7ecd0e349c501a6412c49a522ec63561650",
+      "reason": [
+        "dynamic deletion reference: runtime.agents.changed"
+      ],
+      "complete_snapshot": true,
+      "production_or_test": "production"
+    },
+    {
+      "path": "interfaces/tui/src/tui/app/mod.rs",
+      "category": "interface-ui",
+      "sha256": "53b5671d43a227f98aeabcd3be7644cc57a34c3be2f27c1015fe2ede0cf30634",
+      "reason": [
+        "dynamic deletion reference: runtime.agents.changed, runtime_agents, AgentPanel"
+      ],
+      "complete_snapshot": true,
+      "production_or_test": "production"
+    },
+    {
+      "path": "interfaces/tui/src/tui/app/tests.rs",
+      "category": "interface-ui",
+      "sha256": "36f00557ab0a0e125856e9096299d49ae110e54c2e8c4ae53bc8910b9658b7aa",
+      "reason": [
+        "dynamic deletion reference: runtime.agents.changed, runtime_agents, AgentPanel"
+      ],
+      "complete_snapshot": true,
+      "production_or_test": "test"
+    },
+    {
+      "path": "interfaces/tui/src/tui/commands.rs",
+      "category": "interface-ui",
+      "sha256": "8adafc24aa500b1b1b59d627211c601f006952ab5e5c63f8d1c3e856fc689a99",
+      "reason": [
+        "dynamic deletion reference: AgentPanel"
+      ],
+      "complete_snapshot": true,
+      "production_or_test": "production"
+    },
+    {
+      "path": "interfaces/tui/src/tui/live_acceptance_tests.rs",
+      "category": "interface-ui",
+      "sha256": "2b2c57075adc99890d6435f0aee03c1a41ea334fa86dbdcc83956892ab3d52a0",
+      "reason": [
+        "dynamic deletion reference: runtime_agents"
+      ],
+      "complete_snapshot": true,
+      "production_or_test": "production"
+    },
+    {
+      "path": "interfaces/tui/src/tui/mod.rs",
+      "category": "interface-ui",
+      "sha256": "74a86cc7500606ca44fd3158c7d64593694332fd97d434749b971df3a9949320",
+      "reason": [
+        "dynamic deletion reference: RuntimeAgents, RuntimeAgentState, runtime.agents.changed, runtime_agents, AgentPanel"
+      ],
+      "complete_snapshot": true,
+      "production_or_test": "production"
+    },
+    {
+      "path": "interfaces/tui/src/tui/render.rs",
+      "category": "interface-ui",
+      "sha256": "f7f7795004b2edb663c63cedc2e2016e035388f5741e51c3cdde8936aeffe8bc",
+      "reason": [
+        "dynamic deletion reference: runtime_agents"
+      ],
+      "complete_snapshot": true,
+      "production_or_test": "production"
+    },
+    {
+      "path": "interfaces/tui/src/tui/slash.rs",
+      "category": "interface-ui",
+      "sha256": "b8a179ae31f80730b8a436ce1f57db536f843fe7f0e173112a148df006cc8194",
+      "reason": [
+        "dynamic deletion reference: AgentPanel"
+      ],
+      "complete_snapshot": true,
+      "production_or_test": "production"
+    },
+    {
+      "path": "interfaces/tui/src/tui/widgets/agent_panel.rs",
+      "category": "interface-ui",
+      "sha256": "ced4cbbe21bba34d75d95c1785976152014a6a69b6ddb4b3cf3435d8120721a5",
+      "reason": [
+        "explicit seed: interfaces/tui/src/tui/widgets/agent_panel.rs"
+      ],
+      "complete_snapshot": true,
+      "production_or_test": "production"
+    },
+    {
+      "path": "interfaces/webchat/locales/en.json",
+      "category": "interface-ui",
+      "sha256": "a2cd63c097a3a718368bffc2e5776d59cb90cf3622d7ad716f3f613c080fb981",
+      "reason": [
+        "dynamic deletion reference: runtime_agents"
+      ],
+      "complete_snapshot": true,
+      "production_or_test": "production"
+    },
+    {
+      "path": "interfaces/webchat/locales/zh.json",
+      "category": "interface-ui",
+      "sha256": "b153abb4faab270de079f8d38a5baa8c2fb92adc221ed2538fa36397542c8778",
+      "reason": [
+        "dynamic deletion reference: runtime_agents"
+      ],
+      "complete_snapshot": true,
+      "production_or_test": "production"
+    },
+    {
+      "path": "interfaces/webchat/src/api.rs",
+      "category": "interface-ui",
+      "sha256": "c3fcc9307f10117fe34227f23f9159b3194a93087f6ecc30a6f11074631ef38c",
+      "reason": [
+        "dynamic deletion reference: runtime_agents"
+      ],
+      "complete_snapshot": true,
+      "production_or_test": "production"
+    },
+    {
+      "path": "interfaces/webchat/src/api/runtime_agents.rs",
+      "category": "interface-ui",
+      "sha256": "190300e250e7df6d6fa6c64875a03a04e39c4f96c5a4c095f3d1fe7d70066ba0",
+      "reason": [
+        "explicit seed: interfaces/webchat/src/api/runtime_agents.rs"
+      ],
+      "complete_snapshot": true,
+      "production_or_test": "production"
+    },
+    {
+      "path": "interfaces/webchat/src/components/chat_sidebar.rs",
+      "category": "interface-ui",
+      "sha256": "a1d800cae26040925fc93d6896b8bfc3ac07fac5a74d15a779a5669f8a42b7a3",
+      "reason": [
+        "dynamic deletion reference: AgentPanel"
+      ],
+      "complete_snapshot": true,
+      "production_or_test": "production"
+    },
+    {
+      "path": "interfaces/webchat/src/components/right_pane/pane.rs",
+      "category": "interface-ui",
+      "sha256": "8b8526e2fb7925fd68df46a319dc547a1c09aacaca2f3f9fa53bbf1ba8a0ec59",
+      "reason": [
+        "dynamic deletion reference: runtime_agents"
+      ],
+      "complete_snapshot": true,
+      "production_or_test": "production"
+    },
+    {
+      "path": "interfaces/webchat/src/components/right_pane/slots/mod.rs",
+      "category": "interface-ui",
+      "sha256": "6de6c90157c71b0a3102f595beab9180c0ff394e5d2aeca05324ff2a45687b13",
+      "reason": [
+        "dynamic deletion reference: runtime_agents"
+      ],
+      "complete_snapshot": true,
+      "production_or_test": "production"
+    },
+    {
+      "path": "interfaces/webchat/src/components/right_pane/slots/runtime_agents.rs",
+      "category": "interface-ui",
+      "sha256": "7c46efaaf09b7d9cbcaf34f376814d2fe1c7a6facbdcbe78fbdf1bed914b25f2",
+      "reason": [
+        "dynamic deletion reference: AgentPanel"
+      ],
+      "complete_snapshot": true,
+      "production_or_test": "production"
+    },
+    {
+      "path": "interfaces/webchat/src/components/sidebar/agent_panel.rs",
+      "category": "interface-ui",
+      "sha256": "d47e964b55fd5a5cefe4bad65604df0c167b3597978ed6ec1b0f69b2b36047f8",
+      "reason": [
+        "explicit seed: interfaces/webchat/src/components/sidebar/agent_panel.rs"
+      ],
+      "complete_snapshot": true,
+      "production_or_test": "production"
+    },
+    {
+      "path": "interfaces/webchat/src/components/sidebar/mod.rs",
+      "category": "interface-ui",
+      "sha256": "f7179d55fb3532ab84ee324af1254ed52abd970f9ce60340dc6fd6c764ad7ff8",
+      "reason": [
+        "dynamic deletion reference: AgentPanel"
+      ],
+      "complete_snapshot": true,
+      "production_or_test": "production"
+    },
+    {
+      "path": "interfaces/webchat/src/platform/wide/views/terminal/mod.rs",
+      "category": "interface-ui",
+      "sha256": "b0ee68f5f6f30f99c2a8fa9548d023d4c984f934b5f00ef861e27264ec02fbc7",
+      "reason": [
+        "dynamic deletion reference: RuntimeAgents, runtime.agents.changed, runtime_agents"
+      ],
+      "complete_snapshot": true,
+      "production_or_test": "production"
+    },
+    {
+      "path": "interfaces/webchat/src/platform/wide/views/terminal/tabs.rs",
+      "category": "interface-ui",
+      "sha256": "a761e757adb17437aa21851b45790dd8960bcc25eb1a745e859e925dec109eae",
+      "reason": [
+        "dynamic deletion reference: RuntimeAgentState, runtime_agents"
+      ],
+      "complete_snapshot": true,
+      "production_or_test": "production"
+    },
+    {
+      "path": "qa/README.md",
+      "category": "qa",
+      "sha256": "5b1271091a828ddf7b8bd05afc95cdea64e6fc1cbaf036ec0099e836afbfed50",
+      "reason": [
+        "dynamic deletion reference: agent-detect, AgentPanel"
+      ],
+      "complete_snapshot": true,
+      "production_or_test": "qa"
+    },
+    {
+      "path": "qa/terminal/derive_agent_bins.mjs",
+      "category": "qa",
+      "sha256": "8524e63e079ea6da1a96ae15ce6963758e031865fe5a3c26aef325280f6c3ca2",
+      "reason": [
+        "dynamic deletion reference: agent-detect"
+      ],
+      "complete_snapshot": true,
+      "production_or_test": "qa"
+    },
+    {
+      "path": "qa/terminal/derive_chrome.mjs",
+      "category": "qa",
+      "sha256": "ad56170bed5211dab94190588f7289d9ce664ced509d0c9f295532a96804d7b1",
+      "reason": [
+        "dynamic deletion reference: agent-detect"
+      ],
+      "complete_snapshot": true,
+      "production_or_test": "qa"
+    },
+    {
+      "path": "qa/terminal/drive_terminal.mjs",
+      "category": "qa",
+      "sha256": "22369a31a0634f19a740e18678c168eba9d828c697425722c317dc8cf3fbfb29",
+      "reason": [
+        "dynamic deletion reference: foreground::"
+      ],
+      "complete_snapshot": true,
+      "production_or_test": "qa"
+    },
+    {
+      "path": "qa/terminal/drive_tui.py",
+      "category": "qa",
+      "sha256": "d18973a12c621b898a3e1f4dfed82741d9a7a8f79cce8b9fa03fec108c9af0fd",
+      "reason": [
+        "dynamic deletion reference: AgentPanel"
+      ],
+      "complete_snapshot": true,
+      "production_or_test": "qa"
+    },
+    {
+      "path": "qa/terminal/fake-claude.cjs",
+      "category": "qa",
+      "sha256": "a1b4cc4f911afb899c85376d36399c5bcb5d9dd4139af0eddef577b086be26f5",
+      "reason": [
+        "dynamic deletion reference: agent-detect"
+      ],
+      "complete_snapshot": true,
+      "production_or_test": "qa"
+    },
+    {
+      "path": "qa/terminal/run.sh",
+      "category": "qa",
+      "sha256": "eee5c105e17e8ffe40ecbca8d774cec97df44efc0a3af2e71485101911528460",
+      "reason": [
+        "dynamic deletion reference: agent-detect, foreground::"
+      ],
+      "complete_snapshot": true,
+      "production_or_test": "qa"
+    },
+    {
+      "path": "qa/terminal/toml_min.mjs",
+      "category": "qa",
+      "sha256": "bfc816a54eb72d7d6b4d792c68027737f7367194af8c79e3c391bd0dfc6820dd",
+      "reason": [
+        "dynamic deletion reference: agent-detect"
+      ],
+      "complete_snapshot": true,
+      "production_or_test": "qa"
+    },
+    {
+      "path": "shared/protocol/src/runtime.rs",
+      "category": "shared-contract-or-ui",
+      "sha256": "3f7a3b984457eab954087cb62ec42a7dc97c6ccd86cab27387b76919e81ee612",
+      "reason": [
+        "explicit seed: shared/protocol/src/runtime.rs"
+      ],
+      "complete_snapshot": true,
+      "production_or_test": "production"
+    },
+    {
+      "path": "shared/protocol/src/terminal.rs",
+      "category": "shared-contract-or-ui",
+      "sha256": "c97a63c330e4adb72308fe9f2741eed182d4782461bb7310a089477e925e33b7",
+      "reason": [
+        "dynamic deletion reference: RuntimeAgentState"
+      ],
+      "complete_snapshot": true,
+      "production_or_test": "production"
+    },
+    {
+      "path": "shared/ui_logic/src/state/agent_panel.rs",
+      "category": "shared-contract-or-ui",
+      "sha256": "fb16693cf855ba8dfd1d2d644584a70c95831e568ea0330a6d63ee2b2c5c862d",
+      "reason": [
+        "explicit seed: shared/ui_logic/src/state/agent_panel.rs"
+      ],
+      "complete_snapshot": true,
+      "production_or_test": "production"
+    },
+    {
+      "path": "shared/ui_logic/src/state/agent_panel_parity.rs",
+      "category": "shared-contract-or-ui",
+      "sha256": "a673467aa16a7cfc40b1fb8fca08169a69193e720c3ab1fad5edab88d7e97a6a",
+      "reason": [
+        "explicit seed: shared/ui_logic/src/state/agent_panel_parity.rs"
+      ],
+      "complete_snapshot": true,
+      "production_or_test": "production"
+    },
+    {
+      "path": "shared/ui_logic/src/state/mod.rs",
+      "category": "shared-contract-or-ui",
+      "sha256": "06600df6355109ef79627e6bb25b42daa342a6cf288853ee7be9f574900fc89a",
+      "reason": [
+        "dynamic deletion reference: AgentPanel"
+      ],
+      "complete_snapshot": true,
+      "production_or_test": "production"
+    },
+    {
+      "path": "src/browser/engine/process.rs",
+      "category": "production-source",
+      "sha256": "99541107bf69597f0c0db8e781f20e16da8e2126a54ae90f6e90307f9c77e40d",
+      "reason": [
+        "dynamic deletion reference: agent-detect"
+      ],
+      "complete_snapshot": true,
+      "production_or_test": "production"
+    },
+    {
+      "path": "src/builtin_tools/terminal.rs",
+      "category": "production-source",
+      "sha256": "b784747dce350689df2e8abc35b7f05f7511b501de7491cd1160d0526bdc3132",
+      "reason": [
+        "dynamic deletion reference: RuntimeAgents, RuntimeAgentState, DetectionInputs"
+      ],
+      "complete_snapshot": true,
+      "production_or_test": "production"
+    },
+    {
+      "path": "src/builtin_tools/terminal/capabilities.rs",
+      "category": "production-source",
+      "sha256": "8a4314c963fc68150ece3fc29298a6561ad70c5f2ea5fce2af4f60fea9f2cd96",
+      "reason": [
+        "explicit seed: src/builtin_tools/terminal/capabilities.rs"
+      ],
+      "complete_snapshot": true,
+      "production_or_test": "production"
+    },
+    {
+      "path": "src/builtin_tools/terminal/tests.rs",
+      "category": "production-source",
+      "sha256": "b66985e735a896696ab5cfaa27b3179f638a8649176ee07dfbe8e2dfd72a7f12",
+      "reason": [
+        "explicit seed: src/builtin_tools/terminal/tests.rs"
+      ],
+      "complete_snapshot": true,
+      "production_or_test": "test"
+    },
+    {
+      "path": "src/executor/builtin_registry/groups.rs",
+      "category": "production-source",
+      "sha256": "d9dd3f75300f44cf25d7ad21c88165a3ada8930a97933e3ecd52024f44ba633f",
+      "reason": [
+        "dynamic deletion reference: terminal_sessions_list, terminal_sessions_read, terminal_sessions_status, terminal_sessions_wait, terminal_sessions_explain, terminal_sessions_attach"
+      ],
+      "complete_snapshot": true,
+      "production_or_test": "production"
+    },
+    {
+      "path": "src/gateway/event_scope.rs",
+      "category": "production-source",
+      "sha256": "7535f63acc73279f061b82daabd743748beae2422b2debc92990ca22bf715c44",
+      "reason": [
+        "dynamic deletion reference: runtime.agents.changed"
+      ],
+      "complete_snapshot": true,
+      "production_or_test": "production"
+    },
+    {
+      "path": "src/gateway/handlers/runtime.rs",
+      "category": "production-source",
+      "sha256": "06795afb4be0de0a4fe01cd7cee42865985d97bbc1980f8bfd42a11ae416e575",
+      "reason": [
+        "explicit seed: src/gateway/handlers/runtime.rs"
+      ],
+      "complete_snapshot": true,
+      "production_or_test": "production"
+    },
+    {
+      "path": "src/gateway/handlers/tools_invoke.rs",
+      "category": "production-source",
+      "sha256": "6cb2f746bf2132532103e37b58c64c2e647c4c300256a5b1921ad21be787c55b",
+      "reason": [
+        "dynamic deletion reference: terminal_sessions_list, terminal_sessions_read, terminal_sessions_status, terminal_sessions_wait, terminal_sessions_explain, terminal_sessions_attach, normalize_terminal_compat_call"
+      ],
+      "complete_snapshot": true,
+      "production_or_test": "production"
+    },
+    {
+      "path": "src/gateway/handlers/tools_visibility.rs",
+      "category": "production-source",
+      "sha256": "07ea343cad5e0792f225c7312f299410b400d50d8c20c8292d98440c96852357",
+      "reason": [
+        "dynamic deletion reference: terminal_sessions_wait, terminal_sessions_attach"
+      ],
+      "complete_snapshot": true,
+      "production_or_test": "production"
+    },
+    {
+      "path": "src/gateway/method_authz.rs",
+      "category": "production-source",
+      "sha256": "533aa8eb2ea37d6b20d2dca0f5b564ae61b6308bb0c9d6676b5b12e7bfe0d8c2",
+      "reason": [
+        "dynamic deletion reference: terminal_sessions_list, terminal_sessions_read, terminal_sessions_status, terminal_sessions_wait, terminal_sessions_explain, terminal_sessions_attach"
+      ],
+      "complete_snapshot": true,
+      "production_or_test": "production"
+    },
+    {
+      "path": "src/gateway/pty/foreground.rs",
+      "category": "production-source",
+      "sha256": "1aaa8b041dc5e5cbdb48aadc3103e18426dd6ea1515ba5bc75f2b3aafd3c4499",
+      "reason": [
+        "explicit seed: src/gateway/pty/foreground.rs"
+      ],
+      "complete_snapshot": true,
+      "production_or_test": "production"
+    },
+    {
+      "path": "src/gateway/pty/manager.rs",
+      "category": "production-source",
+      "sha256": "da595897f6aadc588e72f505f6f6c10bbf96d103a7c46aec994bd2358ceb7e84",
+      "reason": [
+        "dynamic deletion reference: RuntimeAgents, DetectionInputs, runtime.agents.changed, foreground::"
+      ],
+      "complete_snapshot": true,
+      "production_or_test": "production"
+    },
+    {
+      "path": "src/gateway/pty/mod.rs",
+      "category": "production-source",
+      "sha256": "9a83d51c31498ba2d1308adddf275c9d3e253f9869b67df7557d673a8c3f322a",
+      "reason": [
+        "dynamic deletion reference: foreground::"
+      ],
+      "complete_snapshot": true,
+      "production_or_test": "production"
+    },
+    {
+      "path": "src/gateway/pty/runtime.rs",
+      "category": "production-source",
+      "sha256": "ef5355ca7e7c1f4a90370b0dffab535d442a5061f4cea8d46aaab08fea05e03c",
+      "reason": [
+        "explicit seed: src/gateway/pty/runtime.rs"
+      ],
+      "complete_snapshot": true,
+      "production_or_test": "production"
+    },
+    {
+      "path": "src/gateway/pty/screen/perform/mod.rs",
+      "category": "production-source",
+      "sha256": "b8d48fa49d2481c4ca33229615634beb4498222034871067da8f53fcd15853e4",
+      "reason": [
+        "dynamic deletion reference: agent-detect"
+      ],
+      "complete_snapshot": true,
+      "production_or_test": "production"
+    },
+    {
+      "path": "src/gateway/pty/screen/perform/osc.rs",
+      "category": "production-source",
+      "sha256": "0cab7792b6762bce0169a992fa1fad2484a095283b3cc88dc6804991f63a1cb0",
+      "reason": [
+        "dynamic deletion reference: foreground::"
+      ],
+      "complete_snapshot": true,
+      "production_or_test": "production"
+    },
+    {
+      "path": "src/gateway/pty/session.rs",
+      "category": "production-source",
+      "sha256": "e18b94d56863311fe8a116c0e2174374f187a6f85660bd45fec098d337090f4a",
+      "reason": [
+        "dynamic deletion reference: RuntimeAgents, runtime.agents.changed, foreground::"
+      ],
+      "complete_snapshot": true,
+      "production_or_test": "production"
+    },
+    {
+      "path": "src/gateway/runtime/mod.rs",
+      "category": "production-source",
+      "sha256": "c6bf6871a505c2f75fa3d9bae1fa955a9dfbeb816a4e5a59597a0f3e910fa805",
+      "reason": [
+        "explicit seed: src/gateway/runtime"
+      ],
+      "complete_snapshot": true,
+      "production_or_test": "production"
+    },
+    {
+      "path": "src/gateway/runtime/tests.rs",
+      "category": "production-source",
+      "sha256": "73112c62f0982a22ae7f8dbea1bdc9ce8315f73b9b3de4f8728ab70382a3f655",
+      "reason": [
+        "explicit seed: src/gateway/runtime"
+      ],
+      "complete_snapshot": true,
+      "production_or_test": "test"
+    },
+    {
+      "path": "src/tools/adapters/registry_adapter.rs",
+      "category": "production-source",
+      "sha256": "664af139e32768c8a8d41b8a3c0224bb6cafd8ab725089f47400f84001fecd26",
+      "reason": [
+        "dynamic deletion reference: terminal_sessions_list, terminal_sessions_read, terminal_sessions_status, terminal_sessions_wait, terminal_sessions_explain, terminal_sessions_attach"
+      ],
+      "complete_snapshot": true,
+      "production_or_test": "production"
+    },
+    {
+      "path": "src/tools/scoped/dispatch.rs",
+      "category": "production-source",
+      "sha256": "6b6d00cda9ea31fde05fec2576aa06d0e98bb303230405b7968fa84658bdeacb",
+      "reason": [
+        "dynamic deletion reference: terminal_sessions_read"
+      ],
+      "complete_snapshot": true,
+      "production_or_test": "production"
+    },
+    {
+      "path": "src/tools/scoped/tests.rs",
+      "category": "production-source",
+      "sha256": "8727a7b18277486fd5bfeae810949676988ef85dbe9f46985eeccdc55d9383f2",
+      "reason": [
+        "dynamic deletion reference: terminal_sessions_list, terminal_sessions_read"
+      ],
+      "complete_snapshot": true,
+      "production_or_test": "test"
+    }
+  ]
+}

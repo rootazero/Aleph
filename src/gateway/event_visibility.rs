@@ -694,14 +694,7 @@ pub(crate) fn classify(topic: &str, data: Option<&Value>) -> Option<SessionIdent
             }
         }
 
-        // Role-gated one filter up (`EventScopeGuard`'s `node.` and `runtime.`
-        // rules): cluster topology and the empty-payload agent-table nudge
-        // carry no per-session content to narrow, so the classification adds
-        // nothing — the same reasoning as `pairing.*` / `config.changed` in
-        // the module doc. Structural on `node.` for the reason the role rule
-        // is: a `node.evicted` added tomorrow is the same family.
         t if t.starts_with("node.") => SessionIdentity::Global,
-        aleph_protocol::runtime::RUNTIME_AGENTS_CHANGED_TOPIC => SessionIdentity::Global,
 
         // ⚠️ SPELLED OUT, NOT RE-REVIEWED (r11 T02). Each of these reached
         // every connection through the default arm before this arm existed;
