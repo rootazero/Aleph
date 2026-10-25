@@ -58,6 +58,8 @@ impl ScopedToolService {
     /// Only the service built for that single request carries it; it is never
     /// global or task-local.
     #[must_use]
+    #[allow(dead_code)] // used by tests only — no production opt-in since the terminal
+                        // herdr removal (5dd337df1); the transport itself is still covered
     pub(crate) fn with_structured_rpc_transport(mut self) -> Self {
         self.result_transport = super::ResultTransport::StructuredRpc;
         self

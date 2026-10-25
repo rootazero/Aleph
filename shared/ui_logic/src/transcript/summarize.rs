@@ -46,7 +46,6 @@ pub const DISPLAY_NAMES: &[(&str, &str)] = &[
     ("search", "Search"),
     ("scratchpad", "Plan"),
     ("tool_search", "Tools"),
-    ("terminal", "Terminal"),
     ("memory_search", "Memory"),
     ("note_manage", "Note"),
     ("subagent", "Agent"),

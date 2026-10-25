@@ -1342,8 +1342,8 @@ mod tests {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
 
         // Declared by its parent as `#[cfg(test)] mod tests;`.
-        let whole = root.join("src/gateway/runtime/tests.rs");
-        let src = std::fs::read_to_string(&whole).expect("src/gateway/runtime/tests.rs");
+        let whole = root.join("src/gateway/security/store/tests.rs");
+        let src = std::fs::read_to_string(&whole).expect("src/gateway/security/store/tests.rs");
         assert!(
             cfg_test_portion(&src).is_empty(),
             "precondition: a whole-file test module carries no `#[cfg(test)]` of its own, so \

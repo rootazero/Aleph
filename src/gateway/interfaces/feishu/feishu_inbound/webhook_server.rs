@@ -48,9 +48,18 @@ async fn handle_webhook(
     headers: HeaderMap,
     body: Bytes,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
-    if !state.api.is_admitted() {
+    let Some(admission) = state.api.admit_inbound().await else {
         return Err(StatusCode::SERVICE_UNAVAILABLE);
-    }
+    };
+    handle_webhook_after_admission(state, headers, body, admission).await
+}
+
+async fn handle_webhook_after_admission(
+    state: WebhookState,
+    headers: HeaderMap,
+    body: Bytes,
+    _admission: tokio::sync::OwnedRwLockReadGuard<()>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
     let body_str = String::from_utf8_lossy(&body);
 
     // Resolve the real event payload: when an Encrypt Key is configured Feishu
@@ -63,6 +72,9 @@ async fn handle_webhook(
     // URL-verification handshake — the challenge may live inside the decrypted payload.
     if let Ok(challenge_json) = serde_json::from_str::<serde_json::Value>(&payload) {
         if let Some(challenge) = challenge_json.get("challenge").and_then(|v| v.as_str()) {
+            if !state.api.is_admitted().await {
+                return Err(StatusCode::SERVICE_UNAVAILABLE);
+            }
             return Ok(Json(serde_json::json!({ "challenge": challenge })));
         }
     }
@@ -102,6 +114,9 @@ async fn handle_webhook(
         Err(e) => tracing::debug!("Failed to parse webhook body: {e}"),
     }
 
+    if !state.api.is_admitted().await {
+        return Err(StatusCode::SERVICE_UNAVAILABLE);
+    }
     Ok(Json(serde_json::json!({ "status": "ok" })))
 }
 
@@ -274,6 +289,136 @@ mod tests {
             .expect("graceful shutdown must finish")
             .unwrap();
         assert!(result.is_ok(), "serve task failed: {result:?}");
+    }
+
+    #[tokio::test]
+    async fn api_drain_does_not_join_an_accepted_handler_waiting_for_its_body() {
+        use crate::capability::provider::{
+            ProviderHandle, ProviderId, ProviderLifecycle, ProviderState, ProviderTransport,
+        };
+        use futures_util::FutureExt;
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let provider = ProviderHandle::new(ProviderLifecycle::ready(
+            ProviderId::new("accepted-handler-drain").unwrap(),
+            ProviderTransport::InProcess,
+        ));
+        let mut state = make_state();
+        let http = reqwest::Client::new();
+        let api = Arc::new(
+            FeishuApi::new(
+                Arc::new(crate::gateway::interfaces::feishu::auth::TokenManager::new(
+                    "id",
+                    "secret",
+                    "http://127.0.0.1:1",
+                    http.clone(),
+                )),
+                "http://127.0.0.1:1",
+                http,
+            )
+            .with_provider(provider.clone(), provider.generation()),
+        );
+        state.api = api.clone();
+        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .unwrap();
+        let address = listener.local_addr().unwrap();
+        let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
+        let mut task = tokio::spawn(run_webhook_server(state, listener, shutdown_rx));
+        let mut client = tokio::net::TcpStream::connect(address).await.unwrap();
+        let body = r#"{"challenge":"late","token":"token"}"#;
+        let head = format!(
+            "POST /feishu/events HTTP/1.1\r\nHost: localhost\r\nContent-Length: {}\r\nContent-Type: application/json\r\nExpect: 100-continue\r\n\r\n", body.len(),
+        );
+        client.write_all(head.as_bytes()).await.unwrap();
+        let expected = b"HTTP/1.1 100 Continue\r\n\r\n";
+        let mut interim = vec![0; expected.len()];
+        tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            client.read_exact(&mut interim),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(
+            interim, expected,
+            "body extractor has accepted this request"
+        );
+        provider.transition(ProviderState::Stopping).unwrap();
+        api.drain().await;
+        shutdown_tx.send(true).unwrap();
+        // Listener release proves graceful shutdown started, while the accepted
+        // handler still owns an incomplete body independently of API admission.
+        tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            loop {
+                if tokio::net::TcpListener::bind(address).await.is_ok() {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        assert!((&mut task).now_or_never().is_none());
+        client.write_all(body.as_bytes()).await.unwrap();
+        let mut response = Vec::new();
+        tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            client.read_to_end(&mut response),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert!(String::from_utf8_lossy(&response).starts_with("HTTP/1.1 503"));
+        tokio::time::timeout(std::time::Duration::from_secs(2), task)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn admitted_handler_rechecks_provider_before_success_response() {
+        use crate::capability::provider::{
+            ProviderHandle, ProviderId, ProviderLifecycle, ProviderState, ProviderTransport,
+        };
+
+        let provider = ProviderHandle::new(ProviderLifecycle::ready(
+            ProviderId::new("webhook-response-admission").unwrap(),
+            ProviderTransport::InProcess,
+        ));
+        let mut state = make_state();
+        let http = reqwest::Client::new();
+        state.api = Arc::new(
+            FeishuApi::new(
+                Arc::new(crate::gateway::interfaces::feishu::auth::TokenManager::new(
+                    "id",
+                    "secret",
+                    "http://127.0.0.1:1",
+                    http.clone(),
+                )),
+                "http://127.0.0.1:1",
+                http,
+            )
+            .with_provider(provider.clone(), provider.generation()),
+        );
+
+        // Model the handler after it has acquired its request drain guard,
+        // then revoke before response processing finishes.
+        let admission = state
+            .api
+            .admit_inbound()
+            .await
+            .expect("provider must admit the request");
+        provider.transition(ProviderState::Stopping).unwrap();
+        let response = handle_webhook_after_admission(
+            state,
+            HeaderMap::new(),
+            Bytes::from(r#"{"challenge":"late","token":"token"}"#),
+            admission,
+        )
+        .await;
+
+        assert!(matches!(response, Err(StatusCode::SERVICE_UNAVAILABLE)));
     }
 
     #[tokio::test]

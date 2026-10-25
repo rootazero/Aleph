@@ -79,6 +79,7 @@ impl TabModel {
 
     /// The showing tab, or `None` when there is nothing open to show.
     #[must_use]
+    #[allow(dead_code)] // no reader since the terminal herdr removal (5dd337df1)
     pub fn selected(&self) -> Option<&TabEntry> {
         let id = self.selected.as_deref()?;
         self.tabs.iter().find(|t| t.session_id == id)

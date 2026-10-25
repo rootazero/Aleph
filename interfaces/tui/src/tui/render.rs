@@ -184,13 +184,6 @@ mod tests {
         AppState::new("s".to_string(), "m".to_string())
     }
 
-    /// The composer's rule row, which spans the full width of whatever
-    /// `main_area` turned out to be. With a 40x10 backend and the default
-    /// (single-line) textarea, `input_height` is 2, the hint and status rows
-    /// take one each, so the chat area gets `Min(5)` = 6 rows and the rule
-    /// lands on y=6.
-    const RULE_Y: u16 = 5;
-
     /// The `/context` overlay reaches the screen through the real `render`.
     ///
     /// Three rounds running (B4c, B5, B6) found a renderer with no caller or a
