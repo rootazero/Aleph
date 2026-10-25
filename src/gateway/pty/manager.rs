@@ -390,6 +390,8 @@ impl PtyManager {
     /// as `attach_snapshot` otherwise — an unknown session is an error, never
     /// an empty screen, because a blank grid would read as "the terminal is
     /// idle".
+    #[allow(dead_code)] // used by tests only — no production reader since the terminal
+                        // herdr removal (5dd337df1) took the agent-detection caller with it
     pub(crate) fn visible_text(&self, session_id: &str) -> Result<String, String> {
         self.with_session(session_id, |s| {
             Ok(s.with_screen(super::screen::Screen::visible_text))

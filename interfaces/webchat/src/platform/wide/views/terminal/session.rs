@@ -252,6 +252,7 @@ impl ClientScreen {
     }
 
     #[must_use]
+    #[allow(dead_code)] // no reader since the terminal herdr removal (5dd337df1)
     pub const fn seq(&self) -> u64 {
         self.seq
     }
@@ -267,6 +268,7 @@ impl ClientScreen {
     }
 
     #[must_use]
+    #[allow(dead_code)] // no reader since the terminal herdr removal (5dd337df1)
     pub const fn alt_screen(&self) -> bool {
         self.alt_screen
     }
@@ -292,6 +294,8 @@ impl ClientScreen {
 
     /// Row as plain text. Test- and selection-facing.
     #[must_use]
+    #[allow(dead_code)] // used by tests only — no reader since the terminal herdr
+                        // removal (5dd337df1)
     pub fn row_text(&self, row: u16) -> String {
         let s: String = self.row_runs(row).iter().map(|r| r.text.as_str()).collect();
         s.trim_end().to_string()

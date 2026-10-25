@@ -22,6 +22,11 @@ pub(crate) struct DispatchVerdict {
     input: Value,
     actor: Option<String>,
     caller: AdmissionCaller,
+    /// The one-shot operator-approval cell. Its only reader was the terminal
+    /// tool's approval consumption, removed with the terminal herdr runtime
+    /// (5dd337df1); the gate still writes it, so the cell is kept rather than
+    /// half-removed until the next operator-gated tool claims it.
+    #[allow(dead_code)]
     operator_approval: Option<Arc<AtomicBool>>,
 }
 
@@ -232,6 +237,7 @@ pub(crate) async fn with_replay_admission<F: Future>(
 /// Consume only an operator-approved exact call, never generic admission or replay.
 /// Mismatches leave the proof untouched; successful consumers share one atomic
 /// claim across verdict clones and dispatch retries. No authority crosses spawn.
+#[allow(dead_code)] // no production caller since the terminal herdr removal (5dd337df1)
 pub(crate) fn consume_operator_approval(name: &str, input: &Value) -> bool {
     let Some(call_id) = crate::approval::current_tool_call_id() else {
         return false;
