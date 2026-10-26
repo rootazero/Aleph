@@ -109,6 +109,19 @@ This ruling does not require implementing a universal lease to pass a design gat
 - [ ] Define owner-generation and admitted-work completion acceptance without a second map or durable store.
 - [ ] Produce resource receipts proving disabled/discovered read paths do not initialize provider runtime resources.
 
+### Provider binding completion probe — 2026-10-26
+
+The next R1 RED probe ran in the real `ChannelRegistry` test module. After correcting a parser-only insertion mistake, the focused compile failed with the exact missing authority APIs:
+
+```text
+error[E0599]: no method named `provider_handle` found for struct `ChannelCapture`
+error[E0599]: no method named `provider_generation` found for struct `ChannelCapture`
+```
+
+The probe was removed. `ChannelCapture` remains source-owned and valid only for the registered channel `Arc` plus source revision. `ProviderHandle` generation/admission, `OwnershipTree` owner generation, Tool descriptor publication, and Tool late-completion fencing remain separate authorities with no existing non-Tool channel binding path. Existing Tool-side provider restart, owner bump, and late-completion tests pass, but they cannot serve as evidence for Gateway channels.
+
+**R1 decision remains NO-GO / deferred.** Do not create a cross-authority registry, adapter, facade glue, generalized completion fence, or resource receipt fixture detached from a real allocation owner. The unique next entry is to revise the source-owned capture contract around an existing provider/source owner that can prove same-generation admission, completion acceptance, and deterministic cold/disabled resource receipts. R2 Feishu remains deferred.
+
 ## R2 — Feishu A/B source-backed re-gate
 
 **Purpose:** Re-evaluate Feishu against the R1 contract before writing Feishu integration code.

@@ -272,6 +272,39 @@ This is a source-boundary proof plus existing provider/owner tests, not a new fo
 
 **Unique next entry: revise the R1 source-owned capture contract**, grounding the candidate signatures and replacement/use/completion boundaries in an existing authority. Close that design question and the proof plan before reconsidering R1. This is not permission for Feishu implementation or a universal lease rewrite.
 
+## Provider binding completion probe / provider binding 完成探针
+
+### Result
+
+The bounded `ChannelRegistry` capture remains **PASS**, while the R1 gate remains **NO-GO / deferred**. The first unclosed contract is the source-owned binding between that capture and an actual `ProviderHandle` instance/generation.
+
+### RED evidence
+
+A temporary probe in the real `src/gateway/channel_registry.rs` test module attempted to read provider identity and generation from the captured source object. After correcting an accidental parser-only insertion error, the focused command produced the expected missing-production-API RED:
+
+```text
+cargo test -p alephcore --lib gateway::channel_registry::tests::capture_exposes_provider_instance_and_generation_for_admission -- --exact
+
+error[E0599]: no method named `provider_handle` found for struct `ChannelCapture`
+error[E0599]: no method named `provider_generation` found for struct `ChannelCapture`
+```
+
+The temporary test was removed after the probe; it is evidence of a missing authority connection, not an API proposal.
+
+### Contract ruling
+
+`ChannelCapture` currently records only the channel id, source publication revision, and the registered channel `Arc` at `src/gateway/channel_registry.rs:55`; `capture_channel` and `validate_channel_capture` remain owned by `ChannelRegistry`. `ProviderHandle` at `src/capability/provider.rs:234` owns provider instance identity, lifecycle generation, and call admission, but no Gateway channel path obtains or validates it. `OwnershipTree::generation` is independently observable and remains independent of both values.
+
+The Tool path has a source-specific canonical descriptor/handler publication and a post-await provider/completion fence in `src/tools/registry.rs`; `ZahirFacade` validates provider generation, owner generation, and descriptor freshness for that Tool source. This does not create a non-Tool Channel authority. Reusing it through a new registry, adapter, facade glue, or generalized completion envelope would duplicate authority and violate the gate.
+
+No existing Gateway/provider owner currently owns admitted work, drain, completion acceptance, or runtime resource receipts. The existing `ProviderHandle` fixture counter proves only a test-local positive control; it cannot prove that channel discovery, describe/list/project, cold resolve, or disabled reads do not initialize threads, connections, databases, caches, token clients, listeners, or websockets.
+
+The independent Tool tests for provider restart, owner-generation bump, and late completion rejection passed, but they do not close the non-Tool source binding. R1 therefore stops at the first missing contract; no simulated completion fence is implemented.
+
+### Required next entry
+
+Revise the source-owned capture contract by naming an existing provider/source owner that can mint and validate the same-generation capture, retain admitted-work proof, accept/reject completion at its linearization boundary, and expose deterministic resource receipts. Until that authority exists, keep R1 NO-GO/deferred and do not enter R2 Feishu.
+
 ## 11. Deferred and not performed / 未做项
 
 - 八类非 Tool backend 仍 deferred：Skill, Agent, Task, Resource, EventSource, Subscription, Plugin, Hook。既有 subsystem 的存在不等于已成为该 kind 的 Capability backend。

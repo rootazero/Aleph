@@ -105,6 +105,41 @@ The warning did not change any exit status. The one combined check-plus-test att
 
 The read-only review found no capture-specific lock-order, revision, stale-identity, or authority-duplication issue. It flagged that failed `stop()` retains the incumbent map entry/webhook surface while `stop_channel_inner` has already set `DesiredChannelState::Stopped`. This is intentional fail-safe behavior: the adapter has already received a stop request, so the health monitor must not race in with an automatic restart after a partial stop failure. The bounded teardown contract says the incumbent registration and runtime surface are retained; it does not promise to retain a restart intent. No change was made in this capture slice. A future lifecycle contract may revisit partial-stop recovery with explicit drain evidence.
 
+## Provider binding completion probe — 2026-10-26
+
+**Decision:** R1 remains **NO-GO / deferred**. The bounded source capture is proven, but the first remaining contract is still source-owned provider binding.
+
+### RED evidence
+
+The probe was inserted in the real `src/gateway/channel_registry.rs` test module, after correcting an accidental test declaration removal that caused a parser error. The focused command was:
+
+```text
+cargo test -p alephcore --lib gateway::channel_registry::tests::capture_exposes_provider_instance_and_generation_for_admission -- --exact
+```
+
+The corrected RED was a production API absence, not a malformed test:
+
+```text
+error[E0599]: no method named `provider_handle` found for struct `ChannelCapture`
+error[E0599]: no method named `provider_generation` found for struct `ChannelCapture`
+```
+
+The probe was removed after observation; no speculative API was left in the tree.
+
+### Authority result
+
+- `ChannelRegistry` remains the sole owner of channel instances and source publication. `ChannelCapture` at `src/gateway/channel_registry.rs:55` carries `channel_id`, `source_revision`, and the registered channel `Arc`; `capture_channel` and `validate_channel_capture` are the only source-owned capture/use boundaries.
+- `ProviderHandle` at `src/capability/provider.rs:234` owns provider lifecycle, instance identity, generation, and `acquire_call`; no `Channel` or `ChannelCapture` path supplies or validates that handle.
+- `OwnershipTree::generation` at `src/capability/ownership.rs:334` provides an independent observation, but no channel admission/completion path retains it.
+- Descriptor identity/schema/revision and post-await completion validation exist in the Tool-owned `ToolHandlerRegistry`/`ZahirFacade` path. They are not a canonical source for Gateway channels, and copying them into a new channel registry would violate the authority table.
+- No existing ChannelRegistry/provider owner owns admitted work, drain, completion acceptance, or resource receipts. `ProviderHandle` admission only proves the Tool/provider lifecycle boundary; the existing fixture counter is not a runtime resource receipt.
+
+The existing independent tests passed for provider restart, owner-generation bump, late completion rejection in the Tool path, and provider call admission. They do not establish a non-Tool binding path. Therefore implementing a completion fence here would be a simulated test-side authority and is forbidden by the R1 plan.
+
+### Next gate
+
+Keep the bounded capture slice PASS and overall R1 NO-GO. The only next entry is to revise the source-owned capture contract with a concrete existing provider/source owner and a real admission/completion boundary. Do not enter R2 Feishu or add a registry, adapter, facade, mount, universal lease, EffectClaim producer, or durable recovery path.
+
 ## Remaining gate blockers
 
 - Bind `ChannelCapture` to the actual `ProviderHandle` instance and provider generation.
