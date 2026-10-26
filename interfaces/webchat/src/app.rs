@@ -422,6 +422,11 @@ fn AppContent() -> impl IntoView {
     // Gating them here removes the whole class by construction rather than
     // relying on the overlay staying opaque and on top.
     let not_phone = move || ff_for_shell.form_factor.get() != FormFactor::Phone;
+    let legacy_chrome = move || {
+        not_phone()
+            && (!cfg!(feature = "panel-tab-spike")
+                || ff_for_shell.form_factor.get() != FormFactor::Wide)
+    };
     let flex_right_pane = flex_path_enabled();
 
     view! {
@@ -455,7 +460,7 @@ fn AppContent() -> impl IntoView {
             //     brand-row button in SidebarBrand handles it.
             // `data-tauri-drag-region="false"` opts out of the parent drag
             // strip so clicks aren't swallowed by the window-drag handler.
-            <Show when=not_phone>
+            <Show when=legacy_chrome>
                 <button
                     type="button"
                     class="aleph-sidebar-toggle"
@@ -483,7 +488,7 @@ fn AppContent() -> impl IntoView {
             <Router>
                 // Left column — context-aware sidebar, full window height.
                 // Phone has its own tab bar; see `not_phone` above.
-                <Show when=not_phone>
+                <Show when=legacy_chrome>
                     <ModeSidebar />
                 </Show>
 
@@ -506,7 +511,7 @@ fn AppContent() -> impl IntoView {
                     // `z-50` keeps the band's chrome chips above
                     // tab content; the band itself is transparent
                     // so any text scrolling beneath is fine.
-                    <Show when=not_phone>
+                    <Show when=legacy_chrome>
                         <div
                             class="aleph-main-drag-band z-50"
                             data-tauri-drag-region=""
@@ -521,7 +526,7 @@ fn AppContent() -> impl IntoView {
                 // path changes the host without duplicating WorkspaceState,
                 // width persistence, or pane body behavior. The legacy branch
                 // remains available for rollback and visual comparison.
-                <Show when=not_phone>
+                <Show when=legacy_chrome>
                     {move || if flex_right_pane {
                         view! { <RightPane /> }.into_any()
                     } else {
@@ -638,6 +643,22 @@ fn ChatBandChrome() -> impl IntoView {
 /// dedicated router components.
 #[component]
 fn MainContent() -> impl IntoView {
+    #[cfg(feature = "panel-tab-spike")]
+    {
+        let form_factor = expect_context::<FormFactorState>();
+        return move || {
+            if form_factor.form_factor.get() == FormFactor::Wide {
+                return view! { <crate::panel::PanelShell /> }.into_any();
+            }
+            view! { <LegacyMainContent /> }.into_any()
+        };
+    }
+    #[cfg(not(feature = "panel-tab-spike"))]
+    view! { <LegacyMainContent /> }
+}
+
+#[component]
+fn LegacyMainContent() -> impl IntoView {
     let location = use_location();
     let mode = Memo::new(move |_| PanelMode::from_path(&location.pathname.get()));
     let form_factor = expect_context::<FormFactorState>();

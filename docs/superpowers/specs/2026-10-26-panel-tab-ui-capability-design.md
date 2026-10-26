@@ -271,6 +271,21 @@ The independent builder check found several plan-shaping ambiguities. The follow
 
 These calls keep the first plan bounded while preserving the selected long-term architecture.
 
+## Spike results — 2026-10-26
+
+The dynamic loading spike selected the direct `wasm-bindgen --target web` arrangement. It produced explicit `describe`/`mount` exports, a reproducible manifest entry, and a loader-compatible ES module layout. Trunk was not installed, so the multi-Trunk comparison remains unmeasured.
+
+Measured output:
+
+- Existing host Panel assets: 184,947,474 raw bytes and 5,196,753 per-file Brotli bytes at quality 11. This includes the current monolithic views and is not a future lightweight Shell measurement.
+- Terminal pilot assets: 303,538 raw bytes and 88,539 Brotli bytes.
+- Shared WASM function-body overlap proxy: 1,353 bytes across 180 shared dependency package names. This is a reproducible duplication proxy, not linker attribution or guaranteed removable bytes.
+- Pilot load and initialization: 10 ms in Chromium; separate instantiate/start observation: 1 ms.
+- Pilot linear-memory capacity observations: 1,179,648 bytes after mount and 1,114,112 bytes in the separate initialization run. These are capacity observations, not live allocations, JS heap, page RSS, or proof of memory reclamation.
+- Browser artifact checks: initial pilot request count 0, first activation 1, re-entry 1; both roots rendered; idempotent unmount emptied both roots; missing entry rejected without owning either root; no page errors during cleanup observation.
+
+The artifact Playwright command completed with 3 passed and 6 skipped. Full Shell/Gateway/WebSocket tests are explicitly gated by `PANEL_SPIKE_FULL_SHELL=1`; the disposable spike server has no Gateway or WebSocket proxy, so the spike does not claim live host SDK, transport, navigation fallback, or alternate-Tab E2E coverage. These results validate the independent artifact and lazy loading boundary, not a production `TerminalView` migration or total installed-size reduction. See the detailed report at `.superpowers/sdd/2026-10-26-panel-tab-ui-capability-spike-plan/task-6-report.md`.
+
 ## Open approval
 
 This document is ready for review. Approval should confirm the goals, selected architecture, staged plan, and the stated trust boundary for community UI modules. After approval, the next step is to invoke the writing-plans workflow; implementation will then happen in a dedicated worktree.

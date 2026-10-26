@@ -4,6 +4,8 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Aleph Dashboard</title>
+    <!-- Trunk replaces href with --public-url, including deployment prefixes. -->
+    <base data-trunk-public-url href="/" />
     <!-- Inline so the browser never issues its default GET /favicon.ico:
          nothing serves that path, so every page load logged a 404 that cost a
          QA round to chase. A data: URI is inside the Panel CSP
@@ -21,6 +23,14 @@
     />
     <link data-trunk rel="rust" data-wasm-opt="z" data-target-name="aleph-dashboard" />
     <link data-trunk rel="css" href="styles/tailwind.css" />
+    <!-- One root asset, never a wasm-bindgen snippet. Import only on activation. -->
+    <link data-trunk rel="copy-file" href="panel_loader.js" />
+    <script id="panel-loader-bridge">
+      // Capture the explicit Trunk base, not the current (possibly nested) route.
+      const panelLoaderUrl = new URL('panel_loader.js', document.querySelector('base').href).href;
+      globalThis.__alephLoadPanelModule = (entry) =>
+        import(panelLoaderUrl).then((loader) => loader.loadPanelModule(entry));
+    </script>
   </head>
   <body class="bg-surface text-text-primary">
     <noscript>This application requires JavaScript to run.</noscript>
