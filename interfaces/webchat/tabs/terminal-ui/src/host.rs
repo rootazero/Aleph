@@ -18,6 +18,7 @@ pub struct TerminalEvent {
 }
 
 pub struct TerminalEventStream {
+    pub coverage_epoch: u64,
     pub drain: Rc<dyn Fn() -> Result<Vec<TerminalEvent>, String>>,
     pub dispose: Rc<dyn Fn()>,
 }
@@ -28,6 +29,15 @@ impl TerminalEventStream {
         drain: Rc<dyn Fn() -> Result<Vec<TerminalEvent>, String>>,
         dispose: Rc<dyn Fn()>,
     ) -> Self {
+        Self::new_at_epoch(0, drain, dispose)
+    }
+
+    #[must_use]
+    pub fn new_at_epoch(
+        coverage_epoch: u64,
+        drain: Rc<dyn Fn() -> Result<Vec<TerminalEvent>, String>>,
+        dispose: Rc<dyn Fn()>,
+    ) -> Self {
         let disposed = Rc::new(Cell::new(false));
         let once = Rc::clone(&disposed);
         let dispose = Rc::new(move || {
@@ -35,13 +45,18 @@ impl TerminalEventStream {
                 dispose();
             }
         });
-        Self { drain, dispose }
+        Self {
+            coverage_epoch,
+            drain,
+            dispose,
+        }
     }
 }
 
 impl Clone for TerminalEventStream {
     fn clone(&self) -> Self {
         Self {
+            coverage_epoch: self.coverage_epoch,
             drain: Rc::clone(&self.drain),
             dispose: Rc::clone(&self.dispose),
         }

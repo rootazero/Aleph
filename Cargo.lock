@@ -366,6 +366,7 @@ name = "aleph-terminal-ui"
 version = "26.9.1"
 dependencies = [
  "aleph-protocol",
+ "any_spawner",
  "futures",
  "gloo-timers 0.4.0",
  "js-sys",

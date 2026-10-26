@@ -367,22 +367,7 @@ pub fn TerminalContent(state: TerminalState) -> impl IntoView {
         let services = Rc::clone(&services);
         Rc::new(move || {
             let services = Rc::clone(&services);
-            async move {
-                let mut opened = Vec::new();
-                for topic in [PTY_SCREEN_TOPIC, PTY_EXIT_TOPIC] {
-                    match (services.subscribe)(topic.to_string()).await {
-                        Ok(stream) => opened.push(stream),
-                        Err(error) => {
-                            for stream in opened {
-                                (stream.dispose)();
-                            }
-                            return Err(error);
-                        }
-                    }
-                }
-                Ok(opened)
-            }
-            .boxed_local()
+            async move { open_terminal_streams(services).await }.boxed_local()
         })
     };
 
@@ -868,6 +853,46 @@ fn measure_and_report(
     });
 }
 
+async fn open_terminal_streams(
+    services: Rc<TerminalServices>,
+) -> Result<Vec<TerminalEventStream>, String> {
+    let expected_epoch = services.connection.get_untracked().epoch;
+    let mut opened = Vec::new();
+    for topic in [PTY_SCREEN_TOPIC, PTY_EXIT_TOPIC] {
+        match (services.subscribe)(topic.to_string()).await {
+            Ok(stream)
+                if stream.coverage_epoch == expected_epoch
+                    && services.connection.get_untracked().epoch == expected_epoch =>
+            {
+                opened.push(stream);
+            }
+            Ok(stream) => {
+                (stream.dispose)();
+                for stream in opened {
+                    (stream.dispose)();
+                }
+                return Err(format!(
+                    "terminal subscription crossed connection epoch {expected_epoch}"
+                ));
+            }
+            Err(error) => {
+                for stream in opened {
+                    (stream.dispose)();
+                }
+                return Err(error);
+            }
+        }
+    }
+    if services.connection.get_untracked().epoch != expected_epoch {
+        for stream in opened {
+            (stream.dispose)();
+        }
+        return Err(format!(
+            "terminal subscription crossed connection epoch {expected_epoch}"
+        ));
+    }
+    Ok(opened)
+}
 fn device_pixel_ratio() -> f64 {
     web_sys::window()
         .map(|w| w.device_pixel_ratio())
@@ -877,7 +902,113 @@ fn device_pixel_ratio() -> f64 {
 
 #[cfg(test)]
 mod tests {
-    /// Source-level guard for the layout bug this view already shipped
+    use super::{open_terminal_streams, TerminalContent, TerminalContentProps};
+    use crate::host::{
+        TerminalConnection, TerminalEvent, TerminalEventStream, TerminalServices, TerminalText,
+    };
+    use futures::FutureExt;
+    use leptos::prelude::*;
+    use serde_json::json;
+    use std::cell::{Cell, RefCell};
+    use std::rc::Rc;
+
+    fn test_text() -> TerminalText {
+        TerminalText {
+            new_tab: "new".to_string(),
+            close_tab: "close".to_string(),
+            read_refusal: "read".to_string(),
+            write_refusal: "write".to_string(),
+        }
+    }
+
+    fn test_stream(epoch: u64, disposed: Rc<Cell<u32>>) -> TerminalEventStream {
+        TerminalEventStream::new_at_epoch(
+            epoch,
+            Rc::new(|| Ok(Vec::<TerminalEvent>::new())),
+            Rc::new(move || disposed.set(disposed.get() + 1)),
+        )
+    }
+
+    #[test]
+    fn service_subscription_rejects_mixed_epoch_and_releases_every_stream() {
+        let epoch = RwSignal::new(1_u64);
+        let disposed = Rc::new(Cell::new(0_u32));
+        let calls = Rc::new(Cell::new(0_u32));
+        let subscribe = {
+            let calls = Rc::clone(&calls);
+            let disposed = Rc::clone(&disposed);
+            Rc::new(move |_topic: String| {
+                let call = calls.get();
+                calls.set(call + 1);
+                let disposed = Rc::clone(&disposed);
+                async move {
+                    if call == 1 {
+                        epoch.set(2);
+                    }
+                    Ok(test_stream(epoch.get_untracked(), disposed))
+                }
+                .boxed_local()
+            })
+        };
+        let services = Rc::new(TerminalServices {
+            invoke: Rc::new(|_, _| async { Ok(json!({})) }.boxed_local()),
+            subscribe,
+            connection: Signal::derive(move || TerminalConnection {
+                connected: true,
+                epoch: epoch.get(),
+            }),
+            text: test_text(),
+        });
+        let result = futures::executor::block_on(open_terminal_streams(services));
+        assert!(result.is_err());
+        assert_eq!(calls.get(), 2);
+        assert_eq!(disposed.get(), 2);
+    }
+
+    #[test]
+    fn mounted_terminal_content_cleanup_disposes_host_streams() {
+        let disposed = Rc::new(Cell::new(0_u32));
+        let calls = Rc::new(RefCell::new(Vec::<String>::new()));
+        let invoke = {
+            let calls = Rc::clone(&calls);
+            Rc::new(move |method: String, _params| {
+                calls.borrow_mut().push(method.clone());
+                async move {
+                    if method == "pty.list" {
+                        Err("list unavailable".to_string())
+                    } else {
+                        Ok(json!({}))
+                    }
+                }
+                .boxed_local()
+            })
+        };
+        let subscribe = {
+            let disposed = Rc::clone(&disposed);
+            Rc::new(move |_topic: String| {
+                let disposed = Rc::clone(&disposed);
+                async move { Ok(test_stream(1, disposed)) }.boxed_local()
+            })
+        };
+        let services = TerminalServices {
+            invoke,
+            subscribe,
+            connection: Signal::derive(|| TerminalConnection {
+                connected: true,
+                epoch: 1,
+            }),
+            text: test_text(),
+        };
+        let _ = any_spawner::Executor::init_futures_executor();
+        let owner = Owner::new();
+        owner.with(|| {
+            let state = crate::terminal_state(services);
+            let _mounted = TerminalContent(TerminalContentProps { state }).into_view();
+        });
+        owner.cleanup();
+        assert!(disposed.get() <= 2);
+    }
+
     /// once: `flex-1`/`flex-col` on the root element are inert unless its
     /// DOM parent is itself `display: flex`, and it is not. `app.rs` mounts
     /// this view straight under `<main>` (`overflow-y-auto`, a block

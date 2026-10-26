@@ -24,3 +24,6 @@ web-sys = { version = "0.3", features = [
     "TextMetrics",
     "Window",
 ] }
+
+[dev-dependencies]
+any_spawner = { version = "0.3", features = ["futures-executor"] }

@@ -41,6 +41,7 @@ mod legacy {
                     .subscribe_topic_ephemeral(&topic)
                     .await
                     .map_err(|error| error.to_string())?;
+                let coverage_epoch = dashboard.connection_epoch.try_get_untracked().unwrap_or(0);
                 let pending = Arc::new(Mutex::new(Vec::<TerminalEvent>::new()));
                 let pending_for_handler = Arc::clone(&pending);
                 let expected = topic.clone();
@@ -64,7 +65,11 @@ mod legacy {
                         let _ = dashboard.unsubscribe_topic(&topic).await;
                     });
                 });
-                Ok(TerminalEventStream::new(drain, dispose))
+                Ok(TerminalEventStream::new_at_epoch(
+                    coverage_epoch,
+                    drain,
+                    dispose,
+                ))
             }
             .boxed_local()
         });
