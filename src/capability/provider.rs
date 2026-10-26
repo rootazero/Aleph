@@ -333,6 +333,56 @@ impl ProviderHandle {
             .acquire_call(expected_generation)
     }
 
+    /// Hold Ready/current-generation validation through a source-local commit.
+    ///
+    /// The callback must only mutate local bookkeeping: no await, I/O, external
+    /// handler code, or provider re-entry. Source and ownership gates must be
+    /// acquired before this guard; entry bookkeeping follows it.
+    #[allow(dead_code)] // Source work admission is integrated in Task 5.
+    pub(crate) fn with_call_admission<R>(
+        &self,
+        expected_generation: u64,
+        commit: impl FnOnce() -> R,
+    ) -> Result<R, ProviderCallError> {
+        let lifecycle = self
+            .lifecycle
+            .lock()
+            .expect("provider lifecycle mutex poisoned");
+        lifecycle.acquire_call(expected_generation)?;
+        Ok(commit())
+    }
+
+    /// Hold provider validation through completion of already-admitted work.
+    ///
+    /// This checks only the provider domain, not permission to finish work in
+    /// Stopping: the source must also validate a live, pre-stop, non-clone work
+    /// ticket. The callback and lock-order constraints of `with_call_admission`
+    /// apply here too; no drain or transport work runs under this guard.
+    #[allow(dead_code)] // Source work completion is integrated in Task 5.
+    pub(crate) fn with_admitted_completion<R>(
+        &self,
+        expected_generation: u64,
+        commit: impl FnOnce() -> R,
+    ) -> Result<R, ProviderCallError> {
+        let lifecycle = self
+            .lifecycle
+            .lock()
+            .expect("provider lifecycle mutex poisoned");
+        if !matches!(
+            lifecycle.state(),
+            ProviderState::Ready | ProviderState::Stopping
+        ) || lifecycle.generation() != expected_generation
+        {
+            return Err(ProviderCallError {
+                provider_id: lifecycle.provider_id().clone(),
+                state: lifecycle.state(),
+                expected_generation,
+                actual_generation: lifecycle.generation(),
+            });
+        }
+        Ok(commit())
+    }
+
     /// Commit a state transition and notify live observers after the state is
     /// visible. The broadcast is a notification tap, not a recovery source.
     pub fn transition(
@@ -446,6 +496,218 @@ mod tests {
         assert!(handle.acquire_call(2).is_err());
         handle.transition(ProviderState::Disabled).unwrap();
         assert!(handle.acquire_call(2).is_err());
+    }
+
+    #[test]
+    fn admission_commit_runs_only_for_ready_current_generation() {
+        let handle = ProviderHandle::new(provider());
+        let commits = std::cell::Cell::new(0);
+        for state in [
+            ProviderState::Discovered,
+            ProviderState::Cold,
+            ProviderState::Disabled,
+            ProviderState::Starting,
+            ProviderState::Ready,
+            ProviderState::Stopping,
+            ProviderState::Stopped,
+            ProviderState::Starting,
+            ProviderState::Failed,
+        ] {
+            if state != ProviderState::Discovered {
+                handle.transition(state).unwrap();
+            }
+            let generation = handle.generation();
+            let before = commits.get();
+            let result = handle.with_call_admission(generation, || {
+                commits.set(commits.get() + 1);
+                7
+            });
+            if state == ProviderState::Ready {
+                assert_eq!(result, Ok(7));
+                assert_eq!(commits.get(), before + 1);
+                assert!(handle
+                    .with_call_admission(generation - 1, || panic!("stale generation"))
+                    .is_err());
+            } else {
+                assert_eq!(
+                    result,
+                    Err(ProviderCallError {
+                        provider_id: ProviderId::new("test/provider").unwrap(),
+                        state,
+                        expected_generation: generation,
+                        actual_generation: generation,
+                    })
+                );
+                assert_eq!(commits.get(), before);
+            }
+            assert_eq!(
+                handle.with_call_admission(generation + 1, || {
+                    commits.set(commits.get() + 1);
+                }),
+                Err(ProviderCallError {
+                    provider_id: ProviderId::new("test/provider").unwrap(),
+                    state,
+                    expected_generation: generation + 1,
+                    actual_generation: generation,
+                })
+            );
+        }
+        assert_eq!(commits.get(), 1);
+    }
+
+    #[test]
+    fn completion_guard_accepts_same_generation_ready_or_stopping() {
+        let handle = ProviderHandle::new(provider());
+        let commits = std::cell::Cell::new(0);
+        for state in [
+            ProviderState::Discovered,
+            ProviderState::Cold,
+            ProviderState::Disabled,
+            ProviderState::Starting,
+            ProviderState::Ready,
+            ProviderState::Stopping,
+            ProviderState::Stopped,
+            ProviderState::Starting,
+            ProviderState::Failed,
+        ] {
+            if state != ProviderState::Discovered {
+                handle.transition(state).unwrap();
+            }
+            let generation = handle.generation();
+            let before = commits.get();
+            let result = handle.with_admitted_completion(generation, || {
+                commits.set(commits.get() + 1);
+                7
+            });
+            if matches!(state, ProviderState::Ready | ProviderState::Stopping) {
+                assert_eq!(result, Ok(7));
+                assert_eq!(commits.get(), before + 1);
+                assert!(handle
+                    .with_admitted_completion(generation - 1, || panic!("stale generation"))
+                    .is_err());
+            } else {
+                assert_eq!(
+                    result,
+                    Err(ProviderCallError {
+                        provider_id: ProviderId::new("test/provider").unwrap(),
+                        state,
+                        expected_generation: generation,
+                        actual_generation: generation,
+                    })
+                );
+                assert_eq!(commits.get(), before);
+            }
+            assert_eq!(
+                handle.with_admitted_completion(generation + 1, || {
+                    commits.set(commits.get() + 1);
+                }),
+                Err(ProviderCallError {
+                    provider_id: ProviderId::new("test/provider").unwrap(),
+                    state,
+                    expected_generation: generation + 1,
+                    actual_generation: generation,
+                })
+            );
+        }
+        assert_eq!(commits.get(), 2);
+    }
+
+    #[test]
+    fn provider_guard_serializes_stop_with_commit() {
+        // Exercise both guards: neither may release the lifecycle lock before
+        // the local commit has completed. No callback re-enters the provider.
+        for completion in [false, true] {
+            let handle = ProviderHandle::new(provider());
+            handle.transition(ProviderState::Starting).unwrap();
+            handle.transition(ProviderState::Ready).unwrap();
+            let generation = handle.generation();
+            let entered = std::sync::Barrier::new(2);
+            let release = std::sync::Barrier::new(2);
+            let committed = std::sync::atomic::AtomicBool::new(false);
+            let (attempt_tx, attempt_rx) = std::sync::mpsc::channel();
+            let (stopped_tx, stopped_rx) = std::sync::mpsc::channel();
+
+            std::thread::scope(|scope| {
+                let admission = scope.spawn(|| {
+                    let commit = || {
+                        entered.wait();
+                        release.wait();
+                        committed.store(true, std::sync::atomic::Ordering::SeqCst);
+                        7
+                    };
+                    if completion {
+                        handle.with_admitted_completion(generation, commit)
+                    } else {
+                        handle.with_call_admission(generation, commit)
+                    }
+                });
+                entered.wait();
+                let stop = scope.spawn(|| {
+                    // Observe the real mutex, not an arbitrary scheduling delay.
+                    attempt_tx
+                        .send(handle.lifecycle.try_lock().is_err())
+                        .unwrap();
+                    let result = handle.transition(ProviderState::Stopping);
+                    stopped_tx
+                        .send(committed.load(std::sync::atomic::Ordering::SeqCst))
+                        .unwrap();
+                    result
+                });
+                let locked = attempt_rx.recv_timeout(std::time::Duration::from_secs(5));
+                let pending = stopped_rx.try_recv();
+                // Always release the callback before asserting, even on failure.
+                release.wait();
+                assert_eq!(admission.join().unwrap(), Ok(7));
+                assert_eq!(stop.join().unwrap().unwrap().to, ProviderState::Stopping);
+                assert!(locked.unwrap());
+                assert_eq!(pending, Err(std::sync::mpsc::TryRecvError::Empty));
+                assert!(stopped_rx.recv().unwrap());
+            });
+            assert_eq!(handle.snapshot(), (ProviderState::Stopping, generation));
+            assert!(handle
+                .with_call_admission(generation, || panic!("stopped"))
+                .is_err());
+        }
+    }
+
+    #[test]
+    fn generation_exhaustion_does_not_run_commit() {
+        let mut lifecycle = provider();
+        lifecycle.state = ProviderState::Stopped;
+        lifecycle.generation = u64::MAX;
+        let handle = ProviderHandle::new(lifecycle);
+        let mut changes = handle.subscribe_changes();
+        assert_eq!(
+            handle.transition(ProviderState::Starting),
+            Err(ProviderLifecycleError::GenerationExhausted {
+                provider_id: ProviderId::new("test/provider").unwrap(),
+            })
+        );
+        assert_eq!(handle.snapshot(), (ProviderState::Stopped, u64::MAX));
+        assert_eq!(
+            changes.try_recv(),
+            Err(tokio::sync::broadcast::error::TryRecvError::Empty)
+        );
+        let commits = std::cell::Cell::new(0);
+        assert_eq!(
+            handle.with_call_admission(u64::MAX, || commits.set(commits.get() + 1)),
+            Err(ProviderCallError {
+                provider_id: ProviderId::new("test/provider").unwrap(),
+                state: ProviderState::Stopped,
+                expected_generation: u64::MAX,
+                actual_generation: u64::MAX,
+            })
+        );
+        assert_eq!(
+            handle.with_admitted_completion(u64::MAX, || commits.set(commits.get() + 1)),
+            Err(ProviderCallError {
+                provider_id: ProviderId::new("test/provider").unwrap(),
+                state: ProviderState::Stopped,
+                expected_generation: u64::MAX,
+                actual_generation: u64::MAX,
+            })
+        );
+        assert_eq!(commits.get(), 0);
     }
 
     #[test]
