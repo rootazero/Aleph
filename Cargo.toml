@@ -20,6 +20,7 @@ members = [
     "interfaces/webchat",
     "interfaces/webchat/tabs/terminal-ui",
     "interfaces/webchat/tabs/terminal-pilot",
+    "interfaces/webchat/tabs/terminal",
 
     "crates/aleph-cdp",
     "crates/aleph-slot-api",
