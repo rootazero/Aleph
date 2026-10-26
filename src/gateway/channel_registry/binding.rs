@@ -7,7 +7,7 @@ use crate::capability::descriptor::{
     ServiceRelation,
 };
 use crate::capability::ownership::{
-    BindingValidationError, LifetimeScope, OwnerRef, VisibilityScope,
+    BindingValidationError, LifetimeScope, OwnerGeneration, OwnerRef, VisibilityScope,
 };
 use crate::capability::provider::{ProviderCallError, ProviderHandle, ProviderLifecycleError};
 use crate::sync_primitives::Arc;
@@ -234,6 +234,553 @@ pub(crate) fn canonical_descriptor_fingerprint(descriptor: &CapabilityDescriptor
 fn session_value(session: &SessionKey) -> Value {
     // Preserve path identity without lossy display strings or filesystem I/O.
     json!({"harness_id": session.harness_id(), "cwd": session.cwd().as_os_str().as_encoded_bytes(), "name": session.name()})
+}
+
+/// Source-owned, bounded in-process bookkeeping, not a discovery catalog.
+#[derive(Default)]
+pub(super) struct EntryRuntime {
+    pub(super) operation: Option<Arc<()>>,
+    pub(super) driver: Option<tokio::task::JoinHandle<()>>,
+    pub(super) active_work: usize,
+    pub(super) executions: Vec<tokio::task::JoinHandle<()>>,
+    pub(super) forwarder: Option<OwnedForwarder>,
+    pub(super) residual: ChannelCleanupResidual,
+}
+
+pub(super) struct OwnedForwarder {
+    pub(super) cancel: tokio_util::sync::CancellationToken,
+    pub(super) task: tokio::task::JoinHandle<()>,
+}
+
+#[derive(Clone)]
+pub(crate) struct BoundObservation {
+    pub(super) capture: BoundChannelCapture,
+    pub(super) owner_generation: OwnerGeneration,
+    pub(super) visibility: VisibilityScope,
+}
+
+/// Only admission constructs this; Drop deliberately cannot report drain.
+struct AdmittedWork {
+    observation: BoundObservation,
+}
+
+#[derive(Debug)]
+#[allow(dead_code)] // Completion payloads are consumed by later Gateway callers and tests.
+pub(crate) enum BoundCompletion {
+    Accepted(crate::gateway::channel::ChannelResult<crate::gateway::channel::SendResult>),
+    #[allow(dead_code)] // The stale reason is consumed by diagnostics/tests in later slices.
+    DiscardedStale(ChannelBindingError),
+}
+
+type LifecycleResult = tokio::sync::oneshot::Receiver<Result<(), ChannelBindingError>>;
+
+#[allow(dead_code)] // Source-private vertical slice; no production opt-in yet.
+impl super::ChannelRegistry {
+    fn validate_bound_capture(
+        &self,
+        capture: &BoundChannelCapture,
+        current: &Arc<ChannelRegistrationEntry>,
+    ) -> Result<(), ChannelBindingError> {
+        let super::ChannelRegistration::Bound(bound) = &current.registration else {
+            return Err(ChannelBindingError::UnboundLegacy);
+        };
+        if !Arc::ptr_eq(&self.source, &capture.source) {
+            return Err(ChannelBindingError::WrongSource);
+        }
+        if !Arc::ptr_eq(current, &capture.entry) || !Arc::ptr_eq(&current.channel, &capture.channel)
+        {
+            return Err(ChannelBindingError::StaleEntry);
+        }
+        if !bound.provider.same_instance(&capture.provider) {
+            return Err(ChannelBindingError::WrongProvider);
+        }
+        if bound.entry_revision != capture.entry_revision
+            || bound.descriptor_fingerprint != capture.descriptor_fingerprint
+            || canonical_descriptor_fingerprint(&capture.descriptor) != bound.descriptor_fingerprint
+        {
+            return Err(ChannelBindingError::StaleDescriptor);
+        }
+        Ok(())
+    }
+
+    pub(crate) async fn resolve_bound_channel(
+        &self,
+        capture: BoundChannelCapture,
+        visibility: &VisibilityScope,
+    ) -> Result<BoundObservation, ChannelBindingError> {
+        let _source = self.lifecycle_sync.lock().await;
+        let entry = self
+            .channels
+            .read()
+            .await
+            .get(&super::ChannelId::new(&capture.descriptor.id.name))
+            .cloned()
+            .ok_or(ChannelBindingError::NotFound)?;
+        self.validate_bound_capture(&capture, &entry)?;
+        let super::ChannelRegistration::Bound(bound) = &entry.registration else {
+            unreachable!()
+        };
+        if visibility != &bound.descriptor.visibility {
+            return Err(ChannelBindingError::WrongVisibility);
+        }
+        let owner_generation = bound
+            .ownership
+            .generation(&bound.descriptor.id, visibility)
+            .ok_or(BindingValidationError::MissingBinding)?;
+        bound.ownership.with_current_binding(
+            &bound.descriptor.id,
+            visibility,
+            owner_generation,
+            &bound.contract.owner,
+            &bound.contract.lifetime,
+            || {
+                bound
+                    .provider
+                    .with_call_admission(capture.provider_generation, || ())
+            },
+        )??;
+        Ok(BoundObservation {
+            capture,
+            owner_generation,
+            visibility: visibility.clone(),
+        })
+    }
+
+    /// The ticket and owned task are committed without an intervening await.
+    pub(crate) async fn send_bound_once(
+        self: &Arc<Self>,
+        observation: BoundObservation,
+        message: super::OutboundMessage,
+    ) -> Result<tokio::sync::oneshot::Receiver<BoundCompletion>, ChannelBindingError> {
+        use futures::FutureExt;
+        let _source = self.lifecycle_sync.lock().await;
+        let entry = self
+            .channels
+            .read()
+            .await
+            .get(&super::ChannelId::new(
+                &observation.capture.descriptor.id.name,
+            ))
+            .cloned()
+            .ok_or(ChannelBindingError::NotFound)?;
+        self.validate_bound_capture(&observation.capture, &entry)?;
+        let super::ChannelRegistration::Bound(bound) = &entry.registration else {
+            unreachable!()
+        };
+        if observation.visibility != bound.descriptor.visibility {
+            return Err(ChannelBindingError::WrongVisibility);
+        }
+        bound.ownership.with_current_binding(
+            &bound.descriptor.id,
+            &observation.visibility,
+            observation.owner_generation,
+            &bound.contract.owner,
+            &bound.contract.lifetime,
+            || {
+                bound.provider.with_call_admission(
+                    observation.capture.provider_generation,
+                    || {
+                        let mut runtime = entry
+                            .runtime
+                            .lock()
+                            .expect("channel runtime mutex poisoned");
+                        // Join completed tasks before reusing bounded execution slots.
+                        runtime
+                            .executions
+                            .retain_mut(|task| match (&mut *task).now_or_never() {
+                                Some(Ok(())) => false,
+                                Some(Err(_)) => true,
+                                None => true,
+                            });
+                        if runtime.executions.len() >= 32 {
+                            return Err(ChannelBindingError::Busy);
+                        }
+                        let (sender, receiver) = tokio::sync::oneshot::channel();
+                        let ticket = AdmittedWork {
+                            observation: observation.clone(),
+                        };
+                        runtime.active_work += 1;
+                        let source = self.clone();
+                        runtime.executions.push(tokio::spawn(async move {
+                            let result = {
+                                let channel = ticket.observation.capture.channel.read().await;
+                                channel.send(message).await
+                            };
+                            source.complete_bound_work(ticket, result, sender).await;
+                        }));
+                        Ok(receiver)
+                    },
+                )?
+            },
+        )?
+    }
+
+    async fn complete_bound_work(
+        &self,
+        ticket: AdmittedWork,
+        result: super::ChannelResult<super::SendResult>,
+        sender: tokio::sync::oneshot::Sender<BoundCompletion>,
+    ) {
+        let _source = self.lifecycle_sync.lock().await;
+        let observation = &ticket.observation;
+        let original = &observation.capture.entry;
+        let current = self
+            .channels
+            .read()
+            .await
+            .get(&super::ChannelId::new(
+                &observation.capture.descriptor.id.name,
+            ))
+            .cloned();
+        let validation = current
+            .as_ref()
+            .ok_or(ChannelBindingError::NotFound)
+            .and_then(|current| self.validate_bound_capture(&observation.capture, current));
+        let mut handoff = Some((result, sender));
+        let accepted = validation.and_then(|()| {
+            let super::ChannelRegistration::Bound(bound) = &original.registration else {
+                unreachable!()
+            };
+            bound
+                .ownership
+                .with_current_binding(
+                    &bound.descriptor.id,
+                    &observation.visibility,
+                    observation.owner_generation,
+                    &bound.contract.owner,
+                    &bound.contract.lifetime,
+                    || {
+                        bound.provider.with_admitted_completion(
+                            observation.capture.provider_generation,
+                            || {
+                                let mut runtime = original
+                                    .runtime
+                                    .lock()
+                                    .expect("channel runtime mutex poisoned");
+                                runtime.active_work = runtime
+                                    .active_work
+                                    .checked_sub(1)
+                                    .expect("live original ticket");
+                                let (result, sender) =
+                                    handoff.take().expect("one completion handoff");
+                                let _ = sender.send(BoundCompletion::Accepted(result));
+                            },
+                        )
+                    },
+                )?
+                .map_err(ChannelBindingError::from)
+        });
+        if let Err(error) = accepted {
+            let mut runtime = original
+                .runtime
+                .lock()
+                .expect("channel runtime mutex poisoned");
+            runtime.active_work = runtime
+                .active_work
+                .checked_sub(1)
+                .expect("live original ticket");
+            let (_, sender) = handoff
+                .take()
+                .expect("stale completion has not been accepted");
+            let _ = sender.send(BoundCompletion::DiscardedStale(error));
+        }
+        original.drained.notify_waiters();
+    }
+
+    pub(crate) async fn start_bound_channel(
+        self: &Arc<Self>,
+        id: &super::ChannelId,
+    ) -> Result<LifecycleResult, ChannelBindingError> {
+        use futures::FutureExt;
+        let _source = self.lifecycle_sync.lock().await;
+        let entry = self
+            .channels
+            .read()
+            .await
+            .get(id)
+            .cloned()
+            .ok_or(ChannelBindingError::NotFound)?;
+        let super::ChannelRegistration::Bound(bound) = &entry.registration else {
+            return Err(ChannelBindingError::UnboundLegacy);
+        };
+        let mut runtime = entry
+            .runtime
+            .lock()
+            .expect("channel runtime mutex poisoned");
+        if let Some(driver) = &mut runtime.driver {
+            match driver.now_or_never() {
+                Some(Ok(())) => runtime.driver = None,
+                Some(Err(_)) => return Err(ChannelBindingError::Busy),
+                None => return Err(ChannelBindingError::Busy),
+            }
+        }
+        if runtime.operation.is_some()
+            || runtime.driver.is_some()
+            || runtime.active_work != 0
+            || runtime.forwarder.is_some()
+        {
+            return Err(ChannelBindingError::Busy);
+        }
+        let generation = bound
+            .provider
+            .transition(crate::capability::provider::ProviderState::Starting)?
+            .generation;
+        let marker = Arc::new(());
+        runtime.operation = Some(marker.clone());
+        runtime.residual.transport_may_be_live = true;
+        let (sender, receiver) = tokio::sync::oneshot::channel();
+        let source = self.clone();
+        let original = entry.clone();
+        let id = id.clone();
+        runtime.driver = Some(tokio::spawn(async move {
+            let result = source
+                .activate_bound(&id, &original, &marker, generation)
+                .await;
+            let _ = sender.send(result);
+        }));
+        Ok(receiver)
+    }
+
+    async fn activate_bound(
+        &self,
+        id: &super::ChannelId,
+        entry: &Arc<ChannelRegistrationEntry>,
+        marker: &Arc<()>,
+        generation: u64,
+    ) -> Result<(), ChannelBindingError> {
+        use crate::capability::provider::ProviderState;
+        let setup = {
+            let mut channel = entry.channel.write().await;
+            match channel.start().await {
+                Ok(()) => Ok((
+                    channel.inbound_subscribe(),
+                    channel
+                        .webhook_handler()
+                        .map(|handler| handler.path().to_owned()),
+                )),
+                Err(error) => Err(error.to_string()),
+            }
+        };
+        let super::ChannelRegistration::Bound(bound) = &entry.registration else {
+            unreachable!()
+        };
+        let (mut inbound, path) = match setup {
+            Ok(setup) => setup,
+            Err(error) => {
+                let _source = self.lifecycle_sync.lock().await;
+                bound.provider.transition(ProviderState::Failed)?;
+                return Err(ChannelBindingError::Runtime {
+                    phase: ChannelRuntimePhase::Start,
+                    error,
+                    residual: entry.runtime.lock().unwrap().residual.clone(),
+                });
+            }
+        };
+        // No Bound ingress is mounted in Stage A. Invalid paths fail setup;
+        // raw handlers and inbound events never reach Legacy consumers.
+        if path
+            .as_ref()
+            .is_some_and(|path| !path.starts_with("/webhook/"))
+        {
+            let _source = self.lifecycle_sync.lock().await;
+            bound.provider.transition(ProviderState::Failed)?;
+            return Err(ChannelBindingError::Runtime {
+                phase: ChannelRuntimePhase::Start,
+                error: "invalid webhook mount path".into(),
+                residual: entry.runtime.lock().unwrap().residual.clone(),
+            });
+        }
+        let cancel = tokio_util::sync::CancellationToken::new();
+        let cancelled = cancel.clone();
+        let task = tokio::spawn(async move {
+            loop {
+                tokio::select! {
+                    biased;
+                    _ = cancelled.cancelled() => break,
+                    result = inbound.recv() => if matches!(result, Err(tokio::sync::broadcast::error::RecvError::Closed)) { break; },
+                }
+            }
+        });
+        let _source = self.lifecycle_sync.lock().await;
+        let current = self
+            .channels
+            .read()
+            .await
+            .get(id)
+            .cloned()
+            .ok_or(ChannelBindingError::NotFound)?;
+        let mut desired = self.desired_state.write().await;
+        bound.provider.with_ready_commit(generation, |_| {
+            let mut runtime = entry
+                .runtime
+                .lock()
+                .expect("channel runtime mutex poisoned");
+            if !Arc::ptr_eq(&current, entry)
+                || !runtime
+                    .operation
+                    .as_ref()
+                    .is_some_and(|active| Arc::ptr_eq(active, marker))
+            {
+                return Err(ChannelBindingError::StaleEntry);
+            }
+            runtime.forwarder = Some(OwnedForwarder { cancel, task });
+            runtime.residual.unjoined_forwarder = true;
+            runtime.operation = None;
+            // The current driver ends without any more I/O; retain its handle
+            // until stop joins it (or a later management call observes it).
+            desired.insert(id.clone(), super::DesiredChannelState::Running);
+            Ok(())
+        })
+    }
+
+    pub(crate) async fn stop_bound_channel(
+        self: &Arc<Self>,
+        id: &super::ChannelId,
+    ) -> Result<LifecycleResult, ChannelBindingError> {
+        use crate::capability::provider::ProviderState;
+        use futures::FutureExt;
+        let _source = self.lifecycle_sync.lock().await;
+        let entry = self
+            .channels
+            .read()
+            .await
+            .get(id)
+            .cloned()
+            .ok_or(ChannelBindingError::NotFound)?;
+        let super::ChannelRegistration::Bound(bound) = &entry.registration else {
+            return Err(ChannelBindingError::UnboundLegacy);
+        };
+        let mut desired = self.desired_state.write().await;
+        let mut runtime = entry
+            .runtime
+            .lock()
+            .expect("channel runtime mutex poisoned");
+        if let Some(driver) = &mut runtime.driver {
+            match driver.now_or_never() {
+                Some(Ok(())) => {
+                    runtime.driver = None;
+                }
+                Some(Err(_)) => {
+                    return Err(ChannelBindingError::Busy);
+                }
+                None => return Err(ChannelBindingError::Busy),
+            }
+        }
+        // A failed, joined setup driver may be cleaned explicitly. A live
+        // driver is never overlapped or inferred ended from observer Drop.
+        if runtime.operation.is_some() && bound.provider.state() != ProviderState::Failed {
+            return Err(ChannelBindingError::Busy);
+        }
+        let state = bound.provider.state();
+        if matches!(state, ProviderState::Ready | ProviderState::Starting) {
+            bound.provider.transition(ProviderState::Stopping)?;
+        }
+        let marker = Arc::new(());
+        runtime.operation = Some(marker.clone());
+        desired.insert(id.clone(), super::DesiredChannelState::Stopped);
+        let (sender, receiver) = tokio::sync::oneshot::channel();
+        let source = self.clone();
+        let original = entry.clone();
+        runtime.driver = Some(tokio::spawn(async move {
+            let result = source.drain_bound(&original, &marker).await;
+            let _ = sender.send(result);
+        }));
+        Ok(receiver)
+    }
+
+    async fn drain_bound(
+        &self,
+        entry: &Arc<ChannelRegistrationEntry>,
+        marker: &Arc<()>,
+    ) -> Result<(), ChannelBindingError> {
+        use crate::capability::provider::ProviderState;
+        loop {
+            let notified = entry.drained.notified();
+            tokio::pin!(notified);
+            notified.as_mut().enable();
+            if entry
+                .runtime
+                .lock()
+                .expect("channel runtime mutex poisoned")
+                .active_work
+                == 0
+            {
+                break;
+            }
+            notified.await;
+        }
+        let (executions, forwarder) = {
+            let mut runtime = entry
+                .runtime
+                .lock()
+                .expect("channel runtime mutex poisoned");
+            (
+                std::mem::take(&mut runtime.executions),
+                runtime.forwarder.take(),
+            )
+        };
+        for task in executions {
+            if let Err(error) = task.await {
+                return Err(self.bound_cleanup_error(entry, error.to_string()));
+            }
+        }
+        if let Some(forwarder) = forwarder {
+            forwarder.cancel.cancel();
+            if let Err(error) = forwarder.task.await {
+                return Err(self.bound_cleanup_error(entry, error.to_string()));
+            }
+            entry.runtime.lock().unwrap().residual.unjoined_forwarder = false;
+        }
+        let super::ChannelRegistration::Bound(bound) = &entry.registration else {
+            unreachable!()
+        };
+        if !matches!(
+            bound.provider.state(),
+            ProviderState::Cold | ProviderState::Discovered | ProviderState::Disabled
+        ) {
+            if let Err(error) = entry.channel.write().await.stop().await {
+                return Err(self.bound_cleanup_error(entry, error.to_string()));
+            }
+        }
+        let _source = self.lifecycle_sync.lock().await;
+        let mut runtime = entry
+            .runtime
+            .lock()
+            .expect("channel runtime mutex poisoned");
+        if !runtime
+            .operation
+            .as_ref()
+            .is_some_and(|active| Arc::ptr_eq(active, marker))
+        {
+            return Err(ChannelBindingError::Busy);
+        }
+        match bound.provider.state() {
+            ProviderState::Stopping | ProviderState::Failed => {
+                bound.provider.transition(ProviderState::Stopped)?;
+            }
+            _ => {}
+        }
+        runtime.residual = ChannelCleanupResidual::default();
+        runtime.operation = None;
+        Ok(())
+    }
+
+    fn bound_cleanup_error(
+        &self,
+        entry: &ChannelRegistrationEntry,
+        error: String,
+    ) -> ChannelBindingError {
+        ChannelBindingError::Runtime {
+            phase: ChannelRuntimePhase::Stop,
+            error,
+            residual: entry
+                .runtime
+                .lock()
+                .expect("channel runtime mutex poisoned")
+                .residual
+                .clone(),
+        }
+    }
 }
 
 #[cfg(test)]
