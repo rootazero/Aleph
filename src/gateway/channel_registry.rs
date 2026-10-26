@@ -63,7 +63,7 @@ struct ChannelRegistrationEntry {
 
 enum ChannelRegistration {
     Legacy,
-    Bound(BoundChannelRegistration),
+    Bound(Box<BoundChannelRegistration>),
 }
 
 #[allow(dead_code)] // Immutable source publication, consumed by later lifecycle tasks.
@@ -706,7 +706,7 @@ impl ChannelRegistry {
         };
         let entry = Arc::new(ChannelRegistrationEntry {
             channel: Arc::new(RwLock::new(channel)),
-            registration: ChannelRegistration::Bound(BoundChannelRegistration {
+            registration: ChannelRegistration::Bound(Box::new(BoundChannelRegistration {
                 source: self.source.clone(),
                 entry_revision: revision,
                 descriptor_fingerprint: canonical_descriptor_fingerprint(&descriptor),
@@ -714,7 +714,7 @@ impl ChannelRegistry {
                 contract,
                 provider,
                 ownership,
-            }),
+            })),
         });
         // Acquire every publication lock before the first write: cancellation
         // cannot leave a half-published tuple or mismatched desired intent.

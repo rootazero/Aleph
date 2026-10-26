@@ -1,5 +1,4 @@
 //! Source-private cold channel declarations; no executable provider admission.
-#![allow(dead_code)] // Published contracts are consumed by later source lifecycle tasks.
 
 use super::{ChannelHandle, ChannelRegistrationEntry};
 use crate::acp::manager::SessionKey;
@@ -14,9 +13,11 @@ use crate::tools::descriptor::canonicalize_json;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 
+#[allow(dead_code)] // Cold declaration schema is not mounted in production yet.
 pub(crate) struct ChannelLifecycleDeclarationV1;
 
 impl ChannelLifecycleDeclarationV1 {
+    #[allow(dead_code)] // Used by the contract constructor pending production opt-in.
     pub(crate) fn schema() -> Value {
         json!({
             "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -38,12 +39,14 @@ pub(crate) struct ChannelLifecycleContract {
     pub(super) owner: OwnerRef,
     pub(super) lifetime: LifetimeScope,
     pub(super) visibility: VisibilityScope,
+    #[allow(dead_code)] // Retained for later source lifecycle validation.
     pub(super) lifecycle_schema: Value,
     pub(super) schema: SchemaRef,
     pub(super) metadata: ProjectionMetadata,
 }
 
 impl ChannelLifecycleContract {
+    #[allow(dead_code)] // Validated cold registration is not mounted in production yet.
     pub(crate) fn new(
         owner: OwnerRef,
         lifetime: LifetimeScope,
@@ -73,6 +76,7 @@ impl ChannelLifecycleContract {
 }
 
 #[derive(Clone, Copy)]
+#[allow(dead_code)] // Cold registration callers arrive with later lifecycle tasks.
 pub(crate) enum ChannelInitialState {
     Discovered,
     Cold,
@@ -80,6 +84,7 @@ pub(crate) enum ChannelInitialState {
 }
 
 #[derive(Clone)]
+#[allow(dead_code)] // Capture fields are consumed by later source admission validation.
 pub(crate) struct BoundChannelCapture {
     pub(super) source: Arc<()>,
     pub(super) entry: Arc<ChannelRegistrationEntry>,
@@ -93,6 +98,7 @@ pub(crate) struct BoundChannelCapture {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(dead_code)] // Runtime start/stop error reporting arrives with lifecycle execution.
 pub(crate) enum ChannelRuntimePhase {
     Start,
     Stop,
@@ -115,16 +121,22 @@ pub(crate) enum ChannelBindingError {
     UnboundLegacy,
     #[error("unsupported channel lifecycle declaration")]
     InvalidContract,
+    #[allow(dead_code)] // Emitted by later source provenance validation.
     #[error("wrong channel source")]
     WrongSource,
+    #[allow(dead_code)] // Emitted by later provider identity validation.
     #[error("wrong channel provider")]
     WrongProvider,
+    #[allow(dead_code)] // Emitted by later scope validation.
     #[error("wrong channel visibility")]
     WrongVisibility,
+    #[allow(dead_code)] // Emitted by later entry identity validation.
     #[error("stale channel entry")]
     StaleEntry,
+    #[allow(dead_code)] // Emitted by later descriptor validation.
     #[error("stale channel descriptor")]
     StaleDescriptor,
+    #[allow(dead_code)] // Emitted by later lifecycle retirement admission.
     #[error("channel is retiring")]
     Retiring,
     #[error("channel publication is busy")]
@@ -135,6 +147,7 @@ pub(crate) enum ChannelBindingError {
     Provider(#[from] ProviderCallError),
     #[error(transparent)]
     ProviderLifecycle(#[from] ProviderLifecycleError),
+    #[allow(dead_code)] // Emitted by later start/stop execution and cleanup.
     #[error("channel runtime {phase:?}: {error}; residual: {residual:?}")]
     Runtime {
         phase: ChannelRuntimePhase,
