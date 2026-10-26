@@ -111,6 +111,17 @@ impl BrowserPanelSdk {
         })
     }
 
+    pub fn connection(&self) -> Result<JsValue, JsValue> {
+        let snapshot = self
+            .sdk
+            .connection()
+            .map_err(|error| JsValue::from_str(&error.to_string()))?;
+        to_js(json!({
+            "connected": snapshot.connected,
+            "epoch": snapshot.epoch,
+        }))
+    }
+
     pub fn navigate(&self, key: JsValue) -> Result<(), JsValue> {
         let key: PanelTabKey = serde_json::from_value(from_js(&key)?)
             .map_err(|_| JsValue::from_str("InvalidNavigation"))?;
