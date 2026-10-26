@@ -643,17 +643,19 @@ fn ChatBandChrome() -> impl IntoView {
 /// dedicated router components.
 #[component]
 fn MainContent() -> impl IntoView {
-    #[cfg(feature = "panel-tab-spike")]
+    #[cfg(feature = "panel-modular")]
     {
         let form_factor = expect_context::<FormFactorState>();
+        let location = use_location();
         return move || {
-            if form_factor.form_factor.get() == FormFactor::Wide {
+            let terminal = PanelMode::from_path(&location.pathname.get()) == PanelMode::Terminal;
+            if form_factor.form_factor.get() != FormFactor::Phone && terminal {
                 return view! { <crate::panel::PanelShell /> }.into_any();
             }
             view! { <LegacyMainContent /> }.into_any()
         };
     }
-    #[cfg(not(feature = "panel-tab-spike"))]
+    #[cfg(not(feature = "panel-modular"))]
     view! { <LegacyMainContent /> }
 }
 
