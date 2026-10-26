@@ -6,7 +6,9 @@ use crate::capability::descriptor::{
     CapabilityDescriptor, CapabilityFacet, CapabilityKind, ProjectionMetadata, SchemaRef,
     ServiceRelation,
 };
-use crate::capability::ownership::{LifetimeScope, OwnerRef, VisibilityScope};
+use crate::capability::ownership::{
+    BindingValidationError, LifetimeScope, OwnerRef, VisibilityScope,
+};
 use crate::capability::provider::{ProviderCallError, ProviderHandle, ProviderLifecycleError};
 use crate::sync_primitives::Arc;
 use crate::tools::descriptor::canonicalize_json;
@@ -147,6 +149,8 @@ pub(crate) enum ChannelBindingError {
     Provider(#[from] ProviderCallError),
     #[error(transparent)]
     ProviderLifecycle(#[from] ProviderLifecycleError),
+    #[error(transparent)]
+    Owner(#[from] BindingValidationError),
     #[allow(dead_code)] // Emitted by later start/stop execution and cleanup.
     #[error("channel runtime {phase:?}: {error}; residual: {residual:?}")]
     Runtime {
