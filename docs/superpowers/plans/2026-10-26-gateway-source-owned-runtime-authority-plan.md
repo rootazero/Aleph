@@ -4,7 +4,7 @@
 
 **Design / 设计：**[architecture addendum](../specs/2026-10-26-gateway-source-owned-runtime-authority-design.md).
 
-**Status / 状态：**架构扩展已获授权，本文件是代码前的执行契约；下面所有实现步骤尚未执行。The authorization allows new runtime responsibilities inside the existing source. This planning commit changes no Rust and supplies no runtime GREEN evidence. R1 remains NO-GO/deferred pending a separate ruling.
+**Status / 状态：**架构扩展已获授权；Stage A bounded Generic Webhook/loopback slice is implemented and committed as `02555b5f1 feat(gateway): own bound channel execution lifecycle`. Stage B–E remain open, and R1 remains separately assessed as NO-GO/deferred until the remaining compatibility/resource evidence is complete.
 
 ## 1. Starting point and execution contract / 起点与执行契约
 
@@ -149,4 +149,14 @@ Also re-run Stage C webhook/delivery/health suites and both Stage D matrices. Th
 - [ ] Provider/source/owner/session domains remain independent; Resource lifecycle declaration never becomes public Callable/send schema.
 - [ ] Actual verification and independent review are recorded; references contain only established facts, not TODOs marked complete from design approval.
 
-**Explicit non-work / 明确未做：**no universal scheduler, durable recovery/admission, EffectClaim producer, Safe Replay, external exactly-once, generalized envelope, new CapabilityKind, Feishu implementation, production Bound opt-in/mount, Zahir route, public send/ingress operation, all-channel migration, terminal/memory/sandbox migration, process crash isolation or compiled-code unloading. This documentation phase runs no cargo/tests and changes no Rust; implementation checkboxes remain open.
+**Explicit non-work / 明确未做：**no universal scheduler, durable recovery/admission, EffectClaim producer, Safe Replay, external exactly-once, generalized envelope, new CapabilityKind, Feishu implementation, production Bound opt-in/mount, Zahir route, public send/ingress operation, all-channel migration, terminal/memory/sandbox migration, process crash isolation or compiled-code unloading. Stage A also does not claim opaque reqwest pooled-task joins, websocket/listener/token-client receipts, full compatibility closure, replacement retirement semantics, or all-channel resource matrices.
+
+## 8. Stage A evidence / Stage A 证据
+
+The bounded slice uses the existing `ChannelRegistry` entry/map as the only Gateway association authority. It adds entry-local operation/ticket/task ownership, keeps Legacy and Bound real I/O outside `lifecycle_sync`, and retains ProviderHandle generation and OwnershipTree binding validation as independent authorities. Generic Webhook client construction is lazy and cold declaration/capture/snapshot observe zero client construction.
+
+该纵向切片只使用既有 `ChannelRegistry` entry/map 作为 Gateway association authority；新增的是 entry-local operation/ticket/task ownership，Legacy 与 Bound 的真实 I/O 均不持有 `lifecycle_sync`，ProviderHandle generation 与 OwnershipTree binding validation 仍是独立 authority。Generic Webhook client 延迟到显式 start，cold declaration/capture/snapshot 不构造 client。
+
+Recorded verification: `cargo fmt --all --check`, `git diff --check`, `cargo check -p alephcore --tests`, and `cargo clippy -p alephcore --tests -- -D warnings` passed. `cargo test -p alephcore --lib gateway::channel_registry::tests::` passed 54/54, and `cargo test -p alephcore --lib capability::` passed 222/222. The mixed Legacy/Bound test covers start, stop, restart, start-all, factory, replacement, create-replace and unregister progress. Only the non-fatal macOS linker warning `__eh_frame section too large (max 16MB)` appeared. An external reviewer was unavailable because the ACP proxy circuit was open; manual review found no forbidden Feishu, second-registry, new-kind, scheduler, or durable-recovery changes.
+
+已记录验证：fmt、diff、check、clippy 全部通过；gateway filter 54/54，capability filter 222/222。mixed Legacy/Bound 测试覆盖 start、stop、restart、start-all、factory、replacement、create-replace、unregister 的进展。仅出现非致命 macOS linker warning `__eh_frame section too large (max 16MB)`。外部 reviewer 因 ACP proxy circuit open 不可用；手工审阅未发现 Feishu、第二 registry、新 CapabilityKind、scheduler 或 durable recovery 变更。
