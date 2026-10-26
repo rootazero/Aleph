@@ -82,7 +82,10 @@ pub struct WebhookChannel {
     /// Shared mutable state (status + inbound channel)
     channel_state: ChannelState,
     /// HTTP client for outbound requests
-    client: reqwest::Client,
+    client: Option<reqwest::Client>,
+    injected_client: bool,
+    #[cfg(test)]
+    probe: Option<crate::gateway::channel_registry::test_support::ResourceProbe>,
     /// The webhook handler (created on start, shared with `WebhookReceiver`)
     handler: Option<Arc<GenericWebhookHandler>>,
 }
@@ -90,6 +93,28 @@ pub struct WebhookChannel {
 impl WebhookChannel {
     /// Create a new generic webhook channel
     pub fn new(id: impl Into<String>, config: WebhookChannelConfig) -> Self {
+        Self::construct(
+            id.into(),
+            config,
+            #[cfg(test)]
+            None,
+        )
+    }
+
+    #[cfg(test)]
+    pub(crate) fn observed(
+        id: &str,
+        config: WebhookChannelConfig,
+        probe: crate::gateway::channel_registry::test_support::ResourceProbe,
+    ) -> Self {
+        Self::construct(id.into(), config, Some(probe))
+    }
+
+    fn construct(
+        id: String,
+        config: WebhookChannelConfig,
+        #[cfg(test)] probe: Option<crate::gateway::channel_registry::test_support::ResourceProbe>,
+    ) -> Self {
         let info = ChannelInfo {
             id: ChannelId::new(id),
             name: "Webhook".to_string(),
@@ -102,7 +127,10 @@ impl WebhookChannel {
             info,
             config,
             channel_state: ChannelState::new(100),
-            client: reqwest::Client::new(),
+            client: None,
+            injected_client: false,
+            #[cfg(test)]
+            probe,
             handler: None,
         }
     }
@@ -113,7 +141,8 @@ impl WebhookChannel {
         client: reqwest::Client,
     ) -> Self {
         let mut channel = Self::new(id, config);
-        channel.client = client;
+        channel.client = Some(client);
+        channel.injected_client = true;
         channel
     }
 
@@ -163,6 +192,21 @@ impl Channel for WebhookChannel {
         // Validate configuration
         self.config.validate().map_err(ChannelError::ConfigError)?;
 
+        if self.client.is_none() {
+            #[cfg(test)]
+            if let Some(probe) = &self.probe {
+                probe.record("client_build_attempt");
+            }
+            self.client = Some(
+                reqwest::Client::builder()
+                    .build()
+                    .map_err(|error| ChannelError::ConfigError(error.to_string()))?,
+            );
+            #[cfg(test)]
+            if let Some(probe) = &self.probe {
+                probe.record("client_built");
+            }
+        }
         self.set_status(ChannelStatus::Connecting).await;
         tracing::info!(
             "Starting Webhook channel (path={}, callback_url={})...",
@@ -189,6 +233,19 @@ impl Channel for WebhookChannel {
     async fn stop(&mut self) -> ChannelResult<()> {
         tracing::info!("Stopping Webhook channel...");
         self.handler = None;
+        if !self.injected_client {
+            let client = self.client.take();
+            let existed = client.is_some();
+            drop(client);
+            #[cfg(test)]
+            if existed {
+                if let Some(probe) = &self.probe {
+                    probe.record("client_drop");
+                }
+            }
+            #[cfg(not(test))]
+            let _ = existed;
+        }
         self.set_status(ChannelStatus::Disconnected).await;
         Ok(())
     }
@@ -198,13 +255,25 @@ impl Channel for WebhookChannel {
     }
 
     async fn send(&self, message: OutboundMessage) -> ChannelResult<SendResult> {
-        WebhookMessageOps::send_outbound(
-            &self.client,
+        let client = self.client.as_ref().ok_or_else(|| {
+            ChannelError::NotConnected("Webhook channel has not been activated".into())
+        })?;
+        #[cfg(test)]
+        if let Some(probe) = &self.probe {
+            probe.record("request_attempt");
+        }
+        let result = WebhookMessageOps::send_outbound(
+            client,
             &self.config.callback_url,
             &self.config.secret,
             &message,
         )
-        .await
+        .await;
+        #[cfg(test)]
+        if let Some(probe) = &self.probe {
+            probe.record("request_ended");
+        }
+        result
     }
 }
 

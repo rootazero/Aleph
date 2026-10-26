@@ -220,6 +220,21 @@ pub enum OwnershipError {
     GenerationExhausted,
 }
 
+/// Why a live ownership binding cannot authorize a source-local commit.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+pub(crate) enum BindingValidationError {
+    #[error("ownership binding missing")]
+    MissingBinding,
+    #[error("capability ownership revoked")]
+    Revoked,
+    #[error("ownership lifetime disposed")]
+    Disposed,
+    #[error("ownership generation mismatch")]
+    GenerationMismatch,
+    #[error("ownership binding mismatch")]
+    BindingMismatch,
+}
+
 /// Why `register` refused to install a binding.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RegisterError {
@@ -406,6 +421,48 @@ impl OwnershipTree {
         let inner = self.inner.lock().expect("ownership mutex poisoned");
         let key = Self::key(capability, visibility);
         inner.bindings.get(&key).map(|binding| binding.generation)
+    }
+
+    /// Validate the complete live binding and commit under the same tree lock.
+    ///
+    /// Generation alone is insufficient: `register` can replace owner/lifetime
+    /// without advancing the nonce. Identical re-registration remains the same
+    /// authorization fact; explicit bump/revoke supplies invalidation semantics.
+    ///
+    /// Callers acquire the source gate first, then this tree, then any provider
+    /// and entry-local locks. The synchronous callback must only commit local
+    /// state: no await, I/O, plugin code, tree re-entry, or source-lock acquisition.
+    #[allow(dead_code)] // Source-local Gateway admission/completion integrates in Task 5.
+    pub(crate) fn with_current_binding<R>(
+        &self,
+        capability: &CapabilityId,
+        visibility: &VisibilityScope,
+        expected: OwnerGeneration,
+        owner: &OwnerRef,
+        lifetime: &LifetimeScope,
+        commit: impl FnOnce() -> R,
+    ) -> Result<R, BindingValidationError> {
+        let inner = self.inner.lock().expect("ownership mutex poisoned");
+        if inner.revoked.contains(capability) {
+            return Err(BindingValidationError::Revoked);
+        }
+        if Self::lifetime_disposed(&inner, *lifetime) {
+            return Err(BindingValidationError::Disposed);
+        }
+        let binding = inner
+            .bindings
+            .get(&Self::key(capability, visibility))
+            .ok_or(BindingValidationError::MissingBinding)?;
+        if Self::lifetime_disposed(&inner, binding.lifetime) {
+            return Err(BindingValidationError::Disposed);
+        }
+        if binding.generation != expected {
+            return Err(BindingValidationError::GenerationMismatch);
+        }
+        if &binding.owner != owner || &binding.lifetime != lifetime {
+            return Err(BindingValidationError::BindingMismatch);
+        }
+        Ok(commit())
     }
 
     /// Read the current owner generation of many `(CapabilityId, VisibilityScope)`
@@ -650,6 +707,399 @@ mod tests {
             workspace: Some(workspace.to_string()),
             ..VisibilityScope::default()
         }
+    }
+
+    #[test]
+    fn current_binding_commit_checks_generation_owner_and_lifetime() {
+        let tree = OwnershipTree::new();
+        let id = cap_id("current-binding");
+        let visibility = full_vis();
+        let owner = OwnerRef::Run(RunId("run-a".into()));
+        let lifetime = LifetimeScope::Run;
+        tree.register(id.clone(), owner.clone(), lifetime, visibility.clone())
+            .unwrap();
+        let generation = tree.generation(&id, &visibility).unwrap();
+        let commits = std::cell::Cell::new(0);
+        let commit = || {
+            commits.set(commits.get() + 1);
+            7
+        };
+
+        assert_eq!(
+            tree.with_current_binding(&id, &visibility, generation, &owner, &lifetime, commit),
+            Ok(7)
+        );
+        for wrong_owner in [OwnerRef::Runtime, OwnerRef::Run(RunId("run-b".into()))] {
+            assert_eq!(
+                tree.with_current_binding(
+                    &id,
+                    &visibility,
+                    generation,
+                    &wrong_owner,
+                    &lifetime,
+                    commit,
+                ),
+                Err(BindingValidationError::BindingMismatch)
+            );
+        }
+        for wrong_lifetime in [
+            LifetimeScope::Runtime,
+            LifetimeScope::Session,
+            LifetimeScope::Task,
+            LifetimeScope::External,
+        ] {
+            assert_eq!(
+                tree.with_current_binding(
+                    &id,
+                    &visibility,
+                    generation,
+                    &owner,
+                    &wrong_lifetime,
+                    commit,
+                ),
+                Err(BindingValidationError::BindingMismatch)
+            );
+        }
+        assert_eq!(
+            tree.with_current_binding(
+                &id,
+                &visibility,
+                OwnerGeneration(generation.0 + 1),
+                &owner,
+                &lifetime,
+                commit,
+            ),
+            Err(BindingValidationError::GenerationMismatch)
+        );
+        assert_eq!(commits.get(), 1);
+        assert_eq!(tree.generation(&id, &visibility), Some(generation));
+
+        // Only the ownership authority advances this generation; no provider or
+        // source generation participates in this guard.
+        let current = tree.bump(LifetimeScope::Run).unwrap();
+        assert_ne!(current, generation);
+        assert_eq!(
+            tree.with_current_binding(&id, &visibility, generation, &owner, &lifetime, commit),
+            Err(BindingValidationError::GenerationMismatch)
+        );
+        assert_eq!(commits.get(), 1);
+        assert_eq!(
+            tree.with_current_binding(&id, &visibility, current, &owner, &lifetime, commit),
+            Ok(7)
+        );
+        assert_eq!(commits.get(), 2);
+    }
+
+    #[test]
+    fn same_nonce_register_replacement_rejects_old_binding() {
+        for (replacement_owner, replacement_lifetime) in [
+            (OwnerRef::Run(RunId("run-b".into())), LifetimeScope::Run),
+            (OwnerRef::Run(RunId("run-a".into())), LifetimeScope::Task),
+            (OwnerRef::Task(TaskId("task-b".into())), LifetimeScope::Task),
+        ] {
+            let tree = OwnershipTree::new();
+            let id = cap_id("same-nonce");
+            let visibility = full_vis();
+            let old_owner = OwnerRef::Run(RunId("run-a".into()));
+            let old_lifetime = LifetimeScope::Run;
+            tree.register(
+                id.clone(),
+                old_owner.clone(),
+                old_lifetime,
+                visibility.clone(),
+            )
+            .unwrap();
+            let generation = tree.generation(&id, &visibility).unwrap();
+            let commits = std::cell::Cell::new(0);
+            let commit = || {
+                commits.set(commits.get() + 1);
+                7
+            };
+
+            // Identical re-registration is the same authorization fact, not an
+            // implicit revocation or a newly allocated owner generation.
+            tree.register(
+                id.clone(),
+                old_owner.clone(),
+                old_lifetime,
+                visibility.clone(),
+            )
+            .unwrap();
+            assert_eq!(tree.generation(&id, &visibility), Some(generation));
+            assert_eq!(
+                tree.with_current_binding(
+                    &id,
+                    &visibility,
+                    generation,
+                    &old_owner,
+                    &old_lifetime,
+                    commit,
+                ),
+                Ok(7)
+            );
+            tree.register(
+                id.clone(),
+                replacement_owner.clone(),
+                replacement_lifetime,
+                visibility.clone(),
+            )
+            .unwrap();
+            assert_eq!(tree.generation(&id, &visibility), Some(generation));
+            assert_eq!(
+                tree.with_current_binding(
+                    &id,
+                    &visibility,
+                    generation,
+                    &old_owner,
+                    &old_lifetime,
+                    commit,
+                ),
+                Err(BindingValidationError::BindingMismatch)
+            );
+            assert_eq!(commits.get(), 1);
+            assert_eq!(
+                tree.with_current_binding(
+                    &id,
+                    &visibility,
+                    generation,
+                    &replacement_owner,
+                    &replacement_lifetime,
+                    commit,
+                ),
+                Ok(7)
+            );
+            assert_eq!(commits.get(), 2);
+            assert_eq!(tree.generation(&id, &visibility), Some(generation));
+        }
+    }
+
+    #[test]
+    fn binding_guard_fails_closed_for_visibility_missing_revoke_dispose() {
+        let tree = OwnershipTree::new();
+        let id = cap_id("exact-binding");
+        let owner = OwnerRef::Runtime;
+        let lifetime = LifetimeScope::Runtime;
+        let visibility = VisibilityScope {
+            principal: Some("agent-a".into()),
+            workspace: Some("workspace-a".into()),
+            session: Some(SessionKey::new("test", ".")),
+            allowed_kinds: Some(vec!["Resource".into(), "Tool".into()]),
+            allowed_ids: Some(vec!["first".into(), "second".into()]),
+            approval: Some("approved-a".into()),
+        };
+        tree.register(id.clone(), owner.clone(), lifetime, visibility.clone())
+            .unwrap();
+        let generation = tree.generation(&id, &visibility).unwrap();
+        let commits = std::cell::Cell::new(0);
+        let commit = || {
+            commits.set(commits.get() + 1);
+            7
+        };
+        let mut wrong_scopes = vec![full_vis()];
+        for dimension in 0..6 {
+            for absent in [false, true] {
+                let mut scope = visibility.clone();
+                match dimension {
+                    0 => scope.principal = (!absent).then(|| "agent-b".into()),
+                    1 => scope.workspace = (!absent).then(|| "workspace-b".into()),
+                    2 => {
+                        scope.session =
+                            (!absent).then(|| SessionKey::with_name("test", ".", Some("other")))
+                    }
+                    3 => {
+                        scope.allowed_kinds =
+                            (!absent).then(|| vec!["Tool".into(), "Resource".into()])
+                    }
+                    4 => {
+                        scope.allowed_ids = (!absent).then(|| vec!["second".into(), "first".into()])
+                    }
+                    5 => scope.approval = (!absent).then(|| "approved-b".into()),
+                    _ => unreachable!(),
+                }
+                wrong_scopes.push(scope);
+            }
+        }
+        for scope in wrong_scopes {
+            assert_eq!(
+                tree.with_current_binding(&id, &scope, generation, &owner, &lifetime, commit),
+                Err(BindingValidationError::MissingBinding),
+                "scope must match exactly: {scope:?}"
+            );
+            assert_eq!(tree.generation(&id, &scope), None);
+        }
+        for missing in [
+            cap_id("another-name"),
+            CapabilityId {
+                namespace: "another-namespace".into(),
+                name: id.name.clone(),
+            },
+        ] {
+            assert_eq!(
+                tree.with_current_binding(
+                    &missing,
+                    &visibility,
+                    generation,
+                    &owner,
+                    &lifetime,
+                    commit
+                ),
+                Err(BindingValidationError::MissingBinding)
+            );
+        }
+        assert_eq!(commits.get(), 0);
+        assert_eq!(
+            tree.with_current_binding(&id, &visibility, generation, &owner, &lifetime, commit),
+            Ok(7)
+        );
+        assert!(tree.revoke(&id));
+        for _ in 0..2 {
+            assert_eq!(
+                tree.with_current_binding(&id, &visibility, generation, &owner, &lifetime, commit),
+                Err(BindingValidationError::Revoked)
+            );
+            assert_eq!(tree.resolve(&id, &visibility), None);
+            assert_eq!(tree.generation(&id, &visibility), None);
+            assert_eq!(
+                tree.register(id.clone(), owner.clone(), lifetime, visibility.clone()),
+                Err(RegisterError::Revoked)
+            );
+        }
+        assert_eq!(commits.get(), 1);
+
+        // Explicit expected coverage pins the existing lifetime ordering,
+        // including External; do not rederive the answer with rank().
+        for (disposed, affected) in [
+            (LifetimeScope::External, vec![LifetimeScope::External]),
+            (
+                LifetimeScope::Task,
+                vec![LifetimeScope::External, LifetimeScope::Task],
+            ),
+            (
+                LifetimeScope::Run,
+                vec![
+                    LifetimeScope::External,
+                    LifetimeScope::Task,
+                    LifetimeScope::Run,
+                ],
+            ),
+            (
+                LifetimeScope::Session,
+                vec![
+                    LifetimeScope::External,
+                    LifetimeScope::Task,
+                    LifetimeScope::Run,
+                    LifetimeScope::Session,
+                ],
+            ),
+            (
+                LifetimeScope::Runtime,
+                vec![
+                    LifetimeScope::External,
+                    LifetimeScope::Task,
+                    LifetimeScope::Run,
+                    LifetimeScope::Session,
+                    LifetimeScope::Runtime,
+                ],
+            ),
+        ] {
+            for lifetime in [
+                LifetimeScope::External,
+                LifetimeScope::Task,
+                LifetimeScope::Run,
+                LifetimeScope::Session,
+                LifetimeScope::Runtime,
+            ] {
+                let tree = OwnershipTree::new();
+                tree.register(id.clone(), owner.clone(), lifetime, visibility.clone())
+                    .unwrap();
+                let generation = tree.generation(&id, &visibility).unwrap();
+                let commits = std::cell::Cell::new(0);
+                let commit = || {
+                    commits.set(commits.get() + 1);
+                    7
+                };
+                assert_eq!(tree.dispose(disposed), affected.contains(&lifetime));
+                for _ in 0..2 {
+                    let result = tree.with_current_binding(
+                        &id,
+                        &visibility,
+                        generation,
+                        &owner,
+                        &lifetime,
+                        commit,
+                    );
+                    if affected.contains(&lifetime) {
+                        assert_eq!(result, Err(BindingValidationError::Disposed));
+                        assert_eq!(tree.resolve(&id, &visibility), None);
+                        assert_eq!(tree.generation(&id, &visibility), None);
+                        assert_eq!(
+                            tree.register(id.clone(), owner.clone(), lifetime, visibility.clone()),
+                            Err(RegisterError::Disposed)
+                        );
+                    } else {
+                        assert_eq!(result, Ok(7));
+                        assert_eq!(tree.generation(&id, &visibility), Some(generation));
+                    }
+                }
+                assert_eq!(
+                    commits.get(),
+                    if affected.contains(&lifetime) { 0 } else { 2 }
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn binding_guard_serializes_revoke_after_commit() {
+        let tree = OwnershipTree::new();
+        let id = cap_id("commit-before-revoke");
+        let visibility = full_vis();
+        let owner = OwnerRef::Runtime;
+        let lifetime = LifetimeScope::Runtime;
+        tree.register(id.clone(), owner.clone(), lifetime, visibility.clone())
+            .unwrap();
+        let generation = tree.generation(&id, &visibility).unwrap();
+        let entered = std::sync::Barrier::new(2);
+        let release = std::sync::Barrier::new(2);
+        let commits = std::sync::atomic::AtomicUsize::new(0);
+        let (attempt_tx, attempt_rx) = std::sync::mpsc::channel();
+        let (revoked_tx, revoked_rx) = std::sync::mpsc::channel();
+        std::thread::scope(|scope| {
+            let admission = scope.spawn(|| {
+                tree.with_current_binding(&id, &visibility, generation, &owner, &lifetime, || {
+                    entered.wait();
+                    release.wait();
+                    commits.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    7
+                })
+            });
+            entered.wait();
+            let revoke = scope.spawn(|| {
+                attempt_tx.send(tree.inner.try_lock().is_err()).unwrap();
+                let result = tree.revoke(&id);
+                revoked_tx
+                    .send(commits.load(std::sync::atomic::Ordering::SeqCst))
+                    .unwrap();
+                result
+            });
+            let locked = attempt_rx.recv_timeout(TEST_WAIT);
+            let pending = revoked_rx.try_recv();
+            // Release before assertions so a failed assertion cannot strand a
+            // callback that still owns the authority mutex.
+            release.wait();
+            assert_eq!(admission.join().unwrap(), Ok(7));
+            assert!(revoke.join().unwrap());
+            assert!(locked.unwrap());
+            assert_eq!(pending, Err(std::sync::mpsc::TryRecvError::Empty));
+            assert_eq!(revoked_rx.recv_timeout(TEST_WAIT).unwrap(), 1);
+        });
+        assert_eq!(
+            tree.with_current_binding(&id, &visibility, generation, &owner, &lifetime, || {
+                commits.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            }),
+            Err(BindingValidationError::Revoked)
+        );
+        assert_eq!(commits.load(std::sync::atomic::Ordering::SeqCst), 1);
     }
 
     #[test]
