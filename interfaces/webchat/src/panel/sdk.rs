@@ -367,7 +367,6 @@ fn reestablish_pty_subscription(
     subscription: Arc<SubscriptionState>,
     state: DashboardState,
     topic: String,
-    epoch: u64,
 ) -> LocalBoxFuture<'static, ()> {
     async move {
         let permission = subscription.permission.clone();
@@ -375,12 +374,15 @@ fn reestablish_pty_subscription(
             .sdk
             .establish_pty_coverage(&topic, &permission)
             .await;
-        let still_current = state.is_connected.try_get_untracked() == Some(true)
-            && state.connection_epoch.try_get_untracked() == Some(epoch);
-        // pty_epoch is the last epoch with confirmed host coverage. It is
-        // deliberately written only after the request succeeds and remains
-        // current, so failures and stale completions remain retryable.
+        // The helper can retry across a reconnect and return coverage for a
+        // newer epoch than the observer that started it. Validate and store
+        // the epoch actually covered by the successful host call.
         if let Ok(covered_epoch) = result {
+            let still_current = state.is_connected.try_get_untracked() == Some(true)
+                && state.connection_epoch.try_get_untracked() == Some(covered_epoch);
+            // pty_epoch is the last epoch with confirmed host coverage. It is
+            // deliberately written only after the request succeeds and remains
+            // current, so failures and stale completions remain retryable.
             if still_current && subscription.authorize() {
                 subscription
                     .pty_epoch
@@ -404,12 +406,7 @@ fn install_pty_reconnect_observer(subscription: &Arc<SubscriptionState>, topic: 
         }
         let subscription = Arc::clone(&subscription);
         let topic = topic.clone();
-        spawn_local(reestablish_pty_subscription(
-            subscription,
-            state,
-            topic,
-            epoch,
-        ));
+        spawn_local(reestablish_pty_subscription(subscription, state, topic));
     });
 }
 
@@ -884,7 +881,6 @@ mod tests {
                 Arc::clone(&subscription),
                 sdk.state,
                 aleph_protocol::pty::PTY_SCREEN_TOPIC.into(),
-                1,
             ));
             assert_eq!(calls.load(Ordering::SeqCst), 1);
             assert_eq!(subscription.pty_epoch.load(Ordering::SeqCst), 1);
@@ -902,7 +898,37 @@ mod tests {
             let state = sdk.state;
             sdk.pty_subscribe = Arc::new(move |_| {
                 let call = recorded.fetch_add(1, Ordering::SeqCst) + 1;
-                if call >= 1 {
+                if call == 1 {
+                    state.connection_epoch.set(2);
+                } else {
+                    state.connection_epoch.set(3);
+                }
+                async { Ok(()) }.boxed_local()
+            });
+            let subscription = pty_subscription_state(&sdk);
+            sdk.state.connection_epoch.set(1);
+            block_on(super::reestablish_pty_subscription(
+                Arc::clone(&subscription),
+                sdk.state,
+                aleph_protocol::pty::PTY_SCREEN_TOPIC.into(),
+            ));
+            assert_eq!(calls.load(Ordering::SeqCst), 2);
+            assert_eq!(subscription.pty_epoch.load(Ordering::SeqCst), 0);
+        });
+    }
+
+    #[test]
+    fn stale_retry_records_coverage_for_new_epoch() {
+        Owner::new().with(|| {
+            let (mut sdk, host, _) = fixture();
+            allow_pty(&host);
+            sdk.state.is_connected.set(true);
+            let calls = Arc::new(AtomicUsize::new(0));
+            let recorded = calls.clone();
+            let state = sdk.state;
+            sdk.pty_subscribe = Arc::new(move |_| {
+                let call = recorded.fetch_add(1, Ordering::SeqCst) + 1;
+                if call == 1 {
                     state.connection_epoch.set(2);
                 }
                 async { Ok(()) }.boxed_local()
@@ -913,10 +939,9 @@ mod tests {
                 Arc::clone(&subscription),
                 sdk.state,
                 aleph_protocol::pty::PTY_SCREEN_TOPIC.into(),
-                1,
             ));
             assert_eq!(calls.load(Ordering::SeqCst), 2);
-            assert_eq!(subscription.pty_epoch.load(Ordering::SeqCst), 0);
+            assert_eq!(subscription.pty_epoch.load(Ordering::SeqCst), 2);
         });
     }
 
@@ -945,7 +970,6 @@ mod tests {
                 Arc::clone(&subscription),
                 sdk.state,
                 aleph_protocol::pty::PTY_SCREEN_TOPIC.into(),
-                1,
             ));
             assert_eq!(calls.load(Ordering::SeqCst), 2);
             assert_eq!(subscription.pty_epoch.load(Ordering::SeqCst), 1);
