@@ -46,6 +46,7 @@ pub struct PanelThemeSnapshot {
 
 type HostRpc =
     dyn Fn(String, Value) -> LocalBoxFuture<'static, Result<Value, String>> + Send + Sync;
+type HostPtySubscribe = dyn Fn(String) -> LocalBoxFuture<'static, Result<(), String>> + Send + Sync;
 
 /// Private host operations only; no public transport or context accessor.
 #[derive(Clone)]
@@ -54,6 +55,7 @@ pub struct PanelSdk {
     host: Option<PanelHostState>,
     tab: PanelTabKey,
     rpc: Arc<HostRpc>,
+    pty_subscribe: Arc<HostPtySubscribe>,
     lifecycle: Arc<SdkLifecycle>,
     locale: String,
 }
@@ -92,6 +94,9 @@ impl PanelSdk {
             tab,
             rpc: Arc::new(move |method, params| {
                 async move { state.rpc_call(&method, params).await }.boxed_local()
+            }),
+            pty_subscribe: Arc::new(move |topic| {
+                async move { state.subscribe_topic_ephemeral(&topic).await }.boxed_local()
             }),
             lifecycle,
             locale: use_context::<crate::i18n::I18nCtx>()
@@ -172,29 +177,26 @@ impl PanelSdk {
             sdk.require_permission(&permission)
                 .map_err(|error| error.to_string())?;
             let pty_topic = is_pty_topic(&topic);
-            if pty_topic {
+            let covered_pty_epoch = if pty_topic {
                 // PTY coverage is mounted by this consumer. The await is part of
                 // subscribe's readiness contract, so a caller never receives a
-                // local listener before the host has accepted the topic.
-                sdk.state
-                    .subscribe_topic_ephemeral(&topic)
-                    .await
-                    .map_err(|error| error.to_string())?;
-                // The host call can race a mount revocation or owner disposal.
-                // Do not publish a successful late subscription in that case.
-                sdk.authorize().map_err(|error| error.to_string())?;
-                sdk.require_permission(&permission)
-                    .map_err(|error| error.to_string())?;
-            }
+                // local listener before the host has accepted the topic on the
+                // current connection epoch.
+                Some(sdk.establish_pty_coverage(&topic, &permission).await?)
+            } else {
+                None
+            };
             let inner = Arc::new(SubscriptionState {
                 sdk: sdk.clone(),
                 permission,
                 pty_epoch: AtomicU64::new(
-                    sdk.state
-                        .connection_epoch
-                        .try_get_untracked()
-                        .ok_or(PanelSdkError::Disposed)
-                        .map_err(|error| error.to_string())?,
+                    covered_pty_epoch.unwrap_or(
+                        sdk.state
+                            .connection_epoch
+                            .try_get_untracked()
+                            .ok_or(PanelSdkError::Disposed)
+                            .map_err(|error| error.to_string())?,
+                    ),
                 ),
                 resources: Mutex::new(SubscriptionResources {
                     cleanup: None,
@@ -292,6 +294,44 @@ impl PanelSdk {
         Ok(())
     }
 
+    async fn establish_pty_coverage(&self, topic: &str, permission: &str) -> Result<u64, String> {
+        // One retry is specific to the PTY readiness boundary: a failed host
+        // request or a reply superseded by reconnect must not be mistaken for
+        // coverage, while an endlessly flapping socket must not create a loop.
+        const ATTEMPTS: usize = 2;
+        let mut last_error = None;
+        for _ in 0..ATTEMPTS {
+            self.authorize().map_err(|error| error.to_string())?;
+            self.require_permission(permission)
+                .map_err(|error| error.to_string())?;
+            let epoch_then = self
+                .state
+                .connection_epoch
+                .try_get_untracked()
+                .ok_or(PanelSdkError::Disposed)
+                .map_err(|error| error.to_string())?;
+            match (self.pty_subscribe)(topic.to_string()).await {
+                Ok(()) => {}
+                Err(error) => {
+                    last_error = Some(error);
+                    continue;
+                }
+            }
+            // The host call can race a mount revocation or owner disposal.
+            // Do not publish a successful late subscription in that case.
+            self.authorize().map_err(|error| error.to_string())?;
+            self.require_permission(permission)
+                .map_err(|error| error.to_string())?;
+            let still_current = self.state.is_connected.try_get_untracked() == Some(true)
+                && self.state.connection_epoch.try_get_untracked() == Some(epoch_then);
+            if still_current {
+                return Ok(epoch_then);
+            }
+            last_error = Some("Connection changed during PTY subscription".into());
+        }
+        Err(last_error.unwrap_or_else(|| "Connection changed during PTY subscription".into()))
+    }
+
     fn require_permission(&self, permission: &str) -> Result<(), PanelSdkError> {
         let host = self.host.as_ref().ok_or(PanelSdkError::Denied)?;
         if !host
@@ -323,6 +363,34 @@ fn is_pty_topic(topic: &str) -> bool {
     )
 }
 
+fn reestablish_pty_subscription(
+    subscription: Arc<SubscriptionState>,
+    state: DashboardState,
+    topic: String,
+    epoch: u64,
+) -> LocalBoxFuture<'static, ()> {
+    async move {
+        let permission = subscription.permission.clone();
+        let result = subscription
+            .sdk
+            .establish_pty_coverage(&topic, &permission)
+            .await;
+        let still_current = state.is_connected.try_get_untracked() == Some(true)
+            && state.connection_epoch.try_get_untracked() == Some(epoch);
+        // pty_epoch is the last epoch with confirmed host coverage. It is
+        // deliberately written only after the request succeeds and remains
+        // current, so failures and stale completions remain retryable.
+        if let Ok(covered_epoch) = result {
+            if still_current && subscription.authorize() {
+                subscription
+                    .pty_epoch
+                    .store(covered_epoch, Ordering::SeqCst);
+            }
+        }
+    }
+    .boxed_local()
+}
+
 fn install_pty_reconnect_observer(subscription: &Arc<SubscriptionState>, topic: String) {
     let subscription = Arc::clone(subscription);
     let state = subscription.sdk.state;
@@ -334,17 +402,14 @@ fn install_pty_reconnect_observer(subscription: &Arc<SubscriptionState>, topic: 
         {
             return;
         }
-        subscription.pty_epoch.store(epoch, Ordering::SeqCst);
         let subscription = Arc::clone(&subscription);
         let topic = topic.clone();
-        spawn_local(async move {
-            let result = state.subscribe_topic_ephemeral(&topic).await;
-            let still_current = state.is_connected.try_get_untracked() == Some(true)
-                && state.connection_epoch.try_get_untracked() == Some(epoch);
-            if result.is_ok() && still_current && subscription.authorize() {
-                subscription.pty_epoch.store(epoch, Ordering::SeqCst);
-            }
-        });
+        spawn_local(reestablish_pty_subscription(
+            subscription,
+            state,
+            topic,
+            epoch,
+        ));
     });
 }
 
@@ -494,6 +559,34 @@ mod tests {
             async { Ok(json!({"sessions": []})) }.boxed_local()
         });
         (sdk, host, calls)
+    }
+
+    fn allow_pty(host: &PanelHostState) {
+        let mut row = host
+            .registry
+            .lock()
+            .unwrap()
+            .get(&key("home"))
+            .unwrap()
+            .clone();
+        row.permissions.push("events.subscribe:pty.screen".into());
+        host.registry
+            .lock()
+            .unwrap()
+            .insert_or_replace(row)
+            .unwrap();
+    }
+
+    fn pty_subscription_state(sdk: &PanelSdk) -> Arc<super::SubscriptionState> {
+        Arc::new(super::SubscriptionState {
+            sdk: sdk.clone(),
+            permission: "events.subscribe:pty.screen".into(),
+            pty_epoch: std::sync::atomic::AtomicU64::new(0),
+            resources: Mutex::new(super::SubscriptionResources {
+                cleanup: Some(Box::new(|| {})),
+                pending: std::collections::VecDeque::new(),
+            }),
+        })
     }
 
     #[test]
@@ -747,6 +840,115 @@ mod tests {
             ));
             // The host readiness failure is returned before a local listener is published.
             assert_eq!(sdk.state.subscribe_events(|_| {}), 0);
+        });
+    }
+
+    #[test]
+    fn successful_pty_readiness_accepts_current_coverage() {
+        Owner::new().with(|| {
+            let (mut sdk, host, _) = fixture();
+            allow_pty(&host);
+            sdk.state.is_connected.set(true);
+            let calls = Arc::new(AtomicUsize::new(0));
+            let recorded = calls.clone();
+            sdk.pty_subscribe = Arc::new(move |_| {
+                recorded.fetch_add(1, Ordering::SeqCst);
+                async { Ok(()) }.boxed_local()
+            });
+            assert_eq!(
+                block_on(sdk.establish_pty_coverage(
+                    aleph_protocol::pty::PTY_SCREEN_TOPIC,
+                    "events.subscribe:pty.screen",
+                )),
+                Ok(0)
+            );
+            assert_eq!(calls.load(Ordering::SeqCst), 1);
+        });
+    }
+
+    #[test]
+    fn reconnect_resubscription_records_epoch_after_success() {
+        Owner::new().with(|| {
+            let (mut sdk, host, _) = fixture();
+            allow_pty(&host);
+            sdk.state.is_connected.set(true);
+            let calls = Arc::new(AtomicUsize::new(0));
+            let recorded = calls.clone();
+            sdk.pty_subscribe = Arc::new(move |_| {
+                recorded.fetch_add(1, Ordering::SeqCst);
+                async { Ok(()) }.boxed_local()
+            });
+            let subscription = pty_subscription_state(&sdk);
+            sdk.state.connection_epoch.set(1);
+            block_on(super::reestablish_pty_subscription(
+                Arc::clone(&subscription),
+                sdk.state,
+                aleph_protocol::pty::PTY_SCREEN_TOPIC.into(),
+                1,
+            ));
+            assert_eq!(calls.load(Ordering::SeqCst), 1);
+            assert_eq!(subscription.pty_epoch.load(Ordering::SeqCst), 1);
+        });
+    }
+
+    #[test]
+    fn stale_pty_completion_does_not_record_coverage() {
+        Owner::new().with(|| {
+            let (mut sdk, host, _) = fixture();
+            allow_pty(&host);
+            sdk.state.is_connected.set(true);
+            let calls = Arc::new(AtomicUsize::new(0));
+            let recorded = calls.clone();
+            let state = sdk.state;
+            sdk.pty_subscribe = Arc::new(move |_| {
+                let call = recorded.fetch_add(1, Ordering::SeqCst) + 1;
+                if call >= 1 {
+                    state.connection_epoch.set(2);
+                }
+                async { Ok(()) }.boxed_local()
+            });
+            let subscription = pty_subscription_state(&sdk);
+            sdk.state.connection_epoch.set(1);
+            block_on(super::reestablish_pty_subscription(
+                Arc::clone(&subscription),
+                sdk.state,
+                aleph_protocol::pty::PTY_SCREEN_TOPIC.into(),
+                1,
+            ));
+            assert_eq!(calls.load(Ordering::SeqCst), 2);
+            assert_eq!(subscription.pty_epoch.load(Ordering::SeqCst), 0);
+        });
+    }
+
+    #[test]
+    fn failed_pty_coverage_is_retried_without_premature_epoch_latch() {
+        Owner::new().with(|| {
+            let (mut sdk, host, _) = fixture();
+            allow_pty(&host);
+            sdk.state.is_connected.set(true);
+            let calls = Arc::new(AtomicUsize::new(0));
+            let recorded = calls.clone();
+            sdk.pty_subscribe = Arc::new(move |_| {
+                let call = recorded.fetch_add(1, Ordering::SeqCst) + 1;
+                async move {
+                    if call == 1 {
+                        Err("temporary coverage failure".into())
+                    } else {
+                        Ok(())
+                    }
+                }
+                .boxed_local()
+            });
+            let subscription = pty_subscription_state(&sdk);
+            sdk.state.connection_epoch.set(1);
+            block_on(super::reestablish_pty_subscription(
+                Arc::clone(&subscription),
+                sdk.state,
+                aleph_protocol::pty::PTY_SCREEN_TOPIC.into(),
+                1,
+            ));
+            assert_eq!(calls.load(Ordering::SeqCst), 2);
+            assert_eq!(subscription.pty_epoch.load(Ordering::SeqCst), 1);
         });
     }
 
