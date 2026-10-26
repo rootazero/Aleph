@@ -304,6 +304,7 @@ name = "aleph-panel"
 version = "0.2.0"
 dependencies = [
  "aleph-protocol",
+ "aleph-terminal-ui",
  "chrono",
  "console_error_panic_hook",
  "futures",
@@ -358,6 +359,22 @@ dependencies = [
  "tokio",
  "tracing",
  "url",
+]
+
+[[package]]
+name = "aleph-terminal-ui"
+version = "26.9.1"
+dependencies = [
+ "aleph-protocol",
+ "any_spawner",
+ "futures",
+ "gloo-timers 0.4.0",
+ "js-sys",
+ "leptos",
+ "serde_json",
+ "unicode-width",
+ "wasm-bindgen",
+ "web-sys",
 ]
 
 [[package]]
@@ -9326,6 +9343,23 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6e6eb142958d64335fb0e345c5b9ead2ecd6fc438c307e9d7d3c4fd428dbaf12"
 dependencies = [
  "libm",
+]
+
+[[package]]
+name = "panel-tab-terminal"
+version = "26.9.1"
+dependencies = [
+ "aleph-protocol",
+ "aleph-terminal-ui",
+ "futures",
+ "gloo-timers 0.4.0",
+ "js-sys",
+ "leptos",
+ "serde",
+ "serde_json",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "web-sys",
 ]
 
 [[package]]

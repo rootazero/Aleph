@@ -1,5 +1,5 @@
-//! Disposable wide-only host frame. Static descriptors are a spike fixture,
-//! not a second authoritative plugin registry or an installation path.
+//! Disposable host frame for a modular Panel tab.
+//! Static descriptors are host projections; the loaded module remains the implementation authority.
 
 use super::{
     loader::{PanelLoadStatus, PanelLoader},
@@ -17,10 +17,10 @@ use leptos::{html, prelude::*, task::spawn_local};
 pub fn PanelShell() -> impl IntoView {
     let i18n = use_i18n();
     let loader = StoredValue::new_local(PanelLoader::new(
-        TabRegistry::new(vec![pilot_descriptor(
+        TabRegistry::new(vec![builtin_descriptor(
             t_string!(i18n, panel_spike.pilot).to_string(),
         )])
-        .expect("static pilot descriptor"),
+        .expect("static panel descriptor"),
     ));
     let host = loader.with_value(PanelLoader::host);
     provide_context(host.clone());
@@ -33,6 +33,11 @@ pub fn PanelShell() -> impl IntoView {
     let content = NodeRef::<html::Div>::new();
     let status = RwSignal::new(PanelLoadStatus::Idle);
     let retry = RwSignal::new(0_u64);
+    let shell_kind = if cfg!(feature = "panel-tab-spike") {
+        "spike"
+    } else {
+        "terminal"
+    };
 
     on_cleanup(move || {
         let _ = loader.try_update_value(|loader| {
@@ -71,7 +76,7 @@ pub fn PanelShell() -> impl IntoView {
     });
 
     view! {
-        <section class="h-full flex flex-col" data-panel-shell="spike">
+        <section class="h-full flex flex-col" data-panel-shell=shell_kind>
             <nav aria-label=move || t_string!(i18n, panel_spike.tabs) class="flex gap-2 p-3">
                 {rows.into_iter().map(|row| {
                     let key = row.key;
@@ -102,7 +107,8 @@ pub fn PanelShell() -> impl IntoView {
     }
 }
 
-fn pilot_descriptor(label: String) -> PanelTabDescriptor {
+#[cfg(feature = "panel-tab-spike")]
+fn builtin_descriptor(label: String) -> PanelTabDescriptor {
     PanelTabDescriptor {
         key: PanelTabKey {
             plugin_id: "aleph".into(),
@@ -118,6 +124,40 @@ fn pilot_descriptor(label: String) -> PanelTabDescriptor {
         api_major: PANEL_UI_API_MAJOR,
         trust: PanelUiTrust::Verified,
         permissions: vec!["sessions.list".into()],
+        status: PanelTabStatus::Enabled,
+        status_detail: None,
+    }
+}
+
+#[cfg(not(feature = "panel-tab-spike"))]
+fn builtin_descriptor(label: String) -> PanelTabDescriptor {
+    PanelTabDescriptor {
+        key: PanelTabKey {
+            plugin_id: "aleph".into(),
+            tab_id: "terminal".into(),
+        },
+        label,
+        icon: "terminal".into(),
+        order: 0,
+        entry: option_env!("PANEL_TERMINAL_ENTRY")
+            .unwrap_or("./tabs/terminal/dev/terminal.js")
+            .into(),
+        api_major: PANEL_UI_API_MAJOR,
+        trust: PanelUiTrust::Verified,
+        permissions: [
+            "pty.list",
+            "pty.spawn",
+            "pty.attach",
+            "pty.input",
+            "pty.resize",
+            "pty.close",
+            "config.get",
+            "events.subscribe:pty.screen",
+            "events.subscribe:pty.exit",
+        ]
+        .into_iter()
+        .map(String::from)
+        .collect(),
         status: PanelTabStatus::Enabled,
         status_detail: None,
     }

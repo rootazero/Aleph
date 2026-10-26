@@ -32,8 +32,16 @@ pub mod i18n;
 mod i18n_census;
 pub mod memory_graph;
 pub mod models;
-#[cfg(feature = "panel-tab-spike")]
+#[cfg(feature = "panel-modular")]
 pub mod panel;
+#[cfg(all(
+    feature = "panel-modular",
+    feature = "legacy-terminal",
+    not(feature = "panel-tab-spike")
+))]
+compile_error!(
+    "panel-modular requires --no-default-features so legacy-terminal cannot remain enabled"
+);
 pub mod panic_overlay;
 pub mod platform;
 pub mod platform_host;

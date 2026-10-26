@@ -35,7 +35,10 @@ crate-type = ["cdylib", "rlib"]
 # produce a native .exe from a WASM-only entry.
 
 [features]
-panel-tab-spike = []
+panel-modular = []
+panel-tab-spike = ["panel-modular"]
+default = ["legacy-terminal"]
+legacy-terminal = ["dep:aleph-terminal-ui"]
 
 [dependencies]
 # Leptos framework (0.8.15 - The latest and greatest)
@@ -134,6 +137,7 @@ qrcode = { version = "0.14", default-features = false, features = ["svg"] }
 # Internal logic
 shared-ui-logic = { path = "../../shared/ui_logic", features = ["wasm"] }
 aleph-protocol = { path = "../../shared/protocol" }
+aleph-terminal-ui = { path = "tabs/terminal-ui", optional = true }
 
 # Terminal grid rendering — must resolve to the same copy the server's PTY
 # grid uses (`cargo tree -p alephcore -i unicode-width`), which is 0.2.0.

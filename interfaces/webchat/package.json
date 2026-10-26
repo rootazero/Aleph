@@ -8,7 +8,10 @@
     "panel:spike:build": "bun scripts/build-panel-spike.ts",
     "panel:spike:report": "bun scripts/panel-spike-report.ts",
     "panel:spike:test": "bun x --no-install playwright test --config .panel-spike/playwright.config.ts",
-    "panel:spike:serve": "bun scripts/build-panel-spike.ts --serve"
+    "panel:spike:serve": "bun scripts/build-panel-spike.ts --serve",
+    "panel:tabs:build": "bun scripts/build-panel-tabs.mjs",
+    "panel:tabs:report": "bun scripts/panel-tabs-report.mjs",
+    "panel:tabs:test": "node --test tests/panel-build.test.mjs"
   },
   "keywords": [],
   "author": "",

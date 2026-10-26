@@ -8,11 +8,12 @@ use crate::context::{DashboardState, GatewayEvent};
 use aleph_protocol::panel::{PanelTabKey, PanelTabStatus};
 use futures::future::LocalBoxFuture;
 use futures::FutureExt;
-use leptos::prelude::{on_cleanup, use_context, GetUntracked, Set};
+use leptos::prelude::{on_cleanup, use_context, Effect, Get, GetUntracked, Set};
+use leptos::task::spawn_local;
 use serde_json::Value;
 use std::collections::VecDeque;
 use std::fmt;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, Weak};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -32,6 +33,12 @@ impl fmt::Display for PanelSdkError {
 impl std::error::Error for PanelSdkError {}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct PanelConnectionSnapshot {
+    pub connected: bool,
+    pub epoch: u64,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct PanelThemeSnapshot {
     pub mode: ThemeMode,
     pub accent: Accent,
@@ -39,6 +46,7 @@ pub struct PanelThemeSnapshot {
 
 type HostRpc =
     dyn Fn(String, Value) -> LocalBoxFuture<'static, Result<Value, String>> + Send + Sync;
+type HostPtySubscribe = dyn Fn(String) -> LocalBoxFuture<'static, Result<(), String>> + Send + Sync;
 
 /// Private host operations only; no public transport or context accessor.
 #[derive(Clone)]
@@ -47,6 +55,7 @@ pub struct PanelSdk {
     host: Option<PanelHostState>,
     tab: PanelTabKey,
     rpc: Arc<HostRpc>,
+    pty_subscribe: Arc<HostPtySubscribe>,
     lifecycle: Arc<SdkLifecycle>,
     locale: String,
 }
@@ -85,6 +94,9 @@ impl PanelSdk {
             tab,
             rpc: Arc::new(move |method, params| {
                 async move { state.rpc_call(&method, params).await }.boxed_local()
+            }),
+            pty_subscribe: Arc::new(move |topic| {
+                async move { state.subscribe_topic_ephemeral(&topic).await }.boxed_local()
             }),
             lifecycle,
             locale: use_context::<crate::i18n::I18nCtx>()
@@ -131,6 +143,22 @@ impl PanelSdk {
         .boxed_local()
     }
 
+    /// Read the connection projection without exposing the transport or signals.
+    pub fn connection(&self) -> Result<PanelConnectionSnapshot, PanelSdkError> {
+        self.authorize()?;
+        let connected = self
+            .state
+            .is_connected
+            .try_get_untracked()
+            .ok_or(PanelSdkError::Disposed)?;
+        let epoch = self
+            .state
+            .connection_epoch
+            .try_get_untracked()
+            .ok_or(PanelSdkError::Disposed)?;
+        Ok(PanelConnectionSnapshot { connected, epoch })
+    }
+
     /// Exact-topic local event subscription. The Shell owns upstream Gateway
     /// topic coverage; disposing a Tab must not unsubscribe shared socket topics.
     /// Its explicit permission is `events.subscribe:<topic>` (no wildcard grant).
@@ -145,19 +173,40 @@ impl PanelSdk {
             if topic.is_empty() || topic.contains('*') {
                 return Err(PanelSdkError::Denied.to_string());
             }
-            sdk.require_permission(&format!("events.subscribe:{topic}"))
+            let permission = format!("events.subscribe:{topic}");
+            sdk.require_permission(&permission)
                 .map_err(|error| error.to_string())?;
+            let pty_topic = is_pty_topic(&topic);
+            let covered_pty_epoch = if pty_topic {
+                // PTY coverage is mounted by this consumer. The await is part of
+                // subscribe's readiness contract, so a caller never receives a
+                // local listener before the host has accepted the topic on the
+                // current connection epoch.
+                Some(sdk.establish_pty_coverage(&topic, &permission).await?)
+            } else {
+                None
+            };
             let inner = Arc::new(SubscriptionState {
                 sdk: sdk.clone(),
-                permission: format!("events.subscribe:{topic}"),
+                permission,
+                pty_epoch: AtomicU64::new(
+                    covered_pty_epoch.unwrap_or(
+                        sdk.state
+                            .connection_epoch
+                            .try_get_untracked()
+                            .ok_or(PanelSdkError::Disposed)
+                            .map_err(|error| error.to_string())?,
+                    ),
+                ),
                 resources: Mutex::new(SubscriptionResources {
                     cleanup: None,
                     pending: VecDeque::new(),
                 }),
             });
             let weak = Arc::downgrade(&inner);
+            let event_topic = topic.clone();
             let id = sdk.state.subscribe_events(move |event| {
-                if event.topic != topic {
+                if event.topic != event_topic {
                     return;
                 }
                 if let Some(inner) = weak.upgrade() {
@@ -174,6 +223,9 @@ impl PanelSdk {
             let mut subscriptions = sdk.lifecycle.subscriptions.lock().unwrap();
             subscriptions.retain(|entry| entry.strong_count() > 0);
             subscriptions.push(Arc::downgrade(&inner));
+            if pty_topic {
+                install_pty_reconnect_observer(&inner, topic.clone());
+            }
             Ok(PanelSubscription { inner })
         }
         .boxed_local()
@@ -242,6 +294,44 @@ impl PanelSdk {
         Ok(())
     }
 
+    async fn establish_pty_coverage(&self, topic: &str, permission: &str) -> Result<u64, String> {
+        // One retry is specific to the PTY readiness boundary: a failed host
+        // request or a reply superseded by reconnect must not be mistaken for
+        // coverage, while an endlessly flapping socket must not create a loop.
+        const ATTEMPTS: usize = 2;
+        let mut last_error = None;
+        for _ in 0..ATTEMPTS {
+            self.authorize().map_err(|error| error.to_string())?;
+            self.require_permission(permission)
+                .map_err(|error| error.to_string())?;
+            let epoch_then = self
+                .state
+                .connection_epoch
+                .try_get_untracked()
+                .ok_or(PanelSdkError::Disposed)
+                .map_err(|error| error.to_string())?;
+            match (self.pty_subscribe)(topic.to_string()).await {
+                Ok(()) => {}
+                Err(error) => {
+                    last_error = Some(error);
+                    continue;
+                }
+            }
+            // The host call can race a mount revocation or owner disposal.
+            // Do not publish a successful late subscription in that case.
+            self.authorize().map_err(|error| error.to_string())?;
+            self.require_permission(permission)
+                .map_err(|error| error.to_string())?;
+            let still_current = self.state.is_connected.try_get_untracked() == Some(true)
+                && self.state.connection_epoch.try_get_untracked() == Some(epoch_then);
+            if still_current {
+                return Ok(epoch_then);
+            }
+            last_error = Some("Connection changed during PTY subscription".into());
+        }
+        Err(last_error.unwrap_or_else(|| "Connection changed during PTY subscription".into()))
+    }
+
     fn require_permission(&self, permission: &str) -> Result<(), PanelSdkError> {
         let host = self.host.as_ref().ok_or(PanelSdkError::Denied)?;
         if !host
@@ -262,9 +352,63 @@ impl PanelSdk {
     }
 }
 
-// Local notifications are lossy: retain the newest 64 events per subscription,
+// Local notifications are lossy: retain the newest 256 events per subscription,
 // dropping the oldest on overflow. This is not a durable replay queue.
-const SUBSCRIPTION_PENDING_CAPACITY: usize = 64;
+const SUBSCRIPTION_PENDING_CAPACITY: usize = 256;
+
+fn is_pty_topic(topic: &str) -> bool {
+    matches!(
+        topic,
+        aleph_protocol::pty::PTY_SCREEN_TOPIC | aleph_protocol::pty::PTY_EXIT_TOPIC
+    )
+}
+
+fn reestablish_pty_subscription(
+    subscription: Arc<SubscriptionState>,
+    state: DashboardState,
+    topic: String,
+) -> LocalBoxFuture<'static, ()> {
+    async move {
+        let permission = subscription.permission.clone();
+        let result = subscription
+            .sdk
+            .establish_pty_coverage(&topic, &permission)
+            .await;
+        // The helper can retry across a reconnect and return coverage for a
+        // newer epoch than the observer that started it. Validate and store
+        // the epoch actually covered by the successful host call.
+        if let Ok(covered_epoch) = result {
+            let still_current = state.is_connected.try_get_untracked() == Some(true)
+                && state.connection_epoch.try_get_untracked() == Some(covered_epoch);
+            // pty_epoch is the last epoch with confirmed host coverage. It is
+            // deliberately written only after the request succeeds and remains
+            // current, so failures and stale completions remain retryable.
+            if still_current && subscription.authorize() {
+                subscription
+                    .pty_epoch
+                    .store(covered_epoch, Ordering::SeqCst);
+            }
+        }
+    }
+    .boxed_local()
+}
+
+fn install_pty_reconnect_observer(subscription: &Arc<SubscriptionState>, topic: String) {
+    let subscription = Arc::clone(subscription);
+    let state = subscription.sdk.state;
+    Effect::new(move |_| {
+        let epoch = state.connection_epoch.get();
+        if !state.is_connected.get()
+            || subscription.is_disposed()
+            || subscription.pty_epoch.load(Ordering::SeqCst) == epoch
+        {
+            return;
+        }
+        let subscription = Arc::clone(&subscription);
+        let topic = topic.clone();
+        spawn_local(reestablish_pty_subscription(subscription, state, topic));
+    });
+}
 
 struct SubscriptionResources {
     cleanup: Option<Box<dyn FnOnce() + Send + Sync>>,
@@ -274,10 +418,15 @@ struct SubscriptionResources {
 struct SubscriptionState {
     sdk: PanelSdk,
     permission: String,
+    pty_epoch: AtomicU64,
     resources: Mutex<SubscriptionResources>,
 }
 
 impl SubscriptionState {
+    fn is_disposed(&self) -> bool {
+        self.resources.lock().unwrap().cleanup.is_none()
+    }
+
     fn enqueue(&self, event: GatewayEvent) {
         if !self.authorize() {
             return;
@@ -325,8 +474,9 @@ impl Drop for SubscriptionState {
 
 /// Clones share one registration. Consuming either clone disposes it for all;
 /// dropping the last clone also releases the listener. The pending buffer keeps
-/// at most 64 events, dropping the oldest on overflow. Revoked authority clears
-/// the buffer and unregisters the listener on the next matching event or drain.
+/// at most 256 events, dropping the oldest on overflow. PTY upstream coverage is
+/// a lossy notification subscription; sequence-gap recovery belongs to Task 2.
+/// Revoked authority clears the buffer and unregisters only the local listener.
 #[derive(Clone)]
 pub struct PanelSubscription {
     inner: Arc<SubscriptionState>,
@@ -365,7 +515,7 @@ mod tests {
         PanelTabDescriptor, PanelTabKey, PanelTabStatus, PanelUiTrust, PANEL_UI_API_MAJOR,
     };
     use futures::{executor::block_on, FutureExt};
-    use leptos::prelude::{provide_context, GetUntracked, Owner};
+    use leptos::prelude::{provide_context, GetUntracked, Owner, Set};
     use serde_json::{json, Value};
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::{Arc, Mutex};
@@ -406,6 +556,34 @@ mod tests {
             async { Ok(json!({"sessions": []})) }.boxed_local()
         });
         (sdk, host, calls)
+    }
+
+    fn allow_pty(host: &PanelHostState) {
+        let mut row = host
+            .registry
+            .lock()
+            .unwrap()
+            .get(&key("home"))
+            .unwrap()
+            .clone();
+        row.permissions.push("events.subscribe:pty.screen".into());
+        host.registry
+            .lock()
+            .unwrap()
+            .insert_or_replace(row)
+            .unwrap();
+    }
+
+    fn pty_subscription_state(sdk: &PanelSdk) -> Arc<super::SubscriptionState> {
+        Arc::new(super::SubscriptionState {
+            sdk: sdk.clone(),
+            permission: "events.subscribe:pty.screen".into(),
+            pty_epoch: std::sync::atomic::AtomicU64::new(0),
+            resources: Mutex::new(super::SubscriptionResources {
+                cleanup: Some(Box::new(|| {})),
+                pending: std::collections::VecDeque::new(),
+            }),
+        })
     }
 
     #[test]
@@ -599,6 +777,247 @@ mod tests {
     }
 
     #[test]
+    fn connection_snapshot_is_revoked_with_mount() {
+        Owner::new().with(|| {
+            let (sdk, host, _) = fixture();
+            assert_eq!(
+                sdk.connection(),
+                Ok(super::PanelConnectionSnapshot {
+                    connected: false,
+                    epoch: 0,
+                })
+            );
+            let mut row = host
+                .registry
+                .lock()
+                .unwrap()
+                .get(&key("home"))
+                .unwrap()
+                .clone();
+            row.status = PanelTabStatus::Disabled;
+            host.registry
+                .lock()
+                .unwrap()
+                .insert_or_replace(row)
+                .unwrap();
+            assert_eq!(sdk.connection(), Err(PanelSdkError::Denied));
+            sdk.dispose();
+            assert_eq!(sdk.connection(), Err(PanelSdkError::Disposed));
+        });
+    }
+
+    #[test]
+    fn pty_topic_is_ready_before_subscribe_returns() {
+        assert!(super::is_pty_topic(aleph_protocol::pty::PTY_SCREEN_TOPIC));
+        assert!(super::is_pty_topic(aleph_protocol::pty::PTY_EXIT_TOPIC));
+        assert!(!super::is_pty_topic("pty.*"));
+        Owner::new().with(|| {
+            let (sdk, host, _) = fixture();
+            assert!(matches!(
+                block_on(sdk.subscribe(aleph_protocol::pty::PTY_SCREEN_TOPIC)),
+                Err(error) if error == PanelSdkError::Denied.to_string()
+            ));
+            let mut row = host
+                .registry
+                .lock()
+                .unwrap()
+                .get(&key("home"))
+                .unwrap()
+                .clone();
+            row.permissions.push("events.subscribe:pty.screen".into());
+            host.registry
+                .lock()
+                .unwrap()
+                .insert_or_replace(row)
+                .unwrap();
+            sdk.state.is_connected.set(true);
+            assert!(matches!(
+                block_on(sdk.subscribe(aleph_protocol::pty::PTY_SCREEN_TOPIC)),
+                Err(error) if error == "Not connected"
+            ));
+            // The host readiness failure is returned before a local listener is published.
+            assert_eq!(sdk.state.subscribe_events(|_| {}), 0);
+        });
+    }
+
+    #[test]
+    fn successful_pty_readiness_accepts_current_coverage() {
+        Owner::new().with(|| {
+            let (mut sdk, host, _) = fixture();
+            allow_pty(&host);
+            sdk.state.is_connected.set(true);
+            let calls = Arc::new(AtomicUsize::new(0));
+            let recorded = calls.clone();
+            sdk.pty_subscribe = Arc::new(move |_| {
+                recorded.fetch_add(1, Ordering::SeqCst);
+                async { Ok(()) }.boxed_local()
+            });
+            assert_eq!(
+                block_on(sdk.establish_pty_coverage(
+                    aleph_protocol::pty::PTY_SCREEN_TOPIC,
+                    "events.subscribe:pty.screen",
+                )),
+                Ok(0)
+            );
+            assert_eq!(calls.load(Ordering::SeqCst), 1);
+        });
+    }
+
+    #[test]
+    fn reconnect_resubscription_records_epoch_after_success() {
+        Owner::new().with(|| {
+            let (mut sdk, host, _) = fixture();
+            allow_pty(&host);
+            sdk.state.is_connected.set(true);
+            let calls = Arc::new(AtomicUsize::new(0));
+            let recorded = calls.clone();
+            sdk.pty_subscribe = Arc::new(move |_| {
+                recorded.fetch_add(1, Ordering::SeqCst);
+                async { Ok(()) }.boxed_local()
+            });
+            let subscription = pty_subscription_state(&sdk);
+            sdk.state.connection_epoch.set(1);
+            block_on(super::reestablish_pty_subscription(
+                Arc::clone(&subscription),
+                sdk.state,
+                aleph_protocol::pty::PTY_SCREEN_TOPIC.into(),
+            ));
+            assert_eq!(calls.load(Ordering::SeqCst), 1);
+            assert_eq!(subscription.pty_epoch.load(Ordering::SeqCst), 1);
+        });
+    }
+
+    #[test]
+    fn stale_pty_completion_does_not_record_coverage() {
+        Owner::new().with(|| {
+            let (mut sdk, host, _) = fixture();
+            allow_pty(&host);
+            sdk.state.is_connected.set(true);
+            let calls = Arc::new(AtomicUsize::new(0));
+            let recorded = calls.clone();
+            let state = sdk.state;
+            sdk.pty_subscribe = Arc::new(move |_| {
+                let call = recorded.fetch_add(1, Ordering::SeqCst) + 1;
+                if call == 1 {
+                    state.connection_epoch.set(2);
+                } else {
+                    state.connection_epoch.set(3);
+                }
+                async { Ok(()) }.boxed_local()
+            });
+            let subscription = pty_subscription_state(&sdk);
+            sdk.state.connection_epoch.set(1);
+            block_on(super::reestablish_pty_subscription(
+                Arc::clone(&subscription),
+                sdk.state,
+                aleph_protocol::pty::PTY_SCREEN_TOPIC.into(),
+            ));
+            assert_eq!(calls.load(Ordering::SeqCst), 2);
+            assert_eq!(subscription.pty_epoch.load(Ordering::SeqCst), 0);
+        });
+    }
+
+    #[test]
+    fn stale_retry_records_coverage_for_new_epoch() {
+        Owner::new().with(|| {
+            let (mut sdk, host, _) = fixture();
+            allow_pty(&host);
+            sdk.state.is_connected.set(true);
+            let calls = Arc::new(AtomicUsize::new(0));
+            let recorded = calls.clone();
+            let state = sdk.state;
+            sdk.pty_subscribe = Arc::new(move |_| {
+                let call = recorded.fetch_add(1, Ordering::SeqCst) + 1;
+                if call == 1 {
+                    state.connection_epoch.set(2);
+                }
+                async { Ok(()) }.boxed_local()
+            });
+            let subscription = pty_subscription_state(&sdk);
+            sdk.state.connection_epoch.set(1);
+            block_on(super::reestablish_pty_subscription(
+                Arc::clone(&subscription),
+                sdk.state,
+                aleph_protocol::pty::PTY_SCREEN_TOPIC.into(),
+            ));
+            assert_eq!(calls.load(Ordering::SeqCst), 2);
+            assert_eq!(subscription.pty_epoch.load(Ordering::SeqCst), 2);
+        });
+    }
+
+    #[test]
+    fn failed_pty_coverage_is_retried_without_premature_epoch_latch() {
+        Owner::new().with(|| {
+            let (mut sdk, host, _) = fixture();
+            allow_pty(&host);
+            sdk.state.is_connected.set(true);
+            let calls = Arc::new(AtomicUsize::new(0));
+            let recorded = calls.clone();
+            sdk.pty_subscribe = Arc::new(move |_| {
+                let call = recorded.fetch_add(1, Ordering::SeqCst) + 1;
+                async move {
+                    if call == 1 {
+                        Err("temporary coverage failure".into())
+                    } else {
+                        Ok(())
+                    }
+                }
+                .boxed_local()
+            });
+            let subscription = pty_subscription_state(&sdk);
+            sdk.state.connection_epoch.set(1);
+            block_on(super::reestablish_pty_subscription(
+                Arc::clone(&subscription),
+                sdk.state,
+                aleph_protocol::pty::PTY_SCREEN_TOPIC.into(),
+            ));
+            assert_eq!(calls.load(Ordering::SeqCst), 2);
+            assert_eq!(subscription.pty_epoch.load(Ordering::SeqCst), 1);
+        });
+    }
+
+    #[test]
+    fn resubscribe_after_epoch_change_preserves_other_consumers() {
+        Owner::new().with(|| {
+            let (sdk, _, _) = fixture();
+            let first = block_on(sdk.subscribe("session.updated")).unwrap();
+            let second = block_on(sdk.subscribe("session.updated")).unwrap();
+            first.clone().dispose();
+            second.inner.enqueue(GatewayEvent {
+                topic: "session.updated".into(),
+                data: json!({"sequence": 1}),
+            });
+            assert_eq!(second.drain().len(), 1);
+            assert!(!second.is_disposed());
+        });
+    }
+
+    #[test]
+    fn subscription_queue_is_bounded_and_disposed() {
+        Owner::new().with(|| {
+            let (sdk, _, _) = fixture();
+            let subscription = block_on(sdk.subscribe("session.updated")).unwrap();
+            for sequence in 0..300 {
+                subscription.inner.enqueue(GatewayEvent {
+                    topic: "session.updated".into(),
+                    data: json!({"sequence": sequence}),
+                });
+            }
+            let events = subscription.drain();
+            assert_eq!(events.len(), 256);
+            assert_eq!(events.first().unwrap().data, json!({"sequence": 44}));
+            assert_eq!(events.last().unwrap().data, json!({"sequence": 299}));
+            assert!(events.windows(2).all(|pair| {
+                pair[1].data["sequence"].as_u64().unwrap()
+                    == pair[0].data["sequence"].as_u64().unwrap() + 1
+            }));
+            subscription.clone().dispose();
+            assert!(subscription.is_disposed());
+            assert!(subscription.drain().is_empty());
+        });
+    }
+
+    #[test]
     fn subscription_buffer_retains_newest_events_in_order() {
         Owner::new().with(|| {
             let (sdk, _, _) = fixture();
@@ -610,8 +1029,8 @@ mod tests {
                 });
             }
             let events = subscription.drain();
-            assert_eq!(events.len(), 64);
-            assert_eq!(events.first().unwrap().data, json!({"sequence": 6}));
+            assert_eq!(events.len(), 70);
+            assert_eq!(events.first().unwrap().data, json!({"sequence": 0}));
             assert_eq!(events.last().unwrap().data, json!({"sequence": 69}));
             assert!(events.windows(2).all(|pair| {
                 pair[1].data["sequence"].as_u64().unwrap()

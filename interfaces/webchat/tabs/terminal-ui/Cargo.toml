@@ -1,0 +1,29 @@
+[package]
+name = "aleph-terminal-ui"
+version.workspace = true
+edition.workspace = true
+publish = false
+
+[dependencies]
+aleph-protocol = { path = "../../../../shared/protocol" }
+futures.workspace = true
+js-sys = "0.3"
+gloo-timers = { version = "0.4", features = ["futures"] }
+leptos = { version = "0.8", features = ["csr"] }
+serde_json.workspace = true
+unicode-width = "0.2"
+wasm-bindgen = "0.2"
+web-sys = { version = "0.3", features = [
+    "CanvasRenderingContext2d",
+    "ClipboardEvent",
+    "DataTransfer",
+    "DomRect",
+    "HtmlCanvasElement",
+    "KeyboardEvent",
+    "ResizeObserver",
+    "TextMetrics",
+    "Window",
+] }
+
+[dev-dependencies]
+any_spawner = { version = "0.3", features = ["futures-executor"] }

@@ -1,5 +1,7 @@
 node_modules/
 package-lock.json
+.panel-tabs/
+.panel-modular-dist/
 
 # NOTE: `dist/` is deliberately NOT ignored — its four build outputs
 # (aleph_panel.js, aleph_panel_bg.wasm, index.html, tailwind.css) are TRACKED,
