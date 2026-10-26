@@ -378,6 +378,17 @@ wasm:
     node scripts/check_panel_dist.mjs {{panel_dist}}
     echo "✓ WASM: {{panel_dist}}/"
 
+# Build the opt-in modular Panel candidate into an ignored staging directory.
+# The legacy `dist/` stays the default release artifact and remains guarded by `wasm`.
+wasm-modular:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    staging="{{panel_dir}}/.panel-modular-dist"
+    rm -rf "$staging"
+    (cd {{panel_dir}} && bun run panel:tabs:build -- --output=.panel-modular-dist)
+    (cd {{panel_dir}} && PANEL_TABS_OUTPUT=.panel-modular-dist bun run panel:tabs:report)
+    (cd {{panel_dir}} && PANEL_TABS_OUTPUT=.panel-modular-dist bun run panel:tabs:test)
+
 # Verify the committed panel dist is a matched js+wasm pair (no closure-trampoline
 # drift). Run by `just wasm`, in CI on every dist change, and gating each release.
 check-dist:
