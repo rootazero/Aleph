@@ -5,6 +5,10 @@
 Date: 2026-10-25  
 Status: Phase 1 contract-first vertical slice is implemented and verified; Feishu production wiring remains deferred.
 
+R0/R1 assessment (2026-10-26): R0 passed with 214 capability tests; the bounded R1 `ChannelRegistry` teardown slice is implemented and verified, but **R1 remains NO-GO / deferred overall**. The source-specific non-Tool capture/validation boundary and provider-resource receipts remain open. See [R1 Provider / Source / Lease Design Gate](2026-10-26-r1-provider-source-lease-design.md) for the current decision and evidence limits. R2 was not entered.
+
+2026-10-26 复核：R0 通过；R1 的通用 `ChannelRegistry` replacement/unregister teardown slice 已完成 RED→GREEN，但整体 R1 仍未获 GO。下一步仍限于修订 source-owned capture contract，不进入 Feishu Rust wiring。
+
 ## 1. Intent / 意图
 
 Aleph 的目标不是把所有现有模块搬进一个更大的注册表，而是把“外部可组合能力”的语义收敛到一个轻量 Capability Core，同时保留每个 provider 对自身运行时状态、资源和外部协议的权威。这样 Gateway channel、Terminal、Memory、Sandbox 等能力可以被发现、启动、停止、替换和订阅，而 disabled provider 不会因为 Aleph 启动而初始化线程、连接、数据库、缓存或 listener。
@@ -28,7 +32,7 @@ The design establishes a small Capability Core without turning it into a second 
 
 - facet 目前主要是 descriptor metadata 和 Tool projection filter，不是完整的 provider runtime contract。
 - `BackendLease` 仍然包含 Tool-specific canonical entry；不能直接假设它已成为所有 provider 的通用 lease。
-- Gateway 的 `ChannelRegistry` 仍是 channel instance、factory、desired state、start/stop 和 webhook mount 的唯一 authority。
+- Gateway 的 `ChannelRegistry` 仍是 channel instance、factory、desired state、start/stop 和 webhook mount 的唯一 authority；R1 slice 已将 replacement/unregister 的 teardown fence 统一落在该 authority 内。
 - Feishu 的 `ProviderHandle`、`FeishuApi`、`api_handle` 和 webhook server 仍是 Feishu 内部 authority，没有 Capability descriptor、resolve route 或 production mount。
 - lazy activation 尚未形成统一生产路径；当前 Tool `ProjectionHost::mount` 是启动期 Tool projection，不是通用 provider supervisor。
 - `EffectClaim` reducer 已存在，但没有生产 producer、external exactly-once、universal scheduler 或 durable Feishu recovery。
@@ -146,7 +150,7 @@ Discovered -> Cold -> Starting -> Ready -> Stopping -> Stopped
 - `Discovered` 和 `Cold` 只声明存在或可用，不创建线程、连接、token client、listener、websocket、数据库或缓存。
 - `Starting` 是唯一允许分配 provider runtime resources 的状态。
 - `Ready` 才允许新的 callable admission 或 event admission。
-- 每次新的成功 start/restart 获得新的 provider generation；旧 generation 永远不能重新 admission。
+- 每次进入 `Starting` 即分配新的 provider generation，包括随后失败的启动尝试；旧 generation 永远不能重新 admission。Every transition into `Starting` allocates a generation, including failed attempts.
 - `Stopping` 拒绝新的 admission，并等待该 provider authority 声明的 in-flight work drain。
 - `Stopped` 和 `Failed` 不会被 read-side 自动唤醒。
 - `Disposed` 是 owner/source 的终态；旧 reference、lease 和 late completion 必须 fail closed。

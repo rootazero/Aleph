@@ -26,6 +26,7 @@
 
 use crate::sync_primitives::{Arc, Mutex};
 use std::collections::HashMap;
+use std::sync::atomic::AtomicU64;
 use std::time::Duration;
 use tokio::sync::{broadcast, Mutex as AsyncMutex, RwLock};
 use tracing::{error, info, warn};
@@ -40,6 +41,30 @@ use super::voice::VoiceState;
 
 /// Type alias for a thread-safe, shareable channel handle
 type ChannelHandle = Arc<RwLock<Box<dyn Channel>>>;
+
+/// A source-owned capture of one registered channel instance.
+///
+/// The handle identity is the admission fence. `source_revision` records the
+/// registry publication cut for diagnostics and future descriptor projection;
+/// an unrelated channel publication must not invalidate this capture.
+///
+/// This contract is intentionally crate-private and not mounted into a
+/// capability route until the provider binding gate closes.
+#[allow(dead_code)]
+#[derive(Clone)]
+pub(crate) struct ChannelCapture {
+    channel_id: ChannelId,
+    source_revision: u64,
+    handle: ChannelHandle,
+}
+
+#[allow(dead_code)]
+impl ChannelCapture {
+    #[must_use]
+    pub(crate) fn source_revision(&self) -> u64 {
+        self.source_revision
+    }
+}
 
 /// Private telecom precommit fence result. An error or timeout is deliberately
 /// not an `Invalid` result: transport acceptance may already have occurred.
@@ -212,6 +237,9 @@ pub struct ChannelRegistry {
     /// This is a synchronization boundary only; channel maps remain the sole
     /// instance authority and desired_state remains the sole intent authority.
     lifecycle_sync: AsyncMutex<()>,
+    /// Publication revision for the channel source. It advances only after a
+    /// registration or unregistration is committed to `channels`.
+    source_revision: AtomicU64,
     /// Per-channel *intent* (see [`DesiredChannelState`]). Written only by the
     /// lifecycle methods on this type, read by the health monitor.
     desired_state: RwLock<HashMap<ChannelId, DesiredChannelState>>,
@@ -233,6 +261,7 @@ impl ChannelRegistry {
             delivery_store: None,
             webhook_mounts: Arc::new(super::webhook_receiver::WebhookMountTable::new()),
             lifecycle_sync: AsyncMutex::new(()),
+            source_revision: AtomicU64::new(0),
             desired_state: RwLock::new(HashMap::new()),
         }
     }
@@ -309,7 +338,7 @@ impl ChannelRegistry {
 
         drop(factories);
 
-        // Observe the replacement policy before touching the outgoing Feishu
+        // Observe the replacement policy before touching the outgoing channel
         // runtime, webhook mount, or publication. DeliveryStore deliberately
         // latches observation failures fail closed; returning here therefore
         // retains the incumbent's live state while preserving that durable
@@ -325,12 +354,12 @@ impl ChannelRegistry {
                 publication = "untouched",
                 admission = "fail_closed_by_delivery_store",
                 %error,
-                "channel replacement refused before Feishu teardown"
+                "channel replacement refused before channel teardown"
             );
             return Err(error);
         }
 
-        self.stop_outgoing_feishu(&channel_id).await?;
+        self.stop_outgoing_channel(&channel_id).await?;
 
         // Same reasoning as `register`: the freshly-created instance has not
         // started, so drop whatever the outgoing instance at this id left
@@ -349,6 +378,7 @@ impl ChannelRegistry {
             DesiredChannelState::Stopped
         };
         self.set_desired(&channel_id, boot_intent).await;
+        self.advance_source_revision();
 
         info!(
             "Created channel: {} (type: {})",
@@ -390,7 +420,7 @@ impl ChannelRegistry {
         let _lifecycle = self.lifecycle_sync.lock().await;
         let channel_id = channel.id().clone();
 
-        // Observe the replacement policy before touching the outgoing Feishu
+        // Observe the replacement policy before touching the outgoing channel
         // runtime, webhook mount, or publication. DeliveryStore deliberately
         // latches observation failures fail closed; returning here therefore
         // retains the incumbent's live state while preserving that durable
@@ -406,15 +436,19 @@ impl ChannelRegistry {
                 publication = "untouched",
                 admission = "fail_closed_by_delivery_store",
                 %error,
-                "channel replacement refused before Feishu teardown"
+                "channel replacement refused before channel teardown"
             );
             return channel_id;
         }
 
-        if let Err(error) = self.stop_outgoing_feishu(&channel_id).await {
+        if let Err(error) = self.stop_outgoing_channel(&channel_id).await {
             // This legacy API returns only an id. Preserve the failed owner and
             // its structured residual instead of dropping failure evidence.
-            warn!(channel = %channel_id, %error, "Feishu replacement refused; incumbent retained");
+            warn!(
+                channel = %channel_id,
+                %error,
+                "channel replacement refused; incumbent retained"
+            );
             return channel_id;
         }
 
@@ -433,25 +467,18 @@ impl ChannelRegistry {
             .write()
             .await
             .insert(channel_id.clone(), boot_intent);
+        self.advance_source_revision();
         info!("Registered channel: {}", channel_id);
         channel_id
     }
 
-    /// Tear down only the concrete Feishu slice before replacing/removing it.
+    /// Tear down the current channel before replacing or removing it.
     /// Called with lifecycle_sync held; never hold the channel map across I/O.
-    async fn stop_outgoing_feishu(&self, channel_id: &ChannelId) -> ChannelResult<()> {
-        let Some(handle) = self.get(channel_id).await else {
+    async fn stop_outgoing_channel(&self, channel_id: &ChannelId) -> ChannelResult<()> {
+        if self.get(channel_id).await.is_none() {
             return Ok(());
-        };
-        let is_feishu = handle
-            .read()
-            .await
-            .as_any()
-            .is_some_and(|value| value.is::<super::interfaces::feishu::FeishuChannel>());
-        if is_feishu {
-            self.stop_channel_inner(channel_id).await?;
         }
-        Ok(())
+        self.stop_channel_inner(channel_id).await
     }
 
     /// Unregister a channel
@@ -474,8 +501,12 @@ impl ChannelRegistry {
 
     pub async fn unregister(&self, channel_id: &ChannelId) -> Option<Box<dyn Channel>> {
         let _lifecycle = self.lifecycle_sync.lock().await;
-        if let Err(error) = self.stop_outgoing_feishu(channel_id).await {
-            warn!(channel = %channel_id, %error, "Feishu removal refused; incumbent retained");
+        if let Err(error) = self.stop_outgoing_channel(channel_id).await {
+            warn!(
+                channel = %channel_id,
+                %error,
+                "channel removal refused; incumbent retained"
+            );
             return None;
         }
         // Drop the HTTP surface before the instance leaves the registry —
@@ -490,6 +521,7 @@ impl ChannelRegistry {
 
         let mut channels = self.channels.write().await;
         if let Some(channel_arc) = channels.remove(channel_id) {
+            self.advance_source_revision();
             // Try to extract the inner channel
             match Arc::try_unwrap(channel_arc) {
                 Ok(rw_lock) => {
@@ -505,6 +537,52 @@ impl ChannelRegistry {
         } else {
             None
         }
+    }
+
+    /// Capture the current registered instance without starting or authenticating it.
+    ///
+    /// The capture and its source revision come from the same registry read
+    /// boundary. The returned handle is opaque to callers; use admission must
+    /// revalidate it through [`Self::validate_channel_capture`].
+    #[allow(dead_code)]
+    pub(crate) async fn capture_channel(&self, channel_id: &ChannelId) -> Option<ChannelCapture> {
+        let _lifecycle = self.lifecycle_sync.lock().await;
+        let channels = self.channels.read().await;
+        let handle = channels.get(channel_id).cloned()?;
+        Some(ChannelCapture {
+            channel_id: channel_id.clone(),
+            source_revision: self
+                .source_revision
+                .load(std::sync::atomic::Ordering::Relaxed),
+            handle,
+        })
+    }
+
+    /// Revalidate a source-owned capture at the use boundary.
+    ///
+    /// An unrelated publication may advance the source revision without
+    /// invalidating this entry. Replacement or unregister always changes the
+    /// registered `Arc` identity, so stale work fails closed here.
+    #[allow(dead_code)]
+    pub(crate) async fn validate_channel_capture(
+        &self,
+        capture: &ChannelCapture,
+    ) -> Option<ChannelHandle> {
+        let _lifecycle = self.lifecycle_sync.lock().await;
+        let channels = self.channels.read().await;
+        let current = channels.get(&capture.channel_id)?;
+        Arc::ptr_eq(current, &capture.handle).then(|| current.clone())
+    }
+
+    /// Advance the source publication revision after a committed map mutation.
+    fn advance_source_revision(&self) {
+        self.source_revision
+            .try_update(
+                std::sync::atomic::Ordering::Relaxed,
+                std::sync::atomic::Ordering::Relaxed,
+                |revision| revision.checked_add(1),
+            )
+            .expect("channel source revision exhausted");
     }
 
     /// Get channel by ID
@@ -3082,6 +3160,7 @@ mod tests {
         path: String,
         handler: Option<Arc<TestHandler>>,
         fail_start: Arc<AtomicBool>,
+        fail_stop: Arc<AtomicBool>,
         delivery_policy: OutboundDeliveryPolicy,
     }
 
@@ -3151,6 +3230,7 @@ mod tests {
                 path: path.to_string(),
                 handler: None,
                 fail_start: Arc::new(AtomicBool::new(false)),
+                fail_stop: Arc::new(AtomicBool::new(false)),
                 delivery_policy: OutboundDeliveryPolicy::Automatic,
             }
         }
@@ -3167,6 +3247,10 @@ mod tests {
 
         fn start_failure_control(&self) -> Arc<AtomicBool> {
             self.fail_start.clone()
+        }
+
+        fn stop_failure_control(&self) -> Arc<AtomicBool> {
+            self.fail_stop.clone()
         }
     }
 
@@ -3189,6 +3273,9 @@ mod tests {
             Ok(())
         }
         async fn stop(&mut self) -> ChannelResult<()> {
+            if self.fail_stop.load(Ordering::SeqCst) {
+                return Err(ChannelError::Internal("test stop failure".to_string()));
+            }
             self.handler = None;
             self.state.set_status(ChannelStatus::Disconnected).await;
             Ok(())
@@ -3209,6 +3296,146 @@ mod tests {
                 timestamp: Utc::now(),
             })
         }
+    }
+
+    #[tokio::test]
+    async fn capture_is_read_only_and_unrelated_publication_keeps_it_valid() {
+        let registry = ChannelRegistry::new();
+        let first_id = registry
+            .register(Box::new(WebhookyChannel::new(
+                "capture-first",
+                "/webhook/capture-first",
+            )))
+            .await;
+        let capture = registry.capture_channel(&first_id).await.unwrap();
+
+        assert_eq!(
+            registry.get(&first_id).await.unwrap().read().await.status(),
+            ChannelStatus::Disconnected,
+            "capture must not start the channel"
+        );
+
+        let second_id = registry
+            .register(Box::new(WebhookyChannel::new(
+                "capture-second",
+                "/webhook/capture-second",
+            )))
+            .await;
+        let second_capture = registry.capture_channel(&second_id).await.unwrap();
+
+        assert_ne!(capture.source_revision(), second_capture.source_revision());
+        assert!(registry.validate_channel_capture(&capture).await.is_some());
+    }
+
+    #[tokio::test]
+    async fn capture_rejects_replaced_channel_instance() {
+        let registry = ChannelRegistry::new();
+        let id = registry
+            .register(Box::new(WebhookyChannel::new(
+                "capture-replaced",
+                "/webhook/capture-replaced",
+            )))
+            .await;
+        let capture = registry.capture_channel(&id).await.unwrap();
+
+        registry
+            .register(Box::new(WebhookyChannel::new(
+                "capture-replaced",
+                "/webhook/capture-replaced",
+            )))
+            .await;
+
+        assert!(registry.validate_channel_capture(&capture).await.is_none());
+    }
+
+    #[tokio::test]
+    async fn capture_rejects_unregistered_channel() {
+        let registry = ChannelRegistry::new();
+        let id = registry
+            .register(Box::new(WebhookyChannel::new(
+                "capture-removed",
+                "/webhook/capture-removed",
+            )))
+            .await;
+        let capture = registry.capture_channel(&id).await.unwrap();
+
+        registry.unregister(&id).await;
+        assert!(registry.get(&id).await.is_none());
+        assert!(registry.validate_channel_capture(&capture).await.is_none());
+    }
+
+    #[tokio::test]
+    async fn replacement_stops_any_running_channel_before_publication() {
+        let registry = ChannelRegistry::new();
+        let incumbent = WebhookyChannel::new("wh", "/webhook/wh");
+        let incumbent_state = incumbent.state().status_handle();
+        let id = registry.register(Box::new(incumbent)).await;
+        registry.start_channel(&id).await.unwrap();
+
+        registry
+            .register(Box::new(WebhookyChannel::new("wh", "/webhook/wh")))
+            .await;
+
+        assert_eq!(
+            *incumbent_state.read().await,
+            ChannelStatus::Disconnected,
+            "replacement must stop the incumbent regardless of channel type"
+        );
+        assert_eq!(registry.webhook_mounts().mounted_count().await, 0);
+        assert_eq!(
+            registry.get(&id).await.unwrap().read().await.status(),
+            ChannelStatus::Disconnected
+        );
+    }
+
+    #[tokio::test]
+    async fn replacement_stop_failure_retains_the_incumbent() {
+        let registry = ChannelRegistry::new();
+        let incumbent = WebhookyChannel::new("stop-fails", "/webhook/stop-fails");
+        let stop_failure = incumbent.stop_failure_control();
+        let id = registry.register(Box::new(incumbent)).await;
+        registry.start_channel(&id).await.unwrap();
+        stop_failure.store(true, Ordering::SeqCst);
+        let incumbent_handle = registry.get(&id).await.unwrap();
+
+        registry
+            .register(Box::new(WebhookyChannel::new(
+                "stop-fails",
+                "/webhook/stop-fails",
+            )))
+            .await;
+
+        assert!(
+            Arc::ptr_eq(&incumbent_handle, &registry.get(&id).await.unwrap()),
+            "a failed teardown must retain the incumbent registration"
+        );
+        assert_eq!(
+            registry.get(&id).await.unwrap().read().await.status(),
+            ChannelStatus::Connected,
+            "a failed teardown must leave the incumbent usable"
+        );
+    }
+
+    #[tokio::test]
+    async fn unregister_stop_failure_retains_the_incumbent() {
+        let registry = ChannelRegistry::new();
+        let incumbent = WebhookyChannel::new("remove-fails", "/webhook/remove-fails");
+        let stop_failure = incumbent.stop_failure_control();
+        let id = registry.register(Box::new(incumbent)).await;
+        registry.start_channel(&id).await.unwrap();
+        stop_failure.store(true, Ordering::SeqCst);
+        let incumbent_handle = registry.get(&id).await.unwrap();
+
+        assert!(registry.unregister(&id).await.is_none());
+        assert!(
+            Arc::ptr_eq(&incumbent_handle, &registry.get(&id).await.unwrap()),
+            "a failed teardown must retain the incumbent registration"
+        );
+        assert_eq!(
+            registry.webhook_mounts().mounted_count().await,
+            1,
+            "a failed teardown must retain the incumbent HTTP surface"
+        );
     }
 
     #[tokio::test]

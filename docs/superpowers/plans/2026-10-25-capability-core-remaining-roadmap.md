@@ -6,10 +6,10 @@
 
 **Current baseline:**
 
-- Repository: `/Volumes/TBU4/Workspace/Aleph`
+- Repository: resolve the current checkout with `git rev-parse --show-toplevel`.
 - Branch: `main`
-- HEAD and `origin/main`: `c25687d2b00a2ebe605406ad11b590182a566672`
-- Current uncommitted work contains the first facets/source-snapshot vertical slice.
+- Verified local HEAD (2026-10-26): `fe6104244` (`feat(capability): establish provider contract slice`).
+- The first facets/source-snapshot vertical slice is committed in this baseline. The initial working tree was clean; remote state was not refreshed during this assessment.
 - `CapabilityKind` remains the nine existing kinds.
 - `CapabilityFacet` exists for `Callable`, `EventSource`, `Subscription`, `ProviderLifecycle`, and `ExternalEffect`.
 - `CapabilityBackend::snapshot(&Scope) -> CapabilitySnapshot` is the read-side source contract for Tool.
@@ -25,7 +25,7 @@
 
 1. Existing registries and duplicated structures are removed or replaced at least as fast as new Core structures are introduced.
 2. At least one real provider exposes more than one behavior facet through one descriptor and one source-backed projection.
-3. At least one provider/resource leak is structurally eliminated by Scope/provider disposal.
+3. At least one provider/resource leak is structurally eliminated by ownership/lifetime disposal and provider cleanup through the existing lifecycle owner; query `Scope` is not a disposer and shared providers are not implicitly stopped.
 4. At least one recovery path is driven by a descriptor-backed replay/effect contract.
 5. `src/harness/**` remains unchanged.
 6. Disabled providers do not initialize threads, connections, databases, caches, token clients, listeners, or websockets.
@@ -86,6 +86,28 @@ R0 baseline and authority census
 **Recommended decision:** Keep Tool's `BackendLease::canonical_entry` source-specific. Introduce a common validation envelope only if the second provider demonstrates the need; do not force Feishu into a Tool-shaped lease. Reuse `CapabilityBackend`, `ProviderHandle`, and `OwnershipTree`; do not add `CapabilitySource` registry or Core lifecycle registry.
 
 **Gate:** R1 is GO only when an implementer can describe a non-Tool provider without adding a parallel registry, handler map, owner map, or durable store. Otherwise return `R1 NO-GO / deferred` and revise the design.
+
+### R0/R1 assessment — 2026-10-26 / 本轮裁决
+
+R0 **PASS**: fmt, diff check, `cargo check -p alephcore --tests`, strict Clippy, and `cargo test -p alephcore --lib capability::` all exited 0; **214 passed, 0 failed**. Test linking emitted a macOS `__eh_frame` size warning.
+
+R1 **bounded lifecycle + source-capture slice PASS; overall NO-GO / deferred**. The authorized slice generalized `ChannelRegistry` replacement/unregister teardown from a Feishu-only gate to the existing common channel owner. Two replacement tests were RED before the change; after the private `stop_outgoing_channel` helper, three focused lifecycle tests and the full 44-test `gateway::channel_registry::tests::` filter passed. Failed stop retains the incumbent registration and webhook mount. No new registry, handler map, owner map, or durable store was added.
+
+The next bounded R1 slice added crate-private `ChannelCapture` at `src/gateway/channel_registry.rs`: one lifecycle boundary captures the registered channel `Arc` identity plus the channel-source publication revision, and the use boundary validates the current `Arc` identity through the same registry. Three capture tests were RED before implementation and pass after implementation. The capture is read-only, does not start/authenticate/network the channel, unrelated publication does not invalidate it, and replacement/unregister rejects stale captures.
+
+首个未闭合 provider 契约已收窄为：把这个 source-owned capture 与实际 `ProviderHandle` instance/generation、descriptor identity/schema/revision、`OwnershipTree` owner generation 和 admitted-work completion acceptance 组成同一份 source proof。provider resource receipts 仍未闭合。R2 未进入；没有创建 Feishu descriptor、resolve route、production mount 或 Zahir route。
+
+The first unclosed provider contract is now narrower: bind this source-owned capture to the actual `ProviderHandle` instance/generation, descriptor identity/schema/revision, `OwnershipTree` owner generation, and admitted-work completion acceptance as one source proof. Provider resource receipts remain open. R2 was not entered; no Feishu descriptor, resolve route, production mount, or Zahir route was created.
+
+This ruling does not require implementing a universal lease to pass a design gate. The next R1 revision must ground the source-specific provider binding in existing authorities, then reconsider R1 before any R2 work.
+
+**R1 slice ledger:**
+
+- [x] Common `ChannelRegistry` replacement/unregister teardown is source-owned and tested for every channel type.
+- [x] Bounded `ChannelCapture` records channel instance identity and source publication revision, then validates use through `ChannelRegistry`.
+- [ ] Bind source capture to `ProviderHandle` instance/generation and descriptor identity/schema/revision.
+- [ ] Define owner-generation and admitted-work completion acceptance without a second map or durable store.
+- [ ] Produce resource receipts proving disabled/discovered read paths do not initialize provider runtime resources.
 
 ## R2 — Feishu A/B source-backed re-gate
 
