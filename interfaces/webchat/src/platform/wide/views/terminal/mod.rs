@@ -65,11 +65,7 @@ mod legacy {
                         let _ = dashboard.unsubscribe_topic(&topic).await;
                     });
                 });
-                Ok(TerminalEventStream::new_at_epoch(
-                    coverage_epoch,
-                    drain,
-                    dispose,
-                ))
+                Ok(TerminalEventStream::new(coverage_epoch, drain, dispose))
             }
             .boxed_local()
         });

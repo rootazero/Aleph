@@ -41,7 +41,7 @@ mod tests {
             async move {
                 let drain = Rc::new(move || Ok(emitted.borrow_mut().drain(..).collect()));
                 let dispose = Rc::new(move || disposed.set(disposed.get() + 1));
-                Ok(TerminalEventStream::new(drain, dispose))
+                Ok(TerminalEventStream::new(1, drain, dispose))
             }
             .boxed_local()
         });

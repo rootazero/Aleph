@@ -21,6 +21,7 @@ use aleph_protocol::pty::{
 };
 use leptos::prelude::*;
 use leptos::task::spawn_local;
+#[cfg(not(test))]
 use wasm_bindgen::closure::Closure;
 use wasm_bindgen::JsCast;
 use web_sys::CanvasRenderingContext2d;
@@ -31,11 +32,21 @@ use crate::tabs::TabBar;
 use crate::{keymap, render, session};
 use futures::future::LocalBoxFuture;
 use futures::FutureExt;
+#[cfg(not(test))]
 use gloo_timers::future::TimeoutFuture;
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
-// Leptos exposes one cleanup hook for both native test builds and the
+#[cfg(test)]
+async fn terminal_event_tick() {
+    futures::future::pending::<()>().await;
+}
+
+#[cfg(not(test))]
+async fn terminal_event_tick() {
+    TimeoutFuture::new(16).await;
+}
+
 // single-threaded browser runtime. This marker keeps local WASM resources in
 // that hook; no instance is ever sent to another thread.
 struct LocalCleanup<T>(T);
@@ -510,7 +521,7 @@ pub fn TerminalContent(state: TerminalState) -> impl IntoView {
                         _ => {}
                     }
                 }
-                TimeoutFuture::new(16).await;
+                terminal_event_tick().await;
             }
         });
     }
@@ -597,6 +608,7 @@ pub fn TerminalContent(state: TerminalState) -> impl IntoView {
         repaint_tick.get();
         let family = font_family.get_value();
         let size_px = font_size_px.get_value();
+        #[cfg(not(test))]
         request_animation_frame(move || {
             let Some((_canvas, ctx)) = canvas_ctx(canvas_ref) else {
                 return;
@@ -611,6 +623,8 @@ pub fn TerminalContent(state: TerminalState) -> impl IntoView {
                 }
             });
         });
+        #[cfg(test)]
+        let _ = (family, size_px);
     });
 
     // Resize: report our measured viewport to the server whenever the
@@ -633,25 +647,29 @@ pub fn TerminalContent(state: TerminalState) -> impl IntoView {
             first_load,
         );
 
-        let resize_services_for_callback = Rc::clone(&resize_services);
-        let cb: Closure<dyn FnMut(js_sys::Array)> = Closure::new(move |_entries: js_sys::Array| {
-            measure_and_report(
-                canvas_ref,
-                Rc::clone(&resize_services_for_callback),
-                session_id.get_value(),
-                font_family.get_value(),
-                font_size_px.get_value(),
-                repaint_tick,
-                first_load,
-            );
-        });
-        if let Some((canvas, _ctx)) = canvas_ctx(canvas_ref) {
-            if let Ok(observer) = web_sys::ResizeObserver::new(cb.as_ref().unchecked_ref()) {
-                observer.observe(&canvas);
-                on_cleanup(move || observer.disconnect());
+        #[cfg(not(test))]
+        {
+            let resize_services_for_callback = Rc::clone(&resize_services);
+            let cb: Closure<dyn FnMut(js_sys::Array)> =
+                Closure::new(move |_entries: js_sys::Array| {
+                    measure_and_report(
+                        canvas_ref,
+                        Rc::clone(&resize_services_for_callback),
+                        session_id.get_value(),
+                        font_family.get_value(),
+                        font_size_px.get_value(),
+                        repaint_tick,
+                        first_load,
+                    );
+                });
+            if let Some((canvas, _ctx)) = canvas_ctx(canvas_ref) {
+                if let Ok(observer) = web_sys::ResizeObserver::new(cb.as_ref().unchecked_ref()) {
+                    observer.observe(&canvas);
+                    on_cleanup(move || observer.disconnect());
+                }
             }
+            cb.forget();
         }
-        cb.forget();
     });
 
     // Bytes -> the PTY, base64-encoded (raw bytes, not JS `btoa`: control
@@ -902,7 +920,10 @@ fn device_pixel_ratio() -> f64 {
 
 #[cfg(test)]
 mod tests {
-    use super::{open_terminal_streams, TerminalContent, TerminalContentProps};
+    use super::{
+        open_terminal_streams, TerminalContent, TerminalContentProps, PTY_EXIT_TOPIC,
+        PTY_SCREEN_TOPIC,
+    };
     use crate::host::{
         TerminalConnection, TerminalEvent, TerminalEventStream, TerminalServices, TerminalText,
     };
@@ -922,7 +943,7 @@ mod tests {
     }
 
     fn test_stream(epoch: u64, disposed: Rc<Cell<u32>>) -> TerminalEventStream {
-        TerminalEventStream::new_at_epoch(
+        TerminalEventStream::new(
             epoch,
             Rc::new(|| Ok(Vec::<TerminalEvent>::new())),
             Rc::new(move || disposed.set(disposed.get() + 1)),
@@ -983,9 +1004,12 @@ mod tests {
                 .boxed_local()
             })
         };
+        let subscribe_calls = Rc::new(RefCell::new(Vec::<String>::new()));
         let subscribe = {
             let disposed = Rc::clone(&disposed);
-            Rc::new(move |_topic: String| {
+            let subscribe_calls = Rc::clone(&subscribe_calls);
+            Rc::new(move |topic: String| {
+                subscribe_calls.borrow_mut().push(topic);
                 let disposed = Rc::clone(&disposed);
                 async move { Ok(test_stream(1, disposed)) }.boxed_local()
             })
@@ -1005,8 +1029,16 @@ mod tests {
             let state = crate::terminal_state(services);
             let _mounted = TerminalContent(TerminalContentProps { state }).into_view();
         });
+        any_spawner::Executor::poll_local();
+        assert_eq!(
+            subscribe_calls.borrow().as_slice(),
+            [PTY_SCREEN_TOPIC.to_string(), PTY_EXIT_TOPIC.to_string()]
+        );
+        assert_eq!(disposed.get(), 0);
         owner.cleanup();
-        assert!(disposed.get() <= 2);
+        assert_eq!(disposed.get(), 2);
+        assert_eq!(calls.borrow().first().map(String::as_str), Some("pty.list"));
+        assert!(!calls.borrow().iter().any(|method| method == "pty.spawn"));
     }
 
     /// once: `flex-1`/`flex-col` on the root element are inert unless its

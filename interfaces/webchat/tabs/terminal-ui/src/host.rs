@@ -26,14 +26,6 @@ pub struct TerminalEventStream {
 impl TerminalEventStream {
     #[must_use]
     pub fn new(
-        drain: Rc<dyn Fn() -> Result<Vec<TerminalEvent>, String>>,
-        dispose: Rc<dyn Fn()>,
-    ) -> Self {
-        Self::new_at_epoch(0, drain, dispose)
-    }
-
-    #[must_use]
-    pub fn new_at_epoch(
         coverage_epoch: u64,
         drain: Rc<dyn Fn() -> Result<Vec<TerminalEvent>, String>>,
         dispose: Rc<dyn Fn()>,
