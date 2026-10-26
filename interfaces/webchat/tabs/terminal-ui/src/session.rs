@@ -1002,7 +1002,7 @@ mod tests {
     /// about the painted result could live.
     #[test]
     fn cursor_visible_false_is_stored_and_render_skips_the_cursor() {
-        use crate::platform::wide::views::terminal::render::{cursor_rect, CellMetrics};
+        use crate::render::{cursor_rect, CellMetrics};
 
         let metrics = CellMetrics {
             width: 8.0,

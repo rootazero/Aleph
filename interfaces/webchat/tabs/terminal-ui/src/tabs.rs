@@ -5,8 +5,6 @@
 use aleph_protocol::pty::PtySessionInfo;
 use leptos::prelude::*;
 
-use crate::i18n::{t_string, use_i18n};
-
 /// One tab: a PTY session and its locally derived title.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TabEntry {
@@ -261,11 +259,13 @@ impl TabModel {
 pub fn TabBar(
     tabs: Signal<Vec<TabEntry>>,
     selected: Signal<Option<String>>,
+    new_tab_label: String,
+    close_tab_label: String,
     on_select: Callback<String>,
     on_close: Callback<String>,
     on_new: Callback<()>,
 ) -> impl IntoView {
-    let i18n = use_i18n();
+    let close_tab_label_for_rows = close_tab_label.clone();
     view! {
         <div
             class="flex items-stretch gap-0.5 shrink-0 overflow-x-auto border-b border-border px-1"
@@ -278,15 +278,15 @@ pub fn TabBar(
                     .into_iter()
                     .map(|tab| {
                         let is_selected = current.as_deref() == Some(tab.session_id.as_str());
-                        view! { <TerminalTab tab=tab is_selected=is_selected on_select=on_select on_close=on_close /> }
+                        view! { <TerminalTab tab=tab is_selected=is_selected close_tab_label=close_tab_label_for_rows.clone() on_select=on_select on_close=on_close /> }
                     })
                     .collect_view()
             }}
             <button
                 type="button"
                 class="shrink-0 px-2 py-1 text-xs rounded text-text-tertiary hover:text-text-primary"
-                title=t_string!(i18n, terminal.new_tab).to_string()
-                aria-label=t_string!(i18n, terminal.new_tab).to_string()
+                title=new_tab_label.clone()
+                aria-label=new_tab_label
                 on:click=move |_| on_new.run(())
             >
                 "+"
@@ -300,10 +300,10 @@ pub fn TabBar(
 fn TerminalTab(
     tab: TabEntry,
     is_selected: bool,
+    close_tab_label: String,
     on_select: Callback<String>,
     on_close: Callback<String>,
 ) -> impl IntoView {
-    let i18n = use_i18n();
     let select_id = tab.session_id.clone();
     let close_id = tab.session_id.clone();
     let border = if is_selected {
@@ -332,8 +332,8 @@ fn TerminalTab(
             <button
                 type="button"
                 class="shrink-0 px-1 rounded text-text-tertiary hover:text-text-primary"
-                title=t_string!(i18n, terminal.close_tab).to_string()
-                aria-label=t_string!(i18n, terminal.close_tab).to_string()
+                title=close_tab_label.clone()
+                aria-label=close_tab_label
                 on:click=move |_| on_close.run(close_id.clone())
             >
                 "\u{00d7}"
