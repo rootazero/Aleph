@@ -29,6 +29,8 @@ use crate::host::{TerminalEventStream, TerminalServices, TerminalState, Terminal
 use crate::session::{ApplyOutcome, AttachOutcome, ClientScreen};
 use crate::tabs::TabBar;
 use crate::{keymap, render, session};
+use futures::future::LocalBoxFuture;
+use futures::FutureExt;
 use gloo_timers::future::TimeoutFuture;
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
@@ -91,6 +93,9 @@ pub fn TerminalContent(state: TerminalState) -> impl IntoView {
     let resync: Rc<dyn Fn(String, u64)> = Rc::new(move |sid: String, generation: u64| {
         let services = Rc::clone(&resync_services);
         spawn_local(async move {
+            if first_load.try_get_value().is_none() {
+                return;
+            }
             let (Some(current_generation), Some(current_session)) = (
                 attach_generation.try_get_untracked(),
                 session_id.try_get_value(),
@@ -111,6 +116,9 @@ pub fn TerminalContent(state: TerminalState) -> impl IntoView {
                 serde_json::json!({ "session_id": sid.clone() }),
             )
             .await;
+            if first_load.try_get_value().is_none() {
+                return;
+            }
             let (Some(current_generation), Some(current_session)) = (
                 attach_generation.try_get_untracked(),
                 session_id.try_get_value(),
@@ -229,6 +237,7 @@ pub fn TerminalContent(state: TerminalState) -> impl IntoView {
             family,
             size,
             repaint_tick,
+            first_load,
         );
         attach_resync(sid, generation);
     });
@@ -245,12 +254,15 @@ pub fn TerminalContent(state: TerminalState) -> impl IntoView {
         let services = Rc::clone(&spawn_services);
         let spawn_attach = Rc::clone(&spawn_attach);
         spawn_local(async move {
-            match (services.invoke)(
+            let result = (services.invoke)(
                 "pty.spawn".to_string(),
                 serde_json::json!({ "rows": 24, "cols": 80 }),
             )
-            .await
-            {
+            .await;
+            if first_load.try_get_value().is_none() {
+                return;
+            }
+            match result {
                 Ok(v) => match serde_json::from_value::<PtySpawnResponse>(v) {
                     Ok(resp) => {
                         tabs.update(|m| m.adopt_spawned(&resp.session_id, &resp.shell));
@@ -289,9 +301,12 @@ pub fn TerminalContent(state: TerminalState) -> impl IntoView {
                 // lives in `session::resolve_session_list` (pure, unit-tested
                 // there); the "may I spawn" half is `session::should_spawn`, which
                 // a `Fail` cannot even be handed because it carries no rows.
-                let sessions = match session::resolve_session_list(
-                    (services.invoke)(PTY_LIST_METHOD.to_string(), serde_json::json!({})).await,
-                ) {
+                let list_result =
+                    (services.invoke)(PTY_LIST_METHOD.to_string(), serde_json::json!({})).await;
+                if first_load.try_get_value().is_none() {
+                    return;
+                }
+                let sessions = match session::resolve_session_list(list_result) {
                     session::ListOutcome::Read(sessions) => sessions,
                     session::ListOutcome::Fail(msg) => {
                         error.set(Some(read_error(&services.text, &msg)));
@@ -322,12 +337,15 @@ pub fn TerminalContent(state: TerminalState) -> impl IntoView {
     let close_tab = move |sid: String| {
         let services = Rc::clone(&close_services);
         spawn_local(async move {
-            if let Err(e) = (services.invoke)(
+            let result = (services.invoke)(
                 "pty.close".to_string(),
                 serde_json::json!({ "session_id": sid }),
             )
-            .await
-            {
+            .await;
+            if first_load.try_get_value().is_none() {
+                return;
+            }
+            if let Err(e) = result {
                 error.set(Some(write_error(&services.text, &e)));
             }
         });
@@ -343,6 +361,31 @@ pub fn TerminalContent(state: TerminalState) -> impl IntoView {
     let cleanup_state = LocalCleanup((stop_for_cleanup, streams_for_cleanup));
     on_cleanup(move || cleanup_state.dispose());
 
+    let subscribe_all: Rc<
+        dyn Fn() -> LocalBoxFuture<'static, Result<Vec<TerminalEventStream>, String>>,
+    > = {
+        let services = Rc::clone(&services);
+        Rc::new(move || {
+            let services = Rc::clone(&services);
+            async move {
+                let mut opened = Vec::new();
+                for topic in [PTY_SCREEN_TOPIC, PTY_EXIT_TOPIC] {
+                    match (services.subscribe)(topic.to_string()).await {
+                        Ok(stream) => opened.push(stream),
+                        Err(error) => {
+                            for stream in opened {
+                                (stream.dispose)();
+                            }
+                            return Err(error);
+                        }
+                    }
+                }
+                Ok(opened)
+            }
+            .boxed_local()
+        })
+    };
+
     let services_for_events = Rc::clone(&services);
     let streams_for_events = Rc::clone(&event_streams);
     let stop_for_events = Rc::clone(&stop_events);
@@ -350,17 +393,21 @@ pub fn TerminalContent(state: TerminalState) -> impl IntoView {
         let services = Rc::clone(&services_for_events);
         let streams = Rc::clone(&streams_for_events);
         let stop = Rc::clone(&stop_for_events);
+        let subscribe_all = Rc::clone(&subscribe_all);
         spawn_local(async move {
-            let mut opened = Vec::new();
-            for topic in [PTY_SCREEN_TOPIC, PTY_EXIT_TOPIC] {
-                match (services.subscribe)(topic.to_string()).await {
-                    Ok(stream) => opened.push(stream),
-                    Err(subscription_error) => {
+            let opened = match subscribe_all().await {
+                Ok(opened) => opened,
+                Err(subscription_error) => {
+                    if first_load.try_get_value().is_some() {
                         error.set(Some(read_error(&services.text, &subscription_error)));
                     }
+                    return;
                 }
-            }
-            if opened.is_empty() {
+            };
+            if first_load.try_get_value().is_none() || stop.get() {
+                for stream in opened {
+                    (stream.dispose)();
+                }
                 return;
             }
             streams.borrow_mut().extend(opened);
@@ -375,7 +422,28 @@ pub fn TerminalContent(state: TerminalState) -> impl IntoView {
                 let connection = services.connection.get_untracked();
                 if connection.connected && connection.epoch != last_connection.epoch {
                     last_connection = connection;
-                    refresh_tabs(false, true);
+                    let old_streams = streams.borrow_mut().drain(..).collect::<Vec<_>>();
+                    for stream in old_streams {
+                        (stream.dispose)();
+                    }
+                    match subscribe_all().await {
+                        Ok(opened) if first_load.try_get_value().is_some() && !stop.get() => {
+                            streams.borrow_mut().extend(opened);
+                            refresh_tabs(false, true);
+                        }
+                        Ok(opened) => {
+                            for stream in opened {
+                                (stream.dispose)();
+                            }
+                            return;
+                        }
+                        Err(subscription_error) => {
+                            if first_load.try_get_value().is_some() {
+                                error.set(Some(read_error(&services.text, &subscription_error)));
+                            }
+                            return;
+                        }
+                    }
                 } else if !connection.connected {
                     last_connection = connection;
                 }
@@ -493,6 +561,9 @@ pub fn TerminalContent(state: TerminalState) -> impl IntoView {
             else {
                 return;
             };
+            if first_load.try_get_value().is_none() {
+                return;
+            }
             let Some(v) = policies.get("terminal") else {
                 return;
             };
@@ -528,6 +599,7 @@ pub fn TerminalContent(state: TerminalState) -> impl IntoView {
                 family,
                 size,
                 repaint_tick,
+                first_load,
             );
         });
     });
@@ -573,6 +645,7 @@ pub fn TerminalContent(state: TerminalState) -> impl IntoView {
             font_family.get_value(),
             font_size_px.get_value(),
             repaint_tick,
+            first_load,
         );
 
         let resize_services_for_callback = Rc::clone(&resize_services);
@@ -584,6 +657,7 @@ pub fn TerminalContent(state: TerminalState) -> impl IntoView {
                 font_family.get_value(),
                 font_size_px.get_value(),
                 repaint_tick,
+                first_load,
             );
         });
         if let Some((canvas, _ctx)) = canvas_ctx(canvas_ref) {
@@ -760,6 +834,7 @@ fn measure_and_report(
     font_family: String,
     font_size_px: f64,
     repaint_tick: RwSignal<u32>,
+    owner: StoredValue<bool>,
 ) {
     let Some((canvas, ctx)) = canvas_ctx(canvas_ref) else {
         return;
@@ -787,6 +862,9 @@ fn measure_and_report(
             serde_json::json!({ "session_id": sid, "rows": rows, "cols": cols }),
         )
         .await;
+        if owner.try_get_value().is_some() {
+            repaint_tick.update(|n| *n = n.wrapping_add(1));
+        }
     });
 }
 
