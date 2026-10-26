@@ -34,6 +34,9 @@ crate-type = ["cdylib", "rlib"]
 # itself is omitted so `cargo build --all-targets` and clippy do not try to
 # produce a native .exe from a WASM-only entry.
 
+[features]
+panel-tab-spike = []
+
 [dependencies]
 # Leptos framework (0.8.15 - The latest and greatest)
 leptos = { version = "0.8", features = ["csr"] }

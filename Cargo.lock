@@ -9329,6 +9329,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "panel-tab-terminal-pilot"
+version = "26.9.1"
+dependencies = [
+ "aleph-protocol",
+ "leptos",
+ "serde",
+ "serde_json",
+ "wasm-bindgen",
+ "web-sys",
+]
+
+[[package]]
 name = "pango"
 version = "0.18.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"

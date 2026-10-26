@@ -2,8 +2,13 @@
   "name": "control_plane",
   "version": "1.0.0",
   "description": "Aleph Control Plane UI",
+  "type": "module",
   "scripts": {
-    "build:css": "tailwindcss -i styles/tailwind.css -o dist/tailwind.css --minify"
+    "build:css": "tailwindcss -i styles/tailwind.css -o dist/tailwind.css --minify",
+    "panel:spike:build": "bun scripts/build-panel-spike.ts",
+    "panel:spike:report": "bun scripts/panel-spike-report.ts",
+    "panel:spike:test": "bun x --no-install playwright test --config .panel-spike/playwright.config.ts",
+    "panel:spike:serve": "bun scripts/build-panel-spike.ts --serve"
   },
   "keywords": [],
   "author": "",
