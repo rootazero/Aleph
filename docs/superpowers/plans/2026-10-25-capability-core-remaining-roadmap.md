@@ -111,16 +111,11 @@ This ruling does not require implementing a universal lease to pass a design gat
 
 ### Provider binding completion probe — 2026-10-26
 
-The next R1 RED probe ran in the real `ChannelRegistry` test module. After correcting a parser-only insertion mistake, the focused compile failed with the exact missing authority APIs:
+The historical RED probe was recorded in the real `ChannelRegistry` test module after correcting an accidental parser-only insertion mistake. Task 1 replaced that invalid independent-provider probe with source-backed cold binding tests; the current tree does not retain a deliberately failing test.
 
-```text
-error[E0599]: no method named `provider_handle` found for struct `ChannelCapture`
-error[E0599]: no method named `provider_generation` found for struct `ChannelCapture`
-```
+The historical RED recorded the missing provider instance/generation proof. Task 1 now publishes a source-minted provider in the canonical Bound entry; Task 2 adds provider-domain guards and Task 3 adds independent ownership binding validation. The remaining unclosed contract is Gateway admitted-work/completion acceptance and real resource receipts.
 
-The probe was removed. `ChannelCapture` remains source-owned and valid only for the registered channel `Arc` plus source revision. `ProviderHandle` generation/admission, `OwnershipTree` owner generation, Tool descriptor publication, and Tool late-completion fencing remain separate authorities with no existing non-Tool channel binding path. Existing Tool-side provider restart, owner bump, and late-completion tests pass, but they cannot serve as evidence for Gateway channels.
-
-**R1 decision remains NO-GO / deferred.** Do not create a cross-authority registry, adapter, facade glue, generalized completion fence, or resource receipt fixture detached from a real allocation owner. The unique next entry is to revise the source-owned capture contract around an existing provider/source owner that can prove same-generation admission, completion acceptance, and deterministic cold/disabled resource receipts. R2 Feishu remains deferred.
+**R1 decision remains NO-GO / deferred.** Do not create a cross-authority registry, adapter, facade glue, generalized completion fence, synthetic ticket, drain counter, or resource receipt fixture detached from a real allocation owner. The next entry is only valid when an existing provider/source owner can prove same-generation admission, completion acceptance, and deterministic cold/disabled resource receipts. R2 Feishu remains deferred.
 
 ## R2 — Feishu A/B source-backed re-gate
 
@@ -244,3 +239,20 @@ Do not claim full target completion until R2–R7 evidence exists. Do not use th
 - EffectClaim producer, Safe Replay, external exactly-once, and universal scheduler before their independent design gate.
 - Terminal, Memory, Sandbox, and other kind backends before their individual authority audits.
 - Any modification to `src/harness/**`.
+
+## R1 source-owned binding revision result — 2026-10-26
+
+R1 remains **NO-GO / deferred** after the approved bounded source-owned binding revision. Tasks 1–3 passed their implementation and independent review gates; implementation stopped before Task 4 because no existing Gateway authority owns admitted-work completion acceptance or real resource receipts.
+
+| Bounded slice | Result | Evidence / limit |
+|---|---|---|
+| Task 1: canonical cold binding | PASS | `ChannelRegistry` source-mints the real `ProviderHandle`, publishes lifecycle-only descriptor/schema fingerprints with source/entry identity, retains the existing `OwnershipTree` reference, and rejects Bound use through legacy surfaces. Commits `12ff9fb3f`, `914d4e974`. |
+| Task 2: provider generation guards | PASS | Existing `ProviderHandle` mutex validates current generation and Ready/Stopping state for crate-private local callbacks; no Gateway ticket or drain authority. Commit `5fde0b3f8`. |
+| Task 3: owner generation guards | PASS | Existing `OwnershipTree` validates exact visibility, owner/lifetime, independent generation, revoke/dispose tombstones, and same-nonce replacement without a second owner map. Commit `d293f8676`. |
+| Task 4–9 | DEFERRED | No lifecycle resource tracker, admitted-work ticket, drain/completion acceptance, retirement, compatibility closure, resource matrix, or final reference publication was implemented. |
+
+Validation evidence at the completed gates: binding 3/3, registry 49/49, provider 10/10, ownership 30/30, capability 222/222, Tool registry 54/54; `cargo fmt --all --check`, `cargo check -p alephcore --tests`, and `cargo clippy -p alephcore --tests -- -D warnings` passed. Existing linker warning `__eh_frame section too large (max 16MB) to encode dwarf unwind offsets in compact unwind table` was non-fatal. One initial binding test invocation hit the 300-second harness timeout during compilation; the same test was rerun with a 900-second limit and passed 3/3.
+
+**First unclosed contract:** no existing Gateway/source authority owns a non-cloneable admitted-work proof through the real send boundary, a completion acceptance linearization point that rejects stale results without touching a successor, or allocation-boundary resource receipts. Tool provider/owner/completion tests remain Tool-specific and cannot prove Gateway behavior. Do not add a synthetic registry, adapter, facade glue, owner map, generalized envelope, or detached receipt fixture to fill this gap.
+
+R2 Feishu remains deferred. No Feishu route, descriptor, production mount, Zahir route, EffectClaim producer, Safe Replay, external exactly-once, universal scheduler, or durable recovery was added. A future R1 GO requires all source capture, provider generation, descriptor publication, owner generation, admitted-work completion acceptance, and resource receipt facts to be proven by existing authorities; even then it requires a separate R2 Feishu A/B re-gate.

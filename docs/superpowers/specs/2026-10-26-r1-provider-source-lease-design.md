@@ -280,26 +280,19 @@ The bounded `ChannelRegistry` capture remains **PASS**, while the R1 gate remain
 
 ### RED evidence
 
-A temporary probe in the real `src/gateway/channel_registry.rs` test module attempted to read provider identity and generation from the captured source object. After correcting an accidental parser-only insertion error, the focused command produced the expected missing-production-API RED:
+A historical probe was added to the real `src/gateway/channel_registry.rs` test module and first exposed an accidental parser-only insertion error. After restoring the existing test declaration, the focused command produced the expected missing-production-API RED. Task 1 replaced that invalid independent-provider probe with source-backed cold binding tests; the current tree does not retain a deliberately failing test.
 
-```text
-cargo test -p alephcore --lib gateway::channel_registry::tests::capture_exposes_provider_instance_and_generation_for_admission -- --exact
-
-error[E0599]: no method named `provider_handle` found for struct `ChannelCapture`
-error[E0599]: no method named `provider_generation` found for struct `ChannelCapture`
-```
-
-The temporary test was removed after the probe; it is evidence of a missing authority connection, not an API proposal.
+The historical RED is contract evidence, not a current cargo failure. It recorded that the original `ChannelCapture` had no provider instance/generation proof to validate. Task 1 now publishes a source-minted provider in the canonical Bound entry; the remaining unclosed contract is later in the path: no existing Gateway authority owns admitted work through completion acceptance or real resource receipts.
 
 ### Contract ruling
 
-`ChannelCapture` currently records only the channel id, source publication revision, and the registered channel `Arc` at `src/gateway/channel_registry.rs:55`; `capture_channel` and `validate_channel_capture` remain owned by `ChannelRegistry`. `ProviderHandle` at `src/capability/provider.rs:234` owns provider instance identity, lifecycle generation, and call admission, but no Gateway channel path obtains or validates it. `OwnershipTree::generation` is independently observable and remains independent of both values.
+`ChannelRegistry` remains source-owned; the new Bound capture is distinct from legacy capture and is published from the same canonical entry as source revision, provider, descriptor, and ownership reference. `ProviderHandle` at `src/capability/provider.rs:234` owns provider instance identity and lifecycle generation; Task 2 adds only crate-private provider-domain guards. `OwnershipTree` independently validates owner generation and binding; Task 3 adds that validation without a second owner map.
 
-The Tool path has a source-specific canonical descriptor/handler publication and a post-await provider/completion fence in `src/tools/registry.rs`; `ZahirFacade` validates provider generation, owner generation, and descriptor freshness for that Tool source. This does not create a non-Tool Channel authority. Reusing it through a new registry, adapter, facade glue, or generalized completion envelope would duplicate authority and violate the gate.
+The Tool path has a source-specific canonical descriptor/handler publication and a post-await provider/completion fence in `src/tools/registry.rs`; `ZahirFacade` validates provider generation, owner generation, and descriptor freshness for that Tool source. This does not create a non-Tool Gateway admitted-work authority. Reusing it through a new registry, adapter, facade glue, or generalized completion envelope would duplicate authority and violate the gate.
 
-No existing Gateway/provider owner currently owns admitted work, drain, completion acceptance, or runtime resource receipts. The existing `ProviderHandle` fixture counter proves only a test-local positive control; it cannot prove that channel discovery, describe/list/project, cold resolve, or disabled reads do not initialize threads, connections, databases, caches, token clients, listeners, or websockets.
+No existing Gateway/provider owner currently owns admitted work, drain, completion acceptance, or runtime resource receipts. The provider and ownership guards are independently tested primitives, not a Gateway completion proof. The current bounded tests therefore do not prove that discovered, cold, or disabled Gateway reads avoid all provider-runtime allocation boundaries.
 
-The independent Tool tests for provider restart, owner-generation bump, and late completion rejection passed, but they do not close the non-Tool source binding. R1 therefore stops at the first missing contract; no simulated completion fence is implemented.
+R1 stops at this remaining contract; no simulated completion fence, synthetic ticket, detached drain counter, or receipt registry is implemented.
 
 ### Required next entry
 
@@ -314,3 +307,18 @@ Revise the source-owned capture contract by naming an existing provider/source o
 - 未执行 commit、push、reset、rebase、stash、clean、merge、部署、消息发送、真实外部 provider start/stop 或远端配置变更。
 
 Local evidence ledger: `.superpowers/sdd/2026-10-25-capability-core-remaining-roadmap/progress.md` (ignored runtime artifact, not a second durable application store).
+
+## 12. R1 source-owned binding revision result / R1 source-owned binding 修订结果
+
+**Decision: R1 remains NO-GO / deferred.** Tasks 1–3 of the approved bounded revision were implemented and independently reviewed; the first unclosed contract is now Gateway-owned admitted work and completion acceptance, together with real resource receipts.
+
+- **Task 1 — PASS for cold publication:** `ChannelRegistry` source-mints and stores the real `ProviderHandle`, its lifecycle state/generation observation, the complete lifecycle-only descriptor/schema fingerprints, source/entry identity, and one `Arc<OwnershipTree>` in the same canonical entry. Bound legacy access fails closed. Commits: `12ff9fb3f`, `914d4e974`.
+- **Task 2 — PASS for provider authority:** `ProviderHandle` now exposes crate-private mutex-held admission/completion guard primitives that reuse its existing lifecycle state, instance identity, generation, and exhaustion rules. It does not own Gateway work tickets or drain. Commit: `5fde0b3f8`.
+- **Task 3 — PASS for ownership authority:** `OwnershipTree` now validates exact capability plus `VisibilityScope`, owner/lifetime, independent `OwnerGeneration`, revoke/dispose tombstones, and same-nonce replacement under its existing mutex. It does not create a second owner map. Commit: `d293f8676`.
+- **Task 4–9 — NOT EXECUTED:** no lifecycle-resource tracker, Gateway admitted-work ticket, drain, completion acceptance, replacement/unregister retirement, compatibility closure, resource matrix, or final reference publication was implemented after the existing-authority stop condition was reached.
+
+The Task 1–3 evidence is bounded and source-backed: binding 3/3, registry 49/49, provider 10/10, ownership 30/30, capability 222/222, Tool registry 54/54, `cargo check -p alephcore --tests`, `cargo clippy -p alephcore --tests -- -D warnings`, and `cargo fmt --all --check` passed at their respective gates. The existing macOS linker warning `__eh_frame section too large (max 16MB) to encode dwarf unwind offsets in compact unwind table` remained non-fatal. The Task 1 and Task 2/3 commits were independently reviewed; the Task 1 lint follow-up was accepted with no remaining findings.
+
+This revision does **not** prove that a Gateway admitted operation retains a source-owned non-cloneable proof from admission through completion, or that a real completion linearization point rejects a late result without mutating a successor. It also does **not** prove that discovered/cold/disabled Gateway describe/list/project/resolve paths avoid thread, connection, database, cache, token-client, listener, or websocket initialization, because no existing Gateway resource receipt authority was found. Adding a synthetic ticket, drain counter, receipt registry, adapter, facade glue, or generalized envelope would violate the gate.
+
+R2 Feishu remains deferred. No Feishu descriptor, resolver, production mount, Zahir route, EffectClaim producer, Safe Replay, external exactly-once, universal scheduler, or durable recovery path was implemented. Any future R1 continuation must first name an existing source/provider owner that owns admitted work, completion acceptance, and real allocation-boundary receipts; only then may R1 be reconsidered. Even a future R1 GO requires a separate R2 Feishu A/B re-gate.
