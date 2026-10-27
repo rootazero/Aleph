@@ -707,26 +707,15 @@ impl ChannelRegistry {
             .expect("channel source revision exhausted");
     }
 
-    /// Publish one complete, cold lifecycle declaration. No runtime activation.
-    #[allow(dead_code)]
-    pub(crate) async fn register_bound_channel(
+    fn prepare_bound_entry(
         &self,
         channel: Box<dyn Channel>,
         contract: ChannelLifecycleContract,
         ownership: Arc<OwnershipTree>,
         initial: ChannelInitialState,
-    ) -> Result<ChannelId, ChannelBindingError> {
-        let _lifecycle = self.lifecycle_sync.lock().await;
+        revision: u64,
+    ) -> Result<Arc<ChannelRegistrationEntry>, ChannelBindingError> {
         let channel_id = channel.id().clone();
-        let mut channels = self.channels.write().await;
-        if channels.contains_key(&channel_id) {
-            return Err(ChannelBindingError::Busy);
-        }
-        let revision = self
-            .source_revision
-            .load(std::sync::atomic::Ordering::Relaxed)
-            .checked_add(1)
-            .ok_or(ChannelBindingError::PublicationExhausted)?;
         if channel_id.as_str().is_empty() {
             return Err(ChannelBindingError::InvalidContract);
         }
@@ -759,7 +748,7 @@ impl ChannelRegistry {
             services: Vec::new(),
             facets: CapabilityFacets::new().with(CapabilityFacet::ProviderLifecycle),
         };
-        let entry = Arc::new(ChannelRegistrationEntry {
+        Ok(Arc::new(ChannelRegistrationEntry {
             channel: Arc::new(RwLock::new(channel)),
             runtime: Mutex::new(binding::EntryRuntime::default()),
             drained: tokio::sync::Notify::new(),
@@ -772,7 +761,29 @@ impl ChannelRegistry {
                 provider,
                 ownership,
             })),
-        });
+        }))
+    }
+    /// Publish one complete, cold lifecycle declaration. No runtime activation.
+    #[allow(dead_code)]
+    pub(crate) async fn register_bound_channel(
+        &self,
+        channel: Box<dyn Channel>,
+        contract: ChannelLifecycleContract,
+        ownership: Arc<OwnershipTree>,
+        initial: ChannelInitialState,
+    ) -> Result<ChannelId, ChannelBindingError> {
+        let _lifecycle = self.lifecycle_sync.lock().await;
+        let channel_id = channel.id().clone();
+        let mut channels = self.channels.write().await;
+        if channels.contains_key(&channel_id) {
+            return Err(ChannelBindingError::Busy);
+        }
+        let revision = self
+            .source_revision
+            .load(std::sync::atomic::Ordering::Relaxed)
+            .checked_add(1)
+            .ok_or(ChannelBindingError::PublicationExhausted)?;
+        let entry = self.prepare_bound_entry(channel, contract, ownership, initial, revision)?;
         // Acquire every publication lock before the first write: cancellation
         // cannot leave a half-published tuple or mismatched desired intent.
         let mut desired = self.desired_state.write().await;
@@ -2344,6 +2355,7 @@ mod tests {
     async fn bound_retirement_discards_original_completion() {
         use super::binding::BoundCompletion;
         use crate::capability::ownership::VisibilityScope;
+        use std::time::Duration;
         let peer = super::test_support::LoopbackPeer::new(200).await;
         let (registry, id, _, tree) = real_bound(peer.url.clone()).await;
         registry
@@ -2388,7 +2400,16 @@ mod tests {
                     .await
             }
         });
-        tokio::task::yield_now().await;
+        tokio::time::timeout(Duration::from_secs(1), async {
+            loop {
+                if capture.entry.runtime.lock().unwrap().retiring {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
         peer.release.send(()).unwrap();
         let stale = completion.await.unwrap();
         assert!(matches!(
@@ -2405,8 +2426,7 @@ mod tests {
     #[tokio::test]
     async fn bound_replace_publishes_whole_tuple() {
         use crate::capability::descriptor::ProjectionMetadata;
-        let peer = super::test_support::LoopbackPeer::new(200).await;
-        let (registry, id, _, tree) = real_bound(peer.url.clone()).await;
+        let (registry, id, _, tree) = real_bound("http://127.0.0.1:1/callback".into()).await;
         let before = registry.capture_bound_channel(&id).await.unwrap();
         let before_revision = before.source_revision;
         let successor_probe = super::test_support::ResourceProbe::default();
@@ -2414,7 +2434,7 @@ mod tests {
             "real-bound",
             WebhookChannelConfig {
                 secret: "successor-secret".into(),
-                callback_url: peer.url.clone(),
+                callback_url: "http://127.0.0.1:1/callback".into(),
                 ..Default::default()
             },
             successor_probe,
@@ -2433,11 +2453,14 @@ mod tests {
         let after = registry.capture_bound_channel(&id).await.unwrap();
         assert!(!Arc::ptr_eq(&before.entry, &after.entry));
         assert!(!before.provider.same_instance(&after.provider));
-        assert_ne!(before.source_revision, before_revision);
+        assert_ne!(after.source_revision, before_revision);
         assert_ne!(before.descriptor_fingerprint, after.descriptor_fingerprint);
-        assert_eq!(after.descriptor.metadata, ProjectionMetadata {
-            surface: Some("replacement".into()),
-        });
+        assert_eq!(
+            after.descriptor.metadata,
+            ProjectionMetadata {
+                surface: Some("replacement".into()),
+            }
+        );
         assert_eq!(after.provider.snapshot().0, ProviderState::Cold);
     }
 
@@ -2465,24 +2488,24 @@ mod tests {
             .await
             .unwrap();
         peer.arrived.await.unwrap();
-        let result = tokio::time::timeout(
-            Duration::from_millis(20),
-            registry.unregister_bound_channel(&id),
-        )
-        .await;
+        let mut unregister = tokio::spawn({
+            let registry = registry.clone();
+            let id = id.clone();
+            async move { registry.unregister_bound_channel(&id).await }
+        });
+        let result = tokio::time::timeout(Duration::from_millis(20), &mut unregister).await;
         assert!(result.is_err(), "unregister must wait for real cleanup");
         assert!(registry.capture_bound_channel(&id).await.is_ok());
         peer.release.send(()).unwrap();
         assert!(completion.await.is_ok());
-        assert!(registry.unregister_bound_channel(&id).await.is_ok());
+        assert!(unregister.await.unwrap().is_ok());
         peer.task.await.unwrap();
     }
 
     #[tokio::test]
     async fn bound_contract_update_retires_old_publication() {
         use crate::capability::ownership::VisibilityScope;
-        let peer = super::test_support::LoopbackPeer::new(200).await;
-        let (registry, id, _, tree) = real_bound(peer.url.clone()).await;
+        let (registry, id, _, tree) = real_bound("http://127.0.0.1:1/callback".into()).await;
         registry
             .start_bound_channel(&id)
             .await
@@ -2502,7 +2525,7 @@ mod tests {
                     "real-bound",
                     WebhookChannelConfig {
                         secret: "contract-update".into(),
-                        callback_url: peer.url,
+                        callback_url: "http://127.0.0.1:1/callback".into(),
                         ..Default::default()
                     },
                 )),
@@ -2521,7 +2544,6 @@ mod tests {
 
     #[tokio::test]
     async fn bound_failed_cleanup_retains_incumbent() {
-        let peer = super::test_support::LoopbackPeer::new(200).await;
         let probe = super::test_support::ResourceProbe::default();
         let tree = Arc::new(OwnershipTree::new());
         let registry = Arc::new(ChannelRegistry::new());
@@ -2529,7 +2551,7 @@ mod tests {
             .register_bound_channel(
                 Box::new(super::test_support::FailingStopWebhook::new(
                     "failed-cleanup",
-                    peer.url.clone(),
+                    "http://127.0.0.1:1/callback".into(),
                     probe,
                 )),
                 stage_b_contract(None),
@@ -2553,10 +2575,7 @@ mod tests {
             .await
             .unwrap()
             .unwrap();
-        let error = registry
-            .unregister_bound_channel(&id)
-            .await
-            .unwrap_err();
+        let error = registry.unregister_bound_channel(&id).await.unwrap_err();
         assert!(matches!(error, ChannelBindingError::Runtime { .. }));
         assert!(registry.capture_bound_channel(&id).await.is_ok());
         let entry = registry.channels.read().await.get(&id).unwrap().clone();
@@ -2566,8 +2585,8 @@ mod tests {
     #[tokio::test]
     async fn bound_revision_exhaustion_never_half_publishes() {
         use std::sync::atomic::Ordering;
-        let peer = super::test_support::LoopbackPeer::new(200).await;
-        let (registry, id, _, tree) = real_bound(peer.url).await;
+        use std::time::Duration;
+        let (registry, id, _, tree) = real_bound("http://127.0.0.1:1/callback".into()).await;
         let before = registry.capture_bound_channel(&id).await.unwrap();
         registry.source_revision.store(u64::MAX, Ordering::Relaxed);
         let result = registry
@@ -2582,14 +2601,104 @@ mod tests {
                 ChannelInitialState::Cold,
             )
             .await;
-        assert!(matches!(result, Err(ChannelBindingError::PublicationExhausted)));
+        assert!(matches!(
+            result,
+            Err(ChannelBindingError::PublicationExhausted)
+        ));
         let after = registry.capture_bound_channel(&id).await.unwrap();
         assert!(Arc::ptr_eq(&before.entry, &after.entry));
         assert_eq!(after.source_revision, u64::MAX);
         assert_eq!(before.provider.snapshot(), after.provider.snapshot());
-    }
-    #[tokio::test]
-    async fn bound_progress_during_each_legacy_io() {
+
+        let peer = super::test_support::LoopbackPeer::new(200).await;
+        let (registry, id, _, tree) = real_bound(peer.url.clone()).await;
+        registry
+            .start_bound_channel(&id)
+            .await
+            .unwrap()
+            .await
+            .unwrap()
+            .unwrap();
+        let before = registry.capture_bound_channel(&id).await.unwrap();
+        let lease = registry
+            .resolve_bound_channel(before.clone(), &VisibilityScope::default())
+            .await
+            .unwrap();
+        let completion = registry
+            .send_bound_once(lease, OutboundMessage::text("test", "revision race"))
+            .await
+            .unwrap();
+        peer.arrived.await.unwrap();
+        registry
+            .source_revision
+            .store(u64::MAX - 1, Ordering::Relaxed);
+        let replacement = tokio::spawn({
+            let registry = registry.clone();
+            let id = id.clone();
+            let peer_url = peer.url.clone();
+            async move {
+                registry
+                    .replace_bound_channel(
+                        &id,
+                        Box::new(WebhookChannel::new(
+                            "real-bound",
+                            WebhookChannelConfig {
+                                callback_url: peer_url,
+                                ..Default::default()
+                            },
+                        )),
+                        stage_b_contract(Some("late-successor")),
+                        tree,
+                        ChannelInitialState::Cold,
+                    )
+                    .await
+            }
+        });
+        tokio::time::timeout(Duration::from_secs(1), async {
+            loop {
+                if before.entry.runtime.lock().unwrap().retiring {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        registry
+            .register_bound_channel(
+                Box::new(WebhookChannel::new(
+                    "revision-consumer",
+                    WebhookChannelConfig {
+                        callback_url: "http://127.0.0.1:1/callback".into(),
+                        ..Default::default()
+                    },
+                )),
+                stage_b_contract(None),
+                Arc::new(OwnershipTree::new()),
+                ChannelInitialState::Cold,
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            registry
+                .source_revision
+                .load(std::sync::atomic::Ordering::Relaxed),
+            u64::MAX
+        );
+        peer.release.send(()).unwrap();
+        assert!(matches!(
+            completion.await.unwrap(),
+            super::binding::BoundCompletion::DiscardedStale(_)
+        ));
+        assert!(matches!(
+            replacement.await.unwrap().unwrap_err(),
+            ChannelBindingError::PublicationExhausted
+        ));
+        let after = registry.capture_bound_channel(&id).await.unwrap();
+        assert!(Arc::ptr_eq(&before.entry, &after.entry));
+        assert_eq!(after.provider.state(), ProviderState::Stopped);
+        assert_eq!(after.source_revision, u64::MAX);
+        peer.task.await.unwrap();
         use super::binding::BoundCompletion;
         use super::test_support::{HeldFactory, HeldWebhook, LifecycleBlock, LoopbackPeer};
         use crate::capability::ownership::VisibilityScope;

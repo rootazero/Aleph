@@ -50,11 +50,7 @@ pub(super) struct FailingStopWebhook {
 }
 
 impl FailingStopWebhook {
-    pub(super) fn new(
-        id: &str,
-        callback_url: String,
-        probe: ResourceProbe,
-    ) -> Self {
+    pub(super) fn new(id: &str, callback_url: String, probe: ResourceProbe) -> Self {
         Self {
             channel: WebhookChannel::observed(
                 id,
@@ -87,8 +83,6 @@ impl Channel for FailingStopWebhook {
         self.channel.send(message).await
     }
 }
-
-
 
 pub(super) struct HeldFactory(pub(super) Mutex<Option<LifecycleBlock>>);
 
