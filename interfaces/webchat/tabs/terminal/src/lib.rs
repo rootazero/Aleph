@@ -118,6 +118,7 @@ export function descriptorValue(json) { return JSON.parse(json); }
         let content = content_root.dyn_into::<HtmlElement>()?;
         validate_roots(&sidebar, &content)?;
 
+        let _ = any_spawner::Executor::init_wasm_bindgen();
         let adapter = sdk::make(sdk_value)?;
         let adapter_cleanup = sdk::Adapter::dispose;
         let owner = Owner::new();
