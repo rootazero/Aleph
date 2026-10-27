@@ -7,7 +7,8 @@ use crate::capability::descriptor::{
     ServiceRelation,
 };
 use crate::capability::ownership::{
-    BindingValidationError, LifetimeScope, OwnerGeneration, OwnerRef, VisibilityScope,
+    BindingValidationError, LifetimeScope, OwnerGeneration, OwnerRef, OwnershipTree,
+    VisibilityScope,
 };
 use crate::capability::provider::{ProviderCallError, ProviderHandle, ProviderLifecycleError};
 use crate::sync_primitives::Arc;
@@ -485,6 +486,24 @@ impl super::ChannelRegistry {
             let _ = sender.send(BoundCompletion::DiscardedStale(error));
         }
         original.drained.notify_waiters();
+    }
+
+    pub(crate) async fn replace_bound_channel(
+        &self,
+        _channel_id: &super::ChannelId,
+        _channel: Box<dyn super::Channel>,
+        _contract: ChannelLifecycleContract,
+        _ownership: Arc<OwnershipTree>,
+        _initial: ChannelInitialState,
+    ) -> Result<super::ChannelId, ChannelBindingError> {
+        Err(ChannelBindingError::Busy)
+    }
+
+    pub(crate) async fn unregister_bound_channel(
+        &self,
+        _channel_id: &super::ChannelId,
+    ) -> Result<(), ChannelBindingError> {
+        Err(ChannelBindingError::Busy)
     }
 
     pub(crate) async fn start_bound_channel(
