@@ -2425,31 +2425,75 @@ mod tests {
 
     #[tokio::test]
     async fn bound_replace_publishes_whole_tuple() {
+        use super::binding::BoundCompletion;
         use crate::capability::descriptor::ProjectionMetadata;
-        let (registry, id, _, tree) = real_bound("http://127.0.0.1:1/callback".into()).await;
+        use crate::capability::ownership::VisibilityScope;
+        use std::time::Duration;
+        let peer = super::test_support::LoopbackPeer::new(200).await;
+        let (registry, id, _, tree) = real_bound(peer.url.clone()).await;
+        registry
+            .start_bound_channel(&id)
+            .await
+            .unwrap()
+            .await
+            .unwrap()
+            .unwrap();
         let before = registry.capture_bound_channel(&id).await.unwrap();
         let before_revision = before.source_revision;
+        let lease = registry
+            .resolve_bound_channel(before.clone(), &VisibilityScope::default())
+            .await
+            .unwrap();
+        let completion = registry
+            .send_bound_once(lease, OutboundMessage::text("test", "publication boundary"))
+            .await
+            .unwrap();
+        peer.arrived.await.unwrap();
         let successor_probe = super::test_support::ResourceProbe::default();
         let successor = WebhookChannel::observed(
             "real-bound",
             WebhookChannelConfig {
                 secret: "successor-secret".into(),
-                callback_url: "http://127.0.0.1:1/callback".into(),
+                callback_url: peer.url.clone(),
                 ..Default::default()
             },
             successor_probe,
         );
-        let replacement = registry
-            .replace_bound_channel(
-                &id,
-                Box::new(successor),
-                stage_b_contract(Some("replacement")),
-                tree,
-                ChannelInitialState::Cold,
-            )
-            .await
-            .unwrap();
-        assert_eq!(replacement, id);
+        let replacement = tokio::spawn({
+            let registry = registry.clone();
+            let id = id.clone();
+            async move {
+                registry
+                    .replace_bound_channel(
+                        &id,
+                        Box::new(successor),
+                        stage_b_contract(Some("replacement")),
+                        tree,
+                        ChannelInitialState::Cold,
+                    )
+                    .await
+            }
+        });
+        tokio::time::timeout(Duration::from_secs(1), async {
+            loop {
+                if before.entry.runtime.lock().unwrap().retiring {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        let during = registry.capture_bound_channel(&id).await.unwrap();
+        assert!(Arc::ptr_eq(&before.entry, &during.entry));
+        assert_eq!(during.source_revision, before_revision);
+        assert_eq!(during.provider.state(), ProviderState::Stopping);
+        peer.release.send(()).unwrap();
+        assert!(matches!(
+            completion.await.unwrap(),
+            BoundCompletion::DiscardedStale(_)
+        ));
+        assert_eq!(replacement.await.unwrap().unwrap(), id);
         let after = registry.capture_bound_channel(&id).await.unwrap();
         assert!(!Arc::ptr_eq(&before.entry, &after.entry));
         assert!(!before.provider.same_instance(&after.provider));
@@ -2462,6 +2506,7 @@ mod tests {
             }
         );
         assert_eq!(after.provider.snapshot().0, ProviderState::Cold);
+        peer.task.await.unwrap();
     }
 
     #[tokio::test]
