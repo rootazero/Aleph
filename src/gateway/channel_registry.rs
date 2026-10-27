@@ -5132,10 +5132,7 @@ mod tests {
         )
     }
 
-    fn desired_of(
-        snapshots: &[ChannelLifecycleSnapshot],
-        id: &ChannelId,
-    ) -> DesiredChannelState {
+    fn desired_of(snapshots: &[ChannelLifecycleSnapshot], id: &ChannelId) -> DesiredChannelState {
         snapshots
             .iter()
             .find(|snapshot| &snapshot.id == id)
@@ -5244,9 +5241,22 @@ mod tests {
         );
         assert_eq!(report.queue, QueueDisposition::NotQueueable);
 
-        // The raw queue seam is the one admission path that has no source
-        // argument today. Rows before/after are the assertion; the returned
-        // outcome is only corroboration.
+        // HANDOFF (Task 4, not this task): `DeliveryStore::enqueue` is the raw
+        // `pub` legacy/import seam today, and this call site exists only to pin
+        // its RED. Task 4 makes the store write private and publishes
+        // `pub(crate) async fn enqueue_validated_legacy(registry, store, ...)`,
+        // which validates the current Legacy registration before writing
+        // (design §6 "Effects and queue"; plan Task 4 Steps 1-2, Step 2 already
+        // names Registry/queue tests as a call site to migrate). Task 4 must
+        // move this call onto that helper and delete the raw call: final API
+        // must not expose an unvalidated `ChannelId`-only queue write.
+        // When migrating, preserve these behavioral assertions verbatim rather
+        // than turning them into "the helper was called":
+        //   (a) the outcome is not `EnqueueOutcome::Queued(_)`,
+        //   (b) `store.len()` is unchanged,
+        //   (c) `delivery_queue_stats().pending == 0`.
+        // Rows before/after are the assertion; the returned outcome is only
+        // corroboration.
         let before = store.len().expect("queue length");
         let outcome = store
             .enqueue(

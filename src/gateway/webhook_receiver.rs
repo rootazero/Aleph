@@ -1049,6 +1049,47 @@ mod tests {
             "before retirement"
         );
 
+        // Both directions of the gate (shape 14). `register` advances a
+        // registry-global `source_revision`, so a guard that consumes that
+        // scalar alone would refuse every live mount after any registration —
+        // a fail-closed answer consumed as a value turns into a lockout.
+        // Identity must be per channel: an unrelated registration cannot
+        // invalidate this mount.
+        let unrelated = registry
+            .register(Box::new(WebhookChannel::new(
+                "unrelated",
+                WebhookChannelConfig {
+                    secret: secret.into(),
+                    callback_url: "http://127.0.0.1:1/callback".into(),
+                    path: "/webhook/unrelated".into(),
+                    ..Default::default()
+                },
+            )))
+            .await;
+        assert_ne!(
+            unrelated, id,
+            "the positive control needs a distinct registration"
+        );
+        assert_eq!(
+            signed_post(
+                &router,
+                path,
+                secret,
+                br#"{"message":"after unrelated registration"}"#
+            )
+            .await,
+            StatusCode::OK,
+            "an unrelated registration must not invalidate a live mount"
+        );
+        assert_eq!(handled.load(Ordering::SeqCst), 2);
+        assert_eq!(
+            inbound_rx
+                .try_recv()
+                .expect("a live mount still forwards after an unrelated registration")
+                .text,
+            "after unrelated registration"
+        );
+
         // Retire the publication: the same channel id now denotes a different
         // registration, one that never published this handler. The retained
         // mount keeps serving until something validates its identity.
@@ -1076,7 +1117,7 @@ mod tests {
         );
         assert_eq!(
             handled.load(Ordering::SeqCst),
-            1,
+            2,
             "handler.handle must not run for a stale mount"
         );
         assert!(
