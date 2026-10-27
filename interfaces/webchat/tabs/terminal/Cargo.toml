@@ -12,6 +12,7 @@ crate-type = ["cdylib", "rlib"]
 [dependencies]
 aleph-protocol = { path = "../../../../shared/protocol" }
 aleph-terminal-ui = { path = "../terminal-ui" }
+any_spawner = "0.3"
 futures.workspace = true
 gloo-timers = { version = "0.4", features = ["futures"] }
 js-sys = "0.3"

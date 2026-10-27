@@ -11,7 +11,8 @@
     "panel:spike:serve": "bun scripts/build-panel-spike.ts --serve",
     "panel:tabs:build": "bun scripts/build-panel-tabs.mjs",
     "panel:tabs:report": "bun scripts/panel-tabs-report.mjs",
-    "panel:tabs:test": "node --test tests/panel-build.test.mjs"
+    "panel:tabs:test": "node --test tests/panel-build.test.mjs",
+    "panel:tabs:protocol:test": "node tests/panel-terminal-protocol.test.mjs"
   },
   "keywords": [],
   "author": "",
