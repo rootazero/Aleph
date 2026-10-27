@@ -7,7 +7,8 @@ use crate::capability::descriptor::{
     ServiceRelation,
 };
 use crate::capability::ownership::{
-    BindingValidationError, LifetimeScope, OwnerGeneration, OwnerRef, VisibilityScope,
+    BindingValidationError, LifetimeScope, OwnerGeneration, OwnerRef, OwnershipTree,
+    VisibilityScope,
 };
 use crate::capability::provider::{ProviderCallError, ProviderHandle, ProviderLifecycleError};
 use crate::sync_primitives::Arc;
@@ -240,6 +241,7 @@ fn session_value(session: &SessionKey) -> Value {
 #[derive(Default)]
 pub(super) struct EntryRuntime {
     pub(super) operation: Option<Arc<()>>,
+    pub(super) retiring: bool,
     pub(super) driver: Option<tokio::task::JoinHandle<()>>,
     pub(super) active_work: usize,
     pub(super) executions: Vec<tokio::task::JoinHandle<()>>,
@@ -299,6 +301,9 @@ impl super::ChannelRegistry {
             || canonical_descriptor_fingerprint(&capture.descriptor) != bound.descriptor_fingerprint
         {
             return Err(ChannelBindingError::StaleDescriptor);
+        }
+        if current.runtime.lock().unwrap().retiring {
+            return Err(ChannelBindingError::Retiring);
         }
         Ok(())
     }
@@ -432,44 +437,52 @@ impl super::ChannelRegistry {
                 &observation.capture.descriptor.id.name,
             ))
             .cloned();
-        let validation = current
-            .as_ref()
-            .ok_or(ChannelBindingError::NotFound)
-            .and_then(|current| self.validate_bound_capture(&observation.capture, current));
         let mut handoff = Some((result, sender));
-        let accepted = validation.and_then(|()| {
+        let accepted = if !Arc::ptr_eq(&self.source, &observation.capture.source) {
+            Err(ChannelBindingError::WrongSource)
+        } else {
             let super::ChannelRegistration::Bound(bound) = &original.registration else {
                 unreachable!()
             };
-            bound
-                .ownership
-                .with_current_binding(
-                    &bound.descriptor.id,
-                    &observation.visibility,
-                    observation.owner_generation,
-                    &bound.contract.owner,
-                    &bound.contract.lifetime,
-                    || {
-                        bound.provider.with_admitted_completion(
-                            observation.capture.provider_generation,
-                            || {
-                                let mut runtime = original
-                                    .runtime
-                                    .lock()
-                                    .expect("channel runtime mutex poisoned");
-                                runtime.active_work = runtime
-                                    .active_work
-                                    .checked_sub(1)
-                                    .expect("live original ticket");
-                                let (result, sender) =
-                                    handoff.take().expect("one completion handoff");
-                                let _ = sender.send(BoundCompletion::Accepted(result));
-                            },
-                        )
-                    },
-                )?
+            let ownership_result = bound.ownership.with_current_binding(
+                &bound.descriptor.id,
+                &observation.visibility,
+                observation.owner_generation,
+                &bound.contract.owner,
+                &bound.contract.lifetime,
+                || {
+                    bound
+                        .provider
+                        .with_admitted_completion(observation.capture.provider_generation, || {
+                            let Some(current) = current.as_ref() else {
+                                return Err(ChannelBindingError::NotFound);
+                            };
+                            if !Arc::ptr_eq(current, original) {
+                                return Err(ChannelBindingError::StaleEntry);
+                            }
+                            let mut runtime = original
+                                .runtime
+                                .lock()
+                                .expect("channel runtime mutex poisoned");
+                            if runtime.retiring {
+                                return Err(ChannelBindingError::Retiring);
+                            }
+                            runtime.active_work = runtime
+                                .active_work
+                                .checked_sub(1)
+                                .expect("live original ticket");
+                            let (result, sender) = handoff.take().expect("one completion handoff");
+                            let _ = sender.send(BoundCompletion::Accepted(result));
+                            Ok(())
+                        })
+                        .map_err(ChannelBindingError::from)
+                        .and_then(|result| result)
+                },
+            );
+            ownership_result
                 .map_err(ChannelBindingError::from)
-        });
+                .and_then(|result| result)
+        };
         if let Err(error) = accepted {
             let mut runtime = original
                 .runtime
@@ -485,6 +498,233 @@ impl super::ChannelRegistry {
             let _ = sender.send(BoundCompletion::DiscardedStale(error));
         }
         original.drained.notify_waiters();
+    }
+
+    pub(crate) async fn replace_bound_channel(
+        self: &Arc<Self>,
+        channel_id: &super::ChannelId,
+        channel: Box<dyn super::Channel>,
+        contract: ChannelLifecycleContract,
+        ownership: Arc<OwnershipTree>,
+        initial: ChannelInitialState,
+    ) -> Result<super::ChannelId, ChannelBindingError> {
+        let candidate_id = channel.id().clone();
+        if candidate_id != *channel_id {
+            return Err(ChannelBindingError::InvalidContract);
+        }
+        let preflight_revision = self.next_bound_revision()?;
+        let candidate =
+            self.prepare_bound_entry(channel, contract, ownership, initial, preflight_revision)?;
+        let incumbent = self.begin_bound_retirement(channel_id).await?;
+        let (receiver, marker) = self.spawn_bound_retirement(&incumbent).await?;
+        self.await_bound_retirement(&incumbent, receiver).await?;
+        self.commit_bound_replacement(channel_id, incumbent, marker, candidate)
+            .await
+    }
+
+    pub(crate) async fn unregister_bound_channel(
+        self: &Arc<Self>,
+        channel_id: &super::ChannelId,
+    ) -> Result<(), ChannelBindingError> {
+        let _ = self.next_bound_revision()?;
+        let incumbent = self.begin_bound_retirement(channel_id).await?;
+        let (receiver, marker) = self.spawn_bound_retirement(&incumbent).await?;
+        self.await_bound_retirement(&incumbent, receiver).await?;
+        self.commit_bound_unregistration(channel_id, incumbent, marker)
+            .await
+    }
+
+    fn next_bound_revision(&self) -> Result<u64, ChannelBindingError> {
+        self.source_revision
+            .load(std::sync::atomic::Ordering::Relaxed)
+            .checked_add(1)
+            .ok_or(ChannelBindingError::PublicationExhausted)
+    }
+
+    async fn begin_bound_retirement(
+        &self,
+        id: &super::ChannelId,
+    ) -> Result<Arc<ChannelRegistrationEntry>, ChannelBindingError> {
+        use crate::capability::provider::ProviderState;
+        use futures::FutureExt;
+        let _source = self.lifecycle_sync.lock().await;
+        let entry = self
+            .channels
+            .read()
+            .await
+            .get(id)
+            .cloned()
+            .ok_or(ChannelBindingError::NotFound)?;
+        let super::ChannelRegistration::Bound(bound) = &entry.registration else {
+            return Err(ChannelBindingError::UnboundLegacy);
+        };
+        let _ = self.next_bound_revision()?;
+        {
+            let mut runtime = entry
+                .runtime
+                .lock()
+                .expect("channel runtime mutex poisoned");
+            if let Some(driver) = &mut runtime.driver {
+                match driver.now_or_never() {
+                    Some(Ok(())) => runtime.driver = None,
+                    Some(Err(_)) => return Err(ChannelBindingError::Busy),
+                    None => return Err(ChannelBindingError::Busy),
+                }
+            }
+            if runtime.operation.is_some() {
+                return Err(ChannelBindingError::Busy);
+            }
+            let state = bound.provider.state();
+            if matches!(state, ProviderState::Ready | ProviderState::Starting) {
+                bound.provider.transition(ProviderState::Stopping)?;
+            }
+            runtime.operation = Some(Arc::new(()));
+            runtime.retiring = true;
+            runtime.residual.transport_may_be_live = matches!(
+                state,
+                ProviderState::Ready | ProviderState::Starting | ProviderState::Stopping
+            ) || runtime.forwarder.is_some();
+        }
+        self.desired_state
+            .write()
+            .await
+            .insert(id.clone(), super::DesiredChannelState::Stopped);
+        Ok(entry)
+    }
+
+    async fn spawn_bound_retirement(
+        self: &Arc<Self>,
+        entry: &Arc<ChannelRegistrationEntry>,
+    ) -> Result<
+        (
+            tokio::sync::oneshot::Receiver<Result<(), ChannelBindingError>>,
+            Arc<()>,
+        ),
+        ChannelBindingError,
+    > {
+        let marker = entry
+            .runtime
+            .lock()
+            .expect("channel runtime mutex poisoned")
+            .operation
+            .clone()
+            .ok_or(ChannelBindingError::Busy)?;
+        let (sender, receiver) = tokio::sync::oneshot::channel();
+        let source = self.clone();
+        let original = entry.clone();
+        let driver_marker = marker.clone();
+        let driver = tokio::spawn(async move {
+            let result = source.drain_bound(&original, &driver_marker, true).await;
+            let _ = sender.send(result);
+        });
+        entry.runtime.lock().unwrap().driver = Some(driver);
+        Ok((receiver, marker))
+    }
+
+    async fn await_bound_retirement(
+        &self,
+        entry: &Arc<ChannelRegistrationEntry>,
+        receiver: tokio::sync::oneshot::Receiver<Result<(), ChannelBindingError>>,
+    ) -> Result<(), ChannelBindingError> {
+        let result = receiver.await.map_err(|_| ChannelBindingError::Runtime {
+            phase: ChannelRuntimePhase::Stop,
+            error: "retirement driver dropped before reporting cleanup".into(),
+            residual: entry.runtime.lock().unwrap().residual.clone(),
+        })?;
+        let driver = entry.runtime.lock().unwrap().driver.take();
+        if let Some(driver) = driver {
+            if let Err(error) = driver.await {
+                return Err(self.bound_cleanup_error(entry, error.to_string()));
+            }
+        }
+        result
+    }
+
+    async fn commit_bound_replacement(
+        &self,
+        id: &super::ChannelId,
+        incumbent: Arc<ChannelRegistrationEntry>,
+        marker: Arc<()>,
+        mut candidate: Arc<ChannelRegistrationEntry>,
+    ) -> Result<super::ChannelId, ChannelBindingError> {
+        let _source = self.lifecycle_sync.lock().await;
+        let current = self
+            .channels
+            .read()
+            .await
+            .get(id)
+            .cloned()
+            .ok_or(ChannelBindingError::NotFound)?;
+        if !Arc::ptr_eq(&current, &incumbent)
+            || !incumbent
+                .runtime
+                .lock()
+                .unwrap()
+                .operation
+                .as_ref()
+                .is_some_and(|active| Arc::ptr_eq(active, &marker))
+        {
+            return Err(ChannelBindingError::StaleEntry);
+        }
+        if incumbent.runtime.lock().unwrap().active_work != 0 {
+            return Err(ChannelBindingError::Busy);
+        }
+        let revision = self.next_bound_revision()?;
+        if let super::ChannelRegistration::Bound(bound) = &mut Arc::get_mut(&mut candidate)
+            .ok_or(ChannelBindingError::Busy)?
+            .registration
+        {
+            bound.entry_revision = revision;
+            bound.descriptor.revision = crate::capability::descriptor::CapabilityRevision(revision);
+            bound.descriptor_fingerprint = canonical_descriptor_fingerprint(&bound.descriptor);
+        } else {
+            return Err(ChannelBindingError::InvalidContract);
+        }
+        let mut channels = self.channels.write().await;
+        let mut desired = self.desired_state.write().await;
+        channels.insert(id.clone(), candidate);
+        desired.insert(id.clone(), super::DesiredChannelState::Stopped);
+        self.source_revision
+            .store(revision, std::sync::atomic::Ordering::Relaxed);
+        Ok(id.clone())
+    }
+
+    async fn commit_bound_unregistration(
+        &self,
+        id: &super::ChannelId,
+        incumbent: Arc<ChannelRegistrationEntry>,
+        marker: Arc<()>,
+    ) -> Result<(), ChannelBindingError> {
+        let _source = self.lifecycle_sync.lock().await;
+        let current = self
+            .channels
+            .read()
+            .await
+            .get(id)
+            .cloned()
+            .ok_or(ChannelBindingError::NotFound)?;
+        if !Arc::ptr_eq(&current, &incumbent)
+            || !incumbent
+                .runtime
+                .lock()
+                .unwrap()
+                .operation
+                .as_ref()
+                .is_some_and(|active| Arc::ptr_eq(active, &marker))
+        {
+            return Err(ChannelBindingError::StaleEntry);
+        }
+        if incumbent.runtime.lock().unwrap().active_work != 0 {
+            return Err(ChannelBindingError::Busy);
+        }
+        let revision = self.next_bound_revision()?;
+        let mut channels = self.channels.write().await;
+        let mut desired = self.desired_state.write().await;
+        channels.remove(id);
+        desired.remove(id);
+        self.source_revision
+            .store(revision, std::sync::atomic::Ordering::Relaxed);
+        Ok(())
     }
 
     pub(crate) async fn start_bound_channel(
@@ -682,7 +922,7 @@ impl super::ChannelRegistry {
         let source = self.clone();
         let original = entry.clone();
         runtime.driver = Some(tokio::spawn(async move {
-            let result = source.drain_bound(&original, &marker).await;
+            let result = source.drain_bound(&original, &marker, false).await;
             let _ = sender.send(result);
         }));
         Ok(receiver)
@@ -692,6 +932,7 @@ impl super::ChannelRegistry {
         &self,
         entry: &Arc<ChannelRegistrationEntry>,
         marker: &Arc<()>,
+        retiring: bool,
     ) -> Result<(), ChannelBindingError> {
         use crate::capability::provider::ProviderState;
         loop {
@@ -761,7 +1002,10 @@ impl super::ChannelRegistry {
             _ => {}
         }
         runtime.residual = ChannelCleanupResidual::default();
-        runtime.operation = None;
+        if !retiring {
+            runtime.operation = None;
+            runtime.retiring = false;
+        }
         Ok(())
     }
 

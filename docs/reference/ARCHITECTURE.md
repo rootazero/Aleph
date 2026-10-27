@@ -1036,7 +1036,17 @@ FEATURE_LOCATOR §1.2 for the distinction.
 
 ---
 
-## See Also
+
+
+## Gateway source-owned lifecycle boundary / Gateway source-owned 生命周期边界
+
+For the verified Stage B Generic Webhook/loopback composition, Gateway association remains in the existing `ChannelRegistry` map and entry. Entry-local runtime state records only retirement markers, admitted work, task/forwarder handles, and cleanup residuals. Provider instance/state/generation stays in `ProviderHandle`; owner/lifetime/generation and irreversible binding state stays in `OwnershipTree`. This is a bounded lifecycle proof, not a production mount or a claim that all externally composable capabilities have already migrated.
+
+对已验证的 Stage B Generic Webhook/loopback 组合，Gateway association 仍由既有 `ChannelRegistry` map 与 entry 持有。entry-local runtime state 只记录 retirement marker、admitted work、task/forwarder handle 与 cleanup residual。provider instance/state/generation 仍由 `ProviderHandle` 持有；owner/lifetime/generation 与不可逆 binding state 仍由 `OwnershipTree` 持有。这是受限生命周期证明，不是 production mount，也不表示所有 externally composable capability 已迁移。
+
+Retirement uses a short source-gate fence and final publication commit; real channel, transport, stop, close, forwarder, and join I/O stays outside the gate. Revision exhaustion fails closed before destructive retirement or final publication. R1 remains NO-GO/deferred pending the broader resource and compatibility evidence.
+
+retirement 使用短 source-gate fence 与最终 publication commit；真实 channel、transport、stop、close、forwarder 和 join I/O 均在 gate 外执行。revision exhaustion 在 destructive retirement 或最终 publication 前 fail-closed。R1 仍为 NO-GO/deferred，等待更广泛的 resource 与 compatibility 证据。
 
 - [Agent System](AGENT_SYSTEM.md) - Agent loop internals
 - [Gateway](GATEWAY.md) - WebSocket protocol and RPC methods

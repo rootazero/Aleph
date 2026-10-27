@@ -77,7 +77,17 @@ Gateway owns CDP; Panel/TUI are I/O only; opt-in only for an explicit valid `[ga
 
 ---
 
-## Feature Flags / 提交规范 / 进程管理
+
+
+## Gateway Stage B verification record / Gateway Stage B 验证记录
+
+The source-owned Bound retirement slice is verified with the following focused gates: `cargo test -p alephcore --lib gateway::channel_registry::tests::`, `cargo test -p alephcore --lib gateway::channel_registry::binding::tests::`, `cargo test -p alephcore --lib gateway::interfaces::webhook::`, `cargo test -p alephcore --lib capability::`, `cargo check -p alephcore --tests`, `cargo clippy -p alephcore --tests -- -D warnings`, `cargo fmt --all --check`, and `git diff --check`. Run `python qa/browser_live/check_memory.py` before every cargo invocation. Exact counts, RED evidence, the known nonfatal macOS linker warning, review unavailability, skipped checks, and deferred scope are recorded in [`docs/superpowers/runs/2026-10-27-gateway-bound-retirement-run.md`](../superpowers/runs/2026-10-27-gateway-bound-retirement-run.md).
+
+source-owned Bound retirement slice 已通过以下 focused gates：registry、binding、Webhook、capability 测试，`cargo check`、`cargo clippy`、`cargo fmt --check` 与 `git diff --check`。每次 cargo invocation 前运行 `python qa/browser_live/check_memory.py`。完整数量、RED 证据、已知非致命 macOS linker warning、review 不可用、跳过的检查与 deferred 范围记录于 [`docs/superpowers/runs/2026-10-27-gateway-bound-retirement-run.md`](../superpowers/runs/2026-10-27-gateway-bound-retirement-run.md)。
+
+This record does not replace the broader workspace verification set. Stage C compatibility closure, Stage D resource matrices, production mount/ingress, and R1 GO assessment remain separate gates.
+
+该记录不替代更广泛的 workspace verification set。Stage C compatibility closure、Stage D resource matrices、production mount/ingress 与 R1 GO assessment 仍是独立 gate。
 
 - 所有生产功能始终编译，无需 feature flags。仅保留测试用：`loom`（并发）、`test-helpers`（集成测试工具）。
 - English commit messages，格式 `<scope>: <description>`（例：`gateway: add WebSocket server foundation`）。**单分支开发**：所有工作直接在 main。`EnterWorktree` 会话内只合并不删除（同会话 `git worktree remove` 会损坏 Shell）→ [CODE_ORGANIZATION.md](docs/reference/CODE_ORGANIZATION.md)

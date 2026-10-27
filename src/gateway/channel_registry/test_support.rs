@@ -1,6 +1,6 @@
 //! Per-instance observations of actual operations, never production authority.
 use super::super::channel::{
-    Channel, ChannelInfo, ChannelResult, ChannelState, OutboundMessage, SendResult,
+    Channel, ChannelError, ChannelInfo, ChannelResult, ChannelState, OutboundMessage, SendResult,
 };
 use crate::gateway::interfaces::webhook::WebhookChannel;
 use crate::sync_primitives::{Arc, Mutex};
@@ -39,6 +39,45 @@ impl Channel for HeldWebhook {
             let _ = block.release.await;
         }
         self.channel.stop().await
+    }
+    async fn send(&self, message: OutboundMessage) -> ChannelResult<SendResult> {
+        self.channel.send(message).await
+    }
+}
+
+pub(super) struct FailingStopWebhook {
+    channel: WebhookChannel,
+}
+
+impl FailingStopWebhook {
+    pub(super) fn new(id: &str, callback_url: String, probe: ResourceProbe) -> Self {
+        Self {
+            channel: WebhookChannel::observed(
+                id,
+                crate::gateway::interfaces::webhook::WebhookChannelConfig {
+                    secret: "test-secret".into(),
+                    callback_url,
+                    ..Default::default()
+                },
+                probe,
+            ),
+        }
+    }
+}
+
+#[async_trait]
+impl Channel for FailingStopWebhook {
+    fn info(&self) -> &ChannelInfo {
+        self.channel.info()
+    }
+    fn state(&self) -> &ChannelState {
+        self.channel.state()
+    }
+    async fn start(&mut self) -> ChannelResult<()> {
+        self.channel.start().await
+    }
+    async fn stop(&mut self) -> ChannelResult<()> {
+        Err(ChannelError::Internal("injected stop failure".into()))
     }
     async fn send(&self, message: OutboundMessage) -> ChannelResult<SendResult> {
         self.channel.send(message).await

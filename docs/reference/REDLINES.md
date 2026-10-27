@@ -38,4 +38,14 @@
 - **非 serde 的序列化栈** —— 全栈 serde
 - **第二个 VT / 终端模拟器实现**——服务端 VT 的唯一真源是 `src/gateway/pty/screen/`；新增终端能力一律**扩容它**，不引第二份（判据 §1「同一事实的两份表述」）
 - **第二个 CDP 客户端实现**（`chromiumoxide` / `headless_chrome` / 在 `src/browser/` 里再手写一份）—— 唯一真源是 **`crates/aleph-cdp`**（零 Aleph 依赖的传输层：一条连接、多 session、逐命令超时、断连时把全部 pending 一次性失败）。两个引擎、每一个 `browser_*` 动词、`page_state` 的两个 fetcher 全走它；缺方法就**给它加一个 `methods::` 包装**，不引第二份（2026-09-06；判据 §1）
-- **第二个 MCP server 实现**（在 `src/gateway/` 之外再挂一个 `/mcp`、或在 `src/mcp/` 里造一套 server 侧类型）—— 唯一真源是 **`src/gateway/mcp_face/`**（一张接口脸：Streamable HTTP `/mcp`、`tools/*` + `list_changed`，把 `tools/call` 翻成同一条 scoped dispatch），**wire 类型来自 `src/mcp/{jsonrpc,protocol,types}.rs`，不复制**；stdio 传输刻意不做（宿主 spawn 第二个 `aleph-server` 会撞单例 flock）（2026-09-20；判据 §1）→ [GATEWAY.md](docs/reference/GATEWAY.md) MCP 面
+
+
+## Gateway lifecycle authority constraint / Gateway lifecycle authority 约束
+
+The verified Stage B Gateway slice must continue to use the existing `ChannelRegistry` map/entry as its association authority. Entry-local retirement markers and cleanup residuals are allowed as source-owned execution bookkeeping; they do not authorize a second registry, owner map, descriptor catalog, runtime table, generalized envelope, or new `CapabilityKind`. Provider generation remains in `ProviderHandle`, and ownership/lifetime/generation remains in `OwnershipTree`.
+
+已验证的 Stage B Gateway 切片必须继续使用既有 `ChannelRegistry` map/entry 作为 association authority。允许使用 entry-local retirement marker 与 cleanup residual 作为 source-owned execution bookkeeping；这不授权新增第二 registry、owner map、descriptor catalog、runtime table、generalized envelope 或新的 `CapabilityKind`。provider generation 仍在 `ProviderHandle`，ownership/lifetime/generation 仍在 `OwnershipTree`。
+
+Retirement and replacement must keep real channel/transport/stop/close/join I/O outside the source gate and must fail closed on revision exhaustion before destructive mutation. The bounded Generic Webhook/loopback evidence does not authorize Feishu/R2, production mount or Zahir routing, public Bound ingress/send, durable recovery, Safe Replay, EffectClaim producers, or universal scheduling.
+
+retirement 与 replacement 必须将真实 channel/transport/stop/close/join I/O 保持在 source gate 外，并在 revision exhaustion 时于 destructive mutation 前 fail-closed。受限 Generic Webhook/loopback 证据不授权 Feishu/R2、production mount 或 Zahir routing、public Bound ingress/send、durable recovery、Safe Replay、EffectClaim producer 或 universal scheduling。

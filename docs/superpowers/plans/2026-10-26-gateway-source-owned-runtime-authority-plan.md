@@ -4,7 +4,7 @@
 
 **Design / 设计：**[architecture addendum](../specs/2026-10-26-gateway-source-owned-runtime-authority-design.md).
 
-**Status / 状态：**架构扩展已获授权；Stage A bounded Generic Webhook/loopback slice is implemented and committed as `02555b5f1 feat(gateway): own bound channel execution lifecycle`. Stage B–E remain open, and R1 remains separately assessed as NO-GO/deferred until the remaining compatibility/resource evidence is complete.
+**Status / 状态：**架构扩展已获授权；Stage A bounded Generic Webhook/loopback slice and Stage B Bound retirement/replacement/unregister slice are implemented and recorded. Stage C–E remain open, and R1 remains separately assessed as NO-GO/deferred until the remaining compatibility/resource evidence is complete.
 
 ## 1. Starting point and execution contract / 起点与执行契约
 
@@ -71,14 +71,14 @@ cargo check -p alephcore --tests
 
 **Files / 范围：**registry, binding and test_support only. Consume Stage A work ownership; do not retrofit provider or tree state mirrors.
 
-- [ ] Write `bound_retirement_discards_original_completion`, `bound_replace_publishes_whole_tuple`, `bound_unregister_waits_for_cleanup`, `bound_contract_update_retires_old_publication`, `bound_failed_cleanup_retains_incumbent`, `bound_revision_exhaustion_never_half_publishes` before changing behavior. Use held actual requests plus capture barriers; test both completion-before-retirement and retirement-before-completion.
-- [ ] Prepare successor privately and validate checked source revision capacity before destructive retirement. Under source gate install marker and retire incumbent; new work and old acceptance must fail immediately. Release gates for original drain/real stop/close/join.
-- [ ] Full drain must exclude any still-running original request before successor publication. Delay caller observation of an already-settled result past publication to test stale-result noninterference; do not forge duplicate work tickets to simulate impossible live transport after full drain.
-- [ ] After cleanup, acquire publication locks/revalidate marker before first mutation, then atomically publish entire successor/intent/revision or remove incumbent without await. Same textual ID/new provider instance and contract-only new publication both invalidate old proof; unrelated entry publication does not.
-- [ ] On failure preserve incumbent identity and honest residual, never publish successor or automatically Ready. Mount metadata may remain but dispatch is fenced. Already closed resources are not resurrected. Explicit same-entry cleanup retry is allowed only after prior operation driver quiesces.
-- [ ] Test preflight exhaustion causes no teardown; test another ID consuming capacity during unlocked cleanup causes final PublicationExhausted with stopped incumbent still present, no successor/removal and no wrap. Apply checked prepublication behavior to legacy map mutations touched by the shared publication mechanism.
-- [ ] Keep legacy ID/Option compatibility wrappers explicit: they cannot report authoritative Bound success. Reject legacy replacement/unregister of Bound incumbents unless routed through the same explicit Result operation. Bound takeover of Legacy rejects when quiescence cannot be proven; never wrap an already-running legacy channel with a Ready provider.
-- [ ] Re-run registry/binding focused suites, `cargo check -p alephcore --tests`, review old entry handoff/mount/accounting cannot reach successor. Suggested commit: `feat(gateway): retire bound runtime publications safely`.
+- [x] Write `bound_retirement_discards_original_completion`, `bound_replace_publishes_whole_tuple`, `bound_unregister_waits_for_cleanup`, `bound_contract_update_retires_old_publication`, `bound_failed_cleanup_retains_incumbent`, `bound_revision_exhaustion_never_half_publishes` before changing behavior. Use held actual requests plus capture barriers; test both completion-before-retirement and retirement-before-completion.
+- [x] Prepare successor privately and validate checked source revision capacity before destructive retirement. Under source gate install marker and retire incumbent; new work and old acceptance must fail immediately. Release gates for original drain/real stop/close/join.
+- [x] Full drain must exclude any still-running original request before successor publication. Delay caller observation of an already-settled result past publication to test stale-result noninterference; do not forge duplicate work tickets to simulate impossible live transport after full drain.
+- [x] After cleanup, acquire publication locks/revalidate marker before first mutation, then atomically publish entire successor/intent/revision or remove incumbent without await. Same textual ID/new provider instance and contract-only new publication both invalidate old proof; unrelated entry publication does not.
+- [x] On failure preserve incumbent identity and honest residual, never publish successor or automatically Ready. Mount metadata may remain but dispatch is fenced. Already closed resources are not resurrected. Explicit same-entry cleanup retry is allowed only after prior operation driver quiesces.
+- [x] Test preflight exhaustion causes no teardown; test another ID consuming capacity during unlocked cleanup causes final PublicationExhausted with stopped incumbent still present, no successor/removal and no wrap. Apply checked prepublication behavior to legacy map mutations touched by the shared publication mechanism.
+- [x] Keep legacy ID/Option compatibility wrappers explicit: they cannot report authoritative Bound success. Reject legacy replacement/unregister of Bound incumbents unless routed through the same explicit Result operation. Bound takeover of Legacy rejects when quiescence cannot be proven; never wrap an already-running legacy channel with a Ready provider.
+- [x] Re-run registry/binding focused suites, `cargo check -p alephcore --tests`, review old entry handoff/mount/accounting cannot reach successor. Suggested commit: `feat(gateway): retire bound runtime publications safely`.
 
 ## 4. Stage C — Compatibility closure / 兼容闭环
 
@@ -159,4 +159,14 @@ The bounded slice uses the existing `ChannelRegistry` entry/map as the only Gate
 
 Recorded verification: `cargo fmt --all --check`, `git diff --check`, `cargo check -p alephcore --tests`, and `cargo clippy -p alephcore --tests -- -D warnings` passed. `cargo test -p alephcore --lib gateway::channel_registry::tests::` passed 54/54, and `cargo test -p alephcore --lib capability::` passed 222/222. The mixed Legacy/Bound test covers start, stop, restart, start-all, factory, replacement, create-replace and unregister progress. Only the non-fatal macOS linker warning `__eh_frame section too large (max 16MB)` appeared. An external reviewer was unavailable because the ACP proxy circuit was open; manual review found no forbidden Feishu, second-registry, new-kind, scheduler, or durable-recovery changes.
 
-已记录验证：fmt、diff、check、clippy 全部通过；gateway filter 54/54，capability filter 222/222。mixed Legacy/Bound 测试覆盖 start、stop、restart、start-all、factory、replacement、create-replace、unregister 的进展。仅出现非致命 macOS linker warning `__eh_frame section too large (max 16MB)`。外部 reviewer 因 ACP proxy circuit open 不可用；手工审阅未发现 Feishu、第二 registry、新 CapabilityKind、scheduler 或 durable recovery 变更。
+
+
+## Stage B evidence addendum / Stage B 证据补充
+
+Stage B is implemented and verified only for the source-private Generic Webhook/loopback test composition. `ChannelRegistry` remains the sole Gateway association authority; `EntryRuntime` owns only entry-local retirement markers, admitted-work accounting, drivers, forwarders, and residuals. `ProviderHandle` remains the provider instance/state/generation authority, and `OwnershipTree` remains the owner/lifetime/generation authority. No second registry, owner map, descriptor catalog, CapabilityKind, production mount, Zahir route, or public Bound operation was added.
+
+Stage B 仅在 source-private Generic Webhook/loopback 测试组合上完成并验证。`ChannelRegistry` 仍是 Gateway 唯一 association authority；`EntryRuntime` 只拥有 entry-local retirement marker、admitted-work accounting、driver、forwarder 和 residual。`ProviderHandle` 仍是 provider instance/state/generation authority，`OwnershipTree` 仍是 owner/lifetime/generation authority。没有新增第二 registry、owner map、descriptor catalog、CapabilityKind、production mount、Zahir route 或 public Bound operation。
+
+The six required tests are GREEN: `bound_retirement_discards_original_completion`, `bound_replace_publishes_whole_tuple`, `bound_unregister_waits_for_cleanup`, `bound_contract_update_retires_old_publication`, `bound_failed_cleanup_retains_incumbent`, and `bound_revision_exhaustion_never_half_publishes`. The detailed bilingual command ledger is [`docs/superpowers/runs/2026-10-27-gateway-bound-retirement-run.md`](../runs/2026-10-27-gateway-bound-retirement-run.md). R1 remains NO-GO/deferred and all later stages remain open.
+
+六个必需测试均 GREEN：上述 retirement、replacement、unregister、contract update、cleanup failure 和 revision exhaustion 测试。完整双语命令 ledger 见 [`docs/superpowers/runs/2026-10-27-gateway-bound-retirement-run.md`](../runs/2026-10-27-gateway-bound-retirement-run.md)。R1 仍为 NO-GO/deferred，后续阶段仍保持 open。
