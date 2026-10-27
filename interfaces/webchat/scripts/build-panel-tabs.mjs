@@ -10,6 +10,9 @@ const outputArg = args.find((arg) => arg.startsWith('--output='))?.slice('--outp
 const output = resolve(panel, outputArg ?? '.panel-tabs');
 const entryPrefix = './tabs/terminal/';
 const profile = 'wasm-release';
+const hostCwd = join(panel);
+const terminalCwd = join(panel, 'tabs/terminal');
+const memoryGate = process.env.PANEL_MEMORY_GATE ?? join(root, 'qa/browser_live/check_memory.py');
 
 if (args.some((arg) => arg !== '--clean' && !arg.startsWith('--output='))) {
   throw Error('Usage: bun scripts/build-panel-tabs.mjs [--clean] [--output=<dir>]');
@@ -17,13 +20,19 @@ if (args.some((arg) => arg !== '--clean' && !arg.startsWith('--output='))) {
 
 const run = async (command, cwd = root, env = process.env) => {
   console.log(`$ ${command.join(' ')}`);
+  if (command[0] === 'cargo') {
+    await run(['python', memoryGate], root, env);
+  }
   const result = Bun.spawn(command, { cwd, env, stdin: 'ignore', stdout: 'inherit', stderr: 'inherit' });
   const exitCode = await result.exited;
   if (exitCode !== 0) throw Error(`Command exited ${exitCode}: ${command.join(' ')}`);
 };
 
-const capture = async (command) => {
-  const result = Bun.spawn(command, { cwd: root, stdout: 'pipe', stderr: 'inherit' });
+const capture = async (command, cwd = root, env = process.env) => {
+  if (command[0] === 'cargo') {
+    await run(['python', memoryGate], root, env);
+  }
+  const result = Bun.spawn(command, { cwd, env, stdout: 'pipe', stderr: 'inherit' });
   const value = await new Response(result.stdout).text();
   const exitCode = await result.exited;
   if (exitCode !== 0) throw Error(`Command exited ${exitCode}: ${command.join(' ')}`);
@@ -98,7 +107,7 @@ const terminalWasm = join(output, 'target/wasm32-unknown-unknown', profile, 'pan
 await run([
   'cargo', 'build', '--locked', '-p', 'aleph-panel', '--lib', '--no-default-features',
   '--features', 'panel-modular', '--profile', profile, '--target', 'wasm32-unknown-unknown',
-], root, env);
+], hostCwd, env);
 await run([
   'wasm-bindgen', '--target', 'web', '--no-typescript', '--out-dir', output, '--out-name', 'aleph_panel', hostWasm,
 ], root, env);
@@ -110,7 +119,7 @@ await rm(join(output, 'aleph_panel_bg.optimized.wasm'), { force: true });
 await run([
   'cargo', 'build', '--locked', '-p', 'panel-tab-terminal', '--lib', '--no-default-features',
   '--profile', profile, '--target', 'wasm32-unknown-unknown',
-], root, env);
+], terminalCwd, env);
 await run([
   'wasm-bindgen', '--target', 'web', '--no-typescript', '--out-dir', join(output, `tabs/terminal/${buildId}`),
   '--out-name', 'terminal', terminalWasm,
@@ -155,7 +164,7 @@ for (const [name, packageName, features] of [
   const tree = await capture([
     'cargo', 'tree', '--locked', '-p', packageName, '--target', 'wasm32-unknown-unknown', ...features,
     '-e', 'normal', '--prefix', 'none', '--format', '{p}',
-  ]);
+  ], packageName === 'aleph-panel' ? hostCwd : terminalCwd);
   await writeFile(join(output, `${name}-dependencies.txt`), tree + '\n');
 }
 await writeFile(join(output, 'build.json'), JSON.stringify({

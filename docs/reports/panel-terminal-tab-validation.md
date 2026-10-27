@@ -2,13 +2,13 @@
 
 ## Scope / 范围
 
-This report closes the executable part of Terminal Tab Task 6 from the `terminal-live` worktree. It records deterministic browser protocol evidence, same-condition legacy/modular measurements, unlink evidence, runtime lifetime rules, and the live Gateway preflight result.
+This report records the bounded Terminal host acceptance follow-up from the `terminal-host` worktree. It keeps the earlier modular migration measurements and deterministic protocol evidence, then adds production-host/wire evidence through the staged host WASM, real `PanelShell`/`PanelSdk`, versioned terminal module, and a loopback Gateway-shaped HTTP/WS fixture. Real Gateway parity remains a separate disposition.
 
-本报告收口 `terminal-live` worktree 中 Terminal Tab Task 6 的可执行部分，记录确定性浏览器协议证据、同条件 legacy/modular 测量、去链接证据、运行时生命周期规则以及真实 Gateway 前置检查结果。
+本报告记录 `terminal-host` worktree 中 Terminal host acceptance 的有界后续工作。它保留此前模块化迁移的测量与确定性协议证据，并新增通过 staged host WASM、真实 `PanelShell`/`PanelSdk`、版本化 terminal module 以及 loopback Gateway 形状 HTTP/WS fixture 的 production-host/wire 证据。真实 Gateway parity 仍单独记录结论。
 
-The migration baseline is `63623f160` (`merge(panel): integrate terminal tab migration`). The current validation worktree was based on `7dd19dae35222e6be90a1e295196a562852ce9d5` (`main` matched `origin/main` at preflight). The default legacy build remains the rollback path; `panel-modular` remains opt-in.
+The current validation branch starts at `8b8a70385` (`docs(panel): plan terminal host acceptance`), matching `origin/main` at worktree creation. The default legacy build remains the rollback path; `panel-modular` remains opt-in.
 
-迁移基线为 `63623f160`（`merge(panel): integrate terminal tab migration`）。本次验收 worktree 从 `7dd19dae35222e6be90a1e295196a562852ce9d5` 创建（preflight 时 `main` 与 `origin/main` 一致）。默认 legacy 构建仍是回退路径；`panel-modular` 仍为 opt-in。
+当前验收分支从 `8b8a70385`（`docs(panel): plan terminal host acceptance`）开始，创建 worktree 时与 `origin/main` 一致。默认 legacy 构建仍是回退路径；`panel-modular` 仍为 opt-in。
 
 ## Deterministic browser protocol fixture / 确定性浏览器协议 fixture
 
@@ -21,9 +21,9 @@ cd interfaces/webchat
 node tests/panel-terminal-protocol.test.mjs
 ```
 
-Result: passed for both `/` and `/panel/` public bases. The fixture serves and loads the final `.panel-tabs` entry `./tabs/terminal/6eee99342a6bf331/terminal.js` and its `terminal_bg.wasm`; it does not use the old pilot artifact.
+Result: passed for both `/` and `/panel/` public bases. The fixture serves and loads the final `.panel-tabs` entry `./tabs/terminal/ff172f356de7e061/terminal.js` and its `terminal_bg.wasm`; it does not use the old pilot artifact.
 
-结果：root `/` 与 `/panel/` 两种 public base 均通过。fixture 从最终 `.panel-tabs` staging 资产加载 `./tabs/terminal/6eee99342a6bf331/terminal.js` 和 `terminal_bg.wasm`，没有使用旧 pilot artifact。
+结果：root `/` 与 `/panel/` 两种 public base 均通过。fixture 从最终 `.panel-tabs` staging 资产加载 `./tabs/terminal/ff172f356de7e061/terminal.js` 和 `terminal_bg.wasm`，没有使用旧 pilot artifact。
 
 The protocol fixture asserts observable screen state and recorded host RPC/subscription events:
 
@@ -47,13 +47,36 @@ fixture 断言可见屏幕状态以及 host RPC/订阅事件：
 - UI teardown 不调用 `pty.close`；本 fixture 没有需要关闭的真实 disposable PTY。
 - terminal operation 缺失或被拒绝只影响 Terminal surface，Chat 与 Settings 仍可导航。
 
+The protocol fixture now reports named scenarios covering Chat/Settings navigation, staged module reuse, exact PTY topics, sequence-gap recovery, selected-session exit transfer, empty-list spawn/attach, UTF-8 and bracketed paste, native Canvas `fillText`, wrong-topic no-op, post-baseline resize, connection-epoch recovery, late-result teardown fencing, and denied `pty.list` without spawn.
+
+protocol fixture 现在报告具名场景，覆盖 Chat/Settings 导航、staged module 复用、exact PTY topics、sequence-gap recovery、selected-session exit 转移、空列表 spawn/attach、UTF-8 与 bracketed paste、Canvas 原生 `fillText`、wrong-topic no-op、baseline 后 resize、connection epoch recovery、迟到结果 teardown fencing，以及拒绝 `pty.list` 不 spawn。
+
 This is protocol-fixture evidence. It uses the real Panel loader, generated terminal JS/WASM and browser DOM, with a test-local host SDK transport. It is not live Gateway evidence.
 
 这是 protocol-fixture evidence：它使用真实 Panel loader、生成的 terminal JS/WASM 和浏览器 DOM，host SDK transport 只在测试边界内提供。它不等价于 live Gateway evidence。
 
+## Production host and wire fixture / Production host 与 wire fixture
+
+Fixture: `interfaces/webchat/tests/panel-terminal-host.test.mjs`.
+
+Command:
+
+```text
+cd interfaces/webchat
+node tests/panel-terminal-host.test.mjs
+```
+
+Result: passed for the production `/terminal` route. The fixture serves the final `.panel-tabs/index.html` and runs the real host WASM/Router/Shell/PanelSdk path. It loads `/aleph_panel.js`, `/aleph_panel_bg.wasm`, `/panel_loader.js`, and the versioned terminal JS/WASM, validates the PTY subscription topics, the `pty.list`/`pty.attach` session id, the `pty.resize` session and positive geometry, and the `pty.input` session/base64 flag/`Aw==` Ctrl-C payload, and observes Canvas output from loopback WebSocket PTY events. The deterministic component fixture separately covers `/` and `/panel/` public bases. The loopback fixture still does not validate authentication or the full Gateway schema.
+
+结果：production `/terminal` route 通过。fixture 提供最终 `.panel-tabs/index.html`，运行真实 host WASM/Router/Shell/PanelSdk 路径；加载 `/aleph_panel.js`、`/aleph_panel_bg.wasm`、`/panel_loader.js` 与版本化 terminal JS/WASM，校验 PTY subscription topic、`pty.list`/`pty.attach` 的 session id、`pty.resize` 的 session 与正数 geometry，以及 `pty.input` 的 session、base64 标记和 `Aw==` Ctrl-C payload，并观察 loopback WebSocket PTY event 驱动的 Canvas 输出。确定性 component fixture 另行覆盖 `/` 与 `/panel/` 两种 public base。loopback fixture 仍不验证认证或完整 Gateway schema。
+
+This proves production host boot and the wire-shaped transport through the real host/module boundary. It does not prove an external Gateway deployment or a real PTY process.
+
+这证明 production host boot 以及真实 host/module 边界上的 wire-shaped transport；它不证明外部 Gateway 部署或真实 PTY 进程。
+
 ## Gateway/live result / Gateway/live 结果
 
-Read-only preflight command:
+The loopback production-host fixture above is not a live Gateway run. The separate read-only Aleph discovery was:
 
 ```text
 opencode service status
@@ -65,12 +88,13 @@ Result:
 /usr/bin/bash: line 1: opencode: command not found
 ```
 
-Status: **BLOCKED**. No elected Gateway, private local credential, disposable project/session, or safe `dev:live` target was available. No service was installed, started, restarted, replaced, or stopped, and no existing PTY/session was touched.
+`opencode service status` only proves that the unrelated `opencode` command is unavailable in this shell; it does **not** prove that Aleph Gateway is unavailable. No Aleph Gateway was started, installed, restarted, replaced, or stopped, and no existing PTY/session was touched.
 
-状态：**BLOCKED**。环境没有 elected Gateway、私有 local credential、disposable project/session 或可安全复用的 `dev:live` target。本次没有安装、启动、重启、替换或停止任何 service，也没有接触已有 PTY/session。
+`opencode service status` 只能证明当前 shell 中无关的 `opencode` 命令不可用；它**不能**证明 Aleph Gateway 不存在。本次没有启动、安装、重启、替换或停止 Aleph Gateway，也没有接触已有 PTY/session。
 
-The following remain unverified because of this block:
+The real Gateway smoke test remains **BLOCKED** because this session did not have an authorized disposable Aleph Gateway/project/session target and credential. Therefore the following remain unverified:
 
+真实 Gateway smoke test 仍为 **BLOCKED**，因为本次没有可授权使用的 disposable Aleph Gateway/project/session target 与 credential。因此以下内容仍未验证：
 - real Panel host → SDK → terminal module → Gateway/WS PTY path;
 - marker, Unicode, bracketed paste, and resize against a real PTY;
 - same-session preservation after route changes;
@@ -124,13 +148,13 @@ modular 过滤结果包含 `aleph-panel` 与 `shared-ui-logic`，没有 `aleph-t
 
 2. Artifact/source inspection:
 
-- `FONT_PROBE_SENTINEL = "1px 'aleph-terminal-font-probe-sentinel'"` is defined by `interfaces/webchat/tabs/terminal-ui/src/render.rs` and the byte is present only in `.panel-tabs/tabs/terminal/6eee99342a6bf331/terminal_bg.wasm`; it is absent from `.panel-tabs/aleph_panel_bg.wasm`.
+- `FONT_PROBE_SENTINEL = "1px 'aleph-terminal-font-probe-sentinel'"` is defined by `interfaces/webchat/tabs/terminal-ui/src/render.rs` and the byte is present only in `.panel-tabs/tabs/terminal/ff172f356de7e061/terminal_bg.wasm`; it is absent from `.panel-tabs/aleph_panel_bg.wasm`.
 - `data-terminal-view` from the terminal renderer is present only in the terminal WASM artifact and absent from the modular host WASM artifact.
 - Shared protocol strings such as `pty.screen` may appear in both artifacts and are not used as the unlink proof.
 
 2. artifact/source 检查：
 
-- `FONT_PROBE_SENTINEL = "1px 'aleph-terminal-font-probe-sentinel'"` 定义于 `interfaces/webchat/tabs/terminal-ui/src/render.rs`，对应字节只出现在 `.panel-tabs/tabs/terminal/6eee99342a6bf331/terminal_bg.wasm`，不出现在 `.panel-tabs/aleph_panel_bg.wasm`。
+- `FONT_PROBE_SENTINEL = "1px 'aleph-terminal-font-probe-sentinel'"` 定义于 `interfaces/webchat/tabs/terminal-ui/src/render.rs`，对应字节只出现在 `.panel-tabs/tabs/terminal/ff172f356de7e061/terminal_bg.wasm`，不出现在 `.panel-tabs/aleph_panel_bg.wasm`。
 - terminal renderer 的 `data-terminal-view` 只出现在 terminal WASM artifact，不出现在 modular host WASM artifact。
 - `pty.screen` 这类 shared protocol string 可能同时出现在两个 artifact，因此没有被用作去链接证据。
 
@@ -140,9 +164,9 @@ Other Tabs remain in the host. This evidence proves Terminal Tab extraction only
 
 ## Verification / 验证
 
-All cargo commands were preceded by `python qa/browser_live/check_memory.py`; every gate used the repository policy of requiring at least 4 GiB available memory and returned `ALLOW`.
+The Panel build and validation cargo commands used in this workflow were each preceded by `python qa/browser_live/check_memory.py`; the repository's unrelated cargo recipes are outside this acceptance claim. Every gate used the repository policy of requiring at least 4 GiB available memory and returned `ALLOW`.
 
-所有 cargo 命令前均执行了 `python qa/browser_live/check_memory.py`；每次 gate 都按仓库策略要求至少 4 GiB 可用内存，并返回 `ALLOW`。
+本次 Panel build 与 validation 使用的 cargo 命令均先执行 `python qa/browser_live/check_memory.py`；仓库中与本验收无关的其他 cargo recipe 不在此声明范围内。每次 gate 都按仓库策略要求至少 4 GiB 可用内存，并返回 `ALLOW`。
 
 Passed:
 
@@ -152,9 +176,11 @@ Passed:
 - `cargo check --lib --target wasm32-unknown-unknown` and `cargo clippy --lib --target wasm32-unknown-unknown -- -D warnings` in `panel-tab-terminal`.
 - Panel default/no-feature `cargo check` and `cargo test --lib`: 1,535 passed.
 - Panel modular `cargo check`, `cargo clippy --lib --no-default-features --features panel-modular --target wasm32-unknown-unknown -- -D warnings`, and `cargo test --lib --no-default-features --features panel-modular`: 1,573 passed.
+- `node tests/panel-terminal-protocol.test.mjs`: named component scenarios passed for `/` and `/panel/`.
+- `node tests/panel-terminal-host.test.mjs`: production host/wire fixture passed for the production `/terminal` root route; the component fixture covers `/` and `/panel/` public bases.
+- `node tests/panel-build-memory-gate.test.mjs`: isolated rejected memory gate passed; the build exited 1 and the stub `cargo` was not launched.
 - `node --test tests/panel-build.test.mjs`: 5 passed.
 - `node --test tests/panel_loader.test.mjs`: 8 passed, 1 skipped because `ALEPH_PANEL_BRIDGE_GLUE` was unavailable.
-- `node tests/panel-terminal-protocol.test.mjs`: passed for `/` and `/panel/`.
 - `bun run check`: unavailable; the repository root has no `check` script and the command returned `error: Script not found "check"`.
 
 ## Rollback / 回退
@@ -170,6 +196,6 @@ The default legacy path remains unchanged and no default release flip, merge, or
 ## Remaining limits / 剩余限制
 
 - Live Gateway parity is **BLOCKED**, not passed.
-- Browser load and WASM instantiate timing are unavailable from the deterministic fixture.
-- The fixture validates the test-local SDK transport and real module protocol path; it does not prove Gateway WebSocket behavior.
+- The production-host/wire fixture uses a loopback Gateway-shaped fixture; it does not prove a real Gateway deployment or PTY process.
+- Browser load and WASM instantiate timing are unavailable from the deterministic fixtures.
 - Other Panel Tabs have not been migrated or removed from the host.

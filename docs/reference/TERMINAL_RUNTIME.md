@@ -68,4 +68,15 @@ cargo test -p alephcore --lib gateway::pty
 cargo test -p aleph-panel --lib
 ```
 
+Panel host acceptance additionally runs from `interfaces/webchat`:
+
+```text
+node tests/panel-terminal-protocol.test.mjs
+node tests/panel-terminal-host.test.mjs
+```
+
+The first is the deterministic component fixture; the second boots the staged host WASM and real Panel loader/SDK against a loopback Gateway-shaped HTTP/WS fixture. Neither replaces the separate real Gateway/live smoke test, which must remain explicitly marked BLOCKED when no disposable Gateway target is available.
+
+Panel host acceptance 还应在 `interfaces/webchat` 下运行上述两个 fixture：前者是确定性 component fixture，后者启动 staged host WASM 与真实 Panel loader/SDK，并连接 loopback Gateway 形状的 HTTP/WS fixture。两者都不能替代独立的真实 Gateway/live smoke test；没有 disposable Gateway target 时必须明确标记为 BLOCKED。
+
 真机 QA 只覆盖仍存在的 PTY spawn、resize、attach、input、screen 和 exit 行为；已删除的 agent detection/runtime/panel 阶段不应重新加入 QA 路由。
