@@ -30,9 +30,14 @@ The PTY/session lifetime belongs to the Gateway. Leaving the route, disabling th
 
 PTY/session 生命周期属于 Gateway。离开路由、禁用 Tab、替换 module 或释放 UI owner 都不会关闭服务端 session。只有经过 PTY close operation 的明确用户动作才能调用 `pty.close`；测试只能为本次测试自己创建的 disposable session 显式调用它。再次进入时通过 `pty.list` 与 `pty.attach` 复用 selected session。
 
+The host-owned projection is the boundary between route selection and module loading. `interfaces/webchat/src/panel/projection.rs::PanelProjection` builds the built-in descriptor set and owns the canonical route mapping; `TabRegistry` remains the projection validator and ordering/state filter. `PanelShell` receives that projection plus the route-selected active key, and `PanelLoader` remains the single lifecycle owner. This stage still projects only the accepted Terminal module. Unknown routes and disabled/incompatible/failed descriptors fall back or fail closed; leaving the route releases UI/module resources and never calls `pty.close`.
+
+host-owned projection 是 route selection 与 module loading 之间的边界。`interfaces/webchat/src/panel/projection.rs::PanelProjection` 构造 built-in descriptor 集并持有 canonical route mapping；`TabRegistry` 继续负责 projection 验证、排序与状态过滤。`PanelShell` 接收 projection 与由 route 选出的 active key，`PanelLoader` 继续是唯一 lifecycle owner。本阶段仍只 projection 已验收的 Terminal module；未知 route 与 disabled/incompatible/failed descriptor fallback 或 fail closed；离开 route 只释放 UI/module 资源，绝不调用 `pty.close`。
+
 Each SDK connection snapshot has an epoch. A reconnect replaces the old `pty.screen` and `pty.exit` subscriptions, re-attaches the selected session, and refreshes from the new epoch. Async list, attach, subscribe, and event results must check the active owner and connection epoch before changing the UI. Results from a disposed owner or an old epoch are discarded; they must not spawn a fallback PTY or report a false success.
 
 每个 SDK connection snapshot 都带有 epoch。重连会释放旧的 `pty.screen`/`pty.exit` 订阅，在新 epoch 下重新 attach selected session，并从新 epoch 刷新。异步 list、attach、subscribe 与 event 结果在写入 UI 前必须检查 active owner 和 connection epoch；已释放 owner 或旧 epoch 的结果会被丢弃，不得 fallback spawn PTY，也不得报告假成功。
+
 ## 已移除代码的归档 / Archive for removed code
 
 已移除的终端 agent 与模型路由代码归档在仓库根目录的 `archive/` 下：`archive/removed-terminal-agent-moa/` 和 `archive/removed-model-routing-moa/`。现行文档仍放在 `docs/`；归档代码不构成当前产品契约。
@@ -75,7 +80,7 @@ node tests/panel-terminal-protocol.test.mjs
 node tests/panel-terminal-host.test.mjs
 ```
 
-The first is the deterministic component fixture; the second boots the staged host WASM and real Panel loader/SDK against a loopback Gateway-shaped HTTP/WS fixture. Neither replaces the separate real Gateway/live smoke test, which must remain explicitly marked BLOCKED when no disposable Gateway target is available.
+The first is the deterministic component fixture; the second boots the staged host WASM and real Panel loader/SDK against a loopback Gateway-shaped HTTP/WS fixture. Neither replaces the separate real Gateway/live smoke test, which must remain explicitly marked BLOCKED when no disposable Gateway target is available. The generic host boundary delivery is recorded in [`2026-10-27-panel-shell-projection-delivery.md`](../superpowers/plans/2026-10-27-panel-shell-projection-delivery.md); it does not claim a second built-in Tab, live Gateway parity, or a default release flip.
 
 Panel host acceptance 还应在 `interfaces/webchat` 下运行上述两个 fixture：前者是确定性 component fixture，后者启动 staged host WASM 与真实 Panel loader/SDK，并连接 loopback Gateway 形状的 HTTP/WS fixture。两者都不能替代独立的真实 Gateway/live smoke test；没有 disposable Gateway target 时必须明确标记为 BLOCKED。
 

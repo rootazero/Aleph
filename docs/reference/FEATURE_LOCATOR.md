@@ -4486,10 +4486,10 @@ round-2 结尾留了三条，本轮全部收掉。共同形状：**三条都不�
 
 - **现行边界**：服务端 `src/gateway/pty/` 是 PTY session 与 VT screen 的唯一实现；`pty.*` 负责 spawn、list、attach、input、resize、close，`pty.screen` / `pty.exit` 负责 screen 与 lifecycle 事件。
 - **wire**：`shared/protocol/src/pty.rs`；客户端只消费 PTY session、screen、attach、input、resize 和 exit 事实。
-- **Panel / TUI**：Panel 的共享 terminal renderer 位于 `interfaces/webchat/tabs/terminal-ui/`，独立 WASM 入口位于 `interfaces/webchat/tabs/terminal/`，由 `interfaces/webchat/scripts/build-panel-tabs.mjs` 生成 host 与版本化 terminal module；TUI 仍位于 `interfaces/tui/src/tui/`。服务端 screen 在客户端卸载后继续存在，`pty.attach` 恢复 owned session 的 snapshot。
+- **Panel host boundary**：`interfaces/webchat/src/panel/projection.rs::PanelProjection` 是 host-owned built-in descriptor projection 的入口；`TabRegistry` 做验证、排序、状态过滤与 replacement，`app.rs` 只把适用 route 映射到 `PanelShell`，`PanelLoader` 独占 module lifecycle。当前只接入已验收的 Terminal，`panel-modular` 仍 opt-in，第二个 built-in Tab、community lifecycle、default release flip 与真实 Gateway/live parity 仍 deferred/BLOCKED。
 - **生命周期**：module teardown 只释放 DOM、Owner、订阅、polling、RAF/observer 与 module handle，不调用 `pty.close`；PTY/session lifetime 属于 Gateway，只有明确的 close operation 才能关闭 session。连接 epoch 变化时旧的异步 list/attach/subscribe 结果不得写回已销毁 UI。
 - **职责**：服务端运行一个 PTY 与一台 VT，向客户端传递行差分；客户端是纯渲染器，不推断进程、agent 或工作状态。
-- **状态**：当前纯 PTY 实现。旧的 agent detection、runtime agent、observation tool、compatibility ingress 和 agent panel 设计已归档，不是现行落点。默认 legacy Panel 构建保留；Terminal 模块的确定性 component fixture 与 production-host/wire fixture 已通过，真实 Gateway/live parity 因环境缺失而 BLOCKED。
+- **状态**：当前纯 PTY 实现。旧的 agent detection、runtime agent、observation tool、compatibility ingress 和 agent panel 设计已归档，不是现行落点。通用 host projection/registry/route/loader 边界已收口，但 Terminal 仍是本阶段唯一真实迁移的 built-in Tab；默认 legacy Panel 构建保留，`panel-modular` 仍是 opt-in。Terminal 模块的确定性 component fixture 与 production-host/wire fixture 已通过，真实 Gateway/live parity 因环境缺失而 BLOCKED。
 - **验证**：`interfaces/webchat/tests/panel-terminal-protocol.test.mjs` 覆盖最终 staged JS/WASM、root 与 `/panel/` base、RPC 字节边界、exact topics、sequence-gap recovery、epoch fencing 和 teardown；`interfaces/webchat/tests/panel-terminal-host.test.mjs` 覆盖真实 host WASM/Router/Shell/PanelSdk、versioned module、loopback HTTP/WS wire、connect/subscribe/list/attach/resize 及 Canvas event；同条件测量与剩余限制见 [panel-terminal-tab-validation.md](../reports/panel-terminal-tab-validation.md)。改动后运行适用的 Panel/PTY 单测；真机边界见 [qa/README.md](../../qa/README.md)。
 
 ### 6.12 运行时 agent 观察面：已移除

@@ -1,4 +1,4 @@
-use crate::i18n::{use_i18n, I18nContextProvider};
+use crate::i18n::{t_string, use_i18n, I18nContextProvider};
 use crate::state::memory::MemoryState;
 use aleph_protocol::browser_live::{CLOSED_TOPIC, RESOURCE_TOPIC};
 use leptos::prelude::*;
@@ -647,10 +647,39 @@ fn MainContent() -> impl IntoView {
     {
         let form_factor = expect_context::<FormFactorState>();
         let location = use_location();
+        let i18n = use_i18n();
+        let projection = crate::panel::projection::PanelProjection::builtins(
+            t_string!(i18n, panel_spike.pilot).to_string(),
+        );
         return move || {
-            let terminal = PanelMode::from_path(&location.pathname.get()) == PanelMode::Terminal;
-            if form_factor.form_factor.get() != FormFactor::Phone && terminal {
-                return view! { <crate::panel::PanelShell /> }.into_any();
+            let path = location.pathname.get();
+            let route = crate::panel::projection::PanelProjection::select_route(
+                &path,
+                projection.as_ref().ok(),
+            );
+            if form_factor.form_factor.get() != FormFactor::Phone {
+                match route {
+                    crate::panel::projection::PanelRoute::Modular(initial_tab) => {
+                        if let Ok(projection) = projection.as_ref() {
+                            return view! {
+                                <crate::panel::PanelShell
+                                    projection=projection.clone()
+                                    initial_tab=Some(initial_tab)
+                                />
+                            }
+                            .into_any();
+                        }
+                    }
+                    crate::panel::projection::PanelRoute::Unavailable => {
+                        return view! {
+                            <section class="h-full flex flex-col" data-panel-shell="panel-error">
+                                <div role="status">"Panel unavailable"</div>
+                            </section>
+                        }
+                        .into_any();
+                    }
+                    crate::panel::projection::PanelRoute::Legacy => {}
+                }
             }
             view! { <LegacyMainContent /> }.into_any()
         };

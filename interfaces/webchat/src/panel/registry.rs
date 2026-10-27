@@ -14,7 +14,7 @@ pub enum RegistryError {
 
 /// Small, key-indexed registry. Linear lookup uses the protocol key's equality
 /// without requiring Hash/Ord on the shared wire contract or a second key format.
-#[derive(Debug, Default)]
+#[derive(Clone, Debug, Default)]
 pub struct TabRegistry {
     entries: Vec<PanelTabDescriptor>,
 }
@@ -68,16 +68,19 @@ impl TabRegistry {
         self.entries.iter().find(|entry| &entry.key == key)
     }
 
-    /// Status rows remain queryable, but only enabled entries may be mounted.
-    pub fn ordered(&self) -> Vec<PanelTabDescriptor> {
-        let mut entries: Vec<_> = self
-            .entries
-            .iter()
-            .filter(|entry| entry.status == PanelTabStatus::Enabled)
-            .cloned()
-            .collect();
+    /// Status rows remain queryable; `ordered` keeps only entries that may be mounted.
+    pub fn rows(&self) -> Vec<PanelTabDescriptor> {
+        let mut entries = self.entries.clone();
         entries.sort_by_cached_key(|entry| (entry.order, entry.key.qualified()));
         entries
+    }
+
+    /// Only enabled entries may be mounted.
+    pub fn ordered(&self) -> Vec<PanelTabDescriptor> {
+        self.rows()
+            .into_iter()
+            .filter(|entry| entry.status == PanelTabStatus::Enabled)
+            .collect()
     }
 
     /// Select the first enabled entry in projection order, excluding the removed key.
@@ -96,6 +99,10 @@ fn validate(descriptor: &PanelTabDescriptor) -> Result<(), RegistryError> {
         // The protocol's qualified display key uses a literal colon separator.
         || descriptor.key.plugin_id.contains(':')
         || descriptor.key.tab_id.contains(':')
+        || descriptor.entry.starts_with('/')
+        || descriptor.entry.contains('\\')
+        || descriptor.entry.contains(':')
+        || descriptor.entry.split('/').any(|segment| segment == "..")
         || descriptor.api_major != PANEL_UI_API_MAJOR
     {
         return Err(RegistryError::InvalidEntry);
