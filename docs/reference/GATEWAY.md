@@ -1405,8 +1405,17 @@ pi（经 pi-mcp-adapter）、Claude Code `.mcp.json`（`type: http`）与 dsh `c
 真机：`qa/mcp_face/run.sh {handshake,tools,auth,list_changed,deny}`——每阶段证明什么见
 [`qa/README.md`](../../qa/README.md)。
 
----
-## See Also
+
+
+### Source-owned Bound lifecycle evidence / Source-owned Bound 生命周期证据（Stage B，2026-10-27）
+
+The bounded Stage B slice uses `ChannelRegistry` as the sole Gateway association and publication authority for source-private Generic Webhook/loopback Bound channels. Retirement, replacement, and unregister install an entry-local fence, perform real drain/stop/forwarder/task cleanup outside the source gate, then perform one checked publication or removal commit. Old completion is validated against the original source, ownership binding, provider generation, and original entry/ticket before it can be accepted; retirement makes it `DiscardedStale`.
+
+受限 Stage B 切片使用 `ChannelRegistry` 作为 source-private Generic Webhook/loopback Bound channel 唯一的 Gateway association 与 publication authority。retirement、replacement 和 unregister 先安装 entry-local fence，在 source gate 外执行真实 drain/stop/forwarder/task cleanup，再以一次 checked publication 或 removal commit 完成。旧 completion 必须依次通过 original source、ownership binding、provider generation、original entry/ticket 校验；retirement 后结果为 `DiscardedStale`。
+
+This evidence covers the test composition only. It does not establish production Bound mount or ingress, Feishu/R2 integration, Zahir routing, all-channel compatibility, crash recovery, durable replay, or external exactly-once effects. See the bilingual run record at [`docs/superpowers/runs/2026-10-27-gateway-bound-retirement-run.md`](../superpowers/runs/2026-10-27-gateway-bound-retirement-run.md).
+
+该证据仅覆盖测试组合，不代表 production Bound mount/ingress、Feishu/R2 integration、Zahir routing、全通道 compatibility、crash recovery、durable replay 或 external exactly-once effects 已完成。详见双语 run record：[`docs/superpowers/runs/2026-10-27-gateway-bound-retirement-run.md`](../superpowers/runs/2026-10-27-gateway-bound-retirement-run.md)。
 
 - [Architecture](ARCHITECTURE.md) - System overview
 - [Agent System](AGENT_SYSTEM.md) - Agent loop
