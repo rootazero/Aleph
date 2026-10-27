@@ -19,7 +19,7 @@ const mime = {
   '.wasm': 'application/wasm',
 };
 
-const pageHtml = (base, denied) => `<!doctype html>
+const pageHtml = (base, denied, empty) => `<!doctype html>
 <html>
 <head>
   <meta charset="utf-8">
@@ -50,6 +50,7 @@ const pageHtml = (base, denied) => `<!doctype html>
   <script type="module">
     const manifest = ${JSON.stringify(manifest)};
     const denied = ${JSON.stringify(denied)};
+    const isEmpty = ${JSON.stringify(empty)};
     const state = {
       epoch: 1,
       connected: true,
@@ -72,7 +73,13 @@ const pageHtml = (base, denied) => `<!doctype html>
       created_at: 1700000000,
       closed: false,
     };
-    const sessions = [initialSession];
+    const sessions = isEmpty ? [] : [initialSession, {
+      session_id: 'sibling-fixture',
+      shell: 'fixture-shell',
+      cwd: '/tmp/terminal-sibling',
+      created_at: 1700000001,
+      closed: false,
+    }];
     const patch = (text, options = {}) => ({
       rows: [{ row: 0, runs: [{ text }] }],
       cursor: [0, text.length],
@@ -137,6 +144,11 @@ const pageHtml = (base, denied) => `<!doctype html>
 
     const emit = (event) => {
       state.emittedTopics.push(event.topic);
+      if (event.topic === 'pty.exit') {
+        const sessionId = event.data?.session_id;
+        const index = sessions.findIndex((session) => session.session_id === sessionId);
+        if (index >= 0) sessions.splice(index, 1);
+      }
       for (const subscription of state.subscriptions) {
         if (!subscription.disposed && subscription.topic === event.topic) subscription.queue.push(event);
       }
@@ -196,7 +208,7 @@ const server = createServer(async (request, response) => {
   const relative = url.pathname.slice(prefix.length).replace(/^\//, '') || 'index.html';
   if (relative === 'index.html') {
     response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
-    response.end(pageHtml(prefix ? '/panel/' : '/', url.searchParams.get('deny') === '1'));
+    response.end(pageHtml(prefix ? '/panel/' : '/', url.searchParams.get('deny') === '1', url.searchParams.get('empty') === '1'));
     return;
   }
   const file = relative === 'panel_loader.js' ? join(panel, 'panel_loader.js') : resolve(staged, relative);
@@ -232,6 +244,16 @@ async function runHappyPath(base) {
   requestLog.length = 0;
   const page = await browser.newPage({ viewport: { width: 1024, height: 720 } });
   const prefix = base === '/' ? '' : '/panel';
+  page.addInitScript(() => {
+    const Canvas = globalThis.CanvasRenderingContext2D;
+    if (!Canvas) return;
+    const fillText = Canvas.prototype.fillText;
+    globalThis.__fillTextCount = 0;
+    Canvas.prototype.fillText = function (...args) {
+      globalThis.__fillTextCount += 1;
+      return fillText.apply(this, args);
+    };
+  });
   await page.goto(`${origin}${prefix}/index.html`, { waitUntil: 'networkidle' });
   assert.equal(await page.evaluate(() => __fixture.state.terminalLoadCount), 0, 'Chat startup must not load terminal');
   assert.equal(requestLog.some((path) => path.includes('/tabs/terminal/')), false, 'Chat startup must not request terminal assets');
@@ -250,9 +272,14 @@ async function runHappyPath(base) {
   assert.equal(initialMethods[1], 'pty.list');
   assert.equal(initialMethods.filter((method) => method === 'pty.attach').length, 1);
   assert.equal(initialMethods.filter((method) => method === 'pty.list').length, 1);
-  assert.ok(await page.locator('canvas').evaluate((canvas) => canvas.width > 0 && canvas.height > 0));
+  assert.ok(await page.evaluate(() => globalThis.__fillTextCount > 0), 'Canvas renderer must use native fillText');
 
+  const initialResize = await page.evaluate(() => __fixture.state.calls.filter((call) => call.kind === 'invoke' && call.value.method === 'pty.resize').at(-1)?.value?.params);
   const firstPaint = await page.locator('canvas').evaluate((canvas) => canvas.toDataURL());
+  await page.evaluate(() => __fixture.emit({ topic: 'wrong.topic', data: { session_id: 'disposable-fixture', seq: 999, rows: 24, cols: 80, patch: { rows: [{ row: 0, runs: [{ text: 'wrong topic' }] }] } } }));
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  assert.equal(await page.locator('canvas').evaluate((canvas) => canvas.toDataURL()), firstPaint, 'wrong-topic events must not repaint');
+
   await page.evaluate(() => __fixture.emit({ topic: 'pty.screen', data: { session_id: 'disposable-fixture', seq: 1, rows: 24, cols: 80, patch: { rows: [{ row: 0, runs: [{ text: 'Unicode marker ✓' }] }], bracketed_paste: true } } }));
   await waitFor(page, (previous) => document.querySelector('canvas').toDataURL() !== previous, firstPaint);
 
@@ -274,13 +301,24 @@ async function runHappyPath(base) {
   const expectedPaste = Buffer.from('\u001b[200~终端 paste\u001b[201~').toString('base64');
   assert.equal(inputs[1].data, expectedPaste, 'bracketed paste must preserve UTF-8 bytes and wrappers');
 
-  await page.evaluate(() => { document.querySelector('canvas').style.width = '620px'; });
-  await waitFor(page, () => __fixture.state.calls.some((call) => call.kind === 'invoke' && call.value.method === 'pty.resize'));
+  const resizeCountBefore = (await callValues(page, 'pty.resize')).length;
+  await page.evaluate(() => {
+    const canvas = document.querySelector('canvas');
+    canvas.style.setProperty('width', '300px', 'important');
+    canvas.style.setProperty('height', '240px', 'important');
+  });
+  await waitFor(page, (count) => __fixture.state.calls.filter((call) => call.kind === 'invoke' && call.value.method === 'pty.resize').length > count, resizeCountBefore);
   const resize = (await callValues(page, 'pty.resize')).at(-1);
   assert.ok(resize.rows > 0 && resize.cols > 0, 'resize must carry positive geometry');
+  assert.notDeepEqual(resize, initialResize, 'post-baseline resize must change reported geometry');
 
   await page.evaluate(() => __fixture.emit({ topic: 'pty.exit', data: { session_id: 'other-fixture-session' } }));
   assert.equal(await page.evaluate(() => __fixture.state.emittedTopics.includes('pty.exit')), true, 'exit events must use the exact topic');
+
+  await page.evaluate(() => __fixture.emit({ topic: 'pty.exit', data: { session_id: 'disposable-fixture' } }));
+  await waitFor(page, () => __fixture.state.calls.filter((call) => call.kind === 'invoke' && call.value.method === 'pty.list').length >= 2 && __fixture.state.attachCount >= 3);
+  assert.equal((await page.locator('[data-terminal-sidebar] button').count()) >= 1, true, 'selected-session exit must select the surviving session');
+  assert.equal(await page.evaluate(() => __fixture.state.calls.some((call) => call.kind === 'invoke' && call.value.method === 'pty.close')), false, 'selected-session exit must not close a different PTY');
 
   await page.getByRole('button', { name: 'Chat' }).click();
   await waitFor(page, () => document.querySelector('[data-panel-content-root]') === null && document.querySelector('canvas') === null);
@@ -294,9 +332,12 @@ async function runHappyPath(base) {
   assert.equal(await page.evaluate(() => __fixture.state.subscriptionDisposes >= 2), true, 'old subscriptions must be disposed before remount');
 
   const subscriptionsBeforeEpoch = await page.evaluate(() => __fixture.state.subscriptions.filter((item) => !item.disposed).length);
+  const beforeReconnectPaint = await page.locator('canvas').evaluate((canvas) => canvas.toDataURL());
   await page.evaluate(() => __fixture.setEpoch(2));
   await waitFor(page, (before) => __fixture.state.subscriptions.filter((item) => !item.disposed).length === before && __fixture.state.calls.filter((call) => call.kind === 'subscribe').length >= 4, subscriptionsBeforeEpoch);
   assert.equal(await page.evaluate(() => __fixture.state.subscriptionDisposes >= 2), true, 'connection epoch must dispose old subscriptions');
+  await page.evaluate(() => __fixture.emit({ topic: 'pty.screen', data: { session_id: 'sibling-fixture', seq: 1, rows: 24, cols: 80, patch: { rows: [{ row: 0, runs: [{ text: 'reconnect coverage' }] }] } } }));
+  await waitFor(page, (previous) => document.querySelector('canvas').toDataURL() !== previous, beforeReconnectPaint);
 
   await page.evaluate(() => __fixture.setDelayList(250));
   await page.evaluate(() => __fixture.show('chat'));
@@ -306,6 +347,27 @@ async function runHappyPath(base) {
   assert.equal(await page.locator('#sidebar').textContent(), '');
   assert.equal(await page.locator('#content').textContent(), '');
   assert.equal(await page.evaluate(() => __fixture.state.calls.some((call) => call.kind === 'invoke' && call.value.method === 'pty.close')), false);
+  await page.close();
+}
+
+async function runSpawnPath() {
+  const page = await browser.newPage({ viewport: { width: 1024, height: 720 } });
+  page.addInitScript(() => {
+    const Canvas = globalThis.CanvasRenderingContext2D;
+    if (!Canvas) return;
+    const fillText = Canvas.prototype.fillText;
+    globalThis.__fillTextCount = 0;
+    Canvas.prototype.fillText = function (...args) {
+      globalThis.__fillTextCount += 1;
+      return fillText.apply(this, args);
+    };
+  });
+  await page.goto(`${origin}/index.html?empty=1`, { waitUntil: 'networkidle' });
+  await page.getByRole('button', { name: 'Terminal' }).click();
+  await waitFor(page, () => __fixture.state.spawnCount >= 1 && document.querySelector('canvas') !== null);
+  assert.equal(await page.evaluate(() => __fixture.state.spawnCount), 1, 'empty list must spawn exactly one PTY');
+  assert.ok((await callValues(page, 'pty.attach')).length >= 1, 'spawned PTY must be attached');
+  assert.ok(await page.evaluate(() => globalThis.__fillTextCount > 0), 'spawned PTY must render through Canvas fillText');
   await page.close();
 }
 
@@ -321,6 +383,7 @@ async function runDeniedPath() {
 try {
   await runHappyPath('/');
   await runHappyPath('/panel/');
+  await runSpawnPath();
   await runDeniedPath();
   console.log(JSON.stringify({
     protocol_fixture: 'passed',
@@ -332,7 +395,11 @@ try {
       'versioned JS/WASM load once and remount reuses the module',
       'exact pty.screen/pty.exit subscriptions and sequence-gap attach recovery',
       'UTF-8 Ctrl-C and bracketed-paste payload boundaries',
-      'resize, connection epoch replacement, late-result teardown fence',
+      'selected-session exit selects a surviving PTY without closing it',
+      'empty list performs one spawn and attaches the returned session',
+      'Canvas uses native fillText and wrong-topic events do not repaint',
+      'resize changes geometry after the baseline report',
+      'connection epoch replacement keeps new screen coverage',
       'pty.list failure is visible and does not spawn',
     ],
   }, null, 2));

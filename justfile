@@ -10,6 +10,7 @@ panel_dir       := "interfaces/webchat"
 panel_dist      := "interfaces/webchat/dist"
 server_bin      := "aleph-server"
 shell_dir       := "desktop/shell"
+memory_gate     := "qa/browser_live/check_memory.py"
 
 # ─── Default ───
 
@@ -184,12 +185,14 @@ wasm:
     (cd {{panel_dir}} && PATH="$main_bin:$PATH" npm run build:css)
     # 2. Compile Rust → WASM (lib only: the cdylib is the shipped artifact and
     #    the vestigial src/main.rs bin breaks under fat LTO)
+    python {{memory_gate}}
     cargo build -p aleph-panel --lib --target wasm32-unknown-unknown --profile wasm-release
     # Resolve cargo's real target dir instead of hardcoding `target/`. A literal
     # relative path breaks in git worktrees: .cargo/config.toml pins an absolute
     # shared target-dir, so `cargo build` writes there while a cwd-relative
     # `target/` points at a nonexistent dir inside the worktree. `cargo metadata`
     # honors target-dir overrides and CARGO_TARGET_DIR, so it's correct everywhere.
+    python {{memory_gate}}
     target_dir=$(cargo metadata --format-version 1 --no-deps \
         | node -e 'let s="";process.stdin.on("data",c=>s+=c).on("end",()=>process.stdout.write(JSON.parse(s).target_directory))')
     # 3. Generate JS bindings
