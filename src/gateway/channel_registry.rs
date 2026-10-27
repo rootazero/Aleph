@@ -5086,4 +5086,591 @@ mod tests {
             .await;
         assert_eq!(registry.webhook_mounts().mounted_count().await, 0);
     }
+
+    // --- Stage C: Legacy compatibility surfaces around a Bound channel ---
+
+    /// Register a Bound channel on an existing registry/ownership tree and
+    /// mirror the claim the source-owned lifecycle needs. Test setup only.
+    async fn register_bound_on(
+        registry: &Arc<ChannelRegistry>,
+        tree: &Arc<OwnershipTree>,
+        channel: Box<dyn Channel>,
+        initial: ChannelInitialState,
+    ) -> ChannelId {
+        let id = registry
+            .register_bound_channel(channel, lifecycle_contract(), tree.clone(), initial)
+            .await
+            .unwrap();
+        let capture = registry.capture_bound_channel(&id).await.unwrap();
+        tree.register(
+            capture.descriptor.id.clone(),
+            capture.descriptor.owner.clone(),
+            capture.descriptor.lifetime,
+            capture.descriptor.visibility.clone(),
+        )
+        .unwrap();
+        id
+    }
+
+    fn observed_webhook(
+        id: &str,
+        callback_url: String,
+        path: &str,
+        secret: &str,
+        probe: &super::test_support::ResourceProbe,
+    ) -> crate::gateway::interfaces::webhook::WebhookChannel {
+        use crate::gateway::interfaces::webhook::{WebhookChannel, WebhookChannelConfig};
+        WebhookChannel::observed(
+            id,
+            WebhookChannelConfig {
+                secret: secret.into(),
+                callback_url,
+                path: path.into(),
+                ..Default::default()
+            },
+            probe.clone(),
+        )
+    }
+
+    fn desired_of(
+        snapshots: &[ChannelLifecycleSnapshot],
+        id: &ChannelId,
+    ) -> DesiredChannelState {
+        snapshots
+            .iter()
+            .find(|snapshot| &snapshot.id == id)
+            .unwrap_or_else(|| panic!("no lifecycle snapshot for {id}"))
+            .desired
+    }
+
+    /// Every Legacy compatibility surface must refuse a Bound registration
+    /// *explicitly* and produce no side effect.
+    ///
+    /// A denial may not degrade into `Ok(None)`, `false`, an empty result, or a
+    /// fallback permission, and it may not reach the transport, the durable
+    /// queue, the inbound stream, or provider activation. The queue half is
+    /// asserted on persisted rows, not on a returned receipt: a `ChannelId`
+    /// alone must never authorize a dynamic send admission.
+    #[tokio::test]
+    async fn bound_compatibility_effect_paths_are_denied() {
+        use super::test_support::{LoopbackPeer, ResourceProbe};
+        use crate::gateway::delivery_queue::{DeliveryQueueConfig, DeliveryStore};
+
+        let peer = LoopbackPeer::new(200).await;
+        let mut arrival = peer.arrived;
+        let probe = ResourceProbe::default();
+        let store = Arc::new(
+            DeliveryStore::open_in_memory(DeliveryQueueConfig::default())
+                .expect("in-memory delivery store"),
+        );
+        let tree = Arc::new(OwnershipTree::new());
+        let registry = Arc::new(ChannelRegistry::new().with_delivery_store(Arc::clone(&store)));
+        let mut inbound = registry
+            .take_inbound_receiver()
+            .expect("the registry owns the only inbound receiver");
+        let id = register_bound_on(
+            &registry,
+            &tree,
+            Box::new(observed_webhook(
+                "effect-bound",
+                peer.url.clone(),
+                "/webhook/effect-bound",
+                "effect-secret",
+                &probe,
+            )),
+            ChannelInitialState::Cold,
+        )
+        .await;
+        let conversation = ConversationId::new("conv-1");
+        let message_id = super::super::channel::MessageId::new("msg-1");
+        let options = ["a".to_string(), "b".to_string()];
+
+        assert!(
+            registry.get(&id).await.is_none(),
+            "a Bound id must never yield a Legacy channel handle"
+        );
+
+        let refusals: [(&str, ChannelResult<()>); 5] = [
+            (
+                "edit",
+                registry
+                    .edit(&id, &conversation, &message_id, "denied")
+                    .await,
+            ),
+            (
+                "react",
+                registry
+                    .react(&id, &conversation, &message_id, "denied")
+                    .await,
+            ),
+            (
+                "send_typing",
+                registry.send_typing(&id, &conversation).await,
+            ),
+            (
+                "set_group_icon",
+                registry
+                    .set_group_icon(&id, &conversation, "data:image/png;base64,AA==")
+                    .await,
+            ),
+            (
+                "list_conversations",
+                registry.list_conversations(&id, "", 10).await.map(|_| ()),
+            ),
+        ];
+        for (surface, result) in refusals {
+            assert!(
+                matches!(result, Err(ChannelError::UnsupportedFeature(_))),
+                "{surface} must refuse a Bound registration explicitly, got {result:?}"
+            );
+        }
+        assert!(
+            matches!(
+                registry
+                    .create_poll(&id, &conversation, "q", &options, false)
+                    .await,
+                Err(ChannelError::UnsupportedFeature(_))
+            ),
+            "create_poll must refuse a Bound registration explicitly"
+        );
+
+        let report = registry
+            .send_reported(&id, OutboundMessage::text("conv-1", "denied send"))
+            .await;
+        assert!(
+            matches!(report.result, Err(ChannelError::UnsupportedFeature(_))),
+            "delivery admission must refuse a Bound registration, got {:?}",
+            report.result
+        );
+        assert_eq!(report.queue, QueueDisposition::NotQueueable);
+
+        // The raw queue seam is the one admission path that has no source
+        // argument today. Rows before/after are the assertion; the returned
+        // outcome is only corroboration.
+        let before = store.len().expect("queue length");
+        let outcome = store
+            .enqueue(
+                id.as_str(),
+                &OutboundMessage::text("conv-1", "raw admission"),
+                "",
+                0,
+            )
+            .expect("enqueue result");
+        assert!(
+            !matches!(
+                outcome,
+                crate::gateway::delivery_queue::EnqueueOutcome::Queued(_)
+            ),
+            "a channel id alone must not authorize queue admission, got {outcome:?}"
+        );
+        assert_eq!(
+            store.len().expect("queue length"),
+            before,
+            "a refused admission must persist no row"
+        );
+        assert_eq!(
+            registry
+                .delivery_queue_stats()
+                .expect("attached store")
+                .pending,
+            0
+        );
+
+        assert_eq!(probe.count("client_build_attempt"), 0);
+        assert_eq!(probe.count("client_built"), 0);
+        assert_eq!(probe.count("request_attempt"), 0);
+        assert_eq!(probe.count("request_ended"), 0);
+        assert_eq!(probe.count("client_drop"), 0);
+        assert!(
+            arrival.try_recv().is_err(),
+            "no effect helper may reach the loopback transport"
+        );
+        assert!(
+            inbound.try_recv().is_err(),
+            "no refused effect may emit an inbound message"
+        );
+        let capture = registry.capture_bound_channel(&id).await.unwrap();
+        assert_eq!(
+            capture.provider.state(),
+            ProviderState::Cold,
+            "a refused effect must not activate the provider"
+        );
+    }
+
+    /// Metadata reads may see a Bound row; none of them may cost a resource.
+    ///
+    /// Cold, Discovered, and Disabled declarations are enumerated because the
+    /// read paths must not care which one it is: none of them may build a
+    /// client, start the channel, create a forwarder, admit a queue row,
+    /// activate the provider, or speak to the directory/transport.
+    #[tokio::test]
+    async fn bound_cold_lists_never_call_transport() {
+        use super::test_support::{LoopbackPeer, ResourceProbe};
+        use crate::gateway::delivery_queue::{DeliveryQueueConfig, DeliveryStore};
+
+        for initial in [
+            ChannelInitialState::Discovered,
+            ChannelInitialState::Cold,
+            ChannelInitialState::Disabled,
+        ] {
+            let label = match initial {
+                ChannelInitialState::Discovered => "discovered",
+                ChannelInitialState::Cold => "cold",
+                ChannelInitialState::Disabled => "disabled",
+            };
+            let expected = match initial {
+                ChannelInitialState::Discovered => ProviderState::Discovered,
+                ChannelInitialState::Cold => ProviderState::Cold,
+                ChannelInitialState::Disabled => ProviderState::Disabled,
+            };
+            let peer = LoopbackPeer::new(200).await;
+            let mut arrival = peer.arrived;
+            let probe = ResourceProbe::default();
+            let store = Arc::new(
+                DeliveryStore::open_in_memory(DeliveryQueueConfig::default())
+                    .expect("in-memory delivery store"),
+            );
+            let tree = Arc::new(OwnershipTree::new());
+            let registry = Arc::new(ChannelRegistry::new().with_delivery_store(Arc::clone(&store)));
+            let mut inbound = registry
+                .take_inbound_receiver()
+                .expect("the registry owns the only inbound receiver");
+            let id = register_bound_on(
+                &registry,
+                &tree,
+                Box::new(observed_webhook(
+                    "cold-list-bound",
+                    peer.url.clone(),
+                    "/webhook/cold-list",
+                    "cold-secret",
+                    &probe,
+                )),
+                initial,
+            )
+            .await;
+            let channel_type = registry.list().await[0].channel_type.clone();
+
+            for _ in 0..3 {
+                let list = registry.list().await;
+                assert_eq!(list.len(), 1, "{label}: metadata rows stay visible");
+                assert_eq!(list[0].id, id);
+                assert_eq!(registry.list_by_type(&channel_type).await.len(), 1);
+                assert_eq!(registry.status_summary().await.total, 1);
+                assert_eq!(registry.health_summary().await.total, 1);
+                let snapshots = registry.health_states().await;
+                assert_eq!(snapshots.len(), 1, "{label}: health snapshot row");
+                assert_eq!(
+                    desired_of(&snapshots, &id),
+                    DesiredChannelState::Stopped,
+                    "{label}: a read never writes desire"
+                );
+                assert!(
+                    registry.get_capabilities(&id).await.is_some(),
+                    "{label}: capability metadata is observable"
+                );
+                assert!(
+                    registry.get(&id).await.is_none(),
+                    "{label}: a handle-returning read stays Legacy-only"
+                );
+                assert!(matches!(
+                    registry.list_conversations(&id, "", 10).await,
+                    Err(ChannelError::UnsupportedFeature(_))
+                ));
+                assert!(registry.capture_bound_channel(&id).await.is_ok());
+                let (descriptors, _) = registry
+                    .snapshot_bound_channels(&VisibilityScope::default())
+                    .await;
+                assert_eq!(descriptors.len(), 1);
+            }
+
+            assert_eq!(probe.count("client_build_attempt"), 0, "{label}");
+            assert_eq!(probe.count("client_built"), 0, "{label}");
+            assert_eq!(probe.count("request_attempt"), 0, "{label}");
+            assert_eq!(probe.count("request_ended"), 0, "{label}");
+            assert_eq!(probe.count("client_drop"), 0, "{label}");
+            assert_eq!(
+                registry.webhook_mounts().mounted_count().await,
+                0,
+                "{label}: a read must not mount ingress"
+            );
+            assert_eq!(store.len().expect("queue length"), 0, "{label}");
+            assert!(inbound.try_recv().is_err(), "{label}");
+            assert!(arrival.try_recv().is_err(), "{label}");
+            let capture = registry.capture_bound_channel(&id).await.unwrap();
+            assert_eq!(capture.provider.state(), expected, "{label}");
+            let entry = registry.channels.read().await.get(&id).unwrap().clone();
+            let runtime = entry.runtime.lock().unwrap();
+            assert!(runtime.driver.is_none(), "{label}");
+            assert!(runtime.forwarder.is_none(), "{label}");
+            assert_eq!(runtime.active_work, 0, "{label}");
+        }
+    }
+
+    /// The compatibility lifecycle entry points must dispatch by registration
+    /// variant: Bound work belongs to the source-owned driver, never to the
+    /// Legacy adapter path.
+    #[tokio::test]
+    async fn bound_compat_lifecycle_uses_source() {
+        use super::test_support::{
+            FailingStopWebhook, HeldWebhook, LifecycleBlock, LoopbackPeer, ResourceProbe,
+        };
+        use crate::gateway::interfaces::webhook::{WebhookChannel, WebhookChannelConfig};
+        use std::time::Duration;
+
+        let peer = LoopbackPeer::new(200).await;
+        let (registry, id, probe, tree) = real_bound(peer.url.clone()).await;
+
+        // start: the driver, the provider, and the entry runtime all move
+        // through the existing binding path.
+        registry
+            .start_channel(&id)
+            .await
+            .expect("compat start must route to the source-owned lifecycle");
+        let capture = registry.capture_bound_channel(&id).await.unwrap();
+        assert_eq!(capture.provider.state(), ProviderState::Ready);
+        assert_eq!(
+            capture.provider.snapshot().1,
+            1,
+            "the provider generation advances through the binding path"
+        );
+        assert_eq!(probe.count("client_built"), 1);
+        assert_eq!(probe.count("request_attempt"), 0);
+        assert_eq!(
+            desired_of(&registry.health_states().await, &id),
+            DesiredChannelState::Running
+        );
+        assert_eq!(
+            registry.webhook_mounts().mounted_count().await,
+            0,
+            "no Bound ingress is mounted"
+        );
+        let entry = registry.channels.read().await.get(&id).unwrap().clone();
+        assert!(entry.runtime.lock().unwrap().forwarder.is_some());
+
+        // stop: same source-owned drain, ending Stopped.
+        registry
+            .stop_channel(&id)
+            .await
+            .expect("compat stop must route to the source-owned lifecycle");
+        assert_eq!(capture_state(&registry, &id).await, ProviderState::Stopped);
+        assert_eq!(probe.count("client_drop"), 1);
+        assert!(entry.runtime.lock().unwrap().forwarder.is_none());
+        assert_eq!(
+            desired_of(&registry.health_states().await, &id),
+            DesiredChannelState::Stopped
+        );
+
+        // restart: a source-owned stop followed by a source-owned start.
+        registry
+            .restart_channel(&id)
+            .await
+            .expect("compat restart must be a source-owned stop then start");
+        assert_eq!(capture_state(&registry, &id).await, ProviderState::Ready);
+        assert_eq!(probe.count("client_built"), 2);
+        assert_eq!(probe.count("client_drop"), 2);
+        assert_eq!(
+            desired_of(&registry.health_states().await, &id),
+            DesiredChannelState::Running
+        );
+
+        // The shared source gate must not be held while channel I/O blocks.
+        let (entered, waiting) = tokio::sync::oneshot::channel();
+        let (release, blocked) = tokio::sync::oneshot::channel();
+        let held_probe = ResourceProbe::default();
+        let held_id = register_bound_on(
+            &registry,
+            &tree,
+            Box::new(HeldWebhook {
+                channel: WebhookChannel::observed(
+                    "held-bound",
+                    WebhookChannelConfig {
+                        secret: "held-secret".into(),
+                        callback_url: "http://127.0.0.1:1/callback".into(),
+                        path: "/webhook/held-bound".into(),
+                        ..Default::default()
+                    },
+                    held_probe.clone(),
+                ),
+                start: Some(LifecycleBlock {
+                    entered,
+                    release: blocked,
+                }),
+                stop: None,
+            }),
+            ChannelInitialState::Cold,
+        )
+        .await;
+        let driver = {
+            let registry = Arc::clone(&registry);
+            let held_id = held_id.clone();
+            tokio::spawn(async move { registry.start_channel(&held_id).await })
+        };
+        waiting.await.expect("the driver must reach channel.start");
+        assert_eq!(
+            capture_state(&registry, &held_id).await,
+            ProviderState::Starting,
+            "the source-owned driver is active while the adapter blocks"
+        );
+        let progressed = tokio::time::timeout(Duration::from_secs(2), async {
+            registry.capture_bound_channel(&held_id).await.unwrap();
+            registry
+                .register(Box::new(observed_webhook(
+                    "gate-probe",
+                    "http://127.0.0.1:1/callback".into(),
+                    "/webhook/gate-probe",
+                    "gate-secret",
+                    &ResourceProbe::default(),
+                )))
+                .await;
+        })
+        .await;
+        assert!(
+            progressed.is_ok(),
+            "the source gate must stay free while channel I/O blocks"
+        );
+        release.send(()).expect("release the held start");
+        driver
+            .await
+            .expect("join the compat start")
+            .expect("compat start must succeed through the source");
+        assert_eq!(
+            capture_state(&registry, &held_id).await,
+            ProviderState::Ready
+        );
+        assert_eq!(held_probe.count("client_built"), 1);
+
+        // A failed cleanup must not fabricate Ready or revive the entry.
+        let failing_probe = ResourceProbe::default();
+        let failing_id = register_bound_on(
+            &registry,
+            &tree,
+            Box::new(FailingStopWebhook::new(
+                "failing-bound",
+                "http://127.0.0.1:1/callback".into(),
+                failing_probe.clone(),
+            )),
+            ChannelInitialState::Cold,
+        )
+        .await;
+        registry
+            .start_channel(&failing_id)
+            .await
+            .expect("start must succeed before the injected stop failure");
+        assert_eq!(
+            capture_state(&registry, &failing_id).await,
+            ProviderState::Ready
+        );
+        assert!(
+            registry.stop_channel(&failing_id).await.is_err(),
+            "the injected stop failure must be reported, not swallowed"
+        );
+        assert_ne!(
+            capture_state(&registry, &failing_id).await,
+            ProviderState::Ready,
+            "a failed stop must never fabricate Ready"
+        );
+        assert!(
+            registry.restart_channel(&failing_id).await.is_err(),
+            "restart must not revive an entry whose cleanup failed"
+        );
+        assert_ne!(
+            capture_state(&registry, &failing_id).await,
+            ProviderState::Ready
+        );
+        assert_eq!(failing_probe.count("client_drop"), 0);
+    }
+
+    /// Legacy traffic must behave exactly as before: same admission, same
+    /// transport, same mount, same cleanup.
+    #[tokio::test]
+    async fn legacy_positive_controls_unchanged() {
+        use super::test_support::{LoopbackPeer, ResourceProbe};
+        use std::time::Duration;
+
+        let peer = LoopbackPeer::new(200).await;
+        let probe = ResourceProbe::default();
+        let registry = Arc::new(ChannelRegistry::new());
+        let mut inbound = registry
+            .take_inbound_receiver()
+            .expect("the registry owns the only inbound receiver");
+        let id = registry
+            .register(Box::new(observed_webhook(
+                "legacy-control",
+                peer.url.clone(),
+                "/webhook/legacy-control",
+                "legacy-secret",
+                &probe,
+            )))
+            .await;
+
+        registry
+            .start_channel(&id)
+            .await
+            .expect("Legacy start stays available");
+        assert_eq!(probe.count("client_built"), 1);
+        assert!(registry.get(&id).await.is_some());
+        assert_eq!(registry.webhook_mounts().mounted_count().await, 1);
+
+        let send = {
+            let registry = Arc::clone(&registry);
+            let id = id.clone();
+            tokio::spawn(async move {
+                registry
+                    .send_reported(&id, OutboundMessage::text("conv-1", "legacy control"))
+                    .await
+            })
+        };
+        let bytes = peer.arrived.await.expect("the loopback peer is reached");
+        assert!(String::from_utf8_lossy(&bytes).contains("legacy control"));
+        peer.release.send(()).expect("release the held response");
+        let report = send.await.expect("join the send");
+        assert!(
+            report.result.is_ok(),
+            "Legacy send must still deliver: {:?}",
+            report.result.err()
+        );
+        assert_eq!(report.queue, QueueDisposition::Delivered);
+        assert_eq!(probe.count("request_attempt"), 1);
+
+        let body = br#"{"message":"inbound control"}"#;
+        let signature = crate::gateway::webhook_receiver::WebhookReceiver::compute_signature(
+            "legacy-secret",
+            body,
+        );
+        let router =
+            crate::gateway::webhook_receiver::WebhookReceiver::router(registry.webhook_mounts());
+        let response = {
+            use tower::ServiceExt;
+            router
+                .oneshot(
+                    axum::http::Request::builder()
+                        .method("POST")
+                        .uri("/webhook/legacy-control")
+                        .header("x-webhook-signature", signature)
+                        .body(axum::body::Body::from(body.to_vec()))
+                        .expect("build the signed request"),
+                )
+                .await
+                .expect("dispatch the inbound webhook")
+        };
+        assert_eq!(response.status(), axum::http::StatusCode::OK);
+        let forwarded = tokio::time::timeout(Duration::from_secs(2), inbound.recv())
+            .await
+            .expect("the forwarder must publish the inbound message")
+            .expect("inbound broadcast is open");
+        assert_eq!(forwarded.text, "inbound control");
+        assert_eq!(forwarded.channel_id, id);
+
+        registry
+            .stop_channel(&id)
+            .await
+            .expect("Legacy stop stays available");
+        assert_eq!(probe.count("client_drop"), 1);
+        assert_eq!(
+            registry.webhook_mounts().mounted_count().await,
+            0,
+            "stop must unmount"
+        );
+        peer.task.await.expect("the loopback peer task ends");
+    }
 }

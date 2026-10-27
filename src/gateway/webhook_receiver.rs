@@ -938,4 +938,150 @@ mod tests {
         // Unmounting an unknown channel is a no-op, not an error.
         assert_eq!(table.unmount_channel(&ChannelId::new("nope")).await, 0);
     }
+
+    // --- Stage C source/registration validation before dispatch ---
+
+    /// A mount retained past its registration must not dispatch.
+    ///
+    /// Pins the Stage C contract: the table is only the mount *collection*, and
+    /// the order is lookup → HMAC → **source/registration validation** → status
+    /// → `handler.handle` → inbound forward. A handler object that outlived its
+    /// registration (retired, replaced, or converted to Bound) is therefore
+    /// unusable even though it is still in the table, its signature still
+    /// verifies, and its status cell still says `Connected`.
+    ///
+    /// The mount is retained by reading it back out of the shared table and
+    /// re-publishing that same handler/inbound pair — exactly the object graph
+    /// a stale mount has. The status cell is refreshed to `Connected` on
+    /// purpose: status is defence in depth, not identity, so a pass here can
+    /// only come from source validation.
+    #[tokio::test]
+    async fn bound_held_webhook_handler_denies_dispatch() {
+        use crate::gateway::channel::ChannelState;
+        use crate::gateway::channel_registry::ChannelRegistry;
+        use crate::gateway::interfaces::webhook::{WebhookChannel, WebhookChannelConfig};
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        /// Counts `handle` without replacing the real handler's verify/parse.
+        struct CountingHandler {
+            inner: Arc<dyn WebhookHandler>,
+            handled: Arc<AtomicUsize>,
+        }
+
+        #[async_trait]
+        impl WebhookHandler for CountingHandler {
+            fn verify(&self, headers: &HeaderMap, body: &[u8]) -> bool {
+                self.inner.verify(headers, body)
+            }
+
+            async fn handle(
+                &self,
+                headers: &HeaderMap,
+                body: Bytes,
+            ) -> ChannelResult<Vec<InboundMessage>> {
+                self.handled.fetch_add(1, Ordering::SeqCst);
+                self.inner.handle(headers, body).await
+            }
+
+            fn path(&self) -> &str {
+                self.inner.path()
+            }
+        }
+
+        let secret = "retire-secret";
+        let path = "/webhook/held";
+        let config = WebhookChannelConfig {
+            secret: secret.into(),
+            callback_url: "http://127.0.0.1:1/callback".into(),
+            path: path.into(),
+            ..Default::default()
+        };
+
+        let registry = ChannelRegistry::new();
+        let id = registry
+            .register(Box::new(WebhookChannel::new("held", config.clone())))
+            .await;
+        registry
+            .start_channel(&id)
+            .await
+            .expect("Legacy start publishes the mount");
+
+        // Retain the live handler behind a counter. Only `handle` is counted;
+        // verify/parse stay production. The sink is a private cell whose
+        // subscriber is held from the start, so a forwarded message is
+        // observed deterministically instead of racing the registry forwarder.
+        let table = registry.webhook_mounts();
+        let live = table
+            .lookup(path)
+            .await
+            .expect("Legacy start must mount the handler");
+        let handled = Arc::new(AtomicUsize::new(0));
+        let sink = ChannelState::new(8);
+        sink.set_status(ChannelStatus::Connected).await;
+        let mut inbound_rx = sink.inbound_subscribe();
+        let retained = || WebhookMount {
+            handler: Arc::new(CountingHandler {
+                inner: Arc::clone(&live.handler),
+                handled: Arc::clone(&handled),
+            }),
+            inbound: sink.sender(),
+            status: sink.status_handle(),
+            channel_id: id.clone(),
+        };
+        assert!(
+            table.mount(retained()).await,
+            "a same-channel refresh is accepted"
+        );
+        let router = WebhookReceiver::router(Arc::clone(&table));
+
+        // Positive control: this mount IS the registration's publication, so a
+        // correctly signed request dispatches and forwards.
+        assert_eq!(
+            signed_post(&router, path, secret, br#"{"message":"before retirement"}"#).await,
+            StatusCode::OK
+        );
+        assert_eq!(handled.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            inbound_rx
+                .try_recv()
+                .expect("inbound must forward while the registration is live")
+                .text,
+            "before retirement"
+        );
+
+        // Retire the publication: the same channel id now denotes a different
+        // registration, one that never published this handler. The retained
+        // mount keeps serving until something validates its identity.
+        registry
+            .register(Box::new(WebhookChannel::new("held", config)))
+            .await;
+        assert!(
+            table.mount(retained()).await,
+            "a mount that outlived its registration is back in the table"
+        );
+
+        let body = br#"{"message":"after retirement"}"#;
+        assert!(
+            WebhookReceiver::verify_signature(
+                secret,
+                body,
+                &WebhookReceiver::compute_signature(secret, body)
+            ),
+            "HMAC stays valid: the refusal must come from source validation"
+        );
+        assert_ne!(
+            signed_post(&router, path, secret, body).await,
+            StatusCode::OK,
+            "a retained handler from a retired registration must not dispatch"
+        );
+        assert_eq!(
+            handled.load(Ordering::SeqCst),
+            1,
+            "handler.handle must not run for a stale mount"
+        );
+        assert!(
+            inbound_rx.try_recv().is_err(),
+            "no inbound message may be forwarded for a stale mount"
+        );
+    }
 }
