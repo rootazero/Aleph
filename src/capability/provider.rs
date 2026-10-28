@@ -338,7 +338,6 @@ impl ProviderHandle {
     /// The callback must only mutate local bookkeeping: no await, I/O, external
     /// handler code, or provider re-entry. Source and ownership gates must be
     /// acquired before this guard; entry bookkeeping follows it.
-    #[allow(dead_code)] // Source work admission is integrated in Task 5.
     pub(crate) fn with_call_admission<R>(
         &self,
         expected_generation: u64,
@@ -358,7 +357,7 @@ impl ProviderHandle {
     /// Stopping: the source must also validate a live, pre-stop, non-clone work
     /// ticket. The callback and lock-order constraints of `with_call_admission`
     /// apply here too; no drain or transport work runs under this guard.
-    #[allow(dead_code)] // Source work completion is integrated in Task 5.
+    #[allow(dead_code)] // Reserved for a future source completion caller.
     pub(crate) fn with_admitted_completion<R>(
         &self,
         expected_generation: u64,

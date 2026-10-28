@@ -1719,10 +1719,9 @@ impl ChannelRegistry {
 
         // NOTE: the read guard is held across the await on `channel.edit`
         // because `Channel::edit` returns a future that borrows `&self`.
-        // Releasing the guard before the await requires the trait to
-        // return an owned (Box<dyn Future>) future, which would need a
-        // breaking change to every `Channel` impl. Documented risk:
-        // a slow adapter edit can block stop_channel / health; mitigated
+        // The owned-operation pattern used by `send` can be applied to edit
+        // separately; this migration covers outbound sends only. Documented
+        // risk: a slow adapter edit can block stop_channel / health; mitigated
         // by the per-adapter `editing` capability gate.
         let channel = channel_arc.read().await;
         channel.edit(conversation_id, message_id, new_text).await
@@ -2034,6 +2033,11 @@ impl ChannelRegistry {
     /// keeps draining that broadcast, so reusing it here avoids the
     /// duplicate-delivery that a second `start_channel` would cause. This is
     /// the recovery primitive used by the health monitor for wedged channels.
+    ///
+    /// For a Bound registration, the registry-level lifecycle stop (not
+    /// `Channel::stop`) first drains admitted source work with no timeout. A wedged transport can therefore keep restart—and a health
+    /// monitor awaiting it—blocked. Stage C does not add cancellation or a
+    /// bounded-drain authority; production Bound mount remains deferred.
     pub async fn restart_channel(&self, channel_id: &ChannelId) -> ChannelResult<()> {
         if self
             .channels
@@ -5419,22 +5423,9 @@ mod tests {
         );
         assert_eq!(report.queue, QueueDisposition::NotQueueable);
 
-        // HANDOFF (Task 4, not this task): `DeliveryStore::enqueue` is the raw
-        // `pub` legacy/import seam today, and this call site exists only to pin
-        // its RED. Task 4 makes the store write private and publishes
-        // `pub(crate) async fn enqueue_validated_legacy(registry, store, ...)`,
-        // which validates the current Legacy registration before writing
-        // (design §6 "Effects and queue"; plan Task 4 Steps 1-2, Step 2 already
-        // names Registry/queue tests as a call site to migrate). Task 4 must
-        // move this call onto that helper and delete the raw call: final API
-        // must not expose an unvalidated `ChannelId`-only queue write.
-        // When migrating, preserve these behavioral assertions verbatim rather
-        // than turning them into "the helper was called":
-        //   (a) the outcome is not `EnqueueOutcome::Queued(_)`,
-        //   (b) `store.len()` is unchanged,
-        //   (c) `delivery_queue_stats().pending == 0`.
-        // Rows before/after are the assertion; the returned outcome is only
-        // corroboration.
+        // Exercise validated Legacy admission directly. The rows before/after
+        // are the primary assertions: no queued outcome, unchanged row count,
+        // and zero pending deliveries must survive future helper refactors.
         let before = store.len().expect("queue length");
         let outcome = super::super::delivery_queue::enqueue_validated_legacy(
             &registry,
