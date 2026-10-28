@@ -1,6 +1,6 @@
 # Gateway Owned Outbound Operation — Design / 设计
 
-**Status / 状态:** DRAFT awaiting human approval. No production code is authorized by this document alone. / 草案，等待人工批准；本文档本身不授权生产修改。
+**Status / 状态:** APPROVED by the human on 2026-10-28. Implementation follows the separate plan. / 已于 2026-10-28 获人工批准；实施遵循单独计划。
 
 **Date / 日期:** 2026-10-28 · **Branch:** `mid-send-closure` · **Base:** `main` @ `3ac50c1be5c3a613195cb76c080ef7d93f99d9ba`
 
