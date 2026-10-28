@@ -1050,17 +1050,19 @@ impl crate::gateway::channel::Channel for RigChannel {
     async fn stop(&mut self) -> crate::gateway::channel::ChannelResult<()> {
         Ok(())
     }
-    async fn send(
+    fn send(
         &self,
         message: crate::gateway::channel::OutboundMessage,
-    ) -> crate::gateway::channel::ChannelResult<crate::gateway::channel::SendResult> {
-        self.sent
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .push(message.text.clone());
-        Ok(crate::gateway::channel::SendResult {
-            message_id: MessageId::new("rig-out"),
-            timestamp: chrono::Utc::now(),
+    ) -> crate::gateway::channel::SendOperation {
+        let sent = std::sync::Arc::clone(&self.sent);
+        Box::pin(async move {
+            sent.lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .push(message.text.clone());
+            Ok(crate::gateway::channel::SendResult {
+                message_id: MessageId::new("rig-out"),
+                timestamp: chrono::Utc::now(),
+            })
         })
     }
 

@@ -45,7 +45,7 @@ pub use message_ops::WebhookMessageOps;
 
 use crate::gateway::channel::{
     Channel, ChannelCapabilities, ChannelError, ChannelFactory, ChannelId, ChannelInfo,
-    ChannelResult, ChannelState, ChannelStatus, InboundMessage, OutboundMessage, SendResult,
+    ChannelResult, ChannelState, ChannelStatus, InboundMessage, OutboundMessage, SendOperation,
 };
 use crate::gateway::webhook_receiver::{WebhookHandler, WebhookReceiver};
 use crate::sync_primitives::Arc;
@@ -172,9 +172,27 @@ impl WebhookChannel {
         }
     }
 
+    fn take_client(&mut self) -> bool {
+        if self.injected_client {
+            return false;
+        }
+        self.client.take().is_some()
+    }
+
     /// Update internal status
     async fn set_status(&self, status: ChannelStatus) {
         self.channel_state.set_status(status).await;
+    }
+}
+
+#[cfg(test)]
+impl Drop for WebhookChannel {
+    fn drop(&mut self) {
+        if self.take_client() {
+            if let Some(probe) = &self.probe {
+                probe.record("client_drop");
+            }
+        }
     }
 }
 
@@ -233,19 +251,15 @@ impl Channel for WebhookChannel {
     async fn stop(&mut self) -> ChannelResult<()> {
         tracing::info!("Stopping Webhook channel...");
         self.handler = None;
-        if !self.injected_client {
-            let client = self.client.take();
-            let existed = client.is_some();
-            drop(client);
-            #[cfg(test)]
-            if existed {
-                if let Some(probe) = &self.probe {
-                    probe.record("client_drop");
-                }
+        let existed = self.take_client();
+        #[cfg(test)]
+        if existed {
+            if let Some(probe) = &self.probe {
+                probe.record("client_drop");
             }
-            #[cfg(not(test))]
-            let _ = existed;
         }
+        #[cfg(not(test))]
+        let _ = existed;
         self.set_status(ChannelStatus::Disconnected).await;
         Ok(())
     }
@@ -254,26 +268,28 @@ impl Channel for WebhookChannel {
         self.handler.clone().map(|h| h as Arc<dyn WebhookHandler>)
     }
 
-    async fn send(&self, message: OutboundMessage) -> ChannelResult<SendResult> {
-        let client = self.client.as_ref().ok_or_else(|| {
-            ChannelError::NotConnected("Webhook channel has not been activated".into())
-        })?;
+    fn send(&self, message: OutboundMessage) -> SendOperation {
+        let client = self.client.clone();
         #[cfg(test)]
-        if let Some(probe) = &self.probe {
-            probe.record("request_attempt");
-        }
-        let result = WebhookMessageOps::send_outbound(
-            client,
-            &self.config.callback_url,
-            &self.config.secret,
-            &message,
-        )
-        .await;
-        #[cfg(test)]
-        if let Some(probe) = &self.probe {
-            probe.record("request_ended");
-        }
-        result
+        let probe = self.probe.clone();
+        let callback_url = self.config.callback_url.clone();
+        let secret = self.config.secret.clone();
+        Box::pin(async move {
+            let client = client.ok_or_else(|| {
+                ChannelError::NotConnected("Webhook channel has not been activated".into())
+            })?;
+            #[cfg(test)]
+            if let Some(probe) = &probe {
+                probe.record("request_attempt");
+            }
+            let result =
+                WebhookMessageOps::send_outbound(&client, &callback_url, &secret, &message).await;
+            #[cfg(test)]
+            if let Some(probe) = &probe {
+                probe.record("request_ended");
+            }
+            result
+        })
     }
 }
 

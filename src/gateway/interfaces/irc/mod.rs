@@ -34,7 +34,8 @@ pub use message_ops::IrcMessageOps;
 
 use crate::gateway::channel::{
     Channel, ChannelCapabilities, ChannelError, ChannelFactory, ChannelId, ChannelInfo,
-    ChannelResult, ChannelState, ChannelStatus, MessageId, OutboundMessage, SendResult,
+    ChannelResult, ChannelState, ChannelStatus, MessageId, OutboundMessage, SendOperation,
+    SendResult,
 };
 use crate::sync_primitives::Arc;
 use async_trait::async_trait;
@@ -200,25 +201,32 @@ impl Channel for IrcChannel {
         Ok(())
     }
 
-    async fn send(&self, message: OutboundMessage) -> ChannelResult<SendResult> {
-        let write_tx = self.write_tx.read().await;
-        let write_tx = write_tx.as_ref().ok_or_else(|| {
-            ChannelError::NotConnected("IRC adapter not started - call start() first".to_string())
-        })?;
+    fn send(&self, message: OutboundMessage) -> SendOperation {
+        let write_tx = self.write_tx.clone();
+        let test_mode = self.test_mode;
+        Box::pin(async move {
+            let write_tx = write_tx.read().await;
+            let write_tx = write_tx.as_ref().ok_or_else(|| {
+                ChannelError::NotConnected(
+                    "IRC adapter not started - call start() first".to_string(),
+                )
+            })?;
 
-        if self.test_mode {
-            // In test mode, verify the channel exists but don't actually send
-            let _ = write_tx;
-            return Ok(SendResult {
-                message_id: MessageId::new(format!(
-                    "irc-sent-{}",
-                    chrono::Utc::now().timestamp_millis()
-                )),
-                timestamp: chrono::Utc::now(),
-            });
-        }
+            if test_mode {
+                // In test mode, verify the channel exists but don't actually send
+                let _ = write_tx;
+                return Ok(SendResult {
+                    message_id: MessageId::new(format!(
+                        "irc-sent-{}",
+                        chrono::Utc::now().timestamp_millis()
+                    )),
+                    timestamp: chrono::Utc::now(),
+                });
+            }
 
-        IrcMessageOps::send_message(write_tx, message.conversation_id.as_str(), &message.text).await
+            IrcMessageOps::send_message(write_tx, message.conversation_id.as_str(), &message.text)
+                .await
+        })
     }
 }
 

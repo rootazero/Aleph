@@ -18,7 +18,7 @@ use async_trait::async_trait;
 use crate::gateway::channel::{
     Channel, ChannelCapabilities, ChannelError, ChannelFactory, ChannelId, ChannelInfo,
     ChannelResult, ChannelState, ChannelStatus, ConversationId, MessageId, OutboundMessage,
-    SendResult,
+    SendOperation, SendResult,
 };
 
 pub use config::WeChatConfig;
@@ -146,50 +146,56 @@ impl Channel for WeChatChannel {
         Ok(())
     }
 
-    async fn send(&self, message: OutboundMessage) -> ChannelResult<SendResult> {
-        if self.test_mode {
-            return Ok(SendResult {
-                message_id: MessageId::new(format!(
-                    "wechat-test-{}",
-                    chrono::Utc::now().timestamp_millis()
-                )),
-                timestamp: chrono::Utc::now(),
-            });
-        }
+    fn send(&self, message: OutboundMessage) -> SendOperation {
+        let runtime = self.runtime.clone();
+        let test_mode = self.test_mode;
+        let account_id = self.config.account_id.clone();
+        let token = self.config.token.clone();
+        let max_message_length = self.info.capabilities.max_message_length;
+        Box::pin(async move {
+            if test_mode {
+                return Ok(SendResult {
+                    message_id: MessageId::new(format!(
+                        "wechat-test-{}",
+                        chrono::Utc::now().timestamp_millis()
+                    )),
+                    timestamp: chrono::Utc::now(),
+                });
+            }
 
-        let runtime = self
-            .runtime
-            .as_ref()
-            .ok_or_else(|| ChannelError::NotConnected("Runtime not initialized".to_string()))?;
+            let runtime = runtime
+                .as_ref()
+                .ok_or_else(|| ChannelError::NotConnected("Runtime not initialized".to_string()))?;
 
-        let context_token = runtime
-            .get_context_token(&self.config.account_id, message.conversation_id.as_str())
-            .await;
+            let context_token = runtime
+                .get_context_token(&account_id, message.conversation_id.as_str())
+                .await;
 
-        let text = outbound::markdown::markdown_to_wechat(&message.text);
-        let chunks = crate::gateway::channel_chunking::WhatsAppChunker::chunk_by_length(
-            &text,
-            self.info.capabilities.max_message_length,
-        );
-
-        for chunk in &chunks {
-            let payload = outbound::mapper::build_send_payload(
-                &self.config.account_id,
-                message.conversation_id.as_str(),
-                &self.config.account_id,
-                chunk,
-                context_token.as_deref(),
+            let text = outbound::markdown::markdown_to_wechat(&message.text);
+            let chunks = crate::gateway::channel_chunking::WhatsAppChunker::chunk_by_length(
+                &text,
+                max_message_length,
             );
 
-            runtime
-                .send_message(&self.config.token, payload)
-                .await
-                .map_err(|e| ChannelError::SendFailed(e.to_string()))?;
-        }
+            for chunk in &chunks {
+                let payload = outbound::mapper::build_send_payload(
+                    &account_id,
+                    message.conversation_id.as_str(),
+                    &account_id,
+                    chunk,
+                    context_token.as_deref(),
+                );
 
-        Ok(SendResult {
-            message_id: MessageId::new(""),
-            timestamp: chrono::Utc::now(),
+                runtime
+                    .send_message(&token, payload)
+                    .await
+                    .map_err(|e| ChannelError::SendFailed(e.to_string()))?;
+            }
+
+            Ok(SendResult {
+                message_id: MessageId::new(""),
+                timestamp: chrono::Utc::now(),
+            })
         })
     }
 

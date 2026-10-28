@@ -10,7 +10,8 @@ use std::time::Duration;
 use aleph_protocol::telecom_relay::TelecomOutcome;
 use alephcore::gateway::channel::{
     Channel, ChannelCapabilities, ChannelError, ChannelId, ChannelInfo, ChannelResult,
-    ChannelState, ChannelStatus, MessageId, OutboundDeliveryPolicy, OutboundMessage, SendResult,
+    ChannelState, ChannelStatus, MessageId, OutboundDeliveryPolicy, OutboundMessage, SendOperation,
+    SendResult,
 };
 use alephcore::gateway::channel_registry::ChannelRegistry;
 use alephcore::gateway::delivery_queue::{
@@ -306,6 +307,7 @@ async fn a_failed_new_send_does_not_enqueue_behind_retired_legacy_rows() {
 #[derive(Default)]
 struct Sends {
     attempts: AtomicUsize,
+    stops: AtomicUsize,
     texts: Mutex<Vec<String>>,
 }
 
@@ -358,21 +360,25 @@ impl Channel for MockChannel {
     async fn stop(&mut self) -> ChannelResult<()> {
         Ok(())
     }
-    async fn send(&self, message: OutboundMessage) -> ChannelResult<SendResult> {
+    fn send(&self, message: OutboundMessage) -> SendOperation {
         let n = self.sends.attempts.fetch_add(1, Ordering::SeqCst);
-        match self.fail {
-            Fail::NotConnected => return Err(ChannelError::NotConnected("down".into())),
-            Fail::RateLimitedThenOk if n == 0 => {
-                return Err(ChannelError::RateLimited {
-                    retry_after_secs: 0,
-                })
+        let fail = self.fail;
+        let sends = Arc::clone(&self.sends);
+        Box::pin(async move {
+            match fail {
+                Fail::NotConnected => return Err(ChannelError::NotConnected("down".into())),
+                Fail::RateLimitedThenOk if n == 0 => {
+                    return Err(ChannelError::RateLimited {
+                        retry_after_secs: 0,
+                    })
+                }
+                _ => {}
             }
-            _ => {}
-        }
-        self.sends.texts.lock().unwrap().push(message.text);
-        Ok(SendResult {
-            message_id: MessageId::new("ok"),
-            timestamp: chrono::Utc::now(),
+            sends.texts.lock().unwrap().push(message.text);
+            Ok(SendResult {
+                message_id: MessageId::new("ok"),
+                timestamp: chrono::Utc::now(),
+            })
         })
     }
 }
@@ -483,10 +489,16 @@ struct VanishingExplicit {
     registry: Mutex<Option<Arc<ChannelRegistry>>>,
     replace_with_automatic: bool,
     sends: Arc<Sends>,
+    successor_sends: Arc<Sends>,
 }
 
 impl VanishingExplicit {
-    fn new(id: &str, replace_with_automatic: bool, sends: Arc<Sends>) -> Self {
+    fn new(
+        id: &str,
+        replace_with_automatic: bool,
+        sends: Arc<Sends>,
+        successor_sends: Arc<Sends>,
+    ) -> Self {
         Self {
             info: ChannelInfo {
                 id: ChannelId::new(id),
@@ -499,6 +511,7 @@ impl VanishingExplicit {
             registry: Mutex::new(None),
             replace_with_automatic,
             sends,
+            successor_sends,
         }
     }
 }
@@ -518,39 +531,60 @@ impl Channel for VanishingExplicit {
         Ok(())
     }
     async fn stop(&mut self) -> ChannelResult<()> {
+        self.sends.stops.fetch_add(1, Ordering::SeqCst);
         Ok(())
     }
-    async fn send(&self, _message: OutboundMessage) -> ChannelResult<SendResult> {
+    fn send(&self, _message: OutboundMessage) -> SendOperation {
         self.sends.attempts.fetch_add(1, Ordering::SeqCst);
         let registry = self.registry.lock().unwrap().clone();
-        if let Some(registry) = registry {
-            let id = self.info.id.clone();
-            let _ = registry.unregister(&id).await;
-            if self.replace_with_automatic {
-                registry
-                    .register(Box::new(MockChannel::new(id.as_str(), Arc::default())))
-                    .await;
+        let id = self.info.id.clone();
+        let replace_with_automatic = self.replace_with_automatic;
+        let successor_sends = Arc::clone(&self.successor_sends);
+        Box::pin(async move {
+            if let Some(registry) = registry {
+                let _ = registry.unregister(&id).await;
+                if replace_with_automatic {
+                    registry
+                        .register(Box::new(MockChannel::new(
+                            id.as_str(),
+                            Arc::clone(&successor_sends),
+                        )))
+                        .await;
+                }
             }
-        }
-        Err(ChannelError::NotConnected("gone".into()))
+            Err(ChannelError::NotConnected("gone".into()))
+        })
     }
 }
 
+/// Returns the retained `Sends` of the old channel and of the successor it
+/// installs, so each instance's transport activity is independently observable.
 async fn vanishing_fixture(
     replace: bool,
-) -> (Arc<ChannelRegistry>, Arc<DeliveryStore>, Arc<Sends>) {
+) -> (
+    Arc<ChannelRegistry>,
+    Arc<DeliveryStore>,
+    Arc<Sends>,
+    Arc<Sends>,
+) {
     let store = Arc::new(DeliveryStore::open_in_memory(fast_cfg()).unwrap());
     let registry = Arc::new(ChannelRegistry::new().with_delivery_store(Arc::clone(&store)));
     let sends = Arc::new(Sends::default());
-    let channel = VanishingExplicit::new("vanish", replace, Arc::clone(&sends));
+    let successor_sends = Arc::new(Sends::default());
+    let channel = VanishingExplicit::new(
+        "vanish",
+        replace,
+        Arc::clone(&sends),
+        Arc::clone(&successor_sends),
+    );
     *channel.registry.lock().unwrap() = Some(Arc::clone(&registry));
     registry.register(Box::new(channel)).await;
-    (registry, store, sends)
+    (registry, store, sends, successor_sends)
 }
 
 #[tokio::test]
 async fn explicit_only_channel_unregistered_mid_send_is_never_persisted() {
-    let (registry, store, sends) = vanishing_fixture(false).await;
+    let (registry, store, sends, _successor_sends) = vanishing_fixture(false).await;
 
     let err = tokio::time::timeout(
         Duration::from_secs(5),
@@ -566,11 +600,13 @@ async fn explicit_only_channel_unregistered_mid_send_is_never_persisted() {
     assert!(matches!(err, ChannelError::NotConnected(_)), "{err:?}");
     assert_eq!(sends.attempts.load(Ordering::SeqCst), 1);
     assert_nothing_stored(&store);
+    assert_eq!(sends.stops.load(Ordering::SeqCst), 1);
+    assert!(registry.get(&ChannelId::new("vanish")).await.is_none());
 }
 
 #[tokio::test]
 async fn explicit_only_channel_replaced_mid_send_is_never_persisted() {
-    let (registry, store, sends) = vanishing_fixture(true).await;
+    let (registry, store, sends, successor_sends) = vanishing_fixture(true).await;
 
     let err = tokio::time::timeout(
         Duration::from_secs(5),
@@ -585,6 +621,32 @@ async fn explicit_only_channel_replaced_mid_send_is_never_persisted() {
 
     assert!(matches!(err, ChannelError::NotConnected(_)), "{err:?}");
     assert_eq!(sends.attempts.load(Ordering::SeqCst), 1);
+    assert_nothing_stored(&store);
+    assert_eq!(sends.stops.load(Ordering::SeqCst), 1);
+    assert_eq!(sends.attempts.load(Ordering::SeqCst), 1);
+    let successor = registry
+        .get(&ChannelId::new("vanish"))
+        .await
+        .expect("successor");
+    assert_eq!(
+        successor.read().await.outbound_delivery_policy(),
+        OutboundDeliveryPolicy::Automatic
+    );
+    // The successor's read guard is released by the statement above, so the
+    // real send below cannot deadlock against our own assertion.
+    registry
+        .send(
+            &ChannelId::new("vanish"),
+            OutboundMessage::text(PEER, "successor-visible"),
+        )
+        .await
+        .expect("Automatic successor sends");
+    assert_eq!(sends.attempts.load(Ordering::SeqCst), 1);
+    assert_eq!(successor_sends.attempts.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        successor_sends.texts.lock().unwrap().as_slice(),
+        ["successor-visible".to_string()]
+    );
     assert_nothing_stored(&store);
 }
 

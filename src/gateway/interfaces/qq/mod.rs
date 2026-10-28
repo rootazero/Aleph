@@ -11,7 +11,8 @@ pub use config::{QQAccountConfig, QQConfig, QQDmPolicy, QQGroupPolicy};
 
 use crate::gateway::channel::{
     Channel, ChannelCapabilities, ChannelError, ChannelFactory, ChannelId, ChannelInfo,
-    ChannelResult, ChannelState, ChannelStatus, MessageId, OutboundMessage, SendResult,
+    ChannelResult, ChannelState, ChannelStatus, MessageId, OutboundMessage, SendOperation,
+    SendResult,
 };
 use crate::gateway::interfaces::qq::types::QQEvent;
 use crate::sync_primitives::Arc;
@@ -211,22 +212,26 @@ impl Channel for QQChannel {
         Ok(())
     }
 
-    async fn send(&self, message: OutboundMessage) -> ChannelResult<SendResult> {
-        if self.test_mode {
-            return Ok(SendResult {
-                message_id: MessageId::new(format!(
-                    "qq-test-{}",
-                    chrono::Utc::now().timestamp_millis()
-                )),
-                timestamp: chrono::Utc::now(),
-            });
-        }
+    fn send(&self, message: OutboundMessage) -> SendOperation {
+        let api = self.api_client.clone();
+        let test_mode = self.test_mode;
+        let reply_tracker = self.reply_tracker.clone();
+        Box::pin(async move {
+            if test_mode {
+                return Ok(SendResult {
+                    message_id: MessageId::new(format!(
+                        "qq-test-{}",
+                        chrono::Utc::now().timestamp_millis()
+                    )),
+                    timestamp: chrono::Utc::now(),
+                });
+            }
 
-        let api = self
-            .api_client
-            .as_ref()
-            .ok_or_else(|| ChannelError::NotConnected("QQ API not initialized".to_string()))?;
-        delivery::deliver_message(api, &message, &self.reply_tracker).await
+            let api = api
+                .as_ref()
+                .ok_or_else(|| ChannelError::NotConnected("QQ API not initialized".to_string()))?;
+            delivery::deliver_message(api, &message, &reply_tracker).await
+        })
     }
 }
 

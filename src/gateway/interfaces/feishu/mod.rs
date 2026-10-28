@@ -21,7 +21,7 @@ use tokio::sync::watch;
 use crate::gateway::channel::{
     Channel, ChannelCapabilities, ChannelError, ChannelFactory, ChannelId, ChannelInfo,
     ChannelResult, ChannelState, ChannelStatus, ConversationId, MessageId, OutboundMessage,
-    SendResult,
+    SendOperation, SendResult,
 };
 
 use api::FeishuApi;
@@ -185,9 +185,9 @@ impl FeishuChannel {
         })
     }
 
-    fn admit_call(&self) -> ChannelResult<()> {
-        self.provider
-            .acquire_call(self.provider.generation())
+    fn admit_call(provider: &ProviderHandle) -> ChannelResult<()> {
+        provider
+            .acquire_call(provider.generation())
             .map_err(|e| ChannelError::NotConnected(e.to_string()))
     }
     async fn start_runtime(&mut self, generation: u64) -> ChannelResult<()> {
@@ -405,23 +405,28 @@ impl Channel for FeishuChannel {
         Ok(())
     }
 
-    async fn send(&self, message: OutboundMessage) -> ChannelResult<SendResult> {
-        self.admit_call()?;
-        if self.test_mode {
-            return Ok(SendResult {
-                message_id: MessageId::new(format!(
-                    "feishu-test-{}",
-                    chrono::Utc::now().timestamp_millis()
-                )),
-                timestamp: chrono::Utc::now(),
-            });
-        }
+    fn send(&self, message: OutboundMessage) -> SendOperation {
+        let provider = self.provider.clone();
+        let test_mode = self.test_mode;
+        let api = self.api.clone();
+        let config = self.config.clone();
+        Box::pin(async move {
+            Self::admit_call(&provider)?;
+            if test_mode {
+                return Ok(SendResult {
+                    message_id: MessageId::new(format!(
+                        "feishu-test-{}",
+                        chrono::Utc::now().timestamp_millis()
+                    )),
+                    timestamp: chrono::Utc::now(),
+                });
+            }
 
-        let api = self
-            .api
-            .as_ref()
-            .ok_or_else(|| ChannelError::NotConnected("API not initialized".to_string()))?;
-        FeishuSender::send_message(api, message, &self.config).await
+            let api = api
+                .as_ref()
+                .ok_or_else(|| ChannelError::NotConnected("API not initialized".to_string()))?;
+            FeishuSender::send_message(api, message, &config).await
+        })
     }
 
     async fn react(
@@ -430,7 +435,7 @@ impl Channel for FeishuChannel {
         _message_id: &MessageId,
         _reaction: &str,
     ) -> ChannelResult<()> {
-        self.admit_call()?;
+        Self::admit_call(&self.provider)?;
         if self.test_mode {
             return Ok(());
         }
@@ -448,7 +453,7 @@ impl Channel for FeishuChannel {
         message_id: &MessageId,
         new_text: &str,
     ) -> ChannelResult<()> {
-        self.admit_call()?;
+        Self::admit_call(&self.provider)?;
         if self.test_mode {
             return Ok(());
         }
@@ -465,7 +470,7 @@ impl Channel for FeishuChannel {
         conversation_id: &ConversationId,
         message_id: &MessageId,
     ) -> ChannelResult<()> {
-        self.admit_call()?;
+        Self::admit_call(&self.provider)?;
         if self.test_mode {
             return Ok(());
         }

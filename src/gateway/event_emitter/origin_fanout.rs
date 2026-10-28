@@ -248,7 +248,7 @@ mod tests {
     async fn the_origin_fanout_chunks_against_the_channels_declared_cap() {
         use crate::gateway::channel::{
             Channel, ChannelCapabilities, ChannelInfo, ChannelResult, ChannelState, ChannelStatus,
-            MessageId, SendResult,
+            MessageId, SendOperation, SendResult,
         };
 
         struct Capped {
@@ -271,11 +271,14 @@ mod tests {
             async fn stop(&mut self) -> ChannelResult<()> {
                 Ok(())
             }
-            async fn send(&self, message: OutboundMessage) -> ChannelResult<SendResult> {
-                self.seen.lock().await.push(message.text.clone());
-                Ok(SendResult {
-                    message_id: MessageId::new("ok"),
-                    timestamp: chrono::Utc::now(),
+            fn send(&self, message: OutboundMessage) -> SendOperation {
+                let seen = Arc::clone(&self.seen);
+                Box::pin(async move {
+                    seen.lock().await.push(message.text.clone());
+                    Ok(SendResult {
+                        message_id: MessageId::new("ok"),
+                        timestamp: chrono::Utc::now(),
+                    })
                 })
             }
         }
@@ -339,7 +342,7 @@ mod tests {
     async fn explicit_only_failure_stops_origin_tail_without_queue_custody() {
         use crate::gateway::channel::{
             Channel, ChannelCapabilities, ChannelError, ChannelInfo, ChannelResult, ChannelState,
-            ChannelStatus, OutboundDeliveryPolicy, SendResult,
+            ChannelStatus, OutboundDeliveryPolicy, SendOperation,
         };
         use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -366,9 +369,9 @@ mod tests {
             async fn stop(&mut self) -> ChannelResult<()> {
                 Ok(())
             }
-            async fn send(&self, _message: OutboundMessage) -> ChannelResult<SendResult> {
+            fn send(&self, _message: OutboundMessage) -> SendOperation {
                 self.attempts.fetch_add(1, Ordering::SeqCst);
-                Err(ChannelError::NotConnected("offline".to_string()))
+                Box::pin(async move { Err(ChannelError::NotConnected("offline".to_string())) })
             }
         }
 

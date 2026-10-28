@@ -65,7 +65,7 @@ use aleph_protocol::telecom_relay::{TelecomEnvelope, TelecomKind, TelecomOutcome
 use crate::gateway::channel::{
     Channel, ChannelCapabilities, ChannelError, ChannelFactory, ChannelId, ChannelInfo,
     ChannelResult, ChannelState, ChannelStatus, MessageId, OutboundDeliveryPolicy, OutboundMessage,
-    SendResult,
+    SendOperation, SendResult,
 };
 use crate::gateway::telecom::{accept_event, AcceptContext, Acceptance, DedupLedger};
 use crate::sync_primitives::{Arc, Mutex, PoisonError};
@@ -322,55 +322,58 @@ impl Channel for SmsChannel {
         Ok(())
     }
 
-    async fn send(&self, message: OutboundMessage) -> ChannelResult<SendResult> {
-        let Some(transport) = self.transport.as_ref() else {
-            return Err(ChannelError::NotConnected(
-                "SMS relay transport is not connected; nothing was sent".into(),
-            ));
-        };
-        if self.channel_state.status() != ChannelStatus::Connected {
-            return Err(ChannelError::NotConnected(
-                "SMS channel is not connected; nothing was sent".into(),
-            ));
-        }
-        // The cached status can be stale (relay dropped after start): ask the
-        // transport now, before building or submitting anything.
-        if !transport.is_connected().await {
-            self.channel_state
-                .set_status(ChannelStatus::Disconnected)
-                .await;
-            self.channel_state
-                .record_failure(Some("SMS relay connection lost".to_string()))
-                .await;
-            return Err(ChannelError::NotConnected(
-                "SMS relay connection is not established; nothing was sent".into(),
-            ));
-        }
-        let operation = build_pending_operation(&self.config, &message, Utc::now())?;
-        let submission = transport.submit(&operation).await?;
-        if submission.operation_id != operation.operation_id() {
-            return Err(ChannelError::SendFailed(
-                "relay acknowledged a different operation id; outcome unverified".into(),
-            ));
-        }
-        match submission.outcome {
-            // The Relay took (or has progressed) the request. Not a delivery claim.
-            TelecomOutcome::Accepted | TelecomOutcome::Submitted | TelecomOutcome::Delivered => {
-                Ok(SendResult {
+    fn send(&self, message: OutboundMessage) -> SendOperation {
+        let transport = self.transport.clone();
+        let channel_state = self.channel_state.clone();
+        let config = self.config.clone();
+        Box::pin(async move {
+            let Some(transport) = transport.as_ref() else {
+                return Err(ChannelError::NotConnected(
+                    "SMS relay transport is not connected; nothing was sent".into(),
+                ));
+            };
+            if channel_state.status() != ChannelStatus::Connected {
+                return Err(ChannelError::NotConnected(
+                    "SMS channel is not connected; nothing was sent".into(),
+                ));
+            }
+            // The cached status can be stale (relay dropped after start): ask the
+            // transport now, before building or submitting anything.
+            if !transport.is_connected().await {
+                channel_state.set_status(ChannelStatus::Disconnected).await;
+                channel_state
+                    .record_failure(Some("SMS relay connection lost".to_string()))
+                    .await;
+                return Err(ChannelError::NotConnected(
+                    "SMS relay connection is not established; nothing was sent".into(),
+                ));
+            }
+            let operation = build_pending_operation(&config, &message, Utc::now())?;
+            let submission = transport.submit(&operation).await?;
+            if submission.operation_id != operation.operation_id() {
+                return Err(ChannelError::SendFailed(
+                    "relay acknowledged a different operation id; outcome unverified".into(),
+                ));
+            }
+            match submission.outcome {
+                // The Relay took (or has progressed) the request. Not a delivery claim.
+                TelecomOutcome::Accepted
+                | TelecomOutcome::Submitted
+                | TelecomOutcome::Delivered => Ok(SendResult {
                     message_id: MessageId::new(submission.operation_id),
                     timestamp: Utc::now(),
-                })
+                }),
+                TelecomOutcome::Unknown => Err(ChannelError::SendFailed(format!(
+                    "SMS outcome unknown for operation {}: it may have been accepted; not retried",
+                    submission.operation_id
+                ))),
+                other => Err(ChannelError::SendFailed(format!(
+                    "SMS operation {} ended as {}",
+                    submission.operation_id,
+                    other.as_wire()
+                ))),
             }
-            TelecomOutcome::Unknown => Err(ChannelError::SendFailed(format!(
-                "SMS outcome unknown for operation {}: it may have been accepted; not retried",
-                submission.operation_id
-            ))),
-            other => Err(ChannelError::SendFailed(format!(
-                "SMS operation {} ended as {}",
-                submission.operation_id,
-                other.as_wire()
-            ))),
-        }
+        })
     }
 }
 

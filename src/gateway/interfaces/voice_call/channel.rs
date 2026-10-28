@@ -5,7 +5,7 @@ use async_trait::async_trait;
 use crate::gateway::channel::{
     Channel, ChannelCapabilities, ChannelError, ChannelFactory, ChannelId, ChannelInfo,
     ChannelResult, ChannelState, ChannelStatus, OutboundDeliveryPolicy, OutboundMessage,
-    SendResult,
+    SendOperation,
 };
 
 use super::config::VoiceCallConfig;
@@ -83,10 +83,12 @@ impl Channel for VoiceCallChannel {
         Ok(())
     }
 
-    async fn send(&self, _message: OutboundMessage) -> ChannelResult<SendResult> {
-        Err(ChannelError::NotConnected(format!(
-            "{RELAY_UNAVAILABLE}; nothing was sent"
-        )))
+    fn send(&self, _message: OutboundMessage) -> SendOperation {
+        Box::pin(async move {
+            Err(ChannelError::NotConnected(format!(
+                "{RELAY_UNAVAILABLE}; nothing was sent"
+            )))
+        })
     }
 }
 

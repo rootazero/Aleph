@@ -456,7 +456,7 @@ mod tests {
     use crate::clarification::{ClarificationQuestion, ClarificationRequest};
     use crate::gateway::channel::{
         Channel, ChannelCapabilities, ChannelInfo, ChannelResult, ChannelState, ChannelStatus,
-        MessageId, SendResult,
+        MessageId, OutboundMessage, SendOperation, SendResult,
     };
     use crate::routing::session_key::SessionKey;
     use crate::tools::turn_context::TURN_CONTEXT;
@@ -497,10 +497,12 @@ mod tests {
         async fn stop(&mut self) -> ChannelResult<()> {
             Ok(())
         }
-        async fn send(&self, _message: OutboundMessage) -> ChannelResult<SendResult> {
-            Ok(SendResult {
-                message_id: MessageId::new("ok"),
-                timestamp: chrono::Utc::now(),
+        fn send(&self, _message: OutboundMessage) -> SendOperation {
+            Box::pin(async move {
+                Ok(SendResult {
+                    message_id: MessageId::new("ok"),
+                    timestamp: chrono::Utc::now(),
+                })
             })
         }
     }

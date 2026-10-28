@@ -37,7 +37,7 @@ pub use message_ops::XmppMessageOps;
 use crate::gateway::channel::{
     Channel, ChannelCapabilities, ChannelError, ChannelFactory, ChannelId, ChannelInfo,
     ChannelResult, ChannelState, ChannelStatus, ConversationId, MessageId, OutboundMessage,
-    SendResult,
+    SendOperation, SendResult,
 };
 use crate::sync_primitives::Arc;
 use async_trait::async_trait;
@@ -202,30 +202,37 @@ impl Channel for XmppChannel {
         Ok(())
     }
 
-    async fn send(&self, message: OutboundMessage) -> ChannelResult<SendResult> {
-        let write_tx = self.write_tx.read().await;
-        let write_tx = write_tx.as_ref().ok_or_else(|| {
-            ChannelError::NotConnected("XMPP adapter not started - call start() first".to_string())
-        })?;
+    fn send(&self, message: OutboundMessage) -> SendOperation {
+        let write_tx = self.write_tx.clone();
+        let test_mode = self.test_mode;
+        let muc_rooms = self.config.muc_rooms.clone();
+        Box::pin(async move {
+            let write_tx = write_tx.read().await;
+            let write_tx = write_tx.as_ref().ok_or_else(|| {
+                ChannelError::NotConnected(
+                    "XMPP adapter not started - call start() first".to_string(),
+                )
+            })?;
 
-        if self.test_mode {
-            return Ok(SendResult {
-                message_id: MessageId::new(format!(
-                    "xmpp-test-{}",
-                    chrono::Utc::now().timestamp_millis()
-                )),
-                timestamp: chrono::Utc::now(),
-            });
-        }
+            if test_mode {
+                return Ok(SendResult {
+                    message_id: MessageId::new(format!(
+                        "xmpp-test-{}",
+                        chrono::Utc::now().timestamp_millis()
+                    )),
+                    timestamp: chrono::Utc::now(),
+                });
+            }
 
-        let conversation = message.conversation_id.as_str();
-        let msg_type = if self.config.muc_rooms.iter().any(|r| r == conversation) {
-            "groupchat"
-        } else {
-            "chat"
-        };
+            let conversation = message.conversation_id.as_str();
+            let msg_type = if muc_rooms.iter().any(|r| r == conversation) {
+                "groupchat"
+            } else {
+                "chat"
+            };
 
-        XmppMessageOps::send_message(write_tx, conversation, &message.text, msg_type).await
+            XmppMessageOps::send_message(write_tx, conversation, &message.text, msg_type).await
+        })
     }
 
     async fn send_typing(&self, conversation_id: &ConversationId) -> ChannelResult<()> {

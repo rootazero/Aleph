@@ -482,7 +482,7 @@ mod tests {
     use crate::exec::socket::ApprovalDecisionType;
     use crate::gateway::channel::{
         Channel, ChannelCapabilities, ChannelId, ChannelInfo, ChannelResult, ChannelState,
-        ChannelStatus, ConversationId, MessageId, OutboundMessage, SendResult,
+        ChannelStatus, ConversationId, MessageId, OutboundMessage, SendOperation, SendResult,
     };
     use crate::gateway::channel_approval::{
         ApprovalAction as CapAction, AuthorizationResult, PendingApproval, RenderedApproval,
@@ -617,10 +617,12 @@ mod tests {
         async fn stop(&mut self) -> ChannelResult<()> {
             Ok(())
         }
-        async fn send(&self, _message: OutboundMessage) -> ChannelResult<SendResult> {
-            Ok(SendResult {
-                message_id: MessageId::new("m"),
-                timestamp: chrono::Utc::now(),
+        fn send(&self, _message: OutboundMessage) -> SendOperation {
+            Box::pin(async move {
+                Ok(SendResult {
+                    message_id: MessageId::new("m"),
+                    timestamp: chrono::Utc::now(),
+                })
             })
         }
     }

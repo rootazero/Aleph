@@ -34,7 +34,7 @@ pub use message_ops::{SignalMessageOps, SignalMonitor};
 use crate::gateway::channel::{
     Channel, ChannelCapabilities, ChannelError, ChannelFactory, ChannelId, ChannelInfo,
     ChannelResult, ChannelState, ChannelStatus, ConversationId, MessageId, OutboundMessage,
-    SendResult,
+    SendOperation,
 };
 use async_trait::async_trait;
 use reqwest_legacy as reqwest;
@@ -197,16 +197,23 @@ impl Channel for SignalChannel {
         Ok(())
     }
 
-    async fn send(&self, message: OutboundMessage) -> ChannelResult<SendResult> {
-        let api_url = self.api_base.as_ref().unwrap_or(&self.config.api_url);
-        SignalMessageOps::send_message(
-            &self.client,
-            api_url,
-            &self.config.phone_number,
-            message.conversation_id.as_str(),
-            &message.text,
-        )
-        .await
+    fn send(&self, message: OutboundMessage) -> SendOperation {
+        let client = self.client.clone();
+        let api_url = self
+            .api_base
+            .clone()
+            .unwrap_or_else(|| self.config.api_url.clone());
+        let phone_number = self.config.phone_number.clone();
+        Box::pin(async move {
+            SignalMessageOps::send_message(
+                &client,
+                &api_url,
+                &phone_number,
+                message.conversation_id.as_str(),
+                &message.text,
+            )
+            .await
+        })
     }
 
     async fn send_typing(&self, conversation_id: &ConversationId) -> ChannelResult<()> {

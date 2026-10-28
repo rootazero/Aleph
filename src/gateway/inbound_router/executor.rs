@@ -871,7 +871,7 @@ mod public_reply_sink_tests {
     use crate::gateway::channel::{
         Channel, ChannelCapabilities, ChannelError, ChannelId, ChannelInfo, ChannelResult,
         ChannelState, ChannelStatus, ConversationId, InboundMessage, MessageId, OutboundMessage,
-        SendResult, UserId,
+        SendOperation, SendResult, UserId,
     };
     use crate::gateway::channel_registry::ChannelRegistry;
     use crate::gateway::delivery_queue::{DeliveryQueueConfig, DeliveryStore, EnqueueOutcome};
@@ -903,18 +903,22 @@ mod public_reply_sink_tests {
         async fn stop(&mut self) -> ChannelResult<()> {
             Ok(())
         }
-        async fn send(&self, message: OutboundMessage) -> ChannelResult<SendResult> {
-            self.sent.lock().unwrap().push(message);
-            if self.fail {
-                Err(ChannelError::RateLimited {
-                    retry_after_secs: 0,
-                })
-            } else {
-                Ok(SendResult {
-                    message_id: MessageId::new("transport-ack"),
-                    timestamp: chrono::Utc::now(),
-                })
-            }
+        fn send(&self, message: OutboundMessage) -> SendOperation {
+            let sent = Arc::clone(&self.sent);
+            let fail = self.fail;
+            Box::pin(async move {
+                sent.lock().unwrap().push(message);
+                if fail {
+                    Err(ChannelError::RateLimited {
+                        retry_after_secs: 0,
+                    })
+                } else {
+                    Ok(SendResult {
+                        message_id: MessageId::new("transport-ack"),
+                        timestamp: chrono::Utc::now(),
+                    })
+                }
+            })
         }
     }
 

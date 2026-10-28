@@ -33,7 +33,7 @@ pub use message_ops::MattermostMessageOps;
 use crate::gateway::channel::{
     Channel, ChannelCapabilities, ChannelError, ChannelFactory, ChannelId, ChannelInfo,
     ChannelResult, ChannelState, ChannelStatus, ConversationId, MessageId, OutboundMessage,
-    SendResult,
+    SendOperation,
 };
 use crate::sync_primitives::Arc;
 use async_trait::async_trait;
@@ -204,35 +204,39 @@ impl Channel for MattermostChannel {
         Ok(())
     }
 
-    async fn send(&self, message: OutboundMessage) -> ChannelResult<SendResult> {
+    fn send(&self, message: OutboundMessage) -> SendOperation {
         // Extract root_id from reply_to for threading
         let root_id = message.reply_to.as_ref().map(|id| id.as_str().to_string());
 
+        let client = self.client.clone();
         let server = self.config.server_url_trimmed().to_string();
-        let api_base = self.api_base.as_deref();
+        let bot_token = self.config.bot_token.clone();
+        let send_typing = self.config.send_typing;
+        let api_base = self.api_base.clone();
+        Box::pin(async move {
+            // Send typing indicator if enabled
+            if send_typing {
+                let _ = MattermostMessageOps::send_typing_with_base(
+                    &client,
+                    &server,
+                    &bot_token,
+                    message.conversation_id.as_str(),
+                    api_base.as_deref(),
+                )
+                .await;
+            }
 
-        // Send typing indicator if enabled
-        if self.config.send_typing {
-            let _ = MattermostMessageOps::send_typing_with_base(
-                &self.client,
+            MattermostMessageOps::send_message_with_base(
+                &client,
                 &server,
-                &self.config.bot_token,
+                &bot_token,
                 message.conversation_id.as_str(),
-                api_base,
+                &message.text,
+                root_id.as_deref(),
+                api_base.as_deref(),
             )
-            .await;
-        }
-
-        MattermostMessageOps::send_message_with_base(
-            &self.client,
-            &server,
-            &self.config.bot_token,
-            message.conversation_id.as_str(),
-            &message.text,
-            root_id.as_deref(),
-            api_base,
-        )
-        .await
+            .await
+        })
     }
 
     async fn send_typing(&self, conversation_id: &ConversationId) -> ChannelResult<()> {

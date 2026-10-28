@@ -26,6 +26,8 @@
 
 pub(crate) mod binding;
 #[cfg(test)]
+mod resource_matrix;
+#[cfg(test)]
 pub(crate) mod test_support;
 
 use crate::capability::descriptor::{
@@ -1295,8 +1297,11 @@ impl ChannelRegistry {
         message: OutboundMessage,
     ) -> ChannelResult<SendResult> {
         let channel_arc = self.legacy_channel(channel_id).await?;
-        let channel = channel_arc.read().await;
-        channel.send(message).await
+        let operation = {
+            let channel = channel_arc.read().await;
+            channel.send(message)
+        };
+        operation.await
     }
 
     /// Cancel-safe pre-submit variant of [`Self::send_public_telecom`].
@@ -1331,7 +1336,9 @@ impl ChannelRegistry {
         // No await or cancellation select between this fence and the first
         // poll of send. Once committed, only the caller's delivery timeout can
         // abandon an ACK (with an unknown external outcome, never retracted).
-        channel.send(message).await.map(Some)
+        let operation = channel.send(message);
+        drop(channel);
+        operation.await.map(Some)
     }
 
     /// Ask the actual registered channel, never its advertised type string.
@@ -1614,7 +1621,8 @@ impl ChannelRegistry {
         loop {
             // Revalidate on every acquisition: `get` exposes this Arc and a
             // writer can replace its Box during an observer or retry wait.
-            // This exact guard carries both the policy and the transport call.
+            // Prepare the operation, policy, and any replay stamp under this
+            // guard; its owned future performs the transport call after release.
             let channel = channel_arc.read().await;
             let policy = channel.outbound_delivery_policy();
             if (matches!(kind, AttemptKind::Replay { .. }) || is_retry)
@@ -1645,14 +1653,15 @@ impl ChannelRegistry {
                     };
                 }
             }
-            let result = if channel.status() == ChannelStatus::Disabled {
-                Err(ChannelError::NotConnected(format!(
-                    "Channel {channel_id} is disabled"
-                )))
-            } else {
-                channel.send(message.clone()).await
-            };
+            let operation = (channel.status() != ChannelStatus::Disabled)
+                .then(|| channel.send(message.clone()));
             drop(channel);
+            let result = match operation {
+                Some(operation) => operation.await,
+                None => Err(ChannelError::NotConnected(format!(
+                    "Channel {channel_id} is disabled"
+                ))),
+            };
 
             match result {
                 Ok(sent) => {
@@ -1712,10 +1721,9 @@ impl ChannelRegistry {
 
         // NOTE: the read guard is held across the await on `channel.edit`
         // because `Channel::edit` returns a future that borrows `&self`.
-        // Releasing the guard before the await requires the trait to
-        // return an owned (Box<dyn Future>) future, which would need a
-        // breaking change to every `Channel` impl. Documented risk:
-        // a slow adapter edit can block stop_channel / health; mitigated
+        // The owned-operation pattern used by `send` can be applied to edit
+        // separately; this migration covers outbound sends only. Documented
+        // risk: a slow adapter edit can block stop_channel / health; mitigated
         // by the per-adapter `editing` capability gate.
         let channel = channel_arc.read().await;
         channel.edit(conversation_id, message_id, new_text).await
@@ -2027,6 +2035,11 @@ impl ChannelRegistry {
     /// keeps draining that broadcast, so reusing it here avoids the
     /// duplicate-delivery that a second `start_channel` would cause. This is
     /// the recovery primitive used by the health monitor for wedged channels.
+    ///
+    /// For a Bound registration, the registry-level lifecycle stop (not
+    /// `Channel::stop`) first drains admitted source work with no timeout. A wedged transport can therefore keep restart—and a health
+    /// monitor awaiting it—blocked. Stage C does not add cancellation or a
+    /// bounded-drain authority; production Bound mount remains deferred.
     pub async fn restart_channel(&self, channel_id: &ChannelId) -> ChannelResult<()> {
         if self
             .channels
@@ -2273,6 +2286,8 @@ pub struct ChannelHealthSummary {
 
 #[cfg(test)]
 mod tests {
+    use super::test_support::{lifecycle_contract, register_bound};
+
     async fn real_bound(
         url: String,
     ) -> (
@@ -2281,45 +2296,25 @@ mod tests {
         super::test_support::ResourceProbe,
         Arc<OwnershipTree>,
     ) {
-        use super::binding::ChannelLifecycleDeclarationV1;
-        use crate::capability::descriptor::ProjectionMetadata;
-        use crate::capability::ownership::{LifetimeScope, OwnerRef, VisibilityScope};
         use crate::gateway::interfaces::webhook::{WebhookChannel, WebhookChannelConfig};
         let probe = super::test_support::ResourceProbe::default();
         let tree = Arc::new(OwnershipTree::new());
         let registry = Arc::new(ChannelRegistry::new());
-        let id = registry
-            .register_bound_channel(
-                Box::new(WebhookChannel::observed(
-                    "real-bound",
-                    WebhookChannelConfig {
-                        secret: "test-secret".into(),
-                        callback_url: url,
-                        ..Default::default()
-                    },
-                    probe.clone(),
-                )),
-                ChannelLifecycleContract::new(
-                    OwnerRef::Runtime,
-                    LifetimeScope::Runtime,
-                    VisibilityScope::default(),
-                    ChannelLifecycleDeclarationV1::schema(),
-                    ProjectionMetadata::default(),
-                )
-                .unwrap(),
-                tree.clone(),
-                ChannelInitialState::Cold,
-            )
-            .await
-            .unwrap();
-        let capture = registry.capture_bound_channel(&id).await.unwrap();
-        tree.register(
-            capture.descriptor.id.clone(),
-            capture.descriptor.owner.clone(),
-            capture.descriptor.lifetime,
-            capture.descriptor.visibility.clone(),
+        let id = register_bound(
+            &registry,
+            &tree,
+            Box::new(WebhookChannel::observed(
+                "real-bound",
+                WebhookChannelConfig {
+                    secret: "test-secret".into(),
+                    callback_url: url,
+                    ..Default::default()
+                },
+                probe.clone(),
+            )),
+            ChannelInitialState::Cold,
         )
-        .unwrap();
+        .await;
         (registry, id, probe, tree)
     }
 
@@ -3117,7 +3112,7 @@ mod tests {
     }
 
     use super::*;
-    use crate::gateway::channel::{ChannelState, MessageId};
+    use crate::gateway::channel::{ChannelState, MessageId, SendOperation};
     use crate::gateway::interfaces::webhook::{WebhookChannel, WebhookChannelConfig};
     use chrono::Utc;
     use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
@@ -3577,7 +3572,7 @@ mod tests {
     struct FlakyChannel {
         info: ChannelInfo,
         state: ChannelState,
-        fail_times: AtomicU32,
+        fail_times: Arc<AtomicU32>,
         attempts: Arc<AtomicU32>,
         terminal: bool,
         delivery_policy: OutboundDeliveryPolicy,
@@ -3597,7 +3592,7 @@ mod tests {
                 // `retry_after_secs` is 0 in the error below, so the registry's
                 // capped sleep is a no-op — tests stay fast and deterministic.
                 state: ChannelState::new(8),
-                fail_times: AtomicU32::new(fail_times),
+                fail_times: Arc::new(AtomicU32::new(fail_times)),
                 attempts,
                 terminal,
                 delivery_policy: OutboundDeliveryPolicy::Automatic,
@@ -3623,20 +3618,23 @@ mod tests {
         async fn stop(&mut self) -> ChannelResult<()> {
             Ok(())
         }
-        async fn send(&self, _message: OutboundMessage) -> ChannelResult<SendResult> {
+        fn send(&self, _message: OutboundMessage) -> SendOperation {
             self.attempts.fetch_add(1, Ordering::SeqCst);
-            if self.terminal {
-                return Err(ChannelError::SendFailed("permanent".to_string()));
-            }
-            if self.fail_times.load(Ordering::SeqCst) > 0 {
-                self.fail_times.fetch_sub(1, Ordering::SeqCst);
-                return Err(ChannelError::RateLimited {
-                    retry_after_secs: self.retry_after_secs,
-                });
-            }
-            Ok(SendResult {
-                message_id: MessageId::new("ok"),
-                timestamp: Utc::now(),
+            let terminal = self.terminal;
+            let fail_times = Arc::clone(&self.fail_times);
+            let retry_after_secs = self.retry_after_secs;
+            Box::pin(async move {
+                if terminal {
+                    return Err(ChannelError::SendFailed("permanent".to_string()));
+                }
+                if fail_times.load(Ordering::SeqCst) > 0 {
+                    fail_times.fetch_sub(1, Ordering::SeqCst);
+                    return Err(ChannelError::RateLimited { retry_after_secs });
+                }
+                Ok(SendResult {
+                    message_id: MessageId::new("ok"),
+                    timestamp: Utc::now(),
+                })
             })
         }
     }
@@ -4667,10 +4665,12 @@ mod tests {
         fn outbound_delivery_policy(&self) -> OutboundDeliveryPolicy {
             self.delivery_policy
         }
-        async fn send(&self, _message: OutboundMessage) -> ChannelResult<SendResult> {
-            Ok(SendResult {
-                message_id: MessageId::new("ok"),
-                timestamp: Utc::now(),
+        fn send(&self, _message: OutboundMessage) -> SendOperation {
+            Box::pin(async move {
+                Ok(SendResult {
+                    message_id: MessageId::new("ok"),
+                    timestamp: Utc::now(),
+                })
             })
         }
     }
@@ -4739,17 +4739,6 @@ mod tests {
         registry.unregister(&id).await;
         assert!(registry.get(&id).await.is_none());
         assert!(registry.validate_channel_capture(&capture).await.is_none());
-    }
-
-    fn lifecycle_contract() -> binding::ChannelLifecycleContract {
-        binding::ChannelLifecycleContract::new(
-            crate::capability::ownership::OwnerRef::Runtime,
-            crate::capability::ownership::LifetimeScope::Runtime,
-            crate::capability::ownership::VisibilityScope::default(),
-            binding::ChannelLifecycleDeclarationV1::schema(),
-            crate::capability::descriptor::ProjectionMetadata::default(),
-        )
-        .unwrap()
     }
 
     #[tokio::test]
@@ -5263,19 +5252,7 @@ mod tests {
         channel: Box<dyn Channel>,
         initial: ChannelInitialState,
     ) -> ChannelId {
-        let id = registry
-            .register_bound_channel(channel, lifecycle_contract(), tree.clone(), initial)
-            .await
-            .unwrap();
-        let capture = registry.capture_bound_channel(&id).await.unwrap();
-        tree.register(
-            capture.descriptor.id.clone(),
-            capture.descriptor.owner.clone(),
-            capture.descriptor.lifetime,
-            capture.descriptor.visibility.clone(),
-        )
-        .unwrap();
-        id
+        register_bound(registry, tree, channel, initial).await
     }
 
     fn observed_webhook(
@@ -5407,22 +5384,9 @@ mod tests {
         );
         assert_eq!(report.queue, QueueDisposition::NotQueueable);
 
-        // HANDOFF (Task 4, not this task): `DeliveryStore::enqueue` is the raw
-        // `pub` legacy/import seam today, and this call site exists only to pin
-        // its RED. Task 4 makes the store write private and publishes
-        // `pub(crate) async fn enqueue_validated_legacy(registry, store, ...)`,
-        // which validates the current Legacy registration before writing
-        // (design §6 "Effects and queue"; plan Task 4 Steps 1-2, Step 2 already
-        // names Registry/queue tests as a call site to migrate). Task 4 must
-        // move this call onto that helper and delete the raw call: final API
-        // must not expose an unvalidated `ChannelId`-only queue write.
-        // When migrating, preserve these behavioral assertions verbatim rather
-        // than turning them into "the helper was called":
-        //   (a) the outcome is not `EnqueueOutcome::Queued(_)`,
-        //   (b) `store.len()` is unchanged,
-        //   (c) `delivery_queue_stats().pending == 0`.
-        // Rows before/after are the assertion; the returned outcome is only
-        // corroboration.
+        // Exercise validated Legacy admission directly. The rows before/after
+        // are the primary assertions: no queued outcome, unchanged row count,
+        // and zero pending deliveries must survive future helper refactors.
         let before = store.len().expect("queue length");
         let outcome = super::super::delivery_queue::enqueue_validated_legacy(
             &registry,
