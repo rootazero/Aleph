@@ -932,6 +932,22 @@ impl ChannelRegistry {
         )
     }
 
+    /// Validate the current registration without exposing its Legacy handle.
+    pub(crate) async fn require_legacy_channel(&self, id: &ChannelId) -> ChannelResult<()> {
+        let channels = self.channels.read().await;
+        match channels.get(id) {
+            Some(entry) if matches!(entry.registration, ChannelRegistration::Legacy { .. }) => {
+                Ok(())
+            }
+            Some(_) => Err(ChannelError::UnsupportedFeature(
+                "bound channel runtime is not implemented".into(),
+            )),
+            None => Err(ChannelError::NotConnected(format!(
+                "Channel not found: {id}"
+            ))),
+        }
+    }
+
     async fn reject_bound_legacy_access(&self, id: &ChannelId) -> ChannelResult<()> {
         if self
             .channels
@@ -4047,13 +4063,16 @@ mod tests {
             .await
             .with_delivery_store(store.clone());
             let id = ChannelId::new("flaky");
-            let EnqueueOutcome::Queued(row) = store
-                .enqueue(
+            let EnqueueOutcome::Queued(row) =
+                super::super::delivery_queue::enqueue_validated_legacy(
+                    &registry,
+                    &store,
                     id.as_str(),
                     &OutboundMessage::text("c", "owner-backlog"),
                     "down",
                     0,
                 )
+                .await
                 .unwrap()
             else {
                 panic!("fixture must queue");
@@ -4123,7 +4142,17 @@ mod tests {
         let store =
             Arc::new(DeliveryStore::open_in_memory(DeliveryQueueConfig::default()).unwrap());
         let message = OutboundMessage::text("c", "private-replay-body");
-        let row = match store.enqueue(id.as_str(), &message, "down", 0).unwrap() {
+        let row = match super::super::delivery_queue::enqueue_validated_legacy(
+            &registry,
+            &store,
+            id.as_str(),
+            &message,
+            "down",
+            0,
+        )
+        .await
+        .unwrap()
+        {
             super::super::delivery_queue::EnqueueOutcome::Queued(row) => row,
             outcome => panic!("unexpected fixture outcome: {outcome:?}"),
         };
@@ -4255,7 +4284,16 @@ mod tests {
             )))
             .await;
         let old = OutboundMessage::text("c", "old-body");
-        let EnqueueOutcome::Queued(r) = store.enqueue(id.as_str(), &old, "down", 0).unwrap() else {
+        let EnqueueOutcome::Queued(r) = super::super::delivery_queue::enqueue_validated_legacy(
+            &registry,
+            &store,
+            id.as_str(),
+            &old,
+            "down",
+            0,
+        )
+        .await
+        .unwrap() else {
             panic!("fixture row must queue");
         };
         let explicit_attempts = Arc::new(AtomicU32::new(0));
@@ -5386,18 +5424,19 @@ mod tests {
         // Rows before/after are the assertion; the returned outcome is only
         // corroboration.
         let before = store.len().expect("queue length");
-        let outcome = store
-            .enqueue(
-                id.as_str(),
-                &OutboundMessage::text("conv-1", "raw admission"),
-                "",
-                0,
-            )
-            .expect("enqueue result");
+        let outcome = super::super::delivery_queue::enqueue_validated_legacy(
+            &registry,
+            &store,
+            id.as_str(),
+            &OutboundMessage::text("conv-1", "raw admission"),
+            "",
+            0,
+        )
+        .await;
         assert!(
             !matches!(
                 outcome,
-                crate::gateway::delivery_queue::EnqueueOutcome::Queued(_)
+                Ok(crate::gateway::delivery_queue::EnqueueOutcome::Queued(_))
             ),
             "a channel id alone must not authorize queue admission, got {outcome:?}"
         );

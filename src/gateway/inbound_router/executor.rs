@@ -945,13 +945,16 @@ mod public_reply_sink_tests {
                     fail,
                 }))
                 .await;
-            let EnqueueOutcome::Queued(row) = store
-                .enqueue(
+            let EnqueueOutcome::Queued(row) =
+                crate::gateway::delivery_queue::enqueue_validated_legacy(
+                    &registry,
+                    &store,
                     channel_id.as_str(),
                     &OutboundMessage::text("original-conversation", "owner-backlog"),
                     "down",
                     0,
                 )
+                .await
                 .unwrap()
             else {
                 panic!("fixture must queue");

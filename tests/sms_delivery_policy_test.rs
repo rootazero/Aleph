@@ -14,7 +14,7 @@ use alephcore::gateway::channel::{
 };
 use alephcore::gateway::channel_registry::ChannelRegistry;
 use alephcore::gateway::delivery_queue::{
-    now_secs, spawn_drain, DeliveryQueueConfig, DeliveryStore,
+    enqueue_validated_legacy, now_secs, spawn_drain, DeliveryQueueConfig, DeliveryStore,
 };
 use alephcore::gateway::interfaces::sms::{
     PendingSmsOperation, SmsChannel, SmsConfig, SmsSubmission, SmsTransport,
@@ -126,15 +126,22 @@ fn assert_nothing_stored(store: &DeliveryStore) {
 }
 
 /// Insert a row the way the pre-policy generic queue would have.
-fn seed_legacy_row(store: &DeliveryStore, conversation: &str, body: &str) {
-    store
-        .enqueue(
-            SMS_ID,
-            &OutboundMessage::text(conversation, body),
-            "NotConnected",
-            now_secs() - 10,
-        )
-        .expect("seed legacy row");
+async fn seed_legacy_row(
+    registry: &ChannelRegistry,
+    store: &DeliveryStore,
+    conversation: &str,
+    body: &str,
+) {
+    enqueue_validated_legacy(
+        registry,
+        store,
+        SMS_ID,
+        &OutboundMessage::text(conversation, body),
+        "NotConnected",
+        now_secs() - 10,
+    )
+    .await
+    .expect("seed legacy row");
 }
 
 fn assert_scrubbed_retirement(store: &DeliveryStore, expected_rows: usize) {
@@ -245,8 +252,8 @@ async fn a_live_sms_send_still_submits_once() {
 #[tokio::test]
 async fn preflush_retires_legacy_sms_rows_without_sending_and_the_new_send_goes_once() {
     let fx = sms_fixture(Mode::Accept).await;
-    seed_legacy_row(&fx.store, PEER, LEGACY_BODY);
-    seed_legacy_row(&fx.store, PEER, LEGACY_BODY);
+    seed_legacy_row(&fx.registry, &fx.store, PEER, LEGACY_BODY).await;
+    seed_legacy_row(&fx.registry, &fx.store, PEER, LEGACY_BODY).await;
 
     fx.registry
         .send(&sms_id(), OutboundMessage::text(PEER, "new explicit send"))
@@ -264,8 +271,8 @@ async fn preflush_retires_legacy_sms_rows_without_sending_and_the_new_send_goes_
 #[tokio::test]
 async fn background_drain_retires_legacy_sms_rows_without_sending() {
     let fx = sms_fixture(Mode::Accept).await;
-    seed_legacy_row(&fx.store, PEER, LEGACY_BODY);
-    seed_legacy_row(&fx.store, "+14155550111", LEGACY_BODY);
+    seed_legacy_row(&fx.registry, &fx.store, PEER, LEGACY_BODY).await;
+    seed_legacy_row(&fx.registry, &fx.store, "+14155550111", LEGACY_BODY).await;
 
     spawn_drain(Arc::clone(&fx.registry), Arc::clone(&fx.store));
     for _ in 0..100 {
@@ -282,7 +289,7 @@ async fn background_drain_retires_legacy_sms_rows_without_sending() {
 #[tokio::test]
 async fn a_failed_new_send_does_not_enqueue_behind_retired_legacy_rows() {
     let fx = sms_fixture(Mode::RateLimited).await;
-    seed_legacy_row(&fx.store, PEER, LEGACY_BODY);
+    seed_legacy_row(&fx.registry, &fx.store, PEER, LEGACY_BODY).await;
 
     let _ = fx
         .registry
@@ -439,14 +446,21 @@ async fn queued_rows_for_an_unregistered_channel_keep_existing_behaviour() {
     // row must stay queued (rescheduled), exactly as before.
     let store = Arc::new(DeliveryStore::open_in_memory(fast_cfg()).unwrap());
     let registry = Arc::new(ChannelRegistry::new().with_delivery_store(Arc::clone(&store)));
-    store
-        .enqueue(
-            "ghost",
-            &OutboundMessage::text("c", "keep me"),
-            "NotConnected",
-            now_secs() - 10,
-        )
-        .unwrap();
+    let sends = Arc::new(Sends::default());
+    registry
+        .register(Box::new(MockChannel::new("ghost", sends)))
+        .await;
+    enqueue_validated_legacy(
+        &registry,
+        &store,
+        "ghost",
+        &OutboundMessage::text("c", "keep me"),
+        "NotConnected",
+        now_secs() - 10,
+    )
+    .await
+    .unwrap();
+    registry.unregister(&ChannelId::new("ghost")).await;
     spawn_drain(Arc::clone(&registry), Arc::clone(&store));
     tokio::time::sleep(Duration::from_millis(250)).await;
     assert_eq!(store.len().unwrap(), 1, "still queued");
@@ -628,9 +642,16 @@ fn assert_letter_scrubbed(l: &alephcore::gateway::delivery_queue::DeadLetter) {
 #[tokio::test]
 async fn registering_an_explicit_only_channel_promptly_scrubs_old_recognised_rows() {
     let store = Arc::new(DeliveryStore::open_in_memory(fast_cfg()).unwrap());
+    let registry = registry_over(&store);
+    registry
+        .register(Box::new(MockChannel::new(
+            SMS_ID,
+            Arc::new(Sends::default()),
+        )))
+        .await;
     // Rows predate the registration of the channel that declares the policy.
-    seed_legacy_row(&store, PEER, LEGACY_BODY);
-    seed_legacy_row(&store, PEER, LEGACY_BODY);
+    seed_legacy_row(&registry, &store, PEER, LEGACY_BODY).await;
+    seed_legacy_row(&registry, &store, PEER, LEGACY_BODY).await;
     let id = store.claim_due(now_secs(), 10).unwrap()[0].id;
     store
         .record_dead_letter(
@@ -641,7 +662,6 @@ async fn registering_an_explicit_only_channel_promptly_scrubs_old_recognised_row
         )
         .unwrap();
 
-    let registry = registry_over(&store);
     register_sms(&registry).await;
 
     assert_eq!(store.len().unwrap(), 0, "live row retired at registration");
@@ -678,7 +698,7 @@ async fn recovered_in_flight_sms_rows_are_scrubbed_and_stay_unknown_outcome() {
     let store = Arc::new(DeliveryStore::open_in_memory(fast_cfg()).unwrap());
     let registry = registry_over(&store);
     let transport = register_sms(&registry).await;
-    seed_legacy_row(&store, PEER, LEGACY_BODY);
+    seed_legacy_row(&registry, &store, PEER, LEGACY_BODY).await;
     let due = store.claim_due(now_secs(), 10).unwrap();
     store.mark_inflight(due[0].id, now_secs() - 5).unwrap();
 
@@ -714,13 +734,20 @@ async fn retirement_is_sticky_after_unregister_and_across_a_restart() {
     let store = Arc::new(DeliveryStore::open_in_memory(fast_cfg()).unwrap());
     {
         let registry = registry_over(&store);
+        registry
+            .register(Box::new(MockChannel::new(
+                SMS_ID,
+                Arc::new(Sends::default()),
+            )))
+            .await;
+        seed_legacy_row(&registry, &store, PEER, LEGACY_BODY).await;
+        registry.unregister(&sms_id()).await;
         register_sms(&registry).await;
         registry.unregister(&sms_id()).await;
     }
     // A fresh registry over the same store: the SMS channel is not registered
     // (not yet restarted), but the store remembers it declared ExplicitOnly.
     let registry = registry_over(&store);
-    seed_legacy_row(&store, PEER, LEGACY_BODY);
     spawn_drain(Arc::clone(&registry), Arc::clone(&store));
     for _ in 0..100 {
         if store.len().unwrap() == 0 {

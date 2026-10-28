@@ -594,6 +594,24 @@ pub struct DeliveryStore {
     drain_gate: tokio::sync::Mutex<()>,
 }
 
+/// Validate the current Legacy registration before admitting a raw queue row.
+/// This is the only cross-module fixture/import entry to the private SQLite write.
+pub async fn enqueue_validated_legacy(
+    registry: &ChannelRegistry,
+    store: &DeliveryStore,
+    channel_id: &str,
+    message: &OutboundMessage,
+    last_error: &str,
+    next_attempt_at: i64,
+) -> Result<EnqueueOutcome, ChannelError> {
+    registry
+        .require_legacy_channel(&ChannelId::new(channel_id))
+        .await?;
+    store
+        .enqueue(channel_id, message, last_error, next_attempt_at)
+        .map_err(|error| ChannelError::Internal(error.to_string()))
+}
+
 impl DeliveryStore {
     /// Open (creating if absent) the delivery database at `path`.
     pub fn open(path: &Path, config: DeliveryQueueConfig) -> rusqlite::Result<Self> {
@@ -875,7 +893,7 @@ impl DeliveryStore {
     /// [`DeadLetterReason::PayloadTooLarge`] so the operator can still see what
     /// was dropped and why, and the caller gets
     /// [`EnqueueOutcome::TooLarge`].
-    pub fn enqueue(
+    fn enqueue(
         &self,
         channel_id: &str,
         message: &OutboundMessage,
