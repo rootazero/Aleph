@@ -117,16 +117,20 @@ cargo check -p alephcore --tests
 - [x] Repeat focused matrix filters three times serially, then all registry/Webhook/binding suites. Review a per-shape receipt coverage table, actual positive controls, deterministic scheduling and zero retained work/handles after tests.
 - [x] Stage exit proves one real adapter and a second generic shape, not every social channel, process isolation or executable unloading. Suggested commit: `test(gateway): prove source-owned resource boundaries`.
 
-## 6. Stage E — Final verification, reference evidence and next gate / 最终验证、参考与门禁
+## Stage E — Bounded executable code-instance evidence and final gate / 有界可执行代码实例证据与最终门禁
 
-**Files / 范围：**after tests/review only, update `docs/reference/GATEWAY.md` and `docs/reference/FEATURE_LOCATOR.md`. Do not amend constitution files, old design evidence or roadmap completion markers automatically; those require their own evidence reconciliation.
+**Files / 范围：** this bounded slice may modify the existing Extism loader/test observation boundary and the existing lifecycle tests; final references update `docs/reference/GATEWAY.md`, `docs/reference/PLUGIN_SYSTEM.md`, `docs/reference/FEATURE_LOCATOR.md` and this source plan after tests/review. This is an explicit amendment to the former docs-only Stage E wording: it proves exact guest-instance ownership/drop, not native compiled-code unloading. Do not amend constitution files or start production Gateway/Feishu mount.
 
-- [ ] Inspect full implementation diff against addendum. Confirm a single canonical association, only entry-local operation/tickets/task ownership, no generation mirrors, exact full-binding comparisons, no deadlock on stop/completion, no synthetic receipts or unconfirmed cleanup success.
+- [ ] Inspect full implementation diff against addendum. Confirm a single canonical association, only entry-local operation/tickets/task ownership, no generation mirrors, exact full-binding comparisons, no deadlock on stop/completion, no synthetic receipts or unconfirmed cleanup success. For Stage E specifically, confirm no second enabled/mount/registry/owner/cleanup authority and that receipts are `#[cfg(test)]` observation only.
+- [ ] Establish cold/activation/dispose evidence for one real Extism guest. Cold discovery/list/descriptor/projection must not construct `PluginLoader`'s WASM runtime or read guest bytes; explicit activation must read bytes, build an instance and execute the guest; `unmount().await` plus release of all test-held Arc/binding/identity/receipt clones must precede exact old-instance drop assertion. Extend existing `src/extension/lifecycle.rs` `b3_*` tests rather than duplicating already-GREEN behavior contracts.
+- [ ] At the loader boundary, use explicit `std::fs::read` followed by `Wasm::data`; Extism `Wasm::file` reads inside `PluginBuilder::build` are not observable at the required receipt boundary. Keep guest-byte/read receipts on a test-only `PluginLoader` probe that exists before lazy runtime construction; keep create/drop receipts on the exact `LoadedWasmPlugin` incarnation.
+- [ ] Census `PluginLoader::shutdown` together with `unload_plugin`, `remove_if_current`, owner identity/receipt/scope disposal and canonical handler/binding holders. Shutdown is a bulk runtime drop and must not be reported as identity-fenced replacement cleanup.
 - [ ] Run final commands serially, memory gate before each cargo:
 
 ```bash
 cargo fmt --all --check
 git diff --check
+cargo check -p alephcore
 cargo check -p alephcore --tests
 cargo clippy -p alephcore --tests -- -D warnings
 cargo test -p alephcore --lib capability::
@@ -138,20 +142,20 @@ cargo test -p alephcore --lib gateway::interfaces::webhook::
 
 Also re-run Stage C webhook/delivery/health suites and both Stage D matrices. These targeted checks do not replace `docs/reference/DEVELOPMENT.md`'s broader verification set if implementation changes expand to bins/shared interfaces/workspace surfaces. Record skipped broader checks explicitly; a zero-test filter is not a pass.
 
-- [ ] Independently review original source through real transport completion, not just worker summaries. Confirm production Bound/mount/Zahir call graph remains unchanged and slot API does not depend on Core; no Feishu, session durable writes, EffectClaim or scheduler slipped in.
-- [ ] Only then publish bilingual references with actual APIs/tests, real command results, receipt coverage and limitations, compatibility denials, Legacy inventory status and the distinction between lifecycle declaration and future operation schema.
+- [ ] Independently review original source through real Extism activation/unmount completion, not just worker summaries. Confirm production Bound/mount/Zahir call graph remains unchanged and slot API does not depend on Core; no Feishu, session durable writes, EffectClaim, scheduler, native unloading or process supervisor slipped in.
+- [ ] Only then publish bilingual references with actual APIs/tests, real command results, receipt coverage and limitations, compatibility denials, Legacy inventory status and the distinction between lifecycle declaration, guest-instance ownership and future operation schema.
 - [ ] Assess R1 separately from stage completion. Missing promised execution/resource proof blocks GO; explicitly N/A resource classes stay unproven and prohibit corresponding all-resource/all-channel claims. Even a bounded R1 GO does not authorize R2 Feishu, production ingress/send/mount or automatic replay.
-- [ ] Commit only reviewed reference hunks after `git diff --check`. Suggested commit: `docs(gateway): record source-owned runtime evidence`.
+- [ ] Commit only reviewed reference hunks after `git diff --check`. Suggested commit: `docs(gateway): record executable code evidence`.
 
 ## 7. Definition of done and non-work / 完成标准与未做项
 
-- [ ] One source-owned proof reaches a real non-Feishu transport and local acceptance; no caller-created provider or parallel registry.
-- [ ] Stop waits for actual work and cleanup without holding completion's gate; retirement discards original results and never affects successor.
-- [ ] All Bound compatibility paths are accounted for, cold/disabled reads allocate no applicable provider runtime resources, positive controls validate the measurement, residuals never masquerade as clean success.
-- [ ] Provider/source/owner/session domains remain independent; Resource lifecycle declaration never becomes public Callable/send schema.
+- [ ] One bounded source-owned proof reaches a real Extism guest instance and local acceptance; no caller-created provider or parallel registry.
+- [ ] Cold projection has zero guest-byte reads and zero runtime/instance creation; activation has real byte-read/create/execute receipts; unmount/replacement invalidates old bindings and only claims exact instance drop after all owners release.
+- [ ] Engine-wide JIT code, anonymous mappings, OS thread state and RSS are separately labelled unproven unless a future platform-specific experiment proves them.
+- [ ] Provider/source/owner/session domains remain independent; code-instance observation never becomes public Callable/send schema.
 - [ ] Actual verification and independent review are recorded; references contain only established facts, not TODOs marked complete from design approval.
 
-**Explicit non-work / 明确未做：**no universal scheduler, durable recovery/admission, EffectClaim producer, Safe Replay, external exactly-once, generalized envelope, new CapabilityKind, Feishu implementation, production Bound opt-in/mount, Zahir route, public send/ingress operation, all-channel migration, terminal/memory/sandbox migration, process crash isolation or compiled-code unloading. Stage A also does not claim opaque reqwest pooled-task joins, websocket/listener/token-client receipts, full compatibility closure, replacement retirement semantics, or all-channel resource matrices.
+**Explicit non-work / 明确未做：**no native Rust dylib hot unload, `dlopen`/`dlclose`, universal scheduler, durable recovery/admission, EffectClaim producer, Safe Replay, external exactly-once, generalized envelope, new CapabilityKind, Feishu implementation, production Bound opt-in/mount, Zahir route, public send/ingress operation, all-channel migration, terminal/memory/sandbox migration, process crash isolation, engine-wide compiled-code/JIT unloading, OS mapping attribution or RSS reclamation claim. The slice also does not claim opaque Extism pooled-task joins, websocket/listener/token-client receipts, all-provider code loading, or every built-in channel becoming dynamically loaded.
 
 ## 8. Stage A evidence / Stage A 证据
 
