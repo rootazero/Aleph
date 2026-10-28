@@ -12,6 +12,7 @@
     "panel:tabs:build": "bun scripts/build-panel-tabs.mjs",
     "panel:tabs:report": "bun scripts/panel-tabs-report.mjs",
     "panel:tabs:test": "node --test tests/panel-build.test.mjs",
+    "panel:tabs:artifacts:test": "node --test tests/panel-build-artifacts.test.mjs",
     "panel:tabs:protocol:test": "node tests/panel-terminal-protocol.test.mjs",
     "panel:tabs:host:test": "node tests/panel-terminal-host.test.mjs",
     "panel:tabs:memory-gate:test": "node tests/panel-build-memory-gate.test.mjs"

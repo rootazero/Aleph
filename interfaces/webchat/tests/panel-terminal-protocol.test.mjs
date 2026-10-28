@@ -6,7 +6,8 @@ import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright';
 
 const panel = resolve(fileURLToPath(new URL('..', import.meta.url)));
-const staged = join(panel, '.panel-tabs');
+const staged = resolve(panel, process.env.PANEL_OUTPUT_ROOT ?? '');
+if (!process.env.PANEL_OUTPUT_ROOT) throw Error('PANEL_OUTPUT_ROOT must name the newly built isolated output');
 const manifest = JSON.parse(await readFile(join(staged, 'manifest.json'), 'utf8'));
 const entry = manifest.entry;
 const requestLog = [];
@@ -249,8 +250,10 @@ async function runHappyPath(base) {
     if (!Canvas) return;
     const fillText = Canvas.prototype.fillText;
     globalThis.__fillTextCount = 0;
+    globalThis.__fillTexts = [];
     Canvas.prototype.fillText = function (...args) {
       globalThis.__fillTextCount += 1;
+      globalThis.__fillTexts.push(String(args[0]));
       return fillText.apply(this, args);
     };
   });
@@ -278,7 +281,8 @@ async function runHappyPath(base) {
   const firstPaint = await page.locator('canvas').evaluate((canvas) => canvas.toDataURL());
   await page.evaluate(() => __fixture.emit({ topic: 'wrong.topic', data: { session_id: 'disposable-fixture', seq: 999, rows: 24, cols: 80, patch: { rows: [{ row: 0, runs: [{ text: 'wrong topic' }] }] } } }));
   await new Promise((resolve) => setTimeout(resolve, 100));
-  assert.equal(await page.locator('canvas').evaluate((canvas) => canvas.toDataURL()), firstPaint, 'wrong-topic events must not repaint');
+  assert.equal(await page.evaluate(() => __fixture.state.emittedTopics.includes('wrong.topic')), true, 'fixture must deliver the wrong topic to exercise the filter');
+  assert.equal(await page.evaluate(() => __fillTexts.includes('wrong topic')), false, 'wrong-topic events must not reach the renderer');
 
   await page.evaluate(() => __fixture.emit({ topic: 'pty.screen', data: { session_id: 'disposable-fixture', seq: 1, rows: 24, cols: 80, patch: { rows: [{ row: 0, runs: [{ text: 'Unicode marker ✓' }] }], bracketed_paste: true } } }));
   await waitFor(page, (previous) => document.querySelector('canvas').toDataURL() !== previous, firstPaint);

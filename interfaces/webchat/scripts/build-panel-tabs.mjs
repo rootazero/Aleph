@@ -45,7 +45,13 @@ const sourceInputs = [
   'interfaces/webchat/Cargo.toml',
   'interfaces/webchat/src/app.rs',
   'interfaces/webchat/src/lib.rs',
+  'interfaces/webchat/src/panel/loader.rs',
+  'interfaces/webchat/src/panel/mod.rs',
+  'interfaces/webchat/src/panel/projection.rs',
+  'interfaces/webchat/src/panel/registry.rs',
+  'interfaces/webchat/src/panel/sdk.rs',
   'interfaces/webchat/src/panel/shell.rs',
+  'interfaces/webchat/panel_loader.js',
   'interfaces/webchat/tabs/terminal/Cargo.toml',
   'interfaces/webchat/tabs/terminal/src/lib.rs',
   'interfaces/webchat/tabs/terminal/src/sdk.rs',
@@ -56,33 +62,41 @@ const sourceInputs = [
 
 const hashInputs = async () => {
   const hash = createHash('sha256');
+  const sourceInputHashes = {};
   hash.update(await capture(['git', 'rev-parse', 'HEAD']));
   hash.update(`\0profile=${profile}\0`);
-  const visit = async (path, label) => {
+  const visit = async (path, label, inputHash) => {
     const entries = (await readdir(path, { withFileTypes: true })).sort((left, right) => left.name.localeCompare(right.name));
     for (const entry of entries) {
       const entryPath = join(path, entry.name);
       const entryLabel = `${label}/${entry.name}`;
       if (entry.isDirectory()) {
-        await visit(entryPath, entryLabel);
+        await visit(entryPath, entryLabel, inputHash);
         continue;
       }
       hash.update(`\0${entryLabel}\0`);
-      hash.update(await readFile(entryPath));
+      inputHash.update(`\0${entryLabel}\0`);
+      const contents = await readFile(entryPath);
+      hash.update(contents);
+      inputHash.update(contents);
     }
   };
   for (const input of sourceInputs) {
     hash.update(`\0${input}\0`);
     if (input.endsWith('/src')) {
-      await visit(join(root, input), input);
+      const inputHash = createHash('sha256');
+      await visit(join(root, input), input, inputHash);
+      sourceInputHashes[input] = inputHash.digest('hex');
       continue;
     }
-    hash.update(await readFile(join(root, input)));
+    const contents = await readFile(join(root, input));
+    hash.update(contents);
+    sourceInputHashes[input] = createHash('sha256').update(contents).digest('hex');
   }
-  return hash.digest('hex').slice(0, 16);
+  return { buildId: hash.digest('hex').slice(0, 16), sourceInputHashes };
 };
 
-const buildId = await hashInputs();
+const { buildId, sourceInputHashes } = await hashInputs();
 const entry = `${entryPrefix}${buildId}/terminal.js`;
 const env = { ...process.env, CARGO_TARGET_DIR: join(output, 'target'), PANEL_TERMINAL_ENTRY: entry };
 
@@ -175,6 +189,7 @@ await writeFile(join(output, 'build.json'), JSON.stringify({
   revision: await capture(['git', 'rev-parse', 'HEAD']),
   tools,
   source_inputs: sourceInputs,
+  source_input_hashes: sourceInputHashes,
   output: outputArg ?? '.panel-tabs',
 }, null, 2) + '\n');
 

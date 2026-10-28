@@ -5,7 +5,8 @@ import { join, resolve, relative, sep } from 'node:path';
 import { test } from 'node:test';
 
 const panel = resolve(import.meta.dirname, '..');
-const output = resolve(panel, process.env.PANEL_TABS_OUTPUT ?? '.panel-tabs');
+if (!process.env.PANEL_OUTPUT_ROOT) throw Error('PANEL_OUTPUT_ROOT must name the newly built isolated output');
+const output = resolve(panel, process.env.PANEL_OUTPUT_ROOT);
 
 const exists = async (path) => {
   try {
