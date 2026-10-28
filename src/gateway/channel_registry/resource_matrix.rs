@@ -5,13 +5,15 @@
 //! Every receipt asserted here is recorded at a real resource boundary by the
 //! shape that owns it; no count is derived from lifecycle state.
 
-use super::binding::{BoundCompletion, ChannelBindingError, ChannelInitialState};
+use super::binding::{
+    BoundCompletion, ChannelBindingError, ChannelInitialState, ChannelRuntimePhase,
+};
 use super::test_support::{
-    lifecycle_contract, register_bound, LoopbackPeer, LoopbackSocket, PollingReceipts,
-    PollingSocketChannel, ResourceProbe, CACHE_CREATED, CACHE_DROP, DATABASE_CLOSED, DATABASE_DROP,
-    DATABASE_OPENED, DATABASE_OPEN_ATTEMPT, SEND_ATTEMPT, SEND_COMPLETED, TCP_CONNECTED,
-    TCP_CONNECT_ATTEMPT, TCP_DROP, TIMER_CREATED, TIMER_DROP, TIMER_TICK, WORKER_EXITED,
-    WORKER_JOINED, WORKER_SPAWNED,
+    lifecycle_contract, register_bound, FailingStopWebhook, LoopbackPeer, LoopbackSocket,
+    PollingReceipts, PollingSocketChannel, ResourceProbe, CACHE_CREATED, CACHE_DROP,
+    DATABASE_CLOSED, DATABASE_DROP, DATABASE_OPENED, DATABASE_OPEN_ATTEMPT, SEND_ATTEMPT,
+    SEND_COMPLETED, TCP_CONNECTED, TCP_CONNECT_ATTEMPT, TCP_DROP, TIMER_CREATED, TIMER_DROP,
+    TIMER_TICK, WORKER_EXITED, WORKER_JOINED, WORKER_SPAWNED,
 };
 use super::{ChannelId, ChannelRegistry, OwnershipTree, VisibilityScope};
 use crate::capability::ownership::{BindingValidationError, OwnerRef, RunId};
@@ -130,19 +132,28 @@ async fn webhook_positive_control() {
         )
         .await
         .unwrap();
-    let bytes = arrived.await.unwrap();
+    let bytes = tokio::time::timeout(Duration::from_secs(10), arrived)
+        .await
+        .expect("the loopback peer must receive a request within ten seconds")
+        .expect("the loopback peer received the request");
     assert!(
         String::from_utf8_lossy(&bytes).contains("control payload"),
         "the loopback peer must receive the real outbound request"
     );
     peer.release.send(()).unwrap();
     assert!(matches!(
-        completion.await.unwrap(),
+        tokio::time::timeout(Duration::from_secs(10), completion)
+            .await
+            .expect("the webhook send must complete within ten seconds")
+            .expect("the send completes"),
         super::binding::BoundCompletion::Accepted(Ok(_))
     ));
     assert!(probe.count("request_attempt") >= 1);
     assert!(probe.count("request_ended") >= 1);
-    peer.task.await.unwrap();
+    tokio::time::timeout(Duration::from_secs(10), peer.task)
+        .await
+        .expect("the webhook peer task must finish within ten seconds")
+        .expect("the loopback peer task finishes");
 
     registry
         .stop_bound_channel_compat(&id)
@@ -279,7 +290,10 @@ async fn polling_positive_control() {
         .await
         .expect("the peer must observe the closed stream")
         .expect("the peer reports its own EOF");
-    peer.task.await.unwrap();
+    tokio::time::timeout(Duration::from_secs(10), peer.task)
+        .await
+        .expect("the polling peer task must finish within ten seconds")
+        .expect("the loopback peer task finishes");
 }
 
 // --- Task 2: cold, active and replacement matrices for both shapes ---
@@ -568,12 +582,28 @@ impl Observation {
     fn assert_no_send(&self, stage: &str) {
         match self {
             Self::Webhook { probe, .. } => {
-                assert_eq!(probe.count("request_attempt"), 0, "{stage}: start");
-                assert_eq!(probe.count("request_ended"), 0, "{stage}: start");
+                assert_eq!(
+                    probe.count("request_attempt"),
+                    0,
+                    "{stage}: start must not attempt a request"
+                );
+                assert_eq!(
+                    probe.count("request_ended"),
+                    0,
+                    "{stage}: start must not end a request"
+                );
             }
             Self::Polling { receipts, .. } => {
-                assert_eq!(receipts.count(SEND_ATTEMPT), 0, "{stage}: start");
-                assert_eq!(receipts.count(SEND_COMPLETED), 0, "{stage}: start");
+                assert_eq!(
+                    receipts.count(SEND_ATTEMPT),
+                    0,
+                    "{stage}: start must not attempt a send"
+                );
+                assert_eq!(
+                    receipts.count(SEND_COMPLETED),
+                    0,
+                    "{stage}: start must not complete a send"
+                );
             }
         }
     }
@@ -1258,4 +1288,400 @@ async fn replacement_cleans_old_resources_and_rejects_old_provider_proof() {
         ));
         fresh.assert_cleaned(&stage("replacement unregister"));
     }
+}
+
+// --- Task 3: activation and cleanup failure evidence ---
+
+/// A failure that happens before the first real acquisition must not fabricate
+/// a receipt, and a failure that happens after one must release it.
+#[tokio::test]
+async fn start_failures_do_not_fabricate_resources_or_cleanup() {
+    webhook_invalid_config_fails_before_client_attempt().await;
+    polling_closed_port_fails_without_a_connection().await;
+    polling_partial_activation_drops_the_connected_stream().await;
+}
+
+fn expect_start_failure(result: Result<(), ChannelBindingError>, stage: &str) -> String {
+    match result {
+        Err(ChannelBindingError::Runtime {
+            phase,
+            error,
+            residual,
+        }) => {
+            assert_eq!(
+                phase,
+                ChannelRuntimePhase::Start,
+                "{stage}: a failed activation reports its own phase, got {error}"
+            );
+            assert_eq!(
+                residual.active_work, 0,
+                "{stage}: failed activation must not retain active work"
+            );
+            assert!(
+                !residual.unjoined_forwarder,
+                "{stage}: failed activation must not retain a forwarder"
+            );
+            assert!(
+                !residual.mount_retained,
+                "{stage}: failed activation must not retain a mount"
+            );
+            error
+        }
+        other => panic!(
+            "{stage}: activation must fail closed, got {}",
+            unexpected(&other)
+        ),
+    }
+}
+
+/// Generic Webhook binds no socket during `start`, so an invalid real config is
+/// the honest pre-acquisition failure: nothing is attempted and nothing is
+/// destroyed.
+async fn webhook_invalid_config_fails_before_client_attempt() {
+    let stage = "real-webhook invalid config";
+    let probe = ResourceProbe::default();
+    let registry = Arc::new(ChannelRegistry::new());
+    let tree = Arc::new(OwnershipTree::new());
+    let id = register_bound(
+        &registry,
+        &tree,
+        Box::new(WebhookChannel::observed(
+            "failing-webhook",
+            WebhookChannelConfig::default(),
+            probe.clone(),
+        )),
+        ChannelInitialState::Cold,
+    )
+    .await;
+    assert_cold_probe(&probe, stage);
+
+    let error = expect_start_failure(registry.start_bound_channel_compat(&id).await, stage);
+    assert!(
+        error.contains("secret is required"),
+        "{stage}: the failure must be real config validation, got {}",
+        error
+    );
+    assert_cold_probe(&probe, stage);
+
+    registry
+        .stop_bound_channel_compat(&id)
+        .await
+        .expect("a failed activation joins its own cleanup path");
+    assert_cold_probe(&probe, stage);
+    registry
+        .unregister_bound_channel(&id)
+        .await
+        .expect("a failed source unregisters after its cleanup");
+}
+
+fn assert_cold_probe(probe: &ResourceProbe, stage: &str) {
+    for event in [
+        "client_build_attempt",
+        "client_built",
+        "client_drop",
+        "request_attempt",
+        "request_ended",
+    ] {
+        assert_eq!(
+            probe.count(event),
+            0,
+            "{stage}: a failed activation before any acquisition must not record {event}"
+        );
+    }
+}
+
+/// A real connect against a released loopback address records the attempt and
+/// nothing else: the failure is the connection, so no later resource exists.
+async fn polling_closed_port_fails_without_a_connection() {
+    let stage = "polling closed port";
+    // Bind then release a loopback port so the target is a real address with no
+    // listener, rather than a privileged port whose behavior varies by host.
+    let address = {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        listener.local_addr().unwrap()
+    };
+    let directory = tempfile::TempDir::new().unwrap();
+    let (receipts, _ticks) = PollingReceipts::new();
+    let registry = Arc::new(ChannelRegistry::new());
+    let tree = Arc::new(OwnershipTree::new());
+    let id = register_bound(
+        &registry,
+        &tree,
+        Box::new(PollingSocketChannel::new(
+            "failing-connect-polling",
+            address,
+            directory.path().join("closed-port.sqlite3"),
+            receipts.clone(),
+        )),
+        ChannelInitialState::Cold,
+    )
+    .await;
+    assert_eq!(
+        active(&receipts),
+        zero_active(),
+        "{stage}: cold registration owns no resource"
+    );
+
+    let error = expect_start_failure(registry.start_bound_channel_compat(&id).await, stage);
+    assert!(
+        error.contains("polling loopback connect failed"),
+        "{stage}: the failure must cross the real connect boundary, got {}",
+        error
+    );
+    assert_eq!(
+        receipts.count(TCP_CONNECT_ATTEMPT),
+        1,
+        "{stage}: the failed start still records the real connect attempt"
+    );
+    assert_eq!(
+        receipts.count(TCP_CONNECTED),
+        0,
+        "{stage}: a refused connect must not report a connection"
+    );
+    for event in [
+        DATABASE_OPEN_ATTEMPT,
+        DATABASE_OPENED,
+        WORKER_SPAWNED,
+        TIMER_CREATED,
+        CACHE_CREATED,
+    ] {
+        assert_eq!(
+            receipts.count(event),
+            0,
+            "{stage}: a failed connect must not reach {event}"
+        );
+    }
+    assert_eq!(
+        active(&receipts),
+        zero_active(),
+        "{stage}: measured active resources stay zero"
+    );
+
+    registry
+        .stop_bound_channel_compat(&id)
+        .await
+        .expect("a failed activation joins its own cleanup path");
+    registry
+        .unregister_bound_channel(&id)
+        .await
+        .expect("the failed source unregisters");
+    assert_eq!(active(&receipts), zero_active(), "{stage}: final");
+}
+
+/// A real TCP connection followed by a real SQLite failure must release the
+/// stream it already holds and never publish a worker, cache or timer.
+async fn polling_partial_activation_drops_the_connected_stream() {
+    let stage = "polling partial activation";
+    let peer = LoopbackSocket::new().await;
+    let directory = tempfile::TempDir::new().unwrap();
+    // A missing parent directory makes the real SQLite open fail after the real
+    // connection succeeded, so the mid-activation boundary is genuinely crossed.
+    let unopenable = directory.path().join("missing").join("polling.sqlite3");
+    let (receipts, _ticks) = PollingReceipts::new();
+    let registry = Arc::new(ChannelRegistry::new());
+    let tree = Arc::new(OwnershipTree::new());
+    let id = register_bound(
+        &registry,
+        &tree,
+        Box::new(PollingSocketChannel::new(
+            "partial-polling",
+            peer.address,
+            unopenable,
+            receipts.clone(),
+        )),
+        ChannelInitialState::Cold,
+    )
+    .await;
+    assert_eq!(active(&receipts), zero_active(), "{stage}: cold baseline");
+
+    let error = expect_start_failure(registry.start_bound_channel_compat(&id).await, stage);
+    assert!(
+        error.contains("polling sqlite open failed"),
+        "{stage}: the failure must cross the real SQLite boundary, got {}",
+        error
+    );
+    assert_eq!(receipts.count(TCP_CONNECT_ATTEMPT), 1, "{stage}");
+    assert_eq!(
+        receipts.count(TCP_CONNECTED),
+        1,
+        "{stage}: the connect really succeeded before the open failed"
+    );
+    assert_eq!(
+        receipts.count(TCP_DROP),
+        1,
+        "{stage}: the already-connected stream must be released before the error escapes"
+    );
+    assert_eq!(
+        receipts.count(DATABASE_OPEN_ATTEMPT),
+        1,
+        "{stage}: the open was attempted"
+    );
+    assert_eq!(
+        receipts.count(DATABASE_OPENED),
+        0,
+        "{stage}: the open must not report success"
+    );
+    for event in [
+        DATABASE_CLOSED,
+        DATABASE_DROP,
+        WORKER_SPAWNED,
+        WORKER_EXITED,
+        WORKER_JOINED,
+        TIMER_CREATED,
+        CACHE_CREATED,
+        SEND_ATTEMPT,
+    ] {
+        assert_eq!(
+            receipts.count(event),
+            0,
+            "{stage}: a partial activation must not record {event}"
+        );
+    }
+    assert_eq!(
+        active(&receipts),
+        zero_active(),
+        "{stage}: measured active resources must return to zero"
+    );
+
+    // Peer-observed EOF: the stream was really closed, not merely uncounted.
+    let mut closed = peer.closed;
+    tokio::time::timeout(Duration::from_secs(10), &mut closed)
+        .await
+        .expect("the peer must observe the closed stream within ten seconds")
+        .expect("the peer reports its own EOF");
+    tokio::time::timeout(Duration::from_secs(10), peer.task)
+        .await
+        .expect("the polling peer task must finish within ten seconds")
+        .expect("the loopback peer task finishes");
+
+    registry
+        .stop_bound_channel_compat(&id)
+        .await
+        .expect("a failed activation joins its own cleanup path");
+    registry
+        .unregister_bound_channel(&id)
+        .await
+        .expect("the failed source unregisters");
+    assert_eq!(active(&receipts), zero_active(), "{stage}: final");
+}
+
+/// A failed stop is not repaired on the caller's behalf: the real client and the
+/// incumbent entry both survive, every retry stays `Busy`, and only the owning
+/// registry's drop performs the real destruction exactly once.
+#[tokio::test]
+async fn failed_stop_preserves_real_residual_until_owner_drop() {
+    let probe = ResourceProbe::default();
+    let registry = Arc::new(ChannelRegistry::new());
+    let tree = Arc::new(OwnershipTree::new());
+    let id = register_bound(
+        &registry,
+        &tree,
+        Box::new(FailingStopWebhook::new(
+            "failing-stop-webhook",
+            "http://127.0.0.1:1/callback".into(),
+            probe.clone(),
+        )),
+        ChannelInitialState::Cold,
+    )
+    .await;
+
+    registry
+        .start_bound_channel_compat(&id)
+        .await
+        .expect("the real webhook activates behind the failing-stop fixture");
+    assert_eq!(
+        probe.count("client_build_attempt"),
+        1,
+        "start builds a client"
+    );
+    assert_eq!(probe.count("client_built"), 1, "start owns one real client");
+    assert!(
+        probe.count("client_built") > probe.count("client_drop"),
+        "an active channel still owns the client it built"
+    );
+
+    let residual = match registry.stop_bound_channel_compat(&id).await {
+        Err(ChannelBindingError::Runtime {
+            phase,
+            residual,
+            error,
+        }) => {
+            assert_eq!(
+                phase,
+                ChannelRuntimePhase::Stop,
+                "a failed stop reports its own phase, got {error}"
+            );
+            residual
+        }
+        other => panic!(
+            "the injected stop failure must surface, got {}",
+            unexpected(&other)
+        ),
+    };
+    assert_eq!(
+        residual.active_work, 0,
+        "failed stop must not retain active work"
+    );
+    assert!(
+        !residual.unjoined_forwarder,
+        "failed stop must not retain an unjoined forwarder"
+    );
+    assert!(
+        !residual.mount_retained,
+        "failed stop must not retain a mount"
+    );
+    assert_eq!(
+        probe.count("client_drop"),
+        0,
+        "a failed stop must not destroy the real client"
+    );
+
+    assert!(
+        matches!(
+            registry.stop_bound_channel_compat(&id).await,
+            Err(ChannelBindingError::Busy)
+        ),
+        "retry stays Busy under the current lifecycle contract"
+    );
+    assert!(
+        matches!(
+            registry.unregister_bound_channel(&id).await,
+            Err(ChannelBindingError::Busy)
+        ),
+        "the retained incumbent cannot be unregistered"
+    );
+    assert_eq!(
+        probe.count("client_drop"),
+        0,
+        "neither a Busy retry nor a Busy unregister cleans up"
+    );
+
+    // Only dropping the owning registry destroys the real client, and it records
+    // the same receipt a successful stop would have recorded.
+    drop(registry);
+    assert_eq!(
+        probe.count("client_drop"),
+        1,
+        "the owner drop must destroy the real client exactly once"
+    );
+    assert_eq!(
+        probe.count("client_build_attempt"),
+        1,
+        "the owner drop must not build a second client"
+    );
+    assert_eq!(
+        probe.count("client_built"),
+        probe.count("client_drop"),
+        "no client may survive the owner drop"
+    );
+    assert_eq!(
+        probe.count("request_attempt"),
+        0,
+        "no request was ever made"
+    );
+    assert_eq!(
+        probe.count("request_ended"),
+        0,
+        "no request was ever closed"
+    );
 }

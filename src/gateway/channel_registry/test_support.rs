@@ -421,6 +421,7 @@ struct OwnedDatabase {
 
 impl OwnedDatabase {
     fn new(connection: rusqlite::Connection, probe: ResourceProbe) -> Self {
+        probe.record(DATABASE_OPENED);
         Self {
             connection: Some(connection),
             probe,
@@ -516,13 +517,16 @@ impl PollingSocketChannel {
         let connection = rusqlite::Connection::open(&self.database_path).map_err(|error| {
             ChannelError::ConfigError(format!("polling sqlite open failed: {error}"))
         })?;
-        connection
+        let database = OwnedDatabase::new(connection, self.receipts.probe.clone());
+        database
+            .connection
+            .as_ref()
+            .expect("a newly opened polling database is still owned")
             .execute_batch("CREATE TABLE IF NOT EXISTS polling_ticks (tick INTEGER NOT NULL)")
             .map_err(|error| {
                 ChannelError::ConfigError(format!("polling sqlite schema failed: {error}"))
             })?;
-        self.receipts.probe.record(DATABASE_OPENED);
-        Ok(OwnedDatabase::new(connection, self.receipts.probe.clone()))
+        Ok(database)
     }
 }
 

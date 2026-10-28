@@ -172,9 +172,27 @@ impl WebhookChannel {
         }
     }
 
+    fn take_client(&mut self) -> bool {
+        if self.injected_client {
+            return false;
+        }
+        self.client.take().is_some()
+    }
+
     /// Update internal status
     async fn set_status(&self, status: ChannelStatus) {
         self.channel_state.set_status(status).await;
+    }
+}
+
+#[cfg(test)]
+impl Drop for WebhookChannel {
+    fn drop(&mut self) {
+        if self.take_client() {
+            if let Some(probe) = &self.probe {
+                probe.record("client_drop");
+            }
+        }
     }
 }
 
@@ -233,19 +251,15 @@ impl Channel for WebhookChannel {
     async fn stop(&mut self) -> ChannelResult<()> {
         tracing::info!("Stopping Webhook channel...");
         self.handler = None;
-        if !self.injected_client {
-            let client = self.client.take();
-            let existed = client.is_some();
-            drop(client);
-            #[cfg(test)]
-            if existed {
-                if let Some(probe) = &self.probe {
-                    probe.record("client_drop");
-                }
+        let existed = self.take_client();
+        #[cfg(test)]
+        if existed {
+            if let Some(probe) = &self.probe {
+                probe.record("client_drop");
             }
-            #[cfg(not(test))]
-            let _ = existed;
         }
+        #[cfg(not(test))]
+        let _ = existed;
         self.set_status(ChannelStatus::Disconnected).await;
         Ok(())
     }
