@@ -18,6 +18,95 @@ use crate::sync_primitives::Arc;
 use std::collections::HashMap;
 use tracing::{info, warn};
 
+#[cfg(test)]
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+
+#[cfg(test)]
+#[derive(Clone, Default, Debug)]
+pub(crate) struct WasmLoadProbe {
+    guest_byte_reads: Arc<AtomicUsize>,
+    guest_bytes: Arc<AtomicUsize>,
+    guest_instance_created: Arc<AtomicUsize>,
+    guest_instance_dropped: Arc<AtomicUsize>,
+    next_instance_id: Arc<AtomicU64>,
+    dropped_instance_ids: Arc<std::sync::Mutex<Vec<u64>>>,
+}
+
+#[cfg(test)]
+#[derive(Clone, Debug)]
+pub(crate) struct WasmInstanceReceipt {
+    id: u64,
+    dropped: Arc<AtomicBool>,
+    probe: WasmLoadProbe,
+}
+
+#[cfg(test)]
+impl WasmLoadProbe {
+    pub(crate) fn record_guest_read(&self, bytes: usize) {
+        self.guest_byte_reads.fetch_add(1, Ordering::Relaxed);
+        self.guest_bytes.fetch_add(bytes, Ordering::Relaxed);
+    }
+
+    pub(crate) fn record_instance(&self) -> WasmInstanceReceipt {
+        let id = self.next_instance_id.fetch_add(1, Ordering::Relaxed) + 1;
+        self.guest_instance_created.fetch_add(1, Ordering::Relaxed);
+        WasmInstanceReceipt {
+            id,
+            dropped: Arc::new(AtomicBool::new(false)),
+            probe: self.clone(),
+        }
+    }
+
+    fn record_instance_drop(&self, id: u64, dropped: &AtomicBool) {
+        if dropped.swap(true, Ordering::AcqRel) {
+            return;
+        }
+        self.guest_instance_dropped.fetch_add(1, Ordering::Relaxed);
+        match self.dropped_instance_ids.lock() {
+            Ok(mut ids) => ids.push(id),
+            Err(error) => error.into_inner().push(id),
+        }
+    }
+
+    pub(crate) fn guest_byte_reads(&self) -> usize {
+        self.guest_byte_reads.load(Ordering::Acquire)
+    }
+
+    pub(crate) fn guest_bytes(&self) -> usize {
+        self.guest_bytes.load(Ordering::Acquire)
+    }
+
+    pub(crate) fn guest_instance_created(&self) -> usize {
+        self.guest_instance_created.load(Ordering::Acquire)
+    }
+
+    pub(crate) fn guest_instance_dropped(&self) -> usize {
+        self.guest_instance_dropped.load(Ordering::Acquire)
+    }
+
+    pub(crate) fn dropped_instance_ids(&self) -> Vec<u64> {
+        match self.dropped_instance_ids.lock() {
+            Ok(ids) => ids.clone(),
+            Err(error) => error.into_inner().clone(),
+        }
+    }
+}
+
+#[cfg(test)]
+impl WasmInstanceReceipt {
+    pub(crate) fn id(&self) -> u64 {
+        self.id
+    }
+
+    pub(crate) fn is_dropped(&self) -> bool {
+        self.dropped.load(Ordering::Acquire)
+    }
+
+    pub(crate) fn mark_dropped(&self) {
+        self.probe.record_instance_drop(self.id, &self.dropped);
+    }
+}
+
 use crate::extension::effects::{async_disposer, Disposer};
 use crate::extension::error::{ExtensionError, ExtensionResult};
 use crate::extension::manifest::PluginManifest;
@@ -39,6 +128,9 @@ pub struct PluginLoader {
     /// WASM runtime (lazy initialized)
     wasm_runtime: Option<WasmRuntime>,
 
+    #[cfg(test)]
+    wasm_load_probe: WasmLoadProbe,
+
     /// Map of `plugin_id` -> runtime kind for fast lookup
     loaded_plugins: HashMap<String, PluginKind>,
     // Runtime exports only. Descriptors, owners and grants live in PluginRegistry.
@@ -53,6 +145,8 @@ impl PluginLoader {
         Self {
             plugin_settings: std::collections::HashMap::new(),
             wasm_runtime: None,
+            #[cfg(test)]
+            wasm_load_probe: WasmLoadProbe::default(),
             loaded_plugins: HashMap::new(),
             context_bindings: HashMap::new(),
             context_call_slots: Arc::new(tokio::sync::Semaphore::new(4)),
@@ -124,7 +218,14 @@ impl PluginLoader {
     fn load_wasm_plugin(&mut self, manifest: &PluginManifest) -> ExtensionResult<()> {
         if self.wasm_runtime.is_none() {
             info!("Initializing WASM runtime");
-            self.wasm_runtime = Some(WasmRuntime::new());
+            #[cfg(test)]
+            {
+                self.wasm_runtime = Some(WasmRuntime::with_probe(self.wasm_load_probe.clone()));
+            }
+            #[cfg(not(test))]
+            {
+                self.wasm_runtime = Some(WasmRuntime::new());
+            }
         }
 
         let runtime = self
@@ -472,6 +573,21 @@ impl PluginLoader {
         self.loaded_plugins.clear();
 
         info!("PluginLoader shutdown complete");
+    }
+
+    #[cfg(test)]
+    pub(crate) fn wasm_load_probe(&self) -> WasmLoadProbe {
+        self.wasm_load_probe.clone()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn wasm_instance_receipt(
+        &self,
+        plugin_id: &str,
+    ) -> Option<crate::extension::loader::WasmInstanceReceipt> {
+        self.wasm_runtime
+            .as_ref()
+            .and_then(|runtime| runtime.instance_receipt(plugin_id))
     }
 
     /// Check if WASM runtime is initialized.

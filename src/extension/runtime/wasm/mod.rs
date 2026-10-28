@@ -54,6 +54,8 @@ pub struct WasmToolOutput {
 #[derive(Default)]
 pub struct WasmRuntime {
     plugins: HashMap<String, Arc<LoadedWasmPlugin>>,
+    #[cfg(test)]
+    probe: Option<crate::extension::loader::WasmLoadProbe>,
 }
 
 #[cfg(test)]
@@ -64,16 +66,18 @@ type GuestBarrier = (
 
 #[derive(Debug)]
 struct LoadedWasmPlugin {
-    plugin: Mutex<extism::Plugin>,
+    plugin: Mutex<Option<extism::Plugin>>,
     #[cfg(test)]
     guest_barrier: Arc<Mutex<Option<GuestBarrier>>>,
-    // Captured from the effective configuration at build time, never from a
-    // manifest supplied by a later binding caller. No per-call attenuation.
-    context_effect_free: bool,
+    #[cfg(test)]
+    instance_receipt: Option<crate::extension::loader::WasmInstanceReceipt>,
     // Immutable discovery facts of THIS incarnation, not active registrations.
     context_declarations: Vec<crate::extension::capability::ContextDeclaration>,
     // Declaration facts captured from THIS mounted manifest, not call metadata.
     hook_exports: std::collections::HashSet<String>,
+    // Captured from the effective configuration at build time, never from a
+    // manifest supplied by a later binding caller. No per-call attenuation.
+    context_effect_free: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -152,11 +156,32 @@ impl WasmMountIdentity {
     }
 }
 
+impl Drop for LoadedWasmPlugin {
+    fn drop(&mut self) {
+        let plugin = match self.plugin.get_mut() {
+            Ok(plugin) => plugin,
+            Err(error) => error.into_inner(),
+        };
+        drop(plugin.take());
+        #[cfg(test)]
+        if let Some(receipt) = &self.instance_receipt {
+            receipt.mark_dropped();
+        }
+    }
+}
+
 impl WasmRuntime {
-    /// Create a new WASM runtime
     #[must_use]
     pub fn new() -> Self {
         Self::default()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn with_probe(probe: crate::extension::loader::WasmLoadProbe) -> Self {
+        Self {
+            plugins: HashMap::new(),
+            probe: Some(probe),
+        }
     }
 
     /// Load a WASM plugin.
@@ -246,6 +271,13 @@ impl WasmRuntime {
         }
 
         info!("Loading WASM plugin: {} from {:?}", manifest.id, wasm_path);
+        let wasm_bytes = std::fs::read(&wasm_path).map_err(|error| {
+            ExtensionError::Runtime(format!("Failed to read WASM file {wasm_path:?}: {error}"))
+        })?;
+        #[cfg(test)]
+        if let Some(probe) = &self.probe {
+            probe.record_guest_read(wasm_bytes.len());
+        }
 
         // Parse capabilities from manifest (default = zero permissions)
         let capabilities = manifest.wasm_capabilities.clone().unwrap_or_default();
@@ -289,7 +321,7 @@ impl WasmRuntime {
         // (the plugin instance cannot continue afterwards and must be
         // reloaded).
         let mut extism_manifest =
-            ExtismManifest::new([Wasm::file(&wasm_path)]).with_timeout(call_timeout);
+            ExtismManifest::new([Wasm::data(wasm_bytes)]).with_timeout(call_timeout);
         if has_contexts {
             // WASM pages are 64 KiB; memory_mb is measured in MiB. Apply the
             // existing mounted limits to the VM, not just the host kernel.
@@ -424,9 +456,14 @@ impl WasmRuntime {
             .map(|ext| ext.contexts.clone())
             .unwrap_or_default();
         let loaded = Arc::new(LoadedWasmPlugin {
-            plugin: Mutex::new(plugin),
+            plugin: Mutex::new(Some(plugin)),
             #[cfg(test)]
             guest_barrier,
+            #[cfg(test)]
+            instance_receipt: self
+                .probe
+                .as_ref()
+                .map(crate::extension::loader::WasmLoadProbe::record_instance),
             context_declarations,
             hook_exports: manifest
                 .hooks_v2
@@ -444,6 +481,16 @@ impl WasmRuntime {
         self.plugins.insert(manifest.id.clone(), loaded);
 
         Ok(())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn instance_receipt(
+        &self,
+        plugin_id: &str,
+    ) -> Option<crate::extension::loader::WasmInstanceReceipt> {
+        self.plugins
+            .get(plugin_id)
+            .and_then(|instance| instance.instance_receipt.clone())
     }
 
     /// Unload a plugin
@@ -501,7 +548,10 @@ impl WasmRuntime {
             .plugin
             .lock()
             .map_err(|e| ExtensionError::Runtime(format!("Failed to lock plugin: {e}")))?;
-        if !plugin.function_exists(export) {
+        if !plugin
+            .as_ref()
+            .is_some_and(|plugin| plugin.function_exists(export))
+        {
             return Err(ExtensionError::Runtime(format!(
                 "WASM export not found: {export}"
             )));
@@ -586,9 +636,11 @@ impl WasmRuntime {
         let mut plugin = loaded
             .plugin
             .lock()
-            .map_err(|e| ExtensionError::Runtime(format!("Failed to lock plugin: {e}")))?;
+            .map_err(|error| ExtensionError::Runtime(format!("Failed to lock plugin: {error}")))?;
 
         let result = plugin
+            .as_mut()
+            .ok_or_else(|| ExtensionError::Runtime("WASM plugin instance unavailable".into()))?
             .call::<&str, &str>(handler, &input_json)
             .map_err(|e| ExtensionError::Runtime(format!("WASM call failed: {e}")))?;
 
