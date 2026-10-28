@@ -26,6 +26,8 @@
 
 pub(crate) mod binding;
 #[cfg(test)]
+mod resource_matrix;
+#[cfg(test)]
 pub(crate) mod test_support;
 
 use crate::capability::descriptor::{
@@ -2284,6 +2286,8 @@ pub struct ChannelHealthSummary {
 
 #[cfg(test)]
 mod tests {
+    use super::test_support::{lifecycle_contract, register_bound};
+
     async fn real_bound(
         url: String,
     ) -> (
@@ -2292,45 +2296,25 @@ mod tests {
         super::test_support::ResourceProbe,
         Arc<OwnershipTree>,
     ) {
-        use super::binding::ChannelLifecycleDeclarationV1;
-        use crate::capability::descriptor::ProjectionMetadata;
-        use crate::capability::ownership::{LifetimeScope, OwnerRef, VisibilityScope};
         use crate::gateway::interfaces::webhook::{WebhookChannel, WebhookChannelConfig};
         let probe = super::test_support::ResourceProbe::default();
         let tree = Arc::new(OwnershipTree::new());
         let registry = Arc::new(ChannelRegistry::new());
-        let id = registry
-            .register_bound_channel(
-                Box::new(WebhookChannel::observed(
-                    "real-bound",
-                    WebhookChannelConfig {
-                        secret: "test-secret".into(),
-                        callback_url: url,
-                        ..Default::default()
-                    },
-                    probe.clone(),
-                )),
-                ChannelLifecycleContract::new(
-                    OwnerRef::Runtime,
-                    LifetimeScope::Runtime,
-                    VisibilityScope::default(),
-                    ChannelLifecycleDeclarationV1::schema(),
-                    ProjectionMetadata::default(),
-                )
-                .unwrap(),
-                tree.clone(),
-                ChannelInitialState::Cold,
-            )
-            .await
-            .unwrap();
-        let capture = registry.capture_bound_channel(&id).await.unwrap();
-        tree.register(
-            capture.descriptor.id.clone(),
-            capture.descriptor.owner.clone(),
-            capture.descriptor.lifetime,
-            capture.descriptor.visibility.clone(),
+        let id = register_bound(
+            &registry,
+            &tree,
+            Box::new(WebhookChannel::observed(
+                "real-bound",
+                WebhookChannelConfig {
+                    secret: "test-secret".into(),
+                    callback_url: url,
+                    ..Default::default()
+                },
+                probe.clone(),
+            )),
+            ChannelInitialState::Cold,
         )
-        .unwrap();
+        .await;
         (registry, id, probe, tree)
     }
 
@@ -4757,17 +4741,6 @@ mod tests {
         assert!(registry.validate_channel_capture(&capture).await.is_none());
     }
 
-    fn lifecycle_contract() -> binding::ChannelLifecycleContract {
-        binding::ChannelLifecycleContract::new(
-            crate::capability::ownership::OwnerRef::Runtime,
-            crate::capability::ownership::LifetimeScope::Runtime,
-            crate::capability::ownership::VisibilityScope::default(),
-            binding::ChannelLifecycleDeclarationV1::schema(),
-            crate::capability::descriptor::ProjectionMetadata::default(),
-        )
-        .unwrap()
-    }
-
     #[tokio::test]
     async fn bound_registration_mints_canonical_provider_while_cold() {
         use crate::capability::descriptor::{CapabilityFacet, CapabilityKind};
@@ -5279,19 +5252,7 @@ mod tests {
         channel: Box<dyn Channel>,
         initial: ChannelInitialState,
     ) -> ChannelId {
-        let id = registry
-            .register_bound_channel(channel, lifecycle_contract(), tree.clone(), initial)
-            .await
-            .unwrap();
-        let capture = registry.capture_bound_channel(&id).await.unwrap();
-        tree.register(
-            capture.descriptor.id.clone(),
-            capture.descriptor.owner.clone(),
-            capture.descriptor.lifetime,
-            capture.descriptor.visibility.clone(),
-        )
-        .unwrap();
-        id
+        register_bound(registry, tree, channel, initial).await
     }
 
     fn observed_webhook(
