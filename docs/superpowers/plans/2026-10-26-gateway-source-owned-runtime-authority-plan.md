@@ -170,3 +170,13 @@ Stage B 仅在 source-private Generic Webhook/loopback 测试组合上完成并�
 The six required tests are GREEN: `bound_retirement_discards_original_completion`, `bound_replace_publishes_whole_tuple`, `bound_unregister_waits_for_cleanup`, `bound_contract_update_retires_old_publication`, `bound_failed_cleanup_retains_incumbent`, and `bound_revision_exhaustion_never_half_publishes`. The detailed bilingual command ledger is [`docs/superpowers/runs/2026-10-27-gateway-bound-retirement-run.md`](../runs/2026-10-27-gateway-bound-retirement-run.md). R1 remains NO-GO/deferred and all later stages remain open.
 
 六个必需测试均 GREEN：上述 retirement、replacement、unregister、contract update、cleanup failure 和 revision exhaustion 测试。完整双语命令 ledger 见 [`docs/superpowers/runs/2026-10-27-gateway-bound-retirement-run.md`](../runs/2026-10-27-gateway-bound-retirement-run.md)。R1 仍为 NO-GO/deferred，后续阶段仍保持 open。
+
+### Stage C compatibility closure evidence / Stage C 兼容性闭合证据（2026-10-28）
+
+Stage C implementation is committed through `66489d94b`. Legacy effect/queue admission, retained webhook dispatch, cold reads, and source-owned compatibility lifecycle are closed against Bound registrations without a second authority or a public Bound route. Required suites pass: registry 63, webhook receiver 22, delivery 52, health 14, tools 54, webhook interface 51, and capability 222; `cargo check -p alephcore --tests`, fmt and diff checks also pass. Every Cargo invocation was preceded by the memory gate with exit 0 / `ALLOW`.
+
+Stage C 实现已提交至 `66489d94b`。Legacy effect/queue admission、retained webhook dispatch、cold reads 与 source-owned compatibility lifecycle 已对 Bound 注册闭合，未新增第二份权威或 public Bound route。必需 suites 全部通过，check/fmt/diff 也通过；每条 Cargo 命令前均有 memory gate exit 0 / `ALLOW`。
+
+The full bilingual ledger is [`docs/superpowers/runs/2026-10-28-gateway-bound-compatibility-closure-run.md`](../runs/2026-10-28-gateway-bound-compatibility-closure-run.md). Independent review is not claimed: reviewer `del_mvri61gw_y936` failed with `No API key found for anthropic.`; manual checklist review found no new Stage C Critical/Important issue. Two additional SMS mid-send integration tests still time out and remain the first unclosed contract. This evidence does not promote R1, Stage D, Feishu/R2, or any deferred provider/kind.
+
+完整双语 ledger 见上述 Stage C run record。独立 review 未通过：reviewer 因 `No API key found for anthropic.` 失败；手工 checklist 未发现新的 Stage C Critical/Important 问题。两个额外 SMS mid-send integration 测试仍超时，是首个未闭合 contract。本证据不提升 R1、Stage D、Feishu/R2 或任何 deferred provider/kind 的状态。
