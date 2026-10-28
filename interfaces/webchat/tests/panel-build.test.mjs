@@ -46,6 +46,11 @@ test('final candidate resolves at root public base', async () => {
   await validateCandidate(output, '/');
 });
 
+test('capability source is included in build provenance', async () => {
+  const { build } = await readCandidate();
+  assert.equal(build.source_inputs.includes('interfaces/webchat/src/panel/source.rs'), true);
+});
+
 test('final candidate resolves under /panel/ public base', async () => {
   await validateCandidate(output, '/panel/');
 });

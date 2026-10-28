@@ -50,6 +50,7 @@ const sourceInputs = [
   'interfaces/webchat/src/panel/projection.rs',
   'interfaces/webchat/src/panel/registry.rs',
   'interfaces/webchat/src/panel/sdk.rs',
+  'interfaces/webchat/src/panel/source.rs',
   'interfaces/webchat/src/panel/shell.rs',
   'interfaces/webchat/panel_loader.js',
   'interfaces/webchat/tabs/terminal/Cargo.toml',

@@ -17,6 +17,7 @@ pub enum RegistryError {
 #[derive(Clone, Debug, Default)]
 pub struct TabRegistry {
     entries: Vec<PanelTabDescriptor>,
+    source_revision: u64,
 }
 
 impl TabRegistry {
@@ -25,16 +26,32 @@ impl TabRegistry {
     pub fn new(builtins: Vec<PanelTabDescriptor>) -> Result<Self, RegistryError> {
         let mut registry = Self::default();
         for descriptor in builtins {
-            validate(&descriptor)?;
-            if descriptor.key.plugin_id != BUILTIN_NAMESPACE {
-                return Err(RegistryError::InvalidEntry);
-            }
-            if registry.get(&descriptor.key).is_some() {
-                return Err(RegistryError::DuplicateKey);
-            }
-            registry.entries.push(descriptor);
+            registry.insert_builtin(descriptor)?;
         }
         Ok(registry)
+    }
+
+    pub(crate) fn insert_builtin(
+        &mut self,
+        descriptor: PanelTabDescriptor,
+    ) -> Result<(), RegistryError> {
+        validate_descriptor(&descriptor)?;
+        if descriptor.key.plugin_id != BUILTIN_NAMESPACE {
+            return Err(RegistryError::InvalidEntry);
+        }
+        if self.get(&descriptor.key).is_some() {
+            return Err(RegistryError::DuplicateKey);
+        }
+        self.entries.push(descriptor);
+        Ok(())
+    }
+
+    pub fn source_revision(&self) -> u64 {
+        self.source_revision
+    }
+
+    pub(crate) fn set_source_revision(&mut self, revision: u64) {
+        self.source_revision = revision;
     }
 
     /// Explicit plugin registration/replacement; reserved built-ins cannot be shadowed.
@@ -42,7 +59,7 @@ impl TabRegistry {
         &mut self,
         descriptor: PanelTabDescriptor,
     ) -> Result<(), RegistryError> {
-        validate(&descriptor)?;
+        validate_descriptor(&descriptor)?;
         if descriptor.key.plugin_id == BUILTIN_NAMESPACE {
             return Err(RegistryError::BuiltInShadowed);
         }
@@ -93,7 +110,7 @@ impl TabRegistry {
     }
 }
 
-fn validate(descriptor: &PanelTabDescriptor) -> Result<(), RegistryError> {
+pub(crate) fn validate_descriptor(descriptor: &PanelTabDescriptor) -> Result<(), RegistryError> {
     if [&descriptor.key.plugin_id, &descriptor.key.tab_id, &descriptor.label, &descriptor.entry]
         .iter().any(|value| value.trim().is_empty())
         // The protocol's qualified display key uses a literal colon separator.
