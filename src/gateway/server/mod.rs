@@ -1960,7 +1960,20 @@ mod tests {
         state.set_status(ChannelStatus::Connected).await;
         let _rx = state.inbound_subscribe();
 
-        let table = Arc::new(WebhookMountTable::new());
+        // This test owns the route merge, not publication identity, so it binds
+        // a permissive guard instead of a registry source.
+        struct PermissiveGuard;
+        #[async_trait::async_trait]
+        impl crate::gateway::webhook_receiver::LegacyWebhookGuard for PermissiveGuard {
+            async fn validate_legacy_webhook(
+                &self,
+                _channel_id: &ChannelId,
+                _source_revision: u64,
+            ) -> crate::gateway::channel::ChannelResult<()> {
+                Ok(())
+            }
+        }
+        let table = Arc::new(WebhookMountTable::guarded_by(Arc::new(PermissiveGuard)));
         let addr: std::net::SocketAddr = "127.0.0.1:0".parse().unwrap();
         let mut server = GatewayServer::new(addr);
         server.set_webhook_mounts(Arc::clone(&table));
@@ -1973,6 +1986,7 @@ mod tests {
                 inbound: state.sender(),
                 status: state.status_handle(),
                 channel_id: ChannelId::new("probe"),
+                source_revision: 0,
             })
             .await;
 

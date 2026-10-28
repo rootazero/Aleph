@@ -49,7 +49,7 @@ use std::collections::HashMap;
 use tokio::sync::RwLock;
 use tracing::{info, warn};
 
-use super::channel::{ChannelId, ChannelStatus, InboundMessageSender};
+use super::channel::{ChannelId, ChannelResult, ChannelStatus, InboundMessageSender};
 
 type HmacSha256 = Hmac<Sha256>;
 
@@ -78,6 +78,33 @@ pub struct WebhookMount {
     /// field is what makes `channel.stop` / `channel.delete` actually remove
     /// the endpoint, not just log a warning.
     pub channel_id: ChannelId,
+    /// The publication stamp of the Legacy registration that mounted this
+    /// handler (`ChannelRegistration::Legacy::publication_revision`).
+    ///
+    /// Matching `channel_id` alone would accept a handler that outlived its
+    /// registration: a retained mount survives `stop` / `delete`, a replaced
+    /// registration reuses the id, and an id converted to Bound keeps the same
+    /// path. Dispatch validates this stamp against the registry's *current*
+    /// entry, so a mount that is no longer that publication is refused.
+    pub source_revision: u64,
+}
+
+/// Dispatch-time check that a mount still denotes its channel's current Legacy
+/// publication.
+///
+/// Implemented by the registry, which owns the canonical channel map; the
+/// endpoint only ever holds the mount table. Keeping this a trait instead of a
+/// registry back-reference is what avoids a construction cycle (a registry is a
+/// plain value until its owner wraps it) and a second instance authority.
+#[async_trait::async_trait]
+pub(crate) trait LegacyWebhookGuard: Send + Sync {
+    /// `Ok(())` only while `channel_id` is still the Legacy registration
+    /// published with `source_revision`.
+    async fn validate_legacy_webhook(
+        &self,
+        channel_id: &ChannelId,
+        source_revision: u64,
+    ) -> ChannelResult<()>;
 }
 
 /// Whether `path` can be reached behind `{WEBHOOK_ROUTE_PREFIX}/{{*rest}}`.
@@ -100,6 +127,8 @@ pub(crate) struct MountedHandler {
     pub(crate) handler: Arc<dyn WebhookHandler>,
     pub(crate) inbound: InboundMessageSender,
     pub(crate) status: Arc<RwLock<ChannelStatus>>,
+    pub(crate) channel_id: ChannelId,
+    pub(crate) source_revision: u64,
 }
 
 /// Live `path -> mount` map behind the single webhook route.
@@ -111,12 +140,45 @@ pub(crate) struct MountedHandler {
 #[derive(Default)]
 pub struct WebhookMountTable {
     mounts: RwLock<HashMap<String, WebhookMount>>,
+    /// Dispatch-time publication authority. `None` refuses every dispatch: a
+    /// table that nobody bound to a registry's source cannot tell a current
+    /// mount from a stale one, so it serves nothing instead of serving
+    /// unchecked handlers.
+    guard: Option<Arc<dyn LegacyWebhookGuard>>,
 }
 
 impl WebhookMountTable {
     #[must_use]
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// A table whose mounts must still match `guard`'s current Legacy
+    /// publication at dispatch. The registry builds its own table this way, so
+    /// its mounts are validated; a bare [`Self::new`] table serves no mount.
+    #[must_use]
+    pub(crate) fn guarded_by(guard: Arc<dyn LegacyWebhookGuard>) -> Self {
+        Self {
+            mounts: RwLock::new(HashMap::new()),
+            guard: Some(guard),
+        }
+    }
+
+    /// Does `mount`'s publication identity still hold, per the bound guard?
+    ///
+    /// Deliberately separate from [`Self::lookup`]: the endpoint verifies the
+    /// HMAC first, so an unauthenticated caller cannot turn this into a state
+    /// oracle. The guard holds the registry's channel map for one read and
+    /// nothing else — no lifecycle gate, and never across HMAC, handler
+    /// parsing, or inbound I/O.
+    async fn mount_is_current(&self, mount: &MountedHandler) -> bool {
+        let Some(guard) = self.guard.as_ref() else {
+            return false;
+        };
+        guard
+            .validate_legacy_webhook(&mount.channel_id, mount.source_revision)
+            .await
+            .is_ok()
     }
 
     /// Mount `mount` at its handler's declared path.
@@ -201,6 +263,8 @@ impl WebhookMountTable {
             handler: Arc::clone(&mount.handler),
             inbound: mount.inbound.clone(),
             status: Arc::clone(&mount.status),
+            channel_id: mount.channel_id.clone(),
+            source_revision: mount.source_revision,
         })
     }
 }
@@ -280,10 +344,13 @@ impl WebhookReceiver {
 ///   1. table lookup  → 404. An unmounted path is simply not served.
 ///   2. signature     → 403. FIRST, so an unauthenticated caller cannot tell
 ///      "channel down" from "wrong secret" (a state oracle).
-///   3. channel status → 503. Depth only: `stop`/`delete` already removed the
+///   3. publication   → 404. The mount must still be the channel's current
+///      Legacy registration; a retained clone, a replacement, or a conversion
+///      to Bound leaves a live handler that must not keep serving.
+///   4. channel status → 503. Depth only: `stop`/`delete` already removed the
 ///      mount, so this catches a channel that moved itself to
 ///      Error/Connecting without any RPC.
-///   4. parse + forward.
+///   5. parse + forward.
 async fn webhook_endpoint(
     State(table): State<Arc<WebhookMountTable>>,
     uri: axum::http::Uri,
@@ -309,6 +376,21 @@ async fn webhook_endpoint(
         return (
             StatusCode::FORBIDDEN,
             String::from("Forbidden: invalid signature"),
+        );
+    }
+
+    // The mount must still be the channel's current Legacy publication: once
+    // it is not, the endpoint is gone for that path even though this clone is
+    // still live.
+    if !table.mount_is_current(&mounted).await {
+        warn!(
+            path = %uri.path(),
+            channel_id = %mounted.channel_id,
+            "webhook mount no longer matches the channel's current publication — rejecting"
+        );
+        return (
+            StatusCode::NOT_FOUND,
+            String::from("Not Found: no webhook mounted at this path"),
         );
     }
 
@@ -530,7 +612,7 @@ mod tests {
 
         let state = ChannelState::new(16);
         state.set_status(ChannelStatus::Connected).await;
-        let table = Arc::new(WebhookMountTable::new());
+        let table = Arc::new(open_table());
         table
             .mount(mount_for("a", "/webhook/mock", "s", &state))
             .await;
@@ -592,7 +674,7 @@ mod tests {
         // `ChannelRegistry::start_message_forwarder`.
         let mut rx = state.inbound_subscribe();
 
-        let table = Arc::new(WebhookMountTable::new());
+        let table = Arc::new(open_table());
         table
             .mount(mount_for("a", "/webhook/mock", "s", &state))
             .await;
@@ -620,7 +702,7 @@ mod tests {
         state.set_status(ChannelStatus::Connected).await;
         let mut rx = state.inbound_subscribe();
 
-        let table = Arc::new(WebhookMountTable::new());
+        let table = Arc::new(open_table());
         let router = WebhookReceiver::router(Arc::clone(&table));
 
         assert_eq!(
@@ -651,7 +733,7 @@ mod tests {
         state.set_status(ChannelStatus::Connected).await;
         let mut rx = state.inbound_subscribe();
 
-        let table = Arc::new(WebhookMountTable::new());
+        let table = Arc::new(open_table());
         table
             .mount(mount_for("a", "/webhook/mock", "s", &state))
             .await;
@@ -686,7 +768,7 @@ mod tests {
         state.set_status(ChannelStatus::Connected).await;
         let mut rx = state.inbound_subscribe();
 
-        let table = Arc::new(WebhookMountTable::new());
+        let table = Arc::new(open_table());
         table
             .mount(mount_for("a", "/webhook/mock", "s", &state))
             .await;
@@ -722,7 +804,7 @@ mod tests {
         // not be able to tell "channel is down" (503) from "wrong secret" (403):
         // that difference is a state oracle on an unauthenticated surface.
         let state = ChannelState::new(16);
-        let table = Arc::new(WebhookMountTable::new());
+        let table = Arc::new(open_table());
         table
             .mount(mount_for("a", "/webhook/mock", "s", &state))
             .await;
@@ -752,7 +834,7 @@ mod tests {
         let state = ChannelState::new(16);
         let mut rx = state.inbound_subscribe();
 
-        let table = Arc::new(WebhookMountTable::new());
+        let table = Arc::new(open_table());
         table
             .mount(mount_for("a", "/webhook/mock", "s", &state))
             .await;
@@ -767,7 +849,7 @@ mod tests {
 
     #[tokio::test]
     async fn unmounted_path_under_the_prefix_is_404() {
-        let table = Arc::new(WebhookMountTable::new());
+        let table = Arc::new(open_table());
         let router = WebhookReceiver::router(table);
 
         assert_eq!(
@@ -778,6 +860,25 @@ mod tests {
 
     // --- WebhookMountTable admission rules ---
 
+    /// Table bound to a permissive publication guard. These tests own the HTTP
+    /// mechanics; `channel_registry` tests own the guard's real semantics.
+    fn open_table() -> WebhookMountTable {
+        WebhookMountTable::guarded_by(Arc::new(OpenGuard))
+    }
+
+    struct OpenGuard;
+
+    #[async_trait]
+    impl LegacyWebhookGuard for OpenGuard {
+        async fn validate_legacy_webhook(
+            &self,
+            _channel_id: &ChannelId,
+            _source_revision: u64,
+        ) -> ChannelResult<()> {
+            Ok(())
+        }
+    }
+
     fn mount_for(channel: &str, path: &str, secret: &str, state: &ChannelState) -> WebhookMount {
         WebhookMount {
             handler: Arc::new(MockWebhookHandler {
@@ -787,6 +888,7 @@ mod tests {
             inbound: state.sender(),
             status: state.status_handle(),
             channel_id: ChannelId::new(channel),
+            source_revision: 0,
         }
     }
 
@@ -794,7 +896,7 @@ mod tests {
     async fn mount_accepts_a_path_under_the_shared_prefix() {
         use crate::gateway::channel::ChannelState;
         let state = ChannelState::new(4);
-        let table = WebhookMountTable::new();
+        let table = open_table();
 
         assert!(
             table
@@ -811,7 +913,7 @@ mod tests {
     async fn mount_refuses_paths_outside_the_shared_prefix() {
         use crate::gateway::channel::ChannelState;
         let state = ChannelState::new(4);
-        let table = WebhookMountTable::new();
+        let table = open_table();
 
         // Every one of these is unreachable behind `/webhook/{*rest}`, so
         // accepting it would re-create the advertised-but-disabled shape this
@@ -855,7 +957,7 @@ mod tests {
         let state = ChannelState::new(4);
 
         // Incumbent is the smaller id → newcomer is refused.
-        let table = WebhookMountTable::new();
+        let table = open_table();
         assert!(
             table
                 .mount(mount_for("aaa", "/webhook/dup", "first", &state))
@@ -874,7 +976,7 @@ mod tests {
         // Incumbent is the larger id → newcomer evicts it. Same outcome
         // whichever order the registry happens to start channels in, which is
         // the whole point (D5): route ownership must not be a per-boot coin flip.
-        let table = WebhookMountTable::new();
+        let table = open_table();
         assert!(
             table
                 .mount(mount_for("zzz", "/webhook/dup", "first", &state))
@@ -895,7 +997,7 @@ mod tests {
     async fn remounting_the_same_channel_refreshes_the_handler() {
         use crate::gateway::channel::ChannelState;
         let state = ChannelState::new(4);
-        let table = WebhookMountTable::new();
+        let table = open_table();
 
         // `restart_channel` builds a fresh handler; keeping the old clone is
         // exactly the staleness this table exists to prevent (spec §2.E).
@@ -917,7 +1019,7 @@ mod tests {
     async fn unmount_channel_removes_every_path_that_channel_owns() {
         use crate::gateway::channel::ChannelState;
         let state = ChannelState::new(4);
-        let table = WebhookMountTable::new();
+        let table = open_table();
 
         table
             .mount(mount_for("a", "/webhook/one", "s", &state))
@@ -1027,6 +1129,7 @@ mod tests {
             inbound: sink.sender(),
             status: sink.status_handle(),
             channel_id: id.clone(),
+            source_revision: live.source_revision,
         };
         assert!(
             table.mount(retained()).await,

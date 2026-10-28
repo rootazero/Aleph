@@ -66,7 +66,16 @@ struct ChannelRegistrationEntry {
 }
 
 enum ChannelRegistration {
-    Legacy,
+    /// A legacy registration published at `publication_revision`, a revision
+    /// unique to this publication for as long as the registry lives.
+    ///
+    /// The revision is the identity a webhook mount carries: it is stamped once
+    /// at publication and never rewritten, so `mount == current entry` is
+    /// decidable at dispatch without an owner map or a second instance
+    /// authority. Bound registrations keep their own `entry_revision`.
+    Legacy {
+        publication_revision: u64,
+    },
     Bound(Box<BoundChannelRegistration>),
 }
 
@@ -249,10 +258,66 @@ impl SendRetryTomlConfig {
     }
 }
 
+/// Dispatch-time authority over a channel's Legacy publication identity.
+///
+/// Owned by the registry and handed to its webhook mount table. The HTTP
+/// endpoint holds the mount table, not the registry: a registry is a plain
+/// value until its owner wraps it, so it cannot hand out a back-reference to
+/// itself, and a second map of "which channels are live" would be a second
+/// instance authority.
+///
+/// Validation is a positive match against the *current* entry, so a mount whose
+/// channel id was replaced, retired, or converted to Bound is refused even
+/// though its handler object and signature are still live.
+struct ChannelSourceGuard {
+    channels: Arc<RwLock<HashMap<ChannelId, Arc<ChannelRegistrationEntry>>>>,
+}
+
+impl ChannelSourceGuard {
+    /// Registry-owned mount validation: does `channel_id` still denote the
+    /// Legacy registration published with `source_revision`?
+    ///
+    /// Holds the channel map for one read only — no lifecycle gate, no I/O — so
+    /// dispatch can call this before status, handler, or inbound work without
+    /// any registry lock outliving it.
+    async fn validate_legacy_webhook(
+        &self,
+        channel_id: &ChannelId,
+        source_revision: u64,
+    ) -> ChannelResult<()> {
+        let channels = self.channels.read().await;
+        let published = channels.get(channel_id).is_some_and(|entry| {
+            matches!(
+                entry.registration,
+                ChannelRegistration::Legacy {
+                    publication_revision
+                } if publication_revision == source_revision
+            )
+        });
+        if published {
+            return Ok(());
+        }
+        Err(ChannelError::NotConnected(format!(
+            "webhook mount for {channel_id} is not its published Legacy registration"
+        )))
+    }
+}
+
+#[async_trait::async_trait]
+impl super::webhook_receiver::LegacyWebhookGuard for ChannelSourceGuard {
+    async fn validate_legacy_webhook(
+        &self,
+        channel_id: &ChannelId,
+        source_revision: u64,
+    ) -> ChannelResult<()> {
+        ChannelSourceGuard::validate_legacy_webhook(self, channel_id, source_revision).await
+    }
+}
+
 /// Central registry for all channel instances
 pub struct ChannelRegistry {
     /// Registered channel instances
-    channels: RwLock<HashMap<ChannelId, Arc<ChannelRegistrationEntry>>>,
+    channels: Arc<RwLock<HashMap<ChannelId, Arc<ChannelRegistrationEntry>>>>,
     /// Private identity shared by this source's immutable publications.
     source: Arc<()>,
     /// Channel factories by type
@@ -293,9 +358,11 @@ impl ChannelRegistry {
     #[must_use]
     pub fn new() -> Self {
         let (inbound_tx, inbound_rx) = broadcast::channel(1000);
+        let channels: Arc<RwLock<HashMap<ChannelId, Arc<ChannelRegistrationEntry>>>> =
+            Arc::new(RwLock::new(HashMap::new()));
 
         Self {
-            channels: RwLock::new(HashMap::new()),
+            channels: Arc::clone(&channels),
             source: Arc::new(()),
             factories: RwLock::new(HashMap::new()),
             inbound_tx: InboundMessageSender::from(inbound_tx),
@@ -303,7 +370,9 @@ impl ChannelRegistry {
             voice_states: RwLock::new(HashMap::new()),
             send_retry: SendRetryPolicy::default(),
             delivery_store: None,
-            webhook_mounts: Arc::new(super::webhook_receiver::WebhookMountTable::new()),
+            webhook_mounts: Arc::new(super::webhook_receiver::WebhookMountTable::guarded_by(
+                Arc::new(ChannelSourceGuard { channels }),
+            )),
             lifecycle_sync: AsyncMutex::new(()),
             source_revision: AtomicU64::new(0),
             desired_state: RwLock::new(HashMap::new()),
@@ -452,11 +521,17 @@ impl ChannelRegistry {
         self.webhook_mounts.unmount_channel(&channel_id).await;
 
         let mut channels = self.channels.write().await;
+        // Stamp the publication while the map is locked: the mount built from
+        // this entry later carries the stamp, and dispatch compares it against
+        // this very entry.
+        let publication_revision = self.advance_source_revision();
         channels.insert(
             channel_id.clone(),
             Arc::new(ChannelRegistrationEntry {
                 channel: Arc::new(RwLock::new(channel)),
-                registration: ChannelRegistration::Legacy,
+                registration: ChannelRegistration::Legacy {
+                    publication_revision,
+                },
                 runtime: Mutex::new(binding::EntryRuntime::default()),
                 drained: tokio::sync::Notify::new(),
             }),
@@ -471,7 +546,6 @@ impl ChannelRegistry {
             DesiredChannelState::Stopped
         };
         self.set_desired(&channel_id, boot_intent).await;
-        self.advance_source_revision();
 
         if let Some((entry, marker)) = &operation {
             self.finish_legacy_operation(entry, marker).await;
@@ -558,11 +632,16 @@ impl ChannelRegistry {
         self.webhook_mounts.unmount_channel(&channel_id).await;
 
         let mut channels = self.channels.write().await;
+        // Stamped under the map lock, exactly like `create_channel`: a retained
+        // mount is refused once this id denotes a different publication.
+        let publication_revision = self.advance_source_revision();
         channels.insert(
             channel_id.clone(),
             Arc::new(ChannelRegistrationEntry {
                 channel: Arc::new(RwLock::new(channel)),
-                registration: ChannelRegistration::Legacy,
+                registration: ChannelRegistration::Legacy {
+                    publication_revision,
+                },
                 runtime: Mutex::new(binding::EntryRuntime::default()),
                 drained: tokio::sync::Notify::new(),
             }),
@@ -575,7 +654,6 @@ impl ChannelRegistry {
             .write()
             .await
             .insert(channel_id.clone(), boot_intent);
-        self.advance_source_revision();
         info!("Registered channel: {}", channel_id);
         channel_id
     }
@@ -662,7 +740,7 @@ impl ChannelRegistry {
         let _lifecycle = self.lifecycle_sync.lock().await;
         let channels = self.channels.read().await;
         let entry = channels.get(channel_id)?;
-        if !matches!(entry.registration, ChannelRegistration::Legacy) {
+        if !matches!(entry.registration, ChannelRegistration::Legacy { .. }) {
             return None;
         }
         Some(ChannelCapture {
@@ -691,20 +769,25 @@ impl ChannelRegistry {
         let current = channels.get(&capture.channel_id)?;
         (Arc::ptr_eq(&self.source, &capture.source)
             && Arc::ptr_eq(current, &capture.entry)
-            && matches!(current.registration, ChannelRegistration::Legacy)
+            && matches!(current.registration, ChannelRegistration::Legacy { .. })
             && Arc::ptr_eq(&current.channel, &capture.handle))
         .then(|| current.channel.clone())
     }
 
-    /// Advance the source publication revision after a committed map mutation.
-    fn advance_source_revision(&self) {
+    /// Advance the source publication revision and return the new value.
+    ///
+    /// Callers that publish an entry stamp it with the returned revision while
+    /// holding the `channels` write lock, so the atomic cut and the stamped
+    /// entry are never observed out of step and every stamp is unique.
+    fn advance_source_revision(&self) -> u64 {
         self.source_revision
             .try_update(
                 std::sync::atomic::Ordering::Relaxed,
                 std::sync::atomic::Ordering::Relaxed,
                 |revision| revision.checked_add(1),
             )
-            .expect("channel source revision exhausted");
+            .map(|previous| previous + 1)
+            .expect("channel source revision exhausted")
     }
 
     fn prepare_bound_entry(
@@ -867,7 +950,7 @@ impl ChannelRegistry {
             .get(id)
             .ok_or_else(|| ChannelError::NotConnected(format!("Channel not found: {id}")))?;
         match entry.registration {
-            ChannelRegistration::Legacy => Ok(entry.channel.clone()),
+            ChannelRegistration::Legacy { .. } => Ok(entry.channel.clone()),
             ChannelRegistration::Bound(_) => Err(ChannelError::UnsupportedFeature(
                 "bound channel runtime is not implemented".into(),
             )),
@@ -906,7 +989,7 @@ impl ChannelRegistry {
                 "Channel changed during lifecycle admission: {id}"
             )));
         }
-        if !matches!(current.registration, ChannelRegistration::Legacy) {
+        if !matches!(current.registration, ChannelRegistration::Legacy { .. }) {
             return Err(ChannelError::UnsupportedFeature(
                 "bound channel runtime is not implemented".into(),
             ));
@@ -1016,12 +1099,22 @@ impl ChannelRegistry {
 
     /// Build the webhook mount for `channel_id` from `channel`'s just-(re)started
     /// state, if it exposes a webhook handler — `None` for every non-webhook
-    /// channel. Shared by `start_channel` and `restart_channel`, the two sites
-    /// where `start()` (re)builds the handler.
+    /// channel and for a Bound registration, which owns no Legacy publication.
+    /// The mount carries the publication stamp of `entry`, so dispatch can tell
+    /// whether this id still denotes that registration.
+    /// Shared by `start_channel` and `restart_channel`, the two sites where
+    /// `start()` (re)builds the handler.
     fn webhook_mount_for(
         channel: &dyn Channel,
         channel_id: &ChannelId,
+        entry: &ChannelRegistrationEntry,
     ) -> Option<super::webhook_receiver::WebhookMount> {
+        let publication_revision = match entry.registration {
+            ChannelRegistration::Legacy {
+                publication_revision,
+            } => publication_revision,
+            ChannelRegistration::Bound(_) => return None,
+        };
         channel
             .webhook_handler()
             .map(|handler| super::webhook_receiver::WebhookMount {
@@ -1029,6 +1122,7 @@ impl ChannelRegistry {
                 inbound: channel.state().sender(),
                 status: channel.state().status_handle(),
                 channel_id: channel_id.clone(),
+                source_revision: publication_revision,
             })
     }
 
@@ -1046,6 +1140,7 @@ impl ChannelRegistry {
         channel_id: &ChannelId,
         channel_arc: &Arc<ChannelRegistrationEntry>,
     ) -> ChannelResult<()> {
+        let entry = channel_arc;
         let channel_arc = channel_arc.channel.clone();
 
         let mut channel = channel_arc.write().await;
@@ -1056,7 +1151,7 @@ impl ChannelRegistry {
         // OWN broadcast so `start_message_forwarder` still stamps channel
         // health — going to the registry's sender directly would make a
         // receiving channel look dead to the health monitor.
-        let mount = Self::webhook_mount_for(&**channel, channel_id);
+        let mount = Self::webhook_mount_for(&**channel, channel_id, entry);
 
         // Start forwarding inbound messages
         self.start_message_forwarder(channel_id.clone(), channel_arc.clone())
@@ -1919,7 +2014,7 @@ impl ChannelRegistry {
         // its own refresh: `start()` builds a NEW handler and the table would
         // otherwise keep serving the pre-restart clone. If `start()` yielded no
         // handler this time, unmount instead of leaving the stale one behind.
-        let mount = Self::webhook_mount_for(&**channel, channel_id);
+        let mount = Self::webhook_mount_for(&**channel, channel_id, entry);
         drop(channel);
 
         match mount {
