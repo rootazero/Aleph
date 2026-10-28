@@ -9,6 +9,9 @@ use std::{cell::RefCell, fmt, rc::Rc};
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum PanelLoadError {
     ImportFailed,
+    AssetFetchFailed,
+    InvalidAssetIntegrity,
+    IntegrityMismatch,
     InvalidDescriptor,
     UnsupportedApiMajor,
     MountFailed,
@@ -173,7 +176,9 @@ impl PanelLoader {
             self.activate_inner(
                 key,
                 sdk,
-                move |descriptor| browser::load(descriptor, sidebar_root, content_root),
+                move |descriptor, integrity| {
+                    browser::load(descriptor, sidebar_root, content_root, integrity)
+                },
                 Some(Box::new(move || {
                     sidebar.set_text_content(None);
                     content.set_text_content(None);
@@ -186,7 +191,7 @@ impl PanelLoader {
             self.activate_inner(
                 key,
                 sdk,
-                |_| async { Err(PanelLoadError::ImportFailed) }.boxed_local(),
+                |_, _| async { Err(PanelLoadError::ImportFailed) }.boxed_local(),
                 None,
             )
         }
@@ -202,6 +207,20 @@ impl PanelLoader {
             ) -> LocalBoxFuture<'static, Result<LoadedModule, PanelLoadError>>
             + 'static,
     ) -> LocalBoxFuture<'static, Result<(), PanelLoadError>> {
+        self.activate_inner(key, sdk, move |descriptor, _| import(descriptor), None)
+    }
+
+    #[cfg(test)]
+    fn activate_with_integrity(
+        &mut self,
+        key: PanelTabKey,
+        sdk: PanelSdk,
+        import: impl FnOnce(
+                PanelTabDescriptor,
+                Option<String>,
+            ) -> LocalBoxFuture<'static, Result<LoadedModule, PanelLoadError>>
+            + 'static,
+    ) -> LocalBoxFuture<'static, Result<(), PanelLoadError>> {
         self.activate_inner(key, sdk, import, None)
     }
 
@@ -211,6 +230,7 @@ impl PanelLoader {
         sdk: PanelSdk,
         import: impl FnOnce(
                 PanelTabDescriptor,
+                Option<String>,
             ) -> LocalBoxFuture<'static, Result<LoadedModule, PanelLoadError>>
             + 'static,
         cleanup: Option<Box<dyn FnOnce()>>,
@@ -240,6 +260,13 @@ impl PanelLoader {
             return async move { Err(error) }.boxed_local();
         }
         let descriptor = descriptor.expect("validated descriptor");
+        let integrity = self
+            .host
+            .registry
+            .lock()
+            .unwrap()
+            .asset_integrity(&key)
+            .map(str::to_owned);
         if self.host.active.get_untracked().as_ref() != Some(&key) {
             self.host.active.set(Some(key.clone()));
         }
@@ -253,12 +280,12 @@ impl PanelLoader {
         let state = self.state.clone();
         let host = self.host.clone();
         async move {
-            if !current(&state, &host, generation, &descriptor) {
+            if !current(&state, &host, generation, &descriptor, integrity.as_deref()) {
                 cancel(&state, generation);
                 return Err(PanelLoadError::Cancelled);
             }
-            let result = import(descriptor.clone()).await;
-            if !current(&state, &host, generation, &descriptor) {
+            let result = import(descriptor.clone(), integrity.clone()).await;
+            if !current(&state, &host, generation, &descriptor, integrity.as_deref()) {
                 cancel(&state, generation);
                 return Err(PanelLoadError::Cancelled);
             }
@@ -287,7 +314,7 @@ impl PanelLoader {
             });
             // A synchronous mount may navigate via the SDK. Dispose that late
             // handle instead of publishing it as the newly selected tab.
-            if !current(&state, &host, generation, &descriptor) {
+            if !current(&state, &host, generation, &descriptor, integrity.as_deref()) {
                 let cleanup = result.map_or(Ok(()), |mut handle| handle.dispose());
                 cancel(&state, generation);
                 cleanup?;
@@ -323,10 +350,17 @@ fn current(
     host: &PanelHostState,
     generation: u64,
     descriptor: &PanelTabDescriptor,
+    integrity: Option<&str>,
 ) -> bool {
     state.borrow().generation == generation
         && host.active.try_get_untracked().flatten().as_ref() == Some(&descriptor.key)
         && host.registry.lock().unwrap().get(&descriptor.key) == Some(descriptor)
+        && host
+            .registry
+            .lock()
+            .unwrap()
+            .asset_integrity(&descriptor.key)
+            == integrity
 }
 
 fn cancel(state: &RefCell<LoadState>, generation: u64) {
@@ -407,6 +441,56 @@ mod tests {
         }
     }
 
+    #[test]
+    fn passes_integrity_and_fences_same_descriptor_replacements() {
+        Owner::new().with(|| {
+            let key = descriptor("one").key;
+            let mut registry = TabRegistry::default();
+            registry.insert_or_replace(descriptor("one")).unwrap();
+            registry.set_asset_integrity(&key, Some("sha256-old".into()));
+            let mut loader = PanelLoader::new(registry);
+            provide_context(loader.host());
+            let old_seen = Rc::new(RefCell::new(None));
+            let (tx, rx) = oneshot::channel();
+            let mut old = loader.activate_with_integrity(key.clone(), sdk("one"), {
+                let old_seen = old_seen.clone();
+                move |_, integrity| {
+                    *old_seen.borrow_mut() = integrity;
+                    async { rx.await.unwrap() }.boxed_local()
+                }
+            });
+            assert!(old.as_mut().now_or_never().is_none());
+            assert_eq!(old_seen.borrow().as_deref(), Some("sha256-old"));
+
+            loader.host().update_registry(|registry| {
+                registry.set_asset_integrity(&key, Some("sha256-new".into()));
+            });
+            let new_seen = Rc::new(RefCell::new(None));
+            let mounted = module(
+                serde_json::to_value(descriptor("one")).unwrap(),
+                Rc::new(RefCell::new(vec![])),
+                false,
+            );
+            block_on(loader.activate_with_integrity(key.clone(), sdk("one"), {
+                let new_seen = new_seen.clone();
+                move |_, integrity| {
+                    *new_seen.borrow_mut() = integrity;
+                    async { Ok(mounted) }.boxed_local()
+                }
+            }))
+            .unwrap();
+            assert_eq!(new_seen.borrow().as_deref(), Some("sha256-new"));
+            assert!(tx
+                .send(Ok(module(
+                    serde_json::to_value(descriptor("one")).unwrap(),
+                    Rc::new(RefCell::new(vec![])),
+                    false,
+                )))
+                .is_ok());
+            assert_eq!(block_on(old), Err(PanelLoadError::Cancelled));
+            assert!(matches!(loader.status(), PanelLoadStatus::Mounted { .. }));
+        });
+    }
     #[test]
     fn unsupported_major_and_malformed_descriptor_never_mount() {
         Owner::new().with(|| {
@@ -720,7 +804,7 @@ mod tests {
             block_on(loader.activate_inner(
                 descriptor("one").key,
                 mounted_sdk.clone(),
-                move |_| async { Ok(mounted) }.boxed_local(),
+                move |_, _| async { Ok(mounted) }.boxed_local(),
                 Some(Box::new(move || cleanup.set(cleanup.get() + 1))),
             ))
             .unwrap();

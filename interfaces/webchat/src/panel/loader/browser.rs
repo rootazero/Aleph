@@ -15,7 +15,7 @@ use web_sys::Element;
 #[wasm_bindgen]
 extern "C" {
     #[wasm_bindgen(catch, js_namespace = globalThis, js_name = __alephLoadPanelModule)]
-    async fn load_module(entry: &str) -> Result<JsValue, JsValue>;
+    async fn load_module(entry: &str, integrity: Option<String>) -> Result<JsValue, JsValue>;
 
     type Module;
     #[wasm_bindgen(method, getter, js_name = descriptorJson)]
@@ -37,10 +37,11 @@ pub(super) fn load(
     descriptor: PanelTabDescriptor,
     sidebar: Element,
     content: Element,
+    integrity: Option<String>,
 ) -> LocalBoxFuture<'static, Result<LoadedModule, PanelLoadError>> {
     async move {
         let module = Module::from(
-            load_module(&descriptor.entry)
+            load_module(&descriptor.entry, integrity)
                 .await
                 .map_err(|error| map_error(error, PanelLoadError::ImportFailed))?,
         );
@@ -67,6 +68,9 @@ fn map_error(error: JsValue, fallback: PanelLoadError) -> PanelLoadError {
         .and_then(|code| code.as_string())
         .as_deref()
     {
+        Some("AssetFetchFailed") => PanelLoadError::AssetFetchFailed,
+        Some("InvalidAssetIntegrity") => PanelLoadError::InvalidAssetIntegrity,
+        Some("IntegrityMismatch") => PanelLoadError::IntegrityMismatch,
         Some("InvalidDescriptor") => PanelLoadError::InvalidDescriptor,
         _ => fallback,
     }

@@ -133,6 +133,7 @@ for (const generated of [false, true]) test(`HTML public-root bridge${generated 
     assert.ok(base, 'Trunk must publish its configured public URL as an explicit base');
     const bootstrap = html.match(/<script\b[^>]*id="panel-loader-bridge"[^>]*>([\s\S]*?)<\/script>/)?.[1];
     assert.ok(bootstrap, 'HTML must synchronously publish the loader bridge before WASM starts');
+    assert.match(bootstrap, /loadPanelModule\(entry, integrity\)/);
     const root = await mkdtemp(join(tmpdir(), 'panel-bridge-'));
     t.after(() => rm(root, { recursive: true, force: true }));
     // Model Trunk's documented base-href substitution and copy-file output.
