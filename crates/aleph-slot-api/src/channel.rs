@@ -984,7 +984,7 @@ pub trait Channel: Send + Sync {
     /// synchronous and must not perform transport I/O, spawn work, or create
     /// externally visible side effects: the first poll is the commit boundary.
     /// Retries may prepare a fresh operation more than once for one logical send.
-    #[must_use]
+    #[must_use = "preparing a channel send does not transmit; await the returned operation"]
     fn send(&self, message: OutboundMessage) -> SendOperation;
 
     /// Returns a subscriber receiver for incoming messages. Multiple subscribers
