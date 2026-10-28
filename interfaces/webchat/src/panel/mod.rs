@@ -1,6 +1,7 @@
 //! Feature-gated Panel projection and browser-only lifecycle boundary.
 
 pub mod loader;
+pub mod projection;
 pub mod registry;
 pub mod sdk;
 mod shell;
@@ -8,7 +9,7 @@ mod shell;
 pub use shell::PanelShell;
 
 use aleph_protocol::panel::PanelTabKey;
-use leptos::prelude::RwSignal;
+use leptos::prelude::{RwSignal, Update};
 use registry::TabRegistry;
 use std::sync::{Arc, Mutex};
 
@@ -16,8 +17,9 @@ use std::sync::{Arc, Mutex};
 /// Provide this context before constructing SDKs; only the Shell mutates it.
 #[derive(Clone)]
 pub struct PanelHostState {
-    pub registry: Arc<Mutex<TabRegistry>>,
+    registry: Arc<Mutex<TabRegistry>>,
     pub active: RwSignal<Option<PanelTabKey>>,
+    revision: RwSignal<u64>,
 }
 
 impl PanelHostState {
@@ -25,7 +27,14 @@ impl PanelHostState {
         Self {
             registry: Arc::new(Mutex::new(registry)),
             active: RwSignal::new(None),
+            revision: RwSignal::new(0),
         }
+    }
+
+    pub fn update_registry(&self, update: impl FnOnce(&mut TabRegistry)) {
+        let mut registry = self.registry.lock().unwrap();
+        update(&mut registry);
+        self.revision.update(|revision| *revision += 1);
     }
 }
 

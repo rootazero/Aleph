@@ -585,6 +585,34 @@ mod tests {
     }
 
     #[test]
+    fn mounted_same_key_replacement_reconciles_old_module() {
+        Owner::new().with(|| {
+            let mut loader = fixture();
+            let events = Rc::new(RefCell::new(vec![]));
+            let mounted = module(
+                serde_json::to_value(descriptor("one")).unwrap(),
+                events.clone(),
+                false,
+            );
+            block_on(
+                loader.activate_with(descriptor("one").key, sdk("one"), move |_| {
+                    async { Ok(mounted) }.boxed_local()
+                }),
+            )
+            .unwrap();
+
+            let mut replacement = descriptor("one");
+            replacement.entry = "tabs/one-replacement.js".into();
+            loader.host().update_registry(|registry| {
+                registry.insert_or_replace(replacement).unwrap();
+            });
+
+            loader.reconcile().unwrap();
+            assert_eq!(*events.borrow(), ["mount", "unmount"]);
+            assert_eq!(loader.status(), PanelLoadStatus::Idle);
+        });
+    }
+    #[test]
     fn disabled_then_removed_unmounts_exactly_once_even_on_error() {
         Owner::new().with(|| {
             for fail in [false, true] {
