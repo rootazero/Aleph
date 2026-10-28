@@ -1,4 +1,5 @@
 import { test, expect } from '@playwright/test';
+import { createHash } from 'node:crypto';
 import { writeFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 
@@ -8,8 +9,103 @@ import { fileURLToPath } from 'node:url';
 const output = fileURLToPath(new URL('../.panel-spike/', import.meta.url));
 const origin = process.env.PANEL_SPIKE_URL || `http://127.0.0.1:${process.env.PANEL_SPIKE_PORT || '18841'}`;
 const pilotEntry = '/site/panel-tabs/terminal-pilot/terminal-pilot.js';
+const sri = (body: string) => `sha256-${createHash('sha256').update(body).digest('base64')}`;
+
+const verifiedCommunityModule = `
+globalThis.__communityTopLevel = (globalThis.__communityTopLevel ?? 0) + 1;
+export default async function init() {
+    globalThis.__communityInit += 1;
+}
+export function describe() {
+    return {
+        key: { plugin_id: 'community.fixture', tab_id: 'verified' },
+        label: 'Verified community fixture',
+        icon: 'terminal',
+        order: 0,
+        entry: 'community/verified.mjs',
+        api_major: 1,
+        trust: 'Verified',
+        permissions: [],
+        status: 'Enabled',
+    };
+}
+export function mount(sidebar, content) {
+    sidebar.textContent = 'community sidebar';
+    content.textContent = 'community content';
+    return { unmount() { sidebar.textContent = ''; content.textContent = ''; } };
+}
+`;
+const invalidCommunityModule = `${verifiedCommunityModule}\nglobalThis.__communityTopLevel = 99;`;
+const importFailureCommunityModule = `${verifiedCommunityModule}\nexport {;`;
 
 test.describe('artifact ABI (not Shell/WS E2E)', () => {
+    test('verifies community bytes before import and revokes Blob URLs', async ({ page }) => {
+        await page.goto(`${origin}/abi.html`);
+        const routes = {
+            '/site/community/verified.mjs': verifiedCommunityModule,
+            '/site/community/mismatch.mjs': invalidCommunityModule,
+            '/site/community/import-failure.mjs': importFailureCommunityModule,
+        };
+        await page.route('**/community/*.mjs', async route => {
+            if (new URL(route.request().url()).pathname === '/site/community/redirect.mjs') {
+                return route.fulfill({ status: 302, headers: { location: '/site/community/verified.mjs' }, body: '' });
+            }
+            const body = routes[new URL(route.request().url()).pathname as keyof typeof routes];
+            if (!body) return route.continue();
+            await route.fulfill({ status: 200, contentType: 'text/javascript', body });
+        });
+        const result = await page.evaluate(async ({ validIntegrity, mismatchIntegrity, importFailureIntegrity }) => {
+            const loader = await import('/site/panel_loader.js');
+            const sidebar = document.querySelector('#sidebar')!;
+            const content = document.querySelector('#content')!;
+            const revoked: string[] = [];
+            const originalRevoke = URL.revokeObjectURL;
+            URL.revokeObjectURL = value => {
+                revoked.push(value);
+                originalRevoke.call(URL, value);
+            };
+            globalThis.__communityTopLevel = 0;
+            globalThis.__communityInit = 0;
+            const verified = await loader.loadPanelModule('community/verified.mjs', validIntegrity);
+            const handle = verified.mount(sidebar, content, undefined);
+            const mounted = [sidebar.textContent, content.textContent];
+            handle.unmount();
+            const cleaned = [sidebar.textContent, content.textContent];
+            const mismatch = await loader.loadPanelModule('community/mismatch.mjs', mismatchIntegrity)
+                .then(() => 'unexpected success', error => error.code);
+            const importFailure = await loader.loadPanelModule('community/import-failure.mjs', importFailureIntegrity)
+                .then(() => 'unexpected success', error => error.code);
+            const redirect = await loader.loadPanelModule('community/redirect.mjs', validIntegrity)
+                .then(() => 'unexpected success', error => error.code);
+            return {
+                descriptor: JSON.parse(verified.descriptorJson),
+                mounted,
+                cleaned,
+                mismatch,
+                importFailure,
+                redirect,
+                topLevel: globalThis.__communityTopLevel,
+                initialized: globalThis.__communityInit,
+                revoked: revoked.length,
+                rootsAfterFailure: [sidebar.textContent, content.textContent],
+            };
+        }, {
+            validIntegrity: sri(verifiedCommunityModule),
+            mismatchIntegrity: sri(verifiedCommunityModule),
+            importFailureIntegrity: sri(importFailureCommunityModule),
+        });
+        expect(result.descriptor.key).toEqual({ plugin_id: 'community.fixture', tab_id: 'verified' });
+        expect(result.mounted).toEqual(['community sidebar', 'community content']);
+        expect(result.cleaned).toEqual(['', '']);
+        expect(result.mismatch).toBe('IntegrityMismatch');
+        expect(result.importFailure).toBe('ImportFailed');
+        expect(result.redirect).toBe('AssetFetchFailed');
+        expect(result.topLevel).toBe(1);
+        expect(result.initialized).toBe(1);
+        expect(result.revoked).toBe(2);
+        expect(result.rootsAfterFailure).toEqual(['', '']);
+    });
+
     test('lazy real loader mounts both roots, cleans up, and caches the module', async ({ page }) => {
         const requests: string[] = [];
         const errors: string[] = [];
