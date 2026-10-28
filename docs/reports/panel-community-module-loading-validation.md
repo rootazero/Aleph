@@ -1,7 +1,7 @@
 # Panel Community Module Loading Validation
 
-> Date / 日期: 2026-10-28  
-> Scope / 范围: `panel-community-loader` worktree, community asset integrity loading stage only  
+> Date / 日期: 2026-10-28
+> Scope / 范围: `panel-community-loader` worktree, community asset integrity loading stage only
 > Artifact / 产物: clean `.panel-tabs-final`, Terminal build id `6dc1cdba239f4234`
 
 ## Intent / 目的
