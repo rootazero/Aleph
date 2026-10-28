@@ -46,7 +46,7 @@ All cargo commands were preceded by `python qa/browser_live/check_memory.py` fro
 | Check | Result |
 |---|---:|
 | `cargo fmt -- --check` | pass |
-| `cargo test --lib --no-default-features --features panel-modular --quiet` | 1585 passed, 0 failed |
+| `cargo test --lib --no-default-features --features panel-modular --quiet` | 1586 passed, 0 failed |
 | `cargo test --lib --quiet` | 1535 passed, 0 failed |
 | `cargo check --lib --no-default-features --features panel-modular --quiet` | pass |
 | `cargo check --target wasm32-unknown-unknown --lib --no-default-features --features panel-modular` | pass |
