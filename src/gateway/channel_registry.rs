@@ -779,7 +779,7 @@ impl ChannelRegistry {
     /// Callers that publish an entry stamp it with the returned revision while
     /// holding the `channels` write lock, so the atomic cut and the stamped
     /// entry are never observed out of step and every stamp is unique.
-    fn advance_source_revision(&self) -> u64 {
+    fn try_advance_source_revision(&self) -> Result<u64, binding::ChannelBindingError> {
         self.source_revision
             .try_update(
                 std::sync::atomic::Ordering::Relaxed,
@@ -787,6 +787,11 @@ impl ChannelRegistry {
                 |revision| revision.checked_add(1),
             )
             .map(|previous| previous + 1)
+            .map_err(|_| binding::ChannelBindingError::PublicationExhausted)
+    }
+
+    fn advance_source_revision(&self) -> u64 {
+        self.try_advance_source_revision()
             .expect("channel source revision exhausted")
     }
 
@@ -870,10 +875,9 @@ impl ChannelRegistry {
         // Acquire every publication lock before the first write: cancellation
         // cannot leave a half-published tuple or mismatched desired intent.
         let mut desired = self.desired_state.write().await;
+        self.try_advance_source_revision()?;
         channels.insert(channel_id.clone(), entry);
         desired.insert(channel_id.clone(), DesiredChannelState::Stopped);
-        self.source_revision
-            .store(revision, std::sync::atomic::Ordering::Relaxed);
         Ok(channel_id)
     }
 

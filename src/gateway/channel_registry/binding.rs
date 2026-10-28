@@ -541,6 +541,10 @@ impl super::ChannelRegistry {
             .ok_or(ChannelBindingError::PublicationExhausted)
     }
 
+    fn advance_bound_revision(&self) -> Result<u64, ChannelBindingError> {
+        self.try_advance_source_revision()
+    }
+
     async fn begin_bound_retirement(
         &self,
         id: &super::ChannelId,
@@ -669,23 +673,21 @@ impl super::ChannelRegistry {
         if incumbent.runtime.lock().unwrap().active_work != 0 {
             return Err(ChannelBindingError::Busy);
         }
-        let revision = self.next_bound_revision()?;
-        if let super::ChannelRegistration::Bound(bound) = &mut Arc::get_mut(&mut candidate)
+        let bound = match &mut Arc::get_mut(&mut candidate)
             .ok_or(ChannelBindingError::Busy)?
             .registration
         {
-            bound.entry_revision = revision;
-            bound.descriptor.revision = crate::capability::descriptor::CapabilityRevision(revision);
-            bound.descriptor_fingerprint = canonical_descriptor_fingerprint(&bound.descriptor);
-        } else {
-            return Err(ChannelBindingError::InvalidContract);
-        }
+            super::ChannelRegistration::Bound(bound) => bound,
+            _ => return Err(ChannelBindingError::InvalidContract),
+        };
+        let revision = self.advance_bound_revision()?;
+        bound.entry_revision = revision;
+        bound.descriptor.revision = crate::capability::descriptor::CapabilityRevision(revision);
+        bound.descriptor_fingerprint = canonical_descriptor_fingerprint(&bound.descriptor);
         let mut channels = self.channels.write().await;
         let mut desired = self.desired_state.write().await;
         channels.insert(id.clone(), candidate);
         desired.insert(id.clone(), super::DesiredChannelState::Stopped);
-        self.source_revision
-            .store(revision, std::sync::atomic::Ordering::Relaxed);
         Ok(id.clone())
     }
 
@@ -717,13 +719,11 @@ impl super::ChannelRegistry {
         if incumbent.runtime.lock().unwrap().active_work != 0 {
             return Err(ChannelBindingError::Busy);
         }
-        let revision = self.next_bound_revision()?;
+        self.advance_bound_revision()?;
         let mut channels = self.channels.write().await;
         let mut desired = self.desired_state.write().await;
         channels.remove(id);
         desired.remove(id);
-        self.source_revision
-            .store(revision, std::sync::atomic::Ordering::Relaxed);
         Ok(())
     }
 

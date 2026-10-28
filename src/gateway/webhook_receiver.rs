@@ -187,6 +187,25 @@ impl WebhookMountTable {
     /// with the offending channel id, never panicked — `path` is operator
     /// config.
     pub async fn mount(&self, mount: WebhookMount) -> bool {
+        let Some(guard) = self.guard.as_ref() else {
+            warn!(
+                channel_id = %mount.channel_id,
+                "webhook mount refused because no publication guard is bound"
+            );
+            return false;
+        };
+        if guard
+            .validate_legacy_webhook(&mount.channel_id, mount.source_revision)
+            .await
+            .is_err()
+        {
+            warn!(
+                channel_id = %mount.channel_id,
+                "webhook mount refused because its Legacy publication is stale"
+            );
+            return false;
+        }
+
         let path = mount.handler.path().to_string();
 
         if !is_mountable_path(&path) {
@@ -893,6 +912,19 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn bare_mount_table_refuses_and_does_not_report_success() {
+        let state = ChannelState::new(4);
+        let table = WebhookMountTable::new();
+
+        assert!(
+            !table
+                .mount(mount_for("bare", "/webhook/bare", "secret", &state))
+                .await
+        );
+        assert_eq!(table.mounted_count().await, 0);
+    }
+
+    #[tokio::test]
     async fn mount_accepts_a_path_under_the_shared_prefix() {
         use crate::gateway::channel::ChannelState;
         let state = ChannelState::new(4);
@@ -1195,14 +1227,12 @@ mod tests {
 
         // Retire the publication: the same channel id now denotes a different
         // registration, one that never published this handler. The retained
-        // mount keeps serving until something validates its identity.
+        // mount may be refused at mount time; the endpoint dispatch denial is
+        // the contract under test.
         registry
             .register(Box::new(WebhookChannel::new("held", config)))
             .await;
-        assert!(
-            table.mount(retained()).await,
-            "a mount that outlived its registration is back in the table"
-        );
+        let _ = table.mount(retained()).await;
 
         let body = br#"{"message":"after retirement"}"#;
         assert!(
