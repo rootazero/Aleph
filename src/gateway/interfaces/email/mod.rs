@@ -38,7 +38,7 @@ pub use message_ops::EmailMessageOps;
 use crate::gateway::channel::{
     Channel, ChannelCapabilities, ChannelError, ChannelFactory, ChannelId, ChannelInfo,
     ChannelResult, ChannelState, ChannelStatus, InboundMessage, MessageId, OutboundMessage,
-    SendResult,
+    SendOperation, SendResult,
 };
 use async_trait::async_trait;
 use tokio::sync::{broadcast, watch};
@@ -175,26 +175,30 @@ impl Channel for EmailChannel {
         Ok(())
     }
 
-    async fn send(&self, message: OutboundMessage) -> ChannelResult<SendResult> {
-        // Test mode: skip real SMTP, return mock success
-        if self.test_mode {
-            return Ok(SendResult {
-                message_id: MessageId::new(format!("email-{}", chrono::Utc::now().timestamp())),
-                timestamp: chrono::Utc::now(),
-            });
-        }
+    fn send(&self, message: OutboundMessage) -> SendOperation {
+        let config = self.config.clone();
+        let test_mode = self.test_mode;
+        Box::pin(async move {
+            // Test mode: skip real SMTP, return mock success
+            if test_mode {
+                return Ok(SendResult {
+                    message_id: MessageId::new(format!("email-{}", chrono::Utc::now().timestamp())),
+                    timestamp: chrono::Utc::now(),
+                });
+            }
 
-        // conversation_id is the recipient email address
-        let to = message.conversation_id.as_str();
+            // conversation_id is the recipient email address
+            let to = message.conversation_id.as_str();
 
-        // Use subject from metadata if provided, otherwise default
-        let subject = message
-            .metadata
-            .get("subject")
-            .cloned()
-            .unwrap_or_else(|| "Message from Aleph".to_string());
+            // Use subject from metadata if provided, otherwise default
+            let subject = message
+                .metadata
+                .get("subject")
+                .cloned()
+                .unwrap_or_else(|| "Message from Aleph".to_string());
 
-        EmailMessageOps::send_email(&self.config, to, &subject, &message.text).await
+            EmailMessageOps::send_email(&config, to, &subject, &message.text).await
+        })
     }
 
     // inbound_receiver() — uses default from Channel trait via state()

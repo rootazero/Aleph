@@ -3220,28 +3220,28 @@ mod tests {
         async fn stop(&mut self) -> super::super::channel::ChannelResult<()> {
             Ok(())
         }
-        async fn send(
-            &self,
-            message: OutboundMessage,
-        ) -> super::super::channel::ChannelResult<super::super::channel::SendResult> {
-            if self.terminal {
-                return Err(ChannelError::SendFailed("permanent".into()));
-            }
-            if self
-                .failing
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .contains(&message.text)
-            {
-                return Err(ChannelError::NotConnected("down".into()));
-            }
-            self.sent
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .push(message.text.clone());
-            Ok(super::super::channel::SendResult {
-                message_id: super::super::channel::MessageId::new("ok"),
-                timestamp: chrono::Utc::now(),
+        fn send(&self, message: OutboundMessage) -> super::super::channel::SendOperation {
+            let sent = Arc::clone(&self.sent);
+            let failing = Arc::clone(&self.failing);
+            let terminal = self.terminal;
+            Box::pin(async move {
+                if terminal {
+                    return Err(ChannelError::SendFailed("permanent".into()));
+                }
+                if failing
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .contains(&message.text)
+                {
+                    return Err(ChannelError::NotConnected("down".into()));
+                }
+                sent.lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .push(message.text.clone());
+                Ok(super::super::channel::SendResult {
+                    message_id: super::super::channel::MessageId::new("ok"),
+                    timestamp: chrono::Utc::now(),
+                })
             })
         }
     }

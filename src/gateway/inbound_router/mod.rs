@@ -2842,14 +2842,14 @@ mod tests {
         async fn stop(&mut self) -> crate::gateway::channel::ChannelResult<()> {
             Ok(())
         }
-        async fn send(
-            &self,
-            message: OutboundMessage,
-        ) -> crate::gateway::channel::ChannelResult<crate::gateway::channel::SendResult> {
-            self.replies.send(message).expect("reply collector is live");
-            Ok(crate::gateway::channel::SendResult {
-                message_id: MessageId::new("cooldown-reply"),
-                timestamp: chrono::Utc::now(),
+        fn send(&self, message: OutboundMessage) -> crate::gateway::channel::SendOperation {
+            let replies = self.replies.clone();
+            Box::pin(async move {
+                replies.send(message).expect("reply collector is live");
+                Ok(crate::gateway::channel::SendResult {
+                    message_id: MessageId::new("cooldown-reply"),
+                    timestamp: chrono::Utc::now(),
+                })
             })
         }
     }

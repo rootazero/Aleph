@@ -3370,7 +3370,7 @@ mod tests {
     async fn a_stamped_resume_skips_the_origin_fan_out_and_an_unstamped_one_takes_it() {
         use crate::gateway::channel::{
             Channel, ChannelCapabilities, ChannelId, ChannelInfo, ChannelResult, ChannelState,
-            ChannelStatus, MessageId, OutboundMessage, SendResult,
+            ChannelStatus, MessageId, OutboundMessage, SendOperation, SendResult,
         };
         use crate::gateway::channel_registry::ChannelRegistry;
         use crate::gateway::event_emitter::{CollectingEventEmitter, RunSummary, StreamEvent};
@@ -3395,11 +3395,14 @@ mod tests {
             async fn stop(&mut self) -> ChannelResult<()> {
                 Ok(())
             }
-            async fn send(&self, message: OutboundMessage) -> ChannelResult<SendResult> {
-                self.seen.lock().await.push(message.text.clone());
-                Ok(SendResult {
-                    message_id: MessageId::new("ok"),
-                    timestamp: chrono::Utc::now(),
+            fn send(&self, message: OutboundMessage) -> SendOperation {
+                let seen = Arc::clone(&self.seen);
+                Box::pin(async move {
+                    seen.lock().await.push(message.text.clone());
+                    Ok(SendResult {
+                        message_id: MessageId::new("ok"),
+                        timestamp: chrono::Utc::now(),
+                    })
                 })
             }
         }

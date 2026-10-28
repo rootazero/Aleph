@@ -1,6 +1,6 @@
 //! Per-instance observations of actual operations, never production authority.
 use super::super::channel::{
-    Channel, ChannelError, ChannelInfo, ChannelResult, ChannelState, OutboundMessage, SendResult,
+    Channel, ChannelError, ChannelInfo, ChannelResult, ChannelState, OutboundMessage, SendOperation,
 };
 use crate::gateway::interfaces::webhook::WebhookChannel;
 use crate::sync_primitives::{Arc, Mutex};
@@ -40,8 +40,8 @@ impl Channel for HeldWebhook {
         }
         self.channel.stop().await
     }
-    async fn send(&self, message: OutboundMessage) -> ChannelResult<SendResult> {
-        self.channel.send(message).await
+    fn send(&self, message: OutboundMessage) -> SendOperation {
+        self.channel.send(message)
     }
 }
 
@@ -79,8 +79,8 @@ impl Channel for FailingStopWebhook {
     async fn stop(&mut self) -> ChannelResult<()> {
         Err(ChannelError::Internal("injected stop failure".into()))
     }
-    async fn send(&self, message: OutboundMessage) -> ChannelResult<SendResult> {
-        self.channel.send(message).await
+    fn send(&self, message: OutboundMessage) -> SendOperation {
+        self.channel.send(message)
     }
 }
 

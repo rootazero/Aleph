@@ -45,7 +45,8 @@ pub use resolver::{Candidate, ChannelResolutionError, DiscordResolver, ResolvedC
 use crate::gateway::channel::{
     Attachment, Channel, ChannelCapabilities, ChannelError, ChannelFactory, ChannelId, ChannelInfo,
     ChannelResult, ChannelState, ChannelStatus, ConversationId, InboundMessage,
-    InboundMessageSender, MessageId, MessageMeta, OutboundMessage, SendResult, UserId,
+    InboundMessageSender, MessageId, MessageMeta, OutboundMessage, SendOperation, SendResult,
+    UserId,
 };
 use crate::sync_primitives::Arc;
 use async_trait::async_trait;
@@ -999,128 +1000,131 @@ impl Channel for DiscordChannel {
         Ok(())
     }
 
-    async fn send(&self, message: OutboundMessage) -> ChannelResult<SendResult> {
-        if self.test_mode {
-            if self.status() != ChannelStatus::Connected {
-                return Err(ChannelError::NotConnected(
-                    "Discord channel not started".to_string(),
-                ));
+    fn send(&self, message: OutboundMessage) -> SendOperation {
+        let http = self.http.clone();
+        let test_mode = self.test_mode;
+        let channel_state = self.channel_state.clone();
+        Box::pin(async move {
+            if test_mode {
+                if channel_state.status() != ChannelStatus::Connected {
+                    return Err(ChannelError::NotConnected(
+                        "Discord channel not started".to_string(),
+                    ));
+                }
+                return Ok(SendResult {
+                    message_id: MessageId::new("discord-test-msg-id".to_string()),
+                    timestamp: chrono::Utc::now(),
+                });
             }
-            return Ok(SendResult {
-                message_id: MessageId::new("discord-test-msg-id".to_string()),
-                timestamp: chrono::Utc::now(),
-            });
-        }
-        let http = self
-            .http
-            .as_ref()
-            .ok_or_else(|| ChannelError::NotConnected("HTTP client not initialized".to_string()))?;
-
-        // Parse channel ID from conversation_id
-        // Handle both "dm:user_id" and direct channel IDs
-        let channel_id = if message.conversation_id.as_str().starts_with("dm:") {
-            // For DMs, we need to create a DM channel first. Use
-            // `strip_prefix` instead of `[3..]` — see `resolve_channel_id`
-            // for the rationale (non-ASCII bytes straddling index 3 would
-            // otherwise panic).
-            let user_id: u64 = message
-                .conversation_id
-                .as_str()
-                .strip_prefix("dm:")
-                .ok_or_else(|| {
-                    ChannelError::Internal("conversation_id does not start with 'dm:'".to_string())
-                })?
-                .parse()
-                .map_err(|e| ChannelError::SendFailed(format!("Invalid user ID: {e}")))?;
-
-            let user = serenity::all::UserId::new(user_id);
-            let dm_channel = user.create_dm_channel(http).await.map_err(|e| {
-                ChannelError::SendFailed(format!("Failed to create DM channel: {e}"))
+            let http = http.as_ref().ok_or_else(|| {
+                ChannelError::NotConnected("HTTP client not initialized".to_string())
             })?;
 
-            dm_channel.id
-        } else {
-            SerenityChannelId::new(
-                message
-                    .conversation_id
-                    .as_str()
-                    .parse()
-                    .map_err(|e| ChannelError::SendFailed(format!("Invalid channel ID: {e}")))?,
-            )
-        };
+            // Parse channel ID from conversation_id
+            // Handle both "dm:user_id" and direct channel IDs
+            let channel_id =
+                if message.conversation_id.as_str().starts_with("dm:") {
+                    // For DMs, we need to create a DM channel first. Use
+                    // `strip_prefix` instead of `[3..]` — see `resolve_channel_id`
+                    // for the rationale (non-ASCII bytes straddling index 3 would
+                    // otherwise panic).
+                    let user_id: u64 = message
+                        .conversation_id
+                        .as_str()
+                        .strip_prefix("dm:")
+                        .ok_or_else(|| {
+                            ChannelError::Internal(
+                                "conversation_id does not start with 'dm:'".to_string(),
+                            )
+                        })?
+                        .parse()
+                        .map_err(|e| ChannelError::SendFailed(format!("Invalid user ID: {e}")))?;
 
-        // Build message
-        let mut builder = CreateMessage::new().content(&message.text);
+                    let user = serenity::all::UserId::new(user_id);
+                    let dm_channel = user.create_dm_channel(http).await.map_err(|e| {
+                        ChannelError::SendFailed(format!("Failed to create DM channel: {e}"))
+                    })?;
 
-        // Add reply reference if specified
-        if let Some(reply_to) = &message.reply_to {
-            if let Ok(msg_id) = reply_to.as_str().parse::<u64>() {
-                builder = builder.reference_message(serenity::all::MessageReference::from((
-                    channel_id,
-                    serenity::all::MessageId::new(msg_id),
-                )));
+                    dm_channel.id
+                } else {
+                    SerenityChannelId::new(message.conversation_id.as_str().parse().map_err(
+                        |e| ChannelError::SendFailed(format!("Invalid channel ID: {e}")),
+                    )?)
+                };
+
+            // Build message
+            let mut builder = CreateMessage::new().content(&message.text);
+
+            // Add reply reference if specified
+            if let Some(reply_to) = &message.reply_to {
+                if let Ok(msg_id) = reply_to.as_str().parse::<u64>() {
+                    builder = builder.reference_message(serenity::all::MessageReference::from((
+                        channel_id,
+                        serenity::all::MessageId::new(msg_id),
+                    )));
+                }
             }
-        }
 
-        // Add attachments. `data` first, then `path` — the same precedence
-        // telegram and slack use. The `path` arm used to be missing entirely,
-        // which made every path-backed attachment (TTS output, harvested media)
-        // vanish without a word while `ChannelCapabilities::attachments` kept
-        // promising Discord could carry them.
-        for attachment in &message.attachments {
-            let filename = attachment
-                .filename
-                .clone()
-                .unwrap_or_else(|| "attachment".to_string());
-            if let Some(data) = &attachment.data {
-                builder = builder.add_file(CreateAttachment::bytes(data.clone(), filename));
-            } else if let Some(path) = &attachment.path {
-                match CreateAttachment::path(path).await {
-                    Ok(file) => builder = builder.add_file(file),
-                    Err(e) => {
-                        return Err(ChannelError::SendFailed(format!(
-                            "Failed to read attachment {path}: {e}"
-                        )))
+            // Add attachments. `data` first, then `path` — the same precedence
+            // telegram and slack use. The `path` arm used to be missing entirely,
+            // which made every path-backed attachment (TTS output, harvested media)
+            // vanish without a word while `ChannelCapabilities::attachments` kept
+            // promising Discord could carry them.
+            for attachment in &message.attachments {
+                let filename = attachment
+                    .filename
+                    .clone()
+                    .unwrap_or_else(|| "attachment".to_string());
+                if let Some(data) = &attachment.data {
+                    builder = builder.add_file(CreateAttachment::bytes(data.clone(), filename));
+                } else if let Some(path) = &attachment.path {
+                    match CreateAttachment::path(path).await {
+                        Ok(file) => builder = builder.add_file(file),
+                        Err(e) => {
+                            return Err(ChannelError::SendFailed(format!(
+                                "Failed to read attachment {path}: {e}"
+                            )))
+                        }
                     }
                 }
             }
-        }
 
-        // Render inline keyboard (approval UI etc.) as Discord button components.
-        // The button `custom_id` carries the callback_data verbatim; a click comes
-        // back through `interaction_create` → cb_-prefixed inbound → approval sink.
-        // Discord caps action rows at 5 and buttons-per-row at 5.
-        if let Some(keyboard) = &message.inline_keyboard {
-            let rows: Vec<CreateActionRow> = keyboard
-                .rows
-                .iter()
-                .take(5)
-                .filter_map(|row| {
-                    let buttons: Vec<CreateButton> = row
-                        .iter()
-                        .take(5)
-                        .map(|btn| button_style_for(&btn.callback_data, &btn.text))
-                        .collect();
-                    (!buttons.is_empty()).then_some(CreateActionRow::Buttons(buttons))
-                })
-                .collect();
-            if !rows.is_empty() {
-                builder = builder.components(rows);
+            // Render inline keyboard (approval UI etc.) as Discord button components.
+            // The button `custom_id` carries the callback_data verbatim; a click comes
+            // back through `interaction_create` → cb_-prefixed inbound → approval sink.
+            // Discord caps action rows at 5 and buttons-per-row at 5.
+            if let Some(keyboard) = &message.inline_keyboard {
+                let rows: Vec<CreateActionRow> = keyboard
+                    .rows
+                    .iter()
+                    .take(5)
+                    .filter_map(|row| {
+                        let buttons: Vec<CreateButton> = row
+                            .iter()
+                            .take(5)
+                            .map(|btn| button_style_for(&btn.callback_data, &btn.text))
+                            .collect();
+                        (!buttons.is_empty()).then_some(CreateActionRow::Buttons(buttons))
+                    })
+                    .collect();
+                if !rows.is_empty() {
+                    builder = builder.components(rows);
+                }
             }
-        }
 
-        // Send the message
-        let sent = channel_id
-            .send_message(http, builder)
-            .await
-            .map_err(|e| ChannelError::SendFailed(format!("Discord send error: {e}")))?;
+            // Send the message
+            let sent = channel_id
+                .send_message(http, builder)
+                .await
+                .map_err(|e| ChannelError::SendFailed(format!("Discord send error: {e}")))?;
 
-        Ok(SendResult {
-            message_id: MessageId::new(sent.id.to_string()),
-            timestamp: Utc
-                .timestamp_opt(sent.timestamp.unix_timestamp(), 0)
-                .single()
-                .unwrap_or_else(Utc::now),
+            Ok(SendResult {
+                message_id: MessageId::new(sent.id.to_string()),
+                timestamp: Utc
+                    .timestamp_opt(sent.timestamp.unix_timestamp(), 0)
+                    .single()
+                    .unwrap_or_else(Utc::now),
+            })
         })
     }
 

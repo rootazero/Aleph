@@ -16,7 +16,7 @@ pub use config::MatrixConfig;
 use crate::gateway::channel::{
     Channel, ChannelCapabilities, ChannelError, ChannelFactory, ChannelId, ChannelInfo,
     ChannelResult, ChannelState, ChannelStatus, ConversationId, MessageId, OutboundMessage,
-    SendResult, StreamProtocol,
+    SendOperation, SendResult, StreamProtocol,
 };
 use crate::sync_primitives::Arc;
 use async_trait::async_trait;
@@ -162,20 +162,27 @@ impl Channel for MatrixChannel {
         Ok(())
     }
 
-    async fn send(&self, message: OutboundMessage) -> ChannelResult<SendResult> {
-        if self.test_mode {
-            if self.status() != ChannelStatus::Connected {
-                return Err(ChannelError::NotConnected(
-                    "Matrix channel not started".to_string(),
-                ));
+    fn send(&self, message: OutboundMessage) -> SendOperation {
+        let client = self.client.clone();
+        let test_mode = self.test_mode;
+        let channel_state = self.channel_state.clone();
+        Box::pin(async move {
+            if test_mode {
+                if channel_state.status() != ChannelStatus::Connected {
+                    return Err(ChannelError::NotConnected(
+                        "Matrix channel not started".to_string(),
+                    ));
+                }
+                return Ok(SendResult {
+                    message_id: MessageId::new("matrix-test-msg-id".to_string()),
+                    timestamp: chrono::Utc::now(),
+                });
             }
-            return Ok(SendResult {
-                message_id: MessageId::new("matrix-test-msg-id".to_string()),
-                timestamp: chrono::Utc::now(),
-            });
-        }
-        let client = self.client()?;
-        outbound::send_message(client.inner(), message).await
+            let client = client.as_ref().ok_or_else(|| {
+                ChannelError::NotConnected("Matrix client not initialized".to_string())
+            })?;
+            outbound::send_message(client.inner(), message).await
+        })
     }
 
     async fn send_typing(&self, _conversation_id: &ConversationId) -> ChannelResult<()> {

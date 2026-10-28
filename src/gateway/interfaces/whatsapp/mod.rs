@@ -40,7 +40,7 @@ pub use config::{AccessConfig, DeliveryConfig, ReactionConfig, WhatsAppConfig};
 use crate::gateway::channel::{
     Channel, ChannelCapabilities, ChannelError, ChannelFactory, ChannelId, ChannelInfo,
     ChannelResult, ChannelState, ChannelStatus, MessageId, OutboundMessage, PairingData,
-    SendResult,
+    SendOperation, SendResult,
 };
 use crate::gateway::interfaces::whatsapp::wa_auth::WaAuthManager;
 use crate::gateway::interfaces::whatsapp::wa_runtime::fake::FakeWaRuntime;
@@ -499,28 +499,31 @@ impl Channel for WhatsAppChannel {
         Ok(())
     }
 
-    async fn send(&self, message: OutboundMessage) -> ChannelResult<SendResult> {
-        if self.test_mode {
-            return Ok(SendResult {
-                message_id: MessageId::new(format!(
-                    "wa-test-{}",
-                    chrono::Utc::now().timestamp_millis()
-                )),
-                timestamp: chrono::Utc::now(),
-            });
-        }
+    fn send(&self, message: OutboundMessage) -> SendOperation {
+        let runtime = self.runtime.clone();
+        let test_mode = self.test_mode;
+        Box::pin(async move {
+            if test_mode {
+                return Ok(SendResult {
+                    message_id: MessageId::new(format!(
+                        "wa-test-{}",
+                        chrono::Utc::now().timestamp_millis()
+                    )),
+                    timestamp: chrono::Utc::now(),
+                });
+            }
 
-        let runtime = self
-            .runtime
-            .as_ref()
-            .ok_or_else(|| ChannelError::NotConnected("WhatsApp runtime not started".into()))?;
-        let message_id = runtime
-            .send_message(message)
-            .await
-            .map_err(|e| ChannelError::Internal(format!("send_message: {e}")))?;
-        Ok(SendResult {
-            message_id,
-            timestamp: chrono::Utc::now(),
+            let runtime = runtime
+                .as_ref()
+                .ok_or_else(|| ChannelError::NotConnected("WhatsApp runtime not started".into()))?;
+            let message_id = runtime
+                .send_message(message)
+                .await
+                .map_err(|e| ChannelError::Internal(format!("send_message: {e}")))?;
+            Ok(SendResult {
+                message_id,
+                timestamp: chrono::Utc::now(),
+            })
         })
     }
 

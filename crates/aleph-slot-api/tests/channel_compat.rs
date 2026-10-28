@@ -19,7 +19,7 @@ use aleph_slot_api::cancellation::CancellationToken;
 use aleph_slot_api::channel::{
     Channel, ChannelCapabilities, ChannelError, ChannelFactory, ChannelId, ChannelInfo,
     ChannelResult, ChannelState, ChannelStatus, ConversationId, InboundMessage, InlineKeyboard,
-    MessageId, OutboundMessage, SendResult, UserId, CB_MESSAGE_ID_PREFIX,
+    MessageId, OutboundMessage, SendOperation, UserId, CB_MESSAGE_ID_PREFIX,
 };
 use aleph_slot_api::webhook::{WebhookHandler, WEBHOOK_ROUTE_PREFIX};
 use chrono::Utc;
@@ -86,8 +86,8 @@ impl Channel for StubChannel {
     async fn stop(&mut self) -> ChannelResult<()> {
         Ok(())
     }
-    async fn send(&self, _message: OutboundMessage) -> ChannelResult<SendResult> {
-        unreachable!("these tests never send")
+    fn send(&self, _message: OutboundMessage) -> SendOperation {
+        Box::pin(async move { unreachable!("these tests never send") })
     }
 }
 

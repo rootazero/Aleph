@@ -36,7 +36,7 @@ pub use message_ops::SlackMessageOps;
 use crate::gateway::channel::{
     Channel, ChannelCapabilities, ChannelError, ChannelFactory, ChannelId, ChannelInfo,
     ChannelResult, ChannelState, ChannelStatus, ConversationId, MessageId, OutboundMessage,
-    SendResult,
+    SendOperation, SendResult,
 };
 use crate::sync_primitives::Arc;
 use async_trait::async_trait;
@@ -216,43 +216,54 @@ impl Channel for SlackChannel {
         Ok(())
     }
 
-    async fn send(&self, message: OutboundMessage) -> ChannelResult<SendResult> {
-        let conversation_id = message.conversation_id.as_str();
-        let thread_ts = message.reply_to.as_ref().map(|id| id.as_str().to_string());
+    fn send(&self, message: OutboundMessage) -> SendOperation {
+        let client = self.client.clone();
+        let bot_token = self.config.bot_token.clone();
+        let api_base = self.api_base.clone();
+        let send_typing = self.config.send_typing;
+        Box::pin(async move {
+            let conversation_id = message.conversation_id.clone();
+            let thread_ts = message.reply_to.as_ref().map(|id| id.as_str().to_string());
 
-        // Send typing indicator if enabled (non-blocking, best-effort)
-        if self.config.send_typing {
-            let client = self.client.clone();
-            let token = self.config.bot_token.clone();
-            let channel = conversation_id.to_string();
-            let api_base = self.api_base.clone();
-            tokio::spawn(async move {
-                let _ = SlackMessageOps::post_typing_with_base(
+            // Send typing indicator if enabled (non-blocking, best-effort)
+            if send_typing {
+                let typing_client = client.clone();
+                let token = bot_token.clone();
+                let channel = conversation_id.as_str().to_string();
+                let typing_api_base = api_base.clone();
+                tokio::spawn(async move {
+                    let _ = SlackMessageOps::post_typing_with_base(
+                        &typing_client,
+                        &token,
+                        &channel,
+                        typing_api_base.as_deref(),
+                    )
+                    .await;
+                });
+            }
+
+            // Handle file attachments
+            if !message.attachments.is_empty() {
+                return Self::send_with_attachments(
                     &client,
-                    &token,
-                    &channel,
+                    &bot_token,
                     api_base.as_deref(),
+                    message,
+                    thread_ts.as_deref(),
                 )
                 .await;
-            });
-        }
+            }
 
-        // Handle file attachments
-        if !message.attachments.is_empty() {
-            return self
-                .send_with_attachments(message, thread_ts.as_deref())
-                .await;
-        }
-
-        SlackMessageOps::send_message_with_base(
-            &self.client,
-            &self.config.bot_token,
-            conversation_id,
-            &message.text,
-            thread_ts.as_deref(),
-            self.api_base.as_deref(),
-        )
-        .await
+            SlackMessageOps::send_message_with_base(
+                &client,
+                &bot_token,
+                conversation_id.as_str(),
+                &message.text,
+                thread_ts.as_deref(),
+                api_base.as_deref(),
+            )
+            .await
+        })
     }
 
     async fn send_typing(&self, conversation_id: &ConversationId) -> ChannelResult<()> {
@@ -353,7 +364,9 @@ impl ChannelFactory for SlackChannelFactory {
 impl SlackChannel {
     /// Send a message with file attachments.
     async fn send_with_attachments(
-        &self,
+        client: &reqwest::Client,
+        bot_token: &str,
+        api_base: Option<&str>,
         message: OutboundMessage,
         thread_ts: Option<&str>,
     ) -> ChannelResult<SendResult> {
@@ -372,8 +385,8 @@ impl SlackChannel {
             let upload_result = if let Some(data) = &attachment.data {
                 let filename = attachment.filename.as_deref().unwrap_or("file");
                 SlackMessageOps::upload_file_with_base(
-                    &self.client,
-                    &self.config.bot_token,
+                    client,
+                    bot_token,
                     conversation_id,
                     data.as_slice(),
                     filename,
@@ -381,7 +394,7 @@ impl SlackChannel {
                     Some(attachment.mime_type.as_str()),
                     caption,
                     thread_ts,
-                    self.api_base.as_deref(),
+                    api_base,
                 )
                 .await
             } else if let Some(path) = &attachment.path {
@@ -390,8 +403,8 @@ impl SlackChannel {
                 })?;
                 let filename = attachment.filename.as_deref().unwrap_or(path);
                 SlackMessageOps::upload_file_with_base(
-                    &self.client,
-                    &self.config.bot_token,
+                    client,
+                    bot_token,
                     conversation_id,
                     file_data.as_slice(),
                     filename,
@@ -399,15 +412,15 @@ impl SlackChannel {
                     Some(attachment.mime_type.as_str()),
                     caption,
                     thread_ts,
-                    self.api_base.as_deref(),
+                    api_base,
                 )
                 .await
             } else if let Some(url) = &attachment.url {
-                let file_data = self.download_url(url).await?;
+                let file_data = Self::download_url(client, url).await?;
                 let filename = attachment.filename.as_deref().unwrap_or("file");
                 SlackMessageOps::upload_file_with_base(
-                    &self.client,
-                    &self.config.bot_token,
+                    client,
+                    bot_token,
                     conversation_id,
                     file_data.as_slice(),
                     filename,
@@ -415,7 +428,7 @@ impl SlackChannel {
                     Some(attachment.mime_type.as_str()),
                     caption,
                     thread_ts,
-                    self.api_base.as_deref(),
+                    api_base,
                 )
                 .await
             } else {
@@ -446,8 +459,8 @@ impl SlackChannel {
                 crate::gateway::formatter::MarkupFormat::SlackMrkdwn,
             );
             let result = SlackMessageOps::send_message(
-                &self.client,
-                &self.config.bot_token,
+                client,
+                bot_token,
                 conversation_id,
                 &formatted,
                 thread_ts,
@@ -459,9 +472,8 @@ impl SlackChannel {
         last_result.ok_or_else(|| ChannelError::SendFailed("No attachments to send".to_string()))
     }
 
-    async fn download_url(&self, url: &str) -> ChannelResult<Vec<u8>> {
-        let response = self
-            .client
+    async fn download_url(client: &reqwest::Client, url: &str) -> ChannelResult<Vec<u8>> {
+        let response = client
             .get(url)
             .send()
             .await

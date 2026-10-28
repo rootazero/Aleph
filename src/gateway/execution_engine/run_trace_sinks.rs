@@ -210,7 +210,7 @@ mod tests {
     use super::*;
     use crate::gateway::channel::{
         Channel, ChannelId, ChannelInfo, ChannelResult, ChannelState, ChannelStatus, MessageId,
-        OutboundMessage, SendResult,
+        OutboundMessage, SendOperation, SendResult,
     };
     use crate::harness::trace::{LoopTraceEvent, ToolCallEndEvent};
     use crate::tools::runtime::ToolResult;
@@ -237,11 +237,14 @@ mod tests {
         async fn stop(&mut self) -> ChannelResult<()> {
             Ok(())
         }
-        async fn send(&self, message: OutboundMessage) -> ChannelResult<SendResult> {
-            self.sent.lock().await.push(message);
-            Ok(SendResult {
-                message_id: MessageId::new("ok"),
-                timestamp: chrono::Utc::now(),
+        fn send(&self, message: OutboundMessage) -> SendOperation {
+            let sent = Arc::clone(&self.sent);
+            Box::pin(async move {
+                sent.lock().await.push(message);
+                Ok(SendResult {
+                    message_id: MessageId::new("ok"),
+                    timestamp: chrono::Utc::now(),
+                })
             })
         }
     }

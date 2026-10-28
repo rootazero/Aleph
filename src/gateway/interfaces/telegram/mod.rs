@@ -44,7 +44,7 @@ pub use config_v2::{DmPolicy, GroupPolicy, StatusReactionConfig, StreamingOption
 use crate::gateway::channel::{
     Channel, ChannelCapabilities, ChannelError, ChannelFactory, ChannelId, ChannelInfo,
     ChannelResult, ChannelState, ChannelStatus, ConversationId, InboundMessage, MessageId,
-    MessageMeta, OutboundMessage, SendResult, UserId, CB_MESSAGE_ID_PREFIX,
+    MessageMeta, OutboundMessage, SendOperation, UserId, CB_MESSAGE_ID_PREFIX,
 };
 use crate::sync_primitives::{Arc, Ordering};
 use access::AccessDecision;
@@ -798,55 +798,59 @@ impl Channel for TelegramChannel {
         Ok(())
     }
 
-    async fn send(&self, message: OutboundMessage) -> ChannelResult<SendResult> {
+    fn send(&self, message: OutboundMessage) -> SendOperation {
         let (chat_id, thread_id) =
-            delivery::parse_conversation_id(message.conversation_id.as_str())?;
+            match delivery::parse_conversation_id(message.conversation_id.as_str()) {
+                Ok(parsed) => parsed,
+                Err(error) => return Box::pin(async move { Err(error) }),
+            };
         let chat_id_i64 = chat_id.0;
 
-        let instance = self
-            .bot_instances
-            .iter()
-            .find(|inst| {
-                self.config_resolver
-                    .resolve(&inst.account_id, chat_id_i64, thread_id)
-                    .is_some()
-            })
-            .ok_or_else(|| {
-                ChannelError::ConfigError(format!(
-                    "No Telegram account configured for chat {chat_id_i64} (thread: {thread_id:?}). \
-                     Ensure the chat_id is covered by allowed_groups or account config"
-                ))
-            })?;
-        let result = delivery::send_message(
-            &instance.bot,
-            &instance.resolved_config,
-            &message,
-            &self.error_cooldown,
-        )
-        .await;
-        // P2-C: write the audit row regardless of outcome. A failed send
-        // is the most useful kind to record (the doctor can answer "why
-        // did chat X stop responding" without scraping logs). The
-        // audit_log.push is best-effort and never panics.
-        let outcome = match &result {
-            Ok(r) => format!("succeeded: msg_id={}", r.message_id.as_str()),
-            Err(e) => format!("failed: {e}"),
+        let instance = self.bot_instances.iter().find(|inst| {
+            self.config_resolver
+                .resolve(&inst.account_id, chat_id_i64, thread_id)
+                .is_some()
+        });
+        let Some(instance) = instance else {
+            let reason = format!(
+                "No Telegram account configured for chat {chat_id_i64} (thread: {thread_id:?}). \
+                 Ensure the chat_id is covered by allowed_groups or account config"
+            );
+            return Box::pin(async move { Err(ChannelError::ConfigError(reason)) });
         };
-        self.audit_log.push(audit::entry(
-            instance.account_id.clone(),
-            Some(chat_id_i64),
-            thread_id,
-            audit::AuditKind::SendAttempted {
-                message_id_kind: message
-                    .text
-                    .chars()
-                    .take(64)
-                    .collect::<String>()
-                    .replace('\n', " "),
-                outcome,
-            },
-        ));
-        result
+        let bot = instance.bot.clone();
+        let resolved_config = instance.resolved_config.clone();
+        let account_id = instance.account_id.clone();
+        let audit_log = Arc::clone(&self.audit_log);
+        let error_cooldown = Arc::clone(&self.error_cooldown);
+
+        Box::pin(async move {
+            let result =
+                delivery::send_message(&bot, &resolved_config, &message, &error_cooldown).await;
+            // P2-C: write the audit row regardless of outcome. A failed send
+            // is the most useful kind to record (the doctor can answer "why
+            // did chat X stop responding" without scraping logs). The
+            // audit_log.push is best-effort and never panics.
+            let outcome = match &result {
+                Ok(r) => format!("succeeded: msg_id={}", r.message_id.as_str()),
+                Err(e) => format!("failed: {e}"),
+            };
+            audit_log.push(audit::entry(
+                account_id,
+                Some(chat_id_i64),
+                thread_id,
+                audit::AuditKind::SendAttempted {
+                    message_id_kind: message
+                        .text
+                        .chars()
+                        .take(64)
+                        .collect::<String>()
+                        .replace('\n', " "),
+                    outcome,
+                },
+            ));
+            result
+        })
     }
 
     async fn send_typing(&self, conversation_id: &ConversationId) -> ChannelResult<()> {

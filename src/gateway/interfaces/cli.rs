@@ -24,7 +24,7 @@ use uuid::Uuid;
 use crate::gateway::channel::{
     Channel, ChannelCapabilities, ChannelError, ChannelFactory, ChannelId, ChannelInfo,
     ChannelResult, ChannelState, ChannelStatus, ConversationId, InboundMessage, MessageId,
-    OutboundMessage, SendResult, UserId,
+    OutboundMessage, SendOperation, SendResult, UserId,
 };
 
 /// CLI channel configuration
@@ -291,30 +291,36 @@ impl Channel for CliChannel {
         Ok(())
     }
 
-    async fn send(&self, message: OutboundMessage) -> ChannelResult<SendResult> {
-        if self.channel_state.status() != ChannelStatus::Connected {
-            return Err(ChannelError::NotConnected(
-                "CLI channel not connected".to_string(),
-            ));
-        }
+    fn send(&self, message: OutboundMessage) -> SendOperation {
+        let channel_state = self.channel_state.clone();
+        let config = self.config.clone();
+        let test_mode = self.test_mode;
+        Box::pin(async move {
+            if channel_state.status() != ChannelStatus::Connected {
+                return Err(ChannelError::NotConnected(
+                    "CLI channel not connected".to_string(),
+                ));
+            }
 
-        // In test mode, skip stdout I/O
-        if !self.test_mode {
-            let mut stdout = io::stdout().lock();
-            writeln!(stdout, "\n{}", message.text)
-                .map_err(|e| ChannelError::SendFailed(format!("Failed to write to stdout: {e}")))?;
-            stdout
-                .flush()
-                .map_err(|e| ChannelError::SendFailed(format!("Failed to flush stdout: {e}")))?;
+            // In test mode, skip stdout I/O
+            if !test_mode {
+                let mut stdout = io::stdout().lock();
+                writeln!(stdout, "\n{}", message.text).map_err(|e| {
+                    ChannelError::SendFailed(format!("Failed to write to stdout: {e}"))
+                })?;
+                stdout.flush().map_err(|e| {
+                    ChannelError::SendFailed(format!("Failed to flush stdout: {e}"))
+                })?;
 
-            print!("{}", self.config.prompt);
-            io::stdout().flush().ok();
-        }
+                print!("{}", config.prompt);
+                io::stdout().flush().ok();
+            }
 
-        let message_id = MessageId::new(Uuid::new_v4().to_string());
-        Ok(SendResult {
-            message_id,
-            timestamp: Utc::now(),
+            let message_id = MessageId::new(Uuid::new_v4().to_string());
+            Ok(SendResult {
+                message_id,
+                timestamp: Utc::now(),
+            })
         })
     }
 }

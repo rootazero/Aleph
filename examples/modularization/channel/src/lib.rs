@@ -6,7 +6,7 @@
 use aleph_slot_api::channel::{
     Channel, ChannelCapabilities, ChannelError, ChannelFactory, ChannelId, ChannelInfo,
     ChannelResult, ChannelState, ChannelStatus, ConversationId, MessageId, OutboundMessage,
-    PairingData, SendResult,
+    PairingData, SendOperation, SendResult,
 };
 use aleph_slot_api::{async_trait, json, Value};
 
@@ -72,15 +72,19 @@ impl Channel for ExampleChannel {
         Ok(())
     }
 
-    async fn send(&self, message: OutboundMessage) -> ChannelResult<SendResult> {
-        if self.state.status() != ChannelStatus::Connected {
-            return Err(ChannelError::NotConnected(self.info.id.0.clone()));
-        }
+    fn send(&self, message: OutboundMessage) -> SendOperation {
+        let state = self.state.clone();
+        let channel_id = self.info.id.clone();
+        Box::pin(async move {
+            if state.status() != ChannelStatus::Connected {
+                return Err(ChannelError::NotConnected(channel_id.0));
+            }
 
-        Self::send_result(MessageId::new(format!(
-            "sent:{}",
-            message.conversation_id.0
-        )))
+            Self::send_result(MessageId::new(format!(
+                "sent:{}",
+                message.conversation_id.0
+            )))
+        })
     }
 }
 

@@ -1295,8 +1295,11 @@ impl ChannelRegistry {
         message: OutboundMessage,
     ) -> ChannelResult<SendResult> {
         let channel_arc = self.legacy_channel(channel_id).await?;
-        let channel = channel_arc.read().await;
-        channel.send(message).await
+        let operation = {
+            let channel = channel_arc.read().await;
+            channel.send(message)
+        };
+        operation.await
     }
 
     /// Cancel-safe pre-submit variant of [`Self::send_public_telecom`].
@@ -1331,7 +1334,9 @@ impl ChannelRegistry {
         // No await or cancellation select between this fence and the first
         // poll of send. Once committed, only the caller's delivery timeout can
         // abandon an ACK (with an unknown external outcome, never retracted).
-        channel.send(message).await.map(Some)
+        let operation = channel.send(message);
+        drop(channel);
+        operation.await.map(Some)
     }
 
     /// Ask the actual registered channel, never its advertised type string.
@@ -1645,14 +1650,15 @@ impl ChannelRegistry {
                     };
                 }
             }
-            let result = if channel.status() == ChannelStatus::Disabled {
-                Err(ChannelError::NotConnected(format!(
-                    "Channel {channel_id} is disabled"
-                )))
-            } else {
-                channel.send(message.clone()).await
-            };
+            let operation = (channel.status() != ChannelStatus::Disabled)
+                .then(|| channel.send(message.clone()));
             drop(channel);
+            let result = match operation {
+                Some(operation) => operation.await,
+                None => Err(ChannelError::NotConnected(format!(
+                    "Channel {channel_id} is disabled"
+                ))),
+            };
 
             match result {
                 Ok(sent) => {
@@ -3117,7 +3123,7 @@ mod tests {
     }
 
     use super::*;
-    use crate::gateway::channel::{ChannelState, MessageId};
+    use crate::gateway::channel::{ChannelState, MessageId, SendOperation};
     use crate::gateway::interfaces::webhook::{WebhookChannel, WebhookChannelConfig};
     use chrono::Utc;
     use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
@@ -3577,7 +3583,7 @@ mod tests {
     struct FlakyChannel {
         info: ChannelInfo,
         state: ChannelState,
-        fail_times: AtomicU32,
+        fail_times: Arc<AtomicU32>,
         attempts: Arc<AtomicU32>,
         terminal: bool,
         delivery_policy: OutboundDeliveryPolicy,
@@ -3597,7 +3603,7 @@ mod tests {
                 // `retry_after_secs` is 0 in the error below, so the registry's
                 // capped sleep is a no-op — tests stay fast and deterministic.
                 state: ChannelState::new(8),
-                fail_times: AtomicU32::new(fail_times),
+                fail_times: Arc::new(AtomicU32::new(fail_times)),
                 attempts,
                 terminal,
                 delivery_policy: OutboundDeliveryPolicy::Automatic,
@@ -3623,20 +3629,23 @@ mod tests {
         async fn stop(&mut self) -> ChannelResult<()> {
             Ok(())
         }
-        async fn send(&self, _message: OutboundMessage) -> ChannelResult<SendResult> {
+        fn send(&self, _message: OutboundMessage) -> SendOperation {
             self.attempts.fetch_add(1, Ordering::SeqCst);
-            if self.terminal {
-                return Err(ChannelError::SendFailed("permanent".to_string()));
-            }
-            if self.fail_times.load(Ordering::SeqCst) > 0 {
-                self.fail_times.fetch_sub(1, Ordering::SeqCst);
-                return Err(ChannelError::RateLimited {
-                    retry_after_secs: self.retry_after_secs,
-                });
-            }
-            Ok(SendResult {
-                message_id: MessageId::new("ok"),
-                timestamp: Utc::now(),
+            let terminal = self.terminal;
+            let fail_times = Arc::clone(&self.fail_times);
+            let retry_after_secs = self.retry_after_secs;
+            Box::pin(async move {
+                if terminal {
+                    return Err(ChannelError::SendFailed("permanent".to_string()));
+                }
+                if fail_times.load(Ordering::SeqCst) > 0 {
+                    fail_times.fetch_sub(1, Ordering::SeqCst);
+                    return Err(ChannelError::RateLimited { retry_after_secs });
+                }
+                Ok(SendResult {
+                    message_id: MessageId::new("ok"),
+                    timestamp: Utc::now(),
+                })
             })
         }
     }
@@ -4667,10 +4676,12 @@ mod tests {
         fn outbound_delivery_policy(&self) -> OutboundDeliveryPolicy {
             self.delivery_policy
         }
-        async fn send(&self, _message: OutboundMessage) -> ChannelResult<SendResult> {
-            Ok(SendResult {
-                message_id: MessageId::new("ok"),
-                timestamp: Utc::now(),
+        fn send(&self, _message: OutboundMessage) -> SendOperation {
+            Box::pin(async move {
+                Ok(SendResult {
+                    message_id: MessageId::new("ok"),
+                    timestamp: Utc::now(),
+                })
             })
         }
     }

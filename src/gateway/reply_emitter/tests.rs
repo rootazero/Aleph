@@ -10,7 +10,7 @@ mod tests {
     use super::*;
     use crate::gateway::channel::{
         Channel, ChannelCapabilities, ChannelInfo, ChannelResult, ChannelState, ChannelStatus,
-        MessageId, OutboundMessage, SendResult, StreamProtocol,
+        MessageId, OutboundMessage, SendOperation, SendResult, StreamProtocol,
     };
     use crate::gateway::media::PendingMedia;
 
@@ -37,11 +37,14 @@ mod tests {
         async fn stop(&mut self) -> ChannelResult<()> {
             Ok(())
         }
-        async fn send(&self, message: OutboundMessage) -> ChannelResult<SendResult> {
-            self.sent.lock().await.push(message);
-            Ok(SendResult {
-                message_id: MessageId::new("ok"),
-                timestamp: chrono::Utc::now(),
+        fn send(&self, message: OutboundMessage) -> SendOperation {
+            let sent = Arc::clone(&self.sent);
+            Box::pin(async move {
+                sent.lock().await.push(message);
+                Ok(SendResult {
+                    message_id: MessageId::new("ok"),
+                    timestamp: chrono::Utc::now(),
+                })
             })
         }
     }
@@ -536,8 +539,8 @@ mod outbound_chunking_tests {
     use super::*;
     use crate::gateway::channel::{
         Channel, ChannelCapabilities, ChannelError, ChannelInfo, ChannelResult, ChannelState,
-        ChannelStatus, MessageId, OutboundDeliveryPolicy, OutboundMessage, SendResult,
-        StreamProtocol,
+        ChannelStatus, MessageId, OutboundDeliveryPolicy, OutboundMessage, SendOperation,
+        SendResult, StreamProtocol,
     };
     use crate::gateway::delivery_queue::{DeliveryQueueConfig, DeliveryStore};
     use crate::gateway::media::PendingMedia;
@@ -573,15 +576,20 @@ mod outbound_chunking_tests {
         async fn stop(&mut self) -> ChannelResult<()> {
             Ok(())
         }
-        async fn send(&self, message: OutboundMessage) -> ChannelResult<SendResult> {
+        fn send(&self, message: OutboundMessage) -> SendOperation {
             let n = self.attempts.fetch_add(1, Ordering::SeqCst);
-            self.seen.lock().await.push(message.text.clone());
-            if n + 1 >= self.fail_from {
-                return Err((self.err_from)("stub".to_string()));
-            }
-            Ok(SendResult {
-                message_id: MessageId::new("ok"),
-                timestamp: chrono::Utc::now(),
+            let seen = Arc::clone(&self.seen);
+            let fail_from = self.fail_from;
+            let err_from = self.err_from;
+            Box::pin(async move {
+                seen.lock().await.push(message.text.clone());
+                if n + 1 >= fail_from {
+                    return Err((err_from)("stub".to_string()));
+                }
+                Ok(SendResult {
+                    message_id: MessageId::new("ok"),
+                    timestamp: chrono::Utc::now(),
+                })
             })
         }
     }
@@ -905,7 +913,7 @@ mod media_cleanup_tests {
     use super::*;
     use crate::gateway::channel::{
         Attachment, Channel, ChannelError, ChannelInfo, ChannelResult, ChannelState, ChannelStatus,
-        MessageId, OutboundDeliveryPolicy, OutboundMessage, SendResult,
+        MessageId, OutboundDeliveryPolicy, OutboundMessage, SendOperation, SendResult,
     };
     use crate::media::cache::MediaCache;
 
@@ -934,14 +942,18 @@ mod media_cleanup_tests {
         async fn stop(&mut self) -> ChannelResult<()> {
             Ok(())
         }
-        async fn send(&self, _message: OutboundMessage) -> ChannelResult<SendResult> {
-            if self.ok {
-                return Ok(SendResult {
-                    message_id: MessageId::new("ok"),
-                    timestamp: chrono::Utc::now(),
-                });
-            }
-            Err((self.err)("stub".to_string()))
+        fn send(&self, _message: OutboundMessage) -> SendOperation {
+            let ok = self.ok;
+            let err = self.err;
+            Box::pin(async move {
+                if ok {
+                    return Ok(SendResult {
+                        message_id: MessageId::new("ok"),
+                        timestamp: chrono::Utc::now(),
+                    });
+                }
+                Err((err)("stub".to_string()))
+            })
         }
     }
 

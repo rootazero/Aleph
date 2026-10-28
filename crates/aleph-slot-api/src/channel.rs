@@ -36,6 +36,8 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::Arc;
 use tokio::sync::broadcast;
 
@@ -57,6 +59,12 @@ pub const CB_MESSAGE_ID_PREFIX: &str = "cb_";
 
 /// Result type for channel operations
 pub type ChannelResult<T> = Result<T, ChannelError>;
+
+/// An owned outbound send operation.
+///
+/// The future owns its transport handles and never borrows the adapter, so it
+/// can be awaited after registry and lifecycle guards are released.
+pub type SendOperation = Pin<Box<dyn Future<Output = ChannelResult<SendResult>> + Send + 'static>>;
 
 /// Errors that can occur in channel operations
 #[derive(Debug, thiserror::Error)]
@@ -669,6 +677,7 @@ impl From<broadcast::Sender<InboundMessage>> for InboundMessageSender {
     }
 }
 
+#[derive(Clone)]
 pub struct ChannelState {
     /// Thread-safe status — set by `start()/stop()`, read by `status()`
     status: Arc<tokio::sync::RwLock<ChannelStatus>>,
@@ -960,11 +969,17 @@ pub trait Channel: Send + Sync {
     /// Start the channel (connect, authenticate, etc.)
     async fn start(&mut self) -> ChannelResult<()>;
 
-    /// Stop the channel (disconnect, cleanup)
+    /// Stop the channel (disconnect, cleanup).
+    ///
+    /// This closes provider-owned resources without joining in-flight send
+    /// operations.
     async fn stop(&mut self) -> ChannelResult<()>;
 
-    /// Send a message through this channel
-    async fn send(&self, message: OutboundMessage) -> ChannelResult<SendResult>;
+    /// Prepare a message send through this channel.
+    ///
+    /// The returned future owns its handles, never borrows this adapter, and
+    /// must not require `stop` to drain it before completing.
+    fn send(&self, message: OutboundMessage) -> SendOperation;
 
     /// Returns a subscriber receiver for incoming messages. Multiple subscribers
     /// can call this simultaneously — each gets their own broadcast receiver.
@@ -1266,8 +1281,8 @@ mod tests {
         async fn stop(&mut self) -> ChannelResult<()> {
             Ok(())
         }
-        async fn send(&self, _message: OutboundMessage) -> ChannelResult<SendResult> {
-            unreachable!("this test never sends")
+        fn send(&self, _message: OutboundMessage) -> SendOperation {
+            Box::pin(async move { unreachable!("this test never sends") })
         }
     }
 

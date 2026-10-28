@@ -17,7 +17,8 @@ use async_trait::async_trait;
 
 use crate::gateway::channel::{
     Channel, ChannelCapabilities, ChannelError, ChannelId, ChannelInfo, ChannelResult,
-    ChannelState, ChannelStatus, ConversationId, MessageId, OutboundMessage, SendResult,
+    ChannelState, ChannelStatus, ConversationId, MessageId, OutboundMessage, SendOperation,
+    SendResult,
 };
 
 use api::{BlueBubblesApi, LruGuidCache, ServerCaps};
@@ -201,38 +202,40 @@ impl Channel for BlueBubblesChannel {
         Ok(())
     }
 
-    async fn send(&self, message: OutboundMessage) -> ChannelResult<SendResult> {
-        let target = message.conversation_id.as_str();
-        let guid = self
-            .api
-            .resolve_chat_guid(target, &self.guid_cache)
-            .await
-            .ok_or_else(|| ChannelError::SendFailed(format!("chat not found: {target}")))?;
-        let private_api = self.server_caps.read().await.private_api;
-        let reply = message.reply_to.as_ref().map(|m| m.as_str());
-        let mut last = String::from("ok");
-        if !message.text.is_empty() {
-            for chunk in outbound::text::split_into_bubbles(&message.text, 4000) {
-                last = self
-                    .api
-                    .send_text_chunk(&guid, &chunk, reply, private_api)
-                    .await
-                    .map_err(|e| ChannelError::SendFailed(e.to_string()))?;
+    fn send(&self, message: OutboundMessage) -> SendOperation {
+        let api = self.api.clone();
+        let guid_cache = Arc::clone(&self.guid_cache);
+        let server_caps = Arc::clone(&self.server_caps);
+        Box::pin(async move {
+            let target = message.conversation_id.as_str();
+            let guid = api
+                .resolve_chat_guid(target, &guid_cache)
+                .await
+                .ok_or_else(|| ChannelError::SendFailed(format!("chat not found: {target}")))?;
+            let private_api = server_caps.read().await.private_api;
+            let reply = message.reply_to.as_ref().map(|m| m.as_str());
+            let mut last = String::from("ok");
+            if !message.text.is_empty() {
+                for chunk in outbound::text::split_into_bubbles(&message.text, 4000) {
+                    last = api
+                        .send_text_chunk(&guid, &chunk, reply, private_api)
+                        .await
+                        .map_err(|e| ChannelError::SendFailed(e.to_string()))?;
+                }
             }
-        }
-        for attachment in &message.attachments {
-            if let Some(path) = &attachment.path {
-                let is_audio = attachment.mime_type.starts_with("audio/");
-                last = self
-                    .api
-                    .send_attachment(&guid, std::path::Path::new(path), is_audio)
-                    .await
-                    .map_err(|e| ChannelError::SendFailed(e.to_string()))?;
+            for attachment in &message.attachments {
+                if let Some(path) = &attachment.path {
+                    let is_audio = attachment.mime_type.starts_with("audio/");
+                    last = api
+                        .send_attachment(&guid, std::path::Path::new(path), is_audio)
+                        .await
+                        .map_err(|e| ChannelError::SendFailed(e.to_string()))?;
+                }
             }
-        }
-        Ok(SendResult {
-            message_id: MessageId::new(last),
-            timestamp: chrono::Utc::now(),
+            Ok(SendResult {
+                message_id: MessageId::new(last),
+                timestamp: chrono::Utc::now(),
+            })
         })
     }
 

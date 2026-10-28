@@ -10,7 +10,8 @@ use std::time::Duration;
 use aleph_protocol::telecom_relay::TelecomOutcome;
 use alephcore::gateway::channel::{
     Channel, ChannelCapabilities, ChannelError, ChannelId, ChannelInfo, ChannelResult,
-    ChannelState, ChannelStatus, MessageId, OutboundDeliveryPolicy, OutboundMessage, SendResult,
+    ChannelState, ChannelStatus, MessageId, OutboundDeliveryPolicy, OutboundMessage, SendOperation,
+    SendResult,
 };
 use alephcore::gateway::channel_registry::ChannelRegistry;
 use alephcore::gateway::delivery_queue::{
@@ -359,21 +360,25 @@ impl Channel for MockChannel {
     async fn stop(&mut self) -> ChannelResult<()> {
         Ok(())
     }
-    async fn send(&self, message: OutboundMessage) -> ChannelResult<SendResult> {
+    fn send(&self, message: OutboundMessage) -> SendOperation {
         let n = self.sends.attempts.fetch_add(1, Ordering::SeqCst);
-        match self.fail {
-            Fail::NotConnected => return Err(ChannelError::NotConnected("down".into())),
-            Fail::RateLimitedThenOk if n == 0 => {
-                return Err(ChannelError::RateLimited {
-                    retry_after_secs: 0,
-                })
+        let fail = self.fail;
+        let sends = Arc::clone(&self.sends);
+        Box::pin(async move {
+            match fail {
+                Fail::NotConnected => return Err(ChannelError::NotConnected("down".into())),
+                Fail::RateLimitedThenOk if n == 0 => {
+                    return Err(ChannelError::RateLimited {
+                        retry_after_secs: 0,
+                    })
+                }
+                _ => {}
             }
-            _ => {}
-        }
-        self.sends.texts.lock().unwrap().push(message.text);
-        Ok(SendResult {
-            message_id: MessageId::new("ok"),
-            timestamp: chrono::Utc::now(),
+            sends.texts.lock().unwrap().push(message.text);
+            Ok(SendResult {
+                message_id: MessageId::new("ok"),
+                timestamp: chrono::Utc::now(),
+            })
         })
     }
 }
@@ -529,22 +534,26 @@ impl Channel for VanishingExplicit {
         self.sends.stops.fetch_add(1, Ordering::SeqCst);
         Ok(())
     }
-    async fn send(&self, _message: OutboundMessage) -> ChannelResult<SendResult> {
+    fn send(&self, _message: OutboundMessage) -> SendOperation {
         self.sends.attempts.fetch_add(1, Ordering::SeqCst);
         let registry = self.registry.lock().unwrap().clone();
-        if let Some(registry) = registry {
-            let id = self.info.id.clone();
-            let _ = registry.unregister(&id).await;
-            if self.replace_with_automatic {
-                registry
-                    .register(Box::new(MockChannel::new(
-                        id.as_str(),
-                        Arc::clone(&self.successor_sends),
-                    )))
-                    .await;
+        let id = self.info.id.clone();
+        let replace_with_automatic = self.replace_with_automatic;
+        let successor_sends = Arc::clone(&self.successor_sends);
+        Box::pin(async move {
+            if let Some(registry) = registry {
+                let _ = registry.unregister(&id).await;
+                if replace_with_automatic {
+                    registry
+                        .register(Box::new(MockChannel::new(
+                            id.as_str(),
+                            Arc::clone(&successor_sends),
+                        )))
+                        .await;
+                }
             }
-        }
-        Err(ChannelError::NotConnected("gone".into()))
+            Err(ChannelError::NotConnected("gone".into()))
+        })
     }
 }
 

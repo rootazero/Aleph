@@ -407,10 +407,11 @@ impl super::ChannelRegistry {
                         runtime.active_work += 1;
                         let source = self.clone();
                         runtime.executions.push(tokio::spawn(async move {
-                            let result = {
+                            let operation = {
                                 let channel = ticket.observation.capture.channel.read().await;
-                                channel.send(message).await
+                                channel.send(message)
                             };
+                            let result = operation.await;
                             source.complete_bound_work(ticket, result, sender).await;
                         }));
                         Ok(receiver)

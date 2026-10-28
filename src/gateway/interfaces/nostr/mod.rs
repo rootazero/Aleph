@@ -36,7 +36,7 @@ pub use message_ops::{NostrEvent, NostrMessageOps};
 use crate::gateway::channel::{
     Channel, ChannelCapabilities, ChannelError, ChannelFactory, ChannelId, ChannelInfo,
     ChannelResult, ChannelState, ChannelStatus, ConversationId, MessageId, OutboundMessage,
-    SendResult,
+    SendOperation, SendResult,
 };
 use async_trait::async_trait;
 use tokio::sync::{mpsc, watch};
@@ -213,64 +213,69 @@ impl Channel for NostrChannel {
         Ok(())
     }
 
-    async fn send(&self, message: OutboundMessage) -> ChannelResult<SendResult> {
-        if self.test_mode {
-            let _recipient_pubkey = if message.conversation_id.as_str() != "public" {
+    fn send(&self, message: OutboundMessage) -> SendOperation {
+        let write_tx = self.write_tx.clone();
+        let test_mode = self.test_mode;
+        let own_pubkey = self.own_pubkey.clone();
+        let private_key = self.config.private_key.clone();
+        Box::pin(async move {
+            if test_mode {
+                let _recipient_pubkey = if message.conversation_id.as_str() != "public" {
+                    Some(message.conversation_id.as_str().to_string())
+                } else {
+                    None
+                };
+
+                let mut event = if let Some(ref recipient) = _recipient_pubkey {
+                    message_ops::build_dm(&message.text, &own_pubkey, recipient)
+                } else {
+                    message_ops::build_text_note(&message.text, &own_pubkey)
+                };
+
+                message_ops::sign_event(&mut event, &private_key)
+                    .map_err(|e| ChannelError::SendFailed(format!("failed to sign event: {e}")))?;
+
+                return Ok(SendResult {
+                    message_id: MessageId::new(event.id),
+                    timestamp: chrono::Utc::now(),
+                });
+            }
+
+            let write_tx = write_tx.as_ref().ok_or_else(|| {
+                ChannelError::NotConnected("Nostr channel not started".to_string())
+            })?;
+
+            // Determine if this is a DM or public note based on conversation_id
+            let recipient_pubkey = if message.conversation_id.as_str() != "public" {
                 Some(message.conversation_id.as_str().to_string())
             } else {
                 None
             };
 
-            let mut event = if let Some(ref recipient) = _recipient_pubkey {
-                message_ops::build_dm(&message.text, &self.own_pubkey, recipient)
+            // Build the event
+            let mut event = if let Some(ref recipient) = recipient_pubkey {
+                message_ops::build_dm(&message.text, &own_pubkey, recipient)
             } else {
-                message_ops::build_text_note(&message.text, &self.own_pubkey)
+                message_ops::build_text_note(&message.text, &own_pubkey)
             };
 
-            message_ops::sign_event(&mut event, &self.config.private_key)
+            // Sign the event
+            message_ops::sign_event(&mut event, &private_key)
                 .map_err(|e| ChannelError::SendFailed(format!("failed to sign event: {e}")))?;
 
-            return Ok(SendResult {
-                message_id: MessageId::new(event.id),
+            let event_id = event.id.clone();
+
+            // Build and send the EVENT message
+            let event_msg = message_ops::build_event_message(&event);
+            write_tx
+                .send(event_msg)
+                .await
+                .map_err(|e| ChannelError::SendFailed(format!("write channel closed: {e}")))?;
+
+            Ok(SendResult {
+                message_id: MessageId::new(event_id),
                 timestamp: chrono::Utc::now(),
-            });
-        }
-
-        let write_tx = self
-            .write_tx
-            .as_ref()
-            .ok_or_else(|| ChannelError::NotConnected("Nostr channel not started".to_string()))?;
-
-        // Determine if this is a DM or public note based on conversation_id
-        let recipient_pubkey = if message.conversation_id.as_str() != "public" {
-            Some(message.conversation_id.as_str().to_string())
-        } else {
-            None
-        };
-
-        // Build the event
-        let mut event = if let Some(ref recipient) = recipient_pubkey {
-            message_ops::build_dm(&message.text, &self.own_pubkey, recipient)
-        } else {
-            message_ops::build_text_note(&message.text, &self.own_pubkey)
-        };
-
-        // Sign the event
-        message_ops::sign_event(&mut event, &self.config.private_key)
-            .map_err(|e| ChannelError::SendFailed(format!("failed to sign event: {e}")))?;
-
-        let event_id = event.id.clone();
-
-        // Build and send the EVENT message
-        let event_msg = message_ops::build_event_message(&event);
-        write_tx
-            .send(event_msg)
-            .await
-            .map_err(|e| ChannelError::SendFailed(format!("write channel closed: {e}")))?;
-
-        Ok(SendResult {
-            message_id: MessageId::new(event_id),
-            timestamp: chrono::Utc::now(),
+            })
         })
     }
 
