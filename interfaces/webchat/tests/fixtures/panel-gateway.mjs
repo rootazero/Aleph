@@ -11,19 +11,27 @@ const mime = {
   '.wasm': 'application/wasm',
 };
 
-export async function createPanelGatewayFixture(staged) {
+export async function createPanelGatewayFixture(staged, options = {}) {
+  const sessions = options.empty ? [] : [{
+    session_id: 'production-fixture-session',
+    shell: 'fixture-shell',
+    cwd: '/tmp/terminal-fixture',
+    created_at: 1700000000,
+    closed: false,
+  }, {
+    session_id: 'production-sibling-session',
+    shell: 'fixture-shell',
+    cwd: '/tmp/terminal-sibling',
+    created_at: 1700000001,
+    closed: false,
+  }];
   const state = {
     httpPaths: [],
+    httpResponses: [],
     rpc: [],
     sockets: [],
     subscriptions: new Map(),
-    sessions: [{
-      session_id: 'production-fixture-session',
-      shell: 'fixture-shell',
-      cwd: '/tmp/terminal-fixture',
-      created_at: 1700000000,
-      closed: false,
-    }],
+    sessions,
   };
 
   const patch = (text, options = {}) => ({
@@ -36,6 +44,7 @@ export async function createPanelGatewayFixture(staged) {
     const url = new URL(request.url ?? '/', 'http://127.0.0.1');
     state.httpPaths.push(url.pathname);
     if (url.pathname === '/health') {
+      state.httpResponses.push({ path: url.pathname, status: 200 });
       response.writeHead(200, { 'content-type': 'text/plain; charset=utf-8' });
       response.end('ok');
       return;
@@ -45,6 +54,7 @@ export async function createPanelGatewayFixture(staged) {
     const relative = requested && extname(requested) ? requested : 'index.html';
     const file = resolve(staged, relative);
     if (!file.startsWith(staged + sep)) {
+      state.httpResponses.push({ path: url.pathname, status: 403 });
       response.writeHead(403);
       response.end('forbidden');
       return;
@@ -52,9 +62,11 @@ export async function createPanelGatewayFixture(staged) {
     try {
       const info = await stat(file);
       if (!info.isFile()) throw Error('not a file');
+      state.httpResponses.push({ path: url.pathname, status: 200 });
       response.writeHead(200, { 'content-type': mime[extname(file)] ?? 'application/octet-stream' });
       response.end(await readFile(file));
     } catch {
+      state.httpResponses.push({ path: url.pathname, status: 404 });
       response.writeHead(404);
       response.end('missing');
     }
@@ -100,7 +112,7 @@ export async function createPanelGatewayFixture(staged) {
         return;
       }
       if (request.method === 'pty.list') {
-        reply(client, request.id, { sessions: state.sessions });
+        reply(client, request.id, { sessions: state.sessions.filter((session) => !session.closed) });
         return;
       }
       if (request.method === 'pty.attach') {
@@ -112,7 +124,7 @@ export async function createPanelGatewayFixture(staged) {
           seq: 0,
           rows: 24,
           cols: 80,
-          patch: patch('Production host screen ✓', { bracketed_paste: true }),
+          patch: patch(params.session_id === 'production-sibling-session' ? 'Fallback screen ✓' : 'Production host screen ✓', { bracketed_paste: true }),
           scrollback_len: 0,
         });
         return;
@@ -183,9 +195,16 @@ export async function createPanelGatewayFixture(staged) {
     origin,
     state,
     emit(topic, data) {
+      if (topic === 'pty.exit') {
+        const session = state.sessions.find((item) => item.session_id === data?.session_id);
+        if (session) session.closed = true;
+      }
       state.sockets.forEach((client) => {
         if (state.subscriptions.get(client)?.has(topic)) event(client, topic, data);
       });
+    },
+    closeSocket(index = 0) {
+      state.sockets[index]?.close();
     },
     async close() {
       await Promise.all(state.sockets.map((client) => new Promise((resolve) => {

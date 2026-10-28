@@ -47,6 +47,9 @@ leptos_meta = { version = "0.8" }
 leptos_router = { version = "0.8" }
 leptos_i18n = { version = "0.6", features = ["csr", "cookie", "plurals", "format_datetime", "format_nums"] }
 
+# Browser-local declaration integrity validation
+base64 = { workspace = true }
+
 # WASM bindings
 wasm-bindgen = "0.2"
 wasm-bindgen-futures = "0.4"

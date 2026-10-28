@@ -5,7 +5,8 @@ import { join, resolve, relative, sep } from 'node:path';
 import { test } from 'node:test';
 
 const panel = resolve(import.meta.dirname, '..');
-const output = resolve(panel, process.env.PANEL_TABS_OUTPUT ?? '.panel-tabs');
+if (!process.env.PANEL_OUTPUT_ROOT) throw Error('PANEL_OUTPUT_ROOT must name the newly built isolated output');
+const output = resolve(panel, process.env.PANEL_OUTPUT_ROOT);
 
 const exists = async (path) => {
   try {
@@ -43,6 +44,11 @@ const validateCandidate = async (root, publicBase) => {
 
 test('final candidate resolves at root public base', async () => {
   await validateCandidate(output, '/');
+});
+
+test('capability source is included in build provenance', async () => {
+  const { build } = await readCandidate();
+  assert.equal(build.source_inputs.includes('interfaces/webchat/src/panel/source.rs'), true);
 });
 
 test('final candidate resolves under /panel/ public base', async () => {

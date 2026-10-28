@@ -1,13 +1,57 @@
-use super::registry::{RegistryError, TabRegistry};
-use aleph_protocol::panel::{
-    PanelTabDescriptor, PanelTabKey, PanelTabStatus, PanelUiTrust, PANEL_UI_API_MAJOR,
+use super::registry::{validate_descriptor, RegistryError, TabRegistry, BUILTIN_NAMESPACE};
+#[cfg(test)]
+use super::source::terminal_descriptor;
+use super::source::{
+    terminal_key, BuiltInTerminalSource, PanelUiCapabilityDeclaration, PanelUiCapabilityOrigin,
+    PanelUiCapabilitySnapshot, PanelUiCapabilitySource,
 };
+#[cfg(test)]
+use aleph_protocol::panel::PANEL_UI_API_MAJOR;
+use aleph_protocol::panel::{PanelTabDescriptor, PanelTabKey, PanelTabStatus, PanelUiTrust};
+use base64::Engine;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum PanelRoute {
     Legacy,
     Modular(PanelTabKey),
     Unavailable,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PanelProjectionError {
+    InvalidIdentity,
+    InvalidOrigin,
+    UnacceptableTrust,
+    UnsupportedPermission,
+    MissingAssetIntegrity,
+    InvalidAssetIntegrity,
+    InvalidEntry,
+    InvalidPublicBase,
+    UnversionedEntry,
+    RevisionMismatch,
+    DuplicateKey,
+    BuiltInShadowed,
+    StaleSnapshot,
+}
+
+impl PanelProjectionError {
+    pub const fn reason_code(self) -> &'static str {
+        match self {
+            Self::InvalidIdentity => "invalid_identity",
+            Self::InvalidOrigin => "invalid_origin",
+            Self::UnacceptableTrust => "unacceptable_trust",
+            Self::UnsupportedPermission => "unsupported_permission",
+            Self::MissingAssetIntegrity => "missing_asset_integrity",
+            Self::InvalidAssetIntegrity => "invalid_asset_integrity",
+            Self::InvalidEntry => "invalid_entry",
+            Self::InvalidPublicBase => "invalid_public_base",
+            Self::UnversionedEntry => "unversioned_entry",
+            Self::RevisionMismatch => "revision_mismatch",
+            Self::DuplicateKey => "duplicate_key",
+            Self::BuiltInShadowed => "built_in_shadowed",
+            Self::StaleSnapshot => "stale_snapshot",
+        }
+    }
 }
 
 /// Host-owned projection of the descriptors available to the modular Panel.
@@ -19,7 +63,66 @@ pub struct PanelProjection {
 impl PanelProjection {
     /// Build the built-in projection. Plugin projection is added separately.
     pub fn builtins(label: String) -> Result<Self, RegistryError> {
-        Self::from_descriptors(vec![terminal_descriptor(label)])
+        let snapshot = BuiltInTerminalSource::new(label).snapshot();
+        Self::from_descriptors(
+            snapshot
+                .declarations
+                .into_iter()
+                .map(|declaration| declaration.descriptor)
+                .collect(),
+        )
+    }
+
+    pub fn from_snapshot(
+        snapshot: PanelUiCapabilitySnapshot,
+    ) -> Result<Self, PanelProjectionError> {
+        Ok(Self {
+            registry: Self::registry_from_snapshot(snapshot)?,
+        })
+    }
+
+    /// Atomically replace the projection only with a newer, fully valid snapshot.
+    pub fn replace_snapshot(
+        &mut self,
+        snapshot: PanelUiCapabilitySnapshot,
+    ) -> Result<(), PanelProjectionError> {
+        if snapshot.revision <= self.registry.source_revision() {
+            return Err(PanelProjectionError::StaleSnapshot);
+        }
+        let registry = Self::registry_from_snapshot(snapshot)?;
+        self.registry = registry;
+        Ok(())
+    }
+
+    fn registry_from_snapshot(
+        snapshot: PanelUiCapabilitySnapshot,
+    ) -> Result<TabRegistry, PanelProjectionError> {
+        if snapshot
+            .declarations
+            .iter()
+            .any(|declaration| declaration.source_revision != snapshot.revision)
+        {
+            return Err(PanelProjectionError::RevisionMismatch);
+        }
+
+        let snapshot = PanelUiCapabilitySnapshot::new(snapshot.revision, snapshot.declarations);
+        let mut registry = TabRegistry::default();
+        for declaration in snapshot.declarations {
+            validate_declaration(&declaration)?;
+            if registry.get(&declaration.descriptor.key).is_some() {
+                return Err(PanelProjectionError::DuplicateKey);
+            }
+            match declaration.origin {
+                PanelUiCapabilityOrigin::BuiltIn => registry
+                    .insert_builtin(declaration.descriptor)
+                    .map_err(map_registry_error)?,
+                PanelUiCapabilityOrigin::Community => registry
+                    .insert_or_replace(declaration.descriptor)
+                    .map_err(map_registry_error)?,
+            }
+        }
+        registry.set_source_revision(snapshot.revision);
+        Ok(registry)
     }
 
     /// Build a projection from host-owned descriptors after boundary validation.
@@ -63,67 +166,183 @@ impl PanelProjection {
     }
 }
 
-fn terminal_key() -> PanelTabKey {
-    PanelTabKey {
-        plugin_id: "aleph".into(),
-        #[cfg(feature = "panel-tab-spike")]
-        tab_id: "terminal-pilot".into(),
-        #[cfg(not(feature = "panel-tab-spike"))]
-        tab_id: "terminal".into(),
+fn map_registry_error(error: RegistryError) -> PanelProjectionError {
+    match error {
+        RegistryError::BuiltInShadowed => PanelProjectionError::BuiltInShadowed,
+        RegistryError::DuplicateKey => PanelProjectionError::DuplicateKey,
+        RegistryError::InvalidEntry => PanelProjectionError::InvalidEntry,
     }
 }
 
-fn terminal_descriptor(label: String) -> PanelTabDescriptor {
-    #[cfg(feature = "panel-tab-spike")]
-    return PanelTabDescriptor {
-        key: terminal_key(),
-        label,
-        icon: "terminal".into(),
-        order: 0,
-        // The build can project a different asset root without changing the loader.
-        entry: option_env!("ALEPH_PANEL_PILOT_ENTRY")
-            .unwrap_or("tabs/terminal-pilot/terminal-pilot.js")
-            .into(),
-        api_major: PANEL_UI_API_MAJOR,
-        trust: PanelUiTrust::Verified,
-        permissions: vec!["sessions.list".into()],
-        status: PanelTabStatus::Enabled,
-        status_detail: None,
-    };
-
-    #[cfg(not(feature = "panel-tab-spike"))]
-    PanelTabDescriptor {
-        key: terminal_key(),
-        label,
-        icon: "terminal".into(),
-        order: 0,
-        entry: option_env!("PANEL_TERMINAL_ENTRY")
-            .unwrap_or("./tabs/terminal/dev/terminal.js")
-            .into(),
-        api_major: PANEL_UI_API_MAJOR,
-        trust: PanelUiTrust::Verified,
-        permissions: [
-            "pty.list",
-            "pty.spawn",
-            "pty.attach",
-            "pty.input",
-            "pty.resize",
-            "pty.close",
-            "config.get",
-            "events.subscribe:pty.screen",
-            "events.subscribe:pty.exit",
-        ]
-        .into_iter()
-        .map(String::from)
-        .collect(),
-        status: PanelTabStatus::Enabled,
-        status_detail: None,
+fn validate_declaration(
+    declaration: &PanelUiCapabilityDeclaration,
+) -> Result<(), PanelProjectionError> {
+    let descriptor = &declaration.descriptor;
+    if !valid_identity_segment(&descriptor.key.plugin_id)
+        || !valid_identity_segment(&descriptor.key.tab_id)
+    {
+        return Err(PanelProjectionError::InvalidIdentity);
     }
+    match declaration.origin {
+        PanelUiCapabilityOrigin::BuiltIn if descriptor.key.plugin_id != BUILTIN_NAMESPACE => {
+            return Err(PanelProjectionError::InvalidOrigin);
+        }
+        PanelUiCapabilityOrigin::Community if descriptor.key.plugin_id == BUILTIN_NAMESPACE => {
+            return Err(PanelProjectionError::BuiltInShadowed);
+        }
+        _ => {}
+    }
+    validate_descriptor(descriptor).map_err(|_| PanelProjectionError::InvalidEntry)?;
+
+    let expected_trust = match declaration.origin {
+        PanelUiCapabilityOrigin::BuiltIn => PanelUiTrust::Verified,
+        PanelUiCapabilityOrigin::Community => PanelUiTrust::Trusted,
+    };
+    if descriptor.trust != expected_trust {
+        return Err(PanelProjectionError::UnacceptableTrust);
+    }
+    if declaration.origin == PanelUiCapabilityOrigin::Community
+        && descriptor
+            .permissions
+            .iter()
+            .any(|permission| !supported_community_permission(permission))
+    {
+        return Err(PanelProjectionError::UnsupportedPermission);
+    }
+    match declaration.origin {
+        PanelUiCapabilityOrigin::BuiltIn => {}
+        PanelUiCapabilityOrigin::Community if declaration.asset_integrity.is_none() => {
+            return Err(PanelProjectionError::MissingAssetIntegrity);
+        }
+        PanelUiCapabilityOrigin::Community => {}
+    }
+    if declaration
+        .asset_integrity
+        .as_deref()
+        .is_some_and(|integrity| !valid_asset_integrity(integrity))
+    {
+        return Err(PanelProjectionError::InvalidAssetIntegrity);
+    }
+    if !valid_public_base(declaration) {
+        return Err(PanelProjectionError::InvalidPublicBase);
+    }
+    if declaration.origin == PanelUiCapabilityOrigin::Community {
+        if !descriptor
+            .entry
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-' | b'/'))
+        {
+            return Err(PanelProjectionError::InvalidEntry);
+        }
+        if !valid_identity_segment(&declaration.plugin_version)
+            || matches!(declaration.plugin_version.as_str(), "." | "..")
+        {
+            return Err(PanelProjectionError::UnversionedEntry);
+        }
+        let prefix = format!(
+            "./tabs/{}/{}/",
+            descriptor.key.plugin_id, declaration.plugin_version
+        );
+        if !descriptor.entry.starts_with(&prefix) || descriptor.entry.len() == prefix.len() {
+            return Err(PanelProjectionError::UnversionedEntry);
+        }
+    }
+    Ok(())
+}
+
+fn valid_identity_segment(value: &str) -> bool {
+    !value.is_empty()
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
+}
+
+fn supported_community_permission(permission: &str) -> bool {
+    matches!(
+        permission,
+        "pty.list"
+            | "pty.spawn"
+            | "pty.attach"
+            | "pty.input"
+            | "pty.resize"
+            | "pty.close"
+            | "config.get"
+            | "events.subscribe:pty.screen"
+            | "events.subscribe:pty.exit"
+            | "sessions.list"
+    )
+}
+
+fn valid_asset_integrity(integrity: &str) -> bool {
+    integrity.strip_prefix("sha256-").is_some_and(|digest| {
+        base64::engine::general_purpose::STANDARD
+            .decode(digest)
+            .is_ok_and(|decoded| decoded.len() == 32)
+    })
+}
+
+fn valid_public_base(declaration: &PanelUiCapabilityDeclaration) -> bool {
+    let base = declaration.public_base.as_str();
+    let supported = match declaration.origin {
+        PanelUiCapabilityOrigin::BuiltIn => {
+            base.ends_with('/')
+                && !base.starts_with('/')
+                && base.bytes().all(|byte| {
+                    byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-' | b'/')
+                })
+                && !base.split('/').any(|segment| segment == "..")
+        }
+        PanelUiCapabilityOrigin::Community => base == "./tabs/",
+    };
+    supported && declaration.descriptor.entry.starts_with(base)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::panel::source::{
+        BuiltInTerminalSource, FixturePanelUiCapabilitySource, PanelUiCapabilityDeclaration,
+        PanelUiCapabilityOrigin, PanelUiCapabilitySnapshot, PanelUiCapabilitySource,
+    };
+
+    fn community_declaration(revision: u64) -> PanelUiCapabilityDeclaration {
+        PanelUiCapabilityDeclaration {
+            descriptor: PanelTabDescriptor {
+                key: PanelTabKey {
+                    plugin_id: "community.example".into(),
+                    tab_id: "overview".into(),
+                },
+                label: "Overview".into(),
+                icon: "layout".into(),
+                order: 10,
+                entry: "./tabs/community.example/1.2.3/overview.js".into(),
+                api_major: PANEL_UI_API_MAJOR,
+                trust: PanelUiTrust::Trusted,
+                permissions: vec!["sessions.list".into()],
+                status: PanelTabStatus::Enabled,
+                status_detail: None,
+            },
+            origin: PanelUiCapabilityOrigin::Community,
+            plugin_version: "1.2.3".into(),
+            asset_integrity: Some("sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=".into()),
+            public_base: "./tabs/".into(),
+            source_revision: revision,
+        }
+    }
+
+    fn community_snapshot(
+        revision: u64,
+        community: Vec<PanelUiCapabilityDeclaration>,
+    ) -> PanelUiCapabilitySnapshot {
+        let mut declarations = BuiltInTerminalSource::new("Terminal".into())
+            .snapshot()
+            .declarations;
+        declarations.extend(community);
+        for declaration in &mut declarations {
+            declaration.source_revision = revision;
+        }
+        PanelUiCapabilitySnapshot::new(revision, declarations)
+    }
 
     #[test]
     fn projection_rejects_duplicate_invalid_entry_and_api_mismatch() {
@@ -219,6 +438,290 @@ mod tests {
             PanelProjection::select_route("/dashboard", None),
             PanelRoute::Legacy
         );
+    }
+
+    #[test]
+    fn capability_sources_expose_stable_descriptor_snapshots() {
+        let baseline = PanelProjection::builtins("Terminal".into()).unwrap();
+        let builtin = BuiltInTerminalSource::new("Terminal".into()).snapshot();
+        assert_eq!(builtin.revision, 0);
+        assert_eq!(builtin.declarations.len(), 1);
+        assert_eq!(
+            builtin.declarations[0].descriptor,
+            baseline.registry().get(&terminal_key()).cloned().unwrap()
+        );
+        assert_eq!(builtin.declarations[0].source_revision, builtin.revision);
+
+        let fixture = FixturePanelUiCapabilitySource::new(builtin.clone());
+        assert_eq!(fixture.snapshot(), builtin);
+        assert_eq!(
+            PanelProjection::from_snapshot(builtin)
+                .unwrap()
+                .registry()
+                .get(&terminal_key())
+                .cloned()
+                .unwrap(),
+            baseline.registry().get(&terminal_key()).cloned().unwrap()
+        );
+    }
+
+    #[test]
+    fn valid_community_declaration_projects_in_deterministic_source_order() {
+        let mut other = community_declaration(7);
+        other.descriptor.key.plugin_id = "community.alpha".into();
+        other.descriptor.key.tab_id = "alpha".into();
+        other.descriptor.entry = "./tabs/community.alpha/1.2.3/alpha.js".into();
+        let snapshot = community_snapshot(7, vec![community_declaration(7), other]);
+        assert_eq!(
+            snapshot
+                .declarations
+                .iter()
+                .map(|declaration| declaration.descriptor.key.qualified())
+                .collect::<Vec<_>>(),
+            vec![
+                terminal_key().qualified(),
+                "community.alpha:alpha".into(),
+                "community.example:overview".into()
+            ]
+        );
+
+        let projection = PanelProjection::from_snapshot(snapshot).unwrap();
+        let community = projection
+            .registry()
+            .get(&community_declaration(7).descriptor.key)
+            .cloned()
+            .unwrap();
+        assert_eq!(community, community_declaration(7).descriptor);
+        assert_eq!(projection.registry().source_revision(), 7);
+        assert_eq!(projection.route_key("/terminal"), Some(terminal_key()));
+    }
+
+    #[test]
+    fn community_validation_rejects_unsupported_facts_with_stable_reason_codes() {
+        let cases = [
+            (
+                PanelUiCapabilityDeclaration {
+                    descriptor: PanelTabDescriptor {
+                        key: PanelTabKey {
+                            plugin_id: String::new(),
+                            ..community_declaration(1).descriptor.key
+                        },
+                        ..community_declaration(1).descriptor
+                    },
+                    ..community_declaration(1)
+                },
+                PanelProjectionError::InvalidIdentity,
+                "invalid_identity",
+            ),
+            (
+                PanelUiCapabilityDeclaration {
+                    origin: PanelUiCapabilityOrigin::BuiltIn,
+                    ..community_declaration(1)
+                },
+                PanelProjectionError::InvalidOrigin,
+                "invalid_origin",
+            ),
+            (
+                PanelUiCapabilityDeclaration {
+                    descriptor: PanelTabDescriptor {
+                        trust: PanelUiTrust::Verified,
+                        ..community_declaration(1).descriptor
+                    },
+                    ..community_declaration(1)
+                },
+                PanelProjectionError::UnacceptableTrust,
+                "unacceptable_trust",
+            ),
+            (
+                PanelUiCapabilityDeclaration {
+                    descriptor: PanelTabDescriptor {
+                        permissions: vec!["gateway.admin".into()],
+                        ..community_declaration(1).descriptor
+                    },
+                    ..community_declaration(1)
+                },
+                PanelProjectionError::UnsupportedPermission,
+                "unsupported_permission",
+            ),
+            (
+                PanelUiCapabilityDeclaration {
+                    asset_integrity: None,
+                    ..community_declaration(1)
+                },
+                PanelProjectionError::MissingAssetIntegrity,
+                "missing_asset_integrity",
+            ),
+            (
+                PanelUiCapabilityDeclaration {
+                    asset_integrity: Some("sha256-not-a-digest".into()),
+                    ..community_declaration(1)
+                },
+                PanelProjectionError::InvalidAssetIntegrity,
+                "invalid_asset_integrity",
+            ),
+            (
+                PanelUiCapabilityDeclaration {
+                    public_base: "/tabs/".into(),
+                    ..community_declaration(1)
+                },
+                PanelProjectionError::InvalidPublicBase,
+                "invalid_public_base",
+            ),
+            (
+                PanelUiCapabilityDeclaration {
+                    descriptor: PanelTabDescriptor {
+                        entry: "https://example.invalid/overview.js".into(),
+                        ..community_declaration(1).descriptor
+                    },
+                    ..community_declaration(1)
+                },
+                PanelProjectionError::InvalidEntry,
+                "invalid_entry",
+            ),
+            (
+                PanelUiCapabilityDeclaration {
+                    descriptor: PanelTabDescriptor {
+                        entry: "./tabs/community.example/../outside.js".into(),
+                        ..community_declaration(1).descriptor
+                    },
+                    ..community_declaration(1)
+                },
+                PanelProjectionError::InvalidEntry,
+                "invalid_entry",
+            ),
+            (
+                PanelUiCapabilityDeclaration {
+                    descriptor: PanelTabDescriptor {
+                        entry: "./tabs/community.example/1.2.3/%2e%2e/outside.js".into(),
+                        ..community_declaration(1).descriptor
+                    },
+                    ..community_declaration(1)
+                },
+                PanelProjectionError::InvalidEntry,
+                "invalid_entry",
+            ),
+            (
+                PanelUiCapabilityDeclaration {
+                    descriptor: PanelTabDescriptor {
+                        entry: "./tabs/community.example/1.2.3/overview.js?raw=1".into(),
+                        ..community_declaration(1).descriptor
+                    },
+                    ..community_declaration(1)
+                },
+                PanelProjectionError::InvalidEntry,
+                "invalid_entry",
+            ),
+            (
+                PanelUiCapabilityDeclaration {
+                    descriptor: PanelTabDescriptor {
+                        entry: "./tabs/community.example/1.2.3/overview.js#module".into(),
+                        ..community_declaration(1).descriptor
+                    },
+                    ..community_declaration(1)
+                },
+                PanelProjectionError::InvalidEntry,
+                "invalid_entry",
+            ),
+            (
+                PanelUiCapabilityDeclaration {
+                    descriptor: PanelTabDescriptor {
+                        entry: "./tabs/community.example/2.0.0/overview.js".into(),
+                        ..community_declaration(1).descriptor
+                    },
+                    ..community_declaration(1)
+                },
+                PanelProjectionError::UnversionedEntry,
+                "unversioned_entry",
+            ),
+        ];
+
+        for (declaration, expected, reason_code) in cases {
+            let error = PanelProjection::from_snapshot(community_snapshot(1, vec![declaration]))
+                .unwrap_err();
+            assert_eq!(error, expected);
+            assert_eq!(error.reason_code(), reason_code);
+        }
+    }
+
+    #[test]
+    fn snapshot_validation_rejects_duplicates_collisions_and_revision_mismatch() {
+        assert_eq!(
+            PanelProjection::from_snapshot(community_snapshot(
+                2,
+                vec![community_declaration(2), community_declaration(2)],
+            ))
+            .unwrap_err(),
+            PanelProjectionError::DuplicateKey
+        );
+
+        let collision = PanelUiCapabilityDeclaration {
+            descriptor: terminal_descriptor("Imposter".into()),
+            origin: PanelUiCapabilityOrigin::Community,
+            plugin_version: "1.2.3".into(),
+            asset_integrity: community_declaration(2).asset_integrity,
+            public_base: "./tabs/".into(),
+            source_revision: 2,
+        };
+        assert_eq!(
+            PanelProjection::from_snapshot(community_snapshot(2, vec![collision])).unwrap_err(),
+            PanelProjectionError::BuiltInShadowed
+        );
+
+        let mut mismatched = community_snapshot(3, vec![community_declaration(3)]);
+        mismatched.declarations[1].source_revision = 2;
+        assert_eq!(
+            PanelProjection::from_snapshot(mismatched).unwrap_err(),
+            PanelProjectionError::RevisionMismatch
+        );
+    }
+
+    #[test]
+    fn snapshot_replacement_fences_stale_and_rejected_late_results() {
+        let mut projection =
+            PanelProjection::from_snapshot(community_snapshot(2, vec![community_declaration(2)]))
+                .unwrap();
+        projection
+            .replace_snapshot(community_snapshot(3, vec![]))
+            .unwrap();
+        assert_eq!(projection.registry().source_revision(), 3);
+        assert!(projection
+            .registry()
+            .get(&community_declaration(2).descriptor.key)
+            .is_none());
+
+        let current = projection.registry();
+        for late in [
+            community_snapshot(2, vec![community_declaration(2)]),
+            community_snapshot(3, vec![community_declaration(3)]),
+        ] {
+            assert_eq!(
+                projection.replace_snapshot(late).unwrap_err(),
+                PanelProjectionError::StaleSnapshot
+            );
+            assert_eq!(projection.registry().rows(), current.rows());
+            assert_eq!(projection.registry().source_revision(), 3);
+        }
+
+        let rejected = PanelUiCapabilityDeclaration {
+            asset_integrity: None,
+            ..community_declaration(4)
+        };
+        assert_eq!(
+            projection
+                .replace_snapshot(community_snapshot(4, vec![rejected]))
+                .unwrap_err(),
+            PanelProjectionError::MissingAssetIntegrity
+        );
+        assert_eq!(projection.registry().rows(), current.rows());
+        assert_eq!(projection.registry().source_revision(), 3);
+    }
+
+    #[test]
+    fn unknown_wire_trust_fails_closed_before_projection() {
+        let mut value =
+            serde_json::to_value(community_snapshot(1, vec![community_declaration(1)])).unwrap();
+        value["declarations"][1]["descriptor"]["trust"] = serde_json::json!("unknown");
+        assert!(serde_json::from_value::<PanelUiCapabilitySnapshot>(value).is_err());
     }
 
     #[test]

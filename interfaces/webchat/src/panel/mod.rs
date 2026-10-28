@@ -5,6 +5,7 @@ pub mod projection;
 pub mod registry;
 pub mod sdk;
 mod shell;
+pub mod source;
 
 pub use shell::PanelShell;
 
