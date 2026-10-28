@@ -19,6 +19,7 @@ pub enum PanelLoadError {
     Cancelled,
 }
 
+#[cfg(any(test, target_arch = "wasm32"))]
 pub(super) fn map_error_code(code: Option<&str>, fallback: PanelLoadError) -> PanelLoadError {
     match code {
         Some("AssetFetchFailed") => PanelLoadError::AssetFetchFailed,
