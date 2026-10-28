@@ -1159,6 +1159,12 @@ Configuration changes are detected via file watcher:
 └─────────────────────────────────┘
 ```
 
+### Stage E code-loading boundary / Stage E 代码加载边界
+
+Gateway hot reload and plugin WASM code loading are separate boundaries. Stage E proves only the existing Extension lifecycle’s bounded Extism path: cold discovery/projection does not read guest bytes or create an instance; explicit activation reads and executes a real guest; replacement rejects stale bindings and drops the exact old `LoadedWasmPlugin` after retained `Arc` holders are released. It does not make built-in Gateway channels dynamically loadable, and it does not measure Extism engine-wide JIT, OS mappings, thread shutdown or RSS reclamation.
+
+Gateway hot reload 与 plugin WASM code loading 是两个边界。Stage E 只证明既有 Extension lifecycle 的有界 Extism 路径：cold discovery/projection 不读取 guest bytes、不创建 instance；显式激活读取并执行真实 guest；替换拒绝 stale binding，并在释放 retained `Arc` holders 后 drop 具体旧 `LoadedWasmPlugin`。它不会让内置 Gateway channel 变成动态加载，也不测量 Extism engine-wide JIT、OS mapping、线程退出或 RSS 回收。
+
 ---
 
 ## HTTP Server

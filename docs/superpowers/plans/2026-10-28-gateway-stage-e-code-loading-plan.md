@@ -2,9 +2,9 @@
 
 > **For next session:** use `docs/superpowers/prompts/2026-10-28-gateway-stage-e-code-loading-prompt.md`.
 >
-> **Status:** handoff draft for the next Stage E slice. The mechanism is limited to the existing Extism runtime and one real test guest. Physical JIT/RAM reclamation and production channel dynamism are not pre-approved claims.
+> **Status:** completed bounded Stage E slice. The implementation is limited to the existing Extism runtime and one real test guest; physical JIT/RAM reclamation and production channel dynamism remain unproven and deferred.
 >
-> **Handoff base:** `main` at `ee6e65885` when written. Re-read actual HEAD before branching.
+> **Handoff base:** actual clean `main` at `8c07dca9f5ccaa33a64ec8105c82c60e84faca49`; the earlier handoff value `ee6e65885` was stale. Code commit: `7c31a5fa6716dabf23cff12ab7a14c8df6175271`.
 
 ## Goal / 目标
 
@@ -116,10 +116,14 @@ git diff --check
 - [ ] Only after GREEN and review, write bilingual `docs/superpowers/runs/2026-10-28-gateway-stage-e-code-loading-run.md`; update source plan Stage E, `docs/reference/GATEWAY.md`, `docs/reference/PLUGIN_SYSTEM.md` and `FEATURE_LOCATOR.md` §3.5i with the exact bounded claim and unproven engine/JIT/RSS/native-channel boundaries. Check `PLUGIN_SYSTEM.md` for stale `Wasm::file`/unload wording.
 - [ ] Commit docs separately, confirm clean branch and `git diff --check`. Do not merge, push, clean worktrees or begin another stage without user instruction.
 
-## Final handoff must answer
+## Stage E closure record / Stage E 收口记录
 
-1. What was loaded/read at cold, activation and replacement?
-2. Which exact object was dropped at stop, and which handles had to be released first?
-3. What remains in the Extism engine/process that this slice cannot measure?
-4. Did any built-in static channel become dynamically loaded? (Expected: no.)
-5. Which commands actually ran, which reviewer ran, and what remains deferred?
+The bounded implementation and evidence are complete at code commit `7c31a5fa6716dabf23cff12ab7a14c8df6175271`. The source census is saved at `.superpowers/sdd/2026-10-28-gateway-stage-e-code-loading/source-census.md`; the bilingual command ledger and review record are [`docs/superpowers/runs/2026-10-28-gateway-stage-e-code-loading-run.md`](../runs/2026-10-28-gateway-stage-e-code-loading-run.md).
+
+有界实现与证据已在代码提交 `7c31a5fa6716dabf23cff12ab7a14c8df6175271` 完成。源码 census 保存在 `.superpowers/sdd/2026-10-28-gateway-stage-e-code-loading/source-census.md`；双语命令台账与审阅记录见 [`docs/superpowers/runs/2026-10-28-gateway-stage-e-code-loading-run.md`](../runs/2026-10-28-gateway-stage-e-code-loading-run.md)。
+
+**Observed claim / 已观察断言:** cold discovery/list/descriptor/projection produced zero guest-byte reads, zero instance creation and an inactive runtime; activation read and executed payload A; real replacement read and executed payload B while stale canonical/binding handles were rejected; invalid bytes produced a read with no instance. The exact old and new `LoadedWasmPlugin` incarnations were observed dropping only after their retained Arc-backed owner/entry/binding holders were released.
+
+**Limit / 限制:** the receipts do not measure Extism engine-wide JIT code, anonymous mappings, executable OS pages, thread shutdown or RSS. `PluginLoader::shutdown` remains a separate bulk cleanup path. No native unload, new runtime/dependency, second lifecycle authority, production channel dynamic code loading, or Gateway/Feishu/R2/Terminal/Memory migration was added. `wasm_capability_test` compiled but collected zero tests in this checkout; full unfiltered workspace tests and engine/RSS/native-channel work remain deferred.
+
+**Review / 审阅:** the first independent review findings were repaired; a second independent read-only gstack Pi review returned `Ready: Yes` with no Critical, Important or Minor findings. ACP reviewer attempts that produced no result are not counted as approval.

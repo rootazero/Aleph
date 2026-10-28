@@ -214,6 +214,16 @@ sensitive = true
 | `"mcp"` | Mcp | 读取 `.mcp.json`，通过 MCP 协议 | Node.js、Python 等 |
 | `"wasm"` | Wasm | Extism 沙箱直接加载 | 高性能安全插件 |
 
+### WASM code-loading boundary / WASM 代码加载边界（Stage E，2026-10-28）
+
+The bounded WASM path reads the guest file explicitly with `std::fs::read`, then passes the bytes to Extism through `Wasm::data` and the existing `PluginBuilder`. Discovery and cold projections read manifest metadata only; they do not read guest bytes, construct the WASM runtime, or create an Extism instance. Explicit activation creates the instance and publishes the existing tool surface through the normal lifecycle path.
+
+有界 WASM 路径显式用 `std::fs::read` 读取 guest 文件，再通过 `Wasm::data` 和既有 `PluginBuilder` 交给 Extism。发现与 cold projection 只读取 manifest metadata，不读取 guest bytes、不构造 WASM runtime、不创建 Extism instance。显式激活才创建 instance，并通过既有 lifecycle 路径发布 tool surface。
+
+Reload/unmount keeps the existing generation, identity and binding fences. A stale canonical entry or `WasmBinding` is rejected; the exact `LoadedWasmPlugin` incarnation is observed as dropped only after the retained owner, entry and binding `Arc` holders are released. The test-only receipts prove this Extism instance boundary. They do not prove engine-wide JIT unloading, anonymous mapping reclamation, executable-page reclamation, thread shutdown or RSS reduction. Native dylib loading/unloading and production channel dynamic code loading remain outside this slice.
+
+Reload/unmount 继续使用既有 generation、identity 和 binding fences。stale canonical entry 或 `WasmBinding` 会被拒绝；只有释放 retained owner、entry 与 binding 的 `Arc` holders 后，才能观察到具体 `LoadedWasmPlugin` incarnation drop。test-only receipt 证明的是这一 Extism instance boundary，不能证明 engine-wide JIT unloading、anonymous mapping 回收、executable page 回收、线程退出或 RSS 降低。native dylib 加载/卸载与生产 channel 动态代码加载仍不在本阶段范围内。
+
 Runtime 与 **origin** 是两个轴。origin（`PluginOrigin`）多了一个值：`ClaudeCache`——`~/.claude/plugins/`
 里 Claude Code 已装的插件（读 `installed_plugins.json`，解析到 `cache/<marketplace>/<plugin>/<version>/`）。
 **只读发现**：Aleph 永不写 `~/.claude/`，不读 `settings.json`；这一 origin 的插件**默认 disabled**
@@ -927,7 +937,7 @@ R8/R9 的自我改进条款）。给它加 allowlist，要么自动放行模型�
 | step 标签 | 注册 ↔ 逆 |
 |---|---|
 | `registry_row` | `PluginRegistry::register_plugin` ↔ `unregister_plugin` |
-| `wasm_module` | `PluginLoader` load ↔ unload |
+| `wasm_module` | `PluginLoader` load ↔ unload; the bounded load is `std::fs::read` → `Wasm::data` → existing Extism `PluginBuilder`; exact instance drop is observed only after lifecycle unmount and release of retained `Arc` holders (test-only receipt) |
 | `mcp_server` | `McpManagerHandle::add_transient_server` ↔ `remove_transient_server` |
 | `service` | `service_manager` start ↔ stop |
 | `memory_extension` | `MemoryExtensionRegistry::register*` ↔ `unregister(plugin_id)`（**2026-09-20 新增**——此前 disable 后 `[memory]` 扩展仍挂着） |
