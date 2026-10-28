@@ -1619,7 +1619,8 @@ impl ChannelRegistry {
         loop {
             // Revalidate on every acquisition: `get` exposes this Arc and a
             // writer can replace its Box during an observer or retry wait.
-            // This exact guard carries both the policy and the transport call.
+            // Prepare the operation, policy, and any replay stamp under this
+            // guard; its owned future performs the transport call after release.
             let channel = channel_arc.read().await;
             let policy = channel.outbound_delivery_policy();
             if (matches!(kind, AttemptKind::Replay { .. }) || is_retry)

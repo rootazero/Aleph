@@ -971,14 +971,20 @@ pub trait Channel: Send + Sync {
 
     /// Stop the channel (disconnect, cleanup).
     ///
-    /// This closes provider-owned resources without joining in-flight send
-    /// operations.
+    /// This closes provider-owned resources without draining or joining
+    /// in-flight send operations. It may briefly wait for a provider-local
+    /// resource lock held by an in-flight transport write; that is resource
+    /// cleanup, not a second operation-lifecycle authority.
     async fn stop(&mut self) -> ChannelResult<()>;
 
     /// Prepare a message send through this channel.
     ///
     /// The returned future owns its handles, never borrows this adapter, and
-    /// must not require `stop` to drain it before completing.
+    /// must not require `stop` to drain it before completing. Preparation is
+    /// synchronous and must not perform transport I/O, spawn work, or create
+    /// externally visible side effects: the first poll is the commit boundary.
+    /// Retries may prepare a fresh operation more than once for one logical send.
+    #[must_use]
     fn send(&self, message: OutboundMessage) -> SendOperation;
 
     /// Returns a subscriber receiver for incoming messages. Multiple subscribers

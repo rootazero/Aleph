@@ -336,9 +336,7 @@ impl Channel for IMessageChannel {
             for attachment in &message.attachments {
                 if let Some(path) = &attachment.path {
                     if !running.load(Ordering::SeqCst) {
-                        return Err(ChannelError::NotConnected(
-                            "iMessage channel stopped before attachment send".to_string(),
-                        ));
+                        return Err(stopped_before_attachment_send());
                     }
                     MessageSender::send_file(target, std::path::Path::new(path))
                         .await
@@ -352,6 +350,17 @@ impl Channel for IMessageChannel {
             })
         })
     }
+}
+
+/// Error for a `stop()` observed before an attachment send in a multi-part
+/// operation. The body or earlier attachments may already be on the wire; with
+/// no earlier part, this conservatively treats the boundary as ambiguous too.
+///
+/// This must stay ambiguous. `NotConnected` means "definitely not delivered"
+/// to `delivery_queue::should_enqueue`, which would retry the whole payload and
+/// text the recipient a second time after a partial delivery.
+fn stopped_before_attachment_send() -> ChannelError {
+    ChannelError::SendFailed("iMessage channel stopped before attachment send".to_string())
 }
 
 /// Factory for creating iMessage channels
@@ -394,6 +403,7 @@ impl ChannelFactory for IMessageChannelFactory {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::gateway::delivery_queue::{should_enqueue, terminal_reason, DeadLetterReason};
 
     #[test]
     fn test_channel_info() {
@@ -433,5 +443,17 @@ mod tests {
             parse_target("+15551234567").unwrap(),
             IMessageTarget::Phone { .. }
         ));
+    }
+
+    #[test]
+    fn stop_after_partial_delivery_is_not_auto_retried() {
+        // This boundary may follow a delivered body or earlier attachment, so
+        // its error is conservatively ambiguous instead of auto-retryable.
+        let err = stopped_before_attachment_send();
+        assert!(
+            !should_enqueue(&err),
+            "post-side-effect stop must not be retryable: {err:?}"
+        );
+        assert_eq!(terminal_reason(&err), DeadLetterReason::Ambiguous);
     }
 }
