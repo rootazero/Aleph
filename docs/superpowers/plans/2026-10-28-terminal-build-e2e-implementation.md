@@ -42,11 +42,11 @@
 - Consumes: existing `bun scripts/build-panel-tabs.mjs --output <dir>` and `createPanelGatewayFixture(staged)`.
 - Produces: `PANEL_OUTPUT_ROOT=<absolute-or-package-relative-dir>` accepted by all three Node fixtures; artifact assertions consume `build.json`, `manifest.json`, `build-inputs.json`, final HTML, and the same staged files served by the host fixture.
 
-- [ ] **Step 1: Write failing artifact tests** for actual HEAD equality, manifest/build ID agreement, exact versioned Terminal entry, descriptor `aleph/terminal` identity, host/Terminal JS/WASM/loader/CSS presence, no unprocessed Trunk assets, no staged `target`, and no Terminal module reference in initial host HTML. Add isolated copied-output negative cases for stale build ID, missing asset, wrong descriptor, and wrong public base.
-- [ ] **Step 2: Run artifact tests against an empty isolated directory** and confirm a provenance/input failure rather than consumption of `.panel-tabs`.
-- [ ] **Step 3: Implement the smallest artifact validation helpers inside the new test file** and replace fixed `.panel-tabs` resolution in protocol/host fixtures with `PANEL_OUTPUT_ROOT`; fail fast when it is absent or invalid.
-- [ ] **Step 4: Run from the worktree root** `python qa/browser_live/check_memory.py`; only on exit 0 run from `interfaces/webchat` `bun run panel:tabs:build -- --output <new-output-root>` and record the gate and build result.
-- [ ] **Step 5: Run** `PANEL_OUTPUT_ROOT=<new-output-root> node --test tests/panel-build-artifacts.test.mjs` from `interfaces/webchat`; expected PASS for the current output and explicit expected failures for corrupted copies.
+- [x] **Step 1: Write failing artifact tests** for actual HEAD equality, manifest/build ID agreement, exact versioned Terminal entry, descriptor `aleph/terminal` identity, host/Terminal JS/WASM/loader/CSS presence, no unprocessed Trunk assets, no staged `target`, and no Terminal module reference in initial host HTML. Add isolated copied-output negative cases for stale build ID, missing asset, wrong descriptor, and wrong public base.
+- [x] **Step 2: Run artifact tests against an empty isolated directory** and confirm a provenance/input failure rather than consumption of `.panel-tabs`.
+- [x] **Step 3: Implement the smallest artifact validation helpers inside the new test file** and replace fixed `.panel-tabs` resolution in protocol/host fixtures with `PANEL_OUTPUT_ROOT`; fail fast when it is absent or invalid.
+- [x] **Step 4: Run from the worktree root** `python qa/browser_live/check_memory.py`; only on exit 0 run from `interfaces/webchat` `bun run panel:tabs:build -- --output <new-output-root>` and record the gate and build result.
+- [x] **Step 5: Run** `PANEL_OUTPUT_ROOT=<new-output-root> node --test tests/panel-build-artifacts.test.mjs` from `interfaces/webchat`; expected PASS for the current output and explicit expected failures for corrupted copies.
 
 ### Task 2: Prove the real production-host loopback path
 
@@ -60,11 +60,11 @@
 - Consumes: Task 1's `PANEL_OUTPUT_ROOT`, validated `build.json`/`manifest.json`, and unchanged production host/module APIs.
 - Produces: non-secret result JSON containing route, actual asset paths, host/module initialization, RPC/event observations, page errors, failed requests, and cleanup state.
 
-- [ ] **Step 1: Add failing host assertions** for exact current-build asset requests, no Terminal prefetch on Chat/Settings, production navigation and Shell/SDK/Loader mount, zero page errors/failed requests, and positive `/`, `/panel/`, `/terminal`, `/panel/terminal` route outcomes.
-- [ ] **Step 2: Run the host fixture against Task 1's output** and classify failures as fixture gaps or repeatable product defects; do not patch production behavior speculatively.
-- [ ] **Step 3: Implement minimal fixture controls/assertions** for connect/subscription/list/attach and spawn when needed, visible native Canvas output, UTF-8 input, post-baseline resize geometry, selected PTY exit/fallback, reconnect using a new socket, stale list/attach/subscribe fencing, missing/incompatible module isolation, and route teardown without closing non-test-owned PTYs.
-- [ ] **Step 4: If a product defect is proven, write its minimal RED first**, then make only the owning local fix; rerun the memory gate and clean build, then rerun all affected fixtures.
-- [ ] **Step 5: Run independently** `PANEL_OUTPUT_ROOT=<new-output-root> node --test tests/panel-terminal-protocol.test.mjs` and `PANEL_OUTPUT_ROOT=<new-output-root> node --test tests/panel-terminal-host.test.mjs` from `interfaces/webchat`; record separate component and production-host verdicts and exact failures, if any.
+- [x] **Step 1: Add failing host assertions** for exact current-build asset requests, no Terminal prefetch on Chat/Settings, production navigation and Shell/SDK/Loader mount, zero page errors/failed requests, and positive `/`, `/panel/`, `/terminal`, `/panel/terminal` route outcomes.
+- [x] **Step 2: Run the host fixture against Task 1's output** and classify failures as fixture gaps or repeatable product defects; do not patch production behavior speculatively.
+- [x] **Step 3: Implement minimal fixture controls/assertions** for connect/subscription/list/attach and spawn when needed, visible native Canvas output, UTF-8 input, post-baseline resize geometry, selected PTY exit/fallback, reconnect using a new socket, stale list/attach/subscribe fencing, missing/incompatible module isolation, and route teardown without closing non-test-owned PTYs.
+- [x] **Step 4: If a product defect is proven, write its minimal RED first**, then make only the owning local fix; rerun the memory gate and clean build, then rerun all affected fixtures.
+- [x] **Step 5: Run independently** `PANEL_OUTPUT_ROOT=<new-output-root> node --test tests/panel-terminal-protocol.test.mjs` and `PANEL_OUTPUT_ROOT=<new-output-root> node --test tests/panel-terminal-host.test.mjs` from `interfaces/webchat`; record separate component and production-host verdicts and exact failures, if any.
 
 ### Task 3: Verify, report, review, and commit
 
@@ -79,8 +79,8 @@
 - Consumes: Task 1 build ledger and Task 2 independent fixture results.
 - Produces: committed bilingual evidence with `component`, `production_host_loopback`, and `live_gateway` verdicts; no live claim without authorized target and proven cleanup.
 
-- [ ] **Step 1: Record exact commands/cwds and results**, including every memory gate, actual HEAD/build ID, source input hashes/tools, asset inventory and requests, initialization/RPC/events, cleanup, unexecuted checks, and remaining scope.
-- [ ] **Step 2: Run applicable package checks serially** with a fresh root memory gate before each Cargo invocation; run `git diff --check`. Record unavailable checks rather than claiming them.
-- [ ] **Step 3: Perform read-only live-target preflight only**; with no newly authorized disposable target write `live_gateway: BLOCKED` and `reason: no authorized disposable Gateway/project/session/credential/cleanup scope`.
-- [ ] **Step 4: Request independent read-only review** focused on provenance, production-host authenticity, verdict boundaries, secret hygiene, and cleanup; resolve evidenced findings.
-- [ ] **Step 5: Inspect the final diff and worktree status**, stage only task files, run the root memory gate before any commit that may invoke Cargo hooks, and commit with a conventional message such as `test(panel): add terminal build e2e`; do not merge or push.
+- [x] **Step 1: Record exact commands/cwds and results**, including every memory gate, actual HEAD/build ID, source input hashes/tools, asset inventory and requests, initialization/RPC/events, cleanup, unexecuted checks, and remaining scope.
+- [x] **Step 2: Run applicable package checks serially** with a fresh root memory gate before each Cargo invocation; run `git diff --check`. Record unavailable checks rather than claiming them.
+- [x] **Step 3: Perform read-only live-target preflight only**; with no newly authorized disposable target write `live_gateway: BLOCKED` and `reason: no authorized disposable Gateway/project/session/credential/cleanup scope`.
+- [x] **Step 4: Request independent read-only review** focused on provenance, production-host authenticity, verdict boundaries, secret hygiene, and cleanup; resolve evidenced findings.
+- [x] **Step 5: Inspect the final diff and worktree status**, stage only task files, run the root memory gate before any commit that may invoke Cargo hooks, and commit with a conventional message such as `test(panel): add terminal build e2e`; do not merge or push.

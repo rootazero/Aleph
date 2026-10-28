@@ -181,7 +181,7 @@ for (const [name, packageName, features] of [
   ], packageName === 'aleph-panel' ? hostCwd : terminalCwd);
   await writeFile(join(output, `${name}-dependencies.txt`), tree + '\n');
 }
-await writeFile(join(output, 'build.json'), JSON.stringify({
+const buildRecord = {
   arrangement: 'wasm-bindgen',
   build_id: buildId,
   entry,
@@ -191,6 +191,14 @@ await writeFile(join(output, 'build.json'), JSON.stringify({
   source_inputs: sourceInputs,
   source_input_hashes: sourceInputHashes,
   output: outputArg ?? '.panel-tabs',
+};
+await writeFile(join(output, 'build.json'), JSON.stringify(buildRecord, null, 2) + '\n');
+await writeFile(join(output, 'build-inputs.json'), JSON.stringify({
+  build_id: buildRecord.build_id,
+  profile: buildRecord.profile,
+  revision: buildRecord.revision,
+  source_inputs: buildRecord.source_inputs,
+  source_input_hashes: buildRecord.source_input_hashes,
 }, null, 2) + '\n');
 
 console.log(`Built ${output} with terminal entry ${entry}`);

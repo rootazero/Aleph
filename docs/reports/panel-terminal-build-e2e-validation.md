@@ -25,10 +25,10 @@ The candidate was generated from the new worktree without copying the shared che
 - Output root: `D:/Workspace/Aleph/.worktrees/terminal-build-e2e/.superpowers/sdd/2026-10-28-terminal-build-e2e-implementation/candidate`
 - Revision: `3ac50c1be5c3a613195cb76c080ef7d93f99d9ba`
 - Profile: `wasm-release`
-- Build id: `e6e56a5097fa37e4`
-- Manifest entry: `./tabs/terminal/e6e56a5097fa37e4/terminal.js`
+- Build id: `612edbe3001f4339`
+- Manifest entry: `./tabs/terminal/612edbe3001f4339/terminal.js`
 - Host descriptor: `aleph / terminal`, API major `1`, trust `verified`, status `enabled`
-- Source input hash ledger: `candidate/build.json` (`source_input_hashes`)
+- Source input hash ledger: `candidate/build.json` and `candidate/build-inputs.json` (`source_input_hashes`)
 - Tools: Bun `1.4.4`, Cargo `1.99.1`, rustc `1.99.1`, wasm-bindgen `0.2.129`, wasm-opt `133`, Tailwind `4.3.3`
 
 The staged deployed asset list was:
@@ -40,9 +40,9 @@ aleph_panel_bg.wasm
 panel_loader.js
 tailwind.css
 snippets/aleph-panel-4f6e070d4bce8856/inline0.js
-tabs/terminal/e6e56a5097fa37e4/terminal.js
-tabs/terminal/e6e56a5097fa37e4/terminal_bg.wasm
-tabs/terminal/e6e56a5097fa37e4/snippets/panel-tab-terminal-c09656c1df86b3e8/inline0.js
+tabs/terminal/612edbe3001f4339/terminal.js
+tabs/terminal/612edbe3001f4339/terminal_bg.wasm
+tabs/terminal/612edbe3001f4339/snippets/panel-tab-terminal-c09656c1df86b3e8/inline0.js
 ```
 
 The temporary candidate target and dependency ledgers were excluded from deployed-asset assertions and first-screen claims. `build.json.revision`, manifest entry, descriptor identity, build id, source hashes and final asset paths agree. Artifact checks reject stale build ids, missing Terminal WASM, wrong descriptor identity, wrong public base, and entry traversal outside the staged root. The final HTML contains no unprocessed Trunk asset marker.
@@ -51,7 +51,7 @@ Every cargo subprocess was preceded by `python qa/browser_live/check_memory.py` 
 
 ## Component evidence / 组件证据
 
-The candidate-aware fixtures require `PANEL_OUTPUT_ROOT`; they cannot silently fall back to historical `.panel-tabs` assets.
+The package test scripts now require an explicit `PANEL_OUTPUT_ROOT`; the commands below pass the isolated candidate directly so they cannot silently consume historical `.panel-tabs` output.
 
 From `interfaces/webchat`:
 
@@ -76,13 +76,13 @@ Observed browser asset paths included:
 /aleph_panel.js
 /aleph_panel_bg.wasm
 /panel_loader.js
-/tabs/terminal/e6e56a5097fa37e4/terminal.js
-/tabs/terminal/e6e56a5097fa37e4/terminal_bg.wasm
+/tabs/terminal/612edbe3001f4339/terminal.js
+/tabs/terminal/612edbe3001f4339/terminal_bg.wasm
 ```
 
-The fixture passed for `/`, `/panel/`, direct `/terminal`, and `/panel/terminal`. The fixture first navigated the production root and asserted that Chat startup did not request Terminal assets, then navigated to `/terminal`. The component fixture separately covers both Chat and Settings before Terminal navigation. The production host initialized the current host WASM and loaded the current build's versioned Terminal module.
+The fixture passed the complete production browser chain for `/` and direct `/terminal`, while the same server returned positive staged HTML for `/`, `/panel/`, `/terminal`, and `/panel/terminal`. The component fixture separately covers both Chat and Settings before Terminal navigation. The production host initialized the current host WASM and loaded the current build's versioned Terminal module. `/panel/` and `/panel/terminal` are retained as positive HTTP route checks; the current Panel router selects the modular Terminal route at `/terminal`, so they are not reported as additional modular mount runs.
 
-Loopback WebSocket evidence included `connect`, exact event subscriptions, `pty.list`, `pty.attach`, screen delivery with visible `Gateway event ✓`, UTF-8 Ctrl-C payload `Aw==`, a new `pty.resize` geometry after the baseline report, selected-session exit and fallback attach, and replacement-socket resubscription followed by visible `Reconnect marker ✓`. The fixture asserts that fallback and route teardown do not call `pty.close` for a non-test-owned PTY. The final run reported no page errors and no failed requests; cleanup closed the page, browser, socket and fixture server.
+Loopback WebSocket evidence included `connect`, exact event subscriptions, `pty.list`, `pty.attach`, screen delivery with visible `Gateway event ✓`, UTF-8 Ctrl-C payload `Aw==`, a new `pty.resize` geometry after the baseline report, selected-session exit and fallback attach, and replacement-socket resubscription followed by visible `Reconnect marker ✓`. The fixture asserts that fallback and route teardown do not call `pty.close` for a non-test-owned PTY. The final run reported no page errors, no failed requests, and no HTTP response status >= 400; cleanup closed the page, browser, socket and fixture server.
 
 Command from `interfaces/webchat`:
 

@@ -27,6 +27,7 @@ export async function createPanelGatewayFixture(staged, options = {}) {
   }];
   const state = {
     httpPaths: [],
+    httpResponses: [],
     rpc: [],
     sockets: [],
     subscriptions: new Map(),
@@ -43,6 +44,7 @@ export async function createPanelGatewayFixture(staged, options = {}) {
     const url = new URL(request.url ?? '/', 'http://127.0.0.1');
     state.httpPaths.push(url.pathname);
     if (url.pathname === '/health') {
+      state.httpResponses.push({ path: url.pathname, status: 200 });
       response.writeHead(200, { 'content-type': 'text/plain; charset=utf-8' });
       response.end('ok');
       return;
@@ -52,6 +54,7 @@ export async function createPanelGatewayFixture(staged, options = {}) {
     const relative = requested && extname(requested) ? requested : 'index.html';
     const file = resolve(staged, relative);
     if (!file.startsWith(staged + sep)) {
+      state.httpResponses.push({ path: url.pathname, status: 403 });
       response.writeHead(403);
       response.end('forbidden');
       return;
@@ -59,9 +62,11 @@ export async function createPanelGatewayFixture(staged, options = {}) {
     try {
       const info = await stat(file);
       if (!info.isFile()) throw Error('not a file');
+      state.httpResponses.push({ path: url.pathname, status: 200 });
       response.writeHead(200, { 'content-type': mime[extname(file)] ?? 'application/octet-stream' });
       response.end(await readFile(file));
     } catch {
+      state.httpResponses.push({ path: url.pathname, status: 404 });
       response.writeHead(404);
       response.end('missing');
     }

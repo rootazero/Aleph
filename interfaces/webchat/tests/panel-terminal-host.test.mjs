@@ -134,8 +134,9 @@ async function runHost(publicBase) {
     await waitFor(() => gateway.state.rpc.some((request) => request.method === 'pty.attach' && request.params?.session_id === 'production-sibling-session'));
     assert.equal(gateway.state.rpc.some((request) => request.method === 'pty.close'), false, 'fallback must not close a non-test-owned PTY');
 
+    const attachCountBeforeReconnect = gateway.state.rpc.filter((request) => request.method === 'pty.attach').length;
     gateway.closeSocket(gateway.state.sockets.indexOf(activeSocket));
-    await waitFor(() => gateway.state.sockets.length >= 2 && gateway.state.sockets[0].readyState !== 1 && gateway.state.sockets.slice(1).some((socket) => socket.readyState === 1));
+    await waitFor(() => gateway.state.sockets.length >= 2 && gateway.state.sockets[0].readyState !== 1 && gateway.state.sockets.slice(1).some((socket) => socket.readyState === 1) && gateway.state.rpc.filter((request) => request.method === 'pty.attach').length > attachCountBeforeReconnect);
     const replacement = gateway.state.sockets.slice(1).find((socket) => socket.readyState === 1);
     assert.ok(replacement, 'reconnect must establish a replacement Gateway socket');
     assert.ok(gateway.state.subscriptions.get(replacement)?.has('pty.screen'), 'replacement socket must resubscribe to pty.screen');
@@ -152,7 +153,9 @@ async function runHost(publicBase) {
     await page.waitForFunction(() => globalThis.__fillTexts?.includes('Reconnect marker ✓'), undefined, { timeout: 5_000 });
 
     assert.deepEqual(failedRequests, [], `production host had failed requests (${publicBase})`);
+    assert.ok(gateway.state.httpResponses.every((response) => response.status < 400), `production host had HTTP failures (${publicBase})`);
     return {
+      base: publicBase,
       route: `${publicBase}terminal`,
       routes: positiveRoutes,
       rpc_methods: [...new Set(gateway.state.rpc.map((request) => request.method))].sort(),
@@ -175,13 +178,14 @@ async function runHost(publicBase) {
 }
 
 try {
-  const result = await runHost('/');
+  const results = [await runHost('/')];
   console.log(JSON.stringify({
     production_host_fixture: 'passed',
-    routes: result.routes,
+    bases: results.map((result) => result.base),
+    routes: [...new Set(results.flatMap((result) => result.routes))],
     gateway: 'loopback websocket fixture',
-    rpc_methods: result.rpc_methods,
-    http_assets: result.http_assets,
+    rpc_methods: [...new Set(results.flatMap((result) => result.rpc_methods))].sort(),
+    http_assets: [...new Set(results.flatMap((result) => result.http_assets))],
   }, null, 2));
 } finally {
   await browser.close();

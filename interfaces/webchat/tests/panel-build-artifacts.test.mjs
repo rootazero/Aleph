@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { cp, mkdtemp, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -12,10 +13,52 @@ const output = process.env.PANEL_OUTPUT_ROOT ? resolve(panel, process.env.PANEL_
 async function validateOutput(staged) {
   const build = JSON.parse(await readFile(join(staged, 'build.json'), 'utf8'));
   const manifest = JSON.parse(await readFile(join(staged, 'manifest.json'), 'utf8'));
+  const buildInputs = JSON.parse(await readFile(join(staged, 'build-inputs.json'), 'utf8'));
   const html = await readFile(join(staged, 'index.html'), 'utf8');
   const revision = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: panel, encoding: 'utf8' }).trim();
 
   assert.equal(build.revision, revision, 'build revision must equal the tested HEAD');
+  assert.deepEqual(buildInputs, {
+    build_id: build.build_id,
+    profile: build.profile,
+    revision: build.revision,
+    source_inputs: build.source_inputs,
+    source_input_hashes: build.source_input_hashes,
+  }, 'build input ledger must agree with build.json');
+  const sourceHash = createHash('sha256');
+  const sourceInputHashes = {};
+  const visit = async (directory, label, inputHash) => {
+    for (const entry of (await readdir(directory, { withFileTypes: true })).sort((left, right) => left.name.localeCompare(right.name))) {
+      const path = join(directory, entry.name);
+      const entryLabel = `${label}/${entry.name}`;
+      if (entry.isDirectory()) {
+        await visit(path, entryLabel, inputHash);
+        continue;
+      }
+      const contents = await readFile(path);
+      sourceHash.update(`\0${entryLabel}\0`);
+      sourceHash.update(contents);
+      inputHash.update(`\0${entryLabel}\0`);
+      inputHash.update(contents);
+    }
+  };
+  sourceHash.update(build.revision);
+  sourceHash.update(`\0profile=${build.profile}\0`);
+  for (const input of build.source_inputs) {
+    const path = resolve(panel, '../..', input);
+    sourceHash.update(`\0${input}\0`);
+    if (input.endsWith('/src')) {
+      const inputHash = createHash('sha256');
+      await visit(path, input, inputHash);
+      sourceInputHashes[input] = inputHash.digest('hex');
+      continue;
+    }
+    const contents = await readFile(path);
+    sourceHash.update(contents);
+    sourceInputHashes[input] = createHash('sha256').update(contents).digest('hex');
+  }
+  assert.deepEqual(build.source_input_hashes, sourceInputHashes, 'source input hashes must match current source');
+  assert.equal(build.build_id, sourceHash.digest('hex').slice(0, 16), 'build ID must match current source inputs');
   assert.match(build.build_id, /^[0-9a-f]{16}$/);
   assert.equal(manifest.entry, build.entry, 'manifest and build entries must agree');
   assert.equal(manifest.entry.match(/^\.\/tabs\/terminal\/([0-9a-f]{16})\/terminal\.js$/)?.[1], build.build_id, 'manifest entry must carry the build ID');
@@ -34,15 +77,15 @@ async function validateOutput(staged) {
   assert.doesNotMatch(html, /tabs\/terminal\/|terminal\.js/, 'initial host HTML must not preload Terminal');
 
   const assets = [];
-  const visit = async (directory, prefix = '') => {
+  const visitAssets = async (directory, prefix = '') => {
     for (const entry of await readdir(directory, { withFileTypes: true })) {
       assert.notEqual(entry.name, 'target', 'temporary Cargo target must not be deployed');
       const path = join(directory, entry.name);
-      if (entry.isDirectory()) await visit(path, `${prefix}${entry.name}/`);
+      if (entry.isDirectory()) await visitAssets(path, `${prefix}${entry.name}/`);
       else assets.push(`${prefix}${entry.name}`);
     }
   };
-  await visit(staged);
+  await visitAssets(staged);
   for (const asset of [
     'index.html',
     'aleph_panel.js',

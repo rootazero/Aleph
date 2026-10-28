@@ -212,8 +212,8 @@ const server = createServer(async (request, response) => {
     response.end(pageHtml(prefix ? '/panel/' : '/', url.searchParams.get('deny') === '1', url.searchParams.get('empty') === '1'));
     return;
   }
-  const file = relative === 'panel_loader.js' ? join(panel, 'panel_loader.js') : resolve(staged, relative);
-  if (relative !== 'panel_loader.js' && !file.startsWith(staged + sep)) {
+  const file = resolve(staged, relative);
+  if (!file.startsWith(staged + sep)) {
     response.writeHead(403);
     response.end('forbidden');
     return;
