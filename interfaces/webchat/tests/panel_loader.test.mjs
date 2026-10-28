@@ -143,12 +143,13 @@ for (const generated of [false, true]) test(`HTML public-root bridge${generated 
         await mkdir(join(deployed, 'tabs'), { recursive: true });
         await writeFile(join(deployed, 'package.json'), '{"type":"module"}');
         await copyFile(new URL('../panel_loader.js', import.meta.url), join(deployed, 'panel_loader.js'));
-        await writeFile(join(deployed, 'tabs', 'pilot.mjs'), `${valid}
+        const pilot = `${valid}
             export function mount(sidebar) {
                 sidebar.value = 'root pilot';
                 return { unmount() { sidebar.value = ''; } };
             }
-        `);
+        `;
+        await writeFile(join(deployed, 'tabs', 'pilot.mjs'), pilot);
         if (generated) {
             const glue = process.env.ALEPH_PANEL_BRIDGE_GLUE;
             await cp(new URL('./snippets/', pathToFileURL(glue)), join(deployed, 'snippets'), { recursive: true });
@@ -156,14 +157,36 @@ for (const generated of [false, true]) test(`HTML public-root bridge${generated 
             // UTF-8 linear memory. The generated bridge callback is unmodified;
             // do not initialize the full Leptos app (that needs a browser DOM).
             await writeFile(join(deployed, 'glue.mjs'), `${await readFile(glue, 'utf8')}
-                export function callLoader(entry) {
-                    const bytes = new TextEncoder().encode(entry);
-                    wasm ??= { memory: new WebAssembly.Memory({ initial: 1 }) };
-                    new Uint8Array(wasm.memory.buffer).set(bytes);
+                export function callLoader(entry, integrity = null) {
+                    const entryBytes = new TextEncoder().encode(entry);
+                    const integrityBytes = integrity === null ? new Uint8Array() : new TextEncoder().encode(integrity);
+                    wasm ??= {
+                        memory: new WebAssembly.Memory({ initial: 1 }),
+                        __wbindgen_externrefs: new WebAssembly.Table({ initial: 32, element: 'externref' }),
+                    };
+                    wasm.__externref_table_alloc ??= () => {
+                        const index = wasm.__wbindgen_externrefs.length;
+                        wasm.__wbindgen_externrefs.grow(1);
+                        return index;
+                    };
+                    wasm.__externref_table_dealloc ??= (index) => wasm.__wbindgen_externrefs.set(index, undefined);
+                    wasm.__wbindgen_free ??= () => {};
+                    wasm.__wbindgen_exn_store ??= (index) => {
+                        throw wasm.__wbindgen_externrefs.get(index);
+                    };
+                    const entryPointer = 0;
+                    const integrityPointer = 4096;
+                    new Uint8Array(wasm.memory.buffer).set(entryBytes, entryPointer);
+                    if (integrity !== null) new Uint8Array(wasm.memory.buffer).set(integrityBytes, integrityPointer);
                     const binding = Object.values(__wbg_get_imports()).flatMap(Object.entries)
                         .find(([name]) => /loadPanelModule|__alephLoadPanelModule/.test(name));
                     if (!binding) throw Error('missing generated loader binding');
-                    return binding[1](0, bytes.length);
+                    return binding[1](
+                        entryPointer,
+                        entryBytes.length,
+                        integrity === null ? 0 : integrityPointer,
+                        integrityBytes.length,
+                    );
                 }
             `);
         }
@@ -172,6 +195,7 @@ for (const generated of [false, true]) test(`HTML public-root bridge${generated 
             import assert from 'node:assert/strict';
             import { runInThisContext } from 'node:vm';
             const publicUrl = ${JSON.stringify(publicUrl)};
+            ${generated ? "globalThis.fetch = async (url) => new Response(await (await import('node:fs/promises')).readFile(new URL(url)), { status: 200 }); globalThis.Blob = class { constructor(parts) { this.parts = parts; } }; globalThis.URL.createObjectURL = (blob) => `data:text/javascript,${encodeURIComponent(new TextDecoder().decode(blob.parts[0]))}`; globalThis.URL.revokeObjectURL = () => {};" : ''}
             globalThis.document = {
                 baseURI: new URL('sessions/deep/route', publicUrl).href,
                 querySelector(selector) {
@@ -188,7 +212,7 @@ for (const generated of [false, true]) test(`HTML public-root bridge${generated 
             const load = ${generated
                 ? `(await import(${JSON.stringify(pathToFileURL(join(deployed, 'glue.mjs')).href)})).callLoader`
                 : 'globalThis.__alephLoadPanelModule'};
-            const module = await load('tabs/pilot.mjs');
+            const module = await load('tabs/pilot.mjs', ${generated ? JSON.stringify(integrity(pilot)) : 'null'});
             assert.deepEqual(imports, [publicUrl + 'panel_loader.js']);
             assert.deepEqual(JSON.parse(module.descriptorJson), { api_major: 1 });
             const sidebar = {};

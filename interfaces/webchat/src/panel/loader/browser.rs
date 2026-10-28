@@ -1,6 +1,6 @@
 //! WASM-only JS bridge. Never exports DashboardState or transport handles.
 
-use super::{LoadedModule, MountedTab, PanelLoadError};
+use super::{map_error_code, LoadedModule, MountedTab, PanelLoadError};
 use crate::appearance::ThemeMode;
 use crate::panel::sdk::{PanelSdk, PanelSubscription};
 use aleph_protocol::panel::{PanelTabDescriptor, PanelTabKey};
@@ -63,17 +63,13 @@ pub(super) fn load(
 }
 
 fn map_error(error: JsValue, fallback: PanelLoadError) -> PanelLoadError {
-    match Reflect::get(&error, &"code".into())
-        .ok()
-        .and_then(|code| code.as_string())
-        .as_deref()
-    {
-        Some("AssetFetchFailed") => PanelLoadError::AssetFetchFailed,
-        Some("InvalidAssetIntegrity") => PanelLoadError::InvalidAssetIntegrity,
-        Some("IntegrityMismatch") => PanelLoadError::IntegrityMismatch,
-        Some("InvalidDescriptor") => PanelLoadError::InvalidDescriptor,
-        _ => fallback,
-    }
+    map_error_code(
+        Reflect::get(&error, &"code".into())
+            .ok()
+            .and_then(|code| code.as_string())
+            .as_deref(),
+        fallback,
+    )
 }
 
 fn from_js(value: &JsValue) -> Result<Value, JsValue> {

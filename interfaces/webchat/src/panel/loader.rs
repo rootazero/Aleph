@@ -19,6 +19,16 @@ pub enum PanelLoadError {
     Cancelled,
 }
 
+pub(super) fn map_error_code(code: Option<&str>, fallback: PanelLoadError) -> PanelLoadError {
+    match code {
+        Some("AssetFetchFailed") => PanelLoadError::AssetFetchFailed,
+        Some("InvalidAssetIntegrity") => PanelLoadError::InvalidAssetIntegrity,
+        Some("IntegrityMismatch") => PanelLoadError::IntegrityMismatch,
+        Some("InvalidDescriptor") => PanelLoadError::InvalidDescriptor,
+        _ => fallback,
+    }
+}
+
 impl fmt::Display for PanelLoadError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{self:?}")
@@ -451,6 +461,7 @@ mod tests {
             let mut loader = PanelLoader::new(registry);
             provide_context(loader.host());
             let old_seen = Rc::new(RefCell::new(None));
+            let old_events = Rc::new(RefCell::new(vec![]));
             let (tx, rx) = oneshot::channel();
             let mut old = loader.activate_with_integrity(key.clone(), sdk("one"), {
                 let old_seen = old_seen.clone();
@@ -465,32 +476,62 @@ mod tests {
             loader.host().update_registry(|registry| {
                 registry.set_asset_integrity(&key, Some("sha256-new".into()));
             });
-            let new_seen = Rc::new(RefCell::new(None));
-            let mounted = module(
-                serde_json::to_value(descriptor("one")).unwrap(),
-                Rc::new(RefCell::new(vec![])),
-                false,
-            );
-            block_on(loader.activate_with_integrity(key.clone(), sdk("one"), {
-                let new_seen = new_seen.clone();
-                move |_, integrity| {
-                    *new_seen.borrow_mut() = integrity;
-                    async { Ok(mounted) }.boxed_local()
-                }
-            }))
-            .unwrap();
-            assert_eq!(new_seen.borrow().as_deref(), Some("sha256-new"));
             assert!(tx
                 .send(Ok(module(
                     serde_json::to_value(descriptor("one")).unwrap(),
-                    Rc::new(RefCell::new(vec![])),
+                    old_events.clone(),
                     false,
                 )))
                 .is_ok());
             assert_eq!(block_on(old), Err(PanelLoadError::Cancelled));
+            assert!(old_events.borrow().is_empty());
+
+            let new_seen = Rc::new(RefCell::new(None));
+            block_on(loader.activate_with_integrity(key.clone(), sdk("one"), {
+                let new_seen = new_seen.clone();
+                move |_, integrity| {
+                    *new_seen.borrow_mut() = integrity;
+                    async {
+                        Ok(module(
+                            serde_json::to_value(descriptor("one")).unwrap(),
+                            Rc::new(RefCell::new(vec![])),
+                            false,
+                        ))
+                    }
+                    .boxed_local()
+                }
+            }))
+            .unwrap();
+            assert_eq!(new_seen.borrow().as_deref(), Some("sha256-new"));
             assert!(matches!(loader.status(), PanelLoadStatus::Mounted { .. }));
         });
     }
+    #[test]
+    fn maps_stable_browser_error_codes_to_panel_errors() {
+        for (code, expected) in [
+            ("AssetFetchFailed", PanelLoadError::AssetFetchFailed),
+            (
+                "InvalidAssetIntegrity",
+                PanelLoadError::InvalidAssetIntegrity,
+            ),
+            ("IntegrityMismatch", PanelLoadError::IntegrityMismatch),
+            ("InvalidDescriptor", PanelLoadError::InvalidDescriptor),
+        ] {
+            assert_eq!(
+                map_error_code(Some(code), PanelLoadError::ImportFailed),
+                expected
+            );
+        }
+        assert_eq!(
+            map_error_code(Some("unknown"), PanelLoadError::MountFailed),
+            PanelLoadError::MountFailed
+        );
+        assert_eq!(
+            map_error_code(None, PanelLoadError::UnmountFailed),
+            PanelLoadError::UnmountFailed
+        );
+    }
+
     #[test]
     fn unsupported_major_and_malformed_descriptor_never_mount() {
         Owner::new().with(|| {

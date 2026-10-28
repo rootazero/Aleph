@@ -52,13 +52,14 @@ All cargo commands were preceded by `python qa/browser_live/check_memory.py` fro
 | `cargo check --target wasm32-unknown-unknown --lib --no-default-features --features panel-modular` | pass |
 | `cargo clippy --lib --no-default-features --features panel-modular -- -D warnings` | pass |
 | `node --test tests/panel_loader.test.mjs` | 12 passed, 1 skipped, 0 failed |
+| `ALEPH_PANEL_BRIDGE_GLUE=.panel-spike/shell/aleph_panel.js node --test tests/panel_loader.test.mjs` | 13 passed, 0 skipped, 0 failed |
 | `bun run panel:spike:test` | 4 passed, 6 skipped, 0 failed |
 | build/artifact/memory/protocol/host fixtures with `PANEL_OUTPUT_ROOT=.panel-tabs-final` | 15 passed, 0 failed |
 | `git diff --check` | pass |
 
-The one Node skip is the opt-in generated WASM glue bridge test because `ALEPH_PANEL_BRIDGE_GLUE` was unset. The six Playwright skips are the explicit full Shell/WS tests that require a live Gateway.
+The default Node run skips the opt-in generated WASM glue bridge test because `ALEPH_PANEL_BRIDGE_GLUE` is unset. The generated glue run above enables that test and passes it with the staged ABI adapter. The six Playwright skips are the explicit full Shell/WS tests that require a live Gateway.
 
-其中 Node 的 1 个 skip 是因为未设置 `ALEPH_PANEL_BRIDGE_GLUE` 的 generated WASM glue bridge opt-in 测试；Playwright 的 6 个 skip 是明确要求 live Gateway 的 full Shell/WS 测试。
+默认 Node 运行因未设置 `ALEPH_PANEL_BRIDGE_GLUE` 跳过 opt-in generated WASM glue bridge 测试；上面的 generated glue 运行启用该测试，并通过 staged ABI adapter。Playwright 的 6 个 skip 是明确要求 live Gateway 的 full Shell/WS 测试。
 
 ## Deferred / 未实现
 
