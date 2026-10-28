@@ -380,8 +380,7 @@ enum Observation {
         closed: Option<oneshot::Receiver<()>>,
         task: Option<tokio::task::JoinHandle<()>>,
         /// Keeps the fixture's temporary SQLite directory alive.
-        #[allow(dead_code)]
-        directory: tempfile::TempDir,
+        _directory: tempfile::TempDir,
     },
 }
 
@@ -463,7 +462,7 @@ async fn build(shape: Shape, id: &str, live: bool) -> (Box<dyn Channel>, Observa
                     ticks,
                     closed,
                     task,
-                    directory,
+                    _directory: directory,
                 },
             )
         }
@@ -529,12 +528,12 @@ impl Observation {
         match self {
             Self::Webhook { probe, .. } => {
                 assert!(
-                    probe.count("client_build_attempt") >= 1,
-                    "{stage}: start must attempt a real client build"
+                    probe.count("client_build_attempt") == 1,
+                    "{stage}: start must attempt exactly one real client build"
                 );
                 assert!(
-                    probe.count("client_built") >= 1,
-                    "{stage}: start must construct the client"
+                    probe.count("client_built") == 1,
+                    "{stage}: start must construct exactly one client"
                 );
                 assert_eq!(
                     probe.count("client_drop"),
@@ -562,6 +561,19 @@ impl Observation {
                     live_active(),
                     "{stage}: an active polling incarnation owns every resource it reported"
                 );
+            }
+        }
+    }
+
+    fn assert_no_send(&self, stage: &str) {
+        match self {
+            Self::Webhook { probe, .. } => {
+                assert_eq!(probe.count("request_attempt"), 0, "{stage}: start");
+                assert_eq!(probe.count("request_ended"), 0, "{stage}: start");
+            }
+            Self::Polling { receipts, .. } => {
+                assert_eq!(receipts.count(SEND_ATTEMPT), 0, "{stage}: start");
+                assert_eq!(receipts.count(SEND_COMPLETED), 0, "{stage}: start");
             }
         }
     }
@@ -635,11 +647,15 @@ impl Observation {
                 release,
                 ..
             } => {
-                let bytes = arrived
-                    .take()
-                    .expect("the live webhook fixture owns exactly one peer request")
-                    .await
-                    .expect("the loopback peer received the request");
+                let bytes = tokio::time::timeout(
+                    Duration::from_secs(10),
+                    arrived
+                        .take()
+                        .expect("the live webhook fixture owns exactly one peer request"),
+                )
+                .await
+                .expect("the loopback peer must receive a request within ten seconds")
+                .expect("the loopback peer received the request");
                 assert!(
                     String::from_utf8_lossy(&bytes).contains(payload),
                     "the loopback peer must receive the real outbound body"
@@ -650,7 +666,10 @@ impl Observation {
                     .send(())
                     .expect("the loopback peer is still waiting for its response");
                 assert!(matches!(
-                    completion.await.expect("the send completes"),
+                    tokio::time::timeout(Duration::from_secs(10), completion)
+                        .await
+                        .expect("the webhook send must complete within ten seconds")
+                        .expect("the send completes"),
                     BoundCompletion::Accepted(Ok(_))
                 ));
                 assert!(probe.count("request_attempt") >= 1);
@@ -658,7 +677,10 @@ impl Observation {
             }
             Self::Polling { receipts, .. } => {
                 assert!(matches!(
-                    completion.await.expect("the send completes"),
+                    tokio::time::timeout(Duration::from_secs(10), completion)
+                        .await
+                        .expect("the polling send must complete within ten seconds")
+                        .expect("the send completes"),
                     BoundCompletion::Accepted(Ok(_))
                 ));
                 assert_eq!(
@@ -677,7 +699,10 @@ impl Observation {
         match self {
             Self::Webhook { task, .. } => {
                 if let Some(task) = task.take() {
-                    task.await.expect("the loopback peer task finishes");
+                    tokio::time::timeout(Duration::from_secs(10), task)
+                        .await
+                        .expect("the webhook peer task must finish within ten seconds")
+                        .expect("the loopback peer task finishes");
                 }
             }
             Self::Polling { closed, task, .. } => {
@@ -688,7 +713,10 @@ impl Observation {
                         .expect("the peer reports its own EOF");
                 }
                 if let Some(task) = task.take() {
-                    task.await.expect("the loopback peer task finishes");
+                    tokio::time::timeout(Duration::from_secs(10), task)
+                        .await
+                        .expect("the polling peer task must finish within ten seconds")
+                        .expect("the loopback peer task finishes");
                 }
             }
         }
@@ -775,8 +803,18 @@ async fn cold_reads_and_admission_fail_closed(shape: Shape, initial: ChannelInit
     let listed = fixture.registry.list().await;
     assert_eq!(listed.len(), 1, "{}", stage("list"));
     assert_eq!(listed[0].id, fixture.id, "{}", stage("list id"));
-    assert_eq!(fixture.registry.status_summary().await.total, 1);
-    assert_eq!(fixture.registry.health_states().await.len(), 1);
+    assert_eq!(
+        fixture.registry.status_summary().await.total,
+        1,
+        "{}",
+        stage("status summary")
+    );
+    assert_eq!(
+        fixture.registry.health_states().await.len(),
+        1,
+        "{}",
+        stage("health states")
+    );
     let (descriptors, _) = fixture
         .registry
         .snapshot_bound_channels(&VisibilityScope::default())
@@ -998,6 +1036,7 @@ async fn active_send_stop_and_old_proof_contracts_hold_for_either_shape() {
             .expect("the shape activates");
         fixture.observation.await_live().await;
         fixture.observation.assert_active(&stage("start"));
+        fixture.observation.assert_no_send(&stage("start"));
 
         let capture = fixture
             .registry
@@ -1049,11 +1088,10 @@ async fn active_send_stop_and_old_proof_contracts_hold_for_either_shape() {
             .unregister_bound_channel(&fixture.id)
             .await
             .expect("the stopped source unregisters");
-        assert!(fixture
-            .registry
-            .capture_bound_channel(&fixture.id)
-            .await
-            .is_err());
+        assert!(matches!(
+            fixture.registry.capture_bound_channel(&fixture.id).await,
+            Err(ChannelBindingError::NotFound)
+        ));
         fixture.observation.assert_cleaned(&stage("unregister"));
     }
 }
@@ -1061,7 +1099,7 @@ async fn active_send_stop_and_old_proof_contracts_hold_for_either_shape() {
 /// Replacement retires the incumbent's resources and publishes a fresh
 /// same-ID source whose own proof is the only one that works.
 #[tokio::test]
-async fn replacement_retires_old_resources_and_rejects_old_proof() {
+async fn replacement_cleans_old_resources_and_rejects_old_provider_proof() {
     for shape in Shape::BOTH {
         let stage = |step: &str| format!("{}: {step}", shape.label());
         let mut old = fixture(
@@ -1078,6 +1116,7 @@ async fn replacement_retires_old_resources_and_rejects_old_proof() {
             .expect("the old incarnation activates");
         old.observation.await_live().await;
         old.observation.assert_active(&stage("old start"));
+        old.observation.assert_no_send(&stage("old start"));
 
         let old_capture = old.registry.capture_bound_channel(&old.id).await.unwrap();
         let old_observation = old
@@ -1169,6 +1208,19 @@ async fn replacement_retires_old_resources_and_rejects_old_proof() {
             .expect("the replacement activates");
         fresh.await_live().await;
         fresh.assert_active(&stage("replacement start"));
+        fresh.assert_no_send(&stage("replacement start"));
+        match old
+            .registry
+            .resolve_bound_channel(cold_capture, &VisibilityScope::default())
+            .await
+        {
+            Err(ChannelBindingError::Provider(_)) => {}
+            other => panic!(
+                "{}: activation must reject a cold-generation proof, got {}",
+                stage("stale cold proof"),
+                unexpected(&other)
+            ),
+        }
         // Activation advances provider generation; capture the proof after
         // start, just as production callers must, instead of reusing a cold one.
         let new_capture = old.registry.capture_bound_channel(&old.id).await.unwrap();
@@ -1200,7 +1252,10 @@ async fn replacement_retires_old_resources_and_rejects_old_proof() {
             .unregister_bound_channel(&old.id)
             .await
             .expect("the replacement unregisters");
-        assert!(old.registry.capture_bound_channel(&old.id).await.is_err());
+        assert!(matches!(
+            old.registry.capture_bound_channel(&old.id).await,
+            Err(ChannelBindingError::NotFound)
+        ));
         fresh.assert_cleaned(&stage("replacement unregister"));
     }
 }
