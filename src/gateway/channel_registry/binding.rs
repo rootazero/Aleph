@@ -652,10 +652,8 @@ impl super::ChannelRegistry {
         mut candidate: Arc<ChannelRegistrationEntry>,
     ) -> Result<super::ChannelId, ChannelBindingError> {
         let _source = self.lifecycle_sync.lock().await;
-        let current = self
-            .channels
-            .read()
-            .await
+        let mut channels = self.channels.write().await;
+        let current = channels
             .get(id)
             .cloned()
             .ok_or(ChannelBindingError::NotFound)?;
@@ -684,7 +682,6 @@ impl super::ChannelRegistry {
         bound.entry_revision = revision;
         bound.descriptor.revision = crate::capability::descriptor::CapabilityRevision(revision);
         bound.descriptor_fingerprint = canonical_descriptor_fingerprint(&bound.descriptor);
-        let mut channels = self.channels.write().await;
         let mut desired = self.desired_state.write().await;
         channels.insert(id.clone(), candidate);
         desired.insert(id.clone(), super::DesiredChannelState::Stopped);
@@ -698,10 +695,8 @@ impl super::ChannelRegistry {
         marker: Arc<()>,
     ) -> Result<(), ChannelBindingError> {
         let _source = self.lifecycle_sync.lock().await;
-        let current = self
-            .channels
-            .read()
-            .await
+        let mut channels = self.channels.write().await;
+        let current = channels
             .get(id)
             .cloned()
             .ok_or(ChannelBindingError::NotFound)?;
@@ -720,19 +715,17 @@ impl super::ChannelRegistry {
             return Err(ChannelBindingError::Busy);
         }
         self.advance_bound_revision()?;
-        let mut channels = self.channels.write().await;
         let mut desired = self.desired_state.write().await;
         channels.remove(id);
         desired.remove(id);
         Ok(())
     }
 
-    pub(crate) async fn start_bound_channel(
-        self: &Arc<Self>,
+    async fn admit_bound_start(
+        &self,
         id: &super::ChannelId,
-    ) -> Result<LifecycleResult, ChannelBindingError> {
+    ) -> Result<(Arc<ChannelRegistrationEntry>, Arc<()>, u64), ChannelBindingError> {
         use futures::FutureExt;
-        let _source = self.lifecycle_sync.lock().await;
         let entry = self
             .channels
             .read()
@@ -768,16 +761,38 @@ impl super::ChannelRegistry {
         let marker = Arc::new(());
         runtime.operation = Some(marker.clone());
         runtime.residual.transport_may_be_live = true;
+        drop(runtime);
+        Ok((entry, marker, generation))
+    }
+
+    pub(crate) async fn start_bound_channel_compat(
+        &self,
+        id: &super::ChannelId,
+    ) -> Result<(), ChannelBindingError> {
+        let (entry, marker, generation) = {
+            let _source = self.lifecycle_sync.lock().await;
+            self.admit_bound_start(id).await?
+        };
+        self.activate_bound(id, &entry, &marker, generation).await
+    }
+
+    pub(crate) async fn start_bound_channel(
+        self: &Arc<Self>,
+        id: &super::ChannelId,
+    ) -> Result<LifecycleResult, ChannelBindingError> {
+        let _source = self.lifecycle_sync.lock().await;
+        let (entry, marker, generation) = self.admit_bound_start(id).await?;
         let (sender, receiver) = tokio::sync::oneshot::channel();
         let source = self.clone();
-        let original = entry.clone();
         let id = id.clone();
-        runtime.driver = Some(tokio::spawn(async move {
+        let original = entry.clone();
+        let driver = tokio::spawn(async move {
             let result = source
                 .activate_bound(&id, &original, &marker, generation)
                 .await;
             let _ = sender.send(result);
-        }));
+        });
+        entry.runtime.lock().unwrap().driver = Some(driver);
         Ok(receiver)
     }
 
@@ -873,13 +888,12 @@ impl super::ChannelRegistry {
         })
     }
 
-    pub(crate) async fn stop_bound_channel(
-        self: &Arc<Self>,
+    async fn admit_bound_stop(
+        &self,
         id: &super::ChannelId,
-    ) -> Result<LifecycleResult, ChannelBindingError> {
+    ) -> Result<(Arc<ChannelRegistrationEntry>, Arc<()>), ChannelBindingError> {
         use crate::capability::provider::ProviderState;
         use futures::FutureExt;
-        let _source = self.lifecycle_sync.lock().await;
         let entry = self
             .channels
             .read()
@@ -918,13 +932,38 @@ impl super::ChannelRegistry {
         let marker = Arc::new(());
         runtime.operation = Some(marker.clone());
         desired.insert(id.clone(), super::DesiredChannelState::Stopped);
+        drop(runtime);
+        drop(desired);
+        Ok((entry, marker))
+    }
+
+    pub(crate) async fn stop_bound_channel_compat(
+        &self,
+        id: &super::ChannelId,
+    ) -> Result<(), ChannelBindingError> {
+        let (entry, marker) = {
+            let _source = self.lifecycle_sync.lock().await;
+            self.admit_bound_stop(id).await?
+        };
+        self.drain_bound(&entry, &marker, false).await
+    }
+
+    pub(crate) async fn stop_bound_channel(
+        self: &Arc<Self>,
+        id: &super::ChannelId,
+    ) -> Result<LifecycleResult, ChannelBindingError> {
+        let _source = self.lifecycle_sync.lock().await;
+        let (entry, marker) = self.admit_bound_stop(id).await?;
         let (sender, receiver) = tokio::sync::oneshot::channel();
         let source = self.clone();
         let original = entry.clone();
-        runtime.driver = Some(tokio::spawn(async move {
+        let driver = tokio::spawn(async move {
             let result = source.drain_bound(&original, &marker, false).await;
             let _ = sender.send(result);
-        }));
+        });
+        // Admission and driver publication share the source gate.
+        // The driver itself performs no channel I/O under that gate.
+        entry.runtime.lock().unwrap().driver = Some(driver);
         Ok(receiver)
     }
 

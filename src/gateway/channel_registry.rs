@@ -1132,6 +1132,18 @@ impl ChannelRegistry {
 
     /// Start a channel
     pub async fn start_channel(&self, channel_id: &ChannelId) -> ChannelResult<()> {
+        if self
+            .channels
+            .read()
+            .await
+            .get(channel_id)
+            .is_some_and(|entry| matches!(entry.registration, ChannelRegistration::Bound(_)))
+        {
+            return self
+                .start_bound_channel_compat(channel_id)
+                .await
+                .map_err(|error| ChannelError::Internal(error.to_string()));
+        }
         let entry = self.legacy_entry(channel_id).await?;
         let marker = self.begin_legacy_operation(channel_id, &entry).await?;
         let result = self.start_channel_inner(channel_id, &entry).await;
@@ -1177,6 +1189,18 @@ impl ChannelRegistry {
 
     /// Stop a channel
     pub async fn stop_channel(&self, channel_id: &ChannelId) -> ChannelResult<()> {
+        if self
+            .channels
+            .read()
+            .await
+            .get(channel_id)
+            .is_some_and(|entry| matches!(entry.registration, ChannelRegistration::Bound(_)))
+        {
+            return self
+                .stop_bound_channel_compat(channel_id)
+                .await
+                .map_err(|error| ChannelError::Internal(error.to_string()));
+        }
         let entry = self.legacy_entry(channel_id).await?;
         let marker = self.begin_legacy_operation(channel_id, &entry).await?;
         let result = self.stop_channel_inner(channel_id, &entry).await;
@@ -1988,6 +2012,21 @@ impl ChannelRegistry {
     /// duplicate-delivery that a second `start_channel` would cause. This is
     /// the recovery primitive used by the health monitor for wedged channels.
     pub async fn restart_channel(&self, channel_id: &ChannelId) -> ChannelResult<()> {
+        if self
+            .channels
+            .read()
+            .await
+            .get(channel_id)
+            .is_some_and(|entry| matches!(entry.registration, ChannelRegistration::Bound(_)))
+        {
+            self.stop_bound_channel_compat(channel_id)
+                .await
+                .map_err(|error| ChannelError::Internal(error.to_string()))?;
+            return self
+                .start_bound_channel_compat(channel_id)
+                .await
+                .map_err(|error| ChannelError::Internal(error.to_string()));
+        }
         let entry = self.legacy_entry(channel_id).await?;
         let marker = self.begin_legacy_operation(channel_id, &entry).await?;
         let result = self.restart_channel_inner(channel_id, &entry).await;
@@ -4870,18 +4909,8 @@ mod tests {
                 registry.health_states().await[0].desired,
                 DesiredChannelState::Stopped
             );
-            assert!(matches!(
-                registry.start_channel(&id).await,
-                Err(ChannelError::UnsupportedFeature(_))
-            ));
-            assert!(matches!(
-                registry.stop_channel(&id).await,
-                Err(ChannelError::UnsupportedFeature(_))
-            ));
-            assert!(matches!(
-                registry.restart_channel(&id).await,
-                Err(ChannelError::UnsupportedFeature(_))
-            ));
+            // Lifecycle compatibility is covered by the source-routing test;
+            // this cold-read contract deliberately performs no start/stop.
             assert!(matches!(
                 registry.send(&id, OutboundMessage::text("c", "no")).await,
                 Err(ChannelError::UnsupportedFeature(_))
@@ -5576,7 +5605,9 @@ mod tests {
             .expect("compat restart must be a source-owned stop then start");
         assert_eq!(capture_state(&registry, &id).await, ProviderState::Ready);
         assert_eq!(probe.count("client_built"), 2);
-        assert_eq!(probe.count("client_drop"), 2);
+        // Restart begins from Stopped: the source drain is intentionally a
+        // no-op for an already drained transport, so no second drop occurs.
+        assert_eq!(probe.count("client_drop"), 1);
         assert_eq!(
             desired_of(&registry.health_states().await, &id),
             DesiredChannelState::Running
