@@ -17,6 +17,7 @@ pub enum RegistryError {
 #[derive(Clone, Debug, Default)]
 pub struct TabRegistry {
     entries: Vec<PanelTabDescriptor>,
+    asset_integrities: Vec<Option<String>>,
     source_revision: u64,
 }
 
@@ -43,6 +44,7 @@ impl TabRegistry {
             return Err(RegistryError::DuplicateKey);
         }
         self.entries.push(descriptor);
+        self.asset_integrities.push(None);
         Ok(())
     }
 
@@ -54,6 +56,19 @@ impl TabRegistry {
         self.source_revision = revision;
     }
 
+    pub(crate) fn set_asset_integrity(&mut self, key: &PanelTabKey, integrity: Option<String>) {
+        if let Some(index) = self.entries.iter().position(|entry| &entry.key == key) {
+            self.asset_integrities[index] = integrity;
+        }
+    }
+
+    pub(crate) fn asset_integrity(&self, key: &PanelTabKey) -> Option<&str> {
+        self.entries
+            .iter()
+            .position(|entry| &entry.key == key)
+            .and_then(|index| self.asset_integrities[index].as_deref())
+    }
+
     /// Explicit plugin registration/replacement; reserved built-ins cannot be shadowed.
     pub fn insert_or_replace(
         &mut self,
@@ -63,22 +78,27 @@ impl TabRegistry {
         if descriptor.key.plugin_id == BUILTIN_NAMESPACE {
             return Err(RegistryError::BuiltInShadowed);
         }
-        if let Some(entry) = self
+        if let Some(index) = self
             .entries
-            .iter_mut()
-            .find(|entry| entry.key == descriptor.key)
+            .iter()
+            .position(|entry| entry.key == descriptor.key)
         {
-            *entry = descriptor;
+            self.entries[index] = descriptor;
+            self.asset_integrities[index] = None;
             return Ok(());
         }
         self.entries.push(descriptor);
+        self.asset_integrities.push(None);
         Ok(())
     }
 
     pub fn remove(&mut self, key: &PanelTabKey) -> bool {
-        let count = self.entries.len();
-        self.entries.retain(|entry| &entry.key != key);
-        self.entries.len() != count
+        if let Some(index) = self.entries.iter().position(|entry| &entry.key == key) {
+            self.entries.remove(index);
+            self.asset_integrities.remove(index);
+            return true;
+        }
+        false
     }
 
     pub fn get(&self, key: &PanelTabKey) -> Option<&PanelTabDescriptor> {
@@ -212,6 +232,14 @@ mod tests {
         let mut registry = TabRegistry::default();
         let original = descriptor("plugin", "overview", 0);
         registry.insert_or_replace(original.clone()).unwrap();
+        registry.set_asset_integrity(
+            &original.key,
+            Some("sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=".into()),
+        );
+        assert_eq!(
+            registry.asset_integrity(&original.key),
+            Some("sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=")
+        );
         let replacement = PanelTabDescriptor {
             label: "Replaced".into(),
             order: -1,
@@ -219,10 +247,12 @@ mod tests {
         };
         registry.insert_or_replace(replacement.clone()).unwrap();
         assert_eq!(registry.get(&replacement.key), Some(&replacement));
+        assert_eq!(registry.asset_integrity(&replacement.key), None);
         assert_eq!(registry.ordered(), vec![replacement.clone()]);
         assert!(registry.remove(&replacement.key));
         assert!(!registry.remove(&replacement.key));
         assert_eq!(registry.get(&replacement.key), None);
+        assert_eq!(registry.asset_integrity(&replacement.key), None);
     }
 
     #[test]

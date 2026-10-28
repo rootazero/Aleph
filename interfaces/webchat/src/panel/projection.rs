@@ -109,7 +109,9 @@ impl PanelProjection {
         let mut registry = TabRegistry::default();
         for declaration in snapshot.declarations {
             validate_declaration(&declaration)?;
-            if registry.get(&declaration.descriptor.key).is_some() {
+            let key = declaration.descriptor.key.clone();
+            let integrity = declaration.asset_integrity.clone();
+            if registry.get(&key).is_some() {
                 return Err(PanelProjectionError::DuplicateKey);
             }
             match declaration.origin {
@@ -120,6 +122,7 @@ impl PanelProjection {
                     .insert_or_replace(declaration.descriptor)
                     .map_err(map_registry_error)?,
             }
+            registry.set_asset_integrity(&key, integrity);
         }
         registry.set_source_revision(snapshot.revision);
         Ok(registry)
@@ -391,6 +394,7 @@ mod tests {
         assert_eq!(descriptor.status, PanelTabStatus::Enabled);
         assert_eq!(descriptor.status_detail, None);
         assert!(!descriptor.entry.trim().is_empty());
+        assert_eq!(projection.registry().asset_integrity(&terminal_key()), None);
 
         #[cfg(feature = "panel-tab-spike")]
         assert_eq!(descriptor.key.tab_id, "terminal-pilot");
@@ -492,6 +496,12 @@ mod tests {
             .cloned()
             .unwrap();
         assert_eq!(community, community_declaration(7).descriptor);
+        assert_eq!(
+            projection
+                .registry()
+                .asset_integrity(&community_declaration(7).descriptor.key),
+            Some("sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=")
+        );
         assert_eq!(projection.registry().source_revision(), 7);
         assert_eq!(projection.route_key("/terminal"), Some(terminal_key()));
     }
@@ -689,7 +699,11 @@ mod tests {
             .get(&community_declaration(2).descriptor.key)
             .is_none());
 
-        let current = projection.registry();
+        let baseline = projection.registry();
+        assert_eq!(
+            baseline.asset_integrity(&community_declaration(2).descriptor.key),
+            None
+        );
         for late in [
             community_snapshot(2, vec![community_declaration(2)]),
             community_snapshot(3, vec![community_declaration(3)]),
@@ -698,22 +712,41 @@ mod tests {
                 projection.replace_snapshot(late).unwrap_err(),
                 PanelProjectionError::StaleSnapshot
             );
-            assert_eq!(projection.registry().rows(), current.rows());
+            assert_eq!(projection.registry().rows(), baseline.rows());
             assert_eq!(projection.registry().source_revision(), 3);
         }
 
+        let mut replacement = community_declaration(4);
+        replacement.descriptor.key = community_declaration(2).descriptor.key;
+        replacement.asset_integrity =
+            Some("sha256-LXEWQrcmsEQBYnyp+6wy9chTD7GQPMTbAiWHF5IaSIE=".into());
+        projection
+            .replace_snapshot(community_snapshot(4, vec![replacement.clone()]))
+            .unwrap();
+        assert_eq!(
+            projection
+                .registry()
+                .asset_integrity(&replacement.descriptor.key),
+            replacement.asset_integrity.as_deref()
+        );
+
         let rejected = PanelUiCapabilityDeclaration {
             asset_integrity: None,
-            ..community_declaration(4)
+            ..community_declaration(5)
         };
         assert_eq!(
             projection
-                .replace_snapshot(community_snapshot(4, vec![rejected]))
+                .replace_snapshot(community_snapshot(5, vec![rejected]))
                 .unwrap_err(),
             PanelProjectionError::MissingAssetIntegrity
         );
-        assert_eq!(projection.registry().rows(), current.rows());
-        assert_eq!(projection.registry().source_revision(), 3);
+        assert_eq!(projection.registry().source_revision(), 4);
+        assert_eq!(
+            projection
+                .registry()
+                .asset_integrity(&replacement.descriptor.key),
+            replacement.asset_integrity.as_deref()
+        );
     }
 
     #[test]
