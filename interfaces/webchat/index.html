@@ -28,8 +28,8 @@
     <script id="panel-loader-bridge">
       // Capture the explicit Trunk base, not the current (possibly nested) route.
       const panelLoaderUrl = new URL('panel_loader.js', document.querySelector('base').href).href;
-      globalThis.__alephLoadPanelModule = (entry) =>
-        import(panelLoaderUrl).then((loader) => loader.loadPanelModule(entry));
+      globalThis.__alephLoadPanelModule = (entry, integrity = null) =>
+        import(panelLoaderUrl).then((loader) => loader.loadPanelModule(entry, integrity));
     </script>
   </head>
   <body class="bg-surface text-text-primary">
