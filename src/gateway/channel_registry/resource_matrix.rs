@@ -166,7 +166,7 @@ async fn webhook_positive_control() {
     assert_eq!(
         probe.count("client_built"),
         probe.count("client_drop"),
-        "no client may survive the observable stop"
+        "the owning channel must retain its client handle across the observable stop"
     );
 }
 
@@ -618,7 +618,7 @@ impl Observation {
                 assert_eq!(
                     probe.count("client_drop"),
                     probe.count("client_built"),
-                    "{stage}: no client may survive stop"
+                    "{stage}: the owning channel must release its client handle on stop"
                 );
                 assert_eq!(
                     probe.count("request_attempt"),
@@ -1043,9 +1043,9 @@ async fn cold_wrong_ownership_fails_closed(shape: Shape, initial: ChannelInitial
     fixture.observation.assert_cold(&stage("old proof"));
 }
 
-/// The active half of the matrix: real activation, a real send that reaches the
-/// transport, a real stop that leaves zero active resources, and an old proof
-/// that cannot outlive its provider.
+/// The active half of the matrix: real activation, the shape's observed send
+/// path, real source-owned stop with zero observed active resources, and an old
+/// proof that cannot outlive its provider.
 #[tokio::test]
 async fn active_send_stop_and_old_proof_contracts_hold_for_either_shape() {
     for shape in Shape::BOTH {
@@ -1299,6 +1299,7 @@ async fn start_failures_do_not_fabricate_resources_or_cleanup() {
     webhook_invalid_config_fails_before_client_attempt().await;
     polling_closed_port_fails_without_a_connection().await;
     polling_partial_activation_drops_the_connected_stream().await;
+    polling_schema_failure_drops_the_open_database().await;
 }
 
 fn expect_start_failure(result: Result<(), ChannelBindingError>, stage: &str) -> String {
@@ -1321,10 +1322,8 @@ fn expect_start_failure(result: Result<(), ChannelBindingError>, stage: &str) ->
                 !residual.unjoined_forwarder,
                 "{stage}: failed activation must not retain a forwarder"
             );
-            assert!(
-                !residual.mount_retained,
-                "{stage}: failed activation must not retain a mount"
-            );
+            // Start admission pre-clears these fields. Keep them as regression
+            // guards, not as evidence of an acquired residual resource.
             error
         }
         other => panic!(
@@ -1565,9 +1564,87 @@ async fn polling_partial_activation_drops_the_connected_stream() {
     assert_eq!(active(&receipts), zero_active(), "{stage}: final");
 }
 
-/// A failed stop is not repaired on the caller's behalf: the real client and the
-/// incumbent entry both survive, every retry stays `Busy`, and only the owning
-/// registry's drop performs the real destruction exactly once.
+/// A real SQLite schema error occurs after a successful open. The guard must
+/// record both boundaries so this failure cannot look like an inactive observer.
+async fn polling_schema_failure_drops_the_open_database() {
+    let stage = "polling schema failure";
+    let peer = LoopbackSocket::new().await;
+    let directory = tempfile::TempDir::new().unwrap();
+    let database_path = directory.path().join("schema.sqlite3");
+    // Test infrastructure pre-creates the fixture table. The subsequent
+    // provider-owned open succeeds, while its real CREATE TABLE fails.
+    let connection = rusqlite::Connection::open(&database_path).unwrap();
+    connection
+        .execute_batch("CREATE TABLE polling_ticks (tick INTEGER NOT NULL)")
+        .unwrap();
+    connection.close().unwrap();
+    let (receipts, _ticks) = PollingReceipts::new();
+    let registry = Arc::new(ChannelRegistry::new());
+    let tree = Arc::new(OwnershipTree::new());
+    let id = register_bound(
+        &registry,
+        &tree,
+        Box::new(PollingSocketChannel::new(
+            "schema-failure",
+            peer.address,
+            database_path,
+            receipts.clone(),
+        )),
+        ChannelInitialState::Cold,
+    )
+    .await;
+    assert_eq!(active(&receipts), zero_active(), "{stage}: cold");
+
+    let error = expect_start_failure(registry.start_bound_channel_compat(&id).await, stage);
+    assert!(
+        error.contains("polling sqlite schema failed"),
+        "{stage}: the failure must cross the real schema boundary, got {error}"
+    );
+    for event in [
+        TCP_CONNECT_ATTEMPT,
+        TCP_CONNECTED,
+        TCP_DROP,
+        DATABASE_OPEN_ATTEMPT,
+        DATABASE_OPENED,
+        DATABASE_DROP,
+    ] {
+        assert_eq!(receipts.count(event), 1, "{stage}: {event}");
+    }
+    assert_eq!(receipts.count(DATABASE_CLOSED), 0, "{stage}: no close");
+    for event in [
+        WORKER_SPAWNED,
+        WORKER_EXITED,
+        WORKER_JOINED,
+        TIMER_CREATED,
+        CACHE_CREATED,
+        SEND_ATTEMPT,
+    ] {
+        assert_eq!(receipts.count(event), 0, "{stage}: no {event}");
+    }
+    assert_eq!(active(&receipts), zero_active(), "{stage}: cleaned");
+
+    let mut closed = peer.closed;
+    tokio::time::timeout(Duration::from_secs(10), &mut closed)
+        .await
+        .expect("the peer must observe schema-failure EOF within ten seconds")
+        .expect("the peer reports its own EOF");
+    tokio::time::timeout(Duration::from_secs(10), peer.task)
+        .await
+        .expect("the schema-failure peer task must finish within ten seconds")
+        .expect("the loopback peer task finishes");
+    registry
+        .stop_bound_channel_compat(&id)
+        .await
+        .expect("a failed schema activation joins its cleanup path");
+    registry
+        .unregister_bound_channel(&id)
+        .await
+        .expect("the failed source unregisters");
+}
+
+/// A failed stop is not repaired on the caller's behalf: the owning channel
+/// retains its client handle and the incumbent entry survives, every retry
+/// stays `Busy`, and only the owning registry's drop releases the handle.
 #[tokio::test]
 async fn failed_stop_preserves_real_residual_until_owner_drop() {
     let probe = ResourceProbe::default();
@@ -1626,14 +1703,16 @@ async fn failed_stop_preserves_real_residual_until_owner_drop() {
         !residual.unjoined_forwarder,
         "failed stop must not retain an unjoined forwarder"
     );
+    // This is a conservative residual diagnostic, while client_drop==0 below
+    // is the measured proof that the owning channel still holds its client.
     assert!(
-        !residual.mount_retained,
-        "failed stop must not retain a mount"
+        residual.transport_may_be_live,
+        "failed stop retains the live-transport diagnostic"
     );
     assert_eq!(
         probe.count("client_drop"),
         0,
-        "a failed stop must not destroy the real client"
+        "a failed stop must not release the client handle"
     );
 
     assert!(
@@ -1662,7 +1741,7 @@ async fn failed_stop_preserves_real_residual_until_owner_drop() {
     assert_eq!(
         probe.count("client_drop"),
         1,
-        "the owner drop must destroy the real client exactly once"
+        "the owner drop must release the channel's client handle exactly once"
     );
     assert_eq!(
         probe.count("client_build_attempt"),
@@ -1672,7 +1751,7 @@ async fn failed_stop_preserves_real_residual_until_owner_drop() {
     assert_eq!(
         probe.count("client_built"),
         probe.count("client_drop"),
-        "no client may survive the owner drop"
+        "the owning channel must have no client handle after owner drop"
     );
     assert_eq!(
         probe.count("request_attempt"),

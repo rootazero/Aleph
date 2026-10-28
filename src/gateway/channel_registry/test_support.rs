@@ -211,7 +211,10 @@ pub(crate) struct ResourceProbe(Arc<Mutex<Vec<&'static str>>>);
 
 impl ResourceProbe {
     pub(crate) fn record(&self, event: &'static str) {
-        self.0.lock().unwrap().push(event);
+        self.0
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .push(event);
     }
 
     pub(crate) fn count(&self, event: &str) -> usize {
@@ -312,9 +315,9 @@ impl LoopbackSocket {
 // --- Real resource guards: one receipt per construction and destruction ---
 //
 // Each guard takes `Option<T>` so the drop receipt is recorded *after* the
-// resource itself is gone, never before. Guards have no implicit release path
-// in `Drop` for the channel: an un-stopped channel keeps reporting residual
-// resources instead of a forged zero.
+// resource itself is gone, never before. The channel has no implicit release
+// path that bypasses the observed provider lifecycle; each guard's own Drop
+// records destruction when an owner releases it.
 
 struct OwnedStream {
     stream: Option<tokio::net::TcpStream>,
@@ -522,7 +525,7 @@ impl PollingSocketChannel {
             .connection
             .as_ref()
             .expect("a newly opened polling database is still owned")
-            .execute_batch("CREATE TABLE IF NOT EXISTS polling_ticks (tick INTEGER NOT NULL)")
+            .execute_batch("CREATE TABLE polling_ticks (tick INTEGER NOT NULL)")
             .map_err(|error| {
                 ChannelError::ConfigError(format!("polling sqlite schema failed: {error}"))
             })?;
