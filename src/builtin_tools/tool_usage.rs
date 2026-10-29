@@ -125,17 +125,32 @@ impl AlephTool for ToolUsageTool {
             .cloned()
             .collect();
 
-        let forgotten = if args.forget_orphans && !report.orphans.is_empty() {
-            let count = report.orphans.len();
-            let report = report.clone();
-            tokio::task::spawn_blocking(move || {
-                if let Some(store) = ToolUsageStore::default_path() {
-                    crate::tools::usage::report::forget_orphans(&report, &store);
-                }
+        let orphan_count = report.orphans.len();
+        let forgotten = if args.forget_orphans && orphan_count > 0 {
+            let orphans = report.orphans.clone();
+            match tokio::task::spawn_blocking(move || {
+                let Some(store) = ToolUsageStore::default_path() else {
+                    return 0;
+                };
+                orphans
+                    .iter()
+                    .filter(|key| {
+                        if store.get(key).is_none() {
+                            return false;
+                        }
+                        store.forget(key);
+                        store.get(key).is_none()
+                    })
+                    .count()
             })
             .await
-            .ok();
-            count
+            {
+                Ok(count) => count,
+                Err(error) => {
+                    tracing::warn!(error = %error, "tool_usage: orphan cleanup task failed");
+                    0
+                }
+            }
         } else {
             0
         };
@@ -144,7 +159,7 @@ impl AlephTool for ToolUsageTool {
             .iter()
             .filter(|e| e.is_idle(threshold.unwrap_or(DEFAULT_IDLE_DAYS)))
             .count();
-        let summary = format!(
+        let mut summary = format!(
             "{} entr(ies){}; {idle_now} idle at {}d{}",
             entries.len(),
             if scope == "all" {
@@ -167,12 +182,17 @@ impl AlephTool for ToolUsageTool {
                 )
             }
         );
+        if args.forget_orphans && forgotten < orphan_count {
+            summary.push_str(&format!(
+                " — orphan cleanup incomplete: removed {forgotten} of {orphan_count}; remaining rows are listed"
+            ));
+        }
         notify_tool_result(Self::NAME, &summary, true);
 
         Ok(ToolUsageOutput {
             summary,
             entries,
-            orphans: if forgotten > 0 {
+            orphans: if args.forget_orphans && forgotten == orphan_count {
                 Vec::new()
             } else {
                 report.orphans.clone()

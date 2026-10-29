@@ -221,6 +221,7 @@ pub(crate) fn executable_among(files: &[PathBuf]) -> Option<PathBuf> {
             .find(|p| {
                 p.file_name()
                     .is_some_and(|n| n == std::ffi::OsStr::new(leaf))
+                    && (!p.exists() || is_executable(p))
             })
             .cloned()
     })

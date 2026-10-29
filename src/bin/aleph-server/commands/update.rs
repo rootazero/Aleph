@@ -227,20 +227,37 @@ fn run_installer() -> Result<(), Box<dyn Error>> {
         );
     }
 
-    // Write the verified bytes to a temp file and execute that file
-    // (not a fresh shell-piped download). The temp file outlives this
-    // function so the child process can read it; cleanup is best-effort.
-    let temp_path = std::env::temp_dir().join(format!(
-        "aleph-installer-{}-{}",
-        installer_name,
-        std::process::id()
-    ));
-    std::fs::write(&temp_path, &installer_bytes).map_err(|e| {
-        format!(
-            "failed to write temp installer {}: {e}",
-            temp_path.display()
-        )
-    })?;
+    // Keep the installer in a private directory and create the file exclusively:
+    // the shared temp directory must not let another user redirect this write.
+    let temp_root = std::env::temp_dir();
+    let nonce = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(|e| format!("failed to get system time for temp installer: {e}"))?
+        .as_nanos();
+    let temp_dir = temp_root.join(format!("aleph-update-{}-{nonce}", std::process::id()));
+    let mut dir_builder = std::fs::DirBuilder::new();
+    dir_builder.recursive(false);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt;
+        dir_builder.mode(0o700);
+    }
+    dir_builder
+        .create(&temp_dir)
+        .map_err(|e| format!("failed to create private temp directory: {e}"))?;
+    let temp_path = temp_dir.join(installer_name);
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    use std::io::Write;
+    options
+        .open(&temp_path)
+        .and_then(|mut file| file.write_all(&installer_bytes))
+        .map_err(|e| format!("failed to securely write temp installer: {e}"))?;
 
     let status = {
         use std::process::Command;
@@ -277,9 +294,8 @@ fn run_installer() -> Result<(), Box<dyn Error>> {
     .status()
     .map_err(|e| format!("failed to launch the installer: {e}"))?;
 
-    // Best-effort temp cleanup. The installer may still be reading it;
-    // a follow-up reboot / tmpfs reap will get it.
-    let _ = std::fs::remove_file(&temp_path);
+    // Best-effort cleanup of the private temporary directory.
+    let _ = std::fs::remove_dir_all(&temp_dir);
 
     if !status.success() {
         return Err(format!("installer exited with status {status}").into());

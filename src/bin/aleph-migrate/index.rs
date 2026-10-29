@@ -331,8 +331,15 @@ fn build_fts5_index(conn: &Connection, sessions_dir: &Path, rebuild: bool) -> Re
 
         let content = fs::read_to_string(&transcript_path)?;
 
+        // FTS5 tables have no UNIQUE constraint, so `INSERT OR REPLACE` is a
+        // plain insert and every re-index would append a second copy of the
+        // transcript. Remove the previous rows for this session first.
         conn.execute(
-            "INSERT OR REPLACE INTO session_transcripts_fts (session_id, content) VALUES (?1, ?2)",
+            "DELETE FROM session_transcripts_fts WHERE session_id = ?1",
+            rusqlite::params![session_id],
+        )?;
+        conn.execute(
+            "INSERT INTO session_transcripts_fts (session_id, content) VALUES (?1, ?2)",
             rusqlite::params![session_id, content],
         )?;
     }

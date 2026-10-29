@@ -461,14 +461,14 @@ fn require_drag_points(
 /// only, not a new refusal: both errors were already true, and the arms below
 /// still do their own extraction. This decides which of the two the model sees.
 ///
-/// `scroll` is deliberately absent: its point is required on the targeted rail
-/// and optional on the global one (which scrolls at the real cursor), so only
-/// the arm that knows the rail can rule on it.
+/// `scroll` accepts no point on the global rail, but a partially supplied or
+/// non-finite point is malformed regardless of the delivery rail.
 fn reject_malformed_coordinates(args: &DesktopArgs) -> std::result::Result<(), DesktopOutput> {
     match args.action.as_str() {
         "click" | "double_click" | "hover" | "mouse_button" => {
             require_xy(args, &args.action).map(|_| ())
         }
+        "scroll" if args.x.is_some() || args.y.is_some() => require_xy(args, "scroll").map(|_| ()),
         "drag" => require_drag_points(args).map(|_| ()),
         _ => Ok(()),
     }
@@ -1429,7 +1429,13 @@ impl super::DesktopTool {
                 // scrolling is the ONLY way to scroll a chosen view. No point at
                 // all stays valid on the global rail: it scrolls at the real
                 // cursor, unchanged.
-                let point = require_xy(args, "scroll").ok();
+                let point = match (args.x, args.y) {
+                    (None, None) => None,
+                    _ => match require_xy(args, "scroll") {
+                        Ok(point) => Some(point),
+                        Err(error) => return Ok(Some(error)),
+                    },
+                };
                 let result = match rail {
                     Rail::Targeted(pid) => {
                         let Some((x, y)) = point else {

@@ -183,7 +183,9 @@ fn scan_email(chars: &[char], start: usize) -> Option<usize> {
         }
         i += 1;
     }
-    let tld_len = last_dot.map(|d| chars.len() - 1 - d).unwrap_or(0);
+    let tld_len = last_dot
+        .map(|d| i.saturating_sub(1).saturating_sub(d))
+        .unwrap_or(0);
     if !(2..=24).contains(&tld_len) {
         return None;
     }
@@ -335,6 +337,15 @@ mod tests {
         async fn update(&self, _: &str, _: SessionSignal) -> Result<UpdateOutcome, AlephError> {
             Ok(UpdateOutcome::Unchanged)
         }
+    }
+
+    #[test]
+    fn email_followed_by_long_text_is_redacted() {
+        let redacted = redact_profile_pii(
+            "alice@example.com and here is a much longer trailing sentence that exceeds twenty four characters",
+        );
+        assert!(!redacted.contains("alice@example.com"));
+        assert!(redacted.contains("[REDACTED:email]"));
     }
 
     #[tokio::test]

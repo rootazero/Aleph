@@ -311,7 +311,15 @@ fn walk(
     parent: Option<usize>,
     out: &mut Vec<Walked>,
     element_seq: &mut usize,
+    depth: usize,
 ) -> Result<(), BrowserError> {
+    const MAX_DOM_DEPTH: usize = 1024;
+    if depth > MAX_DOM_DEPTH {
+        return Err(BrowserError::EngineFailure {
+            engine: Engine::Obscura,
+            reason: format!("DOM.getDocument tree exceeds maximum nesting depth {MAX_DOM_DEPTH}"),
+        });
+    }
     let kind = match node.node_type {
         1 => RawNodeKind::Element,
         3 => RawNodeKind::Text,
@@ -379,7 +387,7 @@ fn walk(
         element_index,
     });
     for child in &node.children {
-        walk(child, Some(me), out, element_seq)?;
+        walk(child, Some(me), out, element_seq, depth + 1)?;
     }
     // Shadow roots are walked so their contents are visible — as ORDINARY
     // children. Part 1's `dom::Node` still carries `shadow_roots`, but R34 cut
@@ -394,14 +402,14 @@ fn walk(
     // this one. obscura returns no shadow roots today, so this costs nothing
     // on the engine this module serves.
     for root in &node.shadow_roots {
-        walk(root, Some(me), out, element_seq)?;
+        walk(root, Some(me), out, element_seq, depth + 1)?;
     }
     // Present for symmetry with the CDP type. obscura never populates it
     // (measured: `pierce: true` is unimplemented), so on this engine the branch
     // is dead — and it is written rather than `unreachable!()` so that the day
     // obscura DOES populate it, the content appears instead of panicking.
     if let Some(doc) = &node.content_document {
-        walk(doc, Some(me), out, element_seq)?;
+        walk(doc, Some(me), out, element_seq, depth + 1)?;
     }
     Ok(())
 }
@@ -478,7 +486,7 @@ pub async fn fetch_obscura(
         .map_err(|e| engine_failure("DOM.getDocument", &e))?;
     let mut walked = Vec::new();
     let mut element_seq = 0usize;
-    walk(&root, None, &mut walked, &mut element_seq)?;
+    walk(&root, None, &mut walked, &mut element_seq, 0)?;
     let element_count = element_seq;
 
     // 4. Boxes, bounded. `Ok(None)` (the engine's own "could not compute box

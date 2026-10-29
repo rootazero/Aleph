@@ -231,7 +231,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     // Plugins are now installed via marketplace: `aleph plugin marketplace update && aleph plugin install <name>`
 
     let ownership_tree = Arc::new(OwnershipTree::new());
-    initialize_extension_manager(args.daemon, Arc::clone(&ownership_tree)).await;
+    initialize_extension_manager(args.daemon, Arc::clone(&ownership_tree)).await?;
 
     // Shared MCP-target ToolHandlerRegistry. The Phase 2 facade chain
     // (`build_tool_service`, `PermissionLayer`, `TimeoutLayer`, etc.) was
@@ -2846,7 +2846,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
                                         if let Err(e) =
                                             alephcore::tools::markdown_skill::markdown_skill_registry_owner()
                                                 .lock()
-                                                .unwrap()
+                                                .unwrap_or_else(std::sync::PoisonError::into_inner)
                                                 .install_or_replace(tool_for_owner)
                                         {
                                             tracing::warn!(
@@ -4135,7 +4135,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     // below.
     let markdown_scope = alephcore::tools::markdown_skill::markdown_skill_registry_owner()
         .lock()
-        .unwrap()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
         .take_shutdown();
     let markdown_report = markdown_scope.dispose().await;
     if !markdown_report.all_ok() {

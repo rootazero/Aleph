@@ -131,6 +131,16 @@ pub const BUILTIN_TOOL_BUDGETS_MS: &[(&str, u64)] = &[
     // budget could ever fire, discarding the partial results in favour of an
     // opaque overrun.
     ("browser_exec", 630_000),
+    // Runs a whole QA procedure: one wait per expectation (up to 16 texts)
+    // plus the selector and the gone wait, each on its own clamped 30 s
+    // budget. Fifth instance of the rule the four rows above state: the
+    // budget must sit ABOVE the tool's own ceiling
+    // (`browser_tools::qa::MAX_QA_WAIT_MS`, ~540 s) so what fires is the
+    // tool's clock, which returns the verdict it already computed. It used
+    // to be absent here, so it resolved to the 300 s default — and the
+    // harness killed every long QA run at half its own worst case,
+    // discarding the verdict in favour of an opaque overrun.
+    ("browser_qa", 630_000),
     // Reverse-RPC to a cluster node. Fourth instance of the rule the three
     // rows above state: the budget must sit ABOVE the tool's own ceiling
     // ([`REVERSE_RPC_MAX_TIMEOUT_MS`], 240s) so what fires
@@ -239,8 +249,9 @@ mod tests {
 
     #[test]
     fn table_size_matches_expected_count() {
-        // Locked at 24 entries (12 fast + 3 slow + 2 exec + ask_user +
-        // subagent + task_wait + browser_exec + the three cluster node tools;
+        // Locked at 25 entries (12 fast + 3 slow + 2 exec + ask_user +
+        // subagent + task_wait + browser_exec + browser_qa + the three
+        // cluster node tools;
         // the 2026-07 phantom sweep removed the never-registered `list_tools` /
         // `search_tools` rows and renamed stale `skill_reader` to `skill_read`).
         // Bumping this requires updating the table AND adjusting this constant
@@ -248,7 +259,7 @@ mod tests {
         // value check. It did its job here: `node_invoke` / `node_invoke_many`
         // / `node_file` were added because they had silently been resolving to
         // the 300s default while their own `timeout_ms` was unbounded.
-        assert_eq!(BUILTIN_TOOL_BUDGETS_MS.len(), 24);
+        assert_eq!(BUILTIN_TOOL_BUDGETS_MS.len(), 25);
     }
 
     #[test]
@@ -311,6 +322,25 @@ mod tests {
             budget > own_ms,
             "browser_exec budget {budget}ms must exceed its own {own_ms}ms wall clock, \
              or the harness clock preempts the tool's and the partial procedure is lost"
+        );
+    }
+
+    /// Same rule, fourth tool — and the one whose own worst case was longest.
+    ///
+    /// `browser_qa` was absent from the table, so it resolved to the 300s
+    /// default while its own worst case is ~540s (one 30s wait per
+    /// expectation, up to sixteen texts, plus the selector and the gone
+    /// wait). The harness therefore killed every long QA run before the tool
+    /// could finish waiting, and the verdict it had already computed was
+    /// thrown away for an opaque overrun.
+    #[test]
+    fn browser_qa_budget_outlives_its_own_worst_case() {
+        let own_ms = crate::builtin_tools::browser_tools::qa::MAX_QA_WAIT_MS;
+        let budget = builtin_tool_budget_ms("browser_qa").expect("browser_qa is budgeted");
+        assert!(
+            budget > own_ms,
+            "browser_qa budget {budget}ms must exceed its own {own_ms}ms worst case, \
+             or the harness clock preempts the tool's and the verdict is lost"
         );
     }
 

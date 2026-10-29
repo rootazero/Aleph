@@ -329,20 +329,22 @@ fn interpret(
     result: std::result::Result<SandboxOutput, SandboxError>,
     plan: Plan,
 ) -> CodeCheckOutput {
-    let (stdout, stderr, exit_code) = match result {
+    let (stdout, stderr, exit_code, timeout_message) = match result {
         Ok(out) => (
             String::from_utf8_lossy(&out.stdout).to_string(),
             String::from_utf8_lossy(&out.stderr).to_string(),
             out.exit_code,
+            None,
         ),
         Err(SandboxError::Timeout {
+            elapsed_ms,
             partial_stdout,
             partial_stderr,
-            ..
         }) => (
             String::from_utf8_lossy(&partial_stdout).to_string(),
             String::from_utf8_lossy(&partial_stderr).to_string(),
             None,
+            Some(format!("Check timed out after {:.1}s", elapsed_ms as f64 / 1000.0)),
         ),
         Err(SandboxError::CapabilityDenied { reason }) => {
             return error_output("(denied)", format!("Capability denied: {reason}"))
@@ -356,7 +358,7 @@ fn interpret(
         Some("tsc") => (Parser::Generic, "tsc --noEmit".to_string()),
         Some("go") => (Parser::Generic, "go vet ./...".to_string()),
         Some("ruff") => (Parser::Generic, "ruff check".to_string()),
-        Some("none") => {
+        Some("none") if timeout_message.is_none() => {
             return CodeCheckOutput {
                 ok: true,
                 command: "(none)".to_string(),
@@ -396,12 +398,16 @@ fn interpret(
     let exit_failed = exit_code.is_some_and(|c| c != 0);
 
     CodeCheckOutput {
-        ok: error_count == 0 && !(exit_failed && total == 0),
+        ok: timeout_message.is_none() && error_count == 0 && !(exit_failed && total == 0),
         command,
         error_count,
         warning_count,
         diagnostics: diags,
-        raw_tail: tail(&format!("{stdout}\n{stderr}"), RAW_TAIL_BYTES),
+        raw_tail: format!(
+            "{}\n{}",
+            tail(&format!("{stdout}\n{stderr}"), RAW_TAIL_BYTES),
+            timeout_message.unwrap_or_default()
+        ),
         truncated,
     }
 }
@@ -779,6 +785,20 @@ not json at all"#;
         assert!(out.ok);
         assert_eq!(out.command, "(none)");
         assert!(out.raw_tail.contains("explicit `command`"));
+    }
+
+    #[test]
+    fn interpret_timeout_without_diagnostics_is_not_ok() {
+        let out = interpret(
+            Err(SandboxError::Timeout {
+                elapsed_ms: 120_000,
+                partial_stdout: Vec::new(),
+                partial_stderr: Vec::new(),
+            }),
+            build_plan(Some("cargo check"), None),
+        );
+        assert!(!out.ok);
+        assert!(out.raw_tail.contains("timed out after 120.0s"));
     }
 
     #[test]

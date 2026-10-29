@@ -698,16 +698,54 @@ pub(crate) const MAX_SCREENSHOT_EDGE: u32 = 1568;
 /// per-image limits (Anthropic rejects images over ~5 MB on many endpoints).
 pub(crate) const MAX_SCREENSHOT_BYTES: usize = 5 * 1024 * 1024;
 
+/// Largest edge (px) the decoder is allowed to accept.
+///
+/// A capture wider or taller than this is not decodable within the memory
+/// budget below, and decoding it is exactly the unbounded allocation the
+/// budgets exist to prevent — so it is refused rather than resized.
+const MAX_SCREENSHOT_DECODE_EDGE: u32 = 16_384;
+
+/// Largest number of bytes the decoder may allocate for one capture.
+///
+/// Bounds the decoded pixel buffer (and the decoder's own working memory) to
+/// a fixed ceiling instead of "whatever the capture turns out to be".
+const MAX_SCREENSHOT_DECODE_ALLOC: u64 = 256 * 1024 * 1024;
+
 /// Downscale a screenshot to fit BOTH budgets — longest edge
 /// [`MAX_SCREENSHOT_EDGE`] px and payload [`MAX_SCREENSHOT_BYTES`] bytes —
 /// re-encoding as PNG (the screenshot format contract every consumer —
 /// base64 output and the vision bridge — assumes). Returns the input bytes
 /// **unchanged** when the image is already within both caps (zero re-encode)
-/// or when decoding/encoding fails: post-processing must never turn a
-/// successful capture into a failure.
+/// or when decoding/encoding fails AND the input is inside the byte budget:
+/// post-processing must never turn a successful capture into a failure.
+///
+/// The budgets are checked against the PNG **header** first, so a capture
+/// that is already inside them costs no decode at all, and an oversized one
+/// is known before a single pixel is materialised. A capture that cannot be
+/// decoded within the decode limits is replaced by a bounded placeholder
+/// rather than handed back unbounded.
 pub(crate) fn bound_screenshot_png(png_bytes: Vec<u8>) -> Vec<u8> {
-    let Ok(decoded) = image::load_from_memory(&png_bytes) else {
-        return png_bytes;
+    let header = png_header_dimensions(&png_bytes);
+    if let Some((width, height)) = header {
+        if width.max(height) <= MAX_SCREENSHOT_EDGE && png_bytes.len() <= MAX_SCREENSHOT_BYTES {
+            // Inside both budgets → byte-for-byte passthrough, no decode.
+            return png_bytes;
+        }
+    }
+    // Over a budget (or not a PNG whose header we can read): decode it, but
+    // only within the decode limits — a capture whose dimensions are absurd
+    // must not be able to allocate its full pixel buffer.
+    let Some(decoded) = decode_bounded(&png_bytes) else {
+        // The decode failed. The original is still the right answer while it
+        // is inside the byte budget AND its pixels were never shown to be
+        // over the edge cap (a format we cannot read the header of, e.g.).
+        // Otherwise a bounded stand-in takes its place: handing the original
+        // back is exactly what the budgets exist to prevent.
+        let over_edge_cap = header.is_some_and(|(width, height)| width.max(height) > MAX_SCREENSHOT_EDGE);
+        if !over_edge_cap && png_bytes.len() <= MAX_SCREENSHOT_BYTES {
+            return png_bytes;
+        }
+        return placeholder_png();
     };
     // Fast path: within both budgets → byte-for-byte passthrough.
     if decoded.width().max(decoded.height()) <= MAX_SCREENSHOT_EDGE
@@ -725,7 +763,7 @@ pub(crate) fn bound_screenshot_png(png_bytes: Vec<u8>) -> Vec<u8> {
         .write_to(&mut std::io::Cursor::new(&mut buf), image::ImageFormat::Png)
         .is_err()
     {
-        return png_bytes;
+        return placeholder_png();
     }
     if buf.len() <= MAX_SCREENSHOT_BYTES {
         return buf;
@@ -767,6 +805,53 @@ pub(crate) fn bound_screenshot_png(png_bytes: Vec<u8>) -> Vec<u8> {
         }
     }
     smallest
+}
+
+/// The dimensions a PNG's header declares, without decoding it.
+///
+/// The IHDR chunk is always the first chunk of a PNG and sits at a fixed
+/// offset, so the pixel budget can be checked against the header alone.
+/// `None` for anything that is not a PNG (or a PNG too short to hold a
+/// header).
+fn png_header_dimensions(bytes: &[u8]) -> Option<(u32, u32)> {
+    const PNG_SIGNATURE: [u8; 8] = [0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a];
+    if bytes.len() < 24 || bytes[..8] != PNG_SIGNATURE {
+        return None;
+    }
+    let width = u32::from_be_bytes([bytes[16], bytes[17], bytes[18], bytes[19]]);
+    let height = u32::from_be_bytes([bytes[20], bytes[21], bytes[22], bytes[23]]);
+    Some((width, height))
+}
+
+/// Decode a capture within the decode limits, or give up.
+fn decode_bounded(bytes: &[u8]) -> Option<image::DynamicImage> {
+    let mut reader = image::ImageReader::new(std::io::Cursor::new(bytes))
+        .with_guessed_format()
+        .ok()?;
+    reader.limits(image::Limits {
+        max_image_width: Some(MAX_SCREENSHOT_DECODE_EDGE),
+        max_image_height: Some(MAX_SCREENSHOT_DECODE_EDGE),
+        max_alloc: Some(MAX_SCREENSHOT_DECODE_ALLOC),
+    });
+    reader.decode().ok()
+}
+
+/// A bounded stand-in for a capture that could not be re-encoded.
+///
+/// One transparent pixel: a valid PNG (the format contract every consumer
+/// assumes), a few dozen bytes, and no unbounded payload. A model sees "the
+/// capture could not be bounded" instead of the megabytes the budgets exist
+/// to keep out of the request.
+fn placeholder_png() -> Vec<u8> {
+    let placeholder = image::DynamicImage::new_rgba8(1, 1);
+    let mut buf = Vec::new();
+    if placeholder
+        .write_to(&mut std::io::Cursor::new(&mut buf), image::ImageFormat::Png)
+        .is_err()
+    {
+        return Vec::new();
+    }
+    buf
 }
 
 pub use click::{BrowserClickArgs, BrowserClickOutput, BrowserClickTool};
@@ -1016,6 +1101,30 @@ mod tests {
         // A decode failure must never drop the capture — bytes flow through.
         let junk = b"\x00\x01not a png".to_vec();
         assert_eq!(super::bound_screenshot_png(junk.clone()), junk);
+    }
+
+    /// A capture that cannot be decoded within the decode limits must not be
+    /// handed back as it came in: the budgets exist to keep the payload out
+    /// of the request, and a failed decode used to return the original bytes
+    /// whatever they were.
+    #[test]
+    fn bound_screenshot_replaces_an_undecodable_oversized_capture() {
+        let mut oversized = Vec::new();
+        oversized.extend_from_slice(&[0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a]);
+        oversized.extend_from_slice(&13u32.to_be_bytes()); // IHDR length
+        oversized.extend_from_slice(b"IHDR");
+        oversized.extend_from_slice(&30_000u32.to_be_bytes()); // width
+        oversized.extend_from_slice(&30_000u32.to_be_bytes()); // height
+        oversized.extend_from_slice(&[8, 6, 0, 0, 0]); // bit depth, colour type, …
+        oversized.extend_from_slice(&[0u8; 4096]); // not a real image body
+        let out = super::bound_screenshot_png(oversized.clone());
+        assert_ne!(
+            out, oversized,
+            "the unbounded original must not come back"
+        );
+        assert!(out.len() <= super::MAX_SCREENSHOT_BYTES);
+        let decoded = image::load_from_memory(&out).expect("the stand-in is still a valid png");
+        assert!(decoded.width().max(decoded.height()) <= super::MAX_SCREENSHOT_EDGE);
     }
 
     /// Incompressible-noise PNG: solid-color fixtures deflate to nothing and

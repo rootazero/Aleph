@@ -38,6 +38,8 @@ pub enum RecordStartError {
         searched.join(", ")
     )]
     NoFfmpeg { searched: Vec<String> },
+    #[error("output path already exists: {}", path.display())]
+    PathExists { path: PathBuf },
     #[error("output path is not writable: {}", path.display())]
     PathNotWritable { path: PathBuf },
     /// The extension chooses the codec (spec §3), so a path without one is a
@@ -477,6 +479,9 @@ impl RecordingRegistry {
             }
         }
         let path = if managed { uniquify(raw) } else { raw };
+        if !managed && path.exists() {
+            return Err(RecordStartError::PathExists { path });
+        }
         let codec_args = codec_args_for(&path)?;
         let parent = path
             .parent()
@@ -921,7 +926,7 @@ fn spawn_ffmpeg(
         ScreencastFormat::Png => "png",
     };
     let mut cmd = tokio::process::Command::new(ffmpeg);
-    cmd.arg("-y")
+    cmd.arg("-n")
         .arg("-loglevel")
         .arg("error")
         .arg("-f")

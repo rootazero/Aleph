@@ -229,15 +229,16 @@ fn decode_local_storage(value: &serde_json::Value) -> Option<Vec<(String, String
 /// place a hand-built string is a bug. The wrapper is
 /// [`super::evaluate::as_call_expression`], not a second locally-written IIFE:
 /// "how a script becomes a call" has one owner.
-fn import_local_storage_js(pairs: &[(String, String)]) -> String {
+fn import_local_storage_js(origin: &str, pairs: &[(String, String)]) -> String {
     let payload = serde_json::Value::Array(
         pairs
             .iter()
             .map(|(k, v)| serde_json::json!([k, v]))
             .collect(),
     );
+    let origin = serde_json::to_string(origin).expect("origin is serializable");
     as_call_expression(&format!(
-        "() => {{ for (const [k, v] of {payload}) localStorage.setItem(k, v); return 'ok'; }}"
+        "() => {{ const actual = location.origin; if (actual !== {origin}) return 'origin:' + actual; for (const [k, v] of {payload}) localStorage.setItem(k, v); return 'restored:' + actual; }}"
     ))
 }
 
@@ -325,12 +326,16 @@ pub(crate) async fn import_state(
                     match runtime::evaluate(
                         conn,
                         Some(&session),
-                        &import_local_storage_js(pairs),
+                        &import_local_storage_js(&origin, pairs),
                         false,
                     )
                     .await
                     {
-                        Ok(res) if res.exception.is_none() => {
+                        Ok(res)
+                            if res.exception.is_none()
+                                && res.result.value.as_ref().and_then(serde_json::Value::as_str)
+                                    == Some(format!("restored:{origin}").as_str()) =>
+                        {
                             imported_origins.push(origin.clone());
                             if let Err(e) =
                                 settle(handle, conn, &session, &tab_id, &tab.url, budget, engine)
@@ -342,10 +347,19 @@ pub(crate) async fn import_state(
                                 ));
                             }
                         }
-                        Ok(res) => report.warnings.push(format!(
-                            "localStorage for {origin} could not be restored: {}",
-                            res.exception.unwrap_or_default()
-                        )),
+                        Ok(res) => {
+                            let value = res.result.value.as_ref().and_then(serde_json::Value::as_str);
+                            if let Some(actual) = value.and_then(|value| value.strip_prefix("origin:")) {
+                                report.warnings.push(format!(
+                                    "localStorage for {origin} was not restored because the page landed on {actual}"
+                                ));
+                            } else {
+                                report.warnings.push(format!(
+                                    "localStorage for {origin} could not be restored: {}",
+                                    res.exception.unwrap_or_default()
+                                ));
+                            }
+                        }
                         Err(e) => report.warnings.push(format!(
                             "localStorage for {origin} could not be restored: {}",
                             map_cdp_err(engine, "Runtime.evaluate", e)
@@ -558,9 +572,9 @@ mod tests {
                 "Target.attachToTarget" => Responder::Reply(json!({ "sessionId": "S-B" })),
                 "Target.getTargets" => Responder::Reply(json!({ "targetInfos": [] })),
                 "Page.navigate" => Responder::Reply(json!({ "frameId": "F-B", "loaderId": "L-B" })),
-                "Runtime.evaluate" => {
-                    Responder::Reply(json!({ "result": { "type": "string", "value": "ok" } }))
-                }
+                "Runtime.evaluate" => Responder::Reply(json!({
+                    "result": { "type": "string", "value": "restored:https://example.com" }
+                }))
                 _ => Responder::Reply(json!({})),
             }
         })

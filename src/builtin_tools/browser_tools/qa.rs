@@ -56,6 +56,17 @@ const MAX_EXPECTED_TEXTS: usize = 16;
 /// the NEW lines the verdict reasoned over — evidence, not a dump.
 const EVIDENCE_TAIL_MAX: usize = 4_000;
 
+/// The tool's own worst-case wall clock: one [`MAX_TIMEOUT_MS`] wait per
+/// expectation (up to [`MAX_EXPECTED_TEXTS`] texts) plus the selector and
+/// the gone waits, plus the diagnostic settle.
+///
+/// The harness budget for `browser_qa` must sit ABOVE this number, or the
+/// harness clock preempts the tool's and the verdict it had already
+/// computed is thrown away for an opaque overrun. Declared here, next to the
+/// constants it is derived from, so the two cannot drift apart.
+pub(crate) const MAX_QA_WAIT_MS: u64 =
+    (MAX_EXPECTED_TEXTS as u64 + 2) * MAX_TIMEOUT_MS + SETTLE_MS;
+
 /// Clamp the per-expectation wait budget into the safe window. Hand-rolled
 /// rather than `Ord::clamp` so it stays `const` (same shape as
 /// `wait_for::clamp_timeout`).
@@ -715,6 +726,31 @@ impl BrowserQaTool {
         // ③ Diagnostic settle — only when a buffer read follows.
         if want_console || v.check_network {
             tokio::time::sleep(std::time::Duration::from_millis(SETTLE_MS)).await;
+        }
+
+        // ③½ Re-check the SSRF policy AFTER the waits. The check at dispatch
+        // time only covers the page as it was BEFORE the expectation waits —
+        // and the page may navigate itself while we wait (a redirect, a
+        // meta-refresh, a script-driven `location` change). Every read below
+        // (the console/network rings, the evidence screenshot) would then
+        // read content from a target the policy forbids. Re-reading the tab
+        // list is the only way to see where the page ended up.
+        match backend.list_tabs().await {
+            Ok(tabs) => {
+                if let Some(violation) =
+                    super::current_page_block(&self.manager, &tabs, tab_id).await
+                {
+                    return engine_failure(
+                        &self.manager,
+                        &BrowserError::NavigationFailed(format!(
+                            "current page blocked by SSRF policy ({violation}); \
+                             the page navigated during the QA wait — \
+                             navigate to an allowed URL before reading page content"
+                        )),
+                    );
+                }
+            }
+            Err(e) => return engine_failure(&self.manager, &e),
         }
 
         // ④ Final read.

@@ -306,6 +306,19 @@ impl RuntimeManageTool {
                 runtimes: Vec::new(),
             };
         }
+        if let Some((job_id, _)) = running_install_jobs()
+            .into_iter()
+            .find(|(_, command)| command == &format!("{INSTALL_JOB_PREFIX}{name}"))
+        {
+            return RuntimeManageOutput {
+                ok: true,
+                message: format!(
+                    "Already installing {name} as job {job_id}; poll it with \
+                     `bash{{process_action:\"wait\", process_id:{job_id}}}`."
+                ),
+                runtimes: Self::list(locator).await.runtimes,
+            };
+        }
         match spawner.spawn(name) {
             Ok(job_id) => {
                 // `ok` must come from THIS branch — the spawn succeeded, a job

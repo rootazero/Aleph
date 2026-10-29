@@ -41,7 +41,7 @@ pub fn run_verify(
 
     // Check 4: Content hashes
     log::info!("[4/6] Checking content hashes...");
-    check_content_hashes(&conn, &sessions_dir, fix, &mut report)?;
+    check_content_hashes(&conn, &sessions_dir, &mut report)?;
 
     // Check 5: Attachment references
     log::info!("[5/6] Checking attachment references...");
@@ -73,6 +73,18 @@ struct VerificationReport {
     warnings: Vec<String>,
     errors: usize,
     fixes_applied: usize,
+}
+
+impl VerificationReport {
+    /// Record a repair that resolved one previously recorded error.
+    ///
+    /// The error counter is decremented so `--fix` can actually turn a
+    /// failing verification into a passing one; `fixes_applied` keeps the
+    /// count of repairs for the report.
+    fn record_fix(&mut self) {
+        self.errors = self.errors.saturating_sub(1);
+        self.fixes_applied += 1;
+    }
 }
 
 fn check_session_count(
@@ -160,10 +172,13 @@ fn check_session_files(
                 .missing_files
                 .push(format!("{}: missing {}", session_id, missing.join(", ")));
 
-            if fix {
-                // Try to regenerate missing files
-                if !metadata.exists() {
-                    regenerate_metadata(conn, &session_id, &session_dir)?;
+            if fix && !metadata.exists() {
+                // Only a missing metadata.json can be regenerated; a missing
+                // transcript or tool-output file stays an error.
+                regenerate_metadata(conn, &session_id, &session_dir)?;
+                if missing.len() == 1 {
+                    report.record_fix();
+                } else {
                     report.fixes_applied += 1;
                 }
             }
@@ -213,7 +228,7 @@ fn check_metadata_consistency(
                     .push(format!("{}: invalid JSON - {}", session_id, error));
                 if fix {
                     regenerate_metadata(conn, &session_id, metadata_path.parent().unwrap())?;
-                    report.fixes_applied += 1;
+                    report.record_fix();
                 }
                 continue;
             }
@@ -225,7 +240,7 @@ fn check_metadata_consistency(
                 .push(format!("{}: {}", session_id, message));
             if fix {
                 regenerate_metadata(conn, &session_id, metadata_path.parent().unwrap())?;
-                report.fixes_applied += 1;
+                report.record_fix();
             }
         }
     }
@@ -272,7 +287,6 @@ fn validate_metadata(metadata: &serde_json::Value, session_id: &str) -> Result<(
 fn check_content_hashes(
     conn: &Connection,
     sessions_dir: &Path,
-    fix: bool,
     report: &mut VerificationReport,
 ) -> Result<()> {
     let mut stmt = conn
@@ -296,20 +310,28 @@ fn check_content_hashes(
         if computed_hash != stored_hash {
             report.errors += 1;
             let stored_preview = stored_hash.get(..8).unwrap_or(&stored_hash);
+            report.invalid_hashes.push(format!(
+                "{}: content hash mismatch (stored: {}, computed: {})",
+                session_id,
+                stored_preview,
+                &computed_hash[..8]
+            ));
             report.warnings.push(format!(
                 "{}: content hash mismatch (stored: {}, computed: {})",
                 session_id,
                 stored_preview,
                 &computed_hash[..8]
             ));
-
-            if fix {
-                conn.execute(
-                    "UPDATE sessions SET content_hash = ?1 WHERE session_id = ?2",
-                    rusqlite::params![computed_hash, session_id],
-                )?;
-                report.fixes_applied += 1;
-            }
+            // The stored hash is the expected value. Overwriting it with the
+            // hash of the current file would launder a truncated or edited
+            // transcript: the only evidence of the corruption would be
+            // destroyed and every later run would report the file as valid.
+            // Regenerating the transcript needs the source export, so the
+            // mismatch is left for the operator to resolve.
+            log::warn!(
+                "Session {}: content hash mismatch; the stored hash is preserved (not auto-repaired)",
+                session_id
+            );
         }
     }
 
@@ -328,6 +350,11 @@ fn check_attachments(
     let migration_root = migration_root_for(sessions_dir)
         .context("sessions directory must have a migration root")?;
     let mut referenced_hashes = HashSet::new();
+    // A session whose metadata or attachment manifest cannot be read may
+    // still own attachment files on disk. While any session is in that
+    // state the set of referenced hashes is incomplete, and sweeping files
+    // that are not in the set would delete live attachments.
+    let mut manifests_complete = true;
 
     for entry in WalkDir::new(sessions_dir)
         .min_depth(1)
@@ -338,6 +365,7 @@ fn check_attachments(
         let session_dir = entry?.into_path();
         let metadata_path = session_dir.join("metadata.json");
         if !metadata_path.exists() {
+            manifests_complete = false;
             continue;
         }
         let metadata: serde_json::Value = match fs::read_to_string(&metadata_path)
@@ -345,9 +373,18 @@ fn check_attachments(
             .and_then(|content| serde_json::from_str(&content).ok())
         {
             Some(metadata) => metadata,
-            None => continue, // Reported by check_metadata_consistency.
+            None => {
+                // Reported by check_metadata_consistency.
+                manifests_complete = false;
+                continue;
+            }
         };
-        let count = metadata["attachment_count"].as_i64().unwrap_or(0);
+        let Some(count) = metadata["attachment_count"].as_i64().filter(|count| *count >= 0) else {
+            // Without a trustworthy attachment count, this session may still
+            // own blobs and the orphan reference set is incomplete.
+            manifests_complete = false;
+            continue;
+        };
         let manifest_path = session_dir.join("attachments.json");
         if count == 0 {
             if manifest_path.exists() {
@@ -363,6 +400,7 @@ fn check_attachments(
                                 "{}: invalid attachments.json",
                                 metadata["session_id"].as_str().unwrap_or("unknown")
                             ));
+                            manifests_complete = false;
                             continue;
                         }
                     };
@@ -385,6 +423,7 @@ fn check_attachments(
                 metadata["session_id"].as_str().unwrap_or("unknown"),
                 count
             ));
+            manifests_complete = false;
             continue;
         }
 
@@ -399,6 +438,7 @@ fn check_attachments(
                     "{}: invalid attachments.json",
                     metadata["session_id"].as_str().unwrap_or("unknown")
                 ));
+                manifests_complete = false;
                 continue;
             }
         };
@@ -410,6 +450,7 @@ fn check_attachments(
                 count,
                 manifest.len()
             ));
+            manifests_complete = false;
         }
 
         for attachment in manifest {
@@ -543,6 +584,16 @@ fn check_attachments(
         migration_root.join("attachments")
     };
     if attachments_dir.exists() {
+        if !manifests_complete {
+            // Some session's references are unknown, so "not referenced" does
+            // not mean "orphaned". Sweeping now could delete live attachment
+            // files.
+            report.warnings.push(format!(
+                "Orphan sweep skipped: attachment references are incomplete ({}). \
+                 Fix the session manifests first.",
+                attachments_dir.display()
+            ));
+        }
         for entry in WalkDir::new(&attachments_dir)
             .into_iter()
             .filter_entry(|e| e.file_type().is_file())
@@ -550,8 +601,8 @@ fn check_attachments(
             let path = entry?.into_path();
             let bytes = fs::read(&path)?;
             let hash = compute_sha256_bytes(&bytes);
-            if !referenced_hashes.contains(&hash) && remove_orphans {
-                fs::remove_file(path)?;
+            if !referenced_hashes.contains(&hash) && remove_orphans && manifests_complete {
+                fs::remove_file(&path)?;
                 report.fixes_applied += 1;
             }
         }

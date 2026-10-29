@@ -371,34 +371,52 @@ Arguments are never stored; each record carries a fingerprint of them, plus a se
                 let dir = crate::utils::paths::get_data_dir()
                     .map_err(|e| AlephError::tool(format!("cannot locate the data dir: {e}")))?
                     .join(EXPORT_DIR);
-                std::fs::create_dir_all(&dir).map_err(|e| {
-                    AlephError::tool(format!("cannot create {}: {e}", dir.display()))
-                })?;
                 let path = dir.join(format!(
                     "agent-chain-{}-{}.json",
                     Self::file_slug(&agent),
                     report.last_seq
                 ));
-                let body = serde_json::to_string_pretty(&doc)
-                    .map_err(|e| AlephError::tool(e.to_string()))?;
-                std::fs::write(&path, body).map_err(|e| {
-                    AlephError::tool(format!("cannot write {}: {e}", path.display()))
-                })?;
-                // The export carries no secrets, but everything else under the
-                // data dir is 0600 (vault, identity files). Keep the discipline
-                // uniform rather than reasoned per file — a permissions
-                // exception is exactly the file someone later adds a secret to.
-                #[cfg(unix)]
-                {
-                    use std::os::unix::fs::PermissionsExt;
-                    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))
+                // The signature is read BEFORE the document moves into the
+                // blocking writer below.
+                let signature = doc.signature.as_ref().map_or_else(
+                    || "unsigned".to_string(),
+                    |s| format!("{}:{}", s.scheme, s.signer_fp),
+                );
+                // A chain is unbounded and the disk is slow: serializing it and
+                // writing it out are blocking work, and this tool call runs on
+                // the async executor, where a stalled disk holds up every other
+                // task on the runtime. The whole file-producing sequence
+                // (mkdir, serialize, write, chmod) moves to the blocking pool
+                // as one unit, so a cancelled task never leaves a half-made
+                // directory or a world-readable file behind.
+                let write_path = path.clone();
+                tokio::task::spawn_blocking(move || -> std::result::Result<(), String> {
+                    std::fs::create_dir_all(&dir)
+                        .map_err(|e| format!("cannot create {}: {e}", dir.display()))?;
+                    let body = serde_json::to_string_pretty(&doc)
+                        .map_err(|e| format!("cannot serialize the chain: {e}"))?;
+                    std::fs::write(&write_path, body)
+                        .map_err(|e| format!("cannot write {}: {e}", write_path.display()))?;
+                    // The export carries no secrets, but everything else under the
+                    // data dir is 0600 (vault, identity files). Keep the discipline
+                    // uniform rather than reasoned per file — a permissions
+                    // exception is exactly the file someone later adds a secret to.
+                    #[cfg(unix)]
+                    {
+                        use std::os::unix::fs::PermissionsExt;
+                        std::fs::set_permissions(
+                            &write_path,
+                            std::fs::Permissions::from_mode(0o600),
+                        )
                         .map_err(|e| {
-                            AlephError::tool(format!(
-                                "cannot set permissions on {}: {e}",
-                                path.display()
-                            ))
+                            format!("cannot set permissions on {}: {e}", write_path.display())
                         })?;
-                }
+                    }
+                    Ok(())
+                })
+                .await
+                .map_err(|e| AlephError::tool(format!("the export writer failed: {e}")))?
+                .map_err(|e| AlephError::tool(e))?;
 
                 // The head, in the exact form `--expect-head` accepts. Emitted
                 // ready to paste because the alternative — telling an auditor to
@@ -412,10 +430,6 @@ Arguments are never stored; each record carries a fingerprint of them, plus a se
                 // plainly: an orphan chain has no key to sign with, and an
                 // auditor reading this output must not have to open the file
                 // to learn which of the two it is.
-                let signature = doc.signature.as_ref().map_or_else(
-                    || "unsigned".to_string(),
-                    |s| format!("{}:{}", s.scheme, s.signer_fp),
-                );
                 Ok(json!({
                     "action": "export",
                     "agent": agent,
@@ -446,29 +460,41 @@ Arguments are never stored; each record carries a fingerprint of them, plus a se
                         .map_err(|e| AlephError::tool(e.to_string()))?;
 
                 let envelope_path = crate::identity::envelope_path(std::path::Path::new(&path));
-                let body = serde_json::to_string_pretty(&envelope)
-                    .map_err(|e| AlephError::tool(e.to_string()))?;
-                std::fs::write(&envelope_path, body).map_err(|e| {
-                    AlephError::tool(format!("cannot write {}: {e}", envelope_path.display()))
-                })?;
-                // Same 0600 discipline as the chain export. The envelope sits
-                // next to the artifact (not under the data dir), but it names
-                // the agent and its key fingerprint — metadata the local
-                // multi-user box has no reason to world-read.
-                #[cfg(unix)]
-                {
-                    use std::os::unix::fs::PermissionsExt;
-                    std::fs::set_permissions(
-                        &envelope_path,
-                        std::fs::Permissions::from_mode(0o600),
-                    )
-                    .map_err(|e| {
-                        AlephError::tool(format!(
-                            "cannot set permissions on {}: {e}",
-                            envelope_path.display()
-                        ))
+                // Read out of the envelope BEFORE it moves into the blocking
+                // writer below.
+                let sha256 = envelope.sha256.clone();
+                let signer_fp = envelope.signer_fp.clone();
+                // Writing the envelope touches the disk on the artifact's own
+                // volume — blocking work, and this tool call runs on the async
+                // executor. The write and the chmod move to the blocking pool
+                // as one unit, so the file is never left world-readable.
+                let write_path = envelope_path.clone();
+                tokio::task::spawn_blocking(move || -> std::result::Result<(), String> {
+                    let body = serde_json::to_string_pretty(&envelope)
+                        .map_err(|e| format!("cannot serialize the envelope: {e}"))?;
+                    std::fs::write(&write_path, body).map_err(|e| {
+                        format!("cannot write {}: {e}", write_path.display())
                     })?;
-                }
+                    // Same 0600 discipline as the chain export. The envelope sits
+                    // next to the artifact (not under the data dir), but it names
+                    // the agent and its key fingerprint — metadata the local
+                    // multi-user box has no reason to world-read.
+                    #[cfg(unix)]
+                    {
+                        use std::os::unix::fs::PermissionsExt;
+                        std::fs::set_permissions(
+                            &write_path,
+                            std::fs::Permissions::from_mode(0o600),
+                        )
+                        .map_err(|e| {
+                            format!("cannot set permissions on {}: {e}", write_path.display())
+                        })?;
+                    }
+                    Ok(())
+                })
+                .await
+                .map_err(|e| AlephError::tool(format!("the envelope writer failed: {e}")))?
+                .map_err(|e| AlephError::tool(e))?;
 
                 // The signing is itself a fact the agent's chain must be able
                 // to prove: the envelope can be copied anywhere, so the chain
@@ -483,7 +509,7 @@ Arguments are never stored; each record carries a fingerprint of them, plus a se
                     outcome: LedgerOutcome::Ok,
                     // The artifact's SHA-256: which bytes were signed, without
                     // storing the artifact.
-                    args_fp: Some(envelope.sha256.clone()),
+                    args_fp: Some(sha256.clone()),
                     detail: format!("signed artifact; envelope at {}", envelope_path.display()),
                     principal: crate::gateway::visibility::ambient_actor(),
                 })
@@ -494,8 +520,8 @@ Arguments are never stored; each record carries a fingerprint of them, plus a se
                     "agent": agent,
                     "path": path,
                     "signature_file": envelope_path.display().to_string(),
-                    "sha256": envelope.sha256,
-                    "signer_fp": envelope.signer_fp,
+                    "sha256": sha256,
+                    "signer_fp": signer_fp,
                     // The chain record is enqueued, not awaited — the same
                     // fire-and-forget every tool call's own record takes, with
                     // `failed_appends` counting a loss.

@@ -538,6 +538,7 @@ pub async fn fetch_chromium(
     // travels with the second and never leaves it: see [`ChildCapture::top_layer`] for the 15-id
     // collision that makes borrowing the parent's set wrong.
     let mut captures: Vec<(u64, serde_json::Value, HashSet<u64>)> = Vec::new();
+    let mut failed_captures = Vec::new();
     for target in targets.iter().filter(|t| t.r#type == IFRAME_TARGET_TYPE) {
         // **The call that PLACES a child is the same call that decides the child is OURS.**
         // Do not "optimise" this into a narrower enumeration with a separate join: a
@@ -549,6 +550,7 @@ pub async fn fetch_chromium(
             continue;
         };
         let Some(capture) = capture_child(conn, &target.target_id).await else {
+            failed_captures.push(owner);
             continue;
         };
         // **A union over sessions.** Each session's frame tree knows only its own frames, and a
@@ -567,10 +569,11 @@ pub async fn fetch_chromium(
             top_layer,
         })
         .collect();
-    stitch_snapshots(
+    stitch_snapshots_with_failed(
         &parent.raw,
         &parent.top_layer,
         &children,
+        &failed_captures,
         viewport,
         &loaders,
     )
@@ -879,6 +882,17 @@ pub fn stitch_snapshots(
     viewport: Viewport,
     loaders: &HashMap<String, String>,
 ) -> Result<RawDom, BrowserError> {
+    stitch_snapshots_with_failed(parent, parent_top_layer, children, &[], viewport, loaders)
+}
+
+fn stitch_snapshots_with_failed(
+    parent: &serde_json::Value,
+    parent_top_layer: &HashSet<u64>,
+    children: &[ChildCapture<'_>],
+    failed_captures: &[u64],
+    viewport: Viewport,
+    loaders: &HashMap<String, String>,
+) -> Result<RawDom, BrowserError> {
     let parent_snapshot = decode(parent)?;
     let (mut frames, mut unreached) = frames_of(
         &parent_snapshot,
@@ -974,7 +988,11 @@ pub fn stitch_snapshots(
     // Before this split, `a.com → b.com → c.com` — an ad, consent or embed stack,
     // i.e. an ordinary page — returned `Err` and the model got **no page at all**
     // rather than the parent's content plus a confession.
-    let accounted: HashSet<u64> = children.iter().map(|c| c.owner_backend_node_id).collect();
+    let accounted: HashSet<u64> = children
+        .iter()
+        .map(|c| c.owner_backend_node_id)
+        .chain(failed_captures.iter().copied())
+        .collect();
     let unenumerable = unaccounted_frame_elements(&parent_snapshot, &accounted)?;
 
     // **`accounted` is the PARENT's node space and must not be applied here.**
@@ -998,12 +1016,22 @@ pub fn stitch_snapshots(
     // An empty set, spelled out rather than reusing `accounted`, because "this
     // filter is inapplicable here" is the fact worth reading.
     let nothing_is_accounted_in_a_childs_space: HashSet<u64> = HashSet::new();
-    let mut nested: Vec<u64> = Vec::new();
+    let mut nested = Vec::new();
     for snapshot in &child_snapshots {
-        nested.extend(unaccounted_frame_elements(
-            snapshot,
-            &nothing_is_accounted_in_a_childs_space,
-        )?);
+        let frame_elements =
+            unaccounted_frame_elements(snapshot, &nothing_is_accounted_in_a_childs_space)?;
+        if frame_elements.is_empty() {
+            continue;
+        }
+        let frame_id = snapshot
+            .documents
+            .first()
+            .and_then(|document| string_at(&snapshot.strings, document.frame_id))
+            .unwrap_or_else(|| "unknown child frame".to_string());
+        nested.push(format!(
+            "{frame_id}: {} nested frame(s) not captured; backend node ids belong to the child renderer",
+            frame_elements.len()
+        ));
     }
 
     if !children.is_empty() && !unenumerable.is_empty() {
@@ -1028,9 +1056,10 @@ pub fn stitch_snapshots(
     unreached.extend(
         unenumerable
             .into_iter()
-            .chain(nested)
+            .chain(failed_captures.iter().copied())
             .map(UnreachedFrame::NotCaptured),
     );
+    unreached.extend(nested.into_iter().map(UnreachedFrame::Unplaceable));
 
     Ok(RawDom {
         engine: crate::browser::engine::Engine::Chromium,

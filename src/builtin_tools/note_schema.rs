@@ -68,19 +68,28 @@ impl NoteSchemaTool {
             NoteSchemaArgs::Write {
                 content,
                 expected_hash,
-            } => match store.write(&content, expected_hash.as_deref()).await {
-                Ok(h) => Ok(NoteSchemaOutput {
-                    content: None,
-                    content_hash: Some(h),
-                    conflict: false,
-                }),
-                Err(e) if e.to_string().contains("hash conflict") => Ok(NoteSchemaOutput {
-                    content: None,
-                    content_hash: None,
-                    conflict: true,
-                }),
-                Err(e) => Err(e),
-            },
+            } => {
+                if expected_hash.is_none() && store.read().await?.is_some() {
+                    return Ok(NoteSchemaOutput {
+                        content: None,
+                        content_hash: None,
+                        conflict: true,
+                    });
+                }
+                match store.write(&content, expected_hash.as_deref()).await {
+                    Ok(h) => Ok(NoteSchemaOutput {
+                        content: None,
+                        content_hash: Some(h),
+                        conflict: false,
+                    }),
+                    Err(e) if e.to_string().contains("hash conflict") => Ok(NoteSchemaOutput {
+                        content: None,
+                        content_hash: None,
+                        conflict: true,
+                    }),
+                    Err(e) => Err(e),
+                }
+            }
         }
     }
 }
@@ -112,6 +121,19 @@ mod tests {
             .unwrap();
         assert!(!w1.conflict);
         let hash = w1.content_hash.clone().unwrap();
+
+        // A missing hash is accepted only while the file is absent.
+        let force_write = tool
+            .call(
+                "default",
+                NoteSchemaArgs::Write {
+                    content: "must not replace existing schema".into(),
+                    expected_hash: None,
+                },
+            )
+            .await
+            .unwrap();
+        assert!(force_write.conflict);
 
         // Subsequent read returns same hash.
         let r2 = tool.call("default", NoteSchemaArgs::Read).await.unwrap();
