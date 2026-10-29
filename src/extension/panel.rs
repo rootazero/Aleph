@@ -60,7 +60,6 @@ pub(crate) struct PanelSnapshotProjection {
 /// A generic plugin record without an explicit `panel` section is intentionally
 /// a no-op. The manifest never selects trust, status, origin, or the asset
 /// base: those facts come from the record and host policy.
-#[must_use]
 pub(crate) fn derive_panel_declaration(
     record: &PluginRecord,
     trust_policy: &OwnerTrustPolicy,
