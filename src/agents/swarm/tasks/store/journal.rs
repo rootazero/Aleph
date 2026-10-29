@@ -34,11 +34,23 @@ pub(super) async fn upsert_task_journal(
     let now = now_epoch();
     let confidence_i: Option<i64> = input.confidence.map(|v| i64::from(v.min(100)));
     let conn = store.conn.lock().await;
+    // `created_at` is the INSERT time and stays that way: it is deliberately
+    // NOT part of the DO UPDATE SET list, so rewriting a journal keeps the
+    // original creation timestamp and the age of a long-running task's
+    // journal can be told from the age of a fresh one. `updated_at` records
+    // the LAST WRITE.
+    //
+    // The PUBLIC `TaskExitJournal::created_at` field is documented as "the
+    // wall-clock when this journal was last written", so the read paths
+    // return `COALESCE(updated_at, created_at)`: the public field keeps its
+    // documented meaning while the column keeps the insert-time meaning.
+    // Renaming either side belongs to the `CoordTaskStore` trait owner, not
+    // to this module.
     conn.execute(
         r#"
         INSERT INTO coord_task_journals
-          (task_id, agent_id, summary, decisions, artifacts_ref, next_steps, confidence, created_at)
-        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+          (task_id, agent_id, summary, decisions, artifacts_ref, next_steps, confidence, created_at, updated_at)
+        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?8)
         ON CONFLICT(task_id) DO UPDATE SET
           agent_id      = excluded.agent_id,
           summary       = excluded.summary,
@@ -46,7 +58,7 @@ pub(super) async fn upsert_task_journal(
           artifacts_ref = excluded.artifacts_ref,
           next_steps    = excluded.next_steps,
           confidence    = excluded.confidence,
-          created_at    = excluded.created_at
+          updated_at    = excluded.updated_at
         "#,
         params![
             input.task_id,
@@ -80,7 +92,7 @@ pub(super) async fn get_task_journal(
     let mut stmt = conn
         .prepare_cached(
             "SELECT task_id, agent_id, summary, decisions, artifacts_ref, next_steps, \
-                    confidence, created_at \
+                    confidence, COALESCE(updated_at, created_at) \
              FROM coord_task_journals WHERE task_id = ?1",
         )
         .map_err(db_err)?;
@@ -119,11 +131,11 @@ pub(super) async fn list_team_journals(
     let mut stmt = conn
         .prepare_cached(
             "SELECT j.task_id, j.agent_id, j.summary, j.decisions, j.artifacts_ref, \
-                    j.next_steps, j.confidence, j.created_at \
+                    j.next_steps, j.confidence, COALESCE(j.updated_at, j.created_at) \
              FROM coord_task_journals j \
              JOIN coord_tasks t ON t.id = j.task_id \
              WHERE t.team_id = ?1 \
-             ORDER BY j.created_at DESC",
+             ORDER BY COALESCE(j.updated_at, j.created_at) DESC",
         )
         .map_err(db_err)?;
     let rows = stmt
