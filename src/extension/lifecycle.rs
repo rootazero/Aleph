@@ -2133,6 +2133,335 @@ handler = "handler"
     }
 
     #[tokio::test]
+    async fn stage_f_cold_provider_surfaces_do_not_read_or_create_guest() {
+        use crate::capability::facade::{Scope, TransportTarget, Zahir};
+        use crate::capability::ownership::OwnershipTree;
+        use crate::capability::provider::ProviderState;
+        use crate::capability::zahir_facade::ZahirFacade;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let _home = isolated_home(tmp.path());
+        let (manager, canonical, owner) = b3_cold_manager(tmp.path()).await;
+        let facade = ZahirFacade::new(canonical.as_ref().clone(), Arc::new(OwnershipTree::new()));
+
+        let row = manager.get_plugin_record("lazy-wasm").await.unwrap();
+        assert_eq!(row.status, PluginStatus::Cold);
+        assert!(manager
+            .discovered_plugin_ids()
+            .unwrap()
+            .iter()
+            .any(|(id, _)| id == "lazy-wasm"));
+        assert!(manager
+            .get_plugin_registry()
+            .await
+            .list_tools_for_plugin("lazy-wasm")
+            .is_empty());
+        assert!(canonical.canonical_publication().entries().is_empty());
+        assert!(facade.describe(Scope::default()).capabilities.is_empty());
+        assert!(facade
+            .project(TransportTarget::Mcp, Scope::default())
+            .capabilities
+            .is_empty());
+
+        let loader = manager.plugin_loader.read().await;
+        let probe = loader.wasm_load_probe();
+        assert_eq!(probe.guest_byte_reads(), 0);
+        assert_eq!(probe.guest_instance_created(), 0);
+        assert_eq!(probe.guest_instance_dropped(), 0);
+        assert!(!loader.is_wasm_runtime_active());
+        drop(loader);
+
+        let _ = manager
+            .set_plugin_enabled("lazy-wasm", false)
+            .await
+            .unwrap();
+        assert_eq!(
+            manager.get_plugin_record("lazy-wasm").await.unwrap().status,
+            PluginStatus::Disabled
+        );
+        assert_eq!(owner.provider.state(), ProviderState::Disabled);
+        let loader = manager.plugin_loader.read().await;
+        let probe = loader.wasm_load_probe();
+        assert_eq!(probe.guest_byte_reads(), 0);
+        assert_eq!(probe.guest_instance_created(), 0);
+        assert_eq!(probe.guest_instance_dropped(), 0);
+        assert!(!loader.is_wasm_runtime_active());
+    }
+
+    #[tokio::test]
+    async fn stage_f_provider_activation_executes_real_guest_through_current_generation() {
+        use crate::capability::provider::ProviderState;
+        use crate::extension::plugin_state::PluginRuntimeOutcome;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let _home = isolated_home(tmp.path());
+        let (manager, canonical, owner) = b3_cold_manager(tmp.path()).await;
+        let outcome = b3_enable_cold_owner(&manager, "lazy-wasm").await;
+
+        assert_eq!(outcome.runtime_outcome, PluginRuntimeOutcome::Mounted);
+        assert_eq!(owner.provider.state(), ProviderState::Ready);
+        let (_, generation) = owner.provider.snapshot();
+        assert!(generation > 0);
+        let publication = canonical
+            .capture_entry("lazy_tool")
+            .expect("activation must publish the real provider entry");
+        assert_eq!(publication.provider_generation(), generation);
+        assert_eq!(
+            b3_call_canonical(canonical.clone(), "lazy_tool")
+                .await
+                .unwrap()
+                .value,
+            serde_json::json!("A")
+        );
+        assert!(owner.provider.acquire_call(generation).is_ok());
+
+        let loader = manager.plugin_loader.read().await;
+        let probe = loader.wasm_load_probe();
+        assert_eq!(probe.guest_byte_reads(), 1);
+        assert_eq!(probe.guest_instance_created(), 1);
+        assert_eq!(probe.guest_instance_dropped(), 0);
+        drop(loader);
+        assert!(manager.unmount("lazy-wasm").await.unwrap().all_ok());
+    }
+
+    #[tokio::test]
+    async fn stage_f_provider_replacement_fences_old_generation_and_drops_exact_owner() {
+        use crate::capability::provider::ProviderState;
+        use crate::extension::plugin_state::PluginRuntimeOutcome;
+        use crate::extension::runtime::wasm::tests::guest_fixture::{
+            manifest_with_guest, PAYLOAD_B,
+        };
+
+        let tmp = tempfile::tempdir().unwrap();
+        let _home = isolated_home(tmp.path());
+        let (manager, canonical, owner) = b3_cold_manager(tmp.path()).await;
+        let _ = b3_enable_cold_owner(&manager, "lazy-wasm").await;
+        assert_eq!(owner.provider.state(), ProviderState::Ready);
+        let (_, old_generation) = owner.provider.snapshot();
+        let old_owner_generation = owner.owner_generation;
+        let old = canonical.capture_entry("lazy_tool").unwrap();
+        let binding = manager
+            .plugin_loader
+            .read()
+            .await
+            .bind_wasm("lazy-wasm", "handler")
+            .unwrap();
+        let (probe, old_receipt) = {
+            let loader = manager.plugin_loader.read().await;
+            (
+                loader.wasm_load_probe(),
+                loader.wasm_instance_receipt("lazy-wasm").unwrap(),
+            )
+        };
+        assert_eq!(
+            b3_call_canonical(canonical.clone(), "lazy_tool")
+                .await
+                .unwrap()
+                .value,
+            serde_json::json!("A")
+        );
+
+        manifest_with_guest(
+            &tmp.path().join("plugins/lazy-wasm"),
+            "lazy-wasm",
+            PAYLOAD_B,
+        );
+        assert_eq!(
+            manager.reload_plugin("lazy-wasm").await.unwrap(),
+            PluginStatus::Cold
+        );
+        assert!(!old.validate(&canonical.canonical_publication()));
+        assert!(owner.provider.acquire_call(old_generation).is_err());
+        assert!(!old_receipt.is_dropped());
+        assert_eq!(probe.guest_instance_dropped(), 0);
+        assert!(manager
+            .plugin_loader
+            .read()
+            .await
+            .call_bound(&binding, serde_json::json!({}))
+            .is_err());
+
+        drop(owner);
+        drop(old);
+        drop(binding);
+        assert!(old_receipt.is_dropped());
+        assert_eq!(probe.guest_instance_dropped(), 1);
+
+        let replacement_outcome = b3_enable_cold_owner(&manager, "lazy-wasm").await;
+        assert_eq!(
+            replacement_outcome.runtime_outcome,
+            PluginRuntimeOutcome::Mounted
+        );
+        let replacement = manager.runtime_owner("lazy-wasm").unwrap();
+        let (_, new_generation) = replacement.provider.snapshot();
+        let new_receipt = manager
+            .plugin_loader
+            .read()
+            .await
+            .wasm_instance_receipt("lazy-wasm")
+            .unwrap();
+        assert_ne!(old_receipt.id(), new_receipt.id());
+        assert_eq!(new_generation, 1);
+        assert!(replacement.owner_generation > old_owner_generation);
+        assert_eq!(
+            b3_call_canonical(canonical.clone(), "lazy_tool")
+                .await
+                .unwrap()
+                .value,
+            serde_json::json!("B")
+        );
+        assert_eq!(probe.guest_byte_reads(), 2);
+        assert_eq!(probe.guest_instance_created(), 2);
+        assert!(manager.unmount("lazy-wasm").await.unwrap().all_ok());
+        drop(replacement);
+        assert!(new_receipt.is_dropped());
+        assert_eq!(probe.guest_instance_dropped(), 2);
+        assert_eq!(
+            probe.dropped_instance_ids(),
+            vec![old_receipt.id(), new_receipt.id()]
+        );
+    }
+
+    #[tokio::test]
+    async fn stage_f_failed_provider_activation_keeps_real_failure_residual() {
+        use crate::capability::provider::ProviderState;
+        use crate::extension::plugin_state::{PluginControlPhase, PluginRuntimeOutcome};
+
+        let tmp = tempfile::tempdir().unwrap();
+        let _home = isolated_home(tmp.path());
+        let (manager, _, owner) = b3_cold_manager(tmp.path()).await;
+        std::fs::remove_file(tmp.path().join("plugins/lazy-wasm/lazy-wasm.wasm")).unwrap();
+
+        let failed = manager
+            .set_plugin_enabled("lazy-wasm", true)
+            .await
+            .unwrap_err()
+            .outcome;
+        assert_eq!(failed.runtime_outcome, PluginRuntimeOutcome::Failed);
+        assert_eq!(failed.error_phase, Some(PluginControlPhase::Reconcile));
+        assert_eq!(failed.actual_state, "failed");
+        assert!(failed
+            .error
+            .as_deref()
+            .is_some_and(|error| error.contains("wasm_module")));
+        assert_eq!(owner.provider.state(), ProviderState::Failed);
+        assert!(!manager.plugin_loader.read().await.is_loaded("lazy-wasm"));
+        let probe = manager.plugin_loader.read().await.wasm_load_probe();
+        assert_eq!(probe.guest_instance_created(), 0);
+        assert_eq!(probe.guest_instance_dropped(), 0);
+    }
+
+    #[tokio::test]
+    async fn stage_f_failed_provider_build_keeps_real_failure_residual() {
+        use crate::capability::provider::ProviderState;
+        use crate::extension::plugin_state::{PluginControlPhase, PluginRuntimeOutcome};
+
+        let tmp = tempfile::tempdir().unwrap();
+        let _home = isolated_home(tmp.path());
+        let (manager, _, owner) = b3_cold_manager(tmp.path()).await;
+        let wasm_path = tmp.path().join("plugins/lazy-wasm/lazy-wasm.wasm");
+        let invalid_bytes = b"stage-f-invalid-wasm";
+        std::fs::write(&wasm_path, invalid_bytes).unwrap();
+
+        let failed = manager
+            .set_plugin_enabled("lazy-wasm", true)
+            .await
+            .unwrap_err()
+            .outcome;
+        assert_eq!(failed.runtime_outcome, PluginRuntimeOutcome::Failed);
+        assert_eq!(failed.error_phase, Some(PluginControlPhase::Reconcile));
+        assert_eq!(failed.actual_state, "failed");
+        assert!(failed.error.is_some());
+        assert_eq!(owner.provider.state(), ProviderState::Failed);
+        assert!(!manager.plugin_loader.read().await.is_loaded("lazy-wasm"));
+        let probe = manager.plugin_loader.read().await.wasm_load_probe();
+        assert_eq!(probe.guest_byte_reads(), 1);
+        assert_eq!(probe.guest_bytes(), invalid_bytes.len());
+        assert_eq!(probe.guest_instance_created(), 0);
+        assert_eq!(probe.guest_instance_dropped(), 0);
+    }
+
+    #[tokio::test]
+    async fn stage_f_failed_provider_publication_keeps_incumbent_and_loser_residual() {
+        use super::super::runtime_owner::OwnerFailure;
+        use crate::capability::provider::ProviderState;
+        use crate::extension::plugin_state::PluginRuntimeOutcome;
+        use crate::tools::registry::PluginPublicationError;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let _home = isolated_home(tmp.path());
+        let (manager, canonical, incumbent) = b3_cold_manager(tmp.path()).await;
+        let first = b3_enable_cold_owner(&manager, "lazy-wasm").await;
+        assert_eq!(first.runtime_outcome, PluginRuntimeOutcome::Mounted);
+        let revision = canonical.revision();
+        let root = tmp.path().join("second-manager");
+        let (other, _, loser) = b3_cold_manager_with_registry(&root, canonical.clone()).await;
+
+        assert!(other.set_plugin_enabled("lazy-wasm", true).await.is_err());
+        assert_eq!(loser.provider.state(), ProviderState::Failed);
+        assert!(loser
+            .failures
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|failure| matches!(
+                failure,
+                OwnerFailure::Publication(PluginPublicationError::ScopeOccupied)
+            )));
+        assert!(!other.plugin_loader.read().await.is_loaded("lazy-wasm"));
+        assert_eq!(canonical.revision(), revision);
+        assert!(canonical.capture_entry("lazy_tool").is_some());
+        assert!(manager.owner_is_current(&incumbent));
+        assert!(manager.unmount("lazy-wasm").await.unwrap().all_ok());
+    }
+
+    #[tokio::test]
+    async fn stage_f_failed_provider_dispose_keeps_failed_owner_residual() {
+        use super::super::runtime_owner::OwnerFailure;
+        use crate::capability::provider::ProviderState;
+        use crate::extension::effects::sync_disposer;
+        use crate::extension::plugin_state::PluginRuntimeOutcome;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let _home = isolated_home(tmp.path());
+        let (manager, canonical, owner) = b3_cold_manager(tmp.path()).await;
+        let outcome = b3_enable_cold_owner(&manager, "lazy-wasm").await;
+        assert_eq!(outcome.runtime_outcome, PluginRuntimeOutcome::Mounted);
+        manager
+            .scopes
+            .lock()
+            .unwrap()
+            .get_mut("lazy-wasm")
+            .unwrap()
+            .effect(
+                "service",
+                sync_disposer(|| Err("stage-f disposer fault".into())),
+            );
+
+        assert!(matches!(
+            manager.unmount("lazy-wasm").await,
+            Err(UnmountError::RuntimeOwnerResidual(_))
+        ));
+        assert_eq!(owner.provider.state(), ProviderState::Failed);
+        assert!(manager.owner_is_current(&owner));
+        assert!(owner.acquire_permit().await.is_err());
+        assert!(canonical.capture_entry("lazy_tool").is_none());
+        assert!(owner.receipt.lock().unwrap().is_some());
+        assert!(owner
+            .failures
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|failure| matches!(
+                failure,
+                OwnerFailure::Dispose(report)
+                    if report
+                        .failures()
+                    .any(|(step, cause)| step == "service" && cause == "stage-f disposer fault")
+            )));
+    }
+
+    #[tokio::test]
     async fn stage_e_wasm_load_reads_guest_bytes_and_drops_exact_instance_after_unmount() {
         let tmp = tempfile::tempdir().unwrap();
         let _home = isolated_home(tmp.path());
