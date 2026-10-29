@@ -2174,13 +2174,12 @@ handler = "handler"
         let _home = isolated_home(tmp.path());
         let tree = Arc::new(crate::capability::ownership::OwnershipTree::new());
         let canonical = Arc::new(crate::tools::ToolHandlerRegistry::new());
-        let (manager, canonical, _owner) =
-            b3_cold_manager_with_registry_and_ownership_tree(
-                tmp.path(),
-                canonical,
-                Arc::clone(&tree),
-            )
-            .await;
+        let (manager, canonical, _owner) = b3_cold_manager_with_registry_and_ownership_tree(
+            tmp.path(),
+            canonical,
+            Arc::clone(&tree),
+        )
+        .await;
         let host = crate::capability::projection_host::ProjectionHost::mount(
             canonical.as_ref().clone(),
             Arc::clone(&tree),
@@ -2204,13 +2203,12 @@ handler = "handler"
         let _home = isolated_home(tmp.path());
         let tree = Arc::new(crate::capability::ownership::OwnershipTree::new());
         let canonical = Arc::new(crate::tools::ToolHandlerRegistry::new());
-        let (manager, canonical, owner) =
-            b3_cold_manager_with_registry_and_ownership_tree(
-                tmp.path(),
-                canonical,
-                Arc::clone(&tree),
-            )
-            .await;
+        let (manager, canonical, owner) = b3_cold_manager_with_registry_and_ownership_tree(
+            tmp.path(),
+            canonical,
+            Arc::clone(&tree),
+        )
+        .await;
         let host = crate::capability::projection_host::ProjectionHost::mount(
             canonical.as_ref().clone(),
             Arc::clone(&tree),
@@ -2367,13 +2365,12 @@ handler = "handler"
         let _home = isolated_home(tmp.path());
         let tree = Arc::new(crate::capability::ownership::OwnershipTree::new());
         let canonical = Arc::new(crate::tools::ToolHandlerRegistry::new());
-        let (manager, canonical, owner) =
-            b3_cold_manager_with_registry_and_ownership_tree(
-                tmp.path(),
-                canonical,
-                Arc::clone(&tree),
-            )
-            .await;
+        let (manager, canonical, owner) = b3_cold_manager_with_registry_and_ownership_tree(
+            tmp.path(),
+            canonical,
+            Arc::clone(&tree),
+        )
+        .await;
         let host = crate::capability::projection_host::ProjectionHost::mount(
             canonical.as_ref().clone(),
             Arc::clone(&tree),
@@ -2580,7 +2577,6 @@ handler = "handler"
             vec![old_receipt.id(), new_receipt.id()]
         );
     }
-
 
     #[tokio::test]
     async fn stage_f_failed_provider_activation_keeps_real_failure_residual() {
