@@ -49,6 +49,7 @@ pub mod manifest;
 pub mod mcp_config;
 #[cfg(test)]
 mod mcp_plugin_tests;
+mod panel;
 mod plugin_ops;
 pub mod plugin_secrets;
 pub mod plugin_state;
@@ -217,6 +218,12 @@ pub struct ExtensionManager {
 
     /// Monotonic revision for active plugin tool snapshot changes.
     plugin_tool_revision: Arc<AtomicU64>,
+
+    /// Canonical Panel capability snapshot, replaced at the lifecycle projection chokepoint.
+    panel_snapshot: Arc<StdRwLock<aleph_protocol::panel::PanelUiCapabilitySnapshot>>,
+
+    /// Monotonic revision for canonical Panel capability snapshots.
+    panel_revision: Arc<AtomicU64>,
 
     /// Serialises every transition: the lifecycle primitives, `ensure_loaded`,
     /// and a server-start watcher's final readiness write + view recompute
@@ -473,6 +480,10 @@ impl ExtensionManager {
             active_plugin_tools: Arc::new(StdRwLock::new(HashMap::new())),
             plugin_scope_keys: Arc::new(StdRwLock::new(HashMap::new())),
             plugin_tool_revision: Arc::new(AtomicU64::new(0)),
+            panel_snapshot: Arc::new(StdRwLock::new(
+                aleph_protocol::panel::PanelUiCapabilitySnapshot::new(0, Vec::new()),
+            )),
+            panel_revision: Arc::new(AtomicU64::new(0)),
             load_guard: Arc::new(Mutex::new(())),
             boot_guard: Arc::new(Mutex::new(())),
             memory_registry: crate::sync_primitives::RwLock::new(None),
@@ -1222,6 +1233,21 @@ impl ExtensionManager {
     /// Monotonic revision for active plugin tool metadata.
     pub fn plugin_tool_revision(&self) -> u64 {
         self.plugin_tool_revision.load(Ordering::SeqCst)
+    }
+
+    /// The canonical Panel capability snapshot last published by lifecycle projection.
+    #[must_use]
+    pub fn panel_ui_capability_snapshot(&self) -> aleph_protocol::panel::PanelUiCapabilitySnapshot {
+        self.panel_snapshot
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+    }
+
+    /// Monotonic revision of the canonical Panel capability snapshot.
+    #[must_use]
+    pub fn panel_ui_capability_revision(&self) -> u64 {
+        self.panel_revision.load(Ordering::SeqCst)
     }
 
     /// Snapshot of active plugin tools keyed by short tool name.
