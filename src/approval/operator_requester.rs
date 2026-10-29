@@ -225,7 +225,13 @@ impl OperatorApprovalRequester {
                 session_key: String::new(),
             },
         };
-        let _ = self.event_bus.publish_frame(&frame);
+        // The card was already answered; this frame only tells the operator's
+        // surface to close it. Losing it leaves a stale card, so it must not
+        // be silent — but it must NOT change the outcome (the decision is
+        // already made).
+        if let Err(e) = self.event_bus.publish_frame(&frame) {
+            tracing::warn!(error = %e, "failed to publish final approval event");
+        }
         // Only an ACTUAL AllowOnce is permission. Never map/clamp a wider
         // decision here, and never return a session or persistent outcome.
         if decision == Some(ApprovalDecisionType::AllowOnce)

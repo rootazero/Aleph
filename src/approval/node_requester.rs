@@ -6,7 +6,10 @@
 //!     (which renders
 //!     `ExecApprovalRecord.command` after refetching `exec.approvals.pending`)
 //!     shows the node context with ZERO frontend change,
-//!   - it returns a wire outcome string instead of an `ApprovalOutcome`.
+//!   - it returns a wire outcome string instead of an `ApprovalOutcome`,
+//!   - its answer is ONE-SHOT: the approval authorizes that single call and
+//!     mints no standing grant (the center could not cascade or revoke one —
+//!     the record carries no grant key).
 //!
 //! Reuses the shared `ExecApprovalManager` so the operator's existing
 //! `exec.approval.resolve` RPC wakes this driver's oneshot.
@@ -22,14 +25,23 @@ use crate::sandbox::exec_approval::gate::ApprovalOutcome;
 /// Render an outcome as the wire string consumed by the node's
 /// `outcome_from_str`. The decision → outcome step is the shared
 /// [`ApprovalDecisionType::to_outcome_within`] mapping, and the set this path
-/// names is [`session_max`](crate::exec::allowed_decisions::session_max):
-/// permanent device elevation is out of scope (same as Phase 2b), and a remote
-/// center answering "always" must not mint an install-wide grant on this side.
+/// names is [`once_only`](crate::exec::allowed_decisions::once_only): a node
+/// approval authorizes ONE call.
+///
+/// A standing grant cannot be minted across the cluster boundary. The request
+/// carries no local action identity for either grant tier to key on, and its
+/// record carries no grant key, so the center could neither cascade nor
+/// revoke such a grant — the node would keep a standing permission the center
+/// cannot see. `once_only` is the canonical set for a cluster node's
+/// reverse-RPC approval, and the manager clamps an operator's decision to the
+/// recorded set, so a wider decision cannot survive the mapping even if one
+/// is offered. Permanent device elevation is out of scope (same as Phase 2b).
 /// This fn only fixes the cluster wire vocabulary, which must not change.
 ///
-/// `ApprovedAlways` is unreachable here for that reason, and is rendered as the
-/// session grant rather than silently as "denied" — an approval must never be
-/// turned into a refusal by a rendering table.
+/// `ApprovedForSession` / `ApprovedAlways` are unreachable here — the
+/// one-shot set clamps every wider decision to `AllowOnce` — but they are
+/// still rendered as the session grant rather than silently as "denied": an
+/// approval must never be turned into a refusal by a rendering table.
 const fn outcome_to_wire(outcome: ApprovalOutcome) -> &'static str {
     match outcome {
         ApprovalOutcome::Approved => "approved",
@@ -97,9 +109,13 @@ pub async fn run_node_approval(
         // The node's redacted summary is not a canonical action identity — no
         // session-grant cascade for node approvals.
         grant_key: None,
-        // A node approval can be answered once; it carries no local action
-        // identity for either grant tier to key on.
-        allowed_decisions: crate::exec::allowed_decisions::session_max(),
+        // A node approval authorizes ONE call: it carries no local action
+        // identity for either grant tier to key on, and a session grant minted
+        // here would be invisible to the center (the record has no grant key,
+        // so nothing could cascade or revoke it) while the node kept the
+        // standing permission. `once_only` is the canonical set for a cluster
+        // node's reverse-RPC approval.
+        allowed_decisions: crate::exec::allowed_decisions::once_only(),
     };
     let record = manager.create(&request, DEFAULT_APPROVAL_TIMEOUT_MS);
     // Register BEFORE publishing so an instantly-resolving operator cannot race
@@ -156,8 +172,12 @@ pub async fn run_node_approval(
         tracing::warn!(error = %e, "failed to publish final approval event for node approval");
     }
 
+    // The SAME one-shot set decides the outcome: the manager already clamps
+    // the operator's decision to the recorded set, and this is the second
+    // place that says so, so a decision that reached the mapping by another
+    // path cannot widen it either.
     let outcome = decision.map_or(ApprovalOutcome::Timeout, |d| {
-        d.to_outcome_within(&crate::exec::allowed_decisions::session_max())
+        d.to_outcome_within(&crate::exec::allowed_decisions::once_only())
     });
     (outcome_to_wire(outcome), resolved.deny_reason)
 }
@@ -167,14 +187,20 @@ pub async fn run_node_approval(
 ///
 /// Strips control characters (incl. newline, which would let a malicious
 /// node forge a fake audit-log entry) and truncates to `max_len` bytes.
-/// ANSI escape sequences are stripped to defend terminal/UI rendering.
+/// ANSI escape sequences are stripped WHOLE — introducer, parameters and
+/// final byte — to defend terminal/UI rendering: dropping only the ESC byte
+/// leaves the rest of the sequence ("[31m") in the card, where a renderer may
+/// still interpret it.
 fn sanitize_for_display(s: &str, max_len: usize) -> String {
     let mut out = String::with_capacity(s.len().min(max_len));
-    for c in s.chars() {
-        if c.is_control() {
+    let mut chars = s.chars();
+    while let Some(c) = chars.next() {
+        if c == '\u{1b}' {
+            // ESC — the introducer of an ANSI sequence. Consume the rest of
+            // the sequence and leave a single space behind.
+            skip_escape_sequence(&mut chars);
             out.push(' ');
-        } else if c == '\u{1b}' {
-            // ESC — drop the start of any ANSI sequence by replacing with space.
+        } else if c.is_control() {
             out.push(' ');
         } else {
             out.push(c);
@@ -187,6 +213,46 @@ fn sanitize_for_display(s: &str, max_len: usize) -> String {
     out
 }
 
+/// Consume the remainder of an ANSI escape sequence, given the introducer
+/// (`ESC`) that has already been read.
+///
+/// The introducer is not the sequence: the parameters and the final byte
+/// follow it, and a renderer may interpret what is left of them.
+fn skip_escape_sequence(chars: &mut std::str::Chars<'_>) {
+    match chars.next() {
+        // CSI — parameters and intermediates, then a final byte in 0x40..=0x7E.
+        Some('[') => {
+            while let Some(c) = chars.next() {
+                if ('\u{40}'..='\u{7e}').contains(&c) {
+                    break;
+                }
+            }
+        }
+        // OSC / DCS / SOS / PM / APC — a string, terminated by BEL or ST
+        // (ESC \).
+        Some(']' | 'P' | 'X' | '^' | '_') => {
+            while let Some(c) = chars.next() {
+                if c == '\u{7}' {
+                    break;
+                }
+                if c == '\u{1b}' {
+                    // ST is ESC \ — drop the backslash with it.
+                    let _ = chars.next();
+                    break;
+                }
+            }
+        }
+        // A two-byte escape, optionally with an intermediate byte
+        // (ESC ( B — a charset designator).
+        Some(c) => {
+            if ('\u{20}'..='\u{2f}').contains(&c) {
+                let _ = chars.next();
+            }
+        }
+        None => {}
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -197,21 +263,18 @@ mod tests {
     #[test]
     fn decision_mapping() {
         // The wire strings are the cluster protocol and must not change; the
-        // decision → outcome step is the shared `to_outcome` mapping.
+        // decision → outcome step is the shared `to_outcome` mapping against
+        // the ONE-SHOT set a node approval is answered with.
         let wire = |d: Option<ApprovalDecisionType>| {
             outcome_to_wire(d.map_or(ApprovalOutcome::Timeout, |d| {
-                d.to_outcome_within(&crate::exec::allowed_decisions::session_max())
+                d.to_outcome_within(&crate::exec::allowed_decisions::once_only())
             }))
         };
         assert_eq!(wire(Some(ApprovalDecisionType::AllowOnce)), "approved");
-        assert_eq!(
-            wire(Some(ApprovalDecisionType::AllowSession)),
-            "approved_session"
-        );
-        assert_eq!(
-            wire(Some(ApprovalDecisionType::AllowAlways)),
-            "approved_session"
-        );
+        // A wider decision is clamped DOWN to the one-shot the node approval
+        // may honor: a node must never receive a standing grant.
+        assert_eq!(wire(Some(ApprovalDecisionType::AllowSession)), "approved");
+        assert_eq!(wire(Some(ApprovalDecisionType::AllowAlways)), "approved");
         assert_eq!(wire(Some(ApprovalDecisionType::Deny)), "denied");
         assert_eq!(wire(None), "timeout");
     }
@@ -268,8 +331,10 @@ mod tests {
                 .map(|p| &p.record.command)
                 .collect::<Vec<_>>()
         );
+        // Resolve with a STANDING grant: the node approval is one-shot, so the
+        // manager clamps it down to the single call it is allowed to authorize.
         assert!(manager.resolve(&id, ApprovalDecisionType::AllowSession, None));
 
-        assert_eq!(handle.await.unwrap(), ("approved_session", None));
+        assert_eq!(handle.await.unwrap(), ("approved", None));
     }
 }
