@@ -76,6 +76,47 @@ fn reject_unknown_keys(input: &Value) -> Result<(), String> {
 
 const BATCH_TASK_ARG_KEYS: &[&str] = &["task", "agent_type", "model", "timeout_secs"];
 
+/// Read an optional string argument, rejecting a wrong-typed value.
+///
+/// A wrong-typed value is not an absent one: defaulting it turns the
+/// caller's request into a *different* request that reports success
+/// (`"agent_type": 7` silently ran the default role, `"model": {}` silently
+/// ran the parent's model) — exactly the outcome `reject_unknown_object_keys`
+/// exists to prevent. An explicit JSON `null` counts as absent, the same
+/// rule the unknown-key rejection uses.
+fn optional_string(value: Option<&Value>, key: &str) -> Result<Option<String>, String> {
+    match value {
+        None | Some(Value::Null) => Ok(None),
+        Some(v) => v.as_str().map(|s| Some(s.to_string())).ok_or_else(|| {
+            format!("'{key}' must be a string (got {})", value_kind(v))
+        }),
+    }
+}
+
+/// Read an optional whole-number argument, rejecting a wrong-typed value
+/// (a float, a negative number, or a string).
+fn optional_u64(value: Option<&Value>, key: &str) -> Result<Option<u64>, String> {
+    match value {
+        None | Some(Value::Null) => Ok(None),
+        Some(v) => v.as_u64().map(Some).ok_or_else(|| {
+            format!(
+                "'{key}' must be a non-negative whole number (got {})",
+                value_kind(v)
+            )
+        }),
+    }
+}
+
+/// Read an optional boolean argument, rejecting a wrong-typed value.
+fn optional_bool(value: Option<&Value>, key: &str) -> Result<Option<bool>, String> {
+    match value {
+        None | Some(Value::Null) => Ok(None),
+        Some(v) => v.as_bool().map(Some).ok_or_else(|| {
+            format!("'{key}' must be a boolean (got {})", value_kind(v))
+        }),
+    }
+}
+
 /// Parse the input JSON into a [`SubagentAction`].
 pub(super) fn parse_args(input: &Value) -> Result<SubagentAction, String> {
     reject_unknown_keys(input)?;
@@ -131,18 +172,39 @@ pub(super) fn parse_args(input: &Value) -> Result<SubagentAction, String> {
         "wait" => {
             // Accept a single `request_id` (string) or `request_ids` (array).
             // Many ids → wait for whichever finishes first.
-            let mut request_ids: Vec<String> = input
-                .get("request_ids")
-                .and_then(|v| v.as_array())
-                .map(|arr| {
-                    arr.iter()
-                        .filter_map(|v| v.as_str())
-                        .map(str::trim)
-                        .filter(|s| !s.is_empty())
-                        .map(str::to_string)
-                        .collect()
-                })
-                .unwrap_or_default();
+            //
+            // A non-string entry is REJECTED, not dropped: the old
+            // `filter_map(as_str)` shape silently shrank the wait set, so the
+            // caller waited for fewer children than it asked for and never
+            // learned which ids were lost. Blank entries are still dropped —
+            // a blank carries no id, and the wait set is what the caller
+            // polls.
+            let mut request_ids: Vec<String> = match input.get("request_ids") {
+                None | Some(Value::Null) => Vec::new(),
+                Some(v) => {
+                    let arr = v.as_array().ok_or_else(|| {
+                        format!(
+                            "'request_ids' must be an array of strings (got {})",
+                            value_kind(v)
+                        )
+                    })?;
+                    let mut ids = Vec::with_capacity(arr.len());
+                    for (idx, item) in arr.iter().enumerate() {
+                        let Some(s) = item.as_str() else {
+                            return Err(format!(
+                                "request_ids[{idx}] must be a string (got {})",
+                                value_kind(item)
+                            ));
+                        };
+                        let s = s.trim();
+                        if s.is_empty() {
+                            continue;
+                        }
+                        ids.push(s.to_string());
+                    }
+                    ids
+                }
+            };
             if request_ids.is_empty() {
                 if let Some(s) = input.get("request_id").and_then(|v| v.as_str()) {
                     let s = s.trim();
@@ -159,9 +221,7 @@ pub(super) fn parse_args(input: &Value) -> Result<SubagentAction, String> {
             }
             // Bounded window: default when omitted, clamped to [1, MAX] so a
             // single wait can never hang the turn past the tool budget.
-            let timeout_secs = input
-                .get("timeout_secs")
-                .and_then(|v| v.as_u64())
+            let timeout_secs = optional_u64(input.get("timeout_secs"), "timeout_secs")?
                 .unwrap_or(DEFAULT_WAIT_TIMEOUT_SECS)
                 .clamp(1, MAX_WAIT_TIMEOUT_SECS);
             return Ok(SubagentAction::Wait {
@@ -187,10 +247,7 @@ pub(super) fn parse_args(input: &Value) -> Result<SubagentAction, String> {
     }
 
     // Legacy heuristic: request_id without task → check_status
-    let request_id = input
-        .get("request_id")
-        .and_then(|v| v.as_str())
-        .map(|s| s.to_string());
+    let request_id = optional_string(input.get("request_id"), "request_id")?;
 
     let task = input
         .get("task")
@@ -250,20 +307,20 @@ pub(super) fn parse_args(input: &Value) -> Result<SubagentAction, String> {
                 }
                 rows.push(BatchTask {
                     task,
-                    agent_type: obj
-                        .get("agent_type")
-                        .and_then(|v| v.as_str())
-                        .map(|s| s.to_string()),
-                    model: obj
-                        .get("model")
-                        .and_then(|v| v.as_str())
-                        .map(|s| s.to_string()),
+                    // A wrong-typed per-entry override is rejected with the
+                    // same rule as the top-level value: a silently dropped
+                    // `agent_type`/`model`/`timeout_secs` would run the
+                    // entry under different conditions than requested and
+                    // report success.
+                    agent_type: optional_string(obj.get("agent_type"), "agent_type")
+                        .map_err(|e| format!("batch_tasks[{idx}]: {e}"))?,
+                    model: optional_string(obj.get("model"), "model")
+                        .map_err(|e| format!("batch_tasks[{idx}]: {e}"))?,
                     // Clamped like the top-level value below — a per-entry
                     // override must not escape the tool-budget ordering
                     // either.
-                    timeout_secs: obj
-                        .get("timeout_secs")
-                        .and_then(|v| v.as_u64())
+                    timeout_secs: optional_u64(obj.get("timeout_secs"), "timeout_secs")
+                        .map_err(|e| format!("batch_tasks[{idx}]: {e}"))?
                         .map(|t| t.clamp(1, max_run_timeout)),
                 });
             }
@@ -287,34 +344,26 @@ pub(super) fn parse_args(input: &Value) -> Result<SubagentAction, String> {
             ),
         };
 
-    let agent_type = input
-        .get("agent_type")
-        .and_then(|v| v.as_str())
-        .map(|s| s.to_string());
+    // Optional scalars are read through the strict helpers above: a
+    // wrong-typed value is an error, not a default. Defaulting it would run
+    // the child under different conditions than the caller asked for (the
+    // default role, the parent's model, a different timeout) and report
+    // success — the near-miss failure mode this parser rejects elsewhere.
+    let agent_type = optional_string(input.get("agent_type"), "agent_type")?;
 
-    let model = input
-        .get("model")
-        .and_then(|v| v.as_str())
-        .map(|s| s.to_string());
+    let model = optional_string(input.get("model"), "model")?;
 
     // Bounded window: default when omitted, clamped to [1, MAX] so the child's
     // own wall-clock timeout always fires before the `subagent` tool budget
     // (and a `0` can never mean "die before the first turn").
-    let timeout_secs = input
-        .get("timeout_secs")
-        .and_then(|v| v.as_u64())
+    let timeout_secs = optional_u64(input.get("timeout_secs"), "timeout_secs")?
         .unwrap_or(DEFAULT_RUN_TIMEOUT_SECS)
         .clamp(1, max_run_timeout);
 
-    let run_in_background = input
-        .get("run_in_background")
-        .and_then(|v| v.as_bool())
-        .unwrap_or(false);
+    let run_in_background =
+        optional_bool(input.get("run_in_background"), "run_in_background")?.unwrap_or(false);
 
-    let context_summary = input
-        .get("context_summary")
-        .and_then(|v| v.as_str())
-        .map(|s| s.to_string());
+    let context_summary = optional_string(input.get("context_summary"), "context_summary")?;
 
     // `context` — where this child starts from. Omitted defers to the target
     // agent's declared `context_mode`, which is what every call made before the

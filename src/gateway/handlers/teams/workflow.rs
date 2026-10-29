@@ -340,7 +340,8 @@ pub async fn handle_workflow_approve_step(
     // then read the task metadata to consult the flag. `verdict_gate`
     // already loaded the task; re-read it here rather than threading it
     // through every arm — the read is cheap and matches the existing arm
-    // shape.
+    // shape. A read that FAILS is fatal for the approval (see below): the
+    // gate may never be skipped.
     if let Some(g) = &params.grounding {
         if !crate::builtin_tools::team::task_review::grounding_kind_valid(&g.kind) {
             return JsonRpcResponse::error(
@@ -354,7 +355,26 @@ pub async fn handle_workflow_approve_step(
             );
         }
     }
-    if let Ok(Some(task)) = coord_store.get_task(&params.task_id).await {
+    // Fail CLOSED when the task cannot be read. The grounding gate is a
+    // CONTROL, and a control enforced only when the lookup happens to succeed
+    // is not a control: a transient read failure (the coord store is one
+    // `Mutex<Connection>` shared with the dispatcher loop — `SQLITE_BUSY` is an
+    // ordinary event) used to skip the gate entirely, so the step was
+    // approved with zero grounding evidence exactly when the system was under
+    // stress. The tool face (`workflow_step_review`) returns a hard error on
+    // the same `Err`, and the sibling verdict gate above refuses on `Err` —
+    // this face must too.
+    let grounding_task = match coord_store.get_task(&params.task_id).await {
+        Ok(task) => task,
+        Err(e) => {
+            return JsonRpcResponse::error(
+                request.id,
+                INTERNAL_ERROR,
+                format!("could not read task '{}': {e}", params.task_id),
+            );
+        }
+    };
+    if let Some(task) = grounding_task {
         if crate::builtin_tools::team::task_review::needs_grounding_bounce(
             crate::builtin_tools::team::task_review::ReviewDecision::Approve,
             &task.metadata,
