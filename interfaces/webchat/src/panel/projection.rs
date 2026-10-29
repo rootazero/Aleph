@@ -9,6 +9,7 @@ use super::source::{
 use aleph_protocol::panel::PANEL_UI_API_MAJOR;
 use aleph_protocol::panel::{
     supported_community_permission, valid_asset_integrity, valid_identity_segment,
+    valid_version_segment,
 };
 use aleph_protocol::panel::{PanelTabDescriptor, PanelTabKey, PanelTabStatus, PanelUiTrust};
 
@@ -239,9 +240,7 @@ fn validate_declaration(
         {
             return Err(PanelProjectionError::InvalidEntry);
         }
-        if !valid_identity_segment(&declaration.plugin_version)
-            || matches!(declaration.plugin_version.as_str(), "." | "..")
-        {
+        if !valid_version_segment(&declaration.plugin_version) {
             return Err(PanelProjectionError::UnversionedEntry);
         }
         let prefix = format!(

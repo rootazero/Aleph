@@ -109,6 +109,16 @@ pub fn valid_identity_segment(value: &str) -> bool {
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
 }
 
+/// Safe version path segment shared by manifest admission and browser validation.
+pub fn valid_version_segment(value: &str) -> bool {
+    !value.is_empty()
+        && value != "."
+        && value != ".."
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-' | b'+'))
+}
+
 /// Validate a relative single-file asset path shared by manifest and browser projection.
 pub fn valid_relative_entry(value: &str) -> bool {
     if value.is_empty() || value.starts_with('/') || value.contains('\\') || value.contains(':') {
@@ -169,6 +179,12 @@ mod tests {
         }
     }
 
+    #[test]
+    fn version_segments_allow_semver_build_metadata_but_not_path_syntax() {
+        assert!(super::valid_version_segment("1.2.3+build.7"));
+        assert!(!super::valid_version_segment("1.2.3/build"));
+        assert!(!super::valid_version_segment(".."));
+    }
     #[test]
     fn panel_descriptor_has_stable_wire_fields_and_enum_spellings() {
         assert_eq!(

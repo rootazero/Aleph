@@ -76,7 +76,7 @@ use super::hooks::HookRegistry;
 use super::visibility::ScopeKey;
 use super::{ExtensionManager, PluginRegistry, ToolRegistration};
 use crate::discovery::DiscoveryManager;
-use crate::sync_primitives::{Arc, AtomicU64, Ordering, RwLock as StdRwLock};
+use crate::sync_primitives::{Arc, AtomicU64, RwLock as StdRwLock};
 
 /// The handles the views are derived from and published to — exactly what
 /// `lifecycle.rs::after_transition` touches, and nothing else of the manager.
@@ -96,7 +96,6 @@ pub(super) struct Views {
     pub(super) owner_trust_policy:
         Arc<crate::sync_primitives::RwLock<crate::extension::plugin_trust::OwnerTrustPolicy>>,
     pub(super) panel_snapshot: Arc<StdRwLock<aleph_protocol::panel::PanelUiCapabilitySnapshot>>,
-    pub(super) panel_revision: Arc<AtomicU64>,
 }
 
 impl ExtensionManager {
@@ -112,7 +111,6 @@ impl ExtensionManager {
             plugin_tool_revision: Arc::clone(&self.plugin_tool_revision),
             owner_trust_policy: Arc::clone(&self.owner_trust_policy),
             panel_snapshot: Arc::clone(&self.panel_snapshot),
-            panel_revision: Arc::clone(&self.panel_revision),
         }
     }
 }
@@ -241,7 +239,12 @@ impl Views {
             .map(|d| d.path)
             .collect();
 
-        let panel_revision = self.panel_revision.fetch_add(1, Ordering::SeqCst) + 1;
+        let panel_revision = self
+            .panel_snapshot
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .revision
+            + 1;
         let projection = self.derive_plugin_projection(panel_revision).await;
         // The plugin roots are published as one process-global with two
         // readers: `get_all_skills_dirs` (the `skill_read` / `skill_list`
@@ -405,7 +408,7 @@ mod tests {
         manager.views().after_transition().await;
 
         let first = manager.panel_ui_capability_snapshot();
-        assert_eq!(manager.panel_ui_capability_revision(), 1);
+        assert_eq!(first.revision, manager.panel_ui_capability_revision());
         assert_eq!(first.declarations.len(), 1);
         assert_eq!(first.declarations[0].plugin_version, "1.0.0");
 
@@ -418,7 +421,7 @@ mod tests {
         manager.views().after_transition().await;
 
         let replacement = manager.panel_ui_capability_snapshot();
-        assert_eq!(manager.panel_ui_capability_revision(), 2);
+        assert_eq!(replacement.revision, manager.panel_ui_capability_revision());
         assert_eq!(replacement.declarations.len(), 1);
         assert_eq!(replacement.declarations[0].plugin_version, "2.0.0");
 
@@ -430,7 +433,7 @@ mod tests {
         manager.views().after_transition().await;
 
         let retracted = manager.panel_ui_capability_snapshot();
-        assert_eq!(manager.panel_ui_capability_revision(), 3);
+        assert_eq!(retracted.revision, manager.panel_ui_capability_revision());
         assert!(retracted.declarations.is_empty());
     }
 }

@@ -8,8 +8,9 @@
 use std::collections::{HashMap, HashSet};
 
 use aleph_protocol::panel::{
-    valid_identity_segment, valid_relative_entry, PanelTabDescriptor, PanelTabKey, PanelTabStatus,
-    PanelUiCapabilityDeclaration, PanelUiCapabilityOrigin, PanelUiCapabilitySnapshot, PanelUiTrust,
+    valid_identity_segment, valid_relative_entry, valid_version_segment, PanelTabDescriptor,
+    PanelTabKey, PanelTabStatus, PanelUiCapabilityDeclaration, PanelUiCapabilityOrigin,
+    PanelUiCapabilitySnapshot, PanelUiTrust,
 };
 
 use super::plugin_trust::OwnerTrustPolicy;
@@ -65,15 +66,15 @@ pub(crate) fn derive_panel_declaration(
     trust_policy: &OwnerTrustPolicy,
     source_revision: u64,
 ) -> Result<Option<PanelUiCapabilityDeclaration>, PanelDeclarationError> {
-    if !trust_policy.allows(&record.id, record.origin) {
-        return Err(PanelDeclarationError::OwnerTrustRejected);
-    }
     if !record.status.is_active() {
         return Ok(None);
     }
     let Some(panel) = record.panel.as_ref() else {
         return Ok(None);
     };
+    if !trust_policy.allows(&record.id, record.origin) {
+        return Err(PanelDeclarationError::OwnerTrustRejected);
+    }
     if !valid_identity_segment(&record.id) {
         return Err(PanelDeclarationError::InvalidPluginId);
     }
@@ -87,7 +88,7 @@ pub(crate) fn derive_panel_declaration(
     else {
         return Err(PanelDeclarationError::MissingVersion);
     };
-    if !valid_identity_segment(version) {
+    if !valid_version_segment(version) {
         return Err(PanelDeclarationError::InvalidManifest(
             "panel.invalid_version",
         ));
@@ -228,6 +229,22 @@ mod tests {
             "./tabs/community.example/1.2.3/overview.js"
         );
         assert_eq!(declaration.public_base, "./tabs/");
+    }
+
+    #[test]
+    fn accepts_semver_build_metadata_in_the_canonical_entry() {
+        let declaration = derive_panel_declaration(
+            &record("community.example", Some("1.2.3+build.7")),
+            &OwnerTrustPolicy::permissive(),
+            1,
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(declaration.plugin_version, "1.2.3+build.7");
+        assert_eq!(
+            declaration.descriptor.entry,
+            "./tabs/community.example/1.2.3+build.7/overview.js"
+        );
     }
 
     #[test]

@@ -222,9 +222,6 @@ pub struct ExtensionManager {
     /// Canonical Panel capability snapshot, replaced at the lifecycle projection chokepoint.
     panel_snapshot: Arc<StdRwLock<aleph_protocol::panel::PanelUiCapabilitySnapshot>>,
 
-    /// Monotonic revision for canonical Panel capability snapshots.
-    panel_revision: Arc<AtomicU64>,
-
     /// Serialises every transition: the lifecycle primitives, `ensure_loaded`,
     /// and a server-start watcher's final readiness write + view recompute
     /// (`lifecycle.rs::watch_server_starts`) — which is why it is shared.
@@ -483,7 +480,6 @@ impl ExtensionManager {
             panel_snapshot: Arc::new(StdRwLock::new(
                 aleph_protocol::panel::PanelUiCapabilitySnapshot::new(0, Vec::new()),
             )),
-            panel_revision: Arc::new(AtomicU64::new(0)),
             load_guard: Arc::new(Mutex::new(())),
             boot_guard: Arc::new(Mutex::new(())),
             memory_registry: crate::sync_primitives::RwLock::new(None),
@@ -1247,7 +1243,7 @@ impl ExtensionManager {
     /// Monotonic revision of the canonical Panel capability snapshot.
     #[must_use]
     pub fn panel_ui_capability_revision(&self) -> u64 {
-        self.panel_revision.load(Ordering::SeqCst)
+        self.panel_ui_capability_snapshot().revision
     }
 
     /// Snapshot of active plugin tools keyed by short tool name.
