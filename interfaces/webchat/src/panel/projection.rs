@@ -441,6 +441,45 @@ mod tests {
     }
 
     #[test]
+    fn explicit_manifest_snapshot_fixture_round_trips_into_webchat_projection() {
+        let wire = serde_json::json!({
+            "revision": 7,
+            "declarations": [{
+                "descriptor": {
+                    "key": {"plugin_id": "community.example", "tab_id": "overview"},
+                    "label": "Overview",
+                    "icon": "layout",
+                    "order": 10,
+                    "entry": "./tabs/community.example/1.2.3/overview.js",
+                    "api_major": 1,
+                    "trust": "trusted",
+                    "permissions": ["sessions.list"],
+                    "status": "enabled",
+                    "status_detail": null
+                },
+                "origin": "community",
+                "plugin_version": "1.2.3",
+                "asset_integrity": "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+                "public_base": "./tabs/",
+                "source_revision": 7
+            }]
+        });
+        let snapshot: PanelUiCapabilitySnapshot = serde_json::from_value(wire).unwrap();
+        let projection = PanelProjection::from_snapshot(community_snapshot(
+            snapshot.revision,
+            snapshot.declarations,
+        ))
+        .unwrap();
+        assert_eq!(projection.registry().source_revision(), 7);
+        assert!(projection
+            .registry()
+            .get(&PanelTabKey {
+                plugin_id: "community.example".into(),
+                tab_id: "overview".into(),
+            })
+            .is_some());
+    }
+    #[test]
     fn valid_community_declaration_projects_in_deterministic_source_order() {
         let mut other = community_declaration(7);
         other.descriptor.key.plugin_id = "community.alpha".into();
