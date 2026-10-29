@@ -85,9 +85,17 @@ The tests establish exact `LoadedWasmPlugin` receipt/drop observations and the p
 
 ## Reviewer status / Reviewer 状态
 
-Independent final reviewer was unavailable. The attempted reviewer used unsupported model `gpt-6-codex` with `openai-codex` and failed before reading the diff: `Codex error: The 'gpt-6-codex' model is not supported when using Codex with a ChatGPT account.` Full failure output: `/var/folders/qt/d007hr751cl59b3_8sptd8fr0000gp/T/acp-delegate/del_mvtj1bea_rkiw.out`. No independent approval is claimed.
+Independent final reviewer completed successfully with `88api/gpt-6.1-sol`. Verdict: **APPROVE WITH NOTES**. The reviewer found no Critical, Important, lifecycle, authority, security, or scope blocker. Full result: `/var/folders/qt/d007hr751cl59b3_8sptd8fr0000gp/T/acp-delegate/del_mvtjnf9f_sjvf.out`.
 
-独立 final reviewer 不可用。尝试使用 `openai-codex` 的 `gpt-6-codex` 在读取 diff 前失败：`Codex error: The 'gpt-6-codex' model is not supported when using Codex with a ChatGPT account.` 完整失败输出：`/var/folders/qt/d007hr751cl59b3_8sptd8fr0000gp/T/acp-delegate/del_mvtj1bea_rkiw.out`。不宣称获得独立批准。
+独立 final reviewer 已使用 `88api/gpt-6.1-sol` 成功完成。结论：**APPROVE WITH NOTES**。reviewer 未发现 Critical、Important、lifecycle、authority、安全或范围阻断项。完整结果：`/var/folders/qt/d007hr751cl59b3_8sptd8fr0000gp/T/acp-delegate/del_mvtjnf9f_sjvf.out`。
+
+The reviewer recorded two optional Minor advisories: a future host accessor could support a direct shared `OwnershipTree` pointer-identity assertion, and Stage G could repeat receipt-ID ordering or successor-generation assertions already covered by Stage F. These are not correctness gaps and were not added: source construction already passes the same Arc, and duplicating Stage F evidence would not change the authority contract.
+
+reviewer 记录了两项可选 Minor advisory：未来 host accessor 可以支持直接断言 shared `OwnershipTree` pointer identity；Stage G 可以重复 Stage F 已覆盖的 receipt-ID 顺序或 successor-generation assertion。这些不是 correctness gap，本次未新增：source construction 已传递同一个 Arc，重复 Stage F evidence 不会改变 authority contract。
+
+An earlier reviewer attempt with unsupported `openai-codex/gpt-6-codex` remains historical tooling context only; the successful `88api/gpt-6.1-sol` review is the independent review result for this stage.
+
+此前使用 unsupported `openai-codex/gpt-6-codex` 的 reviewer 尝试仅作为历史 tooling context 保留；本阶段的独立 review 结果以成功完成的 `88api/gpt-6.1-sol` review 为准。
 
 Manual authority/diff checklist passed: the manager fixture, canonical registry, shared ownership tree, ProjectionHost and facade use one composition; no second registry/tree/lifecycle/generation/cleanup authority was added; host close occurs after plugin cleanup in the tests and before registry-owned scope disposal in the production source-order tests; stale calls fail closed before successor execution; exact old and successor receipts drop only after the retained references are released; residual and proof-limit language stays bounded; no concrete channel, new runtime, dependency, or native/OS claim was added.
 
