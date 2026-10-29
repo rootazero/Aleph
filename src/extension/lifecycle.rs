@@ -1700,21 +1700,35 @@ mod tests {
     /// than made `pub(super)` because the two test modules will diverge (this
     /// one grows the six-effect fixture in P1.13).
     async fn isolated_manager(dir: &Path) -> (ExtensionManager, PathBuf) {
+        isolated_manager_with_ownership_tree(
+            dir,
+            Arc::new(crate::capability::ownership::OwnershipTree::new()),
+        )
+        .await
+    }
+
+    async fn isolated_manager_with_ownership_tree(
+        dir: &Path,
+        tree: Arc<crate::capability::ownership::OwnershipTree>,
+    ) -> (ExtensionManager, PathBuf) {
         let cfg_path = dir.join("plugins.toml");
-        let mut manager = ExtensionManager::new(ExtensionConfig {
-            discovery: DiscoveryConfig {
-                working_dir: dir.to_path_buf(),
-                scan_claude_dirs: false,
-                scan_project_dirs: false,
-                max_upward_depth: 0,
-                claude_home_override: None,
+        let mut manager = ExtensionManager::new_with_ownership_tree(
+            ExtensionConfig {
+                discovery: DiscoveryConfig {
+                    working_dir: dir.to_path_buf(),
+                    scan_claude_dirs: false,
+                    scan_project_dirs: false,
+                    max_upward_depth: 0,
+                    claude_home_override: None,
+                },
+                plugins_config_path: Some(cfg_path.clone()),
+                extra_plugin_parents: vec![crate::discovery::ProjectPluginParent {
+                    project_root: dir.to_path_buf(),
+                    dir: dir.join("plugins"),
+                }],
             },
-            plugins_config_path: Some(cfg_path.clone()),
-            extra_plugin_parents: vec![crate::discovery::ProjectPluginParent {
-                project_root: dir.to_path_buf(),
-                dir: dir.join("plugins"),
-            }],
-        })
+            tree,
+        )
         .await
         .unwrap();
         // The process-global skill system keeps the base dirs earlier fixtures
@@ -2062,10 +2076,27 @@ handler = "handler"
         Arc<crate::tools::ToolHandlerRegistry>,
         Arc<RuntimeOwner>,
     ) {
+        b3_cold_manager_with_registry_and_ownership_tree(
+            root,
+            canonical,
+            Arc::new(crate::capability::ownership::OwnershipTree::new()),
+        )
+        .await
+    }
+
+    async fn b3_cold_manager_with_registry_and_ownership_tree(
+        root: &Path,
+        canonical: Arc<crate::tools::ToolHandlerRegistry>,
+        tree: Arc<crate::capability::ownership::OwnershipTree>,
+    ) -> (
+        Arc<ExtensionManager>,
+        Arc<crate::tools::ToolHandlerRegistry>,
+        Arc<RuntimeOwner>,
+    ) {
         write_cold_tool_wasm_fixture(root);
         let manifest = root.join("plugins/lazy-wasm/aleph.plugin.toml");
         std::fs::write(&manifest, format!("{}\n[[tools]]\nname = \"other_tool\"\ndescription = \"Second tool on the same owner\"\nhandler = \"handler\"\n", std::fs::read_to_string(&manifest).unwrap())).unwrap();
-        let (manager, _) = isolated_manager(root).await;
+        let (manager, _) = isolated_manager_with_ownership_tree(root, tree).await;
         let manager = ExtensionManager::attach_activation_manager(Arc::new(manager));
         manager
             .set_tool_handler_registry(canonical.clone())
@@ -2094,19 +2125,24 @@ handler = "handler"
     fn b4_canonical_service(
         canonical: Arc<crate::tools::ToolHandlerRegistry>,
     ) -> crate::tools::scoped::ScopedToolService {
-        let publication = canonical.canonical_publication();
-        let visible: crate::tools::handlers::McpServerFilter = Arc::new(|_| true);
-        let mut projection = crate::tools::runtime::LoopToolRegistry::new();
-        projection.bind_canonical_registry(Arc::clone(&canonical), visible.clone());
-        // Canonical dispatch validates the captured backend lease through the
-        // mounted facade; without one every canonical call fails closed before
-        // the guest runs.
-        assert!(projection.bind_canonical_facade(
+        b4_canonical_service_with_facade(
+            canonical.clone(),
             crate::capability::zahir_facade::ZahirFacade::new(
                 canonical.as_ref().clone(),
                 Arc::new(crate::capability::ownership::OwnershipTree::new()),
             ),
-        ));
+        )
+    }
+
+    fn b4_canonical_service_with_facade(
+        canonical: Arc<crate::tools::ToolHandlerRegistry>,
+        facade: Arc<crate::capability::zahir_facade::ZahirFacade>,
+    ) -> crate::tools::scoped::ScopedToolService {
+        let publication = canonical.canonical_publication();
+        let visible: crate::tools::handlers::McpServerFilter = Arc::new(|_| true);
+        let mut projection = crate::tools::runtime::LoopToolRegistry::new();
+        projection.bind_canonical_registry(Arc::clone(&canonical), visible.clone());
+        assert!(projection.bind_canonical_facade(facade));
         let entry = publication
             .entry("lazy_tool")
             .expect("published owner tool");
@@ -2130,6 +2166,32 @@ handler = "handler"
             service.execute("lazy_tool", serde_json::json!({"probe": "b4"})),
         )
         .await
+    }
+
+    #[tokio::test]
+    async fn stage_g_production_host_reuses_canonical_authorities() {
+        let tmp = tempfile::tempdir().unwrap();
+        let _home = isolated_home(tmp.path());
+        let tree = Arc::new(crate::capability::ownership::OwnershipTree::new());
+        let canonical = Arc::new(crate::tools::ToolHandlerRegistry::new());
+        let (manager, canonical, _owner) =
+            b3_cold_manager_with_registry_and_ownership_tree(
+                tmp.path(),
+                canonical,
+                Arc::clone(&tree),
+            )
+            .await;
+        let host = crate::capability::projection_host::ProjectionHost::mount(
+            canonical.as_ref().clone(),
+            Arc::clone(&tree),
+        );
+        assert!(host.wait_until_ready().await);
+        let facade = host.facade();
+        assert!(facade.is_backed_by_registry(canonical.as_ref()));
+        drop(manager);
+        let shutdown = Arc::clone(&host).close_and_await().await;
+        assert!(shutdown.source_joined);
+        assert!(shutdown.applier_joined);
     }
 
     #[tokio::test]
