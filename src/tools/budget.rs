@@ -63,6 +63,12 @@ const MCP_DEFAULT_TIMEOUT_MS: u64 = 300_000;
 /// `node_tool_budget_sits_above_the_reverse_rpc_ceiling` pins the pair.
 pub const REVERSE_RPC_MAX_TIMEOUT_MS: u64 = 240_000;
 
+/// Headroom the `browser_qa` harness budget keeps above the tool's own
+/// worst case (`MAX_QA_WAIT_MS`) — the settle and reporting tail the tool
+/// needs after its last wait. The budget row is DERIVED from the tool's
+/// ceiling plus this margin, so the two cannot drift apart.
+const BROWSER_QA_BUDGET_MARGIN_MS: u64 = 89_850;
+
 /// Wall-clock budget per builtin tool. Tools omitted resolve to
 /// [`DEFAULT_TOOL_BUDGET_MS`] via [`resolve_tool_budget_ms`]. Values are
 /// milliseconds.
@@ -140,7 +146,13 @@ pub const BUILTIN_TOOL_BUDGETS_MS: &[(&str, u64)] = &[
     // to be absent here, so it resolved to the 300 s default — and the
     // harness killed every long QA run at half its own worst case,
     // discarding the verdict in favour of an opaque overrun.
-    ("browser_qa", 630_000),
+    //
+    // DERIVED from the tool's own ceiling rather than written as a literal,
+    // so the budget cannot drift below the worst case the tool documents.
+    (
+        "browser_qa",
+        crate::builtin_tools::browser_tools::qa::MAX_QA_WAIT_MS + BROWSER_QA_BUDGET_MARGIN_MS,
+    ),
     // Reverse-RPC to a cluster node. Fourth instance of the rule the three
     // rows above state: the budget must sit ABOVE the tool's own ceiling
     // ([`REVERSE_RPC_MAX_TIMEOUT_MS`], 240s) so what fires

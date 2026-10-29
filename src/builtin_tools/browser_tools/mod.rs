@@ -828,11 +828,11 @@ fn decode_bounded(bytes: &[u8]) -> Option<image::DynamicImage> {
     let mut reader = image::ImageReader::new(std::io::Cursor::new(bytes))
         .with_guessed_format()
         .ok()?;
-    reader.limits(image::Limits {
-        max_image_width: Some(MAX_SCREENSHOT_DECODE_EDGE),
-        max_image_height: Some(MAX_SCREENSHOT_DECODE_EDGE),
-        max_alloc: Some(MAX_SCREENSHOT_DECODE_ALLOC),
-    });
+    let mut limits = image::Limits::default();
+    limits.max_image_width = Some(MAX_SCREENSHOT_DECODE_EDGE);
+    limits.max_image_height = Some(MAX_SCREENSHOT_DECODE_EDGE);
+    limits.max_alloc = Some(MAX_SCREENSHOT_DECODE_ALLOC);
+    reader.limits(limits);
     reader.decode().ok()
 }
 

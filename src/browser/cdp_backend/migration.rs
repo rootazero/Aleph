@@ -333,8 +333,7 @@ pub(crate) async fn import_state(
                     {
                         Ok(res)
                             if res.exception.is_none()
-                                && res.result.value.as_ref().and_then(serde_json::Value::as_str)
-                                    == Some(format!("restored:{origin}").as_str()) =>
+                                && res.value.as_str() == Some(format!("restored:{origin}").as_str()) =>
                         {
                             imported_origins.push(origin.clone());
                             if let Err(e) =
@@ -348,7 +347,7 @@ pub(crate) async fn import_state(
                             }
                         }
                         Ok(res) => {
-                            let value = res.result.value.as_ref().and_then(serde_json::Value::as_str);
+                            let value = res.value.as_str();
                             if let Some(actual) = value.and_then(|value| value.strip_prefix("origin:")) {
                                 report.warnings.push(format!(
                                     "localStorage for {origin} was not restored because the page landed on {actual}"
@@ -574,7 +573,7 @@ mod tests {
                 "Page.navigate" => Responder::Reply(json!({ "frameId": "F-B", "loaderId": "L-B" })),
                 "Runtime.evaluate" => Responder::Reply(json!({
                     "result": { "type": "string", "value": "restored:https://example.com" }
-                }))
+                })),
                 _ => Responder::Reply(json!({})),
             }
         })

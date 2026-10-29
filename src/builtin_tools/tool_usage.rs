@@ -132,16 +132,9 @@ impl AlephTool for ToolUsageTool {
                 let Some(store) = ToolUsageStore::default_path() else {
                     return 0;
                 };
-                orphans
-                    .iter()
-                    .filter(|key| {
-                        if store.get(key).is_none() {
-                            return false;
-                        }
-                        store.forget(key);
-                        store.get(key).is_none()
-                    })
-                    .count()
+                // The shared owner of orphan deletion — it verifies each
+                // removal, so the count below is what was really dropped.
+                crate::tools::usage::report::forget_orphans(&orphans, &store)
             })
             .await
             {
