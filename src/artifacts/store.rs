@@ -130,7 +130,10 @@ impl ArtifactStore {
         let sidecar = serde_json::to_vec(&record)?;
         write_atomic(&dir.join(format!("{}.json", record.id)), &sidecar).await?;
 
-        evict_overflow(&dir).await;
+        // The record this call just published is never a victim of this
+        // call's eviction: `put` reports success, so the artifact it names
+        // has to stay readable.
+        evict_overflow(&dir, Some(record.id.as_str())).await;
 
         Ok(record)
     }
@@ -161,7 +164,9 @@ impl ArtifactStore {
     ///
     /// # Errors
     /// [`ArtifactError::InvalidId`] for a malformed id,
-    /// [`ArtifactError::NotFound`] when the session has no such artifact.
+    /// [`ArtifactError::NotFound`] when the session has no such artifact,
+    /// [`ArtifactError::Io`] when the blob does not match the size its
+    /// sidecar declares.
     pub async fn read(
         &self,
         session_key: &str,
@@ -173,6 +178,21 @@ impl ArtifactStore {
         let sidecar = read_or_not_found(&dir.join(format!("{id}.json")), id).await?;
         let record: ArtifactRecord = serde_json::from_slice(&sidecar)?;
         let bytes = read_or_not_found(&dir.join(format!("{id}.bin")), id).await?;
+
+        // The sidecar advertises the blob's size. Bytes that disagree with it
+        // are a half-written remnant, and serving them would make every
+        // consumer's size arithmetic wrong (Content-Length, export budgets),
+        // so the mismatch is reported instead of shipped.
+        if bytes.len() as u64 != record.size {
+            return Err(ArtifactError::Io(std::io::Error::new(
+                ErrorKind::UnexpectedEof,
+                format!(
+                    "artifact {id} is truncated: sidecar claims {} bytes, blob has {}",
+                    record.size,
+                    bytes.len()
+                ),
+            )));
+        }
 
         Ok((record, bytes))
     }
@@ -253,9 +273,14 @@ const fn eviction_rank(origin: ArtifactOrigin) -> u8 {
 /// [`MAX_ARTIFACTS_PER_SESSION`] — oldest first within a rank, and
 /// deliverables only once nothing else is left (see [`eviction_rank`]).
 ///
+/// `keep` names the record the caller has just published. It is never a
+/// victim: a `put` that reports success must leave a readable artifact
+/// behind. It still counts towards the cap, so the session stays within
+/// [`MAX_ARTIFACTS_PER_SESSION`] records.
+///
 /// Best-effort: the blob is already durably written when this runs, so a
 /// failure here is logged, never surfaced as a failed `put`.
-async fn evict_overflow(dir: &Path) {
+async fn evict_overflow(dir: &Path, keep: Option<&str>) {
     let mut records = match read_records(dir).await {
         Ok(records) => records,
         Err(e) => {
@@ -263,9 +288,13 @@ async fn evict_overflow(dir: &Path) {
             return;
         }
     };
-    if records.len() <= MAX_ARTIFACTS_PER_SESSION {
+    let total = records.len();
+    if total <= MAX_ARTIFACTS_PER_SESSION {
         return;
     }
+    // The freshly published record is not a candidate: evicting it here would
+    // leave `put` reporting success for an artifact that is already gone.
+    records.retain(|record| keep != Some(record.id.as_str()));
 
     // Cheapest-to-lose first, then oldest first, with a stable tiebreak so
     // concurrent puts in the same millisecond still evict deterministically.
@@ -275,16 +304,27 @@ async fn evict_overflow(dir: &Path) {
             .then_with(|| a.created_at.cmp(&b.created_at))
             .then_with(|| a.id.cmp(&b.id))
     });
-    let overflow = records.len() - MAX_ARTIFACTS_PER_SESSION;
+
+    // The kept record is part of `total`, so the overflow is counted against
+    // the whole session: the cap holds even though one record is untouchable.
+    let overflow = total - MAX_ARTIFACTS_PER_SESSION;
     for record in records.into_iter().take(overflow) {
         let json = dir.join(format!("{}.json", record.id));
         let bin = dir.join(format!("{}.bin", record.id));
-        // Sidecar first: a partial delete leaves an invisible orphan blob, not
-        // a listed record whose bytes are gone. Failures are logged but not
+        // Sidecar first, and the blob only once the sidecar is gone: a
+        // surviving sidecar keeps the artifact listed, and a listed record
+        // whose bytes are gone is a broken artifact. Failures are logged but not
         // propagated — the blob is already durably written, and surfacing
         // them as a failed `put` would undo work that succeeded.
-        if let Err(e) = fs::remove_file(&json).await {
-            warn!(path = %json.display(), error = %e, "artifact eviction: could not remove sidecar");
+        match fs::remove_file(&json).await {
+            Ok(()) => {}
+            // Already gone: the record is not listed, so its blob is a
+            // leftover and may go too.
+            Err(e) if e.kind() == ErrorKind::NotFound => {}
+            Err(e) => {
+                warn!(path = %json.display(), error = %e, "artifact eviction: could not remove sidecar; keeping its blob");
+                continue;
+            }
         }
         if let Err(e) = fs::remove_file(&bin).await {
             warn!(path = %bin.display(), error = %e, "artifact eviction: could not remove blob");
@@ -301,7 +341,9 @@ async fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), std::io::Error> {
 
     fs::write(&tmp, bytes).await?;
     if let Err(e) = fs::rename(&tmp, path).await {
-        let _ = fs::remove_file(&tmp).await;
+        if let Err(cleanup) = fs::remove_file(&tmp).await {
+            warn!(path = %tmp.display(), error = %cleanup, "artifact write: could not remove temp file");
+        }
         return Err(e);
     }
     Ok(())
@@ -702,5 +744,78 @@ mod tests {
         let listed = store.list(SESSION).await.unwrap();
         assert_eq!(listed.len(), 1);
         assert_eq!(listed[0].filename, "good.txt");
+    }
+
+    /// A `put` that reports success must leave a readable artifact behind:
+    /// the record it just published is never the victim of its own
+    /// eviction.
+    #[tokio::test]
+    async fn put_never_evicts_the_record_it_just_wrote() {
+        let (store, _guard) = test_store();
+
+        // A session full of deliverables: the new scratch artifact is the
+        // only rank-0 record, so it would be the first eviction victim.
+        for _ in 0..MAX_ARTIFACTS_PER_SESSION {
+            store
+                .put(
+                    SESSION,
+                    None,
+                    ArtifactOrigin::Deliverable,
+                    "report.html",
+                    "text/html",
+                    b"x",
+                )
+                .await
+                .unwrap();
+        }
+
+        let fresh = store
+            .put(
+                SESSION,
+                None,
+                ArtifactOrigin::Outbound,
+                "scratch.png",
+                "image/png",
+                b"x",
+            )
+            .await
+            .unwrap();
+
+        assert!(
+            store
+                .list(SESSION)
+                .await
+                .unwrap()
+                .iter()
+                .any(|record| record.id == fresh.id),
+            "the record this put published was evicted by its own call"
+        );
+        assert!(store.read(SESSION, &fresh.id).await.is_ok());
+    }
+
+    /// The sidecar is the store's promise about the bytes; a blob that
+    /// contradicts it must not be served as if it were whole.
+    #[tokio::test]
+    async fn read_rejects_a_blob_that_disagrees_with_its_sidecar() {
+        let (store, guard) = test_store();
+        let record = store
+            .put(
+                SESSION,
+                None,
+                ArtifactOrigin::Outbound,
+                "a.txt",
+                "text/plain",
+                b"0123456789",
+            )
+            .await
+            .unwrap();
+
+        let dir = guard.path().join(encode_session_key(SESSION));
+        std::fs::write(dir.join(format!("{}.bin", record.id)), b"012").unwrap();
+
+        assert!(matches!(
+            store.read(SESSION, &record.id).await.unwrap_err(),
+            ArtifactError::Io(_)
+        ));
     }
 }
