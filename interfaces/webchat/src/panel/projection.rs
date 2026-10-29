@@ -7,8 +7,10 @@ use super::source::{
 };
 #[cfg(test)]
 use aleph_protocol::panel::PANEL_UI_API_MAJOR;
+use aleph_protocol::panel::{
+    supported_community_permission, valid_asset_integrity, valid_identity_segment,
+};
 use aleph_protocol::panel::{PanelTabDescriptor, PanelTabKey, PanelTabStatus, PanelUiTrust};
-use base64::Engine;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum PanelRoute {
@@ -251,37 +253,6 @@ fn validate_declaration(
         }
     }
     Ok(())
-}
-
-fn valid_identity_segment(value: &str) -> bool {
-    !value.is_empty()
-        && value
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
-}
-
-fn supported_community_permission(permission: &str) -> bool {
-    matches!(
-        permission,
-        "pty.list"
-            | "pty.spawn"
-            | "pty.attach"
-            | "pty.input"
-            | "pty.resize"
-            | "pty.close"
-            | "config.get"
-            | "events.subscribe:pty.screen"
-            | "events.subscribe:pty.exit"
-            | "sessions.list"
-    )
-}
-
-fn valid_asset_integrity(integrity: &str) -> bool {
-    integrity.strip_prefix("sha256-").is_some_and(|digest| {
-        base64::engine::general_purpose::STANDARD
-            .decode(digest)
-            .is_ok_and(|decoded| decoded.len() == 32)
-    })
 }
 
 fn valid_public_base(declaration: &PanelUiCapabilityDeclaration) -> bool {
