@@ -1,159 +1,192 @@
-# Stage F Provider-Boundary Code Lifecycle Plan / Stage F Provider 边界代码生命周期计划
+# Stage F Provider Boundary Composition Implementation Plan
 
-> **Status / 状态:** queued for the next session. This plan is intentionally bounded to a test composition around the existing ProviderHandle/RuntimeOwner/ExtensionManager authority. It does not authorize production Zahir mount or provider/channel integration.
->
-> **Base / 基线:** current merged `main` at `07250ba1f`; Stage E code commit `7c31a5fa6`; Stage E run record [`docs/superpowers/runs/2026-10-28-gateway-stage-e-code-loading-run.md`](../runs/2026-10-28-gateway-stage-e-code-loading-run.md).
->
-> **Prompt / 接续入口:** [`docs/superpowers/prompts/2026-10-29-gateway-stage-f-provider-boundary-prompt.md`](../prompts/2026-10-29-gateway-stage-f-provider-boundary-prompt.md)
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-## Intent / 意图
+**Goal:** Prove, through the existing `ExtensionManager`/`RuntimeOwner`/`ProviderHandle` lifecycle, that a real provider-facing WASM activation owns and admits the same exact Extism instance whose replacement and disposal produce the Stage E drop receipt.
 
-Stage E established a bounded Extism guest-byte and exact loaded-instance boundary inside the existing Extension lifecycle. The next unclosed contract is whether that same guest instance lifecycle is constrained by the existing provider state, generation and call-admission boundary used by Capability Core.
+**Architecture:** Add bounded behavior tests around the existing real plugin composition. Discovery and projection remain lazy; activation enters the existing `ProviderHandle` generation/admission path, publishes the existing canonical handler, and calls the real guest. Stop and replacement continue through existing revoke/drain/join/dispose authority. Production Zahir mount, channel integration, and any second lifecycle authority remain out of scope.
 
-Stage F should prove that relationship with one real test guest and an existing provider composition. The result must show that disabled/discovered/cold state has no guest code side effect, Ready activation creates and executes one current instance, stop/replacement fences old calls, and exact old instance drop occurs only after the existing owner/binding/identity `Arc` holders are released.
+**Tech Stack:** Rust, Tokio, Extism WASM fixture, existing `ProviderHandle`/`ProviderLifecycle`, `RuntimeOwner`, `ExtensionManager`, `PluginLoader`, `WasmBinding`, `WasmMountIdentity`, canonical `ToolHandlerRegistry`, Cargo/Bun project checks.
 
-Stage E 已经在既有 Extension lifecycle 内建立了 guest bytes 与 exact loaded instance 的有界证据。下一条未闭合 contract 是：同一个 guest instance lifecycle 是否确实受 Capability Core 既有 provider state、generation 与 call-admission 边界约束。
+**Spec:** `docs/superpowers/specs/2026-10-29-gateway-stage-f-provider-boundary-design.md`
 
-Stage F 用一个真实 test guest 和现有 provider composition 证明这一关系：disabled/discovered/cold 不产生 guest code side effect；Ready activation 创建并执行当前 instance；stop/replacement 使旧调用失效；只有释放既有 owner/binding/identity `Arc` holders 后才观察到旧 instance 的精确 drop。
+## Global Constraints
 
-## Goals / 目标
+- Base this work on the actual clean `main` HEAD `04fba2229`, on branch `stage-f-provider-boundary`; do not copy historical hashes into evidence.
+- Keep enabled/disabled, discovery, mount/unmount, provider state/generation/admission, runtime ownership, and cleanup on their existing authorities.
+- Do not add `unsafe`, `dlopen`/`dlclose`, `libloading`, Wasmtime, a new runtime/dependency, a global engine/cache, a second registry, a second owner/generation map, detached cleanup, production Zahir mount, or provider/channel integration.
+- Reuse the Stage E loader probe and exact `LoadedWasmPlugin` receipt; do not equate ProviderState, generation, notification, projection, OS mapping, or RSS with exact instance drop.
+- Production comments remain English; new documentation is bilingual.
+- Run `python qa/browser_live/check_memory.py` immediately before every Cargo command; require exit 0 and `ALLOW`.
+- Focused provider-boundary tests run serially three times. A zero-test filter is zero evidence and must be reported as such.
 
-1. Source-back the current relationship between `ProviderHandle`/`ProviderLifecycle`, `RuntimeOwner`, `ExtensionManager`, `PluginLoader`, `WasmBinding`, `WasmMountIdentity`, generation and disposer.
-2. Add behavior RED contracts in the existing provider composition, not a parallel lifecycle harness.
-3. Reuse Stage E loader-owned byte and exact instance receipts.
-4. Prove provider state/generation/admission and guest instance ownership remain one lifecycle path.
-5. Preserve fail-closed replacement and failed-activation residual semantics.
-6. Record exact boundaries in a bilingual run record and the next `FEATURE_LOCATOR` entry only after verification and independent review.
+## Review Focus
 
-## Non-goals / 非目标
+- Cold registry/capability reads must not construct the lazy WASM runtime or read guest bytes — test `ProviderState::Cold`, `PluginStatus::Cold`/disabled view, empty canonical descriptors/projection, and zero loader receipts in Task 1.
+- The guest call must pass through the published canonical handler and current provider generation — test payload A and current-generation admission in Task 1.
+- A retained old canonical entry must fail after stop/replacement even if the caller still owns handler/binding/identity `Arc`s — test stale handler rejection and successor payload B in Task 1.
+- Exact instance drop must wait for every retained owner/binding/identity holder and occur once — test release ordering and receipt identity in Task 1.
+- Failed read/build/publication must retain real residual/error evidence and never report clean Ready/create/drop — test each failure phase in Task 1.
 
-- Native dylib loading/unloading, `unsafe`, `libloading`, Wasmtime or a new runtime/dependency.
-- Production `ZahirFacade` mount, Feishu/R2/Terminal/Memory/Sandbox integration, or all-channel dynamic loading.
-- A global engine/cache, process supervisor, second registry, owner map, generation map or detached cleanup authority.
-- Treating ProviderState, generation, broadcast notifications or projections as exact instance-drop receipts.
-- Claims about Extism engine-wide JIT code, anonymous mappings, executable OS pages, thread shutdown or RSS reclamation.
-- Full production provider/kind rollout. Any public lifecycle or production mount requirement is an architecture decision gate.
+---
 
-## Evidence model / 证据模型
+### Task 1: Add provider-boundary RED contracts in the existing lifecycle composition
 
-Keep these facts separate:
+**Files:**
+- Modify: `src/extension/lifecycle.rs` in the existing Stage E/B3 test module near `b3_call_canonical`, `b3_cold_manager`, and the real guest lifecycle tests.
+- Reuse: `src/extension/runtime/wasm/tests/guest_fixture.rs`, `src/extension/loader.rs`, `src/extension/canonical_handler.rs`, `src/tools/registry.rs`, and `src/capability/zahir_facade.rs`; modify these only if the test cannot access an already-existing fact without a new authority.
+- Test evidence: `.superpowers/sdd/2026-10-29-gateway-stage-f-provider-boundary/`.
 
-| Evidence | Meaning | Not equivalent to |
-|---|---|---|
-| Manifest read | Discovery metadata was inspected | Guest code entered the process |
-| Guest-byte read | `.wasm` bytes entered the process | Extism instance was created |
-| Instance create | `PluginBuilder::build` succeeded for one `LoadedWasmPlugin` | Provider is Ready or OS code was unloaded |
-| Instance drop | Exact Extism `Plugin` owner was destroyed after retained Arcs released | Engine/JIT/mapping/RSS reclamation |
-| Provider state/generation | Existing lifecycle/admission authority changed | Guest bytes or exact instance ownership |
-| OS mapping/RSS | Optional process/platform observation | Per-provider code unload proof |
+**Interfaces:**
+- Consumes: `b3_cold_manager_with_registry`, `b3_enable_cold_owner`, `b3_call_canonical`, `b4_canonical_service`/`b4_execute_canonical` where appropriate, `ProviderHandle::snapshot`, `ProviderHandle::acquire_call`, `CanonicalPublication`, `PluginLoader::wasm_load_probe`, `wasm_instance_receipt`, `WasmBinding`, and the existing `RuntimeOwner` fields.
+- Produces: named Stage F tests that exercise the real provider composition and establish the exact evidence matrix for implementation and final run documentation. No new production lifecycle authority.
 
-## Task 1 — Reconfirm the provider ownership census
+- [ ] **Step 1: Add the Cold/discovered/disabled zero-effect test.**
 
-**Read first:** `AGENTS.md`, Stage E plan/run record, `src/capability/provider.rs`, `src/extension/runtime_owner.rs`, `src/extension/plugin_state.rs`, `src/extension/lifecycle.rs`, `src/extension/loader.rs`, `src/extension/runtime/wasm/mod.rs`, `src/capability/zahir_facade.rs`.
+  Add a test named `stage_f_cold_provider_surfaces_do_not_read_or_create_guest` (or an equally explicit name) that builds the real fixture through discovery/load, before activation:
 
-Record:
+  - assert the registry row is the discovered/disabled or declared `PluginStatus::Cold` representation appropriate to the path;
+  - assert the owner is present only as the existing Cold declaration and its `ProviderHandle::snapshot()` is `(ProviderState::Cold, 0)`;
+  - read the existing plugin list/status, canonical descriptor/publication, and capability facade `describe`/`project` surfaces that are already available in this test composition;
+  - assert no guest-byte reads, no instance creation, no instance drops, and `!PluginLoader::is_wasm_runtime_active()`;
+  - assert no callable canonical entry is visible before Ready publication.
 
-- Which existing object owns provider state and generation.
-- Which existing object owns the WASM runtime, loaded map, binding and mount identity.
-- Where activation transitions to Starting/Ready and where stop transitions to Stopping/Stopped/Disabled/Failed.
-- Where call admission checks current generation and where stale completion/call is rejected.
-- Which unmount/disposer path removes the loaded map entry and which remaining `Arc` holders can delay exact drop.
-- Whether `RuntimeOwner` already contains enough information; avoid adding a seam until the census proves it is needed.
-- Existing tests and baseline counts. Save evidence under `.superpowers/sdd/2026-10-29-gateway-stage-f-provider-boundary/`.
+- [ ] **Step 2: Add the activation/current-generation call test.**
 
-**Exit:** source-backed ownership graph and baseline command ledger. No production edits yet.
+  Add a test named `stage_f_provider_activation_executes_real_guest_through_current_generation` that uses `set_plugin_enabled` or `ensure_loaded` as the production activation path, not direct `activate_owner`:
 
-## Task 2 — Write provider-boundary RED contracts
+  - assert the same declared owner reaches `ProviderState::Ready` with a nonzero current generation;
+  - assert exactly one guest-byte read and one instance create, with no drop while the owner and published entry remain retained;
+  - invoke the real published canonical handler through the existing test call route and assert payload A returns the real guest value;
+  - assert the publication descriptor/handler carries the current provider generation and that current-generation admission succeeds;
+  - assert no independent test counter or map decides whether the call is admitted.
 
-Extend existing B3/provider tests and Stage E fixture helpers. Do not create a second lifecycle harness.
+- [ ] **Step 3: Extend the test to stop, stale admission, replacement, and exact drop ordering.**
 
-Required contracts:
+  Retain the old canonical entry/handler long enough to exercise the existing stop path. Assert:
 
-1. **Cold:** provider declaration/list/descriptor/projection is `Cold`, provider generation remains undispatched, `ProviderHandle` is not Ready, loader probe reports zero guest-byte reads and zero instance create, and WASM runtime remains lazy.
-2. **Activation:** existing provider transition reaches the current Ready generation; one real guest read/create occurs; payload A executes through the existing binding/canonical path; call admission accepts only that generation.
-3. **Stop:** transition to stopping/stop closes admission; old binding and old provider handle reject calls; after existing unmount/dispose returns and all retained owner/binding/identity Arcs are dropped, the exact old instance receipt is dropped once.
-4. **Replacement:** old generation and binding reject after replacement; new activation gets a new generation and payload B; old instance drops before the new instance is allowed to drop; no stale disposer removes the successor.
-5. **Failure:** invalid bytes or failed build may record a byte read but cannot record create/drop or a clean Ready outcome; any existing residual is asserted as residual.
-6. **Notifications:** if provider broadcast is exercised, assert it is notification-only and does not become a recovery or lifecycle authority.
+  - stop withdraws/revokes before drain and leaves the old `ProviderHandle`/binding unable to admit a call;
+  - after replacement activation, the old generation, old handler, old binding, and old mount identity reject or fail closed;
+  - the replacement receives a new generation and executes payload B through the new canonical handler;
+  - the old exact receipt is not dropped while any retained owner, handler, binding, or identity `Arc` remains;
+  - after those retained references and the old owner are released, the old receipt is dropped exactly once and before the successor receipt is allowed to drop;
+  - the successor remains current and cannot be removed by the stale disposer.
 
-Run the new tests before implementation where possible. A compile/import/setup error is not a valid RED contract.
+- [ ] **Step 4: Add failure-phase assertions.**
 
-## Task 3 — Implement the smallest provider composition
+  Cover the existing real failed-read, failed-build, publication-collision, and disposer-failure fixture paths separately. For each phase assert the actual error/residual semantics, including any `ProviderState::Failed` and `RuntimeOwner` failure record, and assert the precise receipt boundary:
 
-Expected production changes are limited to existing provider/lifecycle integration points. Reuse Stage E receipt plumbing.
+  - failed byte read/build may record a guest-byte read but records no successful instance create or drop;
+  - failed publication preserves the incumbent canonical publication/revision, leaves the loser owner Failed with the existing publication failure record, and does not commit a replacement entry;
+  - failed disposal preserves the current Failed owner residual, closed admission, withdrawn canonical entry, retained receipt, and exact disposer failure record;
+  - failed activation does not report a clean Ready owner or committed canonical entry.
 
-- Thread no new owner map or cleanup scheduler.
-- Use existing `ProviderHandle::transition`, generation and admission methods.
-- Reuse existing `RuntimeOwner` and `ExtensionManager` disposer paths.
-- If a test-only adapter is necessary, make it a thin composition that delegates to existing authorities and cannot independently decide enabled/mounted/provider state.
-- Keep test-only counters and receipts behind `#[cfg(test)]`.
-- Preserve `Wasm::data` and explicit byte read; do not reintroduce `Wasm::file`.
-- Keep failures fail-closed and retain real residual evidence.
-- Stop and request architecture direction if the implementation requires public lifecycle changes, production mount, global engine/cache, native unload or process isolation.
+  Keep stale-call rejection in the successful replacement test; do not invent an old canonical handler for a failed activation that never published one.
 
-## Task 4 — Verification
+- [ ] **Step 5: Run the new filter once as RED.**
 
-Every Cargo command must be immediately preceded by a separate:
+  Run immediately after a separate memory gate:
 
-```bash
-python qa/browser_live/check_memory.py
-```
+  ```bash
+  python qa/browser_live/check_memory.py
+  cargo test -p alephcore --lib extension::lifecycle::tests::stage_f_ -- --nocapture
+  ```
 
-Require exit 0 and `ALLOW`, and save each result/log.
+  Expected: the new tests compile and expose the missing provider-boundary assertion or seam; if the current implementation already satisfies a contract, record that fact and keep the test as a regression contract rather than adding artificial production changes. Save the complete output under `.superpowers/sdd/2026-10-29-gateway-stage-f-provider-boundary/red-provider.log`.
 
-Minimum matrix:
+### Task 2: Implement only the smallest composition needed by the RED contracts
 
-```bash
-cargo test -p alephcore --lib <new-provider-boundary-filter> -- --nocapture  # three serial runs
-cargo test -p alephcore --lib extension::runtime::wasm:: -- --nocapture
-cargo test -p alephcore --lib extension::lifecycle::tests::b3_ -- --nocapture
-cargo test -p alephcore --lib capability:: -- --nocapture
-cargo test -p alephcore --lib gateway::channel_registry::resource_matrix:: -- --nocapture
-cargo test -p alephcore --lib gateway::channel_health_monitor::tests:: -- --nocapture
-cargo test -p alephcore --lib tools::registry::tests:: -- --nocapture
-cargo check -p alephcore --tests
-cargo clippy -p alephcore --tests -- -D warnings
-cargo fmt --all --check
-git diff --check
-```
+**Files:**
+- Modify only the exact existing lifecycle/test integration file identified by Task 1’s failure, normally `src/extension/lifecycle.rs`.
+- Modify `src/extension/canonical_handler.rs`, `src/extension/loader.rs`, `src/extension/runtime/wasm/mod.rs`, or `src/tools/registry.rs` only if an existing real receipt/binding/publication fact is inaccessible and the smallest change preserves the current authority.
+- Do not create a new registry, generation map, owner map, cleanup task, public plugin lifecycle API, or production Zahir mount.
 
-Add `cargo check -p alephcore`, relevant integration targets, feature/default-feature checks or workspace checks when the actual diff changes those surfaces. A zero-test filter must be reported as zero evidence, not as a pass.
+**Interfaces:**
+- Consumes: Task 1’s failing assertions and existing signatures: `ExtensionManager::set_plugin_enabled`, `ExtensionManager::ensure_loaded`, `RuntimeOwner::activate_owner`, `ExtensionManager::retained_owner_stop` through `unmount`, `ProviderHandle::transition`/`acquire_call`, `PluginLoader::bind_wasm`/`call_bound`, and the canonical publication API.
+- Produces: passing Stage F tests with every admission decision delegated to the existing provider/canonical handler and every instance receipt tied to a real `LoadedWasmPlugin` incarnation.
 
-## Task 5 — Independent review and closure
+- [ ] **Step 1: Fix the smallest missing access or composition point.**
 
-Dispatch a fresh read-only reviewer after the implementation and saved verification logs exist. Require:
+  Prefer existing test-visible methods and current canonical call paths. If a seam is unavoidable, make it `#[cfg(test)]`, borrow or delegate to the existing `RuntimeOwner`/`ProviderHandle`/loader objects, and ensure it cannot independently transition state, allocate a generation, publish a capability, or dispose an instance.
 
-- Critical/Important/Minor findings with exact file:line references.
-- Ready: Yes/No.
-- Explicit checks for duplicated provider/generation/cleanup authority, stale Arc holders, failed activation residuals, provider-state versus guest-instance conflation, and native/JIT/RSS overclaims.
+- [ ] **Step 2: Preserve lifecycle ordering and failure residuals.**
 
-Resolve all Critical/Important findings and re-review. If the review route fails, preserve the complete error and run the checklist manually without claiming independent approval.
+  Ensure activation remains `Cold → Starting → Ready/Failed`, calls require Ready/current generation, stop closes admission before revoke/drain/join/dispose, and replacement cannot be removed by an old disposer. Keep failed owners and exact dispose errors visible through the current residual semantics.
 
-After GREEN and review:
+- [ ] **Step 3: Run the focused provider-boundary filter and fix only implementation failures.**
 
-- Write `docs/superpowers/runs/2026-10-29-gateway-stage-f-provider-boundary-run.md` in Chinese and English.
-- Update this plan and add `FEATURE_LOCATOR.md` §3.5j only if the bounded contract is actually proved.
-- Update `PLUGIN_SYSTEM.md` or `GATEWAY.md` only if the final behavior changes their documented boundary.
-- Commit code and docs separately.
-- Confirm `main`/development branch status as appropriate; do not merge, push, clean worktrees or start another stage without explicit user instruction.
+  Before the Cargo command, run `python qa/browser_live/check_memory.py`; then run:
 
-## Acceptance criteria / 验收标准
+  ```bash
+  cargo test -p alephcore --lib extension::lifecycle::tests::stage_f_ -- --nocapture
+  ```
 
-Stage F is GREEN only if all are true:
+  Expected: all Stage F tests pass. Repeat this same focused filter two more times serially, with a separate `ALLOW` gate before each Cargo command, and save all three logs.
 
-- Cold provider composition has zero guest-byte reads, zero instances and no WASM runtime construction.
-- Ready activation executes payload A through the existing provider/generation/admission path.
-- Stop/replacement rejects old provider calls and bindings and executes payload B only through the successor.
-- Exact old/new `LoadedWasmPlugin` drops are observed after all retained Arcs are released, with no double count.
-- Failed build/activation does not fabricate instance creation, drop or clean success.
-- No second lifecycle authority is introduced.
-- All required memory gates, focused repeats, regression checks, static checks and independent review are GREEN.
-- Documentation states what remains unproven and what provider/kind/production integration remains deferred.
+- [ ] **Step 4: Check the diff for prohibited authority.**
 
-## Deferred after Stage F / Stage F 之后仍后置
+  Run `git diff --check` and inspect the complete diff. Confirm no `unsafe`, new dependency/runtime, production Zahir mount, second owner/generation/cleanup authority, or ProviderState-as-instance-drop assertion was introduced.
 
-- Production Zahir/provider mount and any Feishu/R2/provider-kind wiring.
-- Dynamic loading of built-in Gateway channels, terminal, memory graph or sandbox.
-- Native compiled-code unloading, engine/JIT instrumentation, per-guest OS mapping attribution and RSS proof.
-- Full unfiltered workspace test suite unless the actual diff expands to require it.
-- Additional provider kinds and universal durable scheduler/recovery/effect claims.
+### Task 3: Run regression verification and document the bounded evidence
+
+**Files:**
+- Create after GREEN/review: `docs/superpowers/runs/2026-10-29-gateway-stage-f-provider-boundary-run.md`.
+- Modify after GREEN/review: `docs/superpowers/plans/2026-10-29-gateway-stage-f-provider-boundary-plan.md` if execution details changed; `docs/reference/FEATURE_LOCATOR.md` only if the bounded contract is actually proved; `docs/reference/PLUGIN_SYSTEM.md` or `docs/reference/GATEWAY.md` only if the documented boundary needs correction.
+- Logs: `.superpowers/sdd/2026-10-29-gateway-stage-f-provider-boundary/`.
+
+**Interfaces:**
+- Consumes: passing Stage F tests, baseline logs, full diff, and independent reviewer result.
+- Produces: bilingual run record with exact commands and evidence classes, explicit remaining limits, and no production integration claim.
+
+- [ ] **Step 1: Run the required narrow regression matrix.**
+
+  Run a separate memory gate before every Cargo command and save each output:
+
+  ```bash
+  cargo test -p alephcore --lib extension::runtime::wasm:: -- --nocapture
+  cargo test -p alephcore --lib extension::lifecycle::tests::stage_e_ -- --nocapture
+  cargo test -p alephcore --lib extension::lifecycle::tests::b3_ -- --nocapture
+  cargo test -p alephcore --lib capability:: -- --nocapture
+  cargo test -p alephcore --lib gateway::channel_registry::resource_matrix:: -- --nocapture
+  cargo test -p alephcore --lib gateway::channel_health_monitor::tests:: -- --nocapture
+  cargo test -p alephcore --lib tools::registry::tests:: -- --nocapture
+  cargo check -p alephcore --tests
+  cargo clippy -p alephcore --tests -- -D warnings
+  cargo fmt --all --check
+  ```
+
+  Report any filter that runs zero tests as zero evidence and run a corrected filter if the actual module path differs.
+
+- [ ] **Step 2: Dispatch an independent read-only review after logs and diff exist.**
+
+  Ask the reviewer to inspect the complete diff and exact test logs for: single-source provider state/generation/admission, no second lifecycle authority, retained `Arc` release ordering, failed activation residuals, stale replacement fencing, and the distinction between exact Extism drop versus OS mapping/JIT/thread/RSS behavior.
+
+- [ ] **Step 3: Resolve Critical/Important findings and repeat review.**
+
+  Do not close the stage with unresolved Critical/Important findings. If the review tool is unavailable, save the complete error and perform the same checklist manually without claiming independent approval.
+
+- [ ] **Step 4: Write the bilingual run record only after GREEN.**
+
+  Record actual HEAD/branch, baseline counts, each memory gate result, all command results, exact manifest/guest-byte/create/drop/state/generation/mapping/RSS evidence, retained Arc release requirements, failed residuals, reviewer availability/verdict, deferred provider/kind/production integrations, and destructive/external actions not performed. State explicitly that no production channel and no Zahir mount were connected.
+
+- [ ] **Step 5: Update reference docs only when the evidence supports it.**
+
+  Add a new `FEATURE_LOCATOR.md` entry only for the bounded provider-boundary contract actually demonstrated. Keep native compiled-code unloading, engine/JIT, OS executable mapping, thread, RSS, universal provider rollout, and production mount explicitly deferred.
+
+- [ ] **Step 6: Commit the completed work.**
+
+  Use conventional commit messages, keep code/tests and documentation logically reviewable, and do not merge, push, clean worktrees, or begin another stage without a new explicit instruction.
+
+## Acceptance criteria
+
+Stage F is GREEN only when all of the following hold:
+
+- Disabled/discovered/Cold list, descriptor, and projection observations perform zero guest-byte reads, zero instance creation, and no WASM runtime construction.
+- Activation through existing enable/ensure-loaded reaches Ready with a current provider generation and executes payload A through the real published canonical handler.
+- Current-generation admission succeeds only while the provider is Ready; old generation, Stopping, Disabled/Stopped, Failed, stale binding, and stale identity calls fail closed.
+- Replacement executes payload B through the successor and cannot be undone by the old disposer.
+- Exact old and new `LoadedWasmPlugin` receipts are observed with correct release ordering and no double drop.
+- Failed read/build/publication preserves real residual/error state and never fabricates clean create/drop/Ready evidence.
+- No second lifecycle authority or production mount was introduced.
+- Required memory gates, three serial focused runs, narrow regressions, static checks, diff check, and independent review are complete and GREEN.
+- Documentation names what OS mapping, engine/JIT, threads, RSS, provider kinds, and production integrations remain unproven or deferred.
