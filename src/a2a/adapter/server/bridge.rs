@@ -349,6 +349,9 @@ impl A2AMessageHandler for AgentLoopBridge {
         let execution_adapter = Arc::clone(&self.execution_adapter);
         let task_id_owned = task_id.to_string();
         let context_id_owned = context_id.to_string();
+        // Kept for the panic path below: `context_id_owned` is moved into the
+        // execution body, but a panic still has to publish a terminal event.
+        let context_id_for_panic = context_id_owned.clone();
 
         // What this actor actually is, and what it is NOT, is written on
         // `a2a_turn_context` — read it before adding an identity here.
@@ -380,8 +383,12 @@ impl A2AMessageHandler for AgentLoopBridge {
                                 )
                                 .await
                             {
+                                // Do not abort the broadcast: the stored state
+                                // and the event stream are separate views, and a
+                                // consumer that only watches the stream would
+                                // otherwise see the channel close with no
+                                // terminal event at all.
                                 error!(task_id = %task_id_owned, error = %e, "Failed to update task to Completed");
-                                return;
                             }
 
                             let completed_event = TaskStatusUpdateEvent {
@@ -421,8 +428,9 @@ impl A2AMessageHandler for AgentLoopBridge {
                                 )
                                 .await
                             {
+                                // Same reasoning as the Completed branch: the
+                                // failure event must still reach subscribers.
                                 error!(task_id = %task_id_owned, error = %update_err, "Failed to update task to Failed");
-                                return;
                             }
 
                             let failed_event = TaskStatusUpdateEvent {
@@ -457,8 +465,56 @@ impl A2AMessageHandler for AgentLoopBridge {
                     error!(
                         task_id = %task_id_owned,
                         ?panic_payload,
-                        "panic in A2A streaming bridge; cleanup will still run"
+                        "panic in A2A streaming bridge; task will be marked Failed"
                     );
+                    // A panic strands the task in `Working`: no terminal status
+                    // is recorded, so the task id stays unusable for later
+                    // callers and SSE subscribers never receive a final event.
+                    // Drive the task to `Failed` and publish that event.
+                    let already_terminal = match task_manager.get_task(&task_id_owned, None).await {
+                        Ok(task) => task.status.state.is_terminal(),
+                        Err(e) => {
+                            tracing::error!(
+                                task_id = %task_id_owned,
+                                error = %e,
+                                "A2A bridge: failed to read task state after panic"
+                            );
+                            false
+                        }
+                    };
+                    if !already_terminal {
+                        if let Err(e) = task_manager
+                            .update_status(&task_id_owned, TaskState::Failed, None)
+                            .await
+                        {
+                            tracing::error!(
+                                task_id = %task_id_owned,
+                                error = %e,
+                                "A2A bridge: failed to mark task Failed after panic"
+                            );
+                        }
+                        let failed_event = TaskStatusUpdateEvent {
+                            task_id: task_id_owned.clone(),
+                            context_id: context_id_for_panic,
+                            status: TaskStatus {
+                                state: TaskState::Failed,
+                                message: None,
+                                timestamp: Utc::now(),
+                            },
+                            is_final: true,
+                            metadata: None,
+                        };
+                        if let Err(e) = streaming
+                            .broadcast_status(&task_id_owned, failed_event)
+                            .await
+                        {
+                            tracing::error!(
+                                task_id = %task_id_owned,
+                                error = %e,
+                                "A2A bridge: failed to broadcast failed-state event after panic"
+                            );
+                        }
+                    }
                 }
                 // Cleanup runs in BOTH the success and the panic branches.
                 if let Err(e) = streaming.cleanup_task(&task_id_owned).await {

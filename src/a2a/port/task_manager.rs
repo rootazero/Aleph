@@ -26,16 +26,16 @@ pub trait A2ATaskManager: Send + Sync {
     /// `update_status` sequence for adapters that have not yet been
     /// updated; this fallback retains the documented TOCTOU race and
     /// adapters should override this method to close it.
+    ///
+    /// Storage failures are propagated instead of being reported as
+    /// "already claimed": a caller that cannot tell the two apart would
+    /// silently drop work on a transient store error.
     async fn claim_task(&self, task_id: &str, context_id: &str) -> A2AResult<bool> {
-        match self.create_task(task_id, context_id).await {
-            Ok(_) => {
-                // Best-effort: promote to Working. If a concurrent claim beat
-                // us, the task will not be in Submitted and we return false.
-                match self.update_status(task_id, TaskState::Working, None).await {
-                    Ok(_) => Ok(true),
-                    Err(_) => Ok(false),
-                }
-            }
+        let created = self.create_task(task_id, context_id).await?;
+        // Best-effort: promote to Working. If a concurrent claim beat
+        // us, the task will not be in Submitted and we return false.
+        match self.update_status(task_id, TaskState::Working, None).await {
+            Ok(_) => Ok(true),
             Err(_) => Ok(false),
         }
     }
