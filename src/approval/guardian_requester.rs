@@ -31,6 +31,13 @@
 //!   provider HEALTH failures count — an unparseable verdict is model quality,
 //!   not a provider fault, and never trips the breaker.
 //!
+//! Blind-judge guard: auto-approval requires a parsed command analysis, whose
+//! segments the judge prompt renders IN FULL. The one-line action summary is a
+//! PROJECTION (redacted, capped, and for some tools reduced to a few identity
+//! keys), so "the summary was not truncated" is NOT proof that the judge sees
+//! the whole action. Without a full analysis the request goes straight to the
+//! human, without a judge call at all.
+//!
 //! R7: this is an LLM making the risk judgment — precisely the class of
 //! decision the constitution routes to the model, replacing only the human's
 //! attention, never a rule engine. R10: lives in `src/approval/`, consumed
@@ -264,16 +271,18 @@ impl GuardianApprovalRequester {
 #[async_trait]
 impl ApprovalRequester for GuardianApprovalRequester {
     async fn request_approval(&self, action: &ApprovalAction) -> ApprovalResponse {
-        // Blind-judge guard: the one-line `summary` is capped at 200 chars and
-        // marked with a trailing '…' when truncated. A malicious command whose
-        // dangerous tail sits past the cap would be invisible to the judge —
-        // which could then auto-approve it. Auto-approval is only sound when
-        // the judge saw the WHOLE action: either the summary was not truncated,
-        // OR a parsed `analysis` carries the full command segments (rendered in
-        // full below). Otherwise skip the LLM and go straight to the human.
+        // Blind-judge guard: auto-approval is only sound when the judge saw
+        // the WHOLE action. The one-line `summary` cannot prove that — it is
+        // a PROJECTION of the call (secret-redacted, length-capped, and for
+        // some tools reduced to a few identity keys), so a dangerous argument
+        // can sit in a key the projection never renders. The one thing that
+        // IS the whole action is a parsed command analysis: its segments are
+        // rendered in full below. Without it the judge would approve an
+        // action it never fully saw, so skip the LLM and go straight to the
+        // human.
         if !can_fully_judge(action) {
             tracing::info!(tool = %action.tool_name,
-                "guardian: action summary truncated with no full analysis; escalating to human (cannot judge blind)");
+                "guardian: no full action analysis; escalating to human (cannot judge blind)");
             return self.fallback.request_approval(action).await;
         }
         // Circuit open (provider unhealthy): skip the doomed judge call and its
@@ -315,16 +324,24 @@ impl ApprovalRequester for GuardianApprovalRequester {
     }
 }
 
-/// Whether the judge can see the WHOLE action (see `request_approval`): the
-/// summary was not truncated, or a parsed command analysis carries the full
-/// segments `render_action` will render. Truncated summary + no analysis =
-/// blind → must not auto-approve.
+/// Whether the judge can see the WHOLE action (see `request_approval`).
+///
+/// The one-line `summary` is a PROJECTION of the call, not the call: it is
+/// secret-redacted, length-capped, and for some tools reduced to a few
+/// identity keys (`file_ops` renders only operation/path/destination,
+/// `loop_graph` only a whitelist of keys). "The summary was not truncated" is
+/// therefore NOT evidence that the judge sees everything the action does — a
+/// dangerous argument can sit in a key the projection never renders.
+///
+/// The only proof is a parsed command analysis: `render_action` prints its
+/// segments IN FULL, so a shell-shaped action is judged on the complete
+/// command. Anything else (a JSON tool call, a route escalation) escalates to
+/// the human.
 fn can_fully_judge(action: &ApprovalAction) -> bool {
     action
         .analysis
         .as_ref()
         .is_some_and(|a| a.ok && !a.segments.is_empty())
-        || !action.summary.ends_with('…')
 }
 
 /// Render the action for the judge. The summary is already secret-redacted
@@ -495,11 +512,37 @@ mod tests {
     }
 
     #[test]
-    fn can_fully_judge_untruncated_summary() {
-        // A short JSON call (no truncation, no analysis) IS fully judgeable.
+    fn an_untruncated_summary_is_not_enough_to_judge() {
+        // A short JSON call has no truncation marker — but its summary is a
+        // PROJECTION (the projection drops keys the action still carries), so
+        // "not truncated" is NOT proof that the judge sees the whole action.
+        // Only a parsed command analysis is.
         let action =
             ApprovalAction::for_tool_call("search", &serde_json::json!({ "q": "rust" }), "ask");
         assert!(!action.summary.ends_with('…'));
+        assert!(
+            action.analysis.is_none(),
+            "precondition: JSON call has no shell analysis"
+        );
+        assert!(!can_fully_judge(&action));
+    }
+
+    #[test]
+    fn a_parsed_command_analysis_is_judgeable() {
+        // The analysis segments are rendered IN FULL, so the judge sees the
+        // whole command even when the summary is capped.
+        let action = ApprovalAction::for_tool_call(
+            "bash",
+            &serde_json::json!({ "command": "ls -la" }),
+            "ask",
+        );
+        assert!(
+            action
+                .analysis
+                .as_ref()
+                .is_some_and(|a| a.ok && !a.segments.is_empty()),
+            "precondition: the shell call has a full analysis"
+        );
         assert!(can_fully_judge(&action));
     }
 

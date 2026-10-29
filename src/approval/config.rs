@@ -97,13 +97,15 @@ fn glob_to_regex_str(pattern: &str) -> String {
 /// without inserting.
 const GLOB_CACHE_MAX: usize = 512;
 
-/// Compiled form of `pattern`, from a process-wide cache. `None` = the pattern
+/// Compiled form of `pattern`, from a process-wide cache. `Err` = the pattern
 /// does not compile (cached too, so a bad pattern is not re-compiled on every
-/// resolve). `regex::Regex` clones are cheap (`Arc`-backed).
-fn cached_glob_regex(pattern: &str) -> Option<regex::Regex> {
+/// resolve). `regex::Regex` clones are cheap (`Arc`-backed); `regex::Error`
+/// clones are cheap because it is a boxed error kind.
+fn cached_glob_regex(pattern: &str) -> Result<regex::Regex, regex::Error> {
     use crate::sync_primitives::Mutex;
     use std::sync::OnceLock;
-    static CACHE: OnceLock<Mutex<HashMap<String, Option<regex::Regex>>>> = OnceLock::new();
+    static CACHE: OnceLock<Mutex<HashMap<String, Result<regex::Regex, regex::Error>>>> =
+        OnceLock::new();
     let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
     {
         let guard = cache.lock().unwrap_or_else(|e| e.into_inner());
@@ -111,9 +113,20 @@ fn cached_glob_regex(pattern: &str) -> Option<regex::Regex> {
             return hit.clone();
         }
     }
-    let compiled = crate::security::safe_regex::bounded_builder(&glob_to_regex_str(pattern))
-        .build()
-        .ok();
+    let compiled =
+        crate::security::safe_regex::bounded_builder(&glob_to_regex_str(pattern)).build();
+    if let Err(e) = &compiled {
+        // A pattern that does not compile is a CONFIG ERROR, not "no match":
+        // a caller that reads "no match" as "no rule applies" drops the rule
+        // silently and falls back to the default permission (fail open). The
+        // blocklist path is deliberately fail-closed for the same reason, so
+        // the failure is logged loudly here instead of being swallowed.
+        error!(
+            pattern = %pattern,
+            error = %e,
+            "glob pattern does not compile; rules using it will not match"
+        );
+    }
     let mut guard = cache.lock().unwrap_or_else(|e| e.into_inner());
     if guard.len() < GLOB_CACHE_MAX {
         guard.insert(pattern.to_string(), compiled.clone());
@@ -129,9 +142,27 @@ fn cached_glob_regex(pattern: &str) -> Option<regex::Regex> {
 /// fresh compile per call multiplied out to hundreds of compiles per turn.
 /// [`ConfigApprovalPolicy::check`] still uses its own per-instance
 /// pre-compiled rules.
+///
+/// A pattern that does not compile is logged as an error (see
+/// [`cached_glob_regex`]) and answers `false`. A caller that must NOT read
+/// "no match" as "no rule applies" — a permission override whose pattern is
+/// broken is silently skipped, which resolves the tool to the DEFAULT
+/// permission, i.e. fail open — uses [`try_matches_glob`] and decides for
+/// itself what an uncompilable pattern means.
 #[must_use]
 pub fn matches_glob(value: &str, pattern: &str) -> bool {
-    cached_glob_regex(pattern).is_some_and(|re| re.is_match(value))
+    try_matches_glob(value, pattern).unwrap_or(false)
+}
+
+/// Match a value against a glob pattern, reporting a pattern that does not
+/// compile.
+///
+/// The fallible twin of [`matches_glob`]: `Ok(true)` / `Ok(false)` is a real
+/// match decision, `Err` is "the pattern is broken" — a different question
+/// with a different answer, which must not be collapsed into "no match".
+#[must_use]
+pub fn try_matches_glob(value: &str, pattern: &str) -> Result<bool, regex::Error> {
+    cached_glob_regex(pattern).map(|re| re.is_match(value))
 }
 
 /// First compiled rule in `rules` whose regex matches `target`. Used by the
@@ -435,9 +466,12 @@ impl Default for ConfigApprovalPolicy {
     }
 }
 
-#[async_trait]
-impl ApprovalPolicy for ConfigApprovalPolicy {
-    async fn check(&self, request: &ActionRequest) -> ApprovalDecision {
+impl ConfigApprovalPolicy {
+    /// The policy evaluation itself — pure, with no audit side effect.
+    ///
+    /// Split out of [`ApprovalPolicy::check`] so that the ONE place that
+    /// knows a decision was produced is also the place that records it.
+    fn decide(&self, request: &ActionRequest) -> ApprovalDecision {
         let action = &request.action_type;
         let target = &request.target;
         let prompt_target = if request.display_target.is_empty() {
@@ -510,6 +544,25 @@ impl ApprovalPolicy for ConfigApprovalPolicy {
             ),
         }
     }
+}
+
+#[async_trait]
+impl ApprovalPolicy for ConfigApprovalPolicy {
+    /// Evaluate the policy for one action request.
+    ///
+    /// The decision returned here is the one the caller acts on. An `Ask` is
+    /// recorded HERE, at the point it is produced: the caller resolves an ask
+    /// by lifting it, by refusing it, or by asking a human — and the refusal
+    /// path records no final decision at all, so an ask that never produced
+    /// an `Allow`/`Deny` would leave NO trace at all unless the ask itself is
+    /// audited.
+    async fn check(&self, request: &ActionRequest) -> ApprovalDecision {
+        let decision = self.decide(request);
+        if matches!(decision, ApprovalDecision::Ask { .. }) {
+            self.record(request, &decision).await;
+        }
+        decision
+    }
 
     async fn record(&self, request: &ActionRequest, decision: &ApprovalDecision) {
         // SECURITY: route both the target and the context through secret redaction
@@ -532,7 +585,12 @@ impl ApprovalPolicy for ConfigApprovalPolicy {
             ApprovalDecision::Ask { prompt } => {
                 let mut masked = masker.mask(prompt);
                 if masked.len() > 256 {
-                    masked.truncate(256);
+                    // The cap is a BYTE budget, walked back to a codepoint
+                    // boundary: `String::truncate` PANICS when the cut lands
+                    // inside a multi-byte codepoint, and a masked prompt
+                    // carries arbitrary user-supplied targets.
+                    let cut = crate::utils::text_format::truncate_bytes(&masked, 256).len();
+                    masked.truncate(cut);
                     masked.push('…');
                 }
                 format!("Ask {{ prompt: {masked} }}")

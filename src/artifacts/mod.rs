@@ -25,7 +25,8 @@
 //!
 //! Sessions are isolated *structurally*: a session's artifacts only exist under
 //! the directory its key encodes to, and [`encode_session_key`] is injective
-//! (`%` is itself encoded), so no two distinct keys can collide on one
+//! (`%` is itself encoded, and the empty key maps to a reserved name the
+//! encoder can never produce), so no two distinct keys can collide on one
 //! directory. A reader holding session A's key cannot name a path into session
 //! B's directory.
 
@@ -47,10 +48,23 @@ use serde::{Deserialize, Serialize};
 /// * **Traversal-safe.** `.` is encoded, so the result can never be `.` or
 ///   `..`, and no separator survives.
 /// * **Injective.** `%` is encoded, so distinct keys always encode distinctly.
+///   The empty key is the one key the encoding alone cannot distinguish: it
+///   maps to a reserved directory name (see [`EMPTY_SESSION_DIR`]) that no
+///   encoded key can produce, so it cannot collide with a real key either.
 const SESSION_KEY_ENCODE_SET: &AsciiSet = &NON_ALPHANUMERIC.remove(b'-').remove(b'_');
 
-/// Directory name used when a session key encodes to nothing (empty key).
-const EMPTY_SESSION_DIR: &str = "_";
+/// Directory name used when a session key encodes to nothing (the empty key).
+///
+/// Must be unreachable through the encoder: `_` is not, because `_` is one of
+/// the characters the encode set leaves alone, so `encode_session_key("_")`
+/// would collide with the empty key. A name holding a bare `%` is unreachable,
+/// because the encoder escapes `%` itself and never emits one.
+///
+/// Renaming this renames the directory of an already-stored empty-key
+/// session: its artifacts stay under the previous name and are no longer
+/// listed. Keys that are not empty keep their encoding, so every other
+/// session's directory is unaffected.
+const EMPTY_SESSION_DIR: &str = "%empty";
 
 /// Encode a raw session key (e.g. `agent:main:main`) into a single, portable
 /// path component.
@@ -169,6 +183,12 @@ mod tests {
         // does not collide with it.
         assert_ne!(encode_session_key("a:b"), encode_session_key("a%3Ab"));
         assert_eq!(encode_session_key("a%3Ab"), "a%253Ab");
+        // The empty key maps to a reserved name the encoder cannot produce,
+        // so it shares its directory with no other key — not with "_", which
+        // the encode set leaves untouched.
+        assert_ne!(encode_session_key(""), encode_session_key("_"));
+        assert_ne!(encode_session_key(""), encode_session_key("%empty"));
+        assert_ne!(encode_session_key("_"), encode_session_key("%empty"));
     }
 
     #[test]

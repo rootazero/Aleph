@@ -1,7 +1,7 @@
 //! CRUD methods for `SqliteCoordTaskStore` (create/get/update/list/delete).
 //! Free functions delegated to by the thin `impl CoordTaskStore` in `mod.rs`.
 
-use rusqlite::params;
+use rusqlite::{params, OptionalExtension};
 
 use super::helpers::{db_err, now_epoch};
 use super::row_decode::{load_task, read_task_row};
@@ -9,6 +9,36 @@ use super::SqliteCoordTaskStore;
 use crate::agents::swarm::tasks::{
     CoordTask, CoordTaskFilter, CoordTaskStatus, CoordTaskUpdate, NewCoordTask,
 };
+
+/// Maximum number of task rows a single `list_tasks` call may materialise.
+///
+/// `coord_tasks` is only pruned by an explicit team deletion, so a
+/// long-lived team grows without bound. Without a cap, one call decoded
+/// EVERY matching row — each carrying the full description/result/metadata
+/// JSON plus a `GROUP_CONCAT` of its dependency ids — while holding the
+/// single connection mutex, so one large team blocked every other writer.
+///
+/// The cap is applied IN SQL (`LIMIT ?N`, the value is bound, never
+/// interpolated), so the driver never decodes more rows than the caller
+/// receives. The ordering stays deterministic (priority, then oldest-first,
+/// then rowid), so a truncated listing is always the same prefix of the same
+/// order, and truncation is never silent: the call logs a warning whenever
+/// the window comes back full.
+///
+/// Known trade-off (deferred): consumers that need the COMPLETE task set
+/// see a truncated list once a team holds more than `TASK_LIST_ROW_CAP`
+/// tasks. The dispatcher settle sweep
+/// (`teams/dispatcher/schedule/settle.rs`) groups the unfiltered listing by
+/// workflow run id and needs every task of a run to decide "all settled";
+/// with a truncated listing it can miss a run entirely or judge a partial
+/// run settled. Fixing that needs pagination (a cursor on the filter), i.e.
+/// a change to the `CoordTaskStore` trait that this module does not own.
+///
+/// The cap is therefore deliberately high: it exists to bound the memory a
+/// single call can take (the defect being fixed), not to truncate a real
+/// team's task set. The truncation is never silent - the call warns - but
+/// the correct fix is the cursor above, which is a follow-up.
+const TASK_LIST_ROW_CAP: usize = 10_000;
 
 pub(super) async fn create_task(
     store: &SqliteCoordTaskStore,
@@ -170,9 +200,36 @@ pub(super) async fn update_task(
         if let Some(ref metadata) = update.metadata {
             let json = serde_json::to_string(metadata)
                 .map_err(|e| db_err(format!("failed to serialize metadata: {e}")))?;
-            sets.push(format!("metadata = ?{idx}"));
-            values.push(Box::new(json));
-            idx += 1;
+            // LOST-UPDATE WINDOW (known, deferred to a follow-up pass):
+            // `metadata` is a single TEXT column written as a whole-blob
+            // replacement, with no version/etag to compare against. The ~37
+            // call sites that patch it do read-modify-write against a
+            // snapshot they fetched OUTSIDE this connection lock, so two
+            // concurrent producers can interleave and the later write
+            // silently drops the earlier one's key. The real fix is
+            // optimistic concurrency — a `metadata_version` column plus
+            // `WHERE metadata_version = ?` — which touches every metadata
+            // writer outside this module and is therefore not done here.
+            //
+            // What this write can still do cheaply and STRICTLY safer:
+            // never rewrite a value that is already stored. When the
+            // incoming blob is byte-identical to the stored text, leaving
+            // the column out of the SET list preserves a concurrent
+            // writer's newer metadata instead of restoring our (identical)
+            // snapshot over it.
+            let stored: Option<String> = conn
+                .query_row(
+                    "SELECT metadata FROM coord_tasks WHERE id = ?1",
+                    params![id],
+                    |row| row.get::<_, String>(0),
+                )
+                .optional()
+                .map_err(db_err)?;
+            if stored.as_deref() != Some(json.as_str()) {
+                sets.push(format!("metadata = ?{idx}"));
+                values.push(Box::new(json));
+                idx += 1;
+            }
         }
 
         if sets.is_empty() {
@@ -253,6 +310,7 @@ pub(super) async fn list_tasks(
     if let Some(ref team_id) = filter.team_id {
         where_clauses.push(format!("t.team_id = ?{idx}"));
         values.push(Box::new(team_id.clone()));
+        idx += 1;
     }
 
     let where_sql = if where_clauses.is_empty() {
@@ -261,13 +319,54 @@ pub(super) async fn list_tasks(
         format!("WHERE {}", where_clauses.join(" AND "))
     };
 
+    // SQL side of the derived-status rule. `Blocked`, `Unsatisfiable` and
+    // `Pending` are all stored as 'pending' and separated AFTER the query,
+    // so a raw `LIMIT` would spend its window on rows the caller then
+    // discards (the dispatcher's pending scan would starve on blocked
+    // rows). These HAVING clauses pre-filter with a deliberately LOOSE
+    // superset of the Rust rule in `row_decode::derive_status`:
+    //
+    //   pending       -> unresolved == 0 OR the tolerate flag is set
+    //   blocked       -> unresolved > 0
+    //   unsatisfiable -> dead > 0
+    //
+    // A loose superset is the safe direction: SQL may return a row the
+    // Rust pass then drops, but it can never hide a row the Rust rule
+    // would keep. The Rust pass stays authoritative.
+    //
+    // The tolerate flag mirrors `acceptance::tolerate_failed_deps`: only a
+    // JSON boolean `true` counts (`json_type`, not `json_extract`, so the
+    // number 1 reads as false exactly like `serde_json::Value::as_bool`).
+    let tolerate_expr = format!(
+        "(CASE WHEN json_valid(t.metadata) \
+         THEN COALESCE(json_type(t.metadata, '$.{key}') = 'true', 0) \
+         ELSE 0 END)",
+        key = crate::agents::swarm::tasks::acceptance::TOLERATE_FAILED_DEPS_METADATA_KEY
+    );
+    let having_sql = if filter_blocked {
+        "HAVING unresolved_parents > 0".to_string()
+    } else if filter_unsatisfiable {
+        "HAVING dead_parents > 0".to_string()
+    } else if filter_pending {
+        format!("HAVING (unresolved_parents = 0 OR {tolerate_expr})")
+    } else {
+        String::new()
+    };
+
+    // Row cap, bound as a parameter (never interpolated into the SQL).
+    values.push(Box::new(TASK_LIST_ROW_CAP as i64));
+    let limit_idx = idx;
+
     // Single pass: tasks + unresolved-parent count + a CSV of dependency ids.
     // GROUP_CONCAT keeps the dependency list inline so we avoid the per-task
     // load_dependencies() round-trip used previously.
     //
     // Ordering: highest priority first so a kanban column surfaces the most
     // urgent work at the top, then oldest-created first as a stable
-    // tiebreaker. Priority is stored as text, so a CASE maps it to a rank.
+    // tiebreaker, then `rowid` so tasks created within the same second
+    // (the timestamps have whole-second granularity) still have ONE
+    // deterministic order instead of SQLite's scan order. Priority is
+    // stored as text, so a CASE maps it to a rank.
     let sql = format!(
         r#"
         SELECT
@@ -290,6 +389,7 @@ pub(super) async fn list_tasks(
         LEFT JOIN coord_tasks dep ON dep.id = d.depends_on
         {where_sql}
         GROUP BY t.id
+        {having_sql}
         ORDER BY
             CASE t.priority
                 WHEN 'critical' THEN 0
@@ -298,7 +398,9 @@ pub(super) async fn list_tasks(
                 WHEN 'low' THEN 3
                 ELSE 2
             END ASC,
-            t.created_at ASC
+            t.created_at ASC,
+            t.rowid ASC
+        LIMIT ?{limit_idx}
         "#
     );
 
@@ -348,8 +450,10 @@ pub(super) async fn list_tasks(
         .map_err(db_err)?;
 
     let mut tasks = Vec::new();
+    let mut window_rows = 0usize;
     for row in rows {
         let task = row.map_err(db_err)?;
+        window_rows += 1;
         if filter_blocked && task.status != CoordTaskStatus::Blocked {
             continue;
         }
@@ -360,6 +464,18 @@ pub(super) async fn list_tasks(
             continue;
         }
         tasks.push(task);
+    }
+
+    // Truncation is never silent: a full window means the SQL LIMIT cut
+    // the result set, so callers that need every task must be told.
+    if window_rows >= TASK_LIST_ROW_CAP {
+        tracing::warn!(
+            cap = TASK_LIST_ROW_CAP,
+            team_id = filter.team_id.as_deref().unwrap_or("<all teams>"),
+            status = filter.status.as_ref().map(|s| s.as_str()),
+            returned = tasks.len(),
+            "list_tasks: row cap reached, the task list is TRUNCATED"
+        );
     }
 
     Ok(tasks)

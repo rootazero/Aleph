@@ -21,8 +21,10 @@
 //!    cron, heartbeat, scheduled tools). Recovers channel from the structured
 //!    `SessionKey`.
 //!
-//! Both unset or a non-channel turn → `Denied` with an explicit warning. Never
-//! a silent auto-approve.
+//! Both unset or a non-channel turn → `Unavailable` with an explicit warning:
+//! no card was ever rendered, so nobody made a decision (the in-code
+//! comment on that arm spells out why this is not a `Denied`). Never a silent
+//! auto-approve.
 //!
 //! A resolvable-but-unregistered channel (the Panel's `gui:chat`) is NOT a
 //! denial: [`FallbackApprovalRequester`] routes those to the operator

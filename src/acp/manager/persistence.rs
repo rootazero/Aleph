@@ -222,8 +222,19 @@ pub async fn wire_persistence(
             // runtime shutdown). Drop the event in that case — losing
             // the on-disk write is strictly better than blocking the
             // caller on a dead channel, and the in-memory state already
-            // reflects the event.
-            let _ = hook_tx.send(event);
+            // reflects the event. The failure is logged (with the harness
+            // id) instead of being discarded silently, so a dead
+            // persistence worker is visible in the logs.
+            if let Err(e) = hook_tx.send(event) {
+                let harness_id = match &e.0 {
+                    crate::acp::AcpSessionEvent::Created { harness_id, .. }
+                    | crate::acp::AcpSessionEvent::Removed { harness_id, .. } => harness_id.as_str(),
+                };
+                warn!(
+                    harness_id,
+                    "persist_sessions: persistence hook channel closed; ACP session event dropped"
+                );
+            }
         }))
         .await;
 

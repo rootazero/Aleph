@@ -133,22 +133,42 @@ pub async fn write_value(stdin: &SharedStdin, value: &serde_json::Value) -> Resu
 /// Serialize `value` to NDJSON (one JSON object + `\n`), lock the shared stdin,
 /// and write+flush. Centralizes the framing used by both [`write_request`] and
 /// [`write_value`] so the wire shape has one source of truth.
+///
+/// The write itself runs in a spawned task that OWNS the stdin lock. Two
+/// properties matter here:
+///
+/// * **Cancel safety.** `write_all` on a pipe is not cancel-safe: a dropped
+///   future can leave a half-written frame in the child's stdin, which the
+///   child then parses as one garbled line. The callers wrap their receive
+///   loop in `tokio::time::timeout`, so dropping this future mid-write is a
+///   real possibility. Handing the write to a detached task means the frame
+///   is always written whole, even if the caller is cancelled.
+/// * **Ordering.** The lock is acquired by the *caller* (before spawning)
+///   and handed to the task, so concurrent writes keep their call order
+///   instead of racing for the lock inside the spawned tasks.
 async fn write_framed<T>(stdin: &SharedStdin, value: &T) -> Result<()>
 where
     T: serde::Serialize,
 {
     let mut line = serde_json::to_string(value)?;
     line.push('\n');
-    let mut guard = stdin.lock().await;
-    guard
-        .write_all(line.as_bytes())
-        .await
-        .map_err(|e| AlephError::IoError(format!("ACP stdin write error: {e}")))?;
-    guard
-        .flush()
-        .await
-        .map_err(|e| AlephError::IoError(format!("ACP stdin flush error: {e}")))?;
-    Ok(())
+    let guard = Arc::clone(stdin).lock_owned().await;
+    let task = tokio::spawn(async move {
+        let mut guard = guard;
+        guard
+            .write_all(line.as_bytes())
+            .await
+            .map_err(|e| AlephError::IoError(format!("ACP stdin write error: {e}")))?;
+        guard
+            .flush()
+            .await
+            .map_err(|e| AlephError::IoError(format!("ACP stdin flush error: {e}")))?;
+        Ok::<(), AlephError>(())
+    });
+    match task.await {
+        Ok(result) => result,
+        Err(e) => Err(AlephError::IoError(format!("ACP stdin write task failed: {e}"))),
+    }
 }
 
 impl StdioTransport {
@@ -193,6 +213,35 @@ impl StdioTransport {
         let response = outcome.into_jsonrpc(id);
         if let Err(e) = write_value(&self.stdin, &response).await {
             warn!(method, "ACP incoming: failed to write response: {}", e);
+        }
+    }
+
+    /// Drain frames that arrived after the request timed out.
+    ///
+    /// Agent→client requests (a frame carrying both an `id` and a `method`)
+    /// must NOT be discarded: the agent blocks until it gets an answer, so
+    /// dropping the frame would stall the agent until its own (much longer)
+    /// timeout. Those are answered through the normal
+    /// [`Self::dispatch_incoming`] path; everything else (stale responses for
+    /// an abandoned id, notifications) is dropped so the next request does not
+    /// pick up a mismatched id.
+    async fn drain_after_timeout(&mut self) {
+        loop {
+            let frame = match self.event_rx.try_recv() {
+                Ok(frame) => frame,
+                Err(_) => return,
+            };
+            match frame {
+                Ok(resp) if resp.is_incoming_request() => {
+                    debug!(
+                        method = ?resp.method,
+                        "ACP transport: answering stale agent→client request after timeout"
+                    );
+                    self.dispatch_incoming(&resp).await;
+                }
+                Ok(_) => debug!("ACP transport: drained stale response after timeout"),
+                Err(e) => warn!("ACP transport: drained stale error after timeout: {}", e),
+            }
         }
     }
 
@@ -250,10 +299,9 @@ impl StdioTransport {
             Ok(inner) => inner,
             Err(_) => {
                 // Timeout: drain any stale responses so the next request
-                // doesn't receive a mismatched id.
-                while self.event_rx.try_recv().is_ok() {
-                    debug!("ACP transport: drained stale response after timeout");
-                }
+                // doesn't receive a mismatched id — but keep answering the
+                // agent's own pending requests.
+                self.drain_after_timeout().await;
                 Err(Self::timeout_err(timeout))
             }
         }
@@ -306,10 +354,9 @@ impl StdioTransport {
             Ok(inner) => inner,
             Err(_) => {
                 // Timeout: drain any stale responses so the next request
-                // doesn't receive a mismatched id.
-                while self.event_rx.try_recv().is_ok() {
-                    debug!("ACP transport: drained stale response after timeout");
-                }
+                // doesn't receive a mismatched id — but keep answering the
+                // agent's own pending requests.
+                self.drain_after_timeout().await;
                 Err(Self::timeout_err(timeout))
             }
         }

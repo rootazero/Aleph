@@ -30,6 +30,12 @@ pub struct GenericAcpAdapter {
     output_format: OutputFormat,
     timeout: Duration,
     trust_level: crate::config::types::acp::TrustLevel,
+    /// Environment variables the harness process inherits, in addition to the
+    /// ones it gets from the parent process.
+    env: Vec<(String, String)>,
+    /// Working directory configured for the harness. Used when the caller
+    /// does not supply one.
+    cwd_override: Option<String>,
 }
 
 impl GenericAcpAdapter {
@@ -55,10 +61,20 @@ impl GenericAcpAdapter {
             output_format: OutputFormat::from(&entry.output_format),
             timeout: Duration::from_secs(entry.timeout_seconds.max(1)),
             trust_level: entry.trust_level.clone(),
+            env: entry
+                .env
+                .iter()
+                .map(|(k, v)| (k.clone(), v.clone()))
+                .collect(),
+            cwd_override: entry.cwd.clone(),
         }
     }
 
     /// Create from individual fields (for programmatic construction).
+    ///
+    /// Programmatic adapters carry no environment overrides and no working
+    /// directory override; use [`Self::from_entry`] when the harness needs
+    /// them.
     pub fn new(
         id: impl Into<String>,
         display_name: impl Into<String>,
@@ -82,6 +98,8 @@ impl GenericAcpAdapter {
             output_format,
             timeout: Duration::from_secs(300),
             trust_level,
+            env: Vec::new(),
+            cwd_override: None,
         }
     }
 
@@ -134,7 +152,8 @@ impl AcpAdapter for GenericAcpAdapter {
         AdapterConfig {
             executable: self.executable.clone(),
             args: self.resolve_args(self.default_mode),
-            cwd: cwd.map(String::from),
+            cwd: cwd.map(String::from).or_else(|| self.cwd_override.clone()),
+            env: self.env.clone(),
             timeout: self.timeout.max(Duration::from_secs(1)),
             permission_policy: self.permission_policy(),
             ..Default::default()
@@ -142,11 +161,18 @@ impl AcpAdapter for GenericAcpAdapter {
     }
 
     async fn execute_oneshot(&self, prompt: &str, cwd: &str) -> Result<String> {
+        // The caller's working directory wins; the configured one is only a
+        // fallback for callers that do not supply one.
+        let cwd = if cwd.is_empty() {
+            self.cwd_override.as_deref().unwrap_or(cwd)
+        } else {
+            cwd
+        };
         super::run_oneshot_command(
             &self.id,
             &self.executable,
             &self.oneshot_args,
-            &[],
+            &self.env,
             &self.output_format,
             prompt,
             cwd,
@@ -160,7 +186,8 @@ impl AcpAdapter for GenericAcpAdapter {
         let config = AdapterConfig {
             executable: self.executable.clone(),
             args: self.native_acp_args.clone(),
-            cwd: cwd.map(String::from),
+            cwd: cwd.map(String::from).or_else(|| self.cwd_override.clone()),
+            env: self.env.clone(),
             timeout,
             permission_policy: self.permission_policy(),
             ..Default::default()

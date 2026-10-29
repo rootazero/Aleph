@@ -682,6 +682,33 @@ pub trait CoordTaskStore: Send + Sync {
     /// terminally dead, which a failure of `settled_id` itself can bring about.
     async fn get_newly_unblocked(&self, settled_id: &str) -> crate::error::Result<Vec<CoordTask>>;
 
+    /// Verify that every id in `blocked_by` names an existing task.
+    ///
+    /// Dependency edges are immutable once written (the store inserts one edge
+    /// row per entry and never rewrites them), so a DANGLING edge — a typo, or
+    /// an id from a task the caller cannot see — leaves the dependent
+    /// `Blocked` forever: the edge never resolves, the dispatcher never claims
+    /// the task, and nothing anywhere reports an error. The cycle check
+    /// ([`dag`](super::dag)) cannot catch this: it asks whether an edge would
+    /// CLOSE a cycle, never whether the target exists.
+    ///
+    /// The rule lives on the trait so every backend applies the same one.
+    /// `create_task` implementations MUST call this before inserting the
+    /// edges.
+    async fn ensure_dependencies_exist(
+        &self,
+        blocked_by: &[CoordTaskId],
+    ) -> crate::error::Result<()> {
+        for dep_id in blocked_by {
+            if self.get_task(dep_id).await?.is_none() {
+                return Err(crate::error::AlephError::invalid_input(format!(
+                    "dependency task '{dep_id}' does not exist"
+                )));
+            }
+        }
+        Ok(())
+    }
+
     // --- Task locking ---
 
     /// Atomically acquire a lock on a task. Idempotent if the same agent already holds it.
@@ -770,6 +797,15 @@ pub trait CoordTaskStore: Send + Sync {
     // --- Comments ---
     // Free-text handoff notes attached to a task. Stored permanently (no
     // TTL) so they survive across retries and panel sessions.
+    //
+    // The read side FAILS CLOSED (`Err`), like the write side: "this task has
+    // no comments" and "this backend cannot tell" must not look the same. A
+    // default that answered `Ok(Vec::new())` let a backend that implements
+    // only the task CRUD inherit it, and the dispatcher then built a handoff
+    // prompt with no notes section — a silently cold start with no
+    // diagnostic. (Only one implementor exists today — `SqliteCoordTaskStore`
+    // — and it implements every method, so this is a contract for the next
+    // backend, not a live bug.)
 
     async fn add_task_comment(
         &self,
@@ -783,18 +819,27 @@ pub trait CoordTaskStore: Send + Sync {
         })
     }
 
+    /// The comments attached to `task_id`, oldest first.
+    ///
+    /// Fails closed: a backend without comment support must say so rather
+    /// than report "no comments".
     async fn list_task_comments(
         &self,
         _task_id: &str,
     ) -> crate::error::Result<Vec<CoordTaskComment>> {
-        Ok(Vec::new())
+        Err(crate::error::AlephError::ConfigError {
+            message: "CoordTaskStore: list_task_comments not implemented".into(),
+            suggestion: None,
+        })
     }
 
     // --- Exit Journal (R3) ---
     // ClawTeam parity. The executing agent calls `upsert_task_journal`
-    // when it finishes; reviewers read via `get_task_journal`. Default
-    // impls are no-ops/empty so backends without journal support degrade
-    // gracefully — the trace API still works, journal field is just None.
+    // when it finishes; reviewers read via `get_task_journal`. The write side
+    // fails closed and so does the read side: "this task has no journal" and
+    // "this backend cannot tell" must not look the same, or a backend that
+    // implements only the task CRUD silently drops the recovery journal from
+    // the handoff prompt (the trace API still works).
 
     async fn upsert_task_journal(
         &self,
@@ -806,20 +851,33 @@ pub trait CoordTaskStore: Send + Sync {
         })
     }
 
+    /// The exit journal of `task_id`, if it has one.
+    ///
+    /// Fails closed: `None` means "this task has no journal"; `Err` means
+    /// "this backend cannot tell".
     async fn get_task_journal(
         &self,
         _task_id: &str,
     ) -> crate::error::Result<Option<TaskExitJournal>> {
-        Ok(None)
+        Err(crate::error::AlephError::ConfigError {
+            message: "CoordTaskStore: get_task_journal not implemented".into(),
+            suggestion: None,
+        })
     }
 
     /// List journals for a team, newest first. Used by the panel's
     /// team-level replay overview ("which tasks have a journal?").
+    ///
+    /// Fails closed: a backend without journal support must say so rather
+    /// than report "no journals".
     async fn list_team_journals(
         &self,
         _team_id: &str,
     ) -> crate::error::Result<Vec<TaskExitJournal>> {
-        Ok(Vec::new())
+        Err(crate::error::AlephError::ConfigError {
+            message: "CoordTaskStore: list_team_journals not implemented".into(),
+            suggestion: None,
+        })
     }
 
     /// Hard-delete all tasks for a team and their child rows

@@ -992,7 +992,22 @@ pub async fn spawn(base: &SpawnerBase, req: SpawnRequest<'_>) -> Result<LoopRunR
                 // background sub-agents need this event in the session
                 // log; silently dropping an emit failure would make the
                 // sub-agent look "still running" forever after a restart.
-                let summary = result.final_text.clone().unwrap_or_default();
+                // A child that ended without a final text must not be recorded
+                // as a completed run carrying an EMPTY summary: the durable
+                // record would read as "the sub-agent finished and had nothing
+                // to say", while the truth is "the sub-agent ended without
+                // producing an answer" — the recovery face that replays this
+                // event would otherwise present a missing answer as a
+                // finished one. The marker is self-describing, and names the
+                // iteration limit when that is what ended the child.
+                let summary = match result.final_text.clone() {
+                    Some(text) if !text.trim().is_empty() => text,
+                    _ if hit_limit => {
+                        "[no final response: the sub-agent stopped at its iteration limit]"
+                            .to_string()
+                    }
+                    _ => "[no final response: the sub-agent ended without producing one]".to_string(),
+                };
                 if let Some(ref parent_str) = base.parent_session_id {
                     if let Some(parent_id) = parent_session_id_of(parent_str) {
                         if let Err(e) = base
@@ -1022,7 +1037,6 @@ pub async fn spawn(base: &SpawnerBase, req: SpawnRequest<'_>) -> Result<LoopRunR
                 //    can distil parent-side lessons. Skipped silently when no writer is
                 //    threaded through (legacy callers, tests, off-by-config).
                 if let Some(writer) = base.raw_memory_writer.clone() {
-                    let summary = result.final_text.clone().unwrap_or_default();
                     let parent_id = base
                         .parent_agent_id
                         .clone()

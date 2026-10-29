@@ -82,6 +82,16 @@ const PARTIAL_RESULT_TAIL_BYTES: usize = 8 * 1024;
 /// bounded at 200 chars upstream, but a terminal `final_text` is not.
 const MAX_LINE_CHARS: usize = 4_000;
 
+/// How many orphan runs one orphan summary may describe. The summary is
+/// injected into a parent prompt, so an unbounded list of orphaned children
+/// crowds out the parent's own context with information it did not ask for.
+const MAX_ORPHAN_RUNS: usize = 8;
+
+/// Hard cap on the size of one orphan summary, in characters. Same order as
+/// [`PARTIAL_RESULT_TAIL_BYTES`] (8 KiB for one run's trail): the summary must
+/// not grow with the number of orphaned runs.
+const MAX_ORPHAN_SUMMARY_CHARS: usize = 16 * 1024;
+
 /// Shared masker. `SecretMasker` is a zero-sized handle — both the vendor floor
 /// and the operator's `[[security.mask_patterns]]` live in process-wide statics
 /// inside `exec::masker` — so this exists only to avoid re-constructing the
@@ -294,7 +304,13 @@ pub fn init_and_reconcile(dir: PathBuf) -> Vec<RecoveredRun> {
                 .ended_ms
                 .is_some_and(|t| now.saturating_sub(t) > RECORD_RETENTION_MS)
         {
-            let _ = std::fs::remove_dir_all(dir.join(slug(&record.request_id)));
+            if let Err(e) = std::fs::remove_dir_all(dir.join(slug(&record.request_id))) {
+                tracing::debug!(
+                    error = %e,
+                    request_id = %record.request_id,
+                    "background_persistence: retention sweep could not remove run dir"
+                );
+            }
             continue;
         }
 
@@ -474,26 +490,8 @@ fn summarize_orphans(runs: &[RecoveredRun]) -> String {
         .into_iter()
         .partition(|r| r.record.outcome.as_deref() == Some("completed"));
 
-    let render = |out: &mut String, group: &[&RecoveredRun]| {
-        for run in group {
-            out.push_str(&format!(
-                "\n- request_id: {}\n  task: {}\n  agent: {}\n",
-                run.record.request_id, run.record.task, run.record.agent
-            ));
-            if let Some(outcome) = run.record.outcome.as_ref() {
-                out.push_str(&format!("  outcome: {outcome}\n"));
-            }
-            if !run.partial_result.is_empty() {
-                out.push_str("  result:\n");
-                let indented: String = run
-                    .partial_result
-                    .lines()
-                    .map(|line| format!("    {line}\n"))
-                    .collect();
-                out.push_str(&indented);
-            }
-        }
-    };
+    let mut budget = MAX_ORPHAN_RUNS;
+    let mut omitted = 0usize;
 
     let mut blocks: Vec<String> = Vec::new();
     if !interrupted.is_empty() {
@@ -503,7 +501,7 @@ fn summarize_orphans(runs: &[RecoveredRun]) -> String {
              re-delegate anything still needed.\n",
             interrupted.len()
         );
-        render(&mut block, &interrupted);
+        omitted += render_orphan_runs(&mut block, &interrupted, &mut budget);
         blocks.push(block);
     }
     if !finished.is_empty() {
@@ -513,7 +511,7 @@ fn summarize_orphans(runs: &[RecoveredRun]) -> String {
              is done, do not repeat it.\n",
             finished.len()
         );
-        render(&mut block, &finished);
+        omitted += render_orphan_runs(&mut block, &finished, &mut budget);
         blocks.push(block);
     }
     if !unsuccessful.is_empty() {
@@ -523,10 +521,69 @@ fn summarize_orphans(runs: &[RecoveredRun]) -> String {
              still be undone, so read it and decide whether to re-run.\n",
             unsuccessful.len()
         );
-        render(&mut block, &unsuccessful);
+        omitted += render_orphan_runs(&mut block, &unsuccessful, &mut budget);
         blocks.push(block);
     }
-    blocks.join("\n")
+    if omitted > 0 {
+        // A truncated list must not read as the whole truth: say how many
+        // runs the bound hid.
+        tracing::warn!(
+            omitted,
+            max_runs = MAX_ORPHAN_RUNS,
+            "background_persistence: orphan summary omitted runs"
+        );
+        blocks.push(format!(
+            "{omitted} further orphaned background sub-agent(s) are not shown (summary bound)."
+        ));
+    }
+    let mut summary = blocks.join("\n");
+    if summary.chars().count() > MAX_ORPHAN_SUMMARY_CHARS {
+        // Cut on a character boundary — a summary that ends mid-codepoint is
+        // worse than a short one.
+        summary = summary
+            .chars()
+            .take(MAX_ORPHAN_SUMMARY_CHARS)
+            .collect::<String>()
+            + "\n… orphan summary truncated";
+        tracing::warn!(
+            max_chars = MAX_ORPHAN_SUMMARY_CHARS,
+            "background_persistence: orphan summary truncated"
+        );
+    }
+    summary
+}
+
+/// Append one group's orphan runs to `out`, spending at most `budget` of them.
+///
+/// The budget is shared by the three groups of one summary. Returns how many
+/// runs of `group` did not fit, so the caller can tell the reader that the
+/// list is incomplete instead of letting a short list read as the whole truth.
+fn render_orphan_runs(out: &mut String, group: &[&RecoveredRun], budget: &mut usize) -> usize {
+    let mut omitted = 0usize;
+    for run in group {
+        if *budget == 0 {
+            omitted += 1;
+            continue;
+        }
+        *budget -= 1;
+        out.push_str(&format!(
+            "\n- request_id: {}\n  task: {}\n  agent: {}\n",
+            run.record.request_id, run.record.task, run.record.agent
+        ));
+        if let Some(outcome) = run.record.outcome.as_ref() {
+            out.push_str(&format!("  outcome: {outcome}\n"));
+        }
+        if !run.partial_result.is_empty() {
+            out.push_str("  result:\n");
+            let indented: String = run
+                .partial_result
+                .lines()
+                .map(|line| format!("    {line}\n"))
+                .collect();
+            out.push_str(&indented);
+        }
+    }
+    omitted
 }
 
 // ============================================================================
@@ -582,9 +639,11 @@ pub fn record_activity(request_id: &str, text: &str) {
 /// long as its record exists — see `INDEX`.
 pub fn record_settled(request_id: &str, outcome: &str, final_text: &str) {
     let Some(dir) = store_dir() else { return };
-    if !final_text.trim().is_empty() {
-        append_trail(&dir, request_id, final_text);
-    }
+    // Membership is proven BEFORE anything is written: `append_trail` creates
+    // the run directory, and a directory that carries no `state.json` is
+    // invisible to the retention sweep (which walks the recorded runs, not
+    // the directory tree) — an unknown id would leave that directory behind
+    // forever. The index is the only authority on which ids exist.
     let record = {
         let mut index = index_lock();
         let Some(record) = index.get_mut(request_id) else {
@@ -595,6 +654,9 @@ pub fn record_settled(request_id: &str, outcome: &str, final_text: &str) {
         record.outcome = Some(outcome.to_string());
         record.clone()
     };
+    if !final_text.trim().is_empty() {
+        append_trail(&dir, request_id, final_text);
+    }
     write_state(&dir, &record);
 }
 

@@ -29,9 +29,14 @@ pub struct TaskStore {
 /// Evict the oldest terminal tasks until the map is back under `MAX_TASKS`
 /// (or no further terminal tasks remain). Only terminal tasks are reclaimed
 /// so an in-flight task is never dropped out from under its handler.
-fn evict_terminal_tasks(tasks: &mut HashMap<String, A2ATask>) {
+///
+/// Returns `true` when the store is below `MAX_TASKS` afterwards. `false`
+/// means every retained task is still in flight: the store cannot accept
+/// more work without dropping a live task, so the caller must refuse the
+/// new task instead of growing the map without bound.
+fn evict_terminal_tasks(tasks: &mut HashMap<String, A2ATask>) -> bool {
     if tasks.len() < MAX_TASKS {
-        return;
+        return true;
     }
     let mut terminal: Vec<(String, chrono::DateTime<Utc>)> = tasks
         .iter()
@@ -48,6 +53,12 @@ fn evict_terminal_tasks(tasks: &mut HashMap<String, A2ATask>) {
         }
         tasks.remove(&id);
     }
+    tasks.len() < MAX_TASKS
+}
+
+/// Error returned when the in-memory task store has no room for a new task.
+fn at_capacity_error() -> A2AError {
+    A2AError::InvalidRequest("task store is at capacity; retry later".to_string())
 }
 
 impl TaskStore {
@@ -75,7 +86,9 @@ impl A2ATaskManager for TaskStore {
                 "Task already exists: {task_id}"
             )));
         }
-        evict_terminal_tasks(&mut tasks);
+        if !evict_terminal_tasks(&mut tasks) {
+            return Err(at_capacity_error());
+        }
         tasks.insert(task_id.to_string(), task.clone());
         Ok(task)
     }
@@ -89,7 +102,9 @@ impl A2ATaskManager for TaskStore {
         let mut tasks = self.tasks.write().await;
         if !tasks.contains_key(task_id) {
             let task = A2ATask::new(task_id, context_id);
-            evict_terminal_tasks(&mut tasks);
+            if !evict_terminal_tasks(&mut tasks) {
+                return Err(at_capacity_error());
+            }
             tasks.insert(task_id.to_string(), task);
         }
         let task = tasks

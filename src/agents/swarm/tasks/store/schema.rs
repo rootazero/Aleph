@@ -78,10 +78,37 @@ pub(super) fn migrate(conn: &Connection) -> crate::error::Result<()> {
         );
 
         if let Err(e) = migration_result {
-            // Best-effort rollback so the connection is not left with FK
-            // enforcement disabled and an open transaction.
-            let _ = conn.execute_batch("ROLLBACK; PRAGMA foreign_keys = ON;");
-            return Err(db_err(e));
+            // The half-applied rebuild must be rolled back AND foreign-key
+            // enforcement restored before this connection is used again.
+            //
+            // Two separate batches on purpose: `PRAGMA foreign_keys = ON` is a
+            // no-op inside an open transaction, so it must not share a batch
+            // with the `ROLLBACK` that closes it. And neither result may be
+            // discarded — a connection left with `foreign_keys = OFF` accepts
+            // orphan rows for the rest of its life, silently, with every
+            // later write claiming the FK was enforced.
+            let rollback_err = conn.execute_batch("ROLLBACK;").err().map(|err| err.to_string());
+            let restore_err = conn
+                .execute_batch("PRAGMA foreign_keys = ON;")
+                .err()
+                .map(|err| err.to_string());
+            // Read the EFFECTIVE state back: the PRAGMA is silently ignored
+            // while a transaction is still open, so a swallowed ROLLBACK
+            // failure would leave FK enforcement off with no error at all.
+            let fk_state = match conn.query_row("PRAGMA foreign_keys", [], |row| {
+                row.get::<_, i64>(0)
+            }) {
+                Ok(1) => "restored".to_string(),
+                Ok(0) => "still disabled".to_string(),
+                Ok(other) => format!("unexpected value {other}"),
+                Err(err) => format!("unknown ({err})"),
+            };
+            return Err(db_err(format!(
+                "legacy coord_tasks migration failed: {e}; rollback: {}; foreign_keys restore: \
+                 {}; foreign_keys state: {fk_state}",
+                rollback_err.as_deref().unwrap_or("ok"),
+                restore_err.as_deref().unwrap_or("ok"),
+            )));
         }
 
         // Re-enable FK enforcement
@@ -142,16 +169,16 @@ pub(super) fn migrate(conn: &Connection) -> crate::error::Result<()> {
     .map_err(db_err)?;
 
     // --- Add task locking columns (idempotent) ---
-    let has_locked_by: bool = conn
-        .prepare("SELECT locked_by FROM coord_tasks LIMIT 0")
-        .is_ok();
-    if !has_locked_by {
-        conn.execute_batch(
-            "ALTER TABLE coord_tasks ADD COLUMN locked_by TEXT;\
-             ALTER TABLE coord_tasks ADD COLUMN locked_at INTEGER;",
-        )
-        .map_err(db_err)?;
-    }
+    // `add_column_if_missing` inspects PRAGMA table_info and issues ONE
+    // ALTER per missing column. The previous bespoke probe ("prepare a
+    // SELECT against locked_by") plus a two-statement `execute_batch` could
+    // half-apply: the batch is not a transaction, so a failure between the
+    // two ALTERs left `locked_by` present and `locked_at` missing — and the
+    // probe then reported "has locked_by" on every later boot and never
+    // added the missing half. Checking each column independently makes the
+    // next boot self-heal whatever the previous one left behind.
+    add_column_if_missing(conn, "coord_tasks", "locked_by", "TEXT")?;
+    add_column_if_missing(conn, "coord_tasks", "locked_at", "INTEGER")?;
 
     // --- Per-attempt run history (additive) ---
     // Captures each dispatcher claim so the panel drawer can show what
@@ -255,6 +282,14 @@ pub(super) fn migrate(conn: &Connection) -> crate::error::Result<()> {
         "#,
     )
     .map_err(db_err)?;
+
+    // `updated_at` records the LAST WRITE of a journal; `created_at` keeps
+    // its original meaning (the insert time of the first journal for the
+    // task). Before this column existed, the UPSERT overwrote `created_at`
+    // with every rewrite, so a journal's "created" timestamp silently
+    // became "last written" and the age of a long-running task's journal
+    // could not be told from the age of a fresh one.
+    add_column_if_missing(conn, "coord_task_journals", "updated_at", "INTEGER")?;
 
     Ok(())
 }
