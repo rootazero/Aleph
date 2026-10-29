@@ -15,7 +15,6 @@ use futures::StreamExt;
 use crate::a2a::domain::security::Credentials;
 use crate::a2a::domain::{AgentCard, UpdateEvent};
 use crate::a2a::port::authenticator::{A2AAuthContext, A2AAuthPrincipal};
-use crate::a2a::port::task_manager::A2ATaskManager;
 
 use super::request_processor::{
     apply_inline_push_config, A2ARequestProcessor, A2AServerState, JsonRpcRequest, JsonRpcResponse,
