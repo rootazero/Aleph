@@ -7,6 +7,16 @@ use crate::a2a::port::A2AResult;
 use crate::security::ssrf::{validate_url_with_pinned, SsrfPolicy};
 use crate::sync_primitives::AsyncRwLock;
 
+/// Maximum number of push-notification configs held at once.
+///
+/// A config is keyed by a caller-supplied task id and holds a webhook URL
+/// that the server will later call, so an authorized peer could otherwise
+/// grow the map without bound by registering a fresh task id per call. The
+/// cap keeps the resident set bounded; registering a *new* task id is
+/// refused once the cap is reached (overwriting an existing task's config
+/// does not grow the map and stays allowed).
+const MAX_PUSH_CONFIGS: usize = 1_024;
+
 /// Configuration for push notifications on a task
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -31,15 +41,48 @@ impl std::fmt::Debug for PushNotificationConfig {
 }
 
 /// Push notification service — manages webhook configs and fires notifications
+///
+/// The outbound-host policy applied to webhook URLs is configurable through
+/// [`NotificationService::with_ssrf_policy`]. See that constructor for why
+/// the default constructor is not equivalent to it.
 pub struct NotificationService {
     configs: AsyncRwLock<HashMap<String, PushNotificationConfig>>,
+    ssrf_policy: SsrfPolicy,
 }
 
 impl NotificationService {
+    /// Construct with the built-in default SSRF policy.
+    ///
+    /// The operator's outbound-host policy (`webhook_ssrf_policy` in the
+    /// server config) is **not** applied on this path. `SsrfPolicy::default()`
+    /// blocks private/internal address ranges, but it carries none of the
+    /// operator's `allowed_hosts` / `blocked_hosts` lists, so an operator who
+    /// restricted outbound hosts would have that restriction silently ignored
+    /// for A2A push notifications. The service therefore warns at construction
+    /// instead of pretending the operator policy is honoured; wire
+    /// [`NotificationService::with_ssrf_policy`] to apply it.
     #[must_use]
     pub fn new() -> Self {
+        tracing::warn!(
+            "A2A push notifications are using the default SSRF policy — the operator webhook SSRF policy is NOT applied on this path. Wire NotificationService::with_ssrf_policy(...) to honour it."
+        );
         Self {
             configs: AsyncRwLock::new(HashMap::new()),
+            ssrf_policy: SsrfPolicy::default(),
+        }
+    }
+
+    /// Construct with an explicit outbound-host policy (the operator's
+    /// `webhook_ssrf_policy`).
+    ///
+    /// The policy is applied both when a webhook URL is accepted
+    /// ([`NotificationService::set_config`]) and when the webhook is
+    /// delivered, so an operator allow-list is enforced end to end.
+    #[must_use]
+    pub fn with_ssrf_policy(ssrf_policy: SsrfPolicy) -> Self {
+        Self {
+            configs: AsyncRwLock::new(HashMap::new()),
+            ssrf_policy,
         }
     }
 
@@ -75,7 +118,7 @@ impl NotificationService {
         // can only ever fail, and the failure surfaces as a `tracing::warn!` in
         // the daemon it will never read. Rejecting here is the only synchronous
         // signal the caller gets.
-        validate_url_with_pinned(&config.url, &SsrfPolicy::default())
+        validate_url_with_pinned(&config.url, &self.ssrf_policy)
             .await
             .map(|(_, _pinned)| ())
             .map_err(|e| {
@@ -85,6 +128,20 @@ impl NotificationService {
             })?;
 
         let mut configs = self.configs.write().await;
+        // Refuse a *new* task id once the store is full: overwriting an
+        // existing task's config does not grow the map and stays allowed.
+        // Without this guard an authorized peer grows the map without bound
+        // by registering a fresh task id per call.
+        if !configs.contains_key(&config.task_id) && configs.len() >= MAX_PUSH_CONFIGS {
+            tracing::warn!(
+                task_id = %config.task_id,
+                limit = MAX_PUSH_CONFIGS,
+                "Refusing push notification config — push notification config store is at capacity"
+            );
+            return Err(A2AError::InvalidRequest(
+                "push notification config store is at capacity; delete an existing config to free a slot or retry later".to_string(),
+            ));
+        }
         configs.insert(config.task_id.clone(), config.clone());
         Ok(config)
     }
@@ -160,8 +217,7 @@ impl NotificationService {
             crate::security::ssrf::SafeFetchRequest::post(body, std::time::Duration::from_secs(10))
                 .with_headers(headers);
 
-        match crate::security::ssrf::safe_fetch(&config.url, &SsrfPolicy::default(), fetch_request)
-            .await
+        match crate::security::ssrf::safe_fetch(&config.url, &self.ssrf_policy, fetch_request).await
         {
             Ok(resp) if resp.status.is_success() => {
                 tracing::debug!(
@@ -503,5 +559,64 @@ mod tests {
             "send_webhook must not POST to a private/loopback URL, got {} request(s)",
             received.len()
         );
+    }
+
+    // Capacity guard: a caller-supplied task id must not be able to grow the
+    // config map without bound. The store is seeded directly here — the guard
+    // is what is under test, not the SSRF validation, and 1k+ URL validations
+    // would make the test slow.
+
+    #[tokio::test]
+    async fn set_config_refuses_new_task_when_store_is_at_capacity() {
+        let svc = NotificationService::new();
+        {
+            let mut configs = svc.configs.write().await;
+            for i in 0..MAX_PUSH_CONFIGS {
+                configs.insert(
+                    format!("seed-{i}"),
+                    PushNotificationConfig {
+                        task_id: format!("seed-{i}"),
+                        url: "https://8.8.8.8/hook".to_string(),
+                        token: None,
+                        events: vec![],
+                    },
+                );
+            }
+        }
+
+        let err = svc
+            .set_config(config_with_url("overflow", "https://8.8.8.8/hook"))
+            .await
+            .expect_err("a new task id must be refused once the store is full");
+        assert!(matches!(
+            err,
+            crate::a2a::domain::A2AError::InvalidRequest(_)
+        ));
+
+        // Overwriting an existing task's config does not grow the map and
+        // must stay allowed.
+        let ok = svc
+            .set_config(config_with_url("seed-0", "https://8.8.8.8/hook"))
+            .await;
+        assert!(
+            ok.is_ok(),
+            "overwrite at capacity must stay allowed, got: {ok:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn set_config_applies_operator_ssrf_policy() {
+        let svc = NotificationService::with_ssrf_policy(SsrfPolicy {
+            blocked_hosts: vec!["blocked.example.com".to_string()],
+            ..SsrfPolicy::default()
+        });
+        let err = svc
+            .set_config(config_with_url("t1", "https://blocked.example.com/hook"))
+            .await
+            .expect_err("operator-blocked host must be rejected");
+        assert!(matches!(
+            err,
+            crate::a2a::domain::A2AError::InvalidParams(_)
+        ));
     }
 }

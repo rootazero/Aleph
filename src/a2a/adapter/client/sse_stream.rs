@@ -122,8 +122,15 @@ where
                             yield Err(err);
                             return;
                         }
-                        if let Some(event) = parse_event(&event_type, &data_buf) {
-                            yield Ok(event);
+                        match parse_event(&event_type, &data_buf) {
+                            Ok(Some(event)) => yield Ok(event),
+                            // Unknown event type: tolerated on purpose for
+                            // forward compatibility, already logged.
+                            Ok(None) => {}
+                            Err(e) => {
+                                yield Err(e);
+                                return;
+                            }
                         }
                         event_type.clear();
                         data_buf.clear();
@@ -158,8 +165,13 @@ where
         if !data_buf.is_empty() {
             if let Some(err) = parse_error_frame(&data_buf) {
                 yield Err(err);
-            } else if let Some(event) = parse_event(&event_type, &data_buf) {
-                yield Ok(event);
+            } else {
+                match parse_event(&event_type, &data_buf) {
+                    Ok(Some(event)) => yield Ok(event),
+                    // Unknown event type: tolerated for forward compatibility.
+                    Ok(None) => {}
+                    Err(e) => yield Err(e),
+                }
             }
         }
     };
@@ -191,26 +203,74 @@ fn parse_error_frame(data: &str) -> Option<A2AError> {
 /// Aleph's server sends a `kind`-tagged `UpdateEvent`, so that is tried
 /// directly; spec agents send a bare event, disambiguated via the SSE
 /// `event:` line.
-fn parse_event(event_type: &str, data: &str) -> Option<UpdateEvent> {
-    let value: serde_json::Value = serde_json::from_str(data).ok()?;
+///
+/// Returns:
+/// - `Ok(Some(event))` — the frame carried a known event.
+/// - `Ok(None)` — the frame was structurally valid but carried an event type
+///   this client does not know. Tolerated on purpose: the A2A event set is
+///   open for extension, so a newer peer must not break an older client. The
+///   drop is logged (event kind only — never the payload, which may carry
+///   agent output or credentials).
+/// - `Err(ParseError)` — the frame is malformed: not JSON at all, or the
+///   payload of a known event type does not match that type's schema.
+///   Surfaced as an error instead of being dropped silently, so a broken
+///   stream stays diagnosable.
+fn parse_event(event_type: &str, data: &str) -> Result<Option<UpdateEvent>, A2AError> {
+    let value: serde_json::Value = serde_json::from_str(data).map_err(|e| {
+        tracing::warn!(
+            event_type,
+            "Malformed A2A SSE event frame — payload is not valid JSON"
+        );
+        // Only the parse position is reported: the serde message itself can
+        // embed fragments of the payload.
+        A2AError::ParseError(format!(
+            "malformed A2A SSE event frame (event type '{event_type}'): payload is not valid JSON (line {}, column {})",
+            e.line(),
+            e.column()
+        ))
+    })?;
+
     let payload = value.get("result").cloned().unwrap_or(value);
 
     if let Ok(event) = serde_json::from_value::<UpdateEvent>(payload.clone()) {
-        return Some(event);
+        return Ok(Some(event));
     }
 
     match event_type {
         "status-update" | "status_update" => {
-            serde_json::from_value::<TaskStatusUpdateEvent>(payload)
-                .ok()
-                .map(UpdateEvent::StatusUpdate)
+            let event = serde_json::from_value::<TaskStatusUpdateEvent>(payload).map_err(|_| {
+                tracing::warn!(
+                    event_type,
+                    "Malformed A2A SSE event frame — payload does not match the status-update schema"
+                );
+                A2AError::ParseError(format!(
+                    "malformed A2A SSE event frame (event type '{event_type}'): payload does not match the status-update schema"
+                ))
+            })?;
+            Ok(Some(UpdateEvent::StatusUpdate(event)))
         }
         "artifact-update" | "artifact_update" => {
-            serde_json::from_value::<TaskArtifactUpdateEvent>(payload)
-                .ok()
-                .map(UpdateEvent::ArtifactUpdate)
+            let event = serde_json::from_value::<TaskArtifactUpdateEvent>(payload).map_err(|_| {
+                tracing::warn!(
+                    event_type,
+                    "Malformed A2A SSE event frame — payload does not match the artifact-update schema"
+                );
+                A2AError::ParseError(format!(
+                    "malformed A2A SSE event frame (event type '{event_type}'): payload does not match the artifact-update schema"
+                ))
+            })?;
+            Ok(Some(UpdateEvent::ArtifactUpdate(event)))
         }
-        _ => None, // Skip keep-alive, unknown events
+        _ => {
+            // Unknown but structurally valid event type: keep forward
+            // compatibility with newer peers. Log the kind only — the payload
+            // may carry agent output or credentials.
+            tracing::debug!(
+                event_type,
+                "Ignoring unknown A2A SSE event type (forward compatibility)"
+            );
+            Ok(None)
+        }
     }
 }
 
@@ -221,7 +281,9 @@ pub struct FoldedOutcome {
     pub summary: String,
     /// Whether the remote task completed successfully.
     pub success: bool,
-    /// Failure reason when `success` is false.
+    /// Failure reason when `success` is false. Always set when `success` is
+    /// false: a stream that ends without a terminal state is reported as a
+    /// truncated stream, not as a silent success.
     pub error: Option<String>,
 }
 
@@ -243,7 +305,10 @@ fn artifact_text(artifact: &Artifact) -> String {
 /// Accumulates artifact text and the last status message; `on_chunk` is fired
 /// with each new text fragment so callers can surface live progress. A stream
 /// `Err` or a terminal `Failed`/`Rejected`/`Canceled` state yields
-/// `success = false`.
+/// `success = false`. A stream that ends without any terminal status update
+/// is reported as a truncated stream (`success = false` plus an explicit
+/// error): the remote never reported a final state, so it must not be
+/// presented as a completed task.
 pub async fn fold_stream<S, F>(stream: S, mut on_chunk: F) -> FoldedOutcome
 where
     S: Stream<Item = A2AResult<UpdateEvent>> + Send,
@@ -308,6 +373,20 @@ where
             body
         };
         (msg.clone(), Some(msg))
+    } else if !got_terminal {
+        // The stream ended without any terminal status update: the remote
+        // never reported a final state, so the delegation is truncated, not
+        // completed. `success = false` with no error (and a summary reading
+        // like a finished task) would hide a lost stream, so the truncation
+        // is surfaced explicitly in both the summary and the error.
+        let notice = "Remote A2A stream ended without a terminal status update (truncated stream)"
+            .to_string();
+        let summary = if body.is_empty() {
+            notice.clone()
+        } else {
+            format!("{body}\n\n[truncated] {notice}")
+        };
+        (summary, Some(notice))
     } else {
         let summary = if body.is_empty() {
             "Remote A2A task completed with no textual output".to_string()
@@ -370,42 +449,65 @@ mod tests {
     fn parse_event_status_update() {
         let json = make_status_json();
         let result = parse_event("status-update", &json);
-        assert!(matches!(result, Some(UpdateEvent::StatusUpdate(_))));
+        assert!(matches!(result, Ok(Some(UpdateEvent::StatusUpdate(_)))));
     }
 
     #[test]
     fn parse_event_status_update_underscore() {
         let json = make_status_json();
         let result = parse_event("status_update", &json);
-        assert!(matches!(result, Some(UpdateEvent::StatusUpdate(_))));
+        assert!(matches!(result, Ok(Some(UpdateEvent::StatusUpdate(_)))));
     }
 
     #[test]
     fn parse_event_artifact_update() {
         let json = make_artifact_json();
         let result = parse_event("artifact-update", &json);
-        assert!(matches!(result, Some(UpdateEvent::ArtifactUpdate(_))));
+        assert!(matches!(result, Ok(Some(UpdateEvent::ArtifactUpdate(_)))));
     }
 
     #[test]
     fn parse_event_artifact_update_underscore() {
         let json = make_artifact_json();
         let result = parse_event("artifact_update", &json);
-        assert!(matches!(result, Some(UpdateEvent::ArtifactUpdate(_))));
+        assert!(matches!(result, Ok(Some(UpdateEvent::ArtifactUpdate(_)))));
     }
 
     #[test]
-    fn parse_event_unknown_type_returns_none() {
+    fn parse_event_unknown_type_is_tolerated() {
+        // Unknown-but-valid event types are tolerated for forward
+        // compatibility: the client must not break on a newer peer.
         let json = make_status_json();
-        assert!(parse_event("keep-alive", &json).is_none());
-        assert!(parse_event("", &json).is_none());
-        assert!(parse_event("unknown", &json).is_none());
+        assert!(matches!(parse_event("keep-alive", &json), Ok(None)));
+        assert!(matches!(parse_event("", &json), Ok(None)));
+        assert!(matches!(parse_event("unknown", &json), Ok(None)));
     }
 
     #[test]
-    fn parse_event_invalid_json_returns_none() {
-        assert!(parse_event("status-update", "not json").is_none());
-        assert!(parse_event("artifact-update", "{broken").is_none());
+    fn parse_event_invalid_json_is_an_error() {
+        // A malformed frame is surfaced, not dropped silently.
+        assert!(matches!(
+            parse_event("status-update", "not json"),
+            Err(A2AError::ParseError(_))
+        ));
+        assert!(matches!(
+            parse_event("artifact-update", "{broken"),
+            Err(A2AError::ParseError(_))
+        ));
+    }
+
+    #[test]
+    fn parse_event_known_type_with_wrong_payload_is_an_error() {
+        // The event type is known, so a payload that does not match its
+        // schema is a broken frame, not an unknown event.
+        assert!(matches!(
+            parse_event("status-update", "{}"),
+            Err(A2AError::ParseError(_))
+        ));
+        assert!(matches!(
+            parse_event("artifact-update", "{}"),
+            Err(A2AError::ParseError(_))
+        ));
     }
 
     #[test]
@@ -418,7 +520,7 @@ mod tests {
         })
         .to_string();
         let result = parse_event("status-update", &envelope);
-        assert!(matches!(result, Some(UpdateEvent::StatusUpdate(_))));
+        assert!(matches!(result, Ok(Some(UpdateEvent::StatusUpdate(_)))));
     }
 
     #[test]
@@ -431,13 +533,13 @@ mod tests {
         })
         .to_string();
         let result = parse_event("artifact-update", &envelope);
-        assert!(matches!(result, Some(UpdateEvent::ArtifactUpdate(_))));
+        assert!(matches!(result, Ok(Some(UpdateEvent::ArtifactUpdate(_)))));
     }
 
     #[test]
     fn parse_event_extracts_correct_fields() {
         let json = make_status_json();
-        if let Some(UpdateEvent::StatusUpdate(ev)) = parse_event("status-update", &json) {
+        if let Ok(Some(UpdateEvent::StatusUpdate(ev))) = parse_event("status-update", &json) {
             assert_eq!(ev.task_id, "task-1");
             assert_eq!(ev.context_id, "ctx-1");
             assert!(!ev.is_final);
@@ -446,7 +548,7 @@ mod tests {
         }
 
         let json = make_artifact_json();
-        if let Some(UpdateEvent::ArtifactUpdate(ev)) = parse_event("artifact-update", &json) {
+        if let Ok(Some(UpdateEvent::ArtifactUpdate(ev))) = parse_event("artifact-update", &json) {
             assert_eq!(ev.task_id, "task-2");
             assert!(ev.last_chunk);
             assert!(!ev.append);
@@ -628,5 +730,37 @@ mod tests {
         let outcome = fold_stream(futures::stream::iter(events), |_| {}).await;
         assert!(!outcome.success);
         assert!(outcome.error.is_some());
+    }
+
+    #[tokio::test]
+    async fn fold_stream_without_terminal_state_reports_truncation() {
+        // The remote never reported a final state: the delegation is
+        // truncated, not completed. It must not be reported as a finished
+        // remote task with no error.
+        let events: Vec<A2AResult<UpdateEvent>> =
+            vec![Ok(status_event(TaskState::Working, Some("partial"), false))];
+        let outcome = fold_stream(futures::stream::iter(events), |_| {}).await;
+        assert!(!outcome.success);
+        let error = outcome
+            .error
+            .expect("a truncated stream must carry an explicit error");
+        assert!(
+            error.contains("without a terminal status update"),
+            "unexpected error: {error}"
+        );
+        assert!(
+            outcome.summary.contains("truncated"),
+            "summary must state the truncation, got: {}",
+            outcome.summary
+        );
+    }
+
+    #[tokio::test]
+    async fn fold_stream_empty_stream_reports_truncation() {
+        let events: Vec<A2AResult<UpdateEvent>> = vec![];
+        let outcome = fold_stream(futures::stream::iter(events), |_| {}).await;
+        assert!(!outcome.success);
+        assert!(outcome.error.is_some());
+        assert!(outcome.summary.contains("truncated"));
     }
 }
