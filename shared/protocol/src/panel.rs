@@ -52,6 +52,52 @@ pub struct PanelTabDescriptor {
     pub status_detail: Option<String>,
 }
 
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, Eq, PartialEq)]
+#[serde(rename_all = "lowercase")]
+pub enum PanelUiCapabilityOrigin {
+    BuiltIn,
+    Community,
+}
+
+/// Audit facts around the sole browser projection shape.
+#[derive(Serialize, Deserialize, Clone, Debug, Eq, PartialEq)]
+pub struct PanelUiCapabilityDeclaration {
+    pub descriptor: PanelTabDescriptor,
+    pub origin: PanelUiCapabilityOrigin,
+    pub plugin_version: String,
+    pub asset_integrity: Option<String>,
+    pub public_base: String,
+    pub source_revision: u64,
+}
+
+/// The only output exposed by a Panel UI capability source.
+#[derive(Serialize, Deserialize, Clone, Debug, Eq, PartialEq)]
+pub struct PanelUiCapabilitySnapshot {
+    pub revision: u64,
+    pub declarations: Vec<PanelUiCapabilityDeclaration>,
+}
+
+impl PanelUiCapabilitySnapshot {
+    pub fn new(revision: u64, mut declarations: Vec<PanelUiCapabilityDeclaration>) -> Self {
+        declarations.sort_by(|left, right| {
+            let rank = |declaration: &PanelUiCapabilityDeclaration| match declaration.origin {
+                PanelUiCapabilityOrigin::BuiltIn => 0,
+                PanelUiCapabilityOrigin::Community => 1,
+            };
+            rank(left).cmp(&rank(right)).then_with(|| {
+                left.descriptor
+                    .key
+                    .qualified()
+                    .cmp(&right.descriptor.key.qualified())
+            })
+        });
+        Self {
+            revision,
+            declarations,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use crate::{
@@ -147,6 +193,42 @@ mod tests {
         assert_eq!(first.qualified(), "plugin-a:overview");
         assert_eq!(second.qualified(), "plugin-b:overview");
         assert_ne!(first.qualified(), second.qualified());
+    }
+
+    #[test]
+    fn panel_snapshot_has_one_shared_wire_contract() {
+        use super::{PanelUiCapabilityDeclaration, PanelUiCapabilityOrigin, PanelUiCapabilitySnapshot};
+        let snapshot = PanelUiCapabilitySnapshot::new(7, vec![PanelUiCapabilityDeclaration {
+            descriptor: descriptor(),
+            origin: PanelUiCapabilityOrigin::Community,
+            plugin_version: "1.2.3".into(),
+            asset_integrity: Some("sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=".into()),
+            public_base: "./tabs/".into(),
+            source_revision: 7,
+        }]);
+        let wire = serde_json::to_value(&snapshot).unwrap();
+        assert_eq!(wire, json!({
+            "revision": 7,
+            "declarations": [{
+                "descriptor": serde_json::to_value(descriptor()).unwrap(),
+                "origin": "community",
+                "plugin_version": "1.2.3",
+                "asset_integrity": "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+                "public_base": "./tabs/",
+                "source_revision": 7
+            }]
+        }));
+        assert_eq!(serde_json::from_value::<PanelUiCapabilitySnapshot>(wire).unwrap(), snapshot);
+        assert_eq!(serde_json::to_value(PanelUiCapabilityOrigin::BuiltIn).unwrap(), json!("builtin"));
+    }
+
+    #[test]
+    fn panel_webchat_source_does_not_define_another_wire_shape() {
+        let source = include_str!("../../../interfaces/webchat/src/panel/source.rs");
+        for name in ["PanelUiCapabilityDeclaration", "PanelUiCapabilitySnapshot", "PanelUiCapabilityOrigin"] {
+            assert!(!source.contains(&format!("struct {name}")));
+            assert!(!source.contains(&format!("enum {name}")));
+        }
     }
 
     #[test]

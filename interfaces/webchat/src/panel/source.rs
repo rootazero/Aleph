@@ -3,53 +3,9 @@
 use aleph_protocol::panel::{
     PanelTabDescriptor, PanelTabKey, PanelTabStatus, PanelUiTrust, PANEL_UI_API_MAJOR,
 };
-use serde::{Deserialize, Serialize};
-
-#[derive(Serialize, Deserialize, Clone, Copy, Debug, Eq, PartialEq)]
-#[serde(rename_all = "lowercase")]
-pub enum PanelUiCapabilityOrigin {
-    BuiltIn,
-    Community,
-}
-
-/// Audit facts around the sole browser projection shape.
-#[derive(Serialize, Deserialize, Clone, Debug, Eq, PartialEq)]
-pub struct PanelUiCapabilityDeclaration {
-    pub descriptor: PanelTabDescriptor,
-    pub origin: PanelUiCapabilityOrigin,
-    pub plugin_version: String,
-    pub asset_integrity: Option<String>,
-    pub public_base: String,
-    pub source_revision: u64,
-}
-
-/// The only output exposed by a Panel UI capability source.
-#[derive(Serialize, Deserialize, Clone, Debug, Eq, PartialEq)]
-pub struct PanelUiCapabilitySnapshot {
-    pub revision: u64,
-    pub declarations: Vec<PanelUiCapabilityDeclaration>,
-}
-
-impl PanelUiCapabilitySnapshot {
-    pub fn new(revision: u64, mut declarations: Vec<PanelUiCapabilityDeclaration>) -> Self {
-        declarations.sort_by(|left, right| {
-            let rank = |declaration: &PanelUiCapabilityDeclaration| match declaration.origin {
-                PanelUiCapabilityOrigin::BuiltIn => 0,
-                PanelUiCapabilityOrigin::Community => 1,
-            };
-            rank(left).cmp(&rank(right)).then_with(|| {
-                left.descriptor
-                    .key
-                    .qualified()
-                    .cmp(&right.descriptor.key.qualified())
-            })
-        });
-        Self {
-            revision,
-            declarations,
-        }
-    }
-}
+pub use aleph_protocol::panel::{
+    PanelUiCapabilityDeclaration, PanelUiCapabilityOrigin, PanelUiCapabilitySnapshot,
+};
 
 pub trait PanelUiCapabilitySource {
     fn snapshot(&self) -> PanelUiCapabilitySnapshot;
