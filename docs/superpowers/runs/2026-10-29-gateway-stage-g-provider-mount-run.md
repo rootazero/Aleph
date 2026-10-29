@@ -36,8 +36,8 @@ The source-backed production composition remains `/Volumes/TBU4/Workspace/Aleph/
 
 | Test / 测试 | Evidence / 证据 | Result / 结果 |
 |---|---|---|
-| `stage_g_production_host_reuses_canonical_authorities_for_cold_and_activation` in `/Volumes/TBU4/Workspace/Aleph/src/extension/lifecycle.rs` | Shared tree and canonical registry; host readiness/facade identity; Cold describe/project empty; zero guest-byte reads/instance creation before enable; production enable; Ready/generation; payload A; host worker joins | Passed once during Task 2; final serial matrix pending |
-| `stage_g_production_host_replacement_fences_stale_facade_and_drops_exact_owner` in `/Volumes/TBU4/Workspace/Aleph/src/extension/lifecycle.rs` | Payload A through host facade; old generation/lease/binding/entry retained; reload to Cold; stale provider/binding/facade route fails closed; old exact receipt drops after reference release; successor executes payload B and drops exactly | Passed once during Task 2; final serial matrix pending |
+| `stage_g_production_host_reuses_canonical_authorities_for_cold_and_activation` in `/Volumes/TBU4/Workspace/Aleph/src/extension/lifecycle.rs` | Shared tree and canonical registry; host readiness/facade identity; Cold describe/project empty; zero guest-byte reads/instance creation before enable; production enable; Ready/generation; payload A; host worker joins | 4/4 focused invocations passed; final verification recorded below |
+| `stage_g_production_host_replacement_fences_stale_facade_and_drops_exact_owner` in `/Volumes/TBU4/Workspace/Aleph/src/extension/lifecycle.rs` | Payload A through host facade; old generation/lease/binding/entry retained; reload to Cold; stale provider/binding/facade route fails closed; old exact receipt drops after reference release; successor executes payload B and drops exactly | 4/4 focused invocations passed; final verification recorded below |
 
 Task 1 fixture change is committed as `e79db18e9 test(core): share ownership tree with stage G host fixture`. Task 2 behavior evidence is committed as `b59bd3f1a test(core): prove stage G host lifecycle reuse`.
 
@@ -45,9 +45,9 @@ Task 1 fixture change 已提交为 `e79db18e9 test(core): share ownership tree w
 
 ## Memory-gated command ledger / Memory gate 命令记录
 
-Every Cargo command below is required to have its own immediately preceding `python qa/browser_live/check_memory.py` invocation with exit 0 and `ALLOW`. Entries are pending until Task 4 runs them; no pending entry is a claimed result.
+Every Cargo command below had its own immediately preceding `python qa/browser_live/check_memory.py` invocation with exit 0 and `ALLOW`; the gate values and actual outcomes are recorded in the table.
 
-下列每条 Cargo 命令都必须有独立且紧邻其前的 `python qa/browser_live/check_memory.py`，并且 exit 0、输出 `ALLOW`。在 Task 4 实际运行前，条目保持 pending，不表示命令已通过。
+下列每条 Cargo 命令都已有独立且紧邻其前的 `python qa/browser_live/check_memory.py`，并且 exit 0、输出 `ALLOW`；gate 数值与实际结果已记录在表格中。
 
 | Command group / 命令组 | Memory gate / memory gate | Result / 结果 |
 |---|---|---|
