@@ -25,6 +25,7 @@
 //! ```
 
 pub(crate) mod binding;
+pub(crate) mod capability;
 #[cfg(test)]
 mod resource_matrix;
 #[cfg(test)]

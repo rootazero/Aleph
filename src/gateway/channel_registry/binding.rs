@@ -281,7 +281,7 @@ type LifecycleResult = tokio::sync::oneshot::Receiver<Result<(), ChannelBindingE
 
 #[allow(dead_code)] // Source-private vertical slice; no production opt-in yet.
 impl super::ChannelRegistry {
-    fn validate_bound_capture(
+    pub(super) fn validate_bound_capture(
         &self,
         capture: &BoundChannelCapture,
         current: &Arc<ChannelRegistrationEntry>,
