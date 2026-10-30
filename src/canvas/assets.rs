@@ -146,7 +146,7 @@ impl CanvasStore {
         // `metadata().is_ok()` accepts non-file types; we gate on
         // `is_file()` so the dedupe branch only fires when an actual file
         // already sits at the canonical name.
-        let dedupe_hit = match tokio::fs::metadata(&path).await {
+        let dedupe_hit = match tokio::fs::symlink_metadata(&path).await {
             Ok(md) if md.is_file() => true,
             Ok(_) => {
                 // A directory / symlink / fifo occupies the path. Refuse

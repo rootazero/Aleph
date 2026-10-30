@@ -115,11 +115,13 @@ fn publish_to_event_bus(
         // Freshly registered: nothing answered yet.
         0,
     );
-    if let Err(e) = bus.publish_frame(&frame) {
-        warn!(error = %e, "ask: failed to publish the question on the event bus");
-        return false;
+    match bus.publish_frame(&frame) {
+        Ok(subscribers) => subscribers > 0,
+        Err(e) => {
+            warn!(error = %e, "ask: failed to publish the question on the event bus");
+            false
+        }
     }
-    true
 }
 
 /// Deny reason when the turn cannot reach a human, phrased for the model.
@@ -366,13 +368,15 @@ pub async fn ask(
         let mut message = OutboundMessage::text(turn.conversation_id.clone(), text);
         message.inline_keyboard = keyboard;
         match deps.channels.send(&channel, message).await {
-            Ok(_) => true,
+            Ok(_) => {
+                // Keep rich-client subscribers in sync even when the originating
+                // channel successfully receives the question.
+                publish_to_event_bus(&turn, &request_id, &request);
+                true
+            }
             Err(e) => {
-                let published = publish_to_event_bus(&turn, &request_id, &request);
-                if !published {
-                    warn!(error = %e, "ask: failed to deliver question to channel");
-                }
-                published
+                warn!(error = %e, "ask: failed to deliver question to channel");
+                publish_to_event_bus(&turn, &request_id, &request)
             }
         }
     };
@@ -385,15 +389,15 @@ pub async fn ask(
             .await;
         parked.disarm();
         return Err(AlephError::tool(
-            "failed to deliver the question to the user — no channel accepted it and no Panel \
-             session is attached. Continue without the answer and say what you assumed.",
+            "failed to deliver the question to the user — no channel accepted it and no event-bus \
+             subscriber was available. Continue without the answer and say what you assumed.",
         ));
     }
 
     info!(
         session = %session_key,
         questions = request.len(),
-        "ask: question delivered — awaiting reply"
+        "ask: question delivered via an available transport — awaiting reply"
     );
 
     // §6.1: the park is a fact BEFORE the park. Written only once delivery is

@@ -27,10 +27,13 @@ const MAX_LABEL_CHARS: usize = 32;
 
 /// Max choices rendered as buttons; beyond this the menu is text-only.
 ///
-/// The numbered text body always lists every choice, so a long list simply
-/// falls back to typed selection and the callback payload stays well under the
-/// channel's per-message limits.
+/// The numbered text body is independently bounded to stay within channel
+/// message-size limits.
 const MAX_CHOICE_BUTTONS: usize = 12;
+
+/// Bound text-only menus for channel message-size limits.
+const MAX_MENU_OPTIONS: usize = 12;
+const MAX_MENU_FIELD_CHARS: usize = 100;
 
 /// One question, rendered for delivery.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -77,23 +80,29 @@ fn collapse_whitespace(s: &str) -> String {
 
 /// The numbered menu body for `options`.
 ///
-/// Whitespace inside `label` and `description` is collapsed so a model-supplied
-/// newline / ANSI byte in either field cannot break the numbering — every
-/// numbered row is one line, so the user's `k+1` reply selects the matching
-/// option regardless of model output quirks.
+/// Whitespace inside `label` and `description` is collapsed and both fields
+/// are length-limited, so model output cannot break numbering or grow the body
+/// without bound.
 fn menu(options: &[ClarificationOption]) -> String {
     let mut out = String::new();
-    for (i, opt) in options.iter().enumerate() {
-        let label = collapse_whitespace(&opt.label);
+    for (i, opt) in options.iter().take(MAX_MENU_OPTIONS).enumerate() {
+        let label: String = collapse_whitespace(&opt.label)
+            .chars()
+            .take(MAX_MENU_FIELD_CHARS)
+            .collect();
         match opt
             .description
             .as_deref()
             .map(collapse_whitespace)
             .filter(|d| !d.is_empty())
+            .map(|desc| desc.chars().take(MAX_MENU_FIELD_CHARS).collect::<String>())
         {
             Some(desc) => out.push_str(&format!("{}. {} — {desc}\n", i + 1, label)),
             None => out.push_str(&format!("{}. {}\n", i + 1, label)),
         }
+    }
+    if options.len() > MAX_MENU_OPTIONS {
+        out.push_str(&format!("…and {} more\n", options.len() - MAX_MENU_OPTIONS));
     }
     out
 }
@@ -149,7 +158,8 @@ pub fn render(question: &ClarificationQuestion, index: usize, total: usize) -> R
         .map(|h| format!("[{}] ", escape_markdown(h)))
         .unwrap_or_default();
 
-    let mut text = format!("❓{position} {header}{}", question.prompt);
+    let prompt = escape_markdown(&collapse_whitespace(&question.prompt));
+    let mut text = format!("❓{position} {header}{prompt}");
     // The hint is read by a person, so it is translated (the prompt and the
     // option labels are the model's own words and are already in the user's
     // language). Everything `ask` produces for the MODEL — the headless denial,
@@ -180,17 +190,9 @@ pub fn render(question: &ClarificationQuestion, index: usize, total: usize) -> R
     }
 }
 
-/// Escape Telegram-flavoured Markdown special characters in
-/// LLM-supplied text so a `*` or `_` in the prompt does not flip
-/// the channel's formatting on a downstream message. Threat is
-/// limited (the model is also the prompt source) but a malformed
-/// prompt from a future `ask_user` producer would render
-/// unexpectedly.
-///
-/// We do NOT escape option labels — they are already trimmed
-/// and the menu builder formats them inside a `*…*` run that
-/// becomes the clickable reply affordance. Escaping the labels
-/// would break the affordance.
+/// Escape Telegram-flavoured Markdown special characters in LLM-supplied text.
+/// Applied to question headers and prompts so formatting control characters
+/// cannot alter the downstream message. Option labels remain plain menu text.
 fn escape_markdown(s: &str) -> String {
     s.replace('\\', r"\\")
         .replace('*', r"\*")
@@ -306,6 +308,19 @@ mod tests {
         let kb = keyboard_for(&ClarificationQuestion::select("q", "?", twelve))
             .expect("12 choices render");
         assert_eq!(kb.rows.iter().flatten().count(), 12);
+    }
+
+    #[test]
+    fn menu_bounds_option_count_and_field_lengths() {
+        let many: Vec<ClarificationOption> = (0..MAX_MENU_OPTIONS + 2)
+            .map(|i| {
+                ClarificationOption::new(&format!("{i}"), &"x".repeat(MAX_MENU_FIELD_CHARS + 1))
+            })
+            .collect();
+        let rendered = menu(&many);
+        assert!(rendered.contains("…and 2 more"));
+        assert!(!rendered.contains(&format!("{}. ", MAX_MENU_OPTIONS + 1)));
+        assert!(rendered.lines().next().unwrap().len() < 250);
     }
 
     #[test]

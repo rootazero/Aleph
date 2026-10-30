@@ -202,30 +202,6 @@ pub fn ask_user_frame(
     }
 }
 
-/// Publish the next question's `AskUser` frame after an advance.
-///
-/// Skipped when the producer carried no run id: an `AskUser` frame with an
-/// empty `run_id` cannot be correlated by any client, and
-/// `EventVisibilityIndex` would have nothing to seed from.
-fn publish_advance(entry: &PendingEntry, session_key: &str) {
-    if entry.run_id.is_empty() {
-        return;
-    }
-    let Some(bus) = crate::gateway::event_emitter::gateway_event_bus() else {
-        return;
-    };
-    let frame = ask_user_frame(
-        &entry.run_id,
-        session_key,
-        &entry.request_id,
-        &entry.request,
-        entry.answers.len(),
-    );
-    if let Err(e) = bus.publish_frame(&frame) {
-        tracing::debug!(error = %e, "failed to publish the next AskUser question");
-    }
-}
-
 /// Per-session registry of pending clarifications.
 ///
 /// Keyed by channel session key. At most one clarification is pending per
@@ -432,7 +408,7 @@ impl ClarificationManager {
             /// Waiter gone (run cancelled): retire the zombie card.
             Abandoned,
             /// Answers recorded, questions remain.
-            More(Box<RenderedQuestion>, usize),
+            More(Box<RenderedQuestion>, usize, Option<GatewayEventFrame>),
             /// Answers recorded, none remain.
             Complete,
         }
@@ -465,8 +441,16 @@ impl ClarificationManager {
                 match entry.current() {
                     Some(question) => {
                         let rendered = render::render(question, cursor, total);
-                        publish_advance(entry, session_key);
-                        Step::More(Box::new(rendered), total - cursor)
+                        let frame = (!entry.run_id.is_empty()).then(|| {
+                            ask_user_frame(
+                                &entry.run_id,
+                                session_key,
+                                &entry.request_id,
+                                &entry.request,
+                                entry.answers.len(),
+                            )
+                        });
+                        Step::More(Box::new(rendered), total - cursor, frame)
                     }
                     None => Step::Complete,
                 }
@@ -501,8 +485,18 @@ impl ClarificationManager {
                 );
                 ResolveOutcome::Stale
             }
-            // The entry stays parked; the caller owns the transport and delivers.
-            Step::More(next, remaining) => ResolveOutcome::More { next, remaining },
+            // The entry stays parked; publish only after releasing the global lock.
+            Step::More(next, remaining, frame) => {
+                drop(pending);
+                if let Some(frame) = frame {
+                    if let Some(bus) = crate::gateway::event_emitter::gateway_event_bus() {
+                        if let Err(e) = bus.publish_frame(&frame) {
+                            tracing::debug!(error = %e, "failed to publish the next AskUser question");
+                        }
+                    }
+                }
+                ResolveOutcome::More { next, remaining }
+            }
             Step::Complete => {
                 let mut entry = pending
                     .remove(session_key)
@@ -709,17 +703,19 @@ fn normalize(reply: &str) -> &str {
 /// the caller to opt into.
 fn match_option(question: &ClarificationQuestion, token: &str) -> Option<u32> {
     let token = token.trim();
-    if let Ok(n) = token.parse::<usize>() {
-        if n >= 1 && n <= question.options.len() {
-            return u32::try_from(n - 1).ok();
-        }
-    }
     let lower = token.to_lowercase();
-    question
+    if let Some(index) = question
         .options
         .iter()
         .position(|opt| opt.value.to_lowercase() == lower || opt.label.to_lowercase() == lower)
-        .and_then(|i| u32::try_from(i).ok())
+    {
+        return u32::try_from(index).ok();
+    }
+    token
+        .parse::<usize>()
+        .ok()
+        .filter(|n| *n >= 1 && *n <= question.options.len())
+        .and_then(|n| u32::try_from(n - 1).ok())
 }
 
 /// Map a user's free-text reply onto a [`ClarificationAnswer`] for `question`.

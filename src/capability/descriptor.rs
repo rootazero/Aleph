@@ -102,9 +102,8 @@ pub struct CapabilityRevision(pub u64);
 /// Versioned schema identity: the schema version plus a SHA-256 fingerprint
 /// of the schema's canonical form.
 ///
-/// The fingerprint is computed by the describe/projection path, not here —
-/// Task 1 only names the field; the digest is left uncomputed until a later
-/// task owns canonical schema serialization.
+/// The fingerprint is computed by `capability::backend::to_descriptor` over
+/// the canonicalized input schema.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct SchemaRef {
     pub version: u32,

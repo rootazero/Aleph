@@ -19,6 +19,9 @@ use super::store::CanvasError;
 /// from smuggling an unbounded payload past `MAX_OPS_PER_APPLY` (the
 /// dimension of that cap is ops, not bytes — CWE-400 lesson).
 pub(super) const MAX_INK_POINTS: usize = 10_000;
+const MAX_SHAPE_TEXT_BYTES: usize = 64 * 1024;
+const MAX_DECK_FRAMES: usize = MAX_SHAPES;
+const MAX_REFERENCE_ASSETS: usize = 64;
 
 /// Canvas-internal ids (canvases, shapes, decks, parents, arrow bindings)
 /// are `[A-Za-z0-9_-]{1,64}`.
@@ -63,6 +66,13 @@ pub(super) fn ops_shape(ops: &[CanvasOp]) -> Result<(), CanvasError> {
             }
             CanvasOp::UpsertDeck { deck } => {
                 require_id(&deck.id)?;
+                check_title(&deck.title).map_err(|why| CanvasError::Invalid(why.to_string()))?;
+                if deck.frame_ids.len() > MAX_DECK_FRAMES {
+                    return Err(CanvasError::Invalid(format!(
+                        "{} deck frames exceeds the {MAX_DECK_FRAMES}-frame cap",
+                        deck.frame_ids.len()
+                    )));
+                }
                 for frame_id in &deck.frame_ids {
                     require_id(frame_id)?;
                 }
@@ -119,11 +129,9 @@ pub(super) fn apply_ops(doc: &mut CanvasDoc, ops: &[CanvasOp]) -> Result<(), Can
     }
     apply_mutations(doc, ops);
 
-    // Document-byte budget: the per-shape / per-asset / per-op caps already
-    // stop any one field from being unbounded, but the AGGREGATE document was
-    // not capped. A member could submit 5000 shapes whose text/prompt/label
-    // fields each hold tens of KB, producing a JSON blob the server must
-    // deserialize, persist and broadcast. Check the wire-byte size after
+    // Document-byte budget: per-shape / per-asset / per-op caps bound
+    // individual inputs, but the AGGREGATE document still needs its own
+    // ceiling. Check the wire-byte size after
     // every apply so a single apply can never push the document past the
     // budget. The cost is one JSON serialize per apply, well below the cost
     // of writing the blob to disk.
@@ -195,6 +203,33 @@ fn shape_is_well_formed(shape: &Shape) -> Result<(), CanvasError> {
         check_color(&style.color).map_err(CanvasError::Invalid)?;
     }
     match shape {
+        Shape::Geo { text, .. } | Shape::Text { text, .. } | Shape::Note { text, .. }
+            if text.len() > MAX_SHAPE_TEXT_BYTES =>
+        {
+            return Err(CanvasError::Invalid(format!(
+                "shape text exceeds the {MAX_SHAPE_TEXT_BYTES}-byte cap"
+            )));
+        }
+        Shape::Frame { title, .. } => {
+            if !title.is_empty() {
+                check_title(title).map_err(|why| CanvasError::Invalid(why.to_string()))?;
+            }
+        }
+        Shape::Arrow { label, .. } | Shape::AiImageFrame { prompt: label, .. }
+            if label.len() > MAX_SHAPE_TEXT_BYTES =>
+        {
+            return Err(CanvasError::Invalid(format!(
+                "shape text exceeds the {MAX_SHAPE_TEXT_BYTES}-byte cap"
+            )));
+        }
+        Shape::AiImageFrame { reference_asset_ids, .. }
+            if reference_asset_ids.len() > MAX_REFERENCE_ASSETS =>
+        {
+            return Err(CanvasError::Invalid(format!(
+                "{} reference assets exceeds the {MAX_REFERENCE_ASSETS}-asset cap",
+                reference_asset_ids.len()
+            )));
+        }
         Shape::Ink { points, .. } if points.len() > MAX_INK_POINTS => {
             return Err(CanvasError::Invalid(format!(
                 "{} ink points exceeds the {MAX_INK_POINTS}-point stroke cap",
