@@ -245,7 +245,7 @@ fn session_value(session: &SessionKey) -> Value {
 pub(super) struct EntryRuntime {
     pub(super) operation: Option<Arc<()>>,
     pub(super) retiring: bool,
-    pub(super) driver: Option<tokio::task::JoinHandle<()>>,
+    pub(super) driver: Option<tokio::task::JoinHandle<bool>>,
     pub(super) active_work: usize,
     pub(super) executions: Vec<tokio::task::JoinHandle<()>>,
     pub(super) forwarder: Option<OwnedForwarder>,
@@ -598,14 +598,15 @@ impl super::ChannelRegistry {
                 .expect("channel runtime mutex poisoned");
             if let Some(driver) = &mut runtime.driver {
                 match driver.now_or_never() {
-                    Some(Ok(())) => {
+                    Some(Ok(true)) => {
                         runtime.driver = None;
                         if runtime.retiring {
                             runtime.operation = None;
                             runtime.retiring = false;
                             runtime.residual = ChannelCleanupResidual::default();
                         }
-                    },
+                    }
+                    Some(Ok(false)) => return Err(ChannelBindingError::Busy),
                     Some(Err(_)) => return Err(ChannelBindingError::Busy),
                     None => return Err(ChannelBindingError::Busy),
                 }
@@ -651,7 +652,9 @@ impl super::ChannelRegistry {
         let driver_marker = marker.clone();
         let driver = tokio::spawn(async move {
             let result = source.drain_bound(&original, &driver_marker, true).await;
+            let succeeded = result.is_ok();
             let _ = sender.send(result);
+            succeeded
         });
         entry.runtime.lock().unwrap().driver = Some(driver);
         Ok((receiver, marker))
@@ -780,7 +783,8 @@ impl super::ChannelRegistry {
             .expect("channel runtime mutex poisoned");
         if let Some(driver) = &mut runtime.driver {
             match driver.now_or_never() {
-                Some(Ok(())) => runtime.driver = None,
+                Some(Ok(true)) => runtime.driver = None,
+                Some(Ok(false)) => return Err(ChannelBindingError::Busy),
                 Some(Err(_)) => return Err(ChannelBindingError::Busy),
                 None => return Err(ChannelBindingError::Busy),
             }
@@ -828,7 +832,9 @@ impl super::ChannelRegistry {
             let result = source
                 .activate_bound(&id, &original, &marker, generation)
                 .await;
+            let succeeded = result.is_ok();
             let _ = sender.send(result);
+            succeeded
         });
         entry.runtime.lock().unwrap().driver = Some(driver);
         Ok(receiver)
@@ -949,8 +955,11 @@ impl super::ChannelRegistry {
             .expect("channel runtime mutex poisoned");
         if let Some(driver) = &mut runtime.driver {
             match driver.now_or_never() {
-                Some(Ok(())) => {
+                Some(Ok(true)) => {
                     runtime.driver = None;
+                }
+                Some(Ok(false)) => {
+                    return Err(ChannelBindingError::Busy);
                 }
                 Some(Err(_)) => {
                     return Err(ChannelBindingError::Busy);
@@ -997,7 +1006,9 @@ impl super::ChannelRegistry {
         let original = entry.clone();
         let driver = tokio::spawn(async move {
             let result = source.drain_bound(&original, &marker, false).await;
+            let succeeded = result.is_ok();
             let _ = sender.send(result);
+            succeeded
         });
         // Admission and driver publication share the source gate.
         // The driver itself performs no channel I/O under that gate.
