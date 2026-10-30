@@ -247,6 +247,47 @@ mod tests {
     }
 
     #[test]
+    fn malformed_payload_does_not_erase_last_good_snapshot() {
+        let mut state = PanelDiscoveryState::new();
+        state.begin_connection(1);
+        assert_eq!(
+            state.accept_snapshot(1, PanelUiCapabilitySnapshot::new(5, Vec::new())),
+            SnapshotUpdate::Accepted
+        );
+        assert!(decode_snapshot(json!({"revision": "bad", "declarations": []})).is_err());
+        assert_eq!(state.snapshot().map(|snapshot| snapshot.revision), Some(5));
+    }
+
+    #[test]
+    fn reconnect_full_snapshot_repairs_a_missed_update() {
+        let mut state = PanelDiscoveryState::new();
+        state.begin_connection(1);
+        assert_eq!(
+            state.accept_snapshot(1, PanelUiCapabilitySnapshot::new(5, Vec::new())),
+            SnapshotUpdate::Accepted
+        );
+        state.begin_connection(2);
+        assert_eq!(
+            state.accept_snapshot(2, PanelUiCapabilitySnapshot::new(7, Vec::new())),
+            SnapshotUpdate::Accepted
+        );
+        assert_eq!(state.last_revision(), Some(7));
+    }
+
+    #[test]
+    fn disconnect_preserves_the_last_known_snapshot() {
+        let mut state = PanelDiscoveryState::new();
+        state.begin_connection(1);
+        assert_eq!(
+            state.accept_snapshot(1, PanelUiCapabilitySnapshot::new(5, Vec::new())),
+            SnapshotUpdate::Accepted
+        );
+        state.disconnect(1);
+        assert_eq!(state.status(), &PanelDiscoveryStatus::Disconnected);
+        assert_eq!(state.snapshot().map(|snapshot| snapshot.revision), Some(5));
+    }
+
+    #[test]
     fn a_same_revision_snapshot_is_rebased_after_reconnect() {
         let mut state = PanelDiscoveryState::new();
         state.begin_connection(1);
