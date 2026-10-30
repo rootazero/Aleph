@@ -142,6 +142,13 @@ struct ScanPlan {
     unreadable: Vec<PathBuf>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum DiscoveryMode {
+    DeclarationsOnly,
+    Activation,
+    FullLoad,
+}
+
 /// What a full reload did.
 #[derive(Debug)]
 pub struct ReloadReport {
@@ -289,6 +296,7 @@ impl ExtensionManager {
         let _boot = self.boot_guard.lock().await;
         let _guard = self.load_guard.lock().await;
         self.cache_state.write().await.loaded = false;
+        self.cache_state.write().await.discovered = false;
         let out = self.load_all_locked().await?;
         Ok(ReloadReport {
             mounted: out.mounted,
@@ -327,6 +335,7 @@ impl ExtensionManager {
         if publish_loaded {
             self.cache_state.write().await.loaded = true;
         }
+        self.cache_state.write().await.discovered = true;
         tracing::info!(
             "Extension loading complete: {} skills, {} agents, {} plugins, {} hooks",
             out.summary.skills_loaded,
@@ -344,21 +353,39 @@ impl ExtensionManager {
         self.sync_runtime_snapshots().await;
     }
 
-    /// One discovery pass: dispose whatever is mounted, rebuild the rows from
-    /// disk, mount every plugin the gates admit. No view recomputation here —
-    /// the caller does that once.
+    /// One declaration-only pass: scan, parse, apply admission, and publish
+    /// rows plus Cold owners for eligible tool-only WASM without touching
+    /// existing runtime effects.
+    pub(super) async fn discover_declarations(&self) -> ExtensionResult<()> {
+        self.discover_with_mode(DiscoveryMode::DeclarationsOnly)
+            .await
+            .map(|_| ())
+    }
+
+    /// One full discovery pass: dispose whatever is mounted, rebuild the rows
+    /// from disk, and mount every plugin the gates admit.
     async fn discover_and_mount(&self) -> ExtensionResult<LoadOutcome> {
+        self.discover_with_mode(DiscoveryMode::FullLoad).await
+    }
+
+    pub(super) async fn discover_with_mode(
+        &self,
+        mode: DiscoveryMode,
+    ) -> ExtensionResult<LoadOutcome> {
         let mut summary = LoadSummary::default();
         let mut mounted: Vec<String> = Vec::new();
         let mut failed: Vec<(String, MountError)> = Vec::new();
 
-        self.unmount_all().await?;
-        self.runtime_owners.lock().unwrap().clear();
+        if mode == DiscoveryMode::FullLoad {
+            self.cache_state.write().await.discovered = false;
+            self.unmount_all().await?;
+            self.runtime_owners.lock().unwrap().clear();
 
-        // The loader's copy of every plugin's stored configuration must be
-        // current before anything loads — a plugin started with an empty
-        // config is a plugin the operator configured and cannot tell.
-        self.publish_plugin_settings().await;
+            // The loader's copy of every plugin's stored configuration must be
+            // current before anything loads — a plugin started with an empty
+            // config is a plugin the operator configured and cannot tell.
+            self.publish_plugin_settings().await;
+        }
 
         // Discovery walk, adapter parse and manifest parse are synchronous
         // filesystem work: run them on the blocking pool over owned inputs.
@@ -382,10 +409,18 @@ impl ExtensionManager {
         {
             // The sources this pass could not read are stored WITH its rows:
             // a reader of the registry gets both from one guard, so "unknown
-            // this load" cannot be read as "not installed".
-            let mut registry = self.plugin_registry.write().await;
-            registry.clear();
-            registry.set_unreadable_sources(plan.unreadable.clone());
+            // this load" cannot be read as "not installed". Declaration-only
+            // discovery rebuilds rows only before any runtime has been
+            // declared, leaving active runtime views untouched if a future
+            // caller reaches this path with an already populated manager.
+            let declaration_can_rebuild = mode == DiscoveryMode::FullLoad
+                || (self.runtime_owners.lock().unwrap().is_empty()
+                    && self.scopes.lock().unwrap().is_empty());
+            if declaration_can_rebuild {
+                let mut registry = self.plugin_registry.write().await;
+                registry.clear();
+                registry.set_unreadable_sources(plan.unreadable.clone());
+            }
         }
 
         // Shadow resolution: dirs are walked highest-priority first, so a
@@ -457,7 +492,8 @@ impl ExtensionManager {
 
             // A foreign tree (Claude Code's cache) is never written: no
             // marker migration there, whatever it contains.
-            if found.origin != PluginOrigin::ClaudeCache {
+            if found.origin != PluginOrigin::ClaudeCache && mode != DiscoveryMode::DeclarationsOnly
+            {
                 self.migrate_legacy_disabled_marker(dir_path, &plugin_id, legacy_marker)
                     .await;
             }
@@ -503,10 +539,22 @@ impl ExtensionManager {
                     // anything else is a bug in this file, not a plugin outcome.
                     unreachable!("admit returned {other:?}");
                 }
-                Ok(()) if super::runtime_owner::eligible(&output, manifest.as_ref()) => {
+                Ok(())
+                    if super::runtime_owner::eligible(&output, manifest.as_ref())
+                        && self.runtime_owner(&plugin_id).is_none() =>
+                {
                     self.declare_cold(output, record, manifest.expect("eligible manifest"))
                         .await;
                 }
+                Ok(()) if super::runtime_owner::eligible(&output, manifest.as_ref()) => {}
+                Ok(()) if mode == DiscoveryMode::DeclarationsOnly => {}
+                Ok(())
+                    if mode == DiscoveryMode::Activation
+                        && self
+                            .scopes
+                            .lock()
+                            .unwrap_or_else(|e| e.into_inner())
+                            .contains_key(&plugin_id) => {}
                 Ok(()) => match self.mount_parsed(output, record, manifest).await {
                     Ok(_) => mounted.push(plugin_id),
                     Err(e) => {
@@ -1797,7 +1845,7 @@ handler = "handler"
         let revision = canonical.revision();
         // Discovery declares an eligible tool-only WASM Cold without starting
         // its VM.
-        manager.load_all().await.unwrap();
+        manager.ensure_discovered().await.unwrap();
 
         let owner = manager
             .runtime_owner("lazy-wasm")
@@ -1806,11 +1854,175 @@ handler = "handler"
             owner.provider.state(),
             crate::capability::provider::ProviderState::Cold
         );
-        assert!(owner.identity.lock().unwrap().is_none());
-        assert!(!manager.plugin_loader.read().await.is_loaded("lazy-wasm"));
+        let loader = manager.plugin_loader.read().await;
+        assert!(!loader.is_loaded("lazy-wasm"));
+        let probe = loader.wasm_load_probe();
+        assert_eq!(probe.guest_byte_reads(), 0);
+        assert_eq!(probe.guest_instance_created(), 0);
+        assert_eq!(probe.guest_instance_dropped(), 0);
+        drop(loader);
         assert_eq!(canonical.revision(), revision);
         assert!(canonical.canonical_publication().entries().is_empty());
         assert!(canonical.capture_entry("lazy_tool").is_none());
+    }
+
+    #[tokio::test]
+    async fn stage_h_concurrent_discovery_yields_one_cold_owner_without_publication() {
+        let tmp = tempfile::tempdir().unwrap();
+        let _home = isolated_home(tmp.path());
+        write_cold_tool_wasm_fixture(tmp.path());
+        let (manager, _) = isolated_manager(tmp.path()).await;
+        let manager = ExtensionManager::attach_activation_manager(Arc::new(manager));
+        let canonical = Arc::new(crate::tools::ToolHandlerRegistry::new());
+        manager
+            .set_tool_handler_registry(canonical.clone())
+            .await
+            .unwrap();
+
+        let (left, right) = tokio::join!(manager.ensure_discovered(), manager.ensure_discovered());
+        left.expect("the first discovery must succeed");
+        right.expect("the second discovery must share the declaration pass");
+
+        let owner = manager
+            .runtime_owner("lazy-wasm")
+            .expect("discovery must declare one runtime owner");
+        assert_eq!(
+            owner.provider.state(),
+            crate::capability::provider::ProviderState::Cold
+        );
+        let loader = manager.plugin_loader.read().await;
+        assert!(!loader.is_loaded("lazy-wasm"));
+        let probe = loader.wasm_load_probe();
+        assert_eq!(probe.guest_byte_reads(), 0);
+        assert_eq!(probe.guest_instance_created(), 0);
+        assert_eq!(probe.guest_instance_dropped(), 0);
+        drop(loader);
+        assert_eq!(canonical.revision(), 0);
+        assert!(canonical.canonical_publication().entries().is_empty());
+    }
+
+    #[tokio::test]
+    async fn stage_h_discovery_then_boot_publishes_once_for_the_same_owner() {
+        let tmp = tempfile::tempdir().unwrap();
+        let _home = isolated_home(tmp.path());
+        write_cold_tool_wasm_fixture(tmp.path());
+        let (manager, _) = isolated_manager(tmp.path()).await;
+        let manager = ExtensionManager::attach_activation_manager(Arc::new(manager));
+        let canonical = Arc::new(crate::tools::ToolHandlerRegistry::new());
+        manager
+            .set_tool_handler_registry(canonical.clone())
+            .await
+            .unwrap();
+
+        manager.ensure_discovered().await.unwrap();
+        let cold_owner = manager
+            .runtime_owner("lazy-wasm")
+            .expect("discovery must declare the owner");
+        assert_eq!(canonical.revision(), 0);
+        b6_set_desired_enabled(&manager, "lazy-wasm").await;
+
+        manager.ensure_loaded().await.unwrap();
+
+        let ready_owner = manager
+            .runtime_owner("lazy-wasm")
+            .expect("boot must retain the discovered owner");
+        assert!(Arc::ptr_eq(&cold_owner, &ready_owner));
+        assert_eq!(
+            ready_owner.provider.state(),
+            crate::capability::provider::ProviderState::Ready
+        );
+        assert_eq!(canonical.revision(), 1);
+        assert_eq!(canonical.canonical_publication().entries().len(), 1);
+        assert!(canonical.capture_entry("lazy_tool").is_some());
+    }
+
+    #[tokio::test]
+    async fn stage_h_reload_invalidates_discovery_and_replaces_cold_owner() {
+        let tmp = tempfile::tempdir().unwrap();
+        let _home = isolated_home(tmp.path());
+        write_cold_tool_wasm_fixture(tmp.path());
+        let (manager, _) = isolated_manager(tmp.path()).await;
+        let manager = ExtensionManager::attach_activation_manager(Arc::new(manager));
+        let canonical = Arc::new(crate::tools::ToolHandlerRegistry::new());
+        manager
+            .set_tool_handler_registry(canonical.clone())
+            .await
+            .unwrap();
+
+        manager.ensure_discovered().await.unwrap();
+        let old_owner = manager
+            .runtime_owner("lazy-wasm")
+            .expect("initial discovery must declare the owner");
+        manager.reload().await.unwrap();
+
+        let new_owner = manager
+            .runtime_owner("lazy-wasm")
+            .expect("reload must rediscover the owner");
+        assert!(!Arc::ptr_eq(&old_owner, &new_owner));
+        assert_eq!(
+            new_owner.provider.state(),
+            crate::capability::provider::ProviderState::Cold
+        );
+        assert!(!manager.plugin_loader.read().await.is_loaded("lazy-wasm"));
+        assert_eq!(canonical.revision(), 0);
+    }
+
+    #[tokio::test]
+    async fn stage_h_plugin_manage_read_stays_cold_then_enable_activates() {
+        use crate::builtin_tools::plugin_manage::{
+            PluginAction, PluginManageArgs, PluginManageTool,
+        };
+
+        let tmp = tempfile::tempdir().unwrap();
+        let _home = isolated_home(tmp.path());
+        write_cold_tool_wasm_fixture(tmp.path());
+        let (manager, _) = isolated_manager(tmp.path()).await;
+        let manager = ExtensionManager::attach_activation_manager(Arc::new(manager));
+        let canonical = Arc::new(crate::tools::ToolHandlerRegistry::new());
+        manager
+            .set_tool_handler_registry(canonical.clone())
+            .await
+            .unwrap();
+
+        let listed = PluginManageTool::call_on(
+            &manager,
+            PluginManageArgs {
+                action: PluginAction::List,
+                name: None,
+                source: None,
+                query: None,
+                config: None,
+                enforce: None,
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(listed.data.as_array().unwrap().len(), 1);
+        assert_eq!(canonical.revision(), 0);
+        let loader = manager.plugin_loader.read().await;
+        assert!(!loader.is_loaded("lazy-wasm"));
+        let probe = loader.wasm_load_probe();
+        assert_eq!(probe.guest_byte_reads(), 0);
+        assert_eq!(probe.guest_instance_created(), 0);
+        assert_eq!(probe.guest_instance_dropped(), 0);
+        drop(loader);
+
+        let enabled = PluginManageTool::call_on(
+            &manager,
+            PluginManageArgs {
+                action: PluginAction::Enable,
+                name: Some("lazy-wasm".to_owned()),
+                source: None,
+                query: None,
+                config: None,
+                enforce: None,
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(enabled.data["ok"], true);
+        assert_eq!(canonical.revision(), 1);
+        assert!(manager.plugin_loader.read().await.is_loaded("lazy-wasm"));
     }
 
     /// Explicitly record "the operator wants `lazy-wasm` loaded" in the

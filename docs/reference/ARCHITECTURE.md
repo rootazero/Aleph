@@ -174,6 +174,16 @@ drain/join/dispose、replacement、stale handle 与 observer。B6 只覆盖 Tool
 ——Feishu——别的什么都没接。当前验证见 `docs/reference/FEATURE_LOCATOR.md`
 §3.5f。
 
+### Stage H declaration-only plugin reads / Stage H 插件只读声明发现
+
+Stage H keeps the B5/B6 owner and publication authorities while splitting the existing `ExtensionManager` discovery walk into a declaration-only read path. `ensure_discovered()` scans, parses and admits installed extensions, publishes declaration rows, and declares eligible tool-only WASM as `RuntimeOwner(Cold)`; it does not unmount existing owners, clear the owner table, mount deferred providers, read guest bytes, create provider resources, or publish callables. `plugins.list`, plugin-management read actions and Hub installed reconciliation use this path. `ensure_loaded()` and explicit enable/reload/control calls remain the activation boundaries and continue through the existing owner and canonical `ToolHandlerRegistry` path.
+
+The `discovered` bit is a derived cache of completed declaration work. Reload invalidates it; it is not durable enabled state, provider state, a generation map or a second owner authority. Stage H is limited to ExtensionManager-managed tool-only WASM. Channel, PTY, memory, MCP and other provider kinds remain deferred, and this slice makes no claim about RSS, thread, engine/JIT, executable-page or OS-mapping reclamation.
+
+Stage H 在保留 B5/B6 owner 与 publication authority 的前提下，把既有 `ExtensionManager` discovery walk 分成 declaration-only read path。`ensure_discovered()` 扫描、解析并 admission 已安装 extension，发布 declaration row，并将 eligible tool-only WASM 声明为 `RuntimeOwner(Cold)`；它不卸载现有 owner、不清空 owner table、不 mount deferred provider、不读取 guest bytes、不创建 provider resource，也不发布 callable。`plugins.list`、plugin management 的读 action 与 Hub installed reconciliation 使用这条路径；`ensure_loaded()` 与显式 enable/reload/control 仍是 activation boundary，继续走既有 owner 与 canonical `ToolHandlerRegistry` 路径。
+
+`discovered` 只是已完成 declaration work 的派生缓存；reload 会使它失效。它不是 durable enabled state、provider state、generation map 或第二份 owner authority。本 Stage H 只覆盖 ExtensionManager 管理的 tool-only WASM；channel、PTY、memory、MCP 与其他 provider kind 仍 deferred，也不声明 RSS、thread、engine/JIT、executable page 或 OS mapping reclamation。
+
 ### B8.2 current Feishu lifecycle re-gate / B8.2 当前 Feishu 生命周期复闸（2026-10-25）
 
 The current worktree closes the Feishu **provider lifecycle slice** around Gateway authority; it does not mount Feishu into Zahir. `ChannelRegistry` owns channel instances, desired intent, lifecycle serialization, replacement preflight, and webhook mounts (`src/gateway/channel_registry.rs:187-220,295-433,600-688,1460-1504`). Disabled boot records `Stopped` and is excluded from `start_all`; `create_channel` derives intent from `ChannelConfig.enabled`; restart publishes `Running` only after a complete stop/start/mount refresh.

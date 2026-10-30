@@ -75,8 +75,8 @@ pub async fn collect_installed(mcp: Option<McpManagerHandle>) -> Vec<ExtensionEn
     }
 
     if let Some(mgr) = crate::extension::try_extension_manager() {
-        if let Err(e) = mgr.ensure_loaded().await {
-            tracing::warn!("collect_installed: failed to load plugins: {e}");
+        if let Err(e) = mgr.ensure_discovered().await {
+            tracing::warn!("collect_installed: failed to discover plugins: {e}");
         }
         out.extend(mgr.list_plugin_records().await.iter().map(plugin_to_entry));
     }

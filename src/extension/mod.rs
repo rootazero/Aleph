@@ -117,6 +117,10 @@ use watcher::{ExtensionChangeEvent, ExtensionChangeType, ExtensionWatcher, Inter
 /// Cache state for lazy-loading
 #[derive(Debug, Default)]
 struct CacheState {
+    /// Whether declaration discovery has completed successfully. This is only
+    /// a derived work cache; it is not enabled state, provider state, a
+    /// generation map, an owner table, or cleanup authority.
+    discovered: bool,
     /// Whether components have been loaded
     loaded: bool,
 }
@@ -597,7 +601,7 @@ impl ExtensionManager {
     /// late first attachment: a future producer reads this handle under the
     /// lifecycle `load_guard` to publish plugin callables, so attaching it
     /// after the manager already did meaningful work — a finished discovery
-    /// (`cache_state.loaded`), any plugin registry row, a mounted scope, or
+    /// (`cache_state.discovered`), any plugin registry row, a mounted scope, or
     /// a loaded plugin runtime — would leave that work with no producer and
     /// no catch-up here to repair it. The existing `load_guard` is held for
     /// the whole decision + publication, so the check and the store are one
@@ -638,10 +642,10 @@ impl ExtensionManager {
         // its own lock; no std guard is held across an await. A failed scan
         // that left no rows, no scopes, no loaded runtime and the cache
         // still false stays attachable — there is no past-attempt flag.
-        if self.cache_state.read().await.loaded {
+        if self.cache_state.read().await.discovered {
             return Err(ExtensionError::Runtime(
                 "tool handler registry must be attached before the first \
-                 extension load; discovery has already completed"
+                 extension discovery; discovery has already completed"
                     .to_string(),
             ));
         }
@@ -681,12 +685,36 @@ impl ExtensionManager {
 
     // ── Lifecycle ─────────────────────────────────────────────────────────────
 
+    /// Ensure declaration discovery has completed without activating any
+    /// provider. The derived cache only records completed declaration work;
+    /// it never stands in for provider state or durable enabled state.
+    pub async fn ensure_discovered(&self) -> ExtensionResult<()> {
+        if self.cache_state.read().await.discovered {
+            return Ok(());
+        }
+
+        let _boot = self.boot_guard.lock().await;
+        if self.cache_state.read().await.discovered {
+            return Ok(());
+        }
+        let _guard = self.load_guard.lock().await;
+        if self.cache_state.read().await.discovered {
+            return Ok(());
+        }
+
+        self.discover_declarations().await?;
+        self.views().after_transition().await;
+        self.cache_state.write().await.discovered = true;
+        Ok(())
+    }
+
     /// Boot-load discovery and activate every eligible tool-only WASM owner.
     ///
     /// Three phases, in this order, under two different guards:
     ///
-    /// 1. Discovery runs under `load_guard` and publishes declarations only.
-    ///    The `loaded` cache flag stays **false** for the whole pass: it is
+    /// 1. Discovery/reconciliation runs under `load_guard` and publishes
+    ///    declarations before any retained Cold owner is activated. The
+    ///    `loaded` cache flag stays **false** for the whole pass: it is
     ///    the flag the fast path reads, and a flag published here would let a
     ///    concurrent caller return while the Cold owners below are still
     ///    half-activated.
@@ -715,9 +743,17 @@ impl ExtensionManager {
 
         let cold_owners: Vec<Arc<crate::extension::runtime_owner::RuntimeOwner>> = {
             let guard = self.load_guard.lock().await;
-            // Discovery only: this method publishes `loaded` itself, after
-            // the activation pass settles.
-            self.load_all_locked_inner(false).await?;
+            if !self.cache_state.read().await.discovered {
+                self.load_all_locked_inner(false).await?;
+            } else {
+                // A prior cold read retained its exact tool-only WASM owners.
+                // Reconcile non-tool providers and refresh runtime settings
+                // without replacing those owners.
+                self.publish_plugin_settings().await;
+                self.discover_with_mode(crate::extension::lifecycle::DiscoveryMode::Activation)
+                    .await?;
+                self.views().after_transition().await;
+            }
             let desired_enabled = self.plugins_config.read().await;
             let owners = self
                 .runtime_owners
