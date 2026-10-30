@@ -152,9 +152,9 @@ B5 历史基线验证：`cargo fmt --all --check` 通过；`cargo check -p aleph
 
 ### B6 Tool/Plugin boot activation / B6 Tool/Plugin 启动激活
 
-B6 connects enabled, eligible tool-only WASM to the real `ExtensionManager::ensure_loaded` path. Discovery remains Cold under `load_guard`; exact owners activate outside that guard; a shared proof checks current owner incarnation, provider `Ready`, row `Loaded`, mount identity, receipt, and effect scope before publishing `cache_state.loaded=true`. `boot_guard` serializes the whole pass, and public `load_all`/`reload` remain discovery-only primitives that are mutually exclusive with boot. Per-plugin failures close admission, leave the provider `Failed`, record the owner/row failure, and allow other owners to settle. Read-side catalog/describe/resolve/`plugins.list`/observer/doctor paths do not activate.
+B6 connects enabled, eligible tool-only WASM to the real `ExtensionManager::ensure_loaded` path. Discovery remains Cold under `load_guard`; exact owners activate outside that guard; a shared proof checks current owner incarnation, provider `Ready`, row `Loaded`, mount identity, receipt, and effect scope before publishing `cache_state.loaded=true`. `boot_guard` serializes the whole pass, and public `load_all`/`reload` remain discovery-only primitives that are mutually exclusive with boot. Per-plugin failures close admission, leave the provider `Failed`, record the owner/row failure, and allow other owners to settle. Read-side catalog/describe/resolve/`plugins.list`/observer/doctor paths do not activate. Stage H makes the distinction explicit: `ensure_discovered()` is declaration-only discovery, while `ensure_loaded()` and explicit enable/reload/control remain activation boundaries. Startup catalog and agent-run paths remain activation boundaries only where they invoke the existing load/activation path; `describe`, `resolve`, `project`, and `ProjectionHost` read-side calls do not start providers.
 
-D-A selects the `ensure_loaded` two-phase entry; D-B is the user-confirmed per-plugin fail-closed policy; D-C lists the remaining legal Cold paths; D-D keeps public load/reload discovery-only. Real WASM tests cover single and concurrent boot ensure effects, while existing B5 lifecycle tests cover publication, revoke, drain/join/dispose, replacement, stale handles, and observer behavior. B6 remains limited to the Tool/Plugin slice; at B6 time channel, terminal, memory, MCP, replay, scheduler, EffectClaim, external exactly-once, and other Capability kinds remained deferred. B7 (below) wires exactly one Gateway provider slice — Feishu — and nothing else. The current validation is recorded in `docs/reference/FEATURE_LOCATOR.md` §3.5f.
+D-A selects the `ensure_loaded` two-phase entry; D-B is the user-confirmed per-plugin fail-closed policy; D-C lists the remaining legal Cold paths; D-D keeps public load/reload discovery-only. Real WASM tests cover single and concurrent boot ensure effects, while existing B5 lifecycle tests cover publication, revoke, drain/join/dispose, replacement, stale handles, and observer behavior. B6 remains limited to the Tool/Plugin slice; the B6 historical scope left channel, terminal, memory, MCP, replay, scheduler, EffectClaim, external exactly-once, and other Capability kinds deferred. The B7 text below is a dated historical record of one Feishu provider slice; it did not wire Feishu into Zahir. Current B8.2 status keeps Feishu → Zahir and the other provider/kind integrations **NO-GO / deferred**. The current validation is recorded in `docs/reference/FEATURE_LOCATOR.md` §3.5f.
 
 B6（Tool/Plugin 启动激活）把 enabled 且 eligible 的 tool-only WASM 接入真实
 `ExtensionManager::ensure_loaded`：discovery 在 `load_guard` 内保持 Cold，exact owner
@@ -163,15 +163,20 @@ B6（Tool/Plugin 启动激活）把 enabled 且 eligible 的 tool-only WASM 接�
 `cache_state.loaded=true`。`boot_guard` 串行化整个 pass；public `load_all`/`reload` 仍是
 与 boot 互斥的 discovery-only 原语。单插件失败会 close admission、使 provider 进入
 `Failed`、记录 owner/row failure，并继续 settle 其他 owner。catalog/describe/resolve/
-`plugins.list`/observer/doctor 等读侧不触发 activation。
+`plugins.list`/observer/doctor 等读侧不触发 activation。Stage H 进一步明确：
+`ensure_discovered()` 只做 declaration-only discovery，而 `ensure_loaded()` 与显式
+enable/reload/control 仍是 activation boundary。startup catalog 与 agent-run 路径只有在
+调用既有 load/activation 路径时才是 activation boundary；`describe` / `resolve` /
+`project` / `ProjectionHost` 的 read-side 调用不会启动 provider。
 
 D-A 选择 `ensure_loaded` 两段式入口；D-B 是用户确认的 per-plugin fail-closed；D-C
 列出仍可见 Cold 的合法路径；D-D 保持 public load/reload discovery-only。真实 WASM 测试
 覆盖单次与并发 boot ensure 的效果，既有 B5 lifecycle 测试覆盖 publication、revoke、
 drain/join/dispose、replacement、stale handle 与 observer。B6 只覆盖 Tool/Plugin slice；
-在 B6 时 channel、terminal、memory、MCP、replay、scheduler、EffectClaim、external exactly-once
-与其他 Capability kinds 均 deferred。B7（见下）只接入 **一条** Gateway provider slice
-——Feishu——别的什么都没接。当前验证见 `docs/reference/FEATURE_LOCATOR.md`
+B6 的历史范围把 channel、terminal、memory、MCP、replay、scheduler、EffectClaim、external exactly-once
+与其他 Capability kinds 留在 deferred。下方 B7 是一条 Feishu provider slice 的带日期历史记录，
+并不表示 Feishu 已接入 Zahir；当前 B8.2 仍将 Feishu → Zahir 与其他 provider/kind 接入标为
+**NO-GO / deferred**。当前验证见 `docs/reference/FEATURE_LOCATOR.md`
 §3.5f。
 
 ### Stage H declaration-only plugin reads / Stage H 插件只读声明发现
@@ -218,11 +223,11 @@ B7（2026-10-24，未提交）把已冻结的 provider lifecycle contract 复用
 
 `src/capability/provider.rs` supplies the shared lifecycle contract for an in-process provider and a future Bridge provider. `ProviderLifecycle` is a side-effect-free state machine: `Discovered`, `Cold`, `Disabled`, `Starting`, `Ready`, `Stopping`, `Stopped`, and `Failed`. Every new `Starting` transition increments the provider generation. `ProviderHandle` only publishes committed state and live notifications; it does not start threads, open IPC, load native libraries, or replace `ExtensionManager`.
 
-`ToolHandlerRegistry` owns the shared provider handle for its callable surface. While the provider is not `Ready`, callable snapshots and resolution are empty while the registered state is retained. `BackendLease` records both the ownership generation and provider generation, so a stop or restart makes an old lease fail closed as `StaleProvider`. `ExtensionManager` and `plugin_state.rs` remain the discovery, effect, and durable enabled-state authorities. A future Bridge supervisor may drive the same contract around a sidecar; native Rust dynamic-library unloading is deliberately outside this foundation.
+`ToolHandlerRegistry` owns the shared provider handle for its callable surface. While the provider is not `Ready`, callable snapshots and resolution are empty while the registered state is retained. `BackendLease` records both the ownership generation and provider generation, so a stop or restart makes an old lease fail closed as `StaleProvider`. `ExtensionManager` and `plugin_state.rs` remain the discovery, effect, and durable enabled-state authorities. In the current bounded production slice, `ExtensionManager` / `RuntimeOwner` drive the provider transitions for ExtensionManager-managed tool-only WASM; `ProjectionHost` / `ZahirFacade` remain derived read/projection/notification surfaces and do not own that lifecycle. A future Bridge supervisor may drive the same contract around a sidecar; native Rust dynamic-library unloading is deliberately outside this foundation. This does not imply a general Gateway or all-capability-kind wiring; see the current Stage H and B8.2 sections above.
 
 `src/capability/provider.rs` 为进程内 Provider 与未来 Bridge Provider 提供共享生命周期契约。`ProviderLifecycle` 是无副作用状态机，覆盖 `Discovered`、`Cold`、`Disabled`、`Starting`、`Ready`、`Stopping`、`Stopped`、`Failed`；每次新的 `Starting` 都递增 Provider generation。`ProviderHandle` 只发布已提交状态和 live notification，不启动线程、不建立 IPC、不加载原生动态库，也不替代 `ExtensionManager`。
 
-`ToolHandlerRegistry` 为自己的 callable surface 持有共享 Provider handle。Provider 未处于 `Ready` 时，callable snapshot 和 resolve 为空，但已注册状态保留；`BackendLease` 同时记录 ownership generation 与 provider generation，因此停止或重启会让旧 lease 以 `StaleProvider` fail-closed。发现、效果执行和持久化 enabled 状态仍由 `ExtensionManager` 与 `plugin_state.rs` 负责。未来 Bridge supervisor 可以围绕同一契约驱动 sidecar；原生 Rust 动态库卸载不属于本基础切片。
+`ToolHandlerRegistry` 为自己的 callable surface 持有共享 Provider handle。Provider 未处于 `Ready` 时，callable snapshot 和 resolve 为空，但已注册状态保留；`BackendLease` 同时记录 ownership generation 与 provider generation，因此停止或重启会让旧 lease 以 `StaleProvider` fail-closed。发现、效果执行和持久化 enabled 状态仍由 `ExtensionManager` 与 `plugin_state.rs` 负责。在当前有界生产切片中，`ExtensionManager` / `RuntimeOwner` 驱动 ExtensionManager-managed tool-only WASM 的 provider transition；`ProjectionHost` / `ZahirFacade` 仍是派生的 read/projection/notification surface，不拥有该 lifecycle。未来 Bridge supervisor 可以围绕同一契约驱动 sidecar；原生 Rust 动态库卸载不属于本基础切片。这不表示 Gateway 或所有 capability kind 已统一接线；当前 Stage H 与 B8.2 状态见上文。
 
 Recovery deliberately does not infer replay safety from a tool name, source, or idempotence flag. `ReplayPolicyLookup` reads the current descriptor. Phase 2A now persists an optional call-time `ToolCallIdentity` on `ToolCallRequested` and carries it through `DanglingCall`; old rows decode to `None`, and unknown nested policy values fail closed. Recovery classifies a call as replay-eligible only when stored and current identities are both `Safe` with equal schema version and a matching nonempty `replay_contract_fingerprint`; `revision` is only a process-local equality/TOCTOU guard, not a cross-restart eligibility criterion. Phase 2A still does not execute eligible tools: it emits the existing unknown-outcome verification event. Safe execution remains a separate Phase 2B decision requiring an executor and external-effect/idempotency contract.
 
