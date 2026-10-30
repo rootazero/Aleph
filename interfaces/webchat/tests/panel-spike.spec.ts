@@ -106,6 +106,28 @@ test.describe('artifact ABI (not Shell/WS E2E)', () => {
         expect(result.rootsAfterFailure).toEqual(['', '']);
     });
 
+    test('deterministic snapshot selection mounts the real PanelShell and cleans up (not live Gateway)', async ({ page }) => {
+        const requests: string[] = [];
+        page.on('request', request => requests.push(new URL(request.url()).pathname));
+        const publicationEntry = '/panel/community.fixture/tabs/community.fixture/1.0.0/verified.mjs';
+        await page.goto(`${origin}/panel/`);
+        expect(requests.filter(path => path === publicationEntry)).toHaveLength(0);
+
+        await page.goto(`${origin}/panel/community.fixture/verified`);
+        const shell = page.locator('[data-panel-shell="verified"]');
+        await expect(shell).toBeVisible();
+        await expect(shell.locator('[data-panel-content-root]')).toHaveText('community fixture content');
+        await expect(shell.locator('[data-panel-sidebar-root]')).toHaveText('community fixture sidebar');
+        expect(requests.filter(path => path === publicationEntry)).toHaveLength(1);
+
+        await shell.getByRole('button', { name: 'Close tab', exact: true }).click();
+        await expect(page.locator('[data-panel-shell="verified"]')).toHaveCount(0);
+        await expect(page.locator('[data-panel-sidebar-root]')).toBeEmpty();
+        await expect(page.locator('[data-panel-content-root]')).toBeEmpty();
+        await page.goto(`${origin}/panel/`);
+        await expect(page.locator('[data-panel-shell="verified"]')).toHaveCount(0);
+        expect(requests.filter(path => path === publicationEntry)).toHaveLength(1);
+    });
     test('lazy real loader mounts both roots, cleans up, and caches the module', async ({ page }) => {
         const requests: string[] = [];
         const errors: string[] = [];

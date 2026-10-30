@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { appendFileSync, closeSync, openSync } from 'node:fs';
 import { cp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { join, resolve, sep } from 'node:path';
@@ -7,6 +8,9 @@ const panel = resolve(import.meta.dir, '..');
 const root = resolve(panel, '../..');
 const output = join(panel, '.panel-spike');
 const entry = 'panel-tabs/terminal-pilot/terminal-pilot.js';
+const communityEntry = 'tabs/community.fixture/1.0.0/verified.mjs';
+const communityModule = await readFile(join(panel, 'tests/fixtures/community-panel.mjs'), 'utf8');
+const communityIntegrity = `sha256-${createHash('sha256').update(communityModule).digest('base64')}`;
 const args = process.argv.slice(2).filter(arg => arg !== '--');
 const arrangement = args.find(arg => arg.startsWith('--arrangement='))?.split('=')[1] ?? 'wasm-bindgen';
 if (args.some(arg => arg !== '--clean' && arg !== '--serve' && !arg.startsWith('--arrangement='))) {
@@ -18,14 +22,38 @@ if (args.includes('--serve')) {
     if (args.length !== 1) throw Error('--serve cannot be combined with build options');
     if (!await Bun.file(join(output, 'build.json')).exists()) throw Error('Build panel:spike:build first');
     const mime: Record<string, string> = { '.js': 'text/javascript', '.wasm': 'application/wasm', '.html': 'text/html', '.css': 'text/css', '.json': 'application/json' };
+    const communityPublication = new Map([
+        [communityEntry, {
+            identity: { plugin_id: 'community.fixture', plugin_version: '1.0.0', tab_id: 'verified', source_revision: 7 },
+            integrity: communityIntegrity,
+            bytes: communityModule,
+        }],
+    ]);
     const server = Bun.serve({
         hostname: '127.0.0.1', port: Number(process.env.PANEL_SPIKE_PORT ?? 18841),
         async fetch(request) {
             const path = decodeURIComponent(new URL(request.url).pathname);
             if (path === '/abi.html') return new Response('<!doctype html><title>ABI only — no host SDK</title><aside id="sidebar"></aside><main id="content"></main>', { headers: { 'Content-Type': 'text/html' } });
+            if (path.startsWith('/panel/')) {
+                const requested = path.slice('/panel/'.length) || 'index.html';
+                const relative = requested.startsWith('tabs/')
+                    ? requested
+                    : /\.[a-z0-9]+$/.test(requested)
+                        ? requested.slice(requested.indexOf('/') + 1)
+                        : 'index.html';
+                const publication = communityPublication.get(relative);
+                if (publication) return new Response(publication.bytes, { headers: { 'Content-Type': 'text/javascript', 'Cache-Control': 'no-cache' } });
+                const base = join(output, 'shell');
+                const file = resolve(base, relative);
+                if (!file.startsWith(base + sep)) return new Response('Forbidden', { status: 403 });
+                if (!await Bun.file(file).exists()) return new Response('Not found', { status: 404 });
+                return new Response(Bun.file(file), { headers: { 'Content-Type': mime[file.slice(file.lastIndexOf('.'))] ?? 'application/octet-stream', 'Cache-Control': 'no-cache' } });
+            }
             const route = path.match(/^\/(site|missing|incompatible)\/(.*)$/);
             if (!route) return new Response('Not found', { status: 404 });
             const relative = route[2] || 'index.html';
+            const publication = communityPublication.get(relative);
+            if (publication) return new Response(publication.bytes, { headers: { 'Content-Type': 'text/javascript', 'Cache-Control': 'no-cache' } });
             if (route[1] === 'missing' && relative.startsWith('panel-tabs/')) return new Response('Intentional missing entry fixture', { status: 404 });
             if (route[1] === 'incompatible' && relative === entry) {
                 // Malformed module fixture, not a host/transport replacement.
@@ -74,7 +102,7 @@ async function build() {
     if (!Bun.which('wasm-bindgen')) throw Error('Install wasm-bindgen-cli matching Cargo.lock before building');
 
     // Avoid stale browser/report evidence when rebuilding without --clean.
-    await Promise.all(['shell', 'panel-tabs', 'trunk', 'browser-observations.json', 'initialization-observations.json', 'report.json', 'build.json', 'manifest.json'].map(path => rm(join(output, path), { recursive: true, force: true })));
+    await Promise.all(['shell', 'panel-tabs', 'trunk', 'browser-observations.json', 'initialization-observations.json', 'report.json', 'build.json', 'manifest.json', 'community-publication.json'].map(path => rm(join(output, path), { recursive: true, force: true })));
     const shell = join(output, 'shell');
     const pilot = join(output, 'panel-tabs/terminal-pilot');
     await mkdir(shell, { recursive: true });
@@ -107,6 +135,11 @@ async function build() {
     const descriptor = module.describe();
     if (descriptor.entry !== entry) throw Error('Compiled pilot descriptor entry does not match deployment');
     await writeFile(join(output, 'manifest.json'), JSON.stringify(descriptor, null, 2));
+    await writeFile(join(output, 'community-publication.json'), JSON.stringify({
+        identity: { plugin_id: 'community.fixture', plugin_version: '1.0.0', tab_id: 'verified', source_revision: 7 },
+        entry: './tabs/community.fixture/1.0.0/verified.mjs', public_base: './tabs/', integrity: communityIntegrity,
+        source: 'in-process deterministic fixture publication; no Gateway or WS proxy',
+    }, null, 2));
     for (const [name, packageName] of [['shell', 'aleph-panel'], ['pilot', 'panel-tab-terminal-pilot']]) {
         const result = Bun.spawn(['cargo', 'tree', '--locked', '-p', packageName, '--target', 'wasm32-unknown-unknown', '-e', 'normal', '--prefix', 'none', '--format', '{p}'], { cwd: root, env, stdout: 'pipe', stderr: 'inherit' });
         const tree = await new Response(result.stdout).text();
