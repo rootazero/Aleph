@@ -107,18 +107,46 @@ Example: {"node":"worker-1","direction":"push","local_path":"/tmp/build.sh","rem
                 let local =
                     check_and_resolve_path(Path::new(&args.local_path), &get_denied_paths(), None)
                         .map_err(|e| AlephError::tool(format!("local path rejected: {e}")))?;
-                let meta = tokio::fs::metadata(&local).await.map_err(|e| {
+                // (B4-04) The size check used to be a *stat snapshot*: between
+                // the `metadata` call and the `tokio::fs::read` the file could
+                // grow (a log being appended to), so the center loaded an
+                // arbitrarily large file into memory and base64-encoded it
+                // (~1.33x). `tokio::fs::read` also blocks forever on a FIFO —
+                // the block happens in `open(2)`, before any byte is read — so
+                // the byte cap cannot help there either. Mirror the node's
+                // shape: refuse a non-regular file, then read through a
+                // bounded handle (`take(MAX + 1)`) and reject what comes back
+                // over the cap.
+                //
+                // `symlink_metadata` does not follow a symlink, so a symlink
+                // planted at the leaf after `check_and_resolve_path`
+                // canonicalized the path is refused as well.
+                let meta = tokio::fs::symlink_metadata(&local).await.map_err(|e| {
                     AlephError::tool(format!("stat local '{}': {e}", local.display()))
                 })?;
-                if meta.len() > MAX_FILE_BYTES as u64 {
+                if !meta.is_file() {
                     return Err(AlephError::tool(format!(
-                        "{} bytes exceeds {MAX_FILE_BYTES} cap",
-                        meta.len()
+                        "local '{}' is not a regular file",
+                        local.display()
                     )));
                 }
-                let bytes = tokio::fs::read(&local).await.map_err(|e| {
+                let file = tokio::fs::File::open(&local).await.map_err(|e| {
                     AlephError::tool(format!("read local '{}': {e}", local.display()))
                 })?;
+                use tokio::io::AsyncReadExt;
+                let mut bytes = Vec::new();
+                file.take(MAX_FILE_BYTES as u64 + 1)
+                    .read_to_end(&mut bytes)
+                    .await
+                    .map_err(|e| {
+                        AlephError::tool(format!("read local '{}': {e}", local.display()))
+                    })?;
+                if bytes.len() > MAX_FILE_BYTES {
+                    return Err(AlephError::tool(format!(
+                        "{} bytes exceeds {MAX_FILE_BYTES} cap",
+                        bytes.len()
+                    )));
+                }
                 let sha = sha256_hex(&bytes);
                 let params = json!({
                     "tool": "file.write",
@@ -444,6 +472,38 @@ mod tests {
             .await
             .expect_err("oversize rejected");
         assert!(err.to_string().contains("exceeds"), "{err}");
+    }
+
+    /// A FIFO on the center side must be refused before the read: opening it
+    /// blocks in `open(2)` until a peer appears, so the push would hang
+    /// instead of failing. `mkfifo(2)` is unix-only, so the test is too.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn push_refuses_a_non_regular_local_file() {
+        use std::os::unix::ffi::OsStrExt;
+        let dir = tempfile::tempdir().unwrap();
+        let fifo = dir.path().join("pipe");
+        let c_path =
+            std::ffi::CString::new(fifo.as_os_str().as_bytes()).expect("path contains no NUL");
+        // Safety: `c_path` is a NUL-terminated path to a file that does not
+        // exist yet; `mkfifo` creates it.
+        let rc = unsafe { libc::mkfifo(c_path.as_ptr(), 0o600) };
+        assert_eq!(rc, 0, "mkfifo failed: {}", std::io::Error::last_os_error());
+
+        let (reg, _rx, _ch) = registry_with_node(vec!["file.write"]);
+        let tool = NodeFileTool::new(reg);
+        let err = tool
+            .call(NodeFileArgs {
+                node: "worker-1".to_string(),
+                direction: "push".to_string(),
+                local_path: fifo.to_string_lossy().to_string(),
+                remote_path: "dest.bin".to_string(),
+                overwrite: false,
+                timeout_ms: Some(500),
+            })
+            .await
+            .expect_err("a FIFO must be refused, not opened");
+        assert!(err.to_string().contains("not a regular file"), "{err}");
     }
 
     #[tokio::test]

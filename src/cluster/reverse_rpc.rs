@@ -128,7 +128,12 @@ pub enum ReverseRpcError {
     /// Frame could **not be pushed** onto the outbound queue: the writer is
     /// stuck on `send` (peer TCP stopped draining bytes = slow consumer /
     /// half-open connection), the bounded mpsc is full, and `send().await` got
-    /// no capacity within the entire budget. This is a socket-level backpressure
+    /// no capacity within the entire budget. The reported duration is the
+    /// budget the enqueue actually had —
+    /// `min(timeout_ms, OUTBOUND_PUSH_BUDGET_MS)` — not the caller's raw
+    /// `timeout_ms`: the call gave up after at most the enqueue sub-budget,
+    /// and reporting the raw value overstated the wait by up to 240x at the
+    /// default 120s tool timeout. This is a socket-level backpressure
     /// failure, mapping openclaw `rejectSlowNodeSocket`'s `bufferedAmount` signal
     /// — distinct from a "slow node" ([`Timeout`](Self::Timeout)): a
     /// center-side channel carrying a close signal will **actively tear down the
@@ -150,7 +155,8 @@ pub enum ReverseRpcError {
 /// Cap on how long `ReverseRpcChannel::call` may spend pushing the request
 /// frame onto the outbound mpsc before it declares the peer a slow consumer
 /// (see B3-01). Once the frame is enqueued, the call switches to the
-/// response-wait budget (the remainder of the caller's `timeout_ms`).
+/// response-wait budget — the caller's *full* `timeout_ms`, counted from that
+/// moment. The enqueue wait is not charged against the response window.
 /// Splitting the two keeps a peer that received and started executing the
 /// frame from being told "timed out" by the center.
 const OUTBOUND_PUSH_BUDGET_MS: u64 = 500;
@@ -245,8 +251,11 @@ impl ReverseRpcChannel {
 
     /// Initiate a reverse RPC request on the connection and await the response.
     ///
-    /// `timeout_ms` is the budget for the **response wait** phase. The
-    /// outbound-enqueue phase is bounded independently by
+    /// `timeout_ms` is the budget for the **response wait** phase, and that
+    /// budget starts when the frame is enqueued: the peer cannot answer
+    /// before it receives the frame, so the time spent waiting for room in
+    /// the outbound queue is not charged against it. The outbound-enqueue
+    /// phase is bounded independently by
     /// `OUTBOUND_PUSH_BUDGET_MS` (500 ms), so total wall-time can be up to
     /// `min(timeout_ms, OUTBOUND_PUSH_BUDGET_MS) + timeout_ms` — call it
     /// `~1.5x–2x timeout_ms` in the worst case. This split is deliberate: a
@@ -306,7 +315,6 @@ impl ReverseRpcChannel {
             Err(e) => return Err(ReverseRpcError::Serialize(e)),
         };
 
-        let budget = Duration::from_millis(timeout_ms);
         // (B3-01) Split the timeout into an outbound-enqueue sub-budget and a
         // response sub-budget. Previously the SAME `deadline` was reused for
         // both phases — if the outbound push consumed most of the budget, the
@@ -315,17 +323,17 @@ impl ReverseRpcChannel {
         // command the center has now told its caller "timed out".
         //
         // `OUTBOUND_PUSH_BUDGET_MS` caps the enqueue half regardless of the
-        // caller's `timeout_ms`; the response_deadline is set at call start
-        // to `now + timeout_ms` (the *full* caller budget), independent of
-        // how much outbound actually consumed. The total call wall-time is
-        // therefore bounded by `timeout_ms` for outbound plus a separate
-        // `timeout_ms` for the response wait, not by a single shared
-        // budget. This is a deliberate split: a slow enqueue is already an
-        // error (`OutboundWedged`), so the response half does not need to
-        // "subtract" anything from a shared clock.
-        let outbound_budget = Duration::from_millis(timeout_ms.min(OUTBOUND_PUSH_BUDGET_MS));
-        let outbound_deadline = tokio::time::Instant::now() + outbound_budget;
-        let response_deadline = tokio::time::Instant::now() + budget;
+        // caller's `timeout_ms`; the response half gets the caller's *full*
+        // `timeout_ms`, but only starts counting once the frame is enqueued
+        // (see the deadline below). The total call wall-time is therefore
+        // bounded by `min(timeout_ms, OUTBOUND_PUSH_BUDGET_MS)` for outbound
+        // plus a separate `timeout_ms` for the response wait, not by a single
+        // shared budget. This is a deliberate split: a slow enqueue is
+        // already an error (`OutboundWedged`), so the response half does not
+        // need to "subtract" anything from a shared clock.
+        let outbound_budget_ms = timeout_ms.min(OUTBOUND_PUSH_BUDGET_MS);
+        let outbound_deadline =
+            tokio::time::Instant::now() + Duration::from_millis(outbound_budget_ms);
 
         match tokio::time::timeout_at(outbound_deadline, self.outbound.send(frame)).await {
             // Receiver gone: the connection's writer task is finished.
@@ -336,12 +344,25 @@ impl ReverseRpcChannel {
             // owning connection to tear itself down so the zombie is reaped now
             // rather than occupying a registry slot until (or past) the inbound
             // idle-watchdog, which never fires for a half-open write-wedge.
+            //
+            // The reported duration is the budget the enqueue ACTUALLY had
+            // (`outbound_budget_ms`), not the caller's raw `timeout_ms`: the
+            // call gave up after at most the enqueue sub-budget, so the raw
+            // value overstated the wait by up to 240x at the default 120s
+            // tool timeout.
             Err(_) => {
                 self.close_connection();
-                return Err(ReverseRpcError::OutboundWedged(timeout_ms));
+                return Err(ReverseRpcError::OutboundWedged(outbound_budget_ms));
             }
             Ok(Ok(())) => {}
         }
+
+        // The response window starts HERE — after the frame is on the wire —
+        // not at call start. The peer only begins executing once it receives
+        // the frame, so the time spent waiting for room in the outbound queue
+        // must not eat the response budget; otherwise a healthy peer's reply
+        // is rejected as a timeout while the peer keeps executing the command.
+        let response_deadline = tokio::time::Instant::now() + Duration::from_millis(timeout_ms);
 
         match tokio::time::timeout_at(response_deadline, rx).await {
             // Resolved: `PendingInvokes::resolve` already removed the entry, so
@@ -686,6 +707,52 @@ mod tests {
                 .is_err(),
             "a slow response must not tear down the connection"
         );
+    }
+
+    /// The response window must not pay for the outbound wait.
+    ///
+    /// Regression: `response_deadline` used to be taken at *call start*, so
+    /// the time spent waiting for room in the outbound queue was subtracted
+    /// from the response budget. A healthy peer whose reply arrived in time
+    /// was nevertheless reported as `Timeout`, while the peer kept executing
+    /// the command it had already been handed.
+    ///
+    /// Deterministic on a paused clock: the outbound queue has a single slot,
+    /// already filled, so the request waits 400ms of *virtual* time for the
+    /// consumer to drain it; the peer then takes 4900ms to answer. With the
+    /// response clock started at call start the deadline (5000ms) would expire
+    /// before the reply (5300ms); with the clock started at the enqueue the
+    /// deadline is 5400ms and the reply lands in time. No wall-clock sleep is
+    /// involved — every duration below is virtual.
+    #[tokio::test(start_paused = true)]
+    async fn the_response_window_does_not_pay_for_the_outbound_wait() {
+        let (out_tx, mut out_rx) = tokio::sync::mpsc::channel::<String>(1);
+        // Fill the single slot so the request frame has to wait for capacity.
+        out_tx.send("stale frame".to_string()).await.unwrap();
+        let channel = ReverseRpcChannel::new(out_tx);
+        let pending = channel.pending();
+        let replier = Arc::clone(&pending);
+
+        tokio::spawn(async move {
+            // A slow consumer: the enqueue waits 400ms for room.
+            tokio::time::sleep(Duration::from_millis(400)).await;
+            let _stale = out_rx.recv().await;
+            let frame = out_rx.recv().await.expect("request frame");
+            let req: Value = serde_json::from_str(&frame).unwrap();
+            let id = req["id"].clone();
+            // Healthy but slow peer: 4900ms of virtual time.
+            tokio::time::sleep(Duration::from_millis(4_900)).await;
+            replier.resolve(
+                &id,
+                JsonRpcResponse::success(Some(id.clone()), json!({"ok": true})),
+            );
+        });
+
+        let resp = channel
+            .call("tool.call", json!({}), 5_000)
+            .await
+            .expect("the peer's reply must not be rejected by the outbound wait");
+        assert!(resp.is_success());
     }
 
     #[tokio::test]

@@ -15,6 +15,17 @@ use crate::utils::sqlite_open::open_sqlite_readonly;
 
 const SECURITY_DB_FILENAME: &str = "security.db";
 
+/// Hard ceiling on the number of response bytes the CLI buffers from a
+/// single admin response.
+///
+/// The admin API answers with small JSON documents (a secret summary, a
+/// resume receipt). `reqwest`'s `text()` / `json()` read the whole body
+/// into memory before the CLI ever sees it, so a misbehaving server — or
+/// an intercepting proxy on the path — can dictate how much the CLI
+/// allocates. 1 MiB is orders of magnitude above any legitimate admin
+/// response and turns an unbounded read into a bounded one.
+const MAX_RESPONSE_BYTES: usize = 1024 * 1024;
+
 pub fn forward_to_server<T>(
     data_dir: &Path,
     method: HttpMethod,
@@ -26,16 +37,46 @@ where
 {
     let endpoint = read_endpoint(data_dir)?.with_context(|| {
         format!(
-            "server is initializing or crashed (no .ipc-endpoint.json at {}). \
-             Try again or run `aleph-server stop` first.",
+            "no usable .ipc-endpoint.json at {} (missing, empty, or unsupported version). \
+             The server is initializing or crashed — try again or run `aleph-server stop` first.",
             data_dir.display()
         )
     })?;
-    // Robust URL join via `url::Url::join` rather than the prior
-    // `format!("{}/{...}")` slice: today the daemon writes a bare
-    // `scheme://host:port`, but a future reverse-proxy prefix or query
-    // string would be silently appended to the wrong segment.
     let base = url::Url::parse(&endpoint.url).context("endpoint URL is not a parseable URL")?;
+    // The admin channel is local-only: the endpoint file is written by the
+    // daemon on this host, and the bearer token is read from this host's
+    // `security.db` — a remote deployment has no local token to send. A
+    // non-loopback host in the endpoint file therefore means the file was
+    // tampered with (or points at another machine), and a plain-HTTP forward
+    // would put the admin bearer token and the secret payload on the wire
+    // in cleartext. Refuse BEFORE the token is attached.
+    let host = base
+        .host_str()
+        .ok_or_else(|| anyhow::anyhow!("endpoint URL {base} carries no host"))?;
+    if !is_loopback_host(host) {
+        anyhow::bail!(
+            "refusing to send the admin bearer token to the non-loopback endpoint host \
+             {host} (from {base}); the admin IPC channel is local-only and a plain-HTTP \
+             forward would carry the token in cleartext. Bind the daemon to 127.0.0.1 or \
+             ::1 and update .ipc-endpoint.json."
+        );
+    }
+    // `url::Url::join` resolves per RFC 3986: an absolute-path reference such
+    // as `/v1/admin/secrets` REPLACES the base path. A prefixed endpoint URL
+    // would therefore lose its prefix and silently address the wrong server.
+    // The daemon publishes a bare `scheme://host:port`, so a prefix is refused
+    // rather than dropped.
+    if !matches!(base.path(), "" | "/") {
+        anyhow::bail!(
+            "refusing to use endpoint URL {base}: it carries the path prefix {:?}, which \
+             the absolute admin route would replace. The daemon must publish a bare \
+             scheme://host:port endpoint.",
+            base.path()
+        );
+    }
+    // The route is absolute (`/v1/admin/...`), so the join below replaces the
+    // (empty or "/") base path — with the prefix case refused above there is
+    // no prefix left to lose.
     let joined = base
         .join(route)
         .with_context(|| format!("cannot join route {route:?} to base {base}"))?;
@@ -56,8 +97,8 @@ where
             let resp2 = call_once(&url, method, &body, &fresh)?;
             return finalize::<T>(resp2);
         }
-        let text = resp
-            .text()
+        let text = read_body_bytes(resp)
+            .map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
             .unwrap_or_else(|e| format!("(failed to read response body: {e})"));
         anyhow::bail!(
             "authentication failed — bearer token rejected by server: {}",
@@ -74,6 +115,77 @@ where
 /// error class and matches the size budget used elsewhere in the admin
 /// layer.
 const MAX_ERROR_BODY_CHARS: usize = 256;
+
+/// Read at most `MAX_RESPONSE_BYTES` from the response body.
+///
+/// `reqwest::blocking::Response::text()` / `json()` buffer the whole body
+/// before the caller sees it, so the peer picks the CLI's memory use. This
+/// streams the body through a capped sink instead: the transfer is aborted
+/// with an error as soon as the cap is passed, so an oversized body is never
+/// fully buffered.
+fn read_body_bytes(mut resp: reqwest::blocking::Response) -> anyhow::Result<Vec<u8>> {
+    let mut capped = CappedBuffer::new(MAX_RESPONSE_BYTES);
+    // Bind the outcome before inspecting the sink: the `&mut capped` borrow
+    // ends with this statement, so the code below may read and move `capped`.
+    let read = resp.copy_to(&mut capped);
+    if let Err(e) = read {
+        if capped.overflowed() {
+            return Err(anyhow::anyhow!(
+                "server response body exceeds the {MAX_RESPONSE_BYTES}-byte limit; \
+                 refusing to buffer it"
+            ));
+        }
+        return Err(anyhow::Error::new(e).context("failed to read the server response body"));
+    }
+    Ok(capped.into_inner())
+}
+
+/// A `std::io::Write` sink that buffers at most `limit` bytes and fails the
+/// write as soon as more arrive, so the transfer stops instead of growing
+/// the buffer.
+struct CappedBuffer {
+    buf: Vec<u8>,
+    limit: usize,
+    overflowed: bool,
+}
+
+impl CappedBuffer {
+    fn new(limit: usize) -> Self {
+        Self {
+            buf: Vec::new(),
+            limit,
+            overflowed: false,
+        }
+    }
+
+    fn overflowed(&self) -> bool {
+        self.overflowed
+    }
+
+    fn into_inner(self) -> Vec<u8> {
+        self.buf
+    }
+}
+
+impl std::io::Write for CappedBuffer {
+    fn write(&mut self, data: &[u8]) -> std::io::Result<usize> {
+        let room = self.limit.saturating_sub(self.buf.len());
+        if data.len() > room {
+            // Keep what fits (bounded by `limit`) and stop the transfer.
+            self.buf.extend_from_slice(&data[..room]);
+            self.overflowed = true;
+            return Err(std::io::Error::other(
+                "response body exceeds the configured limit",
+            ));
+        }
+        self.buf.extend_from_slice(data);
+        Ok(data.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
 
 fn truncate_error_body(s: String) -> String {
     if s.len() <= MAX_ERROR_BODY_CHARS {
@@ -125,9 +237,13 @@ fn call_once(
 /// non-loopback HTTPS host is a clear signal of operator error or a MITM
 /// attempt and is refused outright rather than silently trusted.
 ///
-/// Plain `http://` is allowed on any host: the bearer token is the only
-/// authentication, but the trust model for plain HTTP is the caller's
-/// problem (an operator who chose plain HTTP has accepted the consequences).
+/// Plain `http://` is allowed by this function on any host: the bearer token
+/// is the only authentication, and the trust model for plain HTTP is the
+/// caller's problem (an operator who chose plain HTTP has accepted the
+/// consequences). The channel as a whole is local-only — `forward_to_server`
+/// refuses a non-loopback endpoint for *every* scheme before the token is
+/// attached — but this function keeps its own narrower rule so the two
+/// concerns stay separable.
 fn build_client(url: &str) -> anyhow::Result<reqwest::blocking::Client> {
     let mut builder =
         reqwest::blocking::Client::builder().timeout(std::time::Duration::from_secs(10));
@@ -173,6 +289,15 @@ fn host_of(url: &str) -> Option<String> {
 }
 
 fn is_loopback_host(host: &str) -> bool {
+    // `url::Url::host_str` returns an IPv6 literal in its BRACKETED form
+    // ("[::1]"), while `IpAddr::parse` wants the bare address. Strip the
+    // brackets first, otherwise an IPv6 loopback endpoint ("http://[::1]:port",
+    // which `build_endpoint_url` publishes for an IPv6 bind) is read as a
+    // non-loopback host and refused.
+    let host = host
+        .strip_prefix('[')
+        .and_then(|rest| rest.strip_suffix(']'))
+        .unwrap_or(host);
     // `IpAddr::is_loopback` covers `127.0.0.0/8` and `::1` (and the rest of
     // the loopback range on platforms that recognise it), which subsumes
     // both literal aliases — no need to spell them out.
@@ -188,13 +313,18 @@ where
     T: serde::de::DeserializeOwned,
 {
     let status = resp.status();
+    let body = read_body_bytes(resp);
     if status.is_success() {
-        let body = resp.json::<T>()?;
-        Ok(body)
+        let bytes = body?;
+        Ok(
+            serde_json::from_slice(&bytes)
+                .context("failed to decode the server's JSON response")?,
+        )
     } else {
-        let text = resp
-            .text()
-            .unwrap_or_else(|e| format!("(failed to read response body: {e})"));
+        let text = match body {
+            Ok(bytes) => String::from_utf8_lossy(&bytes).into_owned(),
+            Err(e) => format!("(failed to read response body: {e})"),
+        };
         anyhow::bail!("server returned {status}: {}", truncate_error_body(text))
     }
 }
@@ -202,6 +332,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Write;
 
     // Integration tests for forward_to_server live in tests/spec_c_cli_ipc.rs
     // because they need a real HTTP listener and a seeded security.db. Unit
@@ -280,6 +411,100 @@ mod tests {
         let prefix_len = MAX_ERROR_BODY_CHARS;
         assert!(out.is_char_boundary(prefix_len));
         assert!(out.starts_with(&"y".repeat(prefix_len)));
+    }
+
+    /// The capped sink must accept exactly the limit and refuse one byte
+    /// more — that boundary is the whole point of the bound.
+    #[test]
+    fn capped_buffer_accepts_exactly_the_limit() {
+        let mut capped = CappedBuffer::new(8);
+        capped
+            .write_all(b"12345678")
+            .expect("write within the limit");
+        assert!(!capped.overflowed());
+        assert_eq!(capped.into_inner(), b"12345678".to_vec());
+    }
+
+    #[test]
+    fn capped_buffer_refuses_more_than_the_limit() {
+        let mut capped = CappedBuffer::new(8);
+        let err = capped
+            .write_all(b"123456789")
+            .expect_err("one byte past the limit must fail");
+        assert!(err.to_string().contains("exceeds"), "{err}");
+        assert!(capped.overflowed());
+        // The buffer itself stays bounded by the limit.
+        assert_eq!(capped.into_inner().len(), 8);
+    }
+
+    /// The admin bearer token must never leave the box in cleartext: a
+    /// non-loopback endpoint host is refused before the token is read and
+    /// attached. The address below is TEST-NET-1 (RFC 5737) and never
+    /// resolves, but the refusal happens before any network call at all.
+    #[test]
+    fn forward_to_server_refuses_a_non_loopback_endpoint() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        crate::cli::endpoint::write_endpoint(
+            dir.path(),
+            &crate::cli::endpoint::IpcEndpoint::current("http://192.0.2.1:18790"),
+        )
+        .expect("write endpoint");
+        let err = forward_to_server::<serde_json::Value>(
+            dir.path(),
+            HttpMethod::Get,
+            "/v1/admin/secrets",
+            serde_json::Value::Null,
+        )
+        .expect_err("a non-loopback endpoint must be refused");
+        let msg = format!("{err:#}");
+        assert!(msg.contains("non-loopback"), "{msg}");
+        assert!(msg.contains("refusing"), "{msg}");
+    }
+
+    /// `Url::join` drops a base path prefix, so a prefixed endpoint URL
+    /// would address the wrong server. Fail closed instead.
+    #[test]
+    fn forward_to_server_refuses_an_endpoint_with_a_path_prefix() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        crate::cli::endpoint::write_endpoint(
+            dir.path(),
+            &crate::cli::endpoint::IpcEndpoint::current("http://127.0.0.1:18790/prefix"),
+        )
+        .expect("write endpoint");
+        let err = forward_to_server::<serde_json::Value>(
+            dir.path(),
+            HttpMethod::Get,
+            "/v1/admin/secrets",
+            serde_json::Value::Null,
+        )
+        .expect_err("a prefixed endpoint must be refused");
+        let msg = format!("{err:#}");
+        assert!(msg.contains("path prefix"), "{msg}");
+        assert!(msg.contains("refusing"), "{msg}");
+    }
+
+    /// `read_endpoint` reports a missing file, an empty file and an
+    /// unsupported version the same way (`Ok(None)`); the caller's message
+    /// must therefore cover all three instead of claiming the file is
+    /// absent.
+    #[test]
+    fn forward_to_server_reports_an_unusable_endpoint_file() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let err = forward_to_server::<serde_json::Value>(
+            dir.path(),
+            HttpMethod::Get,
+            "/v1/admin/secrets",
+            serde_json::Value::Null,
+        )
+        .expect_err("no endpoint file must fail");
+        let msg = format!("{err:#}");
+        assert!(msg.contains("no usable .ipc-endpoint.json"), "{msg}");
+        assert!(
+            msg.contains("missing, empty, or unsupported version"),
+            "{msg}"
+        );
+        // Pinned by tests/spec_c_cli_endpoint_missing.rs.
+        assert!(msg.contains("server is initializing"), "{msg}");
     }
 
     #[test]

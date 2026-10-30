@@ -165,8 +165,11 @@ where
 /// The second lock error is preferred over the IPC error when it is *not*
 /// `LockHeldError` (e.g. PermissionDenied from a mode change on `data_dir`)
 /// because that is strictly more informative than "server is initializing
-/// or crashed". A second `LockHeldError` keeps the IPC error — the lock
-/// is in fact held, so the next-most-actionable signal wins.
+/// or crashed". A second `LockHeldError` keeps the IPC error and chains the
+/// *first* lock error on top of it: the lock state names the running
+/// server's PID, and without it the operator only sees the transport
+/// failure ("connection refused"), concludes no server is running, and
+/// starts a second one.
 fn lock_or_ipc_dispatch<L, T>(
     data_dir: &Path,
     route: &'static str,
@@ -181,9 +184,13 @@ where
     match acquire_or_held(data_dir) {
         Ok(lock) => local(&lock),
         Err(e) => {
-            if e.downcast_ref::<LockHeldError>().is_none() {
-                return Err(e);
-            }
+            // Keep the `LockHeldError` instead of dropping it: it names the
+            // running server's PID, which is the actionable half of the
+            // diagnosis once the forward has failed.
+            let held = match e.downcast::<LockHeldError>() {
+                Ok(held) => held,
+                Err(e) => return Err(e),
+            };
             match crate::cli::ipc_client::forward_to_server::<T>(data_dir, method, route, ipc_body)
             {
                 Ok(out) => Ok(out),
@@ -191,7 +198,11 @@ where
                     Ok(lock) => local(&lock),
                     Err(lock_err) => {
                         if lock_err.downcast_ref::<LockHeldError>().is_some() {
-                            Err(fwd_err)
+                            // The lock is held and the forward failed: report
+                            // both. `context` keeps the transport error as the
+                            // cause, so the operator sees the PID *and* the
+                            // reason the forward failed.
+                            Err(fwd_err.context(held.to_string()))
                         } else {
                             tracing::warn!(
                                 ipc_error = %fwd_err,
@@ -417,5 +428,51 @@ mod tests {
         )
         .expect("retry path should run local");
         assert_eq!(result, 42);
+    }
+
+    /// The lock state must survive a failed forward. The operator's first
+    /// question is "is a server running?", and the `LockHeldError` is the
+    /// only answer that names the holder's PID. Dropping it left only the
+    /// transport error ("connection refused"), which reads as "no server is
+    /// running" — and the operator then starts a second one.
+    #[test]
+    fn lock_or_ipc_reports_the_lock_state_when_the_forward_fails() {
+        let dir = tempfile::tempdir().unwrap();
+        let _hold = match crate::utils::instance_lock::try_acquire(dir.path()).unwrap() {
+            crate::utils::instance_lock::AcquireOutcome::Acquired(g) => g,
+            _ => panic!(),
+        };
+        // Seed a bearer token + a real .ipc-endpoint.json pointing at an
+        // unbound port so `forward_to_server` fails to connect.
+        let security_db = dir.path().join("security.db");
+        {
+            let store = crate::gateway::security::store::SecurityStore::open(&security_db).unwrap();
+            store
+                .set_shared_token_with_secret("hash-1", &[1u8; 32], Some("tok"))
+                .unwrap();
+        }
+        crate::cli::endpoint::write_endpoint(
+            dir.path(),
+            &crate::cli::endpoint::IpcEndpoint::current("http://127.0.0.1:1".to_string()),
+        )
+        .unwrap();
+
+        let result: anyhow::Result<i32> = try_with_policy::<_, i32>(
+            CommandPolicy::LockOrIpc {
+                route: "/v1/admin/whatever",
+                method: HttpMethod::Get,
+            },
+            dir.path(),
+            |_lock| Ok(42),
+            serde_json::Value::Null,
+        );
+        let err = result.expect_err("a failed forward with a held lock must fail");
+        let msg = format!("{err:#}");
+        assert!(msg.contains("server is running"), "{msg}");
+        // The transport failure is kept as the cause, not replaced by the
+        // lock state: anyhow's alternate Display renders the chain as
+        // "outer: inner", so the request URL in the transport error proves
+        // the cause survived.
+        assert!(msg.contains("127.0.0.1:1"), "{msg}");
     }
 }
