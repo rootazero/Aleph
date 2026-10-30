@@ -94,6 +94,7 @@ pub(crate) struct BoundChannelCapture {
     pub(super) channel: ChannelHandle,
     pub(super) source_revision: u64,
     pub(super) entry_revision: u64,
+    pub(super) descriptor_revision: u64,
     pub(super) descriptor: CapabilityDescriptor,
     pub(super) descriptor_fingerprint: [u8; 32],
     pub(super) provider: ProviderHandle,
@@ -146,6 +147,8 @@ pub(crate) enum ChannelBindingError {
     Busy,
     #[error("channel source publication revision exhausted")]
     PublicationExhausted,
+    #[error("channel descriptor publication revision exhausted")]
+    DescriptorPublicationExhausted,
     #[error(transparent)]
     Provider(#[from] ProviderCallError),
     #[error(transparent)]
@@ -297,6 +300,8 @@ impl super::ChannelRegistry {
             return Err(ChannelBindingError::WrongProvider);
         }
         if bound.entry_revision != capture.entry_revision
+            || bound.descriptor_revision != capture.descriptor_revision
+            || bound.descriptor.revision.0 != capture.descriptor_revision
             || bound.descriptor_fingerprint != capture.descriptor_fingerprint
             || canonical_descriptor_fingerprint(&capture.descriptor) != bound.descriptor_fingerprint
         {
@@ -514,8 +519,15 @@ impl super::ChannelRegistry {
             return Err(ChannelBindingError::InvalidContract);
         }
         let preflight_revision = self.next_bound_revision()?;
-        let candidate =
-            self.prepare_bound_entry(channel, contract, ownership, initial, preflight_revision)?;
+        let preflight_descriptor_revision = self.next_bound_descriptor_revision()?;
+        let candidate = self.prepare_bound_entry(
+            channel,
+            contract,
+            ownership,
+            initial,
+            preflight_revision,
+            preflight_descriptor_revision,
+        )?;
         let incumbent = self.begin_bound_retirement(channel_id).await?;
         let (receiver, marker) = self.spawn_bound_retirement(&incumbent).await?;
         self.await_bound_retirement(&incumbent, receiver).await?;
@@ -528,6 +540,7 @@ impl super::ChannelRegistry {
         channel_id: &super::ChannelId,
     ) -> Result<(), ChannelBindingError> {
         let _ = self.next_bound_revision()?;
+        let _ = self.next_bound_descriptor_revision()?;
         let incumbent = self.begin_bound_retirement(channel_id).await?;
         let (receiver, marker) = self.spawn_bound_retirement(&incumbent).await?;
         self.await_bound_retirement(&incumbent, receiver).await?;
@@ -542,8 +555,19 @@ impl super::ChannelRegistry {
             .ok_or(ChannelBindingError::PublicationExhausted)
     }
 
+    fn next_bound_descriptor_revision(&self) -> Result<u64, ChannelBindingError> {
+        self.descriptor_revision
+            .load(std::sync::atomic::Ordering::Relaxed)
+            .checked_add(1)
+            .ok_or(ChannelBindingError::DescriptorPublicationExhausted)
+    }
+
     fn advance_bound_revision(&self) -> Result<u64, ChannelBindingError> {
         self.try_advance_source_revision()
+    }
+
+    fn advance_bound_descriptor_revision(&self) -> Result<u64, ChannelBindingError> {
+        self.try_advance_descriptor_revision()
     }
 
     async fn begin_bound_retirement(
@@ -679,9 +703,14 @@ impl super::ChannelRegistry {
             super::ChannelRegistration::Bound(bound) => bound,
             _ => return Err(ChannelBindingError::InvalidContract),
         };
-        let revision = self.advance_bound_revision()?;
-        bound.entry_revision = revision;
-        bound.descriptor.revision = crate::capability::descriptor::CapabilityRevision(revision);
+        let _ = self.next_bound_revision()?;
+        let _ = self.next_bound_descriptor_revision()?;
+        let source_revision = self.advance_bound_revision()?;
+        let descriptor_revision = self.advance_bound_descriptor_revision()?;
+        bound.entry_revision = source_revision;
+        bound.descriptor_revision = descriptor_revision;
+        bound.descriptor.revision =
+            crate::capability::descriptor::CapabilityRevision(descriptor_revision);
         bound.descriptor_fingerprint = canonical_descriptor_fingerprint(&bound.descriptor);
         let mut desired = self.desired_state.write().await;
         channels.insert(id.clone(), candidate);
@@ -716,6 +745,7 @@ impl super::ChannelRegistry {
             return Err(ChannelBindingError::Busy);
         }
         self.advance_bound_revision()?;
+        self.advance_bound_descriptor_revision()?;
         let mut desired = self.desired_state.write().await;
         channels.remove(id);
         desired.remove(id);
