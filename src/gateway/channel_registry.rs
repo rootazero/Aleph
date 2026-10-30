@@ -4849,9 +4849,8 @@ mod tests {
             .await
             .unwrap();
         let after = registry.capture_bound_channel(&id).await.unwrap();
-        assert_ne!(before.source_revision, after.source_revision);
-        assert_ne!(before.descriptor_revision, after.descriptor_revision);
-        assert!(after.source_revision > after.descriptor_revision);
+        assert_eq!(after.source_revision, 3);
+        assert_eq!(after.descriptor_revision, 2);
         assert_eq!(after.descriptor.revision.0, after.descriptor_revision);
         assert_eq!(before.provider_generation, 0);
         assert_eq!(after.provider_generation, 0);
