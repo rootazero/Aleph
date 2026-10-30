@@ -261,24 +261,27 @@ impl LiveViewerBackend {
             ));
         }
         let key = (control_key(binding), route.epoch());
-        let mut controls = self.controls.lock().await;
-        route.validate()?;
-        controls.retain(|(target, epoch), _| target != &key.0 || *epoch == key.1);
-        if let Some(existing) = controls.get(&key) {
-            if existing.is_live() {
-                let live = existing.snapshot();
-                if live.resource_id == resource_id && live.binding == *binding {
-                    return Ok(existing.clone());
+        {
+            let mut controls = self.controls.lock().await;
+            route.validate()?;
+            controls.retain(|(target, epoch), _| target != &key.0 || *epoch == key.1);
+            if let Some(existing) = controls.get(&key) {
+                if existing.is_live() {
+                    let live = existing.snapshot();
+                    if live.resource_id == resource_id && live.binding == *binding {
+                        return Ok(existing.clone());
+                    }
+                    return Err(BrowserError::ActionFailed(
+                        "target already has a control binding for a different viewer resource".into(),
+                    ));
                 }
-                return Err(BrowserError::ActionFailed(
-                    "target already has a control binding for a different viewer resource".into(),
-                ));
+                // Dead tombstone (target closed / re-attached): drop it and bind
+                // fresh. The owner's `bind_control` replaces dead tombstones and
+                // still refuses a live duplicate.
+                controls.remove(&key);
             }
-            // Dead tombstone (target closed / re-attached): drop it and bind
-            // fresh. The owner's `bind_control` replaces dead tombstones and
-            // still refuses a live duplicate.
-            controls.remove(&key);
         }
+        route.validate()?;
         let control = route
             .owner()
             .bind_control(
@@ -288,6 +291,18 @@ impl LiveViewerBackend {
                 self.sink.clone(),
             )
             .await?;
+        let mut controls = self.controls.lock().await;
+        route.validate()?;
+        controls.retain(|(target, epoch), _| target != &key.0 || *epoch == key.1);
+        if let Some(existing) = controls.get(&key).filter(|existing| existing.is_live()) {
+            let live = existing.snapshot();
+            if live.resource_id == resource_id && live.binding == *binding {
+                return Ok(existing.clone());
+            }
+            return Err(BrowserError::ActionFailed(
+                "target already has a control binding for a different viewer resource".into(),
+            ));
+        }
         controls.insert(key, control.clone());
         Ok(control)
     }

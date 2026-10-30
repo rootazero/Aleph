@@ -4,6 +4,7 @@ use anyhow::{Context, Result};
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::fs;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use crate::export::{session_dir_name, ExportData, ExportSession};
@@ -358,7 +359,54 @@ fn store_attachment(
             );
         }
     } else {
-        fs::write(&target_path, &data).context("Failed to write attachment file")?;
+        // The target does not exist yet, but the parent directory may still be
+        // a symlink pointing outside the migration root, and a symlink may sit
+        // at the target path itself (a dangling symlink is invisible to
+        // `exists()`). Verify the parent directory and create the file with
+        // `create_new`, which refuses to follow an existing symlink.
+        let canonical_dir = fs::canonicalize(&target_dir)
+            .context("Failed to resolve attachments subdirectory")?;
+        let canonical_attachments =
+            fs::canonicalize(attachments_dir).context("Failed to resolve attachments directory")?;
+        if !canonical_dir.starts_with(&canonical_attachments) {
+            anyhow::bail!(
+                "attachments subdirectory resolves outside attachments directory: {}",
+                target_dir.display()
+            );
+        }
+        match fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&target_path)
+        {
+            Ok(mut file) => {
+                file.write_all(&data)
+                    .context("Failed to write attachment file")?;
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                // A symlink (or a concurrent writer) already occupies the
+                // path. Refuse to follow it.
+                let metadata = fs::symlink_metadata(&target_path)
+                    .context("Failed to inspect existing attachment path")?;
+                if metadata.file_type().is_symlink() {
+                    anyhow::bail!(
+                        "attachment path is a symlink: {}",
+                        target_path.display()
+                    );
+                }
+                let canonical_target = fs::canonicalize(&target_path)
+                    .context("Failed to resolve existing attachment file")?;
+                if !canonical_target.starts_with(&canonical_attachments) {
+                    anyhow::bail!(
+                        "existing attachment path resolves outside attachments directory: {}",
+                        target_path.display()
+                    );
+                }
+            }
+            Err(error) => {
+                return Err(error).context("Failed to create attachment file");
+            }
+        }
     }
 
     Ok(TransformedAttachment {

@@ -1292,6 +1292,11 @@ impl ExecRunner<'_> {
             }
             _ => {
                 self.offload_ordinal += 1;
+                // What is LEFT of the procedure's wall-clock budget, handed
+                // to the step so a wait may not outlive it (see the `Wait`
+                // arm of `run_one`).
+                let remaining_budget_ms = MAX_EXEC_BUDGET_MS
+                    .saturating_sub(self.started.elapsed().as_millis() as u64);
                 Ok((
                     run_one(
                         self.manager,
@@ -1299,6 +1304,7 @@ impl ExecRunner<'_> {
                         self.tab_id,
                         action,
                         self.offload_ordinal,
+                        remaining_budget_ms,
                     )
                     .await?,
                     Vec::new(),
@@ -1317,6 +1323,7 @@ async fn run_one(
     tab_id: &str,
     action: &PlannedAction,
     step: usize,
+    remaining_budget_ms: u64,
 ) -> std::result::Result<StepOutcome, String> {
     // Every backend error leaves through the same egress chokepoint the read
     // steps and every standalone tool use: `BrowserError` carries raw
@@ -1369,11 +1376,28 @@ async fn run_one(
         PlannedAction::Wait {
             condition,
             timeout_ms,
-        } => backend
-            .wait_for(tab_id, condition, *timeout_ms)
-            .await
-            .map(|found| StepOutcome::ok(if found { "found" } else { "not found" }))
-            .map_err(|e| super::backend_error_text(manager, &e)),
+        } => {
+            // The step's own wait may not outlive the procedure's remaining
+            // wall-clock budget. The budget is only checked BETWEEN steps, so
+            // a 120s wait started one millisecond before the budget ran out
+            // carried the whole tool past it — and past the harness budget
+            // that governs the tool.
+            //
+            // The delay arm is clamped as well: a plain delay IS its
+            // condition and is NOT bounded by `timeout_ms` (see
+            // `browser::wait_probe`), so clamping only the timeout would
+            // leave the long wait in place.
+            let clamped_condition = match condition {
+                WaitCondition::Time(ms) => WaitCondition::Time((*ms).min(remaining_budget_ms)),
+                other => other.clone(),
+            };
+            let clamped_timeout = (*timeout_ms).min(remaining_budget_ms);
+            backend
+                .wait_for(tab_id, &clamped_condition, clamped_timeout)
+                .await
+                .map(|found| StepOutcome::ok(if found { "found" } else { "not found" }))
+                .map_err(|e| super::backend_error_text(manager, &e))
+        }
         PlannedAction::Snapshot { max_chars } => {
             read_guard(manager, backend, tab_id).await?;
             let presented = backend
@@ -1497,22 +1521,8 @@ impl AlephTool for BrowserExecTool {
         // already mutated the page. Unlike the approval gate this is a pure
         // predicate — it records nothing, so scanning ahead costs nothing a
         // later abort would have to give back.
-        for action in &planned {
-            let text = match action {
-                PlannedAction::Type(_, text)
-                | PlannedAction::Fill(_, text)
-                | PlannedAction::Select(_, text) => text,
-                // A prompt-dialog answer is typed into the page — the same
-                // gate `browser_dialog` applies to its own prompt_text.
-                PlannedAction::Dialog {
-                    prompt_text: Some(text),
-                    ..
-                } => text,
-                _ => continue,
-            };
-            if let Some(message) = super::check_input_secret_block(&self.manager, text) {
-                return Ok(refuse(message));
-            }
+        if let Some(message) = input_secret_in_actions(&self.manager, &planned) {
+            return Ok(refuse(message));
         }
 
         match super::make_backend_and_tab(&self.manager, &args.profile).await {
@@ -1560,6 +1570,51 @@ impl AlephTool for BrowserExecTool {
             Err(e) => Ok(refuse(super::backend_error_text(&self.manager, &e))),
         }
     }
+}
+
+fn input_secret_in_actions(
+    manager: &ProfileManager,
+    actions: &[PlannedAction],
+) -> Option<String> {
+    for action in actions {
+        let text = match action {
+            PlannedAction::Type(_, text)
+            | PlannedAction::Fill(_, text)
+            | PlannedAction::Select(_, text)
+            | PlannedAction::Evaluate(text) => Some(text),
+            // A prompt-dialog answer is typed into the page — the same
+            // gate `browser_dialog` applies to its own prompt_text.
+            PlannedAction::Dialog {
+                prompt_text: Some(text),
+                ..
+            } => Some(text),
+            PlannedAction::Repeat { actions, .. } => {
+                if let Some(message) = input_secret_in_actions(manager, actions) {
+                    return Some(message);
+                }
+                None
+            }
+            PlannedAction::If {
+                then, otherwise, ..
+            } => {
+                if let Some(message) = input_secret_in_actions(manager, then) {
+                    return Some(message);
+                }
+                if let Some(message) = otherwise
+                    .as_deref()
+                    .and_then(|actions| input_secret_in_actions(manager, actions))
+                {
+                    return Some(message);
+                }
+                None
+            }
+            _ => None,
+        };
+        if let Some(message) = text.and_then(|text| super::check_input_secret_block(manager, text)) {
+            return Some(message);
+        }
+    }
+    None
 }
 
 #[cfg(test)]
@@ -1700,6 +1755,26 @@ mod tests {
         let mut config = BrowserSystemConfig::default();
         config.policy.block_private = false;
         ProfileManager::new(config)
+    }
+
+    #[test]
+    fn input_secret_pre_scan_covers_nested_actions_and_evaluate_scripts() {
+        let manager = manager();
+        let actions = [PlannedAction::Repeat {
+            actions: vec![PlannedAction::If {
+                condition: WaitCondition::Time(1),
+                then: vec![PlannedAction::Evaluate(format!(
+                    "fetch('/collect', {{ body: '{FAKE_KEY}' }})"
+                ))],
+                otherwise: Some(vec![PlannedAction::Fill(
+                    ActionTarget::Ref { ref_id: "e1".into() },
+                    FAKE_KEY.into(),
+                )]),
+            }],
+            until: WaitCondition::Time(1),
+            max_iterations: 1,
+        }];
+        assert!(input_secret_in_actions(&manager, &actions).is_some());
     }
 
     fn wait_action(fields: WaitFields) -> ExecAction {

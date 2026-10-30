@@ -419,8 +419,7 @@ impl EngineHandle {
         let stalled = |step: &str| {
             BrowserError::AttachFailed(format!(
                 "attaching to tab {} on {} stalled at {step} and did not finish within \
-                 {}s. The tab is refused rather than half-wired; nothing was added to \
-                 the tab table.",
+                 {}s. The tab is refused; it was not added to the tab table.",
                 target.0,
                 self.engine.as_str(),
                 self.conn.command_timeout().as_secs_f64()
@@ -467,31 +466,28 @@ impl EngineHandle {
         for domain in ["Page", "Runtime", "Network"] {
             let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
             if remaining.is_zero() {
+                let _ = self.conn.detach(&session).await;
                 return Err(stalled(&format!("{domain}.enable")));
             }
-            self.conn
+            let enabled = self.conn
                 .call_with_timeout(
                     Some(&session),
                     &format!("{domain}.enable"),
                     serde_json::json!({}),
                     remaining,
                 )
-                .await
-                // Two different facts, two different messages. A per-call
-                // budget expiring says "this engine is not answering"; a CDP
-                // error says "this engine refused". They collapsed into one
-                // sentence when the per-call budget replaced the outer
-                // wrapper, and the reader's next move differs: wait and retry
-                // versus look at what the browser objected to (判据 §17).
-                .map_err(|e| match e {
+                .await;
+            if let Err(e) = enabled {
+                let _ = self.conn.detach(&session).await;
+                return Err(match e {
                     aleph_cdp::CdpError::Timeout { .. } => stalled(&format!("{domain}.enable")),
                     other => BrowserError::AttachFailed(format!(
                         "attached to tab {} but {domain} would not enable: {other}. Its \
-                         events would be silently absent, so the tab is refused \
-                         rather than half-wired.",
+                         events would be silently absent, so the tab was refused.",
                         target.0
                     )),
-                })?;
+                });
+            }
         }
         let mut entry = TabEntry::new(session.clone());
         // The connection's dropped-event count as this tab starts. Everything

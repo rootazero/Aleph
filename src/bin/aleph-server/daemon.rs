@@ -171,24 +171,36 @@ pub fn remove_pid_file(pid_file: &str) {
 /// file is ever written — previously `stop` was a silent no-op there, so the
 /// daemon kept running after "Quit & Stop Aleph".
 pub fn handle_stop(pid_file: &str) -> Result<(), Box<dyn std::error::Error>> {
-    let Some(pid) = read_pid_file(pid_file)
-        .or_else(|| read_endpoint_best_effort().and_then(|ep| i32::try_from(ep.pid).ok()))
+    let endpoint = read_endpoint_best_effort();
+    let endpoint_pid = endpoint.as_ref().and_then(|ep| i32::try_from(ep.pid).ok());
+    let Some(pid) = endpoint_pid.or_else(|| read_pid_file(pid_file))
     else {
         println!("No gateway daemon is running (no PID file or endpoint)");
         return Ok(());
     };
 
+    if endpoint_pid != Some(pid) && is_process_running(pid) {
+        return Err(format!(
+            "Refusing to stop PID {pid}: no matching IPC endpoint proves it is an Aleph server"
+        )
+        .into());
+    }
+
     if !is_process_running(pid) {
         println!("Gateway is not running (stale record for PID {pid})");
         remove_pid_file(pid_file);
-        cleanup_endpoint_file();
+        if endpoint_pid == Some(pid) {
+            cleanup_endpoint_file();
+        }
         return Ok(());
     }
 
     stop_running_process(pid)?;
     println!("Gateway stopped successfully");
     remove_pid_file(pid_file);
-    cleanup_endpoint_file();
+    if endpoint_pid == Some(pid) {
+        cleanup_endpoint_file();
+    }
     Ok(())
 }
 
@@ -408,10 +420,17 @@ pub fn daemonize(
 ) -> Result<(), Box<dyn std::error::Error>> {
     use std::fs::OpenOptions;
 
-    // Check if already running
+    // The PID file alone cannot establish process identity: after a crash or
+    // reboot, its PID may have been recycled by an unrelated process. Only a
+    // matching live IPC endpoint is authoritative for the running instance.
     if let Some(pid) = read_pid_file(pid_file) {
-        if is_process_running(pid) {
+        let endpoint_pid = read_endpoint_best_effort()
+            .and_then(|ep| i32::try_from(ep.pid).ok());
+        if endpoint_pid == Some(pid) && is_process_running(pid) {
             return Err(format!("Gateway already running (PID {pid})").into());
+        }
+        if endpoint_pid != Some(pid) {
+            remove_pid_file(pid_file);
         }
     }
 

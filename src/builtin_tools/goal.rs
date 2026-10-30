@@ -312,16 +312,30 @@ impl GoalTool {
                 extras.join(", ")
             )));
         }
-        let note = args
+        let requested_note = args
             .note
             .clone()
             .unwrap_or_else(|| "Paused by user request from another session.".to_string());
+        // BT-B-R4-01: the same per-field cap the local `set` door applies. A
+        // cross-session pause writes into ANOTHER session's goal row, and an
+        // unbounded note is a re-render tax on every turn of that session.
+        // The note is truncated rather than rejected: the caller asked for the
+        // PAUSE, and refusing to pause because the note was too long would
+        // leave the goal running against the caller's intent. The truncation
+        // is reported in the reply, so it is never silent.
+        let (note, truncated) = cap_goal_string(&requested_note);
+        let note = note.to_string();
         if self.store.pause_if_active(&target, &note, now)? {
+            let truncation_note = if truncated {
+                format!(" The note was truncated to {MAX_GOAL_STRING} bytes.")
+            } else {
+                String::new()
+            };
             return Ok(GoalOutput {
                 success: true,
                 message: format!(
                     "Standing goal paused in session '{target}'. That session \
-                     resumes it with goal(action='update', status='active')."
+                     resumes it with goal(action='update', status='active').{truncation_note}"
                 ),
             });
         }
@@ -533,6 +547,20 @@ const fn clamp_iterations(requested: u32) -> u32 {
     } else {
         requested
     }
+}
+
+/// Cap a goal string to [`MAX_GOAL_STRING`] bytes without splitting a UTF-8
+/// character. Returns the (possibly shortened) string and whether it was
+/// shortened.
+fn cap_goal_string(text: &str) -> (&str, bool) {
+    if text.len() <= MAX_GOAL_STRING {
+        return (text, false);
+    }
+    let mut end = MAX_GOAL_STRING;
+    while end > 0 && !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    (&text[..end], true)
 }
 
 /// Convert a wall-clock budget in minutes to an absolute deadline (Unix epoch
@@ -864,7 +892,16 @@ token_budget. \
                     let max_iterations = clamp_iterations(requested);
                     goal = goal.with_pursuit(PursuitMode::Active { max_iterations });
                 }
-                goal = goal.with_gate_command(args.gate_command.clone());
+                // A blank gate command is NO gate, not an always-passing gate.
+                // `update` already normalizes blank → None; `set` used to
+                // store `Some("")`, which the gate runner would treat as a
+                // command that always succeeds — a gate that can never fail.
+                goal = goal.with_gate_command(
+                    args.gate_command
+                        .as_deref()
+                        .filter(|cmd| !cmd.trim().is_empty())
+                        .map(str::to_string),
+                );
                 if let Some(minutes) = args.timeout_minutes {
                     goal = goal.with_deadline_ms(Some(deadline_from_minutes(now, minutes)));
                 }
@@ -2002,6 +2039,69 @@ mod tests {
             .await
             .unwrap();
         assert!(out.message.contains("per-goal command set"));
+    }
+
+    /// A blank gate command is NO gate.
+    ///
+    /// `update` already normalizes blank → None; `set` used to store
+    /// `Some("")`, which the gate runner reads as a command that always
+    /// succeeds — a gate that can never fail, advertised to the model as
+    /// "per-goal command set".
+    #[tokio::test]
+    async fn a_blank_gate_command_is_not_stored_as_a_gate() {
+        let (tool, _d) = tool_with_session("sess-blank-gate");
+        tool.call(GoalArgs {
+            action: GoalAction::Set,
+            objective: Some("Ship X".into()),
+            status: None,
+            note: None,
+            token_budget: None,
+            pursuit_max_iterations: Some(3),
+            gate_command: Some("   ".into()),
+            lesson: None,
+            timeout_minutes: None,
+            wait_minutes: None,
+            wait_for_task: None,
+            session: None,
+        })
+        .await
+        .unwrap();
+        let out = tool
+            .call(GoalArgs {
+                action: GoalAction::Get,
+                objective: None,
+                status: None,
+                note: None,
+                token_budget: None,
+                pursuit_max_iterations: None,
+                gate_command: None,
+                lesson: None,
+                timeout_minutes: None,
+                wait_minutes: None,
+                wait_for_task: None,
+                session: None,
+            })
+            .await
+            .unwrap();
+        assert!(
+            !out.message.contains("per-goal command set"),
+            "a blank gate_command must not become an always-passing gate: {}",
+            out.message
+        );
+    }
+
+    /// The cross-session pause note is capped at the same ceiling the local
+    /// doors apply, and the cut never splits a UTF-8 character.
+    #[test]
+    fn cap_goal_string_truncates_on_a_character_boundary() {
+        let short = "a short note";
+        assert_eq!(cap_goal_string(short), (short, false));
+
+        let oversized = "工".repeat(MAX_GOAL_STRING);
+        let (capped, truncated) = cap_goal_string(&oversized);
+        assert!(truncated, "an oversized note must be reported as truncated");
+        assert!(capped.len() <= MAX_GOAL_STRING);
+        assert!(oversized.starts_with(capped));
     }
 
     #[tokio::test]

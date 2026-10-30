@@ -172,9 +172,35 @@ pub async fn handle_plugins_install(url: &str) -> Result<(), Box<dyn std::error:
     Ok(())
 }
 
+/// Reject plugin names that are not a single plain path component.
+///
+/// The uninstall path joins the operator-supplied name onto the plugins root
+/// and removes the result recursively, so a name like `../../Documents` would
+/// escape the plugins root and delete an arbitrary directory tree. Only a
+/// single normal component (no separator, no `.`, no `..`) is a valid plugin
+/// directory name.
+fn is_safe_plugin_dir_name(name: &str) -> bool {
+    use std::path::Component;
+
+    let mut components = std::path::Path::new(name).components();
+    matches!(
+        (components.next(), components.next()),
+        (Some(Component::Normal(_)), None)
+    )
+}
+
 /// Handle plugins uninstall command
 pub async fn handle_plugins_uninstall(name: &str) -> Result<(), Box<dyn std::error::Error>> {
     use alephcore::extension::default_plugins_dir;
+
+    // The name is operator input that is joined onto the plugins root and
+    // removed recursively — refuse anything that is not a plain directory
+    // name before the join, so no `..`/separator can escape the root.
+    if !is_safe_plugin_dir_name(name) {
+        eprintln!("Error: invalid plugin name: {name}");
+        eprintln!("A plugin name must be a single directory name without path separators.");
+        std::process::exit(1);
+    }
 
     let plugins_dir = default_plugins_dir();
     let plugin_path = plugins_dir.join(name);
@@ -183,6 +209,26 @@ pub async fn handle_plugins_uninstall(name: &str) -> Result<(), Box<dyn std::err
         eprintln!("Error: Plugin not found: {name}");
         eprintln!("Plugin directory: {}", plugin_path.display());
         std::process::exit(1);
+    }
+
+    // Refuse to remove through a symlink: the recursive delete would follow
+    // the link out of the plugins root.
+    match std::fs::symlink_metadata(&plugin_path) {
+        Ok(meta) if meta.file_type().is_symlink() => {
+            eprintln!(
+                "Error: refusing to uninstall through a symlink: {}",
+                plugin_path.display()
+            );
+            std::process::exit(1);
+        }
+        Ok(_) => {}
+        Err(e) => {
+            eprintln!(
+                "Error: Failed to inspect plugin directory {}: {e}",
+                plugin_path.display()
+            );
+            std::process::exit(1);
+        }
     }
 
     // Confirm uninstall

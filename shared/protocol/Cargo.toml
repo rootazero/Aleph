@@ -6,10 +6,11 @@ description = "Aleph Agent Protocol - Pure type definitions for protocol communi
 license = "MIT"
 readme = "README.md"
 
-# This crate is intentionally minimal - pure types only, no runtime dependencies
+# This crate is intentionally minimal: shared types and pure validation, no I/O dependencies
 # Clients in any language can use these type definitions as a reference
 
 [dependencies]
+base64 = { workspace = true }
 chrono = { workspace = true }
 schemars = { version = "1.2", features = ["derive", "chrono04"] }
 serde = { version = "1.0", features = ["derive"] }

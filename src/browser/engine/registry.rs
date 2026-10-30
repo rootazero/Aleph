@@ -109,7 +109,6 @@ impl EngineRegistry {
         // orphan's only record. Kill first, and only then let the launch have
         // the slot.
         if let Some(dead) = existing {
-            map.remove(&req.profile);
             tracing::warn!(
                 profile = %req.profile,
                 engine = dead.engine.as_str(),
@@ -118,7 +117,17 @@ impl EngineRegistry {
                  relaunching, because a closed socket says we lost our grip, not that \
                  the browser exited"
             );
-            dead.shutdown().await;
+            if !dead.shutdown().await {
+                return Err(BrowserError::EngineFailure {
+                    engine: dead.engine,
+                    reason: format!(
+                        "could not stop pid {}; its sidecar remains at {} and relaunch was refused",
+                        dead.launched.pid,
+                        dead.launched.sidecar_path.display()
+                    ),
+                });
+            }
+            map.remove(&req.profile);
         }
 
         // The launch itself is `launch_engine`, which takes no `&self` and so
@@ -1622,6 +1631,38 @@ mod tests {
             "precondition: the record is keyed on the session key, so the relaunch \
              writes over exactly the slot the orphan would have been reaped from"
         );
+
+        registry.shutdown_all(ENGINE_SHUTDOWN_BUDGET).await;
+        server.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn a_surviving_displaced_engine_blocks_relaunch_and_keeps_its_record() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let server = FakeCdpServer::start(engine_peer).await;
+        let proc = Arc::new(
+            FakeEngineProcess::new(Engine::Chromium, &server, dir.path())
+                .with_kill_outcomes([ScriptedKill::Survived]),
+        );
+        let registry = registry_with(Engine::Chromium, &proc);
+        let req = request("default", dir.path());
+        let first = registry
+            .handle(Engine::Chromium, &req, EngineLaunch::Allow)
+            .await
+            .expect("launch");
+        let sidecar = first.launched.sidecar_path.clone();
+        server.drop_socket();
+        drop(first);
+
+        let err = refusal(
+            registry.handle(Engine::Chromium, &req, EngineLaunch::Allow).await,
+            "a surviving displaced engine must block relaunch",
+        );
+        assert!(err.to_string().contains(&proc.pid().to_string()), "{err}");
+        assert!(err.to_string().contains(&sidecar.display().to_string()), "{err}");
+        assert_eq!(proc.launches().len(), 1, "must not overwrite the sidecar");
+        assert!(sidecar.exists(), "the boot sweep record must remain");
+        assert!(registry.get("default").await.is_some(), "retain the handle");
 
         registry.shutdown_all(ENGINE_SHUTDOWN_BUDGET).await;
         server.shutdown().await;

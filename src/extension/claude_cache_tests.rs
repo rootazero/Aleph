@@ -590,7 +590,7 @@ async fn an_unreadable_index_keeps_the_usage_history() {
     assert_eq!(inventory.unavailable, vec![ExtensionKind::Plugin]);
     let report = build_report(&inventory, &store.snapshot(), chrono::Utc::now());
     assert!(report.orphans.is_empty(), "{:?}", report.orphans);
-    assert_eq!(forget_orphans(&report, &store), 0);
+    assert_eq!(forget_orphans(&report.orphans, &store), 0);
     assert!(store.snapshot().contains_key("plugin:used"));
 
     // Readable again: the plugin claims its own row, and the kind is whole.

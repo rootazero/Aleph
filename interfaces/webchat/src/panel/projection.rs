@@ -7,8 +7,11 @@ use super::source::{
 };
 #[cfg(test)]
 use aleph_protocol::panel::PANEL_UI_API_MAJOR;
+use aleph_protocol::panel::{
+    supported_community_permission, valid_asset_integrity, valid_identity_segment,
+    valid_version_segment,
+};
 use aleph_protocol::panel::{PanelTabDescriptor, PanelTabKey, PanelTabStatus, PanelUiTrust};
-use base64::Engine;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum PanelRoute {
@@ -237,9 +240,7 @@ fn validate_declaration(
         {
             return Err(PanelProjectionError::InvalidEntry);
         }
-        if !valid_identity_segment(&declaration.plugin_version)
-            || matches!(declaration.plugin_version.as_str(), "." | "..")
-        {
+        if !valid_version_segment(&declaration.plugin_version) {
             return Err(PanelProjectionError::UnversionedEntry);
         }
         let prefix = format!(
@@ -251,37 +252,6 @@ fn validate_declaration(
         }
     }
     Ok(())
-}
-
-fn valid_identity_segment(value: &str) -> bool {
-    !value.is_empty()
-        && value
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
-}
-
-fn supported_community_permission(permission: &str) -> bool {
-    matches!(
-        permission,
-        "pty.list"
-            | "pty.spawn"
-            | "pty.attach"
-            | "pty.input"
-            | "pty.resize"
-            | "pty.close"
-            | "config.get"
-            | "events.subscribe:pty.screen"
-            | "events.subscribe:pty.exit"
-            | "sessions.list"
-    )
-}
-
-fn valid_asset_integrity(integrity: &str) -> bool {
-    integrity.strip_prefix("sha256-").is_some_and(|digest| {
-        base64::engine::general_purpose::STANDARD
-            .decode(digest)
-            .is_ok_and(|decoded| decoded.len() == 32)
-    })
 }
 
 fn valid_public_base(declaration: &PanelUiCapabilityDeclaration) -> bool {
@@ -469,6 +439,45 @@ mod tests {
         );
     }
 
+    #[test]
+    fn explicit_manifest_snapshot_fixture_round_trips_into_webchat_projection() {
+        let wire = serde_json::json!({
+            "revision": 7,
+            "declarations": [{
+                "descriptor": {
+                    "key": {"plugin_id": "community.example", "tab_id": "overview"},
+                    "label": "Overview",
+                    "icon": "layout",
+                    "order": 10,
+                    "entry": "./tabs/community.example/1.2.3/overview.js",
+                    "api_major": 1,
+                    "trust": "trusted",
+                    "permissions": ["sessions.list"],
+                    "status": "enabled",
+                    "status_detail": null
+                },
+                "origin": "community",
+                "plugin_version": "1.2.3",
+                "asset_integrity": "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+                "public_base": "./tabs/",
+                "source_revision": 7
+            }]
+        });
+        let snapshot: PanelUiCapabilitySnapshot = serde_json::from_value(wire).unwrap();
+        let projection = PanelProjection::from_snapshot(community_snapshot(
+            snapshot.revision,
+            snapshot.declarations,
+        ))
+        .unwrap();
+        assert_eq!(projection.registry().source_revision(), 7);
+        assert!(projection
+            .registry()
+            .get(&PanelTabKey {
+                plugin_id: "community.example".into(),
+                tab_id: "overview".into(),
+            })
+            .is_some());
+    }
     #[test]
     fn valid_community_declaration_projects_in_deterministic_source_order() {
         let mut other = community_declaration(7);

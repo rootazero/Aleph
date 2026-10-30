@@ -1573,13 +1573,13 @@ impl ProfileManager {
 
     /// Validate a URL against the SSRF policy.
     pub async fn check_url(&self, url: &str) -> Result<(), PolicyViolation> {
-        self.ssrf_guard.load().check_url(url).await
+        self.ssrf_guard.load_full().check_url(url).await
     }
 
     /// Validate an agent-initiated navigation target: SSRF policy plus
     /// secret-exfiltration scanning. Use this for `goto`/`open`.
     pub async fn check_navigation(&self, url: &str) -> Result<(), PolicyViolation> {
-        self.ssrf_guard.load().check_navigation(url).await
+        self.ssrf_guard.load_full().check_navigation(url).await
     }
 
     /// Scan `text` about to be typed into a page form for an embedded
@@ -1683,7 +1683,10 @@ fn args_without_store_flags(args: &[String]) -> Vec<String> {
     let mut kept = Vec::with_capacity(args.len());
     let mut drop_value = false;
     for arg in args {
-        if std::mem::take(&mut drop_value) && !arg.starts_with('-') {
+        if std::mem::take(&mut drop_value)
+            && !arg.starts_with('-')
+            && store_flag(arg).is_none()
+        {
             continue;
         }
         match store_flag(arg) {
@@ -1706,7 +1709,10 @@ enum StoreFlagValue {
 /// Whether `arg` names a browser store, and how its value is spelled.
 fn store_flag(arg: &str) -> Option<StoreFlagValue> {
     const STORE_FLAGS: [&str; 2] = ["user-data-dir", "profile-directory"];
-    let name = arg.strip_prefix("--").or_else(|| arg.strip_prefix('-'))?;
+    let name = arg
+        .strip_prefix("--")
+        .or_else(|| arg.strip_prefix('-'))
+        .or_else(|| arg.strip_prefix('/'))?;
     STORE_FLAGS.iter().find_map(|flag| {
         let rest = name.strip_prefix(flag)?;
         if rest.is_empty() {
@@ -1745,6 +1751,9 @@ mod tests {
             "-user-data-dir=/x",
             "-profile-directory",
             "Profile 2",
+            "/user-data-dir=C:\\Users\\owner\\Chrome",
+            "/profile-directory",
+            "Default",
             "--lang=en",
         ]
         .into_iter()

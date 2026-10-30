@@ -54,7 +54,7 @@ pub struct DesktopTool {
     /// Run id of the last turn seen by [`DesktopTool::check_escape`]. The tool
     /// is a shared singleton, so the abort scope cannot be a struct field fixed
     /// at construction — it is tracked here and compared per call.
-    pub(super) last_run_id: Arc<crate::sync_primitives::Mutex<String>>,
+    pub(super) last_run: Arc<crate::sync_primitives::Mutex<(String, String)>>,
     /// Optional vision bridge: turns a captured screenshot into OCR text + an
     /// optional scene description so text-only models can still act on it.
     /// `None` keeps the screenshot path byte-identical to its legacy behavior.
@@ -76,7 +76,7 @@ impl DesktopTool {
             approval_policy: None,
             platform: None,
             escape_started: Arc::new(crate::sync_primitives::AtomicBool::new(false)),
-            last_run_id: Arc::new(crate::sync_primitives::Mutex::new(String::new())),
+            last_run: Arc::new(crate::sync_primitives::Mutex::new((String::new(), String::new()))),
             vision_bridge: None,
             allow_global_pointer: false,
             clipboard_enabled: true,
@@ -161,19 +161,20 @@ impl DesktopTool {
     /// most. Those callers therefore keep today's sticky flag; because the
     /// platform listener's flag is process-wide, the next gateway run's
     /// boundary clears it for them too.
-    fn run_boundary_crossed(&self) -> bool {
-        let run_id = crate::tools::turn_context::current_turn_context()
-            .map(|turn| turn.run_id)
-            .unwrap_or_default();
-        if run_id.is_empty() {
-            return false;
+    fn run_boundary_crossed(&self) -> (bool, Option<String>) {
+        let Some(turn) = crate::tools::turn_context::current_turn_context() else {
+            return (false, None);
+        };
+        if turn.run_id.is_empty() {
+            return (false, None);
         }
-        let mut last = self.last_run_id.lock().unwrap_or_else(|e| e.into_inner());
-        if *last == run_id {
-            return false;
+        let mut last = self.last_run.lock().unwrap_or_else(|e| e.into_inner());
+        if last.0 == turn.run_id {
+            return (false, None);
         }
-        *last = run_id;
-        true
+        let prior_session = (!last.0.is_empty()).then(|| last.1.clone());
+        *last = (turn.run_id, turn.session_key.to_key_string());
+        (true, prior_session)
     }
 
     /// Check escape abort, starting the listener on first call and resetting the
@@ -211,7 +212,8 @@ impl DesktopTool {
                 .store(true, crate::sync_primitives::Ordering::Release);
         }
 
-        if self.run_boundary_crossed() {
+        let (boundary_crossed, prior_session) = self.run_boundary_crossed();
+        if boundary_crossed {
             listener.reset();
             // A previous run may have died holding a modifier or mid-drag; the
             // new run must not inherit its stuck inputs. Use the *captured*
@@ -221,10 +223,9 @@ impl DesktopTool {
             // inputs would not free the stuck inputs from the run that
             // actually held them.
             if let Some(screen) = platform.screen() {
-                let prior_session = crate::tools::turn_context::current_turn_context()
-                    .map(|t| t.session_key.to_key_string())
-                    .unwrap_or_default();
-                held_inputs::release_all(&prior_session, screen).await;
+                if let Some(prior_session) = prior_session {
+                    held_inputs::release_all(&prior_session, screen).await;
+                }
             }
         }
 
@@ -976,7 +977,7 @@ mod escape_scope_tests {
         let tool = DesktopTool::new();
 
         let first = TURN_CONTEXT
-            .scope(turn("run-1"), async { tool.run_boundary_crossed() })
+            .scope(turn("run-1"), async { tool.run_boundary_crossed().0 })
             .await;
         assert!(
             first,
@@ -984,7 +985,7 @@ mod escape_scope_tests {
         );
 
         let same_run = TURN_CONTEXT
-            .scope(turn("run-1"), async { tool.run_boundary_crossed() })
+            .scope(turn("run-1"), async { tool.run_boundary_crossed().0 })
             .await;
         assert!(
             !same_run,
@@ -993,7 +994,7 @@ mod escape_scope_tests {
         );
 
         let next_run = TURN_CONTEXT
-            .scope(turn("run-2"), async { tool.run_boundary_crossed() })
+            .scope(turn("run-2"), async { tool.run_boundary_crossed().0 })
             .await;
         assert!(next_run, "the next run gets a fresh abort scope");
     }
@@ -1003,12 +1004,12 @@ mod escape_scope_tests {
         let tool = DesktopTool::new();
 
         assert!(
-            !tool.run_boundary_crossed(),
+            !tool.run_boundary_crossed().0,
             "outside a turn there is no run to scope the abort to"
         );
 
         let cron = TURN_CONTEXT
-            .scope(turn(""), async { tool.run_boundary_crossed() })
+            .scope(turn(""), async { tool.run_boundary_crossed().0 })
             .await;
         assert!(
             !cron,

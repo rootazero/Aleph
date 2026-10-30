@@ -155,26 +155,48 @@ impl AlephTool for AgentListTool {
             }
         };
 
-        // 3. List all agents from registry
+        // 3. List all agents from registry.
+        //
+        //    The rows are read through `get_config`, NOT `get`: `get`
+        //    instantiates a lazy entry and, when the instantiation fails,
+        //    DROPS that entry from the registry — so a listing could delete
+        //    the agent it was asked to show, and `total` (counted from the
+        //    surviving rows) would report the loss as "not registered". A
+        //    listing must not mutate what it lists, so no instantiation
+        //    happens here; an agent that would fail to build still appears in
+        //    the listing, which is the honest answer.
         let agent_ids = self.registry.list().await;
         let mut agents = Vec::with_capacity(agent_ids.len());
 
         for id in &agent_ids {
-            if let Some(instance) = self.registry.get(id).await {
-                agents.push(AgentListInfo {
-                    id: id.clone(),
-                    name: instance.display_name().to_string(),
-                    workspace_path: instance.workspace().to_string_lossy().to_string(),
-                    model: instance.config().model.clone(),
-                    bound_channels: bindings.get(id).cloned().unwrap_or_default(),
-                    active: active_agent.as_deref() == Some(id.as_str()),
-                });
+            match self.registry.get_config(id).await {
+                Some(config) => {
+                    agents.push(AgentListInfo {
+                        id: id.clone(),
+                        name: config
+                            .display_name
+                            .clone()
+                            .unwrap_or_else(|| config.agent_id.clone()),
+                        workspace_path: config.workspace.to_string_lossy().to_string(),
+                        model: config.model.clone(),
+                        bound_channels: bindings.get(id).cloned().unwrap_or_default(),
+                        active: active_agent.as_deref() == Some(id.as_str()),
+                    });
+                }
+                None => {
+                    // Registered a moment ago, gone now: the agent was
+                    // removed concurrently. Say so instead of quietly
+                    // shrinking the listing.
+                    warn!(agent_id = %id, "agent_list: agent disappeared while listing");
+                }
             }
         }
 
         // Sort by id for deterministic output
         agents.sort_by(|a, b| a.id.cmp(&b.id));
 
+        // Every registered agent now yields exactly one row, so this counts
+        // the registry rather than the subset that happened to instantiate.
         let total = agents.len();
 
         info!(total, "Agent list complete");
@@ -285,5 +307,56 @@ mod tests {
         );
         // Empty channel context → no active resolution.
         assert!(out.active_agent.is_none());
+    }
+
+    /// A listing must not mutate what it lists. The old implementation read
+    /// every agent through `registry.get`, which instantiates a lazy entry —
+    /// and when the instantiation failed, the registry DROPPED that entry, so
+    /// listing an agent could delete it. The agent is now read without
+    /// instantiation, so it stays registered AND stays visible.
+    #[tokio::test]
+    async fn a_lazy_agent_that_cannot_be_instantiated_is_still_listed() {
+        use crate::gateway::agent_instance::AgentInstanceConfig;
+
+        let temp = tempfile::tempdir().unwrap();
+        // A file where a directory is expected: creating the agent dir under
+        // it fails, so instantiating this agent fails deterministically.
+        let blocker = temp.path().join("blocker");
+        std::fs::write(&blocker, b"not a directory").unwrap();
+
+        let registry = Arc::new(AgentRegistry::new());
+        let (sm, _sm_temp) = test_utils::session_store();
+        registry
+            .register_config(
+                AgentInstanceConfig {
+                    agent_id: "broken".to_string(),
+                    workspace: temp.path().join("workspace"),
+                    agent_dir: blocker.join("agent"),
+                    ..Default::default()
+                },
+                sm,
+            )
+            .await;
+
+        let (wm, _wm_temp) = test_utils::workspace_mgr();
+        let tool = AgentListTool::new(Arc::clone(&registry), wm);
+
+        let out = tool
+            .call(AgentListArgs {
+                __channel: String::new(),
+            })
+            .await
+            .unwrap();
+
+        assert!(
+            out.agents.iter().any(|a| a.id == "broken"),
+            "a registered agent must appear in the listing: {:?}",
+            out.agents
+        );
+        assert_eq!(out.total, 1, "total counts the registry, not the survivors");
+        assert!(
+            registry.contains("broken").await,
+            "listing must not drop the agent it could not instantiate"
+        );
     }
 }

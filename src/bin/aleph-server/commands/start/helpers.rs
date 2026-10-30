@@ -378,12 +378,11 @@ pub(super) fn build_sqlite_session_service(
 pub(super) async fn initialize_extension_manager(
     daemon: bool,
     ownership_tree: Arc<alephcore::capability::ownership::OwnershipTree>,
-) {
+) -> Result<(), Box<dyn std::error::Error>> {
     // Migrate old single-dir layout and update official skills. Resolve via the
     // authoritative resolver (ALEPH_HOME / $HOME) so bundled content is
     // extracted into the SAME ~/.aleph as the rest of the daemon's state.
-    let aleph_home = alephcore::utils::paths::get_config_dir()
-        .unwrap_or_else(|_| std::path::PathBuf::from("/tmp/.aleph"));
+    let aleph_home = alephcore::utils::paths::get_config_dir()?;
     // Bundled extraction may perform a one-time network clone on first run;
     // run it off the async executor so a slow clone never stalls startup.
     let home_for_extract = aleph_home.clone();
@@ -435,6 +434,7 @@ pub(super) async fn initialize_extension_manager(
             }
         }
     }
+    Ok(())
 }
 
 /// Failsafe budget for the graceful teardown after a shutdown signal. Matches

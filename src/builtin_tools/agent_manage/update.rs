@@ -53,7 +53,7 @@
 use async_trait::async_trait;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use tracing::info;
+use tracing::{info, warn};
 
 use crate::config::agent_manager::{AgentManager, AgentPatch};
 use crate::config::types::agents_def::{AgentIdentity, AgentModelRef};
@@ -124,6 +124,13 @@ pub struct AgentUpdateOutput {
     /// failure this whole field exists to prevent, and "the runtime was there
     /// to receive it" is not something a static table can know.
     pub takes_effect: String,
+    /// Whether the patch was persisted to `config.toml`.
+    ///
+    /// `None` — no `AgentManager` is wired, so persistence does not apply.
+    /// `Some(false)` — the TOML write failed. The live half (if any) is still
+    /// in force, but the change is not durable and `takes_effect` says so.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub persisted: Option<bool>,
 }
 
 /// Serde helper: tri-state `Option<Option<T>>` — absent → `None`, explicit
@@ -250,21 +257,40 @@ impl AlephTool for AgentUpdateTool {
         //    field was requested, so a model that calls `agent_update({})`
         //    for "I think you should know there's nothing to update" still
         //    gets a clean no-op rather than a TOML roundtrip.
+        //
+        //    The live half above is deliberately written FIRST: a revocation
+        //    has to bind on the refused caller's next turn, and deferring it
+        //    behind a disk write would widen the window. The price of that
+        //    order is that a failing TOML write must not be reported as a
+        //    total failure — the admission change is already in force — so the
+        //    error is captured and encoded in the output instead of returned.
+        let mut persisted: Option<bool> = None;
+        let mut persist_error: Option<String> = None;
         if self.agent_manager.is_some() {
             let patch = build_toml_patch(&args);
             if patch_has_changes(&patch) {
                 if let Some(ref mgr) = self.agent_manager {
-                    mgr.update(&args.agent_id, patch).map_err(|e| {
-                        AgentManageError::Store(format!(
-                            "Failed to persist update for '{}': {}",
-                            args.agent_id, e
-                        ))
-                    })?;
+                    match mgr.update(&args.agent_id, patch) {
+                        Ok(()) => persisted = Some(true),
+                        Err(e) => {
+                            warn!(
+                                agent_id = %args.agent_id,
+                                error = %e,
+                                "Failed to persist agent update to config.toml (live half already applied)"
+                            );
+                            persisted = Some(false);
+                            persist_error = Some(e.to_string());
+                        }
+                    }
                 }
+            } else {
+                // Nothing to write, so nothing failed: the durable surface is
+                // still in agreement with the live one.
+                persisted = Some(true);
             }
         }
 
-        let message = if fields_changed.is_empty() {
+        let mut message = if fields_changed.is_empty() {
             format!(
                 "Agent '{}' unchanged — no editable fields were supplied.",
                 args.agent_id
@@ -277,19 +303,28 @@ impl AlephTool for AgentUpdateTool {
             )
         };
 
+        if let Some(ref err) = persist_error {
+            message.push_str(&format!(
+                " Not persisted to config.toml: {err}. The change is live for this session only."
+            ));
+        }
+
         info!(
             agent_id = %args.agent_id,
             changed = ?fields_changed,
+            persisted = ?persisted,
             "Agent update complete"
         );
 
-        let takes_effect = takes_effect_sentence(&applied_live, &fields_changed);
+        let takes_effect =
+            takes_effect_sentence(&applied_live, &fields_changed, persist_error.as_deref());
 
         Ok(AgentUpdateOutput {
             agent_id: args.agent_id,
             fields_changed,
             message,
             takes_effect,
+            persisted,
         })
     }
 }
@@ -345,25 +380,42 @@ fn is_live_field(entry: &str, live: &[&'static str]) -> bool {
 /// actually returned rather than from the section table — a section is the kind
 /// of thing that applies live, an individual call is where you learn whether
 /// the runtime was there to receive it.
-fn takes_effect_sentence(live: &[&'static str], fields_changed: &[String]) -> String {
+///
+/// `persist_error` names a TOML write that failed after the live half was
+/// already applied. The sentence then says the change is not durable: the
+/// live half is in force, but the durable surface disagrees with it and the
+/// difference survives until the next restart.
+fn takes_effect_sentence(
+    live: &[&'static str],
+    fields_changed: &[String],
+    persist_error: Option<&str>,
+) -> String {
     let deferred_hint = crate::config::ReloadImpact::classify("agents").agent_hint();
-    if live.is_empty() {
-        return deferred_hint.to_string();
+    let base = if live.is_empty() {
+        deferred_hint.to_string()
+    } else {
+        let (applied, deferred): (Vec<&str>, Vec<&str>) = fields_changed
+            .iter()
+            .map(String::as_str)
+            .partition(|f| is_live_field(f, live));
+        if deferred.is_empty() {
+            crate::config::ReloadImpact::Live.agent_hint().to_string()
+        } else {
+            format!(
+                "{} — {} The rest ({}) — {}",
+                applied.join(", "),
+                crate::config::ReloadImpact::Live.agent_hint(),
+                deferred.join(", "),
+                deferred_hint
+            )
+        }
+    };
+    match persist_error {
+        Some(err) => format!(
+            "{base} NOT persisted to config.toml ({err}) — this change is not durable and will be lost on restart."
+        ),
+        None => base,
     }
-    let (applied, deferred): (Vec<&str>, Vec<&str>) = fields_changed
-        .iter()
-        .map(String::as_str)
-        .partition(|f| is_live_field(f, live));
-    if deferred.is_empty() {
-        return crate::config::ReloadImpact::Live.agent_hint().to_string();
-    }
-    format!(
-        "{} — {} The rest ({}) — {}",
-        applied.join(", "),
-        crate::config::ReloadImpact::Live.agent_hint(),
-        deferred.join(", "),
-        deferred_hint
-    )
 }
 
 /// Translate `AgentUpdateArgs` into the TOML `AgentPatch` used by
@@ -757,8 +809,49 @@ mod tests {
     #[test]
     fn nothing_applied_means_nothing_is_claimed_live() {
         assert_eq!(
-            takes_effect_sentence(&[], &["allowed_users".to_string()]),
+            takes_effect_sentence(&[], &["allowed_users".to_string()], None),
             crate::config::ReloadImpact::classify("agents").agent_hint()
+        );
+    }
+
+    /// A failing TOML write must not erase the live half, and must not be
+    /// reported as a total failure either: the admission change is already in
+    /// force, so the only honest answer is "live, but not durable".
+    #[tokio::test]
+    async fn a_failed_toml_write_is_reported_without_losing_the_live_change() {
+        let temp = tempfile::tempdir().unwrap();
+        let registry = Arc::new(AgentRegistry::new());
+        let (instance, _sm, _t) = test_utils::instance("ops");
+        registry.register(instance).await;
+        // A manager pointed at a config file that does not exist: the write
+        // fails, exactly like a full disk or a read-only config would.
+        let manager = Arc::new(crate::config::agent_manager::AgentManager::new(
+            temp.path().join("config.toml"),
+            temp.path().join("workspaces"),
+            temp.path().join("agents"),
+            temp.path().join("trash"),
+        ));
+        let tool = AgentUpdateTool::new(registry, Some(manager));
+
+        let out = tool
+            .call(AgentUpdateArgs {
+                agent_id: "ops".into(),
+                allowed_users: Some(vec!["u-alice".into()]),
+                ..Default::default()
+            })
+            .await
+            .expect("a failed durable write must not mask the live revocation");
+
+        assert_eq!(out.persisted, Some(false));
+        assert!(
+            out.takes_effect.contains("NOT persisted"),
+            "the sentence must admit the durable half is missing: {}",
+            out.takes_effect
+        );
+        assert!(
+            out.message.contains("Not persisted to config.toml"),
+            "the message must say it too: {}",
+            out.message
         );
     }
 }

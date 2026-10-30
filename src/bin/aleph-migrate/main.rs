@@ -68,7 +68,17 @@ enum Commands {
         compression_status: Option<String>,
 
         /// Include attachment binary data (base64)
-        #[arg(long, default_value = "true")]
+        ///
+        /// Attachments are included by default. Pass `--include-attachments=false`
+        /// for a metadata-only export.
+        #[arg(
+            long,
+            action = clap::ArgAction::Set,
+            value_parser = clap::value_parser!(bool),
+            num_args = 0..=1,
+            default_value = "true",
+            default_missing_value = "true"
+        )]
         include_attachments: bool,
 
         /// Overwrite existing output file

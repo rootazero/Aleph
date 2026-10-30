@@ -124,8 +124,10 @@ pub fn run_export(
         params.push(Box::new(parse_date(start)?));
     }
     if let Some(ref end) = end_date {
-        query.push_str(&format!(" AND {timestamp_column} <= ?"));
-        params.push(Box::new(parse_date(end)?));
+        // The end day is included in full, so the bound is exclusive and
+        // points at the next day's midnight.
+        query.push_str(&format!(" AND {timestamp_column} < ?"));
+        params.push(Box::new(parse_end_date_exclusive(end)?));
     }
     if let Some(ref status) = compression_status {
         if !columns.contains("compression_status") {
@@ -146,7 +148,7 @@ pub fn run_export(
             session_id,
             agent_id,
             row.get::<_, Option<String>>(2)?,
-            row.get::<_, i64>(3)?,
+            row.get::<_, Option<i64>>(3)?,
             row.get::<_, Option<i64>>(4)?,
             row.get::<_, String>(5)?,
             row.get::<_, Option<String>>(6)?,
@@ -159,6 +161,10 @@ pub fn run_export(
         let (session_id, agent, workspace_id, created_at, ended_at, content, status, tags) = row?;
         let Some(session_id) = session_id else {
             log::warn!("Skipping raw memory row without session_id");
+            continue;
+        };
+        let Some(created_at) = created_at else {
+            log::warn!("Skipping raw memory row without timestamp");
             continue;
         };
         let agent_id = agent.unwrap_or_else(|| "unknown".to_string());
@@ -269,10 +275,25 @@ fn parse_tags(value: &str) -> Vec<String> {
 }
 
 fn parse_date(date_str: &str) -> Result<i64> {
+    Ok(midnight_utc(parse_naive_date(date_str)?))
+}
+
+/// Exclusive upper bound for the end filter: the named day is included in
+/// full, so the bound points at the next day's midnight.
+fn parse_end_date_exclusive(date_str: &str) -> Result<i64> {
+    let next_day = parse_naive_date(date_str)?
+        .succ_opt()
+        .context("Date is out of range")?;
+    Ok(midnight_utc(next_day))
+}
+
+fn parse_naive_date(date_str: &str) -> Result<chrono::NaiveDate> {
     use chrono::NaiveDate;
-    let date = NaiveDate::parse_from_str(date_str, "%Y-%m-%d")
-        .context("Invalid date format. Use YYYY-MM-DD")?;
-    Ok(date.and_hms_opt(0, 0, 0).unwrap().and_utc().timestamp())
+    NaiveDate::parse_from_str(date_str, "%Y-%m-%d").context("Invalid date format. Use YYYY-MM-DD")
+}
+
+fn midnight_utc(date: chrono::NaiveDate) -> i64 {
+    date.and_hms_opt(0, 0, 0).unwrap().and_utc().timestamp()
 }
 
 fn parse_messages_from_content(content: &str, timestamp: i64) -> Result<Vec<ExportMessage>> {

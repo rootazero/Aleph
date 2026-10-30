@@ -93,6 +93,9 @@ pub(super) struct Views {
     pub(super) active_plugin_tools: Arc<StdRwLock<HashMap<String, ToolRegistration>>>,
     pub(super) plugin_scope_keys: Arc<StdRwLock<HashMap<String, ScopeKey>>>,
     pub(super) plugin_tool_revision: Arc<AtomicU64>,
+    pub(super) owner_trust_policy:
+        Arc<crate::sync_primitives::RwLock<crate::extension::plugin_trust::OwnerTrustPolicy>>,
+    pub(super) panel_snapshot: Arc<StdRwLock<aleph_protocol::panel::PanelUiCapabilitySnapshot>>,
 }
 
 impl ExtensionManager {
@@ -106,6 +109,8 @@ impl ExtensionManager {
             active_plugin_tools: Arc::clone(&self.active_plugin_tools),
             plugin_scope_keys: Arc::clone(&self.plugin_scope_keys),
             plugin_tool_revision: Arc::clone(&self.plugin_tool_revision),
+            owner_trust_policy: Arc::clone(&self.owner_trust_policy),
+            panel_snapshot: Arc::clone(&self.panel_snapshot),
         }
     }
 }
@@ -115,7 +120,7 @@ impl ExtensionManager {
 /// Derived from the registry in one pass so the *same* activation predicate
 /// decides every surface; publishing is a separate step so the derivation can
 /// be unit-tested without touching global state.
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Clone)]
 pub(crate) struct PluginProjection {
     /// `<root_dir>/skills` of every **active** plugin, with its owner's
     /// REGISTRY id and `ScopeKey`, de-duplicated and in registry order. Feeds
@@ -130,6 +135,10 @@ pub(crate) struct PluginProjection {
     /// Sub-agents contributed by **active** plugins, each with its owner's
     /// `ScopeKey` — [`crate::agents::visible_plugin_subagents`] filters by it.
     pub(crate) subagents: Vec<crate::agents::PluginSubagent>,
+    /// Canonical Panel snapshot derived from the same registry read and
+    /// revision publication as the other plugin-owned views.
+    pub(crate) panel_snapshot: aleph_protocol::panel::PanelUiCapabilitySnapshot,
+    pub(crate) panel_diagnostics: Vec<super::panel::PanelProjectionDiagnostic>,
 }
 
 impl Views {
@@ -149,15 +158,20 @@ impl Views {
     /// live), so only `Disabled` / `Blocked` / `Error` plugins contribute
     /// nothing — which is the whole point: an inactive plugin must be
     /// invisible to the model, not merely absent from the management list.
-    async fn derive_plugin_projection(&self) -> PluginProjection {
+    async fn derive_plugin_projection(&self, panel_revision: u64) -> PluginProjection {
         let registry = self.plugin_registry.read().await;
-
+        let records: Vec<_> = registry.list_plugins().into_iter().cloned().collect();
+        let trust_policy = self
+            .owner_trust_policy
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
         // The id published with each dir is `record.id` — the registry id —
         // copied in the same loop as `record.scope_key`, so "whose dir" and
         // "which key" cannot come from two derivations (D-4: the directory
         // name is not the id).
         let mut plugin_skill_dirs: Vec<crate::utils::paths::PublishedPluginSkillDir> = Vec::new();
-        for record in registry.list_active_plugins() {
+        for record in records.iter().filter(|record| record.status.is_active()) {
             let dir = record.root_dir.join("skills");
             if dir.is_dir() && !plugin_skill_dirs.iter().any(|d| d.dir == dir) {
                 plugin_skill_dirs.push(crate::utils::paths::PublishedPluginSkillDir {
@@ -168,6 +182,8 @@ impl Views {
                 });
             }
         }
+
+        let panel = super::panel::derive_panel_snapshot(&records, &trust_policy, panel_revision);
 
         // An agent row survives only while its owning plugin is active. The
         // registry keys agents by plugin id, so this is the same predicate as
@@ -192,6 +208,8 @@ impl Views {
         PluginProjection {
             plugin_skill_dirs,
             subagents,
+            panel_snapshot: panel.snapshot,
+            panel_diagnostics: panel.diagnostics,
         }
     }
 
@@ -221,7 +239,13 @@ impl Views {
             .map(|d| d.path)
             .collect();
 
-        let projection = self.derive_plugin_projection().await;
+        let panel_revision = self
+            .panel_snapshot
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .revision
+            + 1;
+        let projection = self.derive_plugin_projection(panel_revision).await;
         // The plugin roots are published as one process-global with two
         // readers: `get_all_skills_dirs` (the `skill_read` / `skill_list`
         // search set) and `SkillSystem::scan_roots` (the scan that feeds the
@@ -234,6 +258,17 @@ impl Views {
         // would neither see the dirs nor name their owner.
         crate::utils::paths::publish_plugin_skill_dirs(projection.plugin_skill_dirs.clone());
         crate::agents::publish_plugin_subagents(projection.subagents.clone());
+        *self
+            .panel_snapshot
+            .write()
+            .unwrap_or_else(|e| e.into_inner()) = projection.panel_snapshot.clone();
+        for diagnostic in &projection.panel_diagnostics {
+            tracing::warn!(
+                plugin_id = %diagnostic.plugin_id,
+                code = diagnostic.code,
+                "omitting invalid Panel declaration"
+            );
+        }
 
         self.skill_system.init(skill_dirs).await;
         self.refresh_active_plugin_tools().await;
@@ -343,5 +378,62 @@ mod tests {
              transition). Second author(s) found:\n  {}",
             offenders.join("\n  ")
         );
+    }
+
+    #[tokio::test]
+    async fn lifecycle_projection_replaces_panel_snapshot_on_replacement_and_disable() {
+        let manager = crate::extension::manager_global::test_manager_without_claude_root().await;
+        let mut record = crate::extension::types::PluginRecord::new(
+            "community.example".into(),
+            "Community Example".into(),
+            crate::extension::types::PluginKind::Wasm,
+            crate::extension::types::PluginOrigin::Workspace,
+        );
+        record.version = Some("1.0.0".into());
+        record.panel = Some(crate::extension::manifest::PanelUiManifest {
+            tab_id: "overview".into(),
+            label: "Overview".into(),
+            icon: "layout".into(),
+            order: 10,
+            entry: "overview.js".into(),
+            api_major: aleph_protocol::panel::PANEL_UI_API_MAJOR,
+            permissions: vec!["sessions.list".into()],
+            asset_integrity: "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=".into(),
+        });
+        manager
+            .plugin_registry
+            .write()
+            .await
+            .register_plugin(record.clone());
+        manager.views().after_transition().await;
+
+        let first = manager.panel_ui_capability_snapshot();
+        assert_eq!(first.revision, manager.panel_ui_capability_revision());
+        assert_eq!(first.declarations.len(), 1);
+        assert_eq!(first.declarations[0].plugin_version, "1.0.0");
+
+        record.version = Some("2.0.0".into());
+        manager
+            .plugin_registry
+            .write()
+            .await
+            .register_plugin(record.clone());
+        manager.views().after_transition().await;
+
+        let replacement = manager.panel_ui_capability_snapshot();
+        assert_eq!(replacement.revision, manager.panel_ui_capability_revision());
+        assert_eq!(replacement.declarations.len(), 1);
+        assert_eq!(replacement.declarations[0].plugin_version, "2.0.0");
+
+        manager
+            .plugin_registry
+            .write()
+            .await
+            .disable_plugin("community.example");
+        manager.views().after_transition().await;
+
+        let retracted = manager.panel_ui_capability_snapshot();
+        assert_eq!(retracted.revision, manager.panel_ui_capability_revision());
+        assert!(retracted.declarations.is_empty());
     }
 }

@@ -221,7 +221,11 @@ pub fn extract_bundled_content(aleph_home: &Path) {
     }
 
     // Check if extraction is needed
-    if manifest.bundled_version == BUNDLED_VERSION {
+    if manifest.bundled_version == BUNDLED_VERSION
+        && !manifest.skills.values().any(|entry| {
+            entry.source == SkillOrigin::Official && entry.version.as_deref() != Some(BUNDLED_VERSION)
+        })
+    {
         debug!(version = BUNDLED_VERSION, "Bundled content is up to date");
         // Still reconcile to catch manually added skills
         if let Err(e) = manifest.reconcile(&skills_dir) {
@@ -244,7 +248,8 @@ pub fn extract_bundled_content(aleph_home: &Path) {
     // therefore skipped by extract_skills. Without this, a bundled skill with
     // the same name would overwrite and prune the user's files on upgrade.
     if let Err(e) = manifest.reconcile(&skills_dir) {
-        warn!(error = %e, "Failed to reconcile before extraction; user skills may be at risk");
+        warn!(error = %e, "Failed to reconcile before extraction; aborting to protect user skills");
+        return;
     }
 
     // Extract skills
@@ -253,15 +258,18 @@ pub fn extract_bundled_content(aleph_home: &Path) {
     // Extract plugins (marketplace cache)
     let plugins_ok = extract_plugins(&BUNDLED_PLUGINS, &plugins_cache);
 
-    // Only update bundled_version if ALL extractions succeeded
-    if skills_ok && plugins_ok {
+    // Advance the bundle version when plugins succeeded. Incomplete official
+    // skills retain version=None and trigger a focused retry on the next startup.
+    if plugins_ok {
         manifest.bundled_version = BUNDLED_VERSION.to_string();
+    }
+    if skills_ok && plugins_ok {
         info!(
             version = BUNDLED_VERSION,
             "Bundled content extraction complete"
         );
     } else {
-        warn!("Partial extraction failure — will retry on next startup");
+        warn!("Partial extraction failure — incomplete content will be retried on next startup");
     }
 
     // Reconcile and save
@@ -301,10 +309,14 @@ fn extract_skills(bundled: &Dir, skills_dir: &Path, manifest: &mut InstallRegist
             continue;
         }
 
-        // Skip if user has a non-official skill with the same name
+        // Skip if user has a non-official skill with the same name. Successfully
+        // extracted skills need not be rewritten when another skill is retried.
         if let Some(entry) = manifest.skills.get(&name) {
             if entry.source != SkillOrigin::Official {
                 debug!(skill = %name, source = ?entry.source, "Skipping user skill");
+                continue;
+            }
+            if entry.version.as_deref() == Some(BUNDLED_VERSION) {
                 continue;
             }
         }
@@ -716,32 +728,38 @@ fn copy_tree_with_prune(src: &Path, dst: &Path) -> std::io::Result<()> {
     reject_target_if_symlink(dst)?;
     std::fs::create_dir_all(dst)?;
     copy_dir_into(src, dst)?;
+    prune_copied_tree(src, dst)
+}
+
+/// Recursively prune destination entries absent from the corresponding source subtree.
+fn prune_copied_tree(src: &Path, dst: &Path) -> std::io::Result<()> {
     use std::collections::HashSet;
+
     let mut keep: HashSet<std::ffi::OsString> = HashSet::new();
-    for e in std::fs::read_dir(src)?.filter_map(|e| e.ok()) {
-        if is_vcs_meta(&e.file_name()) {
+    for entry in std::fs::read_dir(src)?.filter_map(|e| e.ok()) {
+        if is_vcs_meta(&entry.file_name()) {
             continue;
         }
-        // Use symlink_metadata so symlinks are not preserved; copying skips them,
-        // so leaving them in `keep` would leave stale/dangling symlinks behind.
-        let ft = std::fs::symlink_metadata(e.path())?.file_type();
-        if !ft.is_symlink() {
-            keep.insert(e.file_name());
+        let file_type = std::fs::symlink_metadata(entry.path())?.file_type();
+        if !file_type.is_symlink() {
+            keep.insert(entry.file_name());
         }
     }
-    for e in std::fs::read_dir(dst)?.filter_map(|e| e.ok()) {
-        if !keep.contains(&e.file_name()) {
-            let p = e.path();
-            // Use symlink_metadata so a symlink-to-dir here is treated as a
-            // symlink (and removed via remove_file), not recursed into via
-            // remove_dir_all — matches the keep-side already using
-            // symlink_metadata a few lines above.
-            let ft = std::fs::symlink_metadata(&p)?.file_type();
-            if ft.is_dir() {
-                let _ = std::fs::remove_dir_all(&p);
+    for entry in std::fs::read_dir(dst)?.filter_map(|e| e.ok()) {
+        let name = entry.file_name();
+        let path = entry.path();
+        let file_type = std::fs::symlink_metadata(&path)?.file_type();
+        if !keep.contains(&name) {
+            if file_type.is_dir() {
+                std::fs::remove_dir_all(&path)?;
             } else {
-                let _ = std::fs::remove_file(&p);
+                std::fs::remove_file(&path)?;
             }
+            continue;
+        }
+        let source = src.join(&name);
+        if file_type.is_dir() && std::fs::symlink_metadata(&source)?.is_dir() {
+            prune_copied_tree(&source, &path)?;
         }
     }
     Ok(())
@@ -749,6 +767,7 @@ fn copy_tree_with_prune(src: &Path, dst: &Path) -> std::io::Result<()> {
 
 /// Recursively copy directory contents (no prune), skipping `.git`/`.gitignore`.
 fn copy_dir_into(src: &Path, dst: &Path) -> std::io::Result<()> {
+    reject_target_if_symlink(dst)?;
     std::fs::create_dir_all(dst)?;
     for entry in std::fs::read_dir(src)?.filter_map(|e| e.ok()) {
         let name = entry.file_name();
@@ -763,6 +782,7 @@ fn copy_dir_into(src: &Path, dst: &Path) -> std::io::Result<()> {
         if ft.is_dir() {
             copy_dir_into(&from, &to)?;
         } else if ft.is_file() {
+            reject_target_if_symlink(&to)?;
             std::fs::copy(&from, &to)?;
         } else {
             // Skip symlinks and other special files.

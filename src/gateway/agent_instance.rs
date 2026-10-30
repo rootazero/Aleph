@@ -783,6 +783,23 @@ impl AgentRegistry {
         })
     }
 
+    /// Get an agent's configuration without instantiating it.
+    ///
+    /// Twin of [`Self::get_allowed_users`] and non-instantiating for the same
+    /// reason: a listing surface needs the display name, workspace and model
+    /// of every registered agent, and building an `AgentInstance` to read
+    /// three strings is work with a real cost — it also *decides* which agents
+    /// are hot, and [`Self::get`] consumes the lazy `Config` entry before the
+    /// build can fail, so a failed instantiation silently deletes the agent
+    /// from the registry instead of merely failing to list it.
+    pub async fn get_config(&self, agent_id: &str) -> Option<AgentInstanceConfig> {
+        let agents = self.agents.read().await;
+        agents.get(agent_id).map(|entry| match entry {
+            AgentEntry::Instance(inst) => inst.config().clone(),
+            AgentEntry::Config { config, .. } => config.clone(),
+        })
+    }
+
     /// Install a new `allowed_users` admission list on a registered agent
     /// without a restart. Returns `false` when `agent_id` is not registered —
     /// nothing was applied and no caller may report that it was.

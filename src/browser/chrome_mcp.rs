@@ -328,7 +328,7 @@ fn read_proc_starttime(pid: u32) -> std::io::Result<u64> {
     let after = &stat[close + 1..];
     let field = after
         .split_whitespace()
-        .nth(20) // 0-indexed: field 22 -> index 21
+        .nth(19) // post-comm field 22 (starttime) is index 19
         .ok_or_else(|| {
             std::io::Error::new(
                 std::io::ErrorKind::InvalidData,

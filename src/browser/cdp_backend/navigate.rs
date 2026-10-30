@@ -231,10 +231,21 @@ pub(super) async fn navigate(be: &CdpBackend, tab_id: &str, url: &str) -> Result
     // `Page.navigate`'s own response names the new document when it started
     // one; the event is the fallback for engines that omit it.
     let loader = result.loader_id.or(outcome.loader_id);
-    // The requested URL is the fallback for the tab's URL, never the preferred
-    // answer: a redirect makes it wrong, and the whole point of the audit below
-    // is the case where it is wrong.
-    let landed = outcome.url.unwrap_or_else(|| url.to_string());
+    // If the event was lost, read the current main-frame URL independently;
+    // never substitute the already-approved request as a landing observation.
+    let landed = match outcome.url {
+        Some(url) => Some(url),
+        None => page::get_frame_tree(&handle.conn, Some(&session))
+            .await
+            .ok()
+            .map(|tree| tree.frame.url),
+    };
+    let Some(landed) = landed else {
+        let _ = super::tabs::close_tab(be, tab_id).await;
+        return Err(BrowserError::NavigationFailed(
+            "could not establish the landed URL; tab closed to fail closed".into(),
+        ));
+    };
     apply_document_boundary(&handle, tab_id, loader.as_deref(), Some(&landed)).await;
     // This function deliberately records NO identity into the tab registry.
     // The audit below re-lists the tabs, and `list_tabs`'s discovery sweep
@@ -285,6 +296,7 @@ pub(super) async fn history(
     handle.live_owner().agent_navigation(tab_id, &session).await;
     let mut events = handle.conn.events();
 
+    let mut history_url = None;
     match nav {
         HistoryNav::Refresh => {
             page::reload(&handle.conn, Some(&session), false)
@@ -315,6 +327,7 @@ pub(super) async fn history(
                     entries.len()
                 )));
             };
+            history_url = Some(entries[idx].url.clone());
             page::navigate_to_history_entry(&handle.conn, Some(&session), entries[idx].id)
                 .await
                 .map_err(|e| map_cdp_err(be.engine(), "Page.navigateToHistoryEntry", e))?;
@@ -337,13 +350,12 @@ pub(super) async fn history(
         &handle,
         tab_id,
         outcome.loader_id.as_deref(),
-        outcome.url.as_deref(),
+        outcome.url.as_deref().or(history_url.as_deref()),
     )
     .await;
-    // Same contract as `navigate`: whatever URL the history move landed on is
-    // this tab's last-seen observation. `None` (no URL in the outcome)
-    // merges to keep the previous record, per `record_identity`.
-    be.record_tab(tab_id, outcome.url.as_deref());
+    // The history entry is an independent URL observation when the event was
+    // missed, so the read-time SSRF guard never inherits the previous page URL.
+    be.record_tab(tab_id, outcome.url.as_deref().or(history_url.as_deref()));
 
     // Deliberately NOT audited: `post_nav`'s module doc says history and
     // interaction ops are covered by the read-time guard in the tool layer, and

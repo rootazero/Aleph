@@ -632,6 +632,7 @@ impl ExtensionManager {
         record.scope_key = scope_key;
         if let Some(m) = manifest {
             record.kind = m.kind;
+            record.panel = m.panel.clone();
         }
         // The row counts only servers the mount will start — the same gate as
         // the `mcp_server` step, on the same `record.kind` — and says why when

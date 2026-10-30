@@ -41,6 +41,11 @@ pub use super::validation::validate_agent_id;
 pub struct AgentCreateArgs {
     /// Unique agent identifier (a-z, 0-9, _, -, max 64 chars).
     /// If empty or missing, auto-generated from the name.
+    ///
+    /// Max 32 chars when the agent is persisted to `config.toml`: the TOML
+    /// layer enforces a shorter limit than the runtime registry, and an id it
+    /// cannot store would leave a runtime-only agent that disappears on the
+    /// next restart.
     #[serde(default)]
     pub id: String,
     /// Human-readable name (defaults to id)
@@ -79,7 +84,31 @@ pub struct AgentCreateOutput {
     pub workspace_path: String,
     /// Human-readable status message
     pub message: String,
+    /// Whether the agent was persisted to `config.toml`.
+    ///
+    /// `None` — no `AgentManager` is wired, so persistence does not apply.
+    /// `Some(false)` — the agent exists in the runtime registry but has **no**
+    /// TOML row: it is missing from the Panel agent list and is lost on the
+    /// next restart. The `message` says so in words.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub persisted: Option<bool>,
+    /// Identity files that already existed and were therefore left untouched
+    /// (for example an operator-authored `SOUL.md`).
+    ///
+    /// Empty when every file was created fresh.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub preserved_files: Vec<String>,
 }
+
+/// Longest agent id the TOML layer can persist.
+///
+/// The source of truth is `config::agent_manager::MAX_ID_LENGTH` (32), but
+/// that constant is `pub(super)` inside the config module and cannot be
+/// imported from `builtin_tools`. This mirror keeps the two id grammars
+/// aligned: an id that passes this guard but not the manager's is still
+/// reported through `AgentCreateOutput::persisted == Some(false)` instead of
+/// a silent success.
+const MAX_PERSISTED_AGENT_ID_LEN: usize = 32;
 
 /// Decide the SOUL.md content for a new agent.
 ///
@@ -252,9 +281,33 @@ impl AlephTool for AgentCreateTool {
         // 1. Validate ID
         validate_agent_id(&args.id).map_err(AgentManageError::InvalidId)?;
 
-        // 2. Check for duplicates (existence only — instantiation is deferred)
+        // 2. Check for duplicates across BOTH surfaces (existence only —
+        //    instantiation is deferred): the live runtime registry and the
+        //    persisted TOML config. Checking only the registry let
+        //    `agent_create` re-create an agent whose row was already in
+        //    `config.toml` — the persisted definition was then silently
+        //    replaced and the operator's persona files were overwritten.
         if self.registry.contains(&args.id).await {
             return Err(AgentManageError::AlreadyExists(args.id.clone()).into());
+        }
+        if let Some(ref manager) = self.agent_manager {
+            if manager.get(&args.id).is_ok() {
+                return Err(AgentManageError::AlreadyExists(args.id.clone()).into());
+            }
+        }
+
+        // 2b. Reject ids the TOML layer cannot store before anything is
+        //     written. `AgentManager` validates the id first and refuses
+        //     anything longer than `MAX_PERSISTED_AGENT_ID_LEN`, so creating
+        //     such an agent would register a runtime-only agent that is
+        //     invisible in the Panel agent list and gone after a restart.
+        if self.agent_manager.is_some() && args.id.len() > MAX_PERSISTED_AGENT_ID_LEN {
+            return Err(AgentManageError::InvalidId(format!(
+                "Agent ID too long to persist ({} chars, max {MAX_PERSISTED_AGENT_ID_LEN}) — \
+                 use a shorter id",
+                args.id.len()
+            ))
+            .into());
         }
 
         // 3. Determine paths. Both roots come from `provisioning_roots`, which
@@ -282,11 +335,30 @@ impl AlephTool for AgentCreateTool {
                     args.id, e
                 ))
             })?;
-        tokio::fs::write(agent_state_dir.join("SOUL.md"), &soul_content)
-            .await
-            .map_err(|e| {
-                AgentManageError::Io(format!("Failed to write SOUL.md for '{}': {}", args.id, e))
-            })?;
+        // Never clobber an existing persona file. The duplicate check above
+        // only sees the runtime registry and the TOML config, so a state
+        // directory left behind by an earlier (now unregistered) agent would
+        // otherwise have its SOUL.md replaced by the archetype soul.
+        let mut preserved_files: Vec<String> = Vec::new();
+        let soul_path = agent_state_dir.join("SOUL.md");
+        if soul_path.exists() {
+            preserved_files.push("SOUL.md".to_string());
+        } else {
+            tokio::fs::write(&soul_path, &soul_content)
+                .await
+                .map_err(|e| {
+                    AgentManageError::Io(format!(
+                        "Failed to write SOUL.md for '{}': {}",
+                        args.id, e
+                    ))
+                })?;
+        }
+
+        // Snapshot whether the operator already had an AGENTS.md BEFORE the
+        // identity initializer below runs: that initializer creates a default
+        // one, so a later existence check would always be true and the
+        // `system_prompt` would never reach the file.
+        let agents_md_pre_existed = agent_state_dir.join("AGENTS.md").exists();
 
         // Initialize the rest of the identity directory (AGENTS.md, MEMORY.md, …).
         // SOUL.md was already written above, so the archetype here only matters
@@ -346,9 +418,17 @@ impl AlephTool for AgentCreateTool {
                  ## Instructions\n\n\
                  Add workspace-specific instructions here.\n"
             );
-            tokio::fs::write(&agents_md, content)
-                .await
-                .map_err(|e| AgentManageError::Io(format!("Failed to write AGENTS.md: {e}")))?;
+            // Same write-if-missing rule as SOUL.md: an existing AGENTS.md is
+            // the operator's, not ours. The snapshot above is the one that
+            // counts — by now the identity initializer has created a default
+            // AGENTS.md for the fresh case.
+            if agents_md_pre_existed {
+                preserved_files.push("AGENTS.md".to_string());
+            } else {
+                tokio::fs::write(&agents_md, content)
+                    .await
+                    .map_err(|e| AgentManageError::Io(format!("Failed to write AGENTS.md: {e}")))?;
+            }
         }
 
         // IDENTITY.md / TOOLS.md are owned by `initialize_agent_identity` above
@@ -405,6 +485,8 @@ impl AlephTool for AgentCreateTool {
         //     reads from there on reload), resolving the drift where the
         //     in-memory `display_name` and the catalog `description` could
         //     disagree after a `remember`-driven IDENTITY.md edit.
+        let mut persisted: Option<bool> = None;
+        let mut persist_error: Option<String> = None;
         if let Some(ref manager) = self.agent_manager {
             let identity = args
                 .description
@@ -422,18 +504,38 @@ impl AlephTool for AgentCreateTool {
                 identity,
                 ..Default::default()
             };
-            if let Err(e) = manager.create(def) {
-                // Non-fatal: agent works in runtime, just won't appear in Panel agents list
-                warn!(
-                    agent_id = %args.id,
-                    error = %e,
-                    "Failed to persist agent to TOML config (runtime registration succeeded)"
-                );
+            match manager.create(def) {
+                Ok(()) => persisted = Some(true),
+                Err(e) => {
+                    // Non-fatal for the runtime agent, but never silent: a
+                    // runtime-only agent is missing from the Panel agent list
+                    // and lost on the next restart, so the failure is reported
+                    // in the tool output as well as logged.
+                    warn!(
+                        agent_id = %args.id,
+                        error = %e,
+                        "Failed to persist agent to TOML config (runtime registration succeeded)"
+                    );
+                    persisted = Some(false);
+                    persist_error = Some(e.to_string());
+                }
             }
         }
 
         let workspace_str = workspace_path.to_string_lossy().to_string();
-        let msg = format!("Agent '{}' created. Workspace: {}", args.id, workspace_str);
+        let mut msg = format!("Agent '{}' created. Workspace: {}", args.id, workspace_str);
+        if let Some(ref err) = persist_error {
+            msg.push_str(&format!(
+                " WARNING: not persisted to config.toml ({err}) — this agent is runtime-only: it will \
+                 not appear in the agents list and will be lost on restart."
+            ));
+        }
+        if !preserved_files.is_empty() {
+            msg.push_str(&format!(
+                " Kept existing {} (not overwritten).",
+                preserved_files.join(", ")
+            ));
+        }
 
         info!(agent_id = %args.id, "Agent created successfully");
 
@@ -441,6 +543,8 @@ impl AlephTool for AgentCreateTool {
             agent_id: args.id,
             workspace_path: workspace_str,
             message: msg,
+            persisted,
+            preserved_files,
         })
     }
 }
@@ -639,5 +743,93 @@ mod tests {
             .unwrap_err();
         let msg = err.to_string();
         assert!(msg.contains("Invalid agent ID"), "got: {msg}");
+    }
+
+    /// An id the TOML layer cannot store must be refused BEFORE anything is
+    /// written. The previous version created the agent in the runtime
+    /// registry anyway, reported "created", and left an agent that is
+    /// invisible in the Panel agent list and gone after the next restart.
+    #[tokio::test]
+    async fn an_id_too_long_to_persist_is_refused_before_anything_is_written() {
+        let temp = tempfile::tempdir().unwrap();
+        let registry = Arc::new(AgentRegistry::new());
+        let (wm, _wm_temp) = test_utils::workspace_mgr();
+        let (sm, _sm_temp) = test_utils::session_store();
+        let manager = Arc::new(crate::config::agent_manager::AgentManager::new(
+            temp.path().join("config.toml"),
+            temp.path().join("workspaces"),
+            temp.path().join("agents"),
+            temp.path().join("trash"),
+        ));
+        let tool = AgentCreateTool::new(registry, wm, sm).with_agent_manager(manager);
+
+        // 40 chars: inside the runtime grammar (64), outside the TOML one (32).
+        let long_id = "a".repeat(40);
+        let err = tool
+            .call(AgentCreateArgs {
+                id: long_id.clone(),
+                ..Default::default()
+            })
+            .await
+            .unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("too long to persist"), "got: {msg}");
+        assert!(
+            !temp.path().join("agents").join(&long_id).exists(),
+            "nothing may be written for a refused id"
+        );
+    }
+
+    /// An operator-authored persona file must survive a create. The state
+    /// directory is not the registry, so a directory left behind by an earlier
+    /// agent (or written by hand) used to be overwritten by the archetype
+    /// soul.
+    #[tokio::test]
+    async fn an_existing_soul_file_is_preserved_and_reported() {
+        let temp = tempfile::tempdir().unwrap();
+        let config_path = temp.path().join("config.toml");
+        std::fs::write(&config_path, "[agents]\n").unwrap();
+        let agents_root = temp.path().join("agents");
+        let manager = Arc::new(crate::config::agent_manager::AgentManager::new(
+            config_path,
+            temp.path().join("workspaces"),
+            agents_root.clone(),
+            temp.path().join("trash"),
+        ));
+
+        // A persona file the operator wrote before the agent existed.
+        let state_dir = agents_root.join("legacy");
+        std::fs::create_dir_all(&state_dir).unwrap();
+        std::fs::write(state_dir.join("SOUL.md"), "OPERATOR PERSONA").unwrap();
+
+        let registry = Arc::new(AgentRegistry::new());
+        let (wm, _wm_temp) = test_utils::workspace_mgr();
+        let (sm, _sm_temp) = test_utils::session_store();
+        let tool = AgentCreateTool::new(registry, wm, sm).with_agent_manager(manager);
+
+        let out = tool
+            .call(AgentCreateArgs {
+                id: "legacy".into(),
+                name: Some("Legacy".into()),
+                ..Default::default()
+            })
+            .await
+            .expect("create should succeed");
+
+        assert_eq!(
+            std::fs::read_to_string(state_dir.join("SOUL.md")).unwrap(),
+            "OPERATOR PERSONA",
+            "an existing persona file must not be clobbered"
+        );
+        assert!(
+            out.preserved_files.contains(&"SOUL.md".to_string()),
+            "the preserved file must be reported: {:?}",
+            out.preserved_files
+        );
+        assert!(
+            out.message.contains("Kept existing SOUL.md"),
+            "got: {}",
+            out.message
+        );
     }
 }

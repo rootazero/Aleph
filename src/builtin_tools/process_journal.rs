@@ -1801,8 +1801,8 @@ fn read_all(dir: &Path) -> Vec<JobRecord> {
             // and no directory `record_dir` could name; it is unreadable in
             // this module's terms even though it parses. Same treatment as
             // a row that does not parse: left on disk, logged, not served.
-            Ok(record) if record.kind == JournalKind::Pty && record.pty_session_id.is_none() => {
-                tracing::warn!(path = %state.display(), "process_journal: unreadable row (pty row without a session id)");
+            Ok(record) if !valid_record_paths(&record, dir, &entry.path()) => {
+                tracing::warn!(path = %state.display(), "process_journal: unreadable row (invalid path fields or directory mismatch)");
             }
             Ok(record) => out.push(record),
             Err(e) => {
@@ -1813,6 +1813,36 @@ fn read_all(dir: &Path) -> Vec<JobRecord> {
         }
     }
     out
+}
+
+fn valid_record_paths(record: &JobRecord, root: &Path, row_dir: &Path) -> bool {
+    let plain_name = |value: &str| {
+        !value.is_empty()
+            && value != "."
+            && value != ".."
+            && !value.contains('/')
+            && !value.contains('\\')
+    };
+    if record
+        .output_file
+        .as_deref()
+        .is_some_and(|name| !plain_name(name))
+        || record
+            .partial_file
+            .as_deref()
+            .is_some_and(|name| !plain_name(name))
+    {
+        return false;
+    }
+    if let Some(session_id) = record.pty_session_id.as_deref() {
+        if !plain_name(session_id) {
+            return false;
+        }
+    }
+    if record.kind == JournalKind::Pty && record.pty_session_id.is_none() {
+        return false;
+    }
+    record_dir(root, record) == row_dir
 }
 
 #[derive(Serialize, Deserialize)]
@@ -1893,6 +1923,21 @@ mod tests {
     use super::*;
 
     const OWNER: &str = "{\"Ephemeral\":{\"agent_id\":\"a\",\"ephemeral_id\":\"j\"}}";
+
+    #[test]
+    fn read_all_rejects_traversal_in_pty_session_id() {
+        let _g = gate();
+        let tmp = tempfile::tempdir().unwrap();
+        enable_for_test(tmp.path().to_path_buf());
+        record_pty_spawn("u-1", "pwsh", "", Some("alice"));
+        let state = tmp.path().join("pty-u-1").join(STATE_FILE);
+        let mut row: serde_json::Value = serde_json::from_slice(&std::fs::read(&state).unwrap()).unwrap();
+        row["pty_session_id"] = serde_json::Value::String("../../escape".to_string());
+        std::fs::write(&state, serde_json::to_vec(&row).unwrap()).unwrap();
+
+        assert!(read_all(tmp.path()).is_empty());
+        disable_for_test();
+    }
 
     // The id high-water allocator is exercised where it lives, against two
     // freshly-constructed registries:

@@ -1,6 +1,8 @@
 //! Pure tab membership and enabled mount projections; no loading or UI effects.
 
-use aleph_protocol::panel::{PanelTabDescriptor, PanelTabKey, PanelTabStatus, PANEL_UI_API_MAJOR};
+use aleph_protocol::panel::{
+    valid_relative_entry, PanelTabDescriptor, PanelTabKey, PanelTabStatus, PANEL_UI_API_MAJOR,
+};
 
 /// Only the host's explicit built-in initialization may populate this namespace.
 pub const BUILTIN_NAMESPACE: &str = "aleph";
@@ -136,10 +138,7 @@ pub(crate) fn validate_descriptor(descriptor: &PanelTabDescriptor) -> Result<(),
         // The protocol's qualified display key uses a literal colon separator.
         || descriptor.key.plugin_id.contains(':')
         || descriptor.key.tab_id.contains(':')
-        || descriptor.entry.starts_with('/')
-        || descriptor.entry.contains('\\')
-        || descriptor.entry.contains(':')
-        || descriptor.entry.split('/').any(|segment| segment == "..")
+        || !valid_relative_entry(&descriptor.entry)
         || descriptor.api_major != PANEL_UI_API_MAJOR
     {
         return Err(RegistryError::InvalidEntry);
