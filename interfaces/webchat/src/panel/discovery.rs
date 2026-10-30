@@ -17,6 +17,7 @@ pub enum PanelDiscoveryStatus {
 pub enum SnapshotUpdate {
     Accepted,
     StaleEpoch,
+    StaleRequest,
     StaleRevision,
 }
 
@@ -27,6 +28,7 @@ pub struct PanelDiscoveryState {
     snapshot: Option<PanelUiCapabilitySnapshot>,
     last_revision: Option<u64>,
     accepted_epoch: Option<u64>,
+    request_generation: u64,
     status: PanelDiscoveryStatus,
 }
 
@@ -38,32 +40,48 @@ impl PanelDiscoveryState {
             snapshot: None,
             last_revision: None,
             accepted_epoch: None,
+            request_generation: 0,
             status: PanelDiscoveryStatus::Disconnected,
         }
     }
 
     /// Start a query for a new socket epoch while retaining the last known snapshot.
-    pub fn begin_connection(&mut self, epoch: u64) {
+    pub fn begin_connection(&mut self, epoch: u64) -> Option<u64> {
         if epoch < self.connection_epoch
             || (epoch == self.connection_epoch
                 && matches!(self.status, PanelDiscoveryStatus::Disconnected))
         {
-            return;
+            return None;
         }
         self.connection_epoch = epoch;
+        self.request_generation = self.request_generation.wrapping_add(1);
         self.status = PanelDiscoveryStatus::Loading;
+        Some(self.request_generation)
     }
 
-    /// Apply a complete snapshot only from the current epoch and in revision order.
+    /// Apply a snapshot using the currently active request generation.
     pub fn accept_snapshot(
         &mut self,
         epoch: u64,
+        snapshot: PanelUiCapabilitySnapshot,
+    ) -> SnapshotUpdate {
+        self.accept_snapshot_for_request(epoch, self.request_generation, snapshot)
+    }
+
+    /// Apply a snapshot only from the request that currently owns the state.
+    pub fn accept_snapshot_for_request(
+        &mut self,
+        epoch: u64,
+        request_generation: u64,
         snapshot: PanelUiCapabilitySnapshot,
     ) -> SnapshotUpdate {
         if epoch != self.connection_epoch
             || matches!(self.status, PanelDiscoveryStatus::Disconnected)
         {
             return SnapshotUpdate::StaleEpoch;
+        }
+        if request_generation != self.request_generation {
+            return SnapshotUpdate::StaleRequest;
         }
         if self.last_revision.is_some_and(|revision| {
             snapshot.revision < revision
@@ -81,9 +99,22 @@ impl PanelDiscoveryState {
         SnapshotUpdate::Accepted
     }
 
-    /// Preserve transport failure as an error for the current connection epoch.
+    /// Preserve transport failure for the currently active request.
     pub fn mark_error(&mut self, epoch: u64, message: impl Into<String>) {
-        if epoch == self.connection_epoch {
+        self.mark_error_for_request(epoch, self.request_generation, message);
+    }
+
+    /// Preserve transport failure only for the request that currently owns the state.
+    pub fn mark_error_for_request(
+        &mut self,
+        epoch: u64,
+        request_generation: u64,
+        message: impl Into<String>,
+    ) {
+        if epoch == self.connection_epoch
+            && request_generation == self.request_generation
+            && !matches!(self.status, PanelDiscoveryStatus::Disconnected)
+        {
             self.status = PanelDiscoveryStatus::Error {
                 message: message.into(),
             };
@@ -93,6 +124,7 @@ impl PanelDiscoveryState {
     /// Mark the current socket as disconnected without inventing an empty snapshot.
     pub fn disconnect(&mut self, epoch: u64) {
         if epoch == self.connection_epoch {
+            self.request_generation = self.request_generation.wrapping_add(1);
             self.status = PanelDiscoveryStatus::Disconnected;
         }
     }
@@ -264,7 +296,37 @@ mod tests {
 
         state.disconnect(2);
         assert_eq!(state.status(), &PanelDiscoveryStatus::Disconnected);
+        state.mark_error(2, "late failure");
+        assert_eq!(state.status(), &PanelDiscoveryStatus::Disconnected);
         assert!(state.snapshot().is_none());
+    }
+
+    #[test]
+    fn an_older_refresh_cannot_overwrite_a_newer_refresh() {
+        let mut state = PanelDiscoveryState::new();
+        let old_request = state.begin_connection(1).expect("old request");
+        let new_request = state.begin_connection(1).expect("new request");
+        assert_ne!(old_request, new_request);
+        assert_eq!(
+            state.accept_snapshot_for_request(
+                1,
+                old_request,
+                PanelUiCapabilitySnapshot::new(99, Vec::new())
+            ),
+            SnapshotUpdate::StaleRequest
+        );
+        state.mark_error_for_request(1, old_request, "late failure");
+        assert_eq!(state.status(), &PanelDiscoveryStatus::Loading);
+        assert_eq!(
+            state.accept_snapshot_for_request(
+                1,
+                new_request,
+                PanelUiCapabilitySnapshot::new(7, Vec::new())
+            ),
+            SnapshotUpdate::Accepted
+        );
+        state.mark_error_for_request(1, old_request, "late failure");
+        assert_eq!(state.status(), &PanelDiscoveryStatus::Ready);
     }
 
     #[test]

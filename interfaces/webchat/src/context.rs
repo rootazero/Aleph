@@ -1401,8 +1401,13 @@ impl DashboardState {
         let Some(epoch) = self.connection_epoch.try_get_untracked() else {
             return Err("Panel discovery owner was disposed".to_string());
         };
-        self.panel_discovery
-            .update(|state| state.begin_connection(epoch));
+        let Some(request_generation) = self
+            .panel_discovery
+            .try_update(|state| state.begin_connection(epoch))
+            .flatten()
+        else {
+            return Err("Panel discovery request is no longer active".to_string());
+        };
         let response = self
             .rpc_call(
                 aleph_protocol::panel::PANEL_UI_CAPABILITY_SNAPSHOT_METHOD,
@@ -1412,13 +1417,13 @@ impl DashboardState {
         match response {
             Ok(value) => match decode_snapshot(value) {
                 Ok(snapshot) => {
-                    match self
-                        .panel_discovery
-                        .try_update(|state| state.accept_snapshot(epoch, snapshot))
-                    {
+                    match self.panel_discovery.try_update(|state| {
+                        state.accept_snapshot_for_request(epoch, request_generation, snapshot)
+                    }) {
                         Some(
                             SnapshotUpdate::Accepted
                             | SnapshotUpdate::StaleEpoch
+                            | SnapshotUpdate::StaleRequest
                             | SnapshotUpdate::StaleRevision,
                         ) => Ok(()),
                         None => Err("Panel discovery owner was disposed".to_string()),
@@ -1426,18 +1431,31 @@ impl DashboardState {
                 }
                 Err(error) => {
                     let message = format!("Panel discovery payload could not be decoded: {error}");
-                    self.panel_discovery
-                        .update(|state| state.mark_error(epoch, message.clone()));
+                    self.panel_discovery.update(|state| {
+                        state.mark_error_for_request(epoch, request_generation, message.clone())
+                    });
                     Err(message)
                 }
             },
             Err(message) => {
-                self.panel_discovery
-                    .update(|state| state.mark_error(epoch, message.clone()));
+                self.panel_discovery.update(|state| {
+                    state.mark_error_for_request(epoch, request_generation, message.clone())
+                });
                 Err(message)
             }
         }
     }
+
+    /// Mark discovery disconnected whenever the owning socket is no longer usable.
+    #[cfg(feature = "panel-modular")]
+    fn mark_panel_discovery_disconnected(&self) {
+        if let Some(epoch) = self.connection_epoch.try_get_untracked() {
+            self.panel_discovery.update(|state| state.disconnect(epoch));
+        }
+    }
+
+    #[cfg(not(feature = "panel-modular"))]
+    fn mark_panel_discovery_disconnected(&self) {}
 
     /// Park until the socket is authorized, bounded by
     /// [`GATEWAY_READY_TIMEOUT_MS`].
@@ -1723,6 +1741,7 @@ impl DashboardState {
         let native = native_expected();
         let _ = self.protected_user.try_set(None);
         let _ = self.is_connected.try_set(false);
+        self.mark_panel_discovery_disconnected();
         let mut previous = None;
         let _ = self
             .disconnect_tx
@@ -1739,6 +1758,7 @@ impl DashboardState {
             let detail = "Insecure transport: open this Panel over https to reach a remote gateway"
                 .to_string();
             self.is_connected.set(false);
+            self.mark_panel_discovery_disconnected();
             self.set_failure(ConnectionFailure::Unreachable {
                 detail: detail.clone(),
             });
@@ -2001,6 +2021,7 @@ impl DashboardState {
                             }
                         }
                         state.is_connected.set(false);
+                        state.mark_panel_discovery_disconnected();
                         // Clear the dead rpc_tx so the next rpc_call() won't
                         // block on a sender whose receiver task just exited.
                         state.rpc_tx.set_value(None);
@@ -2090,6 +2111,7 @@ impl DashboardState {
                         // Reachable but walled — do NOT mark connected and do NOT
                         // spawn subscriptions (only `connect` is allowed unauthorized).
                         self.is_connected.set(false);
+                        self.mark_panel_discovery_disconnected();
                         self.needs_token.set(true);
                         self.token_was_rejected.set(was_rejected);
                         self.set_failure(ConnectionFailure::AuthRequired);
@@ -2102,6 +2124,7 @@ impl DashboardState {
                     }
                     Handshake::Failed(f) => {
                         self.is_connected.set(false);
+                        self.mark_panel_discovery_disconnected();
                         let msg = match &f {
                             ConnectionFailure::Unreachable { detail }
                             | ConnectionFailure::Timeout { detail }
@@ -2117,6 +2140,7 @@ impl DashboardState {
             }
             Err(e) => {
                 self.is_connected.set(false);
+                self.mark_panel_discovery_disconnected();
                 // Keep the connector's verdict: a peer that answered and
                 // refused is `Rejected` (config problem, server is up), a
                 // silent socket is `BeforeOpen`/`Unreachable`. Hardcoding
@@ -2174,10 +2198,7 @@ impl DashboardState {
 
         // Update state
         self.is_connected.set(false);
-        #[cfg(feature = "panel-modular")]
-        if let Some(epoch) = self.connection_epoch.try_get_untracked() {
-            self.panel_discovery.update(|state| state.disconnect(epoch));
-        }
+        self.mark_panel_discovery_disconnected();
         self.connection_error.set(None);
         self.is_reconnecting.set(false);
         Ok(())

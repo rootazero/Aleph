@@ -36,6 +36,8 @@ The existing `get_extension_manager()` unavailable response is returned unchange
 `PanelDiscoveryState` applies the following fences:
 
 - A result from an older connection epoch is `StaleEpoch` and cannot write discovery state.
+- A result from an older refresh request in the same epoch is `StaleRequest` and cannot write discovery state.
+- Disconnect invalidates in-flight request generations; both explicit disconnect and unexpected WebSocket loss enter `Disconnected` before reconnect.
 - A lower revision, or a duplicate revision in the same epoch, is `StaleRevision` and cannot replace the accepted snapshot.
 - A same-revision complete snapshot is accepted after a new connection epoch so reconnect can rebase state even when no revision changed.
 - Each accepted snapshot replaces the complete declaration set, including replacement with an empty snapshot for retraction.
@@ -44,21 +46,21 @@ The existing `get_extension_manager()` unavailable response is returned unchange
 
 `DashboardState` 已经拥有单调递增的 connection `epoch`。每次授权 handshake（包括 reconnect）之后，既有 RPC 路径都会发起完整的 `panel.capabilities.snapshot` query。discovery model 在 `panel-modular` 下 feature-gated，并且与 `PanelProjection`、`PanelShell`、`PanelLoader` 分离。
 
-`PanelDiscoveryState` 执行以下 fencing：旧 connection epoch 的结果返回 `StaleEpoch`，不能写入 discovery state；较低 revision 或同 epoch 重复 revision 返回 `StaleRevision`，不能覆盖已接受 snapshot；新 epoch 可以接受同 revision 的完整 snapshot，使 reconnect 即使 revision 没变也能重新建立状态；每个 accepted snapshot 都替换完整 declaration set，包括用 empty snapshot 表达 retraction；malformed payload 在 state replacement 之前 decode 失败，最后一个正确 snapshot 保持不变；丢失 advisory update 时，reconnect 的完整 query 可以修复状态。
+`PanelDiscoveryState` 执行以下 fencing：旧 connection epoch 的结果返回 `StaleEpoch`，不能写入 discovery state；同一 epoch 中旧 refresh request 的结果返回 `StaleRequest`，不能写入 discovery state；断开会使未完成 request generation 失效，显式 disconnect 与非预期 WebSocket loss 都会先进入 `Disconnected`，再等待 reconnect；较低 revision 或同 epoch 重复 revision 返回 `StaleRevision`，不能覆盖已接受 snapshot；新 epoch 可以接受同 revision 的完整 snapshot，使 reconnect 即使 revision 没变也能重新建立状态；每个 accepted snapshot 都替换完整 declaration set，包括用 empty snapshot 表达 retraction；malformed payload 在 state replacement 之前 decode 失败，最后一个正确 snapshot 保持不变；丢失 advisory update 时，reconnect 的完整 query 可以修复状态。
 
 ## Notification decision / Notification 裁定
 
-No live snapshot notification was added. The existing EventBus/SubscriptionManager path is a lossy advisory broadcast with lag/drop behavior and authorization filtering. It is not a durable complete-snapshot recovery source, so adding a second watcher, poller, broadcaster, or revision authority would violate the ownership boundary. Production discovery refreshes on connect, reconnect, and explicit refresh. Live push remains deferred to a separate transport decision.
+No live snapshot notification was added. The existing EventBus/SubscriptionManager path is a lossy advisory broadcast with lag/drop behavior and authorization filtering. It is not a durable complete-snapshot recovery source, so adding a second watcher, poller, broadcaster, or revision authority would violate the ownership boundary. Production discovery refreshes automatically on connect and reconnect. `DashboardState::refresh_panel_discovery()` is an explicit caller API; this phase adds no UI trigger for it. Live push remains deferred to a separate transport decision.
 
-没有新增 live snapshot notification。现有 EventBus/SubscriptionManager 是可能 lag/drop 的 advisory broadcast，并带有 authorization filtering；它不是 durable complete-snapshot recovery source。因此没有增加第二个 watcher、poller、broadcaster 或 revision authority。production discovery 在 connect、reconnect 与 explicit refresh 时刷新。live push 延后到独立的 transport decision。
+没有新增 live snapshot notification。现有 EventBus/SubscriptionManager 是可能 lag/drop 的 advisory broadcast，并带有 authorization filtering；它不是 durable complete-snapshot recovery source。因此没有增加第二个 watcher、poller、broadcaster 或 revision authority。production discovery 在 connect 与 reconnect 时自动刷新；`DashboardState::refresh_panel_discovery()` 是可供 caller 使用的 explicit refresh API，本阶段没有新增 UI trigger。live push 延后到独立的 transport decision。
 
 ## Validation evidence / 验证证据
 
 | Check | Result |
 | --- | --- |
 | `cargo test -p aleph-protocol panel --lib` | 9 passed, 0 failed |
-| Webchat `panel-modular` Panel suite (before the final late-disconnect regression) | 81 passed, 0 failed |
-| Focused `panel::discovery` suite | 13 passed, 0 failed |
+| Webchat `panel-modular` Panel suite (final HEAD) | 85 passed, 0 failed |
+| Focused `panel::discovery` suite (final HEAD) | 14 passed, 0 failed |
 | `cargo check --no-default-features --features panel-modular` | passed |
 | `cargo clippy --no-default-features --features panel-modular --lib -- -D warnings` | passed |
 | `cargo check -p alephcore --tests` | passed |
