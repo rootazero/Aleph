@@ -11,7 +11,7 @@ use crate::capability::descriptor::{
 };
 use crate::capability::facade::{CapabilitySnapshot, Cursor, Scope};
 use crate::capability::ownership::{LifetimeScope, OwnerRef, VisibilityScope};
-use crate::tools::descriptor::{canonicalize_json, ToolCapabilityDescriptor};
+use crate::tools::descriptor::{canonicalize_json, ReplayPolicy, ToolCapabilityDescriptor, ToolSource};
 use sha2::{Digest, Sha256};
 
 /// Namespace under which the tool backend registers its capabilities.
@@ -49,7 +49,7 @@ impl ToolBackendAdapter {
             }
         }
         if let Some(ns) = &scope.namespace {
-            if !id.namespace.starts_with(ns.as_str()) {
+            if id.namespace != *ns {
                 return false;
             }
         }
@@ -139,12 +139,18 @@ pub(super) fn to_descriptor(tool: &ToolCapabilityDescriptor) -> CapabilityDescri
         owner: OwnerRef::Runtime,
         services: Vec::new(),
         metadata: ProjectionMetadata::default(),
-        facets: tool_facets(),
+        facets: tool_facets(tool),
     }
 }
 
-pub(super) fn tool_facets() -> CapabilityFacets {
-    CapabilityFacets::new().with(CapabilityFacet::Callable)
+pub(super) fn tool_facets(tool: &ToolCapabilityDescriptor) -> CapabilityFacets {
+    let facets = CapabilityFacets::new().with(CapabilityFacet::Callable);
+    if tool.replay_policy == ReplayPolicy::Unsafe
+        || matches!(tool.source, ToolSource::Mcp { .. } | ToolSource::Extension { .. })
+    {
+        return facets.with(CapabilityFacet::ExternalEffect);
+    }
+    facets
 }
 
 #[cfg(test)]
@@ -220,7 +226,7 @@ mod tests {
         assert!(descriptor.supports(CapabilityFacet::Callable));
         assert!(!descriptor.supports(CapabilityFacet::ProviderLifecycle));
         assert!(!descriptor.supports(CapabilityFacet::EventSource));
-        assert!(!descriptor.supports(CapabilityFacet::ExternalEffect));
+        assert!(descriptor.supports(CapabilityFacet::ExternalEffect));
     }
 
     #[test]

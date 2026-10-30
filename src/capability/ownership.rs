@@ -15,11 +15,11 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Mutex;
 use tokio::sync::broadcast;
 
-/// Monotonic owner generation counter.
+/// Per-binding owner generation.
 ///
-/// Bumped whenever ownership is re-issued, so a stale lease can be told apart
-/// from a live one: a lease whose recorded generation is below the current one
-/// is invalid. `u64` matches the registry's own monotonic revision.
+/// A lease is valid only while its recorded generation equals the binding's
+/// current generation. Re-issuing ownership or bumping the binding's lifetime
+/// scope changes that generation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct OwnerGeneration(pub u64);
 
@@ -77,7 +77,7 @@ pub enum OwnerRef {
 /// module must not depend on [`crate::capability::descriptor::CapabilityKind`]
 /// (that would make `descriptor` ↔ `ownership` a cycle), and the strings are
 /// compared against the kind/name spellings at describe time, not here.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Hash)]
 pub struct VisibilityScope {
     /// The principal / agent allowed. `None` = unrestricted.
     pub principal: Option<String>,
@@ -102,11 +102,10 @@ pub struct VisibilityScope {
 pub struct FencingToken(u64);
 
 impl FencingToken {
-    /// Mint a fresh token from the owner layer's monotonic nonce. This is the
-    /// *only* constructor; the nonce's monotonicity is the owner layer's
-    /// contract, not this type's.
+    /// Mint a fresh token from the owner layer's fencing counter. This is the
+    /// *only* constructor; counter monotonicity is the owner layer's contract.
     #[must_use]
-    pub fn new(nonce: u64) -> Self {
+    pub(crate) fn new(nonce: u64) -> Self {
         Self(nonce)
     }
 }
@@ -252,7 +251,7 @@ pub enum RegisterError {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct BindingKey {
     capability: CapabilityId,
-    visibility: String,
+    visibility: VisibilityScope,
 }
 
 #[derive(Debug)]
@@ -265,7 +264,8 @@ struct Binding {
 
 #[derive(Debug)]
 struct OwnershipInner {
-    nonce: u64,
+    generation_nonce: u64,
+    fencing_nonce: u64,
     revoked: HashSet<CapabilityId>,
     disposed: HashSet<LifetimeScope>,
     bindings: HashMap<BindingKey, Binding>,
@@ -289,7 +289,8 @@ impl OwnershipTree {
         let (changes, _) = broadcast::channel(8);
         Self {
             inner: Mutex::new(OwnershipInner {
-                nonce: 0,
+                generation_nonce: 0,
+                fencing_nonce: 0,
                 revoked: HashSet::new(),
                 disposed: HashSet::new(),
                 bindings: HashMap::new(),
@@ -311,7 +312,7 @@ impl OwnershipTree {
     pub fn subscribe_changes(&self) -> broadcast::Receiver<OwnershipChange> {
         self.inner
             .lock()
-            .expect("ownership mutex poisoned")
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .changes
             .subscribe()
     }
@@ -319,7 +320,7 @@ impl OwnershipTree {
     fn key(capability: &CapabilityId, visibility: &VisibilityScope) -> BindingKey {
         BindingKey {
             capability: capability.clone(),
-            visibility: format!("{visibility:?}"),
+            visibility: visibility.clone(),
         }
     }
 
@@ -346,6 +347,20 @@ impl OwnershipTree {
         Ok(())
     }
 
+    /// Register or replace an ownership binding.
+    ///
+    /// The owner generation is the TREE EPOCH, not a per-binding counter: a
+    /// binding is born at the current epoch and stays there until a
+    /// [`OwnershipTree::bump`] re-stamps it. Re-registering the same
+    /// capability with the same owner and lifetime is the same authorization
+    /// fact — it keeps the incumbent's generation AND its live effect claims.
+    /// Re-registering with a DIFFERENT owner or lifetime replaces the binding
+    /// (and clears its claims) but does not move the epoch: a transfer is
+    /// detected by comparing the owner, not the generation.
+    ///
+    /// Callers must keep `owner` and `lifetime` aligned (for example, a Task
+    /// owner must not be given a broader Runtime lifetime), because lifetime
+    /// controls how long the authority remains valid.
     pub fn register(
         &self,
         capability: CapabilityId,
@@ -353,13 +368,18 @@ impl OwnershipTree {
         lifetime: LifetimeScope,
         visibility: VisibilityScope,
     ) -> Result<(), RegisterError> {
-        let mut inner = self.inner.lock().expect("ownership mutex poisoned");
+        let mut inner = self.inner.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         Self::guard(&inner, &capability, lifetime)?;
-        if inner.nonce == u64::MAX {
+        let key = Self::key(&capability, &visibility);
+        if let Some(binding) = inner.bindings.get(&key) {
+            if binding.owner == owner && binding.lifetime == lifetime {
+                return Ok(());
+            }
+        }
+        if inner.generation_nonce == u64::MAX {
             return Err(RegisterError::GenerationExhausted);
         }
-        let key = Self::key(&capability, &visibility);
-        let generation = OwnerGeneration(inner.nonce);
+        let generation = OwnerGeneration(inner.generation_nonce);
         inner.bindings.insert(
             key,
             Binding {
@@ -381,16 +401,16 @@ impl OwnershipTree {
         lifetime: LifetimeScope,
         visibility: VisibilityScope,
     ) -> Result<(), RegisterError> {
-        let mut inner = self.inner.lock().expect("ownership mutex poisoned");
+        let mut inner = self.inner.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         Self::guard(&inner, &capability, lifetime)?;
         let key = Self::key(&capability, &visibility);
         if inner.bindings.contains_key(&key) {
             return Ok(());
         }
-        if inner.nonce == u64::MAX {
+        if inner.generation_nonce == u64::MAX {
             return Err(RegisterError::GenerationExhausted);
         }
-        let generation = OwnerGeneration(inner.nonce);
+        let generation = OwnerGeneration(inner.generation_nonce);
         inner.bindings.entry(key).or_insert_with(|| Binding {
             owner,
             lifetime,
@@ -401,7 +421,7 @@ impl OwnershipTree {
     }
 
     pub fn resolve(&self, capability: &CapabilityId, visibility: &VisibilityScope) -> Option<()> {
-        let inner = self.inner.lock().expect("ownership mutex poisoned");
+        let inner = self.inner.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let key = Self::key(capability, visibility);
         inner.bindings.get(&key).map(|_| ())
     }
@@ -410,17 +430,38 @@ impl OwnershipTree {
     /// binding without mutating it.
     ///
     /// Returns `None` when no such binding exists. Never bumps the nonce, never
-    /// touches claims, never registers a binding. Generation is per-binding
-    /// (`(CapabilityId, VisibilityScope)`-level), NOT a global registry revision.
+    /// touches claims, never registers a binding. Generation is the tree EPOCH
+    /// a binding was born in (`(CapabilityId, VisibilityScope)`-level), NOT a
+    /// global registry revision: a binding keeps its epoch until a
+    /// [`OwnershipTree::bump`] re-stamps it, and an ownership TRANSFER does not
+    /// move the epoch — the transfer is visible in the OWNER, which
+    /// [`OwnershipTree::owner_of`] reads.
     #[must_use]
     pub fn generation(
         &self,
         capability: &CapabilityId,
         visibility: &VisibilityScope,
     ) -> Option<OwnerGeneration> {
-        let inner = self.inner.lock().expect("ownership mutex poisoned");
+        let inner = self.inner.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let key = Self::key(capability, visibility);
         inner.bindings.get(&key).map(|binding| binding.generation)
+    }
+
+    /// Read the owner of one `(CapabilityId, VisibilityScope)` binding.
+    ///
+    /// The generation alone cannot tell an ownership transfer apart from an
+    /// unchanged binding: `register` may replace the owner without moving the
+    /// epoch. A lease that must fail closed across a transfer compares THIS
+    /// value against the owner it captured.
+    #[must_use]
+    pub fn owner_of(
+        &self,
+        capability: &CapabilityId,
+        visibility: &VisibilityScope,
+    ) -> Option<OwnerRef> {
+        let inner = self.inner.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let key = Self::key(capability, visibility);
+        inner.bindings.get(&key).map(|binding| binding.owner.clone())
     }
 
     /// Validate the complete live binding and commit under the same tree lock.
@@ -442,7 +483,7 @@ impl OwnershipTree {
         lifetime: &LifetimeScope,
         commit: impl FnOnce() -> R,
     ) -> Result<R, BindingValidationError> {
-        let inner = self.inner.lock().expect("ownership mutex poisoned");
+        let inner = self.inner.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         if inner.revoked.contains(capability) {
             return Err(BindingValidationError::Revoked);
         }
@@ -479,7 +520,7 @@ impl OwnershipTree {
         capabilities: impl IntoIterator<Item = CapabilityId>,
         visibility: &VisibilityScope,
     ) -> HashMap<CapabilityId, OwnerGeneration> {
-        let inner = self.inner.lock().expect("ownership mutex poisoned");
+        let inner = self.inner.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         capabilities
             .into_iter()
             .filter_map(|capability| {
@@ -499,7 +540,7 @@ impl OwnershipTree {
         owner: OwnerRef,
         request_id: String,
     ) -> Option<EffectClaim> {
-        let mut inner = self.inner.lock().expect("ownership mutex poisoned");
+        let mut inner = self.inner.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         if inner.revoked.contains(capability) {
             return None;
         }
@@ -511,8 +552,8 @@ impl OwnershipTree {
         if inner.bindings.get(&key)?.owner != owner {
             return None;
         }
-        inner.nonce = inner.nonce.checked_add(1)?;
-        let fence = FencingToken::new(inner.nonce);
+        inner.fencing_nonce = inner.fencing_nonce.checked_add(1)?;
+        let fence = FencingToken::new(inner.fencing_nonce);
         let binding = inner.bindings.get_mut(&key)?;
         binding
             .claims
@@ -530,7 +571,7 @@ impl OwnershipTree {
         capability: &CapabilityId,
         visibility: &VisibilityScope,
     ) -> ClaimState {
-        let inner = self.inner.lock().expect("ownership mutex poisoned");
+        let inner = self.inner.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let Some(binding) = inner.bindings.get(&Self::key(capability, visibility)) else {
             return ClaimState::Unknown;
         };
@@ -558,21 +599,18 @@ impl OwnershipTree {
     }
 
     pub fn is_disposed(&self, scope: LifetimeScope) -> bool {
-        self.inner
-            .lock()
-            .expect("ownership mutex poisoned")
-            .disposed
-            .contains(&scope)
+        let inner = self.inner.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        Self::lifetime_disposed(&inner, scope)
     }
 
     pub fn bump(&self, scope: LifetimeScope) -> Result<OwnerGeneration, OwnershipError> {
-        let mut inner = self.inner.lock().expect("ownership mutex poisoned");
+        let mut inner = self.inner.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let next_nonce = inner
-            .nonce
+            .generation_nonce
             .checked_add(1)
             .ok_or(OwnershipError::GenerationExhausted)?;
-        inner.nonce = next_nonce;
-        let generation = OwnerGeneration(inner.nonce);
+        inner.generation_nonce = next_nonce;
+        let generation = OwnerGeneration(inner.generation_nonce);
         for binding in inner.bindings.values_mut() {
             if rank(binding.lifetime) <= rank(scope) {
                 binding.generation = generation;
@@ -588,8 +626,13 @@ impl OwnershipTree {
         Ok(generation)
     }
 
+    /// Irreversibly tombstone `capability`, even when no binding exists.
+    ///
+    /// The return value reports whether a binding was removed, not whether the
+    /// tombstone was created. Use [`revoke_bound`](Self::revoke_bound) when an
+    /// unbound id must remain registerable.
     pub fn revoke(&self, capability: &CapabilityId) -> bool {
-        let mut inner = self.inner.lock().expect("ownership mutex poisoned");
+        let mut inner = self.inner.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         Self::revoke_locked(&mut inner, capability)
     }
 
@@ -604,7 +647,7 @@ impl OwnershipTree {
     /// An existing binding is revoked with the identical irreversible
     /// transition as [`revoke`](Self::revoke).
     pub fn revoke_bound(&self, capability: &CapabilityId) -> BoundRevoke {
-        let mut inner = self.inner.lock().expect("ownership mutex poisoned");
+        let mut inner = self.inner.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         if inner.revoked.contains(capability) {
             return BoundRevoke::AlreadyRevoked;
         }
@@ -638,8 +681,11 @@ impl OwnershipTree {
         bindings_removed
     }
 
+    /// Irreversibly dispose `scope` and every shorter lifetime beneath it.
+    /// Disposing `Runtime` removes every binding and permanently blocks all
+    /// later registration in this tree.
     pub fn dispose(&self, scope: LifetimeScope) -> bool {
-        let mut inner = self.inner.lock().expect("ownership mutex poisoned");
+        let mut inner = self.inner.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let before = inner.bindings.len();
         inner
             .bindings
@@ -1160,8 +1206,9 @@ mod tests {
         // Move the test fixture to the last two representable generation steps
         // without exercising the production mutation path under test.
         {
-            let mut inner = tree.inner.lock().expect("ownership mutex poisoned");
-            inner.nonce = u64::MAX - 2;
+            let mut inner = tree.inner.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            inner.generation_nonce = u64::MAX - 1;
+            inner.fencing_nonce = u64::MAX - 2;
             let binding = inner
                 .bindings
                 .get_mut(&OwnershipTree::key(&cap, &vis))
@@ -1195,7 +1242,7 @@ mod tests {
         let old_lease_state_before_failed_bump = tree.claim_state(&old_lease, &cap, &vis);
         let generation_before = tree.generation(&cap, &vis);
         let binding_before = {
-            let inner = tree.inner.lock().expect("ownership mutex poisoned");
+            let inner = tree.inner.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             let binding = inner
                 .bindings
                 .get(&OwnershipTree::key(&cap, &vis))
@@ -1214,7 +1261,7 @@ mod tests {
         assert_eq!(tree.generation(&cap, &vis), generation_before);
         assert_eq!(tree.resolve(&cap, &vis), Some(()));
         let binding_after = {
-            let inner = tree.inner.lock().expect("ownership mutex poisoned");
+            let inner = tree.inner.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             let binding = inner
                 .bindings
                 .get(&OwnershipTree::key(&cap, &vis))

@@ -19,6 +19,7 @@ pub struct EffectClaimEvent {
     pub owner_generation: u64,
     pub fence: u64,
     pub state: EffectClaimState,
+    pub terminal_receipt: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -52,6 +53,7 @@ pub fn effect_claim_event_from_session(event: &SessionEvent) -> Option<EffectCla
             owner_generation: *owner_generation,
             fence: *fence,
             state: EffectClaimState::Prepared,
+            terminal_receipt: false,
         }),
         SessionEvent::EffectClaimClaimed {
             request_id,
@@ -65,6 +67,7 @@ pub fn effect_claim_event_from_session(event: &SessionEvent) -> Option<EffectCla
             owner_generation: *owner_generation,
             fence: *fence,
             state: EffectClaimState::Claimed,
+            terminal_receipt: false,
         }),
         SessionEvent::EffectClaimInvoking {
             request_id,
@@ -78,6 +81,7 @@ pub fn effect_claim_event_from_session(event: &SessionEvent) -> Option<EffectCla
             owner_generation: *owner_generation,
             fence: *fence,
             state: EffectClaimState::Invoking,
+            terminal_receipt: false,
         }),
         SessionEvent::EffectClaimTerminal {
             request_id,
@@ -99,6 +103,7 @@ pub fn effect_claim_event_from_session(event: &SessionEvent) -> Option<EffectCla
                 ClaimStateWire::Failed => EffectClaimState::Failed,
                 ClaimStateWire::Unknown => EffectClaimState::Unknown,
             },
+            terminal_receipt: true,
         }),
         _ => None,
     }
@@ -111,7 +116,15 @@ pub fn reconcile_session_events(events: &[SessionEvent]) -> EffectClaimReconcili
         .iter()
         .filter_map(effect_claim_event_from_session)
         .collect();
-    reconcile_effect_claim(&mapped)
+    let Some(first) = mapped.first() else {
+        return reconcile_effect_claim(&mapped);
+    };
+    let request_id = first.request_id.clone();
+    let group: Vec<_> = mapped
+        .into_iter()
+        .filter(|event| event.request_id == request_id)
+        .collect();
+    reconcile_effect_claim(&group)
 }
 
 pub fn reconcile_effect_claim(events: &[EffectClaimEvent]) -> EffectClaimReconciliation {
@@ -155,6 +168,20 @@ pub fn reconcile_effect_claim(events: &[EffectClaimEvent]) -> EffectClaimReconci
             || terminal.is_some()
         {
             return unknown();
+        }
+        if event.terminal_receipt {
+            match (current, event.state) {
+                (EffectClaimState::Invoking, state @ (EffectClaimState::Succeeded | EffectClaimState::Failed)) => {
+                    current = state;
+                    terminal = Some(state);
+                }
+                (EffectClaimState::Prepared | EffectClaimState::Claimed | EffectClaimState::Invoking, _) => {
+                    current = EffectClaimState::Unknown;
+                    terminal = Some(EffectClaimState::Unknown);
+                }
+                _ => return unknown(),
+            }
+            continue;
         }
         match (index, event.state) {
             (0, EffectClaimState::Prepared) => {}
@@ -204,6 +231,7 @@ mod tests {
             owner_generation: 1,
             fence: 1,
             state,
+            terminal_receipt: false,
         }
     }
     #[test]
@@ -409,6 +437,7 @@ mod tests {
             owner_generation: gen,
             fence,
             state,
+            terminal_receipt: false,
         }
     }
     #[test]
@@ -442,9 +471,9 @@ mod tests {
         );
     }
 
-    // Adapter path: EffectClaimTerminal{state: Unknown} maps to terminal Unknown.
+    // Adapter path preserves terminality even when the payload is non-terminal.
     #[test]
-    fn session_terminal_unknown_maps_to_unknown() {
+    fn session_terminal_active_maps_to_unknown_and_rejects_following_receipts() {
         let events = vec![
             SessionEvent::EffectClaimPrepared {
                 request_id: "r".into(),
@@ -458,8 +487,16 @@ mod tests {
                 owner: OwnerRefWire::Runtime,
                 owner_generation: 1,
                 fence: 1,
-                state: ClaimStateWire::Unknown,
+                state: ClaimStateWire::Active,
                 at: 1,
+            },
+            SessionEvent::EffectClaimTerminal {
+                request_id: "r".into(),
+                owner: OwnerRefWire::Runtime,
+                owner_generation: 1,
+                fence: 1,
+                state: ClaimStateWire::Succeeded,
+                at: 2,
             },
         ];
         let rec = reconcile_session_events(&events);

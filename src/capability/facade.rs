@@ -12,7 +12,7 @@ use crate::capability::descriptor::{
     CapabilityDescriptor, CapabilityFacet, CapabilityId, CapabilityKind, CapabilityRevision,
     ProjectionMetadata,
 };
-use crate::capability::ownership::{OwnerGeneration, VisibilityScope};
+use crate::capability::ownership::{OwnerGeneration, OwnerRef, VisibilityScope};
 
 /// A scope selecting which capabilities a facade operation targets.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -63,6 +63,13 @@ pub struct CapabilitySnapshot {
 pub struct BackendLease {
     pub descriptor: CapabilityDescriptor,
     pub owner_generation: OwnerGeneration,
+    /// The owner the binding had when the lease was minted.
+    ///
+    /// The generation alone cannot tell an ownership TRANSFER apart from an
+    /// unchanged binding: `OwnershipTree::register` may replace the owner
+    /// without moving the tree epoch. The captured owner is what makes such a
+    /// transfer fail closed at `validate_lease` time.
+    pub owner: OwnerRef,
     /// Generation of the provider instance that resolved this lease. A
     /// provider restart invalidates the lease even when the tool descriptor
     /// itself has not changed.
@@ -123,9 +130,9 @@ pub enum CapabilityChange {
 ///
 /// **Pure value semantics.** This struct holds no store, registry, or
 /// subscription wiring. It is a state machine over `(cursor, changes)` and
-/// nothing else — owner-generation verification lives in the future concrete
-/// facade (`lease` / `future` impls). Dedup uses `(id, revision)` only; the
-/// owner-generation check belongs at the backend boundary, not here.
+/// nothing else — owner-generation verification lives in the concrete facade.
+/// Dedup uses exact lifecycle-change equality. History retains the latest 256
+/// changes.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct CapabilityChangeStream {
     pub committed_cursor: Cursor,
@@ -156,6 +163,7 @@ impl CapabilityChangeStream {
         }
         self.committed_cursor = cursor;
         self.changes.push(change);
+        self.trim_history();
         true
     }
 
@@ -170,6 +178,7 @@ impl CapabilityChangeStream {
         }
         self.changes.extend(changes);
         self.committed_cursor = cursor;
+        self.trim_history();
         true
     }
 
@@ -180,14 +189,14 @@ impl CapabilityChangeStream {
     ///
     /// 1. Snapshot `committed_cursor` as `old`.
     /// 2. Drop delta entries with `cursor <= old` (stale tail).
-    /// 3. Drop surviving entries whose `(id, revision)` already appears in
-    ///    `self.changes` — the subscriber has already seen them. Dedup also
-    ///    collapses duplicates within the accepted tail.
+    /// 3. Drop surviving entries exactly equal to a change in `self.changes`
+    ///    — the subscriber has already seen them. Dedup also collapses exact
+    ///    duplicates within the accepted tail.
     /// 4. Push one `Invalidated` followed by the surviving delta in input
     ///    order.
     /// 5. Advance `committed_cursor` to
     ///    `max(old, snapshot.committed_cursor, accepted cursors)`. The cursor
-    ///    never regresses; the stream's history is preserved, never zeroed.
+    ///    never regresses; history retains only its most recent 256 changes.
     ///
     /// Returns `false` **only** when `snapshot.committed_cursor < old` — a
     /// resync source that lags behind the subscriber. On failure the stream is
@@ -208,16 +217,14 @@ impl CapabilityChangeStream {
             if cursor <= old {
                 continue;
             }
-            if let Some((id, rev)) = id_rev_of(&change) {
-                let already = self.changes.iter().chain(accepted.iter()).any(|existing| {
-                    match id_rev_of(existing) {
-                        Some((eid, erev)) => eid == id && erev == rev,
-                        None => false,
-                    }
-                });
-                if already {
-                    continue;
-                }
+            if !matches!(change, CapabilityChange::Invalidated)
+                && self
+                    .changes
+                    .iter()
+                    .chain(accepted.iter())
+                    .any(|existing| existing == &change)
+            {
+                continue;
             }
             new_cursor = new_cursor.max(cursor);
             accepted.push(change);
@@ -226,21 +233,15 @@ impl CapabilityChangeStream {
         self.changes.push(CapabilityChange::Invalidated);
         self.changes.extend(accepted);
         self.committed_cursor = new_cursor;
+        self.trim_history();
         true
     }
-}
 
-/// Extract the `(id, revision)` payload of a change, if it has one.
-///
-/// [`CapabilityChange::Invalidated`] carries no per-capability identity and
-/// returns `None` so dedup can skip it; multiple `Invalidated` entries (one
-/// per resync call) are therefore preserved verbatim.
-fn id_rev_of(change: &CapabilityChange) -> Option<(&CapabilityId, CapabilityRevision)> {
-    match change {
-        CapabilityChange::Registered { id, revision }
-        | CapabilityChange::Replaced { id, revision }
-        | CapabilityChange::Unregistered { id, revision } => Some((id, *revision)),
-        CapabilityChange::Invalidated => None,
+    fn trim_history(&mut self) {
+        const HISTORY_LIMIT: usize = 256;
+        if self.changes.len() > HISTORY_LIMIT {
+            self.changes.drain(..self.changes.len() - HISTORY_LIMIT);
+        }
     }
 }
 
@@ -381,33 +382,31 @@ mod tests {
     }
 
     #[test]
-    fn invalidate_and_resync_dedups_by_id_and_revision() {
+    fn invalidate_and_resync_dedups_exact_changes_only() {
         let mut stream = CapabilityChangeStream::from_snapshot(empty_snapshot(1));
         // Pre-existing change that the delta will echo.
         stream.changes.push(registered("ns", "x", 2));
         stream.committed_cursor = Cursor(1);
 
         let delta = vec![
-            // Same (id, revision) as the existing change — must be dropped.
+            // Exact duplicate — must be dropped.
             (Cursor(2), registered("ns", "x", 2)),
-            // Brand new (id, revision) — must be kept.
-            (Cursor(3), registered("ns", "y", 1)),
+            // Same id/revision but a distinct lifecycle event — must survive.
+            (Cursor(3), replaced("ns", "x", 2)),
+            (Cursor(4), registered("ns", "y", 1)),
         ];
         assert!(stream.invalidate_and_resync(empty_snapshot(4), delta));
 
-        // 1 pre-existing + 1 Invalidated + 1 surviving delta entry.
-        assert_eq!(stream.changes.len(), 3);
+        // 1 pre-existing + 1 Invalidated + 2 distinct delta entries.
+        assert_eq!(stream.changes.len(), 4);
         assert_eq!(stream.committed_cursor, Cursor(4));
         assert!(matches!(
             stream.changes[0],
             CapabilityChange::Registered { .. }
         ));
         assert!(matches!(stream.changes[1], CapabilityChange::Invalidated));
-        assert!(matches!(
-            stream.changes[2],
-            CapabilityChange::Registered { ref id, revision: CapabilityRevision(1) }
-                if id == &cap_id("ns", "y")
-        ));
+        assert!(matches!(stream.changes[2], CapabilityChange::Replaced { ref id, revision: CapabilityRevision(2) } if id == &cap_id("ns", "x")));
+        assert!(matches!(stream.changes[3], CapabilityChange::Registered { ref id, revision: CapabilityRevision(1) } if id == &cap_id("ns", "y")));
     }
 
     #[test]

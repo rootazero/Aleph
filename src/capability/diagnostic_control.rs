@@ -132,6 +132,14 @@ impl DiagnosticControl {
     }
 
     /// Read the REAL applied state plus queue / telemetry counters.
+    ///
+    /// The error channel is currently INFALLIBLE: reading the status never
+    /// fails, and it stays readable after the host reached its completion
+    /// boundary so the final counters of a closed host remain observable.
+    /// The completion boundary is reported through
+    /// [`DiagnosticStatus::lifecycle`] (`Closing` / `Closed`), NOT through an
+    /// error, so callers MUST inspect `lifecycle` instead of relying on this
+    /// `Result` to learn that the host is dead.
     pub fn status(&self) -> Result<DiagnosticStatus, DiagnosticError> {
         Ok(self.host.diagnostic_status())
     }
@@ -141,6 +149,17 @@ impl DiagnosticControl {
     /// observe the new generation in [`DiagnosticControl::status`] before
     /// trusting it as delivered. Refuses to bump on a disposed Runtime
     /// (irreversible once [`DiagnosticControl::dispose_runtime`] has run).
+    ///
+    /// # Side effects
+    ///
+    /// `bump(Runtime)` is TREE-WIDE, not scoped to a single Runtime binding:
+    /// it re-stamps the owner generation of EVERY binding whose lifetime
+    /// rank is at or below Runtime (Runtime is the maximum rank, so that is
+    /// every binding in the tree) and clears every recorded effect claim on
+    /// those bindings. This call therefore invalidates every live lease and
+    /// drops every effect claim in the shared tree; the returned
+    /// [`OwnerGeneration`] is the only visible result, so a caller must
+    /// choose to bump deliberately.
     pub fn bump_runtime(&self) -> Result<OwnerGeneration, DiagnosticError> {
         if self.host.is_closing() {
             return Err(DiagnosticError::Closed);
@@ -151,11 +170,25 @@ impl DiagnosticControl {
         {
             return Err(DiagnosticError::Closed);
         }
-        self.tree
+        let generation = self
+            .tree
             .bump(crate::capability::ownership::LifetimeScope::Runtime)
             .map_err(|error| match error {
                 OwnershipError::GenerationExhausted => DiagnosticError::GenerationExhausted,
-            })
+            })?;
+        // The tree's `bump` does not re-check disposal and the check above
+        // is not performed under the tree's lock, so a dispose that landed
+        // between the check and the mutation would still be answered with a
+        // generation. Re-check AFTER the mutation so a disposed runtime
+        // fails closed instead of looking live.
+        if self.host.is_closing()
+            || self
+                .tree
+                .is_disposed(crate::capability::ownership::LifetimeScope::Runtime)
+        {
+            return Err(DiagnosticError::Closed);
+        }
+        Ok(generation)
     }
 
     /// Revoke the tool binding for `tool_name` on the SAME tree. The
@@ -168,6 +201,11 @@ impl DiagnosticControl {
     /// tombstone), so the error carries no side effect. Returns
     /// `Ok(true)` when this call revoked a live binding and `Ok(false)` when
     /// the id was already tombstoned (idempotent, nothing changed).
+    ///
+    /// A close that lands between the completion-boundary check and the
+    /// mutation fails the call with [`DiagnosticError::Closed`] even though
+    /// the revoke itself already happened: the control never reports a
+    /// successful mutation from a surface that died underneath the call.
     pub fn revoke_tool(&self, tool_name: &str) -> Result<bool, DiagnosticError> {
         if self.host.is_closing() {
             return Err(DiagnosticError::Closed);
@@ -176,16 +214,35 @@ impl DiagnosticControl {
             namespace: crate::capability::backend::TOOL_NAMESPACE.to_string(),
             name: tool_name.to_string(),
         };
-        match self.tree.revoke_bound(&id) {
-            BoundRevoke::Revoked => Ok(true),
-            BoundRevoke::AlreadyRevoked => Ok(false),
-            BoundRevoke::NotBound => Err(DiagnosticError::UnknownTool {
-                name: tool_name.to_string(),
-            }),
+        let revoked = match self.tree.revoke_bound(&id) {
+            BoundRevoke::Revoked => true,
+            BoundRevoke::AlreadyRevoked => false,
+            BoundRevoke::NotBound => {
+                return Err(DiagnosticError::UnknownTool {
+                    name: tool_name.to_string(),
+                })
+            }
+        };
+        // The revoke and the completion-boundary check are not performed
+        // under one lock, so a close that landed in the gap would be
+        // reported as a successful revoke. Re-check after the mutation and
+        // fail closed when the surface died underneath the call.
+        if self.host.is_closing() {
+            return Err(DiagnosticError::Closed);
         }
+        Ok(revoked)
     }
 
-    /// Dispose the existing Runtime lifetime on the same tree. Irreversible.
+    /// Dispose the RUNTIME lifetime on the same tree. Irreversible, and the
+    /// blast radius is TREE-WIDE rather than Runtime-scoped:
+    ///
+    /// * The tree's `dispose(Runtime)` removes EVERY binding in the tree.
+    ///   Runtime is the maximum lifetime rank, so every shorter lifetime
+    ///   beneath it (Session / Run / Task / External) is released with it.
+    /// * The Runtime scope is tombstoned, and because the tombstone is
+    ///   rank-based, every LATER registration at ANY scope is refused. The
+    ///   tree is permanently closed to new bindings.
+    ///
     /// Idempotent: a duplicate dispose on an already-tombstoned scope is a
     /// no-op and returns `Ok`. The control never synthesises a new Runtime
     /// binding on its own — the tree's `is_disposed(Runtime)` bit is set
@@ -201,6 +258,13 @@ impl DiagnosticControl {
         let _ = self
             .tree
             .dispose(crate::capability::ownership::LifetimeScope::Runtime);
+        // The dispose and the completion-boundary check are not performed
+        // under one lock, so a close that landed in the gap would be
+        // reported as a successful dispose on a dead surface. Re-check
+        // after the mutation and fail closed when the surface died.
+        if self.host.is_closing() {
+            return Err(DiagnosticError::Closed);
+        }
         Ok(())
     }
 
@@ -579,14 +643,22 @@ mod tests {
         assert!(s.applied_tool_ids.iter().any(|t| t.name == "late"));
     }
 
-    /// RED — §3.4 dispose is irreversible; a second dispose reports `Closed`.
+    /// RED — §3.4 dispose is irreversible AND idempotent: the first dispose
+    /// tears the tree down, a duplicate dispose on the already-tombstoned
+    /// runtime is a no-op that still returns `Ok` (it does NOT report
+    /// `Closed`), and `bump_runtime` on the disposed runtime fails closed.
     #[tokio::test]
     async fn dispose_runtime_irreversible() {
         let ctrl = empty_control();
         ctrl.dispose_runtime().unwrap();
         assert!(
-            ctrl.bump_runtime().is_err(),
-            "bump on a disposed runtime must fail"
+            matches!(ctrl.bump_runtime(), Err(DiagnosticError::Closed)),
+            "bump on a disposed runtime must fail closed"
+        );
+        ctrl.dispose_runtime().unwrap();
+        assert!(
+            matches!(ctrl.bump_runtime(), Err(DiagnosticError::Closed)),
+            "bump on a disposed runtime must still fail closed after a duplicate dispose"
         );
     }
 

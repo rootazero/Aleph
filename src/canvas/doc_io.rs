@@ -18,7 +18,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Weak};
 
-use aleph_protocol::canvas::CanvasDoc;
+use aleph_protocol::canvas::{CanvasDoc, MAX_DOCUMENT_BYTES};
 
 use crate::sync_primitives::Mutex;
 
@@ -98,6 +98,22 @@ impl DocLocks {
         })
     }
 
+    /// Lock a canvas for deletion, treating an unreadable document as an
+    /// absent document while preserving the lock through directory removal.
+    ///
+    /// A document that cannot be read — unparseable, over the read cap, or
+    /// unreadable for any other reason — must still be deletable: the
+    /// alternative is a canvas the API can neither list nor delete.
+    pub(super) async fn lock_for_delete(
+        &self,
+        id: &str,
+        path: PathBuf,
+    ) -> Result<DocGuard, CanvasError> {
+        let permit = self.slot(id).lock_owned().await;
+        let doc = read(&path).await.unwrap_or(None);
+        Ok(DocGuard { path, doc, _permit: permit })
+    }
+
     /// How many slots the table is holding. Test-only observability for the
     /// pruning bound.
     #[cfg(test)]
@@ -161,6 +177,16 @@ impl DocGuard {
 /// into the latter is how a corrupt document becomes invisible on every
 /// surface at once.
 pub(super) async fn read(path: &Path) -> Result<Option<CanvasDoc>, CanvasError> {
+    match tokio::fs::metadata(path).await {
+        Ok(metadata) if metadata.len() > MAX_DOCUMENT_BYTES as u64 => {
+            return Err(CanvasError::Internal(format!(
+                "canvas doc exceeds the {MAX_DOCUMENT_BYTES}-byte read cap"
+            )));
+        }
+        Ok(_) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(CanvasError::Internal(format!("failed to read canvas doc: {e}"))),
+    }
     let contents = match tokio::fs::read_to_string(path).await {
         Ok(c) => c,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
