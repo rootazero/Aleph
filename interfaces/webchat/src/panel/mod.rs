@@ -1,5 +1,6 @@
 //! Feature-gated Panel projection and browser-only lifecycle boundary.
 
+pub mod discovery;
 pub mod loader;
 pub mod projection;
 pub mod registry;

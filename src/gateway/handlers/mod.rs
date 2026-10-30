@@ -101,6 +101,7 @@ pub mod memory_curated;
 pub mod memory_scope;
 pub mod oauth;
 pub mod pairing;
+pub mod panel_capabilities;
 pub mod plugins;
 pub mod projects;
 pub mod projects_channel;
