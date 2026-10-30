@@ -357,8 +357,22 @@ fn AppContent() -> impl IntoView {
         });
     }
 
+    // The panel community fixture seeds a canonical snapshot locally and must
+    // keep the transport disconnected so the fixture remains deterministic.
+    let panel_fixture_route = cfg!(feature = "panel-tab-spike")
+        && web_sys::window().is_some_and(|window| {
+            window
+                .location()
+                .pathname()
+                .unwrap_or_default()
+                .starts_with("/panel/")
+        });
+
     // Setup WebSocket connection and alert subscriptions on mount
     Effect::new(move || {
+        if panel_fixture_route {
+            return;
+        }
         let state = state;
         spawn_local(async move {
             match state.connect().await {

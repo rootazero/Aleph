@@ -64,6 +64,35 @@ impl PanelUiCapabilitySource for FixturePanelUiCapabilitySource {
     }
 }
 
+#[cfg(feature = "panel-tab-spike")]
+pub fn community_fixture_snapshot() -> PanelUiCapabilitySnapshot {
+    PanelUiCapabilitySnapshot::new(
+        7,
+        vec![PanelUiCapabilityDeclaration {
+            descriptor: PanelTabDescriptor {
+                key: PanelTabKey {
+                    plugin_id: "community.fixture".into(),
+                    tab_id: "verified".into(),
+                },
+                label: "Verified community fixture".into(),
+                icon: "layout".into(),
+                order: 10,
+                entry: "./tabs/community.fixture/1.0.0/verified.mjs".into(),
+                api_major: PANEL_UI_API_MAJOR,
+                trust: PanelUiTrust::Trusted,
+                permissions: Vec::new(),
+                status: PanelTabStatus::Enabled,
+                status_detail: None,
+            },
+            origin: PanelUiCapabilityOrigin::Community,
+            plugin_version: "1.0.0".into(),
+            asset_integrity: Some("sha256-/81ggyzAwnDzBLiMA4vU6nbBeCk6HAuZIri/T/CqkWE=".into()),
+            public_base: "./tabs/".into(),
+            source_revision: 7,
+        }],
+    )
+}
+
 pub(super) fn terminal_key() -> PanelTabKey {
     PanelTabKey {
         plugin_id: "aleph".into(),

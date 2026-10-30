@@ -78,6 +78,7 @@ pub(crate) enum PanelAssetPublicationError {
     Unauthorized,
     Missing,
     EntryMismatch,
+    Stale,
     Retracted,
 }
 
@@ -106,6 +107,14 @@ impl PanelAssetPublicationStore {
         }
 
         let identity = PanelAssetIdentity::from_declaration(&declaration);
+        if self
+            .records
+            .keys()
+            .find(|existing| existing.same_slot(&identity))
+            .is_some_and(|existing| existing.source_revision >= identity.source_revision)
+        {
+            return Err(PanelAssetPublicationError::Stale);
+        }
         self.records
             .retain(|existing, _| !existing.same_slot(&identity));
         self.records.insert(
@@ -276,6 +285,10 @@ mod tests {
         let mut store = PanelAssetPublicationStore::default();
 
         store.publish(first.clone(), first_bytes).unwrap();
+        assert!(matches!(
+            store.publish(first.clone(), b"export default stale".to_vec()),
+            Err(PanelAssetPublicationError::Stale)
+        ));
         store
             .publish(replacement.clone(), replacement_bytes.clone())
             .unwrap();
