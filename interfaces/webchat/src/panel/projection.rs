@@ -779,4 +779,25 @@ mod tests {
             assert_eq!(projection.route_key("/terminal"), None);
         }
     }
+
+    #[test]
+    fn snapshot_arrival_stays_passive_until_explicit_community_selection() {
+        let declaration = community_declaration(7);
+        let projection = PanelProjection::from_snapshot(community_snapshot(7, vec![declaration.clone()]))
+            .unwrap();
+
+        assert_eq!(
+            PanelProjection::select_route("/community.example/overview", Some(&projection)),
+            PanelRoute::Legacy
+        );
+        assert_eq!(
+            projection
+                .select_explicit(&declaration.descriptor.key, 7)
+                .unwrap(),
+            declaration.descriptor
+        );
+        assert!(projection
+            .select_explicit(&declaration.descriptor.key, 6)
+            .is_err());
+    }
 }

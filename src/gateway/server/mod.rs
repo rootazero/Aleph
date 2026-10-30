@@ -13,6 +13,8 @@ pub mod connection;
 mod flood_guard;
 pub(crate) mod handler;
 mod metrics_endpoint;
+#[cfg(test)]
+mod panel_asset_route;
 mod per_client_buffer;
 mod probe;
 
