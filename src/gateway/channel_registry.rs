@@ -348,8 +348,8 @@ pub struct ChannelRegistry {
     /// This is a synchronization boundary only; channel maps remain the sole
     /// instance authority and desired_state remains the sole intent authority.
     lifecycle_sync: AsyncMutex<()>,
-    /// Serializes bound publication reservations across retirement and commit.
-    bound_publication_sync: AsyncMutex<()>,
+    /// Serializes source publication reservations across retirement and commit.
+    source_publication_sync: AsyncMutex<()>,
     /// Publication revision for the channel source. It advances only after a
     /// registration or unregistration is committed to `channels`.
     source_revision: AtomicU64,
@@ -381,7 +381,7 @@ impl ChannelRegistry {
                 Arc::new(ChannelSourceGuard { channels }),
             )),
             lifecycle_sync: AsyncMutex::new(()),
-            bound_publication_sync: AsyncMutex::new(()),
+            source_publication_sync: AsyncMutex::new(()),
             source_revision: AtomicU64::new(0),
             descriptor_revision: AtomicU64::new(0),
             desired_state: RwLock::new(HashMap::new()),
@@ -444,6 +444,7 @@ impl ChannelRegistry {
     /// `handlers::channel::create_channel_from_config`.
     #[allow(dead_code)]
     pub async fn create_channel(&self, config: ChannelConfig) -> ChannelResult<ChannelId> {
+        let _source_publication = self.source_publication_sync.lock().await;
         let config_id = ChannelId::new(&config.id);
         let operation = match self.channels.read().await.get(&config_id).cloned() {
             Some(entry) => Some((
@@ -597,6 +598,7 @@ impl ChannelRegistry {
         channel: Box<dyn Channel>,
         boot_intent: DesiredChannelState,
     ) -> ChannelId {
+        let _source_publication = self.source_publication_sync.lock().await;
         let channel_id = channel.id().clone();
         if let Err(error) = self.reject_bound_legacy_access(&channel_id).await {
             warn!(channel = %channel_id, %error, "legacy registration refused; bound incumbent retained");
@@ -700,6 +702,7 @@ impl ChannelRegistry {
     /// who keeps the adapter alive while the forwarder runs).
 
     pub async fn unregister(&self, channel_id: &ChannelId) -> Option<Box<dyn Channel>> {
+        let _source_publication = self.source_publication_sync.lock().await;
         if let Err(error) = self.stop_outgoing_channel(channel_id).await {
             warn!(
                 channel = %channel_id,
@@ -889,7 +892,7 @@ impl ChannelRegistry {
         ownership: Arc<OwnershipTree>,
         initial: ChannelInitialState,
     ) -> Result<ChannelId, ChannelBindingError> {
-        let _bound_publication = self.bound_publication_sync.lock().await;
+        let _source_publication = self.source_publication_sync.lock().await;
         let _lifecycle = self.lifecycle_sync.lock().await;
         let channel_id = channel.id().clone();
         let mut channels = self.channels.write().await;
@@ -4907,6 +4910,7 @@ mod tests {
         ));
         let after = registry.capture_bound_channel(&id).await.unwrap();
         assert!(Arc::ptr_eq(&before.entry, &after.entry));
+        assert_eq!(after.source_revision, before.source_revision);
         assert_eq!(after.descriptor_revision, before.descriptor_revision);
     }
 

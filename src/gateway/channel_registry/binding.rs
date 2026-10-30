@@ -518,7 +518,7 @@ impl super::ChannelRegistry {
         if candidate_id != *channel_id {
             return Err(ChannelBindingError::InvalidContract);
         }
-        let _bound_publication = self.bound_publication_sync.lock().await;
+        let _source_publication = self.source_publication_sync.lock().await;
         let preflight_revision = self.next_bound_revision()?;
         let preflight_descriptor_revision = self.next_bound_descriptor_revision()?;
         let candidate = self.prepare_bound_entry(
@@ -540,7 +540,7 @@ impl super::ChannelRegistry {
         self: &Arc<Self>,
         channel_id: &super::ChannelId,
     ) -> Result<(), ChannelBindingError> {
-        let _bound_publication = self.bound_publication_sync.lock().await;
+        let _source_publication = self.source_publication_sync.lock().await;
         let _ = self.next_bound_revision()?;
         let _ = self.next_bound_descriptor_revision()?;
         let incumbent = self.begin_bound_retirement(channel_id).await?;
