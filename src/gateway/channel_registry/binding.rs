@@ -590,6 +590,7 @@ impl super::ChannelRegistry {
             return Err(ChannelBindingError::UnboundLegacy);
         };
         let _ = self.next_bound_revision()?;
+        let mut desired = self.desired_state.write().await;
         {
             let mut runtime = entry
                 .runtime
@@ -623,10 +624,7 @@ impl super::ChannelRegistry {
                 ProviderState::Ready | ProviderState::Starting | ProviderState::Stopping
             ) || runtime.forwarder.is_some();
         }
-        self.desired_state
-            .write()
-            .await
-            .insert(id.clone(), super::DesiredChannelState::Stopped);
+        desired.insert(id.clone(), super::DesiredChannelState::Stopped);
         Ok(entry)
     }
 

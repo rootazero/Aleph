@@ -534,10 +534,13 @@ impl ChannelRegistry {
         self.webhook_mounts.unmount_channel(&channel_id).await;
 
         let mut channels = self.channels.write().await;
-        // Stamp the publication while the map is locked: the mount built from
-        // this entry later carries the stamp, and dispatch compares it against
-        // this very entry.
-        let publication_revision = self.advance_source_revision();
+        let mut desired = self.desired_state.write().await;
+        // Stamp the publication while the map and intent are locked together:
+        // the mount built from this entry later carries the stamp, and dispatch
+        // compares it against this very entry.
+        let publication_revision = self
+            .try_advance_source_revision()
+            .map_err(|error| ChannelError::Internal(error.to_string()))?;
         channels.insert(
             channel_id.clone(),
             Arc::new(ChannelRegistrationEntry {
@@ -549,7 +552,6 @@ impl ChannelRegistry {
                 drained: tokio::sync::Notify::new(),
             }),
         );
-        drop(channels);
 
         // Preserve the configured boot intent: a successful replacement is
         // selected by `start_all` only when its config explicitly enables it.
@@ -558,7 +560,9 @@ impl ChannelRegistry {
         } else {
             DesiredChannelState::Stopped
         };
-        self.set_desired(&channel_id, boot_intent).await;
+        desired.insert(channel_id.clone(), boot_intent);
+        drop(desired);
+        drop(channels);
 
         if let Some((entry, marker)) = &operation {
             self.finish_legacy_operation(entry, marker).await;
@@ -650,9 +654,13 @@ impl ChannelRegistry {
         self.webhook_mounts.unmount_channel(&channel_id).await;
 
         let mut channels = self.channels.write().await;
-        // Stamped under the map lock, exactly like `create_channel`: a retained
-        // mount is refused once this id denotes a different publication.
-        let publication_revision = self.advance_source_revision();
+        let mut desired = self.desired_state.write().await;
+        // Stamped under the map and intent locks, exactly like `create_channel`:
+        // a retained mount is refused once this id denotes a different publication.
+        let Ok(publication_revision) = self.try_advance_source_revision() else {
+            warn!(channel = %channel_id, "legacy registration refused; source revision exhausted");
+            return channel_id;
+        };
         channels.insert(
             channel_id.clone(),
             Arc::new(ChannelRegistrationEntry {
@@ -664,14 +672,12 @@ impl ChannelRegistry {
                 drained: tokio::sync::Notify::new(),
             }),
         );
-        drop(channels);
 
         // This unconditional write is intentional: replacement gets the new
         // registration's boot intent rather than inheriting the old instance's.
-        self.desired_state
-            .write()
-            .await
-            .insert(channel_id.clone(), boot_intent);
+        desired.insert(channel_id.clone(), boot_intent);
+        drop(desired);
+        drop(channels);
         info!("Registered channel: {}", channel_id);
         channel_id
     }
@@ -827,11 +833,6 @@ impl ChannelRegistry {
             .load(std::sync::atomic::Ordering::Relaxed)
             .checked_add(1)
             .ok_or(binding::ChannelBindingError::DescriptorPublicationExhausted)
-    }
-
-    fn advance_source_revision(&self) -> u64 {
-        self.try_advance_source_revision()
-            .expect("channel source revision exhausted")
     }
 
     fn prepare_bound_entry(
