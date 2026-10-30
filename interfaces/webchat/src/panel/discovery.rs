@@ -44,7 +44,10 @@ impl PanelDiscoveryState {
 
     /// Start a query for a new socket epoch while retaining the last known snapshot.
     pub fn begin_connection(&mut self, epoch: u64) {
-        if epoch < self.connection_epoch {
+        if epoch < self.connection_epoch
+            || (epoch == self.connection_epoch
+                && matches!(self.status, PanelDiscoveryStatus::Disconnected))
+        {
             return;
         }
         self.connection_epoch = epoch;
@@ -287,6 +290,15 @@ mod tests {
         state.disconnect(1);
         assert_eq!(state.status(), &PanelDiscoveryStatus::Disconnected);
         assert_eq!(state.snapshot().map(|snapshot| snapshot.revision), Some(5));
+    }
+
+    #[test]
+    fn a_disconnected_epoch_cannot_be_reopened_without_reconnect() {
+        let mut state = PanelDiscoveryState::new();
+        state.begin_connection(1);
+        state.disconnect(1);
+        state.begin_connection(1);
+        assert_eq!(state.status(), &PanelDiscoveryStatus::Disconnected);
     }
 
     #[test]
