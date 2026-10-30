@@ -57,7 +57,7 @@ No live snapshot notification was added. The existing EventBus/SubscriptionManag
 | Check | Result |
 | --- | --- |
 | `cargo test -p aleph-protocol panel --lib` | 9 passed, 0 failed |
-| `cargo test --no-default-features --features panel-modular --lib panel` from `interfaces/webchat` | 81 passed, 0 failed |
+| Webchat `panel-modular` Panel suite (before the final late-disconnect regression) | 81 passed, 0 failed |
 | Focused `panel::discovery` suite | 11 passed, 0 failed |
 | `cargo check --no-default-features --features panel-modular` | passed |
 | `cargo clippy --no-default-features --features panel-modular --lib -- -D warnings` | passed |
