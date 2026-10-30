@@ -705,6 +705,7 @@ impl super::ChannelRegistry {
             super::ChannelRegistration::Bound(bound) => bound,
             _ => return Err(ChannelBindingError::InvalidContract),
         };
+        let mut desired = self.desired_state.write().await;
         let _ = self.next_bound_revision()?;
         let _ = self.next_bound_descriptor_revision()?;
         let source_revision = self.advance_bound_revision()?;
@@ -714,7 +715,6 @@ impl super::ChannelRegistry {
         bound.descriptor.revision =
             crate::capability::descriptor::CapabilityRevision(descriptor_revision);
         bound.descriptor_fingerprint = canonical_descriptor_fingerprint(&bound.descriptor);
-        let mut desired = self.desired_state.write().await;
         channels.insert(id.clone(), candidate);
         desired.insert(id.clone(), super::DesiredChannelState::Stopped);
         Ok(id.clone())
@@ -746,9 +746,9 @@ impl super::ChannelRegistry {
         if incumbent.runtime.lock().unwrap().active_work != 0 {
             return Err(ChannelBindingError::Busy);
         }
+        let mut desired = self.desired_state.write().await;
         self.advance_bound_revision()?;
         self.advance_bound_descriptor_revision()?;
-        let mut desired = self.desired_state.write().await;
         channels.remove(id);
         desired.remove(id);
         Ok(())
