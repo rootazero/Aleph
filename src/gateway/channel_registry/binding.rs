@@ -613,15 +613,18 @@ impl super::ChannelRegistry {
                             runtime.residual = ChannelCleanupResidual::default();
                         }
                     }
+                    Some(Ok(false)) if bound.provider.state() == ProviderState::Failed => {
+                        runtime.driver = None;
+                    }
                     Some(Ok(false)) => return Err(ChannelBindingError::Busy),
                     Some(Err(_)) => return Err(ChannelBindingError::Busy),
                     None => return Err(ChannelBindingError::Busy),
                 }
             }
-            if runtime.operation.is_some() {
+            let state = bound.provider.state();
+            if runtime.operation.is_some() && state != ProviderState::Failed {
                 return Err(ChannelBindingError::Busy);
             }
-            let state = bound.provider.state();
             if matches!(state, ProviderState::Ready | ProviderState::Starting) {
                 bound.provider.transition(ProviderState::Stopping)?;
             }
@@ -773,6 +776,7 @@ impl super::ChannelRegistry {
         &self,
         id: &super::ChannelId,
     ) -> Result<(Arc<ChannelRegistrationEntry>, Arc<()>, u64), ChannelBindingError> {
+        use crate::capability::provider::ProviderState;
         use futures::FutureExt;
         let entry = self
             .channels
@@ -791,6 +795,9 @@ impl super::ChannelRegistry {
         if let Some(driver) = &mut runtime.driver {
             match driver.now_or_never() {
                 Some(Ok(true)) => runtime.driver = None,
+                Some(Ok(false)) if bound.provider.state() == ProviderState::Failed => {
+                    runtime.driver = None;
+                }
                 Some(Ok(false)) => return Err(ChannelBindingError::Busy),
                 Some(Err(_)) => return Err(ChannelBindingError::Busy),
                 None => return Err(ChannelBindingError::Busy),
@@ -963,6 +970,9 @@ impl super::ChannelRegistry {
         if let Some(driver) = &mut runtime.driver {
             match driver.now_or_never() {
                 Some(Ok(true)) => {
+                    runtime.driver = None;
+                }
+                Some(Ok(false)) if bound.provider.state() == ProviderState::Failed => {
                     runtime.driver = None;
                 }
                 Some(Ok(false)) => {

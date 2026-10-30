@@ -1402,7 +1402,11 @@ async fn webhook_invalid_config_fails_before_client_attempt() {
     .await;
     assert_cold_probe(&probe, stage);
 
-    let error = expect_start_failure(registry.start_bound_channel_compat(&id).await, stage);
+    let receiver = registry
+        .start_bound_channel(&id)
+        .await
+        .expect("async start admission succeeds");
+    let error = expect_start_failure(receiver.await.unwrap(), stage);
     assert!(
         error.contains("secret is required"),
         "{stage}: the failure must be real config validation, got {}",
