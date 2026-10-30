@@ -13,6 +13,7 @@ use crate::capability::facade::{
     CapabilitySnapshot, Cursor, Projection, Reference, Scope, TransportTarget,
 };
 use crate::capability::ownership::BindingValidationError;
+use crate::capability::provider::ProviderCallError;
 
 const CHANNEL_NAMESPACE: &str = "aleph/gateway/channels";
 
@@ -82,54 +83,88 @@ impl ChannelRegistry {
             return Err(ChannelBindingError::NotFound);
         }
 
-        let _lifecycle = self.lifecycle_sync.lock().await;
-        let channels = self.channels.read().await;
-        let entry = channels
-            .get(&super::ChannelId::new(&reference.id.name))
-            .ok_or(ChannelBindingError::NotFound)?;
-        let ChannelRegistration::Bound(bound) = &entry.registration else {
-            return Err(ChannelBindingError::UnboundLegacy);
-        };
-        if bound.descriptor.id != reference.id {
-            return Err(ChannelBindingError::NotFound);
-        }
-        if bound.descriptor.visibility != reference.visibility {
-            return Err(ChannelBindingError::WrongVisibility);
-        }
+        let (mut capture, ownership, owner, lifetime) = {
+            let _lifecycle = self.lifecycle_sync.lock().await;
+            let channels = self.channels.read().await;
+            let entry = channels
+                .get(&super::ChannelId::new(&reference.id.name))
+                .cloned()
+                .ok_or(ChannelBindingError::NotFound)?;
+            let ChannelRegistration::Bound(bound) = &entry.registration else {
+                return Err(ChannelBindingError::UnboundLegacy);
+            };
+            if bound.descriptor.id != reference.id {
+                return Err(ChannelBindingError::NotFound);
+            }
+            if bound.descriptor.visibility != reference.visibility {
+                return Err(ChannelBindingError::WrongVisibility);
+            }
 
-        let capture = BoundChannelCapture {
-            source: bound.source.clone(),
-            entry: entry.clone(),
-            channel: entry.channel.clone(),
-            source_revision: self
-                .source_revision
-                .load(std::sync::atomic::Ordering::Relaxed),
-            entry_revision: bound.entry_revision,
-            descriptor_revision: bound.descriptor_revision,
-            descriptor: bound.descriptor.clone(),
-            descriptor_fingerprint: bound.descriptor_fingerprint,
-            provider: bound.provider.clone(),
-            provider_generation: bound.provider.snapshot().1,
+            (
+                BoundChannelCapture {
+                    source: bound.source.clone(),
+                    entry: entry.clone(),
+                    channel: entry.channel.clone(),
+                    source_revision: self
+                        .source_revision
+                        .load(std::sync::atomic::Ordering::Relaxed),
+                    entry_revision: bound.entry_revision,
+                    descriptor_revision: bound.descriptor_revision,
+                    descriptor: bound.descriptor.clone(),
+                    descriptor_fingerprint: bound.descriptor_fingerprint,
+                    provider: bound.provider.clone(),
+                    provider_generation: 0,
+                },
+                bound.ownership.clone(),
+                bound.contract.owner.clone(),
+                bound.contract.lifetime,
+            )
         };
-        self.validate_bound_capture(&capture, entry)?;
-        if bound.ownership.is_revoked(&bound.descriptor.id) {
-            return Err(ChannelBindingError::Owner(BindingValidationError::Revoked));
+
+        capture.provider_generation = capture.provider.snapshot().1;
+        self.validate_bound_capture(&capture, &capture.entry)?;
+        let (provider_state, provider_generation) = capture.provider.snapshot();
+        if provider_generation != capture.provider_generation {
+            return Err(ChannelBindingError::Provider(ProviderCallError {
+                provider_id: capture
+                    .provider
+                    .with_snapshot(|provider| provider.provider_id().clone()),
+                state: provider_state,
+                expected_generation: capture.provider_generation,
+                actual_generation: provider_generation,
+            }));
         }
-        if bound.ownership.is_disposed(bound.contract.lifetime) {
-            return Err(ChannelBindingError::Owner(BindingValidationError::Disposed));
+        if ownership.is_revoked(&capture.descriptor.id) {
+            return Err(BindingValidationError::Revoked.into());
         }
-        let owner_generation = bound
-            .ownership
-            .generation(&bound.descriptor.id, &reference.visibility)
+        if ownership.is_disposed(lifetime) {
+            return Err(BindingValidationError::Disposed.into());
+        }
+        let owner_generation = ownership
+            .generation(&capture.descriptor.id, &reference.visibility)
             .ok_or(BindingValidationError::MissingBinding)?;
-        bound.ownership.with_current_binding(
-            &bound.descriptor.id,
+        ownership.with_current_binding(
+            &capture.descriptor.id,
             &reference.visibility,
             owner_generation,
-            &bound.contract.owner,
-            &bound.contract.lifetime,
+            &owner,
+            &lifetime,
             || (),
         )?;
+
+        let _lifecycle = self.lifecycle_sync.lock().await;
+        let channels = self.channels.read().await;
+        let current = channels
+            .get(&super::ChannelId::new(&reference.id.name))
+            .ok_or(ChannelBindingError::NotFound)?;
+        if self
+            .source_revision
+            .load(std::sync::atomic::Ordering::Relaxed)
+            != capture.source_revision
+        {
+            return Err(ChannelBindingError::StaleEntry);
+        }
+        self.validate_bound_capture(&capture, current)?;
         Ok(capture)
     }
 
