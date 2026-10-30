@@ -57,7 +57,9 @@ impl PanelDiscoveryState {
         epoch: u64,
         snapshot: PanelUiCapabilitySnapshot,
     ) -> SnapshotUpdate {
-        if epoch != self.connection_epoch {
+        if epoch != self.connection_epoch
+            || matches!(self.status, PanelDiscoveryStatus::Disconnected)
+        {
             return SnapshotUpdate::StaleEpoch;
         }
         if self.last_revision.is_some_and(|revision| {
@@ -285,6 +287,19 @@ mod tests {
         state.disconnect(1);
         assert_eq!(state.status(), &PanelDiscoveryStatus::Disconnected);
         assert_eq!(state.snapshot().map(|snapshot| snapshot.revision), Some(5));
+    }
+
+    #[test]
+    fn a_late_snapshot_after_disconnect_is_rejected() {
+        let mut state = PanelDiscoveryState::new();
+        state.begin_connection(1);
+        state.disconnect(1);
+        assert_eq!(
+            state.accept_snapshot(1, PanelUiCapabilitySnapshot::new(9, Vec::new())),
+            SnapshotUpdate::StaleEpoch
+        );
+        assert_eq!(state.status(), &PanelDiscoveryStatus::Disconnected);
+        assert!(state.snapshot().is_none());
     }
 
     #[test]
