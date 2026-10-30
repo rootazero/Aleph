@@ -210,8 +210,20 @@ impl PluginManageTool {
         manager: &crate::extension::ExtensionManager,
         args: PluginManageArgs,
     ) -> Result<PluginManageOutput> {
-        if let Err(e) = manager.ensure_loaded().await {
-            tracing::warn!(error = %e, "plugin_manage: failed to load extensions");
+        if matches!(
+            &args.action,
+            PluginAction::List
+                | PluginAction::Show
+                | PluginAction::ContextStatus
+                | PluginAction::Enable
+                | PluginAction::Disable
+                | PluginAction::Reload
+                | PluginAction::ConfigGet
+                | PluginAction::TrustStatus
+        ) {
+            if let Err(e) = manager.ensure_discovered().await {
+                tracing::warn!(error = %e, "plugin_manage: failed to discover extensions");
+            }
         }
 
         match args.action {
