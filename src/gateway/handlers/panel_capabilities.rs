@@ -1,4 +1,31 @@
-//! RED contract tests for the Panel capability snapshot transport adapter.
+use aleph_protocol::panel::{PanelUiCapabilitySnapshot, PANEL_UI_CAPABILITY_SNAPSHOT_METHOD};
+
+use crate::gateway::handlers::plugins::get_extension_manager;
+use crate::gateway::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR};
+
+/// Return the canonical Panel capability snapshot in the existing JSON-RPC envelope.
+pub fn snapshot_response(
+    request: JsonRpcRequest,
+    snapshot: PanelUiCapabilitySnapshot,
+) -> JsonRpcResponse {
+    match serde_json::to_value(snapshot) {
+        Ok(result) => JsonRpcResponse::success(request.id, result),
+        Err(error) => JsonRpcResponse::error(
+            request.id,
+            INTERNAL_ERROR,
+            format!("Failed to serialize {PANEL_UI_CAPABILITY_SNAPSHOT_METHOD}: {error}"),
+        ),
+    }
+}
+
+/// Read the canonical snapshot once and expose it through the existing `/ws` RPC plane.
+pub async fn handle(request: JsonRpcRequest) -> JsonRpcResponse {
+    let manager = match get_extension_manager() {
+        Ok(manager) => manager,
+        Err(response) => return response,
+    };
+    snapshot_response(request, manager.panel_ui_capability_snapshot())
+}
 
 #[cfg(test)]
 mod tests {

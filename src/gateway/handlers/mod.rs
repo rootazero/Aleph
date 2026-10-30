@@ -390,6 +390,8 @@ impl HandlerRegistry {
             plugins::handle_marketplace_install,
         );
 
+        registry.register("panel.capabilities.snapshot", panel_capabilities::handle);
+
         // Service handlers
         registry.register("services.start", services::handle_start);
         registry.register("services.stop", services::handle_stop);
@@ -1303,6 +1305,7 @@ mod tests {
         assert!(registry.has_method("health"));
         assert!(registry.has_method("echo"));
         assert!(registry.has_method("version"));
+        assert!(registry.has_method("panel.capabilities.snapshot"));
     }
 
     #[test]

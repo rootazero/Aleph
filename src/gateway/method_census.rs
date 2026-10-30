@@ -300,6 +300,7 @@ pub(crate) mod tests {
         ("memory.trace", Class::Open),
         ("memory_config.get", Class::Admin),
         ("memory_config.update", Class::Admin),
+        ("panel.capabilities.snapshot", Class::Open),
         ("plugin.install", Class::Admin),
         ("plugin.marketplace.add", Class::Admin),
         ("plugin.marketplace.browse", Class::Admin),

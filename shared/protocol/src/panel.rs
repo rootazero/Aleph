@@ -6,6 +6,9 @@ use serde::{Deserialize, Serialize};
 /// Supported major version of the Panel UI API.
 pub const PANEL_UI_API_MAJOR: u16 = 1;
 
+/// Read-only JSON-RPC method for the canonical Panel capability snapshot.
+pub const PANEL_UI_CAPABILITY_SNAPSHOT_METHOD: &str = "panel.capabilities.snapshot";
+
 /// A tab identity scoped to its owning plugin.
 #[derive(Serialize, Deserialize, Clone, Debug, Eq, PartialEq)]
 pub struct PanelTabKey {
