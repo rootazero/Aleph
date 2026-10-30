@@ -131,10 +131,26 @@ pub fn decode_snapshot(value: Value) -> Result<PanelUiCapabilitySnapshot, serde_
 
 #[cfg(test)]
 mod tests {
+    use aleph_protocol::jsonrpc::JsonRpcResponse;
     use aleph_protocol::panel::PanelUiCapabilitySnapshot;
     use serde_json::json;
 
     use super::{decode_snapshot, PanelDiscoveryState, PanelDiscoveryStatus, SnapshotUpdate};
+
+    #[test]
+    fn control_plane_success_envelope_reaches_discovery_decoder() {
+        let snapshot = PanelUiCapabilitySnapshot::new(17, Vec::new());
+        let response = JsonRpcResponse::success(
+            json!(41),
+            serde_json::to_value(&snapshot).expect("snapshot serializes"),
+        );
+        let wire = serde_json::to_value(response).expect("response serializes");
+        let response: JsonRpcResponse = serde_json::from_value(wire).expect("response decodes");
+        let decoded =
+            decode_snapshot(response.result.expect("success result")).expect("snapshot decodes");
+
+        assert_eq!(decoded, snapshot);
+    }
 
     #[test]
     fn empty_and_non_empty_snapshots_decode_as_successful_values() {
