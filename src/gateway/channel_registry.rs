@@ -445,6 +445,9 @@ impl ChannelRegistry {
     #[allow(dead_code)]
     pub async fn create_channel(&self, config: ChannelConfig) -> ChannelResult<ChannelId> {
         let _source_publication = self.source_publication_sync.lock().await;
+        if let Err(error) = self.next_bound_revision() {
+            return Err(ChannelError::Internal(error.to_string()));
+        }
         let config_id = ChannelId::new(&config.id);
         let operation = match self.channels.read().await.get(&config_id).cloned() {
             Some(entry) => Some((
@@ -600,6 +603,10 @@ impl ChannelRegistry {
     ) -> ChannelId {
         let _source_publication = self.source_publication_sync.lock().await;
         let channel_id = channel.id().clone();
+        if self.next_bound_revision().is_err() {
+            warn!(channel = %channel_id, "legacy registration refused; source revision exhausted");
+            return channel_id;
+        }
         if let Err(error) = self.reject_bound_legacy_access(&channel_id).await {
             warn!(channel = %channel_id, %error, "legacy registration refused; bound incumbent retained");
             return channel_id;
@@ -703,6 +710,10 @@ impl ChannelRegistry {
 
     pub async fn unregister(&self, channel_id: &ChannelId) -> Option<Box<dyn Channel>> {
         let _source_publication = self.source_publication_sync.lock().await;
+        if self.next_bound_revision().is_err() {
+            warn!(channel = %channel_id, "legacy unregistration refused; source revision exhausted");
+            return None;
+        }
         if let Err(error) = self.stop_outgoing_channel(channel_id).await {
             warn!(
                 channel = %channel_id,
@@ -716,29 +727,27 @@ impl ChannelRegistry {
         // `channel.delete` otherwise leaves an authenticated endpoint the
         // operator believes is gone.
         self.webhook_mounts.unmount_channel(channel_id).await;
-        // Drop the intent with the instance. Leaving it behind would both leak
-        // an entry per deleted channel and hand a later channel that reuses the
-        // id a `Running` intent it never asked for.
+        let mut channels = self.channels.write().await;
+        if !channels.contains_key(channel_id) {
+            return None;
+        }
+        self.try_advance_source_revision().ok()?;
+        let entry = channels.remove(channel_id).expect("channel checked above");
+        drop(channels);
         self.desired_state.write().await.remove(channel_id);
 
-        let mut channels = self.channels.write().await;
-        if let Some(entry) = channels.remove(channel_id) {
-            self.advance_source_revision();
-            // Legacy captures retain the entry as well as its channel handle.
-            let channel_arc = Arc::try_unwrap(entry).ok()?.channel;
-            match Arc::try_unwrap(channel_arc) {
-                Ok(rw_lock) => {
-                    let channel = rw_lock.into_inner();
-                    info!("Unregistered channel: {}", channel_id);
-                    Some(channel)
-                }
-                Err(_) => {
-                    warn!("Could not unregister channel {} - still in use", channel_id);
-                    None
-                }
+        // Legacy captures retain the entry as well as the channel handle.
+        let channel_arc = Arc::try_unwrap(entry).ok()?.channel;
+        match Arc::try_unwrap(channel_arc) {
+            Ok(rw_lock) => {
+                let channel = rw_lock.into_inner();
+                info!("Unregistered channel: {}", channel_id);
+                Some(channel)
             }
-        } else {
-            None
+            Err(_) => {
+                warn!("Could not unregister channel {} - still in use", channel_id);
+                None
+            }
         }
     }
 

@@ -550,7 +550,7 @@ impl super::ChannelRegistry {
             .await
     }
 
-    fn next_bound_revision(&self) -> Result<u64, ChannelBindingError> {
+    pub(super) fn next_bound_revision(&self) -> Result<u64, ChannelBindingError> {
         self.source_revision
             .load(std::sync::atomic::Ordering::Relaxed)
             .checked_add(1)
@@ -597,7 +597,14 @@ impl super::ChannelRegistry {
                 .expect("channel runtime mutex poisoned");
             if let Some(driver) = &mut runtime.driver {
                 match driver.now_or_never() {
-                    Some(Ok(())) => runtime.driver = None,
+                    Some(Ok(())) => {
+                        runtime.driver = None;
+                        if runtime.retiring {
+                            runtime.operation = None;
+                            runtime.retiring = false;
+                            runtime.residual = ChannelCleanupResidual::default();
+                        }
+                    },
                     Some(Err(_)) => return Err(ChannelBindingError::Busy),
                     None => return Err(ChannelBindingError::Busy),
                 }
