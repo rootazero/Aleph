@@ -28,6 +28,7 @@ use alephcore::cluster::{
     ApprovalSlot, CenterApprovalRequester, CommandDescriptor, CommandTable, ReverseRpcChannel,
 };
 use alephcore::gateway::protocol::JsonRpcResponse;
+use alephcore::gateway::server::connection::parse_response_frame;
 use alephcore::routing::session_key::SessionKey;
 use alephcore::sandbox::config::SandboxConfig;
 use alephcore::sandbox::exec_approval::gate::ApprovalGate;
@@ -159,7 +160,7 @@ pub async fn handle_node(
     // confirmation, no refusal, no reconnect diagnostics.
     init_node_tracing();
 
-    let (table, approval_slot) = build_command_table(&name);
+    let (table, approval_slot) = build_command_table(&name).await?;
     let table = Arc::new(table);
     let declared = table.descriptors();
     let url = format!("{}/ws", center.trim_end_matches('/'));
@@ -278,7 +279,9 @@ fn persist_identity(path: Option<&Path>, id: &NodeIdentity) {
 /// `CenterApprovalRequester` whose channel slot is filled per-connection by
 /// `run_session`; until a connection is live the slot is `None` and escalations
 /// fail-closed (same as the old headless `None` requester).
-fn build_command_table(name: &str) -> (CommandTable, ApprovalSlot) {
+async fn build_command_table(
+    name: &str,
+) -> Result<(CommandTable, ApprovalSlot), Box<dyn std::error::Error>> {
     let cfg = SandboxConfig::default();
     let driver = create_platform_driver_from_config(&cfg);
     let slot: ApprovalSlot = Arc::new(RwLock::new(None));
@@ -293,13 +296,46 @@ fn build_command_table(name: &str) -> (CommandTable, ApprovalSlot) {
     );
     let bash = alephcore::builtin_tools::BashExecTool::new().with_sandbox(sandbox);
     let session = SessionKey::ephemeral(format!("node-{name}"));
-    // file.read/file.write jail to the SAME per-session workspace dir bash uses,
-    // so a pushed script can be bash-run and a bash-produced artifact pulled.
-    let workspace_dir =
-        alephcore::sandbox::workspace::session_workspace_dir(&cfg.workspace_root, &session);
-    let mut table = CommandTable::with_bash(bash, session);
-    table.register_file_commands(workspace_dir);
-    (table, slot)
+    let mut table = CommandTable::with_bash(bash, session.clone());
+    setup_file_commands(&mut table, &cfg.workspace_root, &session).await?;
+    Ok((table, slot))
+}
+
+/// Register the node's file commands and make sure their jail root exists.
+///
+/// `file.read`/`file.write` jail to the per-session workspace directory — the
+/// SAME directory the node's bash sandbox runs in, derived from the same
+/// session key — so a pushed script can be bash-run and a bash-produced
+/// artifact pulled. Deriving both from one session key (instead of passing
+/// two independent directories) is what keeps them from drifting apart: a
+/// drifted pair writes into one directory while bash executes in another, and
+/// both report success.
+///
+/// The jail root is created HERE, once, during the node's setup: the file
+/// commands refuse a root that does not exist ("workspace root unresolved"),
+/// and the only other creator was the bash sandbox, which creates the
+/// directory lazily on its first execution. A node that had not yet run a bash
+/// command therefore failed EVERY `file.read`/`file.write` while still
+/// advertising both commands in its declared catalog — so the center's
+/// "command not declared by node" check passed and the user only saw a broken
+/// tool.
+async fn setup_file_commands(
+    table: &mut CommandTable,
+    workspace_root: &Path,
+    session: &SessionKey,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let jail_root = alephcore::sandbox::workspace::session_workspace_dir(workspace_root, session);
+    tokio::fs::create_dir_all(&jail_root).await.map_err(|e| {
+        format!(
+            "failed to create node workspace dir {}: {e}",
+            jail_root.display()
+        )
+    })?;
+    // The jail root the commands are registered with comes from the SAME
+    // (workspace_root, session) pair as the directory created above — one
+    // derivation, two consumers, so they cannot diverge.
+    table.register_file_commands_for_session(workspace_root, session);
+    Ok(())
 }
 
 /// Run one connected session.
@@ -406,13 +442,15 @@ async fn run_session(
             let text = text.to_string();
 
             // Center → node RESPONSE: resolve a node-initiated reverse-RPC call.
-            if let Ok(resp) = serde_json::from_str::<JsonRpcResponse>(&text) {
-                if resp.id.is_some() && (resp.result.is_some() || resp.error.is_some()) {
-                    if let Some(id) = resp.id.clone() {
-                        pending.resolve(&id, resp);
-                    }
-                    continue;
+            // Same discriminator as the center's own demux
+            // (`gateway::server::connection::parse_response_frame`): one rule
+            // for both ends of the wire, so a frame can never be a response on
+            // one side and a request on the other.
+            if let Some(resp) = parse_response_frame(&text) {
+                if let Some(id) = resp.id.clone() {
+                    pending.resolve(&id, resp);
                 }
+                continue;
             }
 
             // Center → node REQUEST (tool.call): dispatch on a spawned task so a
@@ -519,6 +557,74 @@ mod tests {
         let table = bash_table();
         let frame = json!({"jsonrpc": "2.0", "id": 1, "result": {"ok": true}}).to_string();
         assert!(handle_frame(&table, &frame).await.is_none());
+    }
+
+    /// A center answer of `"result": null` HAS answered. serde maps a JSON
+    /// `null` to `None`, so a value-presence test classified that frame as a
+    /// REQUEST and the pending reverse-RPC call waited out its full timeout
+    /// even though the peer had completed. The node demux must use the shared
+    /// shape discriminator.
+    #[tokio::test]
+    async fn a_null_result_response_resolves_the_pending_call() {
+        let (tx, mut rx) = tokio::sync::mpsc::channel::<String>(8);
+        let channel = ReverseRpcChannel::new(tx);
+        let caller = tokio::spawn({
+            let channel = channel.clone();
+            async move { channel.call("tool.call", json!({}), 2_000).await }
+        });
+
+        // The outbound request frame carries the id the call is waiting on.
+        let frame = rx.recv().await.expect("outbound request frame");
+        let id: Value =
+            serde_json::from_str::<Value>(&frame).expect("request frame is JSON")["id"].clone();
+
+        // The center answers with a null result.
+        let reply = format!(r#"{{"jsonrpc":"2.0","id":{id},"result":null}}"#);
+        let resp = parse_response_frame(&reply).expect("a null result is a completed response");
+        assert_eq!(resp.id, Some(id.clone()));
+        channel.pending().resolve(&id, resp);
+
+        let answered = caller
+            .await
+            .expect("call task")
+            .expect("resolved, not timed out");
+        assert!(answered.result.is_none());
+    }
+
+    /// A center REQUEST carries a `method` — it must never be mistaken for
+    /// the answer to a node-initiated call, or the request would be swallowed
+    /// by the pending table instead of reaching the node's request path.
+    #[tokio::test]
+    async fn a_center_request_frame_is_not_a_response() {
+        let frame = json!({
+            "jsonrpc": "2.0", "id": "rpc-7", "method": "tool.call",
+            "params": {"tool": "bash", "args": {"cmd": "echo hi"}}
+        })
+        .to_string();
+        assert!(parse_response_frame(&frame).is_none());
+    }
+
+    /// The file commands jail to the per-session workspace dir and refuse a
+    /// root that does not exist ("workspace root unresolved"). The node
+    /// creates it during setup, so `file.read`/`file.write` work on a node
+    /// that has not run a bash command yet.
+    #[tokio::test]
+    async fn setup_creates_the_file_command_jail_root() {
+        let scratch = tempfile::tempdir().unwrap();
+        let session = SessionKey::ephemeral("node-workspace-test");
+        let sandbox = Arc::new(CannedSandbox(SandboxOutput::default()));
+        let bash = alephcore::builtin_tools::BashExecTool::new().with_sandbox(sandbox);
+        let mut table = CommandTable::with_bash(bash, session.clone());
+        setup_file_commands(&mut table, scratch.path(), &session)
+            .await
+            .expect("file command setup");
+        let jail_root =
+            alephcore::sandbox::workspace::session_workspace_dir(scratch.path(), &session);
+        assert!(
+            jail_root.is_dir(),
+            "the file commands' jail root must exist before they run: {}",
+            jail_root.display()
+        );
     }
 
     #[test]

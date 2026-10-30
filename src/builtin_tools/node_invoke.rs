@@ -64,15 +64,26 @@ node is offline or the command isn't permitted, you get a clear error."#;
     type Output = Value;
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
-        let (channel, declared) = match self.node_registry.resolve(&args.node) {
-            Ok(v) => v,
-            Err(ResolveError::NotFound) => {
-                return Err(AlephError::tool(format!("node '{}' not online", args.node)))
-            }
-            Err(e @ (ResolveError::Ambiguous(_) | ResolveError::NodeNotFound { .. })) => {
-                return Err(AlephError::tool(format!("node '{}' {e}", args.node)))
-            }
-        };
+        let (channel, declared, catalog_malformed) =
+            match self.node_registry.resolve_with_catalog(&args.node) {
+                Ok(v) => v,
+                Err(ResolveError::NotFound) => {
+                    return Err(AlephError::tool(format!("node '{}' not online", args.node)))
+                }
+                Err(e @ (ResolveError::Ambiguous(_) | ResolveError::NodeNotFound { .. })) => {
+                    return Err(AlephError::tool(format!("node '{}' {e}", args.node)))
+                }
+            };
+        // A peer whose declared catalog could not be parsed must NOT be read as
+        // "this node declares no commands": that reading silently switches the
+        // center-side fail-fast layer off for this node (the empty-catalog fast
+        // path below defers to node authority). Fail closed instead.
+        if catalog_malformed {
+            return Err(AlephError::tool(format!(
+                "node '{}' declared a malformed command catalog; refusing to invoke",
+                args.node
+            )));
+        }
         // Center-side fail-fast: only reject when the node declared a non-empty
         // catalog that excludes this command. Empty catalog → defer to node authority.
         if !declared.is_empty() && !declared.iter().any(|c| c.name == args.command) {
@@ -266,5 +277,42 @@ mod tests {
             .await
             .expect_err("times out");
         assert!(err.to_string().contains("reverse-rpc failed"), "{err}");
+    }
+
+    /// A peer whose declared catalog could not be parsed must not silently
+    /// downgrade the center's fail-fast layer to "the node declares nothing"
+    /// (the empty-catalog fast path defers to node authority).
+    #[tokio::test]
+    async fn malformed_declared_catalog_is_rejected() {
+        let (tx, _rx) = mpsc::channel::<String>(8);
+        let channel = ReverseRpcChannel::new(tx);
+        let reg = Arc::new(NodeRegistry::new());
+        // A command entry without its `schema` field makes the WHOLE array
+        // fail to deserialize: the peer declared something the center could
+        // not read.
+        let params = json!({
+            "device_name": "worker-1",
+            "commands": [{"name": "bash"}],
+            "tags": [],
+        });
+        assert!(crate::cluster::maybe_register_node(
+            &reg,
+            Some("node"),
+            "n-1",
+            "conn-1",
+            Some(&params),
+            &channel
+        ));
+        let tool = NodeInvokeTool::new(reg);
+        let err = tool
+            .call(NodeInvokeArgs {
+                node: "worker-1".to_string(),
+                command: "bash".to_string(),
+                args: json!({}),
+                timeout_ms: Some(500),
+            })
+            .await
+            .expect_err("a malformed catalog is refused");
+        assert!(err.to_string().contains("malformed"), "{err}");
     }
 }

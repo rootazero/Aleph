@@ -39,9 +39,34 @@ impl CommandTable {
         Self::default()
     }
 
+    /// Register a command under the name it **declares** to the center.
+    ///
+    /// The table key and the declared descriptor name used to be two
+    /// independent namespaces: the key was whatever the caller passed, the
+    /// declared name was `cmd.descriptor().name`, and nothing asserted that
+    /// they agree. A mismatch makes the node advertise a command it then
+    /// refuses ("command 'X' not permitted on this node"), or hide an
+    /// executable command from the center's admission check.
+    ///
+    /// The descriptor name is the single source of truth: it is the name the
+    /// node declares AND the name the center's admission check compares
+    /// against, so a mismatch can only hide or refuse a capability, never
+    /// expose an undeclared one. The caller-supplied `name` stays in the
+    /// signature (it is `pub` and re-exported) and is used to report the
+    /// mismatch.
     pub fn register(&mut self, name: impl Into<String>, cmd: Arc<dyn NodeCommand>) {
-        let name = name.into();
-        if self.commands.contains_key(&name) {
+        let requested = name.into();
+        let key = cmd.descriptor().name;
+        if key != requested {
+            tracing::error!(
+                requested_name = %requested,
+                descriptor_name = %key,
+                "CommandTable::register: the registered name does not match the command's \
+                 descriptor name; the descriptor name wins (it is the name the node declares \
+                 to the center and the name the center's admission check compares against)"
+            );
+        }
+        if self.commands.contains_key(&key) {
             // A second `register` for the same name shadows the previous
             // command. With `register_file_commands` and `with_bash` both
             // callable from the same setup path, a misordered init could
@@ -49,24 +74,31 @@ impl CommandTable {
             // the one an operator has already pointed at; warn so that
             // shows up in logs instead of being silently overwritten.
             tracing::warn!(
-                command = %name,
+                command = %key,
                 "CommandTable::register overwriting an existing entry"
             );
         }
-        self.commands.insert(name, cmd);
+        self.commands.insert(key, cmd);
     }
 
     /// Command catalog declared to the center on node connect. **Sorted by
     /// name** — the backing store is a `HashMap` whose iteration order differs
     /// every process start, which would cause the declared catalog to jitter on
     /// each connect, in turn jittering `environments.list` and the
-    /// model-visible `node_list` output.
+    /// model-visible `node_list` output. The table key is the secondary sort
+    /// key: since the key IS the descriptor name (see [`register`]), no two
+    /// entries can share a name — but the tie-break keeps the order total even
+    /// if that ever changes, so the emitted order can never depend on
+    /// HashMap iteration order.
     #[must_use]
     pub fn descriptors(&self) -> Vec<CommandDescriptor> {
-        let mut out: Vec<CommandDescriptor> =
-            self.commands.values().map(|c| c.descriptor()).collect();
-        out.sort_unstable_by(|a, b| a.name.cmp(&b.name));
-        out
+        let mut out: Vec<(String, CommandDescriptor)> = self
+            .commands
+            .iter()
+            .map(|(key, command)| (key.clone(), command.descriptor()))
+            .collect();
+        out.sort_unstable_by(|a, b| a.1.name.cmp(&b.1.name).then_with(|| a.0.cmp(&b.0)));
+        out.into_iter().map(|(_, descriptor)| descriptor).collect()
     }
 
     /// Dispatch a reverse RPC request body. `method` must be `"tool.call"`;
@@ -134,6 +166,10 @@ impl CommandTable {
     /// Register `file.read` / `file.write` on top of existing commands. Both
     /// share the same jail root (should be the node's bash session workspace
     /// directory).
+    ///
+    /// Prefer [`register_file_commands_for_session`](Self::register_file_commands_for_session)
+    /// at an assembly site: it derives the jail root from the same session key
+    /// the bash command runs in, so the two cannot drift apart.
     pub fn register_file_commands(&mut self, workspace_dir: std::path::PathBuf) {
         use crate::cluster::{FileReadCommand, FileWriteCommand};
         self.register(
@@ -141,6 +177,27 @@ impl CommandTable {
             Arc::new(FileReadCommand::new(workspace_dir.clone())),
         );
         self.register("file.write", Arc::new(FileWriteCommand::new(workspace_dir)));
+    }
+
+    /// Register `file.read` / `file.write` with the jail root derived from the
+    /// node's session key — the same derivation the bash sandbox uses for its
+    /// working directory.
+    ///
+    /// The file-command jail root and the bash session directory used to be
+    /// two independent inputs that were equal only by convention at the
+    /// call site: a drifted pair writes a pushed file into one directory while
+    /// bash executes in another, and both report success, silently breaking
+    /// the documented "a pushed script can be run by bash" workflow. Deriving
+    /// both from one `(workspace_root, session)` pair makes the equality a
+    /// fact of the API instead of a convention.
+    pub fn register_file_commands_for_session(
+        &mut self,
+        workspace_root: &std::path::Path,
+        session: &SessionKey,
+    ) {
+        let workspace_dir =
+            crate::sandbox::workspace::session_workspace_dir(workspace_root, session);
+        self.register_file_commands(workspace_dir);
     }
 }
 
@@ -284,5 +341,44 @@ mod tests {
         }
         let names: Vec<String> = t.descriptors().into_iter().map(|d| d.name).collect();
         assert_eq!(names, vec!["bash", "file.read", "file.write"]);
+    }
+
+    /// The allowlist key and the name the node declares to the center are ONE
+    /// name. A mismatch used to make the node advertise a command it then
+    /// refuses ("not permitted on this node"), or hide an executable command
+    /// from the center's admission check.
+    #[tokio::test]
+    async fn register_keys_the_table_by_the_declared_descriptor_name() {
+        let mut t = CommandTable::new();
+        // The caller asks for "echo"; the command declares itself "echo2".
+        t.register("echo", Arc::new(NamedCmd("echo2")));
+        assert_eq!(
+            t.descriptors()
+                .iter()
+                .map(|d| d.name.clone())
+                .collect::<Vec<_>>(),
+            vec!["echo2".to_string()],
+            "the declared descriptor name is the single source of truth"
+        );
+        let err = t
+            .dispatch("tool.call", &json!({"tool": "echo", "args": {}}))
+            .await
+            .expect_err("the caller's name is not the declared one");
+        assert!(err.contains("not permitted"), "{err}");
+        t.dispatch("tool.call", &json!({"tool": "echo2", "args": {}}))
+            .await
+            .expect("the declared name dispatches");
+    }
+
+    /// Two commands that declare the same name now collide on one table key:
+    /// the later registration wins (and the duplicate-registration warning
+    /// fires).
+    #[test]
+    fn registering_two_commands_with_the_same_declared_name_keeps_one() {
+        let mut t = CommandTable::new();
+        t.register("a", Arc::new(NamedCmd("dup")));
+        t.register("b", Arc::new(NamedCmd("dup")));
+        assert_eq!(t.descriptors().len(), 1);
+        assert_eq!(t.descriptors()[0].name, "dup");
     }
 }
