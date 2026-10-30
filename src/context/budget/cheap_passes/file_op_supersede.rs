@@ -32,6 +32,16 @@
 //!    left verbatim (stubbing it would inflate context), and
 //!    `[Full output persisted: …]` markers are never stubbed — they carry
 //!    the disk-recovery path the LLM needs.
+//! 8. **Only a full replacement supersedes.** A partial edit carries just
+//!    an excerpt around the replaced span in its result and just the patch
+//!    in its own arguments, so it cannot stand in for the bytes of an
+//!    earlier read. Only a whole-file write does — its own `ToolCall`
+//!    arguments carry the new content, so dropping the earlier bytes
+//!    leaves the model able to reconstruct the file.
+//! 9. **Path identity is the tool's own spelling.** The file tools hand the
+//!    raw path argument to `Path::new` without trimming it, so two paths
+//!    that differ only in surrounding whitespace are two different files —
+//!    the supersede index keys on the raw spelling, not on a trimmed one.
 //!
 //! R7 alignment: the rule is *structural and deterministic* (path equality
 //!   + op ordering). No similarity heuristic, no relevance scoring, no
@@ -49,7 +59,7 @@ use async_trait::async_trait;
 use crate::context::budget::preflight::PreflightStage;
 use crate::context::budget::pressure::estimate_tokens_smart;
 use crate::context::budget::ContextPressure;
-use crate::context::file_ops::{self, FileOp};
+use crate::context::file_ops::{self, FileOp, FileOpKind};
 use crate::providers::message::{ContentBlock, UnifiedMessage};
 
 /// Default fill-ratio gate (60%) below which the stage is a no-op — the
@@ -94,22 +104,22 @@ impl FileOpSupersedeStage {
         self
     }
 
-    /// Group the window's file ops by canonical path, ascending message order
-    /// within each path.
+    /// Group the window's file ops by file identity, ascending message order
+    /// within each group.
     ///
     /// The scan itself is [`file_ops::index_file_ops`] — shared with the
     /// compaction file ledger so "which calls are file ops, and what path do
     /// they name" has exactly one answer in the repo. Only the grouping is
-    /// local, because only supersession needs it.
+    /// local, because only supersession needs it — and the group key is the
+    /// tool's *own* path spelling (see [`path_key`]).
     fn ops_by_path(messages: &[UnifiedMessage]) -> BTreeMap<String, Vec<FileOp<'_>>> {
         let mut by_path: BTreeMap<String, Vec<FileOp<'_>>> = BTreeMap::new();
         for op in file_ops::index_file_ops(messages) {
-            // Probe before keying: the owned `String` key is paid once per
-            // distinct path, not once per op on an already-seen path.
-            if let Some(ops) = by_path.get_mut(&op.path) {
+            let key = path_key(&op, raw_path_of(messages, &op));
+            if let Some(ops) = by_path.get_mut(&key) {
                 ops.push(op);
             } else {
-                by_path.insert(op.path.clone(), vec![op]);
+                by_path.insert(key, vec![op]);
             }
         }
         by_path
@@ -120,16 +130,24 @@ impl FileOpSupersedeStage {
     /// stub. The rule:
     ///
     /// 1. For each path with ≥ `min_ops_per_path` ops, find the LAST
-    ///    *successful* mutating op (Write or Edit whose paired `ToolResult`
-    ///    is in `successful`). If none exists, no op is obsolete — either
-    ///    the model is still reading without committing, or every mutation
-    ///    failed and the earlier reads are still the accurate view.
-    /// 2. Every op whose `msg_index < last_mutating_index` becomes obsolete,
+    ///    *successful full replacement* — a `file_write` / `Write` /
+    ///    `write_file` whose paired `ToolResult` is in `successful`. If none
+    ///    exists, no op is obsolete: either the model is still reading
+    ///    without committing, every mutation failed, or the only later
+    ///    mutation was a partial edit.
+    /// 2. Every op whose `msg_index < last_write_index` becomes obsolete,
     ///    recorded against the superseder's tool name (quoted in the stub).
-    /// 3. The last successful mutating op is preserved — that is the
+    /// 3. The last successful full write is preserved — that is the
     ///    canonical state.
     /// 4. Obsolete entries inside `fresh_tail_start..` are dropped — the
     ///    fresh tail is sacred.
+    ///
+    /// A partial edit never supersedes anything. Its `ToolResult` carries
+    /// only an excerpt around the replaced span (`FileEditOutput::snippet`)
+    /// and its own `ToolCall` arguments carry only the patch, so a stub
+    /// claiming "superseded by a later file_edit" would drop bytes the model
+    /// can no longer reconstruct: the base snapshot a read produced and the
+    /// result of an edit that touched a disjoint span both stay.
     fn obsolete_call_ids<'a>(
         by_path: &'a BTreeMap<String, Vec<FileOp<'a>>>,
         successful: &BTreeSet<&str>,
@@ -140,24 +158,68 @@ impl FileOpSupersedeStage {
             if ops.len() < MIN_OPS_PER_PATH {
                 continue;
             }
-            let Some(last_mut) = ops
+            let Some(last_write) = ops
                 .iter()
                 .rev()
-                .find(|op| op.kind.is_mutating() && successful.contains(op.call_id))
+                .find(|op| op.kind == FileOpKind::Write && successful.contains(op.call_id))
             else {
                 continue;
             };
             for op in ops {
-                if op.msg_index >= last_mut.msg_index {
+                if op.msg_index >= last_write.msg_index {
                     continue;
                 }
                 if op.msg_index >= fresh_tail_start {
                     continue;
                 }
-                obsolete.insert(op.call_id, last_mut.tool_name);
+                obsolete.insert(op.call_id, last_write.tool_name);
             }
         }
         obsolete
+    }
+}
+
+/// The key two file ops must share to count as operations on the same file.
+///
+/// [`file_ops::canonicalize_path_string`] trims the raw path argument, but
+/// the file tools hand the *untrimmed* string to `Path::new`
+/// (`src/builtin_tools/file_ops/read.rs`, `src/builtin_tools/file_ops/write.rs`),
+/// so `"/tmp/report"` and `"/tmp/report "` address two different files on
+/// disk while sharing one canonical key. Keying the supersede index by the
+/// tool's own spelling keeps them apart.
+///
+/// A spelling with surrounding whitespace is used verbatim — that is the
+/// file the tool addressed. Everything else keeps the shared canonical key,
+/// which only reduces a `./` prefix: a real POSIX identity, since `./x` and
+/// `x` are the same file.
+fn path_key(op: &FileOp<'_>, raw_path: Option<&str>) -> String {
+    match raw_path {
+        Some(raw) if raw.trim() != raw => raw.to_string(),
+        _ => op.path.clone(),
+    }
+}
+
+/// The path argument of `op`'s tool call exactly as the tool spelled it.
+///
+/// Mirrors the `"path"` → `"file_path"` precedence of
+/// [`file_ops::canonical_path`]: the two must agree on which argument the
+/// call named, or the group key would describe an argument the tool never
+/// read.
+fn raw_path_of<'a>(messages: &'a [UnifiedMessage], op: &FileOp<'_>) -> Option<&'a str> {
+    let UnifiedMessage::Assistant { content } = messages.get(op.msg_index)? else {
+        return None;
+    };
+    let arguments = content.iter().find_map(|block| match block {
+        ContentBlock::ToolCall { id, arguments, .. } if id.as_str() == op.call_id => {
+            Some(arguments)
+        }
+        _ => None,
+    })?;
+    match arguments.get("path") {
+        Some(serde_json::Value::String(raw)) => Some(raw.as_str()),
+        _ => arguments
+            .get("file_path")
+            .and_then(serde_json::Value::as_str),
     }
 }
 
@@ -379,7 +441,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn last_mutating_op_is_preserved() {
+    async fn a_partial_edit_supersedes_nothing() {
+        // An edit's result carries only an excerpt around the replaced span,
+        // and its own arguments carry only the patch — so it cannot stand in
+        // for the earlier edit's excerpt (which may cover a disjoint span).
         let mut messages = vec![
             edit_call("e1", "/x.rs"),
             tool_result("e1", "file_edit", &"first diff".repeat(100), false),
@@ -387,7 +452,8 @@ mod tests {
             tool_result("e2", "file_edit", "second diff", false),
         ];
         let stage = FileOpSupersedeStage::default();
-        let _ = stage.prepare(&mut messages, &pressure(0.75), 0).await;
+        let freed = stage.prepare(&mut messages, &pressure(0.75), 0).await;
+        assert_eq!(freed, 0, "a partial edit must not supersede anything");
         let UnifiedMessage::ToolResult { content, .. } = &messages[1] else {
             panic!()
         };
@@ -395,7 +461,34 @@ mod tests {
             .as_model_text()
             .expect("a text-bearing block")
             .into_owned();
-        assert!(text.contains("superseded"));
+        assert!(
+            text.contains("first diff"),
+            "the earlier edit's excerpt must survive; got: {text}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_full_write_supersedes_an_earlier_edit() {
+        // A whole-file write replaces the file, so the earlier edit's
+        // excerpt is stale — and the write's own arguments carry the new
+        // content, so the model can still reconstruct the file.
+        let mut messages = vec![
+            edit_call("e1", "/x.rs"),
+            tool_result("e1", "file_edit", &"first diff".repeat(100), false),
+            write_call("w1", "/x.rs"),
+            tool_result("w1", "file_write", "second diff", false),
+        ];
+        let stage = FileOpSupersedeStage::default();
+        let freed = stage.prepare(&mut messages, &pressure(0.75), 0).await;
+        assert!(freed > 0, "a full write must supersede the earlier edit");
+        let UnifiedMessage::ToolResult { content, .. } = &messages[1] else {
+            panic!()
+        };
+        let text = &content[0]
+            .as_model_text()
+            .expect("a text-bearing block")
+            .into_owned();
+        assert!(text.contains("superseded"), "got: {text}");
         let UnifiedMessage::ToolResult { content, .. } = &messages[3] else {
             panic!()
         };
@@ -403,7 +496,76 @@ mod tests {
             .as_model_text()
             .expect("a text-bearing block")
             .into_owned();
-        assert_eq!(text, "second diff");
+        assert_eq!(
+            text, "second diff",
+            "the write itself is the canonical state"
+        );
+    }
+
+    #[tokio::test]
+    async fn an_edit_does_not_supersede_an_earlier_read() {
+        // The read is the only full snapshot of the file. An edit changes
+        // part of it and reports only an excerpt, so stubbing the read would
+        // drop bytes the model cannot reconstruct.
+        let mut messages = vec![
+            read_call("r1", "/tmp/a.txt"),
+            tool_result("r1", "file_read", &"x".repeat(800), false),
+            edit_call("e1", "/tmp/a.txt"),
+            tool_result("e1", "file_edit", "ok", false),
+        ];
+        let stage = FileOpSupersedeStage::default();
+        let freed = stage.prepare(&mut messages, &pressure(0.75), 0).await;
+        assert_eq!(freed, 0, "an edit must not supersede the base snapshot");
+        let UnifiedMessage::ToolResult { content, .. } = &messages[1] else {
+            panic!()
+        };
+        let text = &content[0]
+            .as_model_text()
+            .expect("a text-bearing block")
+            .into_owned();
+        assert_eq!(text.chars().count(), 800, "read body must stay verbatim");
+    }
+
+    #[tokio::test]
+    async fn paths_differing_only_in_whitespace_are_different_files() {
+        // The file tools pass the raw path to `Path::new` without trimming,
+        // so "/tmp/report " is a different file from "/tmp/report".
+        let mut messages = vec![
+            read_call("r1", "/tmp/report"),
+            tool_result("r1", "file_read", &"x".repeat(800), false),
+            write_call("w1", "/tmp/report "),
+            tool_result("w1", "file_write", "ok", false),
+        ];
+        let stage = FileOpSupersedeStage::default();
+        let freed = stage.prepare(&mut messages, &pressure(0.75), 0).await;
+        assert_eq!(
+            freed, 0,
+            "a write to a differently-spelled path must not supersede the read"
+        );
+        let UnifiedMessage::ToolResult { content, .. } = &messages[1] else {
+            panic!()
+        };
+        let text = &content[0]
+            .as_model_text()
+            .expect("a text-bearing block")
+            .into_owned();
+        assert_eq!(text.chars().count(), 800, "read body must stay verbatim");
+    }
+
+    #[tokio::test]
+    async fn the_same_whitespace_spelling_still_supersedes() {
+        // The isolation above is about *identity*, not about disabling the
+        // stage: two ops on the same whitespace-spelled path are still ops
+        // on the same file.
+        let mut messages = vec![
+            read_call("r1", "/tmp/report "),
+            tool_result("r1", "file_read", &"x".repeat(800), false),
+            write_call("w1", "/tmp/report "),
+            tool_result("w1", "file_write", "ok", false),
+        ];
+        let stage = FileOpSupersedeStage::default();
+        let freed = stage.prepare(&mut messages, &pressure(0.75), 0).await;
+        assert!(freed > 0, "the same path must still supersede");
     }
 
     #[tokio::test]
@@ -583,8 +745,8 @@ mod tests {
         let mut messages = vec![
             read_call("r1", "/tmp/a.txt"),
             tool_result("r1", "file_read", &"x".repeat(800), false),
-            edit_call("e1", "/tmp/a.txt"),
-            tool_result("e1", "file_edit", "ok", false),
+            write_call("w1", "/tmp/a.txt"),
+            tool_result("w1", "file_write", "ok", false),
         ];
         let stage = FileOpSupersedeStage::default();
         let _ = stage.prepare(&mut messages, &pressure(0.75), 0).await;
@@ -596,7 +758,7 @@ mod tests {
             .expect("a text-bearing block")
             .into_owned();
         assert!(
-            text.contains("file_edit"),
+            text.contains("file_write"),
             "stub must name the superseding op, not the stubbed one; got: {text}"
         );
     }

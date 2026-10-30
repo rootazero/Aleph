@@ -150,6 +150,24 @@ fn found_finding(engine: Engine, path: &std::path::Path, source: &str) -> Findin
     )
 }
 
+fn pinned_binary_is_usable(path: &std::path::Path) -> bool {
+    if !path.is_file() {
+        return false;
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        return std::fs::metadata(path).is_ok_and(|metadata| {
+            let mode = metadata.permissions().mode();
+            mode & 0o111 != 0 && mode & 0o444 != 0
+        });
+    }
+    #[cfg(not(unix))]
+    {
+        true
+    }
+}
+
 /// The platform the upstream release matrix does not build.
 ///
 /// Neither "missing" (which reads as *install it*) nor "available". A third
@@ -357,7 +375,7 @@ impl EngineMissingCheck {
             }
         };
         if let Some(path) = pinned {
-            return vec![if path.is_file() {
+            return vec![if pinned_binary_is_usable(&path) {
                 found_finding(
                     Engine::Obscura,
                     &path,
@@ -367,7 +385,7 @@ impl EngineMissingCheck {
                 missing_finding(
                     Engine::Obscura,
                     format!(
-                        "[general.browser.obscura] binary_path names {}, which is not a file",
+                        "[general.browser.obscura] binary_path names {}, which is not an executable, readable file",
                         path.display()
                     ),
                 )

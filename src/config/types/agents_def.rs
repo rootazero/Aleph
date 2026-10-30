@@ -104,17 +104,59 @@ pub struct AgentDefaults {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub skills_blacklist: Option<Vec<String>>,
 
-    /// Default DM (domain model) scope
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Default DM scope. Use `[session].dm_scope`; this field is rejected
+    /// because agent defaults do not control session routing.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "reject_agent_dm_scope"
+    )]
+    #[schemars(skip)]
     pub dm_scope: Option<String>,
 
-    /// Maximum characters for a single bootstrap file
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Bootstrap limits are rejected until the production identity-file
+    /// loader consumes them; its configured source is `IdentityFilesConfig`.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "reject_bootstrap_limit"
+    )]
+    #[schemars(skip)]
     pub bootstrap_max_chars: Option<usize>,
 
-    /// Maximum total characters across all bootstrap files
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "reject_bootstrap_limit"
+    )]
+    #[schemars(skip)]
     pub bootstrap_total_max_chars: Option<usize>,
+}
+
+fn reject_agent_dm_scope<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = Option::<String>::deserialize(deserializer)?;
+    if value.is_some() {
+        return Err(serde::de::Error::custom(
+            "agents.defaults.dm_scope is not supported; configure session.dm_scope instead",
+        ));
+    }
+    Ok(None)
+}
+
+fn reject_bootstrap_limit<'de, D>(deserializer: D) -> Result<Option<usize>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = Option::<usize>::deserialize(deserializer)?;
+    if value.is_some() {
+        return Err(serde::de::Error::custom(
+            "agent bootstrap limits are not supported until the identity-file loader consumes them",
+        ));
+    }
+    Ok(None)
 }
 
 // =============================================================================

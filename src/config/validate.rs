@@ -5,6 +5,7 @@
 use crate::config::Config;
 use crate::error::{AlephError, Result};
 use chrono::NaiveTime;
+use regex::Regex;
 use std::sync::OnceLock;
 use tracing::{debug, error, info, warn};
 
@@ -187,6 +188,29 @@ impl Config {
                  Give it a `^/`-prefixed regex to make it a slash command, or delete it."
             );
         }
+        for (position, rule) in self.rules.iter().enumerate() {
+            Regex::new(&rule.regex).map_err(|error| {
+                AlephError::invalid_config(format!(
+                    "Invalid routing rule regex at index {}: {} ({error})",
+                    position + 1,
+                    rule.regex
+                ))
+            })?;
+            if let Some(provider) = rule.provider.as_deref() {
+                if !self.providers.contains_key(provider) {
+                    return Err(AlephError::invalid_config(format!(
+                        "Routing rule at index {} references unknown provider '{provider}'",
+                        position + 1
+                    )));
+                }
+            } else if rule.is_command_rule() {
+                return Err(AlephError::invalid_config(format!(
+                    "Routing rule at index {} is a command but has no provider",
+                    position + 1
+                )));
+            }
+        }
+
         if self.providers.is_empty() && self.general.default_provider.is_none() {
             warn!(
                 "No providers configured and no default_provider set. \

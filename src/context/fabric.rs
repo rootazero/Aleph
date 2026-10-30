@@ -41,17 +41,23 @@
 //! against the snapshot, the output ceiling against the result, resolved and
 //! checked independently — never `min` of the two); snapshot presence for
 //! transforming operations and absence for meta operations; the invoking session
-//! identity supplied by the host; the cross-session grant; and *agreement*
-//! between request, snapshot and result fingerprints.
+//! identity supplied by the host; the cross-session grant; *agreement*
+//! between request, snapshot and result fingerprints; the **honesty of the
+//! size claims** (`token_count`/`byte_count` and `output_bytes`/`output_tokens`
+//! must not be smaller than the payload they describe); and **credential
+//! material**, which is refused in a snapshot payload and in a result output.
 //!
 //! **Not enforced here, and therefore a contract requirement:**
 //!
 //! * [`ContextSnapshot::payload`] is `serde_json::Value`, so this module cannot
-//!   prove that hidden reasoning, credentials, unauthorised project files or
-//!   other sessions were filtered out before the payload was built. No such
-//!   filter exists yet (Core-side, a later task). A snapshot builder must apply
-//!   the scope filter itself; a consumer must not read receipt of a snapshot as
-//!   evidence that filtering happened.
+//!   prove that hidden reasoning, unauthorised project files or other sessions
+//!   were filtered out before the payload was built. It refuses *recognised
+//!   credential material* — the same pattern detector the plugin egress
+//!   boundary uses (`privacy::contains_recognised_credential`) — which is
+//!   pattern detection, not proof that an arbitrary user-authored string is
+//!   harmless. A snapshot builder must still apply the scope filter itself; a
+//!   consumer must not read receipt of a snapshot as evidence that filtering
+//!   happened.
 //! * `input_fingerprint` is a **correlation token, not provenance proof**. Three
 //!   equal caller-supplied strings establish that request, snapshot and result
 //!   were meant for each other; they say nothing about what those bytes were.
@@ -90,6 +96,7 @@ mod runtime_task3_tests;
 #[cfg(test)]
 mod lifecycle_tests;
 
+use crate::context::budget::pressure::estimate_tokens_smart;
 use crate::tools::descriptor::canonicalize_json;
 
 /// The only wire version this module understands.
@@ -156,6 +163,26 @@ fn validate_fingerprint(token: &str, field: &'static str) -> Result<(), ContextC
         });
     }
     Ok(())
+}
+
+/// Measure a JSON payload the way the producers of that payload measure it.
+///
+/// Returns `(bytes, tokens)`: the length of the compact wire encoding, and the
+/// token estimate of that same encoding. Both numbers come from the same
+/// encoder and the same estimator the fabric runtime and the WASM transport
+/// use when they cut a snapshot (`serde_json::to_vec` and
+/// `estimate_tokens_smart`), so a producer that reports the size of its own
+/// payload is measured against the same bytes.
+///
+/// These are *measurements*, not claims. A size claim that is smaller than the
+/// payload it describes is a claim trying to buy budget the payload does not
+/// use, so every claim in this module is held to the measurement of the value
+/// it claims to describe.
+fn measure_payload(value: &serde_json::Value) -> (u64, u64) {
+    // `Value::to_string` is the compact encoding `serde_json::to_vec` emits,
+    // byte for byte, and it cannot fail.
+    let encoded = value.to_string();
+    (encoded.len() as u64, estimate_tokens_smart(&encoded) as u64)
 }
 
 // ============================================================================
@@ -635,14 +662,15 @@ impl ContextOperation {
 /// second message DTO.
 ///
 /// **Contract requirement, not an enforced invariant:** whoever builds a
-/// snapshot must already have removed hidden reasoning, credentials,
-/// unauthorised project files and other sessions from `payload`. This type
-/// cannot check that — `serde_json::Value` carries no provenance — and no such
-/// filter is implemented yet. What *is* enforced is the envelope: the declared
-/// [`ContextScope`] may not exceed the capability's namespace, its handles must
-/// be declared, `token_count`/`byte_count` must fit both the declared input
-/// budget and the requesting call's input budget, and `input_fingerprint` must
-/// agree with the request. Payload contents are not validated.
+/// snapshot must already have removed hidden reasoning, unauthorised project
+/// files and other sessions from `payload`. This type cannot check that —
+/// `serde_json::Value` carries no provenance. What *is* enforced is the
+/// envelope: the declared [`ContextScope`] may not exceed the capability's
+/// namespace, its handles must be declared, `token_count`/`byte_count` must fit
+/// both the declared input budget and the requesting call's input budget,
+/// `input_fingerprint` must agree with the request, the size claims must not
+/// understate the payload they describe, and a payload carrying recognised
+/// credential material is refused at admission.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct ContextSnapshot {
     pub snapshot_id: String,
@@ -659,7 +687,15 @@ pub struct ContextSnapshot {
     /// derivation.
     pub input_fingerprint: String,
     pub scope: ContextScope,
+    /// Tokens the payload is worth, as the builder measured them.
+    ///
+    /// Admission refuses a claim that understates the payload it describes; an
+    /// over-claim is allowed and only tightens the input ceiling.
     pub token_count: u64,
+    /// Bytes the payload occupies on the wire, as the builder measured them.
+    ///
+    /// Admission refuses a claim that understates the payload it describes; an
+    /// over-claim is allowed and only tightens the input ceiling.
     pub byte_count: u64,
     pub payload: serde_json::Value,
 }
@@ -683,6 +719,10 @@ impl ContextSnapshot {
     /// path that never consulted the host-authenticated caller, which is
     /// exactly the hole that let a payload name its own session and be trusted
     /// for it. Admission is the only way in.
+    ///
+    /// The payload is checked here as well as the envelope: recognised
+    /// credential material is refused, and the size claims must not understate
+    /// the payload they describe.
     fn validate_admitted(
         &self,
         descriptor: &ContextCapabilityDescriptor,
@@ -734,6 +774,13 @@ impl ContextSnapshot {
                 });
             }
         }
+        // The payload is what the capability will actually read, so its
+        // contents are refused here rather than trusted: recognised credential
+        // material never enters a capability path. This is the same detector
+        // the plugin egress boundary uses, so the two cannot drift apart.
+        if privacy::contains_recognised_credential(&self.payload) {
+            return Err(ContextContractError::SnapshotContainsCredential);
+        }
         // Both ceilings apply to the input side, and neither is derived from
         // the other direction's number. The descriptor ceiling is checked first
         // so the error names the declaration that was overrun; the per-call
@@ -751,6 +798,27 @@ impl ContextSnapshot {
                     max_bytes: ceiling.max_bytes,
                 });
             }
+        }
+        // The size claims are wire metadata: nothing in the envelope ties
+        // `token_count`/`byte_count` to the payload they describe, so a claim
+        // could buy budget the payload does not use. The payload is measured
+        // here and the claim is held to that measurement. An over-claim stays
+        // allowed — it only tightens the ceilings above — but an under-claim
+        // is refused.
+        let (measured_bytes, measured_tokens) = measure_payload(&self.payload);
+        if self.byte_count < measured_bytes {
+            return Err(ContextContractError::SizeUnderstated {
+                field: "snapshot.byte_count",
+                claimed: self.byte_count,
+                measured: measured_bytes,
+            });
+        }
+        if self.token_count < measured_tokens {
+            return Err(ContextContractError::SizeUnderstated {
+                field: "snapshot.token_count",
+                claimed: self.token_count,
+                measured: measured_tokens,
+            });
         }
         self.scope.validate()?;
         if self.scope.namespace.reach() > descriptor.scope.namespace.reach() {
@@ -1153,9 +1221,11 @@ impl ContextTransformResult {
     /// Fail-closed: a meta operation has no result
     /// ([`ContextContractError::ResultForMetaOperation`]), a blank or oversized
     /// fingerprint is refused, a mismatched fingerprint is refused (a stale
-    /// result must not be read as describing the current input), and an
+    /// result must not be read as describing the current input), an
     /// over-budget result is rejected as a contract violation — never truncated
-    /// into the prompt silently.
+    /// into the prompt silently — a result whose size claims understate the
+    /// output it carries is refused, and so is one carrying recognised
+    /// credential material.
     pub fn validate_for(&self, call: &AdmittedContextCall<'_>) -> Result<(), ContextContractError> {
         let operation = call.operation();
         if !operation.requires_snapshot() {
@@ -1173,6 +1243,13 @@ impl ContextTransformResult {
                 found: self.input_fingerprint.clone(),
             });
         }
+        // The output is what the model will read, so credential material in it
+        // is refused before it is budgeted: the refusal names the content, not
+        // the size. An admitted snapshot carries no credential material, so a
+        // credential here came from the capability itself.
+        if privacy::contains_recognised_credential(&self.output) {
+            return Err(ContextContractError::ResultContainsCredential);
+        }
         if self.output_bytes > output_budget.max_bytes
             || self.output_tokens > output_budget.max_tokens
         {
@@ -1180,6 +1257,25 @@ impl ContextTransformResult {
                 side: "request",
                 bytes: self.output_bytes,
                 tokens: self.output_tokens,
+            });
+        }
+        // As on the input side, the size claims are wire metadata: they are
+        // held to the output they describe, so a claim cannot buy budget the
+        // output does not use. An over-claim stays allowed — it only tightens
+        // the ceiling above — but an under-claim is refused.
+        let (measured_bytes, measured_tokens) = measure_payload(&self.output);
+        if self.output_bytes < measured_bytes {
+            return Err(ContextContractError::SizeUnderstated {
+                field: "result.output_bytes",
+                claimed: self.output_bytes,
+                measured: measured_bytes,
+            });
+        }
+        if self.output_tokens < measured_tokens {
+            return Err(ContextContractError::SizeUnderstated {
+                field: "result.output_tokens",
+                claimed: self.output_tokens,
+                measured: measured_tokens,
             });
         }
         Ok(())
@@ -1240,6 +1336,16 @@ pub enum ContextContractError {
         side: &'static str,
         bytes: u64,
         tokens: u64,
+    },
+    #[error("context snapshot payload contains a recognised credential and is refused")]
+    SnapshotContainsCredential,
+    #[error("context result output contains a recognised credential and is refused")]
+    ResultContainsCredential,
+    #[error("{field} understates the value it describes: claimed {claimed}, measured {measured}")]
+    SizeUnderstated {
+        field: &'static str,
+        claimed: u64,
+        measured: u64,
     },
     #[error("scope handle must not be empty")]
     EmptyScopeHandle,
@@ -3064,6 +3170,134 @@ mod tests {
         assert!(!decoded.permissions.project_write);
         assert!(!decoded.permissions.cross_session_read);
         assert_eq!(decoded.validate(), Ok(()));
+    }
+
+    // ------------------------------------------------------------------
+    // payload contents and size honesty
+    // ------------------------------------------------------------------
+
+    /// A snapshot whose size claims are smaller than the payload it carries.
+    fn understated_snapshot() -> ContextSnapshot {
+        let mut snapshot = snapshot();
+        snapshot.byte_count = 1;
+        snapshot.token_count = 1;
+        snapshot
+    }
+
+    #[test]
+    fn a_snapshot_whose_size_claims_understate_the_payload_is_refused() {
+        let mut request = legacy_request();
+        request.snapshot = Some(understated_snapshot());
+        let error = request
+            .admit(&descriptor(), &caller())
+            .expect_err("an understated size claim must be refused");
+        assert!(
+            matches!(
+                error,
+                ContextContractError::SizeUnderstated {
+                    field: "snapshot.byte_count",
+                    claimed: 1,
+                    measured
+                } if measured > 1
+            ),
+            "unexpected error: {error:?}"
+        );
+    }
+
+    #[test]
+    fn a_snapshot_whose_token_claim_understates_the_payload_is_refused() {
+        let mut request = legacy_request();
+        let mut snapshot = snapshot();
+        snapshot.token_count = 1;
+        request.snapshot = Some(snapshot);
+        let error = request
+            .admit(&descriptor(), &caller())
+            .expect_err("an understated token claim must be refused");
+        assert!(
+            matches!(
+                error,
+                ContextContractError::SizeUnderstated {
+                    field: "snapshot.token_count",
+                    claimed: 1,
+                    measured
+                } if measured > 1
+            ),
+            "unexpected error: {error:?}"
+        );
+    }
+
+    #[test]
+    fn an_over_claiming_snapshot_is_still_admitted() {
+        // The fixture claims 900 tokens / 40_000 bytes for a payload of a few
+        // dozen bytes. An over-claim only tightens the ceiling, so it stays
+        // admissible.
+        assert!(legacy_request().admit(&descriptor(), &caller()).is_ok());
+    }
+
+    #[test]
+    fn a_snapshot_carrying_credential_material_is_refused() {
+        let payload = json!({
+            "headers": {"Authorization": "Bearer sk-abc123def456ghi789jklmnopqrstuvwx"}
+        });
+        let (bytes, tokens) = measure_payload(&payload);
+        let mut snapshot = snapshot();
+        snapshot.payload = payload;
+        snapshot.input_fingerprint = canonical_fingerprint(&snapshot.payload);
+        // Honest size claims, so the refusal can only be the credential.
+        snapshot.byte_count = bytes;
+        snapshot.token_count = tokens;
+        let mut request = legacy_request();
+        request.input_fingerprint = Some(snapshot.input_fingerprint.clone());
+        request.snapshot = Some(snapshot);
+        let error = request
+            .admit(&descriptor(), &caller())
+            .expect_err("a credential must not be admitted");
+        assert_eq!(error, ContextContractError::SnapshotContainsCredential);
+    }
+
+    #[test]
+    fn a_result_carrying_credential_material_is_refused() {
+        let admitted_request = legacy_request();
+        let admitted_descriptor = descriptor();
+        let admitted_caller = caller();
+        let admitted = admitted_request
+            .admit(&admitted_descriptor, &admitted_caller)
+            .expect("the request itself is admissible");
+        let mut result = transform_result(0, 0);
+        result.output = json!({
+            "headers": {"Authorization": "Bearer sk-abc123def456ghi789jklmnopqrstuvwx"}
+        });
+        let (bytes, tokens) = measure_payload(&result.output);
+        result.output_bytes = bytes;
+        result.output_tokens = tokens;
+        let error = result
+            .validate_for(&admitted)
+            .expect_err("a credential must not reach the model");
+        assert_eq!(error, ContextContractError::ResultContainsCredential);
+    }
+
+    #[test]
+    fn a_result_whose_size_claims_understate_the_output_is_refused() {
+        let admitted_request = legacy_request();
+        let admitted_descriptor = descriptor();
+        let admitted_caller = caller();
+        let admitted = admitted_request
+            .admit(&admitted_descriptor, &admitted_caller)
+            .expect("the request itself is admissible");
+        let error = transform_result(1, 1)
+            .validate_for(&admitted)
+            .expect_err("an understated size claim must be refused");
+        assert!(
+            matches!(
+                error,
+                ContextContractError::SizeUnderstated {
+                    field: "result.output_bytes",
+                    claimed: 1,
+                    measured
+                } if measured > 1
+            ),
+            "unexpected error: {error:?}"
+        );
     }
 
     // ------------------------------------------------------------------

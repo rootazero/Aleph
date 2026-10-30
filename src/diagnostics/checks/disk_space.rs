@@ -2,7 +2,7 @@
 //!
 //! SQLite stores, the vault, and session transcripts all grow under the data
 //! dir; a full disk surfaces later as opaque write failures (corrupted WAL,
-//! failed vault saves). Below 256 MiB free this is an Error (imminent write
+//! failed vault saves). Below 256 MiB available this is an Error (imminent write
 //! failure); below 1 GiB a Warning. **Not repairable** — what to delete is a
 //! human decision; the finding only points at the problem.
 
@@ -15,9 +15,9 @@ use crate::diagnostics::finding::{Finding, Severity};
 
 const ID: &str = "core/disk-space";
 
-/// Below this many free bytes the finding is an Error (256 MiB).
+/// Below this many available bytes the finding is an Error (256 MiB).
 const ERROR_THRESHOLD_BYTES: u64 = 256 * 1024 * 1024;
-/// Below this many free bytes the finding is a Warning (1 GiB).
+/// Below this many available bytes the finding is a Warning (1 GiB).
 const WARN_THRESHOLD_BYTES: u64 = 1024 * 1024 * 1024;
 
 /// Threshold classification, pure so it can be unit tested without a filesystem.
@@ -90,26 +90,26 @@ impl HealthCheck for DiskSpaceCheck {
             }
         }
 
-        let free = match fs2::free_space(anchor) {
-            Ok(free) => free,
+        let available = match fs2::available_space(anchor) {
+            Ok(available) => available,
             Err(e) => {
                 return vec![Finding::problem(
                     ID,
                     Severity::Warning,
                     "Free disk space unknown",
-                    format!("could not stat free space for {display}: {e}"),
+                    format!("could not stat available space for {display}: {e}"),
                 )];
             }
         };
 
-        match classify_free_space(free) {
+        match classify_free_space(available) {
             Some(Severity::Error) => vec![Finding::problem(
                 ID,
                 Severity::Error,
                 "Disk almost full",
                 format!(
-                    "{display} has only {} free; SQLite stores and the vault will start failing writes.",
-                    format_mib(free)
+                    "{display} has only {} available; SQLite stores and the vault will start failing writes.",
+                    format_mib(available)
                 ),
             )
             .with_fix_hint(
@@ -121,15 +121,15 @@ impl HealthCheck for DiskSpaceCheck {
                 Severity::Warning,
                 "Disk space is low",
                 format!(
-                    "{display} has {} free; below 1 GiB headroom.",
-                    format_mib(free)
+                    "{display} has {} available; below 1 GiB headroom.",
+                    format_mib(available)
                 ),
             )
             .with_fix_hint("Consider freeing space on the volume hosting the data dir.")],
             None => vec![Finding::ok(
                 ID,
                 "Disk space OK",
-                format!("{display} has {} free.", format_mib(free)),
+                format!("{display} has {} available.", format_mib(available)),
             )],
         }
     }

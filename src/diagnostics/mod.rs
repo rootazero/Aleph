@@ -27,12 +27,16 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use futures::future::join_all;
+use futures::FutureExt;
 use serde::Serialize;
 
 use crate::error::Result;
 
 /// Tag on the synthetic finding emitted when a check blows its deadline.
 pub const TAG_CHECK_TIMEOUT: &str = "check-timeout";
+/// Tag on the finding produced when a check panics and is contained at the
+/// execution boundary (see [`run_bounded`]).
+pub const TAG_CHECK_PANIC: &str = "check-panic";
 
 /// A check slower than this gets its own line in the human render (codex uses
 /// the same 2s threshold to start emitting "still checking…" heartbeats).
@@ -385,14 +389,23 @@ struct BoundedOutcome {
 /// naming it instead of hanging the whole report — the failure the deadline
 /// exists to prevent is a silent stall inside an agent turn, so it must be
 /// *reported*, not just avoided.
+///
+/// A check that **panics** is contained the same way: the panic is caught at
+/// this boundary and turned into a finding, so one broken check cannot take
+/// the other checks' observations down with it. The report must never lose
+/// the whole diagnostic because of a single check.
 async fn run_bounded(check: &Arc<dyn HealthCheck>, posture: Posture) -> BoundedOutcome {
     let deadline = check.timeout();
     let started = Instant::now();
-    let result = tokio::time::timeout(deadline, check.run(posture)).await;
+    let result = tokio::time::timeout(
+        deadline,
+        std::panic::AssertUnwindSafe(check.run(posture)).catch_unwind(),
+    )
+    .await;
     let duration_ms = started.elapsed().as_millis().try_into().unwrap_or(u64::MAX);
 
     match result {
-        Ok(findings) => BoundedOutcome {
+        Ok(Ok(findings)) => BoundedOutcome {
             findings,
             timing: CheckTiming {
                 check_id: check.id(),
@@ -400,6 +413,30 @@ async fn run_bounded(check: &Arc<dyn HealthCheck>, posture: Posture) -> BoundedO
                 timed_out: false,
             },
         },
+        Ok(Err(payload)) => {
+            let detail = panic_message(payload);
+            BoundedOutcome {
+                findings: vec![Finding::problem(
+                    check.id(),
+                    Severity::Error,
+                    format!("{}: check panicked", check.id()),
+                    format!(
+                        "The check panicked and was abandoned; its domain is UNKNOWN, not \
+                         healthy.{detail}"
+                    ),
+                )
+                .with_fix_hint(
+                    "Re-run doctor with this check skipped to get the rest of the report, and \
+                     report the panic with the check id above.",
+                )
+                .with_tag(TAG_CHECK_PANIC)],
+                timing: CheckTiming {
+                    check_id: check.id(),
+                    duration_ms,
+                    timed_out: false,
+                },
+            }
+        }
         Err(_) => BoundedOutcome {
             findings: vec![Finding::problem(
                 check.id(),
@@ -424,6 +461,17 @@ async fn run_bounded(check: &Arc<dyn HealthCheck>, posture: Posture) -> BoundedO
             },
         },
     }
+}
+
+/// Readable text from a caught panic payload, for the finding that reports it.
+fn panic_message(payload: Box<dyn std::any::Any + Send>) -> String {
+    if let Some(message) = payload.downcast_ref::<&str>() {
+        return format!(" ({message})");
+    }
+    if let Some(message) = payload.downcast_ref::<String>() {
+        return format!(" ({message})");
+    }
+    String::new()
 }
 
 const fn posture_label(p: Posture) -> &'static str {

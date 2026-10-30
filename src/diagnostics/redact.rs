@@ -34,7 +34,7 @@ fn vendor_patterns() -> &'static Regex {
         // string literals do not interpret escapes, which is exactly what
         // regex source wants.
         Regex::new(
-            r"(?ix)
+            r##"(?ix)
             (?:
                 # Vendor prefixes (longer first, so the alternation never
                 # stops at a shorter prefix that happens to be a substring).
@@ -63,43 +63,42 @@ fn vendor_patterns() -> &'static Regex {
             |   xox[baprs]-[A-Za-z0-9-]+
                 # OpenAI-style keys.
             |   sk-[A-Za-z0-9_-]{8,}
-                # Authorization headers (whitespace-terminated).
-            |   bearer\s+\S+
-            |   basic\s+\S+
+                # Authorization headers: redact the complete credential value for any
+                # scheme, including structured Digest values.
+            |   ((?:authorization|proxy-authorization)\s*[:=]\s*)(?:digest\b[^\r\n]*|(?:\w+)\s+\S+)
+                # URL userinfo, including percent-encoded credentials. The scheme is
+                # retained by the replacement closure in `redact_secrets`.
+            |   ((?:https?|ftp)://)(?:[^/@\s]+)@
                 # Standalone JWTs.
             |   eyJ[A-Za-z0-9_-]*(?:\.[A-Za-z0-9_-]+){2,4}
                 # X-Api-Key / X-Auth-Token style vendor headers (colon or
                 # equals as separator).
             |   x-(?:api[-_]?key|auth[-_]?token|secret|token|access[-_]?token)\s*[:=]\s*\S+
-                # PEM block assigned to a config field — must precede the
-                # generic branch below, whose value class stops at the
-                # first whitespace and would leak `PRIVATE KEY-----…`.
-            |   (?:password|secret|client_secret|private_key)\s*=\s*-----BEGIN[A-Z\x20]*KEY-----[^\s,;'&]*
-                # Generic config dump shapes — password=foo, secret=bar,
-                # client_secret=baz, private_key=qux. Excludes a small set
-                # of delimiters so the match stops at the value boundary.
-            |   (?:password|secret|client_secret|private_key)\s*=\s*[^\s,;'&]+
-            )"
+                # PEM private-key assignments must start at the field name so
+                # the generic value branch cannot stop at the first line break.
+            |   (?:password|secret|client_secret|private_key|api_key)\s*(?:=|:)\s*-----BEGIN\x20[A-Z0-9\x20]*PRIVATE\x20KEY-----[\s\S]*?-----END\x20[A-Z0-9\x20]*PRIVATE\x20KEY-----
+                # PEM private-key blocks, with or without an assignment prefix.
+            |   -----BEGIN\x20[A-Z0-9\x20]*PRIVATE\x20KEY-----[\s\S]*?-----END\x20[A-Z0-9\x20]*PRIVATE\x20KEY-----
+                # Generic config/JSON shapes. Quoted names, colon separators,
+                # escaped quoted values, and complete quoted assignments are all
+                # consumed before replacement.
+            |   (?:"(?:password|secret|client_secret|private_key|api_key)"|(?:password|secret|client_secret|private_key|api_key))\s*(?:=|:)\s*(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^\s,;'&]+)
+            )"##
         )
         .expect("redaction vendor regex is a compile-time constant")
     })
 }
 
-/// Query-parameter shapes — bounded so a trailing URL fragment
-/// (`&next=…`, `#…`) is not consumed. The value class excludes `*` so a
-/// value already masked by the vendor pass (`key=***`) is left alone,
-/// and escapes `#` because in (?x) mode a bare `#` starts a comment
-/// even inside a character class (previously: unclosed-class panic on
-/// first use).
+/// Query-parameter shapes. Values end only at actual query delimiters, so
+/// opaque values beginning with `*` or `=` are covered too. The replacement
+/// closure preserves the complete `***` marker produced by the vendor pass.
 fn query_param_patterns() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
     RE.get_or_init(|| {
         Regex::new(
             r"(?ix)
             (?:
-                apikey=[^\s&=\#?*]+
-            |   token=[^\s&=\#?*]+
-            |   key=[^\s&=\#?*]+
+                ((?:apikey|token|key)=)([^\s&\#?]+)
             )",
         )
         .expect("redaction query-param regex is a compile-time constant")
@@ -109,9 +108,23 @@ fn query_param_patterns() -> &'static Regex {
 /// Replace common credential shapes in `input` with `***`.
 #[must_use]
 pub fn redact_secrets(input: &str) -> String {
-    let first = vendor_patterns().replace_all(input, "***");
+    let first = vendor_patterns().replace_all(input, |caps: &regex::Captures<'_>| {
+        if let Some(prefix) = caps.get(2) {
+            return format!("{}***@", prefix.as_str());
+        }
+        if let Some(prefix) = caps.get(1) {
+            return format!("{}***", prefix.as_str());
+        }
+        "***".to_string()
+    });
     query_param_patterns()
-        .replace_all(&first, "***")
+        .replace_all(&first, |caps: &regex::Captures<'_>| {
+            if caps.get(2).is_some_and(|value| value.as_str() == "***") {
+                caps[0].to_string()
+            } else {
+                "***".to_string()
+            }
+        })
         .into_owned()
 }
 

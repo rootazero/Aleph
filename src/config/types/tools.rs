@@ -28,11 +28,15 @@ use super::search::default_true;
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ToolServiceConfig {
     /// Default timeout applied to every tool invocation (seconds).
-    #[serde(default = "default_tool_service_timeout_seconds")]
+    #[serde(
+        default = "default_tool_service_timeout_seconds",
+        deserialize_with = "reject_configured_tool_service_timeout"
+    )]
     pub default_timeout_seconds: u64,
 
-    /// Per-tool overrides keyed by tool name (seconds).
-    #[serde(default)]
+    /// Per-tool overrides are reserved until the ToolService runtime consumes
+    /// them; configured overrides are rejected at the config boundary.
+    #[serde(default, deserialize_with = "reject_configured_tool_overrides")]
     pub per_tool_seconds: HashMap<String, u64>,
 
     /// Max number of concurrent-safe tool calls the harness Act phase
@@ -46,6 +50,34 @@ pub struct ToolServiceConfig {
 
 pub const fn default_tool_service_timeout_seconds() -> u64 {
     60
+}
+
+fn reject_configured_tool_service_timeout<'de, D>(deserializer: D) -> Result<u64, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = u64::deserialize(deserializer)?;
+    if value != default_tool_service_timeout_seconds() {
+        return Err(serde::de::Error::custom(
+            "tool_service.default_timeout_seconds is not supported until ToolService consumes it",
+        ));
+    }
+    Ok(value)
+}
+
+fn reject_configured_tool_overrides<'de, D>(
+    deserializer: D,
+) -> Result<HashMap<String, u64>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = HashMap::<String, u64>::deserialize(deserializer)?;
+    if !value.is_empty() {
+        return Err(serde::de::Error::custom(
+            "tool_service.per_tool_seconds is not supported until ToolService consumes it",
+        ));
+    }
+    Ok(value)
 }
 
 pub const fn default_parallel_tool_concurrency() -> usize {
@@ -494,12 +526,15 @@ pub struct NativeToolsConfig {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct FsToolConfig {
     /// Enable filesystem service
-    #[serde(default = "default_true")]
+    #[serde(
+        default = "default_true",
+        deserialize_with = "reject_disabled_native_tool"
+    )]
     pub enabled: bool,
 
-    /// Allowed filesystem roots (paths the fs service can access)
-    /// Empty means current directory only
-    #[serde(default)]
+    /// Allowed filesystem roots are rejected until the native filesystem
+    /// executor consumes them.
+    #[serde(default, deserialize_with = "reject_nonempty_paths")]
     pub allowed_roots: Vec<String>,
 }
 
@@ -516,12 +551,15 @@ impl Default for FsToolConfig {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct GitToolConfig {
     /// Enable git service
-    #[serde(default = "default_true")]
+    #[serde(
+        default = "default_true",
+        deserialize_with = "reject_disabled_native_tool"
+    )]
     pub enabled: bool,
 
-    /// Allowed git repositories (paths the git service can access)
-    /// Empty means current directory only
-    #[serde(default)]
+    /// Allowed git repositories are rejected until the native git executor
+    /// consumes them.
+    #[serde(default, deserialize_with = "reject_nonempty_paths")]
     pub allowed_repos: Vec<String>,
 }
 
@@ -538,16 +576,72 @@ impl Default for GitToolConfig {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ShellToolConfig {
     /// Enable shell service (disabled by default for security)
-    #[serde(default)]
+    #[serde(default, deserialize_with = "reject_enabled_shell")]
     pub enabled: bool,
 
     /// Shell command timeout in seconds
     #[serde(default = "default_shell_timeout")]
     pub timeout_seconds: u64,
 
-    /// Allowed shell commands (whitelist for security)
-    #[serde(default = "default_shell_commands")]
+    /// Shell command allow-lists are rejected until the native shell executor
+    /// consumes them.
+    #[serde(
+        default = "default_shell_commands",
+        deserialize_with = "reject_custom_shell_commands"
+    )]
     pub allowed_commands: Vec<String>,
+}
+
+fn reject_disabled_native_tool<'de, D>(deserializer: D) -> Result<bool, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = bool::deserialize(deserializer)?;
+    if !value {
+        return Err(serde::de::Error::custom(
+            "native tool enable switches are not supported until the native registry consumes them",
+        ));
+    }
+    Ok(value)
+}
+
+fn reject_enabled_shell<'de, D>(deserializer: D) -> Result<bool, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = bool::deserialize(deserializer)?;
+    if value {
+        return Err(serde::de::Error::custom(
+            "native shell enable switch is not supported until the native registry consumes it",
+        ));
+    }
+    Ok(value)
+}
+
+fn reject_nonempty_paths<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = Vec::<String>::deserialize(deserializer)?;
+    if !value.is_empty() {
+        return Err(serde::de::Error::custom(
+            "native path allow-lists are not supported until the native executor consumes them",
+        ));
+    }
+    Ok(value)
+}
+
+fn reject_custom_shell_commands<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = Vec::<String>::deserialize(deserializer)?;
+    if value != default_shell_commands() {
+        return Err(serde::de::Error::custom(
+            "native shell command allow-lists are not supported until the native executor consumes them",
+        ));
+    }
+    Ok(value)
 }
 
 pub fn default_shell_commands() -> Vec<String> {

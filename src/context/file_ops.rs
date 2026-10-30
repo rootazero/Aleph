@@ -84,7 +84,24 @@ pub(crate) fn canonical_path(args: &Value) -> Option<String> {
 #[must_use]
 pub(crate) fn canonicalize_path_string(raw: &str) -> String {
     let trimmed = raw.trim();
-    trimmed.strip_prefix("./").unwrap_or(trimmed).to_string()
+    let mut components = Vec::new();
+    for component in trimmed.split('/') {
+        match component {
+            "" | "." => {}
+            ".." => {
+                if components
+                    .last()
+                    .is_some_and(|component| *component != "..")
+                {
+                    components.pop();
+                } else {
+                    components.push("..");
+                }
+            }
+            component => components.push(component),
+        }
+    }
+    components.join("/")
 }
 
 /// The `tool_call_id`s in `messages` whose `ToolResult` arrived with

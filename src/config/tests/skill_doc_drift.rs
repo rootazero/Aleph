@@ -598,6 +598,13 @@ fn the_bundled_self_skill_names_no_phantom_config_keys() {
         truth.live.len(),
         MIN_SECTIONS_WITH_FIELDS
     );
+    assert_eq!(
+        report.unchecked,
+        BTreeSet::from(["gateway".to_string()]),
+        "the field arm stopped resolving for an unexpected section; the guard would otherwise \
+         pass vacuously: {:?}",
+        report.unchecked
+    );
 
     assert!(report.findings.is_empty(), "{}", render(SKILL_DOC, &report));
 }
@@ -920,6 +927,13 @@ fn looks_like_python(fence: &Fence) -> bool {
         || fence.body.contains("python -c")
 }
 
+// A hardcoded path is tolerated only when the same line derives it from the
+// environment. A comment or unrelated snippet elsewhere in the fence does not
+// establish that the hardcoded occurrence is safe.
+fn line_derives_config_path(line: &str) -> bool {
+    line.contains(HARDCODED_CONFIG_PATH) && line.contains(ALEPH_HOME_VAR)
+}
+
 /// Fences that name the config file without deriving its directory.
 fn hardcoded_config_paths(files: &[(String, &'static str)]) -> (Vec<Finding>, usize) {
     let mut findings = Vec::new();
@@ -927,7 +941,11 @@ fn hardcoded_config_paths(files: &[(String, &'static str)]) -> (Vec<Finding>, us
     for (path, text) in files {
         for fence in fenced_blocks(path, text) {
             scanned += 1;
-            if !fence.body.contains(HARDCODED_CONFIG_PATH) || fence.body.contains(ALEPH_HOME_VAR) {
+            if !fence.body.contains(HARDCODED_CONFIG_PATH)
+                || !fence.body.lines().any(|line| {
+                    line.contains(HARDCODED_CONFIG_PATH) && !line_derives_config_path(line)
+                })
+            {
                 continue;
             }
             let canonical = if looks_like_python(&fence) {
@@ -1006,8 +1024,9 @@ fn render_config_path(findings: &[Finding], scanned: usize, files: usize) -> Str
 ///
 /// Both shapes that actually shipped: a `python` fence with the literal path,
 /// and the smuggled `bash(python3 -c "…")` form whose info string says `bash`.
-/// A fence that mentions the path *and* `ALEPH_HOME` is the escape hatch and
-/// must stay silent, and prose outside any fence must never be flagged.
+/// The `ALEPH_HOME` escape hatch applies to the individual path occurrence,
+/// so an unrelated mention elsewhere in the fence does not make it safe.
+/// Prose outside any fence must never be flagged.
 #[test]
 fn the_config_path_scan_reports_a_hardcoded_snippet() {
     let doc = "\
@@ -1030,7 +1049,8 @@ cat \"${ALEPH_HOME:-$HOME/.aleph}/config.toml\"
 ```
 
 ```bash
-grep x ~/.aleph/config.toml   # named alongside ALEPH_HOME, so tolerated
+grep x ~/.aleph/config.toml
+# ALEPH_HOME is mentioned in an unrelated line.
 ```
 ";
     let files = vec![("self/FIXTURE.md".to_string(), doc)];
@@ -1040,7 +1060,11 @@ grep x ~/.aleph/config.toml   # named alongside ALEPH_HOME, so tolerated
     let got: Vec<&str> = findings.iter().map(|f| f.what.as_str()).collect();
     assert_eq!(
         got,
-        vec!["self/FIXTURE.md:3 (```python)", "self/FIXTURE.md:8 (```)"],
+        vec![
+            "self/FIXTURE.md:3 (```python)",
+            "self/FIXTURE.md:8 (```)",
+            "self/FIXTURE.md:20 (```bash)",
+        ],
         "full report:\n{}",
         render_config_path(&findings, scanned, files.len())
     );

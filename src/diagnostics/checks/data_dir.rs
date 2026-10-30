@@ -6,8 +6,10 @@
 //! deterministic and safe.
 
 use std::path::PathBuf;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use async_trait::async_trait;
+use tokio::io::AsyncWriteExt;
 
 use crate::diagnostics::check::{HealthCheck, Posture, Presence};
 use crate::diagnostics::finding::{Finding, RepairOutcome, Severity};
@@ -24,13 +26,38 @@ impl DataDirCheck {
         Self { data_dir }
     }
 
-    /// Probe writability by creating and removing a throwaway file. Returns
-    /// the io error if the directory is not writable.
+    /// Probe writability by creating and removing a uniquely named file. The
+    /// file is opened with `create_new`, so an existing path (including a
+    /// symlink) is never followed or removed.
     async fn write_probe(dir: &std::path::Path) -> std::io::Result<()> {
-        let probe = dir.join(".aleph-doctor-write-probe");
-        tokio::fs::write(&probe, b"ok").await?;
-        let _ = tokio::fs::remove_file(&probe).await;
-        Ok(())
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        let pid = std::process::id();
+
+        for attempt in 0..8 {
+            let probe = dir.join(format!(".aleph-doctor-write-probe-{pid}-{nonce}-{attempt}"));
+            let mut file = match tokio::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&probe)
+                .await
+            {
+                Ok(file) => file,
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                Err(e) => return Err(e),
+            };
+            let result = file.write_all(b"ok").await;
+            drop(file);
+            let cleanup = tokio::fs::remove_file(&probe).await;
+            return result.and(cleanup);
+        }
+
+        Err(std::io::Error::new(
+            std::io::ErrorKind::AlreadyExists,
+            "could not create a unique write probe",
+        ))
     }
 }
 

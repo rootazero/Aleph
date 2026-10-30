@@ -40,8 +40,9 @@ pub enum ReloadImpact {
     Inert,
 }
 
-/// Top-level sections applied live (effective on the next conversation turn)
-/// without a daemon restart.
+/// Top-level live-apply targets. `execution` is an apply target for its
+/// concurrency fields only; [`live_target_for`] restricts which paths qualify.
+/// Other entries apply live as a whole without a daemon restart.
 ///
 /// Why each one qualifies:
 /// - `behavior` — `output_mode` is re-read fresh from the shared config on
@@ -49,8 +50,9 @@ pub enum ReloadImpact {
 ///   executor, and the `agent` handler's `resolved_output_mode`), so the
 ///   typewriter/instant switch takes effect on the next turn. Its liveness is
 ///   a property of the READER — no hot-swap call exists or is needed.
-/// - `execution` — `[execution] max_runs_*` are pushed to the live
-///   `ConcurrencyLimiter`; new caps bind on the next admission.
+/// - `execution` — only `max_runs_global`, `max_runs_per_agent`, and
+///   `max_concurrent_subagents` have live consumers. The shared apply arm is
+///   named `execution`; a whole-section edit or any other leaf needs restart.
 /// - `search` — the `search` tool reads its provider registry through a
 ///   boot-installed [`crate::search::SearchHandle`]'s `ArcSwap` on every
 ///   call, so rebuilding from the patched config and storing into it is what
@@ -165,6 +167,17 @@ pub(crate) fn dotted_prefix_matches(prefix: &str, path: &str) -> bool {
 /// the invariant this function exists to fix in place, not a reaction to a
 /// conflict that currently exists.
 pub(crate) fn live_target_for(config_path: &str) -> Option<&'static str> {
+    // Keep the existing shared apply target without endorsing startup-captured
+    // fields merely because the concurrency update succeeded.
+    if dotted_prefix_matches("execution", config_path) {
+        return matches!(
+            config_path,
+            "execution.max_runs_global"
+                | "execution.max_runs_per_agent"
+                | "execution.max_concurrent_subagents"
+        )
+        .then_some("execution");
+    }
     LIVE_SUBSECTIONS
         .iter()
         .chain(LIVE_SECTIONS.iter())
@@ -242,12 +255,34 @@ mod tests {
     use super::*;
 
     #[test]
-    fn execution_is_live() {
-        assert_eq!(ReloadImpact::classify("execution"), ReloadImpact::Live);
-        assert_eq!(
-            ReloadImpact::classify("execution.max_runs_global"),
-            ReloadImpact::Live
-        );
+    fn only_execution_concurrency_fields_are_live() {
+        for path in [
+            "execution",
+            "execution.max_iterations",
+            "execution.prompt_mode",
+            "execution.default_timeout_secs",
+            "execution.mid_turn_steering",
+            "execution.progress_push",
+            "execution.max_pending_steering",
+        ] {
+            assert_eq!(
+                ReloadImpact::classify(path),
+                ReloadImpact::Restart,
+                "{path}"
+            );
+            assert_eq!(
+                crate::config::live_apply::classify_verified(path, &["execution"]),
+                ReloadImpact::Restart,
+                "{path} must not inherit a successful concurrency update"
+            );
+        }
+        for path in [
+            "execution.max_runs_global",
+            "execution.max_runs_per_agent",
+            "execution.max_concurrent_subagents",
+        ] {
+            assert_eq!(ReloadImpact::classify(path), ReloadImpact::Live, "{path}");
+        }
     }
 
     /// The retired `[route]` table is not a live section.

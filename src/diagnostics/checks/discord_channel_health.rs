@@ -88,7 +88,7 @@ enum DiscordVerdict {
 ///
 /// All fields are `Option` / default-fillable so a config that lacks a
 /// field we don't probe still parses cleanly — the *only* failure mode
-/// we recognise is "the file is not on disk" or "the bytes are not JSON".
+/// we recognise is "the file is not on disk" or "the bytes are not TOML".
 #[derive(Debug, Deserialize, Default)]
 struct DiscordConfigShape {
     #[serde(default)]
@@ -252,28 +252,48 @@ async fn probe(path: &std::path::Path) -> DiscordVerdict {
         Ok(b) => b,
         Err(e) => return DiscordVerdict::Unknown(format!("read failed: {e}")),
     };
+    let contents = match std::str::from_utf8(&bytes) {
+        Ok(contents) => contents,
+        Err(e) => return DiscordVerdict::Unknown(format!("config is not valid UTF-8: {e}")),
+    };
+    let value: toml::Value = match toml::from_str(contents) {
+        Ok(v) => v,
+        Err(e) => return DiscordVerdict::Unknown(format!("not valid TOML: {e}")),
+    };
     // Extract just the discord section. A whole-file parse would let a
     // bad [channels.config] in another channel poison the verdict; we
-    // only care about the discord table.
-    let value: serde_json::Value = match serde_json::from_slice(&bytes) {
-        Ok(v) => v,
-        Err(e) => return DiscordVerdict::Unknown(format!("not valid JSON/TOML: {e}")),
-    };
+    // only care about the discord table. This follows Config::resolved_channels:
+    // a channel's `type` field wins, otherwise the section key is the type.
     let discord_section = value
         .get("channels")
-        .and_then(|c| c.as_array())
-        .and_then(|arr| {
-            arr.iter()
-                .find(|entry| entry.get("channel_type").and_then(|t| t.as_str()) == Some("discord"))
-        })
-        .and_then(|entry| entry.get("config"));
-    let Some(section) = discord_section else {
+        .and_then(toml::Value::as_table)
+        .and_then(|channels| {
+            channels.iter().find_map(|(id, entry)| {
+                let channel_type = entry
+                    .get("type")
+                    .and_then(toml::Value::as_str)
+                    .unwrap_or(id);
+                if channel_type != "discord" {
+                    return None;
+                }
+                let mut config = entry.clone();
+                if let Some(table) = config.as_table_mut() {
+                    table.remove("type");
+                }
+                Some(config)
+            })
+        });
+    let Some(discord_section) = discord_section else {
         // No discord channel is configured at all — that's an *OK* for the
         // discord check (we have nothing to audit), not a misconfiguration.
         // The operator may simply not have turned discord on.
         return DiscordVerdict::Ok;
     };
-    let shape: DiscordConfigShape = match serde_json::from_value(section.clone()) {
+    let section = match serde_json::to_value(discord_section) {
+        Ok(v) => v,
+        Err(e) => return DiscordVerdict::Unknown(format!("discord section malformed: {e}")),
+    };
+    let shape: DiscordConfigShape = match serde_json::from_value(section) {
         Ok(s) => s,
         Err(e) => return DiscordVerdict::Unknown(format!("discord section malformed: {e}")),
     };
@@ -325,7 +345,7 @@ impl HealthCheck for DiscordChannelHealthCheck {
     }
 
     fn timeout(&self) -> Duration {
-        // Probe is one file read + JSON parse. 5s covers any sane
+        // Probe is one file read + TOML parse. 5s covers any sane
         // filesystem; the engine's 20s default would be wasted slack.
         Duration::from_secs(5)
     }
@@ -471,24 +491,15 @@ mod tests {
     #[tokio::test]
     async fn probe_a_healthy_config_reports_ok() {
         let mut tmp = tempfile::NamedTempFile::new().expect("tempfile");
-        let payload = serde_json::json!({
-            "channels": [{
-                "channel_type": "discord",
-                "config": {
-                    "bot_token": "x".repeat(DISCORD_MIN_BOT_TOKEN_LEN + 1),
-                    "application_id": 999,
-                    "slash_commands_enabled": true,
-                    "intents": {
-                        "guild_messages": true,
-                        "message_content": true,
-                        "direct_messages": true,
-                    },
-                    "max_message_length": DISCORD_MAX_MESSAGE_LENGTH,
-                }
-            }]
-        });
-        tmp.write_all(serde_json::to_vec(&payload).unwrap().as_slice())
-            .unwrap();
+        tmp.write_all(
+            format!(
+                "[channels.discord]\nbot_token = \"{}\"\napplication_id = 999\nslash_commands_enabled = true\nmax_message_length = {}\n",
+                "x".repeat(DISCORD_MIN_BOT_TOKEN_LEN + 1),
+                DISCORD_MAX_MESSAGE_LENGTH,
+            )
+            .as_bytes(),
+        )
+        .unwrap();
         let verdict = probe(tmp.path()).await;
         assert_eq!(verdict, DiscordVerdict::Ok);
     }
@@ -498,13 +509,7 @@ mod tests {
     #[tokio::test]
     async fn probe_a_config_without_discord_reports_ok() {
         let mut tmp = tempfile::NamedTempFile::new().expect("tempfile");
-        let payload = serde_json::json!({
-            "channels": [{
-                "channel_type": "telegram",
-                "config": {"token": "y"}
-            }]
-        });
-        tmp.write_all(serde_json::to_vec(&payload).unwrap().as_slice())
+        tmp.write_all(b"[channels.telegram]\ntoken = \"y\"\n")
             .unwrap();
         let verdict = probe(tmp.path()).await;
         assert_eq!(verdict, DiscordVerdict::Ok);
@@ -515,22 +520,14 @@ mod tests {
     #[tokio::test]
     async fn probe_a_misaligned_config_reports_each_violation() {
         let mut tmp = tempfile::NamedTempFile::new().expect("tempfile");
-        let payload = serde_json::json!({
-            "channels": [{
-                "channel_type": "discord",
-                "config": {
-                    "bot_token": "x".repeat(DISCORD_MIN_BOT_TOKEN_LEN + 1),
-                    "slash_commands_enabled": true,
-                    "application_id": null,
-                    "intents": {
-                        "guild_messages": true,
-                        "message_content": false,
-                    }
-                }
-            }]
-        });
-        tmp.write_all(serde_json::to_vec(&payload).unwrap().as_slice())
-            .unwrap();
+        tmp.write_all(
+            format!(
+                "[channels.discord]\nbot_token = \"{}\"\nslash_commands_enabled = true\n\n[channels.discord.intents]\nguild_messages = true\nmessage_content = false\n",
+                "x".repeat(DISCORD_MIN_BOT_TOKEN_LEN + 1)
+            )
+            .as_bytes(),
+        )
+        .unwrap();
         let verdict = probe(tmp.path()).await;
         match verdict {
             DiscordVerdict::Misconfigured(tags) => {
@@ -558,10 +555,10 @@ mod tests {
     #[tokio::test]
     async fn probe_a_malformed_file_reports_unknown() {
         let mut tmp = tempfile::NamedTempFile::new().expect("tempfile");
-        tmp.write_all(b"this is not json {{{").unwrap();
+        tmp.write_all(b"this is not TOML = {").unwrap();
         let verdict = probe(tmp.path()).await;
         match verdict {
-            DiscordVerdict::Unknown(reason) => assert!(reason.contains("JSON/TOML")),
+            DiscordVerdict::Unknown(reason) => assert!(reason.contains("TOML")),
             other => panic!("expected Unknown, got {other:?}"),
         }
     }

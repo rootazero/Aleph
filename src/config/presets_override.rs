@@ -75,6 +75,12 @@ pub struct GenerationPresetsOverride {
     /// Audio generation provider overrides (keyed by preset name)
     #[serde(default)]
     pub audio: HashMap<String, PartialGenerationPreset>,
+    /// Speech (TTS) generation provider overrides (keyed by preset name)
+    #[serde(default)]
+    pub speech: HashMap<String, PartialGenerationPreset>,
+    /// Transcription (STT) generation provider overrides (keyed by preset name)
+    #[serde(default)]
+    pub transcription: HashMap<String, PartialGenerationPreset>,
 }
 
 // =============================================================================

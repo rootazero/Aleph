@@ -134,10 +134,16 @@ fn test_multi_provider_config_roundtrip() {
     provider2.protocol = Some("anthropic".to_string());
     config.providers.insert("claude".to_string(), provider2);
 
-    // Verify the providers are retained
-    assert_eq!(config.providers.len(), 2);
-    assert!(config.providers.contains_key("openai"));
-    assert!(config.providers.contains_key("claude"));
+    let serialized = toml::to_string_pretty(&config).unwrap();
+    let loaded: Config = toml::from_str(&serialized).unwrap();
+    assert_eq!(loaded.providers.len(), 2);
+    for name in ["openai", "claude"] {
+        assert_eq!(
+            loaded.providers[name].protocol,
+            config.providers[name].protocol
+        );
+        assert_eq!(loaded.providers[name].models, config.providers[name].models);
+    }
 }
 
 #[test]
@@ -215,76 +221,36 @@ fn test_agents_toml_round_trip() {
 }
 
 #[test]
-fn test_real_config_file_parse() {
-    let home = std::env::var("HOME").unwrap_or_default();
-    let path = format!("{}/.aleph/config.toml", home);
-    if let Ok(contents) = std::fs::read_to_string(&path) {
-        // Test 1: Direct parse (should work)
-        match toml::from_str::<Config>(&contents) {
-            Ok(cfg) => {
-                eprintln!(
-                    "Direct parse OK: {} providers, {} agents",
-                    cfg.providers.len(),
-                    cfg.agents.list.len()
-                );
-            }
-            Err(e) => {
-                panic!("Direct parse failed: {}", e);
-            }
-        }
+fn test_config_fixture_file_parse() {
+    let _home = crate::utils::paths::IsolatedAlephHome::new();
+    let temp_dir = tempfile::TempDir::new().unwrap();
+    let path = temp_dir.path().join("config.toml");
+    let contents = r#"
+[general]
+default_provider = "fixture"
 
-        // Test 2: Through migrate_mcp_builtin_in_toml (simulates load_from_file)
-        let migrated = Config::migrate_mcp_builtin_in_toml(&contents).unwrap();
-        eprintln!("migrated == original: {}", migrated == contents);
-        eprintln!(
-            "migrated len: {}, original len: {}",
-            migrated.len(),
-            contents.len()
-        );
-        match toml::from_str::<Config>(&migrated) {
-            Ok(cfg) => {
-                eprintln!(
-                    "Post-migration parse OK: {} providers, {} agents",
-                    cfg.providers.len(),
-                    cfg.agents.list.len()
-                );
-            }
-            Err(e) => {
-                // Show differences
-                if migrated != contents {
-                    for (i, (a, b)) in migrated.lines().zip(contents.lines()).enumerate() {
-                        if a != b {
-                            eprintln!("Line {} differs: '{}' vs '{}'", i + 1, a, b);
-                        }
-                    }
-                }
-                panic!("Post-migration parse failed: {}", e);
-            }
-        }
+[providers.fixture]
+protocol = "openai"
+model = "gpt-4o"
+timeout_seconds = 45
 
-        // Test 3: Full load_from_file
-        match Config::load_from_file(&path) {
-            Ok(cfg) => {
-                eprintln!(
-                    "load_from_file OK: {} providers, {} agents",
-                    cfg.providers.len(),
-                    cfg.agents.list.len()
-                );
-            }
-            Err(e) => {
-                // Local config files may carry user-level validation errors
-                // (e.g. a SearXNG backend without base_url). That is an
-                // environment issue, not a serialization regression, so skip
-                // rather than fail. Parse errors still panic.
-                if matches!(e, crate::AlephError::InvalidConfig { .. }) {
-                    eprintln!("Skipping: local config file failed validation: {e}");
-                    return;
-                }
-                panic!("load_from_file failed: {}", e);
-            }
-        }
-    } else {
-        eprintln!("Skipping: no config file at {}", path);
+[[agents.list]]
+id = "main"
+"#;
+    std::fs::write(&path, contents).unwrap();
+
+    let direct: Config = toml::from_str(contents).expect("Direct fixture parse");
+    let migrated = Config::migrate_mcp_builtin_in_toml(contents).expect("Migrate fixture");
+    let post_migration: Config = toml::from_str(&migrated).expect("Post-migration fixture parse");
+    let loaded = Config::load_from_file(&path).expect("Full fixture load");
+    for cfg in [&direct, &post_migration, &loaded] {
+        assert_eq!(cfg.general.default_provider.as_deref(), Some("fixture"));
+        assert_eq!(cfg.providers.len(), 1);
+        assert_eq!(cfg.providers["fixture"].default_model(), "gpt-4o");
+        assert_eq!(cfg.providers["fixture"].protocol.as_deref(), Some("openai"));
+        assert_eq!(cfg.providers["fixture"].timeout_seconds, 45);
+        assert_eq!(cfg.agents.list.len(), 1);
+        assert_eq!(cfg.agents.list[0].id, "main");
     }
 }
 

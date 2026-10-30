@@ -33,7 +33,7 @@ use rusqlite::{params, Connection, OpenFlags};
 
 use crate::context::compact::fold_ledger::{judge_fold, FoldVerdict, Payback};
 use crate::context::compact::folds::{list_folds, FoldRecord};
-use crate::diagnostics::check::{HealthCheck, Posture, Presence};
+use crate::diagnostics::check::{unknown_finding, HealthCheck, Posture, Presence};
 use crate::diagnostics::finding::{Finding, Severity};
 use crate::session::events::SessionEvent;
 
@@ -81,7 +81,7 @@ impl FoldEconomicsCheck {
             .map_err(|e| format!("system clock before unix epoch: {e}"))?
             .as_secs() as i64;
         let cutoff_s = now_s - WINDOW_SECS;
-        let folds = load_folds(sessions_db, cutoff_s * 1000)?;
+        let (folds, unreadable_fold_events) = load_folds(sessions_db, cutoff_s * 1000)?;
         let usage = load_usage(state_db, cutoff_s)?;
         let mut verdicts = Vec::new();
         let mut unaccounted_folds = 0usize;
@@ -95,34 +95,49 @@ impl FoldEconomicsCheck {
                 continue;
             }
             let fold_at_s = fold.at / 1000;
-            let cost_tokens: u64 = usage
+            let cost_tokens = usage
                 .iter()
                 .filter(|u| u.is_compactor)
                 .filter(|u| {
                     (fold_at_s - ATTRIBUTION_BEFORE_SECS..=fold_at_s + ATTRIBUTION_AFTER_SECS)
                         .contains(&u.at_s)
                 })
-                .map(|u| u.billed_tokens)
-                .sum();
+                .try_fold(0u64, |total, usage| {
+                    total.checked_add(usage.billed_tokens).ok_or_else(|| {
+                        format!(
+                            "compactor token total overflowed near fold {}",
+                            fold.fold_id
+                        )
+                    })
+                })?;
             let turns_observed = usage
                 .iter()
                 .filter(|u| !u.is_compactor && u.at_s > fold_at_s)
                 .count() as u32;
             verdicts.push(judge_fold(fold, turns_observed, cost_tokens, WINDOW_TURNS));
         }
-        let compactor_tokens = usage
-            .iter()
-            .filter(|u| u.is_compactor)
-            .map(|u| u.billed_tokens)
-            .sum();
-        let prompt_tokens = usage
-            .iter()
-            .filter(|u| !u.is_compactor)
-            .map(|u| u.prompt_tokens)
-            .sum();
+        let compactor_tokens =
+            usage
+                .iter()
+                .filter(|u| u.is_compactor)
+                .try_fold(0u64, |total, usage| {
+                    total
+                        .checked_add(usage.billed_tokens)
+                        .ok_or_else(|| "compactor token total overflowed".to_string())
+                })?;
+        let prompt_tokens =
+            usage
+                .iter()
+                .filter(|u| !u.is_compactor)
+                .try_fold(0u64, |total, usage| {
+                    total
+                        .checked_add(usage.prompt_tokens)
+                        .ok_or_else(|| "prompt token total overflowed".to_string())
+                })?;
         Ok(LedgerRollup {
             verdicts,
             unaccounted_folds,
+            unreadable_fold_events,
             compactor_tokens,
             prompt_tokens,
         })
@@ -239,6 +254,7 @@ struct UsageRow {
 struct LedgerRollup {
     verdicts: Vec<FoldVerdict>,
     unaccounted_folds: usize,
+    unreadable_fold_events: usize,
     compactor_tokens: u64,
     prompt_tokens: u64,
 }
@@ -256,11 +272,11 @@ fn table_exists(conn: &Connection, name: &str) -> Result<bool, String> {
 /// Read the last window's folds out of `sessions.db`, grouped per session and
 /// reconstructed through the registry's single source (`list_folds`) so the
 /// doctor check can never drift from what the runtime believes a fold is.
-fn load_folds(sessions_db: &Path, cutoff_ms: i64) -> Result<Vec<FoldRecord>, String> {
+fn load_folds(sessions_db: &Path, cutoff_ms: i64) -> Result<(Vec<FoldRecord>, usize), String> {
     let conn = Connection::open_with_flags(sessions_db, OpenFlags::SQLITE_OPEN_READ_ONLY)
         .map_err(|e| format!("open {}: {e}", sessions_db.display()))?;
     if !table_exists(&conn, "session_events")? {
-        return Ok(Vec::new());
+        return Ok((Vec::new(), 0));
     }
     let mut stmt = conn
         .prepare(
@@ -275,19 +291,19 @@ fn load_folds(sessions_db: &Path, cutoff_ms: i64) -> Result<Vec<FoldRecord>, Str
         })
         .map_err(|e| format!("{e}"))?;
     let mut by_session: BTreeMap<String, Vec<SessionEvent>> = BTreeMap::new();
+    let mut unreadable_fold_events = 0usize;
     for row in rows {
         let (session_id, payload) = row.map_err(|e| format!("{e}"))?;
-        // Undecodable payloads (a newer build's event shape) are skipped, not
-        // fatal: one bad row must not blind the whole ledger.
-        if let Ok(event) = serde_json::from_str::<SessionEvent>(&payload) {
-            by_session.entry(session_id).or_default().push(event);
+        match serde_json::from_str::<SessionEvent>(&payload) {
+            Ok(event) => by_session.entry(session_id).or_default().push(event),
+            Err(_) => unreadable_fold_events += 1,
         }
     }
     let mut folds = Vec::new();
     for (session_key, events) in &by_session {
         folds.extend(list_folds(session_key, events));
     }
-    Ok(folds)
+    Ok((folds, unreadable_fold_events))
 }
 
 /// Read the last window's `provider_usage` rows out of `state.db`. A missing
@@ -300,7 +316,7 @@ fn load_usage(state_db: &Path, cutoff_s: i64) -> Result<Vec<UsageRow>, String> {
     }
     let mut stmt = conn
         .prepare(
-            "SELECT timestamp, \
+            "SELECT id, timestamp, \
              COALESCE(json_extract(event_json, '$.agent_id'), ''), \
              CAST(COALESCE(json_extract(event_json, '$.input_tokens'), 0) AS INTEGER), \
              CAST(COALESCE(json_extract(event_json, '$.output_tokens'), 0) AS INTEGER), \
@@ -311,23 +327,41 @@ fn load_usage(state_db: &Path, cutoff_s: i64) -> Result<Vec<UsageRow>, String> {
         .map_err(|e| format!("{e}"))?;
     let rows = stmt
         .query_map(params![cutoff_s], |row| {
-            let at_s = row.get::<_, i64>(0)?;
-            let agent = row.get::<_, String>(1)?;
-            let input = row.get::<_, i64>(2)? as u64;
-            let output = row.get::<_, i64>(3)? as u64;
-            let read = row.get::<_, i64>(4)? as u64;
-            let creation = row.get::<_, i64>(5)? as u64;
-            Ok(UsageRow {
-                at_s,
-                is_compactor: agent.starts_with("compactor:"),
-                billed_tokens: input + output,
-                prompt_tokens: input + read + creation,
-            })
+            Ok((
+                row.get::<_, i64>(0)?,
+                row.get::<_, i64>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, i64>(3)?,
+                row.get::<_, i64>(4)?,
+                row.get::<_, i64>(5)?,
+                row.get::<_, i64>(6)?,
+            ))
         })
         .map_err(|e| format!("{e}"))?;
     let mut usage = Vec::new();
     for row in rows {
-        usage.push(row.map_err(|e| format!("{e}"))?);
+        let (id, at_s, agent, input, output, read, creation) = row.map_err(|e| format!("{e}"))?;
+        let input = u64::try_from(input)
+            .map_err(|_| format!("provider_usage row {id} has negative input_tokens"))?;
+        let output = u64::try_from(output)
+            .map_err(|_| format!("provider_usage row {id} has negative output_tokens"))?;
+        let read = u64::try_from(read)
+            .map_err(|_| format!("provider_usage row {id} has negative cache_read_tokens"))?;
+        let creation = u64::try_from(creation)
+            .map_err(|_| format!("provider_usage row {id} has negative cache_creation_tokens"))?;
+        let billed_tokens = input
+            .checked_add(output)
+            .ok_or_else(|| format!("provider_usage row {id} billed token count overflowed"))?;
+        let prompt_tokens = input
+            .checked_add(read)
+            .and_then(|total| total.checked_add(creation))
+            .ok_or_else(|| format!("provider_usage row {id} prompt token count overflowed"))?;
+        usage.push(UsageRow {
+            at_s,
+            is_compactor: agent.starts_with("compactor:"),
+            billed_tokens,
+            prompt_tokens,
+        });
     }
     Ok(usage)
 }
@@ -394,6 +428,29 @@ impl HealthCheck for FoldEconomicsCheck {
                 )];
             }
         };
+        if rollup.unreadable_fold_events > 0 {
+            let decoded = if rollup.verdicts.is_empty() {
+                "no fold could be judged successfully".to_string()
+            } else {
+                format!(
+                    "{} decoded fold(s) remain available for a separate economics result",
+                    rollup.verdicts.len()
+                )
+            };
+            let unreadable = unknown_finding(
+                ID,
+                TITLE,
+                format!(
+                    "{} fold event payload(s) could not be decoded; {decoded}. The ledger is \
+                     partially unreadable and must not be reported as clean.",
+                    rollup.unreadable_fold_events
+                ),
+            );
+            if rollup.verdicts.is_empty() {
+                return vec![unreadable];
+            }
+            return vec![unreadable, Self::report(&rollup)];
+        }
         vec![Self::report(&rollup)]
     }
 }

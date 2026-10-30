@@ -10,11 +10,12 @@ use crate::thinker::soul_archetypes::{compose_soul, SoulArchetype};
 pub(crate) fn default_soul(agent_name: &str, archetype: SoulArchetype) -> String {
     // Bootstrap/non-interactive callers pass `SoulArchetype::default()`
     // (= Assistant); the Panel and `agent_create` paths pass the chosen one.
-    compose_soul(archetype, agent_name, None)
+    compose_soul(archetype, &agent_name.replace(['\r', '\n'], " "), None)
 }
 
 /// Default AGENTS.md content for a new agent workspace.
 pub(crate) fn default_agents(agent_name: &str) -> String {
+    let agent_name = agent_name.replace(['\r', '\n'], " ");
     format!(
         r#"# AGENTS.md — {agent_name}'s Operating Manual
 
@@ -118,6 +119,7 @@ This is a starting point. Add your own conventions, style, and rules as you figu
 /// arriving as empty placeholders. `**Name:**` keeps the machine-readable
 /// format that `read_agent_name_from_workspace` parses.
 pub(crate) fn default_identity(agent_name: &str, archetype: SoulArchetype) -> String {
+    let agent_name = agent_name.replace(['\r', '\n'], " ");
     format!(
         r#"# IDENTITY.md — Who Am I?
 

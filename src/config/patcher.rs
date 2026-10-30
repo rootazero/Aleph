@@ -403,9 +403,8 @@ impl ConfigPatcher {
     }
 
     /// Validate a candidate config document: JSON Schema → deserialize →
-    /// normalize → `Config::validate()`. Shared by the preview path in
-    /// `apply` and the write-lock commit path (which must re-validate the
-    /// value actually being committed).
+    /// `Config::validate()`. Patch validation only applies voice-local's
+    /// explicit normalization and never rewrites `general.default_provider`.
     fn validate_candidate(&self, candidate: serde_json::Value) -> Result<Config> {
         self.validate_schema(&candidate)?;
         let mut config: Config = serde_json::from_value(candidate).map_err(|e| {
@@ -414,7 +413,6 @@ impl ConfigPatcher {
         // Normalize before validation (mirrors Config::load ordering) so
         // validation sees the same config a fresh boot would produce.
         crate::config::types::voice_local::normalize_voice_local(&mut config);
-        crate::config::validate::normalize_default_provider(&mut config);
         config.validate()?;
         Ok(config)
     }
@@ -534,7 +532,7 @@ impl ConfigPatcher {
         }
     }
 
-    /// Validate a JSON value against the Config JSON Schema.
+    /// Validate a config JSON value against the generated Config JSON Schema.
     pub(crate) fn validate_schema(&self, config_json: &serde_json::Value) -> Result<()> {
         let validator = cached_config_validator();
 
@@ -661,15 +659,22 @@ impl ConfigPatcher {
         // entirely, and passing only `LIVE_SECTIONS` here (instead of
         // `live_targets()`, which also carries `LIVE_SUBSECTIONS`) would
         // reintroduce the same gap for `policies.spend` today.
-        let live_applied = {
+        let (live_applied, complete) = {
             let cfg = self.config.read().await;
-            crate::config::live_apply::apply_live_sections(
-                &cfg,
-                &crate::config::reload_impact::live_targets(),
-            )
+            let live_targets = crate::config::reload_impact::live_targets();
+            let live_applied = crate::config::live_apply::apply_live_sections(&cfg, &live_targets);
+            let complete = live_targets
+                .iter()
+                .all(|target| live_applied.contains(target));
+            if !complete {
+                warnings.push(
+                    "Rollback persisted, but not every live target accepted the restored config; \
+                     restart or reconcile the runtime before relying on live settings."
+                        .to_string(),
+                );
+            }
+            (live_applied, complete)
         };
-
-        // 8. Refresh the mtime baseline so the next patch's conflict check passes.
         self.record_mtime().await;
 
         info!(
@@ -680,7 +685,7 @@ impl ConfigPatcher {
         );
 
         Ok(RollbackResult {
-            success: true,
+            success: complete,
             restored_from: entry.timestamp,
             diff,
             warnings,
