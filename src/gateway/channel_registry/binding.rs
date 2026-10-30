@@ -299,6 +299,13 @@ impl super::ChannelRegistry {
         if !bound.provider.same_instance(&capture.provider) {
             return Err(ChannelBindingError::WrongProvider);
         }
+        if capture.source_revision
+            > self
+                .source_revision
+                .load(std::sync::atomic::Ordering::Relaxed)
+        {
+            return Err(ChannelBindingError::StaleEntry);
+        }
         if bound.entry_revision != capture.entry_revision
             || bound.descriptor_revision != capture.descriptor_revision
             || bound.descriptor.revision.0 != capture.descriptor_revision
