@@ -18,6 +18,53 @@ use super::toml_types::{
 use crate::extension::runtime::wasm::WasmCapabilities;
 use crate::extension::runtime::wasm::WasmResourceLimits;
 
+/// Explicit, optional facts about one single-file community Panel tab.
+/// Trust, availability, asset publication, and revisions belong to the host.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct PanelUiManifest {
+    pub tab_id: String,
+    pub label: String,
+    pub icon: String,
+    pub order: i32,
+    pub entry: String,
+    pub api_major: u16,
+    pub permissions: Vec<String>,
+    pub asset_integrity: String,
+}
+
+impl PanelUiManifest {
+    pub fn validate(&self) -> Result<(), &'static str> {
+        use aleph_protocol::panel::{
+            supported_community_permission, valid_asset_integrity, valid_identity_segment,
+            valid_relative_entry, PANEL_UI_API_MAJOR,
+        };
+        if !valid_identity_segment(&self.tab_id) {
+            return Err("panel.invalid_identity");
+        }
+        if self.label.trim().is_empty() || self.icon.trim().is_empty() {
+            return Err("panel.invalid_presentation");
+        }
+        if self.api_major != PANEL_UI_API_MAJOR {
+            return Err("panel.incompatible_api");
+        }
+        if !valid_relative_entry(&self.entry) {
+            return Err("panel.invalid_entry");
+        }
+        if !valid_asset_integrity(&self.asset_integrity) {
+            return Err("panel.invalid_integrity");
+        }
+        if self
+            .permissions
+            .iter()
+            .any(|permission| !supported_community_permission(permission))
+        {
+            return Err("panel.unsupported_permission");
+        }
+        Ok(())
+    }
+}
+
 // =============================================================================
 // Config UI Hints
 // =============================================================================
@@ -325,6 +372,10 @@ pub struct PluginManifest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub aleph_extensions: Option<AlephExtensions>,
 
+    /// Opt-in Panel declaration; never inferred from the generic runtime entry.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub panel: Option<PanelUiManifest>,
+
     /// Optional \[memory\] section — memory extension hook declarations.
     /// Parsed from aleph.plugin.toml or .claude-plugin/plugin.toml \[memory\].
     #[serde(skip)]
@@ -376,6 +427,7 @@ impl PluginManifest {
             wasm_resource_limits: None,
             // CC-compat extensions
             aleph_extensions: None,
+            panel: None,
             // Memory extension manifest section
             memory_manifest: None,
         }

@@ -14,6 +14,10 @@ pub mod component_source;
 pub mod config_validation;
 pub mod declared_sections;
 pub mod manifest_cache;
+#[cfg(test)]
+mod panel_schema_tests;
+#[cfg(test)]
+mod panel_tests;
 pub mod parsers;
 pub mod toml_types;
 mod types;
@@ -57,8 +61,8 @@ pub use toml_types::{
     PromptSection, ServiceSection, ToolSection, ALEPH_PLUGIN_TOML,
 };
 pub use types::{
-    AlephExtensions, AlephRuntime, AuthorInfo, ConfigUiHint, FilesystemAccess, PluginManifest,
-    PluginPermission,
+    AlephExtensions, AlephRuntime, AuthorInfo, ConfigUiHint, FilesystemAccess, PanelUiManifest,
+    PluginManifest, PluginPermission,
 };
 
 // Re-export config-schema validation helpers (activates the manifest's

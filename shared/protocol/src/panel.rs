@@ -1,5 +1,6 @@
 //! Shared Panel Tab descriptors for host and client projections.
 
+use base64::Engine;
 use serde::{Deserialize, Serialize};
 
 /// Supported major version of the Panel UI API.
@@ -52,6 +53,107 @@ pub struct PanelTabDescriptor {
     pub status_detail: Option<String>,
 }
 
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, Eq, PartialEq)]
+#[serde(rename_all = "lowercase")]
+pub enum PanelUiCapabilityOrigin {
+    BuiltIn,
+    Community,
+}
+
+/// Audit facts around the sole browser projection shape.
+#[derive(Serialize, Deserialize, Clone, Debug, Eq, PartialEq)]
+pub struct PanelUiCapabilityDeclaration {
+    pub descriptor: PanelTabDescriptor,
+    pub origin: PanelUiCapabilityOrigin,
+    pub plugin_version: String,
+    pub asset_integrity: Option<String>,
+    pub public_base: String,
+    pub source_revision: u64,
+}
+
+/// The only output exposed by a Panel UI capability source.
+#[derive(Serialize, Deserialize, Clone, Debug, Eq, PartialEq)]
+pub struct PanelUiCapabilitySnapshot {
+    pub revision: u64,
+    pub declarations: Vec<PanelUiCapabilityDeclaration>,
+}
+
+impl PanelUiCapabilitySnapshot {
+    pub fn new(revision: u64, mut declarations: Vec<PanelUiCapabilityDeclaration>) -> Self {
+        declarations.sort_by(|left, right| {
+            let rank = |declaration: &PanelUiCapabilityDeclaration| match declaration.origin {
+                PanelUiCapabilityOrigin::BuiltIn => 0,
+                PanelUiCapabilityOrigin::Community => 1,
+            };
+            rank(left).cmp(&rank(right)).then_with(|| {
+                left.descriptor
+                    .key
+                    .qualified()
+                    .cmp(&right.descriptor.key.qualified())
+            })
+        });
+        Self {
+            revision,
+            declarations,
+        }
+    }
+}
+
+/// Safe identifier alphabet shared by manifest admission and browser validation.
+pub fn valid_identity_segment(value: &str) -> bool {
+    !value.is_empty()
+        && value != "."
+        && value != ".."
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
+}
+
+/// Safe version path segment shared by manifest admission and browser validation.
+pub fn valid_version_segment(value: &str) -> bool {
+    !value.is_empty()
+        && value != "."
+        && value != ".."
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-' | b'+'))
+}
+
+/// Validate a relative single-file asset path shared by manifest and browser projection.
+pub fn valid_relative_entry(value: &str) -> bool {
+    if value.is_empty() || value.starts_with('/') || value.contains('\\') || value.contains(':') {
+        return false;
+    }
+    let path = value.strip_prefix("./").unwrap_or(value);
+    !path.is_empty() && path.split('/').all(valid_identity_segment)
+}
+
+/// Existing Panel SDK permission vocabulary; generic plugin permissions do not apply.
+pub fn supported_community_permission(permission: &str) -> bool {
+    matches!(
+        permission,
+        "pty.list"
+            | "pty.spawn"
+            | "pty.attach"
+            | "pty.input"
+            | "pty.resize"
+            | "pty.close"
+            | "config.get"
+            | "events.subscribe:pty.screen"
+            | "events.subscribe:pty.exit"
+            | "sessions.list"
+    )
+}
+
+/// Validate the declared SHA-256 SRI format; exact bytes are checked by the loader.
+pub fn valid_asset_integrity(integrity: &str) -> bool {
+    integrity.strip_prefix("sha256-").is_some_and(|digest| {
+        base64::engine::general_purpose::STANDARD
+            .decode(digest)
+            .is_ok_and(|decoded| decoded.len() == 32)
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use crate::{
@@ -77,6 +179,12 @@ mod tests {
         }
     }
 
+    #[test]
+    fn version_segments_allow_semver_build_metadata_but_not_path_syntax() {
+        assert!(super::valid_version_segment("1.2.3+build.7"));
+        assert!(!super::valid_version_segment("1.2.3/build"));
+        assert!(!super::valid_version_segment(".."));
+    }
     #[test]
     fn panel_descriptor_has_stable_wire_fields_and_enum_spellings() {
         assert_eq!(
@@ -147,6 +255,60 @@ mod tests {
         assert_eq!(first.qualified(), "plugin-a:overview");
         assert_eq!(second.qualified(), "plugin-b:overview");
         assert_ne!(first.qualified(), second.qualified());
+    }
+
+    #[test]
+    fn panel_snapshot_has_one_shared_wire_contract() {
+        use super::{
+            PanelUiCapabilityDeclaration, PanelUiCapabilityOrigin, PanelUiCapabilitySnapshot,
+        };
+        let snapshot = PanelUiCapabilitySnapshot::new(
+            7,
+            vec![PanelUiCapabilityDeclaration {
+                descriptor: descriptor(),
+                origin: PanelUiCapabilityOrigin::Community,
+                plugin_version: "1.2.3".into(),
+                asset_integrity: Some("sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=".into()),
+                public_base: "./tabs/".into(),
+                source_revision: 7,
+            }],
+        );
+        let wire = serde_json::to_value(&snapshot).unwrap();
+        assert_eq!(
+            wire,
+            json!({
+                "revision": 7,
+                "declarations": [{
+                    "descriptor": serde_json::to_value(descriptor()).unwrap(),
+                    "origin": "community",
+                    "plugin_version": "1.2.3",
+                    "asset_integrity": "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+                    "public_base": "./tabs/",
+                    "source_revision": 7
+                }]
+            })
+        );
+        assert_eq!(
+            serde_json::from_value::<PanelUiCapabilitySnapshot>(wire).unwrap(),
+            snapshot
+        );
+        assert_eq!(
+            serde_json::to_value(PanelUiCapabilityOrigin::BuiltIn).unwrap(),
+            json!("builtin")
+        );
+    }
+
+    #[test]
+    fn panel_webchat_source_does_not_define_another_wire_shape() {
+        let source = include_str!("../../../interfaces/webchat/src/panel/source.rs");
+        for name in [
+            "PanelUiCapabilityDeclaration",
+            "PanelUiCapabilitySnapshot",
+            "PanelUiCapabilityOrigin",
+        ] {
+            assert!(!source.contains(&format!("struct {name}")));
+            assert!(!source.contains(&format!("enum {name}")));
+        }
     }
 
     #[test]

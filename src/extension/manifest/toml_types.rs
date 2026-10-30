@@ -40,6 +40,8 @@ pub const ALEPH_PLUGIN_TOML: &str = "aleph.plugin.toml";
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AlephPluginToml {
     pub plugin: PluginSection,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub panel: Option<super::types::PanelUiManifest>,
     #[serde(default)]
     pub permissions: PermissionsSection,
     #[serde(default)]
@@ -533,7 +535,24 @@ pub fn parse_aleph_plugin_toml_content(
 
     let permissions = convert_permissions(&toml.permissions);
 
+    if let Some(panel) = &toml.panel {
+        if toml
+            .plugin
+            .version
+            .as_deref()
+            .is_none_or(|version| version.trim().is_empty())
+        {
+            return Err(ExtensionError::invalid_manifest(
+                plugin_dir,
+                "panel.missing_version",
+            ));
+        }
+        panel
+            .validate()
+            .map_err(|reason| ExtensionError::invalid_manifest(plugin_dir, reason))?;
+    }
     Ok(PluginManifest {
+        panel: toml.panel,
         id: plugin_id,
         name,
         version: toml.plugin.version,

@@ -42,6 +42,9 @@ pub struct CcPluginToml {
     /// Plugin name (required — used as plugin ID source)
     pub name: Option<String>,
 
+    /// Explicit Panel UI declaration, independent of plugin runtime kind.
+    pub panel: Option<super::types::PanelUiManifest>,
+
     /// Plugin version (semver)
     pub version: Option<String>,
 
@@ -294,6 +297,21 @@ pub fn parse_cc_plugin_toml_content(
         .and_then(|ext| ext.capabilities.as_ref())
         .and_then(crate::extension::manifest::toml_types::convert_wasm_capabilities);
 
+    if let Some(panel) = &toml.panel {
+        if toml
+            .version
+            .as_deref()
+            .is_none_or(|version| version.trim().is_empty())
+        {
+            return Err(ExtensionError::invalid_manifest(
+                plugin_dir,
+                "panel.missing_version",
+            ));
+        }
+        panel
+            .validate()
+            .map_err(|reason| ExtensionError::invalid_manifest(plugin_dir, reason))?;
+    }
     let manifest = PluginManifest {
         id: plugin_id,
         name: raw_name,
@@ -326,6 +344,7 @@ pub fn parse_cc_plugin_toml_content(
         // CC-compat extensions
         aleph_extensions: aleph_ext,
         memory_manifest: superset.memory,
+        panel: toml.panel,
     };
 
     Ok(manifest)
