@@ -23,10 +23,11 @@ pub enum ProviderIdError {
 impl ProviderId {
     pub fn new(value: impl Into<String>) -> Result<Self, ProviderIdError> {
         let value = value.into();
-        if value.trim().is_empty() {
+        let value = value.trim();
+        if value.is_empty() {
             return Err(ProviderIdError::Empty);
         }
-        Ok(Self(value))
+        Ok(Self(value.to_string()))
     }
 
     #[must_use]
@@ -264,7 +265,7 @@ impl ProviderHandle {
         let lifecycle = self
             .lifecycle
             .lock()
-            .expect("provider lifecycle mutex poisoned");
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         read(&lifecycle)
     }
 
@@ -272,6 +273,7 @@ impl ProviderHandle {
     /// Only local state is prepared first. On callback error neither state nor
     /// notifications change. The callback must not re-enter this provider or
     /// call external code; lock order is lifecycle -> registry transaction.
+    /// A panic may poison the mutex; later operations recover its inner state.
     pub(crate) fn with_ready_commit<R, E: From<ProviderCallError>>(
         &self,
         expected_generation: u64,
@@ -280,7 +282,7 @@ impl ProviderHandle {
         let mut lifecycle = self
             .lifecycle
             .lock()
-            .expect("provider lifecycle mutex poisoned");
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         if lifecycle.state() != ProviderState::Starting
             || lifecycle.generation() != expected_generation
         {
@@ -329,7 +331,7 @@ impl ProviderHandle {
     pub fn acquire_call(&self, expected_generation: u64) -> Result<(), ProviderCallError> {
         self.lifecycle
             .lock()
-            .expect("provider lifecycle mutex poisoned")
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .acquire_call(expected_generation)
     }
 
@@ -346,7 +348,7 @@ impl ProviderHandle {
         let lifecycle = self
             .lifecycle
             .lock()
-            .expect("provider lifecycle mutex poisoned");
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         lifecycle.acquire_call(expected_generation)?;
         Ok(commit())
     }
@@ -366,7 +368,7 @@ impl ProviderHandle {
         let lifecycle = self
             .lifecycle
             .lock()
-            .expect("provider lifecycle mutex poisoned");
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         if !matches!(
             lifecycle.state(),
             ProviderState::Ready | ProviderState::Stopping
@@ -388,11 +390,12 @@ impl ProviderHandle {
         &self,
         next: ProviderState,
     ) -> Result<ProviderTransition, ProviderLifecycleError> {
-        let transition = self
+        let mut lifecycle = self
             .lifecycle
             .lock()
-            .expect("provider lifecycle mutex poisoned")
-            .transition(next)?;
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let transition = lifecycle.transition(next)?;
+        drop(lifecycle);
         let _ = self.changes.send(transition.clone());
         Ok(transition)
     }

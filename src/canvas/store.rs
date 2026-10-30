@@ -282,7 +282,27 @@ impl CanvasStore {
     /// lives on the RPC face (Task 8), not here.
     pub async fn delete(&self, id: &str) -> Result<(), CanvasError> {
         Self::checked_id(id)?;
-        let mut guard = self.locks.lock(id, self.doc_path(id)).await?;
+        let mut guard = match self.locks.lock(id, self.doc_path(id)).await {
+            Ok(guard) => guard,
+            Err(CanvasError::Internal(_)) => {
+                // The document could not be read (unparseable, over the read
+                // cap, or unreadable). It is still deletable: the lock was
+                // released by the failed read, so reacquire it before removing
+                // the tree.
+                let guard = self.locks.lock_for_delete(id, self.doc_path(id)).await?;
+                let dir = self.root.join(id);
+                tokio::fs::remove_dir_all(&dir).await.map_err(|e| {
+                    if e.kind() == std::io::ErrorKind::NotFound {
+                        CanvasError::NotFound(format!("canvas {id}"))
+                    } else {
+                        CanvasError::Internal(format!("failed to delete corrupt canvas {id}: {e}"))
+                    }
+                })?;
+                drop(guard);
+                return Ok(());
+            }
+            Err(error) => return Err(error),
+        };
         if guard.existing_mut().is_none() {
             // No document, but the directory may still be a leftover from a
             // partial `create()` (commit failed after `create_dir_all`
@@ -291,7 +311,7 @@ impl CanvasStore {
             // canvas dir forever. Idempotent — `NotFound` from `remove_dir`
             // is swallowable because the directory might also be missing.
             let dir = self.root.join(id);
-            match tokio::fs::remove_dir(&dir).await {
+            match tokio::fs::remove_dir_all(&dir).await {
                 Ok(()) => {}
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
                 Err(e) => {

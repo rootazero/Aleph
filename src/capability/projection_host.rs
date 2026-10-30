@@ -530,7 +530,7 @@ impl ProjectionHost {
     /// live change streams are subscribed before the first snapshot.
     #[must_use]
     pub fn mount(registry: ToolHandlerRegistry, tree: Arc<OwnershipTree>) -> Arc<Self> {
-        Self::mount_with_diagnostics(registry, tree, true)
+        Self::mount_internal(registry, tree, DEFAULT_PENDING_CAPACITY, true)
     }
 
     /// Mount the canonical projection host with startup-scoped diagnostics.
@@ -542,6 +542,15 @@ impl ProjectionHost {
         tree: Arc<OwnershipTree>,
         diagnostics_enabled: bool,
     ) -> Arc<Self> {
+        Self::mount_internal(registry, tree, DEFAULT_PENDING_CAPACITY, diagnostics_enabled)
+    }
+
+    fn mount_internal(
+        registry: ToolHandlerRegistry,
+        tree: Arc<OwnershipTree>,
+        capacity: usize,
+        diagnostics_enabled: bool,
+    ) -> Arc<Self> {
         let facade = ZahirFacade::new(registry.clone(), Arc::clone(&tree));
         // Subscribe to BOTH live sources BEFORE reading the initial snapshot
         // (subscribe-before-snapshot).
@@ -551,7 +560,10 @@ impl ProjectionHost {
         let default_scope = Scope::default();
         let initial = HostSnapshot::from_facade(facade.snapshot_entries_in_scope(&default_scope));
         let default_consumer =
-            Arc::new(ConsumerState::new(default_scope, DEFAULT_PENDING_CAPACITY));
+            Arc::new(ConsumerState::new(
+                default_scope,
+                capacity.max(MIN_PENDING_CAPACITY),
+            ));
         // Enqueue the initial snapshot into the DEFAULT delivery queue BEFORE
         // the source/applier tasks spawn, so the REAL default applier applies
         // it (Ruling16). `applied` starts `None`; no publisher state may
@@ -639,83 +651,9 @@ impl ProjectionHost {
         tree: Arc<OwnershipTree>,
         capacity: usize,
     ) -> Arc<Self> {
-        let facade = ZahirFacade::new(registry.clone(), Arc::clone(&tree));
-        let registry_rx = registry.subscribe_publications();
-        let ownership_rx = tree.subscribe_changes();
-
-        let default_scope = Scope::default();
-        let initial = HostSnapshot::from_facade(facade.snapshot_entries_in_scope(&default_scope));
-        let default_consumer = Arc::new(ConsumerState::new(
-            default_scope,
-            capacity.max(MIN_PENDING_CAPACITY),
-        ));
-        default_consumer.enqueue_snapshot(initial);
-
-        let inner = Arc::new(HostInner {
-            facade,
-            registry: registry.clone(),
-            tree,
-            publish: Mutex::new(()),
-            consumers: Mutex::new(ConsumerMap {
-                next_id: 1,
-                by_id: HashMap::new(),
-            }),
-            default_consumer: Arc::clone(&default_consumer),
-            applied: Mutex::new(AppliedState {
-                snapshot: None,
-                closed: false,
-                applied_invalidation_count: 0,
-                applied_replacement_count: 0,
-                awaiting_replacement: false,
-                last_replacement_registry_cursor: None,
-                last_replacement_tool_ids: Vec::new(),
-            }),
-            readiness: Notify::new(),
-            cancel: CancellationToken::new(),
-            closed: AtomicBool::new(false),
-            source_task: Mutex::new(None),
-            applier_task: Mutex::new(None),
-            completion: Mutex::new(CompletionState {
-                started: false,
-                outcome: None,
-            }),
-            completion_notify: Notify::new(),
-            #[cfg(test)]
-            applier_test_gate: ApplierTestGate::new(),
-            diagnostics: Some(DiagnosticMachinery {
-                hold: Mutex::new(DiagnosticHoldState::default()),
-                notify: Notify::new(),
-            }),
-            replacement_count: AtomicU64::new(0),
-            lag_count: AtomicU64::new(0),
-        });
-
-        let host = Arc::new(ProjectionHost {
-            inner: Arc::clone(&inner),
-        });
-
-        let source = tokio::spawn(source_worker(
-            Arc::downgrade(&inner),
-            inner.cancel.clone(),
-            registry_rx,
-            ownership_rx,
-        ));
-        let applier = tokio::spawn(applier_worker(
-            Arc::clone(&default_consumer),
-            Arc::downgrade(&inner),
-            inner.cancel.clone(),
-        ));
-        *inner
-            .source_task
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(source);
-        *inner
-            .applier_task
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(applier);
-
-        host
+        Self::mount_internal(registry, tree, capacity, true)
     }
+
 
     /// Wait until the default consumer has actually applied a snapshot.
     ///
@@ -1123,6 +1061,9 @@ impl ProjectionHandle {
     /// its pending queue is drained.
     pub async fn recv(&mut self) -> Option<ProjectionEvent> {
         loop {
+            let notified = self.consumer.wake.notified();
+            tokio::pin!(notified);
+            notified.as_mut().enable();
             if let Some(event) = self.consumer.try_pop() {
                 return Some(event);
             }
@@ -1132,7 +1073,7 @@ impl ProjectionHandle {
             tokio::select! {
                 biased;
                 _ = self.cancel.cancelled() => return None,
-                _ = self.consumer.wake.notified() => {}
+                _ = &mut notified => {}
             }
         }
     }
@@ -1355,10 +1296,11 @@ async fn source_worker(
         return;
     };
     let close_signal = initial_inner.registry.close_signal();
-    let already_closed = initial_inner.registry.is_closed();
-    drop(initial_inner);
     let notified = close_signal.notified();
     tokio::pin!(notified);
+    notified.as_mut().enable();
+    let already_closed = initial_inner.registry.is_closed();
+    drop(initial_inner);
     if already_closed {
         if let Some(inner) = inner.upgrade() {
             deliver_close(&inner);
@@ -1474,9 +1416,13 @@ fn process_registry_publication(inner: &HostInner, publication: RegistryPublicat
     }
 
     // Default consumer: apply a fresh snapshot so run-loop-readable state stays
-    // current (the applier drains this queue into `applied`).
+    // current (the applier drains this queue into `applied`). Reconcile this
+    // publication even if the default consumer has closed; attached-consumer
+    // cohort filtering depends on the binding.
+    let default_snapshot =
+        build_snapshot_from_cut(inner, &inner.default_consumer.scope, &registry_cut);
     if !inner.default_consumer.is_closed() {
-        let snapshot = build_snapshot_from_cut(inner, &inner.default_consumer.scope, &registry_cut);
+        let snapshot = default_snapshot;
         if inner.default_consumer.enqueue_snapshot(snapshot) {
             inner.replacement_count.fetch_add(1, Ordering::Relaxed);
         }

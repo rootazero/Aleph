@@ -38,6 +38,19 @@ fn tool_id(name: &str) -> CapabilityId {
     }
 }
 
+/// The capability a change names, or `None` for a change that carries none.
+///
+/// [`CapabilityChange::Invalidated`] is scope-wide: it reports that the
+/// subscriber must rebuild, not which capability moved.
+fn change_id(change: &CapabilityChange) -> Option<&CapabilityId> {
+    match change {
+        CapabilityChange::Registered { id, .. }
+        | CapabilityChange::Replaced { id, .. }
+        | CapabilityChange::Unregistered { id, .. } => Some(id),
+        CapabilityChange::Invalidated => None,
+    }
+}
+
 /// One projection of the live registry entries, owner generations, and
 /// registry state. It is TWO internally coherent cuts, NOT one atomic
 /// generation:
@@ -126,6 +139,12 @@ impl ZahirFacade {
     /// entries. Shared by `reconcile_registry_bindings` and
     /// `snapshot_entries_in_scope` so both reconcile from the SAME frozen
     /// entries rather than two independent loads.
+    ///
+    /// The bindings are created under the DEFAULT (unrestricted) visibility
+    /// envelope: the facade owns the registry tools, and the tree's binding for
+    /// a tool is the authority for that tool. A scope's visibility SELECTS
+    /// which binding applies — creating a binding per requested scope would
+    /// make every scope its own authority and the ACL meaningless.
     fn reconcile_snapshot(&self, snap: &RegistrySnapshot) {
         for name in snap.entries().keys() {
             self.reconcile_entry_binding(name);
@@ -259,20 +278,18 @@ impl ZahirFacade {
     /// `map_registry_change` never produces it — the drain only ever asks
     /// about per-tool changes.
     pub(super) fn change_in_scope(&self, change: &CapabilityChange, scope: &Scope) -> bool {
-        let id = match change {
-            CapabilityChange::Registered { id, .. }
-            | CapabilityChange::Replaced { id, .. }
-            | CapabilityChange::Unregistered { id, .. } => id,
-            CapabilityChange::Invalidated => return true,
+        let id = match change_id(change) {
+            Some(id) => id,
+            None => return true,
         };
-        if !ToolBackendAdapter::in_scope(id, scope)
-            || !scope
-                .facet
-                .is_none_or(|facet| crate::capability::backend::tool_facets().contains(facet))
-        {
+        if !ToolBackendAdapter::in_scope(id, scope) {
             return false;
         }
-        self.tree.generation(id, &scope.visibility).is_some()
+        let Some(descriptor) = self.adapter.lookup(id) else {
+            return false;
+        };
+        ToolBackendAdapter::descriptor_in_scope(&descriptor, scope)
+            && self.tree.generation(id, &scope.visibility).is_some()
     }
 
     /// Map one primary publication into a same-cursor capability cohort.
@@ -325,10 +342,17 @@ impl ZahirFacade {
                     // current snapshot instead.
                     if self.adapter.registry.snapshot_state().revision() > publication.revision {
                         let fresh = self.describe(scope.clone());
-                        let _ = stream.invalidate_and_resync(fresh, Vec::new());
+                        if !stream.invalidate_and_resync(fresh, Vec::new()) {
+                            stream.changes.push(CapabilityChange::Invalidated);
+                        }
                         break;
                     }
                     let (cursor, changes) = self.map_registry_publication(publication);
+                    for change in &changes {
+                        if let Some(id) = change_id(change) {
+                            self.reconcile_entry_binding(&id.name);
+                        }
+                    }
                     let visible = changes
                         .into_iter()
                         .filter(|change| self.change_in_scope(change, scope))
@@ -339,7 +363,9 @@ impl ZahirFacade {
                     // Lag: rebuild from a fresh snapshot and mark the stream
                     // invalidated — never fake per-event delivery.
                     let fresh = self.describe(scope.clone());
-                    let _ = stream.invalidate_and_resync(fresh, Vec::new());
+                    if !stream.invalidate_and_resync(fresh, Vec::new()) {
+                        stream.changes.push(CapabilityChange::Invalidated);
+                    }
                     break;
                 }
                 Err(TryRecvError::Empty) | Err(TryRecvError::Closed) => break,
@@ -373,12 +399,22 @@ impl ZahirFacade {
             .acquire_call(provider_generation)
             .map_err(|_| ResolveError::StaleProvider)?;
         match self.tree.generation(&reference.id, &reference.visibility) {
-            Some(owner_generation) => Ok(BackendLease {
-                descriptor,
-                owner_generation,
-                provider_generation,
-                canonical_entry,
-            }),
+            Some(owner_generation) => {
+                // The owner is captured with the lease: the generation alone
+                // cannot tell an ownership transfer apart from an unchanged
+                // binding, and a lease must fail closed across a transfer.
+                let owner = self
+                    .tree
+                    .owner_of(&reference.id, &reference.visibility)
+                    .ok_or(ResolveError::NotVisible)?;
+                Ok(BackendLease {
+                    descriptor,
+                    owner_generation,
+                    owner,
+                    provider_generation,
+                    canonical_entry,
+                })
+            }
             None if self.tree.is_revoked(&reference.id) => Err(ResolveError::Revoked),
             None => Err(ResolveError::NotVisible),
         }
@@ -387,16 +423,32 @@ impl ZahirFacade {
 
 impl Zahir for ZahirFacade {
     fn describe(&self, scope: Scope) -> CapabilitySnapshot {
-        self.reconcile_registry_bindings();
-        let source_snapshot = CapabilityBackend::snapshot(&self.adapter, &scope);
+        let source_snapshot = self.adapter.registry.snapshot_state();
+        if source_snapshot.is_closed() {
+            return CapabilitySnapshot {
+                capabilities: Vec::new(),
+                committed_cursor: Cursor(source_snapshot.revision()),
+            };
+        }
+        self.reconcile_snapshot(&source_snapshot);
         let capabilities = source_snapshot
-            .capabilities
-            .into_iter()
-            .filter(|d| self.tree.generation(&d.id, &scope.visibility).is_some())
+            .entries()
+            .values()
+            .map(|entry| crate::capability::backend::to_descriptor(entry.descriptor.as_ref()))
+            .map(|mut descriptor| {
+                descriptor.visibility = scope.visibility.clone();
+                descriptor
+            })
+            .filter(|descriptor| ToolBackendAdapter::descriptor_in_scope(descriptor, &scope))
+            .filter(|descriptor| {
+                self.tree
+                    .generation(&descriptor.id, &scope.visibility)
+                    .is_some()
+            })
             .collect();
         CapabilitySnapshot {
             capabilities,
-            committed_cursor: source_snapshot.committed_cursor,
+            committed_cursor: Cursor(source_snapshot.revision()),
         }
     }
 
@@ -404,9 +456,11 @@ impl Zahir for ZahirFacade {
         if reference.id.namespace != crate::capability::backend::TOOL_NAMESPACE {
             return Err(ResolveError::Unknown);
         }
-        let canonical_entry = self
-            .adapter
-            .registry
+        let snapshot = self.adapter.registry.snapshot_state();
+        if snapshot.is_closed() {
+            return Err(ResolveError::Unknown);
+        }
+        let canonical_entry = snapshot
             .capture_entry(&reference.id.name)
             .ok_or(ResolveError::Unknown)?;
         self.resolve_with_capture(reference, canonical_entry)
@@ -427,6 +481,14 @@ impl Zahir for ZahirFacade {
                 // ② owner generation — a stale lease must fail closed.
                 if current != lease.owner_generation {
                     return Err(ResolveError::StaleOwner);
+                }
+                // ③ owner identity — an ownership TRANSFER keeps the tree
+                // epoch, so the generation above cannot see it. The binding's
+                // owner must still be the one the lease was minted for.
+                match self.tree.owner_of(&lease.descriptor.id, &lease.descriptor.visibility) {
+                    Some(owner) if owner == lease.owner => {}
+                    Some(_) => return Err(ResolveError::StaleOwner),
+                    None => return Err(ResolveError::Unknown),
                 }
             }
             None if self.tree.is_revoked(&lease.descriptor.id) => {
