@@ -737,10 +737,12 @@ impl ChannelRegistry {
         if !channels.contains_key(channel_id) {
             return None;
         }
+        let mut desired = self.desired_state.write().await;
         self.try_advance_source_revision().ok()?;
         let entry = channels.remove(channel_id).expect("channel checked above");
+        desired.remove(channel_id);
+        drop(desired);
         drop(channels);
-        self.desired_state.write().await.remove(channel_id);
 
         // Legacy captures retain the entry as well as the channel handle.
         let channel_arc = Arc::try_unwrap(entry).ok()?.channel;
