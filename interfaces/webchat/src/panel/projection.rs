@@ -1,17 +1,17 @@
-use super::registry::{validate_descriptor, RegistryError, TabRegistry, BUILTIN_NAMESPACE};
+use super::registry::{BUILTIN_NAMESPACE, RegistryError, TabRegistry, validate_descriptor};
 #[cfg(test)]
 use super::source::terminal_descriptor;
 use super::source::{
-    terminal_key, BuiltInTerminalSource, PanelUiCapabilityDeclaration, PanelUiCapabilityOrigin,
-    PanelUiCapabilitySnapshot, PanelUiCapabilitySource,
+    BuiltInTerminalSource, PanelUiCapabilityDeclaration, PanelUiCapabilityOrigin,
+    PanelUiCapabilitySnapshot, PanelUiCapabilitySource, terminal_key,
 };
 #[cfg(test)]
 use aleph_protocol::panel::PANEL_UI_API_MAJOR;
+use aleph_protocol::panel::{PanelTabDescriptor, PanelTabKey, PanelTabStatus, PanelUiTrust};
 use aleph_protocol::panel::{
     supported_community_permission, valid_asset_integrity, valid_identity_segment,
     valid_version_segment,
 };
-use aleph_protocol::panel::{PanelTabDescriptor, PanelTabKey, PanelTabStatus, PanelUiTrust};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum PanelRoute {
@@ -35,6 +35,7 @@ pub enum PanelProjectionError {
     DuplicateKey,
     BuiltInShadowed,
     StaleSnapshot,
+    SelectionUnavailable,
 }
 
 impl PanelProjectionError {
@@ -53,6 +54,7 @@ impl PanelProjectionError {
             Self::DuplicateKey => "duplicate_key",
             Self::BuiltInShadowed => "built_in_shadowed",
             Self::StaleSnapshot => "stale_snapshot",
+            Self::SelectionUnavailable => "selection_unavailable",
         }
     }
 }
@@ -155,6 +157,40 @@ impl PanelProjection {
         projection
             .route_key(path)
             .map_or(PanelRoute::Unavailable, PanelRoute::Modular)
+    }
+
+    /// Parse the explicit community selection path without turning arbitrary paths
+    /// into browser mounts.
+    pub fn explicit_key(path: &str) -> Option<PanelTabKey> {
+        let mut segments = path.strip_prefix("/panel/")?.split('/');
+        let plugin_id = segments.next()?;
+        let tab_id = segments.next()?;
+        if segments.next().is_some()
+            || !valid_identity_segment(plugin_id)
+            || !valid_identity_segment(tab_id)
+        {
+            return None;
+        }
+        Some(PanelTabKey {
+            plugin_id: plugin_id.to_owned(),
+            tab_id: tab_id.to_owned(),
+        })
+    }
+    /// Select a projected descriptor only when the caller explicitly supplies
+    /// the current canonical snapshot revision.
+    pub fn select_explicit(
+        &self,
+        key: &PanelTabKey,
+        source_revision: u64,
+    ) -> Result<PanelTabDescriptor, PanelProjectionError> {
+        if source_revision != self.registry.source_revision() {
+            return Err(PanelProjectionError::StaleSnapshot);
+        }
+        self.registry
+            .get(key)
+            .filter(|descriptor| descriptor.status == PanelTabStatus::Enabled)
+            .cloned()
+            .ok_or(PanelProjectionError::SelectionUnavailable)
     }
 
     /// Resolve an application route to an enabled projected tab.
@@ -470,13 +506,15 @@ mod tests {
         ))
         .unwrap();
         assert_eq!(projection.registry().source_revision(), 7);
-        assert!(projection
-            .registry()
-            .get(&PanelTabKey {
-                plugin_id: "community.example".into(),
-                tab_id: "overview".into(),
-            })
-            .is_some());
+        assert!(
+            projection
+                .registry()
+                .get(&PanelTabKey {
+                    plugin_id: "community.example".into(),
+                    tab_id: "overview".into(),
+                })
+                .is_some()
+        );
     }
     #[test]
     fn valid_community_declaration_projects_in_deterministic_source_order() {
@@ -703,10 +741,12 @@ mod tests {
             .replace_snapshot(community_snapshot(3, vec![]))
             .unwrap();
         assert_eq!(projection.registry().source_revision(), 3);
-        assert!(projection
-            .registry()
-            .get(&community_declaration(2).descriptor.key)
-            .is_none());
+        assert!(
+            projection
+                .registry()
+                .get(&community_declaration(2).descriptor.key)
+                .is_none()
+        );
 
         let baseline = projection.registry();
         assert_eq!(
@@ -783,8 +823,9 @@ mod tests {
     #[test]
     fn snapshot_arrival_stays_passive_until_explicit_community_selection() {
         let declaration = community_declaration(7);
-        let projection = PanelProjection::from_snapshot(community_snapshot(7, vec![declaration.clone()]))
-            .unwrap();
+        let projection =
+            PanelProjection::from_snapshot(community_snapshot(7, vec![declaration.clone()]))
+                .unwrap();
 
         assert_eq!(
             PanelProjection::select_route("/community.example/overview", Some(&projection)),
@@ -796,8 +837,18 @@ mod tests {
                 .unwrap(),
             declaration.descriptor
         );
-        assert!(projection
-            .select_explicit(&declaration.descriptor.key, 6)
-            .is_err());
+        assert_eq!(
+            PanelProjection::explicit_key("/panel/community.example/overview"),
+            Some(declaration.descriptor.key.clone())
+        );
+        assert_eq!(
+            PanelProjection::explicit_key("/panel/community.example/../outside"),
+            None
+        );
+        assert!(
+            projection
+                .select_explicit(&declaration.descriptor.key, 6)
+                .is_err()
+        );
     }
 }
