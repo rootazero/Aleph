@@ -348,6 +348,8 @@ pub struct ChannelRegistry {
     /// This is a synchronization boundary only; channel maps remain the sole
     /// instance authority and desired_state remains the sole intent authority.
     lifecycle_sync: AsyncMutex<()>,
+    /// Serializes bound publication reservations across retirement and commit.
+    bound_publication_sync: AsyncMutex<()>,
     /// Publication revision for the channel source. It advances only after a
     /// registration or unregistration is committed to `channels`.
     source_revision: AtomicU64,
@@ -379,6 +381,7 @@ impl ChannelRegistry {
                 Arc::new(ChannelSourceGuard { channels }),
             )),
             lifecycle_sync: AsyncMutex::new(()),
+            bound_publication_sync: AsyncMutex::new(()),
             source_revision: AtomicU64::new(0),
             descriptor_revision: AtomicU64::new(0),
             desired_state: RwLock::new(HashMap::new()),
@@ -886,6 +889,7 @@ impl ChannelRegistry {
         ownership: Arc<OwnershipTree>,
         initial: ChannelInitialState,
     ) -> Result<ChannelId, ChannelBindingError> {
+        let _bound_publication = self.bound_publication_sync.lock().await;
         let _lifecycle = self.lifecycle_sync.lock().await;
         let channel_id = channel.id().clone();
         let mut channels = self.channels.write().await;
@@ -2903,39 +2907,46 @@ mod tests {
         })
         .await
         .unwrap();
-        registry
-            .register_bound_channel(
-                Box::new(WebhookChannel::new(
-                    "revision-consumer",
-                    WebhookChannelConfig {
-                        callback_url: "http://127.0.0.1:1/callback".into(),
-                        ..Default::default()
-                    },
-                )),
-                stage_b_contract(None),
-                Arc::new(OwnershipTree::new()),
-                ChannelInitialState::Cold,
-            )
-            .await
-            .unwrap();
+        let registration = tokio::spawn({
+            let registry = registry.clone();
+            async move {
+                registry
+                    .register_bound_channel(
+                        Box::new(WebhookChannel::new(
+                            "revision-consumer",
+                            WebhookChannelConfig {
+                                callback_url: "http://127.0.0.1:1/callback".into(),
+                                ..Default::default()
+                            },
+                        )),
+                        stage_b_contract(None),
+                        Arc::new(OwnershipTree::new()),
+                        ChannelInitialState::Cold,
+                    )
+                    .await
+            }
+        });
+        tokio::task::yield_now().await;
+        assert!(!registration.is_finished());
+        peer.release.send(()).unwrap();
+        assert!(matches!(
+            completion.await.unwrap(),
+            super::binding::BoundCompletion::DiscardedStale(_)
+        ));
+        assert_eq!(replacement.await.unwrap().unwrap(), id);
+        assert!(matches!(
+            registration.await.unwrap(),
+            Err(ChannelBindingError::PublicationExhausted)
+        ));
         assert_eq!(
             registry
                 .source_revision
                 .load(std::sync::atomic::Ordering::Relaxed),
             u64::MAX
         );
-        peer.release.send(()).unwrap();
-        assert!(matches!(
-            completion.await.unwrap(),
-            super::binding::BoundCompletion::DiscardedStale(_)
-        ));
-        assert!(matches!(
-            replacement.await.unwrap().unwrap_err(),
-            ChannelBindingError::PublicationExhausted
-        ));
         let after = registry.capture_bound_channel(&id).await.unwrap();
-        assert!(Arc::ptr_eq(&before.entry, &after.entry));
-        assert_eq!(after.provider.state(), ProviderState::Stopped);
+        assert!(!Arc::ptr_eq(&before.entry, &after.entry));
+        assert_eq!(after.provider.state(), ProviderState::Cold);
         assert_eq!(after.source_revision, u64::MAX);
         peer.task.await.unwrap();
         use super::binding::BoundCompletion;
