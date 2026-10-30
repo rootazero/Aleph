@@ -5,6 +5,8 @@ use crate::api::native_credentials::{
 use crate::api::ExecApprovalApi;
 use crate::api::TelecomApprovalApi;
 use crate::components::sidebar::SystemAlert;
+#[cfg(feature = "panel-modular")]
+use crate::panel::discovery::{decode_snapshot, PanelDiscoveryState, SnapshotUpdate};
 use crate::state::notifications::{PendingApprovalView, PendingAskView};
 use futures::channel::{mpsc, oneshot};
 use futures::{FutureExt, StreamExt};
@@ -672,6 +674,8 @@ pub struct DashboardState {
     /// restarted (frames sent while we were offline are gone either way), so
     /// the client already knows everything it needs without a protocol change.
     pub connection_epoch: RwSignal<u64>,
+    #[cfg(feature = "panel-modular")]
+    pub panel_discovery: RwSignal<PanelDiscoveryState>,
 
     // Phase 3: Channel to send RPC requests to message loop
     rpc_tx: StoredValue<Option<mpsc::UnboundedSender<RpcRequest>>>,
@@ -1007,6 +1011,8 @@ impl DashboardState {
             is_reconnecting: RwSignal::new(false),
             has_connected_once: RwSignal::new(false),
             connection_epoch: RwSignal::new(0),
+            #[cfg(feature = "panel-modular")]
+            panel_discovery: RwSignal::new(PanelDiscoveryState::new()),
             rpc_tx: StoredValue::new(None),
             next_id: StoredValue::new(Arc::new(Mutex::new(1))),
             event_handlers: StoredValue::new(Arc::new(Mutex::new(Vec::new()))),
@@ -1387,6 +1393,50 @@ impl DashboardState {
             return Err(RpcFailure::local(message));
         }
         self.send_rpc(method, params).await
+    }
+
+    /// Refresh the complete canonical Panel snapshot for the current connection.
+    #[cfg(feature = "panel-modular")]
+    pub async fn refresh_panel_discovery(&self) -> Result<(), String> {
+        let Some(epoch) = self.connection_epoch.try_get_untracked() else {
+            return Err("Panel discovery owner was disposed".to_string());
+        };
+        self.panel_discovery
+            .update(|state| state.begin_connection(epoch));
+        let response = self
+            .rpc_call(
+                aleph_protocol::panel::PANEL_UI_CAPABILITY_SNAPSHOT_METHOD,
+                Value::Null,
+            )
+            .await;
+        match response {
+            Ok(value) => match decode_snapshot(value) {
+                Ok(snapshot) => {
+                    match self
+                        .panel_discovery
+                        .try_update(|state| state.accept_snapshot(epoch, snapshot))
+                    {
+                        Some(
+                            SnapshotUpdate::Accepted
+                            | SnapshotUpdate::StaleEpoch
+                            | SnapshotUpdate::StaleRevision,
+                        ) => Ok(()),
+                        None => Err("Panel discovery owner was disposed".to_string()),
+                    }
+                }
+                Err(error) => {
+                    let message = format!("Panel discovery payload could not be decoded: {error}");
+                    self.panel_discovery
+                        .update(|state| state.mark_error(epoch, message.clone()));
+                    Err(message)
+                }
+            },
+            Err(message) => {
+                self.panel_discovery
+                    .update(|state| state.mark_error(epoch, message.clone()));
+                Err(message)
+            }
+        }
     }
 
     /// Park until the socket is authorized, bounded by
@@ -1999,6 +2049,14 @@ impl DashboardState {
                         // frames to be discarded — see the field's doc.
                         self.connection_epoch.update(|n| *n += 1);
 
+                        #[cfg(feature = "panel-modular")]
+                        {
+                            let state_for_panel_discovery = *self;
+                            spawn_local(async move {
+                                let _ = state_for_panel_discovery.refresh_panel_discovery().await;
+                            });
+                        }
+
                         let state_for_subscribe = *self;
                         spawn_local(async move {
                             // Per-socket topic subscriptions must be re-established on
@@ -2116,6 +2174,10 @@ impl DashboardState {
 
         // Update state
         self.is_connected.set(false);
+        #[cfg(feature = "panel-modular")]
+        if let Some(epoch) = self.connection_epoch.try_get_untracked() {
+            self.panel_discovery.update(|state| state.disconnect(epoch));
+        }
         self.connection_error.set(None);
         self.is_reconnecting.set(false);
         Ok(())
