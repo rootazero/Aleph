@@ -6333,15 +6333,17 @@ The bounded explicit-config slice is implemented using the existing bus and sour
 - [Restart prompt / 重启提示](../superpowers/prompts/2026-10-31-capability-core-terminal-live-config-prompt.md)
 - [Implementation run / 实施与验证](../superpowers/runs/2026-10-31-terminal-live-config-run.md)
 
-### Next proposed slice: note-vault watcher shutdown / 下一阶段提案：笔记 watcher 收尾（未实施）
+### Bounded slice implemented: note-vault watcher shutdown / 已实施：笔记 watcher 有界收尾
 
-After Terminal explicit live-config, the next proposed prerequisite is owned shutdown of the existing `NoteVaultWatcher`, not a complete Memory/graph provider. Today the watcher stores its debouncer but discards the Tokio consumer handle; dependency Drop signals stop without waiting. The proposal retains the real consumer and a blocking producer-stop helper, supports cancellation/retry, and awaits this same owner in the common production teardown. No new config switch, Capability mount, whole-Memory cold boot or native/RSS reclamation is implemented by this planning package.
+The bounded watcher-owned shutdown slice is implemented in commits `84655593a` and `4bba875ac` on branch `note-watcher-stop`. `NoteVaultWatcher` now retains the real Tokio consumer JoinHandle and, on explicit `shutdown(&mut self)`, moves the existing `Debouncer::stop(self)` into exactly one retained `tokio::task::spawn_blocking` task. Producer stop and consumer drain are observed separately through mutable handle references; cancellation leaves pending handles owned for a later retry; the first observed JoinError remains sticky; accepted queue batches are drained before successful completion. `Drop` only calls `stop_nonblocking` for an unstarted producer and warns when completion is unobserved; it makes no success or native-thread reclamation claim.
 
-Terminal 闭环之后，下一阶段建议先补既有 `NoteVaultWatcher` 的 source-owned 收尾：保留真实 consumer 和阻塞 producer-stop helper，支持取消后原位重试，并接入生产公共 teardown。当前代码仍丢弃 consumer handle，依赖 Drop 只 signal 不 wait；本入口仅规划，未实施，也不代表 Memory/星云图整体 provider 或关闭能力。共享数据库、startup rebuild 和其他 Memory writer 的边界需后续独立设计，Sandbox 安全策略不变。
+Production startup keeps the same `Option<NoteVaultWatcher>` owner, and `builder::subsystems::drain_note_vault_watcher(&mut Option<NoteVaultWatcher>)` borrows it in place. The common post-`run_until_shutdown` funnel awaits that helper once, warns on failure, preserves sibling teardown and returns the original `run_result`. The detached startup `full_rebuild_all` task remains unchanged.
 
-- [Design / 设计](../superpowers/specs/2026-10-31-capability-core-note-watcher-shutdown-design.md)
-- [Plan / 实施计划](../superpowers/plans/2026-10-31-capability-core-note-watcher-shutdown-plan.md)
-- [Restart prompt / 重启提示](../superpowers/prompts/2026-10-31-capability-core-note-watcher-shutdown-prompt.md)
+真实 temp-root/SQLite watcher tests cover emitted-batch drain, consumer `Arc` release, cancellation with exact retained JoinHandle IDs, independent producer/consumer JoinError handling, sticky failure, idempotent success, replacement watcher edits, missing-root no-side-effect behavior and truthful Drop fallback. Binary tests cover `None` coldness and in-place idempotent drain. Focused verification and review limits are recorded in [the implementation run](../superpowers/runs/2026-10-31-note-watcher-shutdown-run.md). The historical [design](../superpowers/specs/2026-10-31-capability-core-note-watcher-shutdown-design.md), [plan](../superpowers/plans/2026-10-31-capability-core-note-watcher-shutdown-plan.md) and [restart prompt](../superpowers/prompts/2026-10-31-capability-core-note-watcher-shutdown-prompt.md) remain available as scope records.
+
+This slice does not add a Memory provider/config switch, graph or full-Memory disable, backend close, Capability/Zahir/MCP/ACP wiring, registry/supervisor, startup rebuild ownership change, native unloading, process/thread isolation, RSS reduction or whole-Memory coldness claim. The pinned `notify-debouncer-full` 0.7.0 `stop` still hides native join errors. Shared NoteStore and other Memory writers require a separate resource census and shutdown design.
+
+本有界切片已实施，但不代表整个 Memory provider、共享数据库、图、startup rebuild 或其他 Memory writer 已完成 cold/enable/stop/re-enable。不会把 watcher drain 扩大解释为全局 Memory 停止，也不宣称 native/RSS 回收。
 
 ## Reference links / 参考链接
 

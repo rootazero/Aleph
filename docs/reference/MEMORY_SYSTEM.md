@@ -401,7 +401,7 @@ Memory is not yet an independently cold/stoppable Capability provider. The produ
 
 Memory 尚未实现独立 cold/stoppable provider。关闭回合记忆消费或隐藏星云图，不等于共享数据库与后台工作没有初始化。下一步建议只补既有 note-vault watcher 的可等待收尾；其独立 startup rebuild 和其他 Memory writer 仍待后续资源边界设计。不得以节省资源为由关闭 Sandbox 审批/隔离。
 
-The [watcher shutdown design](../superpowers/specs/2026-10-31-capability-core-note-watcher-shutdown-design.md), [plan](../superpowers/plans/2026-10-31-capability-core-note-watcher-shutdown-plan.md) and [restart prompt](../superpowers/prompts/2026-10-31-capability-core-note-watcher-shutdown-prompt.md) are **unimplemented proposals**, not current behavior or production approval. See [Notes §6.4](memory/NOTES.md#64-vault-watcher--markdown-edited-outside-aleph) for the present Drop/consumer ownership limitation. No native-code unloading, process/thread isolation or RSS reduction has been established.
+The [watcher shutdown design](../superpowers/specs/2026-10-31-capability-core-note-watcher-shutdown-design.md), [plan](../superpowers/plans/2026-10-31-capability-core-note-watcher-shutdown-plan.md) and [implementation run](../superpowers/runs/2026-10-31-note-watcher-shutdown-run.md) now describe an implemented bounded slice. `NoteVaultWatcher` retains its consumer and producer-stop work, and the common server teardown awaits the same owner in place. This still does not make Memory an independently cold/stoppable provider: the shared backend, detached startup rebuild, graph consumers and other Memory writers remain outside the slice. The pinned debouncer hides native join errors, so no native-code unloading, process/thread isolation or RSS reduction is established.
 
 ## 12. Provenance Chain (Evidence Drill-Down)
 
