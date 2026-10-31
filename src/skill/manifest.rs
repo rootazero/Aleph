@@ -513,10 +513,11 @@ fn parse_skill_content_from(
 
     // Invocation policy
     if raw.user_invocable.is_some() || raw.disable_model_invocation.is_some() {
-        let policy = InvocationPolicy {
-            user_invocable: raw.user_invocable.unwrap_or(true),
-            disable_model_invocation: raw.disable_model_invocation.unwrap_or(false),
-        };
+        // The domain default is the only home of the default values;
+        // `from_optional` merges the author's values over it instead of
+        // restating the literals here.
+        let policy =
+            InvocationPolicy::from_optional(raw.user_invocable, raw.disable_model_invocation);
         manifest.set_invocation(policy);
     }
 
@@ -534,8 +535,11 @@ fn parse_skill_content_from(
             any_bins: elig.any_bins.clone().unwrap_or_default(),
             required_env: elig.required_env.clone().unwrap_or_default(),
             required_config: elig.required_config.clone().unwrap_or_default(),
-            always: elig.always.unwrap_or(false),
             enabled: elig.enabled,
+            // `always` falls back to `EligibilitySpec::default()` instead of
+            // restating `false` here, so the domain default stays the only
+            // home of that value.
+            ..EligibilitySpec::from_optional(elig.always)
         };
         manifest.set_eligibility(spec);
     }
