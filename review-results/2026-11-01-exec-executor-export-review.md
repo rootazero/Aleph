@@ -209,9 +209,14 @@ orchestrator against the same policy and are marked as such below.
 
 ## Verification
 
-- `cargo check -p alephcore --all-targets -j 1` — **0 errors**. The only
-  warnings are 12 pre-existing dead-code warnings in
-  `src/gateway/server/panel_asset_route.rs`, untouched by this pass.
+- `cargo check -p alephcore --all-targets -j 1` — **0 errors**, run over the whole
+  fix set (14m23s), and re-run after the last batch (15m06s). The only warnings
+  are 12 pre-existing dead-code warnings in
+  `src/gateway/server/panel_asset_route.rs`, untouched by this pass. A final
+  `cargo check -p alephcore --lib -j 1` confirmed the committed tree (5m47s,
+  0 errors) after the rustfmt pass.
+- `rustfmt --edition 2021 --check` is clean on every touched file (three files
+  drifted after the workers' edits and were reformatted).
 - The build ran with the parallelism pinned to one job and `CARGO_BUILD_JOBS=1`,
   because the `--all-targets` unit-test target alone peaks at ~15 GB of RSS on
   this 19 GB host; the first attempt with `-j 2` ran two rustc processes
