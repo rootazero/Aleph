@@ -6318,6 +6318,14 @@ Stop revokes admission before checked session close-all, signals the driver, and
 
 Stop 先撤销 admission，再执行 checked session close-all、signal driver 并等待保留的 handle。取消保留所有权；cleanup/join 失败保留 typed evidence 并 fail-closed。既有同步 live-apply API 对 pending join/失败如实报告 non-live/restart，不另行 spawn cleanup。已有 bus/runtime 时 re-enable 使用 checked 新 generation；cold disabled boot 无 bus 时如实需要 restart。操作与 frame publication/forwarding 校验捕获的 Ready generation，既有 owner predicate 与 journal 继续作为 authority。本切片不等于 Terminal Zahir/BackendLease/MCP/ACP integration 或 durable Capability recovery。kill 返回与 driver join 不证明 native unload、OS child/reader-thread reclamation、RSS reduction 或 process isolation。证据与限制见上述 run record。
 
+### Next planned slice / 下一阶段规划（未实施）
+
+The next proposed slice completes explicit Terminal live-config application: an async central executor receives the existing Gateway bus, cold enable uses that context, and disable awaits source-owned join. Explicit `config.reload` is the recovery entry after incomplete application; identical patches retain their no-op semantics. This is a planning handoff, not evidence of implemented behavior or approval for descriptors/mounts. / 下一阶段提案补齐显式配置启停：传递既有 bus、异步等待 join；未完成应用通过 explicit reload 恢复，相同 patch 保持 no-op。此处仅为交接入口，不声明已实施或扩大 mount 授权。
+
+- [Design / 设计](../superpowers/specs/2026-10-31-capability-core-terminal-live-config-design.md)
+- [Plan / 实施计划](../superpowers/plans/2026-10-31-capability-core-terminal-live-config-plan.md)
+- [Restart prompt / 重启提示](../superpowers/prompts/2026-10-31-capability-core-terminal-live-config-prompt.md)
+
 ## Reference links / 参考链接
 
 - [Architecture](ARCHITECTURE.md) - System overview
