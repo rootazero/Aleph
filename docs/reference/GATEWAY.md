@@ -1437,6 +1437,28 @@ This slice does not establish production Bound ingress/runtime, Feishu/R2 integr
 
 本切片不证明 production Bound ingress/runtime、Feishu/R2 integration、Zahir routing、subscription、durable/crash recovery、external exactly-once effects、all-channel compatibility、Terminal/Memory/Sandbox migration、EffectClaim production、Safe Replay、universal scheduler 或其余 capability kind。`ChannelRegistry` 仍是唯一 `WebhookMountTable` writer 与 Gateway lifecycle authority；production mount/ingress 与 Feishu B8.2 gates 仍 deferred。
 
+### Terminal source-owned lifecycle / Terminal 源所有生命周期（2026-10-31）
+
+The existing `PtyManager` is the only Terminal session/owner-retention/event-bus authority. It owns one side-effect-free `ProviderHandle` and one joinable flush driver. `GatewayServer` receives the existing shared application Config; a disabled or unwired router leaves the manager uninitialized. Enabled activation captures a checked generation, owns its driver handle and only then publishes `Ready`. Repeated activation reuses that generation and bus; replacing a live bus requires stop.
+
+现有 `PtyManager` 是唯一 Terminal session/owner-retention/event-bus authority，持有一个无副作用 `ProviderHandle` 和一个可 join 的 flush driver。`GatewayServer` 接收现有 shared application Config；disabled 或未接线的 router 不初始化 manager。Enabled activation 捕获 checked generation、拥有 driver handle 后才发布 `Ready`。重复激活复用同一 generation 与 bus；替换 live bus 必须先 stop。
+
+Stop transitions to `Stopping` before session cleanup, retains failed sessions in the canonical map, signals the driver and awaits the retained handle. Successful cleanup/join permits `Stopped`; failures remain `Failed` with `TerminalResidual`. Session cleanup observes a successful kill request or successful waiter-confirmed child exit; it does not join descendant processes or reader threads. Cancelling a stop future retains the handle. `LifecycleSnapshot::driver_active` denotes retained driver ownership, including pending cleanup, not OS-thread liveness. Normal daemon shutdown awaits this boundary; forced shutdown attempts it with a one-second timeout and logs remaining evidence. That timeout cannot preempt synchronous native I/O or mutex waits.
+
+Stop 在 session cleanup 前转换为 `Stopping`，失败 session 保留在 canonical map，随后 signal driver 并等待保留的 handle。仅成功 cleanup/join 才允许 `Stopped`；失败保持 `Failed` 与 `TerminalResidual`。Session cleanup 观察的是 kill 请求成功或 waiter 成功确认 child 退出，不包含 descendant process 或 reader thread join。取消 stop future 不丢 handle。`LifecycleSnapshot::driver_active` 表示保留的 driver 所有权，含 pending cleanup，不表示 OS-thread liveness。正常 daemon shutdown 等待此边界；forced shutdown 尝试一秒并记录剩余证据，该 timeout 不能抢占同步 native I/O 或 mutex wait。
+
+`apply_live_sections` remains synchronous. Disable revokes admission, closes sessions and signals immediately; an unobserved join/failure returns non-live and `classify_verified` downgrades to restart. A later apply/start or async shutdown polls the same owned handle. Re-enable starts a new generation using the existing bus; disabled cold boot with no bus reports non-live/restart. File-watcher updates alone do not invoke this explicit live-apply path. No cached enabled flag or detached cleanup driver is added.
+
+`apply_live_sections` 保持同步。Disable 立即撤销 admission、关闭 session 并 signal；未观察到 join 或失败时返回 non-live，`classify_verified` 降级为 restart。后续 apply/start 或 async shutdown 继续 poll 同一 owned handle。Re-enable 用已有 bus 启动新 generation；disabled cold boot 无 bus 时报告 non-live/restart。仅文件 watcher 更新不触发此显式 live-apply path；没有缓存 enabled flag，也没有 detached cleanup driver。
+
+Spawn/input/resize/attach/close capture the current Ready generation; the source admission gate serializes their effects with stop. Flush and final-exit publication/removal check their original generation. Screen/exit topic payloads carry `provider_generation`; WebSocket forwarding rejects queued stale or missing generations before visibility lookup and after asynchronous filtering. The existing `created_by`/`owner_admits` predicate and retained owner stamps still govern owner visibility. The existing process journal remains the durable PTY fact source.
+
+Spawn/input/resize/attach/close 捕获当前 Ready generation，source admission gate 将其 effect 与 stop 串行化。Flush 与 final-exit publication/removal 校验原 generation。Screen/exit topic payload 携带 `provider_generation`，WebSocket forwarding 在 visibility lookup 前和异步过滤后拒绝排队的旧代或缺失 generation 事件。既有 `created_by`/`owner_admits` 与 retained owner stamp 继续决定 owner visibility；现有 process journal 仍是 durable PTY fact source。
+
+Evidence and exclusions are recorded in [Terminal lifecycle run](../superpowers/runs/2026-10-31-terminal-lifecycle-run.md). This does not establish Terminal Zahir/BackendLease/MCP/ACP integration, durable Capability recovery, native unload, OS process/reader-thread/RSS reclamation, process isolation, external delivery or exactly-once effects; other providers and harness remain outside this slice.
+
+证据与排除见上述 run record。本切片不证明 Terminal Zahir/BackendLease/MCP/ACP integration、durable Capability recovery、native unload、OS process/reader-thread/RSS reclamation、process isolation、external delivery 或 exactly-once effects；其余 provider 与 harness 不在范围内。
+
 - [Architecture](ARCHITECTURE.md) - System overview
 - [Agent System](AGENT_SYSTEM.md) - Agent loop
 - [Security](SECURITY.md) - Exec approval system

@@ -1095,7 +1095,8 @@ the operator could not have removed.
 - **PTY 不经 `[sandbox.command_policy]` 也不经 exec tier**（`method_admin.rs` 的注释自陈 "strictly more dangerous"）。
   会话粒度的开关 `[policies.terminal] enabled` 是这一层唯一说得出口的谓词；关掉它会杀掉在飞的会话。
 - **终端历史住在服务器上**（每会话 `scrollback_lines` 行，默认 1000），因此对诊断与审计面可见。
-- **同一装机的所有 operator 共享 `["*"]` 作用域**，能互相看见并 attach 彼此的会话。这是单层信任模型的有意结果，不是疏漏。
+- **Operator scope and session ownership are separate gates.** Operator `['*']` permits reaching the PTY RPC/event surface; it does not override the existing `created_by` check. `owner_admits` is shared by listing, addressed operations and event delivery: a resolved caller must match the recorded creator. An internal caller with no resolved identity retains the existing unscoped behavior.
+  **Operator scope 与 session ownership 是两道闸。** Operator 的 `['*']` 允许到达 PTY RPC/event 面，但不覆盖 `created_by` 判定。list、addressed operations 与事件交付共用 `owner_admits`：已解析身份的 caller 必须匹配创建者；未解析身份的内部 caller 保留现有 unscoped 行为。
 - **打开这道闸本身不举卡就是一次绕闸**：`[policies.terminal] enabled` 在
   `config::types::policies::exec_tier::GATE_DECIDING_CONFIG_PATHS` 上，所以经 `self_config`
   写它在**每个执行档位**——包括 `Full`——都停下来问。这张卡不提供"始终允许"，原因不是它例外，
