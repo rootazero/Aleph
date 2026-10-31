@@ -6327,6 +6327,16 @@ The bounded explicit-config slice is implemented using the existing bus and sour
 - [Restart prompt / 重启提示](../superpowers/prompts/2026-10-31-capability-core-terminal-live-config-prompt.md)
 - [Implementation run / 实施与验证](../superpowers/runs/2026-10-31-terminal-live-config-run.md)
 
+### Next proposed slice: note-vault watcher shutdown / 下一阶段提案：笔记 watcher 收尾（未实施）
+
+After Terminal explicit live-config, the next proposed prerequisite is owned shutdown of the existing `NoteVaultWatcher`, not a complete Memory/graph provider. Today the watcher stores its debouncer but discards the Tokio consumer handle; dependency Drop signals stop without waiting. The proposal retains the real consumer and a blocking producer-stop helper, supports cancellation/retry, and awaits this same owner in the common production teardown. No new config switch, Capability mount, whole-Memory cold boot or native/RSS reclamation is implemented by this planning package.
+
+Terminal 闭环之后，下一阶段建议先补既有 `NoteVaultWatcher` 的 source-owned 收尾：保留真实 consumer 和阻塞 producer-stop helper，支持取消后原位重试，并接入生产公共 teardown。当前代码仍丢弃 consumer handle，依赖 Drop 只 signal 不 wait；本入口仅规划，未实施，也不代表 Memory/星云图整体 provider 或关闭能力。共享数据库、startup rebuild 和其他 Memory writer 的边界需后续独立设计，Sandbox 安全策略不变。
+
+- [Design / 设计](../superpowers/specs/2026-10-31-capability-core-note-watcher-shutdown-design.md)
+- [Plan / 实施计划](../superpowers/plans/2026-10-31-capability-core-note-watcher-shutdown-plan.md)
+- [Restart prompt / 重启提示](../superpowers/prompts/2026-10-31-capability-core-note-watcher-shutdown-prompt.md)
+
 ## Reference links / 参考链接
 
 - [Architecture](ARCHITECTURE.md) - System overview

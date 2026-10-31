@@ -100,6 +100,12 @@ Updated current Terminal sections in `FEATURE_LOCATOR.md` (including §6.11 and 
 
 The local `terminal-live-config` branch and `.worktrees/terminal-live-config` checkout are retained. The original main checkout is not edited or merged by this work; no push or remote merge was performed. / 保留本地分支与隔离检出，不改写或合并主检出，不 push、不远端 merge。
 
+## Post-delivery integration / 交付后的本地集成（2026-10-31）
+
+After the implementation delivery described above, the user explicitly authorized merging the completed Terminal work into local `main` and preparing the next design/plan/prompt. The main checkout was clean; `git merge --ff-only terminal-live-config` moved local main from `1e5036200d96a128e162d7d21eb1839c1e1f8dbd` to `b378b87bd377295499c9a71347a318d94b681916`. Main now contains authorization `88fe4fc4c`, implementation `cf52bb05a` and documentation `b378b87bd`. `git merge-base --is-ancestor b378b87bd main` passed. The resulting production tree is identical to the tested branch; the merge introduced no new source change and did not rerun the test matrix. No push or remote operation was performed. The Terminal branch/worktree remains retained at `b378b87bd`.
+
+上述实施交付后，用户另行授权合入本地 main 并规划下一阶段。已执行真实 fast-forward；先前的“main 未合并”描述保留为交付时历史，**不再描述当前 main**。后续 watcher 规划须从包含上述三个提交和规划包的本地 main 建立，不得将历史初始基线当作当前 tip。此次仅追加集成记录与未实施规划，生产代码与已测 Terminal 分支一致，未重跑测试、未 push，保留旧分支/worktree。
+
 ## Deferred and unproven / 延期与未证明
 
 No automatic file-watcher reconciliation, lifecycle rewrite, second authority/store/bus singleton, Core/ProviderHandle platform effects, Terminal descriptor/BackendLease/Zahir/MCP/ACP, Generic Gateway mount, Feishu, Memory/Sandbox, other kinds, subscribe/durable recovery, EffectClaim/replay/scheduler/harness or native isolation work was implemented. / 未扩大至 watcher、既有生命周期重写、第二 authority、Core 平台副作用或延期 Capability 路线图。
