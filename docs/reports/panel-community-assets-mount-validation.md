@@ -2,6 +2,12 @@
 
 Date: 2026-10-30
 
+## Audit clarification / 审计补充（2026-10-31）
+
+The checks below are historical results from the prior phase, not fresh results from the live-publication audit. The browser fixture uses a fixed Node/Bun byte map, not `PanelAssetPublicationStore`. No production constructor/publisher binds that Rust store to Core admission. Its stale fence covers only a retained same-version slot; retraction leaves no tombstone, and it is not a current-snapshot fence. The caller-supplied authorization boolean is not HTTP authentication. The next phase stopped at its explicit missing-producer boundary; see [production publication audit](panel-community-live-publication-audit.md).
+
+以下检查为上一阶段的历史结果，不是 live-publication 审计的新验证。浏览器 fixture 使用固定 Node/Bun bytes map，不执行 Rust publication store；尚无 production constructor/publisher 把 store 绑定到 Core admission。其 stale fence 仅覆盖仍保留的同版本 slot，retract 不留 tombstone，也不证明 current-snapshot fencing；caller authorization boolean 不是 HTTP 认证。下一阶段已按缺失 producer 的明确边界停止，详见上述审计报告。
+
 ## Scope / 范围
 
 This report validates the constrained phase from an admitted Core declaration to an explicitly selected browser Panel. It covers one single-file ES module, exact bytes, SHA-256 integrity, the existing `PanelLoader` ABI, the existing `PanelShell` lifecycle, and deterministic cleanup. It does not add install, update, uninstall, marketplace, signature, default-release, live-notification, live-Gateway, external-WASM, multi-file, remote-URL, or Zahir runtime behavior.
@@ -14,13 +20,13 @@ This report validates the constrained phase from an admitted Core declaration to
 - `PanelAssetPublicationStore` is a narrow in-process publication seam. It resolves only canonical `(plugin_id, plugin_version, tab_id, source_revision)` plus the declared versioned entry and exact bytes supplied by the host. It does not read a plugin root or filesystem, fetch URLs, parse manifests, redo trust, or create revisions.
 - `PanelProjection::explicit_key` and `select_explicit` own browser selection. Snapshot arrival does not select or mount a tab. The only community route shape is `/panel/<plugin_id>/<tab_id>`.
 - `PanelShell` and `PanelLoader` remain the browser lifecycle authorities. Existing generation, descriptor identity, integrity, async-result and one-shot cleanup fencing is reused. Built-in `/terminal` behavior is unchanged.
-- The production HTTP route remains deferred. No authoritative production byte producer and browser credential injection were approved in this phase; the fixture therefore uses an explicit local adapter and makes no live Gateway claim.
+- The production HTTP route remains deferred. This prior phase did not implement an authoritative production byte producer or browser credential injection; the fixture uses an explicit local adapter and makes no live Gateway claim.
 
 - Core `src/extension` 仍是 declaration、snapshot 与 source-revision 的唯一权威。已认证的 `/ws` JSON-RPC snapshot bridge 仍然只负责 discovery。
 - `PanelAssetPublicationStore` 是窄的 in-process publication seam。它只解析 canonical `(plugin_id, plugin_version, tab_id, source_revision)`、声明中的 versioned entry 与 host 提供的 exact bytes；不读取 plugin root 或 filesystem，不抓取 URL，不解析 manifest，不重新做 trust decision，也不创建 revision。
 - `PanelProjection::explicit_key` 与 `select_explicit` 负责浏览器 selection。Snapshot arrival 不会选择或挂载 tab；唯一 community route shape 是 `/panel/<plugin_id>/<tab_id>`。
 - `PanelShell` 与 `PanelLoader` 仍是浏览器 lifecycle authority。复用既有 generation、descriptor identity、integrity、async-result 与 one-shot cleanup fencing；built-in `/terminal` 行为不变。
-- production HTTP route 仍 deferred。本阶段没有批准权威 production bytes producer 与 browser credential injection；因此 fixture 只使用显式 local adapter，不宣称 live Gateway。
+- production HTTP route 仍 deferred。上一阶段未实现权威 production bytes producer 与 browser credential injection；fixture 只使用显式 local adapter，不宣称 live Gateway。
 
 ## Evidence / 证据
 
@@ -36,8 +42,8 @@ The earlier snapshot transport validation is recorded in `docs/reports/panel-com
 
 - canonical `PanelAssetIdentity { plugin_id, plugin_version, tab_id, source_revision }`;
 - `publish` admission for enabled, trusted, community declarations with `public_base == "./tabs/"`, safe versioned entry, valid `sha256-` SRI and matching bytes;
-- replacement eviction by the same identity slot and explicit `retract`;
-- `serve` refusal for unauthorized, missing, stale, retracted, entry-mismatched or unsafe requests.
+- replacement eviction within a retained `(plugin_id, plugin_version, tab_id)` slot and explicit `retract`, without a tombstone or Core snapshot binding;
+- `serve` refusal when the caller boolean is false, the identity is absent (including an evicted/retracted record), or the entry mismatches/is unsafe; this does not establish production authorization or prevent stale re-admission after retraction.
 
 Because the seam accepts bytes rather than paths, filesystem traversal and symlink escape are structurally unavailable. The tests also reject a traversal entry, arbitrary URL, wrong integrity bytes, unauthorized request, missing identity and generic plugin fields. The core contract compiled with `cargo check -p alephcore --tests -j1`; the targeted core test binary was attempted with `-j1` but test-binary linking exceeded the available command timeouts (1800s, then 900s), so runtime execution of those Rust unit tests is recorded as unverified.
 
