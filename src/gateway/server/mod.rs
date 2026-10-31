@@ -13,6 +13,12 @@ pub mod connection;
 mod flood_guard;
 pub(crate) mod handler;
 mod metrics_endpoint;
+#[cfg(test)]
+mod panel_asset_http_tests;
+mod panel_asset_route;
+#[cfg(test)]
+#[path = "panel_asset_route_tests.rs"]
+mod panel_asset_route_tests;
 mod per_client_buffer;
 mod probe;
 
@@ -1049,6 +1055,21 @@ impl GatewayServer {
             .fallback_service(control_plane)
             .with_state(shared.clone())
             .merge(openai);
+
+        // Panel assets are a separate authenticated HTTP ingress. Mount even
+        // before a Core manager is available; absence refuses instead of SPA HTML.
+        router = router.merge(panel_asset_route::panel_asset_routes(
+            self.device_token_mgr.as_ref().map(|tokens| {
+                panel_asset_route::production_state(
+                    tokens.clone(),
+                    shared.origin_policy.clone(),
+                    shared.trusted_proxy_enabled,
+                    shared.trusted_proxy_ips.clone(),
+                    shared.allow_insecure_remote,
+                    shared.tls_enabled,
+                )
+            }),
+        ));
 
         if let Some(artifacts) = artifacts {
             router = router.merge(artifacts);
