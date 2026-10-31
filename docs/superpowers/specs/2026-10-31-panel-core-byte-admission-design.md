@@ -2,7 +2,7 @@
 
 Date / 日期: 2026-10-31
 
-Status / 状态: **Draft for approval; implementation has not started. / 待批准草案，尚未开始实现。**
+Status / 状态: **Approved on 2026-10-31; implementation in progress under the Core byte-admission plan. / 2026-10-31 已批准，按 Core byte-admission plan 实施中。**
 
 Task / 任务: todo #7, dependency of the [live publication plan](../plans/2026-10-30-panel-community-assets-live-publication-plan.md). Builds on the [production audit](../../reports/panel-community-live-publication-audit.md).
 

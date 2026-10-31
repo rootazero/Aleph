@@ -50,6 +50,7 @@ pub mod mcp_config;
 #[cfg(test)]
 mod mcp_plugin_tests;
 mod panel;
+pub(crate) mod panel_publication;
 mod plugin_ops;
 pub mod plugin_secrets;
 pub mod plugin_state;
