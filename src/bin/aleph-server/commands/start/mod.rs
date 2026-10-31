@@ -28,7 +28,8 @@ use alephcore::ProviderRegistry as _; // trait needed for .default_provider()
 
 mod builder;
 use builder::{
-    initialize_channels, initialize_inbound_router, initialize_vault, load_app_config,
+    drain_note_vault_watcher, initialize_channels, initialize_inbound_router, initialize_vault,
+    load_app_config,
     register_agent_handlers, register_agents_handlers, register_artifact_handlers,
     register_browser_viewer_handlers, register_canvas_handlers, register_config_handlers,
     register_core_handlers, register_cron_handlers, register_daemon_handlers,
@@ -2676,7 +2677,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     // the next restart (and, before the pass above, forever for any corpus but
     // the default agent's). Best-effort: a watch that cannot be established is
     // logged and the server runs exactly as it did before.
-    let _note_vault_watcher = match alephcore::memory::notes::watcher::spawn_note_vault_watcher(
+    let mut note_vault_watcher = match alephcore::memory::notes::watcher::spawn_note_vault_watcher(
         note_indexer.clone(),
     ) {
         Ok(w) => Some(w),
@@ -4098,6 +4099,9 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
 
     let shutdown_rx = setup_graceful_shutdown(args);
     let run_result = server.run_until_shutdown(shutdown_rx).await;
+    if let Err(error) = drain_note_vault_watcher(&mut note_vault_watcher).await {
+        tracing::warn!(%error, "note vault watcher shutdown failed; continuing server teardown");
+    }
     // Close the projection host before any registry-owning scope is disposed.
     // This funnel is reached by both the orderly shutdown (`shutdown_rx`
     // fired) and the fatal `run_until_shutdown` error path, so closing here
