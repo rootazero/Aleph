@@ -2102,7 +2102,8 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         // same `ai:<name>` key resolution the connectivity doctor uses.
         Arc::new(
             alephcore::ConfigPatcher::new(app_config.clone(), config_path, backup)
-                .with_vault(auth_bundle.auth_ctx.shared_token_mgr.clone()),
+                .with_vault(auth_bundle.auth_ctx.shared_token_mgr.clone())
+                .with_event_bus(event_bus.clone()),
         )
     };
     let app_config_for_channels = app_config.clone();

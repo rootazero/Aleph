@@ -15,6 +15,9 @@ use crate::gateway::handlers::parse_params;
 use crate::gateway::hot_reload::ConfigWatcher;
 use crate::gateway::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR, INVALID_PARAMS};
 
+#[cfg(test)]
+mod terminal_tests;
+
 /// Handle config.reload RPC request
 ///
 /// Forces a configuration reload from file.
@@ -64,6 +67,7 @@ pub async fn handle_reload_with_subsystems(
     request: JsonRpcRequest,
     watcher: Arc<ConfigWatcher>,
     app_config: Arc<RwLock<Config>>,
+    event_bus: Arc<GatewayEventBus>,
 ) -> JsonRpcResponse {
     debug!("Handling config.reload with subsystem refresh");
 
@@ -88,9 +92,15 @@ pub async fn handle_reload_with_subsystems(
             let has_profiles = !new_app_config.profiles.is_empty();
             let has_providers = !new_app_config.generation.providers.is_empty();
 
-            let live_applied = {
+            {
                 let mut config_guard = app_config.write().await;
                 *config_guard = new_app_config;
+            }
+            let live_applied = {
+                // Release the installation write before joining the source.
+                // A writer can win this handoff; apply its newest shared intent
+                // and keep readers admitted while excluding further writers.
+                let config_guard = app_config.read().await;
                 // A reload replaces the WHOLE config from disk, so every live
                 // target — section or subsection — may have changed; push
                 // them all onto the running runtime via `live_targets()`
@@ -104,7 +114,9 @@ pub async fn handle_reload_with_subsystems(
                 crate::config::live_apply::apply_live_sections(
                     &config_guard,
                     &crate::config::reload_impact::live_targets(),
+                    Some(&event_bus),
                 )
+                .await
             };
             reloaded.push("app_config".to_string());
             reloaded.extend(live_applied.iter().map(|s| format!("live:{s}")));

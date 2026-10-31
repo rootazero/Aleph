@@ -118,6 +118,9 @@ pub struct SelfConfigOutput {
 // Tool Struct
 // =============================================================================
 
+#[cfg(test)]
+mod terminal_tests;
+
 #[derive(Clone)]
 pub struct SelfConfigTool {
     agent_dir: PathBuf,

@@ -1100,6 +1100,60 @@ pub(crate) fn activate_test_provider() -> &'static PtyManager {
     manager
 }
 
+/// Delay completion of the real stored driver; its stop signal and generation stay owned here.
+#[cfg(test)]
+pub(crate) fn hold_test_driver(
+    manager: &PtyManager,
+) -> (tokio::task::Id, tokio::sync::oneshot::Sender<()>) {
+    let mut stored = manager.driver.lock().unwrap();
+    let driver = stored.take().expect("active driver");
+    let (release, wait) = tokio::sync::oneshot::channel();
+    let handle = tokio::spawn(async move {
+        driver.handle.await.expect("real flush driver");
+        wait.await.expect("release held join");
+    });
+    let id = handle.id();
+    *stored = Some(DriverState {
+        generation: driver.generation,
+        stop: driver.stop,
+        handle,
+    });
+    (id, release)
+}
+
+#[cfg(test)]
+pub(crate) fn test_driver_id(manager: &PtyManager) -> Option<tokio::task::Id> {
+    manager
+        .driver
+        .lock()
+        .unwrap()
+        .as_ref()
+        .map(|driver| driver.handle.id())
+}
+
+#[cfg(test)]
+pub(crate) fn test_session(manager: &PtyManager, session_id: &str) -> Option<Arc<PtySession>> {
+    manager
+        .inner
+        .lock()
+        .unwrap()
+        .sessions
+        .get(session_id)
+        .cloned()
+}
+
+#[cfg(test)]
+pub(crate) fn abort_test_driver(manager: &PtyManager) {
+    manager
+        .driver
+        .lock()
+        .unwrap()
+        .as_ref()
+        .expect("active driver")
+        .handle
+        .abort();
+}
+
 #[cfg(test)]
 struct TestManager {
     manager: PtyManager,

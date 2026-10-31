@@ -1568,18 +1568,17 @@ mod tests {
 
         config.write().await.policies.terminal.enabled = false;
         let disabled = config.read().await;
-        let applied =
-            crate::config::live_apply::apply_live_sections(&disabled, &["policies.terminal"]);
+        let applied = crate::config::live_apply::apply_live_sections(
+            &disabled,
+            &["policies.terminal"],
+            Some(&server.event_bus()),
+        )
+        .await;
         assert!(manager.ready_generation().is_err());
         assert!(manager.write_at(first, &sid, b"refused").is_err());
-        if !applied.contains(&"policies.terminal") {
-            assert_eq!(
-                crate::config::live_apply::classify_verified("policies.terminal.enabled", &applied),
-                crate::config::reload_impact::ReloadImpact::Restart
-            );
-        }
+        assert!(applied.contains(&"policies.terminal"));
+        assert_eq!(crate::gateway::pty::manager::test_driver_id(manager), None);
         drop(disabled);
-        manager.deactivate().await.unwrap();
         let _router = server.build_router();
         assert_eq!(
             manager.lifecycle_snapshot().state,
@@ -1588,13 +1587,25 @@ mod tests {
 
         config.write().await.policies.terminal.enabled = true;
         let enabled = config.read().await;
-        assert!(
-            crate::config::live_apply::apply_live_sections(&enabled, &["policies.terminal"])
-                .contains(&"policies.terminal")
-        );
+        assert!(crate::config::live_apply::apply_live_sections(
+            &enabled,
+            &["policies.terminal"],
+            Some(&server.event_bus())
+        )
+        .await
+        .contains(&"policies.terminal"));
         drop(enabled);
         assert!(manager.ready_generation().unwrap() > first);
-        manager.deactivate().await.unwrap();
+        config.write().await.policies.terminal.enabled = false;
+        let disabled = config.read().await;
+        assert!(crate::config::live_apply::apply_live_sections(
+            &disabled,
+            &["policies.terminal"],
+            Some(&server.event_bus()),
+        )
+        .await
+        .contains(&"policies.terminal"));
+        assert_eq!(crate::gateway::pty::manager::test_driver_id(manager), None);
     }
 
     use super::super::middleware::MiddlewareChain;
