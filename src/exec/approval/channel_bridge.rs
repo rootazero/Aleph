@@ -637,7 +637,7 @@ mod tests {
     use crate::exec::manager::ExecApprovalManager;
     use crate::exec::socket::ApprovalDecisionType;
     use crate::gateway::channel::{
-        Channel, ChannelCapabilities, ChannelError, ChannelId, ChannelInfo, ChannelResult,
+        Channel, ChannelCapabilities, ChannelId, ChannelInfo, ChannelResult,
         ChannelState, ChannelStatus, ConversationId, MessageId, OutboundMessage, SendOperation,
         SendResult,
     };
