@@ -73,7 +73,10 @@ const MAX_PATHS_PER_BATCH: usize = 128;
 /// Must be held for as long as the vault should stay reconciled — the debouncer
 /// owns the platform watch handle and the background thread that feeds it.
 pub struct NoteVaultWatcher {
-    _debouncer: Debouncer<RecommendedWatcher, RecommendedCache>,
+    debouncer: Option<Debouncer<RecommendedWatcher, RecommendedCache>>,
+    consumer_handle: Option<tokio::task::JoinHandle<()>>,
+    stop_handle: Option<tokio::task::JoinHandle<()>>,
+    shutdown_failure: Option<String>,
 }
 
 /// Where a changed file sits in the note layout.
@@ -246,7 +249,7 @@ where
         })?;
 
     let watch_root = root.clone();
-    handle.spawn(async move {
+    let consumer_handle = handle.spawn(async move {
         while let Some(paths) = rx.recv().await {
             reconcile_batch(&indexer, &watch_root, paths).await;
         }
@@ -254,8 +257,73 @@ where
 
     tracing::info!(root = %root.display(), "Watching note vault for external edits");
     Ok(NoteVaultWatcher {
-        _debouncer: debouncer,
+        debouncer: Some(debouncer),
+        consumer_handle: Some(consumer_handle),
+        stop_handle: None,
+        shutdown_failure: None,
     })
+}
+
+impl NoteVaultWatcher {
+    /// Stop the producer and drain every batch already accepted by its consumer.
+    ///
+    /// The debouncer stop runs in one retained blocking task because the
+    /// dependency waits for its native event thread. Both task handles stay
+    /// owned by this watcher if the caller drops this future while it is
+    /// waiting, so a later call observes the same completion.
+    pub async fn shutdown(&mut self) -> Result<(), AlephError> {
+        if self.stop_handle.is_none() {
+            if let Some(debouncer) = self.debouncer.take() {
+                self.stop_handle = Some(tokio::task::spawn_blocking(move || {
+                    debouncer.stop();
+                }));
+            }
+        }
+
+        if let Some(stop_handle) = &mut self.stop_handle {
+            match (&mut *stop_handle).await {
+                Ok(()) => {}
+                Err(error) => {
+                    self.shutdown_failure.get_or_insert_with(|| {
+                        format!("note vault watcher producer stop task failed: {error}")
+                    });
+                }
+            }
+            self.stop_handle = None;
+        }
+
+        if let Some(consumer_handle) = &mut self.consumer_handle {
+            match (&mut *consumer_handle).await {
+                Ok(()) => {}
+                Err(error) => {
+                    self.shutdown_failure.get_or_insert_with(|| {
+                        format!("note vault watcher consumer task failed: {error}")
+                    });
+                }
+            }
+            self.consumer_handle = None;
+        }
+
+        match &self.shutdown_failure {
+            Some(error) => Err(AlephError::other(error.clone())),
+            None => Ok(()),
+        }
+    }
+}
+
+impl Drop for NoteVaultWatcher {
+    fn drop(&mut self) {
+        if let Some(debouncer) = self.debouncer.take() {
+            debouncer.stop_nonblocking();
+            tracing::warn!(
+                "note vault watcher dropped before explicit shutdown; producer stop and consumer drain are unobserved"
+            );
+        } else if self.stop_handle.is_some() || self.consumer_handle.is_some() {
+            tracing::warn!(
+                "note vault watcher dropped before explicit shutdown completed; pending cleanup is unobserved"
+            );
+        }
+    }
 }
 
 /// Reconcile one settled batch of changed paths.
@@ -375,6 +443,9 @@ where
         }
     }
 }
+
+#[cfg(test)]
+mod lifecycle_tests;
 
 #[cfg(test)]
 mod tests {
