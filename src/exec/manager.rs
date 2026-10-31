@@ -204,7 +204,7 @@ impl ExecApprovalRecord {
             // the operator's behalf stamps this to `true` on the record it gets
             // back, before `register_pending` publishes it.
             operator_only: false,
-            allowed_decisions: request.allowed_decisions.clone(),
+            allowed_decisions: request.offered_decisions(),
         }
     }
 
@@ -433,21 +433,28 @@ impl ExecApprovalManager {
     /// # Returns
     ///
     /// The approval record
+    ///
+    /// # Why a failed analysis does not abort the card
+    ///
+    /// `request.analysis.ok` can be `false` here: the parser refuses
+    /// redirection, subshells, background jobs and newlines, so a benign but
+    /// unparseable command (`echo hi > out.txt`) arrives with a failed
+    /// analysis, and no upstream caller checks the flag. A failed analysis is
+    /// not a decision — refusing to raise the card would deny the command on
+    /// the parser's say-so, while the gate that stopped it already decided
+    /// the command needs a human. So the card is still raised and the human
+    /// still decides, exactly as in release builds; the failed analysis is
+    /// logged so the condition is visible instead of silent.
     pub fn create(&self, request: &ExecApprovalRequest, timeout_ms: u64) -> ExecApprovalRecord {
-        // The parser's `CommandAnalysis::error` is the single source of
-        // "this command is unparseable". Surfacing it as an approval card
-        // (delivered to a channel, presented to a human) is the wrong
-        // default — the caller already knows the command is unrunnable.
-        // `debug_assert!` is the right tier: a misconfigured caller logs
-        // the parser's `reason` rather than silently spending a delivery
-        // slot on a card that the human can only deny.
-        debug_assert!(
-            request.analysis.ok,
-            "ExecApprovalManager::create called with !analysis.ok — caller must reject \
-             before this point. Parser reason: {:?}",
-            request.analysis.reason,
-        );
         let record = ExecApprovalRecord::from_request(request, timeout_ms);
+        if !request.analysis.ok {
+            warn!(
+                id = %record.id,
+                reason = ?request.analysis.reason,
+                "ExecApprovalManager::create called with a failed analysis — the card is still \
+                 raised and the human decides",
+            );
+        }
         debug!(id = %record.id, command = %record.command, "Created approval request");
         record
     }
@@ -1292,6 +1299,22 @@ mod tests {
             allowed_decisions: crate::exec::allowed_decisions::with_persistent(),
             ..mock_request()
         }
+    }
+
+    /// A command the parser could not analyse must still raise a card: the
+    /// gate already decided the command needs a human, so refusing to raise
+    /// it here would deny the command on the parser's say-so. This used to
+    /// be a `debug_assert!`, which panicked in every debug build.
+    #[test]
+    fn a_failed_analysis_still_raises_a_card() {
+        let manager = ExecApprovalManager::new();
+        let mut request = mock_request();
+        request.analysis = CommandAnalysis::error("redirection is not allowed");
+
+        let record = manager.create(&request, 60_000);
+
+        assert_eq!(record.id, request.id);
+        assert_eq!(record.command, request.command);
     }
 
     // Intentional filter correction: operator escalation cards never belong to

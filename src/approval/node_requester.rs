@@ -94,12 +94,11 @@ pub async fn run_node_approval(
         id: uuid::Uuid::new_v4().to_string(),
         command,
         cwd: None,
-        analysis: CommandAnalysis {
-            ok: true,
-            reason: None,
-            segments: vec![],
-            chains: None,
-        },
+        // A node action is approved as an action, not as a command line:
+        // there is no argv to parse, and the command string shown to the
+        // operator is a redacted summary, not something the sandbox would
+        // run. `not_a_command()` is the analysis that says exactly that.
+        analysis: CommandAnalysis::not_a_command(),
         agent_id: format!("node:{node_id}"),
         session_key: String::new(),
         reason: (!reason.is_empty()).then(|| reason.to_string()),

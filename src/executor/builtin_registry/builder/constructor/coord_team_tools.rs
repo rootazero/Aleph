@@ -147,21 +147,7 @@ impl BuiltinToolRegistry {
                 .clone()
                 .unwrap_or_else(|| Arc::new(crate::gateway::agent_instance::AgentRegistry::new()));
 
-            let sm_for_teams = config
-                .gateway_context
-                .as_ref()
-                .map(|ctx| Arc::clone(ctx.session_store()))
-                .or_else(|| config.session_manager.clone())
-                .or_else(|| match crate::gateway::SessionManager::with_defaults() {
-                    Ok(sm) => Some(Arc::new(sm)),
-                    Err(e) => {
-                        warn!(
-                            "Failed to create fallback SessionManager for team tools: {}",
-                            e
-                        );
-                        None
-                    }
-                });
+            let sm_for_teams = super::resolve_session_manager(config, "team tools");
 
             if sm_for_teams.is_none() {
                 warn!("Team management tools disabled: SessionManager not available");

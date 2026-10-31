@@ -87,21 +87,7 @@ impl BuiltinToolRegistry {
         };
 
         // Add agent management tools (if AgentRegistry + AgentEnvStore are available)
-        let sm_for_agents = config
-            .gateway_context
-            .as_ref()
-            .map(|ctx| Arc::clone(ctx.session_store()))
-            .or_else(|| config.session_manager.clone())
-            .or_else(|| match crate::gateway::SessionManager::with_defaults() {
-                Ok(sm) => Some(Arc::new(sm)),
-                Err(e) => {
-                    warn!(
-                        "Failed to create fallback SessionManager for agent tools: {}",
-                        e
-                    );
-                    None
-                }
-            });
+        let sm_for_agents = super::resolve_session_manager(config, "agent tools");
 
         let (
             agent_create_tool,

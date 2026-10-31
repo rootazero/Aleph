@@ -14,18 +14,39 @@ use crate::tools::AlephTool;
 
 use super::BuiltinToolRegistry;
 
+/// Serialize a tool's parameter schema, failing closed.
+///
+/// A schema that cannot be serialized must not become `{}`: `{}` accepts any
+/// argument object, so the model is told the tool takes no arguments and
+/// every call is malformed — the registration looks fine and the tool is
+/// broken. The failure is logged as an error and the tool receives a schema
+/// that rejects every argument, so a broken registration is visible in the
+/// log and cannot be called successfully.
+///
+/// The registration is kept rather than skipped because the surrounding code
+/// expects every registered tool to carry a schema; dropping the registration
+/// would reproduce the very "advertised without a schema" defect this helper
+/// exists to prevent.
+///
+/// One implementation, shared by the core and the optional registration
+/// paths, so the two cannot diverge on failure behaviour.
+pub(super) fn tool_schema<T: schemars::JsonSchema>(name: &str) -> serde_json::Value {
+    serde_json::to_value(schemars::schema_for!(T)).unwrap_or_else(|e| {
+        tracing::error!("Failed to serialize schema for {}: {}", name, e);
+        serde_json::json!({
+            "type": "object",
+            "properties": {},
+            "required": [],
+            "additionalProperties": false
+        })
+    })
+}
+
 impl BuiltinToolRegistry {
     /// Register always-available core tool metadata with JSON Schema parameters.
     pub(crate) fn register_core_tools(tools: &mut HashMap<String, UnifiedTool>) {
         // Use the same schema registration for production and the budget census.
         crate::builtin_tools::call_lifecycle::CallLifecycleTools::register(tools);
-
-        fn schema<T: schemars::JsonSchema>(name: &str) -> serde_json::Value {
-            serde_json::to_value(schemars::schema_for!(T)).unwrap_or_else(|e| {
-                tracing::warn!("Failed to serialize schema for {}: {}", name, e);
-                serde_json::Value::Object(Default::default())
-            })
-        }
 
         // Helper: register tool with schema from schemars. `max_result_tokens`
         // is the tool type's `AlephTool::MAX_RESULT_TOKENS`, passed at every
@@ -52,84 +73,84 @@ impl BuiltinToolRegistry {
             "search",
             SearchTool::DESCRIPTION,
             <SearchTool as AlephTool>::MAX_RESULT_TOKENS,
-            schema::<crate::builtin_tools::search::SearchArgs>("search"),
+            tool_schema::<crate::builtin_tools::search::SearchArgs>("search"),
         );
         reg(
             tools,
             "web_fetch",
             "Fetch and read content from a URL",
             <crate::builtin_tools::WebFetchTool as AlephTool>::MAX_RESULT_TOKENS,
-            schema::<crate::builtin_tools::web_fetch::WebFetchArgs>("web_fetch"),
+            tool_schema::<crate::builtin_tools::web_fetch::WebFetchArgs>("web_fetch"),
         );
         reg(
             tools,
             "file_ops",
             FileOpsTool::DESCRIPTION,
             <FileOpsTool as AlephTool>::MAX_RESULT_TOKENS,
-            schema::<crate::builtin_tools::file_ops::FileOpsArgs>("file_ops"),
+            tool_schema::<crate::builtin_tools::file_ops::FileOpsArgs>("file_ops"),
         );
         reg(
             tools,
             "file_read",
             FileReadTool::DESCRIPTION,
             <FileReadTool as AlephTool>::MAX_RESULT_TOKENS,
-            schema::<crate::builtin_tools::file_ops::read::FileReadArgs>("file_read"),
+            tool_schema::<crate::builtin_tools::file_ops::read::FileReadArgs>("file_read"),
         );
         reg(
             tools,
             "grep",
             <crate::builtin_tools::GrepTool as crate::tools::AlephTool>::DESCRIPTION,
             <crate::builtin_tools::GrepTool as AlephTool>::MAX_RESULT_TOKENS,
-            schema::<crate::builtin_tools::GrepArgs>("grep"),
+            tool_schema::<crate::builtin_tools::GrepArgs>("grep"),
         );
         reg(
             tools,
             "find",
             <crate::builtin_tools::FindTool as crate::tools::AlephTool>::DESCRIPTION,
             <crate::builtin_tools::FindTool as AlephTool>::MAX_RESULT_TOKENS,
-            schema::<crate::builtin_tools::FindArgs>("find"),
+            tool_schema::<crate::builtin_tools::FindArgs>("find"),
         );
         reg(
             tools,
             "file_write",
             FileWriteTool::DESCRIPTION,
             <FileWriteTool as AlephTool>::MAX_RESULT_TOKENS,
-            schema::<crate::builtin_tools::file_ops::write::FileWriteArgs>("file_write"),
+            tool_schema::<crate::builtin_tools::file_ops::write::FileWriteArgs>("file_write"),
         );
         reg(
             tools,
             "file_edit",
             FileEditTool::DESCRIPTION,
             <FileEditTool as AlephTool>::MAX_RESULT_TOKENS,
-            schema::<crate::builtin_tools::file_ops::edit::FileEditArgs>("file_edit"),
+            tool_schema::<crate::builtin_tools::file_ops::edit::FileEditArgs>("file_edit"),
         );
         reg(
             tools,
             "bash",
             <BashExecTool as crate::tools::AlephTool>::DESCRIPTION,
             <BashExecTool as AlephTool>::MAX_RESULT_TOKENS,
-            schema::<crate::builtin_tools::bash_exec::BashExecArgs>("bash"),
+            tool_schema::<crate::builtin_tools::bash_exec::BashExecArgs>("bash"),
         );
         reg(
             tools,
             "code_exec",
             CodeExecTool::DESCRIPTION,
             <CodeExecTool as AlephTool>::MAX_RESULT_TOKENS,
-            schema::<crate::builtin_tools::code_exec::CodeExecArgs>("code_exec"),
+            tool_schema::<crate::builtin_tools::code_exec::CodeExecArgs>("code_exec"),
         );
         reg(
             tools,
             "code_check",
             crate::builtin_tools::code_check::CodeCheckTool::DESCRIPTION,
             <crate::builtin_tools::code_check::CodeCheckTool as AlephTool>::MAX_RESULT_TOKENS,
-            schema::<crate::builtin_tools::code_check::CodeCheckArgs>("code_check"),
+            tool_schema::<crate::builtin_tools::code_check::CodeCheckArgs>("code_check"),
         );
         reg(
             tools,
             "pdf_generate",
             PdfGenerateTool::DESCRIPTION,
             <PdfGenerateTool as AlephTool>::MAX_RESULT_TOKENS,
-            schema::<crate::builtin_tools::pdf_generate::PdfGenerateArgs>("pdf_generate"),
+            tool_schema::<crate::builtin_tools::pdf_generate::PdfGenerateArgs>("pdf_generate"),
         );
         reg(
             tools,
@@ -143,42 +164,44 @@ impl BuiltinToolRegistry {
             "skill_read",
             SkillReadTool::DESCRIPTION,
             <SkillReadTool as AlephTool>::MAX_RESULT_TOKENS,
-            schema::<crate::builtin_tools::skill_reader::ReadSkillArgs>("skill_read"),
+            tool_schema::<crate::builtin_tools::skill_reader::ReadSkillArgs>("skill_read"),
         );
         reg(
             tools,
             "read_config_guide",
             ReadConfigGuideTool::DESCRIPTION,
             <ReadConfigGuideTool as AlephTool>::MAX_RESULT_TOKENS,
-            schema::<crate::builtin_tools::config_guide::ReadConfigGuideArgs>("read_config_guide"),
+            tool_schema::<crate::builtin_tools::config_guide::ReadConfigGuideArgs>(
+                "read_config_guide",
+            ),
         );
         reg(
             tools,
             "ctx_search",
             CtxSearchTool::DESCRIPTION,
             <CtxSearchTool as AlephTool>::MAX_RESULT_TOKENS,
-            schema::<crate::builtin_tools::ctx_search::CtxSearchArgs>("ctx_search"),
+            tool_schema::<crate::builtin_tools::ctx_search::CtxSearchArgs>("ctx_search"),
         );
         reg(
             tools,
             "recall_events",
             RecallEventsTool::DESCRIPTION,
             <RecallEventsTool as AlephTool>::MAX_RESULT_TOKENS,
-            schema::<crate::builtin_tools::recall_events::RecallEventsArgs>("recall_events"),
+            tool_schema::<crate::builtin_tools::recall_events::RecallEventsArgs>("recall_events"),
         );
         reg(
             tools,
             "session_decompress",
             SessionDecompressTool::DESCRIPTION,
             <SessionDecompressTool as AlephTool>::MAX_RESULT_TOKENS,
-            schema::<crate::builtin_tools::SessionDecompressArgs>("session_decompress"),
+            tool_schema::<crate::builtin_tools::SessionDecompressArgs>("session_decompress"),
         );
         reg(
             tools,
             "self_manage",
             SelfManageTool::DESCRIPTION,
             <SelfManageTool as AlephTool>::MAX_RESULT_TOKENS,
-            schema::<crate::builtin_tools::self_manage::SelfManageArgs>("self_manage"),
+            tool_schema::<crate::builtin_tools::self_manage::SelfManageArgs>("self_manage"),
         );
         // Always-on: the hook registry it reads is the process-global
         // extension manager, so there is no service dependency to wait for.
@@ -190,7 +213,7 @@ impl BuiltinToolRegistry {
             "hooks_manage",
             crate::builtin_tools::HooksManageTool::DESCRIPTION,
             <crate::builtin_tools::HooksManageTool as AlephTool>::MAX_RESULT_TOKENS,
-            schema::<crate::builtin_tools::hooks_manage::HooksManageArgs>("hooks_manage"),
+            tool_schema::<crate::builtin_tools::hooks_manage::HooksManageArgs>("hooks_manage"),
         );
         // Same argument as hooks_manage: the answer to "why isn't my plugin
         // working?" is a listing, and an absent tool cannot give it. Plugins
@@ -200,12 +223,12 @@ impl BuiltinToolRegistry {
             "plugin_manage",
             crate::builtin_tools::PluginManageTool::DESCRIPTION,
             <crate::builtin_tools::PluginManageTool as AlephTool>::MAX_RESULT_TOKENS,
-            schema::<crate::builtin_tools::plugin_manage::PluginManageArgs>("plugin_manage"),
+            tool_schema::<crate::builtin_tools::plugin_manage::PluginManageArgs>("plugin_manage"),
         );
         reg(tools, "context_plugin",
             crate::builtin_tools::context_plugin::ContextPluginTool::DESCRIPTION,
             <crate::builtin_tools::context_plugin::ContextPluginTool as AlephTool>::MAX_RESULT_TOKENS,
-            schema::<crate::builtin_tools::context_plugin::ContextPluginArgs>("context_plugin"));
+            tool_schema::<crate::builtin_tools::context_plugin::ContextPluginArgs>("context_plugin"));
         // Always-on: the ledger it reads is a process global installed at boot,
         // so this tool has no service dependency to wait for. It must be
         // reachable even when the ledger is NOT installed — it then says so
@@ -216,119 +239,119 @@ impl BuiltinToolRegistry {
             "agent_identity",
             crate::builtin_tools::agent_identity::AgentIdentityTool::DESCRIPTION,
             <crate::builtin_tools::agent_identity::AgentIdentityTool as AlephTool>::MAX_RESULT_TOKENS,
-            schema::<crate::builtin_tools::agent_identity::AgentIdentityArgs>("agent_identity"),
+            tool_schema::<crate::builtin_tools::agent_identity::AgentIdentityArgs>("agent_identity"),
         );
         reg(
             tools,
             "self_config",
             crate::builtin_tools::self_config::SelfConfigTool::DESCRIPTION,
             <crate::builtin_tools::self_config::SelfConfigTool as AlephTool>::MAX_RESULT_TOKENS,
-            schema::<crate::builtin_tools::self_config::SelfConfigArgs>("self_config"),
+            tool_schema::<crate::builtin_tools::self_config::SelfConfigArgs>("self_config"),
         );
         reg(
             tools,
             "list_models",
             crate::builtin_tools::list_models::ListModelsTool::DESCRIPTION,
             <crate::builtin_tools::list_models::ListModelsTool as AlephTool>::MAX_RESULT_TOKENS,
-            schema::<crate::builtin_tools::list_models::ListModelsArgs>("list_models"),
+            tool_schema::<crate::builtin_tools::list_models::ListModelsArgs>("list_models"),
         );
         reg(
             tools,
             "runtime_manage",
             crate::builtin_tools::runtime_manage::RuntimeManageTool::DESCRIPTION,
             <crate::builtin_tools::runtime_manage::RuntimeManageTool as AlephTool>::MAX_RESULT_TOKENS,
-            schema::<crate::builtin_tools::runtime_manage::RuntimeManageArgs>("runtime_manage"),
+            tool_schema::<crate::builtin_tools::runtime_manage::RuntimeManageArgs>("runtime_manage"),
         );
         reg(
             tools,
             "desktop",
             DesktopTool::DESCRIPTION,
             <DesktopTool as AlephTool>::MAX_RESULT_TOKENS,
-            schema::<crate::builtin_tools::desktop::DesktopArgs>("desktop"),
+            tool_schema::<crate::builtin_tools::desktop::DesktopArgs>("desktop"),
         );
         reg(
             tools,
             "pim",
             PimTool::DESCRIPTION,
             <PimTool as AlephTool>::MAX_RESULT_TOKENS,
-            schema::<crate::builtin_tools::pim::PimArgs>("pim"),
+            tool_schema::<crate::builtin_tools::pim::PimArgs>("pim"),
         );
         reg(
             tools,
             "system",
             SystemTool::DESCRIPTION,
             <SystemTool as AlephTool>::MAX_RESULT_TOKENS,
-            schema::<crate::builtin_tools::system_tool::SystemArgs>("system"),
+            tool_schema::<crate::builtin_tools::system_tool::SystemArgs>("system"),
         );
         reg(
             tools,
             "automation",
             AutomationTool::DESCRIPTION,
             <AutomationTool as AlephTool>::MAX_RESULT_TOKENS,
-            schema::<crate::builtin_tools::automation_tool::AutomationArgs>("automation"),
+            tool_schema::<crate::builtin_tools::automation_tool::AutomationArgs>("automation"),
         );
         reg(
             tools,
             "permission",
             PermissionTool::DESCRIPTION,
             <PermissionTool as AlephTool>::MAX_RESULT_TOKENS,
-            schema::<crate::builtin_tools::permission_tool::PermissionArgs>("permission"),
+            tool_schema::<crate::builtin_tools::permission_tool::PermissionArgs>("permission"),
         );
         reg(
             tools,
             "media",
             MediaTool::DESCRIPTION,
             <MediaTool as AlephTool>::MAX_RESULT_TOKENS,
-            schema::<crate::builtin_tools::media_tool::MediaArgs>("media"),
+            tool_schema::<crate::builtin_tools::media_tool::MediaArgs>("media"),
         );
         reg(
             tools,
             "scratchpad",
             ScratchpadTool::DESCRIPTION,
             <ScratchpadTool as AlephTool>::MAX_RESULT_TOKENS,
-            schema::<crate::builtin_tools::scratchpad::ScratchpadArgs>("scratchpad"),
+            tool_schema::<crate::builtin_tools::scratchpad::ScratchpadArgs>("scratchpad"),
         );
         reg(
             tools,
             "goal",
             crate::builtin_tools::GoalTool::DESCRIPTION,
             <crate::builtin_tools::GoalTool as AlephTool>::MAX_RESULT_TOKENS,
-            schema::<crate::builtin_tools::goal::GoalArgs>("goal"),
+            tool_schema::<crate::builtin_tools::goal::GoalArgs>("goal"),
         );
         reg(
             tools,
             "loop",
             crate::builtin_tools::LoopTool::DESCRIPTION,
             <crate::builtin_tools::LoopTool as AlephTool>::MAX_RESULT_TOKENS,
-            schema::<crate::builtin_tools::loop_manage::LoopArgs>("loop"),
+            tool_schema::<crate::builtin_tools::loop_manage::LoopArgs>("loop"),
         );
         reg(
             tools,
             "loop_graph",
             crate::builtin_tools::LoopGraphTool::DESCRIPTION,
             <crate::builtin_tools::LoopGraphTool as AlephTool>::MAX_RESULT_TOKENS,
-            schema::<crate::builtin_tools::loop_graph_manage::LoopGraphArgs>("loop_graph"),
+            tool_schema::<crate::builtin_tools::loop_graph_manage::LoopGraphArgs>("loop_graph"),
         );
         reg(
             tools,
             "strategy",
             crate::builtin_tools::StrategyTool::DESCRIPTION,
             <crate::builtin_tools::StrategyTool as AlephTool>::MAX_RESULT_TOKENS,
-            schema::<crate::builtin_tools::strategy_manage::StrategyArgs>("strategy"),
+            tool_schema::<crate::builtin_tools::strategy_manage::StrategyArgs>("strategy"),
         );
         reg(
             tools,
             "media_send",
             crate::builtin_tools::media_send::MediaSendTool::DESCRIPTION,
             <crate::builtin_tools::media_send::MediaSendTool as AlephTool>::MAX_RESULT_TOKENS,
-            schema::<crate::builtin_tools::media_send::MediaSendArgs>("media_send"),
+            tool_schema::<crate::builtin_tools::media_send::MediaSendArgs>("media_send"),
         );
         reg(
             tools,
             "artifact_publish",
             crate::builtin_tools::artifact_publish::ArtifactPublishTool::DESCRIPTION,
             <crate::builtin_tools::artifact_publish::ArtifactPublishTool as AlephTool>::MAX_RESULT_TOKENS,
-            schema::<crate::builtin_tools::artifact_publish::ArtifactPublishArgs>(
+            tool_schema::<crate::builtin_tools::artifact_publish::ArtifactPublishArgs>(
                 "artifact_publish",
             ),
         );

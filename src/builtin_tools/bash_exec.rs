@@ -69,9 +69,15 @@ pub struct BashExecArgs {
     /// Working directory (optional, defaults to session workspace root)
     #[serde(default)]
     pub working_dir: Option<String>,
-    /// Timeout in seconds (optional, defaults to 60). Accepts the legacy
-    /// `timeout` spelling.
+    /// Timeout in seconds (optional, defaults to 60).
+    ///
+    /// The wire name is `timeout` — the spelling the description teaches —
+    /// because schemars is blind to serde aliases, so a schema naming
+    /// `timeout_seconds` would contradict the prose the model reads. Serde
+    /// keeps accepting the canonical `timeout_seconds` spelling too, so saved
+    /// calls written against either name still parse.
     #[serde(default, alias = "timeout")]
+    #[schemars(rename = "timeout")]
     pub timeout_seconds: Option<u64>,
     /// Request elevated network access for this call (sandbox approval-gated).
     #[serde(default)]
@@ -1135,6 +1141,26 @@ mod tests {
         let b: BashExecArgs =
             serde_json::from_value(serde_json::json!({ "cmd": "true", "timeout": 30 })).unwrap();
         assert_eq!(b.timeout_seconds, Some(30));
+    }
+
+    /// The description teaches `timeout`, so the schema the model is shown
+    /// must declare that name: a schema naming a different spelling hands the
+    /// model a surface its own instructions never mention. Schemars is blind
+    /// to serde aliases, so the rename lives on the schema side.
+    #[test]
+    fn bash_exec_schema_declares_the_timeout_spelling_the_description_teaches() {
+        let schema = serde_json::to_value(schemars::schema_for!(BashExecArgs)).unwrap();
+        let props = schema["properties"]
+            .as_object()
+            .expect("BashExecArgs must render an object schema");
+        assert!(
+            props.contains_key("timeout"),
+            "the schema must declare the `timeout` parameter the description teaches"
+        );
+        assert!(
+            !props.contains_key("timeout_seconds"),
+            "the schema must not declare `timeout_seconds`: the description never names it"
+        );
     }
 
     /// R9 (Intelligence Lives in the Prompt): the bash description is

@@ -13,7 +13,7 @@ use crate::error::AlephError;
 use crate::sync_primitives::Arc;
 use std::collections::HashMap;
 
-use tracing::info;
+use tracing::{info, warn};
 
 use super::{BuiltinToolConfig, BuiltinToolRegistry};
 use crate::builtin_tools::browser_tools::{
@@ -674,6 +674,18 @@ impl BuiltinToolRegistry {
         browser_profile_manager.spawn_idle_reaper(60);
         let browser_profile_tool = BrowserProfileTool::new(browser_profile_manager);
 
+        // Retrieval tools exist only in Tools / Hybrid mode. In Context mode the
+        // model receives memory through auto-injected context messages, so the
+        // retrieval tools are not constructed at all: a constructed tool still
+        // answers dispatch calls, which would serve retrieval the model was
+        // never given a schema for. Gating only the schema registration left
+        // the tools reachable behind a parameterless catalog entry.
+        let expose_retrieval_tools = matches!(
+            config.injection_mode,
+            crate::config::types::memory::MemoryInjectionMode::Tools
+                | crate::config::types::memory::MemoryInjectionMode::Hybrid,
+        );
+
         // Create memory tools if backend and embedder are provided
         let (
             memory_search_tool,
@@ -681,7 +693,9 @@ impl BuiltinToolRegistry {
             memory_explore_tool,
             memory_workspace_handle,
             memory_session_key_handle,
-        ) = if let (Some(ref db), Some(ref embedder), Some(ref raw_store)) = (
+        ) = if !expose_retrieval_tools {
+            (None, None, None, None, None)
+        } else if let (Some(ref db), Some(ref embedder), Some(ref raw_store)) = (
             &config.memory_db,
             &config.embedder,
             &config.raw_memory_store,
@@ -757,13 +771,18 @@ impl BuiltinToolRegistry {
             (None, None, None, None, None)
         };
 
-        // Create memory timeline tool if StateDatabase is provided
-        let timeline_tool = config.state_db.as_ref().map(|sdb| {
-            let traveler = Arc::new(crate::memory::events::traveler::MemoryTimeTraveler::new(
-                Arc::clone(sdb),
-            ));
-            crate::builtin_tools::MemoryTimelineTool::new(traveler)
-        });
+        // Create memory timeline tool if StateDatabase is provided.
+        // The timeline is a retrieval surface, so it follows the retrieval gate.
+        let timeline_tool = if expose_retrieval_tools {
+            config.state_db.as_ref().map(|sdb| {
+                let traveler = Arc::new(crate::memory::events::traveler::MemoryTimeTraveler::new(
+                    Arc::clone(sdb),
+                ));
+                crate::builtin_tools::MemoryTimelineTool::new(traveler)
+            })
+        } else {
+            None
+        };
 
         // Create image generation tool if generation registry is provided
         let image_generate_tool = config.generation_registry.as_ref().map(|registry| {
@@ -786,14 +805,20 @@ impl BuiltinToolRegistry {
             crate::builtin_tools::generation::SpeechGenerateTool::new(Arc::clone(registry))
         });
 
-        // Build wiki tools (Spec 5 Task 12)
-        let note_orient_tool = config.orientation.as_ref().map(|wiki| {
-            use crate::memory::notes::orientation::types::TokenBudget;
-            crate::builtin_tools::note_orient::NoteOrientTool::new(
-                Arc::clone(wiki),
-                TokenBudget::default(),
-            )
-        });
+        // Build wiki tools (Spec 5 Task 12).
+        // `note_orient` is an on-demand retrieval surface: in Context mode the
+        // orientation is injected automatically, so the tool is not built.
+        let note_orient_tool = if expose_retrieval_tools {
+            config.orientation.as_ref().map(|wiki| {
+                use crate::memory::notes::orientation::types::TokenBudget;
+                crate::builtin_tools::note_orient::NoteOrientTool::new(
+                    Arc::clone(wiki),
+                    TokenBudget::default(),
+                )
+            })
+        } else {
+            None
+        };
 
         let note_schema_tool = config
             .note_memory_dir
@@ -855,8 +880,13 @@ impl BuiltinToolRegistry {
                 ut = ut.with_parameters_schema(td.parameters.clone());
                 tools.insert(td.name.clone(), ut);
             }
+            // The count comes from the collection itself: a hand-written number
+            // drifts the moment a tool is added or removed.
+            info!(
+                "Registered {} browser tools in BuiltinToolRegistry",
+                browser_tool_defs.len()
+            );
         }
-        info!("Registered browser tools (26 tools) in BuiltinToolRegistry");
 
         // Register parameter schemas for always-available tools that are listed
         // in BUILTIN_TOOL_DEFINITIONS (so the LLM sees them) and dispatched in
@@ -900,9 +930,13 @@ impl BuiltinToolRegistry {
                 ut = ut.with_parameters_schema(td.parameters.clone());
                 tools.insert(td.name.clone(), ut);
             }
+            // The names come from the collection itself: a hand-written list
+            // drifts and can name a tool that is not registered at all.
+            let extra_names: Vec<&str> = extra_defs.iter().map(|td| td.name.as_str()).collect();
             info!(
-                "Registered schemas for apply_patch, desktop AX/SoM/locate, gateway_route, \
-                 google_meet, select_model, doctor, terminal in BuiltinToolRegistry"
+                "Registered {} additional tool schemas ({}) in BuiltinToolRegistry",
+                extra_defs.len(),
+                extra_names.join(", ")
             );
         }
 
@@ -1122,7 +1156,6 @@ impl BuiltinToolRegistry {
             &image_generate_tool,
             &vault_store_tool,
             &config,
-            config.injection_mode,
             &note_orient_tool,
             &note_schema_tool,
             &user_profile_tool,
@@ -1199,7 +1232,7 @@ impl BuiltinToolRegistry {
             note_manage_tool,
             session_complete_tool,
             memory_reflect_tool,
-        ) = Self::build_collab_session_tools(&config, &mut tools, &current_agent_id);
+        ) = Self::build_collab_session_tools(&config, &mut tools, &current_agent_id)?;
 
         Ok(Self {
             search_tool,
@@ -1509,6 +1542,47 @@ impl BuiltinToolRegistry {
             // "why isn't that in memory?" covers rung 2 of the destination ladder
             // and not just rung 1.
             .with_decision_log(Some(db.clone()))
+    }
+}
+
+/// Resolve the session store the tool constructors should build on.
+///
+/// The gateway context owns the live session store; a directly configured
+/// session manager is the next best source. When neither is present, the
+/// constructors used to build a fresh default manager inline — silently, in two
+/// places, with two different log messages. A fresh manager carries no raw
+/// memory writer and no event bus, so tools built on it behave differently
+/// from tools built on the live store. The substitution is now made in one
+/// place and logged, so the difference is visible instead of silent.
+///
+/// `purpose` names the caller in the log so the two call sites stay
+/// distinguishable.
+pub(super) fn resolve_session_manager(
+    config: &BuiltinToolConfig,
+    purpose: &str,
+) -> Option<Arc<dyn crate::gateway::session_store::SessionStore>> {
+    if let Some(ctx) = config.gateway_context.as_ref() {
+        return Some(Arc::clone(ctx.session_store()));
+    }
+    if let Some(manager) = config.session_manager.clone() {
+        return Some(manager);
+    }
+    match crate::gateway::SessionManager::with_defaults() {
+        Ok(manager) => {
+            warn!(
+                "No session store configured; falling back to a fresh default \
+                 SessionManager for {purpose}. The fallback has no raw memory \
+                 writer and no event bus, so tools built on it are not durable."
+            );
+            Some(Arc::new(manager))
+        }
+        Err(e) => {
+            warn!(
+                "Failed to create fallback SessionManager for {purpose}: {}",
+                e
+            );
+            None
+        }
     }
 }
 

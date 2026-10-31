@@ -9,7 +9,8 @@ use tokio::time::timeout;
 use crate::exec::decision::ExecApprovalRequest;
 use crate::exec::socket::ApprovalDecisionType;
 use crate::gateway::channel::{ChannelId, ConversationId, OutboundMessage};
-use crate::gateway::channel_registry::ChannelRegistry;
+use crate::gateway::channel_registry::{ChannelRegistry, QueueDisposition};
+use crate::utils::text_format::truncate_with_marker;
 
 /// The reply menu a plain-text channel prints under an approval prompt, built
 /// from the tiers the card was actually raised with.
@@ -31,6 +32,89 @@ fn plain_text_menu(allowed: &[ApprovalDecisionType]) -> String {
 }
 
 const DELIVERY_TIMEOUT_SECS: u64 = 30;
+
+/// How many characters of the reason an approval card may show.
+///
+/// The reason is authored by the gate rule or by a plugin hook
+/// (`PermissionDecision::Ask { reason }`), so its length is not ours to
+/// bound — and it rides on the same card as the summary, under a channel
+/// message limit that fails the SEND rather than trimming the text. 200
+/// chars is the summary's own budget: a card carrying a full summary and a
+/// full reason still fits every channel's limit (Telegram's is 4096).
+const MAX_REASON_CHARS: usize = 200;
+
+/// The reason as a human may read it: masked, one line, capped.
+///
+/// ONE redactor for this crate: `sandbox::exec_approval::redact_and_cap`
+/// masks secrets, collapses the text to a single line and truncates at the
+/// summary bound. A second masker here would be a second answer to "what
+/// does the user see" — and the reason is exactly where a secret leaks,
+/// because it is authored by the gate rule or by a plugin hook and can quote
+/// tool arguments verbatim.
+///
+/// The explicit cap on top is the reason's OWN budget, stated where the
+/// reason is sent instead of being inherited from the summary's bound by
+/// accident: the two are separate numbers and only this one governs the
+/// card's reason line.
+fn redacted_reason(reason: &str) -> String {
+    truncate_with_marker(
+        &crate::sandbox::exec_approval::redact_and_cap(reason),
+        MAX_REASON_CHARS,
+        "…",
+    )
+}
+
+/// Build the record request for one approval card, and the session key the
+/// record is filed under.
+///
+/// The reason is redacted and capped HERE, once, because the record is
+/// operator-visible: it is what the resolving UI renders and what the Panel
+/// lists. A secret that rides into the record is a secret in the approval
+/// log.
+///
+/// The AUDIT identity keeps the RAW reason on purpose: it is a ledger key
+/// computed by `audit_identity`, not something a human reads, and masking it
+/// before the identity is derived would change what the ledger records.
+fn build_request(
+    action: &crate::sandbox::exec_approval::ApprovalAction,
+    channel_id: &ChannelId,
+    conversation_id: &ConversationId,
+    session_key: &str,
+    originator: Option<&str>,
+) -> (ExecApprovalRequest, String) {
+    let tool_name = action.tool_name.as_str();
+    let record_session_key = if session_key.is_empty() {
+        format!("{}:{}", channel_id.as_str(), conversation_id.as_str())
+    } else {
+        session_key.to_string()
+    };
+    let request = ExecApprovalRequest {
+        id: uuid::Uuid::new_v4().to_string(),
+        // The redacted ACTION, not the bare tool name — this is the string
+        // the user reads before deciding, on every surface.
+        command: action.summary.clone(),
+        cwd: action.cwd.clone(),
+        analysis: action.analysis_for_record(),
+        // Single source for the issuing agent (`audit_identity`); the
+        // context string it also builds is redundant here — the approval
+        // card renders `command` + `reason`.
+        agent_id: crate::approval::audit_identity("tool", tool_name, action.reason.as_str()).0,
+        session_key: record_session_key.clone(),
+        reason: Some(redacted_reason(action.reason.as_str())),
+        // The human who triggered this tool call. Stamped onto the record so
+        // the channel button-callback gate refuses a resolution from anyone
+        // but them (group-chat approval-bypass fix). `None` when the run has
+        // no channel originator — the gate then no-ops.
+        originator_user_id: originator.map(str::to_string),
+        // Session-grant identity of this action: a session-level decision
+        // cascades to other pending cards of the same action.
+        grant_key: action.grant_key.clone(),
+        // What the gate decided this card may offer — the keyboard below is
+        // built from the same list, and the resolver enforces it.
+        allowed_decisions: action.allowed_decisions.clone(),
+    };
+    (request, record_session_key)
+}
 
 pub struct ChannelApprovalBridge {
     registry: Arc<ChannelRegistry>,
@@ -111,39 +195,8 @@ impl ChannelApprovalBridge {
         }
 
         let tool_name = action.tool_name.as_str();
-        let reason = action.reason.as_str();
-
-        let record_session_key = if session_key.is_empty() {
-            format!("{}:{}", channel_id.as_str(), conversation_id.as_str())
-        } else {
-            session_key.to_string()
-        };
-
-        let request = ExecApprovalRequest {
-            id: uuid::Uuid::new_v4().to_string(),
-            // The redacted ACTION, not the bare tool name — this is the string
-            // the user reads before deciding, on every surface.
-            command: action.summary.clone(),
-            cwd: action.cwd.clone(),
-            analysis: action.analysis_for_record(),
-            // Single source for the issuing agent (`audit_identity`); the
-            // context string it also builds is redundant here — the approval
-            // card renders `command` + `reason`.
-            agent_id: crate::approval::audit_identity("tool", tool_name, reason).0,
-            session_key: record_session_key.clone(),
-            reason: Some(reason.to_string()),
-            // The human who triggered this tool call. Stamped onto the record so
-            // the channel button-callback gate refuses a resolution from anyone
-            // but them (group-chat approval-bypass fix). `None` when the run has
-            // no channel originator — the gate then no-ops.
-            originator_user_id: originator.map(str::to_string),
-            // Session-grant identity of this action: a session-level decision
-            // cascades to other pending cards of the same action.
-            grant_key: action.grant_key.clone(),
-            // What the gate decided this card may offer — the keyboard below is
-            // built from the same list, and the resolver enforces it.
-            allowed_decisions: action.allowed_decisions.clone(),
-        };
+        let (request, record_session_key) =
+            build_request(action, channel_id, conversation_id, session_key, originator);
 
         let record = approval_manager.create(&request, timeout_ms);
         // `record.tool_call_id` lives on the wire and on the record but not on
@@ -163,33 +216,13 @@ impl ChannelApprovalBridge {
         // failure is best-effort: logging and continuing is right, denying the
         // caller is wrong (the Telegram / Discord user may still receive their
         // button any moment now).
-        if let Some(bus) = self.event_bus.as_ref() {
-            match bus.publish_frame(&GatewayEventFrame::ApprovalRequested {
-                approval_id: record_id.clone(),
-                session_key: record_session_key.clone(),
-                channel_id: channel_id.as_str().to_string(),
-                conversation_id: conversation_id.as_str().to_string(),
-                tool_call_id,
-            }) {
-                Ok(0) => {
-                    tracing::debug!(
-                        id = %record_id,
-                        "ApprovalRequested mirror reached no subscribers; \
-                         the channel itself is the user-facing prompt, \
-                         continuing without denial"
-                    );
-                }
-                Ok(_) => {}
-                Err(e) => {
-                    tracing::debug!(
-                        error = %e,
-                        id = %record_id,
-                        "ApprovalRequested mirror publish failed; \
-                         continuing — the channel prompt is independent"
-                    );
-                }
-            }
-        }
+        self.announce_request(
+            &record_id,
+            &record_session_key,
+            channel_id,
+            conversation_id,
+            tool_call_id,
+        );
 
         match self
             .deliver_routed(channel_id, conversation_id, action, &record_id)
@@ -209,22 +242,7 @@ impl ChannelApprovalBridge {
                     id = %record_id,
                     "Approval delivery failed — failing closed (the card never reached anyone)"
                 );
-                // Retire the just-registered entry WITHOUT stamping a Deny:
-                // resolve(Deny) would cascade a fake refusal to every other
-                // live pending card in this session with the same grant_key,
-                // and that cascade's Deny outcomes flow into the
-                // brute-force breaker as `UserRejected` (a delivery hiccup
-                // would count as the user declining). `retire_pending` is
-                // the same "remove from pending" without the cascade and
-                // without the record stamp.
-                approval_manager.retire_pending(&record_id);
-                // `Unavailable`: the prompt did not arrive, so nobody refused
-                // it. Returning `Denied` here made a transient Telegram failure
-                // stick to the intent for the rest of the session and count
-                // toward the brute-force breaker — three hiccups paused every
-                // gate in the conversation and told the model the user had
-                // declined. See `DenialLedger::record_denial`.
-                return ApprovalOutcome::Unavailable.into();
+                return self.close_undelivered(approval_manager, &record_id, &record_session_key);
             }
             None => {
                 tracing::warn!(
@@ -232,8 +250,7 @@ impl ChannelApprovalBridge {
                     id = %record_id,
                     "No channel capability for approval delivery — failing closed"
                 );
-                approval_manager.retire_pending(&record_id);
-                return ApprovalOutcome::Unavailable.into();
+                return self.close_undelivered(approval_manager, &record_id, &record_session_key);
             }
         }
 
@@ -245,28 +262,19 @@ impl ChannelApprovalBridge {
         // itself does not need the event — it learned via the user's button
         // tap or text reply. Best-effort: bus hiccups are logged and dropped,
         // mirroring the publish-request policy above.
-        if let Some(bus) = self.event_bus.as_ref() {
-            let frame = match resolved.decision {
-                Some(decision) => GatewayEventFrame::ApprovalResolved {
-                    approval_id: record_id.clone(),
-                    session_key: record_session_key.clone(),
-                    decision,
-                    resolved_by: None,
-                },
-                None => GatewayEventFrame::ApprovalExpired {
-                    approval_id: record_id.clone(),
-                    session_key: record_session_key.clone(),
-                },
-            };
-            if let Err(e) = bus.publish_frame(&frame) {
-                tracing::debug!(
-                    error = %e,
-                    id = %record_id,
-                    "approval resolution mirror publish failed; \
-                     the channel itself is the user-facing surface"
-                );
-            }
-        }
+        let frame = match resolved.decision {
+            Some(decision) => GatewayEventFrame::ApprovalResolved {
+                approval_id: record_id.clone(),
+                session_key: record_session_key.clone(),
+                decision,
+                resolved_by: None,
+            },
+            None => GatewayEventFrame::ApprovalExpired {
+                approval_id: record_id.clone(),
+                session_key: record_session_key.clone(),
+            },
+        };
+        self.publish_mirror(&record_id, &frame);
         let outcome = match resolved.decision {
             // Single decision → outcome mapping
             // (`ApprovalDecisionType::to_outcome_within`), named against the set
@@ -285,6 +293,105 @@ impl ChannelApprovalBridge {
         crate::sandbox::exec_approval::ApprovalResponse {
             outcome,
             deny_reason: resolved.deny_reason,
+        }
+    }
+
+    /// Mirror the request on the bus so surfaces that did NOT raise it (Panel
+    /// approval bell, R5 banner) learn a card is parked.
+    ///
+    /// The channel itself is the user-facing prompt — this is purely a mirror,
+    /// so a publish failure is best-effort: logging and continuing is right,
+    /// denying the caller is wrong (the Telegram / Discord user may still
+    /// receive their button any moment now).
+    fn announce_request(
+        &self,
+        record_id: &str,
+        record_session_key: &str,
+        channel_id: &ChannelId,
+        conversation_id: &ConversationId,
+        tool_call_id: Option<String>,
+    ) {
+        self.publish_mirror(
+            record_id,
+            &GatewayEventFrame::ApprovalRequested {
+                approval_id: record_id.to_string(),
+                session_key: record_session_key.to_string(),
+                channel_id: channel_id.as_str().to_string(),
+                conversation_id: conversation_id.as_str().to_string(),
+                tool_call_id,
+            },
+        );
+    }
+
+    /// End a card that never reached anyone.
+    ///
+    /// Three things happen here, in this order:
+    /// 1. The pending entry is retired WITHOUT stamping a Deny: `resolve(Deny)`
+    ///    would cascade a fake refusal to every other live pending card in this
+    ///    session with the same `grant_key`, and that cascade's Deny outcomes
+    ///    flow into the brute-force breaker as `UserRejected` (a delivery hiccup
+    ///    would count as the user declining). `retire_pending` is the same
+    ///    "remove from pending" without the cascade and without the record
+    ///    stamp.
+    /// 2. The mirror is closed. The `ApprovalRequested` frame was published
+    ///    BEFORE the delivery attempt, so every surface that mirrors it (Panel
+    ///    approval bell, R5 banner) is holding a parked card; without a
+    ///    terminal frame that card stays parked forever.
+    ///    `ApprovalExpired` is the existing variant for "ended without a
+    ///    decision" — the same one the success path publishes for a card
+    ///    nobody answered. A card that never arrived did end unanswered.
+    /// 3. The caller is told the prompt did not arrive (`Unavailable`), not
+    ///    that somebody refused it. Returning `Denied` here made a transient
+    ///    Telegram failure stick to the intent for the rest of the session and
+    ///    count toward the brute-force breaker — three hiccups paused every
+    ///    gate in the conversation and told the model the user had declined.
+    ///    See `DenialLedger::record_denial`.
+    fn close_undelivered(
+        &self,
+        approval_manager: &crate::exec::manager::ExecApprovalManager,
+        record_id: &str,
+        record_session_key: &str,
+    ) -> crate::sandbox::exec_approval::ApprovalResponse {
+        approval_manager.retire_pending(record_id);
+        self.publish_mirror(
+            record_id,
+            &GatewayEventFrame::ApprovalExpired {
+                approval_id: record_id.to_string(),
+                session_key: record_session_key.to_string(),
+            },
+        );
+        ApprovalOutcome::Unavailable.into()
+    }
+
+    /// Publish one `approval.*` mirror frame — best-effort.
+    ///
+    /// The channel itself is the user-facing prompt; the bus only mirrors it
+    /// for OTHER surfaces (Panel approval bell, R5 banner). A publish failure
+    /// is therefore logged and dropped: it must never turn into a denial (the
+    /// Telegram / Discord user may still receive their button any moment now)
+    /// and it must never block the delivery.
+    fn publish_mirror(&self, approval_id: &str, frame: &GatewayEventFrame) {
+        let Some(bus) = self.event_bus.as_ref() else {
+            return;
+        };
+        match bus.publish_frame(frame) {
+            Ok(0) => {
+                tracing::debug!(
+                    id = %approval_id,
+                    "approval mirror reached no subscribers; \
+                     the channel itself is the user-facing prompt, \
+                     continuing without denial"
+                );
+            }
+            Ok(_) => {}
+            Err(e) => {
+                tracing::debug!(
+                    error = %e,
+                    id = %approval_id,
+                    "approval mirror publish failed; \
+                     continuing — the channel prompt is independent"
+                );
+            }
         }
     }
 
@@ -325,10 +432,18 @@ impl ChannelApprovalBridge {
         action: &crate::sandbox::exec_approval::ApprovalAction,
         approval_id: &str,
     ) -> Option<bool> {
-        // Truncate `action.summary` to the same shape the manager's
-        // `display_line` uses, so the text-fallback path can never overflow
-        // a channel's message limit (Telegram's is 4096 chars; a 4 KB
-        // command summary would silently truncate or refuse to send).
+        // A belt-and-braces bound on the summary in the fallback text, so the
+        // text-fallback path can never overflow a channel's message limit
+        // (Telegram's is 4096 chars; a 4 KB command summary would silently
+        // truncate or refuse to send).
+        //
+        // Inert for every action built by `ApprovalAction`: its constructors
+        // cap the summary at 200 chars (`sandbox::exec_approval::action`), so
+        // this guard never fires for them. It stays because an
+        // `ApprovalAction` can also be built by hand, and a hand-built one is
+        // exactly what the guard is for. The number is NOT the manager's
+        // `display_line` bound — that one is 120 chars and it renders a
+        // different string (the record line), not this card.
         const MAX_SUMMARY_CHARS: usize = 1000;
         let mut summary: String = action.summary.chars().take(MAX_SUMMARY_CHARS).collect();
         if action.summary.chars().count() > MAX_SUMMARY_CHARS {
@@ -336,7 +451,11 @@ impl ChannelApprovalBridge {
         }
         let _ = approval_id; // already used by the caller for register_pending; not echoed in the fallback text
         let tool_name = action.tool_name.as_str();
-        let reason = action.reason.as_str();
+        // The reason a human reads: masked, one line, capped — the same
+        // treatment the summary gets, and the same helper. It is authored by
+        // the gate rule or by a plugin hook, so it can quote tool arguments
+        // verbatim; the raw text must not leave this function.
+        let reason = redacted_reason(action.reason.as_str());
         let channel = self.registry.get(channel_id).await?;
         let capability = {
             let ch = channel.read().await;
@@ -357,27 +476,51 @@ impl ChannelApprovalBridge {
                 "⚠️ 工具 `{tool_name}` 需要你的授权。\n```\n{summary}\n```\n{reason}\n\n{}",
                 plain_text_menu(&action.allowed_decisions)
             );
-            // Through `ChannelRegistry::send`, not the channel handle: the
-            // registry owns rate-limit retry, the durable queue and
+            // Through `ChannelRegistry::send_reported`, not the channel handle:
+            // the registry owns rate-limit retry, the durable queue and
             // per-conversation ordering (see `send_timeout_notice`). The same
             // delivery timeout the capability path uses bounds it — a hung
             // adapter send must not hold the channel read lock forever, or
             // writers (reconnect/stop) block behind it and this approval
             // waits without end.
+            //
+            // `send_reported` and not `send`: the registry PERSISTS a
+            // definitely-not-delivered message for background retry and still
+            // returns the error, so an error alone does not mean "the card
+            // never reached anyone" — the queue may be holding it. Treating a
+            // queued card as undelivered would retire the pending entry while
+            // the card is still on its way to the user, and their tap would
+            // then resolve nothing. The report says which of the two
+            // happened: only `Queued` means the queue owns the card.
             return match timeout(
                 Duration::from_secs(DELIVERY_TIMEOUT_SECS),
-                self.registry.send(
+                self.registry.send_reported(
                     channel_id,
                     OutboundMessage::text(conversation_id.as_str(), text),
                 ),
             )
             .await
             {
-                Ok(Ok(_)) => Some(true),
-                Ok(Err(e)) => {
-                    tracing::warn!(error = %e, "plain-text approval fallback send failed");
-                    Some(false)
-                }
+                Ok(report) => match report.result {
+                    Ok(_) => Some(true),
+                    Err(e) if report.queue == QueueDisposition::Queued => {
+                        tracing::warn!(
+                            error = %e,
+                            "plain-text approval fallback send failed but the card was \
+                             persisted for durable retry — treating it as delivered"
+                        );
+                        Some(true)
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            error = %e,
+                            queue = ?report.queue,
+                            "plain-text approval fallback send failed and the card was \
+                             not persisted — failing closed"
+                        );
+                        Some(false)
+                    }
+                },
                 Err(_) => {
                     tracing::warn!(
                         "plain-text approval fallback send timed out after {}s",
@@ -393,14 +536,27 @@ impl ChannelApprovalBridge {
         // the action. A literal here would be a second answer to "which tiers
         // may this card offer", and the two would drift the first time either
         // moved.
+        //
+        // The reason is the REDACTED one, like the summary: this payload is
+        // what the adapter renders for the human to read.
         let approval_req = crate::exec::approval::types::ApprovalRequest::Command(
             crate::exec::approval::types::CommandApprovalRequest {
                 command: action.summary.clone(),
                 cwd: action.cwd.clone(),
-                reason: Some(reason.to_string()),
+                reason: Some(reason),
                 allowed_decisions: action.allowed_decisions.clone(),
             },
         );
+        // This path deliberately does NOT go through `ChannelRegistry`: the
+        // capability owns the transport (the Telegram adapter sends the
+        // inline keyboard itself), so routing it through the registry would
+        // mean a second delivery for one card. The price is that this path
+        // does not inherit the registry's rate-limit retry, durable queue and
+        // per-conversation ordering the way the plain-text fallback above
+        // does. Closing that gap means changing the
+        // `ChannelApprovalCapability` trait — the capability would have to
+        // hand the registry a message instead of sending it — which is a
+        // public-API change and out of scope here.
         match timeout(
             Duration::from_secs(DELIVERY_TIMEOUT_SECS),
             capability.deliver_approval(conversation_id, &approval_req, approval_id),
@@ -481,8 +637,9 @@ mod tests {
     use crate::exec::manager::ExecApprovalManager;
     use crate::exec::socket::ApprovalDecisionType;
     use crate::gateway::channel::{
-        Channel, ChannelCapabilities, ChannelId, ChannelInfo, ChannelResult, ChannelState,
-        ChannelStatus, ConversationId, MessageId, OutboundMessage, SendOperation, SendResult,
+        Channel, ChannelCapabilities, ChannelError, ChannelId, ChannelInfo, ChannelResult,
+        ChannelState, ChannelStatus, ConversationId, MessageId, OutboundMessage, SendOperation,
+        SendResult,
     };
     use crate::gateway::channel_approval::{
         ApprovalAction as CapAction, AuthorizationResult, PendingApproval, RenderedApproval,
@@ -499,12 +656,17 @@ mod tests {
     /// straight into `manager.resolve` to simulate a button tap.
     struct StubCapability {
         last_approval_id: Arc<Mutex<Option<String>>>,
+        /// The reason the bridge handed to the adapter — what a human would
+        /// have read. Captured so a test can assert on the OUTBOUND payload
+        /// instead of on the bridge's internals.
+        last_reason: Arc<Mutex<Option<String>>>,
     }
 
     impl StubCapability {
         fn new() -> Self {
             Self {
                 last_approval_id: Arc::new(Mutex::new(None)),
+                last_reason: Arc::new(Mutex::new(None)),
             }
         }
     }
@@ -517,10 +679,15 @@ mod tests {
             _request: &crate::exec::approval::types::ApprovalRequest,
             approval_id: &str,
         ) -> ChannelResult<PendingApproval> {
-            *self.last_approval_id.lock().unwrap() = Some(approval_id.to_string());
-            let stub_command = match _request {
-                crate::exec::approval::types::ApprovalRequest::Command(c) => c.command.clone(),
+            let (stub_command, stub_reason) = match _request {
+                crate::exec::approval::types::ApprovalRequest::Command(c) => {
+                    (c.command.clone(), c.reason.clone())
+                }
             };
+            // The reason is captured BEFORE the id: a test that waits for the
+            // id is then guaranteed to see the reason too.
+            *self.last_reason.lock().unwrap() = stub_reason;
+            *self.last_approval_id.lock().unwrap() = Some(approval_id.to_string());
             Ok(PendingApproval {
                 approval_id: approval_id.to_string(),
                 request: crate::exec::approval::types::ApprovalRequest::Command(
