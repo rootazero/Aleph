@@ -793,7 +793,17 @@ impl ExecApprovalManager {
             // `tokio::spawn` requires a runtime context — tests with no
             // audit log installed are the common case and must not panic
             // trying to spawn.
-            if crate::security::audit::global().is_some() {
+            //
+            // The runtime guard is the OTHER half of that promise: the audit
+            // log says the audit hook is wanted, not that a Tokio reactor is
+            // on this thread. `resolve`/`resolve_with_reason` are synchronous
+            // `pub` functions, so a sync caller with the audit log installed
+            // would panic with "there is no reactor running" inside a
+            // security-boundary resolve path. Every production caller today
+            // is async, but the guard is one condition.
+            if crate::security::audit::global().is_some()
+                && tokio::runtime::Handle::try_current().is_ok()
+            {
                 let label = match decision {
                     ApprovalDecisionType::AllowOnce => "allow_once",
                     ApprovalDecisionType::AllowSession => "allow_session",
@@ -917,6 +927,15 @@ impl ExecApprovalManager {
                 // The reason rides along: a sibling refused by cascade must
                 // reach the model with the same instruction the answered card
                 // produced, or two identical calls get two different stories.
+                //
+                // `decision` was clamped to the ADDRESSED card's set. A sibling
+                // may have been raised with a narrower ceiling (an
+                // operator-tier card offering the persistent tier parked
+                // beside an ordinary card at the session ceiling), so the
+                // cascade re-clamps to the sibling's own set: the record must
+                // not state a tier its card never offered. A denial is
+                // unaffected — clamping only narrows.
+                let decision = Self::clamp_decision(decision, &entry.record.allowed_decisions);
                 Self::resolve_entry(entry, decision, resolved_by.clone(), deny_reason.clone());
                 debug!(
                     id = %cascade_id,
@@ -1110,6 +1129,17 @@ impl ExecApprovalManager {
                 resolved_by,
                 deny_reason,
             );
+            // A resolved session invalidates the positional snapshot it came
+            // from: the positions shift with every resolve, so the snapshot is
+            // stale the moment the card is answered, and the next ambiguous
+            // reply re-lists (and re-snapshots) instead of guessing. Leaving
+            // it behind would grow this map by one `Vec` per session that ever
+            // hit an ambiguous listing — and unlike `pending`, nothing sweeps
+            // it. Lock order: `pending` (held) → listings, as above.
+            self.session_listings
+                .write()
+                .unwrap_or_else(|e| e.into_inner())
+                .remove(session_key);
             SessionResolveOutcome::Resolved { decision, summary }
         } else {
             SessionResolveOutcome::NothingPending
@@ -2542,6 +2572,32 @@ mod tests {
             cascaded.decision,
             Some(ApprovalDecisionType::AllowSession),
             "the identical pending card must inherit the session grant"
+        );
+    }
+
+    /// A cascade must not widen a sibling card: the decision was clamped to
+    /// the ANSWERED card's tiers, and a sibling may have been raised with a
+    /// narrower ceiling (an operator-tier card offering the persistent tier
+    /// parked beside an ordinary card at the session ceiling). The sibling's
+    /// own record must state a tier its card offered.
+    #[tokio::test]
+    async fn a_cascade_never_widens_a_sibling_beyond_its_own_ceiling() {
+        let manager = ExecApprovalManager::new();
+        let mut wide = keyed_request("w-a", "s1", Some("k1"));
+        wide.allowed_decisions = crate::exec::allowed_decisions::with_persistent();
+        let mut narrow = keyed_request("n-a", "s1", Some("k1"));
+        narrow.allowed_decisions = crate::exec::allowed_decisions::session_max();
+        let (id_wide, _rx_wide, _t_wide) = manager.register_pending(manager.create(&wide, 60_000));
+        let (id_narrow, rx_narrow, t_narrow) =
+            manager.register_pending(manager.create(&narrow, 60_000));
+
+        assert!(manager.resolve(&id_wide, ApprovalDecisionType::AllowAlways, None));
+
+        let cascaded = manager.await_registered(id_narrow, rx_narrow, t_narrow).await;
+        assert_eq!(
+            cascaded.decision,
+            Some(ApprovalDecisionType::AllowSession),
+            "the sibling offered no persistent tier, so the cascade must not hand it one"
         );
     }
 
