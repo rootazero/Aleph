@@ -2,7 +2,8 @@
 # Capability Core Next-Phase Design: Terminal Source-Owned Lifecycle Boundary
 
 日期 / Date: 2026-10-31
-状态 / Status: 待下一会话 architecture/design approval
+状态 / Status: Approved for the bounded implementation described here; approval recorded from the 2026-10-31 implementation request.
+状态说明：2026-10-31 用户实施指令明确批准本文与对应 implementation plan；授权仅覆盖本文件定义的 Terminal source-owned lifecycle boundary。
 
 ## Intent / 意图
 
@@ -118,9 +119,9 @@ When live apply changes the gate to disabled, the source lifecycle path must rev
 
 ## Approval boundary / approval 边界
 
-This document is a design proposal for the next session. It requires explicit approval before production Rust, tests, configuration wiring, or implementation skill invocation. The implementation plan below must remain subordinate to this design.
+The 2026-10-31 implementation request explicitly approves this design and `docs/superpowers/plans/2026-10-31-capability-core-terminal-lifecycle-plan.md`. This approval covers only the bounded Terminal lifecycle implementation; the plan remains subordinate to this design and all deferred boundaries remain in force.
 
-本文是下一会话的 design proposal。生产 Rust、测试、配置 wiring 或 implementation skill invocation 前必须得到明确批准。下面的 implementation plan 必须从属于本文。
+2026-10-31 用户实施指令明确批准本文与 `docs/superpowers/plans/2026-10-31-capability-core-terminal-lifecycle-plan.md`。本授权仅覆盖受限 Terminal lifecycle 实施；plan 仍从属于本文，所有 deferred boundary 继续有效。
 
 ## Explicit non-actions / 明确不做
 
