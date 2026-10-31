@@ -418,10 +418,8 @@ MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQ...
     #[test]
     #[serial_test::serial(exec_operator_patterns)]
     fn an_operator_replacement_is_emitted_verbatim() {
-        let (installed, rejected) = install_operator_patterns([(
-            r"OPERATOR_SECRET_\d+",
-            "***$REDACTED***",
-        )]);
+        let (installed, rejected) =
+            install_operator_patterns([(r"OPERATOR_SECRET_\d+", "***$REDACTED***")]);
         assert_eq!(installed, 1, "the pattern installs: {rejected:?}");
         assert!(rejected.is_empty(), "the pattern is valid: {rejected:?}");
 

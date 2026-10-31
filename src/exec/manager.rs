@@ -2593,7 +2593,9 @@ mod tests {
 
         assert!(manager.resolve(&id_wide, ApprovalDecisionType::AllowAlways, None));
 
-        let cascaded = manager.await_registered(id_narrow, rx_narrow, t_narrow).await;
+        let cascaded = manager
+            .await_registered(id_narrow, rx_narrow, t_narrow)
+            .await;
         assert_eq!(
             cascaded.decision,
             Some(ApprovalDecisionType::AllowSession),
