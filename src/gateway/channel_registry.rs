@@ -25,6 +25,7 @@
 //! ```
 
 pub(crate) mod binding;
+pub(crate) mod capability;
 #[cfg(test)]
 mod resource_matrix;
 #[cfg(test)]
@@ -85,6 +86,7 @@ enum ChannelRegistration {
 struct BoundChannelRegistration {
     source: Arc<()>,
     entry_revision: u64,
+    descriptor_revision: u64,
     contract: ChannelLifecycleContract,
     descriptor: CapabilityDescriptor,
     descriptor_fingerprint: [u8; 32],
@@ -347,9 +349,13 @@ pub struct ChannelRegistry {
     /// This is a synchronization boundary only; channel maps remain the sole
     /// instance authority and desired_state remains the sole intent authority.
     lifecycle_sync: AsyncMutex<()>,
+    /// Serializes source publication reservations across retirement and commit.
+    source_publication_sync: AsyncMutex<()>,
     /// Publication revision for the channel source. It advances only after a
     /// registration or unregistration is committed to `channels`.
     source_revision: AtomicU64,
+    /// Publication revision for the source-owned bound descriptor projection.
+    descriptor_revision: AtomicU64,
     /// Per-channel *intent* (see [`DesiredChannelState`]). Written only by the
     /// lifecycle methods on this type, read by the health monitor.
     desired_state: RwLock<HashMap<ChannelId, DesiredChannelState>>,
@@ -376,7 +382,9 @@ impl ChannelRegistry {
                 Arc::new(ChannelSourceGuard { channels }),
             )),
             lifecycle_sync: AsyncMutex::new(()),
+            source_publication_sync: AsyncMutex::new(()),
             source_revision: AtomicU64::new(0),
+            descriptor_revision: AtomicU64::new(0),
             desired_state: RwLock::new(HashMap::new()),
         }
     }
@@ -437,6 +445,10 @@ impl ChannelRegistry {
     /// `handlers::channel::create_channel_from_config`.
     #[allow(dead_code)]
     pub async fn create_channel(&self, config: ChannelConfig) -> ChannelResult<ChannelId> {
+        let _source_publication = self.source_publication_sync.lock().await;
+        if let Err(error) = self.next_bound_revision() {
+            return Err(ChannelError::Internal(error.to_string()));
+        }
         let config_id = ChannelId::new(&config.id);
         let operation = match self.channels.read().await.get(&config_id).cloned() {
             Some(entry) => Some((
@@ -523,10 +535,13 @@ impl ChannelRegistry {
         self.webhook_mounts.unmount_channel(&channel_id).await;
 
         let mut channels = self.channels.write().await;
-        // Stamp the publication while the map is locked: the mount built from
-        // this entry later carries the stamp, and dispatch compares it against
-        // this very entry.
-        let publication_revision = self.advance_source_revision();
+        let mut desired = self.desired_state.write().await;
+        // Stamp the publication while the map and intent are locked together:
+        // the mount built from this entry later carries the stamp, and dispatch
+        // compares it against this very entry.
+        let publication_revision = self
+            .try_advance_source_revision()
+            .map_err(|error| ChannelError::Internal(error.to_string()))?;
         channels.insert(
             channel_id.clone(),
             Arc::new(ChannelRegistrationEntry {
@@ -538,7 +553,6 @@ impl ChannelRegistry {
                 drained: tokio::sync::Notify::new(),
             }),
         );
-        drop(channels);
 
         // Preserve the configured boot intent: a successful replacement is
         // selected by `start_all` only when its config explicitly enables it.
@@ -547,7 +561,9 @@ impl ChannelRegistry {
         } else {
             DesiredChannelState::Stopped
         };
-        self.set_desired(&channel_id, boot_intent).await;
+        desired.insert(channel_id.clone(), boot_intent);
+        drop(desired);
+        drop(channels);
 
         if let Some((entry, marker)) = &operation {
             self.finish_legacy_operation(entry, marker).await;
@@ -590,7 +606,12 @@ impl ChannelRegistry {
         channel: Box<dyn Channel>,
         boot_intent: DesiredChannelState,
     ) -> ChannelId {
+        let _source_publication = self.source_publication_sync.lock().await;
         let channel_id = channel.id().clone();
+        if self.next_bound_revision().is_err() {
+            warn!(channel = %channel_id, "legacy registration refused; source revision exhausted");
+            return channel_id;
+        }
         if let Err(error) = self.reject_bound_legacy_access(&channel_id).await {
             warn!(channel = %channel_id, %error, "legacy registration refused; bound incumbent retained");
             return channel_id;
@@ -634,9 +655,13 @@ impl ChannelRegistry {
         self.webhook_mounts.unmount_channel(&channel_id).await;
 
         let mut channels = self.channels.write().await;
-        // Stamped under the map lock, exactly like `create_channel`: a retained
-        // mount is refused once this id denotes a different publication.
-        let publication_revision = self.advance_source_revision();
+        let mut desired = self.desired_state.write().await;
+        // Stamped under the map and intent locks, exactly like `create_channel`:
+        // a retained mount is refused once this id denotes a different publication.
+        let Ok(publication_revision) = self.try_advance_source_revision() else {
+            warn!(channel = %channel_id, "legacy registration refused; source revision exhausted");
+            return channel_id;
+        };
         channels.insert(
             channel_id.clone(),
             Arc::new(ChannelRegistrationEntry {
@@ -648,14 +673,12 @@ impl ChannelRegistry {
                 drained: tokio::sync::Notify::new(),
             }),
         );
-        drop(channels);
 
         // This unconditional write is intentional: replacement gets the new
         // registration's boot intent rather than inheriting the old instance's.
-        self.desired_state
-            .write()
-            .await
-            .insert(channel_id.clone(), boot_intent);
+        desired.insert(channel_id.clone(), boot_intent);
+        drop(desired);
+        drop(channels);
         info!("Registered channel: {}", channel_id);
         channel_id
     }
@@ -693,6 +716,11 @@ impl ChannelRegistry {
     /// who keeps the adapter alive while the forwarder runs).
 
     pub async fn unregister(&self, channel_id: &ChannelId) -> Option<Box<dyn Channel>> {
+        let _source_publication = self.source_publication_sync.lock().await;
+        if self.next_bound_revision().is_err() {
+            warn!(channel = %channel_id, "legacy unregistration refused; source revision exhausted");
+            return None;
+        }
         if let Err(error) = self.stop_outgoing_channel(channel_id).await {
             warn!(
                 channel = %channel_id,
@@ -706,29 +734,29 @@ impl ChannelRegistry {
         // `channel.delete` otherwise leaves an authenticated endpoint the
         // operator believes is gone.
         self.webhook_mounts.unmount_channel(channel_id).await;
-        // Drop the intent with the instance. Leaving it behind would both leak
-        // an entry per deleted channel and hand a later channel that reuses the
-        // id a `Running` intent it never asked for.
-        self.desired_state.write().await.remove(channel_id);
-
         let mut channels = self.channels.write().await;
-        if let Some(entry) = channels.remove(channel_id) {
-            self.advance_source_revision();
-            // Legacy captures retain the entry as well as its channel handle.
-            let channel_arc = Arc::try_unwrap(entry).ok()?.channel;
-            match Arc::try_unwrap(channel_arc) {
-                Ok(rw_lock) => {
-                    let channel = rw_lock.into_inner();
-                    info!("Unregistered channel: {}", channel_id);
-                    Some(channel)
-                }
-                Err(_) => {
-                    warn!("Could not unregister channel {} - still in use", channel_id);
-                    None
-                }
+        if !channels.contains_key(channel_id) {
+            return None;
+        }
+        let mut desired = self.desired_state.write().await;
+        self.try_advance_source_revision().ok()?;
+        let entry = channels.remove(channel_id).expect("channel checked above");
+        desired.remove(channel_id);
+        drop(desired);
+        drop(channels);
+
+        // Legacy captures retain the entry as well as the channel handle.
+        let channel_arc = Arc::try_unwrap(entry).ok()?.channel;
+        match Arc::try_unwrap(channel_arc) {
+            Ok(rw_lock) => {
+                let channel = rw_lock.into_inner();
+                info!("Unregistered channel: {}", channel_id);
+                Some(channel)
             }
-        } else {
-            None
+            Err(_) => {
+                warn!("Could not unregister channel {} - still in use", channel_id);
+                None
+            }
         }
     }
 
@@ -792,9 +820,22 @@ impl ChannelRegistry {
             .map_err(|_| binding::ChannelBindingError::PublicationExhausted)
     }
 
-    fn advance_source_revision(&self) -> u64 {
-        self.try_advance_source_revision()
-            .expect("channel source revision exhausted")
+    fn try_advance_descriptor_revision(&self) -> Result<u64, binding::ChannelBindingError> {
+        self.descriptor_revision
+            .try_update(
+                std::sync::atomic::Ordering::Relaxed,
+                std::sync::atomic::Ordering::Relaxed,
+                |revision| revision.checked_add(1),
+            )
+            .map(|previous| previous + 1)
+            .map_err(|_| binding::ChannelBindingError::DescriptorPublicationExhausted)
+    }
+
+    fn next_descriptor_revision(&self) -> Result<u64, binding::ChannelBindingError> {
+        self.descriptor_revision
+            .load(std::sync::atomic::Ordering::Relaxed)
+            .checked_add(1)
+            .ok_or(binding::ChannelBindingError::DescriptorPublicationExhausted)
     }
 
     fn prepare_bound_entry(
@@ -803,7 +844,8 @@ impl ChannelRegistry {
         contract: ChannelLifecycleContract,
         ownership: Arc<OwnershipTree>,
         initial: ChannelInitialState,
-        revision: u64,
+        source_revision: u64,
+        descriptor_revision: u64,
     ) -> Result<Arc<ChannelRegistrationEntry>, ChannelBindingError> {
         let channel_id = channel.id().clone();
         if channel_id.as_str().is_empty() {
@@ -830,7 +872,7 @@ impl ChannelRegistry {
             },
             kind: CapabilityKind::Resource,
             schema: contract.schema,
-            revision: CapabilityRevision(revision),
+            revision: CapabilityRevision(descriptor_revision),
             owner: contract.owner.clone(),
             lifetime: contract.lifetime,
             visibility: contract.visibility.clone(),
@@ -844,7 +886,8 @@ impl ChannelRegistry {
             drained: tokio::sync::Notify::new(),
             registration: ChannelRegistration::Bound(Box::new(BoundChannelRegistration {
                 source: self.source.clone(),
-                entry_revision: revision,
+                entry_revision: source_revision,
+                descriptor_revision,
                 descriptor_fingerprint: canonical_descriptor_fingerprint(&descriptor),
                 descriptor,
                 contract,
@@ -862,22 +905,43 @@ impl ChannelRegistry {
         ownership: Arc<OwnershipTree>,
         initial: ChannelInitialState,
     ) -> Result<ChannelId, ChannelBindingError> {
+        let _source_publication = self.source_publication_sync.lock().await;
         let _lifecycle = self.lifecycle_sync.lock().await;
         let channel_id = channel.id().clone();
         let mut channels = self.channels.write().await;
         if channels.contains_key(&channel_id) {
             return Err(ChannelBindingError::Busy);
         }
-        let revision = self
+        let source_revision = self
             .source_revision
             .load(std::sync::atomic::Ordering::Relaxed)
             .checked_add(1)
             .ok_or(ChannelBindingError::PublicationExhausted)?;
-        let entry = self.prepare_bound_entry(channel, contract, ownership, initial, revision)?;
+        let descriptor_revision = self.next_descriptor_revision()?;
+        let mut entry = self.prepare_bound_entry(
+            channel,
+            contract,
+            ownership,
+            initial,
+            source_revision,
+            descriptor_revision,
+        )?;
         // Acquire every publication lock before the first write: cancellation
         // cannot leave a half-published tuple or mismatched desired intent.
         let mut desired = self.desired_state.write().await;
-        self.try_advance_source_revision()?;
+        let source_revision = self.try_advance_source_revision()?;
+        let descriptor_revision = self.try_advance_descriptor_revision()?;
+        let bound = match &mut Arc::get_mut(&mut entry)
+            .ok_or(ChannelBindingError::Busy)?
+            .registration
+        {
+            ChannelRegistration::Bound(bound) => bound,
+            _ => return Err(ChannelBindingError::InvalidContract),
+        };
+        bound.entry_revision = source_revision;
+        bound.descriptor_revision = descriptor_revision;
+        bound.descriptor.revision = CapabilityRevision(descriptor_revision);
+        bound.descriptor_fingerprint = canonical_descriptor_fingerprint(&bound.descriptor);
         channels.insert(channel_id.clone(), entry);
         desired.insert(channel_id.clone(), DesiredChannelState::Stopped);
         Ok(channel_id)
@@ -902,6 +966,7 @@ impl ChannelRegistry {
                 .source_revision
                 .load(std::sync::atomic::Ordering::Relaxed),
             entry_revision: bound.entry_revision,
+            descriptor_revision: bound.descriptor_revision,
             descriptor: bound.descriptor.clone(),
             descriptor_fingerprint: bound.descriptor_fingerprint,
             provider: bound.provider.clone(),
@@ -2858,39 +2923,46 @@ mod tests {
         })
         .await
         .unwrap();
-        registry
-            .register_bound_channel(
-                Box::new(WebhookChannel::new(
-                    "revision-consumer",
-                    WebhookChannelConfig {
-                        callback_url: "http://127.0.0.1:1/callback".into(),
-                        ..Default::default()
-                    },
-                )),
-                stage_b_contract(None),
-                Arc::new(OwnershipTree::new()),
-                ChannelInitialState::Cold,
-            )
-            .await
-            .unwrap();
+        let registration = tokio::spawn({
+            let registry = registry.clone();
+            async move {
+                registry
+                    .register_bound_channel(
+                        Box::new(WebhookChannel::new(
+                            "revision-consumer",
+                            WebhookChannelConfig {
+                                callback_url: "http://127.0.0.1:1/callback".into(),
+                                ..Default::default()
+                            },
+                        )),
+                        stage_b_contract(None),
+                        Arc::new(OwnershipTree::new()),
+                        ChannelInitialState::Cold,
+                    )
+                    .await
+            }
+        });
+        tokio::task::yield_now().await;
+        assert!(!registration.is_finished());
+        peer.release.send(()).unwrap();
+        assert!(matches!(
+            completion.await.unwrap(),
+            super::binding::BoundCompletion::DiscardedStale(_)
+        ));
+        assert_eq!(replacement.await.unwrap().unwrap(), id);
+        assert!(matches!(
+            registration.await.unwrap(),
+            Err(ChannelBindingError::PublicationExhausted)
+        ));
         assert_eq!(
             registry
                 .source_revision
                 .load(std::sync::atomic::Ordering::Relaxed),
             u64::MAX
         );
-        peer.release.send(()).unwrap();
-        assert!(matches!(
-            completion.await.unwrap(),
-            super::binding::BoundCompletion::DiscardedStale(_)
-        ));
-        assert!(matches!(
-            replacement.await.unwrap().unwrap_err(),
-            ChannelBindingError::PublicationExhausted
-        ));
         let after = registry.capture_bound_channel(&id).await.unwrap();
-        assert!(Arc::ptr_eq(&before.entry, &after.entry));
-        assert_eq!(after.provider.state(), ProviderState::Stopped);
+        assert!(!Arc::ptr_eq(&before.entry, &after.entry));
+        assert_eq!(after.provider.state(), ProviderState::Cold);
         assert_eq!(after.source_revision, u64::MAX);
         peer.task.await.unwrap();
         use super::binding::BoundCompletion;
@@ -4742,6 +4814,134 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn bound_publication_exposes_independent_revisions() {
+        let registry = Arc::new(ChannelRegistry::new());
+        let ownership = Arc::new(OwnershipTree::new());
+        let id = register_bound(
+            &registry,
+            &ownership,
+            Box::new(WebhookyChannel::new("revisioned", "/webhook/revisioned")),
+            ChannelInitialState::Cold,
+        )
+        .await;
+        let capture = registry.capture_bound_channel(&id).await.unwrap();
+        assert_eq!(capture.source_revision, 1);
+        assert_eq!(capture.descriptor_revision, 1);
+        assert_eq!(capture.descriptor.revision.0, capture.descriptor_revision);
+    }
+
+    #[tokio::test]
+    async fn bound_replacement_changes_publication_revisions_only() {
+        use crate::capability::ownership::VisibilityScope;
+        use crate::gateway::interfaces::webhook::WebhookChannel;
+        let (registry, id, _, tree) = real_bound("http://127.0.0.1:1/callback".into()).await;
+        registry
+            .register(Box::new(WebhookyChannel::new(
+                "revisioned-legacy",
+                "/webhook/revisioned-legacy",
+            )))
+            .await;
+        let before = registry.capture_bound_channel(&id).await.unwrap();
+        let owner_generation = tree
+            .generation(&before.descriptor.id, &VisibilityScope::default())
+            .unwrap();
+        registry
+            .replace_bound_channel(
+                &id,
+                Box::new(WebhookChannel::new(
+                    "real-bound",
+                    crate::gateway::interfaces::webhook::WebhookChannelConfig {
+                        callback_url: "http://127.0.0.1:1/replacement".into(),
+                        ..Default::default()
+                    },
+                )),
+                stage_b_contract(Some("replacement")),
+                tree.clone(),
+                ChannelInitialState::Cold,
+            )
+            .await
+            .unwrap();
+        let after = registry.capture_bound_channel(&id).await.unwrap();
+        assert_eq!(after.source_revision, 3);
+        assert_eq!(after.descriptor_revision, 2);
+        assert_eq!(after.descriptor.revision.0, after.descriptor_revision);
+        assert_eq!(before.provider_generation, 0);
+        assert_eq!(after.provider_generation, 0);
+        assert_eq!(
+            tree.generation(&after.descriptor.id, &VisibilityScope::default()),
+            Some(owner_generation)
+        );
+    }
+
+    #[tokio::test]
+    async fn bound_descriptor_publication_exhaustion_preserves_incumbent() {
+        use crate::gateway::interfaces::webhook::WebhookChannel;
+        use std::sync::atomic::Ordering;
+        let (registry, id, _, tree) = real_bound("http://127.0.0.1:1/callback".into()).await;
+        let before = registry.capture_bound_channel(&id).await.unwrap();
+        registry
+            .descriptor_revision
+            .store(u64::MAX, Ordering::Relaxed);
+        let result = registry
+            .replace_bound_channel(
+                &id,
+                Box::new(WebhookChannel::new(
+                    "real-bound",
+                    crate::gateway::interfaces::webhook::WebhookChannelConfig {
+                        callback_url: "http://127.0.0.1:1/exhausted".into(),
+                        ..Default::default()
+                    },
+                )),
+                stage_b_contract(Some("descriptor-exhausted")),
+                tree,
+                ChannelInitialState::Cold,
+            )
+            .await;
+        assert!(matches!(
+            result,
+            Err(ChannelBindingError::DescriptorPublicationExhausted)
+        ));
+        let after = registry.capture_bound_channel(&id).await.unwrap();
+        assert!(Arc::ptr_eq(&before.entry, &after.entry));
+        assert_eq!(after.source_revision, before.source_revision);
+        assert_eq!(after.descriptor_revision, before.descriptor_revision);
+        assert_eq!(after.descriptor, before.descriptor);
+    }
+
+    #[tokio::test]
+    async fn bound_descriptor_unregistration_exhaustion_preserves_incumbent() {
+        use std::sync::atomic::Ordering;
+        let (registry, id, _, _) = real_bound("http://127.0.0.1:1/callback".into()).await;
+        let before = registry.capture_bound_channel(&id).await.unwrap();
+        registry
+            .descriptor_revision
+            .store(u64::MAX, Ordering::Relaxed);
+        assert!(matches!(
+            registry.unregister_bound_channel(&id).await,
+            Err(ChannelBindingError::DescriptorPublicationExhausted)
+        ));
+        let after = registry.capture_bound_channel(&id).await.unwrap();
+        assert!(Arc::ptr_eq(&before.entry, &after.entry));
+        assert_eq!(after.source_revision, before.source_revision);
+        assert_eq!(after.descriptor_revision, before.descriptor_revision);
+    }
+
+    #[tokio::test]
+    async fn bound_source_publication_exhaustion_preserves_entry_before_removal() {
+        use std::sync::atomic::Ordering;
+        let (registry, id, _, _) = real_bound("http://127.0.0.1:1/callback".into()).await;
+        let before = registry.capture_bound_channel(&id).await.unwrap();
+        registry.source_revision.store(u64::MAX, Ordering::Relaxed);
+        assert!(matches!(
+            registry.unregister_bound_channel(&id).await,
+            Err(ChannelBindingError::PublicationExhausted)
+        ));
+        let after = registry.capture_bound_channel(&id).await.unwrap();
+        assert!(Arc::ptr_eq(&before.entry, &after.entry));
+        assert_eq!(after.source_revision, u64::MAX);
+    }
+
+    #[tokio::test]
     async fn bound_registration_mints_canonical_provider_while_cold() {
         use crate::capability::descriptor::{CapabilityFacet, CapabilityKind};
         use crate::capability::ownership::{OwnershipTree, VisibilityScope};
@@ -4772,7 +4972,8 @@ mod tests {
         });
         assert_eq!(first.descriptor.id.namespace, "aleph/gateway/channels");
         assert_eq!(first.descriptor.id.name, "team/a/b");
-        assert_eq!(first.descriptor.revision.0, first.entry_revision);
+        assert_eq!(first.descriptor.revision.0, first.descriptor_revision);
+        assert_eq!(first.entry_revision, first.source_revision);
         assert_eq!(first.descriptor.kind, CapabilityKind::Resource);
         assert!(first
             .descriptor

@@ -94,6 +94,7 @@ pub(crate) struct BoundChannelCapture {
     pub(super) channel: ChannelHandle,
     pub(super) source_revision: u64,
     pub(super) entry_revision: u64,
+    pub(super) descriptor_revision: u64,
     pub(super) descriptor: CapabilityDescriptor,
     pub(super) descriptor_fingerprint: [u8; 32],
     pub(super) provider: ProviderHandle,
@@ -146,6 +147,8 @@ pub(crate) enum ChannelBindingError {
     Busy,
     #[error("channel source publication revision exhausted")]
     PublicationExhausted,
+    #[error("channel descriptor publication revision exhausted")]
+    DescriptorPublicationExhausted,
     #[error(transparent)]
     Provider(#[from] ProviderCallError),
     #[error(transparent)]
@@ -242,7 +245,7 @@ fn session_value(session: &SessionKey) -> Value {
 pub(super) struct EntryRuntime {
     pub(super) operation: Option<Arc<()>>,
     pub(super) retiring: bool,
-    pub(super) driver: Option<tokio::task::JoinHandle<()>>,
+    pub(super) driver: Option<tokio::task::JoinHandle<bool>>,
     pub(super) active_work: usize,
     pub(super) executions: Vec<tokio::task::JoinHandle<()>>,
     pub(super) forwarder: Option<OwnedForwarder>,
@@ -278,7 +281,7 @@ type LifecycleResult = tokio::sync::oneshot::Receiver<Result<(), ChannelBindingE
 
 #[allow(dead_code)] // Source-private vertical slice; no production opt-in yet.
 impl super::ChannelRegistry {
-    fn validate_bound_capture(
+    pub(super) fn validate_bound_capture(
         &self,
         capture: &BoundChannelCapture,
         current: &Arc<ChannelRegistrationEntry>,
@@ -296,7 +299,16 @@ impl super::ChannelRegistry {
         if !bound.provider.same_instance(&capture.provider) {
             return Err(ChannelBindingError::WrongProvider);
         }
+        if capture.source_revision
+            > self
+                .source_revision
+                .load(std::sync::atomic::Ordering::Relaxed)
+        {
+            return Err(ChannelBindingError::StaleEntry);
+        }
         if bound.entry_revision != capture.entry_revision
+            || bound.descriptor_revision != capture.descriptor_revision
+            || bound.descriptor.revision.0 != capture.descriptor_revision
             || bound.descriptor_fingerprint != capture.descriptor_fingerprint
             || canonical_descriptor_fingerprint(&capture.descriptor) != bound.descriptor_fingerprint
         {
@@ -513,9 +525,17 @@ impl super::ChannelRegistry {
         if candidate_id != *channel_id {
             return Err(ChannelBindingError::InvalidContract);
         }
+        let _source_publication = self.source_publication_sync.lock().await;
         let preflight_revision = self.next_bound_revision()?;
-        let candidate =
-            self.prepare_bound_entry(channel, contract, ownership, initial, preflight_revision)?;
+        let preflight_descriptor_revision = self.next_bound_descriptor_revision()?;
+        let candidate = self.prepare_bound_entry(
+            channel,
+            contract,
+            ownership,
+            initial,
+            preflight_revision,
+            preflight_descriptor_revision,
+        )?;
         let incumbent = self.begin_bound_retirement(channel_id).await?;
         let (receiver, marker) = self.spawn_bound_retirement(&incumbent).await?;
         self.await_bound_retirement(&incumbent, receiver).await?;
@@ -527,7 +547,9 @@ impl super::ChannelRegistry {
         self: &Arc<Self>,
         channel_id: &super::ChannelId,
     ) -> Result<(), ChannelBindingError> {
+        let _source_publication = self.source_publication_sync.lock().await;
         let _ = self.next_bound_revision()?;
+        let _ = self.next_bound_descriptor_revision()?;
         let incumbent = self.begin_bound_retirement(channel_id).await?;
         let (receiver, marker) = self.spawn_bound_retirement(&incumbent).await?;
         self.await_bound_retirement(&incumbent, receiver).await?;
@@ -535,15 +557,26 @@ impl super::ChannelRegistry {
             .await
     }
 
-    fn next_bound_revision(&self) -> Result<u64, ChannelBindingError> {
+    pub(super) fn next_bound_revision(&self) -> Result<u64, ChannelBindingError> {
         self.source_revision
             .load(std::sync::atomic::Ordering::Relaxed)
             .checked_add(1)
             .ok_or(ChannelBindingError::PublicationExhausted)
     }
 
+    fn next_bound_descriptor_revision(&self) -> Result<u64, ChannelBindingError> {
+        self.descriptor_revision
+            .load(std::sync::atomic::Ordering::Relaxed)
+            .checked_add(1)
+            .ok_or(ChannelBindingError::DescriptorPublicationExhausted)
+    }
+
     fn advance_bound_revision(&self) -> Result<u64, ChannelBindingError> {
         self.try_advance_source_revision()
+    }
+
+    fn advance_bound_descriptor_revision(&self) -> Result<u64, ChannelBindingError> {
+        self.try_advance_descriptor_revision()
     }
 
     async fn begin_bound_retirement(
@@ -564,6 +597,7 @@ impl super::ChannelRegistry {
             return Err(ChannelBindingError::UnboundLegacy);
         };
         let _ = self.next_bound_revision()?;
+        let mut desired = self.desired_state.write().await;
         {
             let mut runtime = entry
                 .runtime
@@ -571,15 +605,26 @@ impl super::ChannelRegistry {
                 .expect("channel runtime mutex poisoned");
             if let Some(driver) = &mut runtime.driver {
                 match driver.now_or_never() {
-                    Some(Ok(())) => runtime.driver = None,
+                    Some(Ok(true)) => {
+                        runtime.driver = None;
+                        if runtime.retiring {
+                            runtime.operation = None;
+                            runtime.retiring = false;
+                            runtime.residual = ChannelCleanupResidual::default();
+                        }
+                    }
+                    Some(Ok(false)) if bound.provider.state() == ProviderState::Failed => {
+                        runtime.driver = None;
+                    }
+                    Some(Ok(false)) => return Err(ChannelBindingError::Busy),
                     Some(Err(_)) => return Err(ChannelBindingError::Busy),
                     None => return Err(ChannelBindingError::Busy),
                 }
             }
-            if runtime.operation.is_some() {
+            let state = bound.provider.state();
+            if runtime.operation.is_some() && state != ProviderState::Failed {
                 return Err(ChannelBindingError::Busy);
             }
-            let state = bound.provider.state();
             if matches!(state, ProviderState::Ready | ProviderState::Starting) {
                 bound.provider.transition(ProviderState::Stopping)?;
             }
@@ -590,10 +635,7 @@ impl super::ChannelRegistry {
                 ProviderState::Ready | ProviderState::Starting | ProviderState::Stopping
             ) || runtime.forwarder.is_some();
         }
-        self.desired_state
-            .write()
-            .await
-            .insert(id.clone(), super::DesiredChannelState::Stopped);
+        desired.insert(id.clone(), super::DesiredChannelState::Stopped);
         Ok(entry)
     }
 
@@ -620,7 +662,9 @@ impl super::ChannelRegistry {
         let driver_marker = marker.clone();
         let driver = tokio::spawn(async move {
             let result = source.drain_bound(&original, &driver_marker, true).await;
+            let succeeded = result.is_ok();
             let _ = sender.send(result);
+            succeeded
         });
         entry.runtime.lock().unwrap().driver = Some(driver);
         Ok((receiver, marker))
@@ -679,11 +723,16 @@ impl super::ChannelRegistry {
             super::ChannelRegistration::Bound(bound) => bound,
             _ => return Err(ChannelBindingError::InvalidContract),
         };
-        let revision = self.advance_bound_revision()?;
-        bound.entry_revision = revision;
-        bound.descriptor.revision = crate::capability::descriptor::CapabilityRevision(revision);
-        bound.descriptor_fingerprint = canonical_descriptor_fingerprint(&bound.descriptor);
         let mut desired = self.desired_state.write().await;
+        let _ = self.next_bound_revision()?;
+        let _ = self.next_bound_descriptor_revision()?;
+        let source_revision = self.advance_bound_revision()?;
+        let descriptor_revision = self.advance_bound_descriptor_revision()?;
+        bound.entry_revision = source_revision;
+        bound.descriptor_revision = descriptor_revision;
+        bound.descriptor.revision =
+            crate::capability::descriptor::CapabilityRevision(descriptor_revision);
+        bound.descriptor_fingerprint = canonical_descriptor_fingerprint(&bound.descriptor);
         channels.insert(id.clone(), candidate);
         desired.insert(id.clone(), super::DesiredChannelState::Stopped);
         Ok(id.clone())
@@ -715,8 +764,9 @@ impl super::ChannelRegistry {
         if incumbent.runtime.lock().unwrap().active_work != 0 {
             return Err(ChannelBindingError::Busy);
         }
-        self.advance_bound_revision()?;
         let mut desired = self.desired_state.write().await;
+        self.advance_bound_revision()?;
+        self.advance_bound_descriptor_revision()?;
         channels.remove(id);
         desired.remove(id);
         Ok(())
@@ -726,6 +776,7 @@ impl super::ChannelRegistry {
         &self,
         id: &super::ChannelId,
     ) -> Result<(Arc<ChannelRegistrationEntry>, Arc<()>, u64), ChannelBindingError> {
+        use crate::capability::provider::ProviderState;
         use futures::FutureExt;
         let entry = self
             .channels
@@ -743,7 +794,11 @@ impl super::ChannelRegistry {
             .expect("channel runtime mutex poisoned");
         if let Some(driver) = &mut runtime.driver {
             match driver.now_or_never() {
-                Some(Ok(())) => runtime.driver = None,
+                Some(Ok(true)) => runtime.driver = None,
+                Some(Ok(false)) if bound.provider.state() == ProviderState::Failed => {
+                    runtime.driver = None;
+                }
+                Some(Ok(false)) => return Err(ChannelBindingError::Busy),
                 Some(Err(_)) => return Err(ChannelBindingError::Busy),
                 None => return Err(ChannelBindingError::Busy),
             }
@@ -791,7 +846,9 @@ impl super::ChannelRegistry {
             let result = source
                 .activate_bound(&id, &original, &marker, generation)
                 .await;
+            let succeeded = result.is_ok();
             let _ = sender.send(result);
+            succeeded
         });
         entry.runtime.lock().unwrap().driver = Some(driver);
         Ok(receiver)
@@ -912,8 +969,14 @@ impl super::ChannelRegistry {
             .expect("channel runtime mutex poisoned");
         if let Some(driver) = &mut runtime.driver {
             match driver.now_or_never() {
-                Some(Ok(())) => {
+                Some(Ok(true)) => {
                     runtime.driver = None;
+                }
+                Some(Ok(false)) if bound.provider.state() == ProviderState::Failed => {
+                    runtime.driver = None;
+                }
+                Some(Ok(false)) => {
+                    return Err(ChannelBindingError::Busy);
                 }
                 Some(Err(_)) => {
                     return Err(ChannelBindingError::Busy);
@@ -960,7 +1023,9 @@ impl super::ChannelRegistry {
         let original = entry.clone();
         let driver = tokio::spawn(async move {
             let result = source.drain_bound(&original, &marker, false).await;
+            let succeeded = result.is_ok();
             let _ = sender.send(result);
+            succeeded
         });
         // Admission and driver publication share the source gate.
         // The driver itself performs no channel I/O under that gate.
@@ -1024,6 +1089,19 @@ impl super::ChannelRegistry {
             }
         }
         let _source = self.lifecycle_sync.lock().await;
+        self.complete_bound_retirement(entry, marker, retiring)
+    }
+
+    fn complete_bound_retirement(
+        &self,
+        entry: &Arc<ChannelRegistrationEntry>,
+        marker: &Arc<()>,
+        retiring: bool,
+    ) -> Result<(), ChannelBindingError> {
+        use crate::capability::provider::ProviderState;
+        let super::ChannelRegistration::Bound(bound) = &entry.registration else {
+            unreachable!()
+        };
         let mut runtime = entry
             .runtime
             .lock()

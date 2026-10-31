@@ -1,154 +1,126 @@
-# Next task prompt: Capability Core source-owned contract gate
+# Next Session Prompt: Generic Gateway Source-Owned Capability Slice
+# 下一会话 Prompt：Generic Gateway source-owned Capability slice
 
-你是 Aleph Capability Core 的架构规划与审查 agent。下一阶段的目标不是直接接入 Feishu，而是为所有 externally composable provider 建立一个 source-owned、可验证、不会重复 authority 的 Capability contract。
+You are continuing Aleph Capability Core work in `/Volumes/TBU4/Workspace/Aleph`.
 
-## Current state
+你将在 `/Volumes/TBU4/Workspace/Aleph` 继续 Aleph Capability Core 工作。
 
-仓库：`/Volumes/TBU4/Workspace/Aleph`
+## Read first / 首先阅读
 
-当前 `main`：`5b2115d36`，包含：
+1. `AGENTS.md`
+2. `docs/reference/REDLINES.md`
+3. `docs/reference/ARCHITECTURE.md`
+4. `docs/reference/GATEWAY.md`
+5. `docs/reference/TOOL_SYSTEM.md`
+6. `docs/reference/FEATURE_LOCATOR.md`
+7. `docs/superpowers/specs/2026-10-30-capability-core-source-owned-contract-design.md`
+8. `docs/superpowers/specs/2026-10-30-capability-core-source-owned-contract-claim-census.md`
+9. `docs/superpowers/plans/2026-10-30-capability-core-source-owned-contract-plan.md`
+10. `src/capability/{descriptor,provider,facade,backend,ownership,zahir_facade}.rs`
+11. `src/gateway/channel_registry.rs`
+12. `src/gateway/channel_registry/binding.rs`
 
-- Stage H：ExtensionManager-managed tool-only WASM 的 declaration-only discovery 与显式 activation 边界。
-- Stage G：生产 provider-neutral Tool `ProjectionHost` / `ZahirFacade` mount。
-- `ToolHandlerRegistry`：Tool callable publication 的 canonical authority。
-- `ProviderHandle` / `ProviderLifecycle`：provider state、instance generation、admission。
-- `OwnershipTree`：owner、lifetime、owner generation、revoke/dispose；`OwnershipTree::bump` 使用 checked increment，耗尽时返回 `OwnershipError::GenerationExhausted`。
-- `ChannelRegistry`：当前 Gateway channel instance、intent、association 和 lifecycle authority。
-- Feishu：只有 Gateway-owned provider lifecycle slice；尚未成为 Zahir Capability。
+## Mission / 任务
 
-当前 Feishu → Zahir 的 B8.2 A/B/C/D gates 仍全部 **NO-GO / deferred**。当前 Tool host evidence 不能推导 Feishu Capability evidence。
+Implement only the approved, bounded Generic Gateway source-owned read/lease slice. Preserve the existing `ChannelRegistry` as the sole Gateway association, lifecycle, source revision, replacement, stop/drain, and webhook publication authority. The Capability layer must remain a derived read/projection surface.
 
-先阅读：
+只实现已批准且受限的 Generic Gateway source-owned read/lease slice。保留现有 `ChannelRegistry` 作为唯一 Gateway association、lifecycle、source revision、replacement、stop/drain 和 webhook publication authority。Capability 层必须继续是 derived read/projection surface。
 
-- `AGENTS.md`
-- `docs/reference/REDLINES.md`
-- `docs/reference/ARCHITECTURE.md`
-- `docs/reference/FEATURE_LOCATOR.md`
-- `docs/reference/GATEWAY.md`
-- `docs/reference/TOOL_SYSTEM.md`
-- `docs/research/Everything-externally-composable-is-a-Capability.md`
-- `docs/research/aleph_modularization_plan.md`
-- `src/capability/{descriptor,facade,backend,ownership,effect_claim,projection_host,zahir_facade}.rs`
-- `src/gateway/channel_registry.rs`
-- `src/gateway/interfaces/feishu/**`
-- `src/gateway/pty/manager.rs`
-- `src/memory/extensions/registry.rs`
+The first slice covers:
 
-## Mission
+首个 slice 包含：
 
-把这条 North Star 变成可实施的 source-backed contract：
+- `describe`
+- `list`
+- `project`
+- source-owned `resolve`/lease capture and validation
 
-> Everything externally composable is a Capability.
->
-> 一切需要被 Agent、Runtime 或其他系统动态发现、调用、替换、订阅或管理的能力，都是 Capability。
+It explicitly excludes Gateway `subscribe`, new observer wiring, durable recovery, Feishu → Zahir routing, Feishu production mounting, Terminal/Memory/Sandbox migration, new `CapabilityKind`, EffectClaim producers, Safe Replay, external exactly-once, universal scheduling, native unload, process isolation, RSS reduction, and `src/harness/**`.
 
-目标架构是轻量 Capability Core 加上一组按需启动、可停止、可替换、可订阅的 provider。disabled provider 不得初始化线程、连接、数据库、缓存、token client、listener 或 websocket。
+明确不包含 Gateway `subscribe`、新的 observer wiring、durable recovery、Feishu → Zahir routing、Feishu 生产挂载、Terminal/Memory/Sandbox migration、新 `CapabilityKind`、EffectClaim producer、Safe Replay、external exactly-once、universal scheduler、native unload、process isolation、RSS reduction 和 `src/harness/**`。
 
-本阶段只完成设计与 gate 结论。没有明确的 design approval，不得修改 production Rust、测试、CapabilityKind、Gateway wiring 或 provider mount。
+## Settled decisions / 已确定决策
 
-## 推荐方向
+- Approach: source-owned canonical binding + derived Capability projection.
+- Generic Gateway owner: `OwnerRef::Runtime`.
+- Generic Gateway lifetime: `LifetimeScope::Runtime`.
+- Visibility: supplied by `ChannelLifecycleContract`; never inferred by the projection.
+- Coherent read: anchor at the `ChannelRegistry` source cut, then validate provider and owner evidence. If source revision or entry identity changes, use only a bounded source-defined retry or fail closed.
+- `source_revision` and `descriptor_revision` are separate facts and are never interchangeable. Failed publication advances neither.
+- A live broadcast is notification-only and is not a durable recovery source.
+- Real runtime effects remain outside pure read operations: no token refresh, HTTP, listener bind, websocket connection, task spawn, process spawn, database open, cache activation, or extension execution.
 
-采用“source-owned canonical binding + Capability projection”方案：
+- 方案：source-owned canonical binding + derived Capability projection。
+- Generic Gateway owner：`OwnerRef::Runtime`。
+- Generic Gateway lifetime：`LifetimeScope::Runtime`。
+- visibility：由 `ChannelLifecycleContract` 提供，projection 不得自行推导。
+- coherent read：以 `ChannelRegistry` source cut 为锚，再验证 provider 与 owner evidence；source revision 或 entry identity 变化时，只能进行受限 source-defined retry 或 fail closed。
+- `source_revision` 与 `descriptor_revision` 是独立事实，永远不可互换。publication 失败时两者都不推进。
+- live broadcast 仅是 notification，不是 durable recovery source。
+- 真实 runtime effect 必须位于纯 read operation 之外：不得 token refresh、HTTP、listener bind、websocket connection、task spawn、process spawn、database open、cache activation 或 extension execution。
 
-- 每个已有 source 继续拥有自己的 association、intent、lifecycle 和资源事实源。
-- `ChannelRegistry` 继续是 Gateway authority；不得创建第二个 Gateway registry、descriptor catalog、enabled-state map 或 runtime table。
-- `ProviderHandle` 继续拥有 provider state、provider generation 和 admission。
-- `OwnershipTree` 继续拥有 owner/lifetime/generation/revoke/dispose。
-- `ToolHandlerRegistry` 继续是 Tool callable publication authority。
-- `ProjectionHost` / `ZahirFacade` 只负责 derived describe/resolve/project/subscribe/read surface，不拥有 provider lifecycle。
-- Capability descriptor、facets、source revision、visibility、lease 和 replacement proof 必须从已有 authority 派生，并明确各自的 authority，不合并成一个万能计数器。
+## Execution protocol / 执行协议
 
-这个方向保留了现有 source 的独立生命周期，代价是每种 source 都必须显式提供自己的 binding、snapshot、replacement 和 admission proof；这是为了避免一个中心化 registry 重新成为新的生命周期耦合点。
+1. Confirm the worktree and read the plan before editing.
+2. Work task-by-task in the order of the implementation plan.
+3. Write the failing focused test before each implementation step.
+4. Run the focused test, then package checks, then the required broader checks.
+5. Keep one source of truth per fact; do not add a parallel map or catalog.
+6. If the current `BackendLease` shape cannot represent a Gateway source-owned proof without creating a dependency cycle or changing the Tool authority, stop and report the architectural blocker instead of introducing a generic workaround.
+7. Do not silently expand the first slice to `ZahirFacade` mount, Gateway subscription, Feishu, or other providers.
+8. Before any production change, ensure the implementation plan has been explicitly reviewed and accepted in the current session.
 
-## Hard constraints
+1. 确认 worktree 状态，并先阅读 plan 再编辑。
+2. 按 implementation plan 的顺序逐个 task 执行。
+3. 每个 implementation step 前先写 failing focused test。
+4. 先运行 focused test，再运行 package checks，最后运行要求的 broader checks。
+5. 每个事实只保留一个 source of truth；不得添加平行 map 或 catalog。
+6. 如果当前 `BackendLease` 无法在不制造依赖 cycle 或改变 Tool authority 的前提下表达 Gateway source-owned proof，应停止并报告 architecture blocker，不得引入通用 workaround。
+7. 不得静默扩大首个 slice 到 `ZahirFacade` mount、Gateway subscription、Feishu 或其他 provider。
+8. 任何 production change 前，确认 implementation plan 已在当前 session 被明确审阅并接受。
 
-- 不新增 `CapabilityKind`，除非设计 gate 明确证明现有 kind 无法表达目标，并获得单独 architecture approval。
-- 不创建第二个 registry、owner map、descriptor catalog、handler map、enabled-state map、runtime table 或 durable store。
-- 不把 Feishu 特例倒推成通用 Core 形状；先定义所有 Gateway channel 共用的 source/lifecycle contract。
-- 不把 `ChannelRegistry` 替换成 Zahir authority；不绕过 `ChannelRegistry` 做 Feishu facade glue 或 resolve bypass。
-- 不把 internal admission fence 自动标记为 Capability `ProviderLifecycle` 或 `ExternalEffect` facet。
-- 不把 live broadcast 当作 durable recovery source；durability 仍必须指向已有 durable authority。
-- 不合并 provider generation、owner generation、descriptor revision、source revision 或 `SessionEvent.seq`。
-- 不声称 native unload、JIT/engine reclamation、OS mapping reclamation、thread shutdown、RSS reduction 或 process isolation。
-- 不实现 Feishu production mount、Feishu → Zahir route、EffectClaim producer、Safe Replay、external exactly-once 或 universal scheduler。
-- 不修改 `src/harness/**`。
-- 本阶段只读审计、设计和 plan；无 design approval 前不写 production code。
+## Acceptance / 验收
 
-## Required work
+The slice is complete only when:
 
-### R0 — Reconfirm the current baseline
+只有满足以下条件，slice 才算完成：
 
-用当前源码重新确认：
+- cold/disabled Generic Gateway reads return truthful descriptors without starting runtime effects;
+- `describe`, `list`, and `project` share the source-backed snapshot and no second catalog exists;
+- source-owned resolve captures and validates entry identity, source revision, descriptor revision, provider generation, owner identity/generation/lifetime, and visibility;
+- replacement, unregister, owner transfer, provider stop, and late completion reject stale leases fail-closed;
+- checked revision exhaustion preserves the incumbent and performs no destructive partial mutation;
+- focused tests, `cargo fmt --check`, `cargo check -p alephcore --tests`, and relevant `cargo test` commands pass;
+- the final diff contains no Feishu mount, new CapabilityKind, second registry, harness change, or unrelated provider migration;
+- reference documents are updated only from verified source/test evidence and retain all deferred boundaries.
 
-- Tool capability 的 descriptor、callable publication、provider lease 和 projection path。
-- `ChannelRegistry` 的 source-owned registration、replacement、stop、drain、revision 和 `register_bound_channel` contract。
-- Feishu provider lifecycle 与 `ChannelRegistry` 的真实 authority 分工。
-- `OwnershipTree::bump` 的 checked exhaustion semantics。
-- Terminal、Memory、Sandbox 当前是否有独立 lifecycle/source authority，以及哪些资源会在 disabled/read-side 被初始化。
+- cold/disabled Generic Gateway read 返回真实 descriptor，且不启动 runtime effect；
+- `describe`、`list` 和 `project` 共享 source-backed snapshot，不存在第二 catalog；
+- source-owned resolve 捕获并验证 entry identity、source revision、descriptor revision、provider generation、owner identity/generation/lifetime 与 visibility；
+- replacement、unregister、owner transfer、provider stop 和 late completion 都能 fail-closed 拒绝 stale lease；
+- checked revision exhaustion 保留 incumbent，不产生 destructive partial mutation；
+- focused tests、`cargo fmt --check`、`cargo check -p alephcore --tests` 和相关 `cargo test` 通过；
+- final diff 不包含 Feishu mount、新 CapabilityKind、第二 registry、harness change 或无关 provider migration；
+- reference 文档只根据已验证的 source/test evidence 更新，并保留所有 deferred boundary。
 
-如果文档与源码不一致，记录为事实差异；不要先修代码。
+## Stop conditions / 停止条件
 
-### R1 — Define the universal source-owned Capability contract
+Stop and ask for architecture review if any implementation requires:
 
-设计并画出：
+如遇到以下任一情况，停止并请求 architecture review：
 
-1. `Source`、`CapabilityDescriptor`、`ProviderHandle`、`OwnershipTree`、`BackendLease`、`CapabilityBackend`、`ProjectionHost` / `ZahirFacade` 的关系图。
-2. authority non-duplication table：每个字段和状态由谁拥有、谁只能读取、谁能修改。
-3. canonical identity：capability id、source identity、instance identity、provider generation、owner generation、descriptor/source revision 的组合与边界。
-4. lifecycle state machine：discovered/cold/disabled/starting/ready/stopping/stopped/failed，以及每个状态允许的 read、call、replace、revoke、dispose 行为。
-5. replacement protocol：旧 instance 撤销、in-flight drain、new instance publication、late completion 和 stale lease 的顺序与失败结果。
-6. `describe` / `list` / `project` / `resolve` / `subscribe` 的 no-start、no-auth、no-network 证明。
-7. visibility、scope、lease 和 effect claim 的关系；明确哪些 contract 可以在本阶段落地，哪些必须留给后续 EventSource/ExternalEffect/R5 gate。
-8. source revision、provider generation、owner generation、session sequence 的独立性证明。
+- a second Gateway authority or descriptor catalog;
+- a new capability kind or a new universal runtime table;
+- a cross-authority transaction that changes existing lock ownership;
+- making `ProviderHandle` perform runtime effects;
+- changing `Zahir` or `BackendLease` in a way that makes Core depend on Gateway;
+- using live broadcast as replay or durable recovery;
+- proving external delivery, exactly-once, native unload, RSS reduction, or process isolation.
 
-### R2 — Compare real alternatives
-
-至少比较两种方案：
-
-- A：中心化 Capability registry / runtime table。
-- B：source-owned canonical binding + derived Capability projection。
-
-对每种方案说明：authority duplication 风险、Gateway 兼容性、Tool 兼容性、replacement fencing、read-side lazy boundary、未来 Terminal/Memory 迁移成本、durable recovery 影响和 R1/R3/R4/R8 风险。
-
-必须给出一个推荐方案和明确的拒绝理由。推荐不得只是“更简单”，要指出它如何保持现有 authority 不重复。
-
-### R3 — Run conformance audits
-
-不实现 wiring，只把同一 contract 对照以下 source：
-
-- Tool：当前已完成的 canonical registry/ProjectionHost slice。
-- Gateway：`ChannelRegistry` 与 Generic Webhook/loopback bound evidence。
-- Feishu：只作为第一个 Gateway conformance audit，不作为 Core 形状的设计来源。
-- Terminal：`src/gateway/pty/manager.rs`。
-- Memory：`src/memory/extensions/registry.rs`。
-- Sandbox：现有 sandbox authority 与资源边界。
-
-每个 source 需要列出：
-
-- 现有 authority。
-- descriptor/facet 是否存在。
-- provider instance/generation 是否存在。
-- owner/lifetime/revoke/dispose 是否存在。
-- read-side 是否无启动/认证/网络/资源初始化。
-- replacement/late completion 是否可证明。
-- subscription/observer 是否 live-only 或 durable。
-- 缺失 contract 和是否属于本阶段、后续阶段或明确 deferred。
-
-### R4 — Gate decision
-
-输出一个明确的：
-
-- **GO**：contract 足够稳定，可以进入独立 implementation plan；或
-- **NO-GO / deferred**：指出第一个未闭合 contract，并停止 implementation planning beyond that gate。
-
-如果是 GO，下一阶段仍必须先写独立 design spec 并获得 approval，之后才能选择一个最小 source-owned vertical slice 实施。默认候选是 Generic Gateway binding contract；Feishu production mount 不能自动成为下一步。
-
-## Deliverables
-
-1. 双语 design spec：`docs/superpowers/specs/YYYY-MM-DD-capability-core-source-owned-contract-design.md`。
-2. 双语 implementation plan：`docs/superpowers/plans/YYYY-MM-DD-capability-core-source-owned-contract-plan.md`，只覆盖通过 gate 后的下一步，不提前承诺 Feishu wiring。
-3. 下一会话可直接使用的 prompt：`docs/superpowers/prompts/YYYY-MM-DD-capability-core-source-owned-contract-prompt.md`。
-4. stale/current claim census：记录源码与 reference 文档之间的事实差异、保留的 dated history 和 deferred boundary。
-5. 明确列出不做的 production changes、未运行的 Cargo checks、未关闭的 capability kinds/providers，以及没有执行的 destructive/external actions。
-
-完成后停止等待 architecture/design approval。不要直接修改 Rust，不要创建 CapabilityKind，不要 mount Feishu，不要 push。
+- 第二个 Gateway authority 或 descriptor catalog；
+- 新 capability kind 或新的 universal runtime table；
+- 改变现有 lock ownership 的 cross-authority transaction；
+- 让 `ProviderHandle` 执行 runtime effect；
+- 以使 Core 依赖 Gateway 的方式修改 `Zahir` 或 `BackendLease`；
+- 将 live broadcast 当作 replay 或 durable recovery；
+- 声称证明 external delivery、exactly-once、native unload、RSS reduction 或 process isolation。

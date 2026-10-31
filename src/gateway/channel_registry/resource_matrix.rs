@@ -1126,6 +1126,54 @@ async fn active_send_stop_and_old_proof_contracts_hold_for_either_shape() {
     }
 }
 
+/// Source publication evidence and owner identity are independent parts of a
+/// bound lease. Both must remain coherent at the use boundary.
+#[tokio::test]
+async fn source_owned_validation_fences_revision_and_owner_transfer() {
+    let fixture = fixture(
+        Shape::RealWebhook,
+        ChannelInitialState::Cold,
+        false,
+        Ownership::Registered,
+    )
+    .await;
+    let mut stale_revision = fixture
+        .registry
+        .capture_bound_channel(&fixture.id)
+        .await
+        .unwrap();
+    stale_revision.source_revision += 1;
+    assert!(matches!(
+        fixture
+            .registry
+            .resolve_bound_channel(stale_revision, &VisibilityScope::default())
+            .await,
+        Err(ChannelBindingError::StaleEntry)
+    ));
+
+    let capture = fixture
+        .registry
+        .capture_bound_channel(&fixture.id)
+        .await
+        .unwrap();
+    fixture
+        .tree
+        .register(
+            capture.descriptor.id.clone(),
+            OwnerRef::Run(RunId("late-owner-transfer".into())),
+            capture.descriptor.lifetime,
+            capture.descriptor.visibility.clone(),
+        )
+        .unwrap();
+    assert!(matches!(
+        fixture
+            .registry
+            .resolve_bound_channel(capture, &VisibilityScope::default())
+            .await,
+        Err(ChannelBindingError::Owner(BindingValidationError::BindingMismatch))
+    ));
+}
+
 /// Replacement retires the incumbent's resources and publishes a fresh
 /// same-ID source whose own proof is the only one that works.
 #[tokio::test]
@@ -1354,7 +1402,11 @@ async fn webhook_invalid_config_fails_before_client_attempt() {
     .await;
     assert_cold_probe(&probe, stage);
 
-    let error = expect_start_failure(registry.start_bound_channel_compat(&id).await, stage);
+    let receiver = registry
+        .start_bound_channel(&id)
+        .await
+        .expect("async start admission succeeds");
+    let error = expect_start_failure(receiver.await.unwrap(), stage);
     assert!(
         error.contains("secret is required"),
         "{stage}: the failure must be real config validation, got {}",
