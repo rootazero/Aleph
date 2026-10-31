@@ -11,6 +11,9 @@ use aleph_protocol::panel::{
 use base64::Engine;
 use sha2::{Digest, Sha256};
 
+mod admission;
+pub(super) use admission::PreparedPanelPublication;
+
 use super::visibility::{visible_to, ScopeKey, VisibilityCtx};
 
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -55,6 +58,7 @@ struct PanelAssetPublication {
 #[derive(Default)]
 pub(crate) struct PanelAssetPublicationStore {
     revision: u64,
+    unavailable: bool,
     records: BTreeMap<PanelAssetIdentity, PanelAssetPublication>,
 }
 
@@ -65,7 +69,7 @@ impl PanelAssetPublicationStore {
         revision: u64,
         publications: Vec<(PanelUiCapabilityDeclaration, Arc<[u8]>, ScopeKey)>,
     ) -> Result<(), PanelAssetPublicationError> {
-        if revision <= self.revision {
+        if self.unavailable || revision <= self.revision {
             return Err(PanelAssetPublicationError::Stale);
         }
         let mut records = BTreeMap::new();
@@ -112,6 +116,9 @@ impl PanelAssetPublicationStore {
         entry: &str,
         context: &VisibilityCtx,
     ) -> Result<PublishedPanelAsset, PanelAssetPublicationError> {
+        if self.unavailable {
+            return Err(PanelAssetPublicationError::Missing);
+        }
         let publication = self
             .records
             .get(identity)
@@ -159,5 +166,7 @@ fn matches_integrity(bytes: &[u8], integrity: &str) -> bool {
     expected.as_slice() == Sha256::digest(bytes).as_slice()
 }
 
+#[cfg(test)]
+mod admission_tests;
 #[cfg(test)]
 mod tests;
