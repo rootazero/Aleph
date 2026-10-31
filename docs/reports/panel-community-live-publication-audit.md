@@ -2,7 +2,9 @@
 
 Date / 日期: 2026-10-31
 
-Status / 状态: **Core producer scoped lifecycle verification passed; production HTTP authentication and browser delivery remain incomplete. / Core producer 已接入并通过聚焦 lifecycle 验收；production HTTP 认证与 browser delivery 仍未完成。**
+Status / 状态: **Historical Core-stage audit at `80bf32b8f`. / `80bf32b8f` 时的 Core 阶段历史审计。**
+
+The remaining findings preserve that stage's boundary; subsequent HTTP/auth/browser implementation and actual acceptance evidence are maintained in [production publication validation](panel-community-live-publication-validation.md) and the [HTTP/browser run ledger](../superpowers/runs/2026-10-31-panel-http-publication.md). “Not implemented” below describes the Core-stage audit, not the current working tree. / 下文保留该阶段边界；后续实现与实际验证见新 report/台账，下文“未实现”不描述当前工作树。
 
 ## Ownership and current boundary / 所有权与当前边界
 

@@ -2,7 +2,7 @@
 
 Date / 日期: 2026-10-31
 
-**History note / 历史说明:** Setup and Tasks 1–6 below preserve the initial audit-only delivery at `ceef5c4a7`; their “no code/Cargo” and “boolean unchanged” statements apply to that stage only. The user later approved #7; its implementation is recorded in [the Core run ledger](2026-10-31-panel-core-byte-admission.md). It removes the former boolean and adds a Core lifecycle producer, while HTTP authentication and browser delivery remain pending. / 下文初次审计记录不是当前实现状态；#7 后续实现移除旧 boolean、增加 Core producer，但不完成 HTTP/browser 边界。
+**History note / 历史说明:** Setup and Tasks 1–6 below preserve the initial audit-only delivery at `ceef5c4a7`; their “no code/Cargo” and “boolean unchanged” statements apply to that stage only. The user later approved #7; its implementation is recorded in [the Core run ledger](2026-10-31-panel-core-byte-admission.md). It removes the former boolean and adds a Core lifecycle producer. The authorized #2–#5 continuation and its actual HTTP/browser verification are recorded in [the HTTP/browser ledger](2026-10-31-panel-http-publication.md). / 下文初次审计记录不是当前实现状态；#7 补入 Core producer，后续 #2–#5 的实现与验证见独立 HTTP/browser 台账。
 
 ## Setup / 起点
 
