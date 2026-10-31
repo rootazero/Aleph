@@ -40,6 +40,12 @@ impl EventContext {
 /// Components implement this trait to receive and process events.
 /// Each handler declares which events it subscribes to and how to handle them.
 ///
+/// The production implementors are `TeamEventLogger` (`src/teams/events.rs`)
+/// and `TeamNotifier` (`src/teams/notifier.rs`). A `grep` for
+/// `impl EventHandler for` also hits serenity's own `Handler`
+/// (`src/gateway/interfaces/discord/mod.rs`), which is a different trait with
+/// the same short name.
+///
 /// The handler is invoked by whatever subscription glue the caller wired
 /// (e.g. `GlobalBus::subscribe_async`); `handle` should be self-contained
 /// and must not assume a registry is running alongside it.
@@ -66,10 +72,11 @@ pub trait EventHandler: Send + Sync {
 ///
 /// The previous `Generic { message }` and `Aborted` variants were Form-6
 /// dead variants — every implementor of `EventHandler` in production
-/// (`TeamNotifier`, `TeamEventLogger`, `Handler`) returned `Ok(vec![])`
-/// unconditionally. The struct is kept as an empty error placeholder so
-/// the trait signature stays typed; new errors should be modelled via the
-/// `AlephEvent` returned in the `Ok` arm rather than this dead slot.
+/// (`TeamEventLogger` in `src/teams/events.rs` and `TeamNotifier` in
+/// `src/teams/notifier.rs`) returned `Ok(vec![])` unconditionally. The struct
+/// is kept as an empty error placeholder so the trait signature stays typed;
+/// new errors should be modelled via the `AlephEvent` returned in the `Ok` arm
+/// rather than this dead slot.
 #[derive(Debug, thiserror::Error)]
 #[error("event handler error")]
 pub struct HandlerError;

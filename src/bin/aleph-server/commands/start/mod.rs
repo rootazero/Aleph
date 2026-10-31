@@ -1645,40 +1645,46 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     }
 
     // Register TeamEventLogger on GlobalBus.
-    // The handler is fire-and-forget (handle returns empty vec), so we pass a
-    // Register TeamEventLogger on GlobalBus. The handler never publishes back
-    // through `EventContext`, so no bus context is needed — the trait still
-    // takes `&EventContext` for forward compatibility, so we pass a default.
+    // The handler never publishes back through `EventContext`, so no bus
+    // context is needed — the trait still takes `&EventContext` for forward
+    // compatibility, so we pass a default.
+    //
+    // The subscription is AWAITED, not spawned: `team_events` is the only
+    // production writer of the durable team timeline, and the bus is
+    // notification-only with no replay — an event broadcast before the
+    // subscription exists is gone for good. A subscriber that is merely
+    // *scheduled* is a subscriber that is not listening yet (same rule as
+    // `gateway::announce_delivery`).
     if let Some(event_store) = agent_result.event_store.clone() {
         {
-            use alephcore::event::{EventContext, EventFilter, EventHandler, EventType, GlobalBus};
+            use alephcore::event::{EventContext, EventFilter, EventHandler, GlobalBus};
             use alephcore::teams::events::TeamEventLogger;
 
             let team_logger = Arc::new(TeamEventLogger::new(event_store));
             let ctx = EventContext::new();
 
-            tokio::spawn(async move {
-                let team_logger_clone = team_logger.clone();
-                let ctx_team = ctx.clone();
-                let _team_sub = GlobalBus::global()
+            // Drive the subscription from the handler's own contract so the
+            // boot filter can never drift from what `handle` actually acts
+            // on — a new team event type can then no longer be produced
+            // without the durable log seeing it.
+            let team_subs = team_logger.subscriptions();
+            let _team_sub = GlobalBus::global()
                 .subscribe_async(
-                    EventFilter::new(vec![
-                        EventType::TeamCreated,
-                        EventType::TeamMemberAdded,
-                        EventType::TeamMemberRemoved,
-                        EventType::TeamTaskAssigned,
-                        EventType::TeamTaskUpdated,
-                        EventType::TeamTaskCompleted,
-                        EventType::TeamTaskFailed,
-                        EventType::TeamDisbanded,
-                    ]),
+                    EventFilter::new(team_subs),
                     move |global_event| {
-                        let handler = team_logger_clone.clone();
+                        let handler = team_logger.clone();
                         let event = global_event.event;
-                        let ctx = ctx_team.clone();
+                        let session_id = global_event.source_session_id;
+                        let ctx = ctx.clone();
                         tokio::spawn(async move {
                             match handler.handle(&event, &ctx).await {
-                                Ok(_) => {},
+                                Ok(follow_ups) => {
+                                    for follow_up in follow_ups {
+                                        GlobalBus::global()
+                                            .broadcast(handler.name(), &session_id, follow_up)
+                                            .await;
+                                    }
+                                }
                                 Err(e) => tracing::warn!(handler = handler.name(), error = %e, "TeamEventLogger handle error"),
                             }
                         });
@@ -1686,8 +1692,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
                 )
                 .await;
 
-                tracing::info!("Team event handlers registered (TeamEventLogger)");
-            });
+            tracing::info!("Team event handlers registered (TeamEventLogger)");
         };
     }
 
@@ -1722,10 +1727,18 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
                         move |global_event| {
                             let handler = notifier.clone();
                             let event = global_event.event;
+                            let session_id = global_event.source_session_id;
                             let ctx = ctx.clone();
                             tokio::spawn(async move {
-                                if let Err(e) = handler.handle(&event, &ctx).await {
-                                    tracing::warn!(handler = handler.name(), error = %e, "TeamNotifier handle error");
+                                match handler.handle(&event, &ctx).await {
+                                    Ok(follow_ups) => {
+                                        for follow_up in follow_ups {
+                                            GlobalBus::global()
+                                                .broadcast(handler.name(), &session_id, follow_up)
+                                                .await;
+                                        }
+                                    }
+                                    Err(e) => tracing::warn!(handler = handler.name(), error = %e, "TeamNotifier handle error"),
                                 }
                             });
                         },

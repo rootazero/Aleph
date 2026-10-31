@@ -94,6 +94,17 @@ impl PluginId {
     pub fn new(id: impl Into<String>) -> Self {
         let id = id.into();
         debug_assert!(!id.is_empty(), "PluginId must not be empty");
+        // Defence-in-depth, mirroring `SkillId::new`: whitespace and
+        // control characters can never be part of a meaningful plugin id
+        // and would only ever reach a registry key or a log line. The real
+        // guard lives at the input boundary (plugin id sanitisation), so
+        // this stays a development-time aid — the same policy the domain
+        // applies to every other id.
+        debug_assert!(
+            !id.chars().any(|c| c.is_whitespace() || c.is_control()),
+            "PluginId must not contain whitespace or control characters; got {:?}",
+            id
+        );
         Self(id)
     }
 
@@ -338,6 +349,22 @@ pub struct EligibilitySpec {
     pub enabled: Option<bool>,
 }
 
+impl EligibilitySpec {
+    /// Merge the optional `always` flag over [`EligibilitySpec::default`].
+    ///
+    /// The domain default is the only home of the default values, for the
+    /// same reason as [`InvocationPolicy::from_optional`]: a parse boundary
+    /// that restates `false` silently disagrees with the default it is
+    /// supposed to fall back to.
+    pub fn from_optional(always: Option<bool>) -> Self {
+        let mut spec = Self::default();
+        if let Some(always) = always {
+            spec.always = always;
+        }
+        spec
+    }
+}
+
 // ---------------------------------------------------------------------------
 // InstallSpec / InstallKind
 // ---------------------------------------------------------------------------
@@ -427,6 +454,9 @@ pub struct AutomationSpec {
 /// `Default::default()`, keeping the handwritten `Default` impl below the
 /// single source of truth for defaults (previously the serde default for
 /// `user_invocable` was a separate `default_true` helper that could drift).
+/// A boundary that only holds *optional* values merges them over that
+/// default through [`InvocationPolicy::from_optional`] instead of restating
+/// the literals.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct InvocationPolicy {
@@ -445,6 +475,29 @@ impl Default for InvocationPolicy {
     }
 }
 
+impl InvocationPolicy {
+    /// Merge optional frontmatter values over [`InvocationPolicy::default`].
+    ///
+    /// The domain default is the only home of the default values: a caller
+    /// that has "the author did not say" gets exactly what
+    /// [`InvocationPolicy::default`] says. Restating the literals at a parse
+    /// boundary would let a change to the default silently disagree with the
+    /// boundary that overrides it.
+    pub fn from_optional(
+        user_invocable: Option<bool>,
+        disable_model_invocation: Option<bool>,
+    ) -> Self {
+        let mut policy = Self::default();
+        if let Some(user_invocable) = user_invocable {
+            policy.user_invocable = user_invocable;
+        }
+        if let Some(disable_model_invocation) = disable_model_invocation {
+            policy.disable_model_invocation = disable_model_invocation;
+        }
+        policy
+    }
+}
+
 // ---------------------------------------------------------------------------
 // SkillContent
 // ---------------------------------------------------------------------------
@@ -455,6 +508,15 @@ pub struct SkillContent(String);
 
 impl SkillContent {
     /// Create a new `SkillContent`.
+    ///
+    /// The content is untrusted prompt text: a skill body is third-party
+    /// prose that the manifest pipeline audits, but that any UI may still
+    /// render. `fmt::Display` for `SkillContent` was removed 2026-08-27
+    /// (zero callers) for exactly that reason — a `Display`-formatting
+    /// caller loses the chance to apply the careful sandbox the manifest
+    /// pipeline otherwise maintains. Callers reach the text through
+    /// [`SkillContent::as_str`] (or `SkillManifest::content`) to keep the
+    /// trust boundary explicit.
     pub fn new(content: impl Into<String>) -> Self {
         Self(content.into())
     }
@@ -479,11 +541,8 @@ impl From<String> for SkillContent {
 }
 
 // `fmt::Display` for `SkillContent` was removed 2026-08-27: zero callers.
-// The field is untrusted prompt text (see the wrapping context at
-// `SkillContent::new`), so any UI that Display-formats it loses the chance
-// to apply the careful sandbox the manifest pipeline otherwise maintains.
-// Callers go through `SkillContent::as_str` (or `SkillManifest::content`)
-// to make the trust boundary explicit.
+// The trust note it carried now lives on `SkillContent::new`, next to the
+// constructor every caller goes through.
 
 /// The primary aggregate root for the skill system.
 ///
