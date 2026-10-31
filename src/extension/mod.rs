@@ -50,6 +50,7 @@ pub mod mcp_config;
 #[cfg(test)]
 mod mcp_plugin_tests;
 mod panel;
+pub(crate) mod panel_publication;
 mod plugin_ops;
 pub mod plugin_secrets;
 pub mod plugin_state;
@@ -223,8 +224,8 @@ pub struct ExtensionManager {
     /// Monotonic revision for active plugin tool snapshot changes.
     plugin_tool_revision: Arc<AtomicU64>,
 
-    /// Canonical Panel capability snapshot, replaced at the lifecycle projection chokepoint.
-    panel_snapshot: Arc<StdRwLock<aleph_protocol::panel::PanelUiCapabilitySnapshot>>,
+    /// One lifecycle-owned generation of Panel declarations, immutable bytes and internal scope.
+    panel_publication: Arc<StdRwLock<panel_publication::PanelAssetPublicationStore>>,
 
     /// Serialises every transition: the lifecycle primitives, `ensure_loaded`,
     /// and a server-start watcher's final readiness write + view recompute
@@ -481,8 +482,8 @@ impl ExtensionManager {
             active_plugin_tools: Arc::new(StdRwLock::new(HashMap::new())),
             plugin_scope_keys: Arc::new(StdRwLock::new(HashMap::new())),
             plugin_tool_revision: Arc::new(AtomicU64::new(0)),
-            panel_snapshot: Arc::new(StdRwLock::new(
-                aleph_protocol::panel::PanelUiCapabilitySnapshot::new(0, Vec::new()),
+            panel_publication: Arc::new(StdRwLock::new(
+                panel_publication::PanelAssetPublicationStore::default(),
             )),
             load_guard: Arc::new(Mutex::new(())),
             boot_guard: Arc::new(Mutex::new(())),
@@ -1267,19 +1268,44 @@ impl ExtensionManager {
         self.plugin_tool_revision.load(Ordering::SeqCst)
     }
 
-    /// The canonical Panel capability snapshot last published by lifecycle projection.
+    /// Canonical Global-only discovery; absent trusted context never adopts the daemon's cwd.
     #[must_use]
     pub fn panel_ui_capability_snapshot(&self) -> aleph_protocol::panel::PanelUiCapabilitySnapshot {
-        self.panel_snapshot
-            .read()
-            .unwrap_or_else(|e| e.into_inner())
-            .clone()
+        self.panel_ui_capability_snapshot_for(&visibility::VisibilityCtx::default())
     }
 
-    /// Monotonic revision of the canonical Panel capability snapshot.
+    /// Internal visibility projection, not an HTTP authentication or project authorization proof.
+    pub(crate) fn panel_ui_capability_snapshot_for(
+        &self,
+        context: &visibility::VisibilityCtx,
+    ) -> aleph_protocol::panel::PanelUiCapabilitySnapshot {
+        self.panel_publication
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .snapshot(context)
+    }
+
+    /// Read only the current admitted identity and exact entry in the caller's trusted scope.
+    pub(crate) fn panel_ui_asset(
+        &self,
+        identity: &panel_publication::PanelAssetIdentity,
+        entry: &str,
+        context: &visibility::VisibilityCtx,
+    ) -> Result<panel_publication::PublishedPanelAsset, panel_publication::PanelAssetPublicationError>
+    {
+        self.panel_publication
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .asset(identity, entry, context)
+    }
+
+    /// Monotonic revision from that same committed publication state.
     #[must_use]
     pub fn panel_ui_capability_revision(&self) -> u64 {
-        self.panel_ui_capability_snapshot().revision
+        self.panel_publication
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .revision()
     }
 
     /// Snapshot of active plugin tools keyed by short tool name.

@@ -1556,6 +1556,44 @@ impl DashboardState {
         }
     }
 
+    /// Host-only HTTP credential handoff. This never enters the public Tab SDK.
+    #[cfg(all(target_arch = "wasm32", feature = "panel-modular"))]
+    pub(crate) async fn panel_asset_credential(&self) -> Result<(String, String), ()> {
+        let epoch = self.connection_epoch.try_get_untracked().ok_or(())?;
+        let endpoint = self.gateway_url.try_get_untracked().ok_or(())?;
+        let current = || {
+            self.is_connected.try_get_untracked() == Some(true)
+                && self.connection_epoch.try_get_untracked() == Some(epoch)
+                && self.gateway_url.try_get_untracked().as_deref() == Some(endpoint.as_str())
+        };
+        if !current() {
+            return Err(());
+        }
+        let token = if native_expected() {
+            let lease = crate::api::native_credentials::load_lease(&TauriIpc)
+                .await
+                .map_err(|_| ())?;
+            if self.protected_user.try_get_untracked().flatten().is_none()
+                || !crate::api::native_credentials::endpoint_matches(&lease.gateway_url, &endpoint)
+                || !crate::api::native_credentials::endpoint_allowed(&lease.gateway_url)
+            {
+                return Err(());
+            }
+            lease.credential.ok_or(())?.device_token
+        } else {
+            let credentials = read_connect_credentials();
+            // Bootstrap is a one-time connect exchange, never an HTTP credential.
+            credentials
+                .device_token
+                .or(credentials.legacy_token)
+                .ok_or(())?
+        };
+        if !current() || token.is_empty() {
+            return Err(());
+        }
+        Ok((endpoint, token))
+    }
+
     /// Handshake outcome — distinguishes "authorized", "needs a token"
     /// (login wall, NOT a transport failure), and a transport-level failure.
     async fn handshake(&self, receipt: Option<AttemptReceipt>, dialed_url: &str) -> Handshake {
@@ -2607,7 +2645,8 @@ pub fn DashboardContext(children: Children) -> impl IntoView {
         state.has_connected_once.set(true);
         state.panel_discovery.update(|discovery| {
             discovery.begin_connection(1);
-            let _ = discovery.accept_snapshot(1, crate::panel::source::community_fixture_snapshot());
+            let _ =
+                discovery.accept_snapshot(1, crate::panel::source::community_fixture_snapshot());
         });
     }
     provide_context(state);

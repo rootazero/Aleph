@@ -5,7 +5,7 @@
 use super::PanelHostState;
 use crate::appearance::{Accent, ThemeMode};
 use crate::context::{DashboardState, GatewayEvent};
-use aleph_protocol::panel::{PanelTabKey, PanelTabStatus};
+use aleph_protocol::panel::{PanelTabDescriptor, PanelTabKey, PanelTabStatus};
 use futures::future::LocalBoxFuture;
 use futures::FutureExt;
 use leptos::prelude::{on_cleanup, use_context, Effect, Get, GetUntracked, Set};
@@ -144,6 +144,28 @@ impl PanelSdk {
     }
 
     /// Read the connection projection without exposing the transport or signals.
+    // Host fetch fence, deliberately absent from BrowserPanelSdk's public ABI.
+    #[cfg(any(target_arch = "wasm32", test))]
+    pub(super) fn asset_is_current(&self, descriptor: &PanelTabDescriptor, epoch: u64) -> bool {
+        self.connection()
+            .is_ok_and(|connection| connection.connected && connection.epoch == epoch)
+            && self.host.as_ref().is_some_and(|host| {
+                host.registry.lock().unwrap().get(&self.tab) == Some(descriptor)
+            })
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    pub(super) async fn asset_credential(&self) -> Result<(String, String), PanelSdkError> {
+        self.authorize()?;
+        let credential = self
+            .state
+            .panel_asset_credential()
+            .await
+            .map_err(|_| PanelSdkError::Denied)?;
+        self.authorize()?;
+        Ok(credential)
+    }
+
     pub fn connection(&self) -> Result<PanelConnectionSnapshot, PanelSdkError> {
         self.authorize()?;
         let connected = self
@@ -584,6 +606,43 @@ mod tests {
                 pending: std::collections::VecDeque::new(),
             }),
         })
+    }
+
+    #[test]
+    fn asset_delivery_fences_connection_epoch_descriptor_and_disposal() {
+        Owner::new().with(|| {
+            let (sdk, host, _) = fixture();
+            let descriptor = host
+                .registry
+                .lock()
+                .unwrap()
+                .get(&key("home"))
+                .unwrap()
+                .clone();
+            assert!(!sdk.asset_is_current(&descriptor, 7));
+            sdk.state.is_connected.set(true);
+            sdk.state.connection_epoch.set(7);
+            assert!(sdk.asset_is_current(&descriptor, 7));
+            sdk.state.connection_epoch.set(8);
+            assert!(!sdk.asset_is_current(&descriptor, 7));
+            sdk.state.connection_epoch.set(7);
+            let mut changed = descriptor.clone();
+            changed.entry = "changed.js".into();
+            host.registry
+                .lock()
+                .unwrap()
+                .insert_or_replace(changed)
+                .unwrap();
+            assert!(!sdk.asset_is_current(&descriptor, 7));
+            host.registry
+                .lock()
+                .unwrap()
+                .insert_or_replace(descriptor.clone())
+                .unwrap();
+            assert!(sdk.asset_is_current(&descriptor, 7));
+            sdk.lifecycle.dispose();
+            assert!(!sdk.asset_is_current(&descriptor, 7));
+        });
     }
 
     #[test]

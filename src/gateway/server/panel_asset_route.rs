@@ -1,315 +1,296 @@
-use std::collections::BTreeMap;
+//! Authenticated Panel module delivery. Core owns declarations and bytes;
+//! this ingress owns HTTP credential validation and request policy.
 
-use aleph_protocol::panel::{
-    PanelTabStatus, PanelUiCapabilityDeclaration, PanelUiCapabilityOrigin, PanelUiTrust,
-    valid_asset_integrity, valid_identity_segment, valid_relative_entry, valid_version_segment,
+use std::net::{IpAddr, SocketAddr};
+
+use axum::body::Body;
+use axum::extract::{ConnectInfo, OriginalUri, State};
+use axum::http::{header, HeaderMap, StatusCode, Uri};
+use axum::response::{IntoResponse, Response};
+use axum::routing::get;
+use axum::Router;
+
+use crate::extension::panel_publication::{PanelAssetIdentity, PublishedPanelAsset};
+use crate::extension::visibility::VisibilityCtx;
+use crate::extension::ExtensionManager;
+use crate::gateway::origin_policy::OriginPolicy;
+use crate::gateway::rate_limiter::{
+    RateLimitConfig, RateLimitKey, RateLimitScope, RateLimiter, WindowConfig,
 };
-use base64::Engine;
-use sha2::{Digest, Sha256};
+use crate::gateway::security::SharedTokenManager;
+use crate::gateway::trusted_proxy::resolve_client;
+use crate::sync_primitives::Arc;
 
-#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
-pub(crate) struct PanelAssetIdentity {
-    pub(crate) plugin_id: String,
-    pub(crate) plugin_version: String,
-    pub(crate) tab_id: String,
-    pub(crate) source_revision: u64,
+use crate::gateway::handlers::connect::resolve_connection_identity;
+use crate::gateway::openai_api::auth::extract_bearer_token;
+use crate::gateway::security::{DeviceTokenManager, SecurityStore};
+use crate::gateway::server::connection::auth::wall_admits;
+use crate::gateway::trusted_proxy::ResolvedClient;
+
+/// Fields are private: request values cannot manufacture an authenticated caller.
+#[derive(Debug, PartialEq, Eq)]
+pub(super) struct PanelHttpAuthContext {
+    user: String,
+    role: &'static str,
+    device_id: Option<String>,
 }
 
-impl PanelAssetIdentity {
-    pub(crate) fn from_declaration(declaration: &PanelUiCapabilityDeclaration) -> Self {
-        Self::new(
-            declaration.descriptor.key.plugin_id.clone(),
-            declaration.plugin_version.clone(),
-            declaration.descriptor.key.tab_id.clone(),
-            declaration.source_revision,
-        )
+impl PanelHttpAuthContext {
+    #[cfg(test)]
+    pub(super) fn user(&self) -> &str {
+        &self.user
     }
+}
 
-    pub(crate) fn new(
-        plugin_id: String,
-        plugin_version: String,
-        tab_id: String,
-        source_revision: u64,
+#[derive(Debug, PartialEq, Eq)]
+pub(super) enum PanelHttpAuthError {
+    MissingCredential,
+    InvalidCredential,
+    Walled,
+}
+
+/// Require a live credential on every HTTP request, including loopback.
+/// Bootstrap exchange and credential-less WebSocket compatibility are not HTTP grants.
+pub(super) fn authenticate(
+    headers: &HeaderMap,
+    client: ResolvedClient,
+    device_tokens: &DeviceTokenManager,
+    store: &SecurityStore,
+    validate_shared: &dyn Fn(&str) -> bool,
+) -> Result<PanelHttpAuthContext, PanelHttpAuthError> {
+    let mut values = headers.get_all(header::AUTHORIZATION).iter();
+    let value = values.next().ok_or(PanelHttpAuthError::MissingCredential)?;
+    if values.next().is_some() {
+        return Err(PanelHttpAuthError::InvalidCredential);
+    }
+    let token = value
+        .to_str()
+        .ok()
+        .and_then(extract_bearer_token)
+        .filter(|token| !token.chars().any(char::is_whitespace))
+        .ok_or(PanelHttpAuthError::InvalidCredential)?;
+
+    let device_id = match device_tokens.validate_device_token(token) {
+        Ok(Some(row)) => Some(row.device_id),
+        Ok(None) if validate_shared(token) => None,
+        _ => return Err(PanelHttpAuthError::InvalidCredential),
+    };
+    let (user, role) = resolve_connection_identity(client.local, device_id.as_deref(), store);
+    if !wall_admits(Some(role), "") {
+        return Err(PanelHttpAuthError::Walled);
+    }
+    let user = user.ok_or(PanelHttpAuthError::Walled)?;
+    Ok(PanelHttpAuthContext {
+        user,
+        role,
+        device_id,
+    })
+}
+
+// These handles are ingress dependencies, never a second publication registry.
+type ManagerReader = dyn Fn() -> Option<Arc<ExtensionManager>> + Send + Sync;
+type SharedValidator = dyn Fn(&str) -> bool + Send + Sync;
+
+pub(super) struct PanelAssetRouteState {
+    device_tokens: Arc<DeviceTokenManager>,
+    origin_policy: Arc<OriginPolicy>,
+    trusted_proxy_enabled: bool,
+    trusted_proxy_ips: Vec<IpAddr>,
+    allow_insecure_remote: bool,
+    tls_enabled: bool,
+    manager: Arc<ManagerReader>,
+    validate_shared: Arc<SharedValidator>,
+    rate_limiter: RateLimiter,
+}
+
+impl PanelAssetRouteState {
+    pub(super) fn new(
+        device_tokens: Arc<DeviceTokenManager>,
+        origin_policy: Arc<OriginPolicy>,
+        trusted_proxy_enabled: bool,
+        trusted_proxy_ips: Vec<IpAddr>,
+        allow_insecure_remote: bool,
+        tls_enabled: bool,
+        manager: Arc<ManagerReader>,
+        validate_shared: Arc<SharedValidator>,
     ) -> Self {
         Self {
-            plugin_id,
-            plugin_version,
-            tab_id,
-            source_revision,
-        }
-    }
-
-    fn same_slot(&self, other: &Self) -> bool {
-        self.plugin_id == other.plugin_id
-            && self.plugin_version == other.plugin_version
-            && self.tab_id == other.tab_id
-    }
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct PanelAssetRequest {
-    pub(crate) identity: PanelAssetIdentity,
-    pub(crate) entry: String,
-    pub(crate) authorized: bool,
-}
-
-impl PanelAssetRequest {
-    pub(crate) fn from_declaration(declaration: &PanelUiCapabilityDeclaration) -> Self {
-        Self::new(
-            PanelAssetIdentity::from_declaration(declaration),
-            declaration.descriptor.entry.clone(),
-            true,
-        )
-    }
-
-    pub(crate) fn new(identity: PanelAssetIdentity, entry: String, authorized: bool) -> Self {
-        Self {
-            identity,
-            entry,
-            authorized,
-        }
-    }
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) enum PanelAssetPublicationError {
-    InvalidDeclaration,
-    IntegrityMismatch,
-    Unauthorized,
-    Missing,
-    EntryMismatch,
-    Stale,
-    Retracted,
-}
-
-#[derive(Clone)]
-struct PanelAssetPublication {
-    declaration: PanelUiCapabilityDeclaration,
-    bytes: Vec<u8>,
-}
-
-#[derive(Default)]
-pub(crate) struct PanelAssetPublicationStore {
-    records: BTreeMap<PanelAssetIdentity, PanelAssetPublication>,
-}
-
-impl PanelAssetPublicationStore {
-    pub(crate) fn publish(
-        &mut self,
-        declaration: PanelUiCapabilityDeclaration,
-        bytes: Vec<u8>,
-    ) -> Result<PanelAssetIdentity, PanelAssetPublicationError> {
-        if !valid_declaration(&declaration) {
-            return Err(PanelAssetPublicationError::InvalidDeclaration);
-        }
-        if !matches_integrity(&bytes, declaration.asset_integrity.as_deref().unwrap()) {
-            return Err(PanelAssetPublicationError::IntegrityMismatch);
-        }
-
-        let identity = PanelAssetIdentity::from_declaration(&declaration);
-        if self
-            .records
-            .keys()
-            .find(|existing| existing.same_slot(&identity))
-            .is_some_and(|existing| existing.source_revision >= identity.source_revision)
-        {
-            return Err(PanelAssetPublicationError::Stale);
-        }
-        self.records
-            .retain(|existing, _| !existing.same_slot(&identity));
-        self.records.insert(
-            identity.clone(),
-            PanelAssetPublication { declaration, bytes },
-        );
-        Ok(identity)
-    }
-
-    pub(crate) fn retract(&mut self, identity: &PanelAssetIdentity) -> bool {
-        self.records.remove(identity).is_some()
-    }
-
-    pub(crate) fn serve(
-        &self,
-        request: &PanelAssetRequest,
-    ) -> Result<Vec<u8>, PanelAssetPublicationError> {
-        if !request.authorized {
-            return Err(PanelAssetPublicationError::Unauthorized);
-        }
-        let Some(publication) = self.records.get(&request.identity) else {
-            return Err(PanelAssetPublicationError::Missing);
-        };
-        if publication.declaration.descriptor.entry != request.entry {
-            return Err(PanelAssetPublicationError::EntryMismatch);
-        }
-        if !valid_relative_entry(&request.entry) {
-            return Err(PanelAssetPublicationError::EntryMismatch);
-        }
-        Ok(publication.bytes.clone())
-    }
-}
-
-fn valid_declaration(declaration: &PanelUiCapabilityDeclaration) -> bool {
-    declaration.origin == PanelUiCapabilityOrigin::Community
-        && declaration.public_base == "./tabs/"
-        && declaration.descriptor.status == PanelTabStatus::Enabled
-        && declaration.descriptor.trust == PanelUiTrust::Trusted
-        && valid_identity_segment(&declaration.descriptor.key.plugin_id)
-        && valid_identity_segment(&declaration.descriptor.key.tab_id)
-        && valid_version_segment(&declaration.plugin_version)
-        && valid_relative_entry(&declaration.descriptor.entry)
-        && valid_asset_integrity(declaration.asset_integrity.as_deref().unwrap_or_default())
-        && canonical_entry(declaration)
-}
-
-fn canonical_entry(declaration: &PanelUiCapabilityDeclaration) -> bool {
-    let prefix = format!(
-        "./tabs/{}/{}/",
-        declaration.descriptor.key.plugin_id, declaration.plugin_version
-    );
-    declaration
-        .descriptor
-        .entry
-        .strip_prefix(&prefix)
-        .is_some_and(|entry| valid_relative_entry(entry))
-}
-
-fn matches_integrity(bytes: &[u8], integrity: &str) -> bool {
-    let Some(encoded) = integrity.strip_prefix("sha256-") else {
-        return false;
-    };
-    let Ok(expected) = base64::engine::general_purpose::STANDARD.decode(encoded) else {
-        return false;
-    };
-    expected.as_slice() == Sha256::digest(bytes).as_slice()
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use aleph_protocol::panel::{
-        PANEL_UI_API_MAJOR, PanelTabDescriptor, PanelTabKey, PanelUiCapabilityOrigin,
-    };
-
-    const ENTRY: &str = "./tabs/community.example/1.2.3/overview.js";
-
-    fn declaration(revision: u64, bytes: &[u8]) -> PanelUiCapabilityDeclaration {
-        let digest = Sha256::digest(bytes);
-        PanelUiCapabilityDeclaration {
-            descriptor: PanelTabDescriptor {
-                key: PanelTabKey {
-                    plugin_id: "community.example".into(),
-                    tab_id: "overview".into(),
+            device_tokens,
+            origin_policy,
+            trusted_proxy_enabled,
+            trusted_proxy_ips,
+            allow_insecure_remote,
+            tls_enabled,
+            manager,
+            validate_shared,
+            rate_limiter: RateLimiter::new(RateLimitConfig {
+                // Authentication and byte reads cannot consume RPC budgets.
+                exempt_loopback: false,
+                rpc_heavy: WindowConfig {
+                    max_requests: 120,
+                    window_secs: 60,
+                    lockout_secs: None,
                 },
-                label: "Overview".into(),
-                icon: "layout".into(),
-                order: 10,
-                entry: ENTRY.into(),
-                api_major: PANEL_UI_API_MAJOR,
-                trust: PanelUiTrust::Trusted,
-                permissions: vec!["sessions.list".into()],
-                status: PanelTabStatus::Enabled,
-                status_detail: None,
-            },
-            origin: PanelUiCapabilityOrigin::Community,
-            plugin_version: "1.2.3".into(),
-            asset_integrity: Some(format!(
-                "sha256-{}",
-                base64::engine::general_purpose::STANDARD.encode(digest)
-            )),
-            public_base: "./tabs/".into(),
-            source_revision: revision,
+                ..RateLimitConfig::default()
+            }),
         }
     }
 
-    #[test]
-    fn admitted_declaration_resolves_exact_bytes_by_canonical_identity() {
-        let bytes = b"export default {}".to_vec();
-        let declaration = declaration(7, &bytes);
-        let mut store = PanelAssetPublicationStore::default();
-        store.publish(declaration.clone(), bytes.clone()).unwrap();
-
-        let request = PanelAssetRequest::from_declaration(&declaration);
-        assert_eq!(store.serve(&request).unwrap(), bytes);
-        assert_eq!(
-            request.identity,
-            PanelAssetIdentity::from_declaration(&declaration)
-        );
+    fn asset(&self, _caller: PanelHttpAuthContext, uri: &Uri) -> Option<PublishedPanelAsset> {
+        // The contextless snapshot RPC is Global-only. A URL cannot widen it.
+        // Match the raw URI, not a percent-decoded client path or filesystem path.
+        if uri.query().is_some() || uri.path().contains('%') {
+            return None;
+        }
+        let manager = (self.manager)()?;
+        let context = VisibilityCtx::default();
+        let snapshot = manager.panel_ui_capability_snapshot_for(&context);
+        let mut declarations = snapshot.declarations.iter().filter(|declaration| {
+            declaration.public_base == "./tabs/"
+                && declaration.descriptor.entry.strip_prefix('.') == Some(uri.path())
+        });
+        let declaration = declarations.next()?;
+        if declarations.next().is_some() {
+            return None;
+        }
+        // Identity, version, entry and revision all come from the admitted record.
+        // A concurrent replacement between these reads fails in the Core store.
+        manager
+            .panel_ui_asset(
+                &PanelAssetIdentity::from_declaration(declaration),
+                &declaration.descriptor.entry,
+                &context,
+            )
+            .ok()
     }
+}
 
-    #[test]
-    fn publication_fails_closed_for_integrity_path_auth_and_missing_records() {
-        let bytes = b"export default {}".to_vec();
-        let declaration = declaration(7, &bytes);
-        let mut store = PanelAssetPublicationStore::default();
-        assert!(
-            store
-                .publish(declaration.clone(), b"wrong bytes".to_vec())
-                .is_err()
-        );
-        store.publish(declaration.clone(), bytes).unwrap();
+pub(super) fn production_state(
+    device_tokens: Arc<DeviceTokenManager>,
+    origin_policy: Arc<OriginPolicy>,
+    trusted_proxy_enabled: bool,
+    trusted_proxy_ips: Vec<IpAddr>,
+    allow_insecure_remote: bool,
+    tls_enabled: bool,
+) -> Arc<PanelAssetRouteState> {
+    Arc::new(PanelAssetRouteState::new(
+        device_tokens,
+        origin_policy,
+        trusted_proxy_enabled,
+        trusted_proxy_ips,
+        allow_insecure_remote,
+        tls_enabled,
+        Arc::new(|| crate::extension::try_extension_manager().cloned()),
+        Arc::new(SharedTokenManager::global_validate),
+    ))
+}
 
-        let mut traversal = PanelAssetRequest::from_declaration(&declaration);
-        traversal.entry = "./tabs/community.example/1.2.3/../outside.js".into();
-        assert!(store.serve(&traversal).is_err());
+pub(super) fn panel_asset_routes(state: impl Into<Option<Arc<PanelAssetRouteState>>>) -> Router {
+    Router::new()
+        .route("/tabs", get(serve_asset))
+        .route("/tabs/", get(serve_asset))
+        .route("/tabs/{*entry}", get(serve_asset))
+        .with_state(state.into())
+}
 
-        let mut arbitrary_url = PanelAssetRequest::from_declaration(&declaration);
-        arbitrary_url.entry = "https://example.invalid/module.js".into();
-        assert!(store.serve(&arbitrary_url).is_err());
+fn denied() -> Response {
+    (
+        StatusCode::NOT_FOUND,
+        [(header::CACHE_CONTROL, "private, no-store")],
+        "Panel asset unavailable",
+    )
+        .into_response()
+}
 
-        let mut unauthorized = PanelAssetRequest::from_declaration(&declaration);
-        unauthorized.authorized = false;
-        assert!(store.serve(&unauthorized).is_err());
-
-        let missing = PanelAssetRequest::new(
-            PanelAssetIdentity::new(
-                "missing.example".into(),
-                "1.2.3".into(),
-                "overview".into(),
-                7,
-            ),
-            ENTRY.into(),
-            true,
-        );
-        assert!(store.serve(&missing).is_err());
+async fn serve_asset(
+    State(state): State<Option<Arc<PanelAssetRouteState>>>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    OriginalUri(uri): OriginalUri,
+    headers: HeaderMap,
+) -> Response {
+    // Built-in modules already belong to the public build asset owner. Preserve
+    // that delivery without turning a missing community entry into an SPA page.
+    // Authenticated requests always take the Core publication path below.
+    let public_path = uri.path().trim_start_matches('/');
+    if !headers.contains_key(header::AUTHORIZATION)
+        && uri.query().is_none()
+        && aleph_protocol::panel::valid_relative_entry(&format!("./{public_path}"))
+        && crate::gateway::control_plane::assets::ControlPlaneAssets::get(public_path).is_some()
+    {
+        return crate::gateway::control_plane::server::serve_static_asset(
+            headers,
+            axum::extract::Path(public_path.to_owned()),
+        )
+        .await;
     }
-
-    #[test]
-    fn replacement_retracts_stale_revision_and_explicit_generic_fields_do_not_publish() {
-        let first_bytes = b"export default 1".to_vec();
-        let replacement_bytes = b"export default 2".to_vec();
-        let first = declaration(7, &first_bytes);
-        let mut replacement = declaration(8, &replacement_bytes);
-        replacement.descriptor.label = "Changed label".into();
-        replacement.descriptor.icon = "different".into();
-        replacement.descriptor.order = 99;
-        let mut store = PanelAssetPublicationStore::default();
-
-        store.publish(first.clone(), first_bytes).unwrap();
-        assert!(matches!(
-            store.publish(first.clone(), b"export default stale".to_vec()),
-            Err(PanelAssetPublicationError::Stale)
-        ));
-        store
-            .publish(replacement.clone(), replacement_bytes.clone())
-            .unwrap();
-        assert!(
-            store
-                .serve(&PanelAssetRequest::from_declaration(&first))
-                .is_err()
-        );
-        assert_eq!(
-            store
-                .serve(&PanelAssetRequest::from_declaration(&replacement))
-                .unwrap(),
-            replacement_bytes
-        );
-
-        let identity = PanelAssetIdentity::from_declaration(&replacement);
-        assert!(store.retract(&identity));
-        assert!(
-            store
-                .serve(&PanelAssetRequest::from_declaration(&replacement))
-                .is_err()
-        );
+    let Some(state) = state else {
+        return denied();
+    };
+    let client = resolve_client(
+        peer.ip(),
+        &headers,
+        state.trusted_proxy_enabled,
+        &state.trusted_proxy_ips,
+    );
+    if super::handler::refuse_insecure_remote(
+        client.local,
+        state.tls_enabled || client.secure,
+        state.allow_insecure_remote,
+    ) {
+        return denied();
     }
+    // Malformed or duplicate Origin/Host values must not become an absent header.
+    if [header::ORIGIN, header::HOST].iter().any(|name| {
+        headers.get_all(name).iter().count() > 1
+            || headers
+                .get(name)
+                .is_some_and(|value| value.to_str().is_err())
+    }) {
+        return denied();
+    }
+    if !state.origin_policy.is_allowed(
+        headers
+            .get(header::ORIGIN)
+            .and_then(|value| value.to_str().ok()),
+        headers
+            .get(header::HOST)
+            .and_then(|value| value.to_str().ok()),
+    ) || headers.contains_key("x-aleph-project")
+        || headers.contains_key("x-project-id")
+    {
+        return denied();
+    }
+    if state
+        .rate_limiter
+        .check_and_record(&RateLimitKey::new(
+            &client.ip.to_string(),
+            RateLimitScope::RpcHeavy,
+        ))
+        .is_err()
+    {
+        return denied();
+    }
+    let caller = match authenticate(
+        &headers,
+        client,
+        &state.device_tokens,
+        state.device_tokens.store(),
+        state.validate_shared.as_ref(),
+    ) {
+        Ok(caller) => caller,
+        Err(_) => return denied(),
+    };
+    let Some(asset) = state.asset(caller, &uri) else {
+        return denied();
+    };
+    (
+        [
+            (header::CONTENT_TYPE, "text/javascript; charset=utf-8"),
+            (header::CACHE_CONTROL, "private, no-store"),
+            (header::X_CONTENT_TYPE_OPTIONS, "nosniff"),
+            (header::VARY, "Authorization, Origin"),
+        ],
+        Body::from(asset.bytes.as_ref().to_vec()),
+    )
+        .into_response()
 }

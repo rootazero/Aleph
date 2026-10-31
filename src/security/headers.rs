@@ -193,7 +193,13 @@ fn inject_security_headers(headers: &mut http::HeaderMap, is_static: bool) {
         }
     }
 
-    if !is_static {
+    // Keep the explicit private no-store policy of authenticated asset routes.
+    // Every other non-static response still receives the mandatory default.
+    if !is_static
+        && !headers
+            .get(http::header::CACHE_CONTROL)
+            .is_some_and(|value| value == "private, no-store")
+    {
         // SAFETY: "no-store" is a valid static header value
         let v = HeaderValue::from_static(CACHE_CONTROL_NO_STORE_VALUE);
         headers.insert(http::header::CACHE_CONTROL, v);

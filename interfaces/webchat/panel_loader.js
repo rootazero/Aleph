@@ -23,12 +23,22 @@ const parseIntegrity = (integrity) => {
 const sameBytes = (left, right) =>
     left.length === right.length && left.every((value, index) => value === right[index]);
 
-const importVerifiedModule = async (entry, integrity) => {
+const importVerifiedModule = async (entry, integrity, credential) => {
     const expected = parseIntegrity(integrity);
-    const url = new URL(entry, import.meta.url).href;
+    const url = new URL(entry, import.meta.url);
     let response;
     try {
-        response = await fetch(url, { credentials: 'same-origin', redirect: 'error' });
+        const headers = {};
+        if (credential !== null) {
+            const gateway = new URL(credential.gateway_url);
+            gateway.protocol = gateway.protocol === 'wss:' ? 'https:' : gateway.protocol === 'ws:' ? 'http:' : gateway.protocol;
+            if (!['http:', 'https:'].includes(gateway.protocol)
+                || url.origin !== gateway.origin || url.origin !== globalThis.location?.origin
+                || typeof credential.token !== 'string' || !credential.token || /\s/.test(credential.token)
+                || (credential.current && !credential.current())) throw Error('invalid host binding');
+            headers.Authorization = `Bearer ${credential.token}`;
+        }
+        response = await fetch(url.href, { credentials: 'same-origin', redirect: 'error', cache: 'no-store', headers });
     } catch (cause) {
         throw failure('AssetFetchFailed', cause);
     }
@@ -42,6 +52,7 @@ const importVerifiedModule = async (entry, integrity) => {
     }
     const actual = new Uint8Array(await crypto.subtle.digest('SHA-256', bytes));
     if (!sameBytes(actual, expected)) throw failure('IntegrityMismatch');
+    if (credential?.current && !credential.current()) throw failure('AssetFetchFailed');
 
     const blobUrl = URL.createObjectURL(new Blob([bytes], { type: 'text/javascript' }));
     try {
@@ -53,10 +64,10 @@ const importVerifiedModule = async (entry, integrity) => {
     }
 };
 
-export async function loadPanelModule(entry, integrity = null) {
+export async function loadPanelModule(entry, integrity = null, credential = null) {
     let module;
     try {
-        module = integrity === null ? await import(new URL(entry, import.meta.url).href) : await importVerifiedModule(entry, integrity);
+        module = integrity === null ? await import(new URL(entry, import.meta.url).href) : await importVerifiedModule(entry, integrity, credential);
         if (integrity === null && typeof module.default === 'function') await module.default();
     } catch (cause) {
         if (cause?.code === 'AssetFetchFailed' || cause?.code === 'InvalidAssetIntegrity' || cause?.code === 'IntegrityMismatch') throw cause;

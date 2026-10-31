@@ -100,12 +100,14 @@ pub(crate) const LIVE_SECTIONS: &[&str] = &["behavior", "execution", "search"];
 ///   here: a number in a comment is a list that rots. `PoliciesConfig` has
 ///   ten fields today; `terminal` is the only one this change added, so the
 ///   previous "six" was already wrong before it arrived.)
-/// - `policies.terminal` — declared live because each of its three fields is
-///   either applied at apply time or applies to work started afterwards, and
-///   NONE of them silently requires a restart:
-///   * `enabled` — read fresh from the live config on every `pty.spawn`, and
-///     turning it off runs `PtyManager::close_all`, so the change is
-///     complete when the patch returns.
+/// - `policies.terminal` — supports explicit live application. Declaration
+///   alone is not completion: `classify_verified` requires the matching
+///   `live_applied` target and downgrades missing context, timeout or failure:
+///   * `enabled` — read fresh from shared Config at spawn. Explicit enable
+///     requires the existing Gateway bus; disable reports live only after
+///     source cleanup and retained flush-driver join complete. Persistence
+///     alone is not live evidence; identical patches remain no-ops, with
+///     incomplete application recoverable through explicit `config.reload`.
 ///   * `max_sessions` — read fresh at spawn time (deliberately NOT a
 ///     `const`; a bare constant would make the key inert while this list
 ///     advertised it as live).

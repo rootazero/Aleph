@@ -40,7 +40,8 @@ pub(in crate::commands::start) async fn setup_config_watcher(
                     "config.reload",
                     config_handlers::handle_reload_with_subsystems,
                     watcher,
-                    ac
+                    ac,
+                    event_bus
                 );
             } else {
                 register_handler!(

@@ -1724,6 +1724,8 @@ fn stop_watcher_then(watcher: Option<WatcherStop>, remove_servers: Disposer) -> 
 
 #[cfg(test)]
 mod tests {
+    mod panel_publication;
+
     use super::*;
     use crate::discovery::DiscoveryConfig;
     use crate::extension::{ExtensionConfig, ExtensionManager};
