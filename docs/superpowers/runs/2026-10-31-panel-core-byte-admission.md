@@ -4,7 +4,7 @@ Plan / 计划: [Core byte-admission plan](../plans/2026-10-31-panel-core-byte-ad
 
 Design / 设计: [Approved design](../specs/2026-10-31-panel-core-byte-admission-design.md)
 
-Status / 状态: **Core implementation and scoped acceptance verified; local commit/delivery closure follows below. Broad extension-suite failures remain recorded. / Core 实现与聚焦验收已验证，本地提交收尾见下；全 extension 失败如实保留。**
+Status / 状态: **Dependency #7 delivered with scoped Core acceptance; original HTTP/browser tasks #2–#5 remain pending. The broader extension suite is not fully green. / 依赖 #7 已按 Core 范围交付，原 HTTP/browser 任务 #2–#5 仍待实施；全 extension 并非全绿。**
 
 ## Authorization and isolation / 授权与隔离
 
@@ -56,6 +56,9 @@ Status / 状态: **Core implementation and scoped acceptance verified; local com
 - JS loader: `node --test tests/panel_loader.test.mjs`, exit **0**, **12 passed / 0 failed / 1 skipped**; generated glue absent (`ALEPH_PANEL_BRIDGE_GLUE`). / JS loader 通过，generated glue 一项跳过。
 - Documentation: eight changed Markdown files, **101** resolvable local links, **0** missing targets, **0** new machine paths; four pre-existing example targets excluded. Changed-file rustfmt and `git diff --check` passed. / 文档与改动格式检查通过，原有示例链接单独排除。
 - Fresh read-only whole-branch review: `del_mvwbhf5a_gg5i` left a complete written assessment, then exited `SIGTERM`; this is written review evidence, not a clean-exit run. It found no definite Critical/Important production-code defect and one Minor concurrent-test evidence gap. The main agent regraded the gap Important for acceptance evidence: `observed > 0` could pass with only the initial version or flake before the reader ran. The test now acknowledges successful exact-byte reads of versions 1.0.0, 2.0.0 and 3.0.0 before stopping; snapshot→asset races may still fail closed. This is a test-only strengthening, not a new production fix or invented RED. The strengthened test passed in both the broad run and focused acceptance. / 书面审查完整但 SIGTERM；并发证据缺口升级为验收 Important，逐版本成功读取确认已在广泛回归及聚焦验收中通过。
+
+- Task 3 commit: `6c3c2a1d27e05a1e80296a8adec4fb674029690d` — `feat(panel): publish scoped assets through lifecycle`. Guarded `task-done` reran publication acceptance after the commit: **16 reported passed / 0 failed**, **4.03s**, same explicit symlink limitation. / Task 3 提交后重跑通过，symlink 限制不变。
+- All implementation commits remain local on `panel-community-live-publication`; the plan workspace, RED/GREEN logs and written review are retained. No merge, push, global hook reconfiguration or unrelated production fix was performed. / 所有提交仅留本地，保留台账与证据，没有 merge/push 或无关 production 修改。
 
 ### Review rulings / 审查边界裁定
 

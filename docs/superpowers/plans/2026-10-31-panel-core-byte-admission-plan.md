@@ -92,7 +92,7 @@
 - [x] **Step 3:** Wire the existing lifecycle projection to prepare/commit; preserve the sole `after_transition` trigger and existing load-gate trust semantics. No contextful HTTP constructor, new client project parameter or route is added. Preserve zero-context RPC's shared wire shape while narrowing its records to Global.
 - [x] **Step 4:** Run focused Core store/admission/lifecycle tests, existing declaration/manifest/projection/RPC tests, affected Terminal source/projection/registry/loader tests and JS loader tests. Run `cargo check -p alephcore --lib` and appropriate full Core test command, with serial Cargo and the memory gate each time. Record named baseline failures/skips/build blockers accurately; do not label partial runs green. Do not claim real Gateway/browser proof.
 - [x] **Step 5:** Update approved spec status, publication audit/report, `FEATURE_LOCATOR` §6.11, `TERMINAL_RUNTIME` and tracked run ledger to distinguish proven Core admission from still-deferred route-owned authentication/browser delivery. Run one fresh read-only whole-branch review focused on ownership, path exposure, integrity, revision, scope, dependency direction and passive discovery; fix Important/Critical findings and rerun relevant tests.
-- [ ] **Step 6:** Commit `feat(panel): publish scoped assets through lifecycle`; finish tracked-clean with local commits only. Mark todo #7 complete only after actual runtime acceptance evidence, leaving #2–#5 pending with their real dependencies.
+- [x] **Step 6:** Commit `feat(panel): publish scoped assets through lifecycle`; finish tracked-clean with local commits only. Mark todo #7 complete only after actual runtime acceptance evidence, leaving #2–#5 pending with their real dependencies.
 
 ## Execution note / 执行说明
 
