@@ -12,6 +12,7 @@ use crate::config::backup::ConfigBackup;
 use crate::config::schema::generate_config_schema;
 use crate::config::Config;
 use crate::error::{AlephError, Result};
+use crate::gateway::event_bus::GatewayEventBus;
 use crate::sync_primitives::Arc;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
@@ -176,6 +177,8 @@ pub struct ConfigPatcher {
     /// verification. Absent in tests / offline construction — a requested
     /// health check then reports `Skipped` rather than failing.
     vault: Option<Arc<crate::gateway::security::SharedTokenManager>>,
+    /// Existing Gateway bus; wiring this context does not initialize Terminal.
+    event_bus: Option<Arc<GatewayEventBus>>,
 }
 
 impl ConfigPatcher {
@@ -187,6 +190,7 @@ impl ConfigPatcher {
             backup,
             last_known_mtime: Mutex::new(None),
             vault: None,
+            event_bus: None,
         }
     }
 
@@ -197,6 +201,13 @@ impl ConfigPatcher {
     #[must_use]
     pub fn with_vault(mut self, vault: Arc<crate::gateway::security::SharedTokenManager>) -> Self {
         self.vault = Some(vault);
+        self
+    }
+
+    /// Supply the existing Gateway bus without initializing Terminal.
+    #[must_use]
+    pub fn with_event_bus(mut self, event_bus: Arc<GatewayEventBus>) -> Self {
+        self.event_bus = Some(event_bus);
         self
     }
 
@@ -356,7 +367,11 @@ impl ConfigPatcher {
         // concurrent changes to other sections.
         self.commit_patch(&request, &top_section).await?;
 
-        // 12b. Hot-apply onto the running runtime.
+        // Record our persisted write before the cancellable lifecycle wait,
+        // so a cancelled caller does not later conflict with its own write.
+        self.record_mtime().await;
+
+        // 13. Hot-apply onto the running runtime.
         //
         // This lives in the patcher — the single write chokepoint — and NOT in
         // each calling surface, because that is exactly how it went wrong
@@ -367,11 +382,13 @@ impl ConfigPatcher {
         // its own response already promises.
         let live_applied = {
             let cfg = self.config.read().await;
-            crate::config::live_apply::apply_live_sections(&cfg, &[top_section.as_str()])
+            crate::config::live_apply::apply_live_sections(
+                &cfg,
+                &[top_section.as_str()],
+                self.event_bus.as_ref(),
+            )
+            .await
         };
-
-        // 13. Update mtime
-        self.record_mtime().await;
 
         // 14. Optional post-patch verification — probe the affected provider(s)
         // so a credential/endpoint change can be confirmed reachable in the same
@@ -651,6 +668,9 @@ impl ConfigPatcher {
             }
         }
 
+        // The restored file is ours even if live application is cancelled.
+        self.record_mtime().await;
+
         // 7b. Hot-apply. A snapshot can differ in ANY live target — section
         // or subsection — so every one of them is pushed, not just the one
         // the operator happens to be thinking about. Undoing a route change
@@ -662,7 +682,12 @@ impl ConfigPatcher {
         let live_applied = {
             let cfg = self.config.read().await;
             let live_targets = crate::config::reload_impact::live_targets();
-            let live_applied = crate::config::live_apply::apply_live_sections(&cfg, &live_targets);
+            let live_applied = crate::config::live_apply::apply_live_sections(
+                &cfg,
+                &live_targets,
+                self.event_bus.as_ref(),
+            )
+            .await;
             let complete = live_targets
                 .iter()
                 .all(|target| live_applied.contains(target));
@@ -675,7 +700,6 @@ impl ConfigPatcher {
             }
             live_applied
         };
-        self.record_mtime().await;
 
         info!(
             restored_from = %entry.timestamp,

@@ -592,12 +592,16 @@ pub(super) fn setup_graceful_shutdown(args: &Args) -> tokio::sync::oneshot::Rece
         // is not read by the next boot as a crash that interrupted every open
         // terminal. After the unlink (cheaper), before the browser stop and
         // the 2 s sleep (both dearer).
-        let terminals = alephcore::gateway::pty::manager().close_all();
-        if terminals > 0 {
-            tracing::warn!(
-                count = terminals,
-                "closed terminal sessions before forced exit"
-            );
+        if let Some(manager) = alephcore::gateway::pty::try_manager() {
+            match tokio::time::timeout(std::time::Duration::from_secs(1), manager.deactivate())
+                .await
+            {
+                Ok(Ok(())) => tracing::warn!("stopped terminal driver before forced exit"),
+                Ok(Err(error)) => tracing::warn!(%error, "terminal driver forced shutdown failed"),
+                Err(_) => {
+                    tracing::warn!(state = ?manager.lifecycle_snapshot(), "terminal driver join pending at forced exit")
+                }
+            }
         }
         // The wedged path. `std::process::exit(0)` below skips the orderly
         // block entirely, so the browser stop has to be here too — and this is

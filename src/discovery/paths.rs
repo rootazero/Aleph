@@ -23,10 +23,14 @@ pub(crate) const MCP_CONFIG_FILE: &str = ".mcp.json";
 // =============================================================================
 
 /// Get the user's home directory. Used by `claude_home_dir` (scanner-internal).
+///
+/// A failure here is a USER home failure (`HOME` / `USERPROFILE`), not an
+/// Aleph home failure (`~/.aleph`, `ALEPH_HOME`) — hence its own error
+/// variant, so the reader is not sent to look at the wrong directory.
 pub(crate) fn home_dir() -> DiscoveryResult<PathBuf> {
     // Preserve the structured AlephError (with its actionable "set HOME"
     // message) instead of flattening it into InvalidPath's string.
-    crate::utils::paths::get_home_dir().map_err(DiscoveryError::HomeDir)
+    crate::utils::paths::get_home_dir().map_err(DiscoveryError::UserHome)
 }
 
 /// Get the Aleph home directory (~/.aleph/)
@@ -155,9 +159,28 @@ pub(crate) fn validate_path_component(name: &str) -> DiscoveryResult<()> {
     // already known to contain no separators is the same as `name == ".."`
     // (the only traversal component that can actually escape after the
     // separator check above). Tighten to the traversal case only.
+    //
+    // Both self-reference components are refused, because both move the
+    // resolved path away from where the caller named it: `..` escapes to
+    // the parent, and `.` resolves back to the directory itself — so a `.`
+    // component roots the path one level ABOVE the name it was given.
     if name == ".." {
         return Err(DiscoveryError::InvalidPath(format!(
             "path component cannot be parent directory reference: {name}"
+        )));
+    }
+    if name == "." {
+        return Err(DiscoveryError::InvalidPath(
+            "path component cannot be a directory reference: .".to_string(),
+        ));
+    }
+    // Windows only: `PathBuf::push` REPLACES the base path when the pushed
+    // path carries a drive prefix and no root, so a component like `C:`
+    // would take the joined path out of the tree entirely. `:` is a legal
+    // character in a Unix file name, so Unix behavior must not change.
+    if cfg!(windows) && name.contains(':') {
+        return Err(DiscoveryError::InvalidPath(format!(
+            "path component cannot contain a drive prefix: {name}"
         )));
     }
     Ok(())

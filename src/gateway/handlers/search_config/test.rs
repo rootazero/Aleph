@@ -164,7 +164,7 @@ pub async fn handle_test(
                 // without poking the runtime" the day a consumed field lands
                 // here. Absent handle → no-op, honestly unreported (this
                 // response's payload is the probe result, not a save verdict).
-                crate::config::live_apply::apply_live_sections(&cfg, &["search"]);
+                crate::config::live_apply::apply_live_sections(&cfg, &["search"], None).await;
             }
         }
     }

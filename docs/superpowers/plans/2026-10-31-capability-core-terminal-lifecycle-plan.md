@@ -4,6 +4,8 @@
 > **Gate:** This plan is executable only after explicit approval of `docs/superpowers/specs/2026-10-31-capability-core-terminal-lifecycle-design.md`.
 >
 > **闸门：** 只有明确批准上述 design 后，才能执行本 plan。
+>
+> **Approval recorded / 已记录批准（2026-10-31）:** The user's implementation request explicitly approves this plan and the design above for the bounded Terminal lifecycle slice. / 用户实施指令明确批准本 plan 与上述 design，授权范围仅为受限 Terminal lifecycle slice。
 
 ## Goal / 目标
 

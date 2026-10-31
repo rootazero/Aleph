@@ -385,7 +385,9 @@ Corpora are reconciled sequentially: each reconcile already fans out over catego
 
 ### 6.4 Vault watcher — markdown edited outside Aleph
 
-`src/memory/notes/watcher.rs`. `spawn_note_vault_watcher(indexer)` puts one debounced recursive watch (`notify` + `notify-debouncer-full`, 750 ms settle) over the whole note root and returns a `NoteVaultWatcher`; **dropping it stops the watch**, so the server binds it for the process lifetime.
+`src/memory/notes/watcher.rs`. `spawn_note_vault_watcher(indexer)` puts one debounced recursive watch (`notify` + `notify-debouncer-full`, 750 ms settle) over the whole note root and returns a `NoteVaultWatcher`; the server binds it for the process lifetime. **Current Drop requests stop but does not await completion.** The owner holds only the debouncer; the Tokio consumer JoinHandle is currently discarded. In the pinned debouncer 0.7.0, Drop sets a stop flag while explicit `stop(self)` waits internally and hides the native join result. Do not infer worker/consumer quiescence from dropping the watch.
+
+当前 Drop 仅请求停止，不证明后台 consumer 或 debouncer 线程已收尾。下一阶段的 [owned-shutdown design](../../superpowers/specs/2026-10-31-capability-core-note-watcher-shutdown-design.md)、[plan](../../superpowers/plans/2026-10-31-capability-core-note-watcher-shutdown-plan.md) 与 [restart prompt](../../superpowers/prompts/2026-10-31-capability-core-note-watcher-shutdown-prompt.md) **仅为未实施提案**；不会增加配置开关，也不代表整个 Memory 可关闭。The separate startup rebuild and shared NoteStore remain outside that proposed watcher boundary.
 
 The markdown is the source of truth and every agent directory gets an `.obsidian/` vault config written into it (§9) — i.e. the product tells the user to open their memory in Obsidian. Until this existed nothing honoured that: an edit made outside Aleph changed the truth and search, links and the graph went on serving the old body until the next restart (and, before §6.3, forever for any corpus but the default agent's). A deletion was worse — the index row survived, so recall kept surfacing a note whose file was gone.
 

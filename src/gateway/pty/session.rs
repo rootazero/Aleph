@@ -153,6 +153,8 @@ pub struct PtySession {
     killer: crate::sync_primitives::Mutex<Box<dyn ChildKiller + Send + Sync>>,
     /// Flipped once the child exits or the session is closed.
     closed: AtomicBool,
+    /// Successful wait() evidence, independent of a requested or failed kill.
+    child_exited: AtomicBool,
     /// The server-held screen. Fed by the reader thread, drained by the flush
     /// task. A `Mutex` rather than a channel because both halves want the
     /// latest state, not every intermediate one.
@@ -170,6 +172,8 @@ pub struct PtySession {
     shell_pid: Option<u32>,
 }
 
+pub(crate) type ExitSink = Arc<dyn Fn(&PtySession, Option<u32>) + Send + Sync>;
+
 impl PtySession {
     /// Spawn `opts` behind a fresh PTY and start streaming its output to `bus`
     /// (when attached). Returns the shared session handle; the reader thread
@@ -178,6 +182,23 @@ impl PtySession {
         id: String,
         opts: &SpawnOptions,
         bus: Option<Arc<GatewayEventBus>>,
+    ) -> Result<Arc<Self>, String> {
+        Self::spawn_inner(id, opts, bus, None)
+    }
+
+    pub(crate) fn spawn_with_sink(
+        id: String,
+        opts: &SpawnOptions,
+        sink: ExitSink,
+    ) -> Result<Arc<Self>, String> {
+        Self::spawn_inner(id, opts, None, Some(sink))
+    }
+
+    fn spawn_inner(
+        id: String,
+        opts: &SpawnOptions,
+        bus: Option<Arc<GatewayEventBus>>,
+        sink: Option<ExitSink>,
     ) -> Result<Arc<Self>, String> {
         let rows = if opts.rows == 0 { 24 } else { opts.rows };
         let cols = if opts.cols == 0 { 80 } else { opts.cols };
@@ -271,12 +292,13 @@ impl PtySession {
             master: crate::sync_primitives::Mutex::new(Some(master)),
             killer: crate::sync_primitives::Mutex::new(killer),
             closed: AtomicBool::new(false),
+            child_exited: AtomicBool::new(false),
             screen: crate::sync_primitives::Mutex::new(screen),
             seq: crate::sync_primitives::Mutex::new(0),
             shell_pid,
         });
 
-        spawn_reader(session.clone(), reader, child, bus);
+        spawn_reader(session.clone(), reader, child, bus, sink);
         Ok(session)
     }
 
@@ -316,9 +338,31 @@ impl PtySession {
     /// Terminate the child process. Idempotent — the reader thread also marks
     /// the session closed on EOF.
     pub fn kill(&self) {
+        let _ = self.try_kill();
+    }
+
+    #[cfg(test)]
+    pub(crate) fn replace_killer_for_test(
+        &self,
+        replacement: Box<dyn portable_pty::ChildKiller + Send + Sync>,
+    ) -> Box<dyn portable_pty::ChildKiller + Send + Sync> {
+        std::mem::replace(
+            &mut *self.killer.lock().unwrap_or_else(|e| e.into_inner()),
+            replacement,
+        )
+    }
+
+    pub(crate) fn try_kill(&self) -> Result<(), String> {
+        // Failed kills remain retryable even though input was already revoked.
         self.closed.store(true, Ordering::SeqCst);
-        let mut k = self.killer.lock().unwrap_or_else(|e| e.into_inner());
-        let _ = k.kill();
+        if self.child_exited.load(Ordering::SeqCst) {
+            return Ok(());
+        }
+        match self.killer.lock().unwrap_or_else(|e| e.into_inner()).kill() {
+            Ok(()) => Ok(()),
+            Err(_) if self.child_exited.load(Ordering::SeqCst) => Ok(()),
+            Err(error) => Err(format!("kill failed for {}: {error}", self.id)),
+        }
     }
 
     /// Whether the child has exited or the session was closed.
@@ -524,6 +568,7 @@ fn spawn_reader(
     mut reader: Box<dyn Read + Send>,
     mut child: Box<dyn Child + Send + Sync>,
     bus: Option<Arc<GatewayEventBus>>,
+    sink: Option<ExitSink>,
 ) {
     // Never sent on — the reader's exit is signalled by DROPPING the sender,
     // so the waiter's `recv_timeout` tells "reader gone" (`Disconnected`)
@@ -558,8 +603,17 @@ fn spawn_reader(
             // A `wait()` that errors has no exit code to report — `None`, not
             // `0`: an `Err` may only say "I do not know" (criterion #8), and
             // the journal row below is durable.
-            let exit_code = child.wait().ok().map(|s| s.exit_code());
-            settle_exit(&session, exit_code, bus.as_ref(), &reader_gone);
+            let exit_code = child.wait().ok().map(|status| {
+                session.child_exited.store(true, Ordering::SeqCst);
+                status.exit_code()
+            });
+            settle_exit(
+                &session,
+                exit_code,
+                bus.as_ref(),
+                &reader_gone,
+                sink.as_ref(),
+            );
         })
         .ok();
 }
@@ -620,6 +674,7 @@ fn settle_exit(
     exit_code: Option<u32>,
     bus: Option<&Arc<GatewayEventBus>>,
     reader_gone: &std::sync::mpsc::Receiver<()>,
+    sink: Option<&ExitSink>,
 ) {
     use std::sync::mpsc::RecvTimeoutError;
 
@@ -658,6 +713,10 @@ fn settle_exit(
         exit_code.map(|c| c as i32),
         &screen,
     );
+    if let Some(sink) = sink {
+        sink(session, exit_code);
+        return;
+    }
     if let Some(bus) = bus {
         // KNOWN LIMIT, kept deliberately: the `pty.exit` payload has always
         // carried `exit_code` as an integer, and a `wait()` error has always
@@ -672,7 +731,7 @@ fn settle_exit(
         );
         let _ = bus.publish(serde_json::to_string(&ev).unwrap_or_default());
     }
-    super::manager().remove(&session.id);
+    // Standalone sessions have no manager to mutate; managed sessions use the captured sink.
 }
 
 #[cfg(test)]
@@ -812,7 +871,7 @@ mod tests {
         let (tx, rx) = std::sync::mpsc::channel::<()>();
         drop(tx);
         let t0 = std::time::Instant::now();
-        settle_exit(&session, Some(0), None, &rx);
+        settle_exit(&session, Some(0), None, &rx, None);
         let took = t0.elapsed();
 
         let master_kept = session

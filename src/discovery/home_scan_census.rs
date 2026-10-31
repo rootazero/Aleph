@@ -33,12 +33,16 @@
 //!   `hermetic_home()` / `isolated_home()` shape); a same-file helper whose
 //!   body carries an ENTRY and no REDIRECT counts as an entry where it is
 //!   called (the `manager_with_project_plugin(..)` shape). One level of
-//!   indirection, same file only.
+//!   indirection, same file only. "Called" means an UNQUALIFIED call: a
+//!   qualified one (`Owner::helper(`) does not count — in Rust a qualified
+//!   path names an associated fn or a method, never a free helper.
 //!
-//! A `#[test]` fn whose body (with that one level of helpers) has an ENTRY
-//! and no REDIRECT is a violation. So is a reaching, non-redirecting helper
-//! that no test in its own file calls: its callers live elsewhere, and this
-//! scan will not guess whether they redirect.
+//! A TEST fn — one carrying a recognised test attribute (`#[test]`,
+//! `#[tokio::test]`, `#[rstest]`, `#[test_case]`, `#[quickcheck]`) — whose
+//! body (with that one level of helpers) has an ENTRY and no REDIRECT is a
+//! violation. So is a reaching, non-redirecting helper that no test in its
+//! own file calls: its callers live elsewhere, and this scan will not guess
+//! whether they redirect.
 //!
 //! # What it does NOT recognise (判据 §3: a green covers only these shapes)
 //!
@@ -61,6 +65,16 @@
 //!   the P5.11 report's concerns.
 //! - `$HOME/.agents`, which `DirectoryScanner::new` resolves regardless of
 //!   `scan_claude_dirs`: out of this rule's `~/.claude` scope.
+//! - A test attribute outside the list above: a macro that expands to a test
+//!   fn (`#[my_test_macro]`), or a parameterised-test attribute spelled some
+//!   other way. Such a fn is filed as a HELPER here, not as a test.
+//! - The drift from `utils::source_scan::scan_test_bodies`, the shared
+//!   implementation of the two questions this file re-derives ("which fn is
+//!   a test" and "where does its body end"): the shared scanner keeps every
+//!   attribute TAG attached to a test (`TestBody::attrs`), while this copy
+//!   reduces the attributes to one boolean, so the parameterised-test
+//!   attributes had to be named here separately. Reconciling the two is a
+//!   follow-up, not this change.
 
 #[cfg(test)]
 mod tests {
@@ -111,6 +125,22 @@ mod tests {
 
     /// Whether `line` calls `name(` as a whole identifier (not `x_name(`, not
     /// its own `fn name(` definition).
+    ///
+    /// A QUALIFIED call — `Owner::name(` or `owner.name(` — is NOT a call to
+    /// the helper `name`. In Rust a qualified path never names a free
+    /// function (`Owner::name(` is an associated fn, `owner.name(` a method),
+    /// so the helper cannot be what they call; and where the census cannot
+    /// prove the owner, it reports the file. The collision is not
+    /// hypothetical:
+    /// `src/gateway/execution_engine/slash_command_body/tests.rs` defines a
+    /// redirecting helper named `new` (its body carries `scan_claude_dirs:
+    /// false`) and also calls `TempDir::new(`, `Arc::new(` and
+    /// `PluginRecord::new(`. Under a rule that accepts any `name(`, every one
+    /// of those constructors was read as a call to that helper, so a test in
+    /// that file was credited with the redirect on the strength of an
+    /// unrelated `X::new(` — a false green on the exact rule this census
+    /// exists to enforce. A qualified call therefore never counts: where the
+    /// census cannot prove the owner, it reports the file.
     fn calls(line: &str, name: &str) -> bool {
         let needle = format!("{name}(");
         let mut from = 0;
@@ -118,7 +148,11 @@ mod tests {
             let start = from + at;
             let before = line[..start].chars().next_back();
             let is_def = line[..start].trim_end().ends_with("fn");
-            if !is_def && !before.is_some_and(|c| c.is_ascii_alphanumeric() || c == '_') {
+            let is_qualified = before.is_some_and(|c| c == ':' || c == '.');
+            if !is_def
+                && !is_qualified
+                && !before.is_some_and(|c| c.is_ascii_alphanumeric() || c == '_')
+            {
                 return true;
             }
             from = start + needle.len();
@@ -128,6 +162,17 @@ mod tests {
 
     /// Every fn in `code` with its own ENTRY/REDIRECT verdict. Nested fns are
     /// listed on their own and also lie inside their parent's body.
+    ///
+    /// DUPLICATES `utils::source_scan::scan_test_bodies`, the shared
+    /// implementation (the pty census uses it). The two answer the same two
+    /// questions — "which fn is a test" and "where does its body end" — and
+    /// they can drift, because they are two answers to one fact: the shared
+    /// scanner keeps every attribute TAG attached to a test
+    /// (`TestBody::attrs`), while this copy reduces the attributes to one
+    /// boolean, so the parameterised-test attributes had to be named here
+    /// separately. Reconciling them needs the shared scanner to grow, which
+    /// is a file this change does not own — a follow-up, not a silent
+    /// assumption that the two agree.
     fn fn_bodies(code: &str) -> Vec<FnBody> {
         let lines: Vec<&str> = code.lines().collect();
         let mut out = Vec::new();
@@ -139,8 +184,7 @@ mod tests {
             let mut is_test = false;
             while above > 0 && lines[above - 1].trim().starts_with('#') {
                 above -= 1;
-                let a = lines[above].trim();
-                is_test |= a == "#[test]" || a.starts_with("#[tokio::test");
+                is_test |= is_test_attribute(lines[above].trim());
             }
             let (mut depth, mut opened, mut end) = (0i32, false, None);
             for (k, b) in lines.iter().enumerate().skip(i) {
@@ -170,6 +214,23 @@ mod tests {
             });
         }
         out
+    }
+
+    /// Whether an attribute line marks the fn it is attached to as a TEST.
+    ///
+    /// `#[test]` and `#[tokio::test]` are the spellings this repo uses
+    /// today; the parameterised-test attributes are named too, so a
+    /// `#[rstest]` / `#[test_case]` / `#[quickcheck]` fn is charged as a
+    /// test rather than filed as a helper. None of the three is in use under
+    /// `src/` today (checked 2026-10-31), so this is future-proofing rather
+    /// than a live fix — but it is the fix for the shape, which is what a
+    /// census is cited for.
+    fn is_test_attribute(attr: &str) -> bool {
+        attr == "#[test]"
+            || attr.starts_with("#[tokio::test")
+            || attr.starts_with("#[rstest")
+            || attr.starts_with("#[test_case")
+            || attr.starts_with("#[quickcheck")
     }
 
     /// The census over one file's test code: violations, plus the number of
@@ -253,7 +314,10 @@ mod tests {
         // A scan that finds nothing passes vacuously.
         for known in [
             "src/extension/mod.rs",
-            "src/discovery/scanner.rs",
+            // The scanner's tests moved into their own module file
+            // (`src/discovery/scanner/tests.rs`) when the inline test module
+            // was split out; the reaching test lives there now.
+            "src/discovery/scanner/tests.rs",
             "src/builtin_tools/skill_status.rs",
             "src/gateway/execution_engine/run_loop/tests.rs",
         ] {
@@ -331,5 +395,54 @@ mod tests {
                      let s = \"default_skill_dirs()\";\n}\n"
         )
         .is_empty());
+    }
+
+    /// A QUALIFIED call is not a call to the helper: `X::new(` must not
+    /// stand in for a redirecting helper named `new`.
+    ///
+    /// The false green this pins: `slash_command_body/tests.rs` defines a
+    /// redirecting helper named `new` (its body carries `scan_claude_dirs:
+    /// false`) and also calls `TempDir::new(`, `Arc::new(` and
+    /// `PluginRecord::new(`. Under a rule that accepts any `name(`, each of
+    /// those constructors was read as a call to that helper, so a test in
+    /// that file was credited with the redirect on the strength of an
+    /// unrelated `X::new(` — and was never reported.
+    #[test]
+    fn a_qualified_call_is_not_a_call_to_the_helper() {
+        let run = |src: &str| census_file("f.rs", &code_text(src)).0;
+        let helper = "impl Fixture {\n    fn new() -> Self {\n        let c = \
+                      DiscoveryConfig { scan_claude_dirs: false, ..Default::default() };\n        \
+                      let _ = c;\n        Self\n    }\n}\n";
+        // The test reaches an entry point itself, and its only call to the
+        // redirecting helper is QUALIFIED — so it does not carry the
+        // helper's redirect.
+        let v = run(&format!(
+            "{helper}#[test]\nfn t() {{\n    let _f = Fixture::new();\n    \
+             let m = ExtensionManager::with_defaults();\n}}\n"
+        ));
+        assert_eq!(v.len(), 1, "{v:?}");
+        assert!(v[0].contains("test `t`"), "{v:?}");
+        // An UNQUALIFIED call to the same helper still counts as the
+        // redirect it is.
+        assert!(run(&format!(
+            "{helper}#[test]\nfn t() {{\n    let _f = new();\n    \
+             let m = ExtensionManager::with_defaults();\n}}\n"
+        ))
+        .is_empty());
+    }
+
+    /// A parameterised-test attribute marks a TEST: a `#[rstest]` fn that
+    /// reaches an entry point without redirecting is reported as a test, not
+    /// filed as a helper.
+    #[test]
+    fn a_parameterised_test_attribute_marks_a_test() {
+        let run = |src: &str| census_file("f.rs", &code_text(src)).0;
+        for attr in ["#[rstest]", "#[test_case]", "#[quickcheck]"] {
+            let v = run(&format!(
+                "{attr}\nfn t() {{\n    let m = ExtensionManager::with_defaults();\n}}\n"
+            ));
+            assert_eq!(v.len(), 1, "{attr}: {v:?}");
+            assert!(v[0].contains("test `t`"), "{attr}: {v:?}");
+        }
     }
 }

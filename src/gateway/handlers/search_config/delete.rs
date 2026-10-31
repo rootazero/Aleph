@@ -84,7 +84,7 @@ pub async fn handle_delete_backend(
     // `restart`, reported to the caller rather than claimed live.
     let impact = {
         let cfg = config.read().await;
-        let landed = crate::config::live_apply::apply_live_sections(&cfg, &["search"]);
+        let landed = crate::config::live_apply::apply_live_sections(&cfg, &["search"], None).await;
         crate::config::classify_verified("search", &landed)
     };
 

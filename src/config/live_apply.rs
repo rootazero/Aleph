@@ -35,6 +35,11 @@ use super::reload_impact::{
     dotted_prefix_matches, live_target_for, ReloadImpact, LIVE_SECTIONS, LIVE_SUBSECTIONS,
 };
 use super::Config;
+use crate::gateway::event_bus::GatewayEventBus;
+use crate::sync_primitives::Arc;
+
+#[cfg(test)]
+mod terminal_tests;
 
 /// Hot-apply the sections of `cfg` named by `top_sections` onto the running
 /// runtime, returning the sections that actually landed.
@@ -48,7 +53,11 @@ use super::Config;
 /// omitted from the return value; it is NOT reported as a separate list,
 /// because "declared live minus applied" already says it and a field nobody
 /// reads is a field that will eventually be wrong.
-pub fn apply_live_sections(cfg: &Config, top_sections: &[&str]) -> Vec<&'static str> {
+pub async fn apply_live_sections(
+    cfg: &Config,
+    top_sections: &[&str],
+    event_bus: Option<&Arc<GatewayEventBus>>,
+) -> Vec<&'static str> {
     let mut applied = Vec::new();
 
     for target in LIVE_SECTIONS.iter().chain(LIVE_SUBSECTIONS.iter()) {
@@ -117,6 +126,49 @@ pub fn apply_live_sections(cfg: &Config, top_sections: &[&str]) -> Vec<&'static 
             // this function's return value (see `reload_impact::classify`'s
             // doc on the bare "policies" path).
             "policies.spend" => crate::spend::update_policy(cfg.policies.spend.clone()),
+            // The source retains the driver across cancellation/timeout. This
+            // budget bounds async waiting, not synchronous native PTY work.
+            "policies.terminal" => {
+                let apply = async {
+                    if cfg.policies.terminal.enabled {
+                        let Some(bus) = event_bus else {
+                            return Ok(false);
+                        };
+                        if let Some(manager) = crate::gateway::pty::try_manager() {
+                            if manager.lifecycle_snapshot().state
+                                == crate::capability::provider::ProviderState::Stopping
+                            {
+                                manager.deactivate().await?;
+                            }
+                        }
+                        crate::gateway::pty::attach_event_bus(bus.clone())?;
+                        return Ok(true);
+                    }
+                    match crate::gateway::pty::try_manager() {
+                        Some(manager) => manager.deactivate().await.map(|()| true),
+                        None => Ok(true),
+                    }
+                };
+                match tokio::time::timeout(std::time::Duration::from_secs(5), apply).await {
+                    Ok(Ok(landed)) => landed,
+                    Ok(Err(error)) => {
+                        tracing::warn!(
+                            %error,
+                            source = ?crate::gateway::pty::try_manager().map(|m| m.lifecycle_snapshot()),
+                            "terminal live apply retained cleanup evidence"
+                        );
+                        false
+                    }
+                    Err(error) => {
+                        tracing::warn!(
+                            %error,
+                            source = ?crate::gateway::pty::try_manager().map(|m| m.lifecycle_snapshot()),
+                            "terminal live apply exceeded its async wait budget"
+                        );
+                        false
+                    }
+                }
+            }
             // `[search]`'s handle is a boot-installed `SearchHandle`: an
             // `ArcSwap` over the whole `SearchRegistry` plus the vault handle
             // the rebuild needs, because `SearchBackendConfig::api_key` is
@@ -130,21 +182,6 @@ pub fn apply_live_sections(cfg: &Config, top_sections: &[&str]) -> Vec<&'static 
             // missing handle
             // (CLI process, tests, or a boot without the agent stack) is the
             // other `false`.
-            // `[policies.terminal]`'s handle is the process-global PTY
-            // manager singleton (`crate::gateway::pty::manager()`) — always
-            // present, unlike `route`/`spend`'s boot-installed `ArcSwap`s,
-            // so this arm always lands. Turning the switch off must also
-            // kill live sessions: a gate evaluated only at admission would
-            // leave a shell that is already open still open.
-            "policies.terminal" => {
-                if !cfg.policies.terminal.enabled {
-                    let killed = crate::gateway::pty::manager().close_all();
-                    if killed > 0 {
-                        tracing::warn!(killed, "terminal disabled; live PTY sessions terminated");
-                    }
-                }
-                true
-            }
             "search" => match crate::search::handle::try_global_search_handle() {
                 Some(handle) => handle.apply_config(cfg),
                 None => false,
@@ -159,8 +196,8 @@ pub fn apply_live_sections(cfg: &Config, top_sections: &[&str]) -> Vec<&'static 
         } else {
             tracing::debug!(
                 section = *target,
-                "config section is declared live but its runtime handle is not registered; \
-                 the change is persisted and needs a restart"
+                "config section is declared live but runtime application did not complete; \
+                 the change is persisted and is not verified live"
             );
         }
     }
@@ -230,18 +267,104 @@ mod tests {
         }
     }
 
-    #[test]
-    fn non_live_sections_are_ignored() {
-        let cfg = Config::default();
-        assert!(apply_live_sections(&cfg, &["providers", "memory"]).is_empty());
+    #[tokio::test]
+    #[serial_test::serial(pty_global_manager)]
+    async fn terminal_explicit_cold_enable_uses_supplied_bus() {
+        const CHILD: &str = "ALEPH_TERMINAL_LIVE_CONFIG_CHILD";
+        if std::env::var_os(CHILD).is_none() {
+            let result = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "config::live_apply::tests::terminal_explicit_cold_enable_uses_supplied_bus",
+                    "--nocapture",
+                ])
+                .env(CHILD, "1")
+                .output()
+                .unwrap();
+            assert!(
+                result.status.success(),
+                "{}{}",
+                String::from_utf8_lossy(&result.stdout),
+                String::from_utf8_lossy(&result.stderr)
+            );
+            return;
+        }
+        assert!(crate::gateway::pty::try_manager().is_none());
+        let mut cfg = Config::default();
+        cfg.policies.terminal.enabled = false;
+        assert_eq!(
+            apply_live_sections(&cfg, &["policies.terminal"], None).await,
+            vec!["policies.terminal"]
+        );
+        assert!(crate::gateway::pty::try_manager().is_none());
+        cfg.policies.terminal.enabled = true;
+        assert!(apply_live_sections(&cfg, &["policies.terminal"], None)
+            .await
+            .is_empty());
+        assert!(crate::gateway::pty::try_manager().is_none());
+        let bus = Arc::new(GatewayEventBus::new());
+        let applied = apply_live_sections(&cfg, &["policies.terminal"], Some(&bus)).await;
+        assert_eq!(
+            applied,
+            vec!["policies.terminal"],
+            "explicit context must permit enable after cold boot"
+        );
+        cfg.policies.terminal.enabled = false;
+        assert!(
+            apply_live_sections(&cfg, &["policies.terminal"], Some(&bus))
+                .await
+                .contains(&"policies.terminal")
+        );
+        assert_eq!(
+            crate::gateway::pty::manager::test_driver_id(crate::gateway::pty::manager()),
+            None
+        );
     }
 
-    #[test]
-    fn behavior_is_live_without_any_registered_handle() {
+    #[tokio::test]
+    #[serial_test::serial(pty_global_manager)]
+    async fn terminal_disable_reports_live_only_after_join() {
+        if let Some(manager) = crate::gateway::pty::try_manager() {
+            manager.deactivate().await.unwrap();
+        }
+        let bus =
+            crate::sync_primitives::Arc::new(crate::gateway::event_bus::GatewayEventBus::new());
+        crate::gateway::pty::attach_event_bus(bus).unwrap();
+        let mut cfg = Config::default();
+        cfg.policies.terminal.enabled = false;
+        let applied = apply_live_sections(&cfg, &["policies.terminal"], None).await;
+        assert_eq!(
+            applied,
+            vec!["policies.terminal"],
+            "disable must await the source-owned driver"
+        );
+        let snapshot = crate::gateway::pty::try_manager()
+            .unwrap()
+            .lifecycle_snapshot();
+        assert!(!snapshot.driver_active);
+        assert_eq!(
+            snapshot.state,
+            crate::capability::provider::ProviderState::Stopped
+        );
+    }
+
+    #[tokio::test]
+    async fn non_live_sections_are_ignored() {
+        let cfg = Config::default();
+        assert!(apply_live_sections(&cfg, &["providers", "memory"], None)
+            .await
+            .is_empty());
+    }
+
+    #[tokio::test]
+    async fn behavior_is_live_without_any_registered_handle() {
         // `behavior` liveness comes from readers re-reading the shared config,
         // which the patcher already swapped — no boot-time handle involved.
         let cfg = Config::default();
-        assert_eq!(apply_live_sections(&cfg, &["behavior"]), vec!["behavior"]);
+        assert_eq!(
+            apply_live_sections(&cfg, &["behavior"], None).await,
+            vec!["behavior"]
+        );
     }
 
     /// W27 — the `execution` arm must actually push the sub-agent cap into the
@@ -251,9 +374,9 @@ mod tests {
     /// is what `SubagentTool::new` consults: dropping the `set_…` call from the
     /// arm leaves `every_live_section_has_an_apply_arm` and every clamp test
     /// green while a patched `config.toml` changes nothing.
-    #[test]
+    #[tokio::test]
     #[serial_test::serial(subagent_concurrency_cap)]
-    fn the_execution_arm_installs_the_subagent_concurrency_cap() {
+    async fn the_execution_arm_installs_the_subagent_concurrency_cap() {
         use crate::agents::subagent_tool::{
             max_concurrent_subagents, set_max_concurrent_subagents,
         };
@@ -261,7 +384,7 @@ mod tests {
         let restore = max_concurrent_subagents();
         let mut cfg = Config::default();
         cfg.execution.max_concurrent_subagents = 11;
-        let _ = apply_live_sections(&cfg, &["execution"]);
+        let _ = apply_live_sections(&cfg, &["execution"], None).await;
         let observed = max_concurrent_subagents();
         set_max_concurrent_subagents(restore);
         assert_eq!(
@@ -301,9 +424,9 @@ mod tests {
     /// against `classify_verified` directly, in
     /// `search_without_a_registered_handle_downgrades_to_restart` (see its doc).
     /// Serialised so no second writer can race the install or the swap.
-    #[test]
+    #[tokio::test]
     #[serial_test::serial(search_live_handle)]
-    fn the_search_arm_lands_through_apply_live_sections() {
+    async fn the_search_arm_lands_through_apply_live_sections() {
         use crate::config::types::{SearchBackendConfig, SearchConfigInternal};
 
         let dir = tempfile::tempdir().expect("tempdir");
@@ -347,7 +470,7 @@ mod tests {
             ..Config::default()
         };
 
-        let applied = apply_live_sections(&cfg, &["search"]);
+        let applied = apply_live_sections(&cfg, &["search"], None).await;
         assert_eq!(applied, vec!["search"]);
         assert_eq!(
             classify_verified("search.max_results", &applied),
@@ -409,9 +532,8 @@ mod tests {
     /// from that path — exactly the mismatch the controller ruling called
     /// out.
     ///
-    /// `"policies.terminal"` also fires from this same coarse name — it is
-    /// the other member of `LIVE_SUBSECTIONS` and its handle (the
-    /// process-global PTY manager) is always present, so it always lands.
+    /// `"policies.terminal"` also fires from this same coarse name. Terminal
+    /// may be absent or still joining; spend success is independent.
     /// That is not a false positive: the sibling-does-not-earn-a-verdict
     /// guarantee comes from `classify`/`classify_verified` matching the
     /// *specific* target, not from this function only ever applying one
@@ -423,15 +545,15 @@ mod tests {
     /// cell, and the loser reads the winner's value. The precedent is
     /// `the_execution_arm_installs_the_subagent_concurrency_cap` in this same
     /// file, which takes the same annotation for the same shape.
-    #[test]
+    #[tokio::test]
+    #[serial_test::serial(pty_global_manager)]
     #[serial_test::serial(spend_global_policy)]
-    fn policies_spend_arm_fires_from_the_coarse_top_level_name() {
+    async fn policies_spend_arm_fires_from_the_coarse_top_level_name() {
         crate::spend::install_policy(crate::config::types::policies::SpendPolicy::default());
         let cfg = Config::default();
-        assert_eq!(
-            apply_live_sections(&cfg, &["policies"]),
-            vec!["policies.spend", "policies.terminal"]
-        );
+        assert!(apply_live_sections(&cfg, &["policies"], None)
+            .await
+            .contains(&"policies.spend"));
     }
 
     /// A sibling subsection under the same top-level parent (e.g. a patch to
@@ -473,9 +595,10 @@ mod tests {
     /// cell, and the loser reads the winner's value. The precedent is
     /// `the_execution_arm_installs_the_subagent_concurrency_cap` in this same
     /// file, which takes the same annotation for the same shape.
-    #[test]
+    #[tokio::test]
+    #[serial_test::serial(pty_global_manager)]
     #[serial_test::serial(spend_global_policy)]
-    fn g14_spend_arm_applies_live_and_reaches_check_with_no_restart() {
+    async fn g14_spend_arm_applies_live_and_reaches_check_with_no_restart() {
         // A handle merely needs to exist for `update_policy` (which the arm
         // calls) to succeed — idempotent, so this is safe even if another
         // test in this binary already installed one; `update_policy` always
@@ -501,10 +624,9 @@ mod tests {
 
         // The single-patch caller's exact shape: `top_sections` carries only
         // the coarse top-level segment, never "policies.spend" itself.
-        // `"policies.terminal"` rides along too — same coarse name, its own
-        // always-present handle (see `policies_spend_arm_fires_from_the_coarse_top_level_name`'s doc).
-        let applied = apply_live_sections(&cfg, &["policies"]);
-        assert_eq!(applied, vec!["policies.spend", "policies.terminal"]);
+        // The sibling Terminal arm may be absent or joining; spend still lands.
+        let applied = apply_live_sections(&cfg, &["policies"], None).await;
+        assert!(applied.contains(&"policies.spend"));
         assert_eq!(
             classify_verified("policies.spend.per_user_usd", &applied),
             ReloadImpact::Live
@@ -518,8 +640,8 @@ mod tests {
         // Lower the ceiling below what is already spent — live, with no
         // restart and no new process. `check`'s very next call must see it.
         cfg.policies.spend.per_user_usd = Some(1.0);
-        let applied = apply_live_sections(&cfg, &["policies"]);
-        assert_eq!(applied, vec!["policies.spend", "policies.terminal"]);
+        let applied = apply_live_sections(&cfg, &["policies"], None).await;
+        assert!(applied.contains(&"policies.spend"));
         assert!(matches!(
             crate::spend::check(&principal, now_ms),
             crate::spend::Verdict::Denied { .. }
@@ -693,11 +815,13 @@ mod tests {
     /// `#[serial_test::parallel(pty_global_manager)]` — they stay parallel
     /// with each other and only exclude this one — and a source-level census
     /// in that module fails by name if a new test there forgets it.
-    #[test]
+    #[tokio::test]
     #[serial_test::serial(pty_global_manager)]
-    fn disabling_the_terminal_live_kills_sessions_through_apply_live_sections() {
+    #[serial_test::serial(spend_global_policy)]
+    async fn disabling_the_terminal_live_kills_sessions_through_apply_live_sections() {
         use crate::gateway::pty::SpawnOptions;
 
+        crate::gateway::pty::manager::activate_test_provider();
         let mgr = crate::gateway::pty::manager();
         let sid = mgr
             .spawn(&SpawnOptions::default())
@@ -706,15 +830,28 @@ mod tests {
 
         let mut cfg = Config::default();
         cfg.policies.terminal.enabled = false;
-        let applied = apply_live_sections(&cfg, &["policies"]);
+        let applied = apply_live_sections(&cfg, &["policies"], None).await;
 
+        assert!(applied.contains(&"policies.terminal"));
+        assert_eq!(crate::gateway::pty::manager::test_driver_id(mgr), None);
+        assert_eq!(
+            mgr.lifecycle_snapshot().state,
+            crate::capability::provider::ProviderState::Stopped
+        );
+        cfg.policies.terminal.enabled = true;
         assert!(
-            applied.contains(&"policies.terminal"),
-            "a declared-live target that does not land is not live"
+            apply_live_sections(&cfg, &["policies"], mgr.current_bus().as_ref())
+                .await
+                .contains(&"policies.terminal")
         );
         assert!(
             mgr.list().iter().all(|s| s.session_id != sid || s.closed),
             "the in-flight session must be gone, not merely reported gone"
         );
+        cfg.policies.terminal.enabled = false;
+        assert!(apply_live_sections(&cfg, &["policies.terminal"], None)
+            .await
+            .contains(&"policies.terminal"));
+        assert_eq!(crate::gateway::pty::manager::test_driver_id(mgr), None);
     }
 }

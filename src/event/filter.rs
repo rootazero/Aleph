@@ -98,6 +98,11 @@ impl EventFilter {
     /// If this is the first session added, creates a new filter set.
     /// Otherwise, adds to the existing set.
     ///
+    /// This ADDS to the set — calling it twice keeps both sessions. It is the
+    /// counterpart of [`with_sessions`](Self::with_sessions), which REPLACES
+    /// the set: the builder is order-dependent, and a `with_sessions` that
+    /// comes later discards whatever `with_session` added before it.
+    ///
     /// # Arguments
     ///
     /// * `session_id` - The session ID to include
@@ -108,6 +113,11 @@ impl EventFilter {
     }
 
     /// Set the session IDs to filter on, replacing any existing filter.
+    ///
+    /// This REPLACES the whole set: sessions added earlier with
+    /// [`with_session`](Self::with_session) are dropped. So
+    /// `with_session(..).with_sessions(..)` keeps only the given set, while
+    /// `with_sessions(..).with_session(..)` keeps the set plus the added id.
     ///
     /// # Arguments
     ///
@@ -123,6 +133,11 @@ impl EventFilter {
     /// If this is the first agent added, creates a new filter set.
     /// Otherwise, adds to the existing set.
     ///
+    /// This ADDS to the set — calling it twice keeps both agents. It is the
+    /// counterpart of [`with_agents`](Self::with_agents), which REPLACES the
+    /// set: the builder is order-dependent, and a `with_agents` that comes
+    /// later discards whatever `with_agent` added before it.
+    ///
     /// # Arguments
     ///
     /// * `agent_id` - The agent ID to include
@@ -133,6 +148,11 @@ impl EventFilter {
     }
 
     /// Set the agent IDs to filter on, replacing any existing filter.
+    ///
+    /// This REPLACES the whole set: agents added earlier with
+    /// [`with_agent`](Self::with_agent) are dropped. So
+    /// `with_agent(..).with_agents(..)` keeps only the given set, while
+    /// `with_agents(..).with_agent(..)` keeps the set plus the added id.
     ///
     /// # Arguments
     ///
@@ -147,7 +167,10 @@ impl EventFilter {
     ///
     /// Returns `true` if ALL of the following conditions are met:
     /// 1. Session filter passes (no filter OR event session is in the set)
-    /// 2. Agent filter passes (no filter OR event agent is in the set OR event has empty agent ID)
+    /// 2. Agent filter passes (no filter OR the event's agent is in the set).
+    ///    An event with an EMPTY agent id never matches a filter that names
+    ///    agents — the check fails closed, so a nameless event is not
+    ///    delivered to an agent-scoped subscriber.
     /// 3. Event type filter passes (`event_types` contains `EventType::All` OR event type is in the list)
     ///
     /// # Arguments
@@ -263,6 +286,23 @@ mod tests {
         assert!(!filter.matches(&event));
     }
 
+    /// `with_sessions` and `with_agents` are one contract on two dimensions:
+    /// the filter accepts the listed ids and rejects the rest.
+    fn assert_filter_accepts_only_listed(
+        filter: &EventFilter,
+        listed: &[&str],
+        unlisted: &str,
+        event_for: impl Fn(&str) -> GlobalEvent,
+    ) {
+        for id in listed {
+            assert!(filter.matches(&event_for(id)), "{id} should match");
+        }
+        assert!(
+            !filter.matches(&event_for(unlisted)),
+            "{unlisted} should not match"
+        );
+    }
+
     #[test]
     fn test_filter_with_multiple_sessions() {
         let mut sessions = HashSet::new();
@@ -271,9 +311,12 @@ mod tests {
 
         let filter = EventFilter::new(vec![EventType::SubAgentCompleted]).with_sessions(sessions);
 
-        assert!(filter.matches(&make_global_event("session-1", None, make_subagent_event())));
-        assert!(filter.matches(&make_global_event("session-2", None, make_subagent_event())));
-        assert!(!filter.matches(&make_global_event("session-3", None, make_subagent_event())));
+        assert_filter_accepts_only_listed(
+            &filter,
+            &["session-1", "session-2"],
+            "session-3",
+            |session| make_global_event(session, None, make_subagent_event()),
+        );
     }
 
     #[test]
@@ -309,21 +352,17 @@ mod tests {
 
         let filter = EventFilter::new(vec![EventType::SubAgentCompleted]).with_agents(agents);
 
-        assert!(filter.matches(&make_global_event(
-            "session-1",
-            Some("agent-1".to_string()),
-            make_subagent_event()
-        )));
-        assert!(filter.matches(&make_global_event(
-            "session-1",
-            Some("agent-2".to_string()),
-            make_subagent_event()
-        )));
-        assert!(!filter.matches(&make_global_event(
-            "session-1",
-            Some("agent-3".to_string()),
-            make_subagent_event()
-        )));
+        assert_filter_accepts_only_listed(&filter, &["agent-1", "agent-2"], "agent-3", |agent| {
+            make_global_event("session-1", Some(agent.to_string()), make_subagent_event())
+        });
+    }
+
+    /// Both filters accept the event types they list; what separates them is
+    /// the polarity of the last assertion in each test (see the wildcard
+    /// short-circuit below).
+    fn assert_filter_accepts_listed_types(filter: &EventFilter) {
+        assert!(filter.matches(&make_global_event("s1", None, make_subagent_event())));
+        assert!(filter.matches(&make_global_event("s1", None, make_process_event())));
     }
 
     #[test]
@@ -333,9 +372,7 @@ mod tests {
             EventType::ProcessCompleted,
         ]);
 
-        // Matching event types
-        assert!(filter.matches(&make_global_event("s1", None, make_subagent_event())));
-        assert!(filter.matches(&make_global_event("s1", None, make_process_event())));
+        assert_filter_accepts_listed_types(&filter);
 
         // Non-matching event type
         let other_event = AlephEvent::TeamDisbanded {
@@ -348,9 +385,11 @@ mod tests {
     fn test_filter_event_type_all_matches_everything() {
         let filter = EventFilter::all();
 
-        assert!(filter.matches(&make_global_event("s1", None, make_subagent_event())));
-        assert!(filter.matches(&make_global_event("s1", None, make_process_event())));
+        assert_filter_accepts_listed_types(&filter);
 
+        // The wildcard short-circuit: `EventType::All` accepts a type the
+        // filter never listed — the exact opposite of the sibling test above,
+        // and the behaviour that separates the two.
         let other_event = AlephEvent::TeamDisbanded {
             team_id: "t1".to_string(),
         };

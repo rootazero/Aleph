@@ -233,7 +233,9 @@ impl TeamDispatcher {
         use crate::event::{EventFilter, EventType, GlobalBus};
         let signal = Arc::clone(&self.signal);
         tokio::spawn(async move {
-            GlobalBus::global()
+            // The id is a handle, not a guard: this subscription lives for the
+            // process, so the id is bound only to say that on purpose.
+            let _sub_id = GlobalBus::global()
                 .subscribe_async(
                     EventFilter::new(vec![
                         EventType::TeamTaskAssigned,

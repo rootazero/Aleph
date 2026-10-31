@@ -20,6 +20,12 @@ use serde::{Deserialize, Serialize};
 /// scaffolding that the 2026-08-16 severed-wire audit removed. Adding a new
 /// variant here requires both halves; `AlephEvent::event_type` is the compile
 /// gate.
+///
+/// `All` is the one exception, and it is not an event type at all: it is a
+/// wildcard pseudo-variant that no `AlephEvent::event_type()` ever returns.
+/// It exists so a filter can say "every type" (`EventFilter::all()`). It must
+/// stay the ONLY such pseudo-variant — a second one would give the filter
+/// two ways to spell "everything" and re-open the drift the audit closed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum EventType {
     // Sub-agent
@@ -42,7 +48,10 @@ pub enum EventType {
     TeamTaskFailed,
     TeamDisbanded,
 
-    // Wildcard for components that want all events
+    /// Wildcard for components that want all events.
+    ///
+    /// A pseudo-variant, not an event type: no `AlephEvent::event_type()`
+    /// returns it. It short-circuits the type check in `EventFilter::matches`.
     All,
 }
 
