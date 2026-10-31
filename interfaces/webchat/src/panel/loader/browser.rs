@@ -15,7 +15,11 @@ use web_sys::Element;
 #[wasm_bindgen]
 extern "C" {
     #[wasm_bindgen(catch, js_namespace = globalThis, js_name = __alephLoadPanelModule)]
-    async fn load_module(entry: &str, integrity: Option<String>) -> Result<JsValue, JsValue>;
+    async fn load_module(
+        entry: &str,
+        integrity: Option<String>,
+        credential: JsValue,
+    ) -> Result<JsValue, JsValue>;
 
     type Module;
     #[wasm_bindgen(method, getter, js_name = descriptorJson)]
@@ -38,13 +42,41 @@ pub(super) fn load(
     sidebar: Element,
     content: Element,
     integrity: Option<String>,
+    sdk: PanelSdk,
 ) -> LocalBoxFuture<'static, Result<LoadedModule, PanelLoadError>> {
     async move {
+        // The compile-time deterministic spike remains disconnected and has no
+        // production credential claim. Normal community delivery requires one.
+        let fixture =
+            cfg!(feature = "panel-tab-spike") && descriptor.key.plugin_id == "community.fixture";
+        let mut fence = None;
+        let credential = if integrity.is_some() && !fixture {
+            let epoch = sdk
+                .connection()
+                .map_err(|_| PanelLoadError::AssetFetchFailed)?
+                .epoch;
+            let (gateway_url, token) = sdk
+                .asset_credential()
+                .await
+                .map_err(|_| PanelLoadError::AssetFetchFailed)?;
+            let watched = descriptor.clone();
+            let current =
+                Closure::<dyn FnMut() -> bool>::new(move || sdk.asset_is_current(&watched, epoch));
+            let credential = to_js(json!({ "gateway_url": gateway_url, "token": token }))
+                .map_err(|_| PanelLoadError::AssetFetchFailed)?;
+            Reflect::set(&credential, &"current".into(), current.as_ref())
+                .map_err(|_| PanelLoadError::AssetFetchFailed)?;
+            fence = Some(current);
+            credential
+        } else {
+            JsValue::NULL
+        };
         let module = Module::from(
-            load_module(&descriptor.entry, integrity)
+            load_module(&descriptor.entry, integrity, credential)
                 .await
                 .map_err(|error| map_error(error, PanelLoadError::ImportFailed))?,
         );
+        drop(fence);
         let descriptor = serde_json::from_str(&module.descriptor_json())
             .map_err(|_| PanelLoadError::InvalidDescriptor)?;
         Ok(LoadedModule {

@@ -76,6 +76,39 @@ test('imports verified single-file community bytes through the existing ABI', as
     handle.unmount();
     assert.equal(sidebar.value, '');
 });
+test('binds a host credential to the authenticated same-origin asset request', () => {
+    // Isolate browser location in a child; use real HTTP and the production loader.
+    const result = spawnSync(process.execPath, ['--input-type=module', '-e', `
+        import assert from 'node:assert/strict';
+        import { createServer } from 'node:http';
+        import { loadPanelModule } from ${JSON.stringify(new URL('../panel_loader.js', import.meta.url).href)};
+        let requests = 0;
+        let current = true;
+        const server = createServer((request, response) => {
+            requests++;
+            assert.equal(request.headers.authorization, 'Bearer host-credential');
+            if (request.url.endsWith('/late.mjs')) { current = false; response.end(${JSON.stringify(valid)}); return; }
+            response.end('different bytes');
+        });
+        await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+        const origin = 'http://127.0.0.1:' + server.address().port;
+        globalThis.location = { origin };
+        const credential = { token: 'host-credential', gateway_url: origin.replace('http:', 'ws:') + '/ws' };
+        const sri = ${JSON.stringify(integrity(valid))};
+        try {
+            await assert.rejects(loadPanelModule(origin + '/tabs/community-live/1.0.0/panel.mjs', sri, credential), e => e.code === 'IntegrityMismatch');
+            assert.equal(requests, 1);
+            await assert.rejects(loadPanelModule('http://127.0.0.1:1/tabs/other.mjs', sri, credential), e => e.code === 'AssetFetchFailed');
+            await assert.rejects(loadPanelModule(origin + '/tabs/panel.mjs', sri, { ...credential, gateway_url: 'ws://attacker.invalid/ws' }), e => e.code === 'AssetFetchFailed');
+            await assert.rejects(loadPanelModule(origin + '/tabs/panel.mjs', sri, { ...credential, token: '' }), e => e.code === 'AssetFetchFailed');
+            assert.equal(requests, 1, 'refused bindings must not issue HTTP requests');
+            await assert.rejects(loadPanelModule(origin + '/tabs/late.mjs', sri, { ...credential, current: () => current }), e => e.code === 'AssetFetchFailed');
+            assert.equal(requests, 2, 'a completed stale fetch must refuse before importing');
+        } finally { server.closeAllConnections(); server.close(); }
+    `], { encoding: 'utf8' });
+    assert.equal(result.status, 0, result.stderr);
+});
+
 test('normalizes functions and awaits a generated default initializer', async () => {
     const module = await loadPanelModule(source(`
         let ready = false;
@@ -133,7 +166,7 @@ for (const generated of [false, true]) test(`HTML public-root bridge${generated 
     assert.ok(base, 'Trunk must publish its configured public URL as an explicit base');
     const bootstrap = html.match(/<script\b[^>]*id="panel-loader-bridge"[^>]*>([\s\S]*?)<\/script>/)?.[1];
     assert.ok(bootstrap, 'HTML must synchronously publish the loader bridge before WASM starts');
-    assert.match(bootstrap, /loadPanelModule\(entry, integrity\)/);
+    assert.match(bootstrap, /loadPanelModule\(entry, integrity, credential\)/);
     const root = await mkdtemp(join(tmpdir(), 'panel-bridge-'));
     t.after(() => rm(root, { recursive: true, force: true }));
     // Model Trunk's documented base-href substitution and copy-file output.
@@ -186,6 +219,7 @@ for (const generated of [false, true]) test(`HTML public-root bridge${generated 
                         entryBytes.length,
                         integrity === null ? 0 : integrityPointer,
                         integrityBytes.length,
+                        null,
                     );
                 }
             `);

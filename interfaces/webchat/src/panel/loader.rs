@@ -184,11 +184,12 @@ impl PanelLoader {
         {
             let sidebar = sidebar_root.clone();
             let content = content_root.clone();
+            let asset_sdk = sdk.clone();
             self.activate_inner(
                 key,
                 sdk,
                 move |descriptor, integrity| {
-                    browser::load(descriptor, sidebar_root, content_root, integrity)
+                    browser::load(descriptor, sidebar_root, content_root, integrity, asset_sdk)
                 },
                 Some(Box::new(move || {
                     sidebar.set_text_content(None);
