@@ -411,9 +411,6 @@ mod tests {
             model = "claude-sonnet-4"
             workspace_root = "/home/user/workspaces"
             skills = ["search", "code_review"]
-            dm_scope = "workspace"
-            bootstrap_max_chars = 8000
-            bootstrap_total_max_chars = 32000
 
             [[list]]
             id = "main"
@@ -444,9 +441,6 @@ mod tests {
             config.defaults.skills,
             Some(vec!["search".to_string(), "code_review".to_string()])
         );
-        assert_eq!(config.defaults.dm_scope, Some("workspace".to_string()));
-        assert_eq!(config.defaults.bootstrap_max_chars, Some(8000));
-        assert_eq!(config.defaults.bootstrap_total_max_chars, Some(32000));
 
         // Verify agent list
         assert_eq!(config.list.len(), 2);
@@ -478,6 +472,46 @@ mod tests {
         );
         let subagents = reviewer.subagents.as_ref().unwrap();
         assert_eq!(subagents.allow, vec!["tester"]);
+    }
+
+    /// The agent-defaults knobs that no loader consumes are rejected at the
+    /// configuration boundary, and each rejection names the setting that
+    /// does control the behaviour.
+    #[test]
+    fn test_agents_config_rejects_unconsumed_defaults() {
+        let cases = [
+            (
+                r#"
+            [defaults]
+            dm_scope = "workspace"
+            "#,
+                "agents.defaults.dm_scope is not supported; configure session.dm_scope instead",
+            ),
+            (
+                r#"
+            [defaults]
+            bootstrap_max_chars = 8000
+            "#,
+                "agent bootstrap limits are not supported until the identity-file loader consumes them",
+            ),
+            (
+                r#"
+            [defaults]
+            bootstrap_total_max_chars = 32000
+            "#,
+                "agent bootstrap limits are not supported until the identity-file loader consumes them",
+            ),
+        ];
+
+        for (toml_str, expected) in cases {
+            let err = toml::from_str::<AgentsConfig>(toml_str)
+                .expect_err("an unconsumed agent default must be rejected at the config boundary");
+            let message = err.to_string();
+            assert!(
+                message.contains(expected),
+                "expected {expected:?} in the parse error, got {message:?}"
+            );
+        }
     }
 
     #[test]

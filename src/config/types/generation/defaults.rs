@@ -94,26 +94,75 @@ impl GenerationDefaults {
 
     /// Validate the defaults
     pub fn validate(&self, provider_name: &str) -> Result<(), String> {
-        // These fields are persisted and validated, but no production request
-        // path consumes them. Rejecting them keeps the configuration honest
-        // until request assembly applies them through `to_params`.
-        if self.width.is_some()
-            || self.height.is_some()
-            || self.aspect_ratio.is_some()
-            || self.quality.is_some()
-            || self.style.is_some()
-            || self.n.is_some()
-            || self.format.is_some()
-            || self.duration_seconds.is_some()
-            || self.fps.is_some()
-            || self.speed.is_some()
-            || self.language.is_some()
-            || self.guidance_scale.is_some()
-            || self.steps.is_some()
-        {
-            return Err(format!(
-                "generation.providers.{provider_name}.defaults contains parameters that are not applied to generation requests"
-            ));
+        // Positive integer fields: must be > 0, warn past a sanity threshold
+        validate_count(
+            self.width,
+            provider_name,
+            "width",
+            8192,
+            "Default width is very large (>8192)",
+        )?;
+        validate_count(
+            self.height,
+            provider_name,
+            "height",
+            8192,
+            "Default height is very large (>8192)",
+        )?;
+        validate_count(
+            self.n,
+            provider_name,
+            "n",
+            10,
+            "Default n is high (>10), may be expensive",
+        )?;
+        validate_count(
+            self.fps,
+            provider_name,
+            "fps",
+            120,
+            "Default fps is very high (>120)",
+        )?;
+        validate_count(
+            self.steps,
+            provider_name,
+            "steps",
+            150,
+            "Default steps is high (>150), generation will be slow",
+        )?;
+
+        // Validate speed is in range
+        if let Some(speed) = self.speed {
+            if !(0.25..=4.0).contains(&speed) {
+                return Err(format!(
+                    "generation.providers.{provider_name}.defaults.speed must be between 0.25 and 4.0, got {speed}"
+                ));
+            }
+        }
+
+        // Validate duration_seconds
+        if let Some(duration) = self.duration_seconds {
+            if duration <= 0.0 {
+                return Err(format!(
+                    "generation.providers.{provider_name}.defaults.duration_seconds must be greater than 0"
+                ));
+            }
+        }
+
+        // Validate guidance_scale
+        if let Some(scale) = self.guidance_scale {
+            if scale < 0.0 {
+                return Err(format!(
+                    "generation.providers.{provider_name}.defaults.guidance_scale must be >= 0, got {scale}"
+                ));
+            }
+            if scale > 30.0 {
+                tracing::warn!(
+                    provider = provider_name,
+                    guidance_scale = scale,
+                    "Default guidance_scale is very high (>30)"
+                );
+            }
         }
 
         Ok(())
@@ -168,4 +217,31 @@ impl GenerationDefaults {
 
         builder.build()
     }
+}
+
+/// Shared shape for the positive-integer default fields: the value must be
+/// greater than 0, and values past `warn_over` are legal but suspicious.
+fn validate_count(
+    value: Option<u32>,
+    provider_name: &str,
+    field: &str,
+    warn_over: u32,
+    warn_msg: &str,
+) -> Result<(), String> {
+    if let Some(v) = value {
+        if v == 0 {
+            return Err(format!(
+                "generation.providers.{provider_name}.defaults.{field} must be greater than 0"
+            ));
+        }
+        if v > warn_over {
+            tracing::warn!(
+                provider = provider_name,
+                field = field,
+                value = v,
+                "{warn_msg}"
+            );
+        }
+    }
+    Ok(())
 }

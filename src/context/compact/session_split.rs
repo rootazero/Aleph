@@ -495,9 +495,14 @@ mod tests {
         batches: Mutex<Vec<RecordedBatch>>,
         next_seq: Mutex<EventSeq>,
         trace: Trace,
+        /// How many `emit_batch` calls have been made, failed ones included.
+        calls: Mutex<usize>,
         /// When `Some(n)`, the n-th `emit_batch` call (0-based) fails with
         /// `SessionError::Storage` — the in-process failure the split's
-        /// caller falls back from.
+        /// caller falls back from. Exactly that call fails: the split
+        /// compensates a refused child seed with a re-opener for the parent,
+        /// and that compensating call has to succeed for the compensation to
+        /// be observable.
         fail_batch_at: Option<usize>,
     }
 
@@ -511,6 +516,7 @@ mod tests {
                 batches: Mutex::new(vec![]),
                 next_seq: Mutex::new(1),
                 trace,
+                calls: Mutex::new(0),
                 fail_batch_at: None,
             })
         }
@@ -520,6 +526,7 @@ mod tests {
                 batches: Mutex::new(vec![]),
                 next_seq: Mutex::new(1),
                 trace: Arc::new(Mutex::new(vec![])),
+                calls: Mutex::new(0),
                 fail_batch_at: Some(n),
             })
         }
@@ -574,7 +581,12 @@ mod tests {
             events: Vec<SessionEvent>,
             retire: Option<Retire>,
         ) -> Result<Vec<EventSeq>, SessionError> {
-            let call_index = self.batches.lock().await.len();
+            let call_index = {
+                let mut calls = self.calls.lock().await;
+                let index = *calls;
+                *calls += 1;
+                index
+            };
             if self.fail_batch_at == Some(call_index) {
                 self.trace
                     .lock()

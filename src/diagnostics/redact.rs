@@ -66,6 +66,14 @@ fn vendor_patterns() -> &'static Regex {
                 # Authorization headers: redact the complete credential value for any
                 # scheme, including structured Digest values.
             |   ((?:authorization|proxy-authorization)\s*[:=]\s*)(?:digest\b[^\r\n]*|(?:\w+)\s+\S+)
+                # Bare authorization schemes. A provider error body or a
+                # protocol field often carries the scheme without the header
+                # name ("Basic dXNlcjpwYXNzd29yZA=="), so masking only the
+                # `Authorization:` shape would ship the credential itself.
+                # This branch must stay AFTER the header branch above: the
+                # header branch is the leftmost match for "Authorization: Bearer x"
+                # and keeps the field label.
+            |   (?:bearer|basic)\s+\S+
                 # URL userinfo, including percent-encoded credentials. The scheme is
                 # retained by the replacement closure in `redact_secrets`.
             |   ((?:https?|ftp)://)(?:[^/@\s]+)@
@@ -76,9 +84,13 @@ fn vendor_patterns() -> &'static Regex {
             |   x-(?:api[-_]?key|auth[-_]?token|secret|token|access[-_]?token)\s*[:=]\s*\S+
                 # PEM private-key assignments must start at the field name so
                 # the generic value branch cannot stop at the first line break.
-            |   (?:password|secret|client_secret|private_key|api_key)\s*(?:=|:)\s*-----BEGIN\x20[A-Z0-9\x20]*PRIVATE\x20KEY-----[\s\S]*?-----END\x20[A-Z0-9\x20]*PRIVATE\x20KEY-----
+            |   (?:password|secret|client_secret|private_key|api_key)\s*(?:=|:)\s*-----BEGIN\x20[A-Z0-9\x20]*PRIVATE\x20KEY-----(?:[\s\S]*?-----END\x20[A-Z0-9\x20]*PRIVATE\x20KEY-----|[^\s,;'&]*)
                 # PEM private-key blocks, with or without an assignment prefix.
-            |   -----BEGIN\x20[A-Z0-9\x20]*PRIVATE\x20KEY-----[\s\S]*?-----END\x20[A-Z0-9\x20]*PRIVATE\x20KEY-----
+                # The trailing alternative keeps an unterminated block masked: a
+                # truncated dump ("-----BEGIN PRIVATE KEY-----ABC…") would
+                # otherwise fall through to the generic branch, which stops at
+                # the first whitespace and leaks the rest of the key body.
+            |   -----BEGIN\x20[A-Z0-9\x20]*PRIVATE\x20KEY-----(?:[\s\S]*?-----END\x20[A-Z0-9\x20]*PRIVATE\x20KEY-----|[^\s,;'&]*)
                 # Generic config/JSON shapes. Quoted names, colon separators,
                 # escaped quoted values, and complete quoted assignments are all
                 # consumed before replacement.

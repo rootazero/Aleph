@@ -100,9 +100,29 @@ fn test_get_merged_generation_preset_builtin_only() {
 #[test]
 fn test_get_merged_generation_preset_builtin_by_type() {
     let overrides = crate::config::presets_override::GenerationPresetsOverride::default();
-    // Name doesn't match any preset, but provider_type "openai" does
+    // Name doesn't match any preset, but provider_type "openai" does. The
+    // by-type fallback inherits the shared endpoint but NOT the model: a
+    // default model belongs to the named vendor preset, and handing it to
+    // an arbitrary provider of a protocol-level type would pin that
+    // provider to a model it may not serve.
     let preset = get_merged_generation_preset("my-custom-dalle", "openai", &overrides).unwrap();
-    assert_eq!(preset.default_model, "dall-e-3");
+    assert_eq!(preset.default_model, "");
+    assert_eq!(preset.base_url.as_deref(), Some("https://api.openai.com"));
+}
+
+#[test]
+fn test_get_preset_by_type_is_none_when_endpoints_differ() {
+    // A protocol-level type ("openai_compat") is served by many vendors with
+    // different endpoints. Handing the lexicographically-first one to every
+    // provider of that type would point a Volc Ark provider at xAI's
+    // endpoint, so the by-type lookup must decline instead of guessing.
+    assert!(get_preset_by_type("openai_compat").is_none());
+    assert!(get_merged_generation_preset(
+        "my-custom-image",
+        "openai_compat",
+        &crate::config::presets_override::GenerationPresetsOverride::default(),
+    )
+    .is_none());
 }
 
 #[test]

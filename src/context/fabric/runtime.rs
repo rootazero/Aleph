@@ -1196,7 +1196,16 @@ impl ContextFabric {
         let mut registry = self.registry.write().await;
         let admitted = registry
             .validate_context_grant(key, request, caller, now_seconds())
-            .map_err(ContextFabricError::Registry)?;
+            .map_err(|error| match error {
+                // A contract refusal inside the registry is a contract
+                // refusal, not a registry problem: the snapshot carried
+                // something the call may not contain (a credential, a
+                // budget the grant does not cover). Reporting it as
+                // `Registry` would call it "the plugin is unavailable" and
+                // tell the operator the wrong thing.
+                ContextRegistryError::Contract(contract) => ContextFabricError::Contract(contract),
+                other => ContextFabricError::Registry(other),
+            })?;
         if admitted.descriptor() != descriptor {
             return Err(ContextFabricError::Registry(
                 ContextRegistryError::DescriptorMismatch(key.to_string()),

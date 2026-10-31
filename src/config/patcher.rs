@@ -659,7 +659,7 @@ impl ConfigPatcher {
         // entirely, and passing only `LIVE_SECTIONS` here (instead of
         // `live_targets()`, which also carries `LIVE_SUBSECTIONS`) would
         // reintroduce the same gap for `policies.spend` today.
-        let (live_applied, complete) = {
+        let live_applied = {
             let cfg = self.config.read().await;
             let live_targets = crate::config::reload_impact::live_targets();
             let live_applied = crate::config::live_apply::apply_live_sections(&cfg, &live_targets);
@@ -673,7 +673,7 @@ impl ConfigPatcher {
                         .to_string(),
                 );
             }
-            (live_applied, complete)
+            live_applied
         };
         self.record_mtime().await;
 
@@ -685,7 +685,17 @@ impl ConfigPatcher {
         );
 
         Ok(RollbackResult {
-            success: complete,
+            // `success` means "the rollback was applied" — the snapshot is
+            // restored on disk and in memory. Whether every live target
+            // accepted the restored config is a different fact, and it is
+            // reported where it belongs: `live_applied` names the sections
+            // that landed and `warnings` says what did not. Folding the
+            // hot-apply completeness into `success` would report a
+            // persisted rollback as a failure whenever one section could
+            // not bind (an `execution` cap needs a live engine), and the
+            // caller uses `success` to decide whether to tell the Panels
+            // that the config changed at all.
+            success: true,
             restored_from: entry.timestamp,
             diff,
             warnings,

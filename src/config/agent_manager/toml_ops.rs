@@ -3,7 +3,7 @@
 use std::fs;
 
 use serde::Deserialize;
-use toml_edit::{DocumentMut, Item, Table};
+use toml_edit::{DocumentMut, InlineTable, Item, Table, Value};
 use tracing::debug;
 
 use crate::config::types::agents_def::{AgentDefinition, AgentModelRef, AgentsConfig};
@@ -135,7 +135,51 @@ fn agent_definition_to_table(def: &AgentDefinition) -> Result<Table> {
         .into_table();
     // Deprecated and ignored by the resolver; do not persist new workspace overrides.
     agent.remove("workspace");
+    // The entry is appended to an array of tables, so it must not own a
+    // nested table: toml_edit renders a nested table of an array element as
+    // its own `[agents.list.<key>]` header, and that header turns
+    // `agents.list` into a plain table — every later `[[agents.list]]`
+    // header then reads as a duplicate key and the daemon cannot parse the
+    // config it just wrote. Inline tables keep the element header-free, so
+    // appending stays valid no matter which entry carries a nested struct.
+    inline_nested_tables(&mut agent);
     Ok(agent)
+}
+
+/// Rewrite every nested table of `table` as an inline table.
+fn inline_nested_tables(table: &mut Table) {
+    let keys: Vec<String> = table.iter().map(|(key, _)| key.to_string()).collect();
+    for key in keys {
+        if let Some(Item::Table(nested)) = table.get(&key).cloned() {
+            table.insert(&key, Item::Value(Value::InlineTable(inline_table(&nested))));
+        }
+        // A key that was a table header carries no trailing space; keep the
+        // `key = value` shape the rest of the file uses.
+        if let Some((mut key, _)) = table.get_key_value_mut(&key) {
+            key.leaf_decor_mut().set_suffix(" ");
+        }
+    }
+}
+
+/// Build the inline-table form of a nested table.
+fn inline_table(table: &Table) -> InlineTable {
+    let mut inline = InlineTable::new();
+    for (key, item) in table.iter() {
+        let value = match item {
+            Item::Table(nested) => Value::InlineTable(inline_table(nested)),
+            Item::Value(value) => value.clone(),
+            Item::ArrayOfTables(tables) => {
+                let mut array = toml_edit::Array::new();
+                for entry in tables.iter() {
+                    array.push(Value::InlineTable(inline_table(entry)));
+                }
+                Value::Array(array)
+            }
+            Item::None => continue,
+        };
+        inline.insert(key, value);
+    }
+    inline
 }
 
 /// Write `AgentModelRef` as a `toml_edit` Item:

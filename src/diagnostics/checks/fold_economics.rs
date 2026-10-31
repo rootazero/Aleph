@@ -81,7 +81,8 @@ impl FoldEconomicsCheck {
             .map_err(|e| format!("system clock before unix epoch: {e}"))?
             .as_secs() as i64;
         let cutoff_s = now_s - WINDOW_SECS;
-        let (folds, unreadable_fold_events) = load_folds(sessions_db, cutoff_s * 1000)?;
+        let (folds, unreadable_fold_events, unreadable_reason) =
+            load_folds(sessions_db, cutoff_s * 1000)?;
         let usage = load_usage(state_db, cutoff_s)?;
         let mut verdicts = Vec::new();
         let mut unaccounted_folds = 0usize;
@@ -138,6 +139,7 @@ impl FoldEconomicsCheck {
             verdicts,
             unaccounted_folds,
             unreadable_fold_events,
+            unreadable_reason,
             compactor_tokens,
             prompt_tokens,
         })
@@ -255,6 +257,10 @@ struct LedgerRollup {
     verdicts: Vec<FoldVerdict>,
     unaccounted_folds: usize,
     unreadable_fold_events: usize,
+    /// Why the first payload could not be decoded — the operator needs the
+    /// reason, not only the count, to tell a corrupt ledger from a schema
+    /// change.
+    unreadable_reason: Option<String>,
     compactor_tokens: u64,
     prompt_tokens: u64,
 }
@@ -272,11 +278,14 @@ fn table_exists(conn: &Connection, name: &str) -> Result<bool, String> {
 /// Read the last window's folds out of `sessions.db`, grouped per session and
 /// reconstructed through the registry's single source (`list_folds`) so the
 /// doctor check can never drift from what the runtime believes a fold is.
-fn load_folds(sessions_db: &Path, cutoff_ms: i64) -> Result<(Vec<FoldRecord>, usize), String> {
+fn load_folds(
+    sessions_db: &Path,
+    cutoff_ms: i64,
+) -> Result<(Vec<FoldRecord>, usize, Option<String>), String> {
     let conn = Connection::open_with_flags(sessions_db, OpenFlags::SQLITE_OPEN_READ_ONLY)
         .map_err(|e| format!("open {}: {e}", sessions_db.display()))?;
     if !table_exists(&conn, "session_events")? {
-        return Ok((Vec::new(), 0));
+        return Ok((Vec::new(), 0, None));
     }
     let mut stmt = conn
         .prepare(
@@ -292,18 +301,28 @@ fn load_folds(sessions_db: &Path, cutoff_ms: i64) -> Result<(Vec<FoldRecord>, us
         .map_err(|e| format!("{e}"))?;
     let mut by_session: BTreeMap<String, Vec<SessionEvent>> = BTreeMap::new();
     let mut unreadable_fold_events = 0usize;
+    let mut unreadable_reason: Option<String> = None;
     for row in rows {
         let (session_id, payload) = row.map_err(|e| format!("{e}"))?;
         match serde_json::from_str::<SessionEvent>(&payload) {
             Ok(event) => by_session.entry(session_id).or_default().push(event),
-            Err(_) => unreadable_fold_events += 1,
+            // Bind the error: an undecodable payload is a refusal to read,
+            // not an absent event. The first reason is carried into the
+            // finding so the operator sees why the ledger is unreadable
+            // instead of a bare count.
+            Err(e) => {
+                unreadable_fold_events += 1;
+                if unreadable_reason.is_none() {
+                    unreadable_reason = Some(e.to_string());
+                }
+            }
         }
     }
     let mut folds = Vec::new();
     for (session_key, events) in &by_session {
         folds.extend(list_folds(session_key, events));
     }
-    Ok((folds, unreadable_fold_events))
+    Ok((folds, unreadable_fold_events, unreadable_reason))
 }
 
 /// Read the last window's `provider_usage` rows out of `state.db`. A missing
@@ -442,8 +461,12 @@ impl HealthCheck for FoldEconomicsCheck {
                 TITLE,
                 format!(
                     "{} fold event payload(s) could not be decoded; {decoded}. The ledger is \
-                     partially unreadable and must not be reported as clean.",
-                    rollup.unreadable_fold_events
+                     partially unreadable and must not be reported as clean.{}",
+                    rollup.unreadable_fold_events,
+                    match &rollup.unreadable_reason {
+                        Some(reason) => format!(" First decode error: {reason}."),
+                        None => String::new(),
+                    }
                 ),
             );
             if rollup.verdicts.is_empty() {

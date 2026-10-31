@@ -600,7 +600,7 @@ fn the_bundled_self_skill_names_no_phantom_config_keys() {
     );
     assert_eq!(
         report.unchecked,
-        BTreeSet::from(["gateway".to_string()]),
+        BTreeSet::from(["channels".to_string(), "gateway".to_string()]),
         "the field arm stopped resolving for an unexpected section; the guard would otherwise \
          pass vacuously: {:?}",
         report.unchecked
@@ -1060,10 +1060,14 @@ grep x ~/.aleph/config.toml
     let got: Vec<&str> = findings.iter().map(|f| f.what.as_str()).collect();
     assert_eq!(
         got,
+        // The findings are sorted by their label, so the labels order
+        // lexicographically ("19" before "3") — the fourth fence's header is
+        // on line 19, and the fence that names the path on its own line is
+        // the one that gets reported.
         vec![
+            "self/FIXTURE.md:19 (```bash)",
             "self/FIXTURE.md:3 (```python)",
             "self/FIXTURE.md:8 (```)",
-            "self/FIXTURE.md:20 (```bash)",
         ],
         "full report:\n{}",
         render_config_path(&findings, scanned, files.len())
@@ -1071,11 +1075,29 @@ grep x ~/.aleph/config.toml
 
     // The smuggled shape is recognised as Python even though its fence says
     // nothing — otherwise its failure message would hand the reader the bash
-    // spelling for a Python snippet.
+    // spelling for a Python snippet. The findings are sorted by their label,
+    // so the fence is looked up by name rather than by position.
+    let fix_of = |label: &str| {
+        findings
+            .iter()
+            .find(|finding| finding.what == label)
+            .unwrap_or_else(|| panic!("no finding for {label}"))
+            .fix
+            .as_str()
+    };
     assert!(
-        findings[1].fix.contains(CANONICAL_PYTHON),
+        fix_of("self/FIXTURE.md:8 (```)").contains(CANONICAL_PYTHON),
         "`bash(python3 -c …)` must be told the python spelling: {}",
-        findings[1].fix
+        fix_of("self/FIXTURE.md:8 (```)")
     );
-    assert!(findings[0].fix.contains(CANONICAL_PYTHON));
+    assert!(
+        fix_of("self/FIXTURE.md:3 (```python)").contains(CANONICAL_PYTHON),
+        "a python fence must be told the python spelling: {}",
+        fix_of("self/FIXTURE.md:3 (```python)")
+    );
+    assert!(
+        fix_of("self/FIXTURE.md:19 (```bash)").contains(CANONICAL_BASH),
+        "a bash fence must be told the bash spelling: {}",
+        fix_of("self/FIXTURE.md:19 (```bash)")
+    );
 }

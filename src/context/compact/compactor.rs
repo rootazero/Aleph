@@ -493,15 +493,17 @@ impl ContextCompactor {
         // the user's verbatim turns ABOVE the summary, so after any compaction
         // the summary is no longer the first message and a `messages[0]` probe
         // could never fire — the guard was dead code on every compacted list.
+        // The marker may sit anywhere in that head (a summary followed by the
+        // assistant's continuation is the ordinary shape), so every message of
+        // the head is probed, not only its last one.
         // `strip_context_summary_prefix` recognises both marker flavours —
         // plain `[Context Summary]` and the reuse path's `(from session
         // memory)`.
         if cut_end <= 2
-            && messages[..cut_end].iter().enumerate().any(|(idx, m)| {
-                idx + 1 == cut_end
-                    && first_message_text(m)
-                        .and_then(strip_context_summary_prefix)
-                        .is_some()
+            && messages[..cut_end].iter().any(|m| {
+                first_message_text(m)
+                    .and_then(strip_context_summary_prefix)
+                    .is_some()
             })
         {
             return Ok(CompactResult {
