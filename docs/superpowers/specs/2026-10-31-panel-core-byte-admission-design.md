@@ -2,7 +2,7 @@
 
 Date / 日期: 2026-10-31
 
-Status / 状态: **Approved on 2026-10-31; implementation in progress under the Core byte-admission plan. / 2026-10-31 已批准，按 Core byte-admission plan 实施中。**
+Status / 状态: **Approved and implemented; scoped Core lifecycle verification passed. Broader-suite failures and remaining HTTP/browser work are recorded in the execution ledger. / 已批准并实现，Core lifecycle 聚焦验收通过；更广测试的失败及后续 HTTP/browser 边界见执行台账。**
 
 Task / 任务: todo #7, dependency of the [live publication plan](../plans/2026-10-30-panel-community-assets-live-publication-plan.md). Builds on the [production audit](../../reports/panel-community-live-publication-audit.md).
 

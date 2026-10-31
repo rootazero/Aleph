@@ -65,7 +65,7 @@
 //! So a boot (or any `reload()`, which the file watcher triggers) published the
 //! skills and sub-agents of plugins that were **disabled, shadowed, or failed to
 //! load** while a runtime toggle used the correct predicate. The predicate is
-//! stated once, in [`Views::derive_plugin_projection`].
+//! stated once, in [`Views::project_plugins`].
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -95,7 +95,8 @@ pub(super) struct Views {
     pub(super) plugin_tool_revision: Arc<AtomicU64>,
     pub(super) owner_trust_policy:
         Arc<crate::sync_primitives::RwLock<crate::extension::plugin_trust::OwnerTrustPolicy>>,
-    pub(super) panel_snapshot: Arc<StdRwLock<aleph_protocol::panel::PanelUiCapabilitySnapshot>>,
+    pub(super) panel_publication:
+        Arc<StdRwLock<super::panel_publication::PanelAssetPublicationStore>>,
 }
 
 impl ExtensionManager {
@@ -110,16 +111,15 @@ impl ExtensionManager {
             plugin_scope_keys: Arc::clone(&self.plugin_scope_keys),
             plugin_tool_revision: Arc::clone(&self.plugin_tool_revision),
             owner_trust_policy: Arc::clone(&self.owner_trust_policy),
-            panel_snapshot: Arc::clone(&self.panel_snapshot),
+            panel_publication: Arc::clone(&self.panel_publication),
         }
     }
 }
 
-/// Everything a plugin set projects onto process-global state.
+/// Read models produced from a lifecycle plugin set.
 ///
-/// Derived from the registry in one pass so the *same* activation predicate
-/// decides every surface; publishing is a separate step so the derivation can
-/// be unit-tested without touching global state.
+/// The Panel snapshot is derived from the committed manager-owned publication;
+/// these returned values are not a second declaration or revision authority.
 #[derive(Debug, Clone)]
 pub(crate) struct PluginProjection {
     /// `<root_dir>/skills` of every **active** plugin, with its owner's
@@ -142,7 +142,7 @@ pub(crate) struct PluginProjection {
 }
 
 impl Views {
-    /// Derive the projection from the registry under one read lock.
+    /// Capture registry facts under one read lock, then prepare Panel bytes off-lock.
     ///
     /// Every active plugin's existing `<root>/skills` is published — there is
     /// no "discovery already found this dir" exemption. An unpublished plugin
@@ -152,15 +152,32 @@ impl Views {
     /// route is the scan's concern (`SkillSystem::scan_roots` dedups against
     /// its base dirs), not the projection's.
     ///
-    /// **The activation predicate lives here and nowhere else.** `is_active()`
+    /// All projected surfaces use the same `is_active()` predicate. It
     /// is true for [`PluginStatus::Loaded`](crate::extension::PluginStatus) and
     /// `Pending` (a pending plugin's non-dependent capabilities are already
     /// live), so only `Disabled` / `Blocked` / `Error` plugins contribute
     /// nothing — which is the whole point: an inactive plugin must be
     /// invisible to the model, not merely absent from the management list.
-    async fn derive_plugin_projection(&self, panel_revision: u64) -> PluginProjection {
-        let registry = self.plugin_registry.read().await;
-        let records: Vec<_> = registry.list_plugins().into_iter().cloned().collect();
+    async fn project_plugins(&self) -> PluginProjection {
+        let (records, subagents) = {
+            let registry = self.plugin_registry.read().await;
+            let records: Vec<_> = registry.list_plugins().into_iter().cloned().collect();
+            let subagents = registry
+                .list_agents()
+                .into_iter()
+                .filter_map(|agent| {
+                    let plugin = registry.get_plugin(&agent.plugin_id)?;
+                    if !plugin.status.is_active() {
+                        return None;
+                    }
+                    super::plugin_agent_to_def(agent).map(|def| crate::agents::PluginSubagent {
+                        scope_key: plugin.scope_key.clone(),
+                        def,
+                    })
+                })
+                .collect();
+            (records, subagents)
+        };
         let trust_policy = self
             .owner_trust_policy
             .read()
@@ -183,33 +200,32 @@ impl Views {
             }
         }
 
-        let panel = super::panel::derive_panel_snapshot(&records, &trust_policy, panel_revision);
-
-        // An agent row survives only while its owning plugin is active. The
-        // registry keys agents by plugin id, so this is the same predicate as
-        // above applied one level down — not a second rule. Each surviving
-        // def is paired with its owning plugin's `scope_key` so
-        // `visible_plugin_subagents` can filter it per-session.
-        let subagents = registry
-            .list_agents()
-            .into_iter()
-            .filter_map(|agent| {
-                let plugin = registry.get_plugin(&agent.plugin_id)?;
-                if !plugin.status.is_active() {
-                    return None;
-                }
-                super::plugin_agent_to_def(agent).map(|def| crate::agents::PluginSubagent {
-                    scope_key: plugin.scope_key.clone(),
-                    def,
-                })
-            })
-            .collect();
+        let prepared =
+            super::panel_publication::PreparedPanelPublication::prepare(records, &trust_policy)
+                .await;
+        let (panel_snapshot, panel_diagnostics) = {
+            // No I/O under these locks; current policy validation and generation replacement
+            // share the policy-read -> publication-write order.
+            let policy = self
+                .owner_trust_policy
+                .read()
+                .unwrap_or_else(|e| e.into_inner());
+            let mut publication = self
+                .panel_publication
+                .write()
+                .unwrap_or_else(|e| e.into_inner());
+            let diagnostics = publication.commit(prepared, &policy);
+            (
+                publication.snapshot(&super::visibility::VisibilityCtx::default()),
+                diagnostics,
+            )
+        };
 
         PluginProjection {
             plugin_skill_dirs,
             subagents,
-            panel_snapshot: panel.snapshot,
-            panel_diagnostics: panel.diagnostics,
+            panel_snapshot,
+            panel_diagnostics,
         }
     }
 
@@ -239,13 +255,7 @@ impl Views {
             .map(|d| d.path)
             .collect();
 
-        let panel_revision = self
-            .panel_snapshot
-            .read()
-            .unwrap_or_else(|e| e.into_inner())
-            .revision
-            + 1;
-        let projection = self.derive_plugin_projection(panel_revision).await;
+        let projection = self.project_plugins().await;
         // The plugin roots are published as one process-global with two
         // readers: `get_all_skills_dirs` (the `skill_read` / `skill_list`
         // search set) and `SkillSystem::scan_roots` (the scan that feeds the
@@ -258,10 +268,6 @@ impl Views {
         // would neither see the dirs nor name their owner.
         crate::utils::paths::publish_plugin_skill_dirs(projection.plugin_skill_dirs.clone());
         crate::agents::publish_plugin_subagents(projection.subagents.clone());
-        *self
-            .panel_snapshot
-            .write()
-            .unwrap_or_else(|e| e.into_inner()) = projection.panel_snapshot.clone();
         for diagnostic in &projection.panel_diagnostics {
             tracing::warn!(
                 plugin_id = %diagnostic.plugin_id,
@@ -382,6 +388,12 @@ mod tests {
 
     #[tokio::test]
     async fn lifecycle_projection_replaces_panel_snapshot_on_replacement_and_disable() {
+        use base64::Engine;
+        use sha2::Digest;
+
+        let root = tempfile::tempdir().unwrap();
+        let bytes = b"export const panel = true;";
+        std::fs::write(root.path().join("overview.js"), bytes).unwrap();
         let manager = crate::extension::manager_global::test_manager_without_claude_root().await;
         let mut record = crate::extension::types::PluginRecord::new(
             "community.example".into(),
@@ -390,6 +402,7 @@ mod tests {
             crate::extension::types::PluginOrigin::Workspace,
         );
         record.version = Some("1.0.0".into());
+        record.root_dir = root.path().to_path_buf();
         record.panel = Some(crate::extension::manifest::PanelUiManifest {
             tab_id: "overview".into(),
             label: "Overview".into(),
@@ -398,7 +411,10 @@ mod tests {
             entry: "overview.js".into(),
             api_major: aleph_protocol::panel::PANEL_UI_API_MAJOR,
             permissions: vec!["sessions.list".into()],
-            asset_integrity: "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=".into(),
+            asset_integrity: format!(
+                "sha256-{}",
+                base64::engine::general_purpose::STANDARD.encode(sha2::Sha256::digest(bytes))
+            ),
         });
         manager
             .plugin_registry

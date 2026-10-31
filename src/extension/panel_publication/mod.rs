@@ -63,6 +63,10 @@ pub(crate) struct PanelAssetPublicationStore {
 }
 
 impl PanelAssetPublicationStore {
+    pub(super) fn revision(&self) -> u64 {
+        self.revision
+    }
+
     // Only the Core publication builder may replace a generation. Consumers are read-only.
     fn replace(
         &mut self,
