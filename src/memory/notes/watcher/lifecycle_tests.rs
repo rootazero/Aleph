@@ -177,23 +177,20 @@ async fn consumer_join_failure_stays_failed_after_producer_stop() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn stop_helper_join_failure_still_observes_consumer() {
-    let consumer_observed = Arc::new(std::sync::atomic::AtomicBool::new(false));
-    let observed = consumer_observed.clone();
-    let consumer_handle = tokio::spawn(async move {
-        observed.store(true, std::sync::atomic::Ordering::SeqCst);
-    });
-    let stop_handle = tokio::spawn(async {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("note");
+    tokio::fs::create_dir_all(root.join("main/reference"))
+        .await
+        .unwrap();
+    let indexer = note_indexer(root, &dir.path().join("memory.db"));
+    let mut watcher = spawn_note_vault_watcher(indexer).unwrap();
+    drop(watcher.debouncer.take());
+    watcher.stop_handle = Some(tokio::spawn(async {
         panic!("stop helper lifecycle test panic");
-    });
-    let mut watcher = super::NoteVaultWatcher {
-        debouncer: None,
-        consumer_handle: Some(consumer_handle),
-        stop_handle: Some(stop_handle),
-        shutdown_failure: None,
-    };
+    }));
 
     assert!(watcher.shutdown().await.is_err());
-    assert!(consumer_observed.load(std::sync::atomic::Ordering::SeqCst));
+    assert!(watcher.consumer_handle.is_none());
     assert!(watcher.shutdown().await.is_err());
 }
 
@@ -276,22 +273,26 @@ async fn drop_is_nonblocking_fallback_not_joined_shutdown() {
     let category = root.join("main/reference");
     tokio::fs::create_dir_all(&category).await.unwrap();
 
-    let indexer = note_indexer(root.clone(), &dir.path().join("memory.db"));
+    let embedder = Arc::new(BlockingEmbedder {
+        entered: Notify::new(),
+        release: Notify::new(),
+    });
+    let indexer = Arc::new(
+        NoteIndexer::new(
+            root.clone(),
+            Arc::new(SqliteMemoryBackend::new(&dir.path().join("memory.db")).unwrap()),
+        )
+        .with_embedder(embedder.clone()),
+    );
     let watcher = spawn_note_vault_watcher(indexer.clone()).unwrap();
     write_note(&category.join("drop.md"), "drop fallback").await;
-    assert!(
-        wait_until(|| async {
-            indexer
-                .store()
-                .list_notes("main")
-                .await
-                .unwrap_or_default()
-                .iter()
-                .any(|note| note.path == "reference/drop")
-        })
-        .await
-    );
+    embedder.entered.notified().await;
 
+    let started = std::time::Instant::now();
     drop(watcher);
+    assert!(started.elapsed() < Duration::from_millis(200));
+    assert!(Arc::strong_count(&indexer) >= 2);
+
+    embedder.release.notify_one();
     assert!(wait_until(|| async { Arc::strong_count(&indexer) == 1 }).await);
 }
