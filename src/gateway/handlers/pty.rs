@@ -183,7 +183,13 @@ pub async fn handle_spawn(request: JsonRpcRequest, config: Arc<RwLock<Config>>) 
     // by which the wiring audit (`scripts/config_wiring_audit.py`) can see
     // that `[policies.terminal]` has a consumer outside src/config/.
     let terminal: crate::config::types::policies::TerminalConfig = cfg.policies.terminal.clone();
-    drop(cfg); // don't hold the read lock across the spawn below
+    let generation = match pty::try_manager().and_then(|manager| manager.ready_generation().ok()) {
+        Some(generation) => generation,
+        None => {
+            return JsonRpcResponse::error(id, INVALID_PARAMS, "terminal provider is not ready")
+        }
+    };
+    drop(cfg); // The captured generation is checked again at the effect boundary.
 
     // The client's cwd is a request, not an authorisation: resolve it
     // against the operator-registered workspace roots before it ever reaches
@@ -215,7 +221,7 @@ pub async fn handle_spawn(request: JsonRpcRequest, config: Arc<RwLock<Config>>) 
     };
 
     pty::manager().set_max_sessions(terminal.max_sessions);
-    match pty::manager().spawn(&opts) {
+    match pty::manager().spawn_at(generation, &opts) {
         Ok(res) => {
             // The session is already registered by the time `spawn` returns
             // (manager.rs inserts under the same lock it builds the result
@@ -223,7 +229,7 @@ pub async fn handle_spawn(request: JsonRpcRequest, config: Arc<RwLock<Config>>) 
             // the requested dimensions if it somehow can't be found, rather
             // than failing a spawn that already succeeded.
             let snapshot = pty::manager()
-                .attach_snapshot(&res.session_id)
+                .attach_snapshot_at(generation, &res.session_id)
                 .unwrap_or_else(|_| aleph_protocol::pty::PtyAttachResponse {
                     seq: 0,
                     rows: if params.rows == 0 { 24 } else { params.rows },
@@ -256,10 +262,11 @@ pub async fn handle_attach(request: JsonRpcRequest) -> JsonRpcResponse {
         Ok(v) => v,
         Err(resp) => return resp,
     };
-    if let Err(resp) = require_owned(&request, &params.session_id) {
-        return resp;
-    }
-    match pty::manager().attach_snapshot(&params.session_id) {
+    let generation = match require_owned(&request, &params.session_id) {
+        Ok(generation) => generation,
+        Err(response) => return response,
+    };
+    match pty::manager().attach_snapshot_at(generation, &params.session_id) {
         Ok(snapshot) => match serde_json::to_value(&snapshot) {
             Ok(v) => JsonRpcResponse::success(id, v),
             Err(e) => JsonRpcResponse::error(id, INVALID_PARAMS, format!("encode failed: {e}")),
@@ -275,9 +282,10 @@ pub async fn handle_input(request: JsonRpcRequest) -> JsonRpcResponse {
         Ok(v) => v,
         Err(resp) => return resp,
     };
-    if let Err(resp) = require_owned(&request, &params.session_id) {
-        return resp;
-    }
+    let generation = match require_owned(&request, &params.session_id) {
+        Ok(generation) => generation,
+        Err(response) => return response,
+    };
     let bytes = if params.base64 {
         match BASE64.decode(params.data.as_bytes()) {
             Ok(b) => b,
@@ -288,7 +296,7 @@ pub async fn handle_input(request: JsonRpcRequest) -> JsonRpcResponse {
     } else {
         params.data.into_bytes()
     };
-    match pty::manager().write(&params.session_id, &bytes) {
+    match pty::manager().write_at(generation, &params.session_id, &bytes) {
         Ok(()) => JsonRpcResponse::success(id, json!({ "ok": true })),
         Err(e) => JsonRpcResponse::error(id, INVALID_PARAMS, e),
     }
@@ -323,9 +331,10 @@ pub async fn handle_resize(request: JsonRpcRequest) -> JsonRpcResponse {
         return JsonRpcResponse::error(id, INVALID_PARAMS, e);
     }
 
-    if let Err(resp) = require_owned(&request, &params.session_id) {
-        return resp;
-    }
+    let generation = match require_owned(&request, &params.session_id) {
+        Ok(generation) => generation,
+        Err(response) => return response,
+    };
 
     let Some(conn_id) = crate::gateway::caller_identity::current_caller_conn_id() else {
         return JsonRpcResponse::error(
@@ -340,7 +349,13 @@ pub async fn handle_resize(request: JsonRpcRequest) -> JsonRpcResponse {
     // here, which would both TOCTOU-race a concurrent close/remove and
     // full-clone every live session's SessionInfo on every resize (a resize
     // can fire on every frame of a window drag).
-    match pty::manager().note_viewport(&params.session_id, &conn_id, params.rows, params.cols) {
+    match pty::manager().note_viewport_at(
+        generation,
+        &params.session_id,
+        &conn_id,
+        params.rows,
+        params.cols,
+    ) {
         Ok(()) => JsonRpcResponse::success(id, json!({ "ok": true })),
         Err(e) => JsonRpcResponse::error(id, INVALID_PARAMS, e),
     }
@@ -353,10 +368,11 @@ pub async fn handle_close(request: JsonRpcRequest) -> JsonRpcResponse {
         Ok(v) => v,
         Err(resp) => return resp,
     };
-    if let Err(resp) = require_owned(&request, &params.session_id) {
-        return resp;
-    }
-    match pty::manager().close(&params.session_id) {
+    let generation = match require_owned(&request, &params.session_id) {
+        Ok(generation) => generation,
+        Err(response) => return response,
+    };
+    match pty::manager().close_at(generation, &params.session_id) {
         Ok(()) => JsonRpcResponse::success(id, json!({ "ok": true })),
         Err(e) => JsonRpcResponse::error(id, INVALID_PARAMS, e),
     }
@@ -382,8 +398,9 @@ pub async fn handle_list(request: JsonRpcRequest) -> JsonRpcResponse {
     let id = request.id.clone();
     let actor = crate::gateway::visibility::ambient_actor();
     let body = aleph_protocol::pty::PtyListResponse {
-        sessions: pty::manager()
-            .list()
+        sessions: pty::try_manager()
+            .map(|manager| manager.list())
+            .unwrap_or_default()
             .iter()
             .filter(|s| pty::owner_admits(s.created_by.as_deref(), actor.as_deref()))
             .map(aleph_protocol::pty::PtySessionInfo::from)
@@ -435,11 +452,17 @@ pub async fn handle_list(request: JsonRpcRequest) -> JsonRpcResponse {
 /// that settled in the daemon that owned it stays "no such session" — that
 /// shell ended, it was not lost.
 #[allow(clippy::result_large_err)]
-fn require_owned(request: &JsonRpcRequest, session_id: &str) -> Result<(), JsonRpcResponse> {
+fn require_owned(request: &JsonRpcRequest, session_id: &str) -> Result<u64, JsonRpcResponse> {
     let actor = crate::gateway::visibility::ambient_actor();
-    let owner = pty::manager().owner_of(session_id);
+    let owner = pty::try_manager()
+        .map(|manager| manager.owner_of(session_id))
+        .unwrap_or(pty::SessionOwner::Unknown);
     if owner.admits(actor.as_deref()) {
-        return Ok(());
+        if let Some(generation) =
+            pty::try_manager().and_then(|manager| manager.ready_generation().ok())
+        {
+            return Ok(generation);
+        }
     }
     if matches!(owner, pty::SessionOwner::Unknown) {
         if let Some(job) = crate::builtin_tools::process_journal::lookup_pty(session_id) {
@@ -534,6 +557,7 @@ mod tests {
     #[tokio::test]
     #[serial_test::parallel(pty_global_manager)]
     async fn resize_refuses_a_geometry_that_would_allocate_the_host() {
+        pty::manager::activate_test_provider();
         let resp = handle_resize(req(
             "pty.resize",
             json!({ "session_id": "ghost", "rows": 65535, "cols": 65535 }),
@@ -558,6 +582,7 @@ mod tests {
     #[tokio::test]
     #[serial_test::parallel(pty_global_manager)]
     async fn spawn_refuses_a_geometry_that_would_allocate_the_host() {
+        pty::manager::activate_test_provider();
         let (config, _dir) = isolated_config();
         let resp = handle_spawn(
             req("pty.spawn", json!({ "rows": 65535, "cols": 65535 })),
@@ -581,6 +606,7 @@ mod tests {
     #[tokio::test]
     #[serial_test::parallel(pty_global_manager)]
     async fn a_single_oversized_axis_is_refused() {
+        pty::manager::activate_test_provider();
         assert!(
             check_dimensions(24, 65535).is_err(),
             "wide grid must refuse"
@@ -606,6 +632,7 @@ mod tests {
     #[test]
     #[serial_test::parallel(pty_global_manager)]
     fn zero_is_the_wires_unset_and_stays_admissible() {
+        pty::manager::activate_test_provider();
         assert!(check_dimensions(0, 0).is_ok());
         assert!(check_dimensions(24, 80).is_ok());
     }
@@ -613,6 +640,7 @@ mod tests {
     #[tokio::test]
     #[serial_test::parallel(pty_global_manager)]
     async fn input_unknown_session_is_error_not_panic() {
+        pty::manager::activate_test_provider();
         let resp = handle_input(req(
             "pty.input",
             json!({ "session_id": "ghost", "data": "x" }),
@@ -624,6 +652,7 @@ mod tests {
     #[tokio::test]
     #[serial_test::parallel(pty_global_manager)]
     async fn input_rejects_bad_base64() {
+        pty::manager::activate_test_provider();
         let resp = handle_input(req(
             "pty.input",
             json!({ "session_id": "ghost", "data": "!!!not base64!!!", "base64": true }),
@@ -635,6 +664,7 @@ mod tests {
     #[tokio::test]
     #[serial_test::parallel(pty_global_manager)]
     async fn list_returns_sessions_array() {
+        pty::manager::activate_test_provider();
         let resp = handle_list(req("pty.list", json!({}))).await;
         let result = resp.result.expect("list always succeeds");
         assert!(result.get("sessions").and_then(|s| s.as_array()).is_some());
@@ -664,6 +694,7 @@ mod tests {
     #[tokio::test]
     #[serial_test::parallel(pty_global_manager)]
     async fn list_response_is_built_from_the_protocol_type() {
+        pty::manager::activate_test_provider();
         let (config, _tmp) = isolated_config();
         let spawn = handle_spawn(req("pty.spawn", json!({ "rows": 6, "cols": 20 })), config).await;
         let sid = spawn.result.as_ref().expect("spawned")["session_id"]
@@ -718,6 +749,7 @@ mod tests {
     #[tokio::test]
     #[serial_test::parallel(pty_global_manager)]
     async fn attach_returns_a_snapshot_with_its_seq() {
+        pty::manager::activate_test_provider();
         let (config, _tmp) = isolated_config();
         let spawn = handle_spawn(req("pty.spawn", json!({ "rows": 8, "cols": 30 })), config).await;
         let sid = spawn.result.as_ref().expect("spawned")["session_id"]
@@ -754,6 +786,7 @@ mod tests {
     #[tokio::test]
     #[serial_test::parallel(pty_global_manager)]
     async fn attach_on_an_unknown_session_is_an_error_not_an_empty_screen() {
+        pty::manager::activate_test_provider();
         let resp = handle_attach(req("pty.attach", json!({ "session_id": "ghost" }))).await;
         assert!(
             resp.result.is_none(),
@@ -770,6 +803,7 @@ mod tests {
     #[tokio::test]
     #[serial_test::parallel(pty_global_manager)]
     async fn resize_without_conn_id_is_refused_not_applied() {
+        pty::manager::activate_test_provider();
         let (config, _tmp) = isolated_config();
         let spawn = handle_spawn(req("pty.spawn", json!({ "rows": 24, "cols": 80 })), config).await;
         let sid = spawn.result.as_ref().expect("spawned")["session_id"]
@@ -798,6 +832,7 @@ mod tests {
     #[tokio::test]
     #[serial_test::parallel(pty_global_manager)]
     async fn resize_with_conn_id_records_viewport_and_applies_it() {
+        pty::manager::activate_test_provider();
         let (config, _tmp) = isolated_config();
         let spawn =
             handle_spawn(req("pty.spawn", json!({ "rows": 40, "cols": 120 })), config).await;
@@ -830,6 +865,7 @@ mod tests {
     #[tokio::test]
     #[serial_test::parallel(pty_global_manager)]
     async fn two_conn_ids_share_smallest_wins_through_the_handler() {
+        pty::manager::activate_test_provider();
         let (config, _tmp) = isolated_config();
         let spawn =
             handle_spawn(req("pty.spawn", json!({ "rows": 40, "cols": 120 })), config).await;
@@ -866,6 +902,7 @@ mod tests {
     #[tokio::test]
     #[serial_test::parallel(pty_global_manager)]
     async fn resize_unknown_session_is_still_an_error() {
+        pty::manager::activate_test_provider();
         let resp = crate::gateway::caller_identity::CALLER_CONN_ID
             .scope(Some("conn-a".to_string()), async {
                 handle_resize(req(
@@ -881,6 +918,7 @@ mod tests {
     #[tokio::test]
     #[serial_test::parallel(pty_global_manager)]
     async fn spawn_response_matches_the_contract_key_for_key() {
+        pty::manager::activate_test_provider();
         let (config, _tmp) = isolated_config();
         let resp = handle_spawn(req("pty.spawn", json!({ "rows": 4, "cols": 12 })), config).await;
         let value = resp.result.expect("spawned");
@@ -983,6 +1021,7 @@ mod tests {
     #[tokio::test]
     #[serial_test::parallel(pty_global_manager)]
     async fn spawn_with_a_cwd_outside_every_root_creates_no_session() {
+        pty::manager::activate_test_provider();
         // See the doc comment above for why this exact pair of labels was
         // chosen, and why a before/after id snapshot is not used instead.
         let (probe_command, probe_args): (&str, Vec<String>) = if cfg!(windows) {
@@ -1111,6 +1150,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     #[serial_test::parallel(pty_global_manager)]
     async fn spawn_with_no_cwd_actually_chdirs_the_child_into_the_first_root() {
+        pty::manager::activate_test_provider();
         // The poll loop below drains its budget at ITERATIONS x
         // INTERVAL_MS; both platforms' child processes are bounded to a
         // fixed multiple of that budget (not a bare guess), so they
@@ -1260,6 +1300,7 @@ mod tests {
     #[tokio::test]
     #[serial_test::parallel(pty_global_manager)]
     async fn a_spawn_through_the_handler_carries_both_the_actor_and_the_scrollback() {
+        pty::manager::activate_test_provider();
         let (config, _tmp) = isolated_config();
         config.write().await.policies.terminal.scrollback_lines = 7;
 
@@ -1307,6 +1348,7 @@ mod tests {
     #[tokio::test]
     #[serial_test::parallel(pty_global_manager)]
     async fn a_second_operator_can_neither_see_nor_address_another_operators_session() {
+        pty::manager::activate_test_provider();
         let (config, _tmp) = isolated_config();
         let spawn = crate::gateway::caller_identity::CALLER_USER
             .scope(
@@ -1435,6 +1477,7 @@ mod tests {
     #[tokio::test]
     #[serial_test::parallel(pty_global_manager)]
     async fn require_owned_returns_the_tombstone_text_to_its_owner_only() {
+        pty::manager::activate_test_provider();
         use crate::builtin_tools::process_journal as j;
         let _g = j::test_gate();
         let tmp = tempfile::tempdir().unwrap();
@@ -1564,6 +1607,7 @@ mod tests {
     #[tokio::test]
     #[serial_test::parallel(pty_global_manager)]
     async fn terminal_capability_pty_attach_rpc_calls_terminal_runtime_attach() {
+        pty::manager::activate_test_provider();
         let (config, _tmp) = isolated_config();
         let spawn = handle_spawn(req("pty.spawn", json!({ "rows": 6, "cols": 40 })), config).await;
         let spawned = spawn.result.as_ref().expect("spawned");

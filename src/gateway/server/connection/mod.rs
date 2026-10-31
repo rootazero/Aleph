@@ -1353,6 +1353,9 @@ pub async fn handle_connection(
                         // Try to extract topic from event for filtering
                         let (should_forward, projected_payload) = if let Some(event_obj) = parsed.as_ref() {
                             let (topic, event_data) = extract_topic_and_data(event_obj);
+                            if !crate::gateway::pty::manager::frame_admits(topic, event_data) {
+                                continue;
+                            }
 
                             // The login wall + permission-based scope guard check +
                             // surface audience + caller identity for the owner-scoped
@@ -1468,6 +1471,13 @@ pub async fn handle_connection(
                         };
 
                         if should_forward {
+                            // Subscription/visibility checks await; revalidate at transport admission.
+                            if parsed.as_ref().is_some_and(|event| {
+                                let (topic, data) = extract_topic_and_data(event);
+                                !crate::gateway::pty::manager::frame_admits(topic, data)
+                            }) {
+                                continue;
+                            }
                             debug!("Forwarding event to {}", conn_id);
                             // Apply the projection (if any) and wrap the bare
                             // TopicEvent form — see `event_wire_form`.

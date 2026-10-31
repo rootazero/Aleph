@@ -2619,6 +2619,7 @@ mod tests {
     #[tokio::test]
     #[serial_test::parallel(pty_global_manager)]
     async fn pty_frames_reach_only_the_owner_and_outlive_the_session() {
+        let manager = crate::gateway::pty::manager::activate_test_provider();
         let (store, _temp) = test_store();
         let store: Arc<dyn SessionStore> = Arc::new(store);
         let index = EventVisibilityIndex::new();
@@ -2666,9 +2667,8 @@ mod tests {
             );
         }
 
-        // `pty.exit` fires one line before `remove` and delivery is async —
-        // the owner must still be admitted for a session already gone.
-        crate::gateway::pty::manager().remove(&sid);
+        // Close the test-owned child while keeping the retained owner stamp.
+        manager.close(&sid).expect("close test session");
         let data = serde_json::json!({ "session_id": sid });
         assert!(
             index

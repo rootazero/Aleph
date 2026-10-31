@@ -393,6 +393,7 @@ impl Default for GatewayConfig {
 pub struct GatewayServer {
     addr: SocketAddr,
     config: GatewayConfig,
+    application_config: Option<Arc<RwLock<crate::config::Config>>>,
     handlers: Arc<HandlerRegistry>,
     event_bus: Arc<GatewayEventBus>,
     pub connections: Arc<RwLock<HashMap<String, ConnectionState>>>,
@@ -543,6 +544,7 @@ impl GatewayServer {
         Self {
             addr,
             config: GatewayConfig::default(),
+            application_config: None,
             handlers: Arc::new(HandlerRegistry::new()),
             event_bus: Arc::new(GatewayEventBus::new()),
             connections: Arc::new(RwLock::new(HashMap::new())),
@@ -608,6 +610,7 @@ impl GatewayServer {
         Self {
             addr,
             config,
+            application_config: None,
             handlers: Arc::new(HandlerRegistry::new()),
             event_bus: Arc::new(GatewayEventBus::new()),
             connections: Arc::new(RwLock::new(HashMap::new())),
@@ -652,6 +655,12 @@ impl GatewayServer {
                 crate::gateway::event_visibility::EventVisibilityIndex::new(),
             ),
         }
+    }
+
+    /// Provide the live application Config used to decide whether Terminal
+    /// runtime effects may be started during router construction.
+    pub fn set_application_config(&mut self, config: Arc<RwLock<crate::config::Config>>) {
+        self.application_config = Some(config);
     }
 
     /// Get a reference to the subscription manager
@@ -908,11 +917,21 @@ impl GatewayServer {
         let middleware_chain =
             MiddlewareChain::new(self.handlers.clone(), self.rate_limiter.clone());
 
-        // Wire the embedded-PTY subsystem to this server's event bus so live
-        // terminal output is broadcast on the `pty.screen` / `pty.exit` topics
-        // through the normal subscription path (single fixed port, no second
-        // socket). Idempotent — safe if `build_router` runs more than once.
-        crate::gateway::pty::attach_event_bus(self.event_bus.clone());
+        // Wire the embedded-PTY subsystem only when the live application
+        // policy admits Terminal runtime effects. A missing or locked Config
+        // fails closed and does not initialize the process-global manager.
+        if let Some(config) = self
+            .application_config
+            .as_ref()
+            .and_then(|config| config.try_read().ok())
+        {
+            // Keep the intent read locked until activation commits.
+            if config.policies.terminal.enabled {
+                if let Err(error) = crate::gateway::pty::attach_event_bus(self.event_bus.clone()) {
+                    warn!(%error, "terminal activation failed during gateway boot");
+                }
+            }
+        }
 
         let shared = Arc::new(GatewaySharedState {
             handlers: self.handlers.clone(),
@@ -1473,6 +1492,111 @@ pub enum GatewayError {
 
 #[cfg(test)]
 mod tests {
+    #[tokio::test]
+    #[serial_test::serial(pty_global_manager)]
+    async fn terminal_disabled_router_does_not_initialize_manager() {
+        // A fresh process makes an untouched OnceLock observable regardless of test order.
+        const CHILD: &str = "ALEPH_TERMINAL_DISABLED_BOOT_PROBE";
+        if std::env::var_os(CHILD).is_none() {
+            let result = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "gateway::server::tests::terminal_disabled_router_does_not_initialize_manager",
+                    "--nocapture",
+                ])
+                .env(CHILD, "1")
+                .output()
+                .unwrap();
+            assert!(
+                result.status.success(),
+                "{}{}",
+                String::from_utf8_lossy(&result.stdout),
+                String::from_utf8_lossy(&result.stderr)
+            );
+            return;
+        }
+        assert!(crate::gateway::pty::try_manager().is_none());
+        let unwired = super::GatewayServer::new("127.0.0.1:0".parse().unwrap());
+        let _router = unwired.build_router();
+        assert!(crate::gateway::pty::try_manager().is_none());
+        let mut config = crate::Config::default();
+        config.policies.terminal.enabled = false;
+        let mut server = super::GatewayServer::new("127.0.0.1:0".parse().unwrap());
+        server.set_application_config(crate::sync_primitives::Arc::new(tokio::sync::RwLock::new(
+            config,
+        )));
+        let _router = server.build_router();
+        assert!(
+            crate::gateway::pty::try_manager().is_none(),
+            "disabled router initialized Terminal"
+        );
+        assert!(!crate::gateway::pty::manager::frame_admits(
+            "pty.screen",
+            Some(&serde_json::json!({"provider_generation": 1}))
+        ));
+        let response = crate::gateway::handlers::pty::handle_list(
+            crate::gateway::protocol::JsonRpcRequest::new("pty.list", None, None),
+        )
+        .await;
+        assert!(response.error.is_none());
+        assert!(
+            crate::gateway::pty::try_manager().is_none(),
+            "list initialized Terminal"
+        );
+    }
+
+    #[tokio::test]
+    #[serial_test::serial(pty_global_manager)]
+    async fn terminal_enabled_router_uses_live_intent_and_one_driver() {
+        if let Some(manager) = crate::gateway::pty::try_manager()
+            .filter(|manager| manager.lifecycle_snapshot().driver_active)
+        {
+            manager.deactivate().await.unwrap();
+        }
+        let config = Arc::new(RwLock::new(crate::Config::default()));
+        let mut server = GatewayServer::new("127.0.0.1:0".parse().unwrap());
+        server.set_application_config(config.clone());
+        let _router = server.build_router();
+        let manager = crate::gateway::pty::try_manager().expect("enabled boot");
+        let first = manager.ready_generation().unwrap();
+        let _router = server.build_router();
+        assert_eq!(manager.ready_generation().unwrap(), first);
+        let sid = manager
+            .spawn(&crate::gateway::pty::SpawnOptions::default())
+            .unwrap()
+            .session_id;
+
+        config.write().await.policies.terminal.enabled = false;
+        let disabled = config.read().await;
+        let applied =
+            crate::config::live_apply::apply_live_sections(&disabled, &["policies.terminal"]);
+        assert!(manager.ready_generation().is_err());
+        assert!(manager.write_at(first, &sid, b"refused").is_err());
+        if !applied.contains(&"policies.terminal") {
+            assert_eq!(
+                crate::config::live_apply::classify_verified("policies.terminal.enabled", &applied),
+                crate::config::reload_impact::ReloadImpact::Restart
+            );
+        }
+        drop(disabled);
+        manager.deactivate().await.unwrap();
+        let _router = server.build_router();
+        assert_eq!(
+            manager.lifecycle_snapshot().state,
+            crate::capability::provider::ProviderState::Stopped
+        );
+
+        config.write().await.policies.terminal.enabled = true;
+        let enabled = config.read().await;
+        assert!(
+            crate::config::live_apply::apply_live_sections(&enabled, &["policies.terminal"])
+                .contains(&"policies.terminal")
+        );
+        drop(enabled);
+        assert!(manager.ready_generation().unwrap() > first);
+        manager.deactivate().await.unwrap();
+    }
+
     use super::super::middleware::MiddlewareChain;
     use super::super::protocol::{JsonRpcResponse, PARSE_ERROR};
     use super::*;

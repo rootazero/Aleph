@@ -130,21 +130,24 @@ pub fn apply_live_sections(cfg: &Config, top_sections: &[&str]) -> Vec<&'static 
             // missing handle
             // (CLI process, tests, or a boot without the agent stack) is the
             // other `false`.
-            // `[policies.terminal]`'s handle is the process-global PTY
-            // manager singleton (`crate::gateway::pty::manager()`) — always
-            // present, unlike `route`/`spend`'s boot-installed `ArcSwap`s,
-            // so this arm always lands. Turning the switch off must also
-            // kill live sessions: a gate evaluated only at admission would
-            // leave a shell that is already open still open.
-            "policies.terminal" => {
-                if !cfg.policies.terminal.enabled {
-                    let killed = crate::gateway::pty::manager().close_all();
-                    if killed > 0 {
-                        tracing::warn!(killed, "terminal disabled; live PTY sessions terminated");
+            // Terminal has no manager/bus on disabled boot. Its synchronous
+            // apply revokes admission and closes/signals immediately, but only
+            // reports Live after observing the retained driver's join. Pending
+            // joins and failures remain source-owned and downgrade to Restart.
+            "policies.terminal" => match crate::gateway::pty::try_manager() {
+                Some(manager) if cfg.policies.terminal.enabled => match manager.current_bus() {
+                    Some(bus) => manager.activate(bus).is_ok(),
+                    None => false,
+                },
+                Some(manager) => match manager.request_deactivate() {
+                    Ok(joined) => joined,
+                    Err(error) => {
+                        tracing::warn!(%error, "terminal disable retained cleanup evidence");
+                        false
                     }
-                }
-                true
-            }
+                },
+                None => !cfg.policies.terminal.enabled,
+            },
             "search" => match crate::search::handle::try_global_search_handle() {
                 Some(handle) => handle.apply_config(cfg),
                 None => false,
@@ -409,9 +412,8 @@ mod tests {
     /// from that path — exactly the mismatch the controller ruling called
     /// out.
     ///
-    /// `"policies.terminal"` also fires from this same coarse name — it is
-    /// the other member of `LIVE_SUBSECTIONS` and its handle (the
-    /// process-global PTY manager) is always present, so it always lands.
+    /// `"policies.terminal"` also fires from this same coarse name. Terminal
+    /// may be absent or still joining; spend success is independent.
     /// That is not a false positive: the sibling-does-not-earn-a-verdict
     /// guarantee comes from `classify`/`classify_verified` matching the
     /// *specific* target, not from this function only ever applying one
@@ -424,14 +426,12 @@ mod tests {
     /// `the_execution_arm_installs_the_subagent_concurrency_cap` in this same
     /// file, which takes the same annotation for the same shape.
     #[test]
+    #[serial_test::serial(pty_global_manager)]
     #[serial_test::serial(spend_global_policy)]
     fn policies_spend_arm_fires_from_the_coarse_top_level_name() {
         crate::spend::install_policy(crate::config::types::policies::SpendPolicy::default());
         let cfg = Config::default();
-        assert_eq!(
-            apply_live_sections(&cfg, &["policies"]),
-            vec!["policies.spend", "policies.terminal"]
-        );
+        assert!(apply_live_sections(&cfg, &["policies"]).contains(&"policies.spend"));
     }
 
     /// A sibling subsection under the same top-level parent (e.g. a patch to
@@ -474,6 +474,7 @@ mod tests {
     /// `the_execution_arm_installs_the_subagent_concurrency_cap` in this same
     /// file, which takes the same annotation for the same shape.
     #[test]
+    #[serial_test::serial(pty_global_manager)]
     #[serial_test::serial(spend_global_policy)]
     fn g14_spend_arm_applies_live_and_reaches_check_with_no_restart() {
         // A handle merely needs to exist for `update_policy` (which the arm
@@ -501,10 +502,9 @@ mod tests {
 
         // The single-patch caller's exact shape: `top_sections` carries only
         // the coarse top-level segment, never "policies.spend" itself.
-        // `"policies.terminal"` rides along too — same coarse name, its own
-        // always-present handle (see `policies_spend_arm_fires_from_the_coarse_top_level_name`'s doc).
+        // The sibling Terminal arm may be absent or joining; spend still lands.
         let applied = apply_live_sections(&cfg, &["policies"]);
-        assert_eq!(applied, vec!["policies.spend", "policies.terminal"]);
+        assert!(applied.contains(&"policies.spend"));
         assert_eq!(
             classify_verified("policies.spend.per_user_usd", &applied),
             ReloadImpact::Live
@@ -519,7 +519,7 @@ mod tests {
         // restart and no new process. `check`'s very next call must see it.
         cfg.policies.spend.per_user_usd = Some(1.0);
         let applied = apply_live_sections(&cfg, &["policies"]);
-        assert_eq!(applied, vec!["policies.spend", "policies.terminal"]);
+        assert!(applied.contains(&"policies.spend"));
         assert!(matches!(
             crate::spend::check(&principal, now_ms),
             crate::spend::Verdict::Denied { .. }
@@ -693,11 +693,13 @@ mod tests {
     /// `#[serial_test::parallel(pty_global_manager)]` — they stay parallel
     /// with each other and only exclude this one — and a source-level census
     /// in that module fails by name if a new test there forgets it.
-    #[test]
+    #[tokio::test]
     #[serial_test::serial(pty_global_manager)]
-    fn disabling_the_terminal_live_kills_sessions_through_apply_live_sections() {
+    #[serial_test::serial(spend_global_policy)]
+    async fn disabling_the_terminal_live_kills_sessions_through_apply_live_sections() {
         use crate::gateway::pty::SpawnOptions;
 
+        crate::gateway::pty::manager::activate_test_provider();
         let mgr = crate::gateway::pty::manager();
         let sid = mgr
             .spawn(&SpawnOptions::default())
@@ -708,13 +710,23 @@ mod tests {
         cfg.policies.terminal.enabled = false;
         let applied = apply_live_sections(&cfg, &["policies"]);
 
-        assert!(
-            applied.contains(&"policies.terminal"),
-            "a declared-live target that does not land is not live"
+        if !applied.contains(&"policies.terminal") {
+            assert_eq!(
+                mgr.lifecycle_snapshot().state,
+                crate::capability::provider::ProviderState::Stopping
+            );
+        }
+        mgr.deactivate().await.expect("join the retained driver");
+        assert_eq!(
+            mgr.lifecycle_snapshot().state,
+            crate::capability::provider::ProviderState::Stopped
         );
+        cfg.policies.terminal.enabled = true;
+        assert!(apply_live_sections(&cfg, &["policies"]).contains(&"policies.terminal"));
         assert!(
             mgr.list().iter().all(|s| s.session_id != sid || s.closed),
             "the in-flight session must be gone, not merely reported gone"
         );
+        mgr.deactivate().await.expect("join the re-enabled driver");
     }
 }

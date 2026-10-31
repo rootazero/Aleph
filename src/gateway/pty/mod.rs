@@ -24,7 +24,8 @@ pub mod session;
 
 pub(crate) use manager::no_such_session;
 pub use manager::{
-    attach_event_bus, manager, owner_admits, PtyManager, SessionInfo, SessionOwner, SpawnResult,
+    attach_event_bus, manager, owner_admits, try_manager, LifecycleSnapshot, PtyManager,
+    SessionInfo, SessionOwner, SpawnResult, TerminalResidual,
 };
 pub use session::{PtySession, SpawnOptions};
 
@@ -118,23 +119,26 @@ mod tests {
     /// deliberately, not a fixed sleep-then-assert: bounded retries against a
     /// real 16ms cadence, so a slow CI runner doesn't turn into a flake.
     ///
-    /// Marked `#[ignore]` because under the full `cargo test --lib` parallel
-    /// fan-out on a contended Windows runner the test intermittently fails
-    /// the geometry assertion (frame arrives with the marker but the rows/cols
-    /// payload races with another concurrent test that shares the global PTY
-    /// manager state). Passes deterministically when run in isolation or with
-    /// `--test-threads=1`. Run with `cargo test -- --include-ignored` to
-    /// re-verify on demand.
+    /// Takes the global fixture's exclusive key and joins the driver at both
+    /// boundaries, so unrelated PTY tests cannot replace its bus or geometry.
     #[tokio::test(flavor = "multi_thread")]
-    #[serial_test::parallel(pty_global_manager)]
-    #[ignore = "flaky under heavy parallel runs; passes in isolation or with --test-threads=1"]
+    #[serial_test::serial(pty_global_manager)]
     async fn a_write_reaches_a_real_subscriber_over_the_pty_screen_topic() {
+        if let Some(manager) =
+            try_manager().filter(|manager| manager.lifecycle_snapshot().driver_active)
+        {
+            manager
+                .deactivate()
+                .await
+                .expect("stop earlier test driver");
+        }
         let bus = Arc::new(GatewayEventBus::new());
         let mut rx = bus.subscribe();
 
         // The exact call site `GatewayServer::build_router` makes — not a
         // shortcut into `PtyManager`'s internals.
-        attach_event_bus(bus);
+        let generation = attach_event_bus(bus.clone()).expect("activate");
+        assert_eq!(attach_event_bus(bus.clone()).expect("repeat"), generation);
 
         let opts = SpawnOptions {
             rows: 10,
@@ -150,6 +154,7 @@ mod tests {
         manager().write(&sid, input).expect("write");
 
         let mut found: Option<(u16, u16)> = None;
+        let mut delivered = None;
         // 100 polls × 50 ms = 5 s ceiling. Empirically the frame arrives
         // inside ~300 ms on a quiet box but Windows' ConPTY can take
         // a couple of seconds on a contended runner (the full
@@ -181,7 +186,13 @@ mod tests {
                                     .any(|run| run.text.contains("ALEPH_FLUSH_WIRE_OK"))
                             })
                         {
+                            assert_eq!(data["provider_generation"], generation);
+                            assert!(super::manager::frame_admits(
+                                aleph_protocol::pty::PTY_SCREEN_TOPIC,
+                                Some(data)
+                            ));
                             found = Some((frame.rows, frame.cols));
+                            delivered = Some(data.clone());
                         }
                     }
                     Err(tokio::sync::broadcast::error::TryRecvError::Lagged(_)) => continue,
@@ -195,6 +206,21 @@ mod tests {
         }
 
         manager().close(&sid).ok();
+        manager().deactivate().await.expect("join driver");
+        assert!(!super::manager::frame_admits(
+            aleph_protocol::pty::PTY_SCREEN_TOPIC,
+            delivered.as_ref()
+        ));
+        assert!(attach_event_bus(bus).expect("restart") > generation);
+        assert!(!super::manager::frame_admits(
+            aleph_protocol::pty::PTY_SCREEN_TOPIC,
+            delivered.as_ref()
+        ));
+        assert!(!super::manager::frame_admits(
+            aleph_protocol::pty::PTY_EXIT_TOPIC,
+            Some(&serde_json::json!({"provider_generation": generation}))
+        ));
+        manager().deactivate().await.expect("final join");
         // Geometry on the wire. The client-side unit tests prove `apply`
         // does the right thing WITH a frame's dimensions; only this one
         // proves the server puts them there. An implementation that read

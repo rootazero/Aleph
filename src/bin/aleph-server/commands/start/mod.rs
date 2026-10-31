@@ -2280,6 +2280,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     // are already registered stateless in `HandlerRegistry::new()`. See
     // `register_pty_handlers`'s doc for why it alone is wired here.
     register_pty_handlers(&mut server, &app_config_for_pty);
+    server.set_application_config(app_config_for_pty.clone());
 
     // OAuth state: restore from vault if chatgpt provider exists
     let oauth_vault = auth_bundle.auth_ctx.shared_token_mgr.clone();
@@ -4189,11 +4190,13 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     // a clean stop that closed no terminal left every open PTY row `running`
     // on disk, which the next boot tombstoned as a shell the restart had
     // *interrupted*, and the terminal faces then told the person who merely
-    // restarted the server that their shell was lost. `close_all` records
-    // `killed` before each kill. Synchronous, no scheduler pass needed.
-    let terminals = alephcore::gateway::pty::manager().close_all();
-    if terminals > 0 {
-        tracing::info!(count = terminals, "closed terminal sessions on shutdown");
+    // restarted the server that their shell was lost. Lifecycle stop records
+    // `killed` before each kill, then joins the source-owned flush driver.
+    if let Some(manager) = alephcore::gateway::pty::try_manager() {
+        match manager.deactivate().await {
+            Ok(()) => tracing::info!("stopped terminal driver on shutdown"),
+            Err(error) => tracing::warn!(%error, "terminal driver shutdown failed"),
+        }
     }
     // Same shape and the same reason as the background-bash reap above: the
     // browsers are OUR child processes, `Child` does not kill on drop, and

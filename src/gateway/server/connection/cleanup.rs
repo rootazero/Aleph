@@ -115,7 +115,9 @@ pub(super) async fn run_cleanup(
     ctx.subscription_manager.remove_connection(conn_id).await;
 
     // 6. PTY viewport lock
-    crate::gateway::pty::manager().release_conn(conn_id);
+    if let Some(manager) = crate::gateway::pty::try_manager() {
+        manager.release_conn(conn_id);
+    }
 
     info!("Connection closed: {}", conn_id);
 }
