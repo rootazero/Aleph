@@ -116,9 +116,10 @@ impl AgentManager {
         Ok(())
     }
 
-    /// Ensure `candidate` resolves inside `base` using lexical normalization.
-    /// Catches traversal that survives string-level validation (e.g. symlinks
-    /// resolved by the OS, or crafted relative paths).
+    /// Ensure `candidate` stays lexically inside `base`.
+    ///
+    /// This checks textual `.`/`..` traversal only; it does not resolve
+    /// symlinks. `list_files` separately skips symlinked entries.
     fn require_contained(&self, base: &std::path::Path, candidate: &std::path::Path) -> Result<()> {
         let normalized = normalize_path_lexically(candidate);
         let base_normalized = normalize_path_lexically(base);

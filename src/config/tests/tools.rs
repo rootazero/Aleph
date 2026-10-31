@@ -122,16 +122,10 @@ enabled = true
 
 [unified_tools.native.fs]
 enabled = true
-allowed_roots = ["~", "/tmp"]
 
 [unified_tools.native.git]
-enabled = false
-allowed_repos = []
-
-[unified_tools.native.shell]
 enabled = true
-timeout_seconds = 60
-allowed_commands = []
+allowed_repos = []
 
 [unified_tools.mcp.github]
 command = "node"
@@ -146,14 +140,10 @@ args = ["~/.mcp/github/index.js"]
     // Native tools
     let fs = unified.native.fs.expect("Should have fs config");
     assert!(fs.enabled);
-    assert_eq!(fs.allowed_roots, vec!["~", "/tmp"]);
+    assert!(fs.allowed_roots.is_empty());
 
     let git = unified.native.git.expect("Should have git config");
-    assert!(!git.enabled);
-
-    let shell = unified.native.shell.expect("Should have shell config");
-    assert!(shell.enabled);
-    assert_eq!(shell.timeout_seconds, 60);
+    assert!(git.enabled);
 
     // MCP servers
     assert_eq!(unified.mcp.len(), 1);
@@ -163,6 +153,64 @@ args = ["~/.mcp/github/index.js"]
         .expect("Should have github server");
     assert_eq!(github.command, "node");
     assert_eq!(github.args, vec!["~/.mcp/github/index.js"]);
+}
+
+/// The native tool knobs that no executor consumes are rejected at the
+/// configuration boundary: a config that sets them must fail to load with
+/// the exact reason, not boot into a state where the setting silently does
+/// nothing.
+#[test]
+fn test_unified_tools_rejects_unconsumed_native_knobs() {
+    let cases = [
+        (
+            r#"
+[unified_tools.native.fs]
+enabled = true
+allowed_roots = ["~"]
+"#,
+            "native path allow-lists are not supported until the native executor consumes them",
+        ),
+        (
+            r#"
+[unified_tools.native.git]
+enabled = true
+allowed_repos = ["~/repo"]
+"#,
+            "native path allow-lists are not supported until the native executor consumes them",
+        ),
+        (
+            r#"
+[unified_tools.native.fs]
+enabled = false
+"#,
+            "native tool enable switches are not supported until the native registry consumes them",
+        ),
+        (
+            r#"
+[unified_tools.native.shell]
+enabled = true
+"#,
+            "native shell enable switch is not supported until the native registry consumes it",
+        ),
+        (
+            r#"
+[unified_tools.native.shell]
+enabled = false
+allowed_commands = ["git status"]
+"#,
+            "native shell command allow-lists are not supported until the native executor consumes them",
+        ),
+    ];
+
+    for (toml_str, expected) in cases {
+        let err = toml::from_str::<Config>(toml_str)
+            .expect_err("an unconsumed native knob must be rejected at the config boundary");
+        let message = err.to_string();
+        assert!(
+            message.contains(expected),
+            "expected {expected:?} in the parse error, got {message:?}"
+        );
+    }
 }
 
 #[test]
@@ -177,7 +225,6 @@ enabled = true
 
 [unified_tools.native.fs]
 enabled = true
-allowed_roots = ["~"]
 "#;
 
     let config: Config = toml::from_str(toml_str).expect("Should parse");
@@ -233,12 +280,15 @@ fn test_unified_tools_config_serialization_round_trip() {
     };
     config.native.fs = Some(FsToolConfig {
         enabled: true,
-        allowed_roots: vec!["~".to_string(), "/home".to_string()],
+        allowed_roots: vec![],
     });
     config.native.shell = Some(ShellToolConfig {
-        enabled: true,
+        // The shell allow-list is a fixed default until a native shell
+        // executor consumes it: a custom list is rejected at the config
+        // boundary, so the round-trip must carry the default list.
+        allowed_commands: crate::config::types::tools::default_shell_commands(),
         timeout_seconds: 45,
-        allowed_commands: vec![],
+        ..ShellToolConfig::default()
     });
     config.mcp.insert(
         "test-server".to_string(),
@@ -262,14 +312,21 @@ fn test_unified_tools_config_serialization_round_trip() {
     // Verify round-trip
     assert_eq!(deserialized.enabled, config.enabled);
     assert!(deserialized.is_fs_enabled());
-    assert!(deserialized.is_shell_enabled());
+    // The native shell enable switch is refused at the config boundary (no
+    // executor consumes it), so a config that round-trips can never have the
+    // native shell on — the switch is not a value the loader accepts.
+    assert!(!deserialized.is_shell_enabled());
     assert_eq!(deserialized.mcp.len(), 1);
 
     let fs = deserialized.native.fs.expect("Should have fs");
-    assert_eq!(fs.allowed_roots, vec!["~", "/home"]);
+    assert!(fs.allowed_roots.is_empty());
 
     let shell = deserialized.native.shell.expect("Should have shell");
     assert_eq!(shell.timeout_seconds, 45);
+    assert_eq!(
+        shell.allowed_commands,
+        crate::config::types::tools::default_shell_commands()
+    );
 }
 
 mod is_clipboard_enabled_master_switch {

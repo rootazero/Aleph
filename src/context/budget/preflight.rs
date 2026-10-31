@@ -152,6 +152,12 @@ pub struct PreflightPipeline {
     /// hands the pipeline a `ratio: 1.0` placeholder — on its historical
     /// always-run behaviour.
     flush_ratio: f64,
+    /// Characters-per-token ratio used by the estimator that measures an
+    /// externally staged candidate. It must be the budget's own ratio
+    /// ([`ContextBudgetConfig::token_estimate_ratio`](super::ContextBudgetConfig::token_estimate_ratio)),
+    /// otherwise the "how many tokens did this candidate free?" question is
+    /// answered with a different yardstick than the one the budget enforces.
+    token_estimate_ratio: f64,
 }
 
 impl PreflightPipeline {
@@ -177,6 +183,7 @@ impl PreflightPipeline {
             cut_quantum: DEFAULT_CUT_QUANTUM,
             min_savings_ratio: DEFAULT_MIN_SAVINGS_RATIO,
             flush_ratio: 1.0,
+            token_estimate_ratio: super::pressure::DEFAULT_PROSE_RATIO,
         }
     }
 
@@ -205,6 +212,16 @@ impl PreflightPipeline {
         self.cut_quantum = cut_quantum;
         self.min_savings_ratio = min_savings_ratio;
         self.flush_ratio = flush_ratio;
+        self
+    }
+
+    /// Set the characters-per-token ratio the external-candidate estimator
+    /// must use. Production wires the budget's own ratio so the preflight
+    /// measures a staged candidate with the same yardstick the budget
+    /// enforces.
+    #[must_use]
+    pub(crate) fn with_token_estimate_ratio(mut self, ratio: f64) -> Self {
+        self.token_estimate_ratio = ratio;
         self
     }
 
@@ -280,11 +297,13 @@ impl PreflightPipeline {
         if pressure.ratio < self.min_pressure_ratio {
             return None;
         }
-        let before_tokens = crate::context::budget::pressure::estimate_tokens_smart(
+        let before_tokens = crate::context::budget::pressure::estimate_tokens_aware(
             &serde_json::to_string(before).unwrap_or_default(),
+            self.token_estimate_ratio,
         );
-        let after_tokens = crate::context::budget::pressure::estimate_tokens_smart(
+        let after_tokens = crate::context::budget::pressure::estimate_tokens_aware(
             &serde_json::to_string(&candidate).unwrap_or_default(),
+            self.token_estimate_ratio,
         );
         if after_tokens > before_tokens {
             return None;
@@ -434,6 +453,7 @@ pub fn default_pipeline(
             DEFAULT_MIN_SAVINGS_RATIO,
             cfg.warning_threshold,
         )
+        .with_token_estimate_ratio(cfg.token_estimate_ratio)
 }
 
 // =============================================================================

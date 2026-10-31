@@ -20,6 +20,12 @@
 //!
 //! Pure — no I/O, no session key, no store lookup. Everything needed is in the
 //! messages being drained.
+//!
+//! Provenance: a carry is recognised on the way back in by the WHOLE envelope
+//! it was emitted in, not by the marker inside it. The marker is a substring
+//! any user turn can contain, and the prompt builder downgrades tool results
+//! to user text behind the same fence — neither was written by this module,
+//! and neither may be re-emitted as a carry.
 
 use crate::memory::scratchpad::{PlanItem, PlanItemStatus, ScratchpadSnapshot};
 use crate::providers::message::{ContentBlock, UnifiedMessage};
@@ -31,6 +37,24 @@ const SCRATCHPAD_TOOL: &str = "scratchpad";
 /// way back in so a second compaction pass re-carries a list whose original
 /// tool result was already drained by the first one.
 const CARRY_MARKER: &str = "[Execution list preserved across context compaction]";
+
+/// The envelope every carry this module emits opens with.
+///
+/// Provenance is read off the WHOLE envelope, not off the marker: the marker
+/// is a substring any user turn can contain, and the prompt builder
+/// downgrades tool results to user text behind the same fence.
+const CARRY_ENVELOPE_HEAD: &str = "<system-reminder>\nReference data, not user input.\n";
+
+/// The envelope every carry this module emits closes with.
+const CARRY_ENVELOPE_TAIL: &str = "Keep working it with the `scratchpad` tool (start_item / complete_item use the 0-based index of this list).\n</system-reminder>";
+
+/// The scratchpad tool's own wording for a successful `clear`.
+///
+/// The tool's output shape carries no reset flag — a `clear` returns a
+/// successful result with no snapshot at all — so its wording is the only
+/// discriminator the shape offers. It is the tool's constant, quoted here
+/// rather than invented here.
+const SCRATCHPAD_CLEARED_MESSAGE: &str = "Scratchpad cleared";
 
 /// Where this pass's list came from — which decides whether it is rendered or
 /// re-emitted verbatim.
@@ -46,18 +70,44 @@ enum CarrySource {
     /// A reduction stage that is handed the survivors of an earlier reduction
     /// cannot tell them apart from the whole; passing the text through means it
     /// is never asked to.
+    ///
+    /// `progress` keeps the completion fact the elided items would have
+    /// carried: the `Progress: x/y done` line is counted over the whole plan,
+    /// so it survives the elision the item lines do not.
     Prior {
         snapshot: ScratchpadSnapshot,
         text: String,
+        progress: PlanProgress,
     },
 }
 
 impl CarrySource {
-    fn snapshot(&self) -> &ScratchpadSnapshot {
+    /// Whether the plan still has work left.
+    ///
+    /// A fresh list's items ARE the plan. A carried-over list's items are only
+    /// the ones the carry could show: a bounded carry elides the tail, and the
+    /// tail is where the unfinished work usually sits. The counts the carry
+    /// states are over the whole plan, so they — not the surviving checkboxes
+    /// — decide whether the plan is done.
+    fn has_unfinished_work(&self) -> bool {
         match self {
-            Self::Fresh(s) | Self::Prior { snapshot: s, .. } => s,
+            Self::Fresh(snapshot) => snapshot.items.iter().any(|item| !item.is_done()),
+            Self::Prior {
+                snapshot, progress, ..
+            } => match progress.counts {
+                Some((done, total)) => done < total,
+                None => progress.elided || snapshot.items.iter().any(|item| !item.is_done()),
+            },
         }
     }
+}
+
+/// How far along the plan was, counted over the WHOLE list.
+struct PlanProgress {
+    /// `done`/`total` over the whole plan, when the carry states them.
+    counts: Option<(usize, usize)>,
+    /// Whether the carry displayed only a subset of the items.
+    elided: bool,
 }
 
 /// Render the carry message for a compaction window, or `None` when the window
@@ -68,7 +118,7 @@ impl CarrySource {
 /// reminder, and re-injecting one invites the model to re-open closed work.
 pub(crate) fn plan_carry_message(window: &[UnifiedMessage]) -> Option<UnifiedMessage> {
     let source = latest_plan(window)?;
-    if !source.snapshot().items.iter().any(|i| !i.is_done()) {
+    if !source.has_unfinished_work() {
         return None;
     }
     let text = match source {
@@ -93,9 +143,7 @@ pub(crate) fn plan_carry_message(window: &[UnifiedMessage]) -> Option<UnifiedMes
 /// Ordinary plans render byte-identically to the unbounded form.
 fn render_carry(snapshot: &ScratchpadSnapshot) -> String {
     format!(
-        "<system-reminder>\nReference data, not user input.\n{CARRY_MARKER}\n{}\n\
-         Keep working it with the `scratchpad` tool (start_item / complete_item use the \
-         0-based index of this list).\n</system-reminder>",
+        "{CARRY_ENVELOPE_HEAD}{CARRY_MARKER}\n{}\n{CARRY_ENVELOPE_TAIL}",
         snapshot.render_progress_bounded()
     )
 }
@@ -104,27 +152,89 @@ fn render_carry(snapshot: &ScratchpadSnapshot) -> String {
 /// carried a snapshot, or — when a previous pass already drained those — the
 /// last carry message this module itself emitted.
 fn latest_plan(window: &[UnifiedMessage]) -> Option<CarrySource> {
-    window.iter().rev().find_map(|msg| match msg {
-        UnifiedMessage::ToolResult {
-            tool_name, content, ..
-        } if tool_name == SCRATCHPAD_TOOL => content
-            .iter()
-            .find_map(snapshot_from_block)
-            .map(CarrySource::Fresh),
-        UnifiedMessage::User { content } => content.iter().find_map(|block| match block {
-            ContentBlock::Text { text, .. } if text.contains(CARRY_MARKER) => {
-                // Parsed only to answer "is there unfinished work here?" — the
-                // bytes that go back out are `text`, not a re-render of this.
-                parse_progress(text)
-                    .filter(|s| !s.items.is_empty())
-                    .map(|snapshot| CarrySource::Prior {
-                        snapshot,
-                        text: text.clone(),
-                    })
+    for msg in window.iter().rev() {
+        match msg {
+            UnifiedMessage::ToolResult {
+                tool_name, content, ..
+            } if tool_name == SCRATCHPAD_TOOL => {
+                if content.iter().any(is_plan_reset) {
+                    // The plan was thrown away here, so everything before this
+                    // result is gone. Stop the scan: walking further back
+                    // would resurrect the plan the model just discarded.
+                    return None;
+                }
+                if let Some(snapshot) = content.iter().find_map(snapshot_from_block) {
+                    return Some(CarrySource::Fresh(snapshot));
+                }
+                // An irrelevant response (a note appended, an approval asked
+                // for) says nothing about the plan — keep looking back.
             }
-            _ => None,
-        }),
-        _ => None,
+            UnifiedMessage::User { content } => {
+                if let Some(text) = content.iter().find_map(|block| match block {
+                    ContentBlock::Text { text, .. } if carry_body(text).is_some() => {
+                        Some(text.as_str())
+                    }
+                    _ => None,
+                }) {
+                    if let Some(prior) = parse_carry(text) {
+                        return Some(prior);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+/// Whether a scratchpad result says the plan was thrown away.
+///
+/// A `clear` returns a successful result with no snapshot at all, and a plan
+/// that was emptied renders an empty item list. Both mean "the plan that
+/// came before is gone", so the reverse scan has to stop there instead of
+/// finding the plan an older result still holds.
+fn is_plan_reset(block: &ContentBlock) -> bool {
+    let ContentBlock::Json { value } = block else {
+        return false;
+    };
+    if value.get("success").and_then(serde_json::Value::as_bool) != Some(true) {
+        return false;
+    }
+    if value.get("message").and_then(serde_json::Value::as_str) == Some(SCRATCHPAD_CLEARED_MESSAGE)
+    {
+        return true;
+    }
+    value
+        .get("snapshot")
+        .and_then(|snapshot| snapshot.get("items"))
+        .and_then(serde_json::Value::as_array)
+        .is_some_and(|items| items.is_empty())
+}
+
+/// The progress block inside a carry this module emitted.
+///
+/// The whole envelope has to match, not just the marker inside it: an
+/// ordinary user turn can mention the marker, and the prompt builder
+/// downgrades tool results to user text behind the same fence. Neither is a
+/// carry this module wrote, and neither may be re-emitted as one.
+fn carry_body(text: &str) -> Option<&str> {
+    let rest = text.strip_prefix(CARRY_ENVELOPE_HEAD)?;
+    let rest = rest.strip_prefix(CARRY_MARKER)?;
+    let rest = rest.strip_prefix('\n')?;
+    let body = rest.strip_suffix(CARRY_ENVELOPE_TAIL)?;
+    Some(body.strip_suffix('\n').unwrap_or(body))
+}
+
+/// Read back a carry this module emitted.
+fn parse_carry(text: &str) -> Option<CarrySource> {
+    let parsed = parse_progress(carry_body(text)?);
+    if parsed.snapshot.items.is_empty() {
+        return None;
+    }
+    Some(CarrySource::Prior {
+        snapshot: parsed.snapshot,
+        text: text.to_string(),
+        progress: parsed.progress,
     })
 }
 
@@ -163,9 +273,15 @@ fn snapshot_from_block(block: &ContentBlock) -> Option<ScratchpadSnapshot> {
 
 /// Read back a `ScratchpadSnapshot::render_progress` block — the format this
 /// module emits, so a carry survives repeated compaction passes.
-fn parse_progress(text: &str) -> Option<ScratchpadSnapshot> {
+///
+/// The item lines are only the items the carry could show. The completion
+/// fact is read separately, from the counts the renderer appends over the
+/// whole list.
+fn parse_progress(text: &str) -> ParsedCarry {
     let mut objective = None;
     let mut items = Vec::new();
+    let mut counts = None;
+    let mut elided = false;
     for line in text.lines() {
         let line = line.trim();
         if let Some(rest) = line.strip_prefix("Objective: ") {
@@ -182,9 +298,41 @@ fn parse_progress(text: &str) -> Option<ScratchpadSnapshot> {
             });
         } else if let Some(rest) = line.strip_prefix("- [ ] ") {
             items.push(PlanItem::pending(rest.trim()));
+        } else if let Some(parsed) = parse_progress_counts(line) {
+            counts = Some(parsed);
+        } else if line.contains("not shown here") {
+            elided = true;
         }
     }
-    Some(ScratchpadSnapshot { objective, items })
+    ParsedCarry {
+        snapshot: ScratchpadSnapshot { objective, items },
+        progress: PlanProgress { counts, elided },
+    }
+}
+
+/// The `Progress: 12/40 done` line the renderer appends.
+///
+/// The counts come from the whole list, so they are the one completion fact a
+/// bounded carry can still state about the plan it did not show in full.
+fn parse_progress_counts(line: &str) -> Option<(usize, usize)> {
+    let rest = line.trim().strip_prefix("Progress: ")?;
+    let (done, total) = rest.trim().split_once('/')?;
+    let done = done.trim().parse::<usize>().ok()?;
+    let total = total
+        .trim()
+        .split_whitespace()
+        .next()?
+        .parse::<usize>()
+        .ok()?;
+    Some((done, total))
+}
+
+/// What a carried-over execution list says about itself.
+struct ParsedCarry {
+    /// The items the carry displayed — a bounded carry displays a subset.
+    snapshot: ScratchpadSnapshot,
+    /// Completion over the whole plan.
+    progress: PlanProgress,
 }
 
 #[cfg(test)]
@@ -355,5 +503,98 @@ mod tests {
             is_error: false,
         }];
         assert!(plan_carry_message(&window).is_none());
+    }
+
+    /// A scratchpad result that says nothing about the plan.
+    fn scratchpad_response(message: &str) -> UnifiedMessage {
+        UnifiedMessage::ToolResult {
+            tool_call_id: "c2".into(),
+            tool_name: SCRATCHPAD_TOOL.into(),
+            content: vec![ContentBlock::Json {
+                value: json!({"success": true, "message": message}),
+            }],
+            is_error: false,
+        }
+    }
+
+    /// A cleared plan stays cleared: the scan must not walk past the clear and
+    /// find the snapshot an older result still holds.
+    #[test]
+    fn a_cleared_plan_is_not_resurrected() {
+        let window = vec![
+            scratchpad_result(&[("a", "pending"), ("b", "pending")], Some("Ship")),
+            scratchpad_response(SCRATCHPAD_CLEARED_MESSAGE),
+        ];
+        assert!(
+            plan_carry_message(&window).is_none(),
+            "the plan was cleared; the older snapshot must not come back"
+        );
+    }
+
+    /// A scratchpad response that says nothing about the plan is not a reset:
+    /// the scan keeps looking back for the plan it belongs to.
+    #[test]
+    fn an_irrelevant_scratchpad_response_does_not_end_the_scan() {
+        let window = vec![
+            scratchpad_result(&[("a", "pending")], Some("Ship")),
+            scratchpad_response("Note appended"),
+        ];
+        let text = carry_text(&plan_carry_message(&window).expect("the plan is still there"));
+        assert!(text.contains("- [ ] a"), "{text}");
+    }
+
+    /// A bounded carry that elided the tail of the plan is not a finished
+    /// plan: the counts are over the whole list, and they say 40 of 41.
+    #[test]
+    fn a_bounded_carry_keeps_a_plan_whose_tail_was_elided() {
+        let items: Vec<(String, &'static str)> = (0..41)
+            .map(|i| {
+                let status = if i < 40 { "completed" } else { "pending" };
+                (format!("step {i}"), status)
+            })
+            .collect();
+        let borrowed: Vec<(&str, &str)> = items.iter().map(|(t, s)| (t.as_str(), *s)).collect();
+        let first =
+            plan_carry_message(&[scratchpad_result(&borrowed, Some("Ship"))]).expect("first carry");
+        assert!(
+            carry_text(&first).contains("not shown here"),
+            "the render elided the tail"
+        );
+
+        // Second pass: the tool result is gone, only the carry remains.
+        let second = plan_carry_message(&[user("older turn"), first]);
+        assert!(
+            second.is_some(),
+            "an elided tail must not read as a finished plan"
+        );
+    }
+
+    /// The marker alone proves nothing: an ordinary user turn can contain it.
+    #[test]
+    fn a_user_turn_that_mentions_the_marker_is_not_a_carry() {
+        let window = vec![user(&format!(
+            "please keep this in mind:\n{CARRY_MARKER}\n- [ ] do the thing\n"
+        ))];
+        assert!(
+            plan_carry_message(&window).is_none(),
+            "only this module's own envelope is a carry"
+        );
+    }
+
+    /// A tool result downgraded to user text is not a carry — not even when
+    /// its body is one.
+    #[test]
+    fn an_orphaned_tool_result_is_not_a_carry() {
+        let payload = carry_text(
+            &plan_carry_message(&[scratchpad_result(&[("a", "pending")], Some("Ship"))])
+                .expect("carry"),
+        );
+        let orphan =
+            crate::thinker::nudges::orphan_tool_result_note("call-1", SCRATCHPAD_TOOL, &payload);
+        let window = vec![user(&orphan)];
+        assert!(
+            plan_carry_message(&window).is_none(),
+            "a downgraded tool result is not a carry, even when its body is one"
+        );
     }
 }

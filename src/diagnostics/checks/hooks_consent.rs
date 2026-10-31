@@ -32,9 +32,64 @@ impl HooksConsentCheck {
         Self::new(ShellHookConsent::with_path(ShellHookConsent::default_path()))
     }
 
+    /// The registry file's state, when it is not "readable and valid".
+    ///
+    /// `None` means the registry could be read and parsed (or is absent —
+    /// absent means "no hooks recorded", which is a healthy state).
+    fn registry_problem(&self) -> Option<Finding> {
+        let path = self.consent.path();
+        let bytes = match std::fs::read(path) {
+            Ok(bytes) => bytes,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return None,
+            Err(error) => {
+                return Some(
+                    Finding::problem(
+                        ID,
+                        Severity::Error,
+                        "Shell-hook consent registry cannot be read",
+                        format!(
+                            "{} could not be read ({error}), so the consent state is UNKNOWN — \
+                             hooks may be pending approval or already approved.",
+                            path.display()
+                        ),
+                    )
+                    .with_fix_hint(
+                        "Check the file's permissions and ownership, then re-run the doctor.",
+                    ),
+                )
+            }
+        };
+        if serde_json::from_slice::<serde_json::Value>(&bytes).is_err() {
+            return Some(
+                Finding::problem(
+                    ID,
+                    Severity::Error,
+                    "Shell-hook consent registry is corrupt",
+                    format!(
+                        "{} is not valid JSON, so its consent entries cannot be read; the \
+                         consent state is UNKNOWN.",
+                        path.display()
+                    ),
+                )
+                .with_fix_hint(
+                    "Move the file aside to let the registry re-record itself, then re-run the \
+                     doctor. Pending approvals will have to be given again.",
+                ),
+            );
+        }
+        None
+    }
+
     /// Pure detection — the shared core of both the CLI doctor and the engine.
     /// Returns `ok` summary when clean, or one finding per issue class.
     pub fn diagnose(&self) -> Vec<Finding> {
+        // An unreadable or corrupt registry means the consent state is
+        // UNKNOWN. Reporting "no shell hooks" for it would send the operator
+        // looking for hooks that exist, so the file's readability is checked
+        // before the entries are interpreted.
+        if let Some(problem) = self.registry_problem() {
+            return vec![problem];
+        }
         let entries = self.consent.entries();
         if entries.is_empty() {
             return vec![Finding::ok(

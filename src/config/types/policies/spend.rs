@@ -33,13 +33,21 @@ pub struct SpendPolicy {
     ///
     /// Omitted means unlimited spend per principal within this period.
     /// See [`SpendPeriod`] for the active cycle length.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_ceiling"
+    )]
     pub per_user_usd: Option<f64>,
 
     /// Machine-total USD spend ceiling.
     ///
     /// Omitted means unlimited cumulative spend across all principals.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_ceiling"
+    )]
     pub total_usd: Option<f64>,
 
     /// USD ceiling of the explicit telecom-public principal
@@ -49,12 +57,31 @@ pub struct SpendPolicy {
     ///
     /// Omitted means the public principal falls back to `per_user_usd`
     /// (when that is set), and is otherwise bounded only by `total_usd`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_ceiling"
+    )]
     pub telecom_public_usd: Option<f64>,
 
     /// Billing cycle duration.
     #[serde(default)]
     pub period: SpendPeriod,
+}
+
+fn deserialize_ceiling<'de, D>(deserializer: D) -> Result<Option<f64>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = Option::<f64>::deserialize(deserializer)?;
+    if let Some(value) = value {
+        if !value.is_finite() || value < 0.0 {
+            return Err(serde::de::Error::custom(
+                "spend ceiling must be finite and non-negative",
+            ));
+        }
+    }
+    Ok(value)
 }
 
 impl SpendPolicy {

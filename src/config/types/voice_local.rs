@@ -8,10 +8,10 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 /// Configuration for the user-provided local voice endpoint.
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(Clone, Serialize, Deserialize, JsonSchema)]
 pub struct VoiceLocalConfig {
     /// Master switch. Off by default — enabling injects a "local" provider
-    /// into the generation provider maps at load time (fill-empty-only).
+    /// into the generation provider maps at load time.
     #[serde(default)]
     pub enabled: bool,
     /// Base URL of the OpenAI-compatible voice server. Providers append
@@ -45,6 +45,20 @@ pub struct VoiceLocalConfig {
     /// TTS output container: "opus" (Telegram-native) or "wav".
     #[serde(default = "default_tts_format")]
     pub tts_format: String,
+}
+
+impl std::fmt::Debug for VoiceLocalConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("VoiceLocalConfig")
+            .field("enabled", &self.enabled)
+            .field("endpoint", &self.endpoint)
+            .field("api_key", &"[REDACTED]")
+            .field("stt_model", &self.stt_model)
+            .field("tts_model", &self.tts_model)
+            .field("tts_voice", &self.tts_voice)
+            .field("tts_format", &self.tts_format)
+            .finish()
+    }
 }
 
 fn default_endpoint() -> String {
@@ -91,7 +105,7 @@ impl Default for VoiceLocalConfig {
 /// (4400 close — the `voice.stream.audio` handler drops them upstream), and
 /// `endpointing` defaults to 10 ms which the server rejects under `--no-vac`
 /// (the adapter pins `endpointing=false`; Panel VAD owns turn boundaries).
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(default)]
 pub struct StreamingConfig {
     pub enabled: bool,
@@ -119,6 +133,19 @@ pub struct StreamingConfig {
     /// it silently loads/serves the small one per client request.
     #[serde(skip_serializing_if = "String::is_empty")]
     pub model: String,
+}
+
+impl std::fmt::Debug for StreamingConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("StreamingConfig")
+            .field("enabled", &self.enabled)
+            .field("provider", &self.provider)
+            .field("base_url", &self.base_url)
+            .field("api_key", &"[REDACTED]")
+            .field("language", &self.language)
+            .field("model", &self.model)
+            .finish()
+    }
 }
 
 impl Default for StreamingConfig {
@@ -267,8 +294,8 @@ pub const LOCAL_PROVIDER_TYPE: &str = "local";
 
 /// Load-time normalization: when local voice is enabled, inject a synthetic
 /// "local" provider into the speech/transcription maps and point the unset
-/// defaults at it. Fill-empty-only — explicit user config (cloud included)
-/// always wins. Idempotent: safe across hot reloads.
+/// defaults at it. Explicit defaults and providers of other types always win.
+/// Idempotent: safe across hot reloads.
 ///
 /// The synthetic entry carries the real connection values (`base_url` =
 /// endpoint, `api_key`, model/voice/format) so providers read everything from
@@ -281,9 +308,9 @@ pub const LOCAL_PROVIDER_TYPE: &str = "local";
 /// - When disabled, the cleanup branch removes that state on the next
 ///   load/patch, so an enable→disable round-trip is clean.
 /// - Entries with `provider_type == "local"` are owned by this mechanism:
-///   user customizations of them survive enable-time normalization (the
-///   `or_insert_with` never overwrites), but they are removed on disable —
-///   a "local" provider_type is meaningless without the configured endpoint.
+///   connection values, models, voice and format reconcile from `[voice.local]`
+///   on every normalization. Other provider settings are preserved. Use a
+///   different provider type for independently configured providers.
 pub fn normalize_voice_local(cfg: &mut crate::config::structs::Config) {
     if !cfg.local_voice().enabled {
         // Disable-cleanup: remove every locally-owned entry, then reset any
@@ -337,14 +364,33 @@ pub fn normalize_voice_local(cfg: &mut crate::config::structs::Config) {
         p
     };
 
-    cfg.generation
-        .speech_providers
-        .entry(LOCAL_PROVIDER_TYPE.into())
-        .or_insert_with(|| synth(GenerationType::Speech, &local.tts_model));
-    cfg.generation
-        .transcription_providers
-        .entry(LOCAL_PROVIDER_TYPE.into())
-        .or_insert_with(|| synth(GenerationType::Transcription, &local.stt_model));
+    for (providers, cap, model) in [
+        (
+            &mut cfg.generation.speech_providers,
+            GenerationType::Speech,
+            &local.tts_model,
+        ),
+        (
+            &mut cfg.generation.transcription_providers,
+            GenerationType::Transcription,
+            &local.stt_model,
+        ),
+    ] {
+        let provider = providers
+            .entry(LOCAL_PROVIDER_TYPE.into())
+            .or_insert_with(|| synth(cap, model));
+        if provider.provider_type != LOCAL_PROVIDER_TYPE {
+            continue;
+        }
+        let current = synth(cap, model);
+        provider.base_url = current.base_url;
+        provider.api_key = current.api_key;
+        provider.models = current.models;
+        if cap == GenerationType::Speech {
+            provider.defaults.voice = current.defaults.voice;
+            provider.defaults.format = current.defaults.format;
+        }
+    }
 
     if cfg.generation.default_speech_provider.is_none() {
         cfg.generation.default_speech_provider = Some(LOCAL_PROVIDER_TYPE.into());
@@ -358,6 +404,18 @@ pub fn normalize_voice_local(cfg: &mut crate::config::structs::Config) {
 mod tests {
     use super::*;
     use crate::config::structs::Config;
+
+    #[test]
+    fn voice_debug_redacts_bearer_tokens() {
+        let mut cfg = Config::default();
+        cfg.voice_local.local.api_key = Some("local-secret-for-debug".into());
+        cfg.voice_local.streaming.api_key = "streaming-secret-for-debug".into();
+        for debug in [format!("{cfg:?}"), format!("{cfg:#?}")] {
+            assert!(!debug.contains("local-secret-for-debug"));
+            assert!(!debug.contains("streaming-secret-for-debug"));
+            assert!(debug.contains("[REDACTED]"));
+        }
+    }
 
     #[test]
     fn disabled_is_a_noop() {
@@ -441,20 +499,72 @@ mod tests {
     }
 
     #[test]
-    fn idempotent_and_preserves_user_local_entry() {
+    fn idempotent_and_reconciles_owned_local_entry() {
         let mut cfg = Config::default();
         cfg.voice_local.local.enabled = true;
         normalize_voice_local(&mut cfg);
         let mut user_entry = cfg.generation.speech_providers["local"].clone();
         user_entry.models = vec!["custom".into()];
+        user_entry.timeout_seconds = Some(37);
+        user_entry.enabled = false;
         cfg.generation
             .speech_providers
             .insert("local".into(), user_entry);
+        cfg.voice_local.local.endpoint = "http://localhost:9000/v1".into();
+        cfg.voice_local.local.api_key = Some("new-token".into());
+        cfg.voice_local.local.tts_model = "new-tts".into();
+        cfg.voice_local.local.stt_model = "new-stt".into();
+        cfg.voice_local.local.tts_voice = "new-voice".into();
+        cfg.voice_local.local.tts_format = "wav".into();
         normalize_voice_local(&mut cfg);
+        normalize_voice_local(&mut cfg);
+        let speech = &cfg.generation.speech_providers["local"];
+        assert_eq!(speech.models, vec!["new-tts".to_string()]);
+        assert_eq!(speech.timeout_seconds, Some(37));
+        assert!(!speech.enabled);
+        assert_eq!(speech.base_url.as_deref(), Some("http://localhost:9000/v1"));
+        assert_eq!(speech.api_key.as_deref(), Some("new-token"));
+        assert_eq!(speech.defaults.voice.as_deref(), Some("new-voice"));
+        assert_eq!(speech.defaults.format.as_deref(), Some("wav"));
+        let transcription = &cfg.generation.transcription_providers["local"];
+        assert_eq!(transcription.models, vec!["new-stt".to_string()]);
+        assert_eq!(transcription.base_url, speech.base_url);
+        assert_eq!(transcription.api_key, speech.api_key);
+
+        cfg.voice_local.local.api_key = None;
+        cfg.voice_local.local.tts_model.clear();
+        cfg.voice_local.local.stt_model.clear();
+        cfg.voice_local.local.tts_voice.clear();
+        cfg.voice_local.local.tts_format.clear();
+        normalize_voice_local(&mut cfg);
+        let speech = &cfg.generation.speech_providers["local"];
+        assert_eq!(speech.api_key.as_deref(), Some(""));
+        assert!(speech.models.is_empty());
+        assert!(speech.defaults.voice.is_none());
+        assert!(speech.defaults.format.is_none());
+        assert!(cfg.generation.transcription_providers["local"]
+            .models
+            .is_empty());
+    }
+
+    #[test]
+    fn preserves_an_independent_provider_using_the_local_key() {
+        let mut cfg = Config::default();
+        cfg.voice_local.local.enabled = true;
+        let mut provider = crate::GenerationProviderConfig::new("openai");
+        provider.base_url = Some("https://independent.example/v1".into());
+        provider.models = vec!["independent-model".into()];
+        cfg.generation
+            .speech_providers
+            .insert("local".into(), provider);
+        normalize_voice_local(&mut cfg);
+        let provider = &cfg.generation.speech_providers["local"];
+        assert_eq!(provider.provider_type, "openai");
         assert_eq!(
-            cfg.generation.speech_providers["local"].models,
-            vec!["custom".to_string()]
+            provider.base_url.as_deref(),
+            Some("https://independent.example/v1")
         );
+        assert_eq!(provider.models, vec!["independent-model".to_string()]);
     }
 
     #[test]

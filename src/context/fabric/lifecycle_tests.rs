@@ -146,11 +146,16 @@ async fn credential_snapshot_falls_back_without_calling_external_handler() {
         )
         .await
         .unwrap();
-    assert!(matches!(
-        result.owner,
-        ContextOwner::BuiltinFallback {
-            reason: DegradedReason::InvalidContract,
-            ..
-        }
-    ));
+    assert!(
+        matches!(
+            result.owner,
+            ContextOwner::BuiltinFallback {
+                reason: DegradedReason::InvalidContract,
+                ..
+            }
+        ),
+        "a credential in the tool output must be refused as an invalid contract before the \
+         plugin sees it; owner was {:?}",
+        result.owner
+    );
 }

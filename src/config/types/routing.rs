@@ -112,9 +112,11 @@ pub struct RoutingRuleConfig {
     /// Regex pattern to match against user input
     pub regex: String,
 
-    /// Provider name to use when this rule matches
-    /// Required for command rules, ignored for keyword rules
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Provider selection is retired until custom command dispatch carries a
+    /// provider-aware execution context. Existing values are accepted for
+    /// compatibility but are omitted from the active schema and output.
+    #[serde(default, skip_serializing)]
+    #[schemars(skip)]
     pub provider: Option<String>,
 
     /// System prompt to guide AI behavior.

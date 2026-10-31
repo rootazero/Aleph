@@ -5,6 +5,7 @@
 use crate::config::Config;
 use crate::error::{AlephError, Result};
 use chrono::NaiveTime;
+use regex::Regex;
 use std::sync::OnceLock;
 use tracing::{debug, error, info, warn};
 
@@ -187,6 +188,33 @@ impl Config {
                  Give it a `^/`-prefixed regex to make it a slash command, or delete it."
             );
         }
+        for (position, rule) in self.rules.iter().enumerate() {
+            // Only the rules that reach code are validated strictly. A
+            // retired keyword rule is warned about above and must never
+            // stop the boot — it cannot reach the routing path either, so
+            // an unusable regex on it has no runtime failure mode to
+            // prevent.
+            if !rule.is_registered_command() {
+                continue;
+            }
+            Regex::new(&rule.regex).map_err(|error| {
+                AlephError::invalid_config(format!(
+                    "Invalid routing rule regex at index {}: {} ({error})",
+                    position + 1,
+                    rule.regex
+                ))
+            })?;
+            // The rule's `provider` is deliberately NOT checked here: it is
+            // a retired field — accepted on read for compatibility, omitted
+            // from serialization because custom command dispatch carries no
+            // provider-aware context. A check on it would reject the very
+            // configs it cannot honour: after a save/load round trip the
+            // field is gone (it is not persisted), so requiring it would
+            // make every round-tripped rule an invalid config, and
+            // requiring the named provider to exist would refuse a boot
+            // over a setting that reaches no code.
+        }
+
         if self.providers.is_empty() && self.general.default_provider.is_none() {
             warn!(
                 "No providers configured and no default_provider set. \

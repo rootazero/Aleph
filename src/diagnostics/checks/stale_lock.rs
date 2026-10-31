@@ -98,10 +98,48 @@ impl HealthCheck for StaleLockCheck {
         };
 
         if holder.process_alive {
-            return vec![Finding::ok(
+            let data_dir = self.data_dir.clone();
+            let held = settle_probe(
                 ID,
-                "Server running",
-                format!("aleph.lock held by live PID {}.", holder.pid),
+                SUBJECT,
+                tokio::task::spawn_blocking(move || is_lock_held(&data_dir)).await,
+            );
+            let held = match held {
+                Err(finding) => return vec![finding],
+                Ok(Err(e)) => {
+                    return vec![unknown_finding(
+                        ID,
+                        SUBJECT,
+                        format!(
+                            "the holder record names live PID {}, but the lock itself could not \
+                             be probed: {e}. Treating the singleton as unknown rather than \
+                             running; nothing was changed.",
+                            holder.pid
+                        ),
+                    )];
+                }
+                Ok(Ok(held)) => held,
+            };
+            if held {
+                return vec![Finding::ok(
+                    ID,
+                    "Server running",
+                    format!("aleph.lock held by live PID {}.", holder.pid),
+                )];
+            }
+            return vec![Finding::problem(
+                ID,
+                Severity::Warning,
+                "Holder record stale",
+                format!(
+                    "the holder record names live PID {}, but aleph.lock is free; the \
+                     recorded process is not the running Aleph server.",
+                    holder.pid
+                ),
+            )
+            .with_fix_hint(
+                "Remove the stale holder record only after confirming the PID is unrelated, \
+                 then re-run doctor.",
             )];
         }
 

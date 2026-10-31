@@ -334,12 +334,20 @@ impl AgentDefinitionResolver {
         }
 
         // 3. Load ProfileConfig from profiles HashMap
-        let profile = agent
-            .profile
-            .as_ref()
-            .and_then(|name| profiles.get(name))
-            .cloned()
-            .unwrap_or_default();
+        let profile = match agent.profile.as_ref() {
+            Some(name) => match profiles.get(name) {
+                Some(profile) => profile.clone(),
+                None => {
+                    tracing::warn!(
+                        agent = %agent.id,
+                        profile = %name,
+                        "agent references an unknown profile; the profile tier is skipped"
+                    );
+                    ProfileConfig::default()
+                }
+            },
+            None => ProfileConfig::default(),
+        };
 
         // 4. Resolve model: an invalidated Qualified selection → treat as None, falling to the system default chain.
         let model = agent

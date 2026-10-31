@@ -42,6 +42,8 @@ const ID: &str = "providers/connectivity";
 /// Tag on the per-provider success finding — the total-outage gate counts
 /// these (not title strings) to decide whether any probed provider answered.
 const TAG_REACHABLE: &str = "provider-reachable";
+/// Tag on per-provider failure findings caused by rejected credentials.
+const TAG_CREDENTIALS_REJECTED: &str = "provider-credentials-rejected";
 /// Tag on per-provider failure findings (including timeouts, which the
 /// bounded probe folds into ordinary failures).
 const TAG_UNREACHABLE: &str = "provider-unreachable";
@@ -59,21 +61,16 @@ impl ProvidersConnectivityCheck {
 
 /// What the vault was able to say about one provider's API key.
 ///
-/// Three answers, not two. `Option<String>` can hold "there is a key" and
-/// "there is no key" but not "the vault would not tell me", and folding the
-/// third into the second is not a quiet degradation here — it decides what
-/// this check *reports*. A provider whose stored key could not be read is
-/// dialled without it, answers 401, and is published as
-/// `{name}: unreachable` with a fix hint telling the operator to store a
-/// fresh key with `vault_store`: a confident wrong diagnosis about a
-/// credential this check never read, pointing at the one repair that cannot
-/// help. Same class as the `[ok]` conflations in `stale_lock` /
-/// `duplicate_instance`, one step milder — the wrong *problem* rather than a
-/// reassuring pass.
+/// Four answers, not two. `Option<String>` can hold "there is a key" and
+/// "there is no key" but not "the vault would not tell me"; the explicit
+/// `Absent` state also prevents probing a provider with no credential in
+/// either configuration source.
 enum KeyLookup {
     /// The vault answered. `None` means no secret is stored for this provider
     /// — a determinate answer, and the ordinary case for OAuth presets.
     Ready(Option<String>),
+    /// Neither config nor vault supplied a credential.
+    Absent,
     /// The vault did not answer; the payload is why, already in the
     /// [`unknown_finding`] house style's `detail` voice.
     Unreadable(String),
@@ -171,8 +168,18 @@ impl HealthCheck for ProvidersConnectivityCheck {
             .into_iter()
             .zip(keys)
             .map(|((name, enabled, mut runtime), key)| {
-                if let KeyLookup::Ready(k) = &key {
-                    runtime.api_key = k.clone();
+                let key = match key {
+                    KeyLookup::Ready(None)
+                        if runtime.api_key.as_deref().is_none_or(str::is_empty) =>
+                    {
+                        KeyLookup::Absent
+                    }
+                    key => key,
+                };
+                if runtime.api_key.as_deref().is_none_or(str::is_empty) {
+                    if let KeyLookup::Ready(Some(vault_key)) = &key {
+                        runtime.api_key = Some(vault_key.clone());
+                    }
                 }
                 (name, enabled, runtime, key)
             })
@@ -226,6 +233,9 @@ impl HealthCheck for ProvidersConnectivityCheck {
                 if let KeyLookup::Unreadable(why) = key {
                     return credentials_unknown(&name, why);
                 }
+                if matches!(key, KeyLookup::Absent) {
+                    return credentials_missing(&name);
+                }
                 let outcome = probe_provider_bounded(&name, runtime).await;
                 if outcome.success {
                     let lat = outcome
@@ -243,16 +253,28 @@ impl HealthCheck for ProvidersConnectivityCheck {
                     // authors never considered credentials. A second call here
                     // would be harmless but would re-teach the wrong lesson —
                     // that each check is responsible for its own masking.
-                    Finding::problem(
-                        ID,
-                        Severity::Warning,
-                        format!("{name}: unreachable"),
-                        outcome
-                            .error
-                            .unwrap_or_else(|| "unknown probe error".to_string()),
-                    )
-                    .with_fix_hint(unreachable_hint(&name))
-                    .with_tag(TAG_UNREACHABLE)
+                    let error = outcome
+                        .error
+                        .unwrap_or_else(|| "unknown probe error".to_string());
+                    if is_credentials_rejection(&error) {
+                        Finding::problem(
+                            ID,
+                            Severity::Warning,
+                            format!("{name}: credentials rejected"),
+                            error,
+                        )
+                        .with_fix_hint(credentials_rejected_hint(&name))
+                        .with_tag(TAG_CREDENTIALS_REJECTED)
+                    } else {
+                        Finding::problem(
+                            ID,
+                            Severity::Warning,
+                            format!("{name}: unreachable"),
+                            error,
+                        )
+                        .with_fix_hint(unreachable_hint(&name))
+                        .with_tag(TAG_UNREACHABLE)
+                    }
                 }
             });
 
@@ -312,10 +334,41 @@ fn credentials_unknown(name: &str, why: String) -> Finding {
     ))
 }
 
+fn credentials_missing(name: &str) -> Finding {
+    Finding::problem(
+        ID,
+        Severity::Warning,
+        format!("{name}: no credentials configured"),
+        "No API key is configured in the provider section or vault.",
+    )
+    .with_fix_hint(format!(
+        "Configure `providers.{name}.api_key` or store its key with vault_store (vault key \
+         `ai:{name}`), then re-run doctor."
+    ))
+}
+
 /// Total-outage decision: at least one provider was actually probed and none
 /// of them answered (no finding carries the `provider-reachable` tag).
 fn total_outage(probed_count: usize, findings: &[Finding]) -> bool {
-    probed_count > 0 && !findings.iter().any(|f| f.has_tag(TAG_REACHABLE))
+    probed_count > 0
+        && !findings.iter().any(|f| f.has_tag(TAG_REACHABLE))
+        && !findings.iter().any(|f| f.has_tag(TAG_CREDENTIALS_REJECTED))
+}
+
+fn is_credentials_rejection(error: &str) -> bool {
+    let lower = error.to_ascii_lowercase();
+    lower.contains("401")
+        || lower.contains("403")
+        || lower.contains("unauthorized")
+        || lower.contains("invalid api key")
+        || lower.contains("invalid_api_key")
+}
+
+fn credentials_rejected_hint(name: &str) -> String {
+    format!(
+        "Refresh the rejected API key with vault_store (vault key `ai:{name}`) or fix the \
+         `providers.{name}` section via self_config, then re-run doctor to verify."
+    )
 }
 
 /// Route the LLM (or user) to the tools that can actually fix an unreachable
@@ -386,6 +439,16 @@ mod tests {
         // All probed providers failed → total outage.
         assert!(total_outage(1, &unreachable));
         assert!(total_outage(3, &unreachable));
+        // A credentials rejection is an answered endpoint, not a transport
+        // outage. It must have its own diagnosis and suppress the fleet-wide
+        // outage gate so the operator investigates the key rather than the
+        // network.
+        let credentials_rejected =
+            vec![
+                Finding::problem(ID, Severity::Warning, "openai: credentials rejected", "401")
+                    .with_tag(TAG_CREDENTIALS_REJECTED),
+            ];
+        assert!(!total_outage(1, &credentials_rejected));
         // Nothing was actually probed (all disabled/skipped) → never an outage.
         assert!(!total_outage(0, &unreachable));
         assert!(!total_outage(0, &[]));

@@ -187,17 +187,38 @@ impl ToolPermissionsConfig {
 
         let mut overrides = HashMap::new();
 
-        // Collect all tool names from both layers
-        let all_keys: std::collections::HashSet<&String> = global
+        // Keep glob entries as glob entries. Evaluating a glob key as a literal
+        // tool name loses the overlap between the two policy layers. Each
+        // layer's default still constrains the other layer's glob, while exact
+        // names are resolved against both layers below.
+        for (pattern, action) in &global.overrides {
+            if is_glob_pattern(pattern) {
+                let action = restrictive_min(*action, agent.default);
+                overrides
+                    .entry(pattern.clone())
+                    .and_modify(|current| *current = restrictive_min(*current, action))
+                    .or_insert(action);
+            }
+        }
+        for (pattern, action) in &agent.overrides {
+            if is_glob_pattern(pattern) {
+                let action = restrictive_min(*action, global.default);
+                overrides
+                    .entry(pattern.clone())
+                    .and_modify(|current| *current = restrictive_min(*current, action))
+                    .or_insert(action);
+            }
+        }
+
+        // Exact names need an explicit entry because an exact decision in one
+        // layer must still be restricted by a glob or default in the other.
+        let exact_keys = global
             .overrides
             .keys()
             .chain(agent.overrides.keys())
-            .collect();
-
-        for key in all_keys {
-            let global_perm = global.resolve(key);
-            let agent_perm = agent.resolve(key);
-            let effective = restrictive_min(global_perm, agent_perm);
+            .filter(|key| !is_glob_pattern(key));
+        for key in exact_keys {
+            let effective = restrictive_min(global.resolve(key), agent.resolve(key));
             overrides.insert(key.clone(), effective);
         }
 

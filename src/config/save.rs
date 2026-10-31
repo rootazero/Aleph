@@ -4,6 +4,7 @@
 
 use crate::config::Config;
 use crate::error::{AlephError, Result};
+use crate::utils::atomic_io::{with_file_lock, write_atomic};
 use std::fs;
 use std::path::Path;
 use tracing::{debug, error, info};
@@ -117,60 +118,13 @@ fn enforce_0600_warn(path: &Path) {
 /// rename stays on one filesystem) + fsync + rename. The target is never in
 /// a partially written state, even on crash or power loss mid-write.
 fn write_atomically(path: &Path, contents: &str) -> Result<()> {
-    let temp_path = path.with_extension("tmp");
-
-    // Write to temp file
-    fs::write(&temp_path, contents).map_err(|e| {
-        error!(temp_path = %temp_path.display(), error = %e, "Failed to write temp file");
+    write_atomic(path, contents.as_bytes()).map_err(|e| {
+        error!(target_path = %path.display(), error = %e, "Failed to atomically write config file");
         AlephError::invalid_config(format!(
-            "Failed to write temp config file {}: {}",
-            temp_path.display(),
-            e
+            "Failed to atomically write config to {}: {e}",
+            path.display()
         ))
-    })?;
-
-    debug!(temp_path = %temp_path.display(), "Wrote config to temp file");
-
-    // fsync the temp file to ensure data is on disk
-    #[cfg(unix)]
-    {
-        let file = std::fs::OpenOptions::new()
-            .write(true)
-            .open(&temp_path)
-            .map_err(|e| {
-                error!(temp_path = %temp_path.display(), error = %e, "Failed to open temp file for fsync");
-                AlephError::invalid_config(format!(
-                    "Failed to open temp file for fsync: {e}"
-                ))
-            })?;
-
-        // Sync file data and metadata
-        file.sync_all().map_err(|e| {
-            error!(temp_path = %temp_path.display(), error = %e, "Failed to fsync temp file");
-            AlephError::invalid_config(format!("Failed to fsync temp file: {e}"))
-        })?;
-
-        debug!(temp_path = %temp_path.display(), "Fsynced temp file to disk");
-    }
-
-    // Atomic rename (overwrites target if exists)
-    fs::rename(&temp_path, path).map_err(|e| {
-        error!(
-            temp_path = %temp_path.display(),
-            target_path = %path.display(),
-            error = %e,
-            "Failed to atomically rename temp file"
-        );
-        // Clean up temp file on error
-        let _ = fs::remove_file(&temp_path);
-        AlephError::invalid_config(format!(
-            "Failed to rename temp config to {}: {}",
-            path.display(),
-            e
-        ))
-    })?;
-
-    Ok(())
+    })
 }
 
 /// Copy the requested `sections` (dot-paths) from `current` into `existing`,
@@ -248,7 +202,7 @@ fn merge_sections(
     // but it is detected mid-walk, so earlier sections are already written —
     // the write below is the caller's, and it still happens.
     let mut blocked: Vec<String> = Vec::new();
-    for (section, parts, value) in section_values {
+    for (section, parts, mut value) in section_values {
         // Navigate/create intermediate tables at arbitrary depth
         let (path_parts, leaf) = parts.split_at(parts.len() - 1);
         let leaf_key = leaf[0];
@@ -271,8 +225,19 @@ fn merge_sections(
 
         if navigated {
             if let toml::Value::Table(ref mut t) = target {
+                if section == "security" {
+                    if let Some(ssrf) = t.get("ssrf").cloned() {
+                        if let toml::Value::Table(ref mut value_table) = value {
+                            value_table.entry("ssrf".to_string()).or_insert(ssrf);
+                        }
+                    }
+                }
                 t.insert(leaf_key.to_string(), value);
                 debug!(section = %section, "Updated section");
+            } else {
+                blocked.push(format!(
+                    "`{section}` cannot be written: its parent is not a table."
+                ));
             }
         } else {
             blocked.push(format!(
@@ -286,6 +251,28 @@ fn merge_sections(
         Ok(())
     } else {
         Err(blocked)
+    }
+}
+
+fn preserve_external_sections(current: &mut toml::Value, existing: &toml::Value) {
+    let (toml::Value::Table(current), toml::Value::Table(existing)) = (current, existing) else {
+        return;
+    };
+    for (key, value) in existing {
+        if !current.contains_key(key) {
+            current.insert(key.clone(), value.clone());
+        }
+    }
+    if let (
+        Some(toml::Value::Table(current_security)),
+        Some(toml::Value::Table(existing_security)),
+    ) = (current.get_mut("security"), existing.get("security"))
+    {
+        if let Some(ssrf) = existing_security.get("ssrf") {
+            current_security
+                .entry("ssrf".to_string())
+                .or_insert_with(|| ssrf.clone());
+        }
     }
 }
 
@@ -313,6 +300,22 @@ impl Config {
     /// ```
     pub fn save_to_file<P: AsRef<Path>>(&self, path: P) -> Result<()> {
         let path = path.as_ref();
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).map_err(|e| {
+                AlephError::invalid_config(format!(
+                    "Failed to create config directory {}: {e}",
+                    parent.display()
+                ))
+            })?;
+        }
+        with_file_lock(&path.with_extension("lock"), |_| {
+            self.save_to_file_unlocked(path)
+                .map_err(|e| std::io::Error::other(e.to_string()))
+        })
+        .map_err(|e| AlephError::invalid_config(format!("Failed to lock config for save: {e}")))
+    }
+
+    fn save_to_file_unlocked(&self, path: &Path) -> Result<()> {
         #[cfg(test)]
         reject_real_home_config(path, "save_to_file");
 
@@ -354,7 +357,18 @@ impl Config {
         }
 
         // Serialize to TOML
-        let contents = toml::to_string_pretty(self).map_err(|e| {
+        let mut current: toml::Value = toml::Value::try_from(self).map_err(|e| {
+            error!(error = %e, "Failed to serialize config to TOML");
+            AlephError::invalid_config(format!("Failed to serialize config: {e}"))
+        })?;
+        if path.exists() {
+            if let Ok(existing_contents) = fs::read_to_string(path) {
+                if let Ok(existing) = toml::from_str::<toml::Value>(&existing_contents) {
+                    preserve_external_sections(&mut current, &existing);
+                }
+            }
+        }
+        let contents = toml::to_string_pretty(&current).map_err(|e| {
             error!(error = %e, "Failed to serialize config to TOML");
             AlephError::invalid_config(format!("Failed to serialize config: {e}"))
         })?;
@@ -427,16 +441,38 @@ impl Config {
         sections: &[&str],
     ) -> Result<()> {
         let path = path.as_ref();
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).map_err(|e| {
+                AlephError::invalid_config(format!(
+                    "Failed to create config directory {}: {e}",
+                    parent.display()
+                ))
+            })?;
+        }
+        with_file_lock(&path.with_extension("lock"), |_| {
+            self.save_incremental_to_file_unlocked(path, sections)
+                .map_err(|e| std::io::Error::other(e.to_string()))
+        })
+        .map_err(|e| AlephError::invalid_config(format!("Failed to lock config for save: {e}")))
+    }
+
+    fn save_incremental_to_file_unlocked(&self, path: &Path, sections: &[&str]) -> Result<()> {
         #[cfg(test)]
         reject_real_home_config(path, "save_incremental_to_file");
 
         // If file doesn't exist, do a full save
         if !path.exists() {
-            return self.save_to_file(path);
+            return self.save_to_file_unlocked(path);
         }
 
         self.guard_incremental_memory(path, sections)?;
         self.guard_incremental_providers(path, sections)?;
+
+        let original_mtime = fs::metadata(path)
+            .and_then(|metadata| metadata.modified())
+            .map_err(|e| {
+                AlephError::invalid_config(format!("Failed to read config mtime before save: {e}"))
+            })?;
 
         // Read existing file
         let existing_contents = fs::read_to_string(path).map_err(|e| {
@@ -462,6 +498,17 @@ impl Config {
                 problems.join("; ")
             ))
         })?;
+
+        let current_mtime = fs::metadata(path)
+            .and_then(|metadata| metadata.modified())
+            .map_err(|e| {
+                AlephError::invalid_config(format!("Failed to read config mtime before save: {e}"))
+            })?;
+        if current_mtime != original_mtime {
+            return Err(AlephError::invalid_config(
+                "Config file was modified externally during incremental save; refusing to overwrite it.",
+            ));
+        }
 
         // Serialize back to TOML string
         let new_contents = toml::to_string_pretty(&existing).map_err(|e| {

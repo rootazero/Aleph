@@ -4,7 +4,7 @@
 //! Backups are stored as timestamped copies in `~/.aleph/backups/`.
 
 use crate::error::{AlephError, Result};
-use std::fs;
+use std::fs::{self, OpenOptions};
 use std::path::{Path, PathBuf};
 use tracing::{debug, warn};
 
@@ -91,17 +91,56 @@ impl ConfigBackup {
         // patcher creates one snapshot per patch); second-resolution names
         // would otherwise overwrite each other and silently lose restore points.
         let timestamp = chrono::Local::now().format("%Y%m%dT%H%M%S%3f").to_string();
-        let backup_filename = format!("config.toml.{timestamp}");
-        let backup_path = self.backup_dir.join(&backup_filename);
+        let mut backup_path = self.backup_dir.join(format!("config.toml.{timestamp}"));
+        let mut destination = None;
+        for suffix in 0..1000u32 {
+            if suffix > 0 {
+                backup_path = self
+                    .backup_dir
+                    .join(format!("config.toml.{timestamp}-{suffix:04}"));
+            }
+            let mut options = OpenOptions::new();
+            options.write(true).create_new(true);
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::OpenOptionsExt;
+                options.mode(0o600);
+            }
+            match options.open(&backup_path) {
+                Ok(file) => {
+                    destination = Some(file);
+                    break;
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                Err(e) => {
+                    return Err(AlephError::invalid_config(format!(
+                        "Failed to create backup {}: {e}",
+                        backup_path.display()
+                    )));
+                }
+            }
+        }
+        let Some(mut destination) = destination else {
+            return Err(AlephError::invalid_config(
+                "Failed to allocate a unique config backup name",
+            ));
+        };
 
-        // Copy config file to backup location
-        fs::copy(config_path, &backup_path).map_err(|e| {
+        let mut source = fs::File::open(config_path).map_err(|e| {
             AlephError::invalid_config(format!(
-                "Failed to copy config to {}: {}",
-                backup_path.display(),
-                e
+                "Failed to open config for backup {}: {e}",
+                config_path.display()
             ))
         })?;
+        if let Err(e) =
+            std::io::copy(&mut source, &mut destination).and_then(|_| destination.sync_all())
+        {
+            let _ = fs::remove_file(&backup_path);
+            return Err(AlephError::invalid_config(format!(
+                "Failed to copy config to {}: {e}",
+                backup_path.display()
+            )));
+        }
         debug!(
             backup = %backup_path.display(),
             source = %config_path.display(),

@@ -44,24 +44,128 @@ fn deserialize_adapters_with_presets<'de, D>(
 where
     D: serde::Deserializer<'de>,
 {
-    let mut map: HashMap<String, AcpAdapterEntry> = HashMap::deserialize(deserializer)?;
-    // Fill in any missing presets and backfill substantive fields from the
-    // preset defaults when a user partially overrides a preset entry. Without
-    // this backfill, a TOML that only sets `[acp.adapters.claude-code]
-    // enabled = false` would silently reset executable/args/output_format/
-    // trust_level/default_mode to AcpAdapterEntry's bare defaults, breaking
-    // preset harnesses that the user only meant to flip a single flag on.
-    for (id, entry) in AcpAdapterEntry::all_presets() {
+    let inputs: HashMap<String, AcpAdapterEntryInput> = HashMap::deserialize(deserializer)?;
+    let mut map = HashMap::with_capacity(inputs.len());
+    let mut presence_by_id = HashMap::with_capacity(inputs.len());
+    for (id, input) in inputs {
+        let presence = input.presence();
+        let mut entry = input.into_entry();
+        entry.presence = presence;
+        if let Some(preset_id) = entry.preset.as_deref() {
+            let preset = AcpAdapterEntry::preset_by_id(preset_id).ok_or_else(|| {
+                serde::de::Error::custom(format!(
+                    "unknown ACP preset `{preset_id}` for adapter `{id}`"
+                ))
+            })?;
+            entry.hydrate_from_preset_with_presence(&preset, &presence);
+        }
+        presence_by_id.insert(id.clone(), presence);
+        map.insert(id, entry);
+    }
+
+    // Fill in any missing built-in presets and backfill only fields that were
+    // absent from the user's entry. Presence must be tracked separately from
+    // values because explicit values such as `trust_level = "disabled"` and
+    // `args = []` are meaningful overrides.
+    for (id, preset) in AcpAdapterEntry::all_presets() {
         match map.entry(id) {
             std::collections::hash_map::Entry::Occupied(mut e) => {
-                e.get_mut().hydrate_from_preset(&entry);
+                let presence = presence_by_id
+                    .get(e.key())
+                    .copied()
+                    .unwrap_or_else(|| AcpAdapterEntryPresence::from_entry(e.get()));
+                e.get_mut()
+                    .hydrate_from_preset_with_presence(&preset, &presence);
             }
             std::collections::hash_map::Entry::Vacant(e) => {
-                e.insert(entry);
+                e.insert(preset);
             }
         }
     }
     Ok(map)
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+struct AcpAdapterEntryInput {
+    #[serde(default)]
+    display_name: Option<String>,
+    #[serde(default)]
+    executable: Option<String>,
+    #[serde(default)]
+    args: Option<Vec<String>>,
+    #[serde(default, alias = "mode")]
+    default_mode: Option<AdapterModeSerde>,
+    #[serde(default)]
+    output_format: Option<OutputFormatSerde>,
+    #[serde(default)]
+    env: Option<HashMap<String, String>>,
+    #[serde(default)]
+    cwd: Option<String>,
+    #[serde(default)]
+    timeout_seconds: Option<u64>,
+    #[serde(default)]
+    enabled: Option<bool>,
+    #[serde(default)]
+    preset: Option<String>,
+    #[serde(default)]
+    trust_level: Option<TrustLevel>,
+}
+
+impl AcpAdapterEntryInput {
+    fn into_entry(self) -> AcpAdapterEntry {
+        let default = AcpAdapterEntry::default();
+        AcpAdapterEntry {
+            display_name: self.display_name.unwrap_or(default.display_name),
+            executable: self.executable,
+            args: self.args.unwrap_or(default.args),
+            default_mode: self.default_mode.unwrap_or(default.default_mode),
+            output_format: self.output_format.unwrap_or(default.output_format),
+            env: self.env.unwrap_or(default.env),
+            cwd: self.cwd,
+            timeout_seconds: self.timeout_seconds.unwrap_or(default.timeout_seconds),
+            enabled: self.enabled.unwrap_or(default.enabled),
+            preset: self.preset,
+            trust_level: self.trust_level.unwrap_or(default.trust_level),
+            presence: AcpAdapterEntryPresence::default(),
+        }
+    }
+
+    fn presence(&self) -> AcpAdapterEntryPresence {
+        AcpAdapterEntryPresence {
+            executable: self.executable.is_some(),
+            args: self.args.is_some(),
+            default_mode: self.default_mode.is_some(),
+            output_format: self.output_format.is_some(),
+            timeout_seconds: self.timeout_seconds.is_some(),
+            trust_level: self.trust_level.is_some(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+pub(crate) struct AcpAdapterEntryPresence {
+    executable: bool,
+    args: bool,
+    default_mode: bool,
+    output_format: bool,
+    timeout_seconds: bool,
+    trust_level: bool,
+}
+
+impl AcpAdapterEntryPresence {
+    fn from_entry(entry: &AcpAdapterEntry) -> Self {
+        // Entries that have already been merged came from a preset-keyed
+        // config map; their non-default values are the only reliable signal
+        // available to the live merge path.
+        Self {
+            executable: entry.executable.is_some(),
+            args: !entry.args.is_empty(),
+            default_mode: entry.default_mode != AdapterModeSerde::default(),
+            output_format: entry.output_format != OutputFormatSerde::default(),
+            timeout_seconds: entry.timeout_seconds != default_timeout(),
+            trust_level: entry.trust_level != default_trust_level(),
+        }
+    }
 }
 
 impl Default for AcpConfig {
@@ -176,6 +280,10 @@ pub struct AcpAdapterEntry {
     /// custom harnesses default to Disabled.
     #[serde(default = "default_trust_level")]
     pub trust_level: TrustLevel,
+
+    #[serde(skip)]
+    #[schemars(skip)]
+    pub(crate) presence: AcpAdapterEntryPresence,
 }
 
 const fn default_timeout() -> u64 {
@@ -196,6 +304,7 @@ impl Default for AcpAdapterEntry {
             enabled: true,
             preset: None,
             trust_level: default_trust_level(),
+            presence: AcpAdapterEntryPresence::default(),
         }
     }
 }
@@ -464,30 +573,37 @@ impl AcpAdapterEntry {
     /// `cwd`, `env`, `display_name`, and `enabled` are left untouched: those are
     /// chosen by the user, not the preset.
     pub fn hydrate_from_preset(&mut self, preset: &Self) {
-        // Marker field: a user explicitly typed `preset = ...` leaves as-is;
-        // an absent one becomes the preset's id so spawn-time lookups work.
+        let presence = self.presence;
+        self.hydrate_from_preset_with_presence(preset, &presence);
+    }
+
+    fn hydrate_from_preset_with_presence(
+        &mut self,
+        preset: &Self,
+        presence: &AcpAdapterEntryPresence,
+    ) {
         if self.preset.is_none() {
             self.preset = preset.preset.clone();
         }
-        let base = Self::default();
-        if self.executable == base.executable {
+        if !presence.executable {
             self.executable = preset.executable.clone();
         }
-        if self.args == base.args {
+        if !presence.args {
             self.args = preset.args.clone();
         }
-        if self.default_mode == base.default_mode {
+        if !presence.default_mode {
             self.default_mode = preset.default_mode.clone();
         }
-        if self.output_format == base.output_format {
+        if !presence.output_format {
             self.output_format = preset.output_format.clone();
         }
-        if self.trust_level == base.trust_level {
+        if !presence.trust_level {
             self.trust_level = preset.trust_level.clone();
         }
-        if self.timeout_seconds == base.timeout_seconds {
+        if !presence.timeout_seconds {
             self.timeout_seconds = preset.timeout_seconds;
         }
+        self.presence = *presence;
     }
 }
 

@@ -139,6 +139,31 @@ impl NodeCommand for FileWriteCommand {
         let bytes = decode_verified_payload(content_b64, expected_sha)?;
 
         let dest = resolve_in_jail(path, &self.workspace_dir).await?;
+        // (B4-05) A pre-existing non-regular destination (FIFO, directory,
+        // device, socket) must be refused BEFORE it is opened: `open(2)` on a
+        // FIFO blocks until a peer opens the other end, so the command would
+        // never return and the reverse-RPC call would sit until its timeout
+        // with the node still holding the request. This command *creates* the
+        // destination, so a missing file is still allowed — only an existing
+        // non-regular entry is refused.
+        //
+        // `symlink_metadata` does not follow a symlink, so a symlink planted
+        // at the leaf after `resolve_in_jail` canonicalized the path is
+        // refused here too — the write-side counterpart of the read side's
+        // leaf check, and a companion to the `O_NOFOLLOW` guard below (which
+        // can only reject the symlink at open time, after this check).
+        match tokio::fs::symlink_metadata(&dest).await {
+            // Missing destination: this command creates it, so allow it.
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(format!("file.write: {e}")),
+            Ok(meta) if !meta.is_file() => {
+                return Err(format!(
+                    "file.write: destination is not a regular file: {}",
+                    dest.display()
+                ));
+            }
+            Ok(_) => {}
+        }
         if let Some(parent) = dest.parent() {
             tokio::fs::create_dir_all(parent)
                 .await
@@ -216,6 +241,22 @@ impl NodeCommand for FileReadCommand {
             .and_then(|v| v.as_str())
             .ok_or("file.read: missing string field `path`")?;
         let src = resolve_in_jail(path, &self.workspace_dir).await?;
+        // (B4-05) Refuse a non-regular file BEFORE opening it. A FIFO (or any
+        // other non-regular file) blocks in `open(2)` — the block happens in
+        // the syscall, before a single byte is delivered — so the byte cap
+        // below cannot help: the command would never return and the
+        // reverse-RPC call would sit until its timeout.
+        //
+        // `symlink_metadata` does not follow a symlink, so a symlink planted
+        // at the leaf after `resolve_in_jail` canonicalized the path is
+        // refused as well — the read-side counterpart of the write side's
+        // `O_NOFOLLOW` guard.
+        let meta = tokio::fs::symlink_metadata(&src)
+            .await
+            .map_err(|e| format!("file.read: {e}"))?;
+        if !meta.is_file() {
+            return Err(format!("file.read: not a regular file: {}", src.display()));
+        }
         // (B4-04) `tokio::fs::read` allocates the full file into memory
         // before the size cap can reject it — an adversarial 10GB file at a
         // known path would drive the node's allocator. Open the file and
@@ -433,5 +474,105 @@ mod tests {
             .decode(got["content_b64"].as_str().unwrap())
             .unwrap();
         assert_eq!(decoded, content, "boundary file round-trips byte-for-byte");
+    }
+
+    /// Create a FIFO at `path`.
+    ///
+    /// `mkfifo(2)` has no portable equivalent, so the helper (and the tests
+    /// that use it) are unix-only; on other platforms the non-regular-file
+    /// guard is still exercised by the directory case, which is portable.
+    #[cfg(unix)]
+    fn make_fifo(path: &Path) {
+        use std::os::unix::ffi::OsStrExt;
+        let c_path =
+            std::ffi::CString::new(path.as_os_str().as_bytes()).expect("path contains no NUL");
+        // Safety: `c_path` is a NUL-terminated path to a file that does not
+        // exist yet; `mkfifo` creates it.
+        let rc = unsafe { libc::mkfifo(c_path.as_ptr(), 0o600) };
+        assert_eq!(rc, 0, "mkfifo failed: {}", std::io::Error::last_os_error());
+    }
+
+    /// A FIFO must be refused, not opened: `open(2)` on a FIFO blocks until a
+    /// peer opens the other end, so the byte cap never gets a chance to run
+    /// and the node's dispatch would sit until the reverse-RPC timeout while
+    /// the peer keeps the request pending.
+    ///
+    /// A READER end is held open (`O_RDONLY | O_NONBLOCK`, so the open itself
+    /// succeeds even with no writer): a regressed implementation that opens the
+    /// FIFO for reading then blocks in `read_to_end` until a writer appears,
+    /// which the test's own timeout turns into a failure instead of a hang.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn file_read_refuses_a_fifo() {
+        let dir = tempfile::tempdir().unwrap();
+        let fifo = dir.path().join("pipe");
+        make_fifo(&fifo);
+        let holder = {
+            use std::os::unix::ffi::OsStrExt;
+            let c_path =
+                std::ffi::CString::new(fifo.as_os_str().as_bytes()).expect("path contains no NUL");
+            // Safety: `c_path` is a NUL-terminated path to the FIFO created
+            // above. `O_RDONLY | O_NONBLOCK` opens the read end without
+            // waiting for a writer (POSIX: opening a FIFO for reading with
+            // O_NONBLOCK always succeeds).
+            let fd = unsafe { libc::open(c_path.as_ptr(), libc::O_RDONLY | libc::O_NONBLOCK) };
+            assert!(
+                fd >= 0,
+                "open reader end failed: {}",
+                std::io::Error::last_os_error()
+            );
+            fd
+        };
+
+        let reader = FileReadCommand::new(dir.path().to_path_buf());
+        let err = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            reader.run(json!({ "path": "pipe" })),
+        )
+        .await
+        .expect("file.read must refuse a FIFO instead of blocking on it")
+        .expect_err("a FIFO is not a regular file");
+        assert!(err.contains("not a regular file"), "{err}");
+
+        // Safety: `holder` is an open file descriptor owned by this test.
+        unsafe { libc::close(holder) };
+    }
+
+    /// The write path must refuse a pre-existing FIFO destination for the
+    /// same reason: opening a FIFO for writing blocks until a reader appears.
+    /// With `overwrite=false` the open would fail with `AlreadyExists`
+    /// (the destination exists), but the refusal must be explicit — a FIFO is
+    /// never a legitimate destination, and `overwrite=true` would block.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn file_write_refuses_a_fifo_destination() {
+        let dir = tempfile::tempdir().unwrap();
+        let fifo = dir.path().join("pipe");
+        make_fifo(&fifo);
+        let writer = FileWriteCommand::new(dir.path().to_path_buf());
+        let content = b"x";
+        let err = writer
+            .run(json!({
+                "path": "pipe",
+                "content_b64": b64(content),
+                "sha256": sha256_hex(content),
+            }))
+            .await
+            .expect_err("a FIFO destination must be refused");
+        assert!(err.contains("not a regular file"), "{err}");
+    }
+
+    /// A directory is refused on both paths as well — portable counterpart to
+    /// the FIFO cases above (no `mkfifo` needed).
+    #[tokio::test]
+    async fn file_read_refuses_a_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir(dir.path().join("sub")).unwrap();
+        let reader = FileReadCommand::new(dir.path().to_path_buf());
+        let err = reader
+            .run(json!({ "path": "sub" }))
+            .await
+            .expect_err("a directory is not a regular file");
+        assert!(err.contains("not a regular file"), "{err}");
     }
 }

@@ -134,20 +134,16 @@ impl CommandParser {
     /// Get a reference to the underlying `ToolCatalog`.
     ///
     /// Returns `&ToolCatalog` (auto-deref from the inner `Arc`) — all current
-    /// callers treat it as a borrowed catalog; clone `Arc<ToolCatalog>` from
-    /// `Self::tool_registry_arc` if a shared-owner handle is needed.
+    /// callers treat it as a borrowed catalog.
+    ///
+    /// This borrowed accessor is the ONLY way to reach the catalog. The parser
+    /// is shared process-wide through `crate::command::CommandParserCell`, so
+    /// every slash surface resolves against ONE catalog; handing out a clone
+    /// of the `Arc` would create a second owner, and two owners of the
+    /// catalog are how the slash surfaces drift apart on what `/foo` means.
     #[must_use]
     pub fn tool_registry(&self) -> &ToolCatalog {
         &self.tool_registry
-    }
-
-    /// Clone the underlying `Arc<ToolCatalog>` for shared ownership.
-    ///
-    /// Split from `tool_registry()` so the common borrowed-reference path
-    /// does not pay for an `Arc` in its return type.
-    #[must_use]
-    pub fn tool_registry_arc(&self) -> Arc<ToolCatalog> {
-        Arc::clone(&self.tool_registry)
     }
 }
 
@@ -199,7 +195,21 @@ fn tool_to_command_context(tool: UnifiedTool) -> Option<CommandContext> {
         },
         // `ToolSource` is `#[non_exhaustive]` and lives in another crate:
         // refuse to guess a context for a variant added after this match.
-        _ => return None,
+        //
+        // The refusal is fail-closed but NOT visible: `parse_async` turns the
+        // `None` into "this input is not a command", so the slash command
+        // silently degrades into a plain chat turn. Log the degradation —
+        // without it, a new `ToolSource` variant looks exactly like a command
+        // that was never registered.
+        unknown => {
+            tracing::warn!(
+                tool_id = %tool.id,
+                tool_source = ?unknown,
+                "unknown tool source: the slash command has no command context \
+                 and degrades to a plain chat turn"
+            );
+            return None;
+        }
     })
 }
 
@@ -372,5 +382,17 @@ mod tests {
             parser.parse_async("/gh__t").await.unwrap().owning_plugin,
             None
         );
+    }
+
+    /// The borrowed accessor is the parser's ONLY catalog handle: it must hand
+    /// back the very catalog the parser was built with, so every slash
+    /// surface resolves against ONE registry. (The `Arc`-cloning accessor is
+    /// deliberately gone — a second owner of the catalog is exactly how two
+    /// surfaces drift apart on what `/foo` means.)
+    #[test]
+    fn tool_registry_hands_back_the_parsers_own_catalog() {
+        let registry = create_test_registry();
+        let parser = CommandParser::new(Arc::clone(&registry));
+        assert!(std::ptr::eq(parser.tool_registry(), registry.as_ref()));
     }
 }

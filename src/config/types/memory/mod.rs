@@ -92,8 +92,9 @@ pub struct MemoryConfig {
     #[serde(default)]
     pub rerank: crate::memory::rerank::RerankConfig,
 
-    /// Retrieval-time recency decay + MMR diversity (default: both off →
-    /// byte-for-byte legacy ranking).
+    /// Retrieval-time recency decay + MMR diversity (default: recency and
+    /// reinforcement are enabled; MMR remains disabled). Set the refinement
+    /// switches to `false` to restore the legacy ranking path.
     #[serde(default)]
     pub retrieval_scoring: RetrievalScoringConfig,
 

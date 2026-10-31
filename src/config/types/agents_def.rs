@@ -104,17 +104,59 @@ pub struct AgentDefaults {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub skills_blacklist: Option<Vec<String>>,
 
-    /// Default DM (domain model) scope
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Default DM scope. Use `[session].dm_scope`; this field is rejected
+    /// because agent defaults do not control session routing.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "reject_agent_dm_scope"
+    )]
+    #[schemars(skip)]
     pub dm_scope: Option<String>,
 
-    /// Maximum characters for a single bootstrap file
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Bootstrap limits are rejected until the production identity-file
+    /// loader consumes them; its configured source is `IdentityFilesConfig`.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "reject_bootstrap_limit"
+    )]
+    #[schemars(skip)]
     pub bootstrap_max_chars: Option<usize>,
 
-    /// Maximum total characters across all bootstrap files
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "reject_bootstrap_limit"
+    )]
+    #[schemars(skip)]
     pub bootstrap_total_max_chars: Option<usize>,
+}
+
+fn reject_agent_dm_scope<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = Option::<String>::deserialize(deserializer)?;
+    if value.is_some() {
+        return Err(serde::de::Error::custom(
+            "agents.defaults.dm_scope is not supported; configure session.dm_scope instead",
+        ));
+    }
+    Ok(None)
+}
+
+fn reject_bootstrap_limit<'de, D>(deserializer: D) -> Result<Option<usize>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = Option::<usize>::deserialize(deserializer)?;
+    if value.is_some() {
+        return Err(serde::de::Error::custom(
+            "agent bootstrap limits are not supported until the identity-file loader consumes them",
+        ));
+    }
+    Ok(None)
 }
 
 // =============================================================================
@@ -369,9 +411,6 @@ mod tests {
             model = "claude-sonnet-4"
             workspace_root = "/home/user/workspaces"
             skills = ["search", "code_review"]
-            dm_scope = "workspace"
-            bootstrap_max_chars = 8000
-            bootstrap_total_max_chars = 32000
 
             [[list]]
             id = "main"
@@ -402,9 +441,6 @@ mod tests {
             config.defaults.skills,
             Some(vec!["search".to_string(), "code_review".to_string()])
         );
-        assert_eq!(config.defaults.dm_scope, Some("workspace".to_string()));
-        assert_eq!(config.defaults.bootstrap_max_chars, Some(8000));
-        assert_eq!(config.defaults.bootstrap_total_max_chars, Some(32000));
 
         // Verify agent list
         assert_eq!(config.list.len(), 2);
@@ -436,6 +472,46 @@ mod tests {
         );
         let subagents = reviewer.subagents.as_ref().unwrap();
         assert_eq!(subagents.allow, vec!["tester"]);
+    }
+
+    /// The agent-defaults knobs that no loader consumes are rejected at the
+    /// configuration boundary, and each rejection names the setting that
+    /// does control the behaviour.
+    #[test]
+    fn test_agents_config_rejects_unconsumed_defaults() {
+        let cases = [
+            (
+                r#"
+            [defaults]
+            dm_scope = "workspace"
+            "#,
+                "agents.defaults.dm_scope is not supported; configure session.dm_scope instead",
+            ),
+            (
+                r#"
+            [defaults]
+            bootstrap_max_chars = 8000
+            "#,
+                "agent bootstrap limits are not supported until the identity-file loader consumes them",
+            ),
+            (
+                r#"
+            [defaults]
+            bootstrap_total_max_chars = 32000
+            "#,
+                "agent bootstrap limits are not supported until the identity-file loader consumes them",
+            ),
+        ];
+
+        for (toml_str, expected) in cases {
+            let err = toml::from_str::<AgentsConfig>(toml_str)
+                .expect_err("an unconsumed agent default must be rejected at the config boundary");
+            let message = err.to_string();
+            assert!(
+                message.contains(expected),
+                "expected {expected:?} in the parse error, got {message:?}"
+            );
+        }
     }
 
     #[test]

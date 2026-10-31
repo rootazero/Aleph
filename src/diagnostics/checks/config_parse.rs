@@ -82,8 +82,8 @@ impl HealthCheck for ConfigParseCheck {
             Ok(Presence::Present) => {}
         }
 
-        match Config::load_from_file_reporting_dead_keys(&self.config_path) {
-            Ok((_, dead)) if dead.is_empty() => vec![Finding::ok(
+        match read_and_parse_config(&self.config_path).await {
+            Ok((dead, _)) if dead.is_empty() => vec![Finding::ok(
                 ID,
                 "Config parses",
                 // Not "every key is in effect": channel table interiors are
@@ -91,7 +91,7 @@ impl HealthCheck for ConfigParseCheck {
                 // exactly what was measured.
                 format!("{display} parsed successfully; no key in it was discarded."),
             )],
-            Ok((_, dead)) => vec![Finding::problem(
+            Ok((dead, _)) => vec![Finding::problem(
                 ID,
                 Severity::Warning,
                 "Config has keys nothing reads",
@@ -106,17 +106,45 @@ impl HealthCheck for ConfigParseCheck {
                  live under [general.browser], not [browser]), or delete it. Aleph keeps loading \
                  either way — unknown keys are tolerated so an older config still boots.",
             )],
-            Err(e) => vec![Finding::problem(
+            Err(ConfigReadError::Read) => vec![Finding::problem(
+                ID,
+                Severity::Error,
+                "Config cannot be read",
+                format!("{display} could not be read."),
+            )],
+            Err(ConfigReadError::Invalid) => vec![Finding::problem(
                 ID,
                 Severity::Error,
                 "Config does not parse",
-                format!("{display} failed to load: {e}"),
-            )
-            .with_fix_hint(
-                "Fix the TOML syntax, or ask Aleph to repair it via self-management (it owns config edits).",
-            )],
+                format!("{display} contains invalid TOML or configuration values."),
+            )]
+            .into_iter()
+            .map(|finding| {
+                finding.with_fix_hint(
+                    "Fix the TOML syntax, or ask Aleph to repair it via self-management (it owns config edits).",
+                )
+            })
+            .collect(),
         }
     }
+}
+
+enum ConfigReadError {
+    Read,
+    Invalid,
+}
+
+async fn read_and_parse_config(
+    path: &std::path::Path,
+) -> Result<(Vec<String>, Config), ConfigReadError> {
+    let contents = tokio::fs::read_to_string(path)
+        .await
+        .map_err(|_| ConfigReadError::Read)?;
+    let (config, dead) =
+        crate::config::dead_keys::deserialize_reporting_dead_keys::<Config>(&contents)
+            .map_err(|_| ConfigReadError::Invalid)?;
+    config.validate().map_err(|_| ConfigReadError::Invalid)?;
+    Ok((dead, config))
 }
 
 #[cfg(test)]

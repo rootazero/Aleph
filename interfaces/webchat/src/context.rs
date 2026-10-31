@@ -2602,6 +2602,14 @@ impl DashboardState {
 #[must_use]
 pub fn DashboardContext(children: Children) -> impl IntoView {
     let state = DashboardState::new();
+    #[cfg(feature = "panel-tab-spike")]
+    {
+        state.has_connected_once.set(true);
+        state.panel_discovery.update(|discovery| {
+            discovery.begin_connection(1);
+            let _ = discovery.accept_snapshot(1, crate::panel::source::community_fixture_snapshot());
+        });
+    }
     provide_context(state);
 
     view! {

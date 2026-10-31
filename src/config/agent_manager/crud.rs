@@ -42,19 +42,21 @@ impl AgentManager {
                 // Remove `list = []` (plain array) if present — it conflicts
                 // with the `[[agents.list]]` (array of tables) format that
                 // append_agent_to_document expects.
-                if let Ok(mut doc) = mgr.load_document() {
+                if let Err(e) = mgr.with_config_write(|| {
+                    let mut doc = mgr.load_document()?;
                     if let Some(agents) = doc.get_mut("agents").and_then(|v| v.as_table_mut()) {
                         if agents.get("list").and_then(|v| v.as_array()).is_some() {
                             agents.remove("list");
-                            if let Err(e) = mgr.save_document(&doc) {
-                                warn!(
-                                    "Failed to strip legacy `agents.list = []` from config: {}. \
-                                     The default agent append below may fail to parse.",
-                                    e
-                                );
-                            }
+                            mgr.save_document(&doc)?;
                         }
                     }
+                    Ok(())
+                }) {
+                    warn!(
+                        "Failed to strip legacy `agents.list = []` from config: {}. \
+                         The default agent append below may fail to parse.",
+                        e
+                    );
                 }
 
                 let def = AgentDefinition {
@@ -168,10 +170,15 @@ impl AgentManager {
     /// Append an agent definition to the config file without creating workspace
     /// directories (they already exist for orphan workspaces).
     fn append_agent_to_config(&self, def: &AgentDefinition) -> Result<()> {
-        let mut doc = self.load_document()?;
-        self.append_agent_to_document(&mut doc, def)?;
-        self.save_document(&doc)?;
-        Ok(())
+        self.with_config_write(|| {
+            // Re-read after taking the lock: another creator may have won.
+            if self.load_config()?.list.iter().any(|a| a.id == def.id) {
+                return Ok(());
+            }
+            let mut doc = self.load_document()?;
+            self.append_agent_to_document(&mut doc, def)?;
+            self.save_document(&doc)
+        })
     }
 
     // =========================================================================
@@ -199,88 +206,115 @@ impl AgentManager {
     /// Validates the ID, checks uniqueness, appends to TOML,
     /// creates workspace directory, and initializes SOUL.md.
     pub fn create(&self, def: AgentDefinition) -> Result<()> {
-        self.validate_id(&def.id)?;
+        self.with_config_write(|| {
+            self.validate_id(&def.id)?;
 
-        // Check uniqueness
-        let existing = self.load_config()?;
-        if existing.list.iter().any(|a| a.id == def.id) {
-            return Err(AlephError::invalid_config(format!(
-                "Agent '{}' already exists",
-                def.id
-            )));
-        }
+            // Check uniqueness
+            let existing = self.load_config()?;
+            if existing.list.iter().any(|a| a.id == def.id) {
+                return Err(AlephError::invalid_config(format!(
+                    "Agent '{}' already exists",
+                    def.id
+                )));
+            }
 
-        // Append to TOML document
-        let mut doc = self.load_document()?;
-        self.append_agent_to_document(&mut doc, &def)?;
-        self.save_document(&doc)?;
+            // Prepare the document, but publish it only after provisioning succeeds.
+            let mut doc = self.load_document()?;
+            self.append_agent_to_document(&mut doc, &def)?;
+            let agent_state_dir = self.agents_root.join(&def.id);
+            let ws_dir = self.workspace_root.join(&def.id);
+            let had_agent_dir = agent_state_dir.exists();
+            let had_workspace = ws_dir.exists();
+            let provisioned = (|| {
+                // Initialize agent state directory + identity files (SOUL.md, etc.)
+                initialize_agent_dir(&agent_state_dir).map_err(|e| {
+                    AlephError::IoError(format!(
+                        "Failed to initialize agent dir for '{}': {}",
+                        def.id, e
+                    ))
+                })?;
+                let agent_name = def.name.as_deref().unwrap_or(&def.id);
 
-        // Initialize agent state directory + identity files (SOUL.md, etc.)
-        let agent_state_dir = self.agents_root.join(&def.id);
-        initialize_agent_dir(&agent_state_dir).map_err(|e| {
-            AlephError::IoError(format!(
-                "Failed to initialize agent dir for '{}': {}",
-                def.id, e
-            ))
-        })?;
-        let agent_name = def.name.as_deref().unwrap_or(&def.id);
+                // Identity files (SOUL.md, AGENTS.md, etc.) go in agent state directory.
+                // The chosen archetype (Panel template selector) is baked into SOUL.md here.
+                initialize_agent_identity(
+                    &agent_state_dir,
+                    agent_name,
+                    def.archetype.unwrap_or_default(),
+                )
+                .map_err(|e| {
+                    AlephError::IoError(format!(
+                        "Failed to initialize identity files for '{}': {}",
+                        def.id, e
+                    ))
+                })?;
 
-        // Identity files (SOUL.md, AGENTS.md, etc.) go in agent state directory.
-        // The chosen archetype (Panel template selector) is baked into SOUL.md here.
-        initialize_agent_identity(
-            &agent_state_dir,
-            agent_name,
-            def.archetype.unwrap_or_default(),
-        )
-        .map_err(|e| {
-            AlephError::IoError(format!(
-                "Failed to initialize identity files for '{}': {}",
-                def.id, e
-            ))
-        })?;
+                // Workspace directory for tool output (separate from identity)
+                std::fs::create_dir_all(&ws_dir).map_err(|e| {
+                    AlephError::IoError(format!(
+                        "Failed to create workspace for '{}': {}",
+                        def.id, e
+                    ))
+                })?;
 
-        // Workspace directory for tool output (separate from identity)
-        let ws_dir = self.workspace_root.join(&def.id);
-        std::fs::create_dir_all(&ws_dir).map_err(|e| {
-            AlephError::IoError(format!(
-                "Failed to create workspace for '{}': {}",
-                def.id, e
-            ))
-        })?;
+                self.save_document(&doc)
+            })();
+            if let Err(error) = provisioned {
+                // Only remove directories created by this attempt, never pre-existing files.
+                let mut failures = Vec::new();
+                for (path, existed) in [(&ws_dir, had_workspace), (&agent_state_dir, had_agent_dir)]
+                {
+                    if !existed && path.exists() {
+                        if let Err(e) = fs::remove_dir_all(path) {
+                            failures.push(format!("{}: {e}", path.display()));
+                        }
+                    }
+                }
+                if !failures.is_empty() {
+                    return Err(AlephError::IoError(format!(
+                        "{error}; creation cleanup incomplete: {}",
+                        failures.join("; ")
+                    )));
+                }
+                return Err(error);
+            }
 
-        info!(
-            "Created agent '{}' (identity: {}, workspace: {})",
-            def.id,
-            agent_state_dir.display(),
-            ws_dir.display()
-        );
-        Ok(())
+            info!(
+                "Created agent '{}' (identity: {}, workspace: {})",
+                def.id,
+                agent_state_dir.display(),
+                ws_dir.display()
+            );
+            Ok(())
+        })
     }
 
     /// Update an existing agent's fields via patch
     pub fn update(&self, id: &str, patch: AgentPatch) -> Result<()> {
-        let mut doc = self.load_document()?;
-        let idx = self.find_agent_index(&doc, id)?;
+        self.with_config_write(|| {
+            let mut doc = self.load_document()?;
+            let idx = self.find_agent_index(&doc, id)?;
 
-        let agents_table = doc
-            .get_mut("agents")
-            .and_then(|v| v.as_table_like_mut())
-            .ok_or_else(|| AlephError::invalid_config("[agents] section not found"))?;
+            let agents_table = doc
+                .get_mut("agents")
+                .and_then(|v| v.as_table_like_mut())
+                .ok_or_else(|| AlephError::invalid_config("[agents] section not found"))?;
 
-        let list = agents_table
-            .get_mut("list")
-            .and_then(|v| v.as_array_of_tables_mut())
-            .ok_or_else(|| AlephError::invalid_config("[[agents.list]] not found"))?;
+            let list = agents_table
+                .get_mut("list")
+                .and_then(|v| v.as_array_of_tables_mut())
+                .ok_or_else(|| AlephError::invalid_config("[[agents.list]] not found"))?;
 
-        let agent_table = list
-            .get_mut(idx)
-            .ok_or_else(|| AlephError::invalid_config(format!("Agent at index {idx} not found")))?;
+            let agent_table = list.get_mut(idx).ok_or_else(|| {
+                AlephError::invalid_config(format!("Agent at index {idx} not found"))
+            })?;
 
-        apply_patch_to_table(agent_table, &patch);
+            apply_patch_to_table(agent_table, &patch)?;
 
-        self.save_document(&doc)?;
-        info!("Updated agent '{}'", id);
-        Ok(())
+            self.save_document(&doc)?;
+            info!("Updated agent '{}'", id);
+            Ok(())
+        })
     }
 
     /// Delete an agent definition
@@ -288,78 +322,118 @@ impl AgentManager {
     /// Rejects deletion of the only agent or the default agent.
     /// Moves the workspace directory to trash.
     pub fn delete(&self, id: &str) -> Result<()> {
-        let config = self.load_config()?;
+        self.with_config_write(|| {
+            let config = self.load_config()?;
 
-        // Reject if only agent
-        if config.list.len() <= 1 {
-            return Err(AlephError::invalid_config("Cannot delete the only agent"));
-        }
-
-        // Reject if default agent
-        if let Some(agent) = config.list.iter().find(|a| a.id == id) {
-            if agent.default {
-                return Err(AlephError::invalid_config(
-                    "Cannot delete the default agent. Set another agent as default first.",
-                ));
+            // Reject if only agent
+            if config.list.len() <= 1 {
+                return Err(AlephError::invalid_config("Cannot delete the only agent"));
             }
-        } else {
-            return Err(AlephError::invalid_config(format!(
-                "Agent '{id}' not found"
-            )));
-        }
 
-        // Remove from TOML document
-        let mut doc = self.load_document()?;
-        let idx = self.find_agent_index(&doc, id)?;
+            // Reject if default agent
+            if let Some(agent) = config.list.iter().find(|a| a.id == id) {
+                if agent.default {
+                    return Err(AlephError::invalid_config(
+                        "Cannot delete the default agent. Set another agent as default first.",
+                    ));
+                }
+            } else {
+                return Err(AlephError::invalid_config(format!(
+                    "Agent '{id}' not found"
+                )));
+            }
 
-        let agents_table = doc
-            .get_mut("agents")
-            .and_then(|v| v.as_table_like_mut())
-            .ok_or_else(|| AlephError::invalid_config("[agents] section not found"))?;
+            // Remove from TOML document
+            let mut doc = self.load_document()?;
+            let idx = self.find_agent_index(&doc, id)?;
 
-        let list = agents_table
-            .get_mut("list")
-            .and_then(|v| v.as_array_of_tables_mut())
-            .ok_or_else(|| AlephError::invalid_config("[[agents.list]] not found"))?;
+            let agents_table = doc
+                .get_mut("agents")
+                .and_then(|v| v.as_table_like_mut())
+                .ok_or_else(|| AlephError::invalid_config("[agents] section not found"))?;
 
-        list.remove(idx);
-        self.save_document(&doc)?;
+            let list = agents_table
+                .get_mut("list")
+                .and_then(|v| v.as_array_of_tables_mut())
+                .ok_or_else(|| AlephError::invalid_config("[[agents.list]] not found"))?;
 
-        // Move workspace and agent state directories to trash
-        self.move_dir_to_trash(id, &self.workspace_root.join(id), "", "workspace")?;
-        self.move_dir_to_trash(id, &self.agents_root.join(id), "agent_", "agent state dir")?;
+            list.remove(idx);
 
-        info!("Deleted agent '{}'", id);
-        Ok(())
+            // Keep the restriction-bearing row until both archives and the save succeed.
+            let mut archived = Vec::new();
+            let deleted = (|| {
+                for (dir, prefix, what) in [
+                    (self.workspace_root.join(id), "", "workspace"),
+                    (self.agents_root.join(id), "agent_", "agent state dir"),
+                ] {
+                    if let Some(trash) = self.move_dir_to_trash(id, &dir, prefix, what)? {
+                        archived.push((dir, trash));
+                    }
+                }
+                self.save_document(&doc)
+            })();
+            if let Err(error) = deleted {
+                let mut failures = Vec::new();
+                for (original, trash) in archived.iter().rev() {
+                    if original.exists() {
+                        failures.push(format!(
+                            "{} already exists; archive retained at {}",
+                            original.display(),
+                            trash.display()
+                        ));
+                        continue;
+                    }
+                    if let Err(e) = fs::rename(trash, original) {
+                        failures.push(format!(
+                            "{} -> {}: {e}",
+                            trash.display(),
+                            original.display()
+                        ));
+                    }
+                }
+                if !failures.is_empty() {
+                    return Err(AlephError::IoError(format!(
+                        "{error}; deletion rollback incomplete (original config retained): {}",
+                        failures.join("; ")
+                    )));
+                }
+                return Err(error);
+            }
+
+            info!("Deleted agent '{}'", id);
+            Ok(())
+        })
     }
 
     /// Set an agent as the default, unsetting all others
     pub fn set_default(&self, id: &str) -> Result<()> {
-        let mut doc = self.load_document()?;
+        self.with_config_write(|| {
+            let mut doc = self.load_document()?;
 
-        // Verify the target agent exists
-        let _target_idx = self.find_agent_index(&doc, id)?;
+            // Verify the target agent exists
+            let _target_idx = self.find_agent_index(&doc, id)?;
 
-        let agents_table = doc
-            .get_mut("agents")
-            .and_then(|v| v.as_table_like_mut())
-            .ok_or_else(|| AlephError::invalid_config("[agents] section not found"))?;
+            let agents_table = doc
+                .get_mut("agents")
+                .and_then(|v| v.as_table_like_mut())
+                .ok_or_else(|| AlephError::invalid_config("[agents] section not found"))?;
 
-        let list = agents_table
-            .get_mut("list")
-            .and_then(|v| v.as_array_of_tables_mut())
-            .ok_or_else(|| AlephError::invalid_config("[[agents.list]] not found"))?;
+            let list = agents_table
+                .get_mut("list")
+                .and_then(|v| v.as_array_of_tables_mut())
+                .ok_or_else(|| AlephError::invalid_config("[[agents.list]] not found"))?;
 
-        for i in 0..list.len() {
-            if let Some(table) = list.get_mut(i) {
-                let agent_id = table.get("id").and_then(|v| v.as_str()).unwrap_or("");
-                table["default"] = toml_edit::value(agent_id == id);
+            for i in 0..list.len() {
+                if let Some(table) = list.get_mut(i) {
+                    let agent_id = table.get("id").and_then(|v| v.as_str()).unwrap_or("");
+                    table["default"] = toml_edit::value(agent_id == id);
+                }
             }
-        }
 
-        self.save_document(&doc)?;
-        info!("Set default agent to '{}'", id);
-        Ok(())
+            self.save_document(&doc)?;
+            info!("Set default agent to '{}'", id);
+            Ok(())
+        })
     }
 
     // =========================================================================
@@ -429,9 +503,9 @@ impl AgentManager {
         dir: &std::path::Path,
         prefix: &str,
         what: &str,
-    ) -> Result<()> {
+    ) -> Result<Option<std::path::PathBuf>> {
         if !dir.exists() {
-            return Ok(());
+            return Ok(None);
         }
         let trash_dir = self.unique_trash_path(id, prefix);
         fs::create_dir_all(&self.trash_root)
@@ -439,7 +513,7 @@ impl AgentManager {
         fs::rename(dir, &trash_dir)
             .map_err(|e| AlephError::IoError(format!("Failed to move {what} to trash: {e}")))?;
         info!("Moved {} to trash: {}", what, trash_dir.display());
-        Ok(())
+        Ok(Some(trash_dir))
     }
 
     /// Generate a unique trash directory path that will not collide on rapid
@@ -482,7 +556,7 @@ impl AgentManager {
 /// Extracted from [`AgentManager::update`] so the update path stays a
 /// load → locate → apply → save pipeline and the per-field merge semantics
 /// live in one place.
-fn apply_patch_to_table(agent_table: &mut toml_edit::Table, patch: &AgentPatch) {
+fn apply_patch_to_table(agent_table: &mut toml_edit::Table, patch: &AgentPatch) -> Result<()> {
     if let Some(name) = &patch.name {
         agent_table["name"] = toml_edit::value(name.as_str());
     }
@@ -495,19 +569,17 @@ fn apply_patch_to_table(agent_table: &mut toml_edit::Table, patch: &AgentPatch) 
         let ident_item = agent_table
             .entry("identity")
             .or_insert(toml_edit::Item::Table(toml_edit::Table::new()));
-        if !ident_item.is_table() {
-            *ident_item = toml_edit::Item::Table(toml_edit::Table::new());
+        let t = ident_item
+            .as_table_like_mut()
+            .ok_or_else(|| AlephError::invalid_config("Agent identity must be a table"))?;
+        if let Some(ref emoji) = identity.emoji {
+            t.insert("emoji", toml_edit::value(emoji.as_str()));
         }
-        if let Some(t) = ident_item.as_table_mut() {
-            if let Some(ref emoji) = identity.emoji {
-                t["emoji"] = toml_edit::value(emoji.as_str());
-            }
-            if let Some(ref desc) = identity.description {
-                t["description"] = toml_edit::value(desc.as_str());
-            }
-            if let Some(ref avatar) = identity.avatar {
-                t["avatar"] = toml_edit::value(avatar.as_str());
-            }
+        if let Some(ref desc) = identity.description {
+            t.insert("description", toml_edit::value(desc.as_str()));
+        }
+        if let Some(ref avatar) = identity.avatar {
+            t.insert("avatar", toml_edit::value(avatar.as_str()));
         }
     }
 
@@ -576,4 +648,5 @@ fn apply_patch_to_table(agent_table: &mut toml_edit::Table, patch: &AgentPatch) 
         }
         None => {}
     }
+    Ok(())
 }

@@ -176,6 +176,28 @@ pub async fn perform_session_split(
     let run_id = open_run.run_id.clone();
     let opener_seq = open_run.seq;
 
+    // The compensating opener for the PARENT, built before the child's own
+    // opener consumes these fields. If the child seed fails, the parent's
+    // closer is already durable: the parent reads as finished, the child does
+    // not exist, and the caller is about to fall back to compact-to-fit on a
+    // session with no open run — and the harness's own closer for that run
+    // would land as a `FinishWithoutStart` contradiction. This re-opens the
+    // run instead.
+    //
+    // SAME run id on purpose: the run was never finished — the split only
+    // claimed it was — so the parent's bracket stays
+    // `RunStarted(r) … RunFinished(r) … RunStarted(r)`, which the reducer
+    // accepts (only a `RunFinished` with nothing open is a contradiction) and
+    // which the by-id reader pairs chronologically. A fresh id would leave
+    // the harness's closer for the original id pointing at nothing.
+    let compensating_opener = SessionEvent::RunStarted {
+        run_id: run_id.clone(),
+        at,
+        project_root: open_run.project_root.clone(),
+        envelope: open_run.envelope.clone(),
+        telecom_provenance: open_run.telecom_provenance.clone(),
+    };
+
     // 3. Close the parent FIRST. The harness bridge emitted `RunStarted` on
     //    the parent at run start; without this closer the frozen parent's log
     //    would end on a dangling `RunStarted` and `ResumeCoordinator` would
@@ -223,10 +245,38 @@ pub async fn perform_session_split(
         envelope: open_run.envelope,
         telecom_provenance: open_run.telecom_provenance,
     });
-    session
-        .emit_batch(&child, child_batch, None)
-        .await
-        .map_err(|e| SplitError::Failed(anyhow::anyhow!("seed child: {e}")))?;
+    // The child seed failed AFTER the parent's closer is durable. Restore the
+    // parent's open run before reporting the failure: the split is atomic from
+    // the caller's point of view only if the parent is still routable and
+    // still has a live run, because the caller's fallback is a compaction of
+    // the PARENT. `emit_batch` is one transaction per session, so a refused
+    // child batch wrote nothing — the compensation cannot race a half-written
+    // child.
+    if let Err(e) = session.emit_batch(&child, child_batch, None).await {
+        match session
+            .emit_batch(parent_session_id, vec![compensating_opener], None)
+            .await
+        {
+            Ok(_) => tracing::warn!(
+                target: "context_budget",
+                parent = ?parent_session_id,
+                child = ?child,
+                error = %e,
+                "session split could not seed the child; parent re-opened so the \
+                 session keeps a live run",
+            ),
+            Err(compensate_err) => tracing::error!(
+                target: "context_budget",
+                parent = ?parent_session_id,
+                child = ?child,
+                error = %e,
+                compensation_error = %compensate_err,
+                "session split could not seed the child and the parent could not \
+                 be re-opened; the parent is closed with an intact tail",
+            ),
+        }
+        return Err(SplitError::Failed(anyhow::anyhow!("seed child: {e}")));
+    }
 
     // 5. Routing LAST. From here the log is authoritative: the parent's run is
     //    closed and the child's is open, so a refused registration is NOT an
@@ -331,8 +381,8 @@ async fn summarize_pretail(
 
 /// Convert a single `SessionEvent` to a `UnifiedMessage` for summarization.
 ///
-/// Only conversational events (user/assistant/system messages and tool results)
-/// are mapped; bookkeeping events are dropped.
+/// Only conversational events (user/assistant/system messages, tool results and
+/// tool failures) are mapped; bookkeeping events are dropped.
 ///
 /// Shared with `manual::compact_session`: both walk a session event log and
 /// need the SAME notion of "what counts as a conversational turn". A second
@@ -384,7 +434,21 @@ pub(crate) fn event_to_message(event: &SessionEvent) -> Option<UnifiedMessage> {
                 false,
             ))
         }
-        // Lifecycle, budget, fork, and error events are dropped.
+        SessionEvent::ToolError { call_id, error, .. } => {
+            // A failed tool call is part of the conversation, not bookkeeping:
+            // it is the moment the agent learned the call did not work. The
+            // catch-all below dropped it, so a split seed (and a manual
+            // compaction) summarized a run in which the tool had never been
+            // attempted. Kept as an error-flagged tool result so the failure is
+            // visible to the summarizer without inventing a tool name.
+            Some(UnifiedMessage::tool_result(
+                call_id.clone(),
+                "",
+                error.clone(),
+                true,
+            ))
+        }
+        // Lifecycle, budget, fork, and other error events are dropped.
         _ => None,
     }
 }
@@ -431,9 +495,14 @@ mod tests {
         batches: Mutex<Vec<RecordedBatch>>,
         next_seq: Mutex<EventSeq>,
         trace: Trace,
+        /// How many `emit_batch` calls have been made, failed ones included.
+        calls: Mutex<usize>,
         /// When `Some(n)`, the n-th `emit_batch` call (0-based) fails with
         /// `SessionError::Storage` — the in-process failure the split's
-        /// caller falls back from.
+        /// caller falls back from. Exactly that call fails: the split
+        /// compensates a refused child seed with a re-opener for the parent,
+        /// and that compensating call has to succeed for the compensation to
+        /// be observable.
         fail_batch_at: Option<usize>,
     }
 
@@ -447,6 +516,7 @@ mod tests {
                 batches: Mutex::new(vec![]),
                 next_seq: Mutex::new(1),
                 trace,
+                calls: Mutex::new(0),
                 fail_batch_at: None,
             })
         }
@@ -456,6 +526,7 @@ mod tests {
                 batches: Mutex::new(vec![]),
                 next_seq: Mutex::new(1),
                 trace: Arc::new(Mutex::new(vec![])),
+                calls: Mutex::new(0),
                 fail_batch_at: Some(n),
             })
         }
@@ -510,7 +581,12 @@ mod tests {
             events: Vec<SessionEvent>,
             retire: Option<Retire>,
         ) -> Result<Vec<EventSeq>, SessionError> {
-            let call_index = self.batches.lock().await.len();
+            let call_index = {
+                let mut calls = self.calls.lock().await;
+                let index = *calls;
+                *calls += 1;
+                index
+            };
             if self.fail_batch_at == Some(call_index) {
                 self.trace
                     .lock()
@@ -1371,9 +1447,14 @@ mod tests {
 
     /// The child batch refused ⇒ `Err` too (the caller's fallback contract),
     /// and routing is NOT registered: a child the log does not hold must never
-    /// become the routing target. The parent closer that already landed is the
-    /// accepted torn state — `FinishWithoutStart` when the run's own closer
-    /// follows it, REPORT class, readable and counted.
+    /// become the routing target.
+    ///
+    /// The parent's closer had already landed when the child seed was refused,
+    /// so the parent is RE-OPENED with a compensating opener for the same run
+    /// id: the run was never finished, the split only claimed it was. The
+    /// caller's fallback is a compaction of the parent, and it needs a live
+    /// run — and the harness's own closer for that run would otherwise land as
+    /// a `FinishWithoutStart` contradiction.
     #[tokio::test]
     async fn a_refused_child_batch_fails_the_split_without_registering() {
         let parent = SessionKey::Main {
@@ -1404,12 +1485,56 @@ mod tests {
             "expected Failed, got {result:?}"
         );
         let batches = session.batches().await;
-        assert_eq!(batches.len(), 1, "only the parent closer landed");
+        assert_eq!(batches.len(), 2, "the closer landed, then the re-opener");
         assert_eq!(batches[0].0, parent);
+        assert!(
+            matches!(batches[0].1.as_slice(), [SessionEvent::RunFinished { .. }]),
+            "the first batch closed the parent's run"
+        );
+        assert_eq!(batches[1].0, parent);
+        assert!(
+            matches!(batches[1].1.as_slice(), [SessionEvent::RunStarted { .. }]),
+            "the second batch re-opened the parent's run"
+        );
         assert!(
             registrar.keys().await.is_empty(),
             "routing never learned a child"
         );
+    }
+
+    /// A failed tool call is part of the conversation: it maps to an
+    /// error-flagged tool result instead of being dropped by the catch-all, so
+    /// a split seed does not summarize a run in which the tool was never
+    /// attempted.
+    #[test]
+    fn a_tool_failure_is_mapped_as_an_error_tool_result() {
+        let event = SessionEvent::ToolError {
+            turn_id: uuid::Uuid::new_v4(),
+            call_id: "call-7".into(),
+            error: "file_read: no such file".into(),
+            at: 0,
+        };
+
+        let message = event_to_message(&event).expect("a tool failure is conversational");
+
+        match message {
+            UnifiedMessage::ToolResult {
+                tool_call_id,
+                content,
+                is_error,
+                ..
+            } => {
+                assert_eq!(tool_call_id, "call-7");
+                assert!(is_error, "the failure is flagged as an error result");
+                let text = content
+                    .iter()
+                    .filter_map(|b| b.as_text())
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                assert_eq!(text, "file_read: no such file");
+            }
+            other => panic!("expected a tool result, got {other:?}"),
+        }
     }
 
     // -------------------------------------------------------------------------

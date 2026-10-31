@@ -40,7 +40,7 @@ pub(crate) const fn effective_config_path_slot() -> &'static dyn SlotStatus {
 /// rather than reverse-depend on `gateway`. Lives only for the duration
 /// of [`apply_security_ssrf_overrides`].
 #[derive(serde::Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 struct SecuritySsrfOverrides {
     enabled: Option<bool>,
     allow_tool_private_network: Option<bool>,
@@ -251,7 +251,7 @@ impl Config {
         // the Panel security_config admin), but `WebFetchTool` reads from
         // `Config.ssrf`. Without this copy, `[security.ssrf].allowed_hosts`
         // is silently dead — Panel saves it, code never honours it.
-        Self::apply_security_ssrf_overrides(&mut config, &contents);
+        Self::apply_security_ssrf_overrides(&mut config, &contents)?;
 
         // Bridge: honour `[policies.metrics]` in the live `StageTimer`. Without
         // this, `warning_multiplier` / `enable_logging` / `enable_warnings` are
@@ -416,23 +416,23 @@ impl Config {
     /// because the strongly-typed `SecurityConfig` schema lives in the
     /// gateway layer and we do not want a reverse dep from `config` →
     /// `gateway`.
-    fn apply_security_ssrf_overrides(config: &mut Self, raw_toml: &str) {
-        let Ok(table) = raw_toml.parse::<toml::Table>() else {
-            return;
-        };
+    fn apply_security_ssrf_overrides(config: &mut Self, raw_toml: &str) -> Result<()> {
+        let table = raw_toml.parse::<toml::Table>().map_err(|e| {
+            AlephError::invalid_config(format!("Failed to parse security.ssrf TOML: {e}"))
+        })?;
         let Some(ssrf_table) = table
             .get("security")
             .and_then(|v| v.as_table())
             .and_then(|s| s.get("ssrf"))
             .and_then(|v| v.as_table())
         else {
-            return;
+            return Ok(());
         };
-        let Ok(overrides) =
-            toml::Value::Table(ssrf_table.clone()).try_into::<SecuritySsrfOverrides>()
-        else {
-            return;
-        };
+        let overrides = toml::Value::Table(ssrf_table.clone())
+            .try_into::<SecuritySsrfOverrides>()
+            .map_err(|e| {
+                AlephError::invalid_config(format!("Invalid security.ssrf configuration: {e}"))
+            })?;
 
         if let Some(v) = overrides.enabled {
             config.ssrf.enabled = v;
@@ -446,10 +446,11 @@ impl Config {
             // SSRF redirect bound instead of rejecting the bad config.
             match u8::try_from(v) {
                 Ok(n) => config.ssrf.max_redirects = n,
-                Err(_) => tracing::warn!(
-                    value = v,
-                    "security.ssrf.max_redirects out of range (0-255), ignoring"
-                ),
+                Err(_) => {
+                    return Err(AlephError::invalid_config(format!(
+                        "security.ssrf.max_redirects must be between 0 and 255, got {v}"
+                    )));
+                }
             }
         }
         if let Some(v) = overrides.allowed_hosts {
@@ -466,6 +467,7 @@ impl Config {
         if let Some(v) = overrides.strip_auth_on_cross_origin {
             config.ssrf.strip_auth_on_cross_origin = v;
         }
+        Ok(())
     }
 }
 

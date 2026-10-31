@@ -20,7 +20,7 @@ struct AdmissionFrame {
 }
 
 tokio::task_local! {
-    static TOOL_ADMISSION: Option<AdmissionFrame>;
+    static TOOL_ADMISSION: Option<Result<AdmissionFrame, ContextFabricError>>;
 }
 
 pub(crate) async fn with_tool_admission<F: Future>(
@@ -29,16 +29,18 @@ pub(crate) async fn with_tool_admission<F: Future>(
     cancel: CancellationToken,
     future: F,
 ) -> F::Output {
-    let frame = fabric.and_then(|fabric| {
+    let frame = fabric.map(|fabric| {
         AuthenticatedCaller::from_host_boundary(session_id)
-            .ok()
             .map(|caller| AdmissionFrame {
                 fabric,
                 caller,
                 cancel,
             })
+            .map_err(ContextFabricError::Contract)
     });
-    let finishing_frame = frame.clone();
+    let finishing_frame = frame
+        .as_ref()
+        .and_then(|frame| frame.as_ref().ok().cloned());
     TOOL_ADMISSION
         .scope(frame, async move {
             let result = future.await;
@@ -59,15 +61,33 @@ pub(crate) async fn with_tool_admission<F: Future>(
 
 /// The actual harness session, including delegated child runs.
 pub(crate) fn current_context_caller() -> Option<AuthenticatedCaller> {
-    TOOL_ADMISSION
-        .try_with(|frame| frame.as_ref().map(|frame| frame.caller.clone()))
+    if let Some(frame) = TOOL_ADMISSION
+        .try_with(|frame| {
+            frame
+                .as_ref()
+                .and_then(|result| result.as_ref().ok())
+                .map(|frame| frame.caller.clone())
+        })
         .ok()
         .flatten()
+    {
+        return Some(frame);
+    }
+    None
 }
 
 /// Notify observers for the real scoped harness caller, carrying no raw data.
 pub(crate) async fn notify_current_lifecycle(event: super::ContextLifecycleEvent) {
-    if let Some(frame) = TOOL_ADMISSION.try_with(Clone::clone).ok().flatten() {
+    if let Some(frame) = TOOL_ADMISSION
+        .try_with(|frame| {
+            frame
+                .as_ref()
+                .and_then(|result| result.as_ref().ok())
+                .cloned()
+        })
+        .ok()
+        .flatten()
+    {
         frame
             .fabric
             .notify_lifecycle(event, &frame.caller, Some(&frame.cancel))
@@ -88,11 +108,32 @@ pub(crate) async fn admit_scoped_tool_output(
     if budget.is_none() {
         return Ok(None);
     }
-    let Some(frame) = TOOL_ADMISSION.try_with(Clone::clone).ok().flatten() else {
+    let invalid = TOOL_ADMISSION
+        .try_with(|frame| {
+            frame
+                .as_ref()
+                .and_then(|result| result.as_ref().err())
+                .map(ToString::to_string)
+        })
+        .ok()
+        .flatten();
+    if let Some(error) = invalid {
+        return Err(ContextFabricError::Handler(error));
+    }
+    let Some(frame) = TOOL_ADMISSION
+        .try_with(|frame| {
+            frame
+                .as_ref()
+                .and_then(|result| result.as_ref().ok())
+                .cloned()
+        })
+        .ok()
+        .flatten()
+    else {
         return Ok(None);
     };
     let Some(key) = frame.fabric.admission_key(&frame.caller).await? else {
-        return Ok(None);
+        return Err(ContextFabricError::BuiltinUnavailable("scoped admission"));
     };
     let original = crate::providers::message::value_as_model_text(value).into_owned();
     frame

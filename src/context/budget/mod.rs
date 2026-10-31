@@ -358,6 +358,11 @@ impl ContextBudget {
              `ratio < critical_threshold` is unreachable. Construct via \
              `orchestrator::deps_builder::context_budget` which validates this."
         );
+        assert!(
+            config.token_estimate_ratio.is_finite() && config.token_estimate_ratio > 0.0,
+            "ContextBudgetConfig.token_estimate_ratio must be finite and > 0 (got {})",
+            config.token_estimate_ratio
+        );
         Self {
             token_budget: config.token_budget,
             warning_threshold: config.warning_threshold,

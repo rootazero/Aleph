@@ -1,4 +1,4 @@
-use crate::i18n::{t_string, use_i18n, I18nContextProvider};
+use crate::i18n::{I18nContextProvider, t_string, use_i18n};
 use crate::state::memory::MemoryState;
 use aleph_protocol::browser_live::{CLOSED_TOPIC, RESOURCE_TOPIC};
 use leptos::prelude::*;
@@ -9,7 +9,7 @@ use leptos_router::hooks::{use_location, use_navigate};
 // Views
 use crate::views::agent_trace::AgentTrace;
 use crate::views::browser::{
-    apply_browser_event, seed_from_gateway, BrowserWorkspace, SeedOutcome,
+    BrowserWorkspace, SeedOutcome, apply_browser_event, seed_from_gateway,
 };
 use crate::views::chat::ChatView;
 use crate::views::cron::CronView;
@@ -34,13 +34,15 @@ use crate::views::usage::UsageView;
 use crate::api::BehaviorConfigApi;
 use crate::components::boot_check_gate::BootCheckGate;
 use crate::components::command_palette::CommandPalette;
-use crate::components::mode_sidebar::{is_subagent_tree_route, ModeSidebar, PanelMode};
+use crate::components::mode_sidebar::{ModeSidebar, PanelMode, is_subagent_tree_route};
 use crate::components::notification_center::NotificationCenter;
 use crate::components::right_pane::RightPane;
 use crate::components::service_blocking_gate::ServiceBlockingGate;
 use crate::components::token_wall::TokenWall;
 use crate::components::workspace_panel::WorkspacePanel;
 use crate::context::{DashboardContext, DashboardState};
+#[cfg(feature = "panel-modular")]
+use crate::panel::discovery::{PanelDiscoveryState, PanelDiscoveryStatus};
 use crate::platform::phone::agents::PhoneAgents;
 use crate::platform::phone::chat::PhoneChat;
 use crate::platform::phone::dashboard::PhoneDashboard;
@@ -52,19 +54,19 @@ use crate::platform::phone::settings::connection::PhoneConnection;
 use crate::platform::phone::settings::embeddings::PhoneEmbeddings;
 use crate::platform::phone::settings::providers::PhoneProviders;
 use crate::platform::phone::settings::{
-    screen_for_path as phone_settings_screen, title_for_path as phone_settings_title, NativeScreen,
-    PhoneSettings, PhoneSettingsScreen,
+    NativeScreen, PhoneSettings, PhoneSettingsScreen, screen_for_path as phone_settings_screen,
+    title_for_path as phone_settings_title,
 };
 use crate::platform::phone::shell::PhoneShell;
 use crate::platform::phone::teams::PhoneTeams;
 use crate::state::hotkey::{self as hotkey, HotkeyState};
-use crate::state::layout::{flex_path_enabled, LayoutMode, WorkspaceState};
+use crate::state::layout::{LayoutMode, WorkspaceState, flex_path_enabled};
 use crate::state::notifications::NotificationsState;
 use crate::state::sessions::SessionMap;
 use crate::state::typewriter::TypewriterClock;
 use crate::state::viewport::{FormFactor, FormFactorState};
-use crate::views::chat::events::subscribe_run_events;
 use crate::views::chat::ChatState;
+use crate::views::chat::events::subscribe_run_events;
 use crate::views::voice::{ImmersiveVoiceView, VoiceMode};
 
 #[component]
@@ -355,8 +357,22 @@ fn AppContent() -> impl IntoView {
         });
     }
 
+    // The panel community fixture seeds a canonical snapshot locally and must
+    // keep the transport disconnected so the fixture remains deterministic.
+    let panel_fixture_route = cfg!(feature = "panel-tab-spike")
+        && web_sys::window().is_some_and(|window| {
+            window
+                .location()
+                .pathname()
+                .unwrap_or_default()
+                .starts_with("/panel/")
+        });
+
     // Setup WebSocket connection and alert subscriptions on mount
     Effect::new(move || {
+        if panel_fixture_route {
+            return;
+        }
         let state = state;
         spawn_local(async move {
             match state.connect().await {
@@ -646,6 +662,7 @@ fn MainContent() -> impl IntoView {
     #[cfg(feature = "panel-modular")]
     {
         let form_factor = expect_context::<FormFactorState>();
+        let dashboard = expect_context::<DashboardState>();
         let location = use_location();
         let i18n = use_i18n();
         let projection = crate::panel::projection::PanelProjection::builtins(
@@ -658,6 +675,17 @@ fn MainContent() -> impl IntoView {
                 projection.as_ref().ok(),
             );
             if form_factor.form_factor.get() != FormFactor::Phone {
+                if let Some((community_projection, initial_tab)) =
+                    explicit_community_panel(&path, &dashboard.panel_discovery.get())
+                {
+                    return view! {
+                        <crate::panel::PanelShell
+                            projection=community_projection
+                            initial_tab=Some(initial_tab)
+                        />
+                    }
+                    .into_any();
+                }
                 match route {
                     crate::panel::projection::PanelRoute::Modular(initial_tab) => {
                         if let Ok(projection) = projection.as_ref() {
@@ -686,6 +714,25 @@ fn MainContent() -> impl IntoView {
     }
     #[cfg(not(feature = "panel-modular"))]
     view! { <LegacyMainContent /> }
+}
+
+#[cfg(feature = "panel-modular")]
+fn explicit_community_panel(
+    path: &str,
+    discovery: &PanelDiscoveryState,
+) -> Option<(
+    crate::panel::projection::PanelProjection,
+    aleph_protocol::panel::PanelTabKey,
+)> {
+    if !matches!(discovery.status(), PanelDiscoveryStatus::Ready) {
+        return None;
+    }
+    let key = crate::panel::projection::PanelProjection::explicit_key(path)?;
+    let snapshot = discovery.snapshot()?.clone();
+    let projection =
+        crate::panel::projection::PanelProjection::from_snapshot(snapshot.clone()).ok()?;
+    let descriptor = projection.select_explicit(&key, snapshot.revision).ok()?;
+    Some((projection, descriptor.key))
 }
 
 #[component]

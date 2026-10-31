@@ -68,6 +68,11 @@ const SUBJECT: &str = "Session log";
 /// row is never subject to it — it is part of the repair set, and the repair
 /// hint promises to have named every one.
 const NAMED_LIMIT: usize = 10;
+/// Refuse to materialize a session log whose sequence range already exceeds
+/// the diagnostic's memory budget. `load_rows` returns a Vec, so this guard
+/// must run before that call; the sequence head is a conservative upper bound
+/// on the number of live rows.
+const MAX_SESSION_ROWS: u64 = 100_000;
 
 pub struct SessionLogCheck {
     projector: Option<Arc<MessageProjector>>,
@@ -212,13 +217,22 @@ impl HealthCheck for SessionLogCheck {
             Err(e) => list_unreadable = Some(e.to_string()),
         }
         if let Some(projector) = self.projector.as_ref() {
-            if let Ok(metas) = projector
+            match projector
                 .projection_store()
                 .list_sessions(SessionFilter::default())
                 .await
             {
-                for meta in metas {
-                    keys.insert(meta.key, ());
+                Ok(metas) => {
+                    for meta in metas {
+                        keys.insert(meta.key, ());
+                    }
+                }
+                Err(e) => {
+                    let error = format!("projection session listing failed: {e}");
+                    list_unreadable = Some(match list_unreadable.take() {
+                        Some(previous) => format!("{previous}; {error}"),
+                        None => error,
+                    });
                 }
             }
         }
@@ -229,7 +243,7 @@ impl HealthCheck for SessionLogCheck {
                     ID,
                     SUBJECT,
                     format!(
-                        "the run markers could not be read ({e}), so no session's log was reduced."
+                        "session candidate enumeration failed ({e}), so no session's log was reduced."
                     ),
                 )],
                 None => vec![Finding::ok(
@@ -242,12 +256,21 @@ impl HealthCheck for SessionLogCheck {
 
         let mut bad: Vec<Contradicting> = Vec::new();
         let mut unreadable: usize = 0;
+        let mut over_limit: usize = 0;
         let mut skipped: usize = 0;
         for key in keys.keys() {
             let Some(id) = SessionId::from_key_string(key) else {
                 unreadable += 1;
                 continue;
             };
+            let Ok(head_seq) = events.load_head_seq(&id).await else {
+                unreadable += 1;
+                continue;
+            };
+            if head_seq >= MAX_SESSION_ROWS {
+                over_limit += 1;
+                continue;
+            }
             let Ok(rows) = events.load_rows(&id).await else {
                 unreadable += 1;
                 continue;
@@ -292,7 +315,7 @@ impl HealthCheck for SessionLogCheck {
         }
 
         let scanned = keys.len();
-        if bad.is_empty() && unreadable == 0 && list_unreadable.is_none() {
+        if bad.is_empty() && unreadable == 0 && over_limit == 0 && list_unreadable.is_none() {
             return vec![Finding::ok(
                 ID,
                 "Session logs consistent",
@@ -309,13 +332,13 @@ impl HealthCheck for SessionLogCheck {
                 ID,
                 SUBJECT,
                 format!(
-                    "{unreadable} of {scanned} session log(s) could not be reduced \
-                     (unparseable key, or the log would not read){}. The rest are \
+                    "{unreadable} of {scanned} session log(s) could not be reduced; {over_limit} exceeded the {MAX_SESSION_ROWS}-row safety bound \
+                     (unparseable key, unreadable log, or refused load){}. The rest are \
                      consistent.",
                     list_unreadable
                         .as_deref()
                         .map_or_else(String::new, |e| format!(
-                            ", and the marker scan failed ({e})"
+                            ", and candidate enumeration failed ({e})"
                         ))
                 ),
             )];
@@ -350,7 +373,7 @@ impl HealthCheck for SessionLogCheck {
             },
             "Session logs contradict themselves",
             format!(
-                "{} of {scanned} session log(s) contradict themselves{}: {}{}.{}",
+                "{} of {scanned} session log(s) contradict themselves{}: {}{}{}{}",
                 bad.len(),
                 if refused > 0 {
                     format!(", {refused} of them refused")
@@ -359,11 +382,19 @@ impl HealthCheck for SessionLogCheck {
                 },
                 named.join("; "),
                 skipped_note(skipped),
-                if unreadable > 0 {
-                    format!(" A further {unreadable} could not be reduced.")
+                if unreadable > 0 || over_limit > 0 {
+                    format!(
+                        " A further {unreadable} could not be reduced and {over_limit} exceeded the \
+                         {MAX_SESSION_ROWS}-row safety bound."
+                    )
                 } else {
                     String::new()
-                }
+                },
+                list_unreadable
+                    .as_deref()
+                    .map_or_else(String::new, |e| format!(
+                        " Candidate enumeration failed: {e}."
+                    ))
             ),
         );
         if undecodable_total == 0 {

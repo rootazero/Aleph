@@ -76,6 +76,43 @@ pub use upgrade::{parse_trusted_ips, refuse_insecure_remote, ws_upgrade_handler}
 
 // `cleanup::run_cleanup` is invoked by name only, no import needed.
 
+/// Classify an inbound JSON-RPC frame by SHAPE and parse it as a response.
+///
+/// A frame is a **response** iff it
+///
+/// 1. carries an `id` that is not `null`,
+/// 2. carries NO `method` key, and
+/// 3. carries a `result` OR an `error` KEY.
+///
+/// Key *presence* — not the parsed value — is what decides. `JsonRpcResponse`
+/// stores `result` as an `Option<Value>`, and serde maps a JSON `null` to
+/// `None`, so a peer that answered `{"jsonrpc":"2.0","id":"rpc-0",
+/// "result":null}` was NOT response-shaped under a value-presence test: the
+/// frame fell through to the request path, failed on the missing `method`,
+/// and the pending call waited out its full timeout even though the peer had
+/// answered.
+///
+/// `None` means "not a response": requests and notifications (no `id`, or a
+/// `method` key) and malformed frames keep their existing handling — the
+/// caller falls through to the request path, whose parse-error reply is
+/// unchanged.
+///
+/// Shared by the center's connection demux and the node's frame handler
+/// (`aleph-server node`) so the two ends of one wire cannot classify the
+/// same frame differently.
+#[must_use]
+pub fn parse_response_frame(text: &str) -> Option<JsonRpcResponse> {
+    let frame: serde_json::Value = serde_json::from_str(text).ok()?;
+    let object = frame.as_object()?;
+    let has_id = object.get("id").is_some_and(|id| !id.is_null());
+    let has_method = object.contains_key("method");
+    let has_payload = object.contains_key("result") || object.contains_key("error");
+    if !has_id || has_method || !has_payload {
+        return None;
+    }
+    serde_json::from_str::<JsonRpcResponse>(text).ok()
+}
+
 /// Shared context for handling a WebSocket connection.
 pub struct ConnectionContext {
     middleware_chain: MiddlewareChain,
@@ -253,22 +290,21 @@ pub async fn handle_connection(
                         debug!("WS recv from {}: {}", conn_id, &text[..preview_end]);
 
                         // Reverse-RPC response interception: a frame that is a
-                        // JSON-RPC *response* (has `id` + `result`/`error`, no
-                        // `method`) is the reply to a server-initiated request.
-                        // Route it to the pending table and stop — do NOT treat
-                        // it as a client request (it would fail JsonRpcRequest
-                        // parsing, which requires `method`).
-                        if let Ok(maybe_resp) =
-                            serde_json::from_str::<JsonRpcResponse>(&text)
-                        {
-                            let looks_like_response = maybe_resp.id.is_some()
-                                && (maybe_resp.result.is_some() || maybe_resp.error.is_some());
-                            if looks_like_response {
-                                if let Some(id) = maybe_resp.id.clone() {
-                                    rpc_pending.resolve(&id, maybe_resp);
-                                }
-                                continue;
+                        // JSON-RPC *response* (has `id`, no `method`, and a
+                        // `result`/`error` key) is the reply to a
+                        // server-initiated request. Route it to the pending
+                        // table and stop — do NOT treat it as a client request
+                        // (it would fail JsonRpcRequest parsing, which
+                        // requires `method`).
+                        //
+                        // The discriminator is the shared
+                        // `parse_response_frame`, the same one the node uses
+                        // on its side: one rule, one wire.
+                        if let Some(maybe_resp) = parse_response_frame(&text) {
+                            if let Some(id) = maybe_resp.id.clone() {
+                                rpc_pending.resolve(&id, maybe_resp);
                             }
+                            continue;
                         }
 
                         // Node-initiated reverse request (cluster ③): a
@@ -1571,4 +1607,82 @@ pub async fn handle_connection(
     off_loop_rpcs.shutdown().await;
     cleanup::run_cleanup(&conn_id, &ctx, &rpc_pending).await;
     Ok(())
+}
+
+#[cfg(test)]
+mod response_frame_tests {
+    use super::*;
+
+    /// A peer that answers `"result": null` HAS answered: the frame must be
+    /// recognised as a response, otherwise the pending reverse-RPC call waits
+    /// out its full timeout even though the peer completed. serde maps JSON
+    /// `null` to `None`, so only the KEY's presence tells the two apart.
+    #[test]
+    fn a_null_result_frame_is_a_response() {
+        let resp = parse_response_frame(r#"{"jsonrpc":"2.0","id":"rpc-0","result":null}"#)
+            .expect("a null result is still a completed response");
+        assert_eq!(resp.id, Some(serde_json::json!("rpc-0")));
+        assert!(resp.result.is_none());
+        assert!(resp.error.is_none());
+    }
+
+    #[test]
+    fn a_result_frame_is_a_response() {
+        let resp = parse_response_frame(r#"{"jsonrpc":"2.0","id":7,"result":{"ok":true}}"#)
+            .expect("a result frame is a response");
+        assert_eq!(resp.id, Some(serde_json::json!(7)));
+    }
+
+    #[test]
+    fn an_error_frame_is_a_response() {
+        let resp = parse_response_frame(
+            r#"{"jsonrpc":"2.0","id":"rpc-1","error":{"code":-32000,"message":"boom"}}"#,
+        )
+        .expect("an error frame is a response");
+        assert_eq!(resp.id, Some(serde_json::json!("rpc-1")));
+        assert!(resp.error.is_some());
+    }
+
+    /// A request carries a `method` — it is never a response, whatever else it
+    /// carries. (The node's `tool.call` request and the center's
+    /// `node.approval.request` both land here.)
+    #[test]
+    fn a_request_frame_is_not_a_response() {
+        assert!(parse_response_frame(
+            r#"{"jsonrpc":"2.0","id":"rpc-2","method":"tool.call","params":{"tool":"bash"}}"#
+        )
+        .is_none());
+    }
+
+    /// No `id` ⇒ notification, not a response.
+    #[test]
+    fn a_notification_frame_is_not_a_response() {
+        assert!(
+            parse_response_frame(r#"{"jsonrpc":"2.0","method":"connect","params":{}}"#).is_none()
+        );
+    }
+
+    /// An `id` with neither a `result` nor an `error` key is not a response —
+    /// it stays on the request path (and its parse-error reply is unchanged).
+    #[test]
+    fn a_frame_without_result_or_error_is_not_a_response() {
+        assert!(parse_response_frame(r#"{"jsonrpc":"2.0","id":"rpc-3"}"#).is_none());
+    }
+
+    /// A `null` id is not an id: serde maps it to `None`, so the frame cannot
+    /// be routed to a pending call.
+    #[test]
+    fn a_null_id_frame_is_not_a_response() {
+        assert!(
+            parse_response_frame(r#"{"jsonrpc":"2.0","id":null,"result":{"ok":true}}"#).is_none()
+        );
+    }
+
+    /// Malformed input is not a response — the caller falls through to the
+    /// request path, which answers with the parse error.
+    #[test]
+    fn a_malformed_frame_is_not_a_response() {
+        assert!(parse_response_frame("not json").is_none());
+        assert!(parse_response_frame("[]").is_none());
+    }
 }

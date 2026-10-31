@@ -12,7 +12,8 @@
 //! (`ExtensionStopHookVerifier`); this TOML surface is evaluated first.
 
 use schemars::JsonSchema;
-use serde::{Deserialize, Serialize};
+use serde::de::Error;
+use serde::{Deserialize, Deserializer, Serialize};
 
 /// One stop-hook entry from `config.toml [[stop_hooks]]`.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -22,6 +23,21 @@ pub struct StopHookConfig {
     /// Shell command executed via `/bin/sh -c <command>`.
     pub command: String,
     /// Per-hook timeout in seconds. Defaults to 30 if omitted.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_timeout_secs"
+    )]
     pub timeout_secs: Option<u64>,
+}
+
+fn deserialize_timeout_secs<'de, D>(deserializer: D) -> Result<Option<u64>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let timeout = Option::<u64>::deserialize(deserializer)?;
+    if timeout == Some(0) {
+        return Err(D::Error::custom("timeout_secs must be greater than 0"));
+    }
+    Ok(timeout)
 }

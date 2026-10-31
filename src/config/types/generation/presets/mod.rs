@@ -124,8 +124,8 @@ pub fn get_preset(name: &str) -> Option<&'static GenerationPreset> {
 ///
 /// `PRESETS` is a `HashMap`, so a plain `.find()` would return an arbitrary
 /// preset when several share the same `provider_type` (e.g. 17 `fal-*`
-/// presets), making the fallback default model non-deterministic across runs.
-/// Select the lexicographically-smallest preset name for a stable result.
+/// presets), making the fallback default model deterministic only when all
+/// presets for a provider type share the same endpoint.
 pub fn get_preset_by_type(provider_type: &str) -> Option<&'static GenerationPreset> {
     let mut matches: Vec<(&'static str, &'static GenerationPreset)> = PRESETS
         .iter()
@@ -133,7 +133,14 @@ pub fn get_preset_by_type(provider_type: &str) -> Option<&'static GenerationPres
         .map(|(name, p)| (*name, p))
         .collect();
     matches.sort_by_key(|(name, _)| *name);
-    matches.first().map(|(_, p)| *p)
+    let first = matches.first()?.1;
+    if matches
+        .iter()
+        .any(|(_, preset)| preset.base_url != first.base_url)
+    {
+        return None;
+    }
+    Some(first)
 }
 
 /// Get a generation preset with override support.
@@ -145,20 +152,25 @@ pub fn get_preset_by_type(provider_type: &str) -> Option<&'static GenerationPres
 /// 4. Returns `None` if disabled or not found.
 ///
 /// The `generation_overrides` parameter is the generation section of `PresetsOverride`,
-/// which groups overrides by media type. We search across all media type maps (image, video, audio).
+/// which groups overrides by media type. We search across all media type maps
+/// (image, video, audio, speech, transcription) — a modality missing from the
+/// override type would silently drop the user's override for that modality.
 pub fn get_merged_generation_preset(
     name: &str,
     provider_type: &str,
     generation_overrides: &crate::config::presets_override::GenerationPresetsOverride,
 ) -> Option<crate::config::presets_override::OwnedGenerationPreset> {
-    let builtin = get_preset(name).or_else(|| get_preset_by_type(provider_type));
+    let exact = get_preset(name);
+    let builtin = exact.or_else(|| get_preset_by_type(provider_type));
 
     // Search across all generation override maps for a matching name
     let partial = generation_overrides
         .image
         .get(name)
         .or_else(|| generation_overrides.video.get(name))
-        .or_else(|| generation_overrides.audio.get(name));
+        .or_else(|| generation_overrides.audio.get(name))
+        .or_else(|| generation_overrides.speech.get(name))
+        .or_else(|| generation_overrides.transcription.get(name));
 
     match (builtin, partial) {
         (Some(b), Some(p)) => {
@@ -170,7 +182,11 @@ pub fn get_merged_generation_preset(
             ))
         }
         (Some(b), None) => Some(crate::config::presets_override::OwnedGenerationPreset {
-            default_model: b.default_model.to_string(),
+            default_model: if exact.is_some() {
+                b.default_model.to_string()
+            } else {
+                String::new()
+            },
             base_url: b.base_url.map(|u| u.to_string()),
         }),
         (None, Some(p)) => {
