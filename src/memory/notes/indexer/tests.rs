@@ -5,6 +5,56 @@ use tempfile::TempDir;
 const AGENT: &str = "default";
 
 #[tokio::test]
+async fn runtime_rebuild_category_tasks_keep_source_operation() {
+    use crate::memory::runtime::{MemoryRuntime, MemoryRuntimeConfig};
+
+    let root = TempDir::new().unwrap();
+    let note_dir = root.path().join("notes");
+    let runtime = MemoryRuntime::new(
+        MemoryRuntimeConfig {
+            metadata_path: root.path().join("metadata.db"),
+            note_memory_dir: note_dir.clone(),
+        },
+        Arc::new(crate::capability::ownership::OwnershipTree::new()),
+    );
+    runtime.start().await.unwrap();
+    let category = setup_category_dir(&note_dir, AGENT, "reference").await;
+    fs::write(
+        category.join("owned.md"),
+        sample_md(
+            "reference",
+            &["A category retains its source operation."],
+            &[],
+        ),
+    )
+    .await
+    .unwrap();
+    let operation = runtime.operation().unwrap();
+    let backend = operation.backend().clone();
+    let indexer = NoteIndexer::new(note_dir, backend.clone());
+    let report = operation
+        .run(async move { Ok(indexer.full_rebuild_all(AGENT, 0).await) })
+        .await
+        .unwrap();
+    assert_eq!(
+        report.total.indexed, 1,
+        "category tasks must inherit admission"
+    );
+    assert_eq!(report.total.errors, 0);
+    assert!(report.failed.is_empty());
+    assert_eq!(
+        operation
+            .clone()
+            .scope(async { backend.count_all_notes().await })
+            .await
+            .unwrap(),
+        1
+    );
+    drop(operation);
+    runtime.stop().await.unwrap();
+}
+
+#[tokio::test]
 async fn reconcile_corpus_drains_category_tasks_after_first_error() {
     for panic_first in [false, true] {
         let mut set = tokio::task::JoinSet::new();

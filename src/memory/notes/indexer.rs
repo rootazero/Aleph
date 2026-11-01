@@ -428,7 +428,8 @@ impl<S: NoteStore> NoteIndexer<S> {
             // rust-doctor-disable-next-line excessive-clone
             let sem = sem.clone();
 
-            set.spawn(async move {
+            let operation = crate::memory::runtime::MemoryOperation::current();
+            let task = async move {
                 let _permit = sem
                     .acquire_owned()
                     .await
@@ -469,6 +470,12 @@ impl<S: NoteStore> NoteIndexer<S> {
                     }
                 }
                 Ok(local)
+            };
+            set.spawn(async move {
+                match operation {
+                    Some(operation) => operation.scope(task).await,
+                    None => task.await,
+                }
             });
         }
 
