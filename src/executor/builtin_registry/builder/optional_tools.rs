@@ -29,16 +29,16 @@ impl BuiltinToolRegistry {
         user_profile_tool: &Option<crate::builtin_tools::user_profile::UserProfileTool>,
     ) {
         // Helper: register tool with schema from schemars
-        fn reg(
-            tools: &mut HashMap<String, UnifiedTool>,
+        fn reg<'a>(
+            tools: &'a mut HashMap<String, UnifiedTool>,
             name: &str,
             desc: &str,
             schema: serde_json::Value,
-        ) {
+        ) -> &'a mut UnifiedTool {
             let mut ut =
                 UnifiedTool::new(format!("builtin:{name}"), name, desc, ToolSource::Builtin);
             ut.parameters_schema = Some(schema);
-            tools.insert(name.to_string(), ut);
+            tools.entry(name.to_owned()).insert_entry(ut).into_mut()
         }
 
         // Memory retrieval tools — only exposed in Tools / Hybrid mode.
@@ -61,7 +61,8 @@ impl BuiltinToolRegistry {
                     super::core_tools::tool_schema::<
                         crate::builtin_tools::memory_search::MemorySearchArgs,
                     >("memory_search"),
-                );
+                )
+                .services = MemorySearchTool::services();
                 info!("Registered memory_search tool in BuiltinToolRegistry");
             }
             if memory_browse_tool.is_some() {
@@ -72,7 +73,8 @@ impl BuiltinToolRegistry {
                     super::core_tools::tool_schema::<
                         crate::builtin_tools::memory_browse::MemoryBrowseArgs,
                     >("memory_browse"),
-                );
+                )
+                .services = MemoryBrowseTool::services();
                 info!("Registered memory.browse tool in BuiltinToolRegistry");
             }
             if memory_explore_tool.is_some() {
@@ -83,7 +85,8 @@ impl BuiltinToolRegistry {
                     super::core_tools::tool_schema::<
                         crate::builtin_tools::memory_explore::MemoryExploreArgs,
                     >("memory_explore"),
-                );
+                )
+                .services = MemoryExploreTool::services();
                 info!("Registered memory_explore tool in BuiltinToolRegistry");
             }
             if memory_timeline_tool.is_some() {
@@ -94,7 +97,8 @@ impl BuiltinToolRegistry {
                     super::core_tools::tool_schema::<
                         crate::builtin_tools::memory_timeline::MemoryTimelineArgs,
                     >("memory_timeline"),
-                );
+                )
+                .services = crate::builtin_tools::MemoryTimelineTool::services();
                 info!("Registered memory_timeline tool in BuiltinToolRegistry");
             }
         }
@@ -116,7 +120,8 @@ impl BuiltinToolRegistry {
                 super::core_tools::tool_schema::<
                     crate::builtin_tools::flag_user_correction::FlagUserCorrectionArgs,
                 >("flag_user_correction"),
-            );
+            )
+            .services = crate::builtin_tools::FlagUserCorrectionTool::services();
             info!("Registered flag_user_correction tool in BuiltinToolRegistry");
 
             // governance_metrics — read-only audit reality probe. Exposed
@@ -131,7 +136,8 @@ impl BuiltinToolRegistry {
                 super::core_tools::tool_schema::<
                     crate::builtin_tools::governance_metrics::GovernanceMetricsArgs,
                 >("governance_metrics"),
-            );
+            )
+            .services = crate::builtin_tools::governance_metrics::GovernanceMetricsTool::services();
             info!("Registered governance_metrics tool in BuiltinToolRegistry");
         }
 
@@ -146,7 +152,8 @@ impl BuiltinToolRegistry {
             super::core_tools::tool_schema::<crate::builtin_tools::remember::RememberArgs>(
                 "remember",
             ),
-        );
+        )
+        .services = crate::builtin_tools::RememberTool::services();
         info!("Registered remember tool in BuiltinToolRegistry");
 
         // node_list — cluster discovery (the read half of node_invoke). Always
@@ -609,7 +616,8 @@ impl BuiltinToolRegistry {
                 super::core_tools::tool_schema::<crate::builtin_tools::note_schema::NoteSchemaArgs>(
                     "note_schema",
                 ),
-            );
+            )
+            .services = crate::builtin_tools::note_schema::NoteSchemaTool::services();
             info!("Registered note_schema tool in BuiltinToolRegistry");
         }
 
@@ -621,7 +629,8 @@ impl BuiltinToolRegistry {
                 super::core_tools::tool_schema::<crate::builtin_tools::note_orient::NoteOrientArgs>(
                     "note_orient",
                 ),
-            );
+            )
+            .services = crate::builtin_tools::note_orient::NoteOrientTool::services();
             info!("Registered note_orient tool in BuiltinToolRegistry");
         }
 
@@ -634,7 +643,7 @@ impl BuiltinToolRegistry {
                 super::core_tools::tool_schema::<crate::builtin_tools::user_profile::UserProfileArgs>(
                     "user_profile",
                 ),
-            );
+            ).services = crate::builtin_tools::user_profile::UserProfileTool::services();
             info!("Registered user_profile tool in BuiltinToolRegistry");
         }
     }

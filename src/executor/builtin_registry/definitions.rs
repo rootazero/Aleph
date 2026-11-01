@@ -956,11 +956,13 @@ pub fn create_tool_boxed(
         // enforce; `WebFetchTool::new()` hardcodes the default policy, whose
         // lists are empty. The sibling `google_meet` arm passes the
         // configured policy — the two arms must agree.
-        "web_fetch" => Some(Box::new(WebFetchTool::new().with_ssrf_policy(
-            config
-                .and_then(|c| c.ssrf_policy.clone())
-                .unwrap_or_default(),
-        ))),
+        "web_fetch" => Some(Box::new(
+            WebFetchTool::new().with_ssrf_policy(
+                config
+                    .and_then(|c| c.ssrf_policy.clone())
+                    .unwrap_or_default(),
+            ),
+        )),
         "google_meet" => Some(Box::new(
             crate::builtin_tools::google_meet::GoogleMeetTool::new(
                 config.and_then(|c| c.google_meet_bridge.clone()),
@@ -3663,6 +3665,29 @@ mod tests {
             &None,
         );
         tools
+    }
+
+    #[test]
+    fn production_memory_registration_preserves_its_resource_dependency() {
+        let map = unconditional_registry_map();
+        let remember = map
+            .get("remember")
+            .expect("production remember declaration");
+        assert_eq!(
+            remember.services,
+            vec![aleph_slot_api::capability::Service {
+                relation: aleph_slot_api::capability::ServiceRelation::Requires,
+                target: aleph_slot_api::capability::CapabilityId {
+                    namespace: "aleph/resources".into(),
+                    name: "memory.runtime".into(),
+                },
+            }],
+        );
+        assert!(map
+            .get("file_read")
+            .expect("file reader declaration")
+            .services
+            .is_empty());
     }
 
     #[test]

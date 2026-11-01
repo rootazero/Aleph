@@ -877,7 +877,9 @@ impl BuiltinToolRegistry {
                     &td.description,
                     ToolSource::Builtin,
                 );
-                ut = ut.with_parameters_schema(td.parameters.clone());
+                ut = ut
+                    .with_parameters_schema(td.parameters.clone())
+                    .with_services(td.services.clone());
                 tools.insert(td.name.clone(), ut);
             }
             // The count comes from the collection itself: a hand-written number
@@ -927,7 +929,9 @@ impl BuiltinToolRegistry {
                     &td.description,
                     ToolSource::Builtin,
                 );
-                ut = ut.with_parameters_schema(td.parameters.clone());
+                ut = ut
+                    .with_parameters_schema(td.parameters.clone())
+                    .with_services(td.services.clone());
                 tools.insert(td.name.clone(), ut);
             }
             // The names come from the collection itself: a hand-written list
@@ -965,7 +969,9 @@ impl BuiltinToolRegistry {
                     &td.description,
                     ToolSource::Builtin,
                 );
-                ut = ut.with_parameters_schema(td.parameters.clone());
+                ut = ut
+                    .with_parameters_schema(td.parameters.clone())
+                    .with_services(td.services.clone());
                 tools.insert(td.name.clone(), ut);
             }
             info!("Registered schemas for media_understand, audio_transcribe, document_extract");
@@ -996,7 +1002,9 @@ impl BuiltinToolRegistry {
                 &td.description,
                 ToolSource::Builtin,
             );
-            ut = ut.with_parameters_schema(td.parameters.clone());
+            ut = ut
+                .with_parameters_schema(td.parameters.clone())
+                .with_services(td.services.clone());
             tools.insert(td.name.clone(), ut);
             info!("Registered schema for capability_projection_diagnostics");
         }
@@ -1016,7 +1024,9 @@ impl BuiltinToolRegistry {
                 &td.description,
                 ToolSource::Builtin,
             );
-            ut = ut.with_parameters_schema(td.parameters.clone());
+            ut = ut
+                .with_parameters_schema(td.parameters.clone())
+                .with_services(td.services.clone());
             tools.insert(td.name.clone(), ut);
             info!("Registered schema for config_audit");
         }
@@ -1040,7 +1050,9 @@ impl BuiltinToolRegistry {
                 &td.description,
                 ToolSource::Builtin,
             );
-            ut = ut.with_parameters_schema(td.parameters.clone());
+            ut = ut
+                .with_parameters_schema(td.parameters.clone())
+                .with_services(td.services.clone());
             tools.insert(td.name.clone(), ut);
             info!("Registered schema for hub_catalog_sync");
 
@@ -1055,7 +1067,9 @@ impl BuiltinToolRegistry {
                 &td.description,
                 ToolSource::Builtin,
             );
-            ut = ut.with_parameters_schema(td.parameters.clone());
+            ut = ut
+                .with_parameters_schema(td.parameters.clone())
+                .with_services(td.services.clone());
             tools.insert(td.name.clone(), ut);
             info!("Registered schema for hub_catalog_search");
 
@@ -1069,7 +1083,9 @@ impl BuiltinToolRegistry {
                 &td.description,
                 ToolSource::Builtin,
             );
-            ut = ut.with_parameters_schema(td.parameters.clone());
+            ut = ut
+                .with_parameters_schema(td.parameters.clone())
+                .with_services(td.services.clone());
             tools.insert(td.name.clone(), ut);
             info!("Registered schema for hub_resolve_spec");
 
@@ -1089,7 +1105,9 @@ impl BuiltinToolRegistry {
                     &td.description,
                     ToolSource::Builtin,
                 );
-                ut = ut.with_parameters_schema(td.parameters.clone());
+                ut = ut
+                    .with_parameters_schema(td.parameters.clone())
+                    .with_services(td.services.clone());
                 tools.insert(td.name.clone(), ut);
                 info!("Registered schema for hub_install_run");
             }
@@ -1105,7 +1123,9 @@ impl BuiltinToolRegistry {
                 &td.description,
                 ToolSource::Builtin,
             );
-            ut = ut.with_parameters_schema(td.parameters.clone());
+            ut = ut
+                .with_parameters_schema(td.parameters.clone())
+                .with_services(td.services.clone());
             tools.insert(td.name.clone(), ut);
             info!("Registered schema for hub_fetch_docs");
         }
@@ -1123,7 +1143,9 @@ impl BuiltinToolRegistry {
                 &td.description,
                 ToolSource::Builtin,
             );
-            ut = ut.with_parameters_schema(td.parameters.clone());
+            ut = ut
+                .with_parameters_schema(td.parameters.clone())
+                .with_services(td.services.clone());
             tools.insert(td.name.clone(), ut);
             info!("Registered schema for hub_install_verify");
         }
@@ -1141,7 +1163,9 @@ impl BuiltinToolRegistry {
                 &td.description,
                 ToolSource::Builtin,
             );
-            ut = ut.with_parameters_schema(td.parameters.clone());
+            ut = ut
+                .with_parameters_schema(td.parameters.clone())
+                .with_services(td.services.clone());
             tools.insert(td.name.clone(), ut);
             info!("Registered schema for tool_usage");
         }

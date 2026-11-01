@@ -205,6 +205,10 @@ impl Clone for FlagUserCorrectionTool {
 
 #[async_trait]
 impl AlephTool for FlagUserCorrectionTool {
+    fn services() -> Vec<aleph_slot_api::capability::Service> {
+        vec![crate::memory::runtime::required_service()]
+    }
+
     const NAME: &'static str = "flag_user_correction";
     const DESCRIPTION: &'static str = "Record a user-correction signal so the system can learn from it. \
          Call when the user corrects a mistake you made or pushes back on your approach. \

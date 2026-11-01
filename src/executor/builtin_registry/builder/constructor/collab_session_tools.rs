@@ -86,7 +86,9 @@ impl BuiltinToolRegistry {
                         &td.description,
                         ToolSource::Builtin,
                     );
-                    ut = ut.with_parameters_schema(td.parameters.clone());
+                    ut = ut
+                        .with_parameters_schema(td.parameters.clone())
+                        .with_services(td.services.clone());
                     tools.insert(td.name.clone(), ut);
                 }
             }
@@ -170,7 +172,9 @@ impl BuiltinToolRegistry {
                         &td.description,
                         ToolSource::Builtin,
                     );
-                    ut = ut.with_parameters_schema(td.parameters.clone());
+                    ut = ut
+                        .with_parameters_schema(td.parameters.clone())
+                        .with_services(td.services.clone());
                     tools.insert(td.name.clone(), ut);
                 }
             }
@@ -230,7 +234,9 @@ impl BuiltinToolRegistry {
                         &td.description,
                         ToolSource::Builtin,
                     );
-                    ut = ut.with_parameters_schema(td.parameters.clone());
+                    ut = ut
+                        .with_parameters_schema(td.parameters.clone())
+                        .with_services(td.services.clone());
                     tools.insert(td.name.clone(), ut);
                 }
                 info!(
@@ -274,7 +280,9 @@ impl BuiltinToolRegistry {
                             &td.description,
                             ToolSource::Builtin,
                         );
-                        ut = ut.with_parameters_schema(td.parameters.clone());
+                        ut = ut
+                            .with_parameters_schema(td.parameters.clone())
+                            .with_services(td.services.clone());
                         tools.insert(td.name.clone(), ut);
                     }
                 }
@@ -305,7 +313,9 @@ impl BuiltinToolRegistry {
                     &td.description,
                     ToolSource::Builtin,
                 );
-                ut = ut.with_parameters_schema(td.parameters.clone());
+                ut = ut
+                    .with_parameters_schema(td.parameters.clone())
+                    .with_services(td.services.clone());
                 tools.insert(td.name.clone(), ut);
             }
             info!("Registered task_review tool (leader acceptance)");
@@ -368,7 +378,9 @@ impl BuiltinToolRegistry {
                         &td.description,
                         ToolSource::Builtin,
                     );
-                    ut = ut.with_parameters_schema(td.parameters.clone());
+                    ut = ut
+                        .with_parameters_schema(td.parameters.clone())
+                        .with_services(td.services.clone());
                     tools.insert(td.name.clone(), ut);
                 }
             }
@@ -422,7 +434,9 @@ impl BuiltinToolRegistry {
                     &td.description,
                     ToolSource::Builtin,
                 );
-                ut = ut.with_parameters_schema(td.parameters.clone());
+                ut = ut
+                    .with_parameters_schema(td.parameters.clone())
+                    .with_services(td.services.clone());
                 tools.insert(td.name.clone(), ut);
             }
         }
@@ -472,7 +486,9 @@ impl BuiltinToolRegistry {
                     &td.description,
                     ToolSource::Builtin,
                 );
-                ut = ut.with_parameters_schema(td.parameters.clone());
+                ut = ut
+                    .with_parameters_schema(td.parameters.clone())
+                    .with_services(td.services.clone());
                 tools.insert(td.name.clone(), ut);
             }
             info!("Registered note_manage tool");
@@ -503,7 +519,9 @@ impl BuiltinToolRegistry {
                     &td.description,
                     ToolSource::Builtin,
                 );
-                ut = ut.with_parameters_schema(td.parameters.clone());
+                ut = ut
+                    .with_parameters_schema(td.parameters.clone())
+                    .with_services(td.services.clone());
                 tools.insert(td.name.clone(), ut);
             }
             info!("Registered session_complete tool");
@@ -533,7 +551,9 @@ impl BuiltinToolRegistry {
                     &td.description,
                     ToolSource::Builtin,
                 );
-                ut = ut.with_parameters_schema(td.parameters.clone());
+                ut = ut
+                    .with_parameters_schema(td.parameters.clone())
+                    .with_services(td.services.clone());
                 tools.insert(td.name.clone(), ut);
                 info!("Registered memory_reflect tool");
             }
@@ -578,6 +598,7 @@ impl BuiltinToolRegistry {
                 ToolSource::Builtin,
             );
             ut.parameters_schema = Some(schema);
+            ut.services = MemoryTraceTool::services();
             tools.insert(MemoryTraceTool::NAME.to_string(), ut);
             info!("Registered memory_trace tool");
         }
@@ -599,6 +620,7 @@ impl BuiltinToolRegistry {
                 ToolSource::Builtin,
             );
             ut.parameters_schema = Some(schema);
+            ut.services = NoteGraphQueryTool::services();
             tools.insert(NoteGraphQueryTool::NAME.to_string(), ut);
             info!("Registered note_graph_query tool");
         }

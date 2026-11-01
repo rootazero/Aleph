@@ -181,6 +181,10 @@ impl MemoryReflectTool {
 
 #[async_trait]
 impl AlephTool for MemoryReflectTool {
+    fn services() -> Vec<aleph_slot_api::capability::Service> {
+        vec![crate::memory::runtime::required_service()]
+    }
+
     const NAME: &'static str = "memory_reflect";
     const DESCRIPTION: &'static str = "Synthesise a coherent answer from your long-term memory. \
          Use this when you want a distilled response (vs memory_search, which returns raw hits). \
