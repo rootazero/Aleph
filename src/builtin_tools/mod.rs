@@ -21,6 +21,11 @@
 //! event bus instead. Replace these stubs with direct `event_bus.emit(...)`
 //! calls if a real consumer ever reappears.
 
+pub(crate) mod runtime;
+
+#[cfg(test)]
+mod memory_runtime_tests;
+
 pub mod a2a_tools;
 pub mod acp_tools;
 pub mod acting_agent;

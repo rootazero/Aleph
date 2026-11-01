@@ -335,6 +335,7 @@ impl ToolCapabilityDescriptor {
             description: self.description.clone(),
             parameters: self.input_schema.clone(),
             requires_confirmation: self.requires_confirmation,
+            services: self.services.clone(),
             category,
             strict: false,
         }
@@ -356,6 +357,7 @@ impl ToolCapabilityDescriptor {
         };
         crate::metadata::UnifiedTool::new(id, self.name.clone(), self.description.clone(), source)
             .with_parameters_schema(self.input_schema.clone())
+            .with_services(self.services.clone())
             .populate_safety_profile(self.idempotent, self.requires_confirmation)
     }
 

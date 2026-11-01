@@ -157,10 +157,8 @@ pub struct MemoryContextProvider {
     pub(crate) curated_stores: Arc<DashMap<String, Arc<CuratedMemoryStore>>>,
     /// Char-budget config for both MEMORY.md and USER.md rendering.
     pub(crate) curated_config: CuratedConfig,
-    /// Test-only override for the curated MEMORY.md root directory.
-    /// Real path: `~/.aleph/agents/<agent_id>/MEMORY.md`. Tests redirect
-    /// to a tempdir to keep filesystem state isolated.
-    #[cfg(test)]
+    /// Explicit curated root for the owned runtime; standalone callers may
+    /// retain the normal discovery path.
     pub(crate) curated_root_override: Option<std::path::PathBuf>,
     /// Mirror of `MemoryConfig.project_scoped`. Every public entry point
     /// below that logically operates on "the agent" (`build_curated_message`,
@@ -178,6 +176,9 @@ mod curated;
 mod helpers;
 mod memory;
 mod orientation;
+mod runtime;
+
+pub use runtime::RuntimeMemoryContext;
 
 pub use helpers::*;
 

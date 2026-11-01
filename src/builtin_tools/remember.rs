@@ -519,10 +519,17 @@ impl AlephTool for RememberTool {
          acknowledge a save that did not happen — if the user explicitly asked you to remember \
          it, say in one short sentence that it was not saved and why.";
 
+    fn services() -> Vec<aleph_slot_api::capability::Service> {
+        vec![crate::memory::runtime::required_service()]
+    }
+
     type Args = RememberArgs;
     type Output = RememberOutput;
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
+        if let Some(database) = &self.decisions {
+            database.ensure_available()?;
+        }
         self.call_impl(args).await.map_err(Into::into)
     }
 }

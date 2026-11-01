@@ -7,7 +7,7 @@ use futures::future::BoxFuture;
 /// Capture on the caller task, before MemoryOperation::spawn creates a task.
 /// This carries existing facts; dispatch authority is scoped separately from
 /// the original sealed GateAdmissionToken inside that task.
-pub(super) fn carry<F>(future: F) -> BoxFuture<'static, F::Output>
+pub(crate) fn carry<F>(future: F) -> BoxFuture<'static, F::Output>
 where
     F: Future + Send + 'static,
     F::Output: Send + 'static,

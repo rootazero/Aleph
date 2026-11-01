@@ -24,7 +24,6 @@ mod deferred;
 pub(in crate::tools) mod dispatch;
 mod gate_chain;
 mod ledger;
-mod memory_context;
 mod progressive_disclosure;
 mod search_steer;
 mod traits;

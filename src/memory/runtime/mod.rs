@@ -1,7 +1,9 @@
 //! Concrete ownership of Memory resources and admitted work.
 
 mod bundle;
+mod context;
 mod operation;
+mod services;
 mod state;
 mod tasks;
 
@@ -23,7 +25,9 @@ use crate::sync_primitives::{Arc, Mutex};
 use tokio::sync::Notify;
 use tokio::task::JoinHandle;
 
+pub(crate) use context::carry;
 pub use operation::{MemoryHandle, MemoryOperation};
+pub use services::MemoryServicesConfig;
 pub use state::{MemoryState, MemoryStatus};
 
 pub struct MemoryRuntimeConfig {
@@ -33,6 +37,7 @@ pub struct MemoryRuntimeConfig {
 
 pub struct MemoryRuntime {
     config: MemoryRuntimeConfig,
+    services_config: Option<MemoryServicesConfig>,
     ownership: Arc<OwnershipTree>,
     inner: Mutex<MemoryInner>,
     tasks: tasks::MemoryTasks,
@@ -56,10 +61,34 @@ pub(crate) fn resource_id() -> CapabilityId {
     }
 }
 
+pub(crate) fn required_service() -> aleph_slot_api::capability::Service {
+    aleph_slot_api::capability::Service {
+        relation: aleph_slot_api::capability::ServiceRelation::Requires,
+        target: resource_id(),
+    }
+}
+
 impl MemoryRuntime {
     pub fn new(config: MemoryRuntimeConfig, ownership: Arc<OwnershipTree>) -> Arc<Self> {
+        Self::new_sources(config, ownership, None)
+    }
+
+    pub fn new_with_services(
+        config: MemoryRuntimeConfig,
+        ownership: Arc<OwnershipTree>,
+        services: MemoryServicesConfig,
+    ) -> Arc<Self> {
+        Self::new_sources(config, ownership, Some(services))
+    }
+
+    fn new_sources(
+        config: MemoryRuntimeConfig,
+        ownership: Arc<OwnershipTree>,
+        services_config: Option<MemoryServicesConfig>,
+    ) -> Arc<Self> {
         Arc::new(Self {
             config,
+            services_config,
             ownership,
             inner: Mutex::new(MemoryInner {
                 status: MemoryStatus {
@@ -76,6 +105,22 @@ impl MemoryRuntime {
             #[cfg(test)]
             initialization_gate: Mutex::new(None),
         })
+    }
+
+    /// A fresh entry captures once; descendants keep their existing admission.
+    pub(crate) fn operation(self: &Arc<Self>) -> Result<MemoryOperation, AlephError> {
+        if let Some(operation) = MemoryOperation::current() {
+            return operation
+                .belongs_to(self)
+                .then_some(operation)
+                .ok_or_else(|| AlephError::other("memory operation belongs to another runtime"));
+        }
+        self.capture(&Reference {
+            id: resource_id(),
+            visibility: VisibilityScope::default(),
+        })
+        .and_then(|handle| handle.admit())
+        .map_err(|error| AlephError::other(format!("memory unavailable: {error:?}")))
     }
 
     pub fn status(&self) -> MemoryStatus {
@@ -300,7 +345,10 @@ impl MemoryRuntime {
                     .flatten()
             };
             if let Some(bundle) = bundle {
-                if let Err(error) = bundle.initialize(&self.config) {
+                if let Err(error) = bundle
+                    .initialize(&self.config, self.services_config.as_ref())
+                    .await
+                {
                     let mut inner = self.inner.lock().unwrap_or_else(|error| error.into_inner());
                     Self::record_error(&mut inner, error.to_string());
                     self.begin_drain(&mut inner);

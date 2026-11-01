@@ -113,6 +113,29 @@ impl MemoryOperation {
         Weak::ptr_eq(owner, &self.inner.runtime) && std::ptr::eq(backend, self.backend().as_ref())
     }
 
+    pub(crate) fn belongs_to(&self, runtime: &Arc<MemoryRuntime>) -> bool {
+        Weak::ptr_eq(&self.inner.runtime, &Arc::downgrade(runtime))
+    }
+
+    pub(crate) fn services(&self) -> Result<Arc<super::services::MemoryServices>, AlephError> {
+        self.inner.bundle.services()
+    }
+
+    /// Own a root operation before the caller starts waiting for its result.
+    pub(crate) async fn run<F, R>(&self, future: F) -> Result<R, AlephError>
+    where
+        F: Future<Output = Result<R, AlephError>> + Send + 'static,
+        R: Send + 'static,
+    {
+        let (sender, receiver) = oneshot::channel();
+        self.spawn(super::carry(async move {
+            let _ = sender.send(future.await);
+        }))?;
+        receiver
+            .await
+            .map_err(|_| AlephError::other("memory task ended without a result"))?
+    }
+
     pub(crate) fn backend(&self) -> &Arc<SqliteMemoryBackend> {
         &self.inner.bundle.backend
     }

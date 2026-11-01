@@ -314,8 +314,13 @@ impl MemorySearchTool {
         if let Some(cfg) = expansion_config {
             retrieval = retrieval.with_expansion_config(cfg);
         }
-        let note_retrieval = Arc::new(retrieval);
+        Self::from_retrieval(raw_store, Arc::new(retrieval))
+    }
 
+    pub(crate) fn from_retrieval(
+        raw_store: Arc<dyn RawMemoryStore>,
+        note_retrieval: Arc<NoteFactRetrieval<SqliteMemoryBackend>>,
+    ) -> Self {
         let comptroller_config = ComptrollerConfig::default();
         let comptroller = Arc::new(ContextComptroller::new(comptroller_config));
 
@@ -922,6 +927,10 @@ impl Clone for MemorySearchTool {
 impl AlephTool for MemorySearchTool {
     const NAME: &'static str = "memory_search";
     const DESCRIPTION: &'static str = Self::DESCRIPTION;
+
+    fn services() -> Vec<aleph_slot_api::capability::Service> {
+        vec![crate::memory::runtime::required_service()]
+    }
 
     type Args = MemorySearchArgs;
     type Output = MemorySearchOutput;

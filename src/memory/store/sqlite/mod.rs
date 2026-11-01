@@ -153,6 +153,11 @@ impl SqliteMemoryBackend {
         }
     }
 
+    /// Guard filesystem effects which precede their SQLite projection.
+    pub(crate) fn ensure_available(&self) -> Result<(), AlephError> {
+        self.with_connection(|_| Ok(()))
+    }
+
     /// Keep borrowed statements and transactions inside this checked boundary.
     fn with_connection<R>(
         &self,

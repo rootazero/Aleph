@@ -342,6 +342,7 @@ impl ToolDefinition {
             description: self.description.clone(),
             parameters: self.input_schema.clone(),
             requires_confirmation: self.metadata.requires_approval,
+            services: self.metadata.services.clone(),
             category,
             strict: false,
         }

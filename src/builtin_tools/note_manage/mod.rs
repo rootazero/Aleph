@@ -240,10 +240,15 @@ impl AlephTool for NoteManageTool {
          did not happen — say in one short sentence that it was not saved, or say nothing \
          about memory at all.";
 
+    fn services() -> Vec<aleph_slot_api::capability::Service> {
+        vec![crate::memory::runtime::required_service()]
+    }
+
     type Args = NoteManageArgs;
     type Output = NoteManageResult;
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
+        self.indexer.store().ensure_available()?;
         let result = match args.action {
             NoteManageAction::Create => self.handle_create(&args).await,
             NoteManageAction::Update => self.handle_update(&args).await,

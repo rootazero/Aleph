@@ -1088,7 +1088,7 @@ impl ScopedToolService {
                         outer.intersect(self.recovery_tools())
                     });
                 let (sender, receiver) = tokio::sync::oneshot::channel();
-                let owned = super::memory_context::carry(async move {
+                let owned = crate::memory::runtime::carry(async move {
                     let result = crate::tools::dispatch_verdict::with_gate_admission(
                         &admission,
                         call_id,
