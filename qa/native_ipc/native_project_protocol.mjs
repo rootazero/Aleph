@@ -82,6 +82,10 @@ function validReceipt(message) {
   return ownKeys(message, ["v", "type", "run", "seq", "user", "device", "operation", "project", "revision", "result", "status"]) && message.v === PROTOCOL_VERSION && message.type === "receipt" && RUN_RE.test(message.run) && isInt(message.seq) && ROLE_RE.test(message.user) && DEVICE_RE.test(message.device) && isOneOf(["connect", "select", "discovery", "asset", "revoke", "delay"])(message.operation) && PROJECT_RE.test(message.project) && REVISION_RE.test(message.revision) && RESULT_RE.test(message.result) && isOneOf(["ok", "refused"])(message.status);
 }
 
+function validAck(message) {
+  return ownKeys(message, ["v", "type", "run", "id", "command", "status"]) && message.v === PROTOCOL_VERSION && message.type === "ack" && RUN_RE.test(message.run) && isInt(message.id) && HELPER_COMMANDS.includes(message.command) && isOneOf(["ok"])(message.status);
+}
+
 function validStopped(message) {
   return ownKeys(message, ["v", "type", "run", "listenerClosed", "fixtureClosed"]) && message.v === PROTOCOL_VERSION && message.type === "stopped" && RUN_RE.test(message.run) && isBool(message.listenerClosed) && isBool(message.fixtureClosed);
 }
@@ -94,7 +98,7 @@ export function validateHelperMessage(message, { allowTransientTicket = false } 
   if (message === null || typeof message !== "object" || Array.isArray(message)) return { ok: false, error: "not_object" };
   const size = Buffer.byteLength(JSON.stringify(message), "utf8");
   if (size > MAX_LINE_BYTES) return { ok: false, error: "too_large" };
-  if (validReady(message) || validReceipt(message) || validStopped(message) || validError(message)) return { ok: true };
+  if (validReady(message) || validReceipt(message) || validAck(message) || validStopped(message) || validError(message)) return { ok: true };
   if (allowTransientTicket && validPairing(message)) return { ok: true };
   return { ok: false, error: "invalid_message" };
 }

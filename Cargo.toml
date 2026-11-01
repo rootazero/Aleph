@@ -167,6 +167,7 @@ loom = ["dep:loom"]
 # feature does not compile it and does not need the fake peer. The integration
 # tests get `aleph-cdp/testkit` through the dev-dependency, as before.
 test-helpers = []
+native-qa = []
 # Control plane UI (Leptos/WASM dashboard)
 control-plane = []
 # Disabled test modules awaiting rewrite
@@ -407,6 +408,13 @@ bench = false
 name = "aleph-migrate"
 path = "src/bin/aleph-migrate/main.rs"
 # The binary has no independent test harness; skip it during `cargo test`.
+test = false
+bench = false
+
+[[bin]]
+name = "aleph-panel-native-qa-gateway"
+path = "src/bin/aleph-panel-native-qa-gateway/main.rs"
+required-features = ["native-qa"]
 test = false
 bench = false
 
