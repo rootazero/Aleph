@@ -5,7 +5,7 @@ use crate::error::AlephError;
 use crate::memory::embedding_manager::EmbeddingManager;
 use crate::memory::extensions::MemoryExtensionRegistry;
 use crate::memory::notes::orientation::{FsNoteOrientation, NoteOrientation};
-use crate::memory::notes::profile::synthesizer::FsProfileSynthesizer;
+use crate::memory::notes::profile::synthesizer::{FsProfileSynthesizer, ProfileSynthesizer};
 use crate::memory::notes::NoteIndexer;
 use crate::memory::session_resume::reader::SnapshotReader;
 use crate::memory::store::raw_memory::RawMemoryStore;
@@ -24,6 +24,7 @@ pub struct MemoryServicesConfig {
     pub raw_store: Arc<dyn RawMemoryStore>,
     pub provider: Option<Arc<dyn AiProvider>>,
     pub extensions: Arc<MemoryExtensionRegistry>,
+    pub state_db: Option<Arc<crate::resilience::database::StateDatabase>>,
     pub default_agent_id: String,
     pub curated_root: PathBuf,
     pub snapshot_dir: PathBuf,
@@ -31,11 +32,13 @@ pub struct MemoryServicesConfig {
 
 pub(crate) struct MemoryServices {
     pub(crate) config: MemoryConfig,
+    pub(crate) state_db: Option<Arc<crate::resilience::database::StateDatabase>>,
     pub(crate) raw_store: Arc<dyn RawMemoryStore>,
     pub(crate) default_agent_id: String,
     pub(crate) note_memory_dir: PathBuf,
     pub(crate) context: Arc<MemoryContextProvider>,
     pub(crate) orientation: Arc<dyn NoteOrientation>,
+    pub(crate) profile: Option<Arc<dyn ProfileSynthesizer>>,
     pub(crate) indexer: Arc<NoteIndexer<SqliteMemoryBackend>>,
     pub(crate) embedding: Arc<EmbeddingManager>,
 }
@@ -76,20 +79,29 @@ impl MemoryServices {
         .with_orientation_budget(crate::memory::notes::orientation::types::TokenBudget {
             max_tokens: inputs.memory.orientation.max_tokens,
         });
-        let context = match &inputs.provider {
-            Some(provider) => context.with_profile(Arc::new(FsProfileSynthesizer::new(
-                config.note_memory_dir.clone(),
-                provider.clone(),
-            ))),
+        let profile = inputs
+            .provider
+            .as_ref()
+            .filter(|_| inputs.memory.profile.enabled)
+            .map(|provider| {
+                Arc::new(FsProfileSynthesizer::new(
+                    config.note_memory_dir.clone(),
+                    provider.clone(),
+                )) as Arc<dyn ProfileSynthesizer>
+            });
+        let context = match &profile {
+            Some(profile) => context.with_profile(profile.clone()),
             None => context,
         };
         Ok(Arc::new(Self {
             config: inputs.memory.clone(),
+            state_db: inputs.state_db.clone(),
             raw_store: inputs.raw_store.clone(),
             default_agent_id: inputs.default_agent_id.clone(),
             note_memory_dir: config.note_memory_dir.clone(),
             context: Arc::new(context),
             orientation,
+            profile,
             indexer: Arc::new(indexer),
             embedding,
         }))

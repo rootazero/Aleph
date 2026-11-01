@@ -492,23 +492,18 @@ impl ToolRegistry for BuiltinToolRegistry {
             // idempotent under re-application — feeding it an already-composed
             // id under an active personal scope would double-compose.
             "remember" => Box::pin(async move {
-                let mcp = self.memory_context_provider.get().ok_or_else(|| {
-                    AlephError::tool(
-                        "remember not available: MemoryContextProvider not yet injected",
-                    )
+                let runtime = self.memory_runtime.as_ref().ok_or_else(|| {
+                    AlephError::tool("remember not available: Memory runtime not configured")
                 })?;
-                let base_agent = self.caller_partition_base();
-                let store = mcp
-                    .get_or_load_curated_store(&base_agent)
-                    .await
-                    .map_err(|e| AlephError::tool(format!("remember: {e}")))?;
-                // The write-decision audit log shares the memory_trace_db handle
-                // (both gate on config.memory_db, and `memory_trace` is what
-                // reads these rows back). `None` before/without a memory
-                // backend: the audit is a NO-OP there, never a write failure.
-                let tool = crate::builtin_tools::RememberTool::new(store)
-                    .with_decision_log(self.memory_trace_db.clone());
-                tool.call_json(arguments).await
+                let args = serde_json::from_value(arguments)
+                    .map_err(|error| AlephError::tool(format!("remember: bad args: {error}")))?;
+                let output = crate::builtin_tools::runtime::RuntimeTool::<
+                    crate::builtin_tools::RememberTool,
+                >::new(runtime.clone())
+                .call_for_agent(&self.caller_partition_base(), args)
+                .await?;
+                serde_json::to_value(output)
+                    .map_err(|error| AlephError::tool(format!("remember: serialize: {error}")))
             }),
 
             // Cluster discovery tool — read-only projection of the same
@@ -1723,28 +1718,20 @@ impl ToolRegistry for BuiltinToolRegistry {
                 // persona answered "there are none" for every scoped run.
                 let agent_id = self.caller_memory_partition();
                 Box::pin(async move {
-                    let db = self.memory_trace_db.as_ref().ok_or_else(|| {
-                        AlephError::tool("memory_trace not available: no memory backend configured")
+                    let runtime = self.memory_runtime.as_ref().ok_or_else(|| {
+                        AlephError::tool(
+                            "memory_trace not available: Memory runtime not configured",
+                        )
                     })?;
-                    let note_memory_dir = crate::utils::paths::get_note_memory_dir()
-                        .map_err(|e| AlephError::tool(format!("memory_trace: note dir: {e}")))?;
                     let args: crate::builtin_tools::memory_trace::MemoryTraceArgs =
                         serde_json::from_value(arguments).map_err(|e| {
                             AlephError::tool(format!("memory_trace: bad args: {e}"))
                         })?;
-                    let raw_store = self.raw_memory_store.clone().ok_or_else(|| {
-                        AlephError::tool(
-                            "memory_trace not available: no raw memory store configured",
-                        )
-                    })?;
-                    let tool = crate::builtin_tools::memory_trace::MemoryTraceTool::new(
-                        db.clone(),
-                        raw_store,
-                        agent_id,
-                        note_memory_dir,
-                    );
+                    let tool = crate::builtin_tools::runtime::RuntimeTool::<
+                        crate::builtin_tools::memory_trace::MemoryTraceTool,
+                    >::new(runtime.clone());
                     let out = tool
-                        .call_impl(args)
+                        .call_impl(&agent_id, args)
                         .await
                         .map_err(|e| AlephError::tool(format!("memory_trace: {e}")))?;
                     serde_json::to_value(out)
@@ -1757,21 +1744,20 @@ impl ToolRegistry for BuiltinToolRegistry {
             "note_graph_query" => {
                 let agent_id = self.caller_memory_partition();
                 Box::pin(async move {
-                    let db = self.memory_trace_db.as_ref().ok_or_else(|| {
+                    let runtime = self.memory_runtime.as_ref().ok_or_else(|| {
                         AlephError::tool(
-                            "note_graph_query not available: no memory backend configured",
+                            "note_graph_query not available: Memory runtime not configured",
                         )
                     })?;
                     let args: crate::builtin_tools::note_graph_query::NoteGraphQueryArgs =
                         serde_json::from_value(arguments).map_err(|e| {
                             AlephError::tool(format!("note_graph_query: bad args: {e}"))
                         })?;
-                    let tool = crate::builtin_tools::note_graph_query::NoteGraphQueryTool::new(
-                        db.clone(),
-                        agent_id,
-                    );
+                    let tool = crate::builtin_tools::runtime::RuntimeTool::<
+                        crate::builtin_tools::note_graph_query::NoteGraphQueryTool,
+                    >::new(runtime.clone());
                     let out = tool
-                        .call_impl(args)
+                        .call_impl(&agent_id, args)
                         .await
                         .map_err(|e| AlephError::tool(format!("note_graph_query: {e}")))?;
                     serde_json::to_value(out)

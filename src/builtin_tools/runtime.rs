@@ -29,6 +29,140 @@ impl<T> RuntimeTool<T> {
     }
 }
 
+impl RuntimeTool<super::remember::RememberTool> {
+    pub(crate) async fn call_for_agent(
+        &self,
+        agent_id: &str,
+        args: super::remember::RememberArgs,
+    ) -> Result<super::remember::RememberOutput, AlephError> {
+        let operation = self.runtime.operation()?;
+        let captured = operation.clone();
+        let agent = agent_id.to_owned();
+        operation
+            .run(async move {
+                let services = captured.services()?;
+                let store = services.context.get_or_load_curated_store(&agent).await?;
+                super::remember::RememberTool::new(store)
+                    .with_decision_log(Some(captured.backend().clone()))
+                    .call(args)
+                    .await
+            })
+            .await
+    }
+}
+
+impl RuntimeTool<super::note_orient::NoteOrientTool> {
+    pub(crate) async fn call(
+        &self,
+        agent_id: &str,
+        args: super::note_orient::NoteOrientArgs,
+    ) -> Result<super::note_orient::NoteOrientOutput, AlephError> {
+        let operation = self.runtime.operation()?;
+        let services = operation.services()?;
+        let agent = agent_id.to_owned();
+        operation
+            .run(async move {
+                super::note_orient::NoteOrientTool::new(
+                    services.orientation.clone(),
+                    crate::memory::notes::orientation::types::TokenBudget {
+                        max_tokens: services.config.orientation.max_tokens,
+                    },
+                )
+                .call(&agent, args)
+                .await
+            })
+            .await
+    }
+}
+
+impl RuntimeTool<super::note_schema::NoteSchemaTool> {
+    pub(crate) async fn call(
+        &self,
+        agent_id: &str,
+        args: super::note_schema::NoteSchemaArgs,
+    ) -> Result<super::note_schema::NoteSchemaOutput, AlephError> {
+        let operation = self.runtime.operation()?;
+        let services = operation.services()?;
+        let agent = agent_id.to_owned();
+        operation
+            .run(async move {
+                super::note_schema::NoteSchemaTool::new(services.note_memory_dir.clone())
+                    .call(&agent, args)
+                    .await
+            })
+            .await
+    }
+}
+
+impl RuntimeTool<super::user_profile::UserProfileTool> {
+    pub(crate) async fn call(
+        &self,
+        agent_id: &str,
+        args: super::user_profile::UserProfileArgs,
+    ) -> Result<super::user_profile::UserProfileOutput, AlephError> {
+        let operation = self.runtime.operation()?;
+        let services = operation.services()?;
+        let profile = services
+            .profile
+            .clone()
+            .ok_or_else(|| AlephError::other("memory user profile is unavailable"))?;
+        let agent = agent_id.to_owned();
+        operation
+            .run(async move {
+                super::user_profile::UserProfileTool::new(profile)
+                    .call(&agent, args)
+                    .await
+            })
+            .await
+    }
+}
+
+impl RuntimeTool<super::note_graph_query::NoteGraphQueryTool> {
+    pub(crate) async fn call_impl(
+        &self,
+        agent_id: &str,
+        args: super::note_graph_query::NoteGraphQueryArgs,
+    ) -> Result<super::note_graph_query::NoteGraphQueryResult, AlephError> {
+        let operation = self.runtime.operation()?;
+        let backend = operation.backend().clone();
+        let agent = agent_id.to_owned();
+        operation
+            .run(async move {
+                super::note_graph_query::NoteGraphQueryTool::new(backend, agent)
+                    .call_impl(args)
+                    .await
+                    .map_err(|error| AlephError::other(error.to_string()))
+            })
+            .await
+    }
+}
+
+impl RuntimeTool<super::memory_trace::MemoryTraceTool> {
+    pub(crate) async fn call_impl(
+        &self,
+        agent_id: &str,
+        args: super::memory_trace::MemoryTraceArgs,
+    ) -> Result<super::memory_trace::TraceResult, AlephError> {
+        let operation = self.runtime.operation()?;
+        let services = operation.services()?;
+        let backend = operation.backend().clone();
+        let agent = agent_id.to_owned();
+        operation
+            .run(async move {
+                super::memory_trace::MemoryTraceTool::new(
+                    backend,
+                    services.raw_store.clone(),
+                    agent,
+                    services.note_memory_dir.clone(),
+                )
+                .call_impl(args)
+                .await
+                .map_err(|error| AlephError::other(error.to_string()))
+            })
+            .await
+    }
+}
+
 #[async_trait]
 impl<T> AlephTool for RuntimeTool<T>
 where
@@ -64,6 +198,11 @@ impl MemoryToolFactory for super::note_manage::NoteManageTool {
             operation.backend().clone(),
         )
         .with_project_scoping(services.config.project_scoped);
+        if let Some(database) = &services.state_db {
+            tool = tool.with_command_handler(Arc::new(
+                crate::memory::events::handler::MemoryCommandHandler::new(database.clone()),
+            ));
+        }
         if let Some(embedder) = services.embedding.get_active_provider().await {
             tool = tool.with_embedder(embedder);
         }

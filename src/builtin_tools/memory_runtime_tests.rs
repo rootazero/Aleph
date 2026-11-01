@@ -159,11 +159,14 @@ async fn remember_off_reports_unavailable_without_side_effects() {
 
 #[tokio::test]
 async fn runtime_tool_stays_cold_and_uses_fresh_services_after_restart() {
+    use crate::builtin_tools::note_schema::{NoteSchemaArgs, NoteSchemaTool};
     use crate::builtin_tools::runtime::RuntimeTool;
     use crate::config::types::memory::MemoryConfig;
+    use crate::executor::{BuiltinToolConfig, BuiltinToolRegistry, ToolRegistry};
     use crate::memory::extensions::MemoryExtensionRegistry;
     use crate::memory::runtime::MemoryServicesConfig;
 
+    let _home = crate::utils::paths::IsolatedAlephHome::new();
     let root = tempfile::tempdir().unwrap();
     let raw = Arc::new(MarkdownSessionStore::new(root.path()).await.unwrap());
     let mut memory = MemoryConfig::default();
@@ -181,6 +184,7 @@ async fn runtime_tool_stays_cold_and_uses_fresh_services_after_restart() {
         raw_store: raw,
         provider: None,
         extensions: Arc::new(MemoryExtensionRegistry::new()),
+        state_db: None,
         default_agent_id: "main".into(),
         curated_root: root.path().join("curated"),
         snapshot_dir: root.path().join("snapshots"),
@@ -198,19 +202,108 @@ async fn runtime_tool_stays_cold_and_uses_fresh_services_after_restart() {
     runtime.configure_services(inputs.clone()).unwrap();
     assert!(runtime.configure_services(inputs.clone()).is_err());
     let tool = RuntimeTool::<NoteManageTool>::new(runtime.clone());
+    let registry = BuiltinToolRegistry::with_config(BuiltinToolConfig {
+        memory_runtime: Some(runtime.clone()),
+        ..Default::default()
+    })
+    .await
+    .unwrap();
+    assert!(registry
+        .execute_tool("note_manage", create_note("registered-off"))
+        .await
+        .is_err());
+    assert!(registry
+        .execute_tool(
+            "remember",
+            serde_json::json!({"action": "add", "content": "Unadmitted registry memory"}),
+        )
+        .await
+        .is_err());
+    assert!(!root.path().join("curated").exists());
+    assert!(!root.path().join("note").exists());
+    let schema = RuntimeTool::<NoteSchemaTool>::new(runtime.clone());
     assert!(tool.call_json(create_note("off")).await.is_err());
+    assert!(schema.call("main", NoteSchemaArgs::Read).await.is_err());
     assert!(!root.path().join("note").exists());
     runtime.start().await.unwrap();
     assert!(runtime.configure_services(inputs).is_err());
+    let schema_text = "# Memory Schema\n\nThis schema belongs to the admitted runtime.";
+    let registered_read = registry
+        .execute_tool("note_schema", serde_json::json!({"action": "read"}))
+        .await;
+    assert!(
+        registered_read.is_ok(),
+        "production schema adapter: {registered_read:?}"
+    );
+    let written = schema
+        .call(
+            "main",
+            NoteSchemaArgs::Write {
+                content: schema_text.into(),
+                expected_hash: None,
+            },
+        )
+        .await
+        .unwrap();
+    assert!(!written.conflict);
     tool.call_json(create_note("first")).await.unwrap();
     runtime.stop().await.unwrap();
+    assert!(schema
+        .call(
+            "main",
+            NoteSchemaArgs::Write {
+                content: "unadmitted schema overwrite".into(),
+                expected_hash: written.content_hash,
+            }
+        )
+        .await
+        .is_err());
+    assert_eq!(
+        std::fs::read_to_string(root.path().join("note/main/SCHEMA.md")).unwrap(),
+        schema_text
+    );
     assert!(tool.call_json(create_note("off-again")).await.is_err());
     assert!(!root
         .path()
         .join("note/main/reference/off-again.md")
         .exists());
     runtime.start().await.unwrap();
+    assert_eq!(
+        schema
+            .call("main", NoteSchemaArgs::Read)
+            .await
+            .unwrap()
+            .content
+            .as_deref(),
+        Some(schema_text)
+    );
+    let registered_read = registry
+        .execute_tool("note_schema", serde_json::json!({"action": "read"}))
+        .await
+        .unwrap();
+    assert_eq!(registered_read["content"].as_str(), Some(schema_text));
     tool.call_json(create_note("second")).await.unwrap();
+    let remembered = registry
+        .execute_tool(
+            "remember",
+            serde_json::json!({"action": "add", "content": "The admitted registry uses the current memory bundle."}),
+        )
+        .await
+        .unwrap();
+    assert_eq!(remembered["written"], true);
+    let graph = registry
+        .execute_tool("note_graph_query", serde_json::json!({"op": "schema"}))
+        .await
+        .unwrap();
+    assert_eq!(graph["schema"]["total_notes"], 2);
+    let trace = registry
+        .execute_tool(
+            "memory_trace",
+            serde_json::json!({"kind": "write_decision", "target": "admitted registry"}),
+        )
+        .await
+        .unwrap();
+    assert!(!trace["write_decisions"].as_array().unwrap().is_empty());
     runtime.stop().await.unwrap();
     let connection = rusqlite::Connection::open(root.path().join("metadata.db")).unwrap();
     let count: i64 = connection

@@ -24,9 +24,21 @@ impl BuiltinToolRegistry {
         image_generate_tool: &Option<ImageGenerateTool>,
         vault_store_tool: &Option<VaultStoreTool>,
         config: &BuiltinToolConfig,
-        note_orient_tool: &Option<crate::builtin_tools::note_orient::NoteOrientTool>,
-        note_schema_tool: &Option<crate::builtin_tools::note_schema::NoteSchemaTool>,
-        user_profile_tool: &Option<crate::builtin_tools::user_profile::UserProfileTool>,
+        note_orient_tool: &Option<
+            crate::builtin_tools::runtime::RuntimeTool<
+                crate::builtin_tools::note_orient::NoteOrientTool,
+            >,
+        >,
+        note_schema_tool: &Option<
+            crate::builtin_tools::runtime::RuntimeTool<
+                crate::builtin_tools::note_schema::NoteSchemaTool,
+            >,
+        >,
+        user_profile_tool: &Option<
+            crate::builtin_tools::runtime::RuntimeTool<
+                crate::builtin_tools::user_profile::UserProfileTool,
+            >,
+        >,
     ) {
         // Helper: register tool with schema from schemars
         fn reg<'a>(

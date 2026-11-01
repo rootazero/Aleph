@@ -115,6 +115,8 @@ pub struct BuiltinToolRegistry {
     pub(crate) strategy_tool: crate::builtin_tools::StrategyTool,
     /// Memory search tool instance (optional - requires `memory_db` + embedder)
     pub(crate) memory_search_tool: Option<crate::builtin_tools::MemorySearchTool>,
+    /// The sole Memory lifecycle source; per-call adapters retain no bundle.
+    pub(crate) memory_runtime: Option<Arc<crate::memory::runtime::MemoryRuntime>>,
     /// Memory context provider — used by the `remember` tool to resolve the
     /// per-agent `CuratedMemoryStore`. Uses `OnceCell` for deferred injection:
     /// the registry is wrapped in `Arc` before the MCP is constructed.
@@ -336,8 +338,12 @@ pub struct BuiltinToolRegistry {
     pub(crate) skill_status_tool: crate::builtin_tools::skill_status::SkillStatusTool,
     pub(crate) skill_install_tool: crate::builtin_tools::skill_install::SkillInstallTool,
     pub(crate) skill_manage_tool: crate::builtin_tools::skill_manage::SkillManageTool,
-    /// Unified note management tool (optional - requires `memory_db`)
-    pub(crate) note_manage_tool: Option<crate::builtin_tools::note_manage::NoteManageTool>,
+    /// The adapter holds the stable source rather than a concrete indexer.
+    pub(crate) note_manage_tool: Option<
+        crate::builtin_tools::runtime::RuntimeTool<
+            crate::builtin_tools::note_manage::NoteManageTool,
+        >,
+    >,
     /// Session-complete tool (optional - requires `memory_db`)
     pub(crate) session_complete_tool:
         Option<crate::builtin_tools::session_complete::SessionCompleteTool>,
@@ -350,12 +356,22 @@ pub struct BuiltinToolRegistry {
     /// `channel_registry_cell`). Used by the `ask_user` tool.
     pub(crate) clarification_manager_cell:
         Arc<tokio::sync::OnceCell<Arc<crate::clarification::ClarificationManager>>>,
-    /// Wiki orient tool (Spec 5 Task 12) — optional, requires wiki handle.
-    pub(crate) note_orient_tool: Option<crate::builtin_tools::note_orient::NoteOrientTool>,
-    /// Note schema tool (Spec 5 Task 12) — always Some when `note_memory_dir` is set.
-    pub(crate) note_schema_tool: Option<crate::builtin_tools::note_schema::NoteSchemaTool>,
-    /// User profile tool (Spec 7 Task 9) — optional, requires `ProfileSynthesizer`.
-    pub(crate) user_profile_tool: Option<crate::builtin_tools::user_profile::UserProfileTool>,
+    /// Manual note tools resolve the current admitted bundle on each call.
+    pub(crate) note_orient_tool: Option<
+        crate::builtin_tools::runtime::RuntimeTool<
+            crate::builtin_tools::note_orient::NoteOrientTool,
+        >,
+    >,
+    pub(crate) note_schema_tool: Option<
+        crate::builtin_tools::runtime::RuntimeTool<
+            crate::builtin_tools::note_schema::NoteSchemaTool,
+        >,
+    >,
+    pub(crate) user_profile_tool: Option<
+        crate::builtin_tools::runtime::RuntimeTool<
+            crate::builtin_tools::user_profile::UserProfileTool,
+        >,
+    >,
     /// Hub catalog search (optional - requires CatalogCache). Supplies the
     /// `entry_id` that resolve-spec / install-run take.
     pub(crate) hub_catalog_search_tool: Option<crate::builtin_tools::hub::HubCatalogSearchTool>,

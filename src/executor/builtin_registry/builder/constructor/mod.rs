@@ -805,29 +805,24 @@ impl BuiltinToolRegistry {
             crate::builtin_tools::generation::SpeechGenerateTool::new(Arc::clone(registry))
         });
 
-        // Build wiki tools (Spec 5 Task 12).
-        // `note_orient` is an on-demand retrieval surface: in Context mode the
-        // orientation is injected automatically, so the tool is not built.
-        let note_orient_tool = if expose_retrieval_tools {
-            config.orientation.as_ref().map(|wiki| {
-                use crate::memory::notes::orientation::types::TokenBudget;
-                crate::builtin_tools::note_orient::NoteOrientTool::new(
-                    Arc::clone(wiki),
-                    TokenBudget::default(),
-                )
-            })
-        } else {
-            None
-        };
-
-        let note_schema_tool = config
-            .note_memory_dir
+        let note_orient_tool = config
+            .memory_runtime
             .as_ref()
-            .map(|dir| crate::builtin_tools::note_schema::NoteSchemaTool::new(dir.clone()));
-
-        // Build user profile tool (Spec 7 Task 9)
-        let user_profile_tool = config.profile_synthesizer.as_ref().map(|synth| {
-            crate::builtin_tools::user_profile::UserProfileTool::new(Arc::clone(synth))
+            .filter(|_| expose_retrieval_tools)
+            .map(|runtime| {
+                crate::builtin_tools::runtime::RuntimeTool::<
+                    crate::builtin_tools::note_orient::NoteOrientTool,
+                >::new(runtime.clone())
+            });
+        let note_schema_tool = config.memory_runtime.as_ref().map(|runtime| {
+            crate::builtin_tools::runtime::RuntimeTool::<
+                crate::builtin_tools::note_schema::NoteSchemaTool,
+            >::new(runtime.clone())
+        });
+        let user_profile_tool = config.memory_runtime.as_ref().map(|runtime| {
+            crate::builtin_tools::runtime::RuntimeTool::<
+                crate::builtin_tools::user_profile::UserProfileTool,
+            >::new(runtime.clone())
         });
 
         // Build tool metadata
@@ -1332,6 +1327,7 @@ impl BuiltinToolRegistry {
             loop_graph_tool,
             strategy_tool: strategy_tool.with_session_key_handle(memory_session_key_handle.clone()),
             memory_search_tool,
+            memory_runtime: config.memory_runtime.clone(),
             memory_context_provider: Arc::new(tokio::sync::OnceCell::new()),
             node_registry: Arc::new(tokio::sync::OnceCell::new()),
             node_security_store: Arc::new(tokio::sync::OnceCell::new()),

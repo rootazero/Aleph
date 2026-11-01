@@ -115,6 +115,7 @@ mod tests {
                 raw_store: raw,
                 provider: None,
                 extensions: Arc::new(MemoryExtensionRegistry::new()),
+                state_db: None,
                 default_agent_id: "main".into(),
                 curated_root: curated,
                 snapshot_dir: root.path().join("snapshots"),
