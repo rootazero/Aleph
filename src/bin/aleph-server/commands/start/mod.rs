@@ -524,6 +524,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     let session_store: Arc<dyn SessionStore> = if let Some(sm) = sqlite_sm {
         let sm = sm
             .with_raw_memory_writer(raw_store.clone())
+            .with_memory_runtime(&memory_runtime)
             .with_event_bus(event_bus.clone());
         Arc::new(sm)
     } else {
@@ -2245,6 +2246,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         &mut server,
         &session_store,
         &raw_store,
+        &memory_runtime,
         Some(agent_result.run_manager.clone()),
         Some(app_config.clone()),
         args.daemon,

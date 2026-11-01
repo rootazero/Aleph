@@ -92,6 +92,7 @@ impl MemoryContextProvider {
             curated_stores: Arc::new(DashMap::new()),
             curated_config: CuratedConfig::default(),
             curated_root_override: None,
+            open_loop_inject: false,
             project_scoped: false,
         }
     }
@@ -100,6 +101,13 @@ impl MemoryContextProvider {
     #[must_use]
     pub const fn with_injection_mode(mut self, mode: MemoryInjectionMode) -> Self {
         self.injection_mode = mode;
+        self
+    }
+
+    /// Bind open-loop injection to this provider's activation snapshot.
+    #[must_use]
+    pub const fn with_open_loop_injection(mut self, enabled: bool) -> Self {
+        self.open_loop_inject = enabled;
         self
     }
 
@@ -185,6 +193,7 @@ impl MemoryContextProvider {
             curated_stores: Arc::new(DashMap::new()),
             curated_config: CuratedConfig::default(),
             curated_root_override: None,
+            open_loop_inject: false,
             project_scoped: false,
         }
     }
@@ -307,6 +316,7 @@ impl MemoryContextProvider {
             curated_stores: Arc::new(DashMap::new()),
             curated_config: CuratedConfig::default(),
             curated_root_override: None,
+            open_loop_inject: false,
             project_scoped,
         }
     }

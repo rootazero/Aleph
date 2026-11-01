@@ -3883,6 +3883,10 @@ mod tests {
     /// tool loop, and the production wiring is pinned by the same
     /// `dispatchable.rs` census plus the nine-site registration ledger the
     /// C3 plan's Global Constraints enumerate.
+    /// 2026-11-02: 134 -> 135 for `local_voice` — class (b): its actual
+    /// handler needs the live Config handle. The optional-tools test
+    /// `local_voice_requires_the_config_handle` pins both refusal without
+    /// that handle and a real parameter schema when the handle is supplied.
     #[test]
     fn tools_without_an_unconditional_schema_are_pinned() {
         let map = unconditional_registry_map();
@@ -3899,8 +3903,8 @@ mod tests {
         missing.dedup();
 
         assert!(
-            missing.len() <= 134,
-            "{} tools have no schema in the unconditionally-built registry map, up from the 134 \
+            missing.len() <= 135,
+            "{} tools have no schema in the unconditionally-built registry map, up from the 135 \
              recorded here, so `registry_schema_bytes_ratchet` does not bound them. Three ways in, \
              and they are not equally fine. (a) The tool ships with no parameters at all — free, \
              and fine. (b) It registers only once a dependency is live, so its schema is unmeasured \

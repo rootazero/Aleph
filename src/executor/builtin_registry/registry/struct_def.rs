@@ -145,13 +145,6 @@ pub struct BuiltinToolRegistry {
         Option<crate::builtin_tools::runtime::RuntimeTool<crate::builtin_tools::MemoryExploreTool>>,
     /// Memory timeline tool instance (optional - requires `StateDatabase`)
     pub(crate) memory_timeline_tool: Option<crate::builtin_tools::MemoryTimelineTool>,
-    /// Phase 3 self-evolution path α — backend for `flag_user_correction`,
-    /// which records user-correction signals into `raw_memory` under
-    /// <aleph://correction/{id>}. The handle rather than a constructed tool:
-    /// the tool's agent id must be resolved per call (see
-    /// `BuiltinToolRegistry::build_flag_user_correction`). `None` disables the
-    /// tool — it requires a memory backend.
-    pub(crate) flag_user_correction_db: Option<crate::memory::store::MemoryBackend>,
     pub(crate) raw_memory_store: Option<Arc<dyn crate::memory::store::raw_memory::RawMemoryStore>>,
     /// Shared workspace handle for memory tools — written by `ExecutionEngine` after workspace resolution
     pub(crate) memory_workspace_handle: Option<Arc<RwLock<String>>>,
@@ -405,7 +398,6 @@ pub struct BuiltinToolRegistry {
     #[allow(dead_code)]
     pub(crate) recall_context_db: Option<crate::memory::store::MemoryBackend>,
     /// Memory backend for the `memory_trace` tool (evidence-chain walk).
-    pub(crate) memory_trace_db: Option<crate::memory::store::MemoryBackend>,
     /// Capability-runtime diagnostic control surface for
     /// `capability_projection_diagnostics` (enablement gate). Mirrors the
     /// `BuiltinToolConfig::diagnostics_control` slot: when `None` the

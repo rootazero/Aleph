@@ -161,14 +161,20 @@ impl MemoryReflectTool {
             let q = args.query.clone();
             let synth = synthesis.clone();
             let sid = session_id.clone();
-            tokio::spawn(async move {
+            let task = async move {
                 if let Err(e) = qf
                     .maybe_file(&filed_agent_id, &q, &synth, sid.as_deref())
                     .await
                 {
                     tracing::warn!("query filer failed: {e}");
                 }
-            });
+            };
+            match crate::memory::runtime::MemoryOperation::current() {
+                Some(operation) => operation.spawn(crate::memory::runtime::carry(task))?,
+                None => {
+                    tokio::spawn(task);
+                }
+            }
         }
 
         Ok(MemoryReflectResult { synthesis })

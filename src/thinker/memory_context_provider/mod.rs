@@ -160,6 +160,8 @@ pub struct MemoryContextProvider {
     /// Explicit curated root for the owned runtime; standalone callers may
     /// retain the normal discovery path.
     pub(crate) curated_root_override: Option<std::path::PathBuf>,
+    /// Immutable activation policy; never resolved through a process-global slot.
+    pub(crate) open_loop_inject: bool,
     /// Mirror of `MemoryConfig.project_scoped`. Every public entry point
     /// below that logically operates on "the agent" (`build_curated_message`,
     /// `get_or_load_curated_store`) takes a BASE agent id and resolves the

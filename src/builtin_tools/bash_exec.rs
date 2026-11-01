@@ -70,12 +70,8 @@ pub struct BashExecArgs {
     #[serde(default)]
     pub working_dir: Option<String>,
     /// Timeout in seconds (optional, defaults to 60).
-    ///
-    /// The wire name is `timeout` — the spelling the description teaches —
-    /// because schemars is blind to serde aliases, so a schema naming
-    /// `timeout_seconds` would contradict the prose the model reads. Serde
-    /// keeps accepting the canonical `timeout_seconds` spelling too, so saved
-    /// calls written against either name still parse.
+    // Keep the schema spelling aligned with the tool description: schemars ignores
+    // serde aliases. Saved calls using either wire spelling still deserialize.
     #[serde(default, alias = "timeout")]
     #[schemars(rename = "timeout")]
     pub timeout_seconds: Option<u64>,

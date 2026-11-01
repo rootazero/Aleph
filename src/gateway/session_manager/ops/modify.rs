@@ -202,14 +202,21 @@ impl SessionManager {
                     |row| Ok((row.get(0)?, row.get(1)?)),
                 )
                 .unwrap_or((None, None));
-            super::emit_session_end_raw(
+            self.capture_session_end(
                 writer,
-                agent_id,
-                session_id,
-                tail,
-                crate::memory::store::raw_memory::SessionEndReason::Disconnect,
-                owner_user_id,
-                scope_id,
+                crate::memory::store::raw_memory::RawMemory::new(
+                    tail,
+                    crate::memory::store::raw_memory::RawMemorySource::SessionEnd {
+                        reason: crate::memory::store::raw_memory::SessionEndReason::Disconnect,
+                    },
+                )
+                .with_agent(agent_id)
+                .with_session(session_id),
+                crate::scope::ScopeAttribution::from_persisted(
+                    owner_user_id.as_deref(),
+                    scope_id.as_deref(),
+                ),
+                true,
             );
         }
 

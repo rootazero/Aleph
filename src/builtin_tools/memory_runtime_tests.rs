@@ -15,6 +15,11 @@ use crate::tools::AlephTool;
 use futures::FutureExt;
 use serde_json::json;
 
+#[path = "memory_runtime_remaining_tests.rs"]
+mod remaining;
+#[path = "memory_runtime_session_search_tests.rs"]
+mod session_search;
+
 struct Fixture {
     root: tempfile::TempDir,
     runtime: Arc<MemoryRuntime>,
@@ -185,6 +190,7 @@ async fn runtime_tool_stays_cold_and_uses_fresh_services_after_restart() {
             ..Default::default()
         })),
         raw_store: raw,
+        session_store: None,
         provider: None,
         extensions: Arc::new(MemoryExtensionRegistry::new()),
         state_db: None,
@@ -247,17 +253,26 @@ async fn runtime_tool_stays_cold_and_uses_fresh_services_after_restart() {
         registered_read.is_ok(),
         "production schema adapter: {registered_read:?}"
     );
-    let written = schema
-        .call(
-            "main",
-            NoteSchemaArgs::Write {
-                content: schema_text.into(),
-                expected_hash: None,
-            },
-        )
-        .await
-        .unwrap();
-    assert!(!written.conflict);
+    let written = tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        loop {
+            let current = schema.call("main", NoteSchemaArgs::Read).await.unwrap();
+            let written = schema
+                .call(
+                    "main",
+                    NoteSchemaArgs::Write {
+                        content: schema_text.into(),
+                        expected_hash: current.content_hash,
+                    },
+                )
+                .await
+                .unwrap();
+            if !written.conflict {
+                break written;
+            }
+        }
+    })
+    .await
+    .unwrap();
     tool.call_json(create_note("first")).await.unwrap();
     runtime.stop().await.unwrap();
     assert!(schema

@@ -228,6 +228,9 @@ impl AlephTool for FlagUserCorrectionTool {
     type Output = FlagUserCorrectionOutput;
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
+        if let Some(database) = &self.decisions {
+            database.ensure_available()?;
+        }
         // What this call is ABOUT, read off the args before `decide` consumes
         // them — the branches that never reach the store still have to be able
         // to name their subject.
@@ -330,21 +333,19 @@ impl FlagUserCorrectionTool {
     /// Fire-and-forget: the drain runs an LLM ingest call, and the turn must never
     /// block on it.
     fn spawn_sedimentation(agent_id: &str) {
-        // No CompressionService registered → memory isn't configured; nothing to
-        // drain into. Also keeps this a no-op in unit tests (and outside a runtime).
-        let Some(compression) = crate::thinker::memory_context_provider::session_end_compression()
-        else {
+        let Some(operation) = crate::memory::runtime::MemoryOperation::current() else {
             return;
         };
-        let Ok(rt) = tokio::runtime::Handle::try_current() else {
+        let Some(compression) = operation.services().ok().and_then(|services| services.compression.clone()) else {
             return;
         };
-
         let agent = agent_id.to_string();
         let guard = crate::memory::flush::global_registry().begin(&agent);
-        rt.spawn(async move {
+        if let Err(error) = operation.spawn(crate::memory::runtime::carry(async move {
             crate::memory::flush::flush_agent_memory(guard, agent, compression).await;
-        });
+        })) {
+            tracing::warn!(%error, "Correction memory drain could not start");
+        }
     }
 }
 

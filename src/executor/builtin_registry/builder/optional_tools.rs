@@ -115,16 +115,9 @@ impl BuiltinToolRegistry {
             }
         }
 
-        // Phase 3 Task 19 — flag_user_correction is exposed whenever a
-        // memory backend exists (independent of retrieval policy: this is
-        // a write-only signal, not a retrieval surface).
-        //
-        // Both handlers need the memory backend AND the raw memory store: the
-        // correction is written to the raw store and the audit counts are read
-        // back from it. Advertising the tools without the raw store produced a
-        // fully-schemaed tool whose every call failed with
-        // "no raw memory store configured".
-        if config.memory_db.is_some() && config.raw_memory_store.is_some() {
+        // Stable descriptors remain discoverable while the source is Off.
+        // Each invocation resolves raw and derived storage from its admitted bundle.
+        if config.memory_runtime.is_some() {
             reg(
                 tools,
                 "flag_user_correction",
@@ -136,11 +129,7 @@ impl BuiltinToolRegistry {
             .services = crate::builtin_tools::FlagUserCorrectionTool::services();
             info!("Registered flag_user_correction tool in BuiltinToolRegistry");
 
-            // governance_metrics — read-only audit reality probe. Exposed
-            // whenever a memory backend exists (independent of retrieval policy,
-            // like flag_user_correction): the loop-governance audit ring runs in
-            // a headless cron session and must reach it regardless of injection
-            // mode.
+            // Governance remains independent of retrieval injection policy.
             reg(
                 tools,
                 "governance_metrics",
@@ -666,7 +655,6 @@ mod tests {
     use std::collections::HashMap;
 
     use super::{BuiltinToolConfig, BuiltinToolRegistry};
-    use crate::memory::embedding_provider::tests::MockEmbeddingProvider;
     use crate::memory::store::raw_memory::RawMemoryStore;
     use crate::sync_primitives::Arc;
 
@@ -682,16 +670,9 @@ mod tests {
         )
     }
 
-    fn stub_embedder() -> Arc<dyn crate::memory::EmbeddingProvider> {
-        Arc::new(MockEmbeddingProvider::new(1024, "mock"))
-    }
-
-    /// The corrections are written to the raw store and the audit counts are
-    /// read back from it, so a memory backend on its own cannot serve either
-    /// tool — it used to be advertised anyway and every call then failed with
-    /// "no raw memory store configured".
+    /// Raw and derived handles supplied outside the runtime cannot enable these tools.
     #[tokio::test]
-    async fn flag_user_correction_and_governance_metrics_need_the_raw_memory_store() {
+    async fn flag_user_correction_and_governance_metrics_require_the_runtime() {
         let tmp = tempfile::tempdir().unwrap();
         let backend = memory_backend(tmp.path());
         let raw_store = raw_memory_store(tmp.path()).await;
@@ -735,8 +716,34 @@ mod tests {
             &None,
             &None,
         );
-        assert!(with_raw_store.contains_key("flag_user_correction"));
-        assert!(with_raw_store.contains_key("governance_metrics"));
+        assert!(!with_raw_store.contains_key("flag_user_correction"));
+        assert!(!with_raw_store.contains_key("governance_metrics"));
+
+        let mut with_runtime = HashMap::new();
+        BuiltinToolRegistry::register_optional_tools(
+            &mut with_runtime,
+            &None,
+            &None,
+            &None,
+            &None,
+            &None,
+            &None,
+            &BuiltinToolConfig {
+                memory_runtime: Some(crate::memory::runtime::MemoryRuntime::new(
+                    crate::memory::runtime::MemoryRuntimeConfig {
+                        metadata_path: tmp.path().join("runtime.db"),
+                        note_memory_dir: tmp.path().join("notes"),
+                    },
+                    Arc::new(crate::capability::ownership::OwnershipTree::new()),
+                )),
+                ..Default::default()
+            },
+            &None,
+            &None,
+            &None,
+        );
+        assert!(with_runtime.contains_key("flag_user_correction"));
+        assert!(with_runtime.contains_key("governance_metrics"));
     }
 
     /// The local_voice handler reads the live Config handle, so without that
@@ -759,6 +766,27 @@ mod tests {
             &None,
         );
         assert!(!tools.contains_key("local_voice"));
+        BuiltinToolRegistry::register_optional_tools(
+            &mut tools,
+            &None,
+            &None,
+            &None,
+            &None,
+            &None,
+            &None,
+            &BuiltinToolConfig {
+                config: Some(Arc::new(tokio::sync::RwLock::new(crate::Config::default()))),
+                ..Default::default()
+            },
+            &None,
+            &None,
+            &None,
+        );
+        assert!(tools
+            .get("local_voice")
+            .unwrap()
+            .parameters_schema
+            .is_some());
     }
 
     /// The session_search handler is built from the GatewayContext. A session
@@ -800,14 +828,16 @@ mod tests {
     async fn context_mode_does_not_build_the_retrieval_tools() {
         let _home = crate::utils::paths::IsolatedAlephHome::new();
         let tmp = tempfile::tempdir().unwrap();
-        let backend = memory_backend(tmp.path());
-        let raw_store = raw_memory_store(tmp.path()).await;
-        let embedder = stub_embedder();
+        let runtime = crate::memory::runtime::MemoryRuntime::new(
+            crate::memory::runtime::MemoryRuntimeConfig {
+                metadata_path: tmp.path().join("metadata.db"),
+                note_memory_dir: tmp.path().join("notes"),
+            },
+            Arc::new(crate::capability::ownership::OwnershipTree::new()),
+        );
 
         let context_registry = BuiltinToolRegistry::with_config(BuiltinToolConfig {
-            memory_db: Some(backend.clone()),
-            raw_memory_store: Some(raw_store.clone()),
-            embedder: Some(embedder.clone()),
+            memory_runtime: Some(runtime.clone()),
             injection_mode: crate::config::types::memory::MemoryInjectionMode::Context,
             ..Default::default()
         })
@@ -820,9 +850,7 @@ mod tests {
         assert!(!context_registry.has_tool("memory_timeline"));
 
         let tools_registry = BuiltinToolRegistry::with_config(BuiltinToolConfig {
-            memory_db: Some(backend),
-            raw_memory_store: Some(raw_store),
-            embedder: Some(embedder),
+            memory_runtime: Some(runtime.clone()),
             injection_mode: crate::config::types::memory::MemoryInjectionMode::Tools,
             ..Default::default()
         })
@@ -832,5 +860,9 @@ mod tests {
         assert!(tools_registry.has_tool("memory_search"));
         assert!(tools_registry.has_tool("memory_browse"));
         assert!(tools_registry.has_tool("memory_explore"));
+        assert_eq!(
+            runtime.status().state,
+            crate::memory::runtime::MemoryState::Off,
+        );
     }
 }

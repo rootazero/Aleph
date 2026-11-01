@@ -444,42 +444,31 @@ impl ToolRegistry for BuiltinToolRegistry {
             "flag_user_correction" => {
                 let agent_id = self.caller_memory_partition();
                 Box::pin(async move {
-                    let db = self.flag_user_correction_db.as_ref().ok_or_else(|| {
+                    let runtime = self.memory_runtime.as_ref().ok_or_else(|| {
                         AlephError::tool(
-                            "flag_user_correction not available: no memory backend configured",
+                            "flag_user_correction not available: Memory runtime not configured",
                         )
                     })?;
-                    let raw_store = self.raw_memory_store.clone().ok_or_else(|| {
-                        AlephError::tool(
-                            "flag_user_correction not available: no raw memory store configured",
-                        )
-                    })?;
-                    Self::build_flag_user_correction(db, raw_store, agent_id)
-                        .call_json(arguments)
-                        .await
+                    crate::builtin_tools::runtime::RuntimeTool::<
+                        crate::builtin_tools::FlagUserCorrectionTool,
+                    >::new(runtime.clone())
+                    .call_for_partition(agent_id, arguments)
+                    .await
                 })
             }
 
-            // Governance audit reality probe — read-only counts (recent user
-            // corrections + dreaming activity) straight from the memory backend,
-            // the in-core replacement for the loop-governance sqlite probes.
-            // Shares the memory_trace_db handle (both gate on config.memory_db).
+            // The probe resolves the current admitted bundle on each call.
             "governance_metrics" => Box::pin(async move {
-                let db = self.memory_trace_db.as_ref().ok_or_else(|| {
+                let runtime = self.memory_runtime.as_ref().ok_or_else(|| {
                     AlephError::tool(
-                        "governance_metrics not available: no memory backend configured",
+                        "governance_metrics not available: Memory runtime not configured",
                     )
                 })?;
-                let raw_store = self.raw_memory_store.clone().ok_or_else(|| {
-                    AlephError::tool(
-                        "governance_metrics not available: no raw memory store configured",
-                    )
-                })?;
-                let tool = crate::builtin_tools::governance_metrics::GovernanceMetricsTool::new(
-                    db.clone(),
-                    raw_store,
-                );
-                tool.call_json(arguments).await
+                crate::builtin_tools::runtime::RuntimeTool::<
+                    crate::builtin_tools::governance_metrics::GovernanceMetricsTool,
+                >::new(runtime.clone())
+                .call_json(arguments)
+                .await
             }),
 
             // Curated hot memory write tool — resolves a per-agent
@@ -592,19 +581,18 @@ impl ToolRegistry for BuiltinToolRegistry {
                 // Derive caller identity from session context. Falls back to
                 // "main" when the handle is missing or the key fails to parse.
                 let caller_id = self.caller_agent_id("main");
-                // Assembler from MCP (None if not yet injected → call_impl falls back to raw FTS5).
-                let assembler = self
-                    .memory_context_provider
-                    .get()
-                    .map(|mcp| mcp.assembler());
-                // SummarySynthesizer from SessionEndSummarizer global cell (None if no AiProvider).
-                let synthesizer = crate::thinker::memory_context_provider::session_end_summarizer()
-                    .map(|s| s.synthesizer.clone());
+                if let Some(runtime) = &self.memory_runtime {
+                    return crate::builtin_tools::runtime::RuntimeTool::<
+                        crate::builtin_tools::SessionSearchTool,
+                    >::new(runtime.clone())
+                    .call_with_context(context.clone(), caller_id, arguments)
+                    .await;
+                }
                 let tool = crate::builtin_tools::SessionSearchTool::new(
                     Arc::clone(context),
                     caller_id,
-                    assembler,
-                    synthesizer,
+                    None,
+                    None,
                 );
                 tool.call_json(arguments).await
             }),
@@ -1443,6 +1431,23 @@ impl ToolRegistry for BuiltinToolRegistry {
                 // see (`scope::current_scope`'s doc). Twin of
                 // `flag_user_correction` above.
                 let filed_agent_id = self.caller_memory_partition();
+                if let Some(runtime) = &self.memory_runtime {
+                    let runtime = runtime.clone();
+                    let session = self.memory_session_key_handle.clone();
+                    return Box::pin(async move {
+                        let args = serde_json::from_value(arguments).map_err(|error| {
+                            AlephError::tool(format!("memory_reflect: bad args: {error}"))
+                        })?;
+                        let output = crate::builtin_tools::runtime::RuntimeTool::<
+                            crate::builtin_tools::MemoryReflectTool,
+                        >::new(runtime)
+                        .call_for_partition(filed_agent_id, session, args)
+                        .await?;
+                        serde_json::to_value(output).map_err(|error| {
+                            AlephError::tool(format!("memory_reflect: serialize: {error}"))
+                        })
+                    });
+                }
                 if let Some(ref tool) = self.memory_reflect_tool {
                     let tool = tool.clone();
                     Box::pin(async move {

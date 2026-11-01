@@ -5,9 +5,12 @@ mod context;
 mod operation;
 mod search;
 mod services;
+mod session_end;
 mod state;
 mod tasks;
 
+#[cfg(test)]
+mod service_lifecycle_tests;
 #[cfg(test)]
 mod tests;
 
@@ -241,6 +244,20 @@ impl MemoryRuntime {
         }
     }
 
+    pub(crate) async fn record_turn(self: &Arc<Self>) {
+        let Ok(operation) = self.operation() else {
+            return;
+        };
+        let Ok(services) = operation.services() else {
+            return;
+        };
+        if let Some(compression) = &services.compression {
+            operation
+                .scope(async { compression.record_turn_and_maybe_compress() })
+                .await;
+        }
+    }
+
     pub(crate) fn retain_worker(&self, handle: JoinHandle<()>) {
         self.tasks.retain(handle);
         self.changed.notify_waiters();
@@ -412,29 +429,39 @@ impl MemoryRuntime {
                     self.begin_drain(&mut inner);
                 }
             }
-            let mut inner = self.inner.lock().unwrap_or_else(|error| error.into_inner());
-            if inner.status.state == MemoryState::Starting {
-                let reference = Reference {
-                    id: resource_id(),
-                    visibility: VisibilityScope::default(),
-                };
-                match self.capture_binding(&reference) {
-                    Ok(_) => inner.status.state = MemoryState::Running,
-                    Err(error) => {
-                        Self::record_error(
-                            &mut inner,
-                            format!("memory resource binding failed: {error:?}"),
-                        );
-                        self.begin_drain(&mut inner);
+            let maintenance = {
+                let mut inner = self.inner.lock().unwrap_or_else(|error| error.into_inner());
+                let maintenance = MemoryOperation::for_initialization(self, &mut inner);
+                if let Some((operation, bundle)) = &maintenance {
+                    let reference = Reference {
+                        id: resource_id(),
+                        visibility: VisibilityScope::default(),
+                    };
+                    let mounted = self
+                        .capture_binding(&reference)
+                        .map_err(|error| {
+                            AlephError::other(format!("memory resource binding failed: {error:?}"))
+                        })
+                        .and_then(|_| bundle.mount(self, operation));
+                    match mounted {
+                        Ok(()) => inner.status.state = MemoryState::Running,
+                        Err(error) => {
+                            Self::record_error(&mut inner, error.to_string());
+                            self.begin_drain(&mut inner);
+                        }
                     }
                 }
-            }
-            if inner.status.state == MemoryState::Draining {
-                if let Some(bundle) = &inner.bundle {
-                    bundle.request_stop();
+                if inner.status.state == MemoryState::Draining {
+                    if let Some(bundle) = &inner.bundle {
+                        bundle.request_stop();
+                    }
                 }
-            }
-            self.changed.notify_waiters();
+                self.changed.notify_waiters();
+                maintenance
+            };
+            // The last permit may lock the source on Drop; release it outside
+            // the source gate after every spawned task has a retained handle.
+            drop(maintenance);
         }
 
         loop {

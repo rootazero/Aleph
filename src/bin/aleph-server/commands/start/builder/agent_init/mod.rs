@@ -1028,6 +1028,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
         let mut engine =
             ExecutionEngine::new(engine_config, provider_registry, tool_registry, tools)
                 .with_raw_memory_writer(raw_store.clone())
+                .with_memory_runtime(memory_runtime.clone())
                 .with_app_config(app_config_arc.clone())
                 .with_tool_health(tool_health.clone())
                 // Share the one parser cell with `chat.send` and `agent.run`, so the
@@ -1155,9 +1156,6 @@ pub(in crate::commands::start) async fn register_agent_handlers(
             None
         };
 
-        if let Some(ref cs) = compression_svc {
-            engine = engine.with_compression_service(cs.clone());
-        }
         compression_out = compression_svc;
 
         // Start DreamDaemon with command handler so decay mutations are event-sourced.
@@ -2119,7 +2117,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
     register_common_handlers(
         server,
         &run_manager,
-        session_store,
+        session_store.clone(),
         &router,
         &agent_reg,
         full_config,
@@ -2129,6 +2127,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
     memory_runtime.configure_services(alephcore::memory::runtime::MemoryServicesConfig {
         app_config: app_config_arc.clone(),
         raw_store: raw_store.clone(),
+        session_store: Some(session_store),
         provider: default_prov.clone(),
         extensions: memory_ext_registry.clone(),
         state_db: state_db_out.clone(),

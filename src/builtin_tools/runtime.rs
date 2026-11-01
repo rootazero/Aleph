@@ -209,6 +209,112 @@ where
     }
 }
 
+impl RuntimeTool<super::flag_user_correction::FlagUserCorrectionTool> {
+    pub(crate) async fn call_for_partition(
+        &self,
+        partition: String,
+        arguments: serde_json::Value,
+    ) -> Result<serde_json::Value, AlephError> {
+        let operation = self.runtime.operation()?;
+        let captured = operation.clone();
+        operation
+            .run(async move {
+                let services = captured.services()?;
+                super::flag_user_correction::FlagUserCorrectionTool::new(
+                    services.raw_store.clone(),
+                    partition,
+                )
+                .with_decision_log(Some(captured.backend().clone()))
+                .call_json(arguments)
+                .await
+            })
+            .await
+    }
+}
+
+impl RuntimeTool<super::memory_reflect::MemoryReflectTool> {
+    pub(crate) async fn call_for_partition(
+        &self,
+        partition: String,
+        session: Option<Arc<tokio::sync::RwLock<String>>>,
+        args: super::memory_reflect::MemoryReflectArgs,
+    ) -> Result<super::memory_reflect::MemoryReflectResult, AlephError> {
+        let operation = self.runtime.operation()?;
+        let services = operation.services()?;
+        operation
+            .run(async move {
+                let reflector = services.memory_reflector.clone().ok_or_else(|| {
+                    AlephError::other("memory reflection provider is unavailable")
+                })?;
+                let tool =
+                    super::memory_reflect::MemoryReflectTool::new(&services.default_agent_id)
+                        .with_reflector(reflector);
+                let tool = match &services.query_filer {
+                    Some(filer) => tool.with_query_filer(filer.clone()),
+                    None => tool,
+                };
+                let tool = match session {
+                    Some(session) => tool.with_session_handle(session),
+                    None => tool,
+                };
+                tool.call_with_filed_partition(partition, args).await
+            })
+            .await
+    }
+}
+
+impl RuntimeTool<super::session_search::SessionSearchTool> {
+    pub(crate) async fn call_with_context(
+        &self,
+        context: Arc<crate::gateway::context::GatewayContext>,
+        caller: String,
+        args: serde_json::Value,
+    ) -> Result<serde_json::Value, AlephError> {
+        let operation = match self.runtime.operation() {
+            Ok(operation) => operation,
+            Err(_) => {
+                return super::session_search::SessionSearchTool::new(context, caller, None, None)
+                    .call_json(args)
+                    .await
+            }
+        };
+        let services = match operation.services() {
+            Ok(services) => services,
+            Err(_) => {
+                drop(operation);
+                return super::session_search::SessionSearchTool::new(context, caller, None, None)
+                    .call_json(args)
+                    .await;
+            }
+        };
+        operation
+            .run(async move {
+                super::session_search::SessionSearchTool::new(
+                    context,
+                    caller,
+                    Some(services.context.assembler()),
+                    services
+                        .summarizer
+                        .as_ref()
+                        .map(|summarizer| summarizer.synthesizer.clone()),
+                )
+                .call_json(args)
+                .await
+            })
+            .await
+    }
+}
+
+#[async_trait]
+impl MemoryToolFactory for super::governance_metrics::GovernanceMetricsTool {
+    async fn for_operation(operation: &MemoryOperation) -> Result<Self, AlephError> {
+        Ok(Self::new(
+            operation.backend().clone(),
+            operation.services()?.raw_store.clone(),
+        ))
+    }
+}
+
 #[async_trait]
 impl MemoryToolFactory for super::note_manage::NoteManageTool {
     async fn for_operation(operation: &MemoryOperation) -> Result<Self, AlephError> {

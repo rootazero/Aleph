@@ -67,8 +67,8 @@ pub struct ExecutionEngine<P: ThinkerProviderRegistry + 'static, R: ToolRegistry
     pub(super) tool_health: Option<Arc<crate::tool_metadata::ToolHealthCache>>,
     /// Raw-memory writer, independent of the derived SQLite indexes.
     pub(super) raw_memory_writer: Option<Arc<dyn crate::memory::store::raw_memory::RawMemoryStore>>,
-    /// Compression service for turn-based fact extraction
-    pub(super) compression_service: Option<Arc<crate::memory::compression::CompressionService>>,
+    /// Stable source accessor; concrete compression services belong to each activation.
+    pub(super) memory_runtime: Option<Arc<crate::memory::runtime::MemoryRuntime>>,
     /// Live app config handle. Read once per turn (not snapshotted at boot) so
     /// an `[policies.exec_tier]` / `[policies.tool_permissions]` change takes
     /// effect on the very next tool call without a restart. `None` in tests /
@@ -166,7 +166,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
             workspace_manager: None,
             tool_health: None,
             raw_memory_writer: None,
-            compression_service: None,
+            memory_runtime: None,
             app_config: None,
             session_compactor: None,
             session_manager: None,
@@ -247,12 +247,12 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
         self.continuation_deps.clone()
     }
 
-    /// Set a compression service for automatic turn-based compression.
-    pub fn with_compression_service(
+    /// Admit turn-based compression through the current Memory activation.
+    pub fn with_memory_runtime(
         mut self,
-        service: Arc<crate::memory::compression::CompressionService>,
+        runtime: Arc<crate::memory::runtime::MemoryRuntime>,
     ) -> Self {
-        self.compression_service = Some(service);
+        self.memory_runtime = Some(runtime);
         self
     }
 

@@ -300,6 +300,7 @@ mod tests {
                     ..Default::default()
                 })),
                 raw_store: raw,
+                session_store: None,
                 provider: None,
                 extensions: Arc::new(MemoryExtensionRegistry::new()),
                 state_db: None,

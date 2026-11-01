@@ -8,6 +8,7 @@ pub(in crate::commands::start) fn register_session_handlers(
     server: &mut GatewayServer,
     session_store: &Arc<dyn alephcore::gateway::session_store::SessionStore>,
     raw_store: &Arc<dyn alephcore::memory::store::raw_memory::RawMemoryStore>,
+    memory_runtime: &Arc<alephcore::memory::runtime::MemoryRuntime>,
     run_manager: Option<Arc<alephcore::gateway::handlers::agent::AgentRunManager>>,
     // `context.breakdown` reads the operator's per-provider `context_window`
     // override through it. Optional because the whole config handle is: the
@@ -38,13 +39,20 @@ pub(in crate::commands::start) fn register_session_handlers(
     {
         let store = Arc::clone(session_store);
         let writer = Arc::clone(raw_store);
-        server.handlers_mut().register("sessions.delete", move |req| {
-            let store = Arc::clone(&store);
-            let writer = Arc::clone(&writer);
-            async move {
-                session_handlers::handle_delete_db_with_capture(req, store, writer).await
-            }
-        });
+        let runtime = Arc::clone(memory_runtime);
+        server
+            .handlers_mut()
+            .register("sessions.delete", move |req| {
+                let store = Arc::clone(&store);
+                let writer = Arc::clone(&writer);
+                let runtime = Arc::clone(&runtime);
+                async move {
+                    session_handlers::handle_delete_db_with_runtime_capture(
+                        req, store, writer, runtime,
+                    )
+                    .await
+                }
+            });
     }
     register_handler!(
         server,

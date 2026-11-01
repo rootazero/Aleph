@@ -157,6 +157,7 @@ pub struct FileSessionStore {
     /// the file backend also drives session-end summarization / reflection /
     /// profile synthesis. `None` (the default) keeps the legacy behaviour.
     raw_memory_writer: Option<Arc<dyn crate::memory::store::raw_memory::RawMemoryStore>>,
+    memory_runtime: Option<std::sync::Weak<crate::memory::runtime::MemoryRuntime>>,
     /// Per-session-key locks for `metadata.json`. Everything that writes goes
     /// through these — see the [`meta`] module doc for why.
     metadata_locks: meta::MetaLocks,
@@ -182,6 +183,7 @@ impl FileSessionStore {
             config,
             event_bus: crate::sync_primitives::RwLock::new(None),
             raw_memory_writer: None,
+            memory_runtime: None,
             metadata_locks: meta::MetaLocks::new(),
         })
     }
@@ -262,6 +264,16 @@ impl FileSessionStore {
         writer: Arc<dyn crate::memory::store::raw_memory::RawMemoryStore>,
     ) -> Self {
         self.raw_memory_writer = Some(writer);
+        self
+    }
+
+    /// Attach the canonical Memory source without extending its lifetime.
+    #[must_use]
+    pub fn with_memory_runtime(
+        mut self,
+        runtime: &Arc<crate::memory::runtime::MemoryRuntime>,
+    ) -> Self {
+        self.memory_runtime = Some(Arc::downgrade(runtime));
         self
     }
 
@@ -1146,14 +1158,24 @@ impl SessionStore for FileSessionStore {
                 // scope columns directly (no extra query) so the session-end
                 // reflector can write OPEN_LOOPS.md under the same composed
                 // id the curated-envelope reader resolves.
-                crate::gateway::session_manager::ops::emit_session_end_raw(
+                crate::gateway::session_manager::ops::capture_session_end(
+                    self.memory_runtime
+                        .as_ref()
+                        .and_then(std::sync::Weak::upgrade),
                     writer,
-                    key.agent_id().to_string(),
-                    key_str.clone(),
-                    tail,
-                    crate::memory::store::raw_memory::SessionEndReason::Disconnect,
-                    meta.owner_user_id.clone(),
-                    meta.scope_id.clone(),
+                    crate::memory::store::raw_memory::RawMemory::new(
+                        tail,
+                        crate::memory::store::raw_memory::RawMemorySource::SessionEnd {
+                            reason: crate::memory::store::raw_memory::SessionEndReason::Disconnect,
+                        },
+                    )
+                    .with_agent(key.agent_id())
+                    .with_session(key_str.clone()),
+                    crate::scope::ScopeAttribution::from_persisted(
+                        meta.owner_user_id.as_deref(),
+                        meta.scope_id.as_deref(),
+                    ),
+                    true,
                 );
             }
 

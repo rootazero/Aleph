@@ -313,6 +313,7 @@ async fn starting_factory_restores_dream_health_before_public_admission() {
                 ..Default::default()
             })),
             raw_store: raw,
+            session_store: None,
             provider: None,
             extensions: Arc::new(crate::memory::extensions::MemoryExtensionRegistry::new()),
             state_db: None,
@@ -367,6 +368,7 @@ async fn restart_reads_the_canonical_activation_snapshot() {
         .configure_services(super::MemoryServicesConfig {
             app_config: app_config.clone(),
             raw_store: raw,
+            session_store: None,
             provider: None,
             extensions: Arc::new(crate::memory::extensions::MemoryExtensionRegistry::new()),
             state_db: None,
