@@ -1379,6 +1379,57 @@ impl ToolHandlerRegistry {
             .map(CanonicalEntryLease::into_entry)
     }
 
+    /// Validate a captured entry and commit before canonical withdrawal can pass.
+    pub(crate) fn with_current_capture<R>(
+        &self,
+        capture: &CanonicalEntryLease,
+        commit: impl FnOnce() -> R,
+    ) -> Result<R, crate::capability::facade::ResolveError> {
+        use crate::capability::facade::ResolveError;
+
+        // Producer publication already takes plugin provider -> registry provider
+        // -> mutation gate. Preserve that order and never re-enter a held provider.
+        let admit = |plugin: Option<&crate::capability::provider::ProviderLifecycle>| {
+            self.provider.with_snapshot(|provider| {
+                provider
+                    .acquire_call(capture.provider_generation)
+                    .map_err(|_| ResolveError::StaleProvider)?;
+                if let Some(ready) = &capture.entry.ready {
+                    plugin
+                        .unwrap_or(provider)
+                        .acquire_call(ready.provider_generation)
+                        .map_err(|_| ResolveError::StaleProvider)?;
+                }
+                self.shared.with_current(|current| {
+                    if current.closed {
+                        return Err(ResolveError::Unknown);
+                    }
+                    let entry = current
+                        .value
+                        .entry(&capture.entry.descriptor.name)
+                        .ok_or(ResolveError::Unknown)?;
+                    if capture.entry.descriptor != entry.descriptor {
+                        return Err(ResolveError::Unknown);
+                    }
+                    match (&capture.entry.ready, &entry.ready) {
+                        (Some(captured), Some(live))
+                            if captured.same_lease(live)
+                                && captured.matches_entry(entry, current.revision) => {}
+                        (None, None) => {}
+                        _ => return Err(ResolveError::StaleProvider),
+                    }
+                    Ok(commit())
+                })
+            })
+        };
+        match &capture.entry.ready {
+            Some(ready) if !ready.provider.same_instance(&self.provider) => {
+                ready.provider.with_snapshot(|plugin| admit(Some(plugin)))
+            }
+            _ => admit(None),
+        }
+    }
+
     /// Capture only the requested entry from the same immutable read boundary
     /// as `canonical_publication`, without wrapping or hashing unrelated entries.
     #[must_use]
@@ -2003,6 +2054,40 @@ mod tests {
             output.value = serde_json::from_str(output.value.as_str().unwrap())
                 .unwrap_or_else(|_| output.value.clone());
             Ok(output)
+        }
+
+        #[test]
+        fn current_capture_checks_both_real_provider_authorities() {
+            use crate::capability::facade::ResolveError;
+            for stop_registry in [false, true] {
+                let calls = Arc::new(AtomicUsize::new(0));
+                let entry = mounted_entry(1, calls);
+                let plugin = entry.ready.as_ref().unwrap().provider.clone();
+                let registry = registry_at(entry);
+                let capture = registry.capture_entry("b1_probe").unwrap();
+                let commits = std::cell::Cell::new(0);
+                assert_eq!(
+                    registry.with_current_capture(&capture, || {
+                        commits.set(commits.get() + 1);
+                    }),
+                    Ok(())
+                );
+                if stop_registry {
+                    registry
+                        .provider()
+                        .transition(ProviderState::Stopping)
+                        .unwrap();
+                } else {
+                    plugin.transition(ProviderState::Stopping).unwrap();
+                }
+                assert_eq!(
+                    registry.with_current_capture(&capture, || {
+                        commits.set(commits.get() + 1);
+                    }),
+                    Err(ResolveError::StaleProvider)
+                );
+                assert_eq!(commits.get(), 1);
+            }
         }
 
         // Value: rejects remount/restart/same-name replacement and late effects;
@@ -3359,6 +3444,53 @@ mod tests {
         provider.transition(ProviderState::Stopping).unwrap();
         assert!(registry.snapshot_state().entries().is_empty());
         assert!(registry.resolve_entry("lazy").is_none());
+    }
+
+    #[test]
+    fn current_capture_commits_once_and_rejects_withdrawal() {
+        let registry = ToolHandlerRegistry::new();
+        let handle = registry
+            .register(desc("joint-admission"), fake("joint-admission"))
+            .unwrap();
+        let capture = registry.capture_entry("joint-admission").unwrap();
+        let revision = registry.revision();
+        let mut changes = registry.subscribe();
+        let commits = std::cell::Cell::new(0);
+        assert_eq!(
+            registry.with_current_capture(&capture, || {
+                commits.set(commits.get() + 1);
+                7
+            }),
+            Ok(7)
+        );
+        assert_eq!(commits.get(), 1);
+        assert_eq!(registry.revision(), revision);
+        assert!(changes.try_recv().is_err());
+        assert!(handle.dispose());
+        assert!(registry
+            .with_current_capture(&capture, || commits.set(commits.get() + 1))
+            .is_err());
+        assert_eq!(commits.get(), 1);
+    }
+
+    #[test]
+    fn current_capture_excludes_registry_mutation_through_commit() {
+        let registry = ToolHandlerRegistry::new();
+        let _handle = registry
+            .register(desc("held-admission"), fake("held-admission"))
+            .unwrap();
+        let capture = registry.capture_entry("held-admission").unwrap();
+        let revision = registry.revision();
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            registry.with_current_capture(&capture, || registry.shared.close())
+        }));
+        assert!(
+            result.is_err(),
+            "mutation inside admission must be refused by the real publication guard"
+        );
+        assert!(!registry.shared.is_closed());
+        assert_eq!(registry.revision(), revision);
+        assert_eq!(registry.with_current_capture(&capture, || 7), Ok(7));
     }
 
     fn fake(name: &str) -> Arc<dyn ToolHandler> {

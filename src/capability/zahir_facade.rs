@@ -456,11 +456,12 @@ impl Zahir for ZahirFacade {
         if reference.id.namespace != crate::capability::backend::TOOL_NAMESPACE {
             return Err(ResolveError::Unknown);
         }
-        let snapshot = self.adapter.registry.snapshot_state();
-        if snapshot.is_closed() {
+        if self.adapter.registry.is_closed() {
             return Err(ResolveError::Unknown);
         }
-        let canonical_entry = snapshot
+        let canonical_entry = self
+            .adapter
+            .registry
             .capture_entry(&reference.id.name)
             .ok_or(ResolveError::Unknown)?;
         self.resolve_with_capture(reference, canonical_entry)
@@ -485,7 +486,10 @@ impl Zahir for ZahirFacade {
                 // ③ owner identity — an ownership TRANSFER keeps the tree
                 // epoch, so the generation above cannot see it. The binding's
                 // owner must still be the one the lease was minted for.
-                match self.tree.owner_of(&lease.descriptor.id, &lease.descriptor.visibility) {
+                match self
+                    .tree
+                    .owner_of(&lease.descriptor.id, &lease.descriptor.visibility)
+                {
                     Some(owner) if owner == lease.owner => {}
                     Some(_) => return Err(ResolveError::StaleOwner),
                     None => return Err(ResolveError::Unknown),
