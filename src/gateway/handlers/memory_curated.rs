@@ -295,7 +295,10 @@ mod tests {
             },
             Arc::new(OwnershipTree::new()),
             MemoryServicesConfig {
-                memory,
+                app_config: Arc::new(tokio::sync::RwLock::new(crate::Config {
+                    memory: memory.clone(),
+                    ..Default::default()
+                })),
                 raw_store: raw,
                 provider: None,
                 extensions: Arc::new(MemoryExtensionRegistry::new()),

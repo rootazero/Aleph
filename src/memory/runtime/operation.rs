@@ -98,6 +98,23 @@ impl Drop for MemoryOperationInner {
 }
 
 impl MemoryOperation {
+    pub(super) fn for_initialization(
+        runtime: &Arc<MemoryRuntime>,
+        inner: &mut MemoryInner,
+    ) -> Option<(Self, Arc<MemoryBundle>)> {
+        if inner.status.state != MemoryState::Starting {
+            return None;
+        }
+        let bundle = inner.bundle.clone()?;
+        let operation = MemoryAdmission {
+            runtime,
+            inner,
+            bundle: bundle.clone(),
+        }
+        .commit();
+        Some((operation, bundle))
+    }
+
     pub async fn scope<F: Future>(self, future: F) -> F::Output {
         CURRENT_OPERATION.scope(self, future).await
     }

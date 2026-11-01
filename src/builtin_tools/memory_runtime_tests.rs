@@ -180,7 +180,10 @@ async fn runtime_tool_stays_cold_and_uses_fresh_services_after_restart() {
         Arc::new(OwnershipTree::new()),
     );
     let inputs = MemoryServicesConfig {
-        memory,
+        app_config: Arc::new(tokio::sync::RwLock::new(crate::Config {
+            memory: memory.clone(),
+            ..Default::default()
+        })),
         raw_store: raw,
         provider: None,
         extensions: Arc::new(MemoryExtensionRegistry::new()),

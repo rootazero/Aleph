@@ -102,16 +102,21 @@ impl MemoryRuntime {
     }
 
     pub(crate) fn injection_mode(&self) -> crate::config::types::memory::MemoryInjectionMode {
-        self.memory_config()
-            .map(|memory| memory.injection_mode)
+        self.memory_config(|memory| memory.injection_mode)
             .unwrap_or_default()
     }
 
-    pub(crate) fn memory_config(&self) -> Option<&crate::config::types::memory::MemoryConfig> {
-        self.services_config
-            .get()
-            .and_then(Option::as_ref)
-            .map(|inputs| &inputs.memory)
+    pub(crate) fn memory_config<R>(
+        &self,
+        read: impl FnOnce(&crate::config::types::memory::MemoryConfig) -> R,
+    ) -> Option<R> {
+        let bundle = self
+            .inner
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .bundle
+            .clone()?;
+        Some(read(&bundle.services().ok()?.config))
     }
 
     fn new_sources(
@@ -390,18 +395,16 @@ impl MemoryRuntime {
                     let _ = gate.await;
                 }
             }
-            let bundle = {
-                let inner = self.inner.lock().unwrap_or_else(|error| error.into_inner());
-                (inner.status.state == MemoryState::Starting)
-                    .then(|| inner.bundle.clone())
-                    .flatten()
+            let initialization = {
+                let mut inner = self.inner.lock().unwrap_or_else(|error| error.into_inner());
+                MemoryOperation::for_initialization(self, &mut inner)
             };
-            if let Some(bundle) = bundle {
-                if let Err(error) = bundle
-                    .initialize(
+            if let Some((operation, bundle)) = initialization {
+                if let Err(error) = operation
+                    .scope(bundle.initialize(
                         &self.config,
                         self.services_config.get().and_then(Option::as_ref),
-                    )
+                    ))
                     .await
                 {
                     let mut inner = self.inner.lock().unwrap_or_else(|error| error.into_inner());

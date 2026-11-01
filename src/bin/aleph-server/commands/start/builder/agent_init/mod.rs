@@ -2127,7 +2127,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
     );
 
     memory_runtime.configure_services(alephcore::memory::runtime::MemoryServicesConfig {
-        memory: app_config.memory.clone(),
+        app_config: app_config_arc.clone(),
         raw_store: raw_store.clone(),
         provider: default_prov.clone(),
         extensions: memory_ext_registry.clone(),

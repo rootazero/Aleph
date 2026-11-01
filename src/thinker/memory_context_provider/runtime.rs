@@ -28,16 +28,16 @@ impl RuntimeMemoryContext {
 
     pub fn curated_limit(&self) -> usize {
         self.runtime
-            .memory_config()
-            .map_or(0, |config| config.curated.memory_char_limit)
+            .memory_config(|config| config.curated.memory_char_limit)
+            .unwrap_or(0)
     }
 
     pub(crate) fn resolve_storage_id(&self, agent: &str) -> String {
         crate::memory::project_scope::session_write_id(
             agent,
             self.runtime
-                .memory_config()
-                .is_some_and(|config| config.project_scoped),
+                .memory_config(|config| config.project_scoped)
+                .unwrap_or(false),
             crate::projects::current_project_root().as_deref(),
         )
     }
@@ -207,7 +207,10 @@ mod tests {
             },
             Arc::new(OwnershipTree::new()),
             MemoryServicesConfig {
-                memory,
+                app_config: Arc::new(tokio::sync::RwLock::new(crate::Config {
+                    memory: memory.clone(),
+                    ..Default::default()
+                })),
                 raw_store: raw,
                 provider: None,
                 extensions: Arc::new(MemoryExtensionRegistry::new()),
@@ -218,7 +221,7 @@ mod tests {
             },
         );
         let context = RuntimeMemoryContext::new(runtime.clone());
-        assert_eq!(context.injection_mode(), MemoryInjectionMode::Context);
+        assert_eq!(context.curated_limit(), 0);
         assert!(context
             .build_curated_message("main", "session")
             .await
@@ -226,6 +229,7 @@ mod tests {
             .is_none());
         assert!(!root.path().join("note").exists());
         runtime.start().await.unwrap();
+        assert_eq!(context.injection_mode(), MemoryInjectionMode::Context);
         let first = context
             .build_curated_message("main", "session")
             .await

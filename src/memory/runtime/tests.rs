@@ -286,6 +286,147 @@ async fn restart_never_revives_old_handle() {
     runtime.stop().await.unwrap();
 }
 
+#[tokio::test]
+async fn starting_factory_restores_dream_health_before_public_admission() {
+    let root = tempfile::tempdir().unwrap();
+    let raw = Arc::new(
+        crate::memory::store::markdown::MarkdownSessionStore::new(&root.path().join("memory"))
+            .await
+            .unwrap(),
+    );
+    let seeded = crate::memory::store::sqlite::SqliteMemoryBackend::new(
+        &root.path().join("memory/metadata.db"),
+    )
+    .unwrap();
+    seeded
+        .set_best_health(crate::routing::DEFAULT_AGENT_ID, 0.73)
+        .unwrap();
+    seeded.close().unwrap();
+    let runtime = runtime(root.path());
+    let mut memory = crate::config::types::memory::MemoryConfig::default();
+    memory.embedding.providers.clear();
+    memory.dreaming.enabled = true;
+    runtime
+        .configure_services(super::MemoryServicesConfig {
+            app_config: Arc::new(tokio::sync::RwLock::new(crate::Config {
+                memory: memory.clone(),
+                ..Default::default()
+            })),
+            raw_store: raw,
+            provider: None,
+            extensions: Arc::new(crate::memory::extensions::MemoryExtensionRegistry::new()),
+            state_db: None,
+            default_agent_id: crate::routing::DEFAULT_AGENT_ID.into(),
+            curated_root: root.path().join("agents"),
+            snapshot_dir: root.path().join("snapshots"),
+        })
+        .unwrap();
+    let (release, gate) = oneshot::channel();
+    *runtime.initialization_gate.lock().unwrap() = Some(gate);
+    let mut start = Box::pin(runtime.start());
+    assert!(matches!(futures::poll!(start.as_mut()), Poll::Pending));
+    let _backend = partial_backend(&runtime).await;
+    assert_eq!(runtime.status().state, MemoryState::Starting);
+    assert!(runtime.capture(&reference()).is_err());
+    release.send(()).unwrap();
+    start.await.unwrap();
+    let operation = runtime.operation().unwrap();
+    let restored = operation
+        .services()
+        .unwrap()
+        .dream
+        .as_ref()
+        .unwrap()
+        .best_health_for_test();
+    assert!(
+        (restored - 0.73).abs() < 1e-9,
+        "the real constructor must read persisted health during Starting, got {restored}"
+    );
+    drop(operation);
+    runtime.stop().await.unwrap();
+}
+
+#[tokio::test]
+async fn restart_reads_the_canonical_activation_snapshot() {
+    use crate::config::types::memory::MemoryInjectionMode;
+
+    let root = tempfile::tempdir().unwrap();
+    let raw = Arc::new(
+        crate::memory::store::markdown::MarkdownSessionStore::new(&root.path().join("memory"))
+            .await
+            .unwrap(),
+    );
+    let mut config = crate::Config::default();
+    config.memory.embedding.providers.clear();
+    config.memory.dreaming.enabled = false;
+    config.memory.injection_mode = MemoryInjectionMode::Context;
+    config.memory.curated.memory_char_limit = 123;
+    let app_config = Arc::new(tokio::sync::RwLock::new(config));
+    let runtime = runtime(root.path());
+    runtime
+        .configure_services(super::MemoryServicesConfig {
+            app_config: app_config.clone(),
+            raw_store: raw,
+            provider: None,
+            extensions: Arc::new(crate::memory::extensions::MemoryExtensionRegistry::new()),
+            state_db: None,
+            default_agent_id: crate::routing::DEFAULT_AGENT_ID.into(),
+            curated_root: root.path().join("agents"),
+            snapshot_dir: root.path().join("snapshots"),
+        })
+        .unwrap();
+    runtime.start().await.unwrap();
+    let context =
+        crate::thinker::memory_context_provider::RuntimeMemoryContext::new(runtime.clone());
+    assert_eq!(context.injection_mode(), MemoryInjectionMode::Context);
+    assert_eq!(context.curated_limit(), 123);
+    let operation = runtime.operation().unwrap();
+    assert_eq!(
+        operation
+            .services()
+            .unwrap()
+            .config
+            .curated
+            .memory_char_limit,
+        123
+    );
+    {
+        let mut config = app_config.write().await;
+        config.memory.injection_mode = MemoryInjectionMode::Tools;
+        config.memory.curated.memory_char_limit = 456;
+    }
+    assert_eq!(
+        operation.services().unwrap().config.injection_mode,
+        MemoryInjectionMode::Context,
+        "an admitted bundle must keep its activation snapshot"
+    );
+    assert_eq!(context.injection_mode(), MemoryInjectionMode::Context);
+    assert_eq!(context.curated_limit(), 123);
+    drop(operation);
+    runtime.stop().await.unwrap();
+    assert_eq!(context.curated_limit(), 0);
+    runtime.start().await.unwrap();
+    assert_eq!(context.injection_mode(), MemoryInjectionMode::Tools);
+    assert_eq!(context.curated_limit(), 456);
+    let operation = runtime.operation().unwrap();
+    assert_eq!(
+        operation.services().unwrap().config.injection_mode,
+        MemoryInjectionMode::Tools,
+        "a new bundle must read the same canonical config handle again"
+    );
+    assert_eq!(
+        operation
+            .services()
+            .unwrap()
+            .config
+            .curated
+            .memory_char_limit,
+        456
+    );
+    drop(operation);
+    runtime.stop().await.unwrap();
+}
+
 async fn partial_backend(
     runtime: &Arc<MemoryRuntime>,
 ) -> Arc<crate::memory::store::sqlite::SqliteMemoryBackend> {
