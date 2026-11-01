@@ -120,39 +120,63 @@ test("disposable Gateway helper authenticates and serves actor-bound project byt
   child.stdin.write(`${JSON.stringify({ v: 1, type: "command", run: nonce, id: 19, command: "confirm_pairing", device: "device-a" })}\n`);
   await waitFor(message => message.type === "ack" && message.id === 19);
   assert.equal((await fetch(assetUrl, { headers, signal: AbortSignal.timeout(5000) })).status, 200);
-  const readReceipt = async (after) => {
+  const readReceipt = async (after, predicate = () => true) => {
+    let cursor = after;
     for (let attempt = 0; attempt < 100; attempt++) {
-      const cursor = messages.length;
-      child.stdin.write(`${JSON.stringify({ v: 1, type: "command", run: nonce, id: 20, command: "receipt_since", after })}\n`);
-      const message = await waitFor(message => messages.indexOf(message) >= cursor && (message.type === "receipt" || message.type === "error"));
-      if (message.type === "receipt") return message;
+      const messageCursor = messages.length;
+      child.stdin.write(`${JSON.stringify({ v: 1, type: "command", run: nonce, id: 20 + attempt, command: "receipt_since", after: cursor })}\n`);
+      const message = await waitFor(message => messages.indexOf(message) >= messageCursor && (message.type === "receipt" || message.type === "error"));
+      if (message.type === "receipt") {
+        cursor = message.seq;
+        if (predicate(message)) return message;
+        continue;
+      }
       assert.equal(message.code, "not_found");
       await new Promise(resolve => setTimeout(resolve, 20));
     }
     throw Error("receipt_timeout");
   };
-  const receipt = await readReceipt(0);
-  assert.equal(validateHelperMessage(receipt).ok, true);
+  const connectReceipt = await readReceipt(0, message => message.operation === "connect");
+  assert.equal(validateHelperMessage(connectReceipt).ok, true);
+  assert.equal(connectReceipt.device, "device-a");
+  assert.equal(connectReceipt.user, "alice");
+  assert.equal(connectReceipt.project, "global");
+  assert.equal(connectReceipt.result, "authorized");
+  const globalDiscovery = await readReceipt(connectReceipt.seq, message => message.operation === "discovery" && message.project === "global");
+  const selectReceipt = await readReceipt(globalDiscovery.seq, message => message.operation === "select" && message.project === "project-a");
+  assert.equal(selectReceipt.result, "authorized");
+  const projectDiscovery = await readReceipt(selectReceipt.seq, message => message.operation === "discovery" && message.project === "project-a");
+  const receipt = await readReceipt(projectDiscovery.seq, message => message.operation === "asset" && message.project === "project-a");
   assert.equal(receipt.device, "device-a");
   assert.equal(receipt.user, "alice");
-  assert.equal(receipt.project, "project-a");
   assert.equal(receipt.revision, BigInt(selectedA.revision).toString(16).padStart(16, "0"));
+
   child.stdin.write(`${JSON.stringify({ v: 1, type: "command", run: nonce, id: 30, command: "hold_response", gate: "asset_a" })}\n`);
   await waitFor(message => message.type === "ack" && message.id === 30);
   const heldA = fetch(assetUrl, { headers, signal: AbortSignal.timeout(10_000) });
   // This receipt proves the actual A handler completed before B becomes current.
-  const heldReceipt = await readReceipt(receipt.seq);
+  const heldReceipt = await readReceipt(receipt.seq, message => message.operation === "asset" && message.project === "project-a");
   assert.equal(heldReceipt.result, "asset_ok");
   assert.equal(heldReceipt.seq, receipt.seq + 1);
   await select(b.id);
   const selectedB = await rpc("panel.capabilities.snapshot");
   assert.equal(selectedB.revision, selectedA.revision);
+  const selectBReceipt = await readReceipt(heldReceipt.seq, message => message.operation === "select" && message.project === "project-b");
+  const discoveryBReceipt = await readReceipt(selectBReceipt.seq, message => message.operation === "discovery" && message.project === "project-b");
+  assert.equal(discoveryBReceipt.result, "snapshot_ok");
   assert.equal((await fetch(assetUrl, { headers, signal: AbortSignal.timeout(5000) })).status, 404);
   child.stdin.write(`${JSON.stringify({ v: 1, type: "command", run: nonce, id: 31, command: "release_response", gate: "asset_a" })}\n`);
   await waitFor(message => message.type === "ack" && message.id === 31);
   assert.equal((await heldA).status, 200, "delayed A is a real old successful response, not a request re-authorized under B");
   await select(null);
+  const clearReceipt = await readReceipt(discoveryBReceipt.seq, message => message.operation === "select" && message.project === "global");
+  child.stdin.write(`${JSON.stringify({ v: 1, type: "command", run: nonce, id: 22, command: "set_fixture", action: "unbind_workspace" })}\n`);
+  await waitFor(message => message.type === "ack" && message.id === 22);
+  await assert.rejects(select(a.id), /rpc_refused/);
+  const refusedReceipt = await readReceipt(clearReceipt.seq, message => message.operation === "select" && message.project === "project-a" && message.result === "refused");
+  assert.equal(refusedReceipt.status, "refused");
   child.stdin.write(`${JSON.stringify({ v: 1, type: "command", run: nonce, id: 21, command: "set_fixture", action: "select_a" })}\n`);
+
   assert.equal((await waitFor(message => message.type === "error" && message.code === "bad_state")).code, "bad_state");
   child.stdin.write(`${JSON.stringify({ v: 1, type: "command", run: nonce, id: 40, command: "revoke_exact", device: "device-a" })}\n`);
   await waitFor(message => message.type === "ack" && message.id === 40);

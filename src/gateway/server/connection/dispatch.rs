@@ -72,12 +72,12 @@ async fn dispatch_snapshot(
         snapshot.device_id.clone(),
     ));
     crate::gateway::caller_identity::with_verified_caller_identity(
-        snapshot.role,
-        snapshot.user,
+        snapshot.role.clone(),
+        snapshot.user.clone(),
         caller_is_loopback,
         caller_conn_id,
-        snapshot.verified_user,
-        process_request_with_panel_context(text, mc, context),
+        snapshot.verified_user.clone(),
+        process_request_with_panel_context(text, mc, context, Some(&snapshot)),
     )
     .await
 }
@@ -246,13 +246,14 @@ pub fn idempotency_principal(method: &str, snapshot: &CallerSnapshot) -> String 
 
 /// Process a JSON-RPC request string
 pub async fn process_request(text: &str, middleware_chain: &MiddlewareChain) -> String {
-    process_request_with_panel_context(text, middleware_chain, None).await
+    process_request_with_panel_context(text, middleware_chain, None, None).await
 }
 
 pub(crate) async fn process_request_with_panel_context(
     text: &str,
     middleware_chain: &MiddlewareChain,
     panel_context: Option<PanelRequestContext>,
+    caller: Option<&CallerSnapshot>,
 ) -> String {
     // Parse the request
     let request: JsonRpcRequest = match serde_json::from_str(text) {
@@ -300,7 +301,8 @@ pub(crate) async fn process_request_with_panel_context(
         method = %request.method,
     );
 
-    // Dispatch to middleware chain inside the trace span.
+    #[cfg(feature = "native-qa")]
+    let request_for_observer = request.clone();
     let response = {
         use tracing::Instrument;
         middleware_chain
@@ -308,6 +310,19 @@ pub(crate) async fn process_request_with_panel_context(
             .instrument(span)
             .await
     };
+
+    #[cfg(not(feature = "native-qa"))]
+    let _ = caller;
+
+    #[cfg(feature = "native-qa")]
+    if let Some(caller) = caller {
+        crate::gateway::native_qa::observe_rpc(
+            &middleware_chain.native_qa_observer(),
+            caller,
+            &request_for_observer,
+            &response,
+        );
+    }
 
     // Echo the trace context back so the caller / a downstream hop can continue
     // the trace (naming our span as the parent). `traceparent` is a non-standard

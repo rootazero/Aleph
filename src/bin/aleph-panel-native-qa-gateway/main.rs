@@ -2,7 +2,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex as StdMutex};
 
 use alephcore::discovery::DiscoveryConfig;
 use alephcore::extension::{init_extension_manager, ExtensionConfig, ExtensionManager};
@@ -112,7 +112,8 @@ struct GatewayState {
     asset_a_notify: Arc<Notify>,
     fixture: Arc<Mutex<Fixture>>,
     manager: Arc<ExtensionManager>,
-    receipts: Arc<Mutex<Vec<StoredReceipt>>>,
+    receipts: Arc<StdMutex<Vec<StoredReceipt>>>,
+    rpc_observer: Arc<NativeQaObserver>,
 }
 
 #[derive(Clone, Serialize)]
@@ -139,6 +140,109 @@ struct Stopped<'a> {
     listener_closed: bool,
     #[serde(rename = "fixtureClosed")]
     fixture_closed: bool,
+}
+
+struct NativeQaObserver {
+    run: String,
+    receipts: Arc<StdMutex<Vec<StoredReceipt>>>,
+    manager: Arc<ExtensionManager>,
+    project_a: String,
+    project_b: String,
+    project_c: String,
+    device_labels: StdMutex<HashMap<String, String>>,
+    pending: StdMutex<Vec<alephcore::gateway::native_qa::NativeQaRpcReceipt>>,
+}
+
+impl NativeQaObserver {
+    fn append(&self, receipt: alephcore::gateway::native_qa::NativeQaRpcReceipt) {
+        let Some(user) = receipt.user else {
+            return;
+        };
+        let Some(actual_device) = receipt.device else {
+            return;
+        };
+        let Some(device) = self
+            .device_labels
+            .lock()
+            .expect("device label mutex poisoned")
+            .get(&actual_device)
+            .cloned()
+        else {
+            self.pending
+                .lock()
+                .expect("pending receipt mutex poisoned")
+                .push(alephcore::gateway::native_qa::NativeQaRpcReceipt {
+                    user: Some(user),
+                    device: Some(actual_device),
+                    ..receipt
+                });
+            return;
+        };
+        let project = match receipt.project_id.as_deref() {
+            None => "global",
+            Some(id) if id == self.project_a => "project-a",
+            Some(id) if id == self.project_b => "project-b",
+            Some(id) if id == self.project_c => "project-c",
+            Some(_) => return,
+        };
+        let (operation, result, status) = match (receipt.operation, receipt.result) {
+            (
+                alephcore::gateway::native_qa::NativeQaRpcOperation::Connect,
+                alephcore::gateway::native_qa::NativeQaRpcResult::Authorized,
+            ) => ("connect", "authorized", "ok"),
+            (
+                alephcore::gateway::native_qa::NativeQaRpcOperation::Select,
+                alephcore::gateway::native_qa::NativeQaRpcResult::Authorized,
+            ) => ("select", "authorized", "ok"),
+            (
+                alephcore::gateway::native_qa::NativeQaRpcOperation::Select,
+                alephcore::gateway::native_qa::NativeQaRpcResult::Refused,
+            ) => ("select", "refused", "refused"),
+            (
+                alephcore::gateway::native_qa::NativeQaRpcOperation::Discovery,
+                alephcore::gateway::native_qa::NativeQaRpcResult::SnapshotOk,
+            ) => ("discovery", "snapshot_ok", "ok"),
+            (
+                alephcore::gateway::native_qa::NativeQaRpcOperation::Discovery,
+                alephcore::gateway::native_qa::NativeQaRpcResult::SnapshotError,
+            ) => ("discovery", "snapshot_error", "refused"),
+            _ => return,
+        };
+        let mut receipts = self.receipts.lock().expect("receipt mutex poisoned");
+        if receipts.len() >= 512 {
+            return;
+        }
+        let seq = receipts.len() as u32 + 1;
+        receipts.push(StoredReceipt {
+            v: 1,
+            r#type: "receipt".to_owned(),
+            run: self.run.clone(),
+            seq,
+            user,
+            device,
+            operation: operation.to_owned(),
+            project: project.to_owned(),
+            revision: format!("{:016x}", self.manager.panel_ui_capability_revision()),
+            result: result.to_owned(),
+            status: status.to_owned(),
+        });
+    }
+
+    fn confirm_device(&self, label: &str, actual: String) {
+        self.device_labels
+            .lock()
+            .expect("device label mutex poisoned")
+            .insert(actual, label.to_owned());
+        let pending =
+            std::mem::take(&mut *self.pending.lock().expect("pending receipt mutex poisoned"));
+        pending.into_iter().for_each(|receipt| self.append(receipt));
+    }
+}
+
+impl alephcore::gateway::native_qa::NativeQaRpcObserver for NativeQaObserver {
+    fn record(&self, receipt: alephcore::gateway::native_qa::NativeQaRpcReceipt) {
+        self.append(receipt);
+    }
 }
 
 #[tokio::main(flavor = "multi_thread", worker_threads = 2)]
@@ -194,7 +298,7 @@ async fn run() -> anyhow::Result<()> {
         "project-c",
         source.replace("community-live", "project-c").as_bytes(),
     )?;
-    let _project_c = projects.create("C", Some("alice"), Some(&c_root))?;
+    let project_c = projects.create("C", Some("alice"), Some(&c_root))?;
     projects.add_member(&project_a.id, "alice")?;
     projects.add_member(&project_b.id, "alice")?;
 
@@ -246,6 +350,18 @@ async fn run() -> anyhow::Result<()> {
     gateway.handlers_mut().register("connect", move |request| {
         handle_connect(request, context.clone())
     });
+    let receipts = Arc::new(StdMutex::new(Vec::new()));
+    let rpc_observer = Arc::new(NativeQaObserver {
+        run: args.nonce.clone(),
+        receipts: receipts.clone(),
+        manager: manager.clone(),
+        project_a: project_a.id.clone(),
+        project_b: project_b.id.clone(),
+        project_c: project_c.id.clone(),
+        device_labels: StdMutex::new(HashMap::new()),
+        pending: StdMutex::new(Vec::new()),
+    });
+    gateway.set_native_qa_observer(rpc_observer.clone());
     let fixture = Arc::new(Mutex::new(Fixture {
         origin: origin.clone(),
         tokens,
@@ -260,8 +376,10 @@ async fn run() -> anyhow::Result<()> {
         asset_a_notify: Arc::new(Notify::new()),
         fixture: fixture.clone(),
         manager,
-        receipts: Arc::new(Mutex::new(Vec::new())),
+        receipts,
+        rpc_observer,
     }));
+
     let router = gateway
         .build_router()
         .layer(middleware::from_fn_with_state(
@@ -407,6 +525,13 @@ async fn control_loop(
                 let mut fixture = fixture.lock().await;
                 resolve_device(&mut fixture, device)
             };
+            if let Ok(actual) = &confirmed {
+                gateway_state
+                    .lock()
+                    .await
+                    .rpc_observer
+                    .confirm_device(device, actual.clone());
+            }
             if confirmed.is_err() {
                 write_json(
                     &mut output,
@@ -598,7 +723,7 @@ async fn control_loop(
                 .await
                 .receipts
                 .lock()
-                .await
+                .expect("receipt mutex poisoned")
                 .iter()
                 .find(|receipt| receipt.seq > after)
                 .cloned();
@@ -682,7 +807,7 @@ async fn delay_asset_response(
     if path.starts_with("/tabs/") {
         if let Some((user, device)) = identity {
             let state = gateway_state.lock().await;
-            let mut receipts = state.receipts.lock().await;
+            let mut receipts = state.receipts.lock().expect("receipt mutex poisoned");
             let result = match response.status().as_u16() {
                 200 => Some(("asset_ok", "ok")),
                 404 => Some(("asset_404", "refused")),

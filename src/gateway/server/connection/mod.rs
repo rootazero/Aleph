@@ -1258,6 +1258,23 @@ pub async fn handle_connection(
                                             }
                                         }
 
+                                        #[cfg(feature = "native-qa")]
+                                        if req.method == "connect" {
+                                            let snapshot = dispatch::CallerSnapshot::read(
+                                                &ctx.connections,
+                                                &conn_id,
+                                                ctx.client_is_local,
+                                            )
+                                            .await;
+                                            let observer = ctx.middleware_chain.native_qa_observer();
+                                            crate::gateway::native_qa::observe_connect(
+                                                &observer,
+                                                snapshot.verified_user,
+                                                snapshot.device_id,
+                                                true,
+                                            );
+                                        }
+
                                         response
                                     }
                                 }

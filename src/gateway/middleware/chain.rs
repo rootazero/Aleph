@@ -26,6 +26,8 @@ pub struct MiddlewareChain {
     auth: AuthLayer,
     validate: ValidateLayer,
     panel_projects: Option<Arc<PanelProjectSelector>>,
+    #[cfg(feature = "native-qa")]
+    native_qa_observer: crate::gateway::native_qa::NativeQaRpcObserverSlot,
 }
 
 impl MiddlewareChain {
@@ -44,6 +46,8 @@ impl MiddlewareChain {
             auth: AuthLayer::new(),
             validate: ValidateLayer::new(),
             panel_projects: None,
+            #[cfg(feature = "native-qa")]
+            native_qa_observer: crate::gateway::native_qa::NativeQaRpcObserverSlot::empty(),
         }
     }
 
@@ -58,6 +62,22 @@ impl MiddlewareChain {
     ) -> Self {
         self.panel_projects = selector;
         self
+    }
+
+    #[cfg(feature = "native-qa")]
+    #[must_use]
+    pub fn with_native_qa_observer(
+        mut self,
+        observer: Option<crate::gateway::native_qa::NativeQaRpcObserverHandle>,
+    ) -> Self {
+        self.native_qa_observer = crate::gateway::native_qa::observer_slot(observer);
+        self
+    }
+
+    #[cfg(feature = "native-qa")]
+    #[must_use]
+    pub fn native_qa_observer(&self) -> crate::gateway::native_qa::NativeQaRpcObserverSlot {
+        self.native_qa_observer.clone()
     }
 
     pub(crate) fn panel_context(&self, caller: PanelCallerContext) -> Option<PanelRequestContext> {
