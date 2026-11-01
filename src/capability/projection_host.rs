@@ -542,7 +542,12 @@ impl ProjectionHost {
         tree: Arc<OwnershipTree>,
         diagnostics_enabled: bool,
     ) -> Arc<Self> {
-        Self::mount_internal(registry, tree, DEFAULT_PENDING_CAPACITY, diagnostics_enabled)
+        Self::mount_internal(
+            registry,
+            tree,
+            DEFAULT_PENDING_CAPACITY,
+            diagnostics_enabled,
+        )
     }
 
     fn mount_internal(
@@ -559,11 +564,10 @@ impl ProjectionHost {
 
         let default_scope = Scope::default();
         let initial = HostSnapshot::from_facade(facade.snapshot_entries_in_scope(&default_scope));
-        let default_consumer =
-            Arc::new(ConsumerState::new(
-                default_scope,
-                capacity.max(MIN_PENDING_CAPACITY),
-            ));
+        let default_consumer = Arc::new(ConsumerState::new(
+            default_scope,
+            capacity.max(MIN_PENDING_CAPACITY),
+        ));
         // Enqueue the initial snapshot into the DEFAULT delivery queue BEFORE
         // the source/applier tasks spawn, so the REAL default applier applies
         // it (Ruling16). `applied` starts `None`; no publisher state may
@@ -653,7 +657,6 @@ impl ProjectionHost {
     ) -> Arc<Self> {
         Self::mount_internal(registry, tree, capacity, true)
     }
-
 
     /// Wait until the default consumer has actually applied a snapshot.
     ///
@@ -1787,6 +1790,7 @@ mod tests {
             concurrent_safe: false,
             max_duration_ms: None,
             revision: 0,
+            services: Vec::new(),
             implementation_contract: None,
         }
     }

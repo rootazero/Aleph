@@ -39,4 +39,13 @@ Initial audited inventory: Memory backend has 71 synchronous connection access s
 
 ## Results / 结果
 
-Implementation and checks pending. / 实施与验证待完成；本记录的授权提交不代表任何实现测试已经通过。
+### Task 1 — canonical required services / canonical 依赖服务
+
+- Runtime RED / 运行时失败: `cargo test -p aleph-slot-api --lib descriptor::tests` selected 25: 23 passed, 2 failed, 254 filtered. Required services disappeared across canonical conversion, and adding a Memory dependency did not change the Safe replay fingerprint. / 依赖元数据丢失，且新增依赖未影响 Safe 指纹。
+- Implementation / 实施: `CapabilityId`, `ServiceRelation` and `Service` now have one definition in slot-api, re-exported by Core. Canonical descriptors and `ToolDefinitionMetadata` round-trip `services`; empty services retain legacy JSON and fingerprint bytes. Nonempty edges use the sorted/deduplicated, length-prefixed `aleph-services-v1` preimage extension in both replay and Core projections. No Memory handlers have been migrated yet. / 单一类型源、双向传播、空依赖兼容；实际 Memory handler 尚未迁移。
+- API GREEN / API 通过: `cargo test -p aleph-slot-api --lib`: 279 passed, 0 failed, 0 filtered. The first GREEN attempt had a missing test-fixture field compiler error; that fixture was corrected before this successful run. / 首次绿色尝试的 fixture 编译错误已修正，保留失败记录。
+- Core GREEN / Core 通过: `cargo test -p alephcore --lib capability::backend`: 6 passed, 0 failed, 21734 filtered; exit 0 after 445.0 seconds. Together with the API run, 285 tests passed. / Core 投影 6 项通过，与 API 合计 285 项。
+- Formatting and patch validation / 格式与补丁: affected-file `rustfmt --check` and `git diff --check` passed. / 受影响文件格式与补丁检查通过。
+- Build observation / 构建观察: the Core command passed its pre-Cargo memory gate; while linking, a separate observation reported `available_bytes=2859057152 required_bytes=4294967296 BLOCK`. No additional Cargo command was launched during that observation. / 启动前门限通过；链接期间低于门限，未启动额外 Cargo。
+
+The full runtime implementation and later checks remain pending. / 完整运行时与后续验证仍待完成。

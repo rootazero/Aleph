@@ -12,6 +12,8 @@
 //! [`Service`] is a pure relation edge (`requires` / `provides` / `conflicts`):
 //! it carries no data and is never invocable.
 
+pub use aleph_slot_api::capability::{CapabilityId, Service, ServiceRelation};
+
 use crate::capability::ownership::{LifetimeScope, OwnerRef, VisibilityScope};
 
 /// The nine capability kinds this contract names.
@@ -87,13 +89,6 @@ impl CapabilityFacets {
     }
 }
 
-/// A namespaced capability identifier, e.g. `aleph/tools/<name>`.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct CapabilityId {
-    pub namespace: String,
-    pub name: String,
-}
-
 /// Monotonic capability revision, assigned by the owning registry on every
 /// successful mutation. Mirrors `ToolHandlerRegistry`'s own revision counter.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -108,24 +103,6 @@ pub struct CapabilityRevision(pub u64);
 pub struct SchemaRef {
     pub version: u32,
     pub fingerprint: [u8; 32],
-}
-
-/// How one capability relates to another in the service graph.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ServiceRelation {
-    Requires,
-    Provides,
-    Conflicts,
-}
-
-/// A service-graph edge: the capability this descriptor belongs to stands in
-/// `relation` to `target`.
-///
-/// Pure relation data — no payload, never invocable.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Service {
-    pub relation: ServiceRelation,
-    pub target: CapabilityId,
 }
 
 /// How a capability is surfaced to transports.
