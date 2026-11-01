@@ -453,7 +453,6 @@ fn test_engine_with_config(
         )),
         Arc::new(EmptyToolRegistry),
         Vec::new(),
-        None,
     )
 }
 
@@ -1641,7 +1640,6 @@ fn slash_engine<R: crate::executor::ToolRegistry + 'static>(
         )),
         registry,
         Vec::new(),
-        None,
     )
 }
 

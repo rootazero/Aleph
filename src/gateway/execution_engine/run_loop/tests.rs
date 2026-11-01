@@ -3119,7 +3119,6 @@ async fn the_turn_start_hooks_are_told_the_turns_permission_mode() {
         )),
         Arc::new(super::super::tests::EmptyToolRegistry),
         Vec::new(),
-        None,
     );
 
     let hook = |event: HookEvent, kind: HookKind, command: String| HookConfig {

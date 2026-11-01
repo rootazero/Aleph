@@ -1110,7 +1110,6 @@ async fn run_loop_with_prompt_hook(hook: Option<&str>, metadata: &[(&str, &str)]
         )),
         Arc::new(super::super::tests::EmptyToolRegistry),
         Vec::new(),
-        None,
     )
     .with_inline_consent(Arc::clone(&f.consent));
     let executor = hook.map(|command| {

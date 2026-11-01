@@ -1201,7 +1201,6 @@ fn runner_with_default_provider(
         default_prompt_mode: crate::thinker::prompt_mode::PromptMode::Minimal,
         power: None,
         memory_context_provider: None,
-        memory_backend: None,
         raw_memory_store: None,
         memory_project_scoped: false,
         tool_catalog: None,

@@ -107,14 +107,8 @@ pub(in crate::commands::start) struct AgentHandlersResult {
     >,
     /// Phase 6 follow-up: `MemoryContextProvider` exposed for the orchestrator
     /// path so `AgentHarnessRunner` can build the per-turn system prompt with
-    /// curated memory + hybrid retrieval. `ExecutionEngine` receives a clone via
-    /// `with_memory_context_provider`; the orchestrator path needs its own
-    /// reference because it does not hold an `ExecutionEngine`.
+    /// curated memory + hybrid retrieval.
     pub memory_context_provider: Option<Arc<alephcore::thinker::MemoryContextProvider>>,
-    /// Raw memory store exposed for the orchestrator path so the per-run
-    /// `ContextCompactor` can reuse hierarchical session summaries for
-    /// zero-API-cost compaction.
-    pub memory_backend: Option<alephcore::memory::store::MemoryBackend>,
     /// Memory-extension registry (capture-filter + `on_delegation` hooks).
     /// Exposed so the A2A outbound `A2ASubAgent` can route its delegation
     /// writes through the same capture filter the engine/compactor use;
@@ -1028,20 +1022,15 @@ pub(in crate::commands::start) async fn register_agent_handlers(
                 }
             }
         };
-        let mut engine = ExecutionEngine::new(
-            engine_config,
-            provider_registry,
-            tool_registry,
-            tools,
-            Some(memory_db.clone()),
-        )
-        .with_raw_memory_writer(raw_store.clone())
-        .with_app_config(app_config_arc.clone())
-        .with_tool_health(tool_health.clone())
-        // Share the one parser cell with `chat.send` and `agent.run`, so the
-        // slash surfaces resolve `/foo` identically.
-        // Filled by `init_tool_catalog` further down, before readiness.
-        .with_command_parser_cell(command_parser_cell.clone());
+        let mut engine =
+            ExecutionEngine::new(engine_config, provider_registry, tool_registry, tools)
+                .with_raw_memory_writer(raw_store.clone())
+                .with_app_config(app_config_arc.clone())
+                .with_tool_health(tool_health.clone())
+                // Share the one parser cell with `chat.send` and `agent.run`, so the
+                // slash surfaces resolve `/foo` identically.
+                // Filled by `init_tool_catalog` further down, before readiness.
+                .with_command_parser_cell(command_parser_cell.clone());
         if let Some(ref state_db) = resilience_db {
             engine = engine.with_state_database(state_db.clone());
         }
@@ -1380,7 +1369,6 @@ pub(in crate::commands::start) async fn register_agent_handlers(
             }
 
             mcp_for_orchestrator = Some(mcp.clone());
-            engine = engine.with_memory_context_provider(mcp);
         }
 
         // Wire session manager + event bus for auto-topic generation on first message
@@ -2176,7 +2164,6 @@ pub(in crate::commands::start) async fn register_agent_handlers(
         message_store: message_store.clone(),
         orchestrator_cell: orch_cell_out,
         memory_context_provider: mcp_for_orchestrator,
-        memory_backend: Some(memory_db.clone()),
         memory_ext_registry: memory_ext_registry.clone(),
     })
 }
