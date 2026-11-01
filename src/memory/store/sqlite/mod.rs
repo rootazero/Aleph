@@ -167,7 +167,7 @@ impl SqliteMemoryBackend {
         Self::access_connection(&self.conn, work)
     }
 
-    fn operation(&self) -> Result<Option<MemoryOperation>, AlephError> {
+    pub(crate) fn operation(&self) -> Result<Option<MemoryOperation>, AlephError> {
         let Some(owner) = &self.runtime else {
             return Ok(None);
         };

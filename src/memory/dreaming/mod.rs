@@ -908,6 +908,8 @@ pub struct DreamDaemon {
     /// injectable in tests because the global stamp is process-wide and
     /// parallel tests would otherwise race each other through it.
     activity_probe: Arc<dyn Fn() -> bool + Send + Sync>,
+    #[cfg(test)]
+    lifecycle_gate: Option<Arc<(tokio::sync::Notify, tokio::sync::Notify, AtomicBool)>>,
     // `project_scoped` was mirrored here until 2026-08-08 to gate the
     // per-namespace fan-out. It gated the wrong axis (see the fan-out site),
     // and once the gate was removed the field had zero readers — withdrawn
@@ -946,6 +948,8 @@ impl DreamDaemon {
             orientation: None,
             best_health: crate::sync_primitives::Mutex::new(best_health),
             activity_probe: Arc::new(move || idle_seconds() < idle_threshold),
+            #[cfg(test)]
+            lifecycle_gate: None,
         })
     }
 
@@ -960,6 +964,18 @@ impl DreamDaemon {
     ) -> Self {
         self.activity_probe = probe;
         self
+    }
+
+    #[cfg(test)]
+    async fn lifecycle_pause(&self) {
+        if let Some(gate) = &self.lifecycle_gate {
+            gate.2.store(
+                crate::memory::runtime::MemoryOperation::current().is_some(),
+                Ordering::SeqCst,
+            );
+            gate.0.notify_one();
+            gate.1.notified().await;
+        }
     }
 
     /// Test-only view of the in-memory best-health checkpoint, for asserting
@@ -1036,6 +1052,8 @@ impl DreamDaemon {
     /// stack. Persists `last_run_at` / `last_status` exactly like the scheduler
     /// path so observers (Panel, journalctl, `dream_status` table) see the cycle.
     pub async fn run_now(&self) -> Result<DreamReport, AlephError> {
+        #[cfg(test)]
+        self.lifecycle_pause().await;
         if self
             .is_running
             .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
@@ -1190,6 +1208,34 @@ impl DreamDaemon {
         }
     }
 
+    pub(crate) fn start_owned_background_task(
+        self: Arc<Self>,
+        runtime: Arc<crate::memory::runtime::MemoryRuntime>,
+        mut stop: tokio::sync::watch::Receiver<bool>,
+    ) -> JoinHandle<()> {
+        tokio::spawn(async move {
+            let mut ticker = interval(Duration::from_secs(DEFAULT_CHECK_INTERVAL_SECONDS));
+            loop {
+                if *stop.borrow() {
+                    break;
+                }
+                tokio::select! {
+                    biased;
+                    _ = stop.changed() => break,
+                    _ = ticker.tick() => {}
+                }
+                let operation = match runtime.operation() {
+                    Ok(operation) => operation,
+                    Err(_) => break,
+                };
+                // Keep window, activity, latch and timeout policy in check_and_run.
+                if let Err(error) = operation.scope(self.check_and_run()).await {
+                    warn!(%error, "DreamDaemon check failed");
+                }
+            }
+        })
+    }
+
     async fn run_scheduler(self: Arc<Self>) {
         let mut ticker = interval(Duration::from_secs(DEFAULT_CHECK_INTERVAL_SECONDS));
 
@@ -1202,6 +1248,8 @@ impl DreamDaemon {
     }
 
     async fn check_and_run(&self) -> Result<(), AlephError> {
+        #[cfg(test)]
+        self.lifecycle_pause().await;
         // G3 fix: every skip case logs once at INFO so operators can observe
         // daemon health from `journalctl`/log tails without DEBUG filtering.
         if !self.config.enabled {
@@ -1969,6 +2017,9 @@ fn parse_window(config: &ConfigDreamingConfig) -> Result<(NaiveTime, NaiveTime),
 /// guard and why the guard must be bound by the caller.
 #[cfg(test)]
 pub(crate) use crate::utils::scratch::scratch_root;
+
+#[cfg(test)]
+mod lifecycle_tests;
 
 #[cfg(test)]
 mod tests {
