@@ -45,32 +45,15 @@ impl Default for RetrievalTuning {
 
 /// SQLite-backed memory store using sqlite-vec for vector operations.
 ///
-/// # Deferred risk: sync `Mutex<Connection>` blocking the tokio executor
+/// All SQL enters through the same checked connection slot. Closing the slot
+/// never reopens it; a later runtime start constructs a fresh backend. The raw
+/// Markdown store owns its independent connection to the same database file.
 ///
-/// `conn` is `Arc<std::sync::Mutex<Connection>>` (the `Arc` wrapper is
-/// what makes `with_conn` below safe to drive from `spawn_blocking`).
-/// `lock_conn!` in `notes/store_impl.rs` still holds the guard across a
-/// full SQLite query — which is fine for single-shot ops but, under high
-/// concurrency (many simultaneous note-store / dream-report / recall-signal
-/// calls), causes the holding tokio worker thread to block until the query
-/// returns. With several long queries queued, the executor's parallelism
-/// collapses to one-at-a-time.
-///
-/// **Infra landed this commit, call-site migration deferred to next
-/// sprint:** the field is now `Arc<Mutex<…>>` and [`SqliteMemoryBackend::with_conn`]
-/// wraps a closure in `tokio::task::spawn_blocking`. Migrating the 48+
-/// `lock_conn!(self)` sites in `notes/store_impl.rs` plus the ~18 sites
-/// in the helper files (`dream_reports.rs`, `memory_write_decisions.rs`,
-/// `query_filed.rs`, `recall_signals.rs`) to the async helper is
-/// mechanical (each call becomes `with_conn(...).await?`) but spans enough
-/// surface that doing it in one review-round commit risks regressions across
-/// the 130+ store tests. Call it out as a separate sprint item with its own testing
-/// budget. Until then, treat high-concurrency note-store usage as a known
-/// performance ceiling rather than a correctness bug.
-///
-/// See `review-results/` for the original risk write-up.
+/// Synchronous store methods still hold a standard mutex during their queries.
+/// `with_conn` moves longer work onto the blocking pool; converting every store
+/// method to asynchronous blocking work remains a separate performance change.
 pub struct SqliteMemoryBackend {
-    conn: Arc<Mutex<Connection>>,
+    conn: Arc<Mutex<Option<Connection>>>,
     tuning: RetrievalTuning,
 }
 
@@ -140,9 +123,55 @@ impl SqliteMemoryBackend {
         );
 
         Ok(Self {
-            conn: Arc::new(Mutex::new(conn)),
+            conn: Arc::new(Mutex::new(Some(conn))),
             tuning: RetrievalTuning::default(),
         })
+    }
+
+    /// Close the actual connection, retaining it when SQLite refuses the close.
+    /// Callers must drain admitted work before reaching this boundary.
+    pub(crate) fn close(&self) -> Result<(), AlephError> {
+        let mut slot = self.conn.lock().unwrap_or_else(|error| {
+            tracing::warn!("SqliteMemoryBackend: recovering poisoned connection during close");
+            error.into_inner()
+        });
+        let Some(connection) = slot.take() else {
+            return Ok(());
+        };
+        match connection.close() {
+            Ok(()) => Ok(()),
+            Err((connection, error)) => {
+                *slot = Some(connection);
+                Err(AlephError::other(format!(
+                    "memory database close failed: {error}"
+                )))
+            }
+        }
+    }
+
+    /// Keep borrowed statements and transactions inside this checked boundary.
+    fn with_connection<R>(
+        &self,
+        work: impl FnOnce(&mut Connection) -> Result<R, AlephError>,
+    ) -> Result<R, AlephError> {
+        Self::access_connection(&self.conn, work)
+    }
+
+    fn access_connection<R>(
+        slot: &Mutex<Option<Connection>>,
+        work: impl FnOnce(&mut Connection) -> Result<R, AlephError>,
+    ) -> Result<R, AlephError> {
+        let mut guard = slot.lock().unwrap_or_else(|error| {
+            tracing::warn!(
+                "SqliteMemoryBackend: SQLite mutex was poisoned by a prior panic; \
+                 recovering (this should be rare)"
+            );
+            error.into_inner()
+        });
+        let connection = guard
+            .as_mut()
+            .ok_or_else(|| AlephError::other("memory database is closed"))?;
+        work(connection)
     }
 
     /// Test-only accessor for the underlying connection mutex. Used by
@@ -150,34 +179,13 @@ impl SqliteMemoryBackend {
     /// `total_changes()` counter directly.
     #[cfg(test)]
     #[allow(dead_code)] // test-only accessor
-    pub(crate) fn conn(&self) -> &Arc<Mutex<Connection>> {
+    pub(crate) fn conn(&self) -> &Arc<Mutex<Option<Connection>>> {
         &self.conn
     }
 
-    /// Run a synchronous SQLite closure off the tokio executor thread.
-    ///
-    /// Acquires `self.conn` (a `std::sync::Mutex<Connection>` wrapped in
-    /// `Arc` so the lock guard can be moved into a `spawn_blocking`
-    /// closure) and invokes `f` on the blocking pool. Use this in
-    /// preference to `lock_conn!` + inline work whenever the body holds
-    /// the guard across any I/O — otherwise the calling tokio worker
-    /// blocks until the SQLite query returns, and a queue of slow
-    /// queries collapses executor parallelism (Risk 4 of the review
-    /// backlog).
-    ///
-    /// Constraints (from `spawn_blocking`):
-    /// - `f` must be `Send + 'static` and own everything it touches.
-    /// - `R` must be `Send + 'static`.
-    /// - `f` runs synchronously on a blocking-pool thread; do not `.await`
-    ///   inside it.
-    ///
-    /// If a closure panics, `spawn_blocking` propagates a JoinError
-    /// surfaced as `AlephError::other` — same shape as the
-    /// `into_inner()` poison-recovery path used by `lock_conn!`.
-    ///
-    /// Migration is mechanical but spans 66+ call sites across
-    /// `notes/store_impl.rs` and the 6 helper files; the call-site sweep
-    /// is intentionally out of this commit (see the field doc-comment).
+    /// Run checked SQLite work on the blocking pool. A closure queued before
+    /// close but started afterwards fails without touching the closed database.
+    /// Owned runtime cancellation is layered onto this boundary by MemoryRuntime.
     pub async fn with_conn<F, R>(&self, f: F) -> Result<R, AlephError>
     where
         F: FnOnce(&Connection) -> Result<R, AlephError> + Send + 'static,
@@ -185,14 +193,7 @@ impl SqliteMemoryBackend {
     {
         let conn = Arc::clone(&self.conn);
         tokio::task::spawn_blocking(move || {
-            let guard = conn.lock().unwrap_or_else(|e| {
-                tracing::warn!(
-                    "SqliteMemoryBackend: SQLite mutex was poisoned by a prior panic; \
-                     recovering (this should be rare)"
-                );
-                e.into_inner()
-            });
-            f(&guard)
+            Self::access_connection(&conn, |connection| f(connection))
         })
         .await
         .map_err(|e| AlephError::other(format!("with_conn spawn_blocking join: {e}")))?
@@ -210,7 +211,7 @@ impl SqliteMemoryBackend {
         schema::init_vec_tables(&conn)?;
 
         Ok(Self {
-            conn: Arc::new(Mutex::new(conn)),
+            conn: Arc::new(Mutex::new(Some(conn))),
             tuning: RetrievalTuning::default(),
         })
     }
@@ -230,6 +231,9 @@ impl SqliteMemoryBackend {
 // ---------------------------------------------------------------------------
 // with_conn helper tests
 // ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod lifecycle_tests;
 
 #[cfg(test)]
 mod with_conn_tests {
