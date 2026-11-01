@@ -4513,6 +4513,8 @@ The initial missing-producer audit is historical. Production-router integration 
 
 初次缺少 producer 的审计属于历史；production-router 两项 integration 与真实 Gateway/Chrome fixture/driver 均通过，证明 passive discovery、认证显式 mount 及生命周期拒绝场景；Core 与 HTTP/browser 台账分别记录已证明内容及实际限制。community byte route 包含显式 live bearer、当前身份与独立 client/TLS/origin/private-rate-limit 校验，loopback 不豁免；既有公共 build artifact 的无 credential import 仍由原 owner 服务，带 Authorization 始终走 Core；discovery/delivery 现共用进程内 device selector，每次使用重验当前 paired principal 与 ProjectStore；无选择为 Global，有效选择为 Global+该项目，无效/撤销 claim 不回退；root 不进入 context wire，请求 path/header/query 不授权。跨 tab/撤销在下次边界观察，无 live push 或 idle 即时 teardown。host 仅在显式选择后向现有同源 exact-byte loader 注入凭据，snapshot 仍 passive。native keyring 归属保持不变，native WebView QA 与 web browser 证据分开；trust/load gate、ID replacement、Windows symlink 权限及其余 deferred 边界均见台账。
 
+**Next proposed phase / 下一阶段建议：** [Native project acceptance plan](../superpowers/plans/2026-11-01-panel-native-project-context-plan.md) and [restart prompt](../superpowers/plans/2026-11-01-panel-native-project-context-prompt.md) target real Windows WebView2, protected native credentials and the same production project context. The completed task is merged locally; native audit/design approval and runtime proof remain future work. / 已完成任务已合入本地 main；下一阶段先审计、批准 native 设计，再执行真实 WebView2/凭据链验收，不把 Chrome 或旧 memory-IPC 结果当 native 证明。
+
 ### 6.12 运行时 agent 观察面：已移除
 
 这是一个 removal/archive locator，不是可用能力索引。herdr 风格前台进程探测、agent 识别、运行时状态仲裁、`runtime.agents.*` wire、`terminal_sessions_*` 工具和两端 agent panel 已从生产代码、协议、UI 与 QA 删除。当前终端只保留服务端 PTY/VT 与 `pty.*` lifecycle、screen、input、resize、attach 和 exit；现行边界见 [TERMINAL_RUNTIME.md](TERMINAL_RUNTIME.md)。历史设计与审计记录位于 `docs/superpowers/`，下面的 D.4.40/D.4.41 只记录 pre-removal 历史，不描述当前产品能力。
