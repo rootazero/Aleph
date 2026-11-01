@@ -62,6 +62,22 @@ pub(crate) fn is_provider_exhausted(err: &crate::error::AlephError) -> bool {
 use super::{distill_action, DreamContext};
 use crate::error::AlephError;
 
+async fn compute_owned<F, R>(label: &'static str, work: F) -> Result<R, AlephError>
+where
+    F: FnOnce() -> R + Send + 'static,
+    R: Send + 'static,
+{
+    if let Some(operation) = crate::memory::runtime::MemoryOperation::current() {
+        return operation
+            .run_blocking(move || Ok(work()))
+            .await
+            .map_err(|error| AlephError::other(format!("{label} join: {error}")));
+    }
+    tokio::task::spawn_blocking(work)
+        .await
+        .map_err(|error| AlephError::other(format!("{label} join: {error}")))
+}
+
 /// A single stage in the dream pipeline.
 ///
 /// Each stage receives a `DreamContext`, performs its work, and returns

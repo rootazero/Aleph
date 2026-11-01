@@ -40,9 +40,7 @@ impl DreamStage for GraphRecomputeStage {
         let snapshot: GraphSnapshot = store.load_graph_snapshot(&agent_id).await?;
 
         // CPU-bound compute off the async runtime.
-        let computed = tokio::task::spawn_blocking(move || compute(&snapshot))
-            .await
-            .map_err(|e| AlephError::other(format!("graph recompute join: {e}")))?;
+        let computed = super::compute_owned("graph recompute", move || compute(&snapshot)).await?;
 
         // MinHash similarity edges (content-based; the structural snapshot has
         // no bodies). Non-fatal: failure → skip, keep 5-signal edges.
@@ -62,7 +60,7 @@ impl DreamStage for GraphRecomputeStage {
         };
 
         let related = if docs.len() >= 2 {
-            let mh = tokio::task::spawn_blocking(move || {
+            let mh = super::compute_owned("minhash", move || {
                 let threads = std::thread::available_parallelism().map_or(1, |n| n.get());
                 crate::memory::notes::graph::minhash::similarity_edges(
                     &docs,
@@ -71,8 +69,7 @@ impl DreamStage for GraphRecomputeStage {
                     threads,
                 )
             })
-            .await
-            .map_err(|e| AlephError::other(format!("minhash join: {e}")))?;
+            .await?;
             merge_related(computed.related, mh)
         } else {
             computed.related
@@ -213,6 +210,10 @@ fn merge_related(
     out.sort_by(|x, y| x.0.cmp(&y.0).then_with(|| x.1.cmp(&y.1)));
     out
 }
+
+#[cfg(test)]
+#[path = "graph_recompute_lifecycle_tests.rs"]
+mod lifecycle_tests;
 
 #[cfg(test)]
 mod tests {
