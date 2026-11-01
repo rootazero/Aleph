@@ -2,7 +2,7 @@
 # Panel native authenticated project context 验收设计
 
 - Date / 日期: 2026-11-01
-- Status / 状态: Draft — requires explicit approval before implementation / 草案——实施前必须获得明确批准
+- Status / 状态: Approved by the user in this session; implementation and runtime evidence are recorded separately / 本会话用户已明确批准；实施与运行证据另记于 run ledger
 - Worktree / 工作树: `native-context-qa`
 - Scope / 范围: QA-owned Windows Tauri/WebView2 acceptance only / 仅限 QA-owned Windows Tauri/WebView2 验收
 
