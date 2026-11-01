@@ -166,7 +166,7 @@ pub struct AgentHarnessRunner {
     /// recall message (`HarnessDeps::recall_context`). `None` preserves the
     /// old behaviour (boot path for tests / env without a memory backend).
     pub memory_context_provider:
-        Option<Arc<crate::thinker::memory_context_provider::MemoryContextProvider>>,
+        Option<Arc<crate::thinker::memory_context_provider::RuntimeMemoryContext>>,
 
     /// Raw-memory store used by the session-summary reuse reader. The derived
     /// SQLite backend stores notes and metadata; raw bodies live in Markdown.

@@ -233,6 +233,16 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     // Plugins are now installed via marketplace: `aleph plugin marketplace update && aleph plugin install <name>`
 
     let ownership_tree = Arc::new(OwnershipTree::new());
+    let aleph_home = alephcore::utils::paths::get_config_dir().map_err(|e| {
+        format!("Error: Failed to resolve config directory for metadata database: {e}")
+    })?;
+    let memory_runtime = alephcore::memory::runtime::MemoryRuntime::new(
+        alephcore::memory::runtime::MemoryRuntimeConfig {
+            metadata_path: aleph_home.join("metadata.db"),
+            note_memory_dir: aleph_home.join("memory").join("note"),
+        },
+        ownership_tree.clone(),
+    );
     initialize_extension_manager(args.daemon, Arc::clone(&ownership_tree)).await?;
 
     // Shared MCP-target ToolHandlerRegistry. The Phase 2 facade chain
@@ -268,9 +278,10 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
             .ok()
             .as_deref(),
     );
-    let projection_host = ProjectionHost::mount_with_diagnostics(
+    let projection_host = ProjectionHost::mount_with_memory(
         (*tool_registry_phase2).clone(),
         Arc::clone(&ownership_tree),
+        memory_runtime.clone(),
         diagnostics_enabled,
     );
     alephcore::capability::projection_host::set_projection_host(Arc::clone(&projection_host));
@@ -430,9 +441,6 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     // Initialize memory backend (SQLite + sqlite-vec)
     let data_dir = alephcore::utils::paths::get_data_dir()
         .map_err(|e| format!("Error: Failed to resolve data directory: {e}. Memory backend requires a persistent directory."))?;
-    let aleph_home = alephcore::utils::paths::get_config_dir().map_err(|e| {
-        format!("Error: Failed to resolve config directory for metadata database: {e}")
-    })?;
     let db_path = aleph_home.join("metadata.db");
 
     // Notify user if old LanceDB data directory exists
@@ -1537,6 +1545,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         &*app_config.read().await,
         app_config.clone(),
         &memory_db,
+        memory_runtime.clone(),
         raw_store.clone(),
         workspace_manager.clone(),
         agent_manager.clone(),
@@ -4616,7 +4625,7 @@ mod tests {
             &alephcore::utils::source_scan::production_prefix(&src),
         );
         let mount = production
-            .find("ProjectionHost::mount_with_diagnostics(")
+            .find("ProjectionHost::mount_with_memory(")
             .expect("startup must mount the canonical host with one diagnostics decision");
         let decision = production
             .find("let diagnostics_enabled =")
@@ -4681,7 +4690,7 @@ mod tests {
         let production = alephcore::utils::source_scan::code_text(&production);
 
         for call in [
-            "ProjectionHost::mount_with_diagnostics(",
+            "ProjectionHost::mount_with_memory(",
             "set_projection_host(",
             "wait_until_ready(",
         ] {
@@ -4701,8 +4710,8 @@ mod tests {
             .find("set_mcp_tool_registry(")
             .expect("set_mcp_tool_registry call must exist (sibling census)");
         let mount_at = production
-            .find("ProjectionHost::mount_with_diagnostics(")
-            .expect("ProjectionHost::mount_with_diagnostics call must exist (asserted above)");
+            .find("ProjectionHost::mount_with_memory(")
+            .expect("ProjectionHost::mount_with_memory call must exist (asserted above)");
         assert!(
             mount_at > install_at,
             "ProjectionHost::mount must be installed AFTER set_mcp_tool_registry — \

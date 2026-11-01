@@ -105,10 +105,9 @@ pub(in crate::commands::start) struct AgentHandlersResult {
     pub orchestrator_cell: Option<
         std::sync::Arc<std::sync::OnceLock<std::sync::Arc<alephcore::orchestrator::Orchestrator>>>,
     >,
-    /// Phase 6 follow-up: `MemoryContextProvider` exposed for the orchestrator
-    /// path so `AgentHarnessRunner` can build the per-turn system prompt with
-    /// curated memory + hybrid retrieval.
-    pub memory_context_provider: Option<Arc<alephcore::thinker::MemoryContextProvider>>,
+    /// Stable prompt entry; concrete context services belong to the runtime bundle.
+    pub memory_context_provider:
+        Option<Arc<alephcore::thinker::memory_context_provider::RuntimeMemoryContext>>,
     /// Memory-extension registry (capture-filter + `on_delegation` hooks).
     /// Exposed so the A2A outbound `A2ASubAgent` can route its delegation
     /// writes through the same capture filter the engine/compactor use;
@@ -130,6 +129,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
     app_config: &alephcore::Config,
     app_config_arc: Arc<tokio::sync::RwLock<alephcore::Config>>,
     memory_db: &alephcore::memory::store::MemoryBackend,
+    memory_runtime: Arc<alephcore::memory::runtime::MemoryRuntime>,
     raw_store: Arc<dyn alephcore::memory::store::raw_memory::RawMemoryStore>,
     workspace_manager: Option<Arc<alephcore::gateway::AgentEnvStore>>,
     agent_manager: Arc<alephcore::AgentManager>,
@@ -222,10 +222,12 @@ pub(in crate::commands::start) async fn register_agent_handlers(
     let mut orch_cell_out: Option<
         std::sync::Arc<std::sync::OnceLock<std::sync::Arc<alephcore::orchestrator::Orchestrator>>>,
     > = None;
-    // Phase 6 follow-up: hold the same MemoryContextProvider that gets injected
-    // into the (legacy) ExecutionEngine so the orchestrator path can build a
-    // system prompt with curated memory + hybrid retrieval.
-    let mut mcp_for_orchestrator: Option<Arc<alephcore::thinker::MemoryContextProvider>> = None;
+    let memory_default_agent = router.default_agent().to_owned();
+    let mcp_for_orchestrator = Some(Arc::new(
+        alephcore::thinker::memory_context_provider::RuntimeMemoryContext::new(
+            memory_runtime.clone(),
+        ),
+    ));
     // F5 (per-team usage): lift `resilience_db` out of the real-engine branch so
     // the `teams.usage` RPC handler can scan `task_traces` for ProviderUsage
     // events scoped to a team's members. `None` in the simulated branch (no
@@ -576,6 +578,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
 
         // Build tool config with memory backend, embedder, search API key, and agent management deps
         let tool_config = alephcore::executor::BuiltinToolConfig {
+            memory_runtime: Some(memory_runtime.clone()),
             memory_db: Some(memory_db.clone()),
             raw_memory_store: Some(raw_store.clone()),
             embedder,
@@ -1367,8 +1370,6 @@ pub(in crate::commands::start) async fn register_agent_handlers(
                 alephcore::thinker::memory_context_provider::decline_session_reflector(NO_PROVIDER);
                 alephcore::thinker::memory_context_provider::decline_open_loop_inject(NO_PROVIDER);
             }
-
-            mcp_for_orchestrator = Some(mcp.clone());
         }
 
         // Wire session manager + event bus for auto-topic generation on first message
@@ -2124,6 +2125,17 @@ pub(in crate::commands::start) async fn register_agent_handlers(
         full_config,
         daemon,
     );
+
+    memory_runtime.configure_services(alephcore::memory::runtime::MemoryServicesConfig {
+        memory: app_config.memory.clone(),
+        raw_store: raw_store.clone(),
+        provider: default_prov.clone(),
+        extensions: memory_ext_registry.clone(),
+        state_db: state_db_out.clone(),
+        default_agent_id: memory_default_agent,
+        curated_root: alephcore::utils::paths::get_config_dir()?.join("agents"),
+        snapshot_dir: alephcore::utils::paths::get_data_dir()?.join("sessions"),
+    })?;
 
     Ok(AgentHandlersResult {
         // Both branches (real-execution at line ~1443 and simulated-fallback at

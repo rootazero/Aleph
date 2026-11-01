@@ -98,7 +98,9 @@ pub(in crate::commands::start) async fn initialize_orchestrator(
     // hybrid retrieval entirely). When `Some`, AgentHarnessRunner uses it to
     // assemble the system prompt before each turn. None disables only the
     // memory-driven prompt sections; AgentRoleLayer still renders.
-    memory_context_provider: Option<Arc<alephcore::thinker::MemoryContextProvider>>,
+    memory_context_provider: Option<
+        Arc<alephcore::thinker::memory_context_provider::RuntimeMemoryContext>,
+    >,
     // Markdown-backed raw memory store used by compaction summary reuse.
     raw_memory_store: Option<Arc<dyn alephcore::memory::store::raw_memory::RawMemoryStore>>,
     // Tool catalog — owns the `ToolHealthCache` whose snapshot

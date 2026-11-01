@@ -178,7 +178,7 @@ mod memory;
 mod orientation;
 mod runtime;
 
-pub use runtime::RuntimeMemoryContext;
+pub use runtime::{CuratedRuntimeError, RuntimeMemoryContext};
 
 pub use helpers::*;
 

@@ -667,7 +667,9 @@ pub async fn handle_trace(
     request: JsonRpcRequest,
     raw_store: Arc<dyn RawMemoryStore>,
     db: MemoryBackend,
-    mcp: Option<crate::sync_primitives::Arc<crate::thinker::MemoryContextProvider>>,
+    mcp: Option<
+        crate::sync_primitives::Arc<crate::thinker::memory_context_provider::RuntimeMemoryContext>,
+    >,
 ) -> JsonRpcResponse {
     use crate::builtin_tools::memory_trace::{MemoryTraceArgs, MemoryTraceTool, TraceKind};
 
@@ -1312,11 +1314,17 @@ mod trace_tests {
         )
         .unwrap();
 
-        let mcp = Arc::new(crate::thinker::MemoryContextProvider::new(
-            db.clone(),
-            raw_store.clone(),
-            None,
-        ));
+        let mcp = Arc::new(
+            crate::thinker::memory_context_provider::RuntimeMemoryContext::new(
+                crate::memory::runtime::MemoryRuntime::new(
+                    crate::memory::runtime::MemoryRuntimeConfig {
+                        metadata_path: dir.path().join("unused-runtime.db"),
+                        note_memory_dir: dir.path().join("unused-note"),
+                    },
+                    Arc::new(crate::capability::ownership::OwnershipTree::new()),
+                ),
+            ),
+        );
         let req = JsonRpcRequest::with_id(
             "memory.trace",
             Some(json!({

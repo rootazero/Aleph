@@ -43,7 +43,9 @@ pub(in crate::commands::start) fn register_memory_handlers(
     // Curated hot-tier store resolver. `None` in a process with no agent
     // runtime — see the `memory.curated.*` registrations below for why they
     // are still registered in that case.
-    memory_context_provider: Option<std::sync::Arc<alephcore::thinker::MemoryContextProvider>>,
+    memory_context_provider: Option<
+        std::sync::Arc<alephcore::thinker::memory_context_provider::RuntimeMemoryContext>,
+    >,
     daemon: bool,
 ) {
     register_handler!(

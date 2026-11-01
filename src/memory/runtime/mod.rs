@@ -101,6 +101,19 @@ impl MemoryRuntime {
             .map_err(|_| AlephError::other("memory service inputs are already installed"))
     }
 
+    pub(crate) fn injection_mode(&self) -> crate::config::types::memory::MemoryInjectionMode {
+        self.memory_config()
+            .map(|memory| memory.injection_mode)
+            .unwrap_or_default()
+    }
+
+    pub(crate) fn memory_config(&self) -> Option<&crate::config::types::memory::MemoryConfig> {
+        self.services_config
+            .get()
+            .and_then(Option::as_ref)
+            .map(|inputs| &inputs.memory)
+    }
+
     fn new_sources(
         config: MemoryRuntimeConfig,
         ownership: Arc<OwnershipTree>,

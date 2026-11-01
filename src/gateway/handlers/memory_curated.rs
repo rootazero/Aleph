@@ -10,7 +10,7 @@
 //!
 //! The `agent_id` on the wire is the **BASE** (registered) agent id. The
 //! effective per-scope storage id (`main__u-bob`, `main__proj-…`) is composed
-//! by [`MemoryContextProvider::get_or_load_curated_store`] from the ambient
+//! by the bundle-owned `MemoryContextProvider` from the ambient
 //! scope. This handler must NOT pre-compose it: `session_write_id` is not
 //! idempotent under re-application, so feeding it an already-composed id
 //! under an active personal scope double-composes (the same warning the
@@ -37,9 +37,9 @@ use serde_json::json;
 use super::super::protocol::{
     JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR, INVALID_PARAMS, SERVICE_UNAVAILABLE,
 };
-use crate::memory::curated::store::{CuratedError, CuratedMemoryStore, WriteOutcome};
+use crate::memory::curated::store::{CuratedError, WriteOutcome};
 use crate::sync_primitives::Arc;
-use crate::thinker::MemoryContextProvider;
+use crate::thinker::memory_context_provider::{CuratedRuntimeError, RuntimeMemoryContext};
 
 /// Shared params: every curated verb is scoped by base agent id.
 #[derive(Debug, Default, Deserialize)]
@@ -130,32 +130,22 @@ fn addressable(agent_id: &str) -> bool {
         && crate::gateway::visibility::partition_visible(agent_id)
 }
 
-/// Resolve the per-scope store, or an error response describing why not.
-#[expect(
-    clippy::result_large_err,
-    reason = "Resolve the store or return its prepared RPC response without changing the response contract or allocating a wrapper"
-)]
-async fn resolve_store(
-    request_id: &Option<serde_json::Value>,
-    mcp: Option<&Arc<MemoryContextProvider>>,
-    agent_id: &str,
-) -> Result<Arc<CuratedMemoryStore>, JsonRpcResponse> {
-    let Some(mcp) = mcp else {
-        // No agent runtime in this process (a bare gateway). Distinct from
-        // "empty memory": say so rather than serve a convincing empty list.
-        return Err(JsonRpcResponse::error(
-            request_id.clone(),
+fn runtime_error(
+    request_id: Option<serde_json::Value>,
+    error: CuratedRuntimeError,
+) -> JsonRpcResponse {
+    match error {
+        CuratedRuntimeError::Unavailable => JsonRpcResponse::error(
+            request_id,
             SERVICE_UNAVAILABLE,
-            "curated memory unavailable: no agent runtime in this process".to_string(),
-        ));
-    };
-    mcp.get_or_load_curated_store(agent_id).await.map_err(|e| {
-        JsonRpcResponse::error(
-            request_id.clone(),
+            "curated memory unavailable: Memory is not running".to_owned(),
+        ),
+        CuratedRuntimeError::Service(error) => JsonRpcResponse::error(
+            request_id,
             INTERNAL_ERROR,
-            format!("memory.curated: {e}"),
-        )
-    })
+            format!("memory.curated: {error}"),
+        ),
+    }
 }
 
 /// Map a store error onto the caller/us split (§4.13c three-way): everything
@@ -180,7 +170,7 @@ fn base_agent(agent_id: Option<String>) -> String {
 /// `memory.curated.list` — read the hot-tier entries plus budget usage.
 pub async fn handle_list(
     request: JsonRpcRequest,
-    mcp: Option<Arc<MemoryContextProvider>>,
+    mcp: Option<Arc<RuntimeMemoryContext>>,
 ) -> JsonRpcResponse {
     let params: AgentParams = request
         .params
@@ -190,17 +180,17 @@ pub async fn handle_list(
     let agent = base_agent(params.agent_id);
 
     if !addressable(&agent) {
-        let limit = mcp
-            .as_ref()
-            .map_or(0, |m| m.curated_config.memory_char_limit);
+        let limit = mcp.as_ref().map_or(0, |m| m.curated_limit());
         return JsonRpcResponse::success(request.id, empty_value(limit));
     }
 
-    let store = match resolve_store(&request.id, mcp.as_ref(), &agent).await {
-        Ok(s) => s,
-        Err(resp) => return resp,
+    let Some(mcp) = mcp else {
+        return runtime_error(request.id, CuratedRuntimeError::Unavailable);
     };
-    let snap = store.snapshot_outcome(String::new());
+    let snap = match mcp.curated_list(&agent).await {
+        Ok(snapshot) => snapshot,
+        Err(error) => return runtime_error(request.id, error),
+    };
     JsonRpcResponse::success(
         request.id,
         snapshot_value(
@@ -217,7 +207,7 @@ pub async fn handle_list(
 /// `memory.curated.replace` — rewrite the single entry matching `old_text`.
 pub async fn handle_replace(
     request: JsonRpcRequest,
-    mcp: Option<Arc<MemoryContextProvider>>,
+    mcp: Option<Arc<RuntimeMemoryContext>>,
 ) -> JsonRpcResponse {
     let params: ReplaceParams = match super::parse_params(&request) {
         Ok(p) => p,
@@ -230,23 +220,23 @@ pub async fn handle_replace(
         return error_response(request.id, &CuratedError::NoMatch(params.old_text.clone()));
     }
 
-    let store = match resolve_store(&request.id, mcp.as_ref(), &agent).await {
-        Ok(s) => s,
-        Err(resp) => return resp,
+    let Some(mcp) = mcp else {
+        return runtime_error(request.id, CuratedRuntimeError::Unavailable);
     };
-    match store.replace(&params.old_text, &params.content).await {
-        Ok(outcome) => {
-            invalidate(mcp.as_ref(), &store).await;
-            JsonRpcResponse::success(request.id, outcome_value(&outcome))
-        }
-        Err(e) => error_response(request.id, &e),
+    match mcp
+        .curated_replace(&agent, params.old_text, params.content)
+        .await
+    {
+        Ok(Ok(outcome)) => JsonRpcResponse::success(request.id, outcome_value(&outcome)),
+        Ok(Err(error)) => error_response(request.id, &error),
+        Err(error) => runtime_error(request.id, error),
     }
 }
 
 /// `memory.curated.remove` — drop the single entry matching `old_text`.
 pub async fn handle_remove(
     request: JsonRpcRequest,
-    mcp: Option<Arc<MemoryContextProvider>>,
+    mcp: Option<Arc<RuntimeMemoryContext>>,
 ) -> JsonRpcResponse {
     let params: RemoveParams = match super::parse_params(&request) {
         Ok(p) => p,
@@ -257,35 +247,13 @@ pub async fn handle_remove(
         return error_response(request.id, &CuratedError::NoMatch(params.old_text.clone()));
     }
 
-    let store = match resolve_store(&request.id, mcp.as_ref(), &agent).await {
-        Ok(s) => s,
-        Err(resp) => return resp,
+    let Some(mcp) = mcp else {
+        return runtime_error(request.id, CuratedRuntimeError::Unavailable);
     };
-    match store.remove(&params.old_text).await {
-        Ok(outcome) => {
-            invalidate(mcp.as_ref(), &store).await;
-            JsonRpcResponse::success(request.id, outcome_value(&outcome))
-        }
-        Err(e) => error_response(request.id, &e),
-    }
-}
-
-/// Evict the frozen per-session curated envelope after a mutation.
-///
-/// `build_curated_message` freezes a rendered snapshot per (resolved id,
-/// session) and reuses it for that session's whole lifetime (§2.18 prefix
-/// stability). Without this eviction, an entry corrected in the Panel keeps
-/// being injected in its old wording into every already-open conversation —
-/// the file changes and the prompt does not.
-///
-/// The key is the **resolved** storage id, not the base id the caller sent
-/// (`invalidate_curated_for_agent`'s doc says so explicitly). It is read back
-/// off the store we just wrote through rather than re-derived from the base
-/// id: the store was built by the resolver and carries the answer, and a
-/// second derivation here would be a second source that can disagree with it.
-async fn invalidate(mcp: Option<&Arc<MemoryContextProvider>>, store: &Arc<CuratedMemoryStore>) {
-    if let Some(mcp) = mcp {
-        mcp.invalidate_curated_for_agent(&store.agent_id).await;
+    match mcp.curated_remove(&agent, params.old_text).await {
+        Ok(Ok(outcome)) => JsonRpcResponse::success(request.id, outcome_value(&outcome)),
+        Ok(Err(error)) => error_response(request.id, &error),
+        Err(error) => runtime_error(request.id, error),
     }
 }
 
@@ -293,20 +261,54 @@ async fn invalidate(mcp: Option<&Arc<MemoryContextProvider>>, store: &Arc<Curate
 mod tests {
     use super::*;
     use crate::config::types::memory::MemoryInjectionMode;
-    use crate::memory::curated::CuratedConfig;
     use serde_json::json;
 
     const LIMIT: usize = 200;
 
-    fn provider(root: &std::path::Path) -> Arc<MemoryContextProvider> {
-        Arc::new(
-            MemoryContextProvider::new_for_test_empty_envelope(MemoryInjectionMode::Context)
-                .with_curated_config(CuratedConfig {
-                    memory_char_limit: LIMIT,
-                    user_char_limit: LIMIT,
-                    ..CuratedConfig::default()
-                })
-                .with_curated_root_for_test(root.to_path_buf()),
+    async fn provider(
+        root: &std::path::Path,
+    ) -> (
+        Arc<RuntimeMemoryContext>,
+        Arc<crate::memory::runtime::MemoryRuntime>,
+    ) {
+        use crate::capability::ownership::OwnershipTree;
+        use crate::config::types::memory::MemoryConfig;
+        use crate::memory::extensions::MemoryExtensionRegistry;
+        use crate::memory::runtime::{MemoryRuntime, MemoryRuntimeConfig, MemoryServicesConfig};
+        use crate::memory::store::markdown::MarkdownSessionStore;
+
+        let raw = Arc::new(
+            MarkdownSessionStore::new(&root.join("runtime"))
+                .await
+                .unwrap(),
+        );
+        let mut memory = MemoryConfig::default();
+        memory.injection_mode = MemoryInjectionMode::Context;
+        memory.project_scoped = false;
+        memory.curated.memory_char_limit = LIMIT;
+        memory.curated.user_char_limit = LIMIT;
+        memory.embedding.providers.clear();
+        let runtime = MemoryRuntime::new_with_services(
+            MemoryRuntimeConfig {
+                metadata_path: root.join("runtime/metadata.db"),
+                note_memory_dir: root.join("runtime/note"),
+            },
+            Arc::new(OwnershipTree::new()),
+            MemoryServicesConfig {
+                memory,
+                raw_store: raw,
+                provider: None,
+                extensions: Arc::new(MemoryExtensionRegistry::new()),
+                state_db: None,
+                default_agent_id: "main".into(),
+                curated_root: root.to_owned(),
+                snapshot_dir: root.join("runtime/snapshots"),
+            },
+        );
+        runtime.start().await.unwrap();
+        (
+            Arc::new(RuntimeMemoryContext::new(runtime.clone())),
+            runtime,
         )
     }
 
@@ -333,7 +335,7 @@ mod tests {
     async fn list_reports_entries_and_budget_usage() {
         let dir = tempfile::tempdir().unwrap();
         seed(dir.path(), "main", "likes tea\n§\nships on fridays\n§\n").await;
-        let mcp = provider(dir.path());
+        let (mcp, runtime) = provider(dir.path()).await;
 
         let resp = handle_list(
             req("memory.curated.list", json!({ "agent_id": "main" })),
@@ -350,13 +352,14 @@ mod tests {
         // Per-entry char counts let the Panel show which entry costs what
         // without re-deriving the store's own char (not byte) accounting.
         assert_eq!(v["entries"][0]["chars"], json!("likes tea".chars().count()));
+        runtime.stop().await.unwrap();
     }
 
     #[tokio::test]
     async fn replace_rewrites_the_matched_entry_and_returns_the_new_state() {
         let dir = tempfile::tempdir().unwrap();
         seed(dir.path(), "main", "likes tea\n§\nships on fridays\n§\n").await;
-        let mcp = provider(dir.path());
+        let (mcp, runtime) = provider(dir.path()).await;
 
         let resp = handle_replace(
             req(
@@ -382,13 +385,14 @@ mod tests {
             .unwrap();
         assert!(on_disk.contains("likes coffee"), "{on_disk}");
         assert!(!on_disk.contains("likes tea"), "{on_disk}");
+        runtime.stop().await.unwrap();
     }
 
     #[tokio::test]
     async fn remove_drops_the_matched_entry() {
         let dir = tempfile::tempdir().unwrap();
         seed(dir.path(), "main", "likes tea\n§\nships on fridays\n§\n").await;
-        let mcp = provider(dir.path());
+        let (mcp, runtime) = provider(dir.path()).await;
 
         let resp = handle_remove(
             req(
@@ -401,6 +405,7 @@ mod tests {
 
         assert!(resp.is_success(), "{:?}", resp.error);
         assert_eq!(texts(&resp.result.unwrap()), vec!["likes tea"]);
+        runtime.stop().await.unwrap();
     }
 
     /// The single most load-bearing property of this handler family: the
@@ -412,11 +417,21 @@ mod tests {
     async fn the_rpc_and_the_remember_tool_resolve_the_same_store() {
         let dir = tempfile::tempdir().unwrap();
         seed(dir.path(), "main", "written by the tool\n§\n").await;
-        let mcp = provider(dir.path());
+        let (mcp, runtime) = provider(dir.path()).await;
 
-        // What the tool's registry arm does, verbatim: base id in, resolver
-        // composes the scope.
-        let tool_store = mcp.get_or_load_curated_store("main").await.unwrap();
+        let tool =
+            crate::builtin_tools::runtime::RuntimeTool::<crate::builtin_tools::RememberTool>::new(
+                runtime.clone(),
+            );
+        let written = tool
+            .call_for_agent(
+                "main",
+                crate::builtin_tools::remember::RememberArgs::Add {
+                    content: "I prefer tea in the evening.".into(),
+                },
+            )
+            .await
+            .unwrap();
 
         let resp = handle_list(
             req("memory.curated.list", json!({ "agent_id": "main" })),
@@ -425,8 +440,9 @@ mod tests {
         .await;
         let listed = texts(&resp.result.unwrap());
 
-        assert_eq!(listed, tool_store.current_entries());
-        assert_eq!(listed, vec!["written by the tool"]);
+        assert_eq!(listed, written.entries);
+        assert!(listed.contains(&"I prefer tea in the evening.".to_owned()));
+        runtime.stop().await.unwrap();
     }
 
     /// Caller-composed ids are refused rather than trusted: the resolver
@@ -436,7 +452,7 @@ mod tests {
     async fn a_pre_composed_id_reads_as_an_empty_store_not_a_phantom_one() {
         let dir = tempfile::tempdir().unwrap();
         seed(dir.path(), "main__u-bob", "bob's fact\n§\n").await;
-        let mcp = provider(dir.path());
+        let (mcp, runtime) = provider(dir.path()).await;
 
         let resp = handle_list(
             req("memory.curated.list", json!({ "agent_id": "main__u-bob" })),
@@ -452,6 +468,7 @@ mod tests {
         assert_eq!(v["limit"], json!(LIMIT));
         assert_eq!(v["usage_chars"], json!(0));
         assert_eq!(v["legacy"], json!(false));
+        runtime.stop().await.unwrap();
     }
 
     /// A foreign partition must not be reachable by naming it, and the
@@ -463,7 +480,7 @@ mod tests {
 
         let dir = tempfile::tempdir().unwrap();
         seed(dir.path(), "main__u-alice", "alice's fact\n§\n").await;
-        let mcp = provider(dir.path());
+        let (mcp, runtime) = provider(dir.path()).await;
 
         let resp = CALLER_USER
             .scope(
@@ -488,6 +505,7 @@ mod tests {
             .await
             .unwrap();
         assert!(on_disk.contains("alice's fact"));
+        runtime.stop().await.unwrap();
     }
 
     /// Everything the caller can fix by sending different arguments is
@@ -502,7 +520,7 @@ mod tests {
             "ships on fridays\n§\nships on mondays\n§\n",
         )
         .await;
-        let mcp = provider(dir.path());
+        let (mcp, runtime) = provider(dir.path()).await;
 
         let ambiguous = handle_remove(
             req(
@@ -523,6 +541,43 @@ mod tests {
         )
         .await;
         assert_eq!(missing.error.unwrap().code, INVALID_PARAMS);
+        runtime.stop().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn off_rejects_curated_reads_and_writes_and_restart_uses_the_same_file() {
+        let dir = tempfile::tempdir().unwrap();
+        seed(dir.path(), "main", "likes tea\n§\n").await;
+        let (mcp, runtime) = provider(dir.path()).await;
+        let file = dir.path().join("main/MEMORY.md");
+        let before = tokio::fs::read(&file).await.unwrap();
+        runtime.stop().await.unwrap();
+        let listed = handle_list(
+            req("memory.curated.list", json!({"agent_id": "main"})),
+            Some(mcp.clone()),
+        )
+        .await;
+        assert_eq!(listed.error.unwrap().code, SERVICE_UNAVAILABLE);
+        let replaced = handle_replace(
+            req(
+                "memory.curated.replace",
+                json!({
+                    "agent_id": "main", "old_text": "tea", "content": "likes coffee"
+                }),
+            ),
+            Some(mcp.clone()),
+        )
+        .await;
+        assert_eq!(replaced.error.unwrap().code, SERVICE_UNAVAILABLE);
+        assert_eq!(tokio::fs::read(&file).await.unwrap(), before);
+        runtime.start().await.unwrap();
+        let listed = handle_list(
+            req("memory.curated.list", json!({"agent_id": "main"})),
+            Some(mcp),
+        )
+        .await;
+        assert_eq!(texts(&listed.result.unwrap()), vec!["likes tea"]);
+        runtime.stop().await.unwrap();
     }
 
     /// No agent runtime is not "empty memory". Answering with an empty list
@@ -546,7 +601,7 @@ mod tests {
     async fn a_mutation_evicts_the_frozen_prompt_envelope() {
         let dir = tempfile::tempdir().unwrap();
         seed(dir.path(), "main", "likes tea\n§\n").await;
-        let mcp = provider(dir.path());
+        let (mcp, runtime) = provider(dir.path()).await;
 
         let before = mcp.build_curated_message("main", "ses-1").await.unwrap();
         assert!(format!("{before:?}").contains("likes tea"));
@@ -565,5 +620,6 @@ mod tests {
         let rendered = format!("{after:?}");
         assert!(rendered.contains("likes coffee"), "{rendered}");
         assert!(!rendered.contains("likes tea"), "{rendered}");
+        runtime.stop().await.unwrap();
     }
 }
