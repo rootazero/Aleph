@@ -71,15 +71,17 @@ Receipt corrections also replace the unrelated presence/health/config version wi
 
 ## Verification / 验证
 
-- `node --test qa/native_ipc/native_project_protocol_test.mjs qa/native_ipc/native_project_evidence_test.mjs qa/native_ipc/native_project_run_test.mjs qa/native_ipc/native_project_driver_test.mjs qa/native_ipc/native_project_gateway_smoke_test.mjs`: **32 passed, 0 failed, 0 skipped**.
+- `node --test qa/native_ipc/*_test.mjs`: **37 passed, 0 failed, 0 skipped**.
 - `node qa/native_ipc/panel_driver.mjs --self-test`: **37/37**, JS VM only / 仅 JS VM。
 - `node qa/native_ipc/run-real.mjs --self-test`: **15/15 + 45/45**, pure fakes/owned loopback only / 仅纯 fake 与自有 loopback。
 - Guarded `CARGO_BUILD_JOBS=1 cargo build --features native-qa --bin aleph-panel-native-qa-gateway`: **passed**; final incremental build 12.74s. Existing `src/extension/projection.rs` `panel_snapshot` dead-code warning remains.
+- Guarded `CARGO_BUILD_JOBS=1 cargo check --bin aleph-server`: **passed**; the default build keeps the observer surface compiled out. Guarded `CARGO_BUILD_JOBS=1 cargo check --features native-qa --bin aleph-panel-native-qa-gateway`: **passed**; only the existing `src/extension/projection.rs` `panel_snapshot` dead-code warning remains.
 - Guarded `CARGO_BUILD_JOBS=1 cargo check -p aleph-panel --lib --no-default-features --features panel-modular`: **passed**; final check 1m14s. Existing `PanelTabDescriptor` unused-import warning remains. This is a native-target library check, not a fresh WASM build.
 - Every Cargo invocation was preceded by `python qa/browser_live/check_memory.py` from the worktree root; Cargo ran serially in the same dev profile/target. / 每次 Cargo 前均运行 memory gate，固定单 job、同 profile/target。
 - Earlier Panel checks timed out during compilation; an intermediate `E0382` from the added `aria-pressed` closure was fixed by removing that unnecessary attribute. Final compilation passed. / 早先超时和中途编译错误均披露，不冒充首次全绿。
 - Protocol RED/GREEN regressions now prevent empty, partial or duplicate phases from passing and prevent a blocked phase from hiding cleanup ambiguity. Run identifiers use the full 64-hex digest.
 - Provenance regressions exposed that arbitrary `kind/reason` text could enter the ledger. The boundary now accepts only the implemented fixed source-map/hash labels and rejects raw path/token text before storage. / provenance 字段已限制为已实现的固定标签；先 RED 再 GREEN，拒绝将路径或 token 文本写入台账。
+- The executable runner was checked in both modes: default mode exits `4` with `NOT_RUN/preflight_only`; `--execute` exits `5` with `BLOCKED/endpoint_transition_requires_approved_native_driver` and records no native mutation.
 - Changed Rust files passed targeted `rustfmt --check`; `python qa/browser_live/check_docs.py` and `git diff --check` passed. / 改动 Rust 文件格式、文档检查与 diff 空白检查通过。
 - Fixture behavior is verified through the independent built-helper Node WS/HTTP tests rather than a monolithic Core lib-test or a new public test shim. / fixture 使用独立 helper 的真实 WS/HTTP 测试，未增加 public test shim 或重跑 monolithic Core 配置。
 - Commits use per-invocation `core.hooksPath=/dev/null` because the existing shared formatting hook is blocked by unrelated baseline files; targeted changed-file formatting passes, and no global hook configuration was changed. / 沿用单次提交绕过既有基线 hook 阻塞，未修改全局 hook 配置；改动文件格式已单独验证。
@@ -88,11 +90,11 @@ Ignored local evidence / ignored 本地证据: `.superpowers/sdd/2026-11-01-pane
 
 ## Independent review / 独立审查
 
-The fresh read-only whole-branch reviewer `del_mvxlbhy5_sr3x` returned three findings and ended with **SIGTERM**. This is a substantive written review, not a clean-exit review. It ran no tests. The earlier focused reviewer `del_mvxkn3my_zrsk` also ended SIGTERM and produced no usable findings.
+The fresh read-only whole-branch reviewer `del_mvxlbhy5_sr3x` returned three findings and ended with **SIGTERM**. This is a substantive written review, not a clean-exit review. It ran no tests. The earlier focused reviewer `del_mvxkn3my_zrsk` also ended SIGTERM and produced no usable findings. A later fresh reviewer `del_mvxz7fqg_6lk4` also ended **SIGTERM** before producing findings; it must not be described as a clean review.
 
 完整分支 fresh reviewer 有书面结论，但进程 SIGTERM，不能称 clean review；另一个 focused reviewer 没有可用结论。三项处理如下：
 
-- **HIGH, open / 未完成**: missing trusted RPC receipts. Kept as an explicit acceptance gap; no native PASS or substitute receipts.
+- **HIGH, fixed after the earlier review / 已在此前 review 后修复**: the earlier asset-only helper receipt gap was closed by the feature-gated Core observer and real helper WS smoke. The observer records only final authenticated connect/select/discovery outcomes and the smoke covers authenticated refusal; these remain helper evidence, not native evidence.
 - **MEDIUM, fixed / 已修复**: revealing an already-open Projects menu toggled it closed. Added meaningful failing coverage, then fixed and passed the driver regressions.
 - **LOW, fixed / 已修复**: asset observation established pairing bindings. Binding now requires explicit `confirm_pairing`; real Gateway smoke proves an earlier asset yields no receipt/binding and a later confirmed asset yields a valid receipt.
 
