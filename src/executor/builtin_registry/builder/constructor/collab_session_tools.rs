@@ -18,11 +18,14 @@ use crate::tool_metadata::{ToolSource, UnifiedTool};
 #[allow(clippy::type_complexity)]
 impl BuiltinToolRegistry {
     /// Build messaging/session/skill/note tools and register their schemas.
+    ///
+    /// Fails when a tool that was asked for cannot be built safely — see the
+    /// note directory handling below.
     pub(crate) fn build_collab_session_tools(
         config: &BuiltinToolConfig,
         tools: &mut HashMap<String, UnifiedTool>,
         boot_fallback_agent_id: &str,
-    ) -> (
+    ) -> crate::error::Result<(
         Option<crate::builtin_tools::team::MessageSendTool>,
         Option<crate::builtin_tools::team::InboxReadTool>,
         Option<crate::builtin_tools::team::PlanSubmitTool>,
@@ -44,7 +47,7 @@ impl BuiltinToolRegistry {
         Option<crate::builtin_tools::note_manage::NoteManageTool>,
         Option<crate::builtin_tools::session_complete::SessionCompleteTool>,
         Option<crate::builtin_tools::memory_reflect::MemoryReflectTool>,
-    ) {
+    )> {
         // Fallback only — see the identical note in `coord_team_tools.rs`. The
         // acting identity is resolved per call by
         // `builtin_tools::acting_agent::acting_agent_id`.
@@ -427,15 +430,18 @@ impl BuiltinToolRegistry {
 
         // Note management tool — unified CRUD for all note categories
         let note_manage_tool = if let Some(ref db) = config.memory_db {
-            let memory_dir = crate::utils::paths::get_note_memory_dir().unwrap_or_else(|_| {
-                // See the twin in `constructor/mod.rs`: the home branch was
-                // either identical to the path that just failed, or wrong
-                // because it ignored `ALEPH_HOME`.
-                std::env::temp_dir()
-                    .join("aleph")
-                    .join("memory")
-                    .join("note")
-            });
+            // Fail closed: the note directory must be the configured one.
+            // The old fallback was a shared, predictable path
+            // (`<temp>/aleph/memory/note`), where any local process can
+            // pre-create the directory or a symlink and redirect the writes.
+            // There is no safe alternative location, so the registry
+            // construction fails instead of picking one.
+            let memory_dir = crate::utils::paths::get_note_memory_dir().map_err(|e| {
+                crate::error::AlephError::config(format!(
+                    "Cannot build the note_manage tool: the note memory directory \
+                     could not be resolved: {e}"
+                ))
+            })?;
             let mut tool =
                 crate::builtin_tools::note_manage::NoteManageTool::new(memory_dir, db.clone())
                     .with_project_scoping(config.memory_project_scoped);
@@ -477,7 +483,7 @@ impl BuiltinToolRegistry {
 
         // Session-complete signals belong to the raw store, not the notes index.
         let session_complete_tool = if let Some(ref store) = config.raw_memory_store {
-            let agent_id = "main".to_string();
+            let agent_id = current_agent_id.clone();
             let mut tool =
                 crate::builtin_tools::session_complete::SessionCompleteTool::new_with_store(
                     store.clone(),
@@ -514,7 +520,7 @@ impl BuiltinToolRegistry {
                 | crate::config::types::memory::MemoryInjectionMode::Hybrid,
         );
         let memory_reflect_tool = {
-            let agent_id = "main".to_string();
+            let agent_id = current_agent_id.clone();
             let tool = crate::builtin_tools::memory_reflect::MemoryReflectTool::new(agent_id);
 
             // Register tool schema only when retrieval tools are exposed
@@ -597,7 +603,7 @@ impl BuiltinToolRegistry {
             info!("Registered note_graph_query tool");
         }
 
-        (
+        Ok((
             message_send_tool,
             inbox_read_tool,
             plan_submit_tool,
@@ -619,6 +625,6 @@ impl BuiltinToolRegistry {
             note_manage_tool,
             session_complete_tool,
             memory_reflect_tool,
-        )
+        ))
     }
 }

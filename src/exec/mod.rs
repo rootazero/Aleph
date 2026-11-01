@@ -5,8 +5,12 @@
 //! - Risk classification and blocked-pattern hard filters
 //! - Async approval manager for RPC integration
 //!
-//! Approval grants live only in memory: `AllowOnce` for a single execution,
-//! `AllowSession` for the rest of the session. There is no on-disk allowlist.
+//! Approval grants come in three tiers, and only two of them are in-memory:
+//! `AllowOnce` (a single execution) and `AllowSession` (the rest of the
+//! session) live only in memory, while the `AllowAlways` tier is persisted to
+//! `~/.aleph/approval-grants.json` and survives a restart until it is revoked.
+//! See [`allowed_decisions::with_persistent`] for the set that carries it and
+//! [`crate::sandbox::exec_approval::grants`] for the store that persists it.
 
 pub mod allowed_decisions;
 pub mod analysis;

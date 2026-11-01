@@ -339,7 +339,40 @@ pub async fn handle_export_html(
         _ => session_key.clone(),
     };
 
+    // Refuse before the document is built: the store would reject it anyway,
+    // and a session this large deserves an explanation rather than a storage
+    // error on a document that was already rendered in full.
+    let projected = crate::export::exported_document_bytes(
+        export_messages.iter().map(|m| m.text.len() as u64).sum(),
+        &export_artifacts,
+    );
+    if projected > crate::export::MAX_EXPORTED_DOCUMENT_BYTES {
+        return JsonRpcResponse::error(
+            request.id,
+            INTERNAL_ERROR,
+            format!(
+                "Failed to export the session: the document would be {projected} bytes, over the {} byte limit",
+                crate::export::MAX_EXPORTED_DOCUMENT_BYTES
+            ),
+        );
+    }
+
     let html = crate::export::render_session_html(&title, &export_messages, &export_artifacts);
+
+    // The projection above counts the transcript's text; the rendered markup
+    // is larger, so the finished size is checked exactly here.
+    if html.len() as u64 > crate::export::MAX_EXPORTED_DOCUMENT_BYTES {
+        return JsonRpcResponse::error(
+            request.id,
+            INTERNAL_ERROR,
+            format!(
+                "Failed to export the session: the document is {} bytes, over the {} byte limit",
+                html.len(),
+                crate::export::MAX_EXPORTED_DOCUMENT_BYTES
+            ),
+        );
+    }
+
     let filename = format!(
         "aleph-session-{}.html",
         chrono::Local::now().format("%Y%m%d-%H%M%S")

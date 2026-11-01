@@ -40,6 +40,21 @@
 
 use super::socket::ApprovalDecisionType;
 
+/// The legacy wire backfill set — **not** a live decision set.
+///
+/// `full_set()` is `[AllowOnce, AllowAlways, Deny]`: it omits the session tier
+/// and carries the persistent one, so it is neither the maximum nor the
+/// minimum of anything a card may offer.
+///
+/// Its only job is the serde default for a wire request whose
+/// `allowed_decisions` field predates the field — the historical
+/// (unconstrained) behavior for payloads serialized before `allowed_decisions`
+/// existed. It is byte-stable on purpose: it backfills *old* payloads, so it
+/// must NOT gain the newer `AllowSession` tier.
+///
+/// The live sets are [`once_only`], [`session_max`] and [`with_persistent`]
+/// — plus [`for_confirm_gate`], which picks one of them from the gate's own
+/// knowledge.
 pub use aleph_slot_api::approval::full_set;
 
 /// Allow-once and deny — for approvals that cannot carry a standing grant at

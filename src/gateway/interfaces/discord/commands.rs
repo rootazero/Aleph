@@ -44,6 +44,8 @@ use std::fmt;
 
 use chrono::Utc;
 
+use crate::exec::bridge::ApprovalBridge;
+use crate::exec::socket::ApprovalDecisionType;
 use crate::gateway::channel::{
     ChannelId, ConversationId, InboundMessage, MessageId, UserId, CB_MESSAGE_ID_PREFIX,
 };
@@ -519,10 +521,18 @@ pub fn dispatch_component_click(
             //   `:deny` so the sink has a parseable tier.
             let callback_data = match id.kind {
                 ComponentKind::ApprovalApprove if !id.payload.contains(':') => {
-                    format!("approve:{}:once", id.payload)
+                    format!(
+                        "approve:{}:{}",
+                        id.payload,
+                        ApprovalBridge::decision_token(&ApprovalDecisionType::AllowOnce)
+                    )
                 }
                 ComponentKind::ApprovalDeny if !id.payload.contains(':') => {
-                    format!("approve:{}:deny", id.payload)
+                    format!(
+                        "approve:{}:{}",
+                        id.payload,
+                        ApprovalBridge::decision_token(&ApprovalDecisionType::Deny)
+                    )
                 }
                 _ => id.to_wire(),
             };

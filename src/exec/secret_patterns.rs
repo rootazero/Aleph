@@ -2,6 +2,14 @@
 //!
 //! All secret patterns are defined here in one place to prevent drift
 //! between the two consumers.
+//!
+//! **This file is NOT the repo's vendor catalog.** `crate::secrets::vendor_patterns`
+//! knows Slack `xapp-`, Stripe, SendGrid, HuggingFace, Replicate, Groq, xAI,
+//! Perplexity, npm, PyPI, DigitalOcean, Google OAuth, Telegram, Twilio and
+//! GitLab credentials that this catalog does not: the two overlap only
+//! partially. The gap is deliberate for now — which of the two is the single
+//! source of truth is an owner decision, and copying one into the other
+//! would make that decision silently instead of explicitly.
 
 use regex::Regex;
 use std::sync::OnceLock;
@@ -56,8 +64,19 @@ pub(crate) fn secret_masker_patterns() -> Vec<SecretPattern> {
                     replacement: "AKIA***REDACTED***",
                 },
                 SecretPattern {
-                    regex: Regex::new(r#"(?i)(aws_secret_access_key|secret_access_key)\s*[=:]\s*['"]?([a-zA-Z0-9/+=]{40})['"]?"#).unwrap(),
-                    replacement: "$1=***REDACTED***",
+                    // The key may be quoted, and in JSON the key's closing
+                    // quote sits BETWEEN the name and the separator — so a
+                    // rule that wants the separator right after the name can
+                    // never fire on a JSON document and the credential ships
+                    // in clear.
+                    //
+                    // The prefix is CAPTURED rather than rebuilt because only
+                    // the value is the secret: the key text, the separator and
+                    // its spacing, and the quotes are structure the consumer
+                    // downstream still has to parse. Re-emitting the captured
+                    // prefix is what keeps the redacted document valid JSON.
+                    regex: Regex::new(r#"(?i)(aws_secret_access_key|secret_access_key)(\s*["']?\s*[=:]\s*["']?)([a-zA-Z0-9/+=]{40,})(["']?)"#).unwrap(),
+                    replacement: "${1}${2}***REDACTED***${4}",
                 },
                 SecretPattern {
                     regex: Regex::new(r"gh[pousr]_[a-zA-Z0-9]{36,}").unwrap(),
@@ -68,8 +87,24 @@ pub(crate) fn secret_masker_patterns() -> Vec<SecretPattern> {
                     replacement: "github_pat_***REDACTED***",
                 },
                 SecretPattern {
-                    regex: Regex::new(r#"(?i)(bearer|token|authorization)\s*[=:]\s*['"]?([a-zA-Z0-9\-_.]{20,})['"]?"#).unwrap(),
-                    replacement: "$1=***REDACTED***",
+                    // Same quoted-key gap as the AWS rule above, and the value
+                    // alphabet was too narrow for a real credential: standard
+                    // base64 carries `+`, `/` and `=` padding, so
+                    // `token=abc+def/…` sailed straight past the old class.
+                    //
+                    // Two shapes, because the separator decides the shape: the
+                    // header form (`key: value`) may carry an auth scheme
+                    // word before the blob (`Authorization: Basic <base64>`)
+                    // — one word plus one space — while the `key=value` form
+                    // is a single unbroken run. The floor of 20 characters
+                    // applies to the final run in both shapes, so a short
+                    // `token=x` is still left alone.
+                    //
+                    // `api_key` joins the key names here: it is a credential
+                    // key this catalog had no rule for at all, and the JSON
+                    // leg could not reach it.
+                    regex: Regex::new(r#"(?i)(bearer|token|authorization|api_key)(\s*["']?\s*[=:]\s*["']?)((?:[a-zA-Z0-9\-_.+/=]+\s+)?[a-zA-Z0-9\-_.+/=]{20,})(["']?)"#).unwrap(),
+                    replacement: "${1}${2}***REDACTED***${4}",
                 },
                 SecretPattern {
                     regex: Regex::new(r"(?i)bearer\s+[a-zA-Z0-9\-._~+/]+=*").unwrap(),
@@ -84,12 +119,45 @@ pub(crate) fn secret_masker_patterns() -> Vec<SecretPattern> {
                     replacement: "-----BEGIN PRIVATE KEY-----\n***REDACTED***\n-----END PRIVATE KEY-----",
                 },
                 SecretPattern {
-                    regex: Regex::new(r"://([^:]+):([^@]+)@").unwrap(),
-                    replacement: "://$1:***REDACTED***@",
+                    // A key whose END marker is not in the text is the
+                    // REACHABLE case, not the exotic one: `mask_file_change`
+                    // masks the hunk lines, so an edit that touches only the
+                    // first lines of an existing key file ships the header
+                    // plus the first base64 lines of the body. A key body
+                    // continues past the text, so the only safe reading is
+                    // "from the BEGIN marker to the end of the text".
+                    //
+                    // The lookahead keeps this rule off a complete block: the
+                    // rule above already replaced it, and that replacement
+                    // contains the BEGIN marker again — matching here would
+                    // eat the rest of the document.
+                    //
+                    // The replacement is one line on purpose: a multi-line
+                    // replacement written back into a single hunk line would
+                    // make the diff's line counts lie.
+                    regex: Regex::new(r"-----BEGIN[A-Z ]*PRIVATE KEY-----(?![\s\S]*?-----END[A-Z ]*PRIVATE KEY-----)[\s\S]*").unwrap(),
+                    replacement: "-----BEGIN PRIVATE KEY----- ***REDACTED***",
                 },
                 SecretPattern {
-                    regex: Regex::new(r#"(?i)(password|passwd|pwd|secret)\s*[=:]\s*['"]?([^\s'"]{8,})['"]?"#).unwrap(),
-                    replacement: "$1=***REDACTED***",
+                    // A URL credential cannot contain whitespace, so the
+                    // value class stops at it: the old `[^@]+` ran across
+                    // spaces and ate the port, the path and the following
+                    // prose of a URL that had no credential at all.
+                    //
+                    // The password may contain `@` itself, so the class is
+                    // greedy over the whole non-whitespace run and the match
+                    // settles on its LAST `@` — stopping at the first one
+                    // left the tail of the password in clear.
+                    regex: Regex::new(r"://([^\s:/@]+):(\S*)@").unwrap(),
+                    replacement: "://${1}:***REDACTED***@",
+                },
+                SecretPattern {
+                    // Same quoted-key gap as the AWS and token rules, and the
+                    // same reason for capturing the prefix: `db_password = "…"`
+                    // must keep its spacing and its quotes, because only the
+                    // value is the secret. The 8-character floor stays.
+                    regex: Regex::new(r#"(?i)(password|passwd|pwd|secret)(\s*["']?\s*[=:]\s*["']?)([^\s'"]{8,})(["']?)"#).unwrap(),
+                    replacement: "${1}${2}***REDACTED***${4}",
                 },
                 SecretPattern {
                     regex: Regex::new(r"xox[baprs]-[a-zA-Z0-9\-]{10,}").unwrap(),

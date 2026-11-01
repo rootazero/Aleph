@@ -40,12 +40,14 @@ impl CommandAnalysis {
     /// approved as an action, not as a command line; there is no argv to
     /// parse. `ok` is `true` because **nothing failed** — "there was nothing
     /// to parse" and "parsing failed" are different answers, and
-    /// [`crate::exec::manager::ExecApprovalManager::create`] asserts on the
-    /// second (a card the human can only deny is not worth a delivery slot).
+    /// [`crate::exec::manager::ExecApprovalManager::create`] treats the
+    /// second as a condition to log, never as a reason to withhold the card.
     ///
     /// Named because the distinction is not obvious from the struct: three
     /// separate test fixtures reached for [`Self::error`] here, and every one
-    /// of them tripped that assertion — eleven tests that had never passed.
+    /// of them tripped an assertion in the manager — eleven tests that had
+    /// never passed. The manager no longer asserts on a failed analysis, but
+    /// the distinction is what keeps those fixtures honest.
     #[must_use]
     pub const fn not_a_command() -> Self {
         Self {
@@ -95,12 +97,6 @@ impl CommandSegment {
     pub fn with_resolution(mut self, resolution: CommandResolution) -> Self {
         self.resolution = Some(resolution);
         self
-    }
-
-    /// Get the executable name (first argv element)
-    #[must_use]
-    pub fn executable(&self) -> Option<&str> {
-        self.argv.first().map(|s| s.as_str())
     }
 }
 
@@ -181,12 +177,6 @@ mod tests {
 
         assert!(!analysis.ok);
         assert_eq!(analysis.reason, Some("parse failed".to_string()));
-    }
-
-    #[test]
-    fn test_segment_executable() {
-        let segment = CommandSegment::new("git status", vec!["git".into(), "status".into()]);
-        assert_eq!(segment.executable(), Some("git"));
     }
 
     #[test]
