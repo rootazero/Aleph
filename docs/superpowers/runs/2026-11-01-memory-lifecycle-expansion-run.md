@@ -1,6 +1,6 @@
 # Memory lifecycle expansion — validation and design record / Memory 生命周期扩展验证与设计记录
 
-**Status / 状态: Validation attempted; new lifecycle design awaiting approval / 已执行扩展验证，新生命周期设计待批准。**
+**Status / 状态: Validation attempted; lifecycle design approved; implementation plan awaiting review / 已执行扩展验证，生命周期设计已批准，实施计划待审阅。**
 
 ## Authorization and baseline / 授权与基线
 
@@ -55,7 +55,7 @@ Source census found separate Memory and raw connections to the same SQLite file,
 
 One native Pi researcher returned a useful source report before SIGTERM. The separate QA researcher timed out after six minutes without a substantive result; the main agent completed the signal fixture investigation directly. These process outcomes are not represented as successful independent QA reviews. / 如实区分可用源码报告与超时无结果的 QA 调研。
 
-A fresh native Pi builder check returned two planning blockers before SIGTERM: (1) Tool-to-Memory Resource lease association and public lease/host changes; (2) retry semantics after cleanup failure. The draft now proposes captured dependency leases and retryable cleanup with retained historical error. These are explicit architectural proposals for user approval, not previously approved decisions. / 全新 builder check 的两个阻塞已转为明确设计提案，等待用户批准，不冒充已批准。
+A fresh native Pi builder check returned two planning blockers before SIGTERM: (1) Tool-to-Memory Resource lease association and public lease/host changes; (2) retry semantics after cleanup failure. The draft proposed captured dependency leases and retryable cleanup with retained historical error. The user subsequently confirmed the written design on 2026-11-01. The [implementation plan](../plans/2026-11-01-memory-runtime-lifecycle-plan.md) now records the native execution tasks and awaits plan review; no production code changed during planning. / 两个阻塞已转为明确契约，用户随后于 2026-11-01 确认设计；现已编写实施计划待审阅，本阶段仍未改生产代码。
 
 ## Not implemented or proven / 未实施与未证明
 

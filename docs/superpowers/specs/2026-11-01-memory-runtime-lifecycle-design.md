@@ -1,8 +1,8 @@
 # Memory runtime stop/re-enable with live session archival / 保留会话归档的 Memory 运行时停止与重启
 
-**Status / 状态: Draft for design approval / 待设计批准；未实施。**
+**Status / 状态: Design approved on 2026-11-01; implementation plan awaiting review; unimplemented / 设计已于 2026-11-01 批准，实施计划待审阅；未实施。**
 
-This document records the user's selected direction on 2026-11-01. It does not claim implementation or authorize an unreviewed architecture. / 本文记录用户已选择的方向，不代表功能已经实现；生产实施须在本设计批准及实施计划完成后进行。
+The user confirmed this written design after reviewing the captured dependency-lease and retryable cleanup proposals. The selected native execution workflow is preserved. [Implementation plan](../plans/2026-11-01-memory-runtime-lifecycle-plan.md) records the dependency-ordered tasks; design approval is not evidence of implemented behavior. / 用户已确认本设计，包括依赖 lease 与失败清理重试提案；沿用 native 实施方式。实施任务见计划，设计批准不等于功能已经实现。
 
 ## Intent / 意图
 
@@ -14,7 +14,7 @@ User decisions / 用户决定:
 - Reject new Memory work; drain already admitted work. / 拒绝新 Memory 工作，等待已接纳工作完成。
 - Include early-startup-error cleanup and resource close/reopen. / 包含启动中途失败清理、资源关闭与重开。
 
-Builder proposals requiring approval / 本设计提出、待批准的选择:
+Builder proposals approved with this design / 随本设计一并批准的选择:
 
 - Stop completion has no hard time bound. A caller cancellation stops waiting, not cleanup ownership. / stop 不承诺硬期限；取消调用方等待不丢失清理所有权。
 - Runtime off/on is initially process-local and does not edit the boot configuration. Restart uses the persisted startup configuration. / 首版运行时启停仅影响当前进程，不改写启动配置；进程重启采用持久配置。
@@ -58,7 +58,7 @@ Lifecycle control must remain callable while data operations are disabled. Keep 
 
 **Resolution of builder question 1 — proposed architecture / builder 问题 1 的架构提案:** a resolved Memory Tool lease captures both its own canonical Tool lease and the required Memory Resource lease at resolution time. Validation and admission check both captures; they must never refresh the captured Memory generation from the current accessor. Stop rotates only the Memory Resource ID's bindings, invalidating every dependent old Tool lease across visibility scopes while leaving unrelated Tool bindings and control leases intact. Direct internal Memory handles capture the same Resource lease. / Memory Tool 在 resolve 时同时捕获自己的 canonical Tool lease 与所需 Resource lease；校验和准入检查两个捕获值，不能临时换成当前 Resource generation。stop 只轮换统一 Resource ID 的各 scope binding，使所有旧数据工具 lease 失效，无关工具与控制 lease 不变；内部 handle 同样捕获 Resource lease。
 
-This explicitly approves extending the public lease/host contract if the user approves this design: replace Tool-only mandatory evidence in `BackendLease` with kind-specific source evidence, retain `CanonicalEntryLease` for Tool leases, and add Resource evidence backed by `MemoryRuntime`. A Resource lease must not fabricate a Tool registry entry. Required-service lease capture is part of that contract, not private implementation detail. Add only this concrete Resource backend to the existing host composition; other deferred kinds remain deferred. / 用户批准本设计即批准必要的公共 lease/host 契约扩展：BackendLease 的源证据按 kind 区分，Tool 保留 CanonicalEntryLease，Resource 由 MemoryRuntime 提供证据，不伪造工具 entry。依赖 lease 的捕获是公共契约，不是私有细节；只挂载这个具体 Resource，其他 kind 仍延期。
+The user's design approval includes extending the public lease/host contract: replace Tool-only mandatory evidence in `BackendLease` with kind-specific source evidence, retain `CanonicalEntryLease` for Tool leases, and add Resource evidence backed by `MemoryRuntime`. A Resource lease must not fabricate a Tool registry entry. Required-service lease capture is part of that contract, not private implementation detail. Add only this concrete Resource backend to the existing host composition; other deferred kinds remain deferred. / 用户批准本设计即批准必要的公共 lease/host 契约扩展：BackendLease 的源证据按 kind 区分，Tool 保留 CanonicalEntryLease，Resource 由 MemoryRuntime 提供证据，不伪造工具 entry。依赖 lease 的捕获是公共契约，不是私有细节；只挂载这个具体 Resource，其他 kind 仍延期。
 
 For Memory Tool admission, the full lock order is Memory source gate → canonical registry read gate → OwnershipTree → entry-local state. Validate Tool and required Resource ownership together in one tree critical section; preserve the registry's existing canonical-entry admission guarantees. No tree re-entry, I/O or await inside that critical section. Non-Memory dispatch retains its current path. / Memory 工具完整锁序为 source gate → canonical registry read gate → OwnershipTree → entry-local；在一次 tree 临界区共同校验 Tool 和 Resource，保留 canonical-entry 现有保证；不重入树、不在锁内 I/O/await；无关工具路径保持现有行为。
 
@@ -136,4 +136,4 @@ Decisions left to the implementation plan / 留给计划的细节: exact file sp
 
 ## Builder check / 构建者审查
 
-A fresh read-only native Pi review identified two important planning gaps: dependency lease semantics and recovery from failed cleanup. Both now have explicit proposed contracts above, for the user's approval. The review produced a complete report before its process ended with SIGTERM; it did not run implementation tests or approve an implemented runtime. Main integration also tightened Resource rotation to cover all visibility bindings of the Memory Resource ID. / 独立审阅提出依赖 lease 与失败清理恢复两项缺口，已在上文写为待批准提案。报告完整产出后进程以 SIGTERM 结束；不是实施测试或生产验收。主 Agent 另补强同一 Resource ID 各 visibility binding 的失效覆盖。
+A fresh read-only native Pi review identified two important planning gaps: dependency lease semantics and recovery from failed cleanup. Both received explicit contracts above and were included in the user's subsequent design approval. The review produced a complete report before its process ended with SIGTERM; it did not run implementation tests or approve an implemented runtime. Main integration also tightened Resource rotation to cover all visibility bindings of the Memory Resource ID. / 独立审阅提出依赖 lease 与失败清理恢复两项缺口，已在上文补全，并随设计一起获得用户确认。报告完整产出后进程以 SIGTERM 结束；不是实施测试或生产验收。主 Agent 另补强同一 Resource ID 各 visibility binding 的失效覆盖。
