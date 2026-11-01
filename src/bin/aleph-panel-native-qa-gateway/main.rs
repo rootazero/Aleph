@@ -63,16 +63,10 @@ struct ErrorMessage<'a> {
 
 #[derive(Clone)]
 struct Fixture {
-    run: String,
     origin: String,
     tokens: Arc<DeviceTokenManager>,
-    security: Arc<SecurityStore>,
     projects: Arc<ProjectStore>,
     alice_project: String,
-    bob_project: String,
-    c_project: String,
-    panel_root: PathBuf,
-    state_versions: Arc<StateVersionTracker>,
 }
 
 #[derive(Debug, Serialize)]
@@ -86,21 +80,6 @@ struct Pairing<'a> {
 }
 
 #[derive(Debug, Serialize)]
-struct Receipt<'a> {
-    v: u8,
-    r#type: &'a str,
-    run: &'a str,
-    seq: u32,
-    user: &'a str,
-    device: &'a str,
-    operation: &'a str,
-    project: &'a str,
-    revision: String,
-    result: &'a str,
-    status: &'a str,
-}
-
-#[derive(Debug, Serialize)]
 struct Ack<'a> {
     v: u8,
     r#type: &'a str,
@@ -111,9 +90,28 @@ struct Ack<'a> {
 }
 
 #[derive(Clone)]
-struct GateState {
+struct GatewayState {
+    run: String,
     asset_a_held: bool,
     asset_a_notify: Arc<Notify>,
+    tokens: Arc<DeviceTokenManager>,
+    receipts: Arc<Mutex<Vec<StoredReceipt>>>,
+    state_versions: Arc<StateVersionTracker>,
+}
+
+#[derive(Clone, Serialize)]
+struct StoredReceipt {
+    v: u8,
+    r#type: String,
+    run: String,
+    seq: u32,
+    user: String,
+    device: String,
+    operation: String,
+    project: String,
+    revision: String,
+    result: String,
+    status: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -157,7 +155,7 @@ async fn run() -> anyhow::Result<()> {
     let project_b = projects.create("B", Some("bob"), Some(&b_root))?;
     let c_root = args.owned_root.join("project-c");
     write_panel(&c_root.join(".aleph"), "project-c", b"export const project = 'c';")?;
-    let project_c = projects.create("C", Some("alice"), Some(&c_root))?;
+    let _project_c = projects.create("C", Some("alice"), Some(&c_root))?;
     projects.add_member(&project_a.id, "alice")?;
     projects.add_member(&project_b.id, "alice")?;
 
@@ -200,25 +198,23 @@ async fn run() -> anyhow::Result<()> {
     gateway.handlers_mut().register("connect", move |request| {
         handle_connect(request, context.clone())
     });
-    let gates = Arc::new(Mutex::new(GateState {
+    let gateway_state = Arc::new(Mutex::new(GatewayState {
+        run: args.nonce.clone(),
         asset_a_held: false,
         asset_a_notify: Arc::new(Notify::new()),
+        tokens: tokens.clone(),
+        receipts: Arc::new(Mutex::new(Vec::new())),
+        state_versions: state_versions.clone(),
     }));
     let router = gateway
         .build_router()
-        .layer(middleware::from_fn_with_state(gates.clone(), delay_asset_response))
+        .layer(middleware::from_fn_with_state(gateway_state.clone(), delay_asset_response))
         .fallback_service(ServeDir::new(&args.panel_root).fallback(ServeFile::new(args.panel_root.join("index.html"))));
     let fixture = Fixture {
-        run: args.nonce.clone(),
         origin: origin.clone(),
         tokens,
-        security,
         projects,
         alice_project: project_a.id,
-        bob_project: project_b.id,
-        c_project: project_c.id,
-        panel_root: args.panel_root,
-        state_versions,
     };
     let fixture = Arc::new(Mutex::new(fixture));
     let run = args.nonce;
@@ -230,14 +226,14 @@ async fn run() -> anyhow::Result<()> {
             })
             .await
     });
-    let control = control_loop(run.clone(), fixture, gates, server, shutdown_tx).await;
+    let control = control_loop(run.clone(), fixture, gateway_state, server, shutdown_tx).await;
     control
 }
 
 async fn control_loop(
     run: String,
     fixture: Arc<Mutex<Fixture>>,
-    gates: Arc<Mutex<GateState>>,
+    gateway_state: Arc<Mutex<GatewayState>>,
     server: tokio::task::JoinHandle<Result<(), std::io::Error>>,
     shutdown: oneshot::Sender<()>,
 ) -> anyhow::Result<()> {
@@ -285,7 +281,7 @@ async fn control_loop(
                 write_json(&mut output, &ErrorMessage { v: 1, r#type: "error", run: &run, code: "bad_command" }).await?;
                 continue;
             }
-            gates.lock().await.asset_a_held = true;
+            gateway_state.lock().await.asset_a_held = true;
             write_json(&mut output, &Ack { v: 1, r#type: "ack", run: &run, id: command.id, command: "hold_response", status: "ok" }).await?;
             continue;
         }
@@ -295,7 +291,7 @@ async fn control_loop(
                 continue;
             }
             let notify = {
-                let mut state = gates.lock().await;
+                let mut state = gateway_state.lock().await;
                 state.asset_a_held = false;
                 state.asset_a_notify.clone()
             };
@@ -318,38 +314,12 @@ async fn control_loop(
             continue;
         }
         if command.command == "receipt_since" {
-            let user = command.user.as_deref().unwrap_or("");
-            let device = command.device.as_deref().unwrap_or("");
-            let fixture_guard = fixture.lock().await;
-            let active = fixture_guard
-                .tokens
-                .list_panel_devices()?
-                .into_iter()
-                .find(|row| row.device_id == device && row.user_id.as_deref() == Some(user));
-            if active.is_none() {
+            let receipt = gateway_state.lock().await.receipts.lock().await.last().cloned();
+            if let Some(receipt) = receipt {
+                write_json(&mut output, &receipt).await?;
+            } else {
                 write_json(&mut output, &ErrorMessage { v: 1, r#type: "error", run: &run, code: "not_found" }).await?;
-                continue;
             }
-            let state_version = fixture_guard.state_versions.snapshot();
-            let revision = format!(
-                "{:016x}{:016x}{:016x}",
-                state_version.presence,
-                state_version.health,
-                state_version.config,
-            );
-            write_json(&mut output, &Receipt {
-                v: 1,
-                r#type: "receipt",
-                run: &run,
-                seq: 1,
-                user,
-                device,
-                operation: "connect",
-                project: "global",
-                revision,
-                result: "authorized",
-                status: "ok",
-            }).await?;
             continue;
         }
         if command.command == "shutdown" {
@@ -365,22 +335,70 @@ async fn control_loop(
     Ok(())
 }
 
-async fn delay_asset_response(State(gates): State<Arc<Mutex<GateState>>>, request: Request, next: Next) -> Response {
-    let wait = if request.uri().path().starts_with("/tabs/") {
-        let mut state = gates.lock().await;
-        if state.asset_a_held {
-            state.asset_a_held = false;
-            Some(state.asset_a_notify.clone().notified_owned())
+async fn delay_asset_response(State(gateway_state): State<Arc<Mutex<GatewayState>>>, request: Request, next: Next) -> Response {
+    let path = request.uri().path().to_string();
+    let authorization = request
+        .headers()
+        .get(axum::http::header::AUTHORIZATION)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.strip_prefix("Bearer "))
+        .map(str::to_owned);
+    let response = {
+        let wait = if path.starts_with("/tabs/") {
+            let mut state = gateway_state.lock().await;
+            if state.asset_a_held {
+                state.asset_a_held = false;
+                Some(state.asset_a_notify.clone().notified_owned())
+            } else {
+                None
+            }
         } else {
             None
+        };
+        if let Some(notified) = wait {
+            notified.await;
         }
-    } else {
-        None
+        next.run(request).await
     };
-    if let Some(notified) = wait {
-        notified.await;
+    if path.starts_with("/tabs/") {
+        if let Some(token) = authorization {
+            let state = gateway_state.lock().await;
+            if let Ok(Some(device)) = state.tokens.validate_device_token(&token) {
+                if let Ok(Some(user)) = state.tokens.store().device_user(&device.device_id) {
+                    let version = state.state_versions.snapshot();
+                    let revision = format!(
+                        "{:016x}{:016x}{:016x}",
+                        version.presence,
+                        version.health,
+                        version.config,
+                    );
+                    let seq = state.receipts.lock().await.len() as u32 + 1;
+                    let result = if response.status().is_success() { "asset_ok" } else { "asset_404" };
+                    let project = if path.contains("project-a") {
+                        "project-a"
+                    } else if path.contains("project-b") {
+                        "project-b"
+                    } else {
+                        "global"
+                    };
+                    state.receipts.lock().await.push(StoredReceipt {
+                        v: 1,
+                        r#type: "receipt".to_owned(),
+                        run: state.run.clone(),
+                        seq,
+                        user,
+                        device: device.device_id,
+                        operation: "asset".to_owned(),
+                        project: project.to_owned(),
+                        revision,
+                        result: result.to_owned(),
+                        status: response.status().as_u16().to_string(),
+                    });
+                }
+            }
+        }
     }
-    next.run(request).await
+    response
 }
 
 fn apply_fixture_action(fixture: &Fixture, action: &str) -> anyhow::Result<()> {

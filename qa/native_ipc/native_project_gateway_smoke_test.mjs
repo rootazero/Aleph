@@ -17,6 +17,9 @@ test("disposable Gateway helper binds away from the daily daemon and shuts down"
   const child = spawn(binary, ["--owned-root", root, "--nonce", nonce, "--panel-root", panel], {
     stdio: ["pipe", "pipe", "pipe"],
   });
+  t.after(() => {
+    if (child.exitCode === null) child.kill();
+  });
   const messages = [];
   let stdout = "";
   child.stdout.setEncoding("utf8");
