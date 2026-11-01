@@ -391,6 +391,7 @@ impl HandlerRegistry {
         );
 
         registry.register("panel.capabilities.snapshot", panel_capabilities::handle);
+        registry.register("panel.project.select", panel_capabilities::handle_select);
 
         // Service handlers
         registry.register("services.start", services::handle_start);
@@ -1260,6 +1261,19 @@ impl HandlerRegistry {
                 format!("Method not found: {}", request.method),
             )
         }
+    }
+
+    pub(crate) async fn handle_with_panel_context(
+        &self,
+        request: &JsonRpcRequest,
+        context: &crate::gateway::panel_project_context::PanelRequestContext,
+    ) -> JsonRpcResponse {
+        if self.has_method(&request.method)
+            && panel_capabilities::is_context_method(&request.method)
+        {
+            return panel_capabilities::handle_with_context(request.clone(), context).await;
+        }
+        self.handle(request).await
     }
 
     /// Check if a method is registered

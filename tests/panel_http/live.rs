@@ -17,6 +17,47 @@ use std::sync::Arc;
 use super::common::{manager, write_panel, Home};
 use super::GatewayServer;
 
+fn project_panel(
+    root: &std::path::Path,
+    projects: &alephcore::projects::ProjectStore,
+    name: &str,
+    plugin_id: &str,
+    source: &str,
+) -> alephcore::projects::Project {
+    let workspace = root.join(plugin_id);
+    std::fs::create_dir_all(&workspace).unwrap();
+    let project = projects
+        .create(
+            &format!("Fixture Project {name}"),
+            Some("fixture-operator"),
+            Some(&workspace),
+        )
+        .unwrap();
+    let plugin_home = workspace.join(".aleph");
+    write_panel(
+        &plugin_home,
+        "1.0.0",
+        source
+            .replace("community-live", plugin_id)
+            .replace(
+                "Live Gateway community content",
+                &format!("Live Gateway project {name} content"),
+            )
+            .as_bytes(),
+    );
+    let plugin = plugin_home.join("plugins/community-live");
+    let manifest = plugin.join("aleph.plugin.toml");
+    std::fs::write(
+        &manifest,
+        std::fs::read_to_string(&manifest)
+            .unwrap()
+            .replace("community-live", plugin_id),
+    )
+    .unwrap();
+    std::fs::rename(plugin, plugin_home.join("plugins").join(plugin_id)).unwrap();
+    project
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "requires a freshly generated Panel shell and explicit file-control directory"]
 async fn panel_asset_live_gateway_fixture() {
@@ -40,12 +81,19 @@ async fn panel_asset_live_gateway_fixture() {
     let _home = Home::set(&home, root.path());
     let source = include_str!("../../interfaces/webchat/tests/fixtures/community-live.mjs");
     write_panel(&home, "1.0.0", source.as_bytes());
+    let projects = alephcore::projects::ProjectStore::shared();
+    projects.create_schema().unwrap();
+    let project_a = project_panel(root.path(), &projects, "A", "project-a", source);
+    let project_b = project_panel(root.path(), &projects, "B", "project-b", source);
     let manager = manager(root.path()).await;
     assert_eq!(manager.panel_ui_capability_snapshot().declarations.len(), 1);
     assert!(alephcore::extension::init_extension_manager(manager.clone()).is_ok());
     let store = Arc::new(SecurityStore::in_memory().unwrap());
     store
         .create_user("fixture-operator", "Fixture operator", UserRole::Admin)
+        .unwrap();
+    store
+        .create_user("fixture-other", "Other member", UserRole::Member)
         .unwrap();
     let tokens = Arc::new(DeviceTokenManager::new(store.clone()));
     let ticket = tokens
@@ -58,6 +106,12 @@ async fn panel_asset_live_gateway_fixture() {
             Some("Live Panel fixture".into()),
             None,
         )
+        .unwrap();
+    let other_ticket = tokens
+        .create_bootstrap_ticket(None, Some("fixture-other"))
+        .unwrap();
+    let other = tokens
+        .exchange_bootstrap_ticket(&other_ticket, Some("other-panel".into()), None, None)
         .unwrap();
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
@@ -98,6 +152,8 @@ async fn panel_asset_live_gateway_fixture() {
         control.join("connection.json"),
         serde_json::to_vec(&json!({
             "origin": format!("http://{address}"), "token": issued.device_token,
+            "other_token": other.device_token, "project_a": project_a.id,
+            "project_b": project_b.id,
         }))
         .unwrap(),
     )
@@ -133,6 +189,9 @@ async fn panel_asset_live_gateway_fixture() {
                     b"throw Error('intentional fixture loader failure');",
                 );
                 manager.reload().await.unwrap();
+            }
+            "archive-project-a" => {
+                projects.archive(&project_a.id).unwrap();
             }
             "revoke" => {
                 tokens.revoke_device(&issued.device_id).unwrap();

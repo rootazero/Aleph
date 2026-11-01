@@ -1,6 +1,8 @@
 //! Connection-scoped discovery state for the canonical Panel capability snapshot.
 
-use aleph_protocol::panel::PanelUiCapabilitySnapshot;
+use aleph_protocol::panel::{
+    PanelProjectSelection, PanelUiCapabilitySnapshot, PanelUiContextSnapshot,
+};
 use serde_json::Value;
 
 /// The current outcome of the discovery query for one connection epoch.
@@ -29,6 +31,8 @@ pub struct PanelDiscoveryState {
     last_revision: Option<u64>,
     accepted_epoch: Option<u64>,
     request_generation: u64,
+    context_epoch: u64,
+    project_context: PanelProjectSelection,
     status: PanelDiscoveryStatus,
 }
 
@@ -41,6 +45,8 @@ impl PanelDiscoveryState {
             last_revision: None,
             accepted_epoch: None,
             request_generation: 0,
+            context_epoch: 0,
+            project_context: PanelProjectSelection::default(),
             status: PanelDiscoveryStatus::Disconnected,
         }
     }
@@ -75,6 +81,30 @@ impl PanelDiscoveryState {
         request_generation: u64,
         snapshot: PanelUiCapabilitySnapshot,
     ) -> SnapshotUpdate {
+        self.apply_snapshot(epoch, request_generation, snapshot, None)
+    }
+
+    pub fn accept_context_snapshot_for_request(
+        &mut self,
+        epoch: u64,
+        request_generation: u64,
+        snapshot: PanelUiContextSnapshot,
+    ) -> SnapshotUpdate {
+        self.apply_snapshot(
+            epoch,
+            request_generation,
+            snapshot.snapshot,
+            Some(snapshot.project_context),
+        )
+    }
+
+    fn apply_snapshot(
+        &mut self,
+        epoch: u64,
+        request_generation: u64,
+        snapshot: PanelUiCapabilitySnapshot,
+        project_context: Option<PanelProjectSelection>,
+    ) -> SnapshotUpdate {
         if epoch != self.connection_epoch
             || matches!(self.status, PanelDiscoveryStatus::Disconnected)
         {
@@ -83,20 +113,56 @@ impl PanelDiscoveryState {
         if request_generation != self.request_generation {
             return SnapshotUpdate::StaleRequest;
         }
+        if project_context.as_ref().is_some_and(|context| {
+            self.accepted_epoch == Some(epoch)
+                && context.generation < self.project_context.generation
+        }) {
+            return SnapshotUpdate::StaleRequest;
+        }
         if self.last_revision.is_some_and(|revision| {
             snapshot.revision < revision
-                || (snapshot.revision == revision && self.accepted_epoch == Some(epoch))
+                || (snapshot.revision == revision
+                    && self.accepted_epoch == Some(epoch)
+                    && project_context.is_none())
         }) {
             if self.snapshot.is_some() {
                 self.status = PanelDiscoveryStatus::Ready;
             }
             return SnapshotUpdate::StaleRevision;
         }
+        if let Some(context) = project_context {
+            self.project_context = context;
+        }
         self.last_revision = Some(snapshot.revision);
         self.accepted_epoch = Some(epoch);
         self.snapshot = Some(snapshot);
         self.status = PanelDiscoveryStatus::Ready;
         SnapshotUpdate::Accepted
+    }
+
+    /// Invalidate before sending a selection or exposing any late result.
+    pub fn invalidate_context(&mut self) -> u64 {
+        self.context_epoch = self
+            .context_epoch
+            .checked_add(1)
+            .expect("Panel context epoch exhausted");
+        self.request_generation = self
+            .request_generation
+            .checked_add(1)
+            .expect("Panel request exhausted");
+        self.snapshot = None;
+        self.status = PanelDiscoveryStatus::Loading;
+        self.request_generation
+    }
+
+    pub const fn request_generation(&self) -> u64 {
+        self.request_generation
+    }
+    pub const fn context_epoch(&self) -> u64 {
+        self.context_epoch
+    }
+    pub fn project_context(&self) -> &PanelProjectSelection {
+        &self.project_context
     }
 
     /// Preserve transport failure for the currently active request.
@@ -115,6 +181,7 @@ impl PanelDiscoveryState {
             && request_generation == self.request_generation
             && !matches!(self.status, PanelDiscoveryStatus::Disconnected)
         {
+            self.snapshot = None;
             self.status = PanelDiscoveryStatus::Error {
                 message: message.into(),
             };
@@ -168,6 +235,88 @@ mod tests {
     use serde_json::json;
 
     use super::{decode_snapshot, PanelDiscoveryState, PanelDiscoveryStatus, SnapshotUpdate};
+
+    fn context_snapshot(
+        project: Option<&str>,
+        generation: u64,
+        revision: u64,
+    ) -> aleph_protocol::panel::PanelUiContextSnapshot {
+        aleph_protocol::panel::PanelUiContextSnapshot {
+            snapshot: PanelUiCapabilitySnapshot::new(revision, Vec::new()),
+            project_context: aleph_protocol::panel::PanelProjectSelection {
+                project_id: project.map(str::to_string),
+                generation,
+            },
+        }
+    }
+
+    #[test]
+    fn project_switch_discards_cached_content_and_old_requests() {
+        let mut state = PanelDiscoveryState::new();
+        let first = state.begin_connection(1).unwrap();
+        assert_eq!(
+            state.accept_context_snapshot_for_request(1, first, context_snapshot(Some("A"), 1, 10)),
+            SnapshotUpdate::Accepted
+        );
+        let old_epoch = state.context_epoch();
+        state.invalidate_context();
+        assert!(state.snapshot().is_none());
+        assert!(state.context_epoch() > old_epoch);
+        let second = state.begin_connection(1).unwrap();
+        assert_eq!(
+            state.accept_context_snapshot_for_request(1, first, context_snapshot(Some("A"), 1, 11)),
+            SnapshotUpdate::StaleRequest
+        );
+        assert_eq!(
+            state.accept_context_snapshot_for_request(
+                1,
+                second,
+                context_snapshot(Some("B"), 2, 10)
+            ),
+            SnapshotUpdate::Accepted
+        );
+        assert_eq!(state.project_context().project_id.as_deref(), Some("B"));
+        assert_eq!(state.last_revision(), Some(10));
+        state.mark_error_for_request(1, first, "late refusal");
+        assert!(state.snapshot().is_some());
+    }
+
+    #[test]
+    fn current_context_refusal_drops_content_without_global_fallback() {
+        let mut state = PanelDiscoveryState::new();
+        let request = state.begin_connection(1).unwrap();
+        state.accept_context_snapshot_for_request(1, request, context_snapshot(Some("A"), 7, 10));
+        state.mark_error_for_request(1, request, "Project unavailable");
+        assert!(state.snapshot().is_none());
+        assert_eq!(state.project_context().project_id.as_deref(), Some("A"));
+        assert!(matches!(state.status(), PanelDiscoveryStatus::Error { .. }));
+    }
+
+    #[test]
+    fn current_authorized_view_can_change_without_a_new_core_revision() {
+        let mut state = PanelDiscoveryState::new();
+        let first = state.begin_connection(1).unwrap();
+        state.accept_context_snapshot_for_request(1, first, context_snapshot(Some("A"), 7, 10));
+        let second = state.begin_connection(1).unwrap();
+        // A current ProjectStore workspace binding can change at the same source revision.
+        assert_eq!(
+            state.accept_context_snapshot_for_request(
+                1,
+                second,
+                context_snapshot(Some("A"), 7, 10)
+            ),
+            SnapshotUpdate::Accepted
+        );
+        let third = state.begin_connection(1).unwrap();
+        assert_eq!(
+            state.accept_context_snapshot_for_request(1, third, context_snapshot(Some("A"), 6, 11)),
+            SnapshotUpdate::StaleRequest
+        );
+        assert_eq!(
+            state.accept_context_snapshot_for_request(1, third, context_snapshot(Some("A"), 8, 9)),
+            SnapshotUpdate::StaleRevision
+        );
+    }
 
     #[test]
     fn control_plane_success_envelope_reaches_discovery_decoder() {

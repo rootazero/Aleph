@@ -716,6 +716,10 @@ pub async fn handle_connection(
                                         // Check idempotency guard (only for non-Query lanes with a key)
                                         let mut response = if let Some(r) = off_loop_response {
                                             r
+                                        } else if req.method == aleph_protocol::panel::PANEL_PROJECT_SELECT_METHOD {
+                                            // Selection is a process-local assignment. Cached success
+                                            // after an intervening switch would not apply this claim.
+                                            do_lane_dispatch(text.to_string(), ctx.lane_manager.clone(), ctx.middleware_chain.clone(), req.method.clone(), req.id.clone(), ctx.channel_class, ctx.connections.clone(), conn_id.clone(), ctx.client_is_local, caller_snapshot.clone()).await
                                         } else if let Some(ref key) = idempotency_key {
                                             if lane.needs_idempotency() {
                                                 use crate::gateway::idempotency::AcquireResult;
