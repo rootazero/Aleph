@@ -28,18 +28,19 @@ use alephcore::ProviderRegistry as _; // trait needed for .default_provider()
 
 mod builder;
 use builder::{
-    drain_note_vault_watcher, initialize_channels, initialize_inbound_router, initialize_vault,
-    load_app_config,
-    register_agent_handlers, register_agents_handlers, register_artifact_handlers,
-    register_browser_viewer_handlers, register_canvas_handlers, register_config_handlers,
-    register_core_handlers, register_cron_handlers, register_daemon_handlers,
-    register_extensions_handlers, register_extensions_install_handlers, register_fs_handlers,
-    register_graph_handlers, register_group_chat_handlers, register_heartbeat_handlers,
-    register_identity_handlers, register_mcp_config_handlers, register_mcp_handlers,
-    register_memory_handlers, register_oauth_handlers, register_projects_handlers,
-    register_pty_handlers, register_session_handlers, register_session_management_handlers,
-    register_teams_handlers, register_voice_capability_handlers, register_workspace_handlers,
-    setup_config_watcher, start_webchat_server,
+    drain_note_maintenance, drain_note_vault_watcher, initialize_channels,
+    initialize_inbound_router, initialize_vault, load_app_config, register_agent_handlers,
+    register_agents_handlers, register_artifact_handlers, register_browser_viewer_handlers,
+    register_canvas_handlers, register_config_handlers, register_core_handlers,
+    register_cron_handlers, register_daemon_handlers, register_extensions_handlers,
+    register_extensions_install_handlers, register_fs_handlers, register_graph_handlers,
+    register_group_chat_handlers, register_heartbeat_handlers, register_identity_handlers,
+    register_mcp_config_handlers, register_mcp_handlers, register_memory_handlers,
+    register_oauth_handlers, register_projects_handlers, register_pty_handlers,
+    register_session_handlers, register_session_management_handlers, register_teams_handlers,
+    register_voice_capability_handlers, register_workspace_handlers, setup_config_watcher,
+    spawn_note_index_rebuild, spawn_note_orientation_bootstrap, start_webchat_server,
+    NoteMaintenanceOwner,
 };
 
 mod orchestrator_init;
@@ -1452,15 +1453,8 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
             memory_db.clone(),
         ))
     };
-    {
-        let wiki_clone = wiki.clone();
-        let agent_id = default_agent_id.clone();
-        tokio::spawn(async move {
-            if let Err(e) = wiki_clone.bootstrap(&agent_id).await {
-                tracing::warn!(error = %e, "Wiki orientation bootstrap failed; continuing without it");
-            }
-        });
-    }
+    let note_orientation_task =
+        spawn_note_orientation_bootstrap(wiki.clone(), default_agent_id.clone());
 
     // A2A outbound tool handle — created empty so the builtin tool registry
     // (built inside register_agent_handlers) can register the `a2a_delegate` /
@@ -2633,42 +2627,12 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     // each non-default agent is a corpus in exactly the same sense, and used to
     // be reconciled by nothing at all. Once that pass exists, the vault watcher
     // below keeps it true for the rest of the process's life.
-    {
-        let indexer = note_indexer.clone();
-        let agent_id = default_agent_id.clone();
-        tokio::spawn(async move {
-            tracing::info!(agent = %agent_id, "Reconciling note index with disk");
-            let stats = indexer
-                .full_rebuild_all(&agent_id, tx_residue_max_age)
-                .await;
-            tracing::info!(
-                corpora = stats.corpora,
-                indexed = stats.total.indexed,
-                skipped = stats.total.skipped,
-                errors = stats.total.errors,
-                pruned = stats.total.pruned,
-                // The summary line is what an operator actually reads,
-                // so the vector drift has to appear on it. Without this
-                // the only production consumer of `IndexStats` dropped
-                // `stale_vectors` on the floor — the field had no reader
-                // anywhere in the repo — and a boot reporting
-                // `errors=0` looked healthy while every note's vector
-                // was missing or outdated. A count near the note total
-                // is the shape a misconfigured embedding dimension
-                // makes; `reembed_all` is the repair.
-                stale_vectors = stats.total.stale_vectors,
-                // Non-zero means a previous process died mid-ingest. The trees
-                // were full copies of notes-about-to-be-written sitting in the
-                // user's vault, and before this line existed nothing removed or
-                // reported them.
-                tx_residue_removed = stats.tx_residue_removed,
-                "Note index rebuild complete"
-            );
-            for (corpus, error) in &stats.failed {
-                tracing::warn!(%corpus, %error, "Note corpus left unreconciled at startup");
-            }
-        });
-    }
+    let note_rebuild_task = spawn_note_index_rebuild(
+        note_indexer.clone(),
+        default_agent_id.clone(),
+        tx_residue_max_age,
+    );
+    let mut note_maintenance = NoteMaintenanceOwner::new(note_orientation_task, note_rebuild_task);
 
     // Vault watcher: pick up markdown edited outside Aleph. Every agent
     // directory gets an `.obsidian/` vault config written into it, i.e. the
@@ -4101,6 +4065,9 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     let run_result = server.run_until_shutdown(shutdown_rx).await;
     if let Err(error) = drain_note_vault_watcher(&mut note_vault_watcher).await {
         tracing::warn!(%error, "note vault watcher shutdown failed; continuing server teardown");
+    }
+    if let Err(error) = drain_note_maintenance(&mut note_maintenance).await {
+        tracing::warn!(%error, "note maintenance drain failed; continuing server teardown");
     }
     // Close the projection host before any registry-owning scope is disposed.
     // This funnel is reached by both the orderly shutdown (`shutdown_rx`

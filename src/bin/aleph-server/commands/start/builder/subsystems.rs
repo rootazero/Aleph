@@ -44,6 +44,110 @@ pub(in crate::commands::start) async fn drain_note_vault_watcher(
     watcher.shutdown().await
 }
 
+// ── Note maintenance lifecycle ──────────────────────────────────────────────
+
+/// Spawn the existing nonfatal bootstrap wrapper at its original startup point.
+pub(in crate::commands::start) fn spawn_note_orientation_bootstrap(
+    wiki_clone: Arc<dyn alephcore::memory::notes::orientation::NoteOrientation>,
+    agent_id: String,
+) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async move {
+        if let Err(e) = wiki_clone.bootstrap(&agent_id).await {
+            tracing::warn!(error = %e, "Wiki orientation bootstrap failed; continuing without it");
+        }
+    })
+}
+
+/// Spawn the existing rebuild wrapper, retaining its complete operator summary.
+pub(in crate::commands::start) fn spawn_note_index_rebuild(
+    indexer: Arc<
+        alephcore::memory::notes::NoteIndexer<alephcore::memory::store::SqliteMemoryBackend>,
+    >,
+    agent_id: String,
+    tx_residue_max_age: u64,
+) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async move {
+        tracing::info!(agent = %agent_id, "Reconciling note index with disk");
+        let stats = indexer
+            .full_rebuild_all(&agent_id, tx_residue_max_age)
+            .await;
+        tracing::info!(
+            corpora = stats.corpora,
+            indexed = stats.total.indexed,
+            skipped = stats.total.skipped,
+            errors = stats.total.errors,
+            pruned = stats.total.pruned,
+            // The summary line is what an operator actually reads,
+            // so the vector drift has to appear on it. Without this
+            // the only production consumer of `IndexStats` dropped
+            // `stale_vectors` on the floor — the field had no reader
+            // anywhere in the repo — and a boot reporting
+            // `errors=0` looked healthy while every note's vector
+            // was missing or outdated. A count near the note total
+            // is the shape a misconfigured embedding dimension
+            // makes; `reembed_all` is the repair.
+            stale_vectors = stats.total.stale_vectors,
+            // Non-zero means a previous process died mid-ingest. The trees
+            // were full copies of notes-about-to-be-written sitting in the
+            // user's vault, and before this line existed nothing removed or
+            // reported them.
+            tx_residue_removed = stats.tx_residue_removed,
+            "Note index rebuild complete"
+        );
+        for (corpus, error) in &stats.failed {
+            tracing::warn!(%corpus, %error, "Note corpus left unreconciled at startup");
+        }
+    })
+}
+
+/// Owns only the two startup note-maintenance tasks; shared stores remain external.
+pub(in crate::commands::start) struct NoteMaintenanceOwner {
+    orientation: Option<tokio::task::JoinHandle<()>>,
+    rebuild: Option<tokio::task::JoinHandle<()>>,
+    failure: Option<String>,
+}
+
+impl NoteMaintenanceOwner {
+    pub(in crate::commands::start) fn new(
+        orientation: tokio::task::JoinHandle<()>,
+        rebuild: tokio::task::JoinHandle<()>,
+    ) -> Self {
+        Self {
+            orientation: Some(orientation),
+            rebuild: Some(rebuild),
+            failure: None,
+        }
+    }
+}
+
+/// Observe both startup tasks without surrendering pending handles on cancellation.
+///
+/// A terminal join failure remains sticky, but never skips the sibling task.
+pub(in crate::commands::start) async fn drain_note_maintenance(
+    owner: &mut NoteMaintenanceOwner,
+) -> Result<(), alephcore::error::AlephError> {
+    if let Some(handle) = owner.orientation.as_mut() {
+        if let Err(error) = handle.await {
+            owner
+                .failure
+                .get_or_insert_with(|| format!("note orientation task failed: {error}"));
+        }
+        owner.orientation = None;
+    }
+    if let Some(handle) = owner.rebuild.as_mut() {
+        if let Err(error) = handle.await {
+            owner
+                .failure
+                .get_or_insert_with(|| format!("note rebuild task failed: {error}"));
+        }
+        owner.rebuild = None;
+    }
+    match owner.failure.as_ref() {
+        Some(error) => Err(alephcore::error::AlephError::other(error.clone())),
+        None => Ok(()),
+    }
+}
+
 // ── Security store + vault ──────────────────────────────────────────────────
 
 /// Return type for `initialize_vault`: the security store, the secrets

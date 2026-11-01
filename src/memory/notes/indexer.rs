@@ -472,17 +472,7 @@ impl<S: NoteStore> NoteIndexer<S> {
             });
         }
 
-        let mut total = IndexStats::default();
-        while let Some(joined) = set.join_next().await {
-            match joined.map_err(|e| AlephError::config(format!("full_rebuild join: {e}")))? {
-                Ok(s) => {
-                    total.indexed += s.indexed;
-                    total.skipped += s.skipped;
-                    total.errors += s.errors;
-                }
-                Err(e) => return Err(e),
-            }
-        }
+        let mut total = drain_category_tasks(&mut set).await?;
 
         // Reconcile: the index must reflect disk. The scan above only adds or
         // updates rows (keyed by content_hash) — it never removed rows whose
@@ -1400,6 +1390,33 @@ impl<S: NoteStore> NoteIndexer<S> {
             }
         }
         Ok(())
+    }
+}
+
+async fn drain_category_tasks(
+    set: &mut tokio::task::JoinSet<Result<IndexStats, AlephError>>,
+) -> Result<IndexStats, AlephError> {
+    let mut total = IndexStats::default();
+    let mut failure = None;
+    // A failed category must not drop the JoinSet and abort unobserved siblings.
+    while let Some(joined) = set.join_next().await {
+        match joined
+            .map_err(|e| AlephError::config(format!("full_rebuild join: {e}")))
+            .and_then(|result| result)
+        {
+            Ok(s) => {
+                total.indexed += s.indexed;
+                total.skipped += s.skipped;
+                total.errors += s.errors;
+            }
+            Err(error) => {
+                failure.get_or_insert(error);
+            }
+        }
+    }
+    match failure {
+        Some(error) => Err(error),
+        None => Ok(total),
     }
 }
 
