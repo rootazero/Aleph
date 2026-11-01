@@ -1,6 +1,6 @@
 # Startup note maintenance owned drain implementation plan / 启动笔记维护任务所有权收尾实施计划
 
-> **For the later implementation session:** read the companion design completely. This document is an unimplemented plan. The restart prompt becomes production authorization only after the user explicitly asks to execute it.
+> **Execution status / 执行状态 (2026-11-01):** Implemented on local `note-maintenance-drain` after explicit current-user authorization. Original tasks below are preserved as the approved plan; see [actual evidence and limits](../runs/2026-11-01-note-maintenance-drain-run.md). / 用户明确授权后已在本地实施；原计划保留，实际验证以 run 为准。
 
 ## Goal / 目标
 

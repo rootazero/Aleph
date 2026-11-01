@@ -395,13 +395,15 @@ Notes form an Obsidian-compatible knowledge graph through `[[wikilink]]` syntax:
 
 The `notes_links` SQLite table stores outgoing links per note, enabling fast graph traversal without re-parsing markdown.
 
-## Capability lifecycle status / Capability 生命周期状态（2026-10-31）
+## Capability lifecycle status / Capability 生命周期状态（2026-11-01）
 
 Memory is not yet an independently cold/stoppable Capability provider. The production server opens the shared memory backend and starts note reconciliation/watch work; the `memory.enabled` turn-memory gate or hiding the graph UI is not evidence that those resources were never initialized. `graph.*` consumes the shared NoteStore rather than an isolated graph backend. Keep durable note/session storage, recall, graph projection and background maintenance ownership distinct before introducing a global stop switch.
 
-Memory 尚未实现独立 cold/stoppable provider。关闭回合记忆消费或隐藏星云图，不等于共享数据库与后台工作没有初始化。下一步建议只补既有 note-vault watcher 的可等待收尾；其独立 startup rebuild 和其他 Memory writer 仍待后续资源边界设计。不得以节省资源为由关闭 Sandbox 审批/隔离。
+Memory 尚未实现独立 cold/stoppable provider。关闭回合记忆消费或隐藏星云图，不等于共享数据库与后台工作没有初始化。既有 watcher 收尾与两个 startup note-maintenance task 的所有权收尾现已实现；下一步应先盘点共享 NoteStore/raw session storage、Compression、Dream、producer scheduler、event reconciler 与 embedding 引用，再单独设计全局生命周期。不得以节省资源为由关闭 Sandbox 审批/隔离。
 
-The [watcher shutdown design](../superpowers/specs/2026-10-31-capability-core-note-watcher-shutdown-design.md), [plan](../superpowers/plans/2026-10-31-capability-core-note-watcher-shutdown-plan.md) and [implementation run](../superpowers/runs/2026-10-31-note-watcher-shutdown-run.md) now describe an implemented bounded slice. `NoteVaultWatcher` retains its consumer and producer-stop work, and the common server teardown awaits the same owner in place. This still does not make Memory an independently cold/stoppable provider: the shared backend, detached startup rebuild, graph consumers and other Memory writers remain outside the slice. The pinned debouncer hides native join errors, so no native-code unloading, process/thread isolation or RSS reduction is established.
+The [watcher shutdown design](../superpowers/specs/2026-10-31-capability-core-note-watcher-shutdown-design.md), [plan](../superpowers/plans/2026-10-31-capability-core-note-watcher-shutdown-plan.md) and [implementation run](../superpowers/runs/2026-10-31-note-watcher-shutdown-run.md) now describe an implemented bounded slice. `NoteVaultWatcher` retains its consumer and producer-stop work, and the common server teardown awaits the same owner in place. This still does not make Memory an independently cold/stoppable provider. At that watcher-only milestone, the shared backend, detached startup rebuild, graph consumers and other Memory writers remained outside its slice. The pinned debouncer hides native join errors, so no native-code unloading, process/thread isolation or RSS reduction is established.
+
+The later [startup maintenance implementation run](../superpowers/runs/2026-11-01-note-maintenance-drain-run.md) implements the next bounded prerequisite: one concrete `NoteMaintenanceOwner` retains the actual orientation bootstrap and `full_rebuild_all` handles. The common post-server funnel drains watcher, then maintenance, before later shared-resource disposal, retaining pending handles on cancellation and the first observed JoinError as sticky evidence. The category JoinSet drains all children before returning its first error; nonfatal bootstrap/corpus failures and rebuild summaries are preserved. / 后续切片已收拢两个启动任务，取消可原位重试；不关闭共享 store，不代表所有 Memory writer 已停止。Early startup errors, OS-signal/live-server E2E and whole-Memory quiescence remain outside this evidence.
 
 ## 12. Provenance Chain (Evidence Drill-Down)
 
