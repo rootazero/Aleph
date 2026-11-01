@@ -127,15 +127,34 @@ pub(crate) fn secret_masker_patterns() -> Vec<SecretPattern> {
                     // continues past the text, so the only safe reading is
                     // "from the BEGIN marker to the end of the text".
                     //
-                    // The lookahead keeps this rule off a complete block: the
-                    // rule above already replaced it, and that replacement
-                    // contains the BEGIN marker again — matching here would
-                    // eat the rest of the document.
+                    // What keeps this rule off a COMPLETE block is the rule
+                    // above: it already replaced every one of those, and
+                    // what it leaves behind starts its body line with the
+                    // redaction marker `***REDACTED***` — a `*`, which a
+                    // base64 key body never starts with. So the first
+                    // character of the body is what separates "a key body
+                    // follows" from "a redacted block was already handled
+                    // here". The `*` is also what keeps this rule from
+                    // eating the rest of the document after that frame.
+                    //
+                    // That test is a character class and not a negative
+                    // condition because the `regex` crate has NO look-around:
+                    // a pattern naming it as a negative condition does not
+                    // COMPILE, and since this catalog is compiled lazily the
+                    // failure is a panic in the first `mask()` call, not a
+                    // build error — `cargo check` cannot see it.
+                    //
+                    // The body may open with `\r\n` (a key file written on
+                    // Windows), so the newline is matched with its optional
+                    // carriage return. The second alternative is the key body
+                    // on the SAME line as the header; it requires a base64
+                    // character so that this rule's own replacement — which
+                    // puts a space after the header — is not matched again.
                     //
                     // The replacement is one line on purpose: a multi-line
                     // replacement written back into a single hunk line would
                     // make the diff's line counts lie.
-                    regex: Regex::new(r"-----BEGIN[A-Z ]*PRIVATE KEY-----(?![\s\S]*?-----END[A-Z ]*PRIVATE KEY-----)[\s\S]*").unwrap(),
+                    regex: Regex::new(r"-----BEGIN[A-Z ]*PRIVATE KEY-----(?:\r?\n[^*][\s\S]*|[A-Za-z0-9+/=][\s\S]*)").unwrap(),
                     replacement: "-----BEGIN PRIVATE KEY----- ***REDACTED***",
                 },
                 SecretPattern {
@@ -334,5 +353,46 @@ mod tests {
             .iter()
             .any(|mp| mp.regex.as_str() == github.regex.as_str());
         assert!(found, "github_token regex should be identical in both");
+    }
+
+    /// Every pattern in this catalog must COMPILE, and the only place that
+    /// can be asserted is a test: the `regex` crate rejects a pattern it
+    /// cannot express, and this catalog is built inside a `OnceLock`, so a
+    /// pattern that does not compile is not a build error — it is a PANIC in
+    /// the first `mask()` call, on whatever live path masks first.
+    /// `cargo check` cannot see it.
+    ///
+    /// The look-around assertion is the specific regression: the `regex`
+    /// crate has NO look-around, so a pattern naming it as a negative
+    /// condition (`(?!…)`) does not compile. One did, in the truncated-PEM
+    /// rule, and the catalog panicked on first use.
+    #[test]
+    fn every_catalog_pattern_compiles_without_look_around() {
+        // `Regex::new` already panicked on an inexpressible pattern, so
+        // reaching this line means every pattern compiled.
+        let masker = secret_masker_patterns();
+        let leak_assets = leak_detector_assets();
+        assert!(!masker.is_empty(), "the masker catalog must not be empty");
+        assert!(
+            !leak_assets.patterns.is_empty(),
+            "the leak detector catalog must not be empty"
+        );
+
+        // The `regex` crate supports `(?i)`, `(?s)`, `(?m)`, `(?x)` and
+        // `(?:`, and supports NO look-around: not `(?=`, not `(?!`, not
+        // `(?<`.
+        for source in masker
+            .iter()
+            .map(|p| p.regex.as_str())
+            .chain(leak_assets.patterns.iter().map(|p| p.regex.as_str()))
+        {
+            for look_around in ["(?=", "(?!", "(?<"] {
+                assert!(
+                    !source.contains(look_around),
+                    "the `regex` crate has no look-around, and this pattern \
+                     names one ({look_around}): {source:?}"
+                );
+            }
+        }
     }
 }
