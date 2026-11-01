@@ -686,89 +686,40 @@ impl BuiltinToolRegistry {
                 | crate::config::types::memory::MemoryInjectionMode::Hybrid,
         );
 
-        // Create memory tools if backend and embedder are provided
+        // Retrieval adapters retain only the source and caller-updated configuration.
         let (
             memory_search_tool,
             memory_browse_tool,
             memory_explore_tool,
             memory_workspace_handle,
             memory_session_key_handle,
-        ) = if !expose_retrieval_tools {
-            (None, None, None, None, None)
-        } else if let (Some(ref db), Some(ref embedder), Some(ref raw_store)) = (
-            &config.memory_db,
-            &config.embedder,
-            &config.raw_memory_store,
-        ) {
-            // Cross-encoder rerank + retrieval-scoring config (both disabled by
-            // default → no behaviour change). Read once to avoid re-locking.
-            let (rerank_cfg, scoring_cfg, expansion_cfg): (
-                Option<crate::memory::rerank::RerankConfig>,
-                Option<crate::config::types::memory::RetrievalScoringConfig>,
-                Option<crate::config::types::memory::ExpansionConfig>,
-            ) = match &config.config {
-                Some(cfg) => {
-                    let guard = cfg.read().await;
-                    (
-                        Some(guard.memory.rerank.clone()),
-                        Some(guard.memory.retrieval_scoring.clone()),
-                        Some(guard.memory.expansion.clone()),
-                    )
-                }
-                None => (None, None, None),
-            };
-            let search_tool = MemorySearchTool::new_with_config(
-                db.clone(),
-                raw_store.clone(),
-                Arc::clone(embedder),
-                rerank_cfg.as_ref(),
-                scoring_cfg.as_ref(),
-                expansion_cfg.as_ref(),
-            )
-            .with_project_scoping(config.memory_project_scoped);
-            let ws_handle = search_tool.default_workspace_handle();
-            let sk_handle = search_tool.default_session_key_handle();
-            let note_memory_dir = crate::utils::paths::get_note_memory_dir().unwrap_or_else(|_| {
-                // No home branch: `get_note_memory_dir` fails either because
-                // there is no home (so re-deriving one cannot help) or because
-                // creating the directory failed (so re-deriving the *same*
-                // path cannot help either). The only spelling that added
-                // anything was the one that ignored `ALEPH_HOME`.
-                std::env::temp_dir()
-                    .join("aleph")
-                    .join("memory")
-                    .join("note")
-            });
-            let browse_tool = MemoryBrowseTool::new(note_memory_dir, "default".to_string())
-                .with_project_scoping(config.memory_project_scoped);
-            let explore_tool = MemoryExploreTool::new(db.clone(), Arc::clone(embedder))
-                .with_project_scoping(config.memory_project_scoped);
-            info!("Created memory_search, memory_browse, and memory_explore tools");
-            (
-                Some(search_tool),
-                Some(browse_tool),
-                Some(explore_tool),
-                Some(ws_handle),
-                Some(sk_handle),
-            )
-        } else if config.memory_db.is_some() {
-            let note_memory_dir = crate::utils::paths::get_note_memory_dir().unwrap_or_else(|_| {
-                // No home branch: `get_note_memory_dir` fails either because
-                // there is no home (so re-deriving one cannot help) or because
-                // creating the directory failed (so re-deriving the *same*
-                // path cannot help either). The only spelling that added
-                // anything was the one that ignored `ALEPH_HOME`.
-                std::env::temp_dir()
-                    .join("aleph")
-                    .join("memory")
-                    .join("note")
-            });
-            let browse_tool = MemoryBrowseTool::new(note_memory_dir, "default".to_string())
-                .with_project_scoping(config.memory_project_scoped);
-            info!("Created memory_browse tool (no embedder for memory_search)");
-            (None, Some(browse_tool), None, None, None)
-        } else {
-            (None, None, None, None, None)
+        ) = match config
+            .memory_runtime
+            .as_ref()
+            .filter(|_| expose_retrieval_tools)
+        {
+            Some(runtime) => {
+                let search_tool =
+                    crate::builtin_tools::runtime::RuntimeTool::<MemorySearchTool>::new(
+                        runtime.clone(),
+                    );
+                let workspace = search_tool.default_workspace_handle();
+                let session_key = search_tool.default_session_key_handle();
+                (
+                    Some(search_tool),
+                    Some(
+                        crate::builtin_tools::runtime::RuntimeTool::<MemoryBrowseTool>::new(
+                            runtime.clone(),
+                        ),
+                    ),
+                    Some(crate::builtin_tools::runtime::RuntimeTool::<
+                        MemoryExploreTool,
+                    >::new(runtime.clone())),
+                    Some(workspace),
+                    Some(session_key),
+                )
+            }
+            None => (None, None, None, None, None),
         };
 
         // Create memory timeline tool if StateDatabase is provided.

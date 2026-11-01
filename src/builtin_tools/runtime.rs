@@ -29,6 +29,26 @@ impl<T> RuntimeTool<T> {
     }
 }
 
+impl RuntimeTool<super::memory_search::MemorySearchTool> {
+    pub(crate) fn default_workspace_handle(&self) -> Arc<tokio::sync::RwLock<String>> {
+        self.runtime.search_settings.workspace.clone()
+    }
+
+    pub(crate) fn default_session_key_handle(&self) -> Arc<tokio::sync::RwLock<String>> {
+        self.runtime.search_settings.session_key.clone()
+    }
+
+    pub(crate) fn smart_recall_config_handle(
+        &self,
+    ) -> Arc<
+        tokio::sync::RwLock<
+            std::collections::HashMap<String, crate::config::types::profile::SmartRecallConfig>,
+        >,
+    > {
+        self.runtime.search_settings.smart_recall.clone()
+    }
+}
+
 impl RuntimeTool<super::remember::RememberTool> {
     pub(crate) async fn call_for_agent(
         &self,
@@ -262,9 +282,12 @@ impl MemoryToolFactory for super::memory_search::MemorySearchTool {
         .with_rerank_config(&services.config.rerank)
         .with_scoring_config(&services.config.retrieval_scoring)
         .with_expansion_config(&services.config.expansion);
-        Ok(
-            Self::from_retrieval(services.raw_store.clone(), Arc::new(retrieval))
-                .with_project_scoping(services.config.project_scoped),
+        Ok(Self::from_retrieval(
+            services.raw_store.clone(),
+            Arc::new(retrieval),
+            services.note_memory_dir.clone(),
         )
+        .with_runtime_settings(operation.search_settings()?)
+        .with_project_scoping(services.config.project_scoped))
     }
 }

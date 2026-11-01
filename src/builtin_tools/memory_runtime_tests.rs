@@ -204,10 +204,19 @@ async fn runtime_tool_stays_cold_and_uses_fresh_services_after_restart() {
     let tool = RuntimeTool::<NoteManageTool>::new(runtime.clone());
     let registry = BuiltinToolRegistry::with_config(BuiltinToolConfig {
         memory_runtime: Some(runtime.clone()),
+        injection_mode: crate::config::types::memory::MemoryInjectionMode::Hybrid,
         ..Default::default()
     })
     .await
     .unwrap();
+    let workspace = registry.workspace_handle().unwrap();
+    let session_key = registry.session_key_handle().unwrap();
+    let recall = registry.smart_recall_config_handle().unwrap();
+    *session_key.write().await = "runtime-session".into();
+    assert!(registry
+        .execute_tool("memory_search", json!({"query": "Lifecycle"}))
+        .await
+        .is_err());
     assert!(registry
         .execute_tool("note_manage", create_note("registered-off"))
         .await
@@ -283,6 +292,35 @@ async fn runtime_tool_stays_cold_and_uses_fresh_services_after_restart() {
         .unwrap();
     assert_eq!(registered_read["content"].as_str(), Some(schema_text));
     tool.call_json(create_note("second")).await.unwrap();
+    assert!(Arc::ptr_eq(
+        &workspace,
+        &registry.workspace_handle().unwrap()
+    ));
+    assert!(Arc::ptr_eq(
+        &session_key,
+        &registry.session_key_handle().unwrap()
+    ));
+    assert!(Arc::ptr_eq(
+        &recall,
+        &registry.smart_recall_config_handle().unwrap()
+    ));
+    assert_eq!(session_key.read().await.as_str(), "runtime-session");
+    let searched = registry
+        .execute_tool("memory_search", json!({"query": "admitted"}))
+        .await
+        .unwrap();
+    assert!(!searched["facts"].as_array().unwrap().is_empty());
+    let across = registry
+        .execute_tool(
+            "memory_search",
+            json!({"query": "admitted", "cross_workspace": true}),
+        )
+        .await
+        .unwrap();
+    assert!(
+        !across["facts"].as_array().unwrap().is_empty(),
+        "fan-out must use the runtime's note root: {across}"
+    );
     let remembered = registry
         .execute_tool(
             "remember",

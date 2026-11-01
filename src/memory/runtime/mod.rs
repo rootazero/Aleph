@@ -3,6 +3,7 @@
 mod bundle;
 mod context;
 mod operation;
+mod search;
 mod services;
 mod state;
 mod tasks;
@@ -27,6 +28,7 @@ use tokio::task::JoinHandle;
 
 pub(crate) use context::carry;
 pub use operation::{MemoryHandle, MemoryOperation};
+pub(crate) use search::MemorySearchSettings;
 pub use services::MemoryServicesConfig;
 pub use state::{MemoryState, MemoryStatus};
 
@@ -41,6 +43,7 @@ pub struct MemoryRuntime {
     ownership: Arc<OwnershipTree>,
     inner: Mutex<MemoryInner>,
     tasks: tasks::MemoryTasks,
+    pub(crate) search_settings: search::MemorySearchSettings,
     changed: Notify,
     #[cfg(test)]
     initialization_gate: Mutex<Option<tokio::sync::oneshot::Receiver<()>>>,
@@ -120,6 +123,7 @@ impl MemoryRuntime {
                 rotation_failed: false,
             }),
             tasks: tasks::MemoryTasks::default(),
+            search_settings: search::MemorySearchSettings::default(),
             changed: Notify::new(),
             #[cfg(test)]
             initialization_gate: Mutex::new(None),

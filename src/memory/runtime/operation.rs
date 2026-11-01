@@ -145,6 +145,16 @@ impl MemoryOperation {
             .map_err(|_| AlephError::other("memory task ended without a result"))?
     }
 
+    pub(crate) fn search_settings(
+        &self,
+    ) -> Result<super::search::MemorySearchSettings, AlephError> {
+        self.inner
+            .runtime
+            .upgrade()
+            .map(|runtime| runtime.search_settings.clone())
+            .ok_or_else(|| AlephError::other("memory owner is gone"))
+    }
+
     pub(crate) fn backend(&self) -> &Arc<SqliteMemoryBackend> {
         &self.inner.bundle.backend
     }

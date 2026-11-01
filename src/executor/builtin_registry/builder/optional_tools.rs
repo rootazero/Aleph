@@ -17,9 +17,9 @@ impl BuiltinToolRegistry {
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn register_optional_tools(
         tools: &mut HashMap<String, UnifiedTool>,
-        memory_search_tool: &Option<MemorySearchTool>,
-        memory_browse_tool: &Option<MemoryBrowseTool>,
-        memory_explore_tool: &Option<MemoryExploreTool>,
+        memory_search_tool: &Option<crate::builtin_tools::runtime::RuntimeTool<MemorySearchTool>>,
+        memory_browse_tool: &Option<crate::builtin_tools::runtime::RuntimeTool<MemoryBrowseTool>>,
+        memory_explore_tool: &Option<crate::builtin_tools::runtime::RuntimeTool<MemoryExploreTool>>,
         memory_timeline_tool: &Option<crate::builtin_tools::MemoryTimelineTool>,
         image_generate_tool: &Option<ImageGenerateTool>,
         vault_store_tool: &Option<VaultStoreTool>,

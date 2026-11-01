@@ -114,7 +114,8 @@ pub struct BuiltinToolRegistry {
     /// Strategy tool instance (persistent planner output, R8).
     pub(crate) strategy_tool: crate::builtin_tools::StrategyTool,
     /// Memory search tool instance (optional - requires `memory_db` + embedder)
-    pub(crate) memory_search_tool: Option<crate::builtin_tools::MemorySearchTool>,
+    pub(crate) memory_search_tool:
+        Option<crate::builtin_tools::runtime::RuntimeTool<crate::builtin_tools::MemorySearchTool>>,
     /// The sole Memory lifecycle source; per-call adapters retain no bundle.
     pub(crate) memory_runtime: Option<Arc<crate::memory::runtime::MemoryRuntime>>,
     /// Memory context provider — used by the `remember` tool to resolve the
@@ -137,9 +138,11 @@ pub struct BuiltinToolRegistry {
     pub(crate) gateway_event_bus:
         Arc<tokio::sync::OnceCell<Arc<crate::gateway::event_bus::GatewayEventBus>>>,
     /// Memory browse tool instance (optional - requires `memory_db`)
-    pub(crate) memory_browse_tool: Option<crate::builtin_tools::MemoryBrowseTool>,
+    pub(crate) memory_browse_tool:
+        Option<crate::builtin_tools::runtime::RuntimeTool<crate::builtin_tools::MemoryBrowseTool>>,
     /// Memory explore tool instance (optional - requires `memory_db` + embedder)
-    pub(crate) memory_explore_tool: Option<crate::builtin_tools::MemoryExploreTool>,
+    pub(crate) memory_explore_tool:
+        Option<crate::builtin_tools::runtime::RuntimeTool<crate::builtin_tools::MemoryExploreTool>>,
     /// Memory timeline tool instance (optional - requires `StateDatabase`)
     pub(crate) memory_timeline_tool: Option<crate::builtin_tools::MemoryTimelineTool>,
     /// Phase 3 self-evolution path α — backend for `flag_user_correction`,
