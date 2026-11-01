@@ -13,6 +13,7 @@ use super::{MemoryInner, MemoryRuntime, MemoryState};
 
 tokio::task_local! {
     static CURRENT_OPERATION: MemoryOperation;
+    static OWNED_OPERATION: MemoryOperation;
 }
 
 #[derive(Clone)]
@@ -127,6 +128,14 @@ impl MemoryOperation {
         F: Future<Output = Result<R, AlephError>> + Send + 'static,
         R: Send + 'static,
     {
+        // A nested call already belongs to this retained task. Keep its original
+        // sealed dispatch proof rather than creating a new task without it.
+        if OWNED_OPERATION
+            .try_with(|owned| Arc::ptr_eq(&owned.inner, &self.inner))
+            .unwrap_or(false)
+        {
+            return self.clone().scope(future).await;
+        }
         let (sender, receiver) = oneshot::channel();
         self.spawn(super::carry(async move {
             let _ = sender.send(future.await);
@@ -149,9 +158,9 @@ impl MemoryOperation {
             .runtime
             .upgrade()
             .ok_or_else(|| AlephError::other("memory owner is gone"))?;
-        runtime
-            .tasks
-            .retain(tokio::spawn(self.clone().scope(future)));
+        runtime.tasks.retain(tokio::spawn(
+            OWNED_OPERATION.scope(self.clone(), self.clone().scope(future)),
+        ));
         runtime.changed.notify_waiters();
         Ok(())
     }

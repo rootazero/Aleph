@@ -169,26 +169,39 @@ async fn runtime_tool_stays_cold_and_uses_fresh_services_after_restart() {
     let mut memory = MemoryConfig::default();
     memory.embedding.providers.clear();
     memory.project_scoped = false;
-    let runtime = MemoryRuntime::new_with_services(
+    let runtime = MemoryRuntime::new(
         MemoryRuntimeConfig {
             metadata_path: root.path().join("metadata.db"),
             note_memory_dir: root.path().join("note"),
         },
         Arc::new(OwnershipTree::new()),
-        MemoryServicesConfig {
-            memory,
-            raw_store: raw,
-            provider: None,
-            extensions: Arc::new(MemoryExtensionRegistry::new()),
-            default_agent_id: "main".into(),
-            curated_root: root.path().join("curated"),
-            snapshot_dir: root.path().join("snapshots"),
-        },
     );
+    let inputs = MemoryServicesConfig {
+        memory,
+        raw_store: raw,
+        provider: None,
+        extensions: Arc::new(MemoryExtensionRegistry::new()),
+        default_agent_id: "main".into(),
+        curated_root: root.path().join("curated"),
+        snapshot_dir: root.path().join("snapshots"),
+    };
+    let frozen = MemoryRuntime::new(
+        MemoryRuntimeConfig {
+            metadata_path: root.path().join("unconfigured.db"),
+            note_memory_dir: root.path().join("unconfigured-note"),
+        },
+        Arc::new(OwnershipTree::new()),
+    );
+    frozen.start().await.unwrap();
+    frozen.stop().await.unwrap();
+    assert!(frozen.configure_services(inputs.clone()).is_err());
+    runtime.configure_services(inputs.clone()).unwrap();
+    assert!(runtime.configure_services(inputs.clone()).is_err());
     let tool = RuntimeTool::<NoteManageTool>::new(runtime.clone());
     assert!(tool.call_json(create_note("off")).await.is_err());
     assert!(!root.path().join("note").exists());
     runtime.start().await.unwrap();
+    assert!(runtime.configure_services(inputs).is_err());
     tool.call_json(create_note("first")).await.unwrap();
     runtime.stop().await.unwrap();
     assert!(tool.call_json(create_note("off-again")).await.is_err());

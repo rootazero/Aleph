@@ -37,7 +37,7 @@ pub struct MemoryRuntimeConfig {
 
 pub struct MemoryRuntime {
     config: MemoryRuntimeConfig,
-    services_config: Option<MemoryServicesConfig>,
+    services_config: std::sync::OnceLock<Option<MemoryServicesConfig>>,
     ownership: Arc<OwnershipTree>,
     inner: Mutex<MemoryInner>,
     tasks: tasks::MemoryTasks,
@@ -81,6 +81,23 @@ impl MemoryRuntime {
         Self::new_sources(config, ownership, Some(services))
     }
 
+    /// Install external inputs once, before the first owned resource is opened.
+    pub fn configure_services(&self, services: MemoryServicesConfig) -> Result<(), AlephError> {
+        let inner = self.inner.lock().unwrap_or_else(|error| error.into_inner());
+        if inner.status.state != MemoryState::Off
+            || inner.bundle.is_some()
+            || inner.driver.is_some()
+            || self.services_config.get().is_some()
+        {
+            return Err(AlephError::other(
+                "memory service inputs are already installed or initialization has begun",
+            ));
+        }
+        self.services_config
+            .set(Some(services))
+            .map_err(|_| AlephError::other("memory service inputs are already installed"))
+    }
+
     fn new_sources(
         config: MemoryRuntimeConfig,
         ownership: Arc<OwnershipTree>,
@@ -88,7 +105,9 @@ impl MemoryRuntime {
     ) -> Arc<Self> {
         Arc::new(Self {
             config,
-            services_config,
+            services_config: services_config.map_or_else(std::sync::OnceLock::new, |services| {
+                std::sync::OnceLock::from(Some(services))
+            }),
             ownership,
             inner: Mutex::new(MemoryInner {
                 status: MemoryStatus {
@@ -142,6 +161,7 @@ impl MemoryRuntime {
                 match inner.status.state {
                     MemoryState::Off if requested => return Err(Self::failure(&inner)),
                     MemoryState::Off if inner.driver.is_none() => {
+                        self.services_config.get_or_init(|| None);
                         inner.status.state = MemoryState::Starting;
                         inner.rotation_failed = false;
                         self.spawn_driver(&mut inner, true);
@@ -346,7 +366,10 @@ impl MemoryRuntime {
             };
             if let Some(bundle) = bundle {
                 if let Err(error) = bundle
-                    .initialize(&self.config, self.services_config.as_ref())
+                    .initialize(
+                        &self.config,
+                        self.services_config.get().and_then(Option::as_ref),
+                    )
                     .await
                 {
                     let mut inner = self.inner.lock().unwrap_or_else(|error| error.into_inner());

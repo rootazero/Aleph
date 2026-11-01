@@ -18,6 +18,7 @@ use super::MemoryRuntimeConfig;
 
 /// External inputs remain owned by chat/session and their canonical sources.
 /// Constructing this value creates no Memory connection, worker or provider.
+#[derive(Clone)]
 pub struct MemoryServicesConfig {
     pub memory: MemoryConfig,
     pub raw_store: Arc<dyn RawMemoryStore>,

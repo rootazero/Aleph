@@ -49,10 +49,16 @@ impl ToolHandler for MemoryHandler {
                 reason: "lost dispatch identity or sealed gate proof".into(),
             });
         }
-        operation.backend().with_conn(|connection| {
-            connection.execute_batch("CREATE TABLE IF NOT EXISTS memory_dispatch_effect(value INTEGER); INSERT INTO memory_dispatch_effect VALUES (1)")
-                .map_err(|error| crate::error::AlephError::other(error.to_string()))?;
-            Ok(())
+        let nested = operation.clone();
+        operation.run(async move {
+            if crate::tools::dispatch_verdict::current_dispatch_verdict().is_none() {
+                return Err(crate::error::AlephError::other("nested owned call lost the original sealed gate proof"));
+            }
+            nested.backend().with_conn(|connection| {
+                connection.execute_batch("CREATE TABLE IF NOT EXISTS memory_dispatch_effect(value INTEGER); INSERT INTO memory_dispatch_effect VALUES (1)")
+                    .map_err(|error| crate::error::AlephError::other(error.to_string()))?;
+                Ok(())
+            }).await
         }).await.map_err(|error| ToolError::Execution { name: self.definition.name.clone(), cause: error.to_string() })?;
         Ok(ToolOutput {
             value: json!({"persisted": true}),
