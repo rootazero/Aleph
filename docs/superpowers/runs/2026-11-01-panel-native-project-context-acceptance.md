@@ -5,8 +5,8 @@
 - Branch / 分支: `native-context-qa`; base / 基线: `cb6790e8e` (local main / 本地 main).
 - Contract / 契约: `aleph-native-project-context-run-v1`.
 - Status / 状态: **BLOCKED — native acceptance remains incomplete / native 验收未完成**.
-- Current preflight / 当前预检: `node qa/native_ipc/native_project_run.mjs --repo-root . --execute` exits `5`, reason `endpoint_transition_requires_approved_native_driver`, before creating a listener, shell, credential, or native-owned root.
-- The CLI is a source-only preflight, not an implemented native execution runner. / 该 CLI 仅为源码预检，不是已完成的 native 执行 runner。
+- Current preflight / 当前预检: `node qa/native_ipc/native_project_runner.mjs --repo-root . --execute` exits `5`, reason `endpoint_transition_requires_approved_native_driver`, before creating a listener, shell, credential, or native-owned root.
+- The runner now has an executable fail-closed entry point and exports the exact cleanup adapter, but it intentionally stops before native mutation when no approved endpoint/lease driver is supplied. / runner 已有可执行的 fail-closed 入口并导出 exact cleanup 适配器；没有批准的 endpoint/lease driver 时会在 native mutation 前停止。
 
 ## Corrected source audit / 源码审计更正
 
@@ -20,10 +20,9 @@ The controls now expose additive `data-panel-*` observation attributes. The QA m
 
 ## Remaining blockers and implementation gaps / 真实阻塞与实施缺口
 
-1. **Native endpoint/lease transition / native endpoint 与 lease 切换**: the Panel network ConnectionSection is read-only. The existing native `set_connection_target` command and bundled connection-page paths exist, but the current bounded remote-page DOM driver cannot drive that transition while the old page/lease is active. Command registration alone is not proof of a callable remote UI path. The driver must not call `invoke` or edit markers and then call that an in-flight lease transition. Approved design §3, phase 8 explicitly requires `BLOCKED` for this case.
-2. **Trusted RPC receipts / 可信 RPC 回执**: the helper currently records actual authenticated HTTP asset outcomes only. It does not yet emit after-auth `connect/select/discovery/revoke` RPC receipts. Existing contextual dispatch owns those checks; no public test shim or `actor=None` path was added to bypass them. This is unfinished implementation, not proof that the product cannot support it.
-3. **Native orchestration / native 编排未完成**: evidence aggregation and cleanup-order modules have pure tests, but the new runner has not wired the real process manager, monitor, protected credential reaper, independent absence verifier, or native phase sequence. Earlier task-completed markers overstated this scope; the remaining work is explicitly tracked.
-4. **Launch prerequisites / 启动前置条件**: no numeric GUI window budget was established in the approved design. No current shell/WASM/reaper served-provenance bundle or native launch preflight was completed. Historical budgets and launch permissions were not reused.
+1. **Native launch and endpoint/lease transition / native 启动与 endpoint/lease 切换**: the Panel network ConnectionSection is read-only. The existing native `set_connection_target` command and bundled connection-page paths exist, but the current bounded remote-page DOM driver cannot drive that transition while the old page/lease is active. Command registration alone is not proof of a callable remote UI path. The driver must not call `invoke` or edit markers and then call that an in-flight lease transition. Approved design §3, phase 8 explicitly requires `BLOCKED` for this case.
+2. **Native orchestration / native 编排**: the runner now has an executable read-only/preflight entry point and an exact six-step cleanup adapter. The adapter is covered by fakes and enforces shell → helper → exact device revoke → exact credential delete → independent absence → root removal. It has not been connected to a real WebView2 process or OS keyring run; that remains gated by the native launch prerequisites below.
+3. **Launch prerequisites / 启动前置条件**: no numeric GUI window budget was established in the approved design. No current shell/WASM/reaper served-provenance bundle or native launch preflight was completed. Historical budgets and launch permissions were not reused.
 
 These are not grounds to fabricate native evidence. No Windows Tauri/WebView2 window or OS credential operation was launched in this continuation. No further product UI/API expansion is claimed or silently approved.
 
@@ -49,9 +48,13 @@ The real Node WebSocket/HTTP smoke now proves:
 
 实际 Node WS/HTTP smoke 证明了上列 Gateway 行为，包括同 revision 切换、真实延迟旧响应和 exact device revoke；这些客户端是 Node，不是 native WebView。旧 WS 实验的根因已定位为 Axum 缺少 `ConnectInfo`，真实 RED 为 `ws_upgrade_status_500`；改为 `into_make_service_with_connect_info::<SocketAddr>()` 后认证成功。此前撤回的挂起实验不计为通过证据。
 
+The helper's feature-gated observer now records typed after-auth `connect`, `select`, and `discovery` outcomes from the real contextual dispatch, plus authenticated refusal after workspace unbind. The helper maps actual Core device/project identifiers to fixed redacted labels only after explicit pairing confirmation; it never records request claims, raw IDs, error text or tokens. HTTP asset receipts remain a separate evidence channel.
+
+QA-only observer 现在挂在真实 contextual dispatch 之后，并记录 typed after-auth `connect`、`select`、`discovery` 结果；workspace unbind 后的 authenticated refusal 也有真实回执。helper 只有在显式 pairing confirmation 后才把实际设备映射到固定脱敏标签；不记录 raw ID、错误文本、请求 claim 或 token。HTTP asset receipt 仍是独立证据通道。
+
 Receipt corrections also replace the unrelated presence/health/config version with Core publication revision, avoid raw device IDs, paginate by sequence cursor, refuse unsupported no-op controls, and bind devices explicitly before observing asset receipts. A server error cannot masquerade as an asset refusal.
 
-回执已修正 Core revision、synthetic handle、游标和显式 binding；观察不再隐式改变 pairing 状态。helper 仍缺少上述 RPC receipts，不能称完整 native proof。
+回执已修正 Core revision、synthetic handle、游标和显式 binding；观察不再隐式改变 pairing 状态。
 
 ## Evidence classification / 证据分层
 
