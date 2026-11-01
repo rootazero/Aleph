@@ -43,6 +43,10 @@ const importVerifiedModule = async (entry, integrity, credential) => {
         throw failure('AssetFetchFailed', cause);
     }
     if (!response.ok) throw failure('AssetFetchFailed', Error(`HTTP ${response.status}`));
+    if (credential !== null && (typeof credential.project_generation !== 'string'
+        || response.headers.get('x-aleph-panel-project-generation') !== credential.project_generation)) {
+        throw failure('AssetFetchFailed', Error('project context changed'));
+    }
 
     let bytes;
     try {

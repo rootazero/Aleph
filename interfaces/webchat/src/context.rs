@@ -6,7 +6,7 @@ use crate::api::ExecApprovalApi;
 use crate::api::TelecomApprovalApi;
 use crate::components::sidebar::SystemAlert;
 #[cfg(feature = "panel-modular")]
-use crate::panel::discovery::{decode_snapshot, PanelDiscoveryState, SnapshotUpdate};
+use crate::panel::discovery::{PanelDiscoveryState, SnapshotUpdate};
 use crate::state::notifications::{PendingApprovalView, PendingAskView};
 use futures::channel::{mpsc, oneshot};
 use futures::{FutureExt, StreamExt};
@@ -1395,6 +1395,42 @@ impl DashboardState {
         self.send_rpc(method, params).await
     }
 
+    #[cfg(feature = "panel-modular")]
+    pub fn select_panel_project(
+        &self,
+        project_id: Option<String>,
+    ) -> impl std::future::Future<Output = Result<(), String>> + 'static {
+        let state = *self;
+        let epoch = self.connection_epoch.get_untracked();
+        let request = self
+            .panel_discovery
+            .try_update(|state| state.invalidate_context());
+        async move {
+            let request =
+                request.ok_or_else(|| "Panel discovery owner was disposed".to_string())?;
+            let result = state.rpc_call(aleph_protocol::panel::PANEL_PROJECT_SELECT_METHOD,
+            serde_json::json!({"project_id": project_id, "idempotency_key": format!("panel-project-{epoch}-{request}")})).await;
+            if state
+                .panel_discovery
+                .try_get_untracked()
+                .is_none_or(|state| {
+                    state.connection_epoch() != epoch || state.request_generation() != request
+                })
+            {
+                return Ok(());
+            }
+            match result {
+                Ok(_) => state.refresh_panel_discovery().await,
+                Err(message) => {
+                    state.panel_discovery.update(|state| {
+                        state.mark_error_for_request(epoch, request, message.clone())
+                    });
+                    Err(message)
+                }
+            }
+        }
+    }
+
     /// Refresh the complete canonical Panel snapshot for the current connection.
     #[cfg(feature = "panel-modular")]
     pub async fn refresh_panel_discovery(&self) -> Result<(), String> {
@@ -1415,28 +1451,36 @@ impl DashboardState {
             )
             .await;
         match response {
-            Ok(value) => match decode_snapshot(value) {
-                Ok(snapshot) => {
-                    match self.panel_discovery.try_update(|state| {
-                        state.accept_snapshot_for_request(epoch, request_generation, snapshot)
-                    }) {
-                        Some(
-                            SnapshotUpdate::Accepted
-                            | SnapshotUpdate::StaleEpoch
-                            | SnapshotUpdate::StaleRequest
-                            | SnapshotUpdate::StaleRevision,
-                        ) => Ok(()),
-                        None => Err("Panel discovery owner was disposed".to_string()),
+            Ok(value) => {
+                match serde_json::from_value::<aleph_protocol::panel::PanelUiContextSnapshot>(value)
+                {
+                    Ok(snapshot) => {
+                        match self.panel_discovery.try_update(|state| {
+                            state.accept_context_snapshot_for_request(
+                                epoch,
+                                request_generation,
+                                snapshot,
+                            )
+                        }) {
+                            Some(
+                                SnapshotUpdate::Accepted
+                                | SnapshotUpdate::StaleEpoch
+                                | SnapshotUpdate::StaleRequest
+                                | SnapshotUpdate::StaleRevision,
+                            ) => Ok(()),
+                            None => Err("Panel discovery owner was disposed".to_string()),
+                        }
+                    }
+                    Err(error) => {
+                        let message =
+                            format!("Panel discovery payload could not be decoded: {error}");
+                        self.panel_discovery.update(|state| {
+                            state.mark_error_for_request(epoch, request_generation, message.clone())
+                        });
+                        Err(message)
                     }
                 }
-                Err(error) => {
-                    let message = format!("Panel discovery payload could not be decoded: {error}");
-                    self.panel_discovery.update(|state| {
-                        state.mark_error_for_request(epoch, request_generation, message.clone())
-                    });
-                    Err(message)
-                }
-            },
+            }
             Err(message) => {
                 self.panel_discovery.update(|state| {
                     state.mark_error_for_request(epoch, request_generation, message.clone())

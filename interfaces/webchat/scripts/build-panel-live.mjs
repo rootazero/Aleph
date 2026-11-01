@@ -33,7 +33,7 @@ const html = (await readFile(join(panel, 'index.html'), 'utf8'))
 if (/<(?:link|base)\s+data-trunk/.test(html)) throw Error('unprocessed host asset');
 await writeFile(join(shell, 'index.html'), html);
 const sha256 = bytes => createHash('sha256').update(bytes).digest('hex');
-const sources = ['index.html', 'panel_loader.js', 'src/context.rs', 'src/panel/sdk.rs', 'src/panel/loader.rs', 'src/panel/loader/browser.rs'];
+const sources = ['index.html', 'panel_loader.js', 'src/context.rs', 'src/app.rs', 'src/panel/discovery.rs', 'src/panel/projection.rs', 'src/panel/sdk.rs', 'src/panel/loader.rs', 'src/panel/loader/browser.rs', 'src/components/sidebar/projects.rs', 'src/components/project_page/settings.rs', 'locales/en.json', 'locales/zh.json', '../../shared/protocol/src/panel.rs'];
 await writeFile(join(output, 'build.json'), JSON.stringify({
     feature: 'panel-modular (no spike, no legacy-terminal)', profile: 'dev, debug=0',
     wasm_sha256: sha256(await readFile(join(shell, 'aleph_panel_bg.wasm'))),

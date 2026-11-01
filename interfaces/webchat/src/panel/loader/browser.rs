@@ -50,19 +50,23 @@ pub(super) fn load(
         let fixture =
             cfg!(feature = "panel-tab-spike") && descriptor.key.plugin_id == "community.fixture";
         let mut fence = None;
+        let mut binding = None;
         let credential = if integrity.is_some() && !fixture {
             let epoch = sdk
                 .connection()
                 .map_err(|_| PanelLoadError::AssetFetchFailed)?
                 .epoch;
+            let context = sdk.asset_project_context().ok_or(PanelLoadError::AssetFetchFailed)?;
+            binding = Some((epoch, context));
             let (gateway_url, token) = sdk
                 .asset_credential()
                 .await
                 .map_err(|_| PanelLoadError::AssetFetchFailed)?;
             let watched = descriptor.clone();
+            let watching = sdk.clone();
             let current =
-                Closure::<dyn FnMut() -> bool>::new(move || sdk.asset_is_current(&watched, epoch));
-            let credential = to_js(json!({ "gateway_url": gateway_url, "token": token }))
+                Closure::<dyn FnMut() -> bool>::new(move || watching.asset_context_is_current(&watched, epoch, context));
+            let credential = to_js(json!({ "gateway_url": gateway_url, "token": token, "project_generation": context.1.to_string() }))
                 .map_err(|_| PanelLoadError::AssetFetchFailed)?;
             Reflect::set(&credential, &"current".into(), current.as_ref())
                 .map_err(|_| PanelLoadError::AssetFetchFailed)?;
@@ -71,11 +75,15 @@ pub(super) fn load(
         } else {
             JsValue::NULL
         };
-        let module = Module::from(
-            load_module(&descriptor.entry, integrity, credential)
-                .await
-                .map_err(|error| map_error(error, PanelLoadError::ImportFailed))?,
-        );
+        let result = load_module(&descriptor.entry, integrity, credential)
+            .await
+            .map_err(|error| map_error(error, PanelLoadError::ImportFailed));
+        if matches!(&result, Err(PanelLoadError::AssetFetchFailed)) {
+            if let Some((epoch, context)) = binding {
+                sdk.asset_refused(&descriptor, epoch, context);
+            }
+        }
+        let module = Module::from(result?);
         drop(fence);
         let descriptor = serde_json::from_str(&module.descriptor_json())
             .map_err(|_| PanelLoadError::InvalidDescriptor)?;

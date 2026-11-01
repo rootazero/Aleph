@@ -53,6 +53,18 @@ The response-only `x-aleph-panel-project-generation` header fences host asset re
 
 GREEN: real WebSocket + HTTP project target **1 passed / 0 failed**; existing production HTTP target **2 passed / 0 failed / 1 opt-in live fixture ignored**. The project target also proves A/B asset switching, cross-user isolation, absent workspace, live workspace rebinding with unchanged Core revision, roster removal, archive and device revocation. Regular-library build took 9m30s and emitted only the existing `panel_snapshot` warning. / 真实 RPC+HTTP 项目 target 1 通过；既有 HTTP target 2 通过、1 个 opt-in live fixture 尚未运行。换绑、撤销及既有 transport/Terminal/bytes/cache 验证通过；常规库构建 9m30s，仅既有 warning。
 
+Tooling note: the existing public Terminal test temporarily writes `dist/`, watched by Core `build.rs`, and invalidates the next Cargo fingerprint. A redundant task-done compilation exceeded the tool wait and was stopped; rerunning the freshly built exact-source executables completed **1 + 2 tests**, with the opt-in fixture still ignored. / 既有 Terminal 测试会临时写入 build script 监视的 dist，导致下次 Cargo 重编译；收尾重复编译等待超时后主动停止，改用同一份源码刚生成的测试产物，1+2 项复验通过。
+
+## Task 4 — Browser project lifecycle / 浏览器项目生命周期
+
+Behavioral RED: expected generation `7`, real HTTP response generation `8`; the old bridge returned `IntegrityMismatch` after inspecting bytes instead of refusing the context before reading/importing them. The new bridge checks the response-only generation first. / 真实 HTTP 返回 generation 8，而当前期待 7；旧 bridge 先读取并校验 bytes 才报 IntegrityMismatch。新实现先拒绝不匹配上下文。
+
+The existing discovery state receives the typed context envelope, fences request/connection/context generations, and accepts current filtered views at equal Core revision. Explicit selection invalidates content synchronously before RPC; observed refusal clears content, while old refusals cannot erase a newer context. Sidebar selection and an explicit Global action use the authenticated selector; passive metadata reflection never writes selection. / 复用 discovery 状态与 typed envelope；显式选择先同步失效旧内容，再发送 RPC；当前拒绝清空内容，旧拒绝不能清空新上下文。sidebar 与显式全局操作走受认证 selector，读取 metadata 不产生选择写入。
+
+Ruling: archive invalidates local content and retains the explicit server claim until a separate Global action, so a revoked project cannot silently turn into Global. This resolves the plan's automatic-clear wording in favor of the approved fail-closed design. / 归档后保持显式服务器 claim 并失效本地内容，用户另选全局才清除；以已批准的 fail-closed 设计裁决计划中的自动清除描述。
+
+GREEN: native Panel/Terminal regression **1607 passed / 0 failed / 0 ignored**; freshly generated production-feature WASM/glue loader **15 passed / 0 failed / 0 skipped**. All 14 source hashes and the generated WASM hash match the provenance manifest. The initial native classification-guard failure was fixed through the existing classifier. / 原生 Panel/Terminal 1607 通过；fresh production-feature WASM/glue 的 loader 15 通过、无跳过；14 项源码与 WASM hash 均匹配。首次错误分类守卫失败已通过复用既有 classifier 修复。
+
 ## Remaining / 剩余
 
 Browser lifecycle, production Gateway/browser evidence and fresh whole-branch review remain open. Real Gateway RPC/HTTP project integration is now proven independently of private selector tests. / browser、新的真实浏览器证据与整分支审查仍未完成；RPC/HTTP 项目接线已由真实 Gateway 单独验证。

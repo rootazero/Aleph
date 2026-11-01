@@ -87,13 +87,14 @@ test('binds a host credential to the authenticated same-origin asset request', (
         const server = createServer((request, response) => {
             requests++;
             assert.equal(request.headers.authorization, 'Bearer host-credential');
+            response.setHeader('x-aleph-panel-project-generation', '0');
             if (request.url.endsWith('/late.mjs')) { current = false; response.end(${JSON.stringify(valid)}); return; }
             response.end('different bytes');
         });
         await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
         const origin = 'http://127.0.0.1:' + server.address().port;
         globalThis.location = { origin };
-        const credential = { token: 'host-credential', gateway_url: origin.replace('http:', 'ws:') + '/ws' };
+        const credential = { token: 'host-credential', gateway_url: origin.replace('http:', 'ws:') + '/ws', project_generation: '0' };
         const sri = ${JSON.stringify(integrity(valid))};
         try {
             await assert.rejects(loadPanelModule(origin + '/tabs/community-live/1.0.0/panel.mjs', sri, credential), e => e.code === 'IntegrityMismatch');
@@ -104,6 +105,30 @@ test('binds a host credential to the authenticated same-origin asset request', (
             assert.equal(requests, 1, 'refused bindings must not issue HTTP requests');
             await assert.rejects(loadPanelModule(origin + '/tabs/late.mjs', sri, { ...credential, current: () => current }), e => e.code === 'AssetFetchFailed');
             assert.equal(requests, 2, 'a completed stale fetch must refuse before importing');
+        } finally { server.closeAllConnections(); server.close(); }
+    `], { encoding: 'utf8' });
+    assert.equal(result.status, 0, result.stderr);
+});
+
+test('refuses a different project generation before inspecting or importing bytes', () => {
+    const result = spawnSync(process.execPath, ['--input-type=module', '-e', `
+        import assert from 'node:assert/strict';
+        import { createServer } from 'node:http';
+        import { loadPanelModule } from ${JSON.stringify(new URL('../panel_loader.js', import.meta.url).href)};
+        const server = createServer((request, response) => {
+            assert.equal(request.headers.authorization, 'Bearer host-credential');
+            assert.equal(request.headers['x-aleph-project'], undefined);
+            response.setHeader('x-aleph-panel-project-generation', '8');
+            response.end('different bytes');
+        });
+        await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+        const origin = 'http://127.0.0.1:' + server.address().port;
+        globalThis.location = { origin };
+        try {
+            await assert.rejects(loadPanelModule(origin + '/tabs/shared.mjs',
+                ${JSON.stringify(integrity(valid))},
+                { token: 'host-credential', gateway_url: origin + '/ws', project_generation: '7' }),
+                error => error.code === 'AssetFetchFailed');
         } finally { server.closeAllConnections(); server.close(); }
     `], { encoding: 'utf8' });
     assert.equal(result.status, 0, result.stderr);
