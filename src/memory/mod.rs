@@ -38,6 +38,7 @@ pub mod reembed;
 pub mod reflector;
 pub mod rerank;
 pub mod ripple;
+pub mod runtime;
 pub mod scratchpad;
 pub mod session_compactor;
 pub mod session_memory_mode;

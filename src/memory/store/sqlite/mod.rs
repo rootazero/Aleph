@@ -17,9 +17,11 @@ pub mod recall_signals;
 mod sessions;
 
 use crate::error::AlephError;
+use crate::memory::runtime::{MemoryOperation, MemoryRuntime};
 use crate::sync_primitives::{Arc, Mutex};
 use rusqlite::Connection;
 use std::path::{Path, PathBuf};
+use std::sync::Weak;
 
 /// Tunable knobs for hybrid (vector + FTS) retrieval fusion.
 ///
@@ -55,6 +57,7 @@ impl Default for RetrievalTuning {
 pub struct SqliteMemoryBackend {
     conn: Arc<Mutex<Option<Connection>>>,
     tuning: RetrievalTuning,
+    runtime: Option<Weak<MemoryRuntime>>,
 }
 
 /// Escape SQL `LIKE` metacharacters so a query containing `%`, `_` or `\\`
@@ -125,6 +128,7 @@ impl SqliteMemoryBackend {
         Ok(Self {
             conn: Arc::new(Mutex::new(Some(conn))),
             tuning: RetrievalTuning::default(),
+            runtime: None,
         })
     }
 
@@ -154,7 +158,25 @@ impl SqliteMemoryBackend {
         &self,
         work: impl FnOnce(&mut Connection) -> Result<R, AlephError>,
     ) -> Result<R, AlephError> {
+        let _operation = self.operation()?;
         Self::access_connection(&self.conn, work)
+    }
+
+    fn operation(&self) -> Result<Option<MemoryOperation>, AlephError> {
+        let Some(owner) = &self.runtime else {
+            return Ok(None);
+        };
+        MemoryOperation::current()
+            .filter(|operation| operation.matches_backend(owner, self))
+            .map(Some)
+            .ok_or_else(|| {
+                AlephError::other("memory database requires an admitted Memory operation")
+            })
+    }
+
+    pub(crate) fn with_runtime(mut self, owner: Weak<MemoryRuntime>) -> Self {
+        self.runtime = Some(owner);
+        self
     }
 
     fn access_connection<R>(
@@ -183,15 +205,21 @@ impl SqliteMemoryBackend {
         &self.conn
     }
 
-    /// Run checked SQLite work on the blocking pool. A closure queued before
-    /// close but started afterwards fails without touching the closed database.
-    /// Owned runtime cancellation is layered onto this boundary by MemoryRuntime.
+    /// Run checked SQLite work on the blocking pool. Bundled connections retain
+    /// the actual join and inherited admission in their Memory source owner.
+    /// Standalone stores preserve their independent connection contract.
     pub async fn with_conn<F, R>(&self, f: F) -> Result<R, AlephError>
     where
         F: FnOnce(&Connection) -> Result<R, AlephError> + Send + 'static,
         R: Send + 'static,
     {
+        let operation = self.operation()?;
         let conn = Arc::clone(&self.conn);
+        if let Some(operation) = operation {
+            return operation
+                .run_blocking(move || Self::access_connection(&conn, |connection| f(connection)))
+                .await;
+        }
         tokio::task::spawn_blocking(move || {
             Self::access_connection(&conn, |connection| f(connection))
         })
@@ -213,6 +241,7 @@ impl SqliteMemoryBackend {
         Ok(Self {
             conn: Arc::new(Mutex::new(Some(conn))),
             tuning: RetrievalTuning::default(),
+            runtime: None,
         })
     }
 
