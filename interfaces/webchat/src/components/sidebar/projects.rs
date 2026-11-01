@@ -228,6 +228,7 @@ pub fn ProjectsSidebar() -> impl IntoView {
                             view! {
                                 <button
                                     type="button"
+                                    data-panel-project-name=p.name.clone()
                                     class=move || {
                                         if is_active() {
                                             "nav-tile-active w-full flex flex-col items-start px-3 py-2 rounded-lg text-left"

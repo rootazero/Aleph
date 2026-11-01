@@ -111,6 +111,7 @@ pub fn PanelShell(projection: PanelProjection, initial_tab: Option<PanelTabKey>)
                             let detail = row.status_detail.map(|detail| format!(" ({detail})"));
                             view! {
                                 <button type="button" disabled=move || !enabled
+                                    data-panel-plugin=selected.plugin_id.clone()
                                     aria-pressed=move || active.get().as_ref() == Some(&selected)
                                     aria-disabled=(!enabled).to_string()
                                     on:click=move |_| active.set(Some(key.clone()))>

@@ -196,7 +196,8 @@ const QA_MONITOR_NONCE_PLACEHOLDER: &str = "__QA_MONITOR_NONCE__";
 /// accepted for a loopback-only QA channel and is why commands are fixed and bounded.
 ///
 /// DOM side: after `hello` the page accepts ONLY fixed snake_case commands
-/// `ask_pair | submit_ticket | reload | inspect | reveal_browser` (envelope
+/// `ask_pair | submit_ticket | reload | inspect | reveal_browser | reveal_projects`
+/// plus the fixed `select_project_a/b`, `select_global`, and `open_project_a/b` actions (envelope
 /// `{v:1,type:'command',run,id,command[,ticket]}`: exact key set, `run` == this
 /// document's run token, `id` strictly sequential from 0, one command in flight). It
 /// never evaluates harness text, never takes a selector, and never calls
@@ -204,12 +205,15 @@ const QA_MONITOR_NONCE_PLACEHOLDER: &str = "__QA_MONITOR_NONCE__";
 /// button, sets the real password input through the native value setter plus an
 /// `input` event and clicks the real submit button, reloads, reports booleans, or
 /// (`reveal_browser`) opens the workspace pane and selects the Browser tab.
-/// `reveal_browser` is the ONLY multi-step command and stays fixed and bounded: it
+/// `reveal_browser` and `reveal_projects` are multi-step commands and stay fixed and bounded: the former
 /// clicks the `layout-toggle` button ONLY when the workspace pane is not already open
 /// (the toggle would otherwise close it), then polls at most 20 x 25 ms (500 ms) for
 /// the enabled `workspace-tab-browser` button and clicks only that. No selector or
 /// text from the harness is used; absent/disabled => `command_ack` ok:false.
-/// Selectors are the compile-time table `SEL` (stable `data-testid`). The ticket
+/// `reveal_projects` opens the real navigation menu and polls the Projects route
+/// with the same bound. Project actions only click existing Global/project/tab
+/// buttons; none receives an id, selector, URL, or RPC payload from the harness.
+/// Selectors are the compile-time table `SEL` (stable DOM attributes). The ticket
 /// lives only in the handler's local variable: it is never stored in a module
 /// variable, emitted, logged or put in a URL. `command_ack` carries only a fixed
 /// action enum and a boolean (false when the element is absent/disabled or the
@@ -224,7 +228,7 @@ const QA_MONITOR_JS: &str = r#"(function () {
   var V = 1;
   var CONTRACT = 'aleph-qa-monitor-v1';
   var MAX_SEQ = 512;
-  var ACTIONS = ['ask_pair', 'submit_ticket', 'reload', 'inspect', 'reveal_browser'];
+  var ACTIONS = ['ask_pair', 'submit_ticket', 'reload', 'inspect', 'reveal_browser', 'reveal_projects', 'select_project_a', 'select_project_b', 'select_global', 'open_project_a', 'open_project_b'];
   var MAX_COMMAND_CHARS = 4096;
   var MAX_TICKET_CHARS = 2048;
   var SEL = {
@@ -240,7 +244,14 @@ const QA_MONITOR_JS: &str = r#"(function () {
     liveStatus: '[data-testid=browser-live-status]',
     workspace: '[data-testid=workspace-panel]',
     layoutToggle: '[data-testid=layout-toggle]',
-    browserTab: '[data-testid=workspace-tab-browser]'
+    browserTab: '[data-testid=workspace-tab-browser]',
+    projectA: '[data-panel-project-name="Native QA A"]',
+    projectB: '[data-panel-project-name="Native QA B"]',
+    globalProject: '[data-panel-global]',
+    tabA: '[data-panel-shell] button[data-panel-plugin="project-a"]',
+    tabB: '[data-panel-shell] button[data-panel-plugin="project-b"]',
+    navToggle: '[data-panel-nav-toggle]',
+    projectsRoute: '[data-panel-nav="/projects"]'
   };
   var REVEAL_POLL_MS = 25;
   var REVEAL_MAX_TRIES = 20;
@@ -394,6 +405,32 @@ const QA_MONITOR_JS: &str = r#"(function () {
     };
     setTimeout(poll, REVEAL_POLL_MS);
   }
+  // These actions click production controls; they cannot provide a project id or call RPC/IPC.
+  function projectAction(action) {
+    var button = action === 'select_project_a' ? q(SEL.projectA)
+      : action === 'select_project_b' ? q(SEL.projectB)
+      : action === 'select_global' ? q(SEL.globalProject)
+      : action === 'open_project_a' ? q(SEL.tabA) : q(SEL.tabB);
+    if (!enabledButton(button)) { done(action, false); return; }
+    button.click();
+    done(action, true);
+  }
+  function revealProjects() {
+    var route = q(SEL.projectsRoute);
+    if (enabledButton(route)) { route.click(); done('reveal_projects', true); return; }
+    var toggle = q(SEL.navToggle);
+    if (!enabledButton(toggle)) { done('reveal_projects', false); return; }
+    toggle.click();
+    var tries = 0;
+    var poll = function () {
+      var button = q(SEL.projectsRoute);
+      if (enabledButton(button)) { button.click(); done('reveal_projects', true); return; }
+      tries += 1;
+      if (tries >= REVEAL_MAX_TRIES) { done('reveal_projects', false); return; }
+      setTimeout(poll, REVEAL_POLL_MS);
+    };
+    setTimeout(poll, REVEAL_POLL_MS);
+  }
   function reload() {
     done('reload', true);
     setTimeout(function () { try { window.location.reload(); } catch (_) {} }, 100);
@@ -414,6 +451,8 @@ const QA_MONITOR_JS: &str = r#"(function () {
       else if (act.action === 'ask_pair') { askPair(); }
       else if (act.action === 'submit_ticket') { submitTicket(act); }
       else if (act.action === 'reveal_browser') { revealBrowser(); }
+      else if (act.action === 'reveal_projects') { revealProjects(); }
+      else if (['select_project_a', 'select_project_b', 'select_global', 'open_project_a', 'open_project_b'].indexOf(act.action) !== -1) { projectAction(act.action); }
       else { reload(); }
     } catch (_) { done(act.action, false); }
   }
