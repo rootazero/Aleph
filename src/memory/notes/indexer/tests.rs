@@ -4,6 +4,52 @@ use tempfile::TempDir;
 
 const AGENT: &str = "default";
 
+#[tokio::test]
+async fn reconcile_corpus_drains_category_tasks_after_first_error() {
+    for panic_first in [false, true] {
+        let mut set = tokio::task::JoinSet::new();
+        let (failed, failure_ready) = tokio::sync::oneshot::channel();
+        set.spawn(async move {
+            failed.send(()).unwrap();
+            if panic_first {
+                panic!("category lifecycle test panic");
+            }
+            Err(AlephError::config("first category failure"))
+        });
+        failure_ready.await.unwrap();
+        let (release, gate) = tokio::sync::oneshot::channel();
+        let (finished, done) = tokio::sync::oneshot::channel();
+        set.spawn(async move {
+            gate.await.unwrap();
+            finished.send(()).unwrap();
+            Ok(IndexStats {
+                indexed: 1,
+                ..IndexStats::default()
+            })
+        });
+        use std::future::Future;
+        let error = {
+            let mut drain = std::pin::pin!(drain_category_tasks(&mut set));
+            assert!(
+                drain
+                    .as_mut()
+                    .poll(&mut std::task::Context::from_waker(std::task::Waker::noop()))
+                    .is_pending(),
+                "a category error must not return before the other category finishes"
+            );
+            release.send(()).unwrap();
+            drain.await.unwrap_err().to_string()
+        };
+        done.await.unwrap();
+        assert!(set.is_empty());
+        assert!(error.contains(if panic_first {
+            "full_rebuild join:"
+        } else {
+            "first category failure"
+        }));
+    }
+}
+
 fn create_test_db() -> (tempfile::TempDir, Arc<SqliteMemoryBackend>) {
     let (scratch, db_path) = crate::utils::scratch::scratch_root();
     // rust-doctor-disable-next-line unwrap-in-production
