@@ -58,7 +58,10 @@ test("receipts have a fixed redacted shape", () => {
 test("commands are closed and reject arbitrary passthrough", () => {
   assert.equal(validateHelperCommand({ v: 1, type: "command", run, id: 0, command: "shutdown" }).ok, true);
   assert.equal(validateHelperCommand({ v: 1, type: "command", run, id: 0, command: "shutdown", token: "secret" }).ok, false);
-  assert.equal(validateHelperCommand({ v: 1, type: "command", run, id: 0, command: "set_fixture", action: "select_a" }).ok, true);
+  assert.equal(validateHelperCommand({ v: 1, type: "command", run, id: 0, command: "set_fixture", action: "select_a" }).ok, false);
+  assert.equal(validateHelperCommand({ v: 1, type: "command", run, id: 0, command: "set_fixture", action: "unbind_workspace" }).ok, true);
+  assert.equal(validateHelperCommand({ v: 1, type: "command", run, id: 0, command: "receipt_since", after: 0 }).ok, true);
+  assert.equal(validateHelperCommand({ v: 1, type: "command", run, id: 0, command: "receipt_since" }).ok, false);
   assert.equal(validateHelperCommand({ v: 1, type: "command", run, id: 0, command: "set_fixture", action: "unknown" }).ok, false);
 });
 
@@ -68,6 +71,19 @@ test("only complete protected phases and exact cleanup can pass", () => {
   assert.equal(overallOutcome(phases, cleanup), "PASS");
   assert.equal(overallOutcome(phases.map((phase) => phase.name === "late_a_fenced" ? { ...phase, outcome: "BLOCKED" } : phase), cleanup), "BLOCKED");
   assert.equal(overallOutcome(phases, cleanup.slice(0, -1)), "AMBIGUOUS");
+});
+
+test("missing or duplicate required phases never pass", () => {
+  const cleanup = CLEANUP_STEPS.map((name) => ({ name, ok: true }));
+  assert.notEqual(overallOutcome([], cleanup), "PASS");
+  assert.notEqual(overallOutcome([{ name: "helper_ready", outcome: "PASS" }], cleanup), "PASS");
+  const duplicate = PHASES.map((name) => ({ name, outcome: "PASS" }));
+  duplicate[1] = duplicate[0];
+  assert.notEqual(overallOutcome(duplicate, cleanup), "PASS");
+});
+
+test("cleanup ambiguity cannot be hidden by a blocked phase after mutation", () => {
+  assert.equal(overallOutcome([makePhase("project_a", "BLOCKED")], [{ name: "shell_stopped", ok: false }]), "AMBIGUOUS");
 });
 
 test("run state enforces phase uniqueness and cleanup order", () => {
@@ -95,6 +111,6 @@ test("run outcome maps to fail-closed exit codes", () => {
 
 test("blocked phases cannot be reported as a generic failure or pass", () => {
   const state = createRunState({ run, nonce: "ab".repeat(16), origin: "http://127.0.0.1:30123" });
-  const blocked = recordPhase(state, makePhase("helper_ready", "BLOCKED", "project_selector_unavailable"));
+  const blocked = recordPhase(state, makePhase("helper_ready", "BLOCKED", "endpoint_transition_requires_approved_native_driver"));
   assert.equal(finishRun(blocked).outcome, "BLOCKED");
 });

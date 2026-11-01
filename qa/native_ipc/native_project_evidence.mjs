@@ -57,7 +57,9 @@ export function recordNativeTrace(ledger, record, { auth, pid } = {}) {
 export function recordProvenance(ledger, entry) {
   if (entry === null || typeof entry !== "object" || Array.isArray(entry)) throw new Error("invalid_provenance");
   const keys = Object.keys(entry);
-  if (!keys.every((key) => ["kind", "ok", "reason"].includes(key)) || typeof entry.kind !== "string" || typeof entry.ok !== "boolean" || typeof entry.reason !== "string") {
+  const fixedEntry = (entry.kind === "project_source_map" && ["source_only", "source_files_missing"].includes(entry.reason))
+    || (entry.kind === "shell_binary" && entry.reason === "hash_match");
+  if (!keys.every((key) => ["kind", "ok", "reason"].includes(key)) || typeof entry.ok !== "boolean" || !fixedEntry) {
     throw new Error("invalid_provenance");
   }
   ledger.provenance.push({ kind: entry.kind, ok: entry.ok, reason: entry.reason });

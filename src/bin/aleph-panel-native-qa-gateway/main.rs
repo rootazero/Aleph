@@ -1,5 +1,6 @@
 #![cfg(feature = "native-qa")]
 
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -24,6 +25,11 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::sync::{oneshot, Mutex, Notify};
 use tower_http::services::{ServeDir, ServeFile};
 
+// Reuse the shell's exact root proof; other shell accessors are unused by the helper.
+#[allow(dead_code)]
+#[path = "../../../desktop/shell/src/qa_root.rs"]
+mod qa_root;
+
 #[derive(Debug)]
 struct Args {
     owned_root: PathBuf,
@@ -43,6 +49,7 @@ struct Command {
     device: Option<String>,
     action: Option<String>,
     gate: Option<String>,
+    after: Option<u32>,
 }
 
 #[derive(Debug, Serialize)]
@@ -67,6 +74,15 @@ struct Fixture {
     tokens: Arc<DeviceTokenManager>,
     projects: Arc<ProjectStore>,
     alice_project: String,
+    c_root: PathBuf,
+    bindings: HashMap<String, PairingBinding>,
+}
+
+#[derive(Clone)]
+struct PairingBinding {
+    user: String,
+    baseline: HashSet<String>,
+    actual: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -94,9 +110,9 @@ struct GatewayState {
     run: String,
     asset_a_held: bool,
     asset_a_notify: Arc<Notify>,
-    tokens: Arc<DeviceTokenManager>,
+    fixture: Arc<Mutex<Fixture>>,
+    manager: Arc<ExtensionManager>,
     receipts: Arc<Mutex<Vec<StoredReceipt>>>,
-    state_versions: Arc<StateVersionTracker>,
 }
 
 #[derive(Clone, Serialize)]
@@ -139,22 +155,45 @@ async fn main() -> std::process::ExitCode {
 async fn run() -> anyhow::Result<()> {
     let args = parse_args(std::env::args_os())?;
     validate_nonce(&args.nonce)?;
+    qa_root::init_from_args([
+        std::ffi::OsString::from("native-qa-helper"),
+        std::ffi::OsString::from("--qa-root"),
+        args.owned_root.clone().into_os_string(),
+        std::ffi::OsString::from("--qa-nonce"),
+        args.nonce.clone().into(),
+    ])?;
     let aleph_home = args.owned_root.join(".aleph");
     std::fs::create_dir_all(&aleph_home)?;
     std::env::set_var("ALEPH_HOME", &aleph_home);
-    std::fs::create_dir_all(&args.panel_root)?;
-    write_panel(&aleph_home, "community-live", b"export const nativeQa = true;")?;
+    anyhow::ensure!(
+        args.panel_root.join("index.html").is_file(),
+        "missing_panel"
+    );
+    let source = include_str!("../../../interfaces/webchat/tests/fixtures/community-live.mjs");
+    write_panel(&aleph_home, "community-live", source.as_bytes())?;
 
     let projects = ProjectStore::shared();
     projects.create_schema()?;
     let a_root = args.owned_root.join("project-a");
     let b_root = args.owned_root.join("project-b");
-    write_panel(&a_root.join(".aleph"), "project-a", b"export const project = 'a';")?;
-    write_panel(&b_root.join(".aleph"), "project-b", b"export const project = 'b';")?;
-    let project_a = projects.create("A", Some("alice"), Some(&a_root))?;
-    let project_b = projects.create("B", Some("bob"), Some(&b_root))?;
+    write_panel(
+        &a_root.join(".aleph"),
+        "project-a",
+        source.replace("community-live", "project-a").as_bytes(),
+    )?;
+    write_panel(
+        &b_root.join(".aleph"),
+        "project-b",
+        source.replace("community-live", "project-b").as_bytes(),
+    )?;
+    let project_a = projects.create("Native QA A", Some("alice"), Some(&a_root))?;
+    let project_b = projects.create("Native QA B", Some("bob"), Some(&b_root))?;
     let c_root = args.owned_root.join("project-c");
-    write_panel(&c_root.join(".aleph"), "project-c", b"export const project = 'c';")?;
+    write_panel(
+        &c_root.join(".aleph"),
+        "project-c",
+        source.replace("community-live", "project-c").as_bytes(),
+    )?;
     let _project_c = projects.create("C", Some("alice"), Some(&c_root))?;
     projects.add_member(&project_a.id, "alice")?;
     projects.add_member(&project_b.id, "alice")?;
@@ -172,11 +211,20 @@ async fn run() -> anyhow::Result<()> {
     .await?;
     manager.load_all().await?;
     let manager = Arc::new(manager);
-    init_extension_manager(manager).map_err(|_| anyhow::anyhow!("extension_manager_already_initialized"))?;
+    init_extension_manager(manager.clone())
+        .map_err(|_| anyhow::anyhow!("extension_manager_already_initialized"))?;
 
     let security = Arc::new(SecurityStore::in_memory()?);
-    security.create_user("alice", "Alice", alephcore::gateway::security::store::UserRole::Member)?;
-    security.create_user("bob", "Bob", alephcore::gateway::security::store::UserRole::Member)?;
+    security.create_user(
+        "alice",
+        "Alice",
+        alephcore::gateway::security::store::UserRole::Member,
+    )?;
+    security.create_user(
+        "bob",
+        "Bob",
+        alephcore::gateway::security::store::UserRole::Member,
+    )?;
     let tokens = Arc::new(DeviceTokenManager::new(security.clone()));
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
     let address = listener.local_addr()?;
@@ -198,33 +246,43 @@ async fn run() -> anyhow::Result<()> {
     gateway.handlers_mut().register("connect", move |request| {
         handle_connect(request, context.clone())
     });
-    let gateway_state = Arc::new(Mutex::new(GatewayState {
-        run: args.nonce.clone(),
-        asset_a_held: false,
-        asset_a_notify: Arc::new(Notify::new()),
-        tokens: tokens.clone(),
-        receipts: Arc::new(Mutex::new(Vec::new())),
-        state_versions: state_versions.clone(),
-    }));
-    let router = gateway
-        .build_router()
-        .layer(middleware::from_fn_with_state(gateway_state.clone(), delay_asset_response))
-        .fallback_service(ServeDir::new(&args.panel_root).fallback(ServeFile::new(args.panel_root.join("index.html"))));
-    let fixture = Fixture {
+    let fixture = Arc::new(Mutex::new(Fixture {
         origin: origin.clone(),
         tokens,
         projects,
         alice_project: project_a.id,
-    };
-    let fixture = Arc::new(Mutex::new(fixture));
+        c_root,
+        bindings: HashMap::new(),
+    }));
+    let gateway_state = Arc::new(Mutex::new(GatewayState {
+        run: args.nonce.clone(),
+        asset_a_held: false,
+        asset_a_notify: Arc::new(Notify::new()),
+        fixture: fixture.clone(),
+        manager,
+        receipts: Arc::new(Mutex::new(Vec::new())),
+    }));
+    let router = gateway
+        .build_router()
+        .layer(middleware::from_fn_with_state(
+            gateway_state.clone(),
+            delay_asset_response,
+        ))
+        .fallback_service(
+            ServeDir::new(&args.panel_root)
+                .fallback(ServeFile::new(args.panel_root.join("index.html"))),
+        );
     let run = args.nonce;
     let (shutdown_tx, shutdown_rx) = oneshot::channel();
     let server = tokio::spawn(async move {
-        axum::serve(listener, router)
-            .with_graceful_shutdown(async {
-                let _ = shutdown_rx.await;
-            })
-            .await
+        axum::serve(
+            listener,
+            router.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+        )
+        .with_graceful_shutdown(async {
+            let _ = shutdown_rx.await;
+        })
+        .await
     });
     let control = control_loop(run.clone(), fixture, gateway_state, server, shutdown_tx).await;
     control
@@ -239,55 +297,221 @@ async fn control_loop(
 ) -> anyhow::Result<()> {
     let mut input = BufReader::new(tokio::io::stdin()).lines();
     let mut output = tokio::io::BufWriter::new(tokio::io::stdout());
-    write_json(&mut output, &Ready { v: 1, r#type: "ready", run: &run, origin: fixture.lock().await.origin.clone() }).await?;
+    write_json(
+        &mut output,
+        &Ready {
+            v: 1,
+            r#type: "ready",
+            run: &run,
+            origin: fixture.lock().await.origin.clone(),
+        },
+    )
+    .await?;
     while let Some(line) = input.next_line().await? {
         let command: Command = match serde_json::from_str(&line) {
             Ok(command) => command,
             Err(_) => {
-                write_json(&mut output, &ErrorMessage { v: 1, r#type: "error", run: &run, code: "bad_command" }).await?;
+                write_json(
+                    &mut output,
+                    &ErrorMessage {
+                        v: 1,
+                        r#type: "error",
+                        run: &run,
+                        code: "bad_command",
+                    },
+                )
+                .await?;
                 continue;
             }
         };
         if command.v != 1 || command.r#type != "command" || command.run != run {
-            write_json(&mut output, &ErrorMessage { v: 1, r#type: "error", run: &run, code: "bad_command" }).await?;
+            write_json(
+                &mut output,
+                &ErrorMessage {
+                    v: 1,
+                    r#type: "error",
+                    run: &run,
+                    code: "bad_command",
+                },
+            )
+            .await?;
             continue;
         }
         if command.command == "issue_pairing" {
             let user = command.user.as_deref().unwrap_or("");
             let device = command.device.as_deref().unwrap_or("");
             if !matches!(user, "alice" | "bob") || !matches!(device, "device-a" | "device-b") {
-                write_json(&mut output, &ErrorMessage { v: 1, r#type: "error", run: &run, code: "bad_command" }).await?;
+                write_json(
+                    &mut output,
+                    &ErrorMessage {
+                        v: 1,
+                        r#type: "error",
+                        run: &run,
+                        code: "bad_command",
+                    },
+                )
+                .await?;
                 continue;
             }
-            let ticket = fixture.lock().await.tokens.create_bootstrap_ticket(None, Some(user))?;
-            write_json(&mut output, &Pairing { v: 1, r#type: "pairing", run: &run, user, device, ticket }).await?;
+            let mut fixture = fixture.lock().await;
+            if fixture.bindings.contains_key(device)
+                || fixture
+                    .bindings
+                    .values()
+                    .any(|binding| binding.user == user && binding.actual.is_none())
+            {
+                write_json(
+                    &mut output,
+                    &ErrorMessage {
+                        v: 1,
+                        r#type: "error",
+                        run: &run,
+                        code: "bad_state",
+                    },
+                )
+                .await?;
+                continue;
+            }
+            let baseline = fixture
+                .tokens
+                .list_panel_devices()?
+                .into_iter()
+                .map(|row| row.device_id)
+                .collect();
+            let ticket = fixture.tokens.create_bootstrap_ticket(None, Some(user))?;
+            fixture.bindings.insert(
+                device.to_owned(),
+                PairingBinding {
+                    user: user.to_owned(),
+                    baseline,
+                    actual: None,
+                },
+            );
+            write_json(
+                &mut output,
+                &Pairing {
+                    v: 1,
+                    r#type: "pairing",
+                    run: &run,
+                    user,
+                    device,
+                    ticket,
+                },
+            )
+            .await?;
+            continue;
+        }
+        if command.command == "confirm_pairing" {
+            let device = command.device.as_deref().unwrap_or("");
+            let confirmed = {
+                let mut fixture = fixture.lock().await;
+                resolve_device(&mut fixture, device)
+            };
+            if confirmed.is_err() {
+                write_json(
+                    &mut output,
+                    &ErrorMessage {
+                        v: 1,
+                        r#type: "error",
+                        run: &run,
+                        code: "bad_state",
+                    },
+                )
+                .await?;
+                continue;
+            }
+            write_json(
+                &mut output,
+                &Ack {
+                    v: 1,
+                    r#type: "ack",
+                    run: &run,
+                    id: command.id,
+                    command: "confirm_pairing",
+                    status: "ok",
+                },
+            )
+            .await?;
             continue;
         }
         if command.command == "set_fixture" {
             let action = command.action.as_deref().unwrap_or("");
             let action_result = {
-                let fixture_guard = fixture.lock().await;
-                apply_fixture_action(&fixture_guard, action)
+                let mut fixture_guard = fixture.lock().await;
+                apply_fixture_action(&mut fixture_guard, action)
             };
             if action_result.is_err() {
-                write_json(&mut output, &ErrorMessage { v: 1, r#type: "error", run: &run, code: "bad_state" }).await?;
+                write_json(
+                    &mut output,
+                    &ErrorMessage {
+                        v: 1,
+                        r#type: "error",
+                        run: &run,
+                        code: "bad_state",
+                    },
+                )
+                .await?;
                 continue;
             }
-            write_json(&mut output, &Ack { v: 1, r#type: "ack", run: &run, id: command.id, command: "set_fixture", status: "ok" }).await?;
+            write_json(
+                &mut output,
+                &Ack {
+                    v: 1,
+                    r#type: "ack",
+                    run: &run,
+                    id: command.id,
+                    command: "set_fixture",
+                    status: "ok",
+                },
+            )
+            .await?;
             continue;
         }
         if command.command == "hold_response" {
             if command.gate.as_deref() != Some("asset_a") {
-                write_json(&mut output, &ErrorMessage { v: 1, r#type: "error", run: &run, code: "bad_command" }).await?;
+                write_json(
+                    &mut output,
+                    &ErrorMessage {
+                        v: 1,
+                        r#type: "error",
+                        run: &run,
+                        code: "bad_command",
+                    },
+                )
+                .await?;
                 continue;
             }
-            gateway_state.lock().await.asset_a_held = true;
-            write_json(&mut output, &Ack { v: 1, r#type: "ack", run: &run, id: command.id, command: "hold_response", status: "ok" }).await?;
+            {
+                let mut state = gateway_state.lock().await;
+                state.asset_a_held = true;
+                state.asset_a_notify = Arc::new(Notify::new());
+            }
+            write_json(
+                &mut output,
+                &Ack {
+                    v: 1,
+                    r#type: "ack",
+                    run: &run,
+                    id: command.id,
+                    command: "hold_response",
+                    status: "ok",
+                },
+            )
+            .await?;
             continue;
         }
         if command.command == "release_response" {
             if command.gate.as_deref() != Some("asset_a") {
-                write_json(&mut output, &ErrorMessage { v: 1, r#type: "error", run: &run, code: "bad_command" }).await?;
+                write_json(
+                    &mut output,
+                    &ErrorMessage {
+                        v: 1,
+                        r#type: "error",
+                        run: &run,
+                        code: "bad_command",
+                    },
+                )
+                .await?;
                 continue;
             }
             let notify = {
@@ -295,133 +519,280 @@ async fn control_loop(
                 state.asset_a_held = false;
                 state.asset_a_notify.clone()
             };
-            notify.notify_waiters();
-            write_json(&mut output, &Ack { v: 1, r#type: "ack", run: &run, id: command.id, command: "release_response", status: "ok" }).await?;
+            notify.notify_one();
+            write_json(
+                &mut output,
+                &Ack {
+                    v: 1,
+                    r#type: "ack",
+                    run: &run,
+                    id: command.id,
+                    command: "release_response",
+                    status: "ok",
+                },
+            )
+            .await?;
             continue;
         }
         if command.command == "revoke_exact" {
             let device = command.device.as_deref().unwrap_or("");
             if !matches!(device, "device-a" | "device-b") {
-                write_json(&mut output, &ErrorMessage { v: 1, r#type: "error", run: &run, code: "bad_command" }).await?;
+                write_json(
+                    &mut output,
+                    &ErrorMessage {
+                        v: 1,
+                        r#type: "error",
+                        run: &run,
+                        code: "bad_command",
+                    },
+                )
+                .await?;
                 continue;
             }
-            let revoked = fixture.lock().await.tokens.revoke_panel_device(device)?;
+            let mut fixture = fixture.lock().await;
+            let actual = resolve_device(&mut fixture, device)?;
+            let revoked = fixture.tokens.revoke_panel_device(&actual)?;
             if !revoked {
-                write_json(&mut output, &ErrorMessage { v: 1, r#type: "error", run: &run, code: "already_revoked" }).await?;
+                write_json(
+                    &mut output,
+                    &ErrorMessage {
+                        v: 1,
+                        r#type: "error",
+                        run: &run,
+                        code: "already_revoked",
+                    },
+                )
+                .await?;
                 continue;
             }
-            write_json(&mut output, &Ack { v: 1, r#type: "ack", run: &run, id: command.id, command: "revoke_exact", status: "ok" }).await?;
+            write_json(
+                &mut output,
+                &Ack {
+                    v: 1,
+                    r#type: "ack",
+                    run: &run,
+                    id: command.id,
+                    command: "revoke_exact",
+                    status: "ok",
+                },
+            )
+            .await?;
             continue;
         }
         if command.command == "receipt_since" {
-            let receipt = gateway_state.lock().await.receipts.lock().await.last().cloned();
+            let Some(after) = command.after else {
+                write_json(
+                    &mut output,
+                    &ErrorMessage {
+                        v: 1,
+                        r#type: "error",
+                        run: &run,
+                        code: "bad_command",
+                    },
+                )
+                .await?;
+                continue;
+            };
+            let receipt = gateway_state
+                .lock()
+                .await
+                .receipts
+                .lock()
+                .await
+                .iter()
+                .find(|receipt| receipt.seq > after)
+                .cloned();
             if let Some(receipt) = receipt {
                 write_json(&mut output, &receipt).await?;
             } else {
-                write_json(&mut output, &ErrorMessage { v: 1, r#type: "error", run: &run, code: "not_found" }).await?;
+                write_json(
+                    &mut output,
+                    &ErrorMessage {
+                        v: 1,
+                        r#type: "error",
+                        run: &run,
+                        code: "not_found",
+                    },
+                )
+                .await?;
             }
             continue;
         }
         if command.command == "shutdown" {
             let _ = shutdown.send(());
-            let _ = server.await;
-            write_json(&mut output, &Stopped { v: 1, r#type: "stopped", run: &run, listener_closed: true, fixture_closed: true }).await?;
+            server.await??;
+            write_json(
+                &mut output,
+                &Stopped {
+                    v: 1,
+                    r#type: "stopped",
+                    run: &run,
+                    listener_closed: true,
+                    fixture_closed: true,
+                },
+            )
+            .await?;
             return Ok(());
         }
-        write_json(&mut output, &ErrorMessage { v: 1, r#type: "error", run: &run, code: "bad_state" }).await?;
+        write_json(
+            &mut output,
+            &ErrorMessage {
+                v: 1,
+                r#type: "error",
+                run: &run,
+                code: "bad_state",
+            },
+        )
+        .await?;
     }
     let _ = shutdown.send(());
-    let _ = server.await;
+    server.await??;
     Ok(())
 }
 
-async fn delay_asset_response(State(gateway_state): State<Arc<Mutex<GatewayState>>>, request: Request, next: Next) -> Response {
-    let path = request.uri().path().to_string();
-    let authorization = request
+async fn delay_asset_response(
+    State(gateway_state): State<Arc<Mutex<GatewayState>>>,
+    request: Request,
+    next: Next,
+) -> Response {
+    let path = request.uri().path().to_owned();
+    if !path.starts_with("/tabs/") {
+        return next.run(request).await;
+    }
+    let token = request
         .headers()
         .get(axum::http::header::AUTHORIZATION)
         .and_then(|value| value.to_str().ok())
-        .and_then(|value| value.strip_prefix("Bearer "))
-        .map(str::to_owned);
-    let response = {
-        let wait = if path.starts_with("/tabs/") {
-            let mut state = gateway_state.lock().await;
-            if state.asset_a_held {
-                state.asset_a_held = false;
-                Some(state.asset_a_notify.clone().notified_owned())
-            } else {
-                None
+        .and_then(|value| value.strip_prefix("Bearer "));
+    let state = gateway_state.lock().await;
+    let fixture = state.fixture.lock().await;
+    let identity = token
+        .and_then(|token| fixture.tokens.validate_device_token(token).ok().flatten())
+        .and_then(|device| {
+            // Observation reads only bindings established by the explicit pairing confirmation.
+            fixture.bindings.iter().find_map(|(label, binding)| {
+                (binding.actual.as_deref() == Some(device.device_id.as_str()))
+                    .then(|| (binding.user.clone(), label.clone()))
+            })
+        });
+    let revision = format!("{:016x}", state.manager.panel_ui_capability_revision());
+    drop(fixture);
+    drop(state);
+    let response = next.run(request).await;
+    if path.starts_with("/tabs/") {
+        if let Some((user, device)) = identity {
+            let state = gateway_state.lock().await;
+            let mut receipts = state.receipts.lock().await;
+            let result = match response.status().as_u16() {
+                200 => Some(("asset_ok", "ok")),
+                404 => Some(("asset_404", "refused")),
+                _ => None, // A transport/server error cannot be upgraded to an authorization refusal.
+            };
+            if let Some((result, status)) = result.filter(|_| receipts.len() < 512) {
+                let plugin = path
+                    .strip_prefix("/tabs/")
+                    .and_then(|path| path.split('/').next());
+                let project = match plugin {
+                    Some("project-a") => "project-a",
+                    Some("project-b") => "project-b",
+                    Some("project-c") => "project-c",
+                    _ => "global",
+                };
+                let seq = receipts.len() as u32 + 1;
+                receipts.push(StoredReceipt {
+                    v: 1,
+                    r#type: "receipt".to_owned(),
+                    run: state.run.clone(),
+                    seq,
+                    user,
+                    device,
+                    operation: "asset".to_owned(),
+                    project: project.to_owned(),
+                    revision,
+                    result: result.to_owned(),
+                    status: status.to_owned(),
+                });
             }
+        }
+    }
+    // Hold the actual authorized A response, after the production route has run.
+    // A held request would instead be re-authorized under B, missing the late-body case.
+    let wait = if path.starts_with("/tabs/project-a/") {
+        let mut state = gateway_state.lock().await;
+        if state.asset_a_held {
+            state.asset_a_held = false;
+            Some(state.asset_a_notify.clone().notified_owned())
         } else {
             None
-        };
-        if let Some(notified) = wait {
-            notified.await;
         }
-        next.run(request).await
+    } else {
+        None
     };
-    if path.starts_with("/tabs/") {
-        if let Some(token) = authorization {
-            let state = gateway_state.lock().await;
-            if let Ok(Some(device)) = state.tokens.validate_device_token(&token) {
-                if let Ok(Some(user)) = state.tokens.store().device_user(&device.device_id) {
-                    let version = state.state_versions.snapshot();
-                    let revision = format!(
-                        "{:016x}{:016x}{:016x}",
-                        version.presence,
-                        version.health,
-                        version.config,
-                    );
-                    let seq = state.receipts.lock().await.len() as u32 + 1;
-                    let result = if response.status().is_success() { "asset_ok" } else { "asset_404" };
-                    let project = if path.contains("project-a") {
-                        "project-a"
-                    } else if path.contains("project-b") {
-                        "project-b"
-                    } else {
-                        "global"
-                    };
-                    state.receipts.lock().await.push(StoredReceipt {
-                        v: 1,
-                        r#type: "receipt".to_owned(),
-                        run: state.run.clone(),
-                        seq,
-                        user,
-                        device: device.device_id,
-                        operation: "asset".to_owned(),
-                        project: project.to_owned(),
-                        revision,
-                        result: result.to_owned(),
-                        status: response.status().as_u16().to_string(),
-                    });
-                }
-            }
-        }
+    if let Some(notified) = wait {
+        notified.await;
     }
     response
 }
 
-fn apply_fixture_action(fixture: &Fixture, action: &str) -> anyhow::Result<()> {
+fn resolve_device(fixture: &mut Fixture, label: &str) -> anyhow::Result<String> {
+    let binding = fixture
+        .bindings
+        .get(label)
+        .ok_or_else(|| anyhow::anyhow!("unknown_device"))?;
+    if let Some(actual) = &binding.actual {
+        return Ok(actual.clone());
+    }
+    let candidates = fixture
+        .tokens
+        .list_panel_devices()?
+        .into_iter()
+        .filter(|device| {
+            !binding.baseline.contains(&device.device_id)
+                && device.user_id.as_deref() == Some(binding.user.as_str())
+                && !fixture
+                    .bindings
+                    .values()
+                    .any(|other| other.actual.as_deref() == Some(device.device_id.as_str()))
+        })
+        .map(|device| device.device_id)
+        .collect::<Vec<_>>();
+    anyhow::ensure!(candidates.len() == 1, "ambiguous_device");
+    fixture
+        .bindings
+        .get_mut(label)
+        .expect("binding exists")
+        .actual = Some(candidates[0].clone());
+    Ok(candidates[0].clone())
+}
+
+fn apply_fixture_action(fixture: &mut Fixture, action: &str) -> anyhow::Result<()> {
     match action {
-        "global" | "select_a" | "select_b" | "clear_global" | "rebind_workspace_c" => Ok(()),
         "unbind_workspace" => {
-            fixture.projects.bind_workspace(&fixture.alice_project, None)?;
-            Ok(())
+            fixture
+                .projects
+                .bind_workspace(&fixture.alice_project, None)?;
+        }
+        "rebind_workspace_c" => {
+            fixture
+                .projects
+                .bind_workspace(&fixture.alice_project, Some(&fixture.c_root))?;
         }
         "revoke_membership" => {
-            fixture.projects.remove_member(&fixture.alice_project, "alice")?;
-            Ok(())
+            fixture
+                .projects
+                .remove_member(&fixture.alice_project, "alice")?;
         }
         "archive_a" => {
             fixture.projects.archive(&fixture.alice_project)?;
-            Ok(())
         }
         "revoke_device_a" => {
-            fixture.tokens.revoke_panel_device("device-a")?;
-            Ok(())
+            let actual = resolve_device(fixture, "device-a")?;
+            anyhow::ensure!(fixture.tokens.revoke_panel_device(&actual)?, "not_revoked");
         }
+        // Selection belongs to the authenticated Panel, never a fixture-control no-op.
         _ => anyhow::bail!("unknown_action"),
     }
+    Ok(())
 }
 
 async fn write_json<W, T>(output: &mut W, value: &T) -> anyhow::Result<()>
@@ -429,7 +800,9 @@ where
     W: AsyncWriteExt + Unpin,
     T: Serialize,
 {
-    output.write_all(serde_json::to_string(value)?.as_bytes()).await?;
+    output
+        .write_all(serde_json::to_string(value)?.as_bytes())
+        .await?;
     output.write_all(b"\n").await?;
     output.flush().await?;
     Ok(())
@@ -449,17 +822,37 @@ where
         if values.contains_key(&key) {
             anyhow::bail!("duplicate_argument");
         }
-        values.insert(key, iter.next().ok_or_else(|| anyhow::anyhow!("missing_value"))?);
+        values.insert(
+            key,
+            iter.next()
+                .ok_or_else(|| anyhow::anyhow!("missing_value"))?,
+        );
     }
     Ok(Args {
-        owned_root: PathBuf::from(values.remove("--owned-root").ok_or_else(|| anyhow::anyhow!("missing_root"))?),
-        nonce: values.remove("--nonce").ok_or_else(|| anyhow::anyhow!("missing_nonce"))?.to_string_lossy().to_string(),
-        panel_root: PathBuf::from(values.remove("--panel-root").ok_or_else(|| anyhow::anyhow!("missing_panel"))?),
+        owned_root: PathBuf::from(
+            values
+                .remove("--owned-root")
+                .ok_or_else(|| anyhow::anyhow!("missing_root"))?,
+        ),
+        nonce: values
+            .remove("--nonce")
+            .ok_or_else(|| anyhow::anyhow!("missing_nonce"))?
+            .to_string_lossy()
+            .to_string(),
+        panel_root: PathBuf::from(
+            values
+                .remove("--panel-root")
+                .ok_or_else(|| anyhow::anyhow!("missing_panel"))?,
+        ),
     })
 }
 
 fn validate_nonce(nonce: &str) -> anyhow::Result<()> {
-    if !(32..=128).contains(&nonce.len()) || !nonce.bytes().all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase()) {
+    if !(32..=128).contains(&nonce.len())
+        || !nonce
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+    {
         anyhow::bail!("bad_nonce");
     }
     Ok(())

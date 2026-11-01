@@ -94,6 +94,9 @@ test("provenance is bounded to fixed value-free entries", () => {
   recordProvenance(ledger, { kind: "shell_binary", ok: true, reason: "hash_match" });
   assert.deepEqual(ledger.provenance, [{ kind: "shell_binary", ok: true, reason: "hash_match" }]);
   assert.throws(() => recordProvenance(ledger, { kind: "shell_binary", ok: true, reason: "x", token: "secret" }), /invalid_provenance/);
+  assert.throws(() => recordProvenance(ledger, { kind: "shell_binary", ok: false, reason: "aleph-dt-test-secret" }), /invalid_provenance/);
+  assert.throws(() => recordProvenance(ledger, { kind: "C:/private/root", ok: true, reason: "hash_match" }), /invalid_provenance/);
+  assert.equal(ledger.provenance.length, 1);
 });
 
 test("finished evidence combines the closed run state with bounded evidence", () => {

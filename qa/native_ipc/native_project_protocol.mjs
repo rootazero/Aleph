@@ -7,6 +7,7 @@ export const MAX_RECEIPTS = 512;
 
 export const HELPER_COMMANDS = Object.freeze([
   "issue_pairing",
+  "confirm_pairing",
   "set_fixture",
   "hold_response",
   "release_response",
@@ -16,10 +17,6 @@ export const HELPER_COMMANDS = Object.freeze([
 ]);
 
 export const FIXTURE_ACTIONS = Object.freeze([
-  "global",
-  "select_a",
-  "select_b",
-  "clear_global",
   "unbind_workspace",
   "rebind_workspace_c",
   "revoke_membership",
@@ -105,11 +102,13 @@ export function validateHelperMessage(message, { allowTransientTicket = false } 
 
 export function validateHelperCommand(command) {
   if (command === null || typeof command !== "object" || Array.isArray(command)) return { ok: false, error: "not_object" };
-  if (!ownKeys(command, ["v", "type", "run", "id", "command", "user", "device", "action", "gate"])) return { ok: false, error: "unknown_key" };
+  if (!ownKeys(command, ["v", "type", "run", "id", "command", "user", "device", "action", "gate", "after"])) return { ok: false, error: "unknown_key" };
   if (command.v !== PROTOCOL_VERSION || command.type !== "command" || !RUN_RE.test(command.run) || !isInt(command.id) || !HELPER_COMMANDS.includes(command.command)) return { ok: false, error: "bad_envelope" };
   if (command.command === "issue_pairing" && (!ROLE_RE.test(command.user) || !DEVICE_RE.test(command.device))) return { ok: false, error: "bad_pairing_target" };
   if (command.command === "set_fixture" && !FIXTURE_ACTIONS.includes(command.action)) return { ok: false, error: "bad_fixture_action" };
-  if ((command.command === "hold_response" || command.command === "release_response") && !isOneOf(["discovery_a", "asset_a"])(command.gate)) return { ok: false, error: "bad_gate" };
+  if ((command.command === "hold_response" || command.command === "release_response") && !isOneOf(["asset_a"])(command.gate)) return { ok: false, error: "bad_gate" };
+  if (command.command === "receipt_since" && !isInt(command.after)) return { ok: false, error: "bad_cursor" };
+  if (["confirm_pairing", "revoke_exact"].includes(command.command) && !DEVICE_RE.test(command.device)) return { ok: false, error: "bad_device_target" };
   return { ok: true };
 }
 
@@ -121,17 +120,20 @@ export function redactHelperMessage(message) {
 }
 
 export function digestRun(value) {
-  return createHash("sha256").update(String(value)).digest("hex").slice(0, 16);
+  return createHash("sha256").update(String(value)).digest("hex");
 }
 
 export function overallOutcome(phases, cleanup) {
   if (!Array.isArray(phases) || phases.some((phase) => !phase || !PHASES.includes(phase.name))) return "FAIL";
+  const cleanupComplete = Array.isArray(cleanup) && cleanup.length === CLEANUP_STEPS.length && cleanup.every((step, index) => step.name === CLEANUP_STEPS[index] && step.ok === true);
+  if (Array.isArray(cleanup) && cleanup.length > 0 && !cleanupComplete) return "AMBIGUOUS";
   const phaseOutcomes = phases.map((phase) => phase.outcome);
   if (phaseOutcomes.includes("BLOCKED")) return "BLOCKED";
   if (phaseOutcomes.includes("NOT_RUN")) return "NOT_RUN";
   if (phaseOutcomes.includes("AMBIGUOUS")) return "AMBIGUOUS";
   if (phaseOutcomes.some((outcome) => outcome !== "PASS")) return "FAIL";
-  if (!Array.isArray(cleanup) || cleanup.length !== CLEANUP_STEPS.length || cleanup.some((step, index) => step.name !== CLEANUP_STEPS[index] || step.ok !== true)) return "AMBIGUOUS";
+  if (phases.length !== PHASES.length || new Set(phases.map((phase) => phase.name)).size !== PHASES.length) return "FAIL";
+  if (!cleanupComplete) return "AMBIGUOUS";
   return "PASS";
 }
 
