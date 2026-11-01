@@ -2,10 +2,10 @@
 
 use std::collections::HashMap;
 
-use serde::Serialize;
+use aleph_protocol::panel::PanelProjectSelection;
 
 use crate::extension::visibility::{canonical_root, VisibilityCtx};
-use crate::gateway::security::store::{SecurityStore, UserStatus};
+use crate::gateway::security::store::{DeviceRow, SecurityStore, UserStatus};
 use crate::gateway::security::PANEL_DEVICE_TYPE;
 use crate::projects::{authz, ProjectStatus, ProjectStore};
 use crate::sync_primitives::{Arc, Mutex};
@@ -26,11 +26,11 @@ impl PanelCallerContext {
     }
 }
 
-/// Context metadata, never an authorization input or a Core source revision.
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
-pub(crate) struct PanelProjectSelection {
-    pub(crate) project_id: Option<String>,
-    pub(crate) generation: u64,
+/// Explicit dispatch state; it cannot be populated from JSON-RPC params.
+#[derive(Clone)]
+pub(crate) struct PanelRequestContext {
+    pub(crate) caller: PanelCallerContext,
+    pub(crate) selector: Arc<PanelProjectSelector>,
 }
 
 pub(crate) struct PanelResolvedContext {
@@ -99,6 +99,18 @@ impl PanelProjectSelector {
         &self,
         caller: &PanelCallerContext,
     ) -> Result<PanelResolvedContext, PanelProjectContextError> {
+        // A paired identity remains current even before its first project selection.
+        let principal = if caller.verified_user.is_some() {
+            Some(self.principal(caller)?)
+        } else {
+            if let Some(device) = caller.device_id.as_deref() {
+                // Compatibility is only for a currently unbound, active device.
+                if self.device(device)?.user_id.is_some() {
+                    return Err(PanelProjectContextError);
+                }
+            }
+            None
+        };
         let selected = caller
             .device_id
             .as_deref()
@@ -116,7 +128,7 @@ impl PanelProjectSelector {
                 visibility: VisibilityCtx::default(),
             });
         };
-        let (_, user) = self.principal(caller)?;
+        let (_, user) = principal.ok_or(PanelProjectContextError)?;
         if selected.user != user {
             return Err(PanelProjectContextError);
         }
@@ -143,16 +155,8 @@ impl PanelProjectSelector {
             .verified_user
             .as_deref()
             .ok_or(PanelProjectContextError)?;
-        let device = self
-            .security
-            .get_device(device_id)
-            .ok()
-            .flatten()
-            .ok_or(PanelProjectContextError)?;
-        if device.revoked_at.is_some()
-            || device.device_type.as_deref() != Some(PANEL_DEVICE_TYPE)
-            || device.user_id.as_deref() != Some(user_id)
-        {
+        let device = self.device(device_id)?;
+        if device.user_id.as_deref() != Some(user_id) {
             return Err(PanelProjectContextError);
         }
         let user = self
@@ -165,6 +169,19 @@ impl PanelProjectSelector {
             return Err(PanelProjectContextError);
         }
         Ok((device_id, user_id))
+    }
+
+    fn device(&self, id: &str) -> Result<DeviceRow, PanelProjectContextError> {
+        let device = self
+            .security
+            .get_device(id)
+            .ok()
+            .flatten()
+            .ok_or(PanelProjectContextError)?;
+        if device.revoked_at.is_some() || device.device_type.as_deref() != Some(PANEL_DEVICE_TYPE) {
+            return Err(PanelProjectContextError);
+        }
+        Ok(device)
     }
 
     fn project_visibility(

@@ -9,6 +9,24 @@ pub const PANEL_UI_API_MAJOR: u16 = 1;
 /// Read-only JSON-RPC method for the canonical Panel capability snapshot.
 pub const PANEL_UI_CAPABILITY_SNAPSHOT_METHOD: &str = "panel.capabilities.snapshot";
 
+/// Assign the authenticated device's server-owned Panel project selection.
+pub const PANEL_PROJECT_SELECT_METHOD: &str = "panel.project.select";
+
+/// Non-authorizing context metadata, independent of Core source revisions.
+#[derive(Serialize, Deserialize, Clone, Debug, Default, Eq, PartialEq)]
+pub struct PanelProjectSelection {
+    pub project_id: Option<String>,
+    pub generation: u64,
+}
+
+/// Gateway context accompanying the unchanged Core capability snapshot.
+#[derive(Serialize, Deserialize, Clone, Debug, Eq, PartialEq)]
+pub struct PanelUiContextSnapshot {
+    #[serde(flatten)]
+    pub snapshot: PanelUiCapabilitySnapshot,
+    pub project_context: PanelProjectSelection,
+}
+
 /// A tab identity scoped to its owning plugin.
 #[derive(Serialize, Deserialize, Clone, Debug, Eq, PartialEq)]
 pub struct PanelTabKey {

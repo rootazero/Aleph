@@ -25,6 +25,24 @@ The approved design/plan documentation commit uses a per-invocation disabled Git
 
 Task 1 final focused verification: **7 passed, 0 failed**. A temporary omission of the active-project gate produced the expected behavioral RED (archived claim incorrectly returned `Ok` instead of `Err`); restoring the gate returned the full target to **7 passed, 0 failed**. / Task 1 最终 7 通过、0 失败；临时省略 active gate 的突变测试实际捕获 archived claim 被接受，恢复后全绿。
 
+## Task 2 — RPC context / RPC 上下文
+
+Behavioral RED through the real production WebSocket router: authenticated Alice can query the existing Global snapshot, but selecting authorized Project A returns `-32601 Method not found: panel.project.select`. / 真实生产 WebSocket RED：已认证 Alice 的 Global snapshot 可用，选择有权限的 A 时因缺少 method 失败。
+
+Ruling: carry a typed `PanelRequestContext` explicitly through the existing dispatch, admin gate and middleware terminal. Preserve all request-only APIs. One selector is created with the live DeviceTokenManager's SecurityStore and shared by Gateway middleware (and Task 3 HTTP state). / 通过现有 dispatch、admin gate 和 middleware 显式传递 typed context；保留旧 API，selector 使用真实 credential store。
+
+Ruling: the approved design permits non-authorizing selection metadata even though the plan initially said no snapshot wire change. Use a shared protocol envelope flattening the unchanged Core snapshot plus `project_context { project_id, generation }`; no roots, extra source revision or authorization input. / 使用设计已允许的非授权 metadata；Core snapshot 本体不变，不传 root，也不另造 source revision。
+
+Ruling: do not replay cached selection success after an intervening switch. Retain lane, required-key policy, reserved-key validation and all middleware, but authorize/apply each selection. `idempotency_key` is accepted as existing policy metadata, not project authority. / 切换后不重放旧 selection 成功结果；保留全部既有校验，每次重新授权并应用选择。
+
+Current paired identities are revalidated even before their first selection; compatibility Global remains available only for a currently unbound active device or the existing credential-less compatibility path. Method visibility records snapshot as ListFiltered and selection as KeyChecked; the separate admin census keeps both member-open (its Class::Open means member-reachable, not unscoped). / 首次选择之前也重新校验配对身份；保留有效 compatibility Global。visibility 与 admin census 的分类各自保持正确语义。
+
+GREEN: selector **7 passed / 0 failed**, real Gateway WebSocket discovery **1 passed / 0 failed**; existing method census **4 passed / 0 failed** and shared protocol regression **9 passed / 0 failed**. All Cargo commands used the memory guard, jobs=1 and the ordinary-shell wrapper. / selector 7、真实 RPC 1、census 4、protocol 9 均通过；Cargo 全程经内存 guard 串行执行。
+
+The first RPC run selected A successfully but returned only Global because the new fixture wrote `<project>/plugins`; Core scans `<project>/.aleph/plugins`. Corrected only the fixture. An attempted external fixture oracle called a crate-private Core accessor and failed to compile; removed it, without widening the production API. The runtime proof remains the actual WebSocket response. / 首次缺少项目声明来自 fixture 目录错误；只修正 fixture。外部 oracle 无权调用私有 accessor，已移除，未扩大生产 API；验收以真实 WebSocket 返回为准。
+
+The independent census target compiles the existing census, role/lane tables and source scanner directly; their `cfg(test)` helpers are absent from the regular library. It adds no production test shim. The monolithic Core test harness was not run. / 独立 census target 编译原有 guard 与配套源码，不添加生产测试入口；未运行 monolithic Core harness。
+
 ## Remaining / 剩余
 
-RPC context, HTTP context, browser lifecycle, production Gateway/browser evidence and fresh whole-branch review remain open. The private selector tests do not establish runtime integration. / RPC、HTTP、browser、真实验收与整分支审查仍未完成；私有 selector 测试不证明 runtime 接线。
+HTTP context, browser lifecycle, production Gateway/browser evidence and fresh whole-branch review remain open. The private selector tests do not establish runtime integration. / HTTP、browser、真实验收与整分支审查仍未完成；私有 selector 测试不证明 runtime 接线。

@@ -536,6 +536,9 @@ pub enum Treatment {
 /// attributes as enforced — see that doc for the sweep methodology and the
 /// (recorded, not silently dropped) gaps this table does not yet cover.
 pub const SCOPED_METHODS: &[(&str, Treatment)] = &[
+    // Project selection and discovery revalidate the current paired principal.
+    ("panel.project.select", Treatment::KeyChecked),
+    ("panel.capabilities.snapshot", Treatment::ListFiltered),
     // Browser issuer RPCs resolve opaque keys against server-owned state.
     // Ownership is exact even for operators; no cross-user admin override.
     ("browser.viewer.grant.issue", Treatment::KeyChecked),
