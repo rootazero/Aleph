@@ -35,6 +35,14 @@ pub struct MemoryCommandHandler {
     /// preserve the prior report rather than wiping the last known
     /// good state.
     last_reconcile: Arc<Mutex<Option<ReconcileReport>>>,
+    #[cfg(test)]
+    reconcile_gate: Option<
+        Arc<(
+            tokio::sync::Notify,
+            tokio::sync::Notify,
+            crate::sync_primitives::AtomicBool,
+        )>,
+    >,
 }
 
 impl MemoryCommandHandler {
@@ -44,6 +52,8 @@ impl MemoryCommandHandler {
             db,
             note_indexer: None,
             last_reconcile: Arc::new(Mutex::new(None)),
+            #[cfg(test)]
+            reconcile_gate: None,
         }
     }
 
@@ -652,6 +662,15 @@ impl MemoryCommandHandler {
     /// statistics. This lets callers wire the reconciler before the
     /// notes layer is configured and still get a sane baseline.
     pub async fn reconcile_once(&self) -> Result<ReconcileReport, AlephError> {
+        #[cfg(test)]
+        if let Some(gate) = &self.reconcile_gate {
+            gate.2.store(
+                crate::memory::runtime::MemoryOperation::current().is_some(),
+                crate::sync_primitives::Ordering::SeqCst,
+            );
+            gate.0.notify_one();
+            gate.1.notified().await;
+        }
         let start = std::time::Instant::now();
         let fact_ids = self.db.list_memory_fact_ids().await?;
         let scanned = fact_ids.len();
@@ -793,6 +812,48 @@ impl MemoryCommandHandler {
             .clone()
     }
 
+    pub(crate) fn spawn_owned_reconciler_daemon(
+        self: Arc<Self>,
+        interval: std::time::Duration,
+        runtime: Arc<crate::memory::runtime::MemoryRuntime>,
+        mut stop: tokio::sync::watch::Receiver<bool>,
+    ) -> tokio::task::JoinHandle<()> {
+        tokio::spawn(async move {
+            let scan = || async {
+                let operation = match runtime.operation() {
+                    Ok(operation) => operation,
+                    Err(_) => return false,
+                };
+                operation
+                    .scope(run_one_tick(&self, &self.last_reconcile))
+                    .await;
+                true
+            };
+            if *stop.borrow() {
+                return;
+            }
+            if !scan().await {
+                return;
+            }
+            // Preserve the original delay measured after the immediate scan.
+            let mut ticker = tokio::time::interval(interval);
+            ticker.tick().await;
+            loop {
+                if *stop.borrow() {
+                    break;
+                }
+                tokio::select! {
+                    biased;
+                    _ = stop.changed() => break,
+                    _ = ticker.tick() => {}
+                }
+                if !scan().await {
+                    break;
+                }
+            }
+        })
+    }
+
     /// Spawn a background task that periodically calls `reconcile_once`
     /// and stores each report in `last_reconcile_report`.
     ///
@@ -809,11 +870,9 @@ impl MemoryCommandHandler {
     /// next tick. This way a transient DB hiccup doesn't lose the
     /// last known good state.
     ///
-    /// Returns the `JoinHandle` so the operator can abort the daemon
-    /// (e.g. during shutdown) by calling `.abort()`. The handle is
-    /// intentionally not stored on `Self` — Aleph today has no notion of
-    /// a single owner for long-lived background tasks, and `tokio::spawn`
-    /// outlives any single component cleanly.
+    /// Returns a caller-owned handle for standalone use. The Memory runtime
+    /// uses the owned variant above, signals its stop boundary, and observes
+    /// the actual task before releasing the bundle.
     ///
     /// The daemon's clone of the handler shares the outer handler's
     /// `last_reconcile` slot (via `Arc::clone`), so `last_reconcile_report`
@@ -831,6 +890,8 @@ impl MemoryCommandHandler {
             // Share the outer handler's slot so the daemon's writes are
             // visible through `last_reconcile_report()` on the original.
             last_reconcile: Arc::clone(&self.last_reconcile),
+            #[cfg(test)]
+            reconcile_gate: self.reconcile_gate.clone(),
         });
         tokio::spawn(async move {
             // Run an immediate first scan so the operator sees fresh
@@ -911,6 +972,10 @@ pub struct DivergentFact {
     /// removed from in the stale case).
     pub expected_path: std::path::PathBuf,
 }
+
+#[cfg(test)]
+#[path = "handler_lifecycle_tests.rs"]
+mod lifecycle_tests;
 
 #[cfg(test)]
 mod tests {
