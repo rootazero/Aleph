@@ -5,6 +5,7 @@ import {
   CONTRACT_ID,
   PHASES,
   overallOutcome,
+  makePhase,
   redactHelperMessage,
   validateHelperCommand,
   validateHelperMessage,
@@ -65,7 +66,7 @@ test("only complete protected phases and exact cleanup can pass", () => {
   const phases = PHASES.map((name) => ({ name, outcome: "PASS" }));
   const cleanup = CLEANUP_STEPS.map((name) => ({ name, ok: true }));
   assert.equal(overallOutcome(phases, cleanup), "PASS");
-  assert.equal(overallOutcome(phases.map((phase) => phase.name === "late_a_fenced" ? { ...phase, outcome: "BLOCKED" } : phase), cleanup), "FAIL");
+  assert.equal(overallOutcome(phases.map((phase) => phase.name === "late_a_fenced" ? { ...phase, outcome: "BLOCKED" } : phase), cleanup), "BLOCKED");
   assert.equal(overallOutcome(phases, cleanup.slice(0, -1)), "AMBIGUOUS");
 });
 
@@ -92,6 +93,8 @@ test("run outcome maps to fail-closed exit codes", () => {
   assert.equal(finishRun(failed).outcome, "FAIL");
 });
 
-test("contract id remains stable", () => {
-  assert.equal(CONTRACT_ID, "aleph-native-project-context-run-v1");
+test("blocked phases cannot be reported as a generic failure or pass", () => {
+  const state = createRunState({ run, nonce: "ab".repeat(16), origin: "http://127.0.0.1:30123" });
+  const blocked = recordPhase(state, makePhase("helper_ready", "BLOCKED", "project_selector_unavailable"));
+  assert.equal(finishRun(blocked).outcome, "BLOCKED");
 });

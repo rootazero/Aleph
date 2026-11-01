@@ -125,7 +125,12 @@ export function digestRun(value) {
 }
 
 export function overallOutcome(phases, cleanup) {
-  if (!Array.isArray(phases) || phases.some((phase) => !PHASES.includes(phase.name) || phase.outcome !== "PASS")) return "FAIL";
+  if (!Array.isArray(phases) || phases.some((phase) => !phase || !PHASES.includes(phase.name))) return "FAIL";
+  const phaseOutcomes = phases.map((phase) => phase.outcome);
+  if (phaseOutcomes.includes("BLOCKED")) return "BLOCKED";
+  if (phaseOutcomes.includes("NOT_RUN")) return "NOT_RUN";
+  if (phaseOutcomes.includes("AMBIGUOUS")) return "AMBIGUOUS";
+  if (phaseOutcomes.some((outcome) => outcome !== "PASS")) return "FAIL";
   if (!Array.isArray(cleanup) || cleanup.length !== CLEANUP_STEPS.length || cleanup.some((step, index) => step.name !== CLEANUP_STEPS[index] || step.ok !== true)) return "AMBIGUOUS";
   return "PASS";
 }
