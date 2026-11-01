@@ -29,7 +29,10 @@ use tracing::warn;
 
 use crate::artifacts::{ArtifactOrigin, ArtifactRecord, ArtifactStore};
 use crate::error::{AlephError, Result};
-use crate::export::{collect_artifacts, render_document_html, ExportDocument};
+use crate::export::{
+    collect_artifacts, exported_document_bytes, render_document_html, ExportDocument,
+    MAX_EXPORTED_DOCUMENT_BYTES,
+};
 use crate::gateway::event_emitter::artifact_ping::publish_artifact_ping;
 use crate::tools::turn_context::current_turn_context;
 use crate::tools::AlephTool;
@@ -154,7 +157,28 @@ impl AlephTool for ArtifactPublishTool {
             provenance: provenance_line(),
             markdown: args.content,
         };
+
+        // Refuse before the document is built: the store would reject it
+        // anyway, and the model is told why instead of watching a document
+        // that was rendered in full get refused at the store's door.
+        let projected = exported_document_bytes(doc.markdown.len() as u64, &figures);
+        if projected > MAX_EXPORTED_DOCUMENT_BYTES {
+            return Err(AlephError::tool(format!(
+                "failed to publish the deliverable: the document would be {projected} bytes, over the {} byte limit",
+                MAX_EXPORTED_DOCUMENT_BYTES
+            )));
+        }
+
         let html = render_document_html(&doc, &figures);
+        // The projection above counts the body text; the rendered markup is
+        // larger, so the finished size is checked exactly here.
+        if html.len() as u64 > MAX_EXPORTED_DOCUMENT_BYTES {
+            return Err(AlephError::tool(format!(
+                "failed to publish the deliverable: the document is {} bytes, over the {} byte limit",
+                html.len(),
+                MAX_EXPORTED_DOCUMENT_BYTES
+            )));
+        }
 
         let record = store
             .put(

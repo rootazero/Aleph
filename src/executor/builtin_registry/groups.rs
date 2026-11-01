@@ -430,4 +430,40 @@ mod tests {
             "these tools reach the model but are listed in no group: {orphans:?}"
         );
     }
+
+    /// The other direction of the Hub drift guard.
+    ///
+    /// `agents::registry`'s `verify_denies_every_hub_tool` derives the family
+    /// from the GROUP; this one derives it from the CATALOG, which is where a
+    /// new `hub_*` tool lands first. `verify`'s `denied_tools` is an
+    /// exact-match list, so a Hub tool that reaches the catalog without
+    /// reaching that list stays reachable through `verify`'s `*` allow — the
+    /// read-only verifier could then install extensions.
+    ///
+    /// The deny list itself is not touched here: this guard only says that a
+    /// catalog tool of the Hub family must be denied by `verify`.
+    #[test]
+    fn verify_denies_every_hub_tool_in_the_catalog() {
+        let agents = crate::agents::builtin_agents();
+        let verify = agents
+            .iter()
+            .find(|agent| agent.id == "verify")
+            .expect("verify builtin must exist");
+        let family: Vec<&str> = BUILTIN_TOOL_DEFINITIONS
+            .iter()
+            .map(|def| def.name)
+            .filter(|name| name.starts_with("hub_"))
+            .collect();
+        assert!(
+            !family.is_empty(),
+            "the catalog must still contain the Hub family"
+        );
+        for name in family {
+            assert!(
+                !verify.is_tool_allowed(name),
+                "verify must deny every Hub tool; '{name}' is in the catalog but not in verify's \
+                 denied_tools"
+            );
+        }
+    }
 }

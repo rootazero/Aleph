@@ -8,6 +8,7 @@
 //! [`crate::sandbox::security_kernel_hook::SecurityKernelHook`].
 
 use super::risk::RiskLevel;
+use crate::config::types::security::CustomRiskPattern;
 use crate::config::types::ShellSecurityConfig;
 use regex::Regex;
 
@@ -34,33 +35,38 @@ impl SecurityKernel {
     /// Create a security kernel from configuration, compiling the custom
     /// blocked / danger patterns when `enable_custom_patterns` is set.
     ///
-    /// Invalid patterns are skipped (logged at warn) instead of aborting the
-    /// whole kernel — one bad regex must not silently disable every other
-    /// user-configured rule. The factory that wires this kernel in must also
-    /// surface the skip count to operators.
+    /// Invalid patterns are skipped instead of aborting the whole kernel — one
+    /// bad regex must not silently disable every other user-configured rule.
+    ///
+    /// A dropped *block* rule means the operator's rule never fires, so the
+    /// drops are reported: one aggregated warning naming the count and the
+    /// offending patterns, emitted once at the end of this function. The
+    /// count cannot be handed back — `from_config` yields the kernel alone —
+    /// so that warning is the only channel an operator has.
     pub fn from_config(config: &ShellSecurityConfig) -> Self {
         let mut kernel = Self::default();
 
         if config.enable_custom_patterns {
-            for pattern in &config.custom_blocked {
-                match crate::security::safe_regex::bounded_builder(&pattern.pattern).build() {
-                    Ok(re) => kernel.custom_blocked.push(re),
-                    Err(err) => tracing::warn!(
-                        pattern = %pattern.pattern,
-                        error = %err,
-                        "security kernel: dropping invalid custom_blocked regex",
-                    ),
-                }
-            }
-            for pattern in &config.custom_danger {
-                match crate::security::safe_regex::bounded_builder(&pattern.pattern).build() {
-                    Ok(re) => kernel.custom_danger.push(re),
-                    Err(err) => tracing::warn!(
-                        pattern = %pattern.pattern,
-                        error = %err,
-                        "security kernel: dropping invalid custom_danger regex",
-                    ),
-                }
+            let mut dropped = Vec::new();
+            compile_patterns(
+                &config.custom_blocked,
+                &mut kernel.custom_blocked,
+                "custom_blocked",
+                &mut dropped,
+            );
+            compile_patterns(
+                &config.custom_danger,
+                &mut kernel.custom_danger,
+                "custom_danger",
+                &mut dropped,
+            );
+            if !dropped.is_empty() {
+                tracing::warn!(
+                    count = dropped.len(),
+                    patterns = %dropped.join(", "),
+                    "security kernel: dropped invalid custom pattern regexes; \
+                     the dropped rules are NOT enforced",
+                );
             }
         }
 
@@ -83,6 +89,37 @@ impl SecurityKernel {
             return Some(RiskLevel::Danger);
         }
         None
+    }
+}
+
+/// Compile one kind of configured custom pattern into `into`.
+///
+/// The two kinds differ only in the target vector and the log wording, so
+/// they are compiled by one function: a pattern that fails to compile must
+/// be dropped the same way wherever it came from.
+///
+/// A pattern that does not compile is dropped — and its text recorded in
+/// `dropped` — instead of aborting the whole kernel: one bad regex must not
+/// silently disable every other user-configured rule.
+fn compile_patterns(
+    patterns: &[CustomRiskPattern],
+    into: &mut Vec<Regex>,
+    kind: &str,
+    dropped: &mut Vec<String>,
+) {
+    for pattern in patterns {
+        match crate::security::safe_regex::bounded_builder(&pattern.pattern).build() {
+            Ok(re) => into.push(re),
+            Err(err) => {
+                tracing::warn!(
+                    kind = %kind,
+                    pattern = %pattern.pattern,
+                    error = %err,
+                    "security kernel: dropping invalid custom regex",
+                );
+                dropped.push(pattern.pattern.clone());
+            }
+        }
     }
 }
 

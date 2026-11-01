@@ -8,7 +8,9 @@
 
 use tracing::warn;
 
-use super::{ExportArtifact, MAX_INLINE_ARTIFACT_BYTES, MAX_INLINE_TOTAL_BYTES};
+use super::{
+    base64_encoded_len, ExportArtifact, MAX_INLINE_ARTIFACT_BYTES, MAX_INLINE_TOTAL_BYTES,
+};
 use crate::artifacts::{ArtifactRecord, ArtifactStore};
 
 /// Read the bytes for each record, obeying the inline budget.
@@ -29,13 +31,17 @@ pub async fn collect_artifacts(
     let mut out = Vec::with_capacity(records.len());
 
     for record in records {
-        let fits = record.size <= MAX_INLINE_ARTIFACT_BYTES
-            && inlined_total.saturating_add(record.size) <= MAX_INLINE_TOTAL_BYTES;
+        // The budget is counted in the bytes the document will hold, so a
+        // payload is measured after base64 inflation — the unit the artifact
+        // store measures the finished file in.
+        let encoded = base64_encoded_len(record.size);
+        let fits = encoded <= MAX_INLINE_ARTIFACT_BYTES
+            && inlined_total.saturating_add(encoded) <= MAX_INLINE_TOTAL_BYTES;
 
         let bytes = if fits {
             match store.read(session_key, &record.id).await {
                 Ok((_, bytes)) => {
-                    inlined_total = inlined_total.saturating_add(record.size);
+                    inlined_total = inlined_total.saturating_add(encoded);
                     Some(bytes)
                 }
                 Err(e) => {
@@ -145,11 +151,17 @@ mod tests {
         // Records that each pass the PER-ARTIFACT cap but together exhaust the
         // whole-document ceiling. Declared sizes do the work — the reader
         // consults the record, so no multi-MB fixture has to be written.
+        //
+        // The budget counts encoded bytes, so a record's declared size is the
+        // payload whose base64 length is compared against the caps: three
+        // payload bytes encode to four, so a payload of three quarters of the
+        // per-artifact cap encodes to exactly that cap.
         let per_doc = (MAX_INLINE_TOTAL_BYTES / MAX_INLINE_ARTIFACT_BYTES) as usize;
+        let payload = MAX_INLINE_ARTIFACT_BYTES / 4 * 3;
         let mut records: Vec<_> = (0..=per_doc)
             .map(|_| {
                 let mut r = real.clone();
-                r.size = MAX_INLINE_ARTIFACT_BYTES;
+                r.size = payload;
                 r
             })
             .collect();

@@ -8,7 +8,11 @@
 /// Risk level for a command.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RiskLevel {
-    /// Danger: Destructive operations - requires explicit approval
+    /// Danger: the operator's `custom_danger` pattern matched — **advisory
+    /// only**.
+    ///
+    /// The command still runs, with a warning; this level does NOT require
+    /// approval. [`Blocked`] is the variant that vetoes.
     Danger,
     /// Blocked: Absolutely forbidden - immediate rejection
     Blocked,

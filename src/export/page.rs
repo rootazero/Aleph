@@ -14,7 +14,9 @@ use base64::Engine as _;
 use std::fmt::Write as _;
 
 use super::markdown::{escape_attr, escape_text};
-use super::{ExportArtifact, MAX_INLINE_ARTIFACT_BYTES, MAX_INLINE_TOTAL_BYTES};
+use super::{
+    base64_encoded_len, ExportArtifact, MAX_INLINE_ARTIFACT_BYTES, MAX_INLINE_TOTAL_BYTES,
+};
 
 /// The stylesheet is embedded at COMPILE TIME.
 ///
@@ -88,15 +90,18 @@ pub(super) fn render_artifacts(heading: &str, artifacts: &[ExportArtifact]) -> S
 
         // Re-check the budget rather than trusting the caller: `bytes` may be
         // present and oversized, and the running total is only knowable here.
+        // The budget counts encoded bytes — the length the base64 payload
+        // occupies in the document — because that is what the document holds.
         let payload = art.bytes.as_ref().filter(|bytes| {
-            let len = bytes.len() as u64;
-            len <= MAX_INLINE_ARTIFACT_BYTES
-                && inlined_total.saturating_add(len) <= MAX_INLINE_TOTAL_BYTES
+            let encoded = base64_encoded_len(bytes.len() as u64);
+            encoded <= MAX_INLINE_ARTIFACT_BYTES
+                && inlined_total.saturating_add(encoded) <= MAX_INLINE_TOTAL_BYTES
         });
 
         match payload {
             Some(bytes) => {
-                inlined_total = inlined_total.saturating_add(bytes.len() as u64);
+                let encoded_len = base64_encoded_len(bytes.len() as u64);
+                inlined_total = inlined_total.saturating_add(encoded_len);
                 let encoded = BASE64.encode(bytes);
                 if is_image(&art.mime_type) {
                     // `<img>` cannot execute its payload, so the real MIME is
@@ -268,7 +273,9 @@ mod tests {
 
     #[test]
     fn total_budget_stops_inlining_after_the_ceiling() {
-        let each = MAX_INLINE_ARTIFACT_BYTES as usize;
+        // The budget counts encoded bytes, so a payload of three quarters of
+        // the per-artifact cap encodes to exactly that cap.
+        let each = (MAX_INLINE_ARTIFACT_BYTES / 4 * 3) as usize;
         let count = (MAX_INLINE_TOTAL_BYTES / MAX_INLINE_ARTIFACT_BYTES) as usize + 1;
         let arts: Vec<_> = (0..count)
             .map(|i| art(&format!("f{i}.bin"), "application/octet-stream", each))

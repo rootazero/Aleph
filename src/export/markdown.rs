@@ -18,11 +18,20 @@
 //!    what makes tricks like `java\0script:` harmless — the odd scheme simply
 //!    fails to match and is neutralised, rather than being matched against a
 //!    denylist that a control character can slip past.
+//!
+//! 3. The document is rendered by a **single** HTML writer. The writer's
+//!    state spans the events it is fed — a table's head/body phase, its
+//!    column alignment, an image's alt text — so it has to see the whole
+//!    stream.
 
 use pulldown_cmark::{html, Event, Options, Parser, Tag};
 
-/// Escape a value destined for HTML *text* content.
-pub(super) fn escape_text(s: &str) -> String {
+/// Escape the characters that would let a value turn into markup.
+///
+/// One rule, one place: [`escape_text`] and [`escape_attr`] differ only in
+/// the quotes they additionally escape, so the shared set is written here
+/// once instead of being restated in two escapers that can drift apart.
+fn escape_markup(s: &str) -> String {
     let mut out = String::with_capacity(s.len() + 16);
     for c in s.chars() {
         match c {
@@ -35,24 +44,26 @@ pub(super) fn escape_text(s: &str) -> String {
     out
 }
 
+/// Escape a value destined for HTML *text* content.
+pub(super) fn escape_text(s: &str) -> String {
+    escape_markup(s)
+}
+
 /// Escape a value destined for a double-quoted HTML *attribute*.
 ///
 /// Quotes matter here in a way they do not for text content: filenames and
 /// MIME types are user- and model-controlled and land in `alt=`, `download=`
 /// and `href=`, where an unescaped `"` is an attribute breakout.
+///
+/// # Invariant
+///
+/// Every value that lands inside an attribute goes through this function.
+/// The text rule leaves quotes alone, so an attribute that skipped this one
+/// would be a breakout waiting to happen.
 pub(super) fn escape_attr(s: &str) -> String {
-    let mut out = String::with_capacity(s.len() + 16);
-    for c in s.chars() {
-        match c {
-            '&' => out.push_str("&amp;"),
-            '<' => out.push_str("&lt;"),
-            '>' => out.push_str("&gt;"),
-            '"' => out.push_str("&quot;"),
-            '\'' => out.push_str("&#39;"),
-            _ => out.push(c),
-        }
-    }
-    out
+    escape_markup(s)
+        .replace('"', "&quot;")
+        .replace('\'', "&#39;")
 }
 
 /// Allowlist link/image destinations; neutralise everything else.
@@ -151,8 +162,12 @@ fn hex_digit(b: u8) -> Option<u8> {
     }
 }
 
-/// Rewrite link and image destinations before they reach the HTML writer.
-fn sanitize_link_event(event: Event<'_>) -> Event<'_> {
+/// Rewrite link and image destinations, and defuse raw HTML, before the
+/// events reach the HTML writer.
+///
+/// Raw HTML is escaped here rather than by the writer: the writer emits HTML
+/// events verbatim, so the escaped text has to travel inside the event.
+fn sanitize_event(event: Event<'_>) -> Event<'_> {
     match event {
         Event::Start(Tag::Link {
             link_type,
@@ -176,6 +191,9 @@ fn sanitize_link_event(event: Event<'_>) -> Event<'_> {
             title,
             id,
         }),
+        // Raw HTML in model output renders as literal text.
+        Event::Html(text) => Event::Html(escape_text(&text).into()),
+        Event::InlineHtml(text) => Event::InlineHtml(escape_text(&text).into()),
         other => other,
     }
 }
@@ -206,15 +224,18 @@ fn markdown_options() -> Options {
 
 /// Render Markdown to an HTML fragment with raw HTML escaped and URL schemes
 /// allowlisted.
+///
+/// The whole document goes through **one** writer. The writer keeps state
+/// across events — whether it is in a table head or body, which column it is
+/// in, and which text belongs to an image's alt attribute — so a writer per
+/// event throws that state away: every table body cell came out as a header
+/// cell, the column alignment was dropped, and image alt text was lost.
 pub(super) fn render_markdown(src: &str) -> String {
     let mut out = String::with_capacity(src.len() * 2);
-    for event in Parser::new_ext(src, markdown_options()) {
-        match event {
-            // Raw HTML in model output renders as literal text.
-            Event::Html(text) | Event::InlineHtml(text) => out.push_str(&escape_text(&text)),
-            other => html::push_html(&mut out, std::iter::once(sanitize_link_event(other))),
-        }
-    }
+    html::push_html(
+        &mut out,
+        Parser::new_ext(src, markdown_options()).map(sanitize_event),
+    );
     out
 }
 
@@ -310,6 +331,36 @@ mod tests {
         assert!(html.contains("<h1>"), "{html}");
         assert!(html.contains("<li>"), "{html}");
         assert!(html.contains("<code>"), "{html}");
+    }
+
+    /// A table is rendered by a writer that remembers whether it is in the
+    /// head or the body of the table. A writer per event threw that state
+    /// away, so every body cell came out as a header cell and the column
+    /// alignment was dropped.
+    #[test]
+    fn a_table_body_cell_is_a_data_cell_and_keeps_its_alignment() {
+        let html = render_markdown("| left | right |\n|:---|---:|\n| a | b |");
+        assert!(
+            html.contains("<td style=\"text-align: left\">a</td>"),
+            "body cell is not a data cell: {html}"
+        );
+        assert!(
+            html.contains("<td style=\"text-align: right\">b</td>"),
+            "alignment dropped: {html}"
+        );
+        assert!(
+            html.contains("<th style=\"text-align: left\">"),
+            "header cell lost its alignment: {html}"
+        );
+    }
+
+    /// An image's alt text is taken from the events that follow it, so the
+    /// writer has to have seen them. A writer that never did filled the
+    /// attribute with nothing.
+    #[test]
+    fn an_image_keeps_its_alt_text() {
+        let html = render_markdown("![a chart](https://example.com/c.png)");
+        assert!(html.contains("alt=\"a chart\""), "alt text lost: {html}");
     }
 
     #[test]

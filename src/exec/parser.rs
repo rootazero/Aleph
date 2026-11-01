@@ -24,8 +24,15 @@ fn contains_unquoted_subshell(command: &str) -> bool {
     // Most recent non-whitespace, non-quote char in the *current* quoting
     // context. Whitespace doesn't update it; quotes reset the relevant
     // context via the in_single / in_double checks at the `(` arm.
-    // Escape consumes the next char without updating (the backslash itself
-    // is the new last_significant).
+    //
+    // The backslash arm below does NOT update `last_significant`: the
+    // backslash is dropped and the *escaped* character becomes the new
+    // `last_significant`. An escaped `$(` therefore looks like a subshell
+    // here, even though bash treats it as a literal `$` followed by `(` —
+    // a false positive. The rejection is fail-closed, so the cost is a
+    // spurious refusal rather than a hole; the intent (an escaped
+    // character must not be significant) is recorded here so the behavior
+    // can be corrected in one place.
     let mut last_significant: char = '\0';
 
     for ch in command.chars() {
@@ -97,8 +104,15 @@ fn contains_unquoted_redirect(command: &str) -> bool {
                 return true;
             }
             '&' if !in_single && !in_double
-                // Only flag & when it follows > or < (fd duplication redirects like 2>&1)
-                // Do NOT flag && (chain operator) or bare & (background operator)
+                // Only flag & when it directly follows a redirection char.
+                //
+                // An unquoted `>` or `<` already returned `true` at the arm
+                // above, so a plain `2>&1` never reaches this arm — it is
+                // caught as a redirect. The only way `prev` is `>` or `<`
+                // here is an *escaped* one (`\>`), which the escape branch
+                // folds into `prev` without being a redirect.
+                // Do NOT flag && (chain operator) or bare & (background
+                // operator)
                 && (prev == '>' || prev == '<') =>
             {
                 return true;

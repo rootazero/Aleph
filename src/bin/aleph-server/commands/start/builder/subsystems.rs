@@ -12,6 +12,7 @@
 
 use std::path::PathBuf;
 
+use alephcore::memory::notes::watcher::NoteVaultWatcher;
 use alephcore::sync_primitives::{Arc, RwLock};
 
 use alephcore::gateway::handlers::auth as auth_handlers;
@@ -26,6 +27,22 @@ use alephcore::gateway::GatewayServer;
 use alephcore::gateway::{AgentRegistry, ChannelRegistry, InboundMessageRouter, RoutingConfig};
 
 use super::register_channel_handlers;
+
+// ── Note vault lifecycle ────────────────────────────────────────────────────
+
+/// Drain the existing watcher owner in place during the common server teardown.
+///
+/// `None` means that watcher startup was unavailable and therefore has no
+/// producer or consumer to stop. `Some` remains the same owner so a cancelled
+/// shutdown can be retried by the caller.
+pub(in crate::commands::start) async fn drain_note_vault_watcher(
+    watcher: &mut Option<NoteVaultWatcher>,
+) -> Result<(), alephcore::error::AlephError> {
+    let Some(watcher) = watcher.as_mut() else {
+        return Ok(());
+    };
+    watcher.shutdown().await
+}
 
 // ── Security store + vault ──────────────────────────────────────────────────
 
@@ -1171,5 +1188,39 @@ pub(in crate::commands::start) async fn initialize_inbound_router(
     if !daemon {
         println!("Inbound message router started");
         println!();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::drain_note_vault_watcher;
+    use alephcore::memory::notes::NoteIndexer;
+    use alephcore::memory::notes::store::NoteStore;
+    use alephcore::memory::notes::watcher::spawn_note_vault_watcher;
+    use alephcore::memory::store::SqliteMemoryBackend;
+    use std::sync::Arc;
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn note_watcher_drain_is_in_place_and_idempotent() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("note");
+        tokio::fs::create_dir_all(root.join("main/reference"))
+            .await
+            .unwrap();
+        let store = Arc::new(SqliteMemoryBackend::new(&dir.path().join("memory.db")).unwrap());
+        let indexer = Arc::new(NoteIndexer::new(root, store.clone()));
+        let mut watcher = Some(spawn_note_vault_watcher(indexer).unwrap());
+
+        drain_note_vault_watcher(&mut watcher).await.unwrap();
+        drain_note_vault_watcher(&mut watcher).await.unwrap();
+        assert!(store.list_notes("main").await.unwrap().is_empty());
+        assert!(watcher.is_some());
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn note_watcher_drain_accepts_absent_startup_watcher() {
+        let mut watcher = None;
+        drain_note_vault_watcher(&mut watcher).await.unwrap();
+        assert!(watcher.is_none());
     }
 }

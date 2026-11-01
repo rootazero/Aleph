@@ -4,15 +4,18 @@
 //! # The gap this closes
 //!
 //! Advertising a builtin and dispatching one are separate acts with no
-//! compiler between them. A tool becomes visible to the model through either
-//! of two registration shapes:
+//! compiler between them. A tool becomes visible to the model through any of
+//! five registration shapes:
 //!
 //! | shape | file | what it does |
 //! |---|---|---|
 //! | `BUILTIN_TOOL_DEFINITIONS` entry | `definitions.rs` | catalog row, progressive disclosure, `dangerous_tools` validation |
 //! | `reg(tools, "name", …)` | `builder/core_tools.rs` | registry-map row (the ten registry-only tools live here) |
+//! | `reg(tools, "name", …)` | `builder/optional_tools.rs` | registry-map row for the conditionally registered tools |
+//! | `tools.insert("name".to_string(), …)` | `builder/constructor/*.rs` | registry-map row the constructor writes directly |
+//! | `Registered schema for X` | `builder/constructor/mod.rs` | the constructor's log-line inventory of the names it registers |
 //!
-//! Neither reaches `ToolRegistry::execute_tool`, which is a hand-written
+//! None of them reaches `ToolRegistry::execute_tool`, which is a hand-written
 //! `match` on the tool name. A tool registered but not matched falls through
 //! to `_ =>` and answers `Unknown tool: <name>` — *after* its description has
 //! been billed on every request that carried the tool list.
@@ -60,15 +63,14 @@ fn production_source(src: &str) -> String {
     ))
 }
 
-/// Tool names the model can be told about, from all three registration
-/// shapes.
+/// Tool names the model can be told about, from every registration shape.
 ///
 /// Panics if any scan finds implausibly few names: the failure mode this
 /// guards against is a scanner that stops matching (a refactor renames `reg`,
 /// rustfmt reflows the catalog, a future shape moves) and thereafter passes
 /// by finding nothing.
 ///
-/// `pub` so cross-crate consumers (the `dangerous_tools` test that pins
+/// `pub` so this crate's consumers (the `dangerous_tools` test that pins
 /// every denylist entry against a real tool) can verify a conditionally
 /// registered tool exists without rebuilding the registry. The set returned
 /// here is a SOURCE-LEVEL set, not a runtime one: a tool registered in the
@@ -79,7 +81,11 @@ fn production_source(src: &str) -> String {
 pub fn advertised_tools() -> std::collections::BTreeSet<String> {
     let catalog_src = production_source(include_str!("definitions.rs"));
     let core_src = production_source(include_str!("builder/core_tools.rs"));
+    let optional_src = production_source(include_str!("builder/optional_tools.rs"));
     let constructor_src = production_source(include_str!("builder/constructor/mod.rs"));
+    let agent_acp_src = production_source(include_str!("builder/constructor/agent_acp_tools.rs"));
+    let collab_src = production_source(include_str!("builder/constructor/collab_session_tools.rs"));
+    let coord_src = production_source(include_str!("builder/constructor/coord_team_tools.rs"));
 
     let mut names = std::collections::BTreeSet::new();
 
@@ -92,19 +98,26 @@ pub fn advertised_tools() -> std::collections::BTreeSet<String> {
         }
     }
 
-    // Registry rows: `reg(tools, "foo", …)` — the name is the SECOND argument,
-    // and rustfmt puts each argument on its own line, so this cannot be a
-    // single-line match.
-    let mut reg_count = 0usize;
-    for (idx, _) in core_src.match_indices("reg(") {
-        let rest = &core_src[idx + "reg(".len()..];
-        // Skip the `tools` argument, then take the first string literal.
-        if let Some(comma) = rest.find(',') {
-            if let Some(n) = quoted_after(&rest[comma + 1..]) {
-                reg_count += 1;
-                names.insert(n);
-            }
-        }
+    // Registry rows: `reg(tools, "foo", …)`. Two files carry the shape — the
+    // always-on core builder and the optional builder whose registrations are
+    // gated on a live dependency — and a tool registered through either one is
+    // offered to the model exactly the same way, so the census reads both.
+    let (core_rows, reg_count) = registry_rows(&core_src);
+    let (optional_rows, optional_count) = registry_rows(&optional_src);
+    names.extend(core_rows);
+    names.extend(optional_rows);
+
+    // Constructor-direct rows: `tools.insert("foo".to_string(), ut)`. The
+    // constructor writes some tools into the map itself instead of going
+    // through `reg(`, so without this scan those names are advertised to the
+    // model by nobody and the census certifies nothing about them. The rows
+    // that insert a catalogued name (`tools.insert(td.name.clone(), ut)`)
+    // yield nothing here — the catalog already counts them.
+    let mut insert_count = 0usize;
+    for src in [&constructor_src, &agent_acp_src, &collab_src, &coord_src] {
+        let (rows, count) = constructor_insert_rows(src);
+        insert_count += count;
+        names.extend(rows);
     }
 
     // Constructor's conditional registration block: every conditional tool
@@ -150,6 +163,22 @@ pub fn advertised_tools() -> std::collections::BTreeSet<String> {
         "core_tools scan found only {reg_count} `reg(` calls — the scanner \
          stopped matching and would now pass by finding nothing"
     );
+    assert!(
+        optional_count > 20,
+        "optional_tools scan found only {optional_count} `reg(` calls — the scanner \
+         stopped matching the conditional registrations and would now pass by \
+         finding nothing"
+    );
+    // Same band as the constructor scan: a floor so a scanner that stopped
+    // matching fails, a ceiling so a runaway bulk registration cannot slip
+    // through as "fine" because the count would only go up.
+    assert!(
+        insert_count >= 1 && insert_count <= 32,
+        "constructor direct-insert scan returned {insert_count} entries — outside the \
+         1..=32 band, so either the scanner stopped matching the \
+         `tools.insert(\"name\".to_string(), …)` shape or a runaway bulk insert swept \
+         in unintended tools"
+    );
     // Stable generic floor + soft cap. The exact count is an artifact of which
     // constructor blocks are unconditional today and will drift as new tools are
     // added; a magic lower bound bakes a specific toolset into the test, and a
@@ -170,6 +199,40 @@ pub fn advertised_tools() -> std::collections::BTreeSet<String> {
          Investigate before relaxing this bound."
     );
     names
+}
+
+/// Tool names registered by the builder's `reg(tools, "name", …)` rows.
+///
+/// The name is the SECOND argument, and rustfmt puts each argument on its own
+/// line, so this cannot be a single-line match.
+fn registry_rows(src: &str) -> (std::collections::BTreeSet<String>, usize) {
+    let mut names = std::collections::BTreeSet::new();
+    let mut count = 0usize;
+    for (idx, _) in src.match_indices("reg(") {
+        let rest = &src[idx + "reg(".len()..];
+        // Skip the `tools` argument, then take the first string literal.
+        if let Some(comma) = rest.find(',') {
+            if let Some(n) = quoted_after(&rest[comma + 1..]) {
+                count += 1;
+                names.insert(n);
+            }
+        }
+    }
+    (names, count)
+}
+
+/// Tool names the constructor writes into the runtime map directly:
+/// `tools.insert("name".to_string(), ut)`.
+fn constructor_insert_rows(src: &str) -> (std::collections::BTreeSet<String>, usize) {
+    let mut names = std::collections::BTreeSet::new();
+    let mut count = 0usize;
+    for (idx, _) in src.match_indices("tools.insert(") {
+        if let Some(n) = quoted_after(&src[idx + "tools.insert(".len()..]) {
+            count += 1;
+            names.insert(n);
+        }
+    }
+    (names, count)
 }
 
 /// First double-quoted `[a-z0-9_]+` literal in `s`, if it starts one (modulo
@@ -235,15 +298,23 @@ fn dispatchable_tools() -> std::collections::BTreeSet<String> {
 }
 
 /// Walk forward from `start` (which must point at `{`) to the matching `}`,
-/// respecting nested braces and Rust string literals (so a `}` inside a
-/// `"…"` does not terminate the block early). Returns the byte offset of
-/// the matching `}` or `None` if the braces do not pair.
+/// respecting nested braces, Rust string literals and comments (so a `}`
+/// inside a `"…"`, a `//` line comment or a `/* … */` block comment does not
+/// terminate the block early). Returns the byte offset of the matching `}` or
+/// `None` if the braces do not pair.
+///
+/// Comments are skipped rather than merely tolerated: a `//` comment holding
+/// an odd number of `"` characters would otherwise flip the scan into string
+/// mode and swallow the block's real `}` — and a comment is exactly the kind
+/// of text a reader adds while working on the block the scan is measuring.
 fn find_matching_close(src: &str, start: usize) -> Option<usize> {
     let bytes = src.as_bytes();
     let mut depth: i32 = 0;
     let mut i = start;
     let mut in_string = false;
     let mut escape = false;
+    let mut in_line_comment = false;
+    let mut in_block_comment = false;
     while i < bytes.len() {
         let b = bytes[i];
         if escape {
@@ -260,8 +331,34 @@ fn find_matching_close(src: &str, start: usize) -> Option<usize> {
             i += 1;
             continue;
         }
+        if in_line_comment {
+            if b == b'\n' {
+                in_line_comment = false;
+            }
+            i += 1;
+            continue;
+        }
+        if in_block_comment {
+            if b == b'*' && bytes.get(i + 1) == Some(&b'/') {
+                in_block_comment = false;
+                i += 2;
+                continue;
+            }
+            i += 1;
+            continue;
+        }
         match b {
             b'"' => in_string = true,
+            b'/' if bytes.get(i + 1) == Some(&b'/') => {
+                in_line_comment = true;
+                i += 2;
+                continue;
+            }
+            b'/' if bytes.get(i + 1) == Some(&b'*') => {
+                in_block_comment = true;
+                i += 2;
+                continue;
+            }
             b'{' => depth += 1,
             b'}' => {
                 depth -= 1;
@@ -612,6 +709,90 @@ mod tests {
              \"no DiagnosticControl configured\" phrase — operators reading a \
              rejected call would not know which env var to set. The arm body \
              is:\n{arm_body}"
+        );
+    }
+
+    /// A comment cannot move the block boundary.
+    ///
+    /// The scanner used to track string literals only, so a comment holding an
+    /// odd number of `"` characters flipped it into string mode and it walked
+    /// past the block's real `}` — the block became unfindable, and the
+    /// diagnostics gate above would read the wrong bytes. A comment is
+    /// exactly the kind of text a reader adds while working on the block the
+    /// scan is measuring, so the scan has to be the one that yields.
+    #[test]
+    fn a_comment_cannot_change_the_block_boundary() {
+        let line_comment = r#"
+fn outer() {
+    // a comment with one " quote in it
+    let inner = 1;
+}
+"#;
+        let block_comment = r#"
+fn outer() {
+    /* a comment with one " quote in it */
+    let inner = 1;
+}
+"#;
+        for src in [line_comment, block_comment] {
+            let open = src.find('{').expect("the fixture has a block to find");
+            let close = src.rfind('}').expect("the fixture has a block to find");
+            assert_eq!(
+                find_matching_close(src, open),
+                Some(close),
+                "the scanner must ignore quotes inside comments"
+            );
+        }
+    }
+
+    /// Every tool the registry registers outside the catalog is a name
+    /// `is_builtin_tool_name` answers "yes" to.
+    ///
+    /// The run loop offers the model the catalog and then completes the list
+    /// from the registry's own map ("anything the registry can execute, the
+    /// model can see"), so a registry-only tool IS offered to the model.
+    /// `is_builtin_tool_name` used to read the catalog alone and reported
+    /// those tools as "not builtin", so a skill row could claim a name the run
+    /// loop already owns.
+    ///
+    /// The census reads source, so this guard fails by name: a registration
+    /// the predicate list does not name fails here, and an entry in that list
+    /// that no registration backs fails the other way.
+    #[test]
+    fn every_registry_only_tool_is_named_by_the_predicate_list() {
+        let advertised = advertised_tools();
+        let catalogued: std::collections::BTreeSet<String> =
+            crate::executor::BUILTIN_TOOL_DEFINITIONS
+                .iter()
+                .map(|def| def.name.to_string())
+                .collect();
+        let declared: std::collections::BTreeSet<String> =
+            crate::executor::REGISTRY_ONLY_TOOL_NAMES
+                .iter()
+                .map(|name| (*name).to_string())
+                .collect();
+
+        let unregistered: Vec<&str> = declared
+            .difference(&advertised)
+            .map(String::as_str)
+            .collect();
+        assert!(
+            unregistered.is_empty(),
+            "these names are in `crate::executor::REGISTRY_ONLY_TOOL_NAMES` but no \
+             registration advertises them any more: {unregistered:?}. Remove them from \
+             the list."
+        );
+
+        let undeclared: Vec<&str> = advertised
+            .difference(&catalogued)
+            .filter(|name| !declared.contains(*name))
+            .map(String::as_str)
+            .collect();
+        assert!(
+            undeclared.is_empty(),
+            "these tools are registered outside the catalog but not named by \
+             `crate::executor::REGISTRY_ONLY_TOOL_NAMES`, so `is_builtin_tool_name` \
+             would report them as 'not builtin': {undeclared:?}"
         );
     }
 }

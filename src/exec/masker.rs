@@ -1,5 +1,5 @@
 use crate::exec::secret_patterns::secret_masker_patterns;
-use regex::Regex;
+use regex::{NoExpand, Regex};
 use std::borrow::Cow;
 use std::sync::{Arc, LazyLock, RwLock};
 
@@ -111,7 +111,16 @@ impl SecretMasker {
             }
         }
         for (regex, replacement) in operator_patterns().iter() {
-            if let Cow::Owned(masked) = regex.replace_all(&result, replacement.as_str()) {
+            // The operator's replacement is what the operator WROTE — the
+            // config documents the field as "what the match is replaced with",
+            // with no `$` semantics. `&str` as a `Replacer` is a regex
+            // TEMPLATE though: `$` opens a capture reference and an unknown
+            // one expands to the empty string, so `***$REDACTED***` lost its
+            // `$` and the operator's own text. `NoExpand` emits it verbatim.
+            //
+            // The built-in patterns above keep their `$1` templates: those
+            // are the crate's own and they DO capture.
+            if let Cow::Owned(masked) = regex.replace_all(&result, NoExpand(replacement.as_str())) {
                 result = Cow::Owned(masked);
             }
         }
@@ -375,7 +384,12 @@ MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQ...
     /// *without* ever being told about them — that is the whole point of
     /// hanging them off the type instead of a constructor argument, and it is
     /// what makes the other six construction sites correct for free.
+    ///
+    /// Serialised with the other operator-pattern test: the patterns are
+    /// process-global, so two tests installing them at the same time would
+    /// reset each other's set mid-assertion.
     #[test]
+    #[serial_test::serial(exec_operator_patterns)]
     fn operator_patterns_reach_a_masker_nobody_configured() {
         let (installed, rejected) = install_operator_patterns([
             (r"CUSTOM_SECRET_\d+", "CUSTOM_***"),
@@ -393,6 +407,34 @@ MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQ...
         let _ = install_operator_patterns(std::iter::empty());
     }
 
+    /// The operator's replacement is what the operator WROTE: the config
+    /// documents the field as "what the match is replaced with", with no `$`
+    /// semantics. A regex template reads `$` as a capture reference and an
+    /// unknown one expands to the empty string — so `***$REDACTED***` used to
+    /// reach the model as `***`, and the operator's own marker was gone.
+    ///
+    /// Serialised with the other operator-pattern test: the pattern set is
+    /// process-global.
+    #[test]
+    #[serial_test::serial(exec_operator_patterns)]
+    fn an_operator_replacement_is_emitted_verbatim() {
+        let (installed, rejected) =
+            install_operator_patterns([(r"OPERATOR_SECRET_\d+", "***$REDACTED***")]);
+        assert_eq!(installed, 1, "the pattern installs: {rejected:?}");
+        assert!(rejected.is_empty(), "the pattern is valid: {rejected:?}");
+
+        let masker = SecretMasker::new();
+        let output = masker.mask("Value: OPERATOR_SECRET_12345");
+        assert!(
+            output.contains("***$REDACTED***"),
+            "the operator's `$` must survive: {output}"
+        );
+        assert!(!output.contains("12345"), "the secret must go: {output}");
+
+        // Leave the process as we found it — this static outlives the test.
+        let _ = install_operator_patterns(std::iter::empty());
+    }
+
     #[test]
     fn test_no_false_positives() {
         let masker = SecretMasker::new();
@@ -400,6 +442,142 @@ MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQ...
         let input = "Hello world, this is a normal message";
         let output = masker.mask(input);
         assert_eq!(input, output);
+    }
+
+    // ========================================================================
+    // The key-adjacent rules — quoted keys, structure, base64 values
+    // ========================================================================
+
+    /// A JSON document quotes its keys, so the key's closing quote sits
+    /// BETWEEN the name and the colon. A rule that wanted the separator
+    /// right after the name could never fire on the JSON leg — and the
+    /// replacement rebuilt the payload instead of editing it, so a redacted
+    /// document was no longer a document.
+    #[test]
+    fn a_json_document_is_redacted_and_still_parses() {
+        let masker = SecretMasker::new();
+        let input = concat!(
+            r#"{"password":"hunter2secret","#,
+            r#""api_key":"abcdefghijklmnopqrstuvwx","#,
+            r#""token":"0123456789abcdefghijkl","#,
+            r#""aws_secret_access_key":"AAAABBBBCCCCDDDDEEEEFFFFGGGGHHHHIIIIJJJK"}"#,
+        );
+        let output = masker.mask(input);
+
+        for secret in [
+            "hunter2secret",
+            "abcdefghijklmnopqrstuvwx",
+            "0123456789abcdefghijkl",
+            "AAAABBBBCCCCDDDDEEEEFFFFGGGGHHHHIIIIJJJK",
+        ] {
+            assert!(
+                !output.contains(secret),
+                "the credential is still in the document: {output}"
+            );
+        }
+
+        let parsed: serde_json::Value =
+            serde_json::from_str(&output).expect("the redacted document must still parse");
+        let serde_json::Value::Object(map) = parsed else {
+            panic!("the document must stay an object: {parsed:?}");
+        };
+        assert_eq!(
+            map.len(),
+            4,
+            "the keys are structure, not the secret: {output}"
+        );
+    }
+
+    /// The unquoted form is what config files and `.env` files use, and it
+    /// must keep its spacing and its quotes: only the value is the secret.
+    #[test]
+    fn the_unquoted_form_keeps_its_spacing_and_quotes() {
+        let masker = SecretMasker::new();
+        let output = masker.mask("db_password = \"p@ssw0rd123\"");
+        assert_eq!(output, "db_password = \"***REDACTED***\"");
+    }
+
+    /// The other direction: the length floor is what keeps prose alive. A
+    /// `token:` line that carries words instead of a credential is not a
+    /// credential, and eating it would cost the model its own instructions.
+    #[test]
+    fn a_prose_value_is_not_eaten() {
+        let masker = SecretMasker::new();
+        let input = "token: please use the default token when calling the api";
+        assert_eq!(masker.mask(input), input);
+    }
+
+    /// A URL with no userinfo has no credential to redact, so the rule must
+    /// not eat the port, the path and the word behind them.
+    #[test]
+    fn a_url_without_a_credential_keeps_its_port_path_and_prose() {
+        let masker = SecretMasker::new();
+        let output = masker.mask("http://localhost:3000/x bob@x.com");
+        assert!(
+            output.contains("localhost:3000/x"),
+            "the port and the path are not a credential: {output}"
+        );
+        assert!(
+            output.contains("bob"),
+            "a word behind the URL is not a credential: {output}"
+        );
+    }
+
+    /// And when the password itself contains an `@`, the whole password must
+    /// go: stopping at the first `@` left its tail in clear.
+    #[test]
+    fn a_url_password_containing_an_at_sign_is_fully_redacted() {
+        let masker = SecretMasker::new();
+        let output = masker.mask("https://user:p@ss@example.com/path");
+        assert!(
+            !output.contains("p@ss"),
+            "the whole password must go: {output}"
+        );
+        assert!(
+            output.contains("example.com/path"),
+            "the host and the path are not the credential: {output}"
+        );
+    }
+
+    /// A standard-base64 credential carries `+`, `/` and `=` padding, none of
+    /// which the old value alphabet allowed.
+    #[test]
+    fn a_base64_token_is_redacted() {
+        let masker = SecretMasker::new();
+        let output = masker.mask("token=abc+def/ghijklmnopqrstu==");
+        assert!(!output.contains("abc+def"), "the token must go: {output}");
+        assert!(output.contains("token=***REDACTED***"), "{output}");
+    }
+
+    /// The header form carries a scheme word before the blob, and the value
+    /// class used to stop at the space — leaving the whole credential in
+    /// clear because the scheme word alone is shorter than the floor.
+    #[test]
+    fn a_base64_authorization_header_is_redacted() {
+        let masker = SecretMasker::new();
+        let output = masker.mask("Authorization: Basic dXNlcjpwYXNzd29yZA==");
+        assert!(
+            !output.contains("dXNlcjpwYXNzd29yZA"),
+            "the credential must go: {output}"
+        );
+        assert!(output.contains("***REDACTED***"), "{output}");
+    }
+
+    /// A key whose END marker is not in the text is the reachable case, not
+    /// the exotic one: an edit that touches only the first lines of a key
+    /// file ships the header and the first body lines. A key body continues
+    /// past the text, so the only safe reading is "from the BEGIN marker to
+    /// the end of the text".
+    #[test]
+    fn a_private_key_without_its_end_marker_is_redacted() {
+        let masker = SecretMasker::new();
+        let input = "-----BEGIN RSA PRIVATE KEY-----\nMIIEowIBAAKCAQEAvGqZ0Ym3nQKBgQDR8Xk2LqTf9Nc1sVbWpQ7hJZmKdEyRtUiO";
+        let output = masker.mask(input);
+        assert!(
+            !output.contains("MIIEowIBAAKCAQEA"),
+            "the key body must go: {output}"
+        );
+        assert!(output.contains("***REDACTED***"), "{output}");
     }
 
     // ========================================================================
@@ -470,6 +648,36 @@ MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQ...
             (change.added, change.removed),
             (4, 0),
             "the stats stay exact — they are the honest half of the answer"
+        );
+    }
+
+    /// The reachable case, and the one the per-line walk alone cannot catch:
+    /// an edit that touches only the FIRST lines of a key file ships the
+    /// header and the first body lines — and a key body continues past the
+    /// text, so there is no END marker to anchor on. The only safe reading is
+    /// "from the BEGIN marker to the end of the text", and the change has to
+    /// degrade rather than ship the header with the key body attached.
+    #[test]
+    fn a_hunk_with_only_the_key_header_is_withheld() {
+        let masker = SecretMasker::new();
+        let mut p = aleph_protocol::Presentation::FileChanges {
+            changes: vec![change_with(&[
+                "-----BEGIN RSA PRIVATE KEY-----",
+                "MIIEowIBAAKCAQEAvGqZ0Ym3nQKBgQDR8Xk2LqTf9Nc1sVbWpQ7hJZmKdEyRtUiO",
+            ])],
+        };
+
+        mask_presentation(&masker, &mut p);
+
+        let change = only_change(&p);
+        assert!(
+            change.hunks.is_empty(),
+            "a key body that continues past the diff must not ship: {:?}",
+            change.hunks
+        );
+        assert_eq!(
+            change.unavailable,
+            Some(aleph_protocol::Unavailable::Redacted)
         );
     }
 
