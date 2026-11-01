@@ -2,7 +2,7 @@
 
 Date / 日期: 2026-11-01
 
-Status / 状态: **Approved — implementation plan in progress. / 已批准——正在编写 implementation plan。**
+Status / 状态: **Approved and implemented — validation recorded in the [run ledger](../runs/2026-11-01-panel-trusted-project-context.md). / 已批准并实现——验证结果见运行台账。**
 
 Task / 任务: Panel community UI trusted project context, following the production publication phase and the plan in `docs/superpowers/plans/2026-11-01-panel-trusted-project-context-plan.md`.
 

@@ -90,7 +90,12 @@ pub(super) fn authenticate(
             .filter(|bound| bound == &user),
         None => None,
     };
-    Ok(PanelHttpAuthContext { user, role, device_id, verified_user })
+    Ok(PanelHttpAuthContext {
+        user,
+        role,
+        device_id,
+        verified_user,
+    })
 }
 
 // These handles are ingress dependencies, never a second publication registry.
@@ -152,9 +157,12 @@ impl PanelAssetRouteState {
         let manager = (self.manager)()?;
         let (context, generation) = match &self.panel_projects {
             Some(selector) => {
-                let resolved = selector.resolve(&PanelCallerContext::authenticated(
-                    caller.verified_user, caller.device_id,
-                )).ok()?;
+                let resolved = selector
+                    .resolve(&PanelCallerContext::authenticated(
+                        caller.verified_user,
+                        caller.device_id,
+                    ))
+                    .ok()?;
                 (resolved.visibility, resolved.selection.generation)
             }
             None => (VisibilityCtx::default(), 0),

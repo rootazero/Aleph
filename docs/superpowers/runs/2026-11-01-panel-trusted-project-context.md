@@ -1,6 +1,6 @@
 # Trusted Panel project context run / Panel 可信项目上下文运行记录
 
-Status / 状态: implementation in progress / 实施中。
+Status / 状态: validation complete; isolated-branch handoff / 验证完成，隔离分支交付。
 
 Base: `52e13cb3d`; branch: `panel-trusted-context`. Approved [design](../specs/2026-11-01-panel-trusted-project-context-design.md) and [implementation plan](../plans/2026-11-01-panel-trusted-project-context-implementation-plan.md). No merge or push. / 设计与计划均已批准；不合并、不推送。
 
@@ -65,6 +65,24 @@ Ruling: archive invalidates local content and retains the explicit server claim 
 
 GREEN: native Panel/Terminal regression **1607 passed / 0 failed / 0 ignored**; freshly generated production-feature WASM/glue loader **15 passed / 0 failed / 0 skipped**. All 14 source hashes and the generated WASM hash match the provenance manifest. The initial native classification-guard failure was fixed through the existing classifier. / 原生 Panel/Terminal 1607 通过；fresh production-feature WASM/glue 的 loader 15 通过、无跳过；14 项源码与 WASM hash 均匹配。首次错误分类守卫失败已通过复用既有 classifier 修复。
 
-## Remaining / 剩余
+## Task 5 — Production acceptance and review / 生产链路验收与审查
 
-Browser lifecycle, production Gateway/browser evidence and fresh whole-branch review remain open. Real Gateway RPC/HTTP project integration is now proven independently of private selector tests. / browser、新的真实浏览器证据与整分支审查仍未完成；RPC/HTTP 项目接线已由真实 Gateway 单独验证。
+Final serial compilation of the regular production library and the four independent integration targets succeeded in **9m31s**. Command: `cargo test -p alephcore --no-run --test panel_project_context --test panel_project_rpc --test panel_http_publication --test gateway_method_census`. The memory guard ran first and jobs remained 1. Only the existing Core `panel_snapshot` warning and unused helpers in source-backed test targets were reported. / 最终常规库与四个独立 target 编译成功，未构建 monolithic harness；内存守卫和串行限制均遵守。
+
+Freshly compiled exact-source executables then passed: selector **7/0**, real RPC + HTTP **1/0**, census **4/0** (83 unrelated tests filtered), production HTTP **2/0** (the opt-in fixture excluded in this ordinary run). Running these executables avoids a second Core build invalidated by the existing Terminal test's temporary `dist/` files. / 同一份源码刚生成的 executable 全部通过；使用产物直接复验，避免既有 Terminal 测试使下一次 Cargo fingerprint 失效而重复编译。
+
+The opt-in `panel_asset_live_gateway_fixture` was then run separately from that same production-library executable, with `PANEL_LIVE_SHELL=interfaces/webchat/.panel-live/shell` and `PANEL_LIVE_CONTROL=interfaces/webchat/.panel-live/control`: **1 passed / 0 failed**, exit **0**, 47.41s. The fixture uses real ProjectStore projects and paired users/devices; no forged caller, fake snapshot, alternate project endpoint or asset bytes are injected into the host. / opt-in 真实 Gateway fixture 单独执行并通过，使用真实项目、身份和生产路由。
+
+`node scripts/test-panel-live.mjs` ran from `interfaces/webchat` against real Chrome and that Gateway, using the already installed QA Playwright module. Driver exit **0**. The redacted report records **12 snapshots and 13 observed asset requests**, plus passing assertions for passive selection, Global + A/B discovery, equal-Core-revision switching, cross-user claim/asset refusal, old A work not importing/mounting or erasing B, same-device cross-tab observation at the next asset boundary, and archived claims refusing both project and Global assets until explicit Global selection. Existing exact cleanup, disconnect late results, retraction/replacement, import failure and live device revocation also pass. / Chrome driver exit 0；项目隔离、同 revision 切换、迟到结果、多 tab、归档拒绝和既有生命周期场景全绿。
+
+The initial explicit-mount cleanup sample records imports **2**, mounts **2**, unmounts **2**, duplicate cleanup **0**. Fresh WASM SHA-256 is `4ff8be5092bb21ad90b502cd37dba909c217dcc571e5448e213c036ea63e8488`; all **14** provenance source hashes and the WASM hash still match. / 初始清理样本无重复清理；fresh WASM 与 14 项源码 provenance 均一致。
+
+Local ignored evidence is under `.superpowers/sdd/2026-11-01-panel-trusted-project-context-implementation-plan/` (`task-5-build.log`, selector/RPC/census/HTTP logs, `task-5-gateway.log`, `task-5-browser.log`, and `browser-evidence/`). The driver writes its redacted report and screenshot under `interfaces/webchat/.panel-live/control/`; credentials are separate ignored fixture data and are not committed. / 证据保留在本地 ignored 目录；报告脱敏，credential 独立且不提交。
+
+Fresh whole-branch read-only review: run `del_mvx85qmh_dfql`, BASE `52e13cb3d`, HEAD `ed225e028` plus all tracked final fixture/reference changes (37 files). It produced a complete written assessment with **no confirmed Critical, Important or Minor issue**, but the process exited **SIGTERM**. This is a written static assessment, not a clean-process review or an independent runtime rerun. The review explicitly left Chrome pending; the real run above subsequently passed. Local assessment: `whole-branch-review.out` in the same ignored evidence directory. / 独立整分支只读审查未确认缺陷，但 SIGTERM 退出，不称为 clean review，也不冒称独立重跑测试；其待定 Chrome 验收随后已实际通过。
+
+## Limits and retained scope / 验证边界与保留范围
+
+The monolithic Core unit-test harness, full workspace suite and native WebView were not run. Prior monolithic LLVM OOM is a limitation, not a passing result; the production-library Gateway path was compiled and exercised independently. No install/update/uninstall, marketplace/signatures, release switching, notification/background refresh, multi-file asset, external WASM or Zahir mount was added. Idle Panels are not destroyed immediately on unseen cross-tab changes or revocation; the next discovery/asset boundary observes current authorization. / 未运行 monolithic Core、全 workspace 或 native WebView；不以 OOM 充当通过结果。本阶段其余 deferred 功能不扩展，撤销与多 tab 在下一请求边界观察。
+
+The branch and worktree are retained for review. No merge or push. / 保留隔离分支与 worktree，不合并、不推送。

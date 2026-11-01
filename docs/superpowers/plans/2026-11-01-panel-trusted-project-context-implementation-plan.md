@@ -1,5 +1,7 @@
 # Panel Trusted Project Context Implementation Plan
 
+Execution status / 执行状态: **Completed on the isolated branch. / 已在隔离分支完成。** This approved plan is retained as written; the [run ledger](../runs/2026-11-01-panel-trusted-project-context.md) records the final contracts, verification and explicit implementation rulings where the spec takes precedence. / 本文保留获批计划，最终契约、验证及以 spec 为准的执行裁决见台账。
+
 - **Goal / 目标:** Replace the deliberate Global-only Panel ingress with one authenticated, server-owned project selection shared by `panel.capabilities.snapshot` and `/tabs/...` asset delivery, while preserving Core as the only declaration, immutable-byte, visibility, trust, and revision authority.
 - **Architecture / 架构:** A process-local selector keyed by stable authenticated device identity. The selector stores only `project_id` and a monotonically increasing selector generation. A typed caller context is derived at the authenticated dispatch boundary and passed explicitly through the RPC middleware terminal and the HTTP route. Every use revalidates the selected project through `ProjectStore` and constructs the Core `VisibilityCtx` from the internal `Project.workspace_path`.
 - **Tech Stack / 技术栈:** Rust `alephcore` gateway/Core, Tokio/Axum, existing `ProjectStore`/`SecurityStore`/device-token identity, Leptos/WASM webchat, existing Panel publication APIs, existing production-library `tests/panel_http_publication.rs` target.
@@ -301,7 +303,7 @@ If documentation is intentionally separated from tests by repository convention,
 Before asking for plan review, verify this document against the approved design:
 
 - [ ] Every approved goal, non-goal and anti-goal appears above.
-- [ ] File paths are scoped to `D:/Workspace/Aleph/.worktrees/panel-trusted-context`; the existing high-level plan is preserved.
+- [ ] File paths are scoped to the isolated worktree and written relative to its repository root; the existing high-level plan is preserved.
 - [ ] Core remains the only declaration/bytes/trust/scope/revision authority; selector state contains no root or bytes.
 - [ ] Actor/device proof is explicit at RPC and HTTP boundaries; no `actor=None` claimed path exists.
 - [ ] Global behavior, Terminal delegation, exact refusal/cache headers and passive discovery are tested.

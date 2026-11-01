@@ -85,14 +85,24 @@ async fn connect(address: std::net::SocketAddr, token: Option<&str>) -> Socket {
 
 fn entry(snapshot: &Value, plugin: &str) -> String {
     snapshot["result"]["declarations"]
-        .as_array().unwrap().iter()
+        .as_array()
+        .unwrap()
+        .iter()
         .find(|declaration| declaration["descriptor"]["key"]["plugin_id"] == plugin)
-        .unwrap()["descriptor"]["entry"].as_str().unwrap().trim_start_matches('.').to_owned()
+        .unwrap()["descriptor"]["entry"]
+        .as_str()
+        .unwrap()
+        .trim_start_matches('.')
+        .to_owned()
 }
 
 async fn asset(address: std::net::SocketAddr, token: &str, path: &str) -> reqwest::Response {
-    reqwest::Client::new().get(format!("http://{address}{path}"))
-        .bearer_auth(token).send().await.unwrap()
+    reqwest::Client::new()
+        .get(format!("http://{address}{path}"))
+        .bearer_auth(token)
+        .send()
+        .await
+        .unwrap()
 }
 
 fn plugins(snapshot: &Value) -> Vec<String> {
@@ -204,15 +214,36 @@ async fn authenticated_project_selection_controls_real_rpc_discovery() {
     assert_eq!(scoped["result"]["project_context"], selected["result"]);
     let a_entry = entry(&scoped, "project-a");
     let delivered = asset(address, &alice_token, &a_entry).await;
-    assert_eq!(delivered.status(), 200, "HTTP must use the same selection as discovery");
+    assert_eq!(
+        delivered.status(),
+        200,
+        "HTTP must use the same selection as discovery"
+    );
     assert_eq!(delivered.headers()["cache-control"], "private, no-store");
     assert_eq!(delivered.headers()["x-content-type-options"], "nosniff");
     assert_eq!(delivered.headers()["vary"], "Authorization, Origin");
-    assert_eq!(delivered.headers()["x-aleph-panel-project-generation"],
-        selected["result"]["generation"].as_u64().unwrap().to_string());
-    assert_eq!(delivered.text().await.unwrap(), "export const passive = true;");
+    assert_eq!(
+        delivered.headers()["x-aleph-panel-project-generation"],
+        selected["result"]["generation"]
+            .as_u64()
+            .unwrap()
+            .to_string()
+    );
+    assert_eq!(
+        delivered.text().await.unwrap(),
+        "export const passive = true;"
+    );
     assert_eq!(asset(address, &bob_token, &a_entry).await.status(), 404);
-    assert_eq!(asset(address, &alice_token, &format!("{a_entry}?project_id={}", b.id)).await.status(), 404);
+    assert_eq!(
+        asset(
+            address,
+            &alice_token,
+            &format!("{a_entry}?project_id={}", b.id)
+        )
+        .await
+        .status(),
+        404
+    );
     assert!(
         !scoped
             .to_string()
@@ -290,21 +321,37 @@ async fn authenticated_project_selection_controls_real_rpc_discovery() {
     assert_eq!(asset(address, &alice_token, &b_entry).await.status(), 404);
     let global_entry = entry(&scoped, "community-live");
     projects.bind_workspace(&a.id, None).unwrap();
-    assert_eq!(asset(address, &alice_token, &global_entry).await.status(), 404);
-    assert!(rpc(&mut alice, SNAPSHOT, Value::Null).await.get("error").is_some());
+    assert_eq!(
+        asset(address, &alice_token, &global_entry).await.status(),
+        404
+    );
+    assert!(rpc(&mut alice, SNAPSHOT, Value::Null)
+        .await
+        .get("error")
+        .is_some());
     projects.bind_workspace(&a.id, Some(&c_root)).unwrap();
     let rebound = rpc(&mut alice, SNAPSHOT, Value::Null).await;
     assert_eq!(plugins(&rebound), ["community-live", "project-c"]);
-    assert_eq!(rebound["result"]["revision"], scoped["result"]["revision"],
-        "project placement is re-read without inventing a Core revision");
+    assert_eq!(
+        rebound["result"]["revision"], scoped["result"]["revision"],
+        "project placement is re-read without inventing a Core revision"
+    );
     assert_eq!(asset(address, &alice_token, &a_entry).await.status(), 404);
-    assert_eq!(asset(address, &alice_token, &entry(&rebound, "project-c")).await.status(), 200);
+    assert_eq!(
+        asset(address, &alice_token, &entry(&rebound, "project-c"))
+            .await
+            .status(),
+        200
+    );
     projects.bind_workspace(&a.id, Some(&a_root)).unwrap();
     assert_eq!(asset(address, &alice_token, &a_entry).await.status(), 200);
     projects.remove_member(&a.id, "alice").unwrap();
     assert_eq!(asset(address, &alice_token, &a_entry).await.status(), 404);
-    assert_eq!(asset(address, &alice_token, &global_entry).await.status(), 404,
-        "invalid selection must refuse Global delivery too");
+    assert_eq!(
+        asset(address, &alice_token, &global_entry).await.status(),
+        404,
+        "invalid selection must refuse Global delivery too"
+    );
     assert!(
         rpc(&mut alice, SNAPSHOT, Value::Null)
             .await
@@ -338,15 +385,34 @@ async fn authenticated_project_selection_controls_real_rpc_discovery() {
     .await
     .get("error")
     .is_some());
-    assert_eq!(asset(address, &alice_token, &global_entry).await.status(), 200);
+    assert_eq!(
+        asset(address, &alice_token, &global_entry).await.status(),
+        200
+    );
     projects.add_member(&a.id, "alice").unwrap();
-    assert!(rpc(&mut alice, SELECT, json!({"project_id": a.id, "idempotency_key":"archive"})).await.get("error").is_none());
+    assert!(rpc(
+        &mut alice,
+        SELECT,
+        json!({"project_id": a.id, "idempotency_key":"archive"})
+    )
+    .await
+    .get("error")
+    .is_none());
     projects.archive(&a.id).unwrap();
-    assert_eq!(asset(address, &alice_token, &global_entry).await.status(), 404);
+    assert_eq!(
+        asset(address, &alice_token, &global_entry).await.status(),
+        404
+    );
     assert_eq!(asset(address, &alice_token, &a_entry).await.status(), 404);
-    assert!(rpc(&mut alice, SNAPSHOT, Value::Null).await.get("error").is_some());
+    assert!(rpc(&mut alice, SNAPSHOT, Value::Null)
+        .await
+        .get("error")
+        .is_some());
     tokens.revoke_device("bob-panel").unwrap();
-    assert_eq!(asset(address, &bob_token, &global_entry).await.status(), 404);
+    assert_eq!(
+        asset(address, &bob_token, &global_entry).await.status(),
+        404
+    );
     assert!(
         rpc(&mut bob, SNAPSHOT, Value::Null)
             .await
