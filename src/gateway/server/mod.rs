@@ -1097,6 +1097,7 @@ impl GatewayServer {
                     shared.trusted_proxy_ips.clone(),
                     shared.allow_insecure_remote,
                     shared.tls_enabled,
+                    self.panel_projects.clone(),
                 )
             }),
         ));

@@ -43,6 +43,16 @@ The first RPC run selected A successfully but returned only Global because the n
 
 The independent census target compiles the existing census, role/lane tables and source scanner directly; their `cfg(test)` helpers are absent from the regular library. It adds no production test shim. The monolithic Core test harness was not run. / 独立 census target 编译原有 guard 与配套源码，不添加生产测试入口；未运行 monolithic Core harness。
 
+## Task 3 — Shared HTTP context / 共用 HTTP 上下文
+
+Behavioral RED: real authenticated RPC discovery returned Project A, while its canonical HTTP asset returned `404` instead of `200`. / 真实 RPC 已返回 A，但同一身份的 canonical asset 仍返回 404，形成行为 RED。
+
+HTTP now receives the exact Gateway selector Arc, derives a strict verified actor from the validated device and current SecurityStore, and resolves once for declaration matching and immutable bytes. Existing transport/origin/bearer/wall/rate-limit and built-in delivery paths remain in place. / HTTP 接收同一个 selector Arc，使用已验证设备与当前 SecurityStore 建立 actor；一次 resolve 同时用于声明与 bytes，复用既有入口校验。
+
+The response-only `x-aleph-panel-project-generation` header fences host asset results. No request header, URL or query can select a project. Generation never replaces Core revision. / generation 仅在响应中供 host 丢弃过期结果；请求不能用 header、URL 或 query 选择项目，也不替代 Core revision。
+
+GREEN: real WebSocket + HTTP project target **1 passed / 0 failed**; existing production HTTP target **2 passed / 0 failed / 1 opt-in live fixture ignored**. The project target also proves A/B asset switching, cross-user isolation, absent workspace, live workspace rebinding with unchanged Core revision, roster removal, archive and device revocation. Regular-library build took 9m30s and emitted only the existing `panel_snapshot` warning. / 真实 RPC+HTTP 项目 target 1 通过；既有 HTTP target 2 通过、1 个 opt-in live fixture 尚未运行。换绑、撤销及既有 transport/Terminal/bytes/cache 验证通过；常规库构建 9m30s，仅既有 warning。
+
 ## Remaining / 剩余
 
-HTTP context, browser lifecycle, production Gateway/browser evidence and fresh whole-branch review remain open. The private selector tests do not establish runtime integration. / HTTP、browser、真实验收与整分支审查仍未完成；私有 selector 测试不证明 runtime 接线。
+Browser lifecycle, production Gateway/browser evidence and fresh whole-branch review remain open. Real Gateway RPC/HTTP project integration is now proven independently of private selector tests. / browser、新的真实浏览器证据与整分支审查仍未完成；RPC/HTTP 项目接线已由真实 Gateway 单独验证。

@@ -11,6 +11,8 @@ pub const PANEL_UI_CAPABILITY_SNAPSHOT_METHOD: &str = "panel.capabilities.snapsh
 
 /// Assign the authenticated device's server-owned Panel project selection.
 pub const PANEL_PROJECT_SELECT_METHOD: &str = "panel.project.select";
+/// Response metadata for host fencing; never accepted as request authorization.
+pub const PANEL_PROJECT_GENERATION_HEADER: &str = "x-aleph-panel-project-generation";
 
 /// Non-authorizing context metadata, independent of Core source revisions.
 #[derive(Serialize, Deserialize, Clone, Debug, Default, Eq, PartialEq)]
