@@ -236,6 +236,21 @@ impl MemoryRuntime {
         }
     }
 
+    pub(crate) fn retain_worker(&self, handle: JoinHandle<()>) {
+        self.tasks.retain(handle);
+        self.changed.notify_waiters();
+    }
+
+    pub(crate) fn worker_stop(&self) -> Result<tokio::sync::watch::Receiver<bool>, AlephError> {
+        self.inner
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .bundle
+            .as_ref()
+            .map(|bundle| bundle.subscribe_stop())
+            .ok_or_else(|| AlephError::other("memory bundle is unavailable"))
+    }
+
     pub fn capture(self: &Arc<Self>, reference: &Reference) -> Result<MemoryHandle, ResolveError> {
         let inner = self.inner.lock().unwrap_or_else(|error| error.into_inner());
         if reference.id != resource_id() || inner.status.state != MemoryState::Running {

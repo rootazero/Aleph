@@ -52,6 +52,10 @@ impl MemoryBundle {
             .ok_or_else(|| AlephError::other("memory services are not configured"))
     }
 
+    pub(super) fn subscribe_stop(&self) -> watch::Receiver<bool> {
+        self.stop.subscribe()
+    }
+
     pub(super) fn request_stop(&self) {
         self.stop.send_replace(true);
     }
