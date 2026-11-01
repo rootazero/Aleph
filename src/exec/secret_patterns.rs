@@ -12,7 +12,34 @@
 //! would make that decision silently instead of explicitly.
 
 use regex::Regex;
+use std::borrow::Cow;
 use std::sync::OnceLock;
+
+const PRIVATE_KEY_BEGIN: &str = r"-----BEGIN[A-Z ]*PRIVATE KEY-----";
+const PRIVATE_KEY_END: &str = r"-----END[A-Z ]*PRIVATE KEY-----";
+
+/// Redact a truncated PEM tail before complete blocks receive their replacement.
+pub(crate) fn mask_incomplete_private_key(text: &str) -> Cow<'_, str> {
+    static MARKERS: OnceLock<(Regex, Regex)> = OnceLock::new();
+    let markers = MARKERS.get_or_init(|| {
+        (
+            Regex::new(PRIVATE_KEY_BEGIN).unwrap(),
+            Regex::new(PRIVATE_KEY_END).unwrap(),
+        )
+    });
+    let mut cursor = 0;
+    while let Some(begin) = markers.0.find_at(text, cursor) {
+        if let Some(end) = markers.1.find_at(text, begin.end()) {
+            cursor = end.end();
+            continue;
+        }
+        return Cow::Owned(format!(
+            "{}-----BEGIN PRIVATE KEY----- ***REDACTED***",
+            &text[..begin.start()]
+        ));
+    }
+    Cow::Borrowed(text)
+}
 
 #[derive(Clone)]
 pub(crate) struct SecretPattern {
@@ -115,28 +142,8 @@ pub(crate) fn secret_masker_patterns() -> Vec<SecretPattern> {
                     replacement: "$1 ***REDACTED***",
                 },
                 SecretPattern {
-                    regex: Regex::new(r"-----BEGIN[A-Z ]*PRIVATE KEY-----[\s\S]*?-----END[A-Z ]*PRIVATE KEY-----").unwrap(),
+                    regex: Regex::new(&format!("{PRIVATE_KEY_BEGIN}[\\s\\S]*?{PRIVATE_KEY_END}")).unwrap(),
                     replacement: "-----BEGIN PRIVATE KEY-----\n***REDACTED***\n-----END PRIVATE KEY-----",
-                },
-                SecretPattern {
-                    // A key whose END marker is not in the text is the
-                    // REACHABLE case, not the exotic one: `mask_file_change`
-                    // masks the hunk lines, so an edit that touches only the
-                    // first lines of an existing key file ships the header
-                    // plus the first base64 lines of the body. A key body
-                    // continues past the text, so the only safe reading is
-                    // "from the BEGIN marker to the end of the text".
-                    //
-                    // The lookahead keeps this rule off a complete block: the
-                    // rule above already replaced it, and that replacement
-                    // contains the BEGIN marker again — matching here would
-                    // eat the rest of the document.
-                    //
-                    // The replacement is one line on purpose: a multi-line
-                    // replacement written back into a single hunk line would
-                    // make the diff's line counts lie.
-                    regex: Regex::new(r"-----BEGIN[A-Z ]*PRIVATE KEY-----(?![\s\S]*?-----END[A-Z ]*PRIVATE KEY-----)[\s\S]*").unwrap(),
-                    replacement: "-----BEGIN PRIVATE KEY----- ***REDACTED***",
                 },
                 SecretPattern {
                     // A URL credential cannot contain whitespace, so the
@@ -228,7 +235,7 @@ pub(crate) fn leak_detector_assets() -> LeakDetectorAssets {
                 },
                 LeakPatternDef {
                     name: "private_key",
-                    regex: Regex::new(r"-----BEGIN[A-Z ]*PRIVATE KEY-----").unwrap(),
+                    regex: Regex::new(PRIVATE_KEY_BEGIN).unwrap(),
                     action: super::leak_detector::LeakAction::Block,
                 },
                 LeakPatternDef {
