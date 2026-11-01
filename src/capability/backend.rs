@@ -60,7 +60,11 @@ impl ToolBackendAdapter {
 
     /// Whether a descriptor falls inside `scope`, including its behavior facet.
     pub(super) fn descriptor_in_scope(descriptor: &CapabilityDescriptor, scope: &Scope) -> bool {
-        Self::in_scope(&descriptor.id, scope)
+        scope.kind.is_none_or(|kind| descriptor.kind == kind)
+            && scope
+                .namespace
+                .as_ref()
+                .is_none_or(|namespace| descriptor.id.namespace == *namespace)
             && scope.facet.is_none_or(|facet| descriptor.supports(facet))
     }
 

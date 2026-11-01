@@ -17,7 +17,7 @@ use crate::sandbox::exec_approval::{denial_ledger, grants, ApprovalAction, Grant
 use crate::session::events::ToolOutput;
 use crate::sync_primitives::Arc;
 use crate::tools::descriptor::{ReplayPolicy, ToolCallIdentity, ToolCapabilityDescriptor};
-use crate::tools::registry::{CanonicalEntryLease, RegistryEntry};
+use crate::tools::registry::{CanonicalEntryLease, RegistryEntry, ToolHandlerRegistry};
 use crate::tools::runtime::LoopTool;
 use crate::tools::service::{RefusedBy, ToolError};
 
@@ -650,7 +650,7 @@ impl ScopedToolService {
             });
         }
         *capture = Some(effective_input.clone());
-        let admission = GateAdmissionToken::new(approved_by_operator_gate);
+        let admission = Arc::new(GateAdmissionToken::new(approved_by_operator_gate));
 
         let mut result = match tokio::time::timeout(
             budget,
@@ -661,7 +661,7 @@ impl ScopedToolService {
                 cancel,
                 deadline,
                 descriptor,
-                &admission,
+                admission,
             ),
         )
         .await
@@ -929,7 +929,7 @@ impl ScopedToolService {
         cancel: CancellationToken,
         deadline: std::time::Instant,
         descriptor: Option<&ToolCapabilityDescriptor>,
-        admission: &'call GateAdmissionToken,
+        admission: Arc<GateAdmissionToken>,
     ) -> Result<ToolOutput, ToolError> {
         match routing {
             RoutingTarget::Missing => Err(ToolError::NotFound {
@@ -978,7 +978,7 @@ impl ScopedToolService {
                         attempt_name.clone(),
                         attempt_input.clone(),
                         cancel.clone(),
-                        admission,
+                        admission.clone(),
                     )
                 };
                 let raw_outcome =
@@ -1035,7 +1035,7 @@ impl ScopedToolService {
         name: String,
         input: Value,
         cancel: CancellationToken,
-        admission: &'call GateAdmissionToken,
+        admission: Arc<GateAdmissionToken>,
     ) -> Result<ToolOutput, ToolError> {
         if matches!(&target, RoutingTarget::Inner)
             && self
@@ -1052,7 +1052,7 @@ impl ScopedToolService {
                 reason: "plugin activation requires an exact canonical admission".into(),
             });
         }
-        if let RoutingTarget::Canonical(entry, lease, _) = &target {
+        if let RoutingTarget::Canonical(entry, lease, backend_lease) = &target {
             self.validate_plugin_lease(lease)?;
             let call_id = crate::approval::current_tool_call_id().ok_or_else(|| {
                 ToolError::PermissionDenied {
@@ -1064,8 +1064,78 @@ impl ScopedToolService {
             let proof_input = input.clone();
             let proof_name = name.clone();
             let actor = crate::identity::current_actor();
+            let facade =
+                self.canonical_facade
+                    .as_ref()
+                    .ok_or_else(|| ToolError::PermissionDenied {
+                        name: name.clone(),
+                        reason: "canonical capability facade is not mounted".into(),
+                    })?;
+            let operation = facade.admit_memory(backend_lease).map_err(|error| {
+                ToolError::PermissionDenied {
+                    name: name.clone(),
+                    reason: format!("canonical memory admission is stale: {error:?}"),
+                }
+            })?;
+            if let Some(operation) = operation {
+                let entry = entry.clone();
+                let lease = lease.clone();
+                let backend_lease = backend_lease.clone();
+                let facade = facade.clone();
+                let registry = self.canonical_registry.clone();
+                let recovery = crate::tools::result_processing::dispatch_recovery_tools()
+                    .map_or(self.recovery_tools(), |outer| {
+                        outer.intersect(self.recovery_tools())
+                    });
+                let (sender, receiver) = tokio::sync::oneshot::channel();
+                let owned = super::memory_context::carry(async move {
+                    let result = crate::tools::dispatch_verdict::with_gate_admission(
+                        &admission,
+                        call_id,
+                        proof_name,
+                        identity,
+                        proof_input,
+                        actor,
+                        async move {
+                            Self::validate_plugin_capture(registry.as_deref(), &lease)?;
+                            let result = crate::tools::result_processing::with_recovery_tools(
+                                recovery,
+                                crate::tools::adapters::mcp_adapter::invoke_handler(
+                                    &entry.handler,
+                                    &entry.descriptor,
+                                    input,
+                                    cancel,
+                                ),
+                            )
+                            .await;
+                            Self::validate_plugin_capture(registry.as_deref(), &lease)?;
+                            facade
+                                .validate_completion(&backend_lease)
+                                .map_err(|error| ToolError::PermissionDenied {
+                                    name: entry.descriptor.name.clone(),
+                                    reason: format!(
+                                        "canonical capability lease became stale: {error:?}"
+                                    ),
+                                })?;
+                            result
+                        },
+                    )
+                    .await;
+                    let _ = sender.send(result);
+                });
+                operation
+                    .spawn(owned)
+                    .map_err(|error| ToolError::Execution {
+                        name: name.clone(),
+                        cause: error.to_string(),
+                    })?;
+                return receiver.await.map_err(|_| ToolError::Execution {
+                    name,
+                    cause: "owned memory handler ended without a result".into(),
+                })?;
+            }
             crate::tools::dispatch_verdict::with_gate_admission(
-                admission,
+                &admission,
                 call_id,
                 proof_name,
                 identity,
@@ -1082,11 +1152,15 @@ impl ScopedToolService {
     /// Legacy builtin/MCP/static captures keep their cached-call semantics.
     /// A Ready plugin publication must still be the exact producer lease.
     fn validate_plugin_lease(&self, lease: &CanonicalEntryLease) -> Result<(), ToolError> {
+        Self::validate_plugin_capture(self.canonical_registry.as_deref(), lease)
+    }
+
+    fn validate_plugin_capture(
+        registry: Option<&ToolHandlerRegistry>,
+        lease: &CanonicalEntryLease,
+    ) -> Result<(), ToolError> {
         if lease.is_plugin_publication()
-            && !self
-                .canonical_registry
-                .as_ref()
-                .is_some_and(|registry| lease.validate(&registry.canonical_publication()))
+            && !registry.is_some_and(|registry| lease.validate(&registry.canonical_publication()))
         {
             return Err(ToolError::PermissionDenied {
                 name: lease.entry().descriptor.name.clone(),

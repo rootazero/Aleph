@@ -165,20 +165,63 @@ impl MemoryRuntime {
         })
     }
 
-    fn capture_binding(&self, reference: &Reference) -> Result<CapturedBinding, ResolveError> {
-        self.ownership
-            .register_if_absent(
-                reference.id.clone(),
-                OwnerRef::Runtime,
-                LifetimeScope::Runtime,
-                reference.visibility.clone(),
-            )
-            .map_err(|error| match error {
-                RegisterError::Revoked => ResolveError::Revoked,
-                RegisterError::Disposed | RegisterError::GenerationExhausted => {
-                    ResolveError::StaleOwner
-                }
-            })?;
+    pub(crate) fn is_backed_by_tree(&self, tree: &Arc<OwnershipTree>) -> bool {
+        Arc::ptr_eq(&self.ownership, tree)
+    }
+
+    pub(crate) fn descriptor(
+        &self,
+        visibility: &VisibilityScope,
+    ) -> Result<crate::capability::descriptor::CapabilityDescriptor, ResolveError> {
+        use crate::capability::descriptor::{
+            CapabilityDescriptor, CapabilityFacet, CapabilityFacets, CapabilityKind,
+            CapabilityRevision, ProjectionMetadata, SchemaRef,
+        };
+        use sha2::{Digest, Sha256};
+        self.capture_binding(&Reference {
+            id: resource_id(),
+            visibility: visibility.clone(),
+        })?;
+        let schema = serde_json::to_value(schemars::schema_for!(MemoryStatus))
+            .map_err(|_| ResolveError::Unknown)?;
+        let mut canonical = Vec::new();
+        crate::tools::descriptor::canonicalize_json(&schema, &mut canonical);
+        Ok(CapabilityDescriptor {
+            id: resource_id(),
+            kind: CapabilityKind::Resource,
+            schema: SchemaRef {
+                version: 1,
+                fingerprint: Sha256::digest(canonical).into(),
+            },
+            revision: CapabilityRevision(0),
+            lifetime: LifetimeScope::Runtime,
+            visibility: visibility.clone(),
+            owner: OwnerRef::Runtime,
+            services: Vec::new(),
+            metadata: ProjectionMetadata::default(),
+            facets: CapabilityFacets::new().with(CapabilityFacet::ProviderLifecycle),
+        })
+    }
+
+    pub(crate) fn capture_binding(
+        &self,
+        reference: &Reference,
+    ) -> Result<CapturedBinding, ResolveError> {
+        if reference.visibility == VisibilityScope::default() {
+            self.ownership
+                .register_if_absent(
+                    reference.id.clone(),
+                    OwnerRef::Runtime,
+                    LifetimeScope::Runtime,
+                    reference.visibility.clone(),
+                )
+                .map_err(|error| match error {
+                    RegisterError::Revoked => ResolveError::Revoked,
+                    RegisterError::Disposed | RegisterError::GenerationExhausted => {
+                        ResolveError::StaleOwner
+                    }
+                })?;
+        }
         let binding = CapturedBinding {
             capability: reference.id.clone(),
             visibility: reference.visibility.clone(),

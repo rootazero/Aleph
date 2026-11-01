@@ -34,10 +34,10 @@ impl MemoryHandle {
 
     /// The caller adds its canonical Tool gate and captured bindings here.
     /// The source gate stays held until that synchronous commit returns.
-    pub(crate) fn with_admission(
+    pub(crate) fn with_admission<R>(
         &self,
-        commit: impl FnOnce(&mut MemoryAdmission<'_>) -> Result<MemoryOperation, ResolveError>,
-    ) -> Result<MemoryOperation, ResolveError> {
+        commit: impl FnOnce(&mut MemoryAdmission<'_>) -> Result<R, ResolveError>,
+    ) -> Result<R, ResolveError> {
         let runtime = self.runtime.upgrade().ok_or(ResolveError::Unknown)?;
         let mut inner = runtime
             .inner
