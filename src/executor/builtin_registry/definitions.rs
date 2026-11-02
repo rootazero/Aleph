@@ -3564,7 +3564,33 @@ mod tests {
     /// measurement (the same `unconditional_registry_map()` and the same
     /// `schema.to_string().len()` the guard sums), so the ceiling and the
     /// per-tool ledger are one fact again.
-    const REGISTRY_SCHEMA_CEILING_BYTES: usize = 103_865;
+    ///
+    /// 2026-11-01 (measured, lowered from 103_865): 104,093 -> 103,437 B
+    /// (-656) across 59 tools. The measurement was already over the ceiling
+    /// when this round started, and the delta had two independent causes
+    /// that a total alone could not separate:
+    /// * `local_voice` 332 -> 0 — its registration now gates on the live
+    ///   Config handle its handler reads, the same rule the sibling
+    ///   `config_audit` tool follows, so the unconditional map no longer
+    ///   reaches it at all. Its row is gone from the table below rather
+    ///   than zeroed: the table records what this measurement SAW, and
+    ///   this measurement no longer sees the tool. Its production wiring
+    ///   is pinned by `local_voice_registers_with_a_schema_when_the_config_handle_is_live`
+    ///   in `builder/optional_tools.rs`.
+    /// * `bash` 2,230 -> 2,182 and `code_exec` 2,128 -> 2,080 (-48 each) —
+    ///   the `timeout_seconds` doc comment carried a second paragraph
+    ///   explaining the serde/schemars alias interaction. Schemars renders
+    ///   a doc comment into the parameter schema's `description`, so that
+    ///   paragraph shipped to the model on every request while explaining
+    ///   a Rust-side detail no model can act on. It is now a plain `//`
+    ///   comment beside the field, which the schema does not render —
+    ///   the same cut the 2026-08-28 round made for `loop_graph`.
+    ///
+    /// Arithmetic: 104,093 - 656 = 103,437. The ceiling is set flush
+    /// against the measurement, not above it: headroom is not bookkeeping,
+    /// it is a pre-authorised allowance the next author spends without an
+    /// edit here.
+    const REGISTRY_SCHEMA_CEILING_BYTES: usize = 103_437;
 
     /// That same measurement, decomposed per tool.
     ///
@@ -3598,7 +3624,7 @@ mod tests {
         ("artifact_publish", 841),
         ("ask_user", 2678),
         ("automation", 1244),
-        ("bash", 2230),
+        ("bash", 2182),
         ("call_status", 278),
         ("cancel_output", 275),
         ("channel_directory", 627),
@@ -3606,7 +3632,7 @@ mod tests {
         ("channel_outbox", 1519),
         ("channel_pairing", 743),
         ("code_check", 837),
-        ("code_exec", 2128),
+        ("code_exec", 2080),
         ("context_plugin", 638),
         ("ctx_search", 548),
         ("desktop", 20273),
@@ -3622,7 +3648,6 @@ mod tests {
         ("hooks_manage", 2151),
         ("initiate_call", 288),
         ("list_models", 597),
-        ("local_voice", 332),
         ("loop", 2998),
         ("loop_graph", 8235),
         ("media", 1045),
@@ -3834,9 +3859,10 @@ mod tests {
     /// the unconditional map because their registration gates on a live
     /// dependency (generation registry, ACP manager). The channel and voice
     /// tools (`channel_directory` / `channel_message` / `channel_outbox` /
-    /// `voice_mode_set` / `local_voice`) are registered unconditionally and
-    /// DO carry schemas — the schema path was already honest for them; only
-    /// the description measurement was blind.
+    /// `voice_mode_set`) are registered unconditionally and DO carry schemas —
+    /// the schema path was already honest for them; only the description
+    /// measurement was blind. (`local_voice` was in that group then; it left
+    /// it on 2026-11-01, below.)
     ///
     /// 2026-08-17: 130 (+1: `canvas`, whose registration gates on the
     /// gateway's `CanvasStore` — in a wired deployment it carries a schema;
@@ -3898,10 +3924,17 @@ mod tests {
     /// tool loop, and the production wiring is pinned by the same
     /// `dispatchable.rs` census plus the nine-site registration ledger the
     /// C3 plan's Global Constraints enumerate.
-    /// 2026-11-02: 134 -> 135 for `local_voice` — class (b): its actual
-    /// handler needs the live Config handle. The optional-tools test
-    /// `local_voice_requires_the_config_handle` pins both refusal without
-    /// that handle and a real parameter schema when the handle is supplied.
+    ///
+    /// 2026-11-01: 134 -> 135 for `local_voice` — class (b), same shape as
+    /// the browser tools above: its handler reads the live Config handle, so
+    /// its registration now gates on that handle being present (the same
+    /// rule the sibling `config_audit` tool already followed) and the
+    /// unconditional map cannot reach it. The production wiring is pinned by
+    /// `local_voice_registers_with_a_schema_when_the_config_handle_is_live`
+    /// in `builder/optional_tools.rs`, which asserts the schema IS present
+    /// once the handle is wired — the class (b) fact that this count alone
+    /// cannot show.
+    ///
     /// 2026-11-02: 135 -> 138 for `memory_runtime_status`,
     /// `memory_runtime_start`, and `memory_runtime_stop` — class (b): they
     /// require the canonical runtime source. The live registry lifecycle test

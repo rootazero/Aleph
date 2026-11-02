@@ -116,7 +116,7 @@ export const MONITOR_PORT_MIN = 1024; // == qa_root.rs MONITOR_PORT_MIN
 export const MONITOR_PORT_MAX = 65535;
 
 /** Harness -> page fixed commands (snake_case), == `ACTIONS` in QA_MONITOR_JS. */
-export const ACTIONS = Object.freeze(["ask_pair", "submit_ticket", "reload", "inspect", "reveal_browser"]);
+export const ACTIONS = Object.freeze(["ask_pair", "submit_ticket", "reload", "inspect", "reveal_browser", "reveal_projects", "select_project_a", "select_project_b", "select_global", "open_project_a", "open_project_b"]);
 /** `command_ack.action`: the five actions or `refused` (envelope rejected; always ok:false). */
 export const ACK_ACTIONS = Object.freeze([...ACTIONS, "refused"]);
 /** Fixed boolean keys of `dom_state`, == `inspect()` in QA_MONITOR_JS. */

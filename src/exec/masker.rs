@@ -596,6 +596,31 @@ MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQ...
         assert!(output.contains("***REDACTED***"), "{output}");
     }
 
+    /// The other half of the same rule, and the one a truncated-key rule
+    /// breaks when it is written wrong: the text AFTER a COMPLETE key must
+    /// survive.
+    ///
+    /// The two rules run in order, so by the time the truncated-key rule
+    /// runs, every complete block is already a redacted frame — and that
+    /// frame carries a BEGIN marker of its own. A truncated-key rule that
+    /// matches on the marker alone therefore re-matches that frame and eats
+    /// the rest of the document. This is the check that keeps the two rules
+    /// apart, so it is pinned here and not only implied by the frame test.
+    #[test]
+    fn a_complete_private_key_leaves_the_text_after_it_alone() {
+        let masker = SecretMasker::new();
+        let input = "-----BEGIN RSA PRIVATE KEY-----\nMIIEpAIBAAKCAQEA0Z3VS5JJcds3xfn/ygWyF8DHGP...\n-----END RSA PRIVATE KEY-----\nkeep this prose";
+        let output = masker.mask(input);
+        assert!(
+            !output.contains("MIIEpAIBAAKCAQEA"),
+            "the key body must go: {output}"
+        );
+        assert!(
+            output.contains("keep this prose"),
+            "the text after a complete key must survive: {output}"
+        );
+    }
+
     // ========================================================================
     // `mask_presentation` — the per-line pass and the multi-line degrade
     // ========================================================================

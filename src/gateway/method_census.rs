@@ -301,6 +301,7 @@ pub(crate) mod tests {
         ("memory_config.get", Class::Admin),
         ("memory_config.update", Class::Admin),
         ("panel.capabilities.snapshot", Class::Open),
+        ("panel.project.select", Class::Open),
         ("plugin.install", Class::Admin),
         ("plugin.marketplace.add", Class::Admin),
         ("plugin.marketplace.browse", Class::Admin),

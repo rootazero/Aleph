@@ -1091,6 +1091,7 @@ mod tests {
             role: role.map(str::to_string),
             user: user.map(str::to_string),
             verified_user: v.map(str::to_string),
+            device_id: None,
         }
     }
 

@@ -9,7 +9,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 const control = resolve(process.env.PANEL_LIVE_CONTROL || '.panel-live/control');
 const { chromium } = await import(process.env.PANEL_PLAYWRIGHT_MODULE
     ? pathToFileURL(resolve(process.env.PANEL_PLAYWRIGHT_MODULE)).href : 'playwright');
-const { origin, token } = JSON.parse(await readFile(join(control, 'connection.json'), 'utf8'));
+const { origin, token, other_token, project_a, project_b } = JSON.parse(await readFile(join(control, 'connection.json'), 'utf8'));
 const browser = await chromium.launch({ headless: true, ...(process.env.PANEL_BROWSER_EXECUTABLE ? { executablePath: process.env.PANEL_BROWSER_EXECUTABLE } : {}) });
 const context = await browser.newContext({ viewport: { width: 1440, height: 1000 }, locale: 'en-US' });
 await context.addInitScript(({ token }) => {
@@ -38,6 +38,8 @@ page.on('websocket', socket => socket.on('framereceived', ({ payload }) => {
         if (Array.isArray(value.result?.declarations)) snapshots.push({
             revision: value.result.revision, count: value.result.declarations.length,
             versions: value.result.declarations.map(row => row.plugin_version),
+            plugins: value.result.declarations.map(row => row.descriptor.key.plugin_id).sort(),
+            project_context: value.result.project_context,
         });
     } catch { /* Non-JSON frames do not contribute evidence. */ }
 }));
@@ -60,16 +62,28 @@ const visit = async path => {
     assert(response.headers()['content-security-policy']?.includes('blob:'), 'generated host must use the real Gateway security headers');
     await wait(() => snapshots.length > count, 'real authenticated snapshot RPC did not arrive');
 };
-const navigate = async path => {
-    // Use a real browser history navigation. Anchor transitions can keep the
-    // address bar pending on unrelated dashboard resources in this fixture.
-    await page.evaluate(path => {
+const navigateIn = async (target, path) => {
+    // Use the production router without reloading the WASM owner.
+    await target.evaluate(path => {
         history.pushState(null, '', path);
         window.dispatchEvent(new PopStateEvent('popstate'));
     }, path);
-    await page.waitForFunction(path => window.location.pathname === path, path);
+    await target.waitForFunction(path => window.location.pathname === path, path);
 };
-const mounted = () => page.waitForFunction(() => document.querySelector('[data-panel-content-root]')?.textContent === 'Live Gateway community content');
+const navigate = path => navigateIn(page, path);
+const mounted = (text = 'Live Gateway community content') => page.waitForFunction(text => document.querySelector('[data-panel-content-root]')?.textContent === text, text);
+const selectProject = async (name, id) => {
+    await navigate('/projects');
+    const count = snapshots.length;
+    await page.getByRole('button', { name: new RegExp(`Fixture Project ${name}`) }).click();
+    await wait(() => snapshots.length > count && snapshots.at(-1).project_context?.project_id === id, `project ${name} selection was not admitted`);
+};
+const globalProject = async () => {
+    await navigate('/projects');
+    const count = snapshots.length;
+    await page.locator('[data-panel-global]').click();
+    await wait(() => snapshots.length > count && snapshots.at(-1).project_context?.project_id === null, 'explicit Global selection did not complete');
+};
 const counters = () => page.evaluate(() => ({
     imports: window.__livePanelImports || 0, mounts: window.__livePanelMounts || 0,
     unmounts: window.__livePanelUnmounts || 0, duplicates: window.__livePanelDuplicateCleanup || 0,
@@ -106,6 +120,107 @@ try {
             finally { window.__fixtureLoadsFinished++; }
         };
     });
+    // The real project controls must keep discovery passive and replace views
+    // even though A and B have the same Core publication revision.
+    const passiveRequests = requests.length;
+    await selectProject('A', project_a);
+    const revisionA = snapshots.at(-1).revision;
+    assert.deepEqual(snapshots.at(-1).plugins, ['community-live', 'project-a']);
+    assert.equal(requests.length, passiveRequests);
+    await navigate('/panel/project-a/overview');
+    await mounted('Live Gateway project A content');
+    const otherAsset = await context.request.get(origin + '/tabs/project-a/1.0.0/ui/panel.mjs', { headers: { Authorization: `Bearer ${other_token}` } });
+    assert.equal(otherAsset.status(), 404);
+    const foreign = await page.evaluate(async ({ origin, token, project }) => {
+        const socket = new WebSocket(origin.replace('http:', 'ws:') + '/ws');
+        await new Promise((resolve, reject) => { socket.onopen = resolve; socket.onerror = reject; });
+        let id = 0;
+        const rpc = (method, params) => new Promise(resolve => {
+            const requestId = ++id;
+            const listener = event => {
+                const response = JSON.parse(event.data);
+                if (response.id !== requestId) return;
+                socket.removeEventListener('message', listener);
+                resolve(response);
+            };
+            socket.addEventListener('message', listener);
+            socket.send(JSON.stringify({ jsonrpc: '2.0', id: requestId, method, params }));
+        });
+        const connect = await rpc('connect', { device_token: token });
+        const claim = await rpc('panel.project.select', { project_id: project, idempotency_key: 'foreign-project' });
+        const snapshot = await rpc('panel.capabilities.snapshot', null);
+        socket.close();
+        return { authorized: connect.result?.authorized, error: claim.error?.code, plugins: snapshot.result?.declarations.map(row => row.descriptor.key.plugin_id) };
+    }, { origin, token: other_token, project: project_a });
+    assert.equal(foreign.authorized, true);
+    assert.equal(typeof foreign.error, 'number');
+    assert.deepEqual(foreign.plugins, ['community-live']);
+    report.cross_user_claim_and_asset_refused = true;
+
+    await navigate('/projects');
+    let releaseA;
+    const holdA = new Promise(resolve => { releaseA = resolve; });
+    let waitingA = false;
+    await page.route('**/tabs/project-a/**', async route => { waitingA = true; await holdA; await route.continue(); });
+    await navigate('/panel/project-a/overview');
+    await wait(() => waitingA, 'project A asset did not reach the real fetch boundary');
+    await selectProject('B', project_b);
+    assert.equal(snapshots.at(-1).revision, revisionA);
+    assert.deepEqual(snapshots.at(-1).plugins, ['community-live', 'project-b']);
+    await navigate('/panel/project-b/overview');
+    await mounted('Live Gateway project B content');
+    const beforeA = await counters();
+    const finishedA = await page.evaluate(() => window.__fixtureLoadsFinished);
+    releaseA();
+    await page.waitForFunction(before => window.__fixtureLoadsFinished > before, finishedA);
+    assert.deepEqual(await counters(), beforeA, 'late A must not import, mount or clear B');
+    await mounted('Live Gateway project B content');
+    await page.unroute('**/tabs/project-a/**');
+    report.project_switch_same_revision_and_late_result = true;
+
+    await selectProject('A', project_a);
+    await navigate('/panel/project-a/overview');
+    await mounted('Live Gateway project A content');
+    const second = await context.newPage();
+    let secondProject;
+    second.on('websocket', socket => socket.on('framereceived', ({ payload }) => {
+        try { const value = JSON.parse(String(payload)); if (value.result?.project_context) secondProject = value.result.project_context.project_id; }
+        catch { /* Ignore unrelated frames. */ }
+    }));
+    await second.goto(origin + '/projects', { waitUntil: 'domcontentloaded' });
+    await wait(() => secondProject === project_a, 'new tab must read the existing server selection without clearing it');
+    await second.getByRole('button', { name: /Fixture Project B/ }).click();
+    await wait(() => secondProject === project_b, 'second tab did not switch the shared device selection');
+    await mounted('Live Gateway project A content'); // Idle revocation is intentionally not pushed.
+    await navigate('/panel/');
+    const beforeCrossTab = await counters();
+    const finishedCrossTab = await page.evaluate(() => window.__fixtureLoadsFinished);
+    await navigate('/panel/project-a/overview');
+    await page.waitForFunction(before => window.__fixtureLoadsFinished > before, finishedCrossTab);
+    assert.deepEqual(await counters(), beforeCrossTab);
+    assert.equal(await page.locator('[data-panel-content-root]').count(), 0);
+    await second.close();
+    report.cross_tab_context_observed_at_asset_boundary = true;
+
+    await globalProject();
+    assert.deepEqual(snapshots.at(-1).plugins, ['community-live']);
+    await selectProject('A', project_a);
+    await navigate('/panel/project-a/overview');
+    await mounted('Live Gateway project A content');
+    await command('archive-project-a');
+    await navigate('/panel/');
+    const beforeArchive = await counters();
+    const finishedArchive = await page.evaluate(() => window.__fixtureLoadsFinished);
+    await navigate('/panel/project-a/overview');
+    await page.waitForFunction(before => window.__fixtureLoadsFinished > before, finishedArchive);
+    assert.deepEqual(await counters(), beforeArchive);
+    assert.equal(await page.locator('[data-panel-content-root]').count(), 0);
+    const noFallback = await context.request.get(origin + '/tabs/community-live/1.0.0/ui/panel.mjs', { headers: { Authorization: `Bearer ${token}` } });
+    assert.equal(noFallback.status(), 404, 'an archived explicit claim must refuse even a Global asset');
+    await globalProject();
+    assert.deepEqual(snapshots.at(-1).plugins, ['community-live']);
+    report.project_archive_refused_without_global_fallback = true;
+
     // Delay delivery of a real authenticated asset request, never its bytes or RPC.
     let release;
     const held = new Promise(resolve => { release = resolve; });
@@ -119,8 +234,9 @@ try {
         for (const socket of window.__fixtureSockets) socket.close();
     });
     await page.waitForFunction(() => !document.querySelector('[data-panel-content-root]'));
+    const beforeDisconnectLoads = await page.evaluate(() => window.__fixtureLoadsFinished);
     release();
-    await page.waitForFunction(() => window.__fixtureLoadsFinished === 1);
+    await page.waitForFunction(before => window.__fixtureLoadsFinished > before, beforeDisconnectLoads);
     assert.deepEqual(await counters(), before, 'stale completion must not import or mount');
     await page.unroute('**/tabs/**');
     report.disconnect_late_result_fenced = true;
@@ -149,8 +265,10 @@ try {
     await command('replace');
     await visit('/panel/');
     await command('revoke');
+    const revokedResponse = page.waitForResponse(response => new URL(response.url()).pathname.startsWith('/tabs/'));
     await navigate('/panel/community-live/overview');
-    await page.waitForFunction(() => document.querySelector('[data-panel-shell] [role="status"]')?.textContent.includes('AssetFetchFailed'));
+    assert.equal((await revokedResponse).status(), 404);
+    await page.waitForFunction(() => !document.querySelector('[data-panel-content-root]') && !document.querySelector('[data-panel-shell]'));
     assert.equal((await counters()).imports, 0);
     report.live_device_revocation_refused = true;
     await page.screenshot({ path: join(control, 'browser.png') });

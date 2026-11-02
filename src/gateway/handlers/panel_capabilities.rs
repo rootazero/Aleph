@@ -1,7 +1,14 @@
-use aleph_protocol::panel::{PanelUiCapabilitySnapshot, PANEL_UI_CAPABILITY_SNAPSHOT_METHOD};
+use aleph_protocol::panel::{
+    PanelUiCapabilitySnapshot, PanelUiContextSnapshot, PANEL_PROJECT_SELECT_METHOD,
+    PANEL_UI_CAPABILITY_SNAPSHOT_METHOD,
+};
+use serde::Deserialize;
 
 use crate::gateway::handlers::plugins::get_extension_manager;
-use crate::gateway::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR};
+use crate::gateway::panel_project_context::PanelRequestContext;
+use crate::gateway::protocol::{
+    JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR, PERMISSION_DENIED,
+};
 
 /// Return the canonical Panel capability snapshot in the existing JSON-RPC envelope.
 pub fn snapshot_response(
@@ -20,11 +27,87 @@ pub fn snapshot_response(
 
 /// Read the canonical snapshot once and expose it through the existing `/ws` RPC plane.
 pub async fn handle(request: JsonRpcRequest) -> JsonRpcResponse {
+    if !valid_snapshot_params(&request) {
+        return denied(request);
+    }
     let manager = match get_extension_manager() {
         Ok(manager) => manager,
         Err(response) => return response,
     };
     snapshot_response(request, manager.panel_ui_capability_snapshot())
+}
+
+/// Selection requires explicit, nullable project_id; omission cannot mean clear.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SelectParams {
+    #[serde(deserialize_with = "Option::deserialize")]
+    project_id: Option<String>,
+    #[serde(rename = "idempotency_key")]
+    _idempotency_key: Option<String>,
+}
+
+pub(crate) fn is_context_method(method: &str) -> bool {
+    matches!(
+        method,
+        PANEL_PROJECT_SELECT_METHOD | PANEL_UI_CAPABILITY_SNAPSHOT_METHOD
+    )
+}
+
+fn denied(request: JsonRpcRequest) -> JsonRpcResponse {
+    JsonRpcResponse::error(request.id, PERMISSION_DENIED, "denied")
+}
+
+/// Request-only registries cannot manufacture authenticated device selection.
+pub async fn handle_select(request: JsonRpcRequest) -> JsonRpcResponse {
+    denied(request)
+}
+
+pub(crate) async fn handle_with_context(
+    request: JsonRpcRequest,
+    context: &PanelRequestContext,
+) -> JsonRpcResponse {
+    if request.method == PANEL_PROJECT_SELECT_METHOD {
+        let Ok(params) = serde_json::from_value::<SelectParams>(
+            request.params.clone().unwrap_or(serde_json::Value::Null),
+        ) else {
+            return denied(request);
+        };
+        return match context.selector.select(&context.caller, params.project_id) {
+            Ok(selection) => JsonRpcResponse::success(request.id, serde_json::json!(selection)),
+            Err(_) => denied(request),
+        };
+    }
+    if !valid_snapshot_params(&request) {
+        return denied(request);
+    }
+    let Ok(resolved) = context.selector.resolve(&context.caller) else {
+        return denied(request);
+    };
+    let manager = match get_extension_manager() {
+        Ok(manager) => manager,
+        Err(response) => return response,
+    };
+    let snapshot = PanelUiContextSnapshot {
+        snapshot: manager.panel_ui_capability_snapshot_for(&resolved.visibility),
+        project_context: resolved.selection,
+    };
+    match serde_json::to_value(snapshot) {
+        Ok(result) => JsonRpcResponse::success(request.id, result),
+        Err(_) => JsonRpcResponse::error(
+            request.id,
+            INTERNAL_ERROR,
+            "Panel snapshot serialization failed",
+        ),
+    }
+}
+
+fn valid_snapshot_params(request: &JsonRpcRequest) -> bool {
+    match request.params.as_ref() {
+        None | Some(serde_json::Value::Null) => true,
+        Some(serde_json::Value::Object(params)) => params.is_empty(),
+        _ => false,
+    }
 }
 
 #[cfg(test)]

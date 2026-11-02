@@ -2304,6 +2304,7 @@
     "sidebar_empty": "No projects yet — use + in the top right to create one",
     "sidebar_name_placeholder": "Project name",
     "sidebar_new": "New project",
+    "panel_global": "Global panels",
     "tab_chat": "Group chat",
     "tab_kanban": "Kanban",
     "tab_memory": "Memory",

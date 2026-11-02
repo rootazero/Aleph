@@ -133,9 +133,18 @@ pub struct CodeExecArgs {
     /// Must live under the session workspace — paths outside are denied.
     #[serde(default)]
     pub working_dir: Option<String>,
+    // The wire name is `timeout` — the spelling the description teaches —
+    // because schemars is blind to serde aliases, so a schema naming
+    // `timeout_seconds` would contradict the prose the model reads. Serde
+    // keeps accepting the canonical `timeout_seconds` spelling too, so saved
+    // calls written against either name still parse.
+    //
+    // A plain comment, not a doc comment: schemars renders doc comments into
+    // the parameter schema's `description`, and that text ships to the model
+    // on every request. This rationale is for the maintainer of this file,
+    // not for the model — the model needs the field NAME, which the rename
+    // below provides, and nothing about serde aliases.
     /// Timeout in seconds (optional, defaults to 60).
-    // Keep the schema spelling aligned with the tool description: schemars ignores
-    // serde aliases. Saved calls using either wire spelling still deserialize.
     #[serde(default, alias = "timeout")]
     #[schemars(rename = "timeout")]
     pub timeout_seconds: Option<u64>,

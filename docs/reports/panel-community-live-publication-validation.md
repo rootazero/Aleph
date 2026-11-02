@@ -1,12 +1,12 @@
 # Community Panel production publication validation / 社区 Panel production publication 验证
 
-Status: production-router and real Gateway/Chrome acceptance passed. The generated host uses `panel-modular` without spike/legacy features. This report separates the production ingress from the retained deterministic fixture. / 状态：production router 与真实 Gateway/Chrome 验收通过；新 host 使用非 spike/legacy 的 `panel-modular`，本报告将其与 deterministic fixture 分开记录。
+Status: authenticated project-context RPC/HTTP, native regression, fresh WASM/glue and the extended real Gateway/Chrome acceptance all passed. / 状态：项目 RPC/HTTP、原生回归、fresh WASM/glue 与扩展真实 Gateway/Chrome 验收均通过。
 
 ## Ownership and request proof / 归属与请求证明
 
-Core remains the only community declaration, admission, trust, bytes, scope and revision authority. The HTTP module has no community publication map, filesystem producer, manifest parser or revision counter. Its narrow state contains live credential validation, transport/origin policy, a private rate limiter and a current Core accessor. Existing public built-in build artifacts remain under `ControlPlaneAssets`: an uncredentialed request for an exact existing safe public asset delegates to that original owner. It cannot read plugin/Core bytes; authenticated requests always use Core, and unknown community addresses never become SPA HTML.
+Core remains the only community declaration, admission, trust, bytes, scope and revision authority. The HTTP module has no community publication map, filesystem producer, manifest parser or revision counter. Its narrow state contains live credential validation, transport/origin policy, a private rate limiter, the shared device selector and a current Core accessor. Existing public built-in build artifacts remain under `ControlPlaneAssets`: an uncredentialed request for an exact existing safe public asset delegates to that original owner. It cannot read plugin/Core bytes; authenticated requests always use Core, and unknown community addresses never become SPA HTML.
 
-Core 仍唯一拥有 community declaration、admission、trust、bytes、scope、revision；HTTP 不增加 community map、文件生产者、manifest parser 或 revision。窄 state 只持有 credential、transport/origin、私有限流与 Core accessor。现有公共 built-in 构建产物仍由 `ControlPlaneAssets` 服务：无 credential 且精确命中安全公共资源时委托原 owner，不读取 plugin/Core bytes；带 Authorization 始终走 Core，未知 community 地址不回落 SPA。
+Core 仍唯一拥有 community declaration、admission、trust、bytes、scope、revision；HTTP 不增加 community map、文件生产者、manifest parser 或 revision。窄 state 只持有 credential、transport/origin、私有限流、共用 device selector 与 Core accessor。现有公共 built-in 构建产物仍由 `ControlPlaneAssets` 服务：无 credential 且精确命中安全公共资源时委托原 owner，不读取 plugin/Core bytes；带 Authorization 始终走 Core，未知 community 地址不回落 SPA。
 
 | Boundary / 边界 | Production derivation / production 推导 | Validation / 验证 |
 | --- | --- | --- |
@@ -16,7 +16,7 @@ Core 仍唯一拥有 community declaration、admission、trust、bytes、scope�
 | Caller | Device ID comes from the validated row; `resolve_connection_identity` and `wall_admits` resolve the current user/role | Bound member identity and deactivated-user refusal |
 | Internal proof | Private `PanelHttpAuthContext` fields; only the validator constructs it; the byte-read method consumes it | HTTP requests supply headers, never a boolean or identity assertion |
 | Admission | Match one current declaration, derive its complete identity/revision/entry, then call `ExtensionManager::panel_ui_asset` | Exact admitted bytes, stale/replaced/retracted/missing entries, failed SRI re-admission |
-| Scope | `VisibilityCtx::default()` on discovery and delivery; Global-only, no CWD or client project inference | Project-scoped Core record cannot be read; project headers/queries refuse |
+| Scope | One Gateway-owned device selector, current verified actor and `ProjectStore` authorization feed the same Core visibility context to RPC discovery and HTTP delivery | No claim means Global; valid claim means Global + selected project; invalid/currently inaccessible claim refuses without fallback. Header/query/path/root assertions never authorize. |
 | Address | Raw `/tabs/...` must equal the admitted entry address; queries and percent-encoded alternatives refuse | No client revision, generic entry, URL, parent path or raw root authority |
 | Response | JavaScript MIME, `nosniff`, `private, no-store`; generic 404 without path/existence/credential detail | Reserved `/tabs` routes precede SPA fallback even when dependencies are unavailable |
 
@@ -44,7 +44,17 @@ Web 使用既有 connect 后 device/shared credential owner，bootstrap ticket �
 
 Actual commands, RED/GREEN results, review disposition and environment limits belong in the [HTTP/browser ledger](../superpowers/runs/2026-10-31-panel-http-publication.md). / 实际命令、RED/GREEN、review 与环境限制见台账。
 
-## Executed acceptance / 已执行验收
+## Authenticated project context / 经过认证的项目上下文
+
+`panel.project.select` accepts only a required nullable `project_id` and optional idempotency metadata. It reauthorizes and applies every selection, including retried keys; it preserves the existing mutation lane and required-key policy. One process-local selector stores device identity, admitting-user provenance, project ID and selection generation. It stores no root, declaration, trust, bytes or Core revision. Each RPC/HTTP use revalidates the current live paired device, active user, same admitting user, roster access, active project and bound workspace via existing authorities. Explicit refusal preserves the server claim; only an explicit authenticated null selection clears it. / 选择 RPC 只接受必须出现但可为 null 的 project ID 与可选幂等 metadata；重试也重新授权并应用，不复用陈旧成功结果，保留既有 lane/key policy。单一进程内 selector 不保存 root、声明、trust、bytes 或 Core revision；每次使用重验设备、用户、roster、项目与 workspace，失败不清除 claim，只有显式 null 才清除。
+
+The internal workspace builds Core visibility without CWD fallback. `PanelUiContextSnapshot` flattens the unchanged Core snapshot plus non-authorizing `project_context`. The response-only `x-aleph-panel-project-generation` fences asset delivery before bytes are read/imported. Browser selection clears/disposes content before RPC; old snapshots and old asset refusals cannot overwrite a newer context. Equal Core revision may carry a new authorized filtered view after a workspace rebind. Cross-tab changes and revocation are observed at the next discovery/asset boundary; there is no immediate idle-Panel destruction or push. / 内部 workspace 仅用于 Core visibility，不借 CWD；snapshot envelope 与响应 generation 只做 fence，不提供授权或替代 Core revision。浏览器先清除旧内容再选择，旧结果不能覆盖新上下文；同 Core revision 可接收换绑后的新视图。跨 tab 与撤销在下一次 discovery/asset 边界观察，不推送或立即销毁 idle Panel。
+
+Current results: private selector **7/0**, real Gateway WebSocket + HTTP project integration **1/0**, source census **4/0**, Panel protocol **9/0**, native Panel/Terminal **1607/0**, fresh production WASM/glue loader **15/0/0 skipped**, production HTTP regression **2/0**, and real project Gateway/Chrome fixture **1/0** with driver exit **0**. Chrome recorded 12 snapshots and 13 asset requests, proving passive selection, A/B switching at equal Core revision, cross-user refusal, old A results leaving B intact, cross-tab observation at the next boundary, and archive refusal without Global fallback. Existing disconnect, retraction/replacement, import-failure and device-revocation checks also passed. / 当前各项均通过；Chrome 实际记录 12 个 snapshot、13 次 asset request，项目隔离、同 revision 切换、迟到结果、多 tab、归档与既有生命周期验证全绿。
+
+The fresh whole-branch read-only assessment found no confirmed Critical, Important or Minor issue. It produced a complete written assessment but the reviewer process exited **SIGTERM**; this is not a clean-process review. The monolithic Core harness, full workspace and native WebView were not run. Exact commands, rulings, review limits and local evidence are in the [trusted-project ledger](../superpowers/runs/2026-11-01-panel-trusted-project-context.md). / 独立只读审查未确认缺陷，但进程 SIGTERM 退出，不称为 clean review；未运行 monolithic Core、全 workspace 或 native WebView，详情见台账。
+
+## Previous Global-phase acceptance / 既有 Global 阶段验收
 
 | Check / 检查 | Actual result / 实际结果 |
 | --- | --- |
@@ -71,12 +81,12 @@ From `interfaces/webchat`, install the pinned UI tooling with `bun install --fro
 
 在 `interfaces/webchat` 安装锁定工具并构建；可通过 `CARGO_TARGET_DIR` 指定本地 cache。脚本在 worktree root 先执行 memory guard，再串行 Cargo，记录新产物 hash。
 
-From the worktree root, run `python qa/browser_live/check_memory.py`, then start the opt-in fixture with `PANEL_LIVE_SHELL=interfaces/webchat/.panel-live/shell PANEL_LIVE_CONTROL=interfaces/webchat/.panel-live/control cargo test -p alephcore --test panel_http_publication panel_asset_live_gateway_fixture -- --ignored --nocapture`. On memory-constrained hosts use `CARGO_PROFILE_TEST_DEBUG=0` and `CARGO_BUILD_JOBS=1` consistently. Wait for the readiness line. Run `PANEL_LIVE_CONTROL=.panel-live/control node scripts/test-panel-live.mjs` from `interfaces/webchat` with Playwright available; `PANEL_PLAYWRIGHT_MODULE` may name an isolated local Playwright module and `PANEL_BROWSER_EXECUTABLE` an installed Chromium/Edge executable. The driver writes a redacted report/screenshot and stops the fixture. `connection.json` contains a temporary test credential and must remain ignored and local.
+From the worktree root, run `python qa/browser_live/check_memory.py`, then start the opt-in fixture with `PANEL_LIVE_SHELL=interfaces/webchat/.panel-live/shell PANEL_LIVE_CONTROL=interfaces/webchat/.panel-live/control CARGO_BUILD_JOBS=1 cargo test -p alephcore --test panel_http_publication panel_asset_live_gateway_fixture -- --ignored --nocapture`. Keep `CARGO_BUILD_JOBS=1`; use one consistent debug profile throughout a run. Wait for the readiness line. Run `PANEL_LIVE_CONTROL=.panel-live/control node scripts/test-panel-live.mjs` from `interfaces/webchat` with Playwright available; `PANEL_PLAYWRIGHT_MODULE` may name an isolated local Playwright module and `PANEL_BROWSER_EXECUTABLE` an installed Chromium/Edge executable. The driver writes a redacted report/screenshot and stops the fixture. `connection.json` contains a temporary test credential and must remain ignored and local.
 
 从 worktree root 先运行 memory guard，再启动上述 opt-in fixture；内存紧张时统一 debug=0/jobs=1。看到 ready 后，在 webchat 运行 browser driver；Playwright 可通过独立本地 module 指定，浏览器可指定本机 Chromium/Edge。driver 写脱敏报告/截图并停止 fixture；含临时测试 credential 的 `connection.json` 必须保持本地 ignored。
 
 ## Deferred / 未实施
 
-Trusted project selection for both discovery/delivery, native WebView runtime QA, install/update/uninstall, marketplace/signatures, default-release switching, notifications/background refresh, external WASM, multi-file dependency graphs and Zahir runtime mount remain deferred. `/terminal` and built-in release policy are not changed. No merge or push is part of this delivery.
+Native WebView runtime QA, install/update/uninstall, marketplace/signatures, default-release switching, notifications/background refresh, external WASM, multi-file dependency graphs and Zahir runtime mount remain deferred. Project selection is process-local and shared by tabs of the same device; there is no per-tab lease or immediate idle revocation. `/terminal` and built-in release policy are unchanged. No merge or push is part of this delivery.
 
-可信 project selector（须同时覆盖 discovery/delivery）、native WebView 真机 QA、安装/更新/卸载、marketplace/signature、默认 release 切换、通知/后台刷新、external WASM、多文件依赖图、Zahir runtime mount 均 deferred；不改变 `/terminal` 与 built-in release，不合并、不推送。
+native WebView 真机 QA、安装/更新/卸载、marketplace/signature、默认 release 切换、通知/后台刷新、external WASM、多文件依赖图、Zahir runtime mount 均 deferred。项目选择为进程内、同 device 多 tab 共用，无 per-tab lease 或 idle 即时撤销；不改变 `/terminal` 与 built-in release，不合并、不推送。

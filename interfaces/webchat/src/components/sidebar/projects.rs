@@ -54,6 +54,20 @@ pub fn ProjectsSidebar() -> impl IntoView {
         }
     });
 
+    #[cfg(feature = "panel-modular")]
+    Effect::new(move |_| {
+        let discovery = dash.panel_discovery.get();
+        if matches!(
+            discovery.status(),
+            crate::panel::discovery::PanelDiscoveryStatus::Ready { .. }
+        ) {
+            // Reflect server selection without issuing another selection write.
+            tab_state
+                .selected_project_id
+                .set(discovery.project_context().project_id.clone());
+        }
+    });
+
     // `projects.changed` push topic (Task 6): another surface, or another
     // room member, creating / renaming / archiving / joining / leaving a
     // room refreshes this list live. No client-side filtering by
@@ -88,7 +102,17 @@ pub fn ProjectsSidebar() -> impl IntoView {
                 Ok(project) => {
                     new_name.set(String::new());
                     creating.set(false);
-                    tab_state.selected_project_id.set(Some(project.id));
+                    tab_state.selected_project_id.set(Some(project.id.clone()));
+                    #[cfg(feature = "panel-modular")]
+                    if let Err(message) = dash.select_panel_project(Some(project.id)).await {
+                        error.set(Some(
+                            crate::components::admin_refusal::settings_write_error(
+                                i18n,
+                                &message,
+                                |e| e.to_string(),
+                            ),
+                        ));
+                    }
                     refresh();
                 }
                 Err(e) => error.set(Some(
@@ -102,7 +126,17 @@ pub fn ProjectsSidebar() -> impl IntoView {
 
     let select = move |id: String| {
         tab_state.selected_project_id.set(Some(id.clone()));
+        #[cfg(feature = "panel-modular")]
+        let selection = dash.select_panel_project(Some(id.clone()));
         spawn_local(async move {
+            #[cfg(feature = "panel-modular")]
+            if let Err(message) = selection.await {
+                error.set(Some(
+                    crate::components::admin_refusal::settings_write_error(i18n, &message, |e| {
+                        e.to_string()
+                    }),
+                ));
+            }
             // Best-effort — reordering the list is a courtesy, not a
             // correctness requirement, so a failure here is silently ignored
             // (mirrors `project_menu.rs`'s own `touch` call).
@@ -151,6 +185,22 @@ pub fn ProjectsSidebar() -> impl IntoView {
             </Show>
 
             <nav class="flex-1 overflow-y-auto px-3 space-y-0.5">
+                {#[cfg(feature = "panel-modular")] {
+                    view! {
+                        <button type="button" class="w-full text-left px-2 py-1.5 text-sm rounded-md hover:bg-surface-sunken"
+                            data-panel-global=""
+                            on:click=move |_| {
+                                let selection = dash.select_panel_project(None);
+                                spawn_local(async move {
+                                    if let Err(message) = selection.await {
+                                        error.set(Some(crate::components::admin_refusal::settings_write_error(i18n, &message, |e| e.to_string())));
+                                    }
+                                });
+                            }>
+                            {t!(i18n, project_room.panel_global)}
+                        </button>
+                    }
+                }}
                 <Show
                     when=move || !projects.get().is_empty()
                     fallback=move || view! {
@@ -178,6 +228,7 @@ pub fn ProjectsSidebar() -> impl IntoView {
                             view! {
                                 <button
                                     type="button"
+                                    data-panel-project-name=p.name.clone()
                                     class=move || {
                                         if is_active() {
                                             "nav-tile-active w-full flex flex-col items-start px-3 py-2 rounded-lg text-left"

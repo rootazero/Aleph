@@ -40,7 +40,10 @@ pub mod mdns_broadcaster;
 pub mod memory_monitor;
 pub mod middleware;
 pub mod model_override;
+#[cfg(feature = "native-qa")]
+pub mod native_qa;
 pub mod origin_policy;
+pub(crate) mod panel_project_context;
 pub mod process_announce;
 pub mod protocol;
 pub mod pty;

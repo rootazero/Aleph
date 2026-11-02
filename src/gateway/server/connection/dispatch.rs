@@ -16,6 +16,7 @@ use std::collections::HashMap;
 use tokio::sync::RwLock;
 
 use crate::gateway::middleware::MiddlewareChain;
+use crate::gateway::panel_project_context::{PanelCallerContext, PanelRequestContext};
 use crate::gateway::protocol::{
     JsonRpcRequest, JsonRpcResponse, ADMIN_REQUIRED_MESSAGE, AUTH_REQUIRED, PARSE_ERROR,
     PERMISSION_DENIED,
@@ -44,13 +45,39 @@ pub async fn dispatch_with_caller_context(
     caller_conn_id: Option<String>,
     caller_verified_user: Option<String>,
 ) -> String {
-    crate::gateway::caller_identity::with_verified_caller_identity(
-        caller_role,
-        caller_user,
+    dispatch_snapshot(
+        text,
+        mc,
+        CallerSnapshot {
+            role: caller_role,
+            user: caller_user,
+            verified_user: caller_verified_user,
+            device_id: None,
+        },
         caller_is_loopback,
         caller_conn_id,
-        caller_verified_user,
-        process_request(text, mc),
+    )
+    .await
+}
+
+async fn dispatch_snapshot(
+    text: &str,
+    mc: &MiddlewareChain,
+    snapshot: CallerSnapshot,
+    caller_is_loopback: bool,
+    caller_conn_id: Option<String>,
+) -> String {
+    let context = mc.panel_context(PanelCallerContext::authenticated(
+        viewer_principal(&snapshot),
+        snapshot.device_id.clone(),
+    ));
+    crate::gateway::caller_identity::with_verified_caller_identity(
+        snapshot.role.clone(),
+        snapshot.user.clone(),
+        caller_is_loopback,
+        caller_conn_id,
+        snapshot.verified_user.clone(),
+        process_request_with_panel_context(text, mc, context, Some(&snapshot)),
     )
     .await
 }
@@ -62,6 +89,7 @@ pub struct CallerSnapshot {
     pub role: Option<String>,
     pub user: Option<String>,
     pub verified_user: Option<String>,
+    pub device_id: Option<String>,
 }
 
 impl CallerSnapshot {
@@ -80,12 +108,14 @@ impl CallerSnapshot {
                 role: Some(s.caller_role.clone()),
                 user: s.caller_user.clone(),
                 verified_user: s.verified_user.clone(),
+                device_id: s.device_id.clone(),
             },
             None => Self {
                 role: Some(if client_is_local { "operator" } else { "guest" }.to_string()),
                 user: client_is_local
                     .then(|| crate::gateway::security::store::OWNER_USER_ID.to_string()),
                 verified_user: None,
+                device_id: None,
             },
         }
     }
@@ -141,6 +171,13 @@ pub async fn revalidate_for_dispatch(
     method: &str,
     start: &CallerSnapshot,
 ) -> Option<CallerSnapshot> {
+    if crate::gateway::handlers::panel_capabilities::is_context_method(method) {
+        let live = CallerSnapshot::read(connections, conn_id, client_is_local).await;
+        return (super::auth::wall_admits(live.role.as_deref(), method)
+            && viewer_principal(&live) == viewer_principal(start)
+            && live.device_id == start.device_id)
+            .then_some(live);
+    }
     if !is_browser_viewer_method(method) {
         return Some(start.clone());
     }
@@ -187,16 +224,7 @@ pub async fn dispatch_for_connection(
     };
     match revalidate_for_dispatch(connections, conn_id, client_is_local, method, start).await {
         Some(snap) => {
-            dispatch_with_caller_context(
-                text,
-                mc,
-                snap.role,
-                snap.user,
-                client_is_local,
-                Some(conn_id.to_string()),
-                snap.verified_user,
-            )
-            .await
+            dispatch_snapshot(text, mc, snap, client_is_local, Some(conn_id.to_string())).await
         }
         None => viewer_denied_response(req_id),
     }
@@ -218,6 +246,15 @@ pub fn idempotency_principal(method: &str, snapshot: &CallerSnapshot) -> String 
 
 /// Process a JSON-RPC request string
 pub async fn process_request(text: &str, middleware_chain: &MiddlewareChain) -> String {
+    process_request_with_panel_context(text, middleware_chain, None, None).await
+}
+
+pub(crate) async fn process_request_with_panel_context(
+    text: &str,
+    middleware_chain: &MiddlewareChain,
+    panel_context: Option<PanelRequestContext>,
+    caller: Option<&CallerSnapshot>,
+) -> String {
     // Parse the request
     let request: JsonRpcRequest = match serde_json::from_str(text) {
         Ok(req) => req,
@@ -264,11 +301,28 @@ pub async fn process_request(text: &str, middleware_chain: &MiddlewareChain) -> 
         method = %request.method,
     );
 
-    // Dispatch to middleware chain inside the trace span.
+    #[cfg(feature = "native-qa")]
+    let request_for_observer = request.clone();
     let response = {
         use tracing::Instrument;
-        middleware_chain.serve(request).instrument(span).await
+        middleware_chain
+            .serve_with_panel_context(request, panel_context)
+            .instrument(span)
+            .await
     };
+
+    #[cfg(not(feature = "native-qa"))]
+    let _ = caller;
+
+    #[cfg(feature = "native-qa")]
+    if let Some(caller) = caller {
+        crate::gateway::native_qa::observe_rpc(
+            &middleware_chain.native_qa_observer(),
+            caller,
+            &request_for_observer,
+            &response,
+        );
+    }
 
     // Echo the trace context back so the caller / a downstream hop can continue
     // the trace (naming our span as the parent). `traceparent` is a non-standard

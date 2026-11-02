@@ -8,6 +8,8 @@ use crate::context::{DashboardState, GatewayEvent};
 use aleph_protocol::panel::{PanelTabDescriptor, PanelTabKey, PanelTabStatus};
 use futures::future::LocalBoxFuture;
 use futures::FutureExt;
+#[cfg(any(target_arch = "wasm32", test))]
+use leptos::prelude::Update;
 use leptos::prelude::{on_cleanup, use_context, Effect, Get, GetUntracked, Set};
 use leptos::task::spawn_local;
 use serde_json::Value;
@@ -152,6 +154,45 @@ impl PanelSdk {
             && self.host.as_ref().is_some_and(|host| {
                 host.registry.lock().unwrap().get(&self.tab) == Some(descriptor)
             })
+    }
+
+    #[cfg(any(target_arch = "wasm32", test))]
+    pub(super) fn asset_project_context(&self) -> Option<(u64, u64)> {
+        let state = self.state.panel_discovery.try_get_untracked()?;
+        matches!(
+            state.status(),
+            crate::panel::discovery::PanelDiscoveryStatus::Ready { .. }
+        )
+        .then(|| (state.context_epoch(), state.project_context().generation))
+    }
+
+    #[cfg(any(target_arch = "wasm32", test))]
+    pub(super) fn asset_context_is_current(
+        &self,
+        descriptor: &PanelTabDescriptor,
+        epoch: u64,
+        context: (u64, u64),
+    ) -> bool {
+        self.asset_is_current(descriptor, epoch) && self.asset_project_context() == Some(context)
+    }
+
+    #[cfg(any(target_arch = "wasm32", test))]
+    pub(super) fn asset_refused(
+        &self,
+        descriptor: &PanelTabDescriptor,
+        epoch: u64,
+        context: (u64, u64),
+    ) {
+        if !self.asset_context_is_current(descriptor, epoch, context) {
+            return;
+        }
+        self.state.panel_discovery.update(|state| {
+            state.mark_error_for_request(
+                epoch,
+                state.request_generation(),
+                "Panel project context is unavailable".to_string(),
+            );
+        });
     }
 
     #[cfg(target_arch = "wasm32")]
@@ -537,7 +578,7 @@ mod tests {
         PanelTabDescriptor, PanelTabKey, PanelTabStatus, PanelUiTrust, PANEL_UI_API_MAJOR,
     };
     use futures::{executor::block_on, FutureExt};
-    use leptos::prelude::{provide_context, GetUntracked, Owner, Set};
+    use leptos::prelude::{provide_context, GetUntracked, Owner, Set, Update};
     use serde_json::{json, Value};
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::{Arc, Mutex};
@@ -606,6 +647,63 @@ mod tests {
                 pending: std::collections::VecDeque::new(),
             }),
         })
+    }
+
+    #[test]
+    fn project_context_fences_delivery_and_old_refusals_cannot_clear_new_content() {
+        Owner::new().with(|| {
+            let (sdk, host, _) = fixture();
+            sdk.state.is_connected.set(true);
+            sdk.state.connection_epoch.set(7);
+            let descriptor = host
+                .registry
+                .lock()
+                .unwrap()
+                .get(&key("home"))
+                .unwrap()
+                .clone();
+            let accept = |project: &str, generation| {
+                sdk.state.panel_discovery.update(|state| {
+                    let request = state.begin_connection(7).unwrap();
+                    state.accept_context_snapshot_for_request(
+                        7,
+                        request,
+                        aleph_protocol::panel::PanelUiContextSnapshot {
+                            snapshot: aleph_protocol::panel::PanelUiCapabilitySnapshot::new(
+                                10,
+                                Vec::new(),
+                            ),
+                            project_context: aleph_protocol::panel::PanelProjectSelection {
+                                project_id: Some(project.into()),
+                                generation,
+                            },
+                        },
+                    );
+                })
+            };
+            accept("A", 4);
+            let old = sdk.asset_project_context().unwrap();
+            assert!(sdk.asset_context_is_current(&descriptor, 7, old));
+            sdk.state.panel_discovery.update(|state| {
+                state.invalidate_context();
+            });
+            assert!(!sdk.asset_context_is_current(&descriptor, 7, old));
+            accept("B", 5);
+            sdk.asset_refused(&descriptor, 7, old);
+            assert!(sdk
+                .state
+                .panel_discovery
+                .get_untracked()
+                .snapshot()
+                .is_some());
+            sdk.asset_refused(&descriptor, 7, sdk.asset_project_context().unwrap());
+            assert!(sdk
+                .state
+                .panel_discovery
+                .get_untracked()
+                .snapshot()
+                .is_none());
+        });
     }
 
     #[test]

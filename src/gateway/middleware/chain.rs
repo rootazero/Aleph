@@ -10,6 +10,9 @@ use crate::gateway::middleware::{
     request_state::{set_global_registry, RequestStateRegistry},
     AuthLayer, HandlerService, MetricsLayer, RateLimitLayer, TraceLayer, ValidateLayer,
 };
+use crate::gateway::panel_project_context::{
+    PanelCallerContext, PanelProjectSelector, PanelRequestContext,
+};
 use crate::gateway::protocol::{JsonRpcRequest, JsonRpcResponse};
 use crate::gateway::rate_limiter::RateLimiter;
 
@@ -22,6 +25,9 @@ pub struct MiddlewareChain {
     metrics: MetricsLayer,
     auth: AuthLayer,
     validate: ValidateLayer,
+    panel_projects: Option<Arc<PanelProjectSelector>>,
+    #[cfg(feature = "native-qa")]
+    native_qa_observer: crate::gateway::native_qa::NativeQaRpcObserverSlot,
 }
 
 impl MiddlewareChain {
@@ -39,6 +45,9 @@ impl MiddlewareChain {
             metrics,
             auth: AuthLayer::new(),
             validate: ValidateLayer::new(),
+            panel_projects: None,
+            #[cfg(feature = "native-qa")]
+            native_qa_observer: crate::gateway::native_qa::NativeQaRpcObserverSlot::empty(),
         }
     }
 
@@ -47,9 +56,51 @@ impl MiddlewareChain {
         self.state_registry.clone()
     }
 
+    pub(crate) fn with_panel_projects(
+        mut self,
+        selector: Option<Arc<PanelProjectSelector>>,
+    ) -> Self {
+        self.panel_projects = selector;
+        self
+    }
+
+    #[cfg(feature = "native-qa")]
+    #[must_use]
+    pub fn with_native_qa_observer(
+        mut self,
+        observer: Option<crate::gateway::native_qa::NativeQaRpcObserverHandle>,
+    ) -> Self {
+        self.native_qa_observer = crate::gateway::native_qa::observer_slot(observer);
+        self
+    }
+
+    #[cfg(feature = "native-qa")]
+    #[must_use]
+    pub fn native_qa_observer(&self) -> crate::gateway::native_qa::NativeQaRpcObserverSlot {
+        self.native_qa_observer.clone()
+    }
+
+    pub(crate) fn panel_context(&self, caller: PanelCallerContext) -> Option<PanelRequestContext> {
+        self.panel_projects
+            .as_ref()
+            .map(|selector| PanelRequestContext {
+                caller,
+                selector: selector.clone(),
+            })
+    }
+
     pub async fn serve(&self, request: JsonRpcRequest) -> JsonRpcResponse {
+        self.serve_with_panel_context(request, None).await
+    }
+
+    pub(crate) async fn serve_with_panel_context(
+        &self,
+        request: JsonRpcRequest,
+        context: Option<PanelRequestContext>,
+    ) -> JsonRpcResponse {
         let rate_limit = RateLimitLayer::new(self.rate_limiter.clone());
-        let terminal: HandlerService<()> = HandlerService::new(self.handlers.clone());
+        let terminal: HandlerService<()> =
+            HandlerService::new(self.handlers.clone()).with_panel_context(context);
 
         let traced = self.trace.layer(terminal);
         let metered = self.metrics.layer(traced);
