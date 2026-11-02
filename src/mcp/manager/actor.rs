@@ -429,7 +429,7 @@ impl McpManagerActor {
                 let _ = respond_to.send(instructions);
             }
             McpCommand::Shutdown { respond_to } => {
-                let _ = respond_to.send(Ok(()));
+                let _ = respond_to.send(());
                 return false;
             }
             McpCommand::SetSamplingCallback {
