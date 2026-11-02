@@ -477,7 +477,7 @@ impl super::ChannelRegistry {
                 bound.provider.with_call_admission(
                     observation.capture.provider_generation,
                     || {
-                        let (mut runtime, poisoned) = lock_runtime(entry);
+                        let (mut runtime, poisoned) = lock_runtime(&entry);
                         if poisoned {
                             // The lifecycle state may be half-updated: refuse
                             // new work rather than admit it against an unknown
@@ -682,7 +682,7 @@ impl super::ChannelRegistry {
         let _ = self.next_bound_revision()?;
         let mut desired = self.desired_state.write().await;
         {
-            let (mut runtime, _poisoned) = lock_runtime(entry);
+            let (mut runtime, _poisoned) = lock_runtime(&entry);
             if let Some(driver) = &mut runtime.driver {
                 match driver.now_or_never() {
                     Some(Ok(true)) => {
@@ -870,7 +870,7 @@ impl super::ChannelRegistry {
         let super::ChannelRegistration::Bound(bound) = &entry.registration else {
             return Err(ChannelBindingError::UnboundLegacy);
         };
-        let (mut runtime, _poisoned) = lock_runtime(entry);
+        let (mut runtime, _poisoned) = lock_runtime(&entry);
         if let Some(driver) = &mut runtime.driver {
             match driver.now_or_never() {
                 Some(Ok(true)) => runtime.driver = None,
@@ -1042,7 +1042,7 @@ impl super::ChannelRegistry {
             return Err(ChannelBindingError::UnboundLegacy);
         };
         let mut desired = self.desired_state.write().await;
-        let (mut runtime, _poisoned) = lock_runtime(entry);
+        let (mut runtime, _poisoned) = lock_runtime(&entry);
         if let Some(driver) = &mut runtime.driver {
             match driver.now_or_never() {
                 Some(Ok(true)) => {
@@ -1138,7 +1138,7 @@ impl super::ChannelRegistry {
             }
         }
         let (executions, forwarder) = {
-            let (mut runtime, _poisoned) = lock_runtime(entry);
+            let (mut runtime, _poisoned) = lock_runtime(&entry);
             (
                 std::mem::take(&mut runtime.executions),
                 runtime.forwarder.take(),

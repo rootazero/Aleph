@@ -1174,7 +1174,7 @@ impl DeliveryStore {
                     channel_id: channel_id.as_str(),
                     conversation_id: conversation_id.as_deref().unwrap_or_default(),
                     payload: payload.as_str(),
-                    attempts: attempts.clamp(0, i64::from(u32::MAX)) as u32,
+                    attempts: (*attempts).clamp(0, i64::from(u32::MAX)) as u32,
                     last_error: note.as_str(),
                     reason: DeadLetterReason::QueueOverflow,
                     created_at: *created_at,
