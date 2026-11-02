@@ -267,6 +267,8 @@ mod tests {
             nick: "alephbot".to_string(),
             password: Some("secret123".to_string()),
             channels: vec!["#aleph".to_string(), "#test".to_string()],
+            allowed_users: Vec::new(),
+            require_mention: false,
             use_tls: true,
             realname: "Aleph IRC Bot".to_string(),
         };
