@@ -19,7 +19,46 @@
 
 ---
 
-## 0. 速查索引（口语关键词 → 规范名 → 状态）
+## Current state / 当前现状
+
+> Date / 日期: 2026-11-02
+
+> This section is the current-state entry for architecture and lifecycle questions. The historical and round-specific entries below remain evidence indexes; they do not override this section or the owning reference documents.
+> 本节是架构与生命周期问题的当前现状入口。下方历史轮次词条仍是证据索引，不覆盖本节或各事实所属的 reference 文档。
+
+### One authority, derived projections / 单一权威与派生投影
+
+A Capability is a semantic contract with an owner, scope, effects, mount/activation boundary, and revocation boundary. A projection or notification surface reads from its source authority; it is not a second registry, handler map, owner counter, or lifecycle authority. In the current Tool slice, `ToolHandlerRegistry` is the callable Tool source, `OwnershipTree` is the owner/revoke/dispose source, and `ZahirFacade` / `ProjectionHost` provide derived Tool read, projection, and live-notification surfaces. Registry broadcast is not durable recovery; durable session recovery remains with `SessionEventStore`. See [`ARCHITECTURE.md`](ARCHITECTURE.md), [`PLUGIN_SYSTEM.md`](PLUGIN_SYSTEM.md), [`TOOL_SYSTEM.md`](TOOL_SYSTEM.md), and [`src/capability/zahir_facade.rs`](../../src/capability/zahir_facade.rs).
+
+Capability 是带有 owner、scope、effects、mount/activation 与 revoke 边界的语义契约。projection 或 notification surface 从其 source authority 读取，不构成第二份 registry、handler map、owner counter 或 lifecycle authority。当前 Tool 切片中，`ToolHandlerRegistry` 是 callable Tool source，`OwnershipTree` 是 owner/revoke/dispose source，`ZahirFacade` / `ProjectionHost` 是派生的 Tool read、projection 与 live-notification surface。registry broadcast 不是 durable recovery；durable session recovery 仍由 `SessionEventStore` 负责。详见 [`ARCHITECTURE.md`](ARCHITECTURE.md)、[`PLUGIN_SYSTEM.md`](PLUGIN_SYSTEM.md)、[`TOOL_SYSTEM.md`](TOOL_SYSTEM.md) 与 [`src/capability/zahir_facade.rs`](../../src/capability/zahir_facade.rs)。
+
+### Tool/Plugin production slice / Tool/Plugin 当前生产切片
+
+The production activation slice is bounded to ExtensionManager-managed, tool-only WASM. `ExtensionManager` / `RuntimeOwner` perform discovery, effect execution, and durable enabled-state transitions; `ToolHandlerRegistry` remains the callable authority. `ProviderHandle` publishes committed provider state and generation, while `BackendLease` and call admission reject stale provider or owner generations. Discovery and read-side `describe`, `resolve`, `project`, catalog, observer, and doctor paths do not start or authenticate providers. Explicit load/enable/reload paths are activation boundaries. See [`PLUGIN_SYSTEM.md`](PLUGIN_SYSTEM.md), [`TOOL_SYSTEM.md`](TOOL_SYSTEM.md), [`src/capability/provider.rs`](../../src/capability/provider.rs), and [`src/capability/backend.rs`](../../src/capability/backend.rs).
+
+当前生产 activation 切片只覆盖由 `ExtensionManager` 管理的 tool-only WASM。`ExtensionManager` / `RuntimeOwner` 负责 discovery、effects 执行与 durable enabled-state transition；`ToolHandlerRegistry` 仍是 callable authority。`ProviderHandle` 发布已提交的 provider state 与 generation，`BackendLease` 和 call admission 则拒绝 stale provider 或 owner generation。discovery 以及 read-side 的 `describe`、`resolve`、`project`、catalog、observer、doctor 路径不会启动或认证 provider；显式 load/enable/reload 路径才是 activation boundary。详见 [`PLUGIN_SYSTEM.md`](PLUGIN_SYSTEM.md)、[`TOOL_SYSTEM.md`](TOOL_SYSTEM.md)、[`src/capability/provider.rs`](../../src/capability/provider.rs) 与 [`src/capability/backend.rs`](../../src/capability/backend.rs)。
+
+### Provider lifecycle boundary / Provider lifecycle 边界
+
+`ProviderHandle` owns the in-process state/generation admission contract but does not start threads, open transports, load dynamic libraries, or perform IPC. Runtime owners drive effects around that contract. This is a provider lifecycle fence, not a universal capability runtime. The current bounded production wiring does not mount Feishu into Zahir: Feishu remains a Gateway-owned provider slice, and Feishu → Zahir B8.2-A/B/C/D is **NO-GO / deferred**.
+
+`ProviderHandle` 负责进程内 state/generation admission contract，但不启动线程、不打开 transport、不加载动态库、不执行 IPC；runtime owner 在该契约周围驱动实际 effects。这是 provider lifecycle fence，不是 universal capability runtime。当前有界生产接线没有把 Feishu mount 到 Zahir：Feishu 仍是 Gateway-owned provider slice，Feishu → Zahir 的 B8.2-A/B/C/D 仍为 **NO-GO / deferred**。
+
+### MemoryRuntime boundary / MemoryRuntime 边界
+
+`MemoryRuntime` is the current lifecycle authority for the bounded derived Memory bundle: runtime-bound backend access, admitted `MemoryOperation`, retained workers, spawned operation context, and shutdown cleanup. `MemoryOperation` must be carried explicitly across spawned work; a source-owned operation boundary retains the callback and its associated write under an admitted `MemoryOperation`. Raw chat, Markdown archival, and raw session-search paths remain independently available when Memory is Off or unbound. This does not claim a universal Memory scheduler, a stop gate for every Memory writer, process isolation, native unload, RSS reclamation, or exactly-once external effects. The source census and 33-row boundary ledger are in [`2026-11-02-memory-derived-writer-boundary-run.md`](../superpowers/runs/2026-11-02-memory-derived-writer-boundary-run.md); the owning contract is [`MEMORY_SYSTEM.md`](MEMORY_SYSTEM.md).
+
+`MemoryRuntime` 是 bounded derived Memory bundle 的当前 lifecycle authority：它负责 runtime-bound backend access、准入的 `MemoryOperation`、retained workers、跨 spawned work 的 operation context 以及 shutdown cleanup。跨 spawned work 必须显式携带 `MemoryOperation`；source-owned operation boundary 会在 admitted `MemoryOperation` 下保留 callback 及其关联写入。raw chat、Markdown archival 与 raw session-search path 在 Memory Off 或 unbound 时仍可独立使用。这不表示 universal Memory scheduler、覆盖每个 Memory writer 的 stop gate、process isolation、native unload、RSS reclamation 或 exactly-once external effects。源码 census 与 33 行 boundary ledger 见 [`2026-11-02-memory-derived-writer-boundary-run.md`](../superpowers/runs/2026-11-02-memory-derived-writer-boundary-run.md)；所属契约见 [`MEMORY_SYSTEM.md`](MEMORY_SYSTEM.md)。
+
+### Independent and deferred surfaces / 独立与 deferred surface
+
+Gateway `ChannelRegistry` remains the Gateway lifecycle authority; `PtyManager` remains the bounded Terminal lifecycle authority; neither is thereby mounted as a Zahir Capability backend. Memory retains its own runtime authority. MCP lazy activation, EffectClaim production, automatic Safe Replay, universal durable scheduling, remaining Capability kinds, and production Feishu → Zahir remain deferred or NO-GO. Research documents describe direction and design evidence only: [`aleph_modularization_plan.md`](../research/aleph_modularization_plan.md) and [`Everything-externally-composable-is-a-Capability.md`](../research/Everything-externally-composable-is-a-Capability.md) must not be read as current production wiring.
+
+Gateway 的 lifecycle authority 仍是 `ChannelRegistry`；bounded Terminal lifecycle authority 仍是 `PtyManager`；这不表示它们已经 mount 成 Zahir Capability backend。Memory 保留自己的 runtime authority。MCP lazy activation、EffectClaim production、automatic Safe Replay、universal durable scheduling、其余 Capability kinds 与 production Feishu → Zahir 仍是 deferred 或 NO-GO。研究文档只描述方向与设计证据：[`aleph_modularization_plan.md`](../research/aleph_modularization_plan.md) 与 [`Everything-externally-composable-is-a-Capability.md`](../research/Everything-externally-composable-is-a-Capability.md) 不应被当作当前 production wiring。
+
+---
+
+
 
 | 层 | 你的口语关键词 | 规范名 (EN) | 主锚点 | 状态 |
 |----|----------------|-------------|--------|------|

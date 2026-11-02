@@ -1,7 +1,7 @@
 # Memory Derived Writer Boundary Run / Memory 派生写入边界运行记录
 
 **Date / 日期:** 2026-11-02
-**Status / 状态:** Census recorded before production edits; implementation decision pending source-backed RED. / 已在生产修改前记录清查；是否实施仍需来源证据与真实 RED。
+**Status / 状态:** Census complete; no production gap confirmed. Documentation reconciliation implemented; final review passed and local commit recorded. / 清查完成；未确认生产缺口。文档校准已实施；最终复核已通过并已记录本地提交。
 
 ## Scope and baseline / 范围与基线
 
@@ -141,10 +141,20 @@ Before every Cargo command, run `python qa/browser_live/check_memory.py`; procee
 
 ## Documentation follow-up / 文档后续
 
-The requested deep references are available and will be consulted in a separate documentation phase: `/Volumes/TBU4/Github/deepseek-harness`, `/Volumes/TBU4/Workspace/Aleph/docs/research/aleph_modularization_plan.md`, and `/Volumes/TBU4/Workspace/Aleph/docs/research/Everything-externally-composable-is-a-Capability.md`. Updating `docs/reference/FEATURE_LOCATOR.md` and proofreading/strengthening reference documents is broader than this bounded census and is recorded as a follow-on objective unless the current source comparison proves that the runtime contract itself needs a correction.
+The requested documentation phase is now implemented with bounded reconciliation. `docs/reference/FEATURE_LOCATOR.md` has a bilingual `Current state / 当前现状` entry covering authority/projection ownership, the bounded Tool/Plugin production slice, provider lifecycle fencing, the MemoryRuntime boundary, and independent/deferred surfaces. `MEMORY_SYSTEM.md`, `PLUGIN_SYSTEM.md`, `ARCHITECTURE.md`, and `TOOL_SYSTEM.md` each link to that locator and retain ownership of their detailed contracts. Historical locator entries remain in place; research documents remain design/history evidence rather than production wiring.
 
-用户指定的深度参考资料均已确认存在，后续文档阶段将单独查阅：`/Volumes/TBU4/Github/deepseek-harness`、`/Volumes/TBU4/Workspace/Aleph/docs/research/aleph_modularization_plan.md` 与 `/Volumes/TBU4/Workspace/Aleph/docs/research/Everything-externally-composable-is-a-Capability.md`。更新 `docs/reference/FEATURE_LOCATOR.md` 以及校对/强化 reference 文档的范围大于本次有界清查；除非当前源码比对证明 runtime 契约需要修正，否则记录为后续目标。
+本次文档阶段已按有限校准实施。`docs/reference/FEATURE_LOCATOR.md` 新增双语 `Current state / 当前现状` 入口，覆盖 authority/projection ownership、bounded Tool/Plugin production slice、provider lifecycle fencing、MemoryRuntime 边界以及独立/deferred surface。`MEMORY_SYSTEM.md`、`PLUGIN_SYSTEM.md`、`ARCHITECTURE.md` 与 `TOOL_SYSTEM.md` 均链接到该入口，同时继续各自拥有详细契约。历史 locator 词条保留；研究文档仍是设计/历史证据，不是 production wiring。
+
+Documentation validation passed: all five reference files are UTF-8 with no trailing whitespace; all six current-state headings and required deferred markers are present; all four owning documents contain the `FEATURE_LOCATOR.md#current-state--当前现状` link; all newly introduced local target files exist; and `git diff --check` passed. Existing unrelated relative-link warnings were not modified. No Cargo, native execution, production runtime tests, or full workspace checks were run because this phase changes documentation only.
+
+文档验证已通过：五份 reference 文件均为 UTF-8 且无尾随空白；六个 current-state heading 与必要 deferred marker 均存在；四份 owning document 均包含 `FEATURE_LOCATOR.md#current-state--当前现状` 链接；所有本次新增的本地目标文件均存在；`git diff --check` 通过。既有且与本次无关的相对链接警告未修改。由于本阶段只修改文档，未运行 Cargo、原生执行、生产 runtime 测试或全 workspace 检查。
+
+The post-fix fresh read-only re-review returned **Clean / APPROVE**. It confirmed that all four new cross-document navigation notes now include Chinese counterparts, the MemoryRuntime wording assigns callback/write retention to the source-owned operation boundary rather than directly to `MemoryOperation`, all newly introduced links remain resolvable, no deferred capability was promoted to production, and no production source changed. Pre-existing unrelated relative-link warnings remain outside this change.
+
+修正后的 fresh read-only re-review 返回 **Clean / APPROVE**。复核确认四个新增跨文档导航说明均已补充中文对应，MemoryRuntime 表述已将 callback/write 的保留责任归于 source-owned operation boundary，而不是直接归于 `MemoryOperation`；所有本次新增链接仍可解析，没有把 deferred capability 提升为生产能力，也没有生产源码变更。既有且与本次无关的相对链接警告仍保持原样。
+
+**Documentation files changed / 文档变更文件:** `docs/reference/FEATURE_LOCATOR.md`, `docs/reference/MEMORY_SYSTEM.md`, `docs/reference/PLUGIN_SYSTEM.md`, `docs/reference/ARCHITECTURE.md`, `docs/reference/TOOL_SYSTEM.md`, `docs/superpowers/specs/2026-11-02-documentation-current-state-design.md`, `docs/superpowers/plans/2026-11-02-documentation-current-state-plan.md`.
 
 **Production edits before this record / 本记录前生产修改:** none / 无。
 **Cargo evidence in this run / 本次 Cargo 证据:** none yet / 尚无。
-**Commit/push status / 提交推送状态:** no commit, no push, no merge / 未提交、未推送、未合并。
+**Commit/push status / 提交推送状态:** local conventional commit recorded, no push, no merge / 已记录本地 conventional commit，未推送、未合并。

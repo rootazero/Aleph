@@ -90,6 +90,8 @@
 
 ## Capability Plane
 
+> Current-state cross-subsystem map: [`FEATURE_LOCATOR.md`](FEATURE_LOCATOR.md#current-state--当前现状). This architecture keeps semantic Capability contracts separate from plugin assembly and preserves the existing authority for each bounded production slice. / 当前现状跨子系统地图：[`FEATURE_LOCATOR.md`](FEATURE_LOCATOR.md#current-state--当前现状)。本架构保持 Capability 语义契约与插件装配分离，并保留各有界生产切片的既有 authority。
+
 Capability is a semantic contract, not another plugin or dependency-injection container. In the first converged slice, a callable Tool is represented by one `ToolCapabilityDescriptor` and one live handler in `ToolHandlerRegistry`. The descriptor is the source for discovery and projection; the handler is the execution implementation. `LoopToolRegistry`, provider metadata, ToolCatalog, MCP bridge, and recovery are consumers of that contract, not parallel registries.
 
 ```text

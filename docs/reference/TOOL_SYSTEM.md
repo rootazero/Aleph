@@ -1,5 +1,7 @@
 # Tool System
 
+> Current-state cross-subsystem map: [`FEATURE_LOCATOR.md`](FEATURE_LOCATOR.md#current-state--当前现状). This document owns callable Tool dispatch and its raw compatibility boundary; it does not imply that deferred Capability kinds are mounted through the Tool registry. / 当前现状跨子系统地图：[`FEATURE_LOCATOR.md`](FEATURE_LOCATOR.md#current-state--当前现状)。本文档拥有 callable Tool dispatch 与 raw compatibility 边界；这不表示 deferred Capability kinds 已通过 Tool registry mount。
+
 > AlephTool trait, built-in tools, and tool development guide
 
 ---

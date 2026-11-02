@@ -15,6 +15,8 @@ Aleph 插件系统实现了 **单向兼容 + 超集** 策略：
 
 ## Provider lifecycle foundation / Provider 生命周期基础（2026-10-21）
 
+> Cross-subsystem current-state entry: [`FEATURE_LOCATOR.md`](FEATURE_LOCATOR.md#current-state--当前现状). This document owns plugin discovery and activation semantics; the locator owns the compact cross-subsystem map. / 跨子系统当前现状入口：[`FEATURE_LOCATOR.md`](FEATURE_LOCATOR.md#current-state--当前现状)。本文档拥有插件 discovery 与 activation 语义；locator 拥有紧凑的跨子系统地图。
+
 `src/capability/provider.rs` adds a pure state machine and shared handle for `InProcess` and future `Bridge` providers. It publishes lifecycle transitions and increments a generation for each restart. `ToolHandlerRegistry::new_with_provider` connects that handle to the canonical Tool registry: when the provider is not `Ready`, callable snapshots and resolution fail closed while registration data remains retained. `BackendLease.provider_generation` and `ResolveError::StaleProvider` fence old leases after stop or restart.
 
 The lifecycle contract does not create a second plugin manager. At this 2026-10-21 pre-Stage-F/G/H baseline, `src/extension/lifecycle.rs::ExtensionManager` still owned discovery, mount/unmount effects, and reload; `src/extension/plugin_state.rs` remained the durable enabled configuration. The Provider handle was the Core boundary reserved for later owner-driven integration at that historical point. This dated baseline did not start sidecars, load dynamic libraries, or wire ExtensionManager side effects into the state machine. The current bounded production wiring is recorded below: `ExtensionManager` / `RuntimeOwner` drive ProviderLifecycle transitions only for ExtensionManager-managed tool-only WASM.
