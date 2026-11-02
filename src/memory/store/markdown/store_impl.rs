@@ -292,9 +292,6 @@ impl RawSessionStore for MarkdownSessionStore {
         role: MessageRole,
         content: &str,
     ) -> Result<(), AlephError> {
-        // Serialize the file append, metadata read/modify/write, and index refresh.
-        // The projector has one worker, but direct store callers can overlap.
-        let mut db = self.db.lock().await;
         let mut metadata = self.read_metadata(session_id).await?;
         let transcript_path = self.session_dir(session_id).join("transcript.md");
 
@@ -310,8 +307,9 @@ impl RawSessionStore for MarkdownSessionStore {
         let transcript = self.read_transcript(session_id).await?;
 
         // Keep the SQLite count and full-transcript FTS replacement atomic.
-        // Do not hold a rusqlite transaction across an await.
+        // Scope the lock tightly around SQLite mutations only.
         let (message_count, tool_call_count) = {
+            let mut db = self.db.lock().await;
             let tx = db.transaction().map_err(|e| {
                 AlephError::other(format!("Failed to start transcript update: {}", e))
             })?;
@@ -352,7 +350,6 @@ impl RawSessionStore for MarkdownSessionStore {
         args: &str,
         result: &ToolResult,
     ) -> Result<(), AlephError> {
-        let db = self.db.lock().await;
         let mut metadata = self.read_metadata(session_id).await?;
         let tool_outputs_path = self.session_dir(session_id).join("tool_outputs.md");
 
@@ -369,14 +366,16 @@ impl RawSessionStore for MarkdownSessionStore {
 
         append_markdown(&tool_outputs_path, &entry).await?;
 
-        let (message_count, tool_call_count): (i64, i64) = db
-            .query_row(
+        let (message_count, tool_call_count): (i64, i64) = {
+            let db = self.db.lock().await;
+            db.query_row(
                 "UPDATE sessions SET tool_call_count = tool_call_count + 1, updated_at = ? WHERE session_id = ? \
                  RETURNING message_count, tool_call_count",
                 rusqlite::params![timestamp, session_id],
                 |row| Ok((row.get(0)?, row.get(1)?)),
             )
-            .map_err(|e| AlephError::other(format!("Failed to update tool call count: {}", e)))?;
+            .map_err(|e| AlephError::other(format!("Failed to update tool call count: {}", e)))?
+        };
 
         metadata.message_count = message_count;
         metadata.tool_call_count = tool_call_count;
@@ -453,8 +452,6 @@ impl RawSessionStore for MarkdownSessionStore {
     }
 
     async fn finalize_session(&self, session_id: &str, ended_at: i64) -> Result<(), AlephError> {
-        // Serialize with appends so finalization cannot overwrite newer counts.
-        let db = self.db.lock().await;
         let mut metadata = self.read_metadata(session_id).await?;
 
         // Update metadata
@@ -471,6 +468,7 @@ impl RawSessionStore for MarkdownSessionStore {
         self.update_metadata(&metadata).await?;
 
         // Update database
+        let db = self.db.lock().await;
         db.execute(
             "UPDATE sessions SET ended_at = ?, duration_seconds = ?, content_hash = ?, updated_at = ? WHERE session_id = ?",
             rusqlite::params![
