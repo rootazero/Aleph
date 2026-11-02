@@ -123,7 +123,8 @@ export function digestRun(value) {
   return createHash("sha256").update(String(value)).digest("hex");
 }
 
-export function overallOutcome(phases, cleanup) {
+export function overallOutcome(phases, cleanup, budgetExceeded = false) {
+  if (budgetExceeded) return "AMBIGUOUS";
   if (!Array.isArray(phases) || phases.some((phase) => !phase || !PHASES.includes(phase.name))) return "FAIL";
   const cleanupComplete = Array.isArray(cleanup) && cleanup.length === CLEANUP_STEPS.length && cleanup.every((step, index) => step.name === CLEANUP_STEPS[index] && step.ok === true);
   if (Array.isArray(cleanup) && cleanup.length > 0 && !cleanupComplete) return "AMBIGUOUS";

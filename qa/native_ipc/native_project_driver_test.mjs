@@ -3,9 +3,29 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import { createMockPage, extractMonitorScript, renderMonitorScript } from './panel_driver.mjs';
 import { buildCommand } from './monitor_contract.mjs';
+import { classifyPairingSurface } from './native_project_run.mjs';
 
 const template = extractMonitorScript(fs.readFileSync(new URL('../../desktop/shell/src/main.rs', import.meta.url), 'utf8'));
 const script = renderMonitorScript(template, { port: 31234, nonce: 'cd'.repeat(16) });
+
+test('ordinary fresh Panel with no supported auth surface is classified as unavailable without IPC', () => {
+  const page = createMockPage({ script });
+  page.open();
+  const hello = page.events().find(event => event.type === 'hello');
+  page.deliver(buildCommand({ run: hello.run, id: 0, action: 'inspect' }));
+  page.flush();
+  const state = page.events().find(event => event.type === 'dom_state');
+  assert.deepEqual(
+    { tokenWall: state.tokenWall, tokenInput: state.tokenInput, pairingNotice: state.pairingNotice, pairDesktop: state.pairDesktop },
+    { tokenWall: false, tokenInput: false, pairingNotice: false, pairDesktop: false },
+  );
+  assert.equal(classifyPairingSurface(state), 'pairing_surface_unavailable');
+
+  page.deliver(buildCommand({ run: hello.run, id: 1, action: 'ask_pair' }));
+  page.flush();
+  assert.equal(page.events().at(-1).ok, false);
+  assert.deepEqual(page.invokeLog.calls, []);
+});
 
 test('reveal_projects uses the already open real route without toggling it closed', () => {
   const page = createMockPage({ script });

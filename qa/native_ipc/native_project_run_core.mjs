@@ -17,6 +17,7 @@ export function createRunState({ run, nonce, origin }) {
     phases: [],
     cleanup: [],
     cleanupStarted: false,
+    budgetExceeded: false,
     outcome: "NOT_RUN",
   };
 }
@@ -41,7 +42,9 @@ export function recordCleanup(state, step) {
 }
 
 export function finishRun(state) {
-  const outcome = overallOutcome(state.phases, state.cleanup);
+  const outcome = state.cleanupStarted && state.cleanup.length === 0
+    ? "AMBIGUOUS"
+    : overallOutcome(state.phases, state.cleanup, state.budgetExceeded);
   return Object.freeze({ ...state, outcome });
 }
 

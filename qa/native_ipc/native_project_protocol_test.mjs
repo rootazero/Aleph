@@ -73,6 +73,11 @@ test("only complete protected phases and exact cleanup can pass", () => {
   assert.equal(overallOutcome(phases, cleanup.slice(0, -1)), "AMBIGUOUS");
 });
 
+test("business budget exhaustion remains ambiguous after complete cleanup", () => {
+  const phases = PHASES.map((name) => ({ name, outcome: "PASS" }));
+  const cleanup = CLEANUP_STEPS.map((name) => ({ name, ok: true }));
+  assert.equal(overallOutcome(phases, cleanup, true), "AMBIGUOUS");
+});
 test("missing or duplicate required phases never pass", () => {
   const cleanup = CLEANUP_STEPS.map((name) => ({ name, ok: true }));
   assert.notEqual(overallOutcome([], cleanup), "PASS");

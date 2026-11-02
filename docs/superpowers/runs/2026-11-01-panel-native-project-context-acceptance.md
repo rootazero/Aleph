@@ -107,6 +107,30 @@ Earlier reviews remain disclosed: `del_mvxlbhy5_sr3x` returned three findings an
 - **MEDIUM, fixed / 已修复**: revealing an already-open Projects menu toggled it closed. Added meaningful failing coverage, then fixed and passed the driver regressions.
 - **LOW, fixed / 已修复**: asset observation established pairing bindings. Binding now requires explicit `confirm_pairing`; real Gateway smoke proves an earlier asset yields no receipt/binding and a later confirmed asset yields a valid receipt.
 
+## 2026-11-02 hardening continuation / 2026-11-02 加固续行
+
+This iteration completed the source-backed pairing diagnosis and hardened the QA runner without launching WebView2. The bounded monitor regression uses an authenticated mock page with no `token-wall`, `token-wall-input`, `pairing-notice`, or `pairing-notice-pair-desktop`; it reports `pairing_surface_unavailable`, refuses `ask_pair`, and records no IPC invocation. This is source/VM evidence only. `PairingNotice` remains a workspace Browser viewer `LaunchSection` surface; ordinary fresh Panel has no Browser resource/slot, and `TokenWall` remains governed by the real Gateway `needs_token` verdict and native welcome conditions.
+
+本轮完成了 source-backed pairing diagnosis，并在没有启动 WebView2 的情况下加固 QA runner。bounded monitor 回归测试使用缺少 `token-wall`、`token-wall-input`、`pairing-notice`、`pairing-notice-pair-desktop` 的 authenticated mock page，返回 `pairing_surface_unavailable`，拒绝 `ask_pair`，且不产生 IPC 调用。这只属于 source/VM 证据。`PairingNotice` 仍只属于 workspace Browser viewer 的 `LaunchSection`；普通 fresh Panel 没有 Browser resource/slot；`TokenWall` 仍由真实 Gateway `needs_token` verdict 与 native welcome 条件决定。
+
+The runner now consumes a separately prepared `aleph-native-project-provenance-v1` manifest. It validates closed-shape named SHA-256 values for shell/helper/reaper, Panel WASM, Panel build manifest, and Tauri QA config plus the current 40-hex revision before creating an owned root. Missing, malformed, stale, or mismatched provenance returns structured `NOT_RUN` with empty cleanup/evidence and never prepares a manifest during execution. The current checkout has no fresh `interfaces/webchat/.panel-live/build.json` or independent native provenance manifest, so this iteration remains preflight-only and must not manufacture either artifact.
+
+runner 现在只消费独立准备的 `aleph-native-project-provenance-v1` manifest；在创建 owned root 前校验 shell/helper/reaper、Panel WASM、Panel build manifest、Tauri QA config 的固定命名 SHA-256、闭合结构和当前 40 位 revision。manifest 缺失、损坏、过期或 digest 不匹配时返回结构化 `NOT_RUN`，cleanup/evidence 为空，执行路径不会生成 manifest。当前检出缺少 fresh `interfaces/webchat/.panel-live/build.json` 与独立 native provenance manifest，因此本轮只能停在 preflight，不能制造这些 artifact。
+
+Helper lifecycle now reads the awaited `stopped` facts, keeps the helper alive until exact revoke/EOF, accepts Rust's uncorrelated `not_found` and `already_revoked` errors, and requires final child exit separately. Receipt waits reject `seq <= cursor`, retry uncorrelated `not_found` with the same cursor, and use one absolute business deadline. Cleanup retains the six declared steps and root-last ordering; budget exhaustion is `AMBIGUOUS` even after six successful proofs, and fallback stop runs only when cleanup construction fails before the state machine starts.
+
+helper lifecycle 现在读取 await 后的 `stopped` facts，在 exact revoke/EOF 前保持 helper 可用，并单独验证最终 child exit；适配真实 Rust helper 的无 request-id `not_found` 与 `already_revoked`。receipt wait 拒绝 `seq <= cursor`，对无关联 `not_found` 使用同一 cursor 重试，并共享一个绝对 business deadline。cleanup 仍严格执行六步、root-last；即使六步事实都成功，预算耗尽仍为 `AMBIGUOUS`；只有 cleanup state machine 启动前构造失败时才允许 fallback stop。
+
+Reviewable preflight output from `node qa/native_ipc/native_project_runner.mjs` is `NOT_RUN/preflight_only`, with `launchGate: new_explicit_budget_required`, `webviewLaunches: 0`, `pairingDiagnosis: source_only_runtime_conditions_unobserved`, the exact cleanup sequence, and `artifacts.ok:false/reason:provenance_manifest_missing`. No native trace, credential receipt, or WebView2 launch is claimed in this iteration.
+
+可审阅 preflight 输出为 `NOT_RUN/preflight_only`，包含 `launchGate: new_explicit_budget_required`、`webviewLaunches: 0`、`pairingDiagnosis: source_only_runtime_conditions_unobserved`、完整 cleanup 顺序，以及 `artifacts.ok:false/reason:provenance_manifest_missing`。本轮没有 native trace、credential receipt 或 WebView2 launch 证据。
+
+## Fresh review status / Fresh review 状态
+
+A fresh read-only whole-branch review of commit `0defd4f3f` was dispatched after the implementation commit, but the reviewer timed out after 600 seconds without returning a report. It is disclosed as a timeout and is not a clean review; no findings were silently converted into PASS.
+
+提交 `0defd4f3f` 后已发起 fresh read-only whole-branch review，但 reviewer 在 600 秒后超时且没有返回报告。本次只能记录为 timeout，不能称 clean review；没有把缺失的审查结果默认为 PASS。
+
 ## Not done / 未做与未验证
 
 A real QA WebView2 shell launch occurred within the approved one-launch budget, reached the page, and stopped at `pairing_surface_unavailable`; no protected OS save/load/delete, same-device native reload, native project A/B/Global, endpoint/lease or revocation evidence was obtained. The exact absence cleanup was completed externally after the runner's helper-stop proof failed. No daily daemon/default release/production credential changes, no old connection-file read, no merge and no push.

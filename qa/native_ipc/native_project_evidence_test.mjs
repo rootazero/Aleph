@@ -98,6 +98,12 @@ test("exact cleanup records its phase after all six proofs", async () => {
   assert.equal(result.outcome, "PASS");
 });
 
+test("cleanup records budget exhaustion as ambiguous even after all six proofs", async () => {
+  const state = PHASES.filter((name) => name !== "cleanup").reduce((current, name) => addPhase(current, makePhase(name, "PASS")), createRunState({ run, nonce, origin: "http://127.0.0.1:30123" }));
+  const result = await performExactCleanup({ ...state, budgetExceeded: true }, [() => true, () => true, () => true, () => true, () => true, () => true], { budgetExceeded: true });
+  assert.deepEqual(result.phases.at(-1), { name: "cleanup", outcome: "AMBIGUOUS", reason: "window_budget_exceeded" });
+  assert.equal(result.outcome, "AMBIGUOUS");
+});
 test("provenance is bounded to fixed value-free entries", () => {
   const ledger = createEvidenceLedger({ run, nonce, origin: "http://127.0.0.1:30123" });
   recordProvenance(ledger, { kind: "shell_binary", ok: true, reason: "hash_match" });

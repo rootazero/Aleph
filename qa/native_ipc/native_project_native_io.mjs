@@ -1,4 +1,3 @@
-import assert from "node:assert/strict";
 import { createHash, randomBytes } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -7,9 +6,13 @@ import { join, basename } from "node:path";
 
 import { createMonitorServer, createProcessManager, createReaperRunner } from "./real_run_io.mjs";
 import { createNativeCleanup } from "./native_project_cleanup.mjs";
+import { inspectNativeProvenance, nativeArtifactPaths } from "./native_project_provenance.mjs";
+import { fileURLToPath } from "node:url";
+import path from "node:path";
 import { createEvidenceLedger, recordHelperMessage, recordNativeTrace, recordProvenance, performExactCleanup } from "./native_project_evidence.mjs";
 import { PHASES } from "./native_project_protocol.mjs";
 import { createRunState, finishRun, recordPhase } from "./native_project_run_core.mjs";
+import { classifyPairingSurface } from "./native_project_run.mjs";
 
 const WINDOW_MS = 120_000;
 const ROOT_PREFIX = "aleph-shell-qa-";
@@ -18,8 +21,18 @@ const HELPER_READY_TIMEOUT_MS = 30_000;
 const MONITOR_TIMEOUT_MS = 45_000;
 const RECEIPT_TIMEOUT_MS = 12_000;
 
-function sha256File(path) {
-  return createHash("sha256").update(readFileSync(path)).digest("hex");
+export async function businessWait(deadline, timeoutMs, operation) {
+  const remaining = deadline - Date.now();
+  if (remaining <= 0) throw new Error("window_budget_exceeded");
+  let timer;
+  try {
+    return await Promise.race([
+      operation(Math.min(timeoutMs, remaining)),
+      new Promise((_, reject) => { timer = setTimeout(() => reject(new Error("window_budget_exceeded")), remaining); }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 function sleep(ms) {
@@ -44,8 +57,8 @@ function redactedError(error) {
     : "native_run_failed";
 }
 
-function createHelper(binary, root, nonce, panelRoot) {
-  const child = spawn(binary, ["--owned-root", root, "--nonce", nonce, "--panel-root", panelRoot], {
+export function createHelper(binary, root, nonce, panelRoot, { binaryArgs = [] } = {}) {
+  const child = spawn(binary, [...binaryArgs, "--owned-root", root, "--nonce", nonce, "--panel-root", panelRoot], {
     cwd: process.cwd(),
     stdio: ["pipe", "pipe", "ignore"],
     windowsHide: false,
@@ -76,13 +89,18 @@ function createHelper(binary, root, nonce, panelRoot) {
       }
     }
   });
+  child.once("error", () => {
+    closed = true;
+    for (const waiter of waiters.splice(0)) waiter.reject(new Error("helper_spawn_failed"));
+  });
   child.once("close", () => {
     closed = true;
     for (const waiter of waiters.splice(0)) waiter.reject(new Error("helper_closed"));
   });
-  const waitFor = (predicate, timeoutMs = 30_000) => new Promise((resolve, reject) => {
-    const existing = messages.find(predicate);
+  const waitFor = (predicate, timeoutMs = 30_000, cursor = 0) => new Promise((resolve, reject) => {
+    const existing = messages.slice(cursor).find(predicate);
     if (existing) return resolve(existing);
+    if (closed) return reject(new Error("helper_closed"));
     const waiter = { predicate, resolve, reject };
     const timer = setTimeout(() => {
       const index = waiters.indexOf(waiter);
@@ -96,32 +114,24 @@ function createHelper(binary, root, nonce, panelRoot) {
   const send = (command, fields = {}) => {
     const id = nextId++;
     child.stdin.write(`${JSON.stringify({ v: 1, type: "command", run: nonce, id, command, ...fields })}\n`);
-    return { id };
+    return { id, cursor: messages.length };
   };
-  const waitAck = async (id) => waitFor((message) => message.type === "ack" && message.id === id);
+  const waitAck = async (id, timeoutMs) => waitFor((message) => message.type === "ack" && message.id === id, timeoutMs);
   const stop = async () => {
-    const stoppedMessage = messages.find((message) => message.type === "stopped");
+    let stoppedMessage = messages.find((message) => message.type === "stopped");
     if (!stoppedMessage && !closed) {
       const request = send("shutdown");
-      await waitAck(request.id);
-      await waitFor((message) => message.type === "stopped", 10_000);
-    }
-    if (child.exitCode === null && child.signalCode === null) {
-      return {
-        stopped: stoppedMessage?.listenerClosed === true && stoppedMessage?.fixtureClosed === true,
-        listenerClosed: stoppedMessage?.listenerClosed === true,
-        fixtureClosed: stoppedMessage?.fixtureClosed === true,
-      };
+      stoppedMessage = await waitFor((message) => message.type === "stopped", 10_000, request.cursor);
     }
     return {
-      stopped: false,
+      stopped: stoppedMessage?.listenerClosed === true && stoppedMessage?.fixtureClosed === true,
       listenerClosed: stoppedMessage?.listenerClosed === true,
       fixtureClosed: stoppedMessage?.fixtureClosed === true,
     };
   };
   const revokeExact = async (device) => {
     const request = send("revoke_exact", { device });
-    const message = await waitFor((candidate) => (candidate.type === "ack" || candidate.type === "error") && candidate.id === request.id, 8_000);
+    const message = await waitFor((candidate) => (candidate.type === "ack" && candidate.id === request.id) || (candidate.type === "error" && candidate.code === "already_revoked"), 8_000, request.cursor);
     const ok = message.type === "ack" || message.code === "already_revoked";
     if (ok && !closed) {
       child.stdin.end();
@@ -137,12 +147,18 @@ function createHelper(binary, root, nonce, panelRoot) {
   return { child, messages, closed: () => closed, waitFor, send, waitAck, revokeExact, stop };
 }
 
-async function waitReceipt(helper, cursor, predicate, ledger, deadline) {
+export async function waitReceipt(helper, cursor, predicate, ledger, deadline) {
   let after = cursor;
   const receiptDeadline = Math.min(Date.now() + RECEIPT_TIMEOUT_MS, deadline);
   while (Date.now() < receiptDeadline) {
     const request = helper.send("receipt_since", { after });
-    const message = await helper.waitFor((candidate) => (candidate.type === "receipt" && candidate.seq > after) || (candidate.type === "error" && candidate.id === request.id), Math.max(1, Math.min(5_000, receiptDeadline - Date.now())));
+    let message;
+    try {
+      message = await helper.waitFor((candidate) => (candidate.type === "receipt" && candidate.seq > after) || (candidate.type === "error" && (candidate.id === request.id || candidate.code === "not_found")), Math.max(1, Math.min(5_000, receiptDeadline - Date.now())), request.cursor);
+    } catch (error) {
+      if (Date.now() >= receiptDeadline && error instanceof Error && error.message === "helper_timeout") throw new Error("receipt_timeout");
+      throw error;
+    }
     if (message.type === "receipt") {
       recordHelperMessage(ledger, message);
       after = message.seq;
@@ -160,41 +176,40 @@ function mark(state, name, outcome, reason = null) {
 
 function paths(repoRoot) {
   return {
-    helper: join(repoRoot, "target", "debug", "aleph-panel-native-qa-gateway.exe"),
-    shell: join(repoRoot, "target", "debug", "aleph-desktop-shell.exe"),
-    reaper: join(repoRoot, "target", "debug", "examples", "qa_credential_reaper.exe"),
+    ...nativeArtifactPaths(repoRoot),
     panel: join(repoRoot, "interfaces", "webchat", ".panel-live", "shell"),
-    panelEvidence: join(repoRoot, "interfaces", "webchat", ".panel-live", "build.json"),
-    tauri: join(repoRoot, "desktop", "shell", "tauri.qa.conf.json"),
   };
 }
 
-function assertArtifacts(p) {
-  for (const path of Object.values(p)) assert.equal(existsSync(path), true, "native_artifact_missing");
-  assert.equal(existsSync(join(p.panel, "index.html")), true, "fresh_panel_missing");
-  assert.equal(existsSync(p.panelEvidence), true, "fresh_panel_provenance_missing");
-  assert.match(readFileSync(join(p.panel, "index.html"), "utf8"), /aleph_panel\.js/);
-  const provenance = JSON.parse(readFileSync(p.panelEvidence, "utf8"));
-  const expected = provenance.artifact_sha256;
-  if (expected === null || typeof expected !== "object") throw new Error("artifact_hash_manifest_missing");
-  for (const [name, path] of [["shell", p.shell], ["helper", p.helper], ["reaper", p.reaper]]) {
-    if (typeof expected[name] !== "string" || !/^[0-9a-f]{64}$/.test(expected[name])) throw new Error("artifact_hash_manifest_missing");
-    if (sha256File(path) !== expected[name]) throw new Error("artifact_hash_mismatch");
-  }
-  if (typeof provenance.wasm_sha256 !== "string" || sha256File(join(p.panel, "aleph_panel_bg.wasm")) !== provenance.wasm_sha256) {
-    throw new Error("wasm_hash_mismatch");
+function assertArtifacts(p, repoRoot) {
+  const checked = inspectNativeProvenance(repoRoot);
+  if (!checked.ok) throw new Error(checked.reason);
+  if (!existsSync(join(p.panel, "index.html")) || !/aleph_panel\.js/.test(readFileSync(join(p.panel, "index.html"), "utf8"))) throw new Error("fresh_panel_missing");
+  return checked.manifest;
+}
+
+export async function cleanupNativeRun(state, createOperations, fallbackStop) {
+  let cleanupStarted = false;
+  try {
+    const operations = createOperations();
+    cleanupStarted = true;
+    return await performExactCleanup(state, operations);
+  } catch {
+    if (!cleanupStarted) {
+      try { await fallbackStop(); } catch { /* An incomplete safety proof remains ambiguous. */ }
+    }
+    return finishRun({ ...state, cleanupStarted: true, phases: [...state.phases.filter((entry) => entry.name !== "cleanup"), { name: "cleanup", outcome: "BLOCKED", reason: "cleanup_incomplete" }] });
   }
 }
 
 export async function runNativeProjectNative({ repoRoot = process.cwd(), windowMs = WINDOW_MS } = {}) {
-  if (!Number.isInteger(windowMs) || windowMs < 1_000 || windowMs > WINDOW_MS) return { outcome: "INVALID", reason: "window_budget" };
   const p = paths(repoRoot);
-  assertArtifacts(p);
   const nonce = randomBytes(32).toString("hex");
   const run = createHash("sha256").update(nonce).digest("hex");
   const ledger = createEvidenceLedger({ run, nonce, origin: "<DISPOSABLE_ORIGIN>" });
   const state0 = createRunState({ run, nonce, origin: "<DISPOSABLE_ORIGIN>" });
   let state = state0;
+  let artifactManifest = null;
   let root = null;
   let helper = null;
   let monitor = null;
@@ -202,7 +217,6 @@ export async function runNativeProjectNative({ repoRoot = process.cwd(), windowM
   let shellRecord = null;
   let trace = null;
   let monitorConnection = null;
-  let gateway = null;
   let origin = null;
   let wsUrl = null;
   let cursor = 0;
@@ -213,19 +227,27 @@ export async function runNativeProjectNative({ repoRoot = process.cwd(), windowM
   const assertWithinWindow = () => {
     if (Date.now() >= deadline) throw new Error("window_budget_exceeded");
   };
-  const monitorCommand = async (...args) => {
+  const monitorCommand = (command, fields, timeoutMs) => businessWait(deadline, timeoutMs, (timeout) => monitorConnection.command(command, fields, timeout));
+  const helperCommand = (command, fields) => {
     assertWithinWindow();
-    const response = await monitorConnection.command(...args);
-    assertWithinWindow();
-    return response;
+    return helper.send(command, fields);
   };
+  const helperAck = (id) => businessWait(deadline, 30_000, (timeout) => helper.waitAck(id, timeout));
   const phase = (name, outcome, reason = null) => { state = mark(state, name, outcome, reason); };
   try {
+    if (!Number.isInteger(windowMs) || windowMs < 1_000 || windowMs > WINDOW_MS) throw new Error("window_budget");
+    artifactManifest = assertArtifacts(p, repoRoot);
+  } catch (error) {
+    phase("helper_ready", "NOT_RUN", redactedError(error));
+    return { state: finishRun(state), ledger, startedMs: Date.now() - started, origin: "<DISPOSABLE_ORIGIN>", error: redactedError(error) };
+  }
+  try {
+    recordProvenance(ledger, { kind: "artifact_manifest", ok: true, reason: "hash_match" });
     root = ownedRoot(nonce);
     const target = { kind: "shell_binary", ok: true, reason: "hash_match" };
     recordProvenance(ledger, target);
     helper = createHelper(p.helper, root, nonce, p.panel);
-    const ready = await helper.waitFor((message) => message.type === "ready", HELPER_READY_TIMEOUT_MS);
+    const ready = await businessWait(deadline, HELPER_READY_TIMEOUT_MS, (timeout) => helper.waitFor((message) => message.type === "ready", timeout));
     if (ready.origin === DAILY_ORIGIN) throw new Error("daily_origin_refused");
     origin = ready.origin;
     wsUrl = origin.replace("http:", "ws:") + "/ws";
@@ -234,8 +256,8 @@ export async function runNativeProjectNative({ repoRoot = process.cwd(), windowM
     writeTarget(root, origin);
     phase("helper_ready", "PASS");
 
-    helper.send("issue_pairing", { user: "alice", device: "device-a" });
-    const pairing = await helper.waitFor((message) => message.type === "pairing", 10_000);
+    helperCommand("issue_pairing", { user: "alice", device: "device-a" });
+    const pairing = await businessWait(deadline, 10_000, (timeout) => helper.waitFor((message) => message.type === "pairing", timeout));
     if (!pairing.ticketPresent && typeof pairing.ticket !== "string") throw new Error("pairing_missing");
 
     monitor = createMonitorServer({ nonce, markerOrigin: origin });
@@ -243,44 +265,45 @@ export async function runNativeProjectNative({ repoRoot = process.cwd(), windowM
     const tauriConfigJson = readFileSync(p.tauri, "utf8");
     processManager = createProcessManager({
       exe: p.shell,
-      pinnedSha: sha256File(p.shell),
+      pinnedSha: artifactManifest.artifact_sha256.shell,
       repoRoot,
       windowIndex: 1,
       tauriConfigJson,
     });
+    assertWithinWindow();
     const spawned = await processManager.spawnShell(root, nonce, monitor.port);
     shellRecord = spawned.record;
     trace = spawned.trace;
-    monitorConnection = await monitor.accept(MONITOR_TIMEOUT_MS);
+    monitorConnection = await businessWait(deadline, MONITOR_TIMEOUT_MS, (timeout) => monitor.accept(timeout));
     if (!monitorConnection?.authenticated) throw new Error("monitor_auth_failed");
     const initial = await monitorCommand("inspect", {}, 5_000);
     if (!initial?.ack) throw new Error("initial_dom_inspect_failed");
-    if (initial.dom?.tokenWall !== true && initial.dom?.tokenInput !== true) {
-      if (initial.dom?.pairDesktop === true) {
-        const revealBrowser = await monitorCommand("reveal_browser", {}, 15_000);
-        if (!revealBrowser?.ack) throw new Error("browser_reveal_failed");
-        const askPair = await monitorCommand("ask_pair", {}, 15_000);
-        if (!askPair?.ack) throw new Error("pairing_wall_failed");
-      } else {
-        throw new Error("pairing_surface_unavailable");
-      }
+    if (classifyPairingSurface(initial.dom) === "token_wall") {
+      // Continue through the real token-wall controls below.
+    } else if (classifyPairingSurface(initial.dom) === "browser_pairing") {
+      const revealBrowser = await monitorCommand("reveal_browser", {}, 15_000);
+      if (!revealBrowser?.ack) throw new Error("browser_reveal_failed");
+      const askPair = await monitorCommand("ask_pair", {}, 15_000);
+      if (!askPair?.ack) throw new Error("pairing_wall_failed");
+    } else {
+      throw new Error("pairing_surface_unavailable");
     }
     const submit = await monitorCommand("submit_ticket", { ticket: pairing.ticket }, 20_000);
     if (!submit?.ack) throw new Error("ticket_submit_failed");
-    const save = await trace.wait("panel_credential_save", { timeoutMs: 30_000 });
+    const save = await businessWait(deadline, 30_000, (timeoutMs) => trace.wait("panel_credential_save", { timeoutMs }));
     if (!save) throw new Error("native_save_missing");
     recordNativeTrace(ledger, save, { auth: nonce, pid: shellRecord.pid });
-    const confirm = helper.send("confirm_pairing", { device: "device-a" });
-    await helper.waitAck(confirm.id);
+    const confirm = helperCommand("confirm_pairing", { device: "device-a" });
+    await helperAck(confirm.id);
     const connectReceipt = await waitReceipt(helper, cursor, (message) => message.operation === "connect", ledger, deadline);
     cursor = connectReceipt.seq;
     phase("protected_pairing", "PASS");
 
     const reload = await monitorCommand("reload", {}, 15_000);
     if (!reload?.ack) throw new Error("reload_command_failed");
-    monitorConnection = await monitor.accept(MONITOR_TIMEOUT_MS);
+    monitorConnection = await businessWait(deadline, MONITOR_TIMEOUT_MS, (timeout) => monitor.accept(timeout));
     if (!monitorConnection?.authenticated) throw new Error("reload_monitor_failed");
-    const reloadLoad = await trace.wait("panel_credential_load", { timeoutMs: 30_000 });
+    const reloadLoad = await businessWait(deadline, 30_000, (timeoutMs) => trace.wait("panel_credential_load", { timeoutMs }));
     if (!reloadLoad || reloadLoad.credentialPresent !== true) throw new Error("protected_reload_missing");
     recordNativeTrace(ledger, reloadLoad, { auth: nonce, pid: shellRecord.pid });
     const reloadReceipt = await waitReceipt(helper, cursor, (message) => message.operation === "connect" && message.result === "authorized", ledger, deadline);
@@ -311,8 +334,8 @@ export async function runNativeProjectNative({ repoRoot = process.cwd(), windowM
     cursor = discoveryBReceipt.seq;
     phase("project_b_same_revision", "PASS");
 
-    const hold = helper.send("hold_response", { gate: "asset_a" });
-    await helper.waitAck(hold.id);
+    const hold = helperCommand("hold_response", { gate: "asset_a" });
+    await helperAck(hold.id);
     const delayedSelectA = await monitorCommand("select_project_a", {}, 15_000);
     if (!delayedSelectA?.ack) throw new Error("delayed_project_a_control_failed");
     const delayedReceipt = await waitReceipt(helper, cursor, (message) => message.operation === "asset" && message.project === "project-a" && message.result === "asset_ok", ledger, deadline);
@@ -320,13 +343,13 @@ export async function runNativeProjectNative({ repoRoot = process.cwd(), windowM
     const delayedSelectB = await monitorCommand("select_project_b", {}, 15_000);
     if (!delayedSelectB?.ack) throw new Error("delayed_project_b_control_failed");
     await waitReceipt(helper, cursor, (message) => message.operation === "select" && message.project === "project-b", ledger, deadline);
-    const release = helper.send("release_response", { gate: "asset_a" });
-    await helper.waitAck(release.id);
+    const release = helperCommand("release_response", { gate: "asset_a" });
+    await helperAck(release.id);
     phase("late_a_fenced", "BLOCKED", "dom_monitor_has_no_selected_project_identity");
 
     phase("endpoint_lease_fail_closed", "BLOCKED", "no_supported_bounded_product_transition");
-    const revoke = helper.send("revoke_exact", { device: "device-a" });
-    await helper.waitAck(revoke.id);
+    const revoke = helperCommand("revoke_exact", { device: "device-a" });
+    await helperAck(revoke.id);
     phase("revocation_fail_closed", "BLOCKED", "native_revoke_boundary_not_observed");
     result = { state, ledger, startedMs: Date.now() - started, origin: "<DISPOSABLE_ORIGIN>" };
   } catch (error) {
@@ -335,8 +358,8 @@ export async function runNativeProjectNative({ repoRoot = process.cwd(), windowM
     failure = redactedError(error);
     result = { state, ledger, startedMs: Date.now() - started, origin: "<DISPOSABLE_ORIGIN>", error: failure };
   } finally {
-    try {
-      const cleanup = createNativeCleanup({
+    state = { ...state, budgetExceeded: Date.now() >= deadline };
+    state = await cleanupNativeRun(state, () => createNativeCleanup({
 
       shell: {
         async terminate() {
@@ -344,11 +367,14 @@ export async function runNativeProjectNative({ repoRoot = process.cwd(), windowM
           return processManager.terminate(shellRecord);
         },
       },
-      helper: { stop: async () => helper ? helper.stop() : { stopped: true, listenerClosed: true, fixtureClosed: true } },
+      helper: {
+        stop: async () => helper ? helper.stop() : { stopped: true, listenerClosed: true, fixtureClosed: true },
+        revokeExact: async (device) => helper ? helper.revokeExact(device) : false,
+      },
       devices: ["device-a"],
       reaper: {
         run(rootDir, rootNonce, mode, gatewayUrl) {
-          const runner = createReaperRunner({ reaper: p.reaper, pinnedSha: sha256File(p.reaper), gatewayUrl });
+          const runner = createReaperRunner({ reaper: p.reaper, pinnedSha: artifactManifest.artifact_sha256.reaper, gatewayUrl });
           return runner.run(rootDir, rootNonce, mode);
         },
       },
@@ -364,20 +390,13 @@ export async function runNativeProjectNative({ repoRoot = process.cwd(), windowM
       rootDir: root,
       nonce,
       gatewayUrl: wsUrl,
-    });
-      const exactCleanup = await performExactCleanup(state, cleanup);
-      state = exactCleanup;
-    } catch (error) {
-      failure = redactedError(error);
-      state = finishRun({ ...state, cleanupStarted: true });
-    }
-    if (helper && !helper.closed()) { try { await helper.stop(); } catch {} }
+    }), async () => { if (helper && !helper.closed()) await helper.stop(); });
     if (monitor) { try { await monitor.close(); } catch {} }
   }
   return { ...(result ?? { ledger, startedMs: Date.now() - started, origin: "<DISPOSABLE_ORIGIN>" }), state, ...(failure ? { error: failure } : {}) };
 }
 
-if (import.meta.url === `file://${process.argv[1].replaceAll("\\", "/")}`) {
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   const repoRoot = process.cwd();
   try {
     const result = await runNativeProjectNative({ repoRoot });

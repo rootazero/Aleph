@@ -3,7 +3,8 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { randomBytes } from "node:crypto";
 
-import { digestRun, makePhase } from "./native_project_protocol.mjs";
+import { inspectNativeProvenance } from "./native_project_provenance.mjs";
+import { CLEANUP_STEPS, digestRun, makePhase } from "./native_project_protocol.mjs";
 import { createRunState, exitForOutcome, recordPhase } from "./native_project_run_core.mjs";
 import { createEvidenceLedger, finishEvidence, recordProvenance } from "./native_project_evidence.mjs";
 
@@ -19,6 +20,12 @@ export const PROJECT_SOURCE_PATHS = Object.freeze([
 
 export function inspectProjectSources(repoRoot) {
   return PROJECT_SOURCE_PATHS.every(file => existsSync(path.join(repoRoot, file)));
+}
+
+export function classifyPairingSurface(dom) {
+  if (dom?.tokenWall === true || dom?.tokenInput === true) return "token_wall";
+  if (dom?.pairDesktop === true || dom?.pairingNotice === true) return "browser_pairing";
+  return "pairing_surface_unavailable";
 }
 
 export function preflightNativeProjectRun({ repoRoot, execute = false } = {}) {
@@ -39,7 +46,16 @@ export function preflightNativeProjectRun({ repoRoot, execute = false } = {}) {
   // read-only; the bounded DOM monitor cannot invoke set_connection_target.
   // A marker edit while the shell is stopped cannot prove an in-flight lease transition.
   state = recordPhase(state, makePhase("helper_ready", outcome, reason));
-  return finishEvidence(state, ledger);
+  return {
+    ...finishEvidence(state, ledger),
+    preflight: {
+      launchGate: "new_explicit_budget_required",
+      webviewLaunches: 0,
+      pairingDiagnosis: "source_only_runtime_conditions_unobserved",
+      artifacts: inspectNativeProvenance(repoRoot),
+      cleanupSequence: CLEANUP_STEPS,
+    },
+  };
 }
 
 export function publicReport(result) {
@@ -50,6 +66,7 @@ export function publicReport(result) {
     phases: result.phases,
     cleanup: result.cleanup,
     evidence: result.evidence,
+    ...(result.preflight ? { preflight: result.preflight } : {}),
   };
 }
 

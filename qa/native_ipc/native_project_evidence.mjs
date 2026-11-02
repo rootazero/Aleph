@@ -58,7 +58,8 @@ export function recordProvenance(ledger, entry) {
   if (entry === null || typeof entry !== "object" || Array.isArray(entry)) throw new Error("invalid_provenance");
   const keys = Object.keys(entry);
   const fixedEntry = (entry.kind === "project_source_map" && ["source_only", "source_files_missing"].includes(entry.reason))
-    || (entry.kind === "shell_binary" && entry.reason === "hash_match");
+    || (entry.kind === "shell_binary" && entry.reason === "hash_match")
+    || (entry.kind === "artifact_manifest" && entry.reason === "hash_match");
   if (!keys.every((key) => ["kind", "ok", "reason"].includes(key)) || typeof entry.ok !== "boolean" || !fixedEntry) {
     throw new Error("invalid_provenance");
   }
@@ -70,9 +71,9 @@ export function addPhase(state, phase) {
   return recordPhase(state, phase);
 }
 
-export async function performExactCleanup(state, operations) {
+export async function performExactCleanup(state, operations, { budgetExceeded = state.budgetExceeded } = {}) {
   if (!Array.isArray(operations) || operations.length !== CLEANUP_STEPS.length) throw new Error("invalid_cleanup_operations");
-  let next = startCleanup(state);
+  let next = startCleanup({ ...state, budgetExceeded });
   for (let index = 0; index < operations.length; index += 1) {
     const operation = operations[index];
     let ok = false;
@@ -89,7 +90,7 @@ export async function performExactCleanup(state, operations) {
     ...next,
     phases: [
       ...next.phases.filter((phase) => phase.name !== "cleanup"),
-      { name: "cleanup", outcome: cleanupComplete ? "PASS" : "BLOCKED", reason: cleanupComplete ? null : "cleanup_incomplete" },
+      { name: "cleanup", outcome: !cleanupComplete ? "BLOCKED" : budgetExceeded ? "AMBIGUOUS" : "PASS", reason: !cleanupComplete ? "cleanup_incomplete" : budgetExceeded ? "window_budget_exceeded" : null },
     ],
   };
   return finishRun(next);
