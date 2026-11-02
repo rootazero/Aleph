@@ -24,8 +24,6 @@
 //!     (`[gateway] allowed_origins`) for split panel/API deployments.
 //!   * **`tauri:` scheme** → allow. The desktop shell's own webview origin,
 //!     unspoofable by a remote page.
-//!   * **Loopback host** (`127.0.0.0/8`, `::1`, `localhost`, `*.localhost`) →
-//!     allow. Same-machine UI.
 //!   * **Same-origin with an IP-literal / loopback `Host`** (the `Origin`
 //!     authority equals the request `Host`, *and* that `Host` is an IP literal
 //!     or loopback) → allow. Keeps LAN deployments reached by IP
@@ -33,6 +31,14 @@
 //!     cannot be DNS-rebound. Same-origin with a *domain* `Host` is **not**
 //!     auto-allowed — such a deployment must add its origin to `allowed_origins`
 //!     (this is what closes the DNS-rebinding hole).
+//!   * **Loopback origin** (`127.0.0.0/8`, `::1`, `localhost`, `*.localhost`)
+//!     → allow **only when it is that same-origin case**. A loopback origin
+//!     on a different authority (a dev server on `localhost:3000`, a notebook
+//!     server) is a different origin: it is refused unless the operator
+//!     allow-lists it. Loopback alone cannot vouch for the page, because the
+//!     loopback *operator grant* on the WebSocket handshake is granted to any
+//!     peer on the loopback interface — a locally served page would otherwise
+//!     inherit it.
 //!   * Anything else → deny.
 
 use axum::http::Uri;
@@ -84,9 +90,8 @@ impl OriginPolicy {
     /// Decide whether a request carrying `origin` (the raw `Origin` header) and
     /// `host` (the raw `Host` header) may proceed.
     ///
-    /// `host` is `None` for callers that have no notion of same-origin (the
-    /// static-asset CORS layer), in which case only loopback / `tauri:` /
-    /// allow-list pass.
+    /// `host` is `None` when the request carries no `Host` header. Same-origin
+    /// cannot be established then, so only `tauri:` and the allow-list pass.
     #[must_use]
     pub fn is_allowed(&self, origin: Option<&str>, host: Option<&str>) -> bool {
         if self.allow_any {
@@ -125,11 +130,6 @@ impl OriginPolicy {
             _ => return false,
         }
 
-        let origin_host = uri.host().unwrap_or("");
-        if is_loopback_host(origin_host) {
-            return true;
-        }
-
         // Same-origin: the Origin's authority (host[:port]) equals the request
         // Host header. This blocks the cross-origin confused-deputy — a page at
         // evil.com carries `Origin: …evil.com`, which never matches the
@@ -143,6 +143,12 @@ impl OriginPolicy {
         // always loopback, an IP literal (LAN `host = "0.0.0.0"` deployments
         // reach the gateway by IP, which cannot be rebound), or an
         // operator-configured domain that is matched earlier by `allowed_origins`.
+        //
+        // A loopback *origin* gets no blanket allowance: the loopback interface
+        // grants the WebSocket handshake an implicit operator credential, so a
+        // page served from the machine (a dev server on `localhost:3000`, a
+        // notebook) must not be able to claim it. Same-origin is the only
+        // automatic way in; other origins go through `allowed_origins`.
         if let Some(host) = host {
             let host = host.trim();
             if let Some(authority) = uri.authority() {
@@ -210,12 +216,30 @@ mod tests {
     }
 
     #[test]
-    fn loopback_origins_allowed() {
+    fn loopback_origins_allowed_when_same_origin() {
         let p = OriginPolicy::loopback_only();
-        assert!(p.is_allowed(Some("http://127.0.0.1:18790"), None));
-        assert!(p.is_allowed(Some("http://localhost:3000"), None));
-        assert!(p.is_allowed(Some("http://[::1]:18790"), None));
-        assert!(p.is_allowed(Some("http://panel.localhost"), None));
+        // The gateway's own panel: the origin authority is the request's own
+        // authority, and the Host is a loopback / IP literal.
+        assert!(p.is_allowed(Some("http://127.0.0.1:18790"), Some("127.0.0.1:18790")));
+        assert!(p.is_allowed(Some("http://localhost:18790"), Some("localhost:18790")));
+        assert!(p.is_allowed(Some("http://[::1]:18790"), Some("[::1]:18790")));
+        assert!(p.is_allowed(
+            Some("http://panel.localhost:18790"),
+            Some("panel.localhost:18790")
+        ));
+    }
+
+    #[test]
+    fn a_loopback_origin_on_another_port_is_refused() {
+        let p = OriginPolicy::loopback_only();
+        // A dev server / notebook on the same machine is a *different* origin
+        // and must not inherit the loopback operator grant of the handshake.
+        assert!(!p.is_allowed(Some("http://localhost:3000"), Some("127.0.0.1:18790")));
+        assert!(!p.is_allowed(Some("http://127.0.0.1:3000"), Some("127.0.0.1:18790")));
+        assert!(!p.is_allowed(Some("http://localhost:3000"), None));
+        // …unless the operator allow-lists it.
+        let configured = OriginPolicy::new(vec!["http://localhost:3000".to_string()]);
+        assert!(configured.is_allowed(Some("http://localhost:3000"), Some("127.0.0.1:18790")));
     }
 
     #[test]
