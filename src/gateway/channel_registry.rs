@@ -41,7 +41,7 @@ use crate::capability::provider::{
 };
 use crate::sync_primitives::{Arc, Mutex};
 use binding::{
-    canonical_descriptor_fingerprint, BoundChannelCapture, ChannelBindingError,
+    canonical_descriptor_fingerprint, lock_runtime, BoundChannelCapture, ChannelBindingError,
     ChannelInitialState, ChannelLifecycleContract,
 };
 use std::collections::HashMap;
@@ -1081,10 +1081,14 @@ impl ChannelRegistry {
                 "bound channel runtime is not implemented".into(),
             ));
         }
-        let mut runtime = entry
-            .runtime
-            .lock()
-            .expect("channel runtime mutex poisoned");
+        let (mut runtime, poisoned) = lock_runtime(entry);
+        if poisoned {
+            // A poisoned runtime means a previous lifecycle operation may not
+            // have finished: refuse to start another one on unknown state.
+            return Err(ChannelError::Busy(format!(
+                "Channel runtime state is uncertain after a poisoned mutex; a previous lifecycle operation may not have finished: {id}"
+            )));
+        }
         if runtime.operation.is_some() {
             return Err(ChannelError::Busy(format!(
                 "Channel lifecycle operation already active: {id}"
@@ -1101,10 +1105,7 @@ impl ChannelRegistry {
         marker: &Arc<()>,
     ) {
         let _source = self.lifecycle_sync.lock().await;
-        let mut runtime = entry
-            .runtime
-            .lock()
-            .expect("channel runtime mutex poisoned");
+        let (mut runtime, _poisoned) = lock_runtime(entry);
         if runtime
             .operation
             .as_ref()

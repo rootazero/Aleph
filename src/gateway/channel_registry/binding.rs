@@ -11,10 +11,11 @@ use crate::capability::ownership::{
     VisibilityScope,
 };
 use crate::capability::provider::{ProviderCallError, ProviderHandle, ProviderLifecycleError};
-use crate::sync_primitives::Arc;
+use crate::sync_primitives::{Arc, MutexGuard};
 use crate::tools::descriptor::canonicalize_json;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
+use tracing::warn;
 
 #[allow(dead_code)] // Cold declaration schema is not mounted in production yet.
 pub(crate) struct ChannelLifecycleDeclarationV1;
@@ -252,6 +253,32 @@ pub(super) struct EntryRuntime {
     pub(super) residual: ChannelCleanupResidual,
 }
 
+/// Lock a channel's runtime, recovering from a poisoned mutex instead of
+/// panicking the caller, and report whether it was poisoned.
+///
+/// A poisoned runtime means a previous holder panicked *while holding it*, so
+/// the lifecycle state inside may be half-updated — most importantly the "one
+/// lifecycle operation at a time" marker may be stale. Callers that decide
+/// whether to admit new work fail closed on `poisoned` (the previous lifecycle
+/// operation may not have finished); callers that only read state may proceed.
+///
+/// The crate recovers poisoned mutexes elsewhere rather than propagating the
+/// panic (see `mcp_face::session`): a panic in a channel lifecycle path takes
+/// down the caller's task over a state problem that is recoverable.
+pub(super) fn lock_runtime(
+    entry: &ChannelRegistrationEntry,
+) -> (MutexGuard<'_, EntryRuntime>, bool) {
+    match entry.runtime.lock() {
+        Ok(guard) => (guard, false),
+        Err(poisoned) => {
+            warn!(
+                "channel runtime mutex poisoned; a previous lifecycle operation may not have finished"
+            );
+            (poisoned.into_inner(), true)
+        }
+    }
+}
+
 pub(super) struct OwnedForwarder {
     pub(super) cancel: tokio_util::sync::CancellationToken,
     pub(super) task: tokio::task::JoinHandle<()>,
@@ -397,10 +424,13 @@ impl super::ChannelRegistry {
                 bound.provider.with_call_admission(
                     observation.capture.provider_generation,
                     || {
-                        let mut runtime = entry
-                            .runtime
-                            .lock()
-                            .expect("channel runtime mutex poisoned");
+                        let (mut runtime, poisoned) = lock_runtime(entry);
+                        if poisoned {
+                            // The lifecycle state may be half-updated: refuse
+                            // new work rather than admit it against an unknown
+                            // state.
+                            return Err(ChannelBindingError::Busy);
+                        }
                         // Join completed tasks before reusing bounded execution slots.
                         runtime
                             .executions
@@ -473,10 +503,7 @@ impl super::ChannelRegistry {
                             if !Arc::ptr_eq(current, original) {
                                 return Err(ChannelBindingError::StaleEntry);
                             }
-                            let mut runtime = original
-                                .runtime
-                                .lock()
-                                .expect("channel runtime mutex poisoned");
+                            let (mut runtime, _poisoned) = lock_runtime(original);
                             if runtime.retiring {
                                 return Err(ChannelBindingError::Retiring);
                             }
@@ -497,10 +524,7 @@ impl super::ChannelRegistry {
                 .and_then(|result| result)
         };
         if let Err(error) = accepted {
-            let mut runtime = original
-                .runtime
-                .lock()
-                .expect("channel runtime mutex poisoned");
+            let (mut runtime, _poisoned) = lock_runtime(original);
             runtime.active_work = runtime
                 .active_work
                 .checked_sub(1)
@@ -599,10 +623,7 @@ impl super::ChannelRegistry {
         let _ = self.next_bound_revision()?;
         let mut desired = self.desired_state.write().await;
         {
-            let mut runtime = entry
-                .runtime
-                .lock()
-                .expect("channel runtime mutex poisoned");
+            let (mut runtime, _poisoned) = lock_runtime(entry);
             if let Some(driver) = &mut runtime.driver {
                 match driver.now_or_never() {
                     Some(Ok(true)) => {
@@ -649,13 +670,15 @@ impl super::ChannelRegistry {
         ),
         ChannelBindingError,
     > {
-        let marker = entry
-            .runtime
-            .lock()
-            .expect("channel runtime mutex poisoned")
-            .operation
-            .clone()
-            .ok_or(ChannelBindingError::Busy)?;
+        let marker = {
+            let (runtime, poisoned) = lock_runtime(entry);
+            if poisoned {
+                // A previous lifecycle operation may not have finished, so the
+                // marker it left behind cannot be trusted.
+                return Err(ChannelBindingError::Busy);
+            }
+            runtime.operation.clone().ok_or(ChannelBindingError::Busy)?
+        };
         let (sender, receiver) = tokio::sync::oneshot::channel();
         let source = self.clone();
         let original = entry.clone();
@@ -788,10 +811,7 @@ impl super::ChannelRegistry {
         let super::ChannelRegistration::Bound(bound) = &entry.registration else {
             return Err(ChannelBindingError::UnboundLegacy);
         };
-        let mut runtime = entry
-            .runtime
-            .lock()
-            .expect("channel runtime mutex poisoned");
+        let (mut runtime, _poisoned) = lock_runtime(entry);
         if let Some(driver) = &mut runtime.driver {
             match driver.now_or_never() {
                 Some(Ok(true)) => runtime.driver = None,
@@ -924,10 +944,10 @@ impl super::ChannelRegistry {
             .ok_or(ChannelBindingError::NotFound)?;
         let mut desired = self.desired_state.write().await;
         bound.provider.with_ready_commit(generation, |_| {
-            let mut runtime = entry
-                .runtime
-                .lock()
-                .expect("channel runtime mutex poisoned");
+            let (mut runtime, poisoned) = lock_runtime(entry);
+            if poisoned {
+                return Err(ChannelBindingError::Busy);
+            }
             if !Arc::ptr_eq(&current, entry)
                 || !runtime
                     .operation
@@ -963,10 +983,7 @@ impl super::ChannelRegistry {
             return Err(ChannelBindingError::UnboundLegacy);
         };
         let mut desired = self.desired_state.write().await;
-        let mut runtime = entry
-            .runtime
-            .lock()
-            .expect("channel runtime mutex poisoned");
+        let (mut runtime, _poisoned) = lock_runtime(entry);
         if let Some(driver) = &mut runtime.driver {
             match driver.now_or_never() {
                 Some(Ok(true)) => {
@@ -1044,22 +1061,17 @@ impl super::ChannelRegistry {
             let notified = entry.drained.notified();
             tokio::pin!(notified);
             notified.as_mut().enable();
-            if entry
-                .runtime
-                .lock()
-                .expect("channel runtime mutex poisoned")
-                .active_work
-                == 0
-            {
+            let drained = {
+                let (runtime, _poisoned) = lock_runtime(entry);
+                runtime.active_work == 0
+            };
+            if drained {
                 break;
             }
             notified.await;
         }
         let (executions, forwarder) = {
-            let mut runtime = entry
-                .runtime
-                .lock()
-                .expect("channel runtime mutex poisoned");
+            let (mut runtime, _poisoned) = lock_runtime(entry);
             (
                 std::mem::take(&mut runtime.executions),
                 runtime.forwarder.take(),
@@ -1102,10 +1114,10 @@ impl super::ChannelRegistry {
         let super::ChannelRegistration::Bound(bound) = &entry.registration else {
             unreachable!()
         };
-        let mut runtime = entry
-            .runtime
-            .lock()
-            .expect("channel runtime mutex poisoned");
+        let (mut runtime, poisoned) = lock_runtime(entry);
+        if poisoned {
+            return Err(ChannelBindingError::Busy);
+        }
         if !runtime
             .operation
             .as_ref()
@@ -1135,12 +1147,10 @@ impl super::ChannelRegistry {
         ChannelBindingError::Runtime {
             phase: ChannelRuntimePhase::Stop,
             error,
-            residual: entry
-                .runtime
-                .lock()
-                .expect("channel runtime mutex poisoned")
-                .residual
-                .clone(),
+            residual: {
+                let (runtime, _poisoned) = lock_runtime(entry);
+                runtime.residual.clone()
+            },
         }
     }
 }
