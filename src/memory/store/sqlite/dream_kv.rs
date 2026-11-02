@@ -62,25 +62,28 @@ impl SqliteMemoryBackend {
         consumer: &str,
         agent_id: &str,
     ) -> Result<Option<i64>, AlephError> {
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
-        let key = key_for(consumer, agent_id);
+        self.with_connection(|conn| {
+            let key = key_for(consumer, agent_id);
 
-        let mut stmt = conn
-            .prepare("SELECT value FROM compression_metadata WHERE key = ?1")
-            .map_err(|e| AlephError::config(format!("get_dream_watermark prepare: {e}")))?;
+            let mut stmt = conn
+                .prepare("SELECT value FROM compression_metadata WHERE key = ?1")
+                .map_err(|e| AlephError::config(format!("get_dream_watermark prepare: {e}")))?;
 
-        let result = stmt.query_row(params![key], |row| row.get::<_, String>(0));
+            let result = stmt.query_row(params![key], |row| row.get::<_, String>(0));
 
-        match result {
-            Ok(value) => {
-                let ts = value.parse::<i64>().map_err(|e| {
-                    AlephError::config(format!("get_dream_watermark parse {key}={value:?}: {e}"))
-                })?;
-                Ok(Some(ts))
+            match result {
+                Ok(value) => {
+                    let ts = value.parse::<i64>().map_err(|e| {
+                        AlephError::config(format!(
+                            "get_dream_watermark parse {key}={value:?}: {e}"
+                        ))
+                    })?;
+                    Ok(Some(ts))
+                }
+                Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+                Err(e) => Err(AlephError::config(format!("get_dream_watermark: {e}"))),
             }
-            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
-            Err(e) => Err(AlephError::config(format!("get_dream_watermark: {e}"))),
-        }
+        })
     }
 
     /// Persist the watermark for the given consumer/agent pair. Idempotent —
@@ -91,17 +94,18 @@ impl SqliteMemoryBackend {
         agent_id: &str,
         watermark: i64,
     ) -> Result<(), AlephError> {
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
-        let key = key_for(consumer, agent_id);
+        self.with_connection(|conn| {
+            let key = key_for(consumer, agent_id);
 
-        conn.execute(
-            "INSERT INTO compression_metadata (key, value) \
+            conn.execute(
+                "INSERT INTO compression_metadata (key, value) \
              VALUES (?1, ?2) \
              ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-            params![key, watermark.to_string()],
-        )
-        .map_err(|e| AlephError::config(format!("set_dream_watermark: {e}")))?;
-        Ok(())
+                params![key, watermark.to_string()],
+            )
+            .map_err(|e| AlephError::config(format!("set_dream_watermark: {e}")))?;
+            Ok(())
+        })
     }
 
     /// Full rejected-edit records for this agent, oldest first. Empty on first
@@ -112,37 +116,38 @@ impl SqliteMemoryBackend {
         &self,
         agent_id: &str,
     ) -> Result<Vec<DistillRejectRecord>, AlephError> {
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
-        let key = rejects_key_for(agent_id);
+        self.with_connection(|conn| {
+            let key = rejects_key_for(agent_id);
 
-        let mut stmt = conn
-            .prepare("SELECT value FROM compression_metadata WHERE key = ?1")
-            .map_err(|e| AlephError::config(format!("distill_rejects prepare: {e}")))?;
+            let mut stmt = conn
+                .prepare("SELECT value FROM compression_metadata WHERE key = ?1")
+                .map_err(|e| AlephError::config(format!("distill_rejects prepare: {e}")))?;
 
-        match stmt.query_row(params![key], |row| row.get::<_, String>(0)) {
-            Ok(value) => {
-                // New rich format first; fall back to the legacy fingerprint list.
-                if let Ok(records) = serde_json::from_str::<Vec<DistillRejectRecord>>(&value) {
-                    Ok(records)
-                } else if let Ok(fps) = serde_json::from_str::<Vec<String>>(&value) {
-                    Ok(fps
-                        .into_iter()
-                        .map(|fingerprint| DistillRejectRecord {
-                            fingerprint,
-                            target: String::new(),
-                            summary: String::new(),
-                            reason: String::new(),
-                        })
-                        .collect())
-                } else {
-                    Err(AlephError::config(format!(
-                        "distill_rejects parse {key}={value:?}"
-                    )))
+            match stmt.query_row(params![key], |row| row.get::<_, String>(0)) {
+                Ok(value) => {
+                    // New rich format first; fall back to the legacy fingerprint list.
+                    if let Ok(records) = serde_json::from_str::<Vec<DistillRejectRecord>>(&value) {
+                        Ok(records)
+                    } else if let Ok(fps) = serde_json::from_str::<Vec<String>>(&value) {
+                        Ok(fps
+                            .into_iter()
+                            .map(|fingerprint| DistillRejectRecord {
+                                fingerprint,
+                                target: String::new(),
+                                summary: String::new(),
+                                reason: String::new(),
+                            })
+                            .collect())
+                    } else {
+                        Err(AlephError::config(format!(
+                            "distill_rejects parse {key}={value:?}"
+                        )))
+                    }
                 }
+                Err(rusqlite::Error::QueryReturnedNoRows) => Ok(Vec::new()),
+                Err(e) => Err(AlephError::config(format!("distill_rejects: {e}"))),
             }
-            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(Vec::new()),
-            Err(e) => Err(AlephError::config(format!("distill_rejects: {e}"))),
-        }
+        })
     }
 
     /// Remember a rejected distill edit so the same bad edit is dropped on later
@@ -166,15 +171,16 @@ impl SqliteMemoryBackend {
 
         let value = serde_json::to_string(&rejects)
             .map_err(|e| AlephError::config(format!("record_distill_reject encode: {e}")))?;
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
-        conn.execute(
-            "INSERT INTO compression_metadata (key, value) \
+        self.with_connection(|conn| {
+            conn.execute(
+                "INSERT INTO compression_metadata (key, value) \
              VALUES (?1, ?2) \
              ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-            params![rejects_key_for(agent_id), value],
-        )
-        .map_err(|e| AlephError::config(format!("record_distill_reject: {e}")))?;
-        Ok(())
+                params![rejects_key_for(agent_id), value],
+            )
+            .map_err(|e| AlephError::config(format!("record_distill_reject: {e}")))?;
+            Ok(())
+        })
     }
 
     /// Read the best-ever memory-health score for this agent. Persisted across
@@ -182,37 +188,39 @@ impl SqliteMemoryBackend {
     /// score) survives a reboot instead of resetting to 0 and re-accepting a
     /// worse-than-historical cycle as a "new best". `None` on first run.
     pub fn get_best_health(&self, agent_id: &str) -> Result<Option<f64>, AlephError> {
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
-        let key = best_health_key_for(agent_id);
+        self.with_connection(|conn| {
+            let key = best_health_key_for(agent_id);
 
-        let mut stmt = conn
-            .prepare("SELECT value FROM compression_metadata WHERE key = ?1")
-            .map_err(|e| AlephError::config(format!("get_best_health prepare: {e}")))?;
+            let mut stmt = conn
+                .prepare("SELECT value FROM compression_metadata WHERE key = ?1")
+                .map_err(|e| AlephError::config(format!("get_best_health prepare: {e}")))?;
 
-        match stmt.query_row(params![key], |row| row.get::<_, String>(0)) {
-            Ok(value) => {
-                let v = value.parse::<f64>().map_err(|e| {
-                    AlephError::config(format!("get_best_health parse {key}={value:?}: {e}"))
-                })?;
-                Ok(Some(v))
+            match stmt.query_row(params![key], |row| row.get::<_, String>(0)) {
+                Ok(value) => {
+                    let v = value.parse::<f64>().map_err(|e| {
+                        AlephError::config(format!("get_best_health parse {key}={value:?}: {e}"))
+                    })?;
+                    Ok(Some(v))
+                }
+                Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+                Err(e) => Err(AlephError::config(format!("get_best_health: {e}"))),
             }
-            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
-            Err(e) => Err(AlephError::config(format!("get_best_health: {e}"))),
-        }
+        })
     }
 
     /// Persist the best-ever memory-health score for this agent. Idempotent
     /// upsert keyed by agent; only the monotonic best need be written.
     pub fn set_best_health(&self, agent_id: &str, value: f64) -> Result<(), AlephError> {
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
-        conn.execute(
-            "INSERT INTO compression_metadata (key, value) \
+        self.with_connection(|conn| {
+            conn.execute(
+                "INSERT INTO compression_metadata (key, value) \
              VALUES (?1, ?2) \
              ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-            params![best_health_key_for(agent_id), value.to_string()],
-        )
-        .map_err(|e| AlephError::config(format!("set_best_health: {e}")))?;
-        Ok(())
+                params![best_health_key_for(agent_id), value.to_string()],
+            )
+            .map_err(|e| AlephError::config(format!("set_best_health: {e}")))?;
+            Ok(())
+        })
     }
 }
 
@@ -338,7 +346,8 @@ mod tests {
         // A buffer written by the pre-upgrade code is a bare JSON string array.
         let backend = make_backend();
         {
-            let conn = backend.conn.lock().unwrap_or_else(|e| e.into_inner());
+            let connection = backend.conn.lock().unwrap_or_else(|e| e.into_inner());
+            let conn = connection.as_ref().unwrap();
             conn.execute(
                 "INSERT INTO compression_metadata (key, value) VALUES (?1, ?2)",
                 params![rejects_key_for("main"), r#"["legacy_a","legacy_b"]"#],

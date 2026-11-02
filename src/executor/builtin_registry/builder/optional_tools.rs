@@ -17,28 +17,40 @@ impl BuiltinToolRegistry {
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn register_optional_tools(
         tools: &mut HashMap<String, UnifiedTool>,
-        memory_search_tool: &Option<MemorySearchTool>,
-        memory_browse_tool: &Option<MemoryBrowseTool>,
-        memory_explore_tool: &Option<MemoryExploreTool>,
+        memory_search_tool: &Option<crate::builtin_tools::runtime::RuntimeTool<MemorySearchTool>>,
+        memory_browse_tool: &Option<crate::builtin_tools::runtime::RuntimeTool<MemoryBrowseTool>>,
+        memory_explore_tool: &Option<crate::builtin_tools::runtime::RuntimeTool<MemoryExploreTool>>,
         memory_timeline_tool: &Option<crate::builtin_tools::MemoryTimelineTool>,
         image_generate_tool: &Option<ImageGenerateTool>,
         vault_store_tool: &Option<VaultStoreTool>,
         config: &BuiltinToolConfig,
-        note_orient_tool: &Option<crate::builtin_tools::note_orient::NoteOrientTool>,
-        note_schema_tool: &Option<crate::builtin_tools::note_schema::NoteSchemaTool>,
-        user_profile_tool: &Option<crate::builtin_tools::user_profile::UserProfileTool>,
+        note_orient_tool: &Option<
+            crate::builtin_tools::runtime::RuntimeTool<
+                crate::builtin_tools::note_orient::NoteOrientTool,
+            >,
+        >,
+        note_schema_tool: &Option<
+            crate::builtin_tools::runtime::RuntimeTool<
+                crate::builtin_tools::note_schema::NoteSchemaTool,
+            >,
+        >,
+        user_profile_tool: &Option<
+            crate::builtin_tools::runtime::RuntimeTool<
+                crate::builtin_tools::user_profile::UserProfileTool,
+            >,
+        >,
     ) {
         // Helper: register tool with schema from schemars
-        fn reg(
-            tools: &mut HashMap<String, UnifiedTool>,
+        fn reg<'a>(
+            tools: &'a mut HashMap<String, UnifiedTool>,
             name: &str,
             desc: &str,
             schema: serde_json::Value,
-        ) {
+        ) -> &'a mut UnifiedTool {
             let mut ut =
                 UnifiedTool::new(format!("builtin:{name}"), name, desc, ToolSource::Builtin);
             ut.parameters_schema = Some(schema);
-            tools.insert(name.to_string(), ut);
+            tools.entry(name.to_owned()).insert_entry(ut).into_mut()
         }
 
         // Memory retrieval tools — only exposed in Tools / Hybrid mode.
@@ -61,7 +73,8 @@ impl BuiltinToolRegistry {
                     super::core_tools::tool_schema::<
                         crate::builtin_tools::memory_search::MemorySearchArgs,
                     >("memory_search"),
-                );
+                )
+                .services = MemorySearchTool::services();
                 info!("Registered memory_search tool in BuiltinToolRegistry");
             }
             if memory_browse_tool.is_some() {
@@ -72,7 +85,8 @@ impl BuiltinToolRegistry {
                     super::core_tools::tool_schema::<
                         crate::builtin_tools::memory_browse::MemoryBrowseArgs,
                     >("memory_browse"),
-                );
+                )
+                .services = MemoryBrowseTool::services();
                 info!("Registered memory.browse tool in BuiltinToolRegistry");
             }
             if memory_explore_tool.is_some() {
@@ -83,7 +97,8 @@ impl BuiltinToolRegistry {
                     super::core_tools::tool_schema::<
                         crate::builtin_tools::memory_explore::MemoryExploreArgs,
                     >("memory_explore"),
-                );
+                )
+                .services = MemoryExploreTool::services();
                 info!("Registered memory_explore tool in BuiltinToolRegistry");
             }
             if memory_timeline_tool.is_some() {
@@ -94,21 +109,39 @@ impl BuiltinToolRegistry {
                     super::core_tools::tool_schema::<
                         crate::builtin_tools::memory_timeline::MemoryTimelineArgs,
                     >("memory_timeline"),
-                );
+                )
+                .services = crate::builtin_tools::MemoryTimelineTool::services();
                 info!("Registered memory_timeline tool in BuiltinToolRegistry");
             }
         }
 
-        // Phase 3 Task 19 — flag_user_correction is exposed whenever a
-        // memory backend exists (independent of retrieval policy: this is
-        // a write-only signal, not a retrieval surface).
-        //
-        // Both handlers need the memory backend AND the raw memory store: the
-        // correction is written to the raw store and the audit counts are read
-        // back from it. Advertising the tools without the raw store produced a
-        // fully-schemaed tool whose every call failed with
-        // "no raw memory store configured".
-        if config.memory_db.is_some() && config.raw_memory_store.is_some() {
+        // Stable descriptors remain discoverable while the source is Off.
+        // Each invocation resolves raw and derived storage from its admitted bundle.
+        if config.memory_runtime.is_some() {
+            reg(
+                tools,
+                "memory_runtime_status",
+                crate::builtin_tools::runtime_control::MemoryRuntimeStatusTool::DESCRIPTION,
+                super::core_tools::tool_schema::<
+                    crate::builtin_tools::runtime_control::RuntimeControlArgs,
+                >("memory_runtime_status"),
+            );
+            reg(
+                tools,
+                "memory_runtime_start",
+                crate::builtin_tools::runtime_control::MemoryRuntimeStartTool::DESCRIPTION,
+                super::core_tools::tool_schema::<
+                    crate::builtin_tools::runtime_control::RuntimeControlArgs,
+                >("memory_runtime_start"),
+            );
+            reg(
+                tools,
+                "memory_runtime_stop",
+                crate::builtin_tools::runtime_control::MemoryRuntimeStopTool::DESCRIPTION,
+                super::core_tools::tool_schema::<
+                    crate::builtin_tools::runtime_control::RuntimeControlArgs,
+                >("memory_runtime_stop"),
+            );
             reg(
                 tools,
                 "flag_user_correction",
@@ -116,14 +149,11 @@ impl BuiltinToolRegistry {
                 super::core_tools::tool_schema::<
                     crate::builtin_tools::flag_user_correction::FlagUserCorrectionArgs,
                 >("flag_user_correction"),
-            );
+            )
+            .services = crate::builtin_tools::FlagUserCorrectionTool::services();
             info!("Registered flag_user_correction tool in BuiltinToolRegistry");
 
-            // governance_metrics — read-only audit reality probe. Exposed
-            // whenever a memory backend exists (independent of retrieval policy,
-            // like flag_user_correction): the loop-governance audit ring runs in
-            // a headless cron session and must reach it regardless of injection
-            // mode.
+            // Governance remains independent of retrieval injection policy.
             reg(
                 tools,
                 "governance_metrics",
@@ -131,7 +161,8 @@ impl BuiltinToolRegistry {
                 super::core_tools::tool_schema::<
                     crate::builtin_tools::governance_metrics::GovernanceMetricsArgs,
                 >("governance_metrics"),
-            );
+            )
+            .services = crate::builtin_tools::governance_metrics::GovernanceMetricsTool::services();
             info!("Registered governance_metrics tool in BuiltinToolRegistry");
         }
 
@@ -146,7 +177,8 @@ impl BuiltinToolRegistry {
             super::core_tools::tool_schema::<crate::builtin_tools::remember::RememberArgs>(
                 "remember",
             ),
-        );
+        )
+        .services = crate::builtin_tools::RememberTool::services();
         info!("Registered remember tool in BuiltinToolRegistry");
 
         // node_list — cluster discovery (the read half of node_invoke). Always
@@ -609,7 +641,8 @@ impl BuiltinToolRegistry {
                 super::core_tools::tool_schema::<crate::builtin_tools::note_schema::NoteSchemaArgs>(
                     "note_schema",
                 ),
-            );
+            )
+            .services = crate::builtin_tools::note_schema::NoteSchemaTool::services();
             info!("Registered note_schema tool in BuiltinToolRegistry");
         }
 
@@ -621,7 +654,8 @@ impl BuiltinToolRegistry {
                 super::core_tools::tool_schema::<crate::builtin_tools::note_orient::NoteOrientArgs>(
                     "note_orient",
                 ),
-            );
+            )
+            .services = crate::builtin_tools::note_orient::NoteOrientTool::services();
             info!("Registered note_orient tool in BuiltinToolRegistry");
         }
 
@@ -634,7 +668,7 @@ impl BuiltinToolRegistry {
                 super::core_tools::tool_schema::<crate::builtin_tools::user_profile::UserProfileArgs>(
                     "user_profile",
                 ),
-            );
+            ).services = crate::builtin_tools::user_profile::UserProfileTool::services();
             info!("Registered user_profile tool in BuiltinToolRegistry");
         }
     }
@@ -645,7 +679,6 @@ mod tests {
     use std::collections::HashMap;
 
     use super::{BuiltinToolConfig, BuiltinToolRegistry};
-    use crate::memory::embedding_provider::tests::MockEmbeddingProvider;
     use crate::memory::store::raw_memory::RawMemoryStore;
     use crate::sync_primitives::Arc;
 
@@ -661,16 +694,9 @@ mod tests {
         )
     }
 
-    fn stub_embedder() -> Arc<dyn crate::memory::EmbeddingProvider> {
-        Arc::new(MockEmbeddingProvider::new(1024, "mock"))
-    }
-
-    /// The corrections are written to the raw store and the audit counts are
-    /// read back from it, so a memory backend on its own cannot serve either
-    /// tool — it used to be advertised anyway and every call then failed with
-    /// "no raw memory store configured".
+    /// Raw and derived handles supplied outside the runtime cannot enable these tools.
     #[tokio::test]
-    async fn flag_user_correction_and_governance_metrics_need_the_raw_memory_store() {
+    async fn flag_user_correction_and_governance_metrics_require_the_runtime() {
         let tmp = tempfile::tempdir().unwrap();
         let backend = memory_backend(tmp.path());
         let raw_store = raw_memory_store(tmp.path()).await;
@@ -714,8 +740,37 @@ mod tests {
             &None,
             &None,
         );
-        assert!(with_raw_store.contains_key("flag_user_correction"));
-        assert!(with_raw_store.contains_key("governance_metrics"));
+        assert!(!with_raw_store.contains_key("flag_user_correction"));
+        assert!(!with_raw_store.contains_key("governance_metrics"));
+        assert!(!with_raw_store.contains_key("memory_runtime_status"));
+        assert!(!with_raw_store.contains_key("memory_runtime_start"));
+        assert!(!with_raw_store.contains_key("memory_runtime_stop"));
+
+        let mut with_runtime = HashMap::new();
+        BuiltinToolRegistry::register_optional_tools(
+            &mut with_runtime,
+            &None,
+            &None,
+            &None,
+            &None,
+            &None,
+            &None,
+            &BuiltinToolConfig {
+                memory_runtime: Some(crate::memory::runtime::MemoryRuntime::new(
+                    crate::memory::runtime::MemoryRuntimeConfig {
+                        metadata_path: tmp.path().join("runtime.db"),
+                        note_memory_dir: tmp.path().join("notes"),
+                    },
+                    Arc::new(crate::capability::ownership::OwnershipTree::new()),
+                )),
+                ..Default::default()
+            },
+            &None,
+            &None,
+            &None,
+        );
+        assert!(with_runtime.contains_key("flag_user_correction"));
+        assert!(with_runtime.contains_key("governance_metrics"));
     }
 
     /// The local_voice handler reads the live Config handle, so without that
@@ -738,6 +793,27 @@ mod tests {
             &None,
         );
         assert!(!tools.contains_key("local_voice"));
+        BuiltinToolRegistry::register_optional_tools(
+            &mut tools,
+            &None,
+            &None,
+            &None,
+            &None,
+            &None,
+            &None,
+            &BuiltinToolConfig {
+                config: Some(Arc::new(tokio::sync::RwLock::new(crate::Config::default()))),
+                ..Default::default()
+            },
+            &None,
+            &None,
+            &None,
+        );
+        assert!(tools
+            .get("local_voice")
+            .unwrap()
+            .parameters_schema
+            .is_some());
     }
 
     /// The other half of the gate: with the Config handle wired, the tool IS
@@ -823,14 +899,16 @@ mod tests {
     async fn context_mode_does_not_build_the_retrieval_tools() {
         let _home = crate::utils::paths::IsolatedAlephHome::new();
         let tmp = tempfile::tempdir().unwrap();
-        let backend = memory_backend(tmp.path());
-        let raw_store = raw_memory_store(tmp.path()).await;
-        let embedder = stub_embedder();
+        let runtime = crate::memory::runtime::MemoryRuntime::new(
+            crate::memory::runtime::MemoryRuntimeConfig {
+                metadata_path: tmp.path().join("metadata.db"),
+                note_memory_dir: tmp.path().join("notes"),
+            },
+            Arc::new(crate::capability::ownership::OwnershipTree::new()),
+        );
 
         let context_registry = BuiltinToolRegistry::with_config(BuiltinToolConfig {
-            memory_db: Some(backend.clone()),
-            raw_memory_store: Some(raw_store.clone()),
-            embedder: Some(embedder.clone()),
+            memory_runtime: Some(runtime.clone()),
             injection_mode: crate::config::types::memory::MemoryInjectionMode::Context,
             ..Default::default()
         })
@@ -843,9 +921,7 @@ mod tests {
         assert!(!context_registry.has_tool("memory_timeline"));
 
         let tools_registry = BuiltinToolRegistry::with_config(BuiltinToolConfig {
-            memory_db: Some(backend),
-            raw_memory_store: Some(raw_store),
-            embedder: Some(embedder),
+            memory_runtime: Some(runtime.clone()),
             injection_mode: crate::config::types::memory::MemoryInjectionMode::Tools,
             ..Default::default()
         })
@@ -855,5 +931,9 @@ mod tests {
         assert!(tools_registry.has_tool("memory_search"));
         assert!(tools_registry.has_tool("memory_browse"));
         assert!(tools_registry.has_tool("memory_explore"));
+        assert_eq!(
+            runtime.status().state,
+            crate::memory::runtime::MemoryState::Off,
+        );
     }
 }

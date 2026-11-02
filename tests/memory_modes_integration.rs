@@ -223,12 +223,21 @@ async fn build_pipeline(
     // "database is locked". Each `#[tokio::test]` drives its own current-thread
     // runtime, so blocking here parks only this test's thread.
     static REGISTRY_INIT: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let runtime = alephcore::memory::runtime::MemoryRuntime::new(
+        alephcore::memory::runtime::MemoryRuntimeConfig {
+            metadata_path: tmp.path().join("runtime.db"),
+            note_memory_dir: tmp.path().join("runtime-notes"),
+        },
+        Arc::new(alephcore::capability::ownership::OwnershipTree::new()),
+    );
+
     let registry = {
         let _serialise = REGISTRY_INIT
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         BuiltinToolRegistry::with_config(BuiltinToolConfig {
             injection_mode: mode,
+            memory_runtime: Some(runtime.clone()),
             memory_db: Some(backend_arc.clone() as MemoryBackend),
             raw_memory_store: Some(Arc::clone(&raw_store)),
             embedder: Some(Arc::clone(&embedder)),

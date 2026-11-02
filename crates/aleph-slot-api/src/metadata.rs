@@ -21,6 +21,7 @@
 //!    (confirmation set, safety left at `ReadOnly`) — the user-approved
 //!    correction; a fresh/preset truth-table test pins the full matrix.
 
+use crate::capability::Service;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::fmt;
@@ -84,6 +85,8 @@ pub struct ToolDefinition {
     pub description: String,
     pub parameters: Value,
     pub requires_confirmation: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub services: Vec<Service>,
     pub category: ToolCategory,
     #[serde(default)]
     pub strict: bool,
@@ -102,6 +105,7 @@ impl ToolDefinition {
             description: description.into(),
             parameters,
             requires_confirmation: false,
+            services: Vec::new(),
             category,
             strict: false,
         }
@@ -110,6 +114,12 @@ impl ToolDefinition {
     #[must_use]
     pub const fn with_confirmation(mut self, requires: bool) -> Self {
         self.requires_confirmation = requires;
+        self
+    }
+
+    #[must_use]
+    pub fn with_services(mut self, services: Vec<Service>) -> Self {
+        self.services = services;
         self
     }
 
@@ -123,6 +133,42 @@ impl ToolDefinition {
 #[cfg(test)]
 mod definition_tests {
     use super::*;
+
+    #[test]
+    fn legacy_memory_services_roundtrip() {
+        let mut value = serde_json::to_value(ToolDefinition::new(
+            "memory",
+            "memory",
+            serde_json::json!({"type":"object"}),
+            ToolCategory::Builtin,
+        ))
+        .unwrap();
+        let services = serde_json::json!([{"relation":"requires", "target":{"namespace":"aleph/resources", "name":"memory.runtime"}}]);
+        value["services"] = services.clone();
+        let definition: ToolDefinition = serde_json::from_value(value).unwrap();
+        assert_eq!(
+            serde_json::to_value(definition).unwrap()["services"],
+            services
+        );
+    }
+
+    #[test]
+    fn unified_memory_services_roundtrip() {
+        let mut value = serde_json::to_value(UnifiedTool::new(
+            "builtin:memory",
+            "memory",
+            "memory",
+            ToolSource::Builtin,
+        ))
+        .unwrap();
+        let services = serde_json::json!([{"relation":"requires", "target":{"namespace":"aleph/resources", "name":"memory.runtime"}}]);
+        value["services"] = services.clone();
+        let definition: UnifiedTool = serde_json::from_value(value).unwrap();
+        assert_eq!(
+            serde_json::to_value(definition).unwrap()["services"],
+            services
+        );
+    }
 
     #[test]
     fn definition_builders_round_trip() {
@@ -648,6 +694,9 @@ pub struct UnifiedTool {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub parameters_schema: Option<Value>,
 
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub services: Vec<Service>,
+
     /// Per-result token budget the tool declares
     /// (`crate::tools::AlephTool::MAX_RESULT_TOKENS`), stamped at
     /// registration and carried by `RegistryToolAdapter` to the Layer-2
@@ -823,6 +872,7 @@ impl UnifiedTool {
             description: description.into(),
             source,
             parameters_schema: None,
+            services: Vec::new(),
             max_result_tokens: None,
             is_active: true,
             requires_confirmation: false,
@@ -889,6 +939,12 @@ impl UnifiedTool {
     // =========================================================================
     // Basic Builder Methods
     // =========================================================================
+
+    /// Declare dependencies using the canonical capability contract.
+    pub fn with_services(mut self, services: Vec<Service>) -> Self {
+        self.services = services;
+        self
+    }
 
     /// Builder method: set display name
     pub fn with_display_name(mut self, display_name: impl Into<String>) -> Self {

@@ -132,6 +132,8 @@ pub struct EffectClaim {
 /// - [`OwnershipChange::Bumped`]: the owner nonce was bumped; every binding
 ///   at or below `scope` was rewritten to `generation` and its claims were
 ///   cleared.
+/// - [`OwnershipChange::Rotated`]: all bindings for one capability were
+///   rewritten to `generation` and their claims were cleared.
 /// - [`OwnershipChange::Revoked`]: every binding for `capability` was
 ///   removed and the id was added to the irreversibly-revoked set.
 /// - [`OwnershipChange::Disposed`]: every binding at or below `scope` was
@@ -146,6 +148,11 @@ pub enum OwnershipChange {
     Bumped {
         generation: OwnerGeneration,
         scope: LifetimeScope,
+    },
+    /// One capability's bindings were rotated across all visibility scopes.
+    Rotated {
+        capability: CapabilityId,
+        generation: OwnerGeneration,
     },
     /// A capability id was irreversibly revoked.
     Revoked { capability: CapabilityId },
@@ -217,6 +224,16 @@ pub enum OwnershipError {
     /// The owner generation counter reached its terminal value.
     #[error("ownership generation exhausted")]
     GenerationExhausted,
+}
+
+/// A complete binding capture used by a synchronous source-local commit.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct CapturedBinding {
+    pub capability: CapabilityId,
+    pub visibility: VisibilityScope,
+    pub generation: OwnerGeneration,
+    pub owner: OwnerRef,
+    pub lifetime: LifetimeScope,
 }
 
 /// Why a live ownership binding cannot authorize a source-local commit.
@@ -302,8 +319,8 @@ impl OwnershipTree {
     /// Subscribe to ownership invalidation events.
     ///
     /// Each subscriber receives every subsequent [`OwnershipChange`] emitted
-    /// by [`bump`](Self::bump), [`revoke`](Self::revoke), or
-    /// [`dispose`](Self::dispose). Subscribing is pure observation: it does
+    /// by [`bump`](Self::bump), [`rotate_capability`](Self::rotate_capability),
+    /// [`revoke`](Self::revoke), or [`dispose`](Self::dispose). Subscribing is pure observation: it does
     /// not mutate state, does not advance the owner nonce, and does not
     /// register a binding. The receiver may lag if it falls behind the
     /// channel capacity; the lagged count is reported so a consumer can
@@ -368,7 +385,10 @@ impl OwnershipTree {
         lifetime: LifetimeScope,
         visibility: VisibilityScope,
     ) -> Result<(), RegisterError> {
-        let mut inner = self.inner.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut inner = self
+            .inner
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         Self::guard(&inner, &capability, lifetime)?;
         let key = Self::key(&capability, &visibility);
         if let Some(binding) = inner.bindings.get(&key) {
@@ -401,7 +421,10 @@ impl OwnershipTree {
         lifetime: LifetimeScope,
         visibility: VisibilityScope,
     ) -> Result<(), RegisterError> {
-        let mut inner = self.inner.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut inner = self
+            .inner
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         Self::guard(&inner, &capability, lifetime)?;
         let key = Self::key(&capability, &visibility);
         if inner.bindings.contains_key(&key) {
@@ -421,7 +444,10 @@ impl OwnershipTree {
     }
 
     pub fn resolve(&self, capability: &CapabilityId, visibility: &VisibilityScope) -> Option<()> {
-        let inner = self.inner.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let inner = self
+            .inner
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let key = Self::key(capability, visibility);
         inner.bindings.get(&key).map(|_| ())
     }
@@ -442,7 +468,10 @@ impl OwnershipTree {
         capability: &CapabilityId,
         visibility: &VisibilityScope,
     ) -> Option<OwnerGeneration> {
-        let inner = self.inner.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let inner = self
+            .inner
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let key = Self::key(capability, visibility);
         inner.bindings.get(&key).map(|binding| binding.generation)
     }
@@ -459,9 +488,15 @@ impl OwnershipTree {
         capability: &CapabilityId,
         visibility: &VisibilityScope,
     ) -> Option<OwnerRef> {
-        let inner = self.inner.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let inner = self
+            .inner
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let key = Self::key(capability, visibility);
-        inner.bindings.get(&key).map(|binding| binding.owner.clone())
+        inner
+            .bindings
+            .get(&key)
+            .map(|binding| binding.owner.clone())
     }
 
     /// Validate the complete live binding and commit under the same tree lock.
@@ -470,9 +505,11 @@ impl OwnershipTree {
     /// without advancing the nonce. Identical re-registration remains the same
     /// authorization fact; explicit bump/revoke supplies invalidation semantics.
     ///
-    /// Callers acquire the source gate first, then this tree, then any provider
-    /// and entry-local locks. The synchronous callback must only commit local
-    /// state: no await, I/O, plugin code, tree re-entry, or source-lock acquisition.
+    /// Source gates precede this tree. Canonical Tool admission also holds its
+    /// provider/publication gates before entering the tree. Channel admission
+    /// uses a distinct, source-private channel provider after the tree. These
+    /// provider authorities must not be shared. The synchronous callback only
+    /// commits local state: no await, I/O, plugin code, or lock re-entry.
     #[allow(dead_code)] // Source-local Gateway admission/completion integrates in Task 5.
     pub(crate) fn with_current_binding<R>(
         &self,
@@ -483,27 +520,95 @@ impl OwnershipTree {
         lifetime: &LifetimeScope,
         commit: impl FnOnce() -> R,
     ) -> Result<R, BindingValidationError> {
-        let inner = self.inner.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let inner = self
+            .inner
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        Self::validate_binding(&inner, capability, visibility, expected, owner, *lifetime)?;
+        Ok(commit())
+    }
+
+    /// Validate every captured binding before one local commit under one lock.
+    /// An empty capture cannot authorize a commit.
+    pub(crate) fn with_current_bindings<R>(
+        &self,
+        captures: &[CapturedBinding],
+        commit: impl FnOnce() -> R,
+    ) -> Result<R, BindingValidationError> {
+        if captures.is_empty() {
+            return Err(BindingValidationError::MissingBinding);
+        }
+        let inner = self
+            .inner
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        for capture in captures {
+            Self::validate_binding(
+                &inner,
+                &capture.capability,
+                &capture.visibility,
+                capture.generation,
+                &capture.owner,
+                capture.lifetime,
+            )?;
+        }
+        Ok(commit())
+    }
+
+    fn validate_binding(
+        inner: &OwnershipInner,
+        capability: &CapabilityId,
+        visibility: &VisibilityScope,
+        expected: OwnerGeneration,
+        owner: &OwnerRef,
+        lifetime: LifetimeScope,
+    ) -> Result<(), BindingValidationError> {
         if inner.revoked.contains(capability) {
             return Err(BindingValidationError::Revoked);
         }
-        if Self::lifetime_disposed(&inner, *lifetime) {
+        if Self::lifetime_disposed(inner, lifetime) {
             return Err(BindingValidationError::Disposed);
         }
         let binding = inner
             .bindings
             .get(&Self::key(capability, visibility))
             .ok_or(BindingValidationError::MissingBinding)?;
-        if Self::lifetime_disposed(&inner, binding.lifetime) {
+        if Self::lifetime_disposed(inner, binding.lifetime) {
             return Err(BindingValidationError::Disposed);
         }
         if binding.generation != expected {
             return Err(BindingValidationError::GenerationMismatch);
         }
-        if &binding.owner != owner || &binding.lifetime != lifetime {
+        if &binding.owner != owner || binding.lifetime != lifetime {
             return Err(BindingValidationError::BindingMismatch);
         }
-        Ok(commit())
+        Ok(())
+    }
+
+    /// Invalidate only one capability's bindings across all visibility scopes.
+    /// Revoked ids and disposed lifetimes remain terminal.
+    pub fn rotate_capability(&self, id: &CapabilityId) -> Result<(), OwnershipError> {
+        let mut inner = self
+            .inner
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let next = inner
+            .generation_nonce
+            .checked_add(1)
+            .ok_or(OwnershipError::GenerationExhausted)?;
+        let generation = OwnerGeneration(next);
+        inner.generation_nonce = next;
+        for (key, binding) in &mut inner.bindings {
+            if key.capability == *id {
+                binding.generation = generation;
+                binding.claims.clear();
+            }
+        }
+        let _ = inner.changes.send(OwnershipChange::Rotated {
+            capability: id.clone(),
+            generation,
+        });
+        Ok(())
     }
 
     /// Read the current owner generation of many `(CapabilityId, VisibilityScope)`
@@ -520,7 +625,10 @@ impl OwnershipTree {
         capabilities: impl IntoIterator<Item = CapabilityId>,
         visibility: &VisibilityScope,
     ) -> HashMap<CapabilityId, OwnerGeneration> {
-        let inner = self.inner.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let inner = self
+            .inner
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         capabilities
             .into_iter()
             .filter_map(|capability| {
@@ -540,7 +648,10 @@ impl OwnershipTree {
         owner: OwnerRef,
         request_id: String,
     ) -> Option<EffectClaim> {
-        let mut inner = self.inner.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut inner = self
+            .inner
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         if inner.revoked.contains(capability) {
             return None;
         }
@@ -571,7 +682,10 @@ impl OwnershipTree {
         capability: &CapabilityId,
         visibility: &VisibilityScope,
     ) -> ClaimState {
-        let inner = self.inner.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let inner = self
+            .inner
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let Some(binding) = inner.bindings.get(&Self::key(capability, visibility)) else {
             return ClaimState::Unknown;
         };
@@ -599,12 +713,18 @@ impl OwnershipTree {
     }
 
     pub fn is_disposed(&self, scope: LifetimeScope) -> bool {
-        let inner = self.inner.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let inner = self
+            .inner
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         Self::lifetime_disposed(&inner, scope)
     }
 
     pub fn bump(&self, scope: LifetimeScope) -> Result<OwnerGeneration, OwnershipError> {
-        let mut inner = self.inner.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut inner = self
+            .inner
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let next_nonce = inner
             .generation_nonce
             .checked_add(1)
@@ -632,7 +752,10 @@ impl OwnershipTree {
     /// tombstone was created. Use [`revoke_bound`](Self::revoke_bound) when an
     /// unbound id must remain registerable.
     pub fn revoke(&self, capability: &CapabilityId) -> bool {
-        let mut inner = self.inner.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut inner = self
+            .inner
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         Self::revoke_locked(&mut inner, capability)
     }
 
@@ -647,7 +770,10 @@ impl OwnershipTree {
     /// An existing binding is revoked with the identical irreversible
     /// transition as [`revoke`](Self::revoke).
     pub fn revoke_bound(&self, capability: &CapabilityId) -> BoundRevoke {
-        let mut inner = self.inner.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut inner = self
+            .inner
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         if inner.revoked.contains(capability) {
             return BoundRevoke::AlreadyRevoked;
         }
@@ -685,7 +811,10 @@ impl OwnershipTree {
     /// Disposing `Runtime` removes every binding and permanently blocks all
     /// later registration in this tree.
     pub fn dispose(&self, scope: LifetimeScope) -> bool {
-        let mut inner = self.inner.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut inner = self
+            .inner
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let before = inner.bindings.len();
         inner
             .bindings
@@ -752,6 +881,222 @@ mod tests {
         VisibilityScope {
             workspace: Some(workspace.to_string()),
             ..VisibilityScope::default()
+        }
+    }
+
+    #[test]
+    fn rotation_invalidates_all_memory_scopes_only() {
+        let tree = OwnershipTree::new();
+        let memory = CapabilityId {
+            namespace: "aleph/resources".into(),
+            name: "memory.runtime".into(),
+        };
+        let unrelated = cap_id("unrelated");
+        let control = cap_id("memory_runtime_stop");
+        let captures: Vec<_> = [
+            (memory.clone(), full_vis()),
+            (memory.clone(), restricted_vis("workspace-b")),
+            (unrelated.clone(), full_vis()),
+            (control.clone(), full_vis()),
+        ]
+        .into_iter()
+        .map(|(capability, visibility)| {
+            tree.register(
+                capability.clone(),
+                OwnerRef::Runtime,
+                LifetimeScope::Runtime,
+                visibility.clone(),
+            )
+            .unwrap();
+            CapturedBinding {
+                generation: tree.generation(&capability, &visibility).unwrap(),
+                capability,
+                visibility,
+                owner: OwnerRef::Runtime,
+                lifetime: LifetimeScope::Runtime,
+            }
+        })
+        .collect();
+        let claims: Vec<_> = captures
+            .iter()
+            .map(|capture| {
+                tree.claim(
+                    &capture.capability,
+                    &capture.visibility,
+                    capture.owner.clone(),
+                    "rotation".into(),
+                )
+                .unwrap()
+            })
+            .collect();
+        let mut changes = tree.subscribe_changes();
+        tree.rotate_capability(&memory).unwrap();
+        assert_eq!(
+            changes.try_recv().unwrap(),
+            OwnershipChange::Rotated {
+                capability: memory.clone(),
+                generation: tree.generation(&memory, &full_vis()).unwrap(),
+            }
+        );
+        assert!(changes.try_recv().is_err());
+        for (index, capture) in captures.iter().enumerate() {
+            let result = tree.with_current_bindings(std::slice::from_ref(capture), || 7);
+            if index < 2 {
+                assert_eq!(result, Err(BindingValidationError::GenerationMismatch));
+                assert_eq!(
+                    tree.claim_state(&claims[index], &capture.capability, &capture.visibility),
+                    ClaimState::Unknown
+                );
+                assert_ne!(
+                    tree.generation(&capture.capability, &capture.visibility),
+                    Some(capture.generation)
+                );
+            } else {
+                assert_eq!(result, Ok(7));
+                assert_eq!(
+                    tree.claim_state(&claims[index], &capture.capability, &capture.visibility),
+                    ClaimState::Active
+                );
+                assert_eq!(
+                    tree.generation(&capture.capability, &capture.visibility),
+                    Some(capture.generation)
+                );
+            }
+        }
+        let third = restricted_vis("workspace-c");
+        tree.register(
+            memory.clone(),
+            OwnerRef::Runtime,
+            LifetimeScope::Runtime,
+            third.clone(),
+        )
+        .unwrap();
+        assert_eq!(
+            tree.generation(&memory, &third),
+            tree.generation(&memory, &captures[0].visibility)
+        );
+        assert!(tree.generation(&memory, &third).unwrap() > captures[0].generation);
+    }
+
+    #[test]
+    fn plural_validation_has_no_partial_commit() {
+        for stale_index in 0..2 {
+            let tree = OwnershipTree::new();
+            let captures: Vec<_> = ["tool", "resource"]
+                .into_iter()
+                .map(|name| {
+                    let capability = cap_id(name);
+                    let visibility = full_vis();
+                    tree.register(
+                        capability.clone(),
+                        OwnerRef::Runtime,
+                        LifetimeScope::Runtime,
+                        visibility.clone(),
+                    )
+                    .unwrap();
+                    CapturedBinding {
+                        generation: tree.generation(&capability, &visibility).unwrap(),
+                        capability,
+                        visibility,
+                        owner: OwnerRef::Runtime,
+                        lifetime: LifetimeScope::Runtime,
+                    }
+                })
+                .collect();
+            let commits = std::cell::Cell::new(0);
+            assert_eq!(
+                tree.with_current_bindings(&captures, || {
+                    commits.set(commits.get() + 1);
+                    7
+                }),
+                Ok(7)
+            );
+            assert_eq!(commits.get(), 1);
+            tree.revoke(&captures[stale_index].capability);
+            assert_eq!(
+                tree.with_current_bindings(&captures, || commits.set(commits.get() + 1)),
+                Err(BindingValidationError::Revoked)
+            );
+            assert_eq!(
+                commits.get(),
+                1,
+                "no partial callback may run when either capture is stale"
+            );
+        }
+    }
+
+    #[test]
+    fn rotation_exhaustion_preserves_bindings_claims_and_notifications() {
+        let tree = OwnershipTree::new();
+        let id = cap_id("exhausted-rotation");
+        let visibility = full_vis();
+        tree.register(
+            id.clone(),
+            OwnerRef::Runtime,
+            LifetimeScope::Runtime,
+            visibility.clone(),
+        )
+        .unwrap();
+        let generation = tree.generation(&id, &visibility).unwrap();
+        let claim = tree
+            .claim(
+                &id,
+                &visibility,
+                OwnerRef::Runtime,
+                "before-exhaustion".into(),
+            )
+            .unwrap();
+        tree.inner.lock().unwrap().generation_nonce = u64::MAX;
+        let mut changes = tree.subscribe_changes();
+        assert_eq!(
+            tree.rotate_capability(&id),
+            Err(OwnershipError::GenerationExhausted)
+        );
+        assert_eq!(tree.generation(&id, &visibility), Some(generation));
+        assert_eq!(
+            tree.claim_state(&claim, &id, &visibility),
+            ClaimState::Active
+        );
+        assert!(changes.try_recv().is_err());
+    }
+
+    #[test]
+    fn rotation_never_revives_revoked_or_disposed_bindings() {
+        for revoked in [true, false] {
+            let tree = OwnershipTree::new();
+            let id = cap_id("terminal-rotation");
+            let visibility = full_vis();
+            tree.register(
+                id.clone(),
+                OwnerRef::Runtime,
+                LifetimeScope::Task,
+                visibility.clone(),
+            )
+            .unwrap();
+            let capture = CapturedBinding {
+                capability: id.clone(),
+                visibility: visibility.clone(),
+                generation: tree.generation(&id, &visibility).unwrap(),
+                owner: OwnerRef::Runtime,
+                lifetime: LifetimeScope::Task,
+            };
+            if revoked {
+                tree.revoke(&id);
+            } else {
+                tree.dispose(LifetimeScope::Task);
+            }
+            tree.rotate_capability(&id).unwrap();
+            assert_eq!(
+                tree.with_current_bindings(&[capture], || panic!("terminal binding committed")),
+                Err(if revoked {
+                    BindingValidationError::Revoked
+                } else {
+                    BindingValidationError::Disposed
+                })
+            );
+            assert!(tree
+                .register(id, OwnerRef::Runtime, LifetimeScope::Task, visibility)
+                .is_err());
         }
     }
 
@@ -1206,7 +1551,10 @@ mod tests {
         // Move the test fixture to the last two representable generation steps
         // without exercising the production mutation path under test.
         {
-            let mut inner = tree.inner.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            let mut inner = tree
+                .inner
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             inner.generation_nonce = u64::MAX - 1;
             inner.fencing_nonce = u64::MAX - 2;
             let binding = inner
@@ -1242,7 +1590,10 @@ mod tests {
         let old_lease_state_before_failed_bump = tree.claim_state(&old_lease, &cap, &vis);
         let generation_before = tree.generation(&cap, &vis);
         let binding_before = {
-            let inner = tree.inner.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            let inner = tree
+                .inner
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             let binding = inner
                 .bindings
                 .get(&OwnershipTree::key(&cap, &vis))
@@ -1261,7 +1612,10 @@ mod tests {
         assert_eq!(tree.generation(&cap, &vis), generation_before);
         assert_eq!(tree.resolve(&cap, &vis), Some(()));
         let binding_after = {
-            let inner = tree.inner.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            let inner = tree
+                .inner
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             let binding = inner
                 .bindings
                 .get(&OwnershipTree::key(&cap, &vis))

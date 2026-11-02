@@ -443,7 +443,7 @@ pub struct GatewayServer {
     /// Provider configs for /v1/models listing
     pub openai_provider_configs: Vec<(String, crate::config::ProviderConfig)>,
     /// Embedding provider for /v1/embeddings
-    pub embedding_provider: Option<Arc<dyn crate::memory::EmbeddingProvider>>,
+    pub memory_runtime: Option<Arc<crate::memory::runtime::MemoryRuntime>>,
     /// Phase 5 Orchestrator (flow composition). Populated at boot after
     /// agent registry + session + tool + provider + sandbox are assembled.
     /// Task 10 (Gateway `run_agent_loop` replacement) consumes this.
@@ -578,7 +578,7 @@ impl GatewayServer {
             openai_agent_registry: None,
             openai_provider_map: Arc::new(HashMap::new()),
             openai_provider_configs: Vec::new(),
-            embedding_provider: None,
+            memory_runtime: None,
             orchestrator: None,
             admin_router: None,
             reconciler_handle: None,
@@ -647,7 +647,7 @@ impl GatewayServer {
             openai_agent_registry: None,
             openai_provider_map: Arc::new(HashMap::new()),
             openai_provider_configs: Vec::new(),
-            embedding_provider: None,
+            memory_runtime: None,
             orchestrator: None,
             admin_router: None,
             reconciler_handle: None,
@@ -1041,7 +1041,7 @@ impl GatewayServer {
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap_or_default()
                 .as_secs(),
-            embedding_provider: self.embedding_provider.clone(),
+            memory_runtime: self.memory_runtime.clone(),
         });
         let openai = openai_routes(openai_state);
 

@@ -157,6 +157,7 @@ pub struct FileSessionStore {
     /// the file backend also drives session-end summarization / reflection /
     /// profile synthesis. `None` (the default) keeps the legacy behaviour.
     raw_memory_writer: Option<Arc<dyn crate::memory::store::raw_memory::RawMemoryStore>>,
+    memory_runtime: Option<std::sync::Weak<crate::memory::runtime::MemoryRuntime>>,
     /// Per-session-key locks for `metadata.json`. Everything that writes goes
     /// through these — see the [`meta`] module doc for why.
     metadata_locks: meta::MetaLocks,
@@ -182,6 +183,7 @@ impl FileSessionStore {
             config,
             event_bus: crate::sync_primitives::RwLock::new(None),
             raw_memory_writer: None,
+            memory_runtime: None,
             metadata_locks: meta::MetaLocks::new(),
         })
     }
@@ -262,6 +264,16 @@ impl FileSessionStore {
         writer: Arc<dyn crate::memory::store::raw_memory::RawMemoryStore>,
     ) -> Self {
         self.raw_memory_writer = Some(writer);
+        self
+    }
+
+    /// Attach the canonical Memory source without extending its lifetime.
+    #[must_use]
+    pub fn with_memory_runtime(
+        mut self,
+        runtime: &Arc<crate::memory::runtime::MemoryRuntime>,
+    ) -> Self {
+        self.memory_runtime = Some(Arc::downgrade(runtime));
         self
     }
 
@@ -771,20 +783,44 @@ impl SessionStore for FileSessionStore {
             return Ok(DeleteResult { deleted: false });
         }
         let date = chrono::Utc::now().format("%Y-%m-%d").to_string();
-        let archive_dir = self
+        let archive_base = self
             .config
             .base_dir
             .join(".archive")
             .join(date)
-            .join(&key_str);
-        if let Some(parent) = archive_dir.parent() {
+            .join(sanitize_key_for_dir(&key_str));
+        if let Some(parent) = archive_base.parent() {
             tokio::fs::create_dir_all(parent).await.map_err(|e| {
                 SessionStoreError::DatabaseError(format!("Create archive dir failed: {e}"))
             })?;
         }
-        tokio::fs::rename(&dir, &archive_dir).await.map_err(|e| {
-            SessionStoreError::DatabaseError(format!("Archive session failed: {e}"))
-        })?;
+        let mut archive_dir = archive_base.clone();
+        let mut collision = 0usize;
+        loop {
+            match tokio::fs::rename(&dir, &archive_dir).await {
+                Ok(()) => break,
+                Err(error) if archive_dir.exists() => {
+                    collision += 1;
+                    if collision > 1024 {
+                        return Err(SessionStoreError::DatabaseError(format!(
+                            "Archive session failed after too many name collisions: {error}"
+                        )));
+                    }
+                    archive_dir = archive_base.with_file_name(format!(
+                        "{}-{collision}",
+                        archive_base
+                            .file_name()
+                            .and_then(|name| name.to_str())
+                            .unwrap_or("session")
+                    ));
+                }
+                Err(error) => {
+                    return Err(SessionStoreError::DatabaseError(format!(
+                        "Archive session failed: {error}"
+                    )));
+                }
+            }
+        }
         self.emit_session_changed(&key_str, "delete", None);
         Ok(DeleteResult { deleted: true })
     }
@@ -1146,15 +1182,26 @@ impl SessionStore for FileSessionStore {
                 // scope columns directly (no extra query) so the session-end
                 // reflector can write OPEN_LOOPS.md under the same composed
                 // id the curated-envelope reader resolves.
-                crate::gateway::session_manager::ops::emit_session_end_raw(
+                crate::gateway::session_manager::ops::capture_session_end(
+                    self.memory_runtime
+                        .as_ref()
+                        .and_then(std::sync::Weak::upgrade),
                     writer,
-                    key.agent_id().to_string(),
-                    key_str.clone(),
-                    tail,
-                    crate::memory::store::raw_memory::SessionEndReason::Disconnect,
-                    meta.owner_user_id.clone(),
-                    meta.scope_id.clone(),
-                );
+                    crate::memory::store::raw_memory::RawMemory::new(
+                        tail,
+                        crate::memory::store::raw_memory::RawMemorySource::SessionEnd {
+                            reason: crate::memory::store::raw_memory::SessionEndReason::Disconnect,
+                        },
+                    )
+                    .with_agent(key.agent_id())
+                    .with_session(key_str.clone()),
+                    crate::scope::ScopeAttribution::from_persisted(
+                        meta.owner_user_id.as_deref(),
+                        meta.scope_id.as_deref(),
+                    ),
+                    true,
+                )
+                .await;
             }
 
             meta.state = Some(SessionState::Stopped);
@@ -2512,6 +2559,40 @@ mod reap_tests {
         let (store, _dir) = temp_store();
         let cutoff = chrono::Utc::now().timestamp();
         assert_eq!(store.reap_task_sessions("cron", cutoff).await.unwrap(), 0);
+    }
+}
+
+#[cfg(test)]
+mod archive_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn delete_session_reuses_a_key_without_colliding_with_its_archive() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let store = FileSessionStore::new(FileSessionStoreConfig {
+            base_dir: dir.path().to_path_buf(),
+            ..Default::default()
+        })
+        .expect("store");
+        let key = SessionKey::main("main");
+
+        store.get_or_create(&key).await.unwrap();
+        assert!(store.delete_session(&key).await.unwrap().deleted);
+        store.get_or_create(&key).await.unwrap();
+        assert!(store.delete_session(&key).await.unwrap().deleted);
+
+        let date = chrono::Utc::now().format("%Y-%m-%d").to_string();
+        let archive = dir.path().join(".archive").join(date);
+        let mut entries = tokio::fs::read_dir(&archive).await.unwrap();
+        let mut names = Vec::new();
+        while let Some(entry) = entries.next_entry().await.unwrap() {
+            names.push(entry.file_name().to_string_lossy().into_owned());
+        }
+
+        let base = sanitize_key_for_dir(&key.to_key_string());
+        assert_eq!(names.len(), 2);
+        assert!(names.contains(&base));
+        assert!(names.contains(&format!("{base}-1")));
     }
 }
 

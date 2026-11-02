@@ -246,6 +246,7 @@ fn note_memory_dir() -> std::path::PathBuf {
 pub struct MemorySearchTool {
     raw_store: Arc<dyn RawMemoryStore>,
     note_retrieval: Arc<NoteFactRetrieval<SqliteMemoryBackend>>,
+    note_memory_dir: std::path::PathBuf,
     comptroller: Arc<ContextComptroller>,
     /// Shared default workspace ID, written per-request by the execution engine
     /// (`execute.rs`) from the session's agent id.
@@ -303,7 +304,7 @@ impl MemorySearchTool {
     ) -> Self {
         // NoteFactRetrieval: used for the primary long-term recall path.
         let memory_dir = note_memory_dir();
-        let note_indexer = Arc::new(NoteIndexer::new(memory_dir, database.clone()));
+        let note_indexer = Arc::new(NoteIndexer::new(memory_dir.clone(), database.clone()));
         let mut retrieval = NoteFactRetrieval::new(note_indexer, Arc::clone(&embedder));
         if let Some(cfg) = rerank_config {
             retrieval = retrieval.with_rerank_config(cfg);
@@ -314,20 +315,37 @@ impl MemorySearchTool {
         if let Some(cfg) = expansion_config {
             retrieval = retrieval.with_expansion_config(cfg);
         }
-        let note_retrieval = Arc::new(retrieval);
+        Self::from_retrieval(raw_store, Arc::new(retrieval), memory_dir)
+    }
 
+    pub(crate) fn from_retrieval(
+        raw_store: Arc<dyn RawMemoryStore>,
+        note_retrieval: Arc<NoteFactRetrieval<SqliteMemoryBackend>>,
+        note_memory_dir: std::path::PathBuf,
+    ) -> Self {
         let comptroller_config = ComptrollerConfig::default();
         let comptroller = Arc::new(ContextComptroller::new(comptroller_config));
 
         Self {
             raw_store,
             note_retrieval,
+            note_memory_dir,
             comptroller,
             default_workspace: Arc::new(RwLock::new(DEFAULT_AGENT.to_string())),
             default_session_key: Arc::new(RwLock::new(String::new())),
             smart_recall_config: Arc::new(RwLock::new(std::collections::HashMap::new())),
             project_scoped: false,
         }
+    }
+
+    pub(crate) fn with_runtime_settings(
+        mut self,
+        settings: crate::memory::runtime::MemorySearchSettings,
+    ) -> Self {
+        self.default_workspace = settings.workspace;
+        self.default_session_key = settings.session_key;
+        self.smart_recall_config = settings.smart_recall;
+        self
     }
 
     /// Enable per-project scoping for the `current_session` raw-chunk reads,
@@ -470,7 +488,7 @@ impl MemorySearchTool {
             // Resolved HERE so there is one decision point rather than a second
             // copy of the predicate inside the retrieval fan-out — the property
             // this comment has always claimed, now true of both fan-outs.
-            let all = crate::memory::project_scope::list_note_corpora(&note_memory_dir());
+            let all = crate::memory::project_scope::list_note_corpora(&self.note_memory_dir);
             let kept: Vec<String> = all.iter().filter(|id| admits(id)).cloned().collect();
             filtered_out = all.len() - kept.len();
             AgentEnvFilter::Multiple(kept)
@@ -670,7 +688,7 @@ impl MemorySearchTool {
                         threshold = threshold,
                         "Smart Recall Phase 2 triggered — expanding to all agents"
                     );
-                    let memory_dir = note_memory_dir();
+                    let memory_dir = &self.note_memory_dir;
                     // The SECOND fan-out, and the one the narrowing above never
                     // reached. `retrieve_all_agents` is `list_note_corpora`
                     // over the whole memory directory, so a sparse primary
@@ -689,7 +707,7 @@ impl MemorySearchTool {
                     // `None` actor (cron / A2A / tests) admits everything, so
                     // this is byte-identical to `retrieve_all_agents` there.
                     let visible: Vec<String> =
-                        crate::memory::project_scope::list_note_corpora(&memory_dir)
+                        crate::memory::project_scope::list_note_corpora(memory_dir)
                             .into_iter()
                             .filter(|id| admits(id))
                             .collect();
@@ -771,7 +789,7 @@ impl MemorySearchTool {
                         .note_retrieval
                         .retrieve_multi_agent(
                             &args.query,
-                            &crate::memory::project_scope::list_note_corpora(&note_memory_dir()),
+                            &crate::memory::project_scope::list_note_corpora(&self.note_memory_dir),
                             args.max_results,
                         )
                         .await
@@ -908,6 +926,7 @@ impl Clone for MemorySearchTool {
         Self {
             raw_store: self.raw_store.clone(),
             note_retrieval: self.note_retrieval.clone(),
+            note_memory_dir: self.note_memory_dir.clone(),
             comptroller: self.comptroller.clone(),
             default_workspace: self.default_workspace.clone(),
             default_session_key: self.default_session_key.clone(),
@@ -922,6 +941,10 @@ impl Clone for MemorySearchTool {
 impl AlephTool for MemorySearchTool {
     const NAME: &'static str = "memory_search";
     const DESCRIPTION: &'static str = Self::DESCRIPTION;
+
+    fn services() -> Vec<aleph_slot_api::capability::Service> {
+        vec![crate::memory::runtime::required_service()]
+    }
 
     type Args = MemorySearchArgs;
     type Output = MemorySearchOutput;

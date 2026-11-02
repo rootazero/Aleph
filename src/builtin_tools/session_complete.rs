@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::Result;
 use crate::memory::extensions::types::{CaptureCtx, CaptureDecision};
-use crate::memory::extensions::{insert_with_capture_filter, MemoryExtensionRegistry};
+use crate::memory::extensions::MemoryExtensionRegistry;
 use crate::memory::namespace::NamespaceScope;
 use crate::memory::store::raw_memory::{
     RawMemory, RawMemorySource, RawMemoryStore, SessionEndReason,
@@ -57,6 +57,7 @@ pub struct SessionCompleteTool {
     /// When set, the `SessionEnd` row goes through `insert_with_capture_filter`.
     /// Task 11 wires the real registry at startup; `None` falls back to direct insert.
     capture_registry: Option<Arc<MemoryExtensionRegistry>>,
+    memory_runtime: Option<std::sync::Weak<crate::memory::runtime::MemoryRuntime>>,
 }
 
 impl SessionCompleteTool {
@@ -72,6 +73,7 @@ impl SessionCompleteTool {
             agent_id: agent_id.into(),
             session_id: None,
             capture_registry: None,
+            memory_runtime: None,
         }
     }
 
@@ -88,6 +90,14 @@ impl SessionCompleteTool {
     /// Task 11 wires the real registry at startup; `None` preserves current behaviour.
     pub fn with_capture_registry(mut self, registry: Arc<MemoryExtensionRegistry>) -> Self {
         self.capture_registry = Some(registry);
+        self
+    }
+
+    pub fn with_memory_runtime(
+        mut self,
+        runtime: std::sync::Weak<crate::memory::runtime::MemoryRuntime>,
+    ) -> Self {
+        self.memory_runtime = Some(runtime);
         self
     }
 
@@ -163,7 +173,15 @@ impl AlephTool for SessionCompleteTool {
             // Returning ok: true here would lie to the agent (and the user)
             // that the completion was persisted. Surface the block as an
             // explicit non-OK result so the caller can react.
-            match insert_with_capture_filter(&store, registry, &ctx, raw).await? {
+            match crate::memory::extensions::insert_helper::insert_with_runtime_capture_filter(
+                &store,
+                registry,
+                self.memory_runtime.as_ref(),
+                &ctx,
+                raw,
+            )
+            .await?
+            {
                 CaptureDecision::Allow => {}
                 CaptureDecision::Block { reason } => {
                     return Ok(SessionCompleteResult {
@@ -182,10 +200,7 @@ impl AlephTool for SessionCompleteTool {
 
         Ok(SessionCompleteResult {
             ok: true,
-            message: format!(
-                "Task completion recorded. Retrospective extraction queued for agent '{}'.",
-                actor
-            ),
+            message: format!("Task completion recorded for agent '{}'.", actor),
         })
     }
 }

@@ -95,6 +95,7 @@ impl ToolHandler for BuiltinHandler {
             input_schema: inner_def.parameters,
             source: ToolSource::Builtin,
             metadata: ToolDefinitionMetadata {
+                services: inner_def.services,
                 hidden_from_llm: false,
                 requires_approval: inner_def.requires_confirmation,
                 tags: Vec::new(),
@@ -224,6 +225,7 @@ impl ToolHandler for BuiltinRegistryRouter {
                     // `requires_confirmation` / idempotency / budget must
                     // come from the same source the registry itself uses.
                     metadata: ToolDefinitionMetadata {
+                        services: unified.services.clone(),
                         hidden_from_llm: false,
                         requires_approval: unified.requires_confirmation(),
                         tags: Vec::new(),
@@ -247,6 +249,7 @@ impl ToolHandler for BuiltinRegistryRouter {
                 input_schema: serde_json::json!({"type": "object"}),
                 source: ToolSource::Builtin,
                 metadata: ToolDefinitionMetadata {
+                    services: Vec::new(),
                     hidden_from_llm: true,
                     requires_approval: true,
                     tags: Vec::new(),

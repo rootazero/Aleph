@@ -44,6 +44,110 @@ pub(in crate::commands::start) async fn drain_note_vault_watcher(
     watcher.shutdown().await
 }
 
+// ── Note maintenance lifecycle ──────────────────────────────────────────────
+
+/// Spawn the existing nonfatal bootstrap wrapper at its original startup point.
+pub(in crate::commands::start) fn spawn_note_orientation_bootstrap(
+    wiki_clone: Arc<dyn alephcore::memory::notes::orientation::NoteOrientation>,
+    agent_id: String,
+) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async move {
+        if let Err(e) = wiki_clone.bootstrap(&agent_id).await {
+            tracing::warn!(error = %e, "Wiki orientation bootstrap failed; continuing without it");
+        }
+    })
+}
+
+/// Spawn the existing rebuild wrapper, retaining its complete operator summary.
+pub(in crate::commands::start) fn spawn_note_index_rebuild(
+    indexer: Arc<
+        alephcore::memory::notes::NoteIndexer<alephcore::memory::store::SqliteMemoryBackend>,
+    >,
+    agent_id: String,
+    tx_residue_max_age: u64,
+) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async move {
+        tracing::info!(agent = %agent_id, "Reconciling note index with disk");
+        let stats = indexer
+            .full_rebuild_all(&agent_id, tx_residue_max_age)
+            .await;
+        tracing::info!(
+            corpora = stats.corpora,
+            indexed = stats.total.indexed,
+            skipped = stats.total.skipped,
+            errors = stats.total.errors,
+            pruned = stats.total.pruned,
+            // The summary line is what an operator actually reads,
+            // so the vector drift has to appear on it. Without this
+            // the only production consumer of `IndexStats` dropped
+            // `stale_vectors` on the floor — the field had no reader
+            // anywhere in the repo — and a boot reporting
+            // `errors=0` looked healthy while every note's vector
+            // was missing or outdated. A count near the note total
+            // is the shape a misconfigured embedding dimension
+            // makes; `reembed_all` is the repair.
+            stale_vectors = stats.total.stale_vectors,
+            // Non-zero means a previous process died mid-ingest. The trees
+            // were full copies of notes-about-to-be-written sitting in the
+            // user's vault, and before this line existed nothing removed or
+            // reported them.
+            tx_residue_removed = stats.tx_residue_removed,
+            "Note index rebuild complete"
+        );
+        for (corpus, error) in &stats.failed {
+            tracing::warn!(%corpus, %error, "Note corpus left unreconciled at startup");
+        }
+    })
+}
+
+/// Owns only the two startup note-maintenance tasks; shared stores remain external.
+pub(in crate::commands::start) struct NoteMaintenanceOwner {
+    orientation: Option<tokio::task::JoinHandle<()>>,
+    rebuild: Option<tokio::task::JoinHandle<()>>,
+    failure: Option<String>,
+}
+
+impl NoteMaintenanceOwner {
+    pub(in crate::commands::start) fn new(
+        orientation: tokio::task::JoinHandle<()>,
+        rebuild: tokio::task::JoinHandle<()>,
+    ) -> Self {
+        Self {
+            orientation: Some(orientation),
+            rebuild: Some(rebuild),
+            failure: None,
+        }
+    }
+}
+
+/// Observe both startup tasks without surrendering pending handles on cancellation.
+///
+/// A terminal join failure remains sticky, but never skips the sibling task.
+pub(in crate::commands::start) async fn drain_note_maintenance(
+    owner: &mut NoteMaintenanceOwner,
+) -> Result<(), alephcore::error::AlephError> {
+    if let Some(handle) = owner.orientation.as_mut() {
+        if let Err(error) = handle.await {
+            owner
+                .failure
+                .get_or_insert_with(|| format!("note orientation task failed: {error}"));
+        }
+        owner.orientation = None;
+    }
+    if let Some(handle) = owner.rebuild.as_mut() {
+        if let Err(error) = handle.await {
+            owner
+                .failure
+                .get_or_insert_with(|| format!("note rebuild task failed: {error}"));
+        }
+        owner.rebuild = None;
+    }
+    match owner.failure.as_ref() {
+        Some(error) => Err(alephcore::error::AlephError::other(error.clone())),
+        None => Ok(()),
+    }
+}
+
 // ── Security store + vault ──────────────────────────────────────────────────
 
 /// Return type for `initialize_vault`: the security store, the secrets
@@ -1193,12 +1297,305 @@ pub(in crate::commands::start) async fn initialize_inbound_router(
 
 #[cfg(test)]
 mod tests {
-    use super::drain_note_vault_watcher;
-    use alephcore::memory::notes::NoteIndexer;
+    use super::{
+        drain_note_maintenance, drain_note_vault_watcher, spawn_note_index_rebuild,
+        spawn_note_orientation_bootstrap, NoteMaintenanceOwner,
+    };
     use alephcore::memory::notes::store::NoteStore;
     use alephcore::memory::notes::watcher::spawn_note_vault_watcher;
+    use alephcore::memory::notes::NoteIndexer;
     use alephcore::memory::store::SqliteMemoryBackend;
-    use std::sync::Arc;
+    use alephcore::sync_primitives::{Arc, Mutex};
+    use std::future::Future;
+    use std::task::{Context, Waker};
+    use tokio::sync::oneshot;
+
+    struct CapturedLogs(Arc<Mutex<Vec<u8>>>);
+
+    impl std::io::Write for CapturedLogs {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn note_maintenance_production_tasks_preserve_nonfatal_errors_and_logs() {
+        use alephcore::memory::notes::orientation::FsNoteOrientation;
+
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("note");
+        tokio::fs::create_dir_all(root.join("main")).await.unwrap();
+        tokio::fs::write(root.join("main/preference"), "blocked category")
+            .await
+            .unwrap();
+        tokio::fs::write(root.join("blocked"), "blocked orientation root")
+            .await
+            .unwrap();
+        tokio::fs::create_dir_all(root.join("other/reference"))
+            .await
+            .unwrap();
+        tokio::fs::write(
+            root.join("other/reference/good.md"),
+            "---\ncategory: reference\ntags: []\n---\n\n- sibling corpus survives\n",
+        )
+        .await
+        .unwrap();
+        let store = Arc::new(SqliteMemoryBackend::new(&dir.path().join("memory.db")).unwrap());
+        let logs = Arc::new(Mutex::new(Vec::new()));
+        let captured = logs.clone();
+        let subscriber = tracing_subscriber::fmt()
+            .without_time()
+            .with_ansi(false)
+            .with_writer(move || CapturedLogs(captured.clone()))
+            .finish();
+        // Current-thread runtime keeps the subscriber local, including spawned wrappers.
+        let _subscriber = tracing::subscriber::set_default(subscriber);
+        let mut owner = NoteMaintenanceOwner::new(
+            spawn_note_orientation_bootstrap(
+                Arc::new(FsNoteOrientation::new(root.join("blocked"), store.clone())),
+                "main".to_string(),
+            ),
+            spawn_note_index_rebuild(
+                Arc::new(NoteIndexer::new(root, store.clone())),
+                "main".to_string(),
+                3600,
+            ),
+        );
+        drain_note_maintenance(&mut owner).await.unwrap();
+        assert!(owner.failure.is_none());
+        assert_eq!(store.list_notes("other").await.unwrap().len(), 1);
+        let logs = String::from_utf8(logs.lock().unwrap().clone()).unwrap();
+        assert!(
+            logs.contains("Wiki orientation bootstrap failed; continuing without it"),
+            "{logs}"
+        );
+        assert!(logs.contains("full_rebuild_all: corpus failed"), "{logs}");
+        assert!(
+            logs.contains("Note corpus left unreconciled at startup"),
+            "{logs}"
+        );
+        assert!(logs.contains("Note index rebuild complete"), "{logs}");
+        for field in [
+            "corpora=2",
+            "indexed=1",
+            "skipped=0",
+            "errors=0",
+            "pruned=0",
+            "stale_vectors=1",
+            "tx_residue_removed=0",
+        ] {
+            assert!(logs.contains(field), "missing {field}: {logs}");
+        }
+    }
+
+    #[tokio::test]
+    async fn note_maintenance_cancelled_drain_retains_same_task_ids() {
+        let (release_orientation, orientation_gate) = oneshot::channel();
+        let (release_rebuild, rebuild_gate) = oneshot::channel();
+        let mut owner = NoteMaintenanceOwner::new(
+            tokio::spawn(async { orientation_gate.await.unwrap() }),
+            tokio::spawn(async { rebuild_gate.await.unwrap() }),
+        );
+        let orientation_id = owner.orientation.as_ref().unwrap().id();
+        let rebuild_id = owner.rebuild.as_ref().unwrap().id();
+        {
+            let mut drain = std::pin::pin!(drain_note_maintenance(&mut owner));
+            assert!(drain
+                .as_mut()
+                .poll(&mut Context::from_waker(Waker::noop()))
+                .is_pending());
+        }
+        assert_eq!(owner.orientation.as_ref().unwrap().id(), orientation_id);
+        assert_eq!(owner.rebuild.as_ref().unwrap().id(), rebuild_id);
+
+        release_orientation.send(()).unwrap();
+        // Repeatedly cancel a pending drain until orientation has been observed.
+        tokio::time::timeout(std::time::Duration::from_secs(10), async {
+            while owner.orientation.is_some() {
+                {
+                    let mut drain = std::pin::pin!(drain_note_maintenance(&mut owner));
+                    assert!(drain
+                        .as_mut()
+                        .poll(&mut Context::from_waker(Waker::noop()))
+                        .is_pending());
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("orientation completion was never observed");
+        assert_eq!(owner.rebuild.as_ref().unwrap().id(), rebuild_id);
+        release_rebuild.send(()).unwrap();
+        drain_note_maintenance(&mut owner).await.unwrap();
+        assert!(owner.orientation.is_none());
+        assert!(owner.rebuild.is_none());
+        drain_note_maintenance(&mut owner).await.unwrap();
+        assert!(owner.orientation.is_none() && owner.rebuild.is_none());
+    }
+
+    #[tokio::test]
+    async fn note_maintenance_drain_waits_for_real_bootstrap_and_rebuild_effects() {
+        use alephcore::memory::notes::orientation::{FsNoteOrientation, NoteOrientation};
+
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("note");
+        tokio::fs::create_dir_all(root.join("main/reference"))
+            .await
+            .unwrap();
+        tokio::fs::write(
+            root.join("main/reference/owned.md"),
+            "---\ncategory: reference\ntags: [lifecycle]\n---\n\n- retained startup task\n",
+        )
+        .await
+        .unwrap();
+        let store = Arc::new(SqliteMemoryBackend::new(&dir.path().join("memory.db")).unwrap());
+        let orientation = FsNoteOrientation::new(root.clone(), store.clone());
+        let indexer = NoteIndexer::new(root.clone(), store.clone());
+        let (release_orientation, orientation_gate) = oneshot::channel();
+        let (release_rebuild, rebuild_gate) = oneshot::channel();
+        let mut owner = NoteMaintenanceOwner::new(
+            tokio::spawn(async move {
+                orientation_gate.await.unwrap();
+                orientation.bootstrap("main").await.unwrap();
+            }),
+            tokio::spawn(async move {
+                rebuild_gate.await.unwrap();
+                let stats = indexer.full_rebuild_all("main", 3600).await;
+                assert_eq!(stats.total.indexed, 1);
+                assert!(stats.failed.is_empty());
+            }),
+        );
+        {
+            let mut drain = std::pin::pin!(drain_note_maintenance(&mut owner));
+            assert!(drain
+                .as_mut()
+                .poll(&mut Context::from_waker(Waker::noop()))
+                .is_pending());
+        }
+        assert!(!root.join("main/SCHEMA.md").exists());
+        assert!(store.list_notes("main").await.unwrap().is_empty());
+        release_orientation.send(()).unwrap();
+        release_rebuild.send(()).unwrap();
+        drain_note_maintenance(&mut owner).await.unwrap();
+        assert!(tokio::fs::read_to_string(root.join("main/SCHEMA.md"))
+            .await
+            .unwrap()
+            .contains("# Memory Schema"));
+        assert!(root.join("main/index.md").is_file());
+        let log = tokio::fs::read_to_string(root.join("main/log.md"))
+            .await
+            .unwrap();
+        assert!(log.contains("wiki orientation bootstrapped for agent=main"));
+        let rows = store.list_notes("main").await.unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].path, "reference/owned");
+        assert_eq!(rows[0].tags, vec!["lifecycle"]);
+        drain_note_maintenance(&mut owner).await.unwrap();
+        assert_eq!(
+            tokio::fs::read_to_string(root.join("main/log.md"))
+                .await
+                .unwrap(),
+            log
+        );
+        assert_eq!(store.list_notes("main").await.unwrap().len(), 1);
+        assert!(owner.orientation.is_none() && owner.rebuild.is_none());
+    }
+
+    #[tokio::test]
+    async fn note_maintenance_cancelled_after_failure_keeps_first_error() {
+        let (panicked, ready) = oneshot::channel();
+        let (release, gate) = oneshot::channel();
+        let mut owner = NoteMaintenanceOwner::new(
+            tokio::spawn(async move {
+                panicked.send(()).unwrap();
+                panic!("first orientation failure");
+            }),
+            tokio::spawn(async move {
+                gate.await.unwrap();
+                panic!("later rebuild failure");
+            }),
+        );
+        ready.await.unwrap();
+        let rebuild_id = owner.rebuild.as_ref().unwrap().id();
+        {
+            let mut drain = std::pin::pin!(drain_note_maintenance(&mut owner));
+            assert!(drain
+                .as_mut()
+                .poll(&mut Context::from_waker(Waker::noop()))
+                .is_pending());
+        }
+        assert!(owner.orientation.is_none());
+        let failure = owner
+            .failure
+            .clone()
+            .expect("first failure must survive cancellation");
+        assert!(failure.contains("first orientation failure"));
+        assert_eq!(owner.rebuild.as_ref().unwrap().id(), rebuild_id);
+        release.send(()).unwrap();
+        let error = drain_note_maintenance(&mut owner)
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains(&failure));
+        assert!(!error.contains("later rebuild failure"));
+        assert_eq!(
+            drain_note_maintenance(&mut owner)
+                .await
+                .unwrap_err()
+                .to_string(),
+            error
+        );
+        assert!(owner.orientation.is_none() && owner.rebuild.is_none());
+    }
+
+    #[tokio::test]
+    async fn note_maintenance_either_join_failure_observes_sibling_and_stays_failed() {
+        for orientation_panics in [true, false] {
+            let (release, gate) = oneshot::channel();
+            let (observed, done) = oneshot::channel();
+            let panics = tokio::spawn(async { panic!("note maintenance test panic") });
+            let sibling = tokio::spawn(async {
+                gate.await.unwrap();
+                observed.send(()).unwrap();
+            });
+            let mut owner = if orientation_panics {
+                NoteMaintenanceOwner::new(panics, sibling)
+            } else {
+                NoteMaintenanceOwner::new(sibling, panics)
+            };
+            {
+                let mut drain = std::pin::pin!(drain_note_maintenance(&mut owner));
+                assert!(drain
+                    .as_mut()
+                    .poll(&mut Context::from_waker(Waker::noop()))
+                    .is_pending());
+            }
+            release.send(()).unwrap();
+            let error = drain_note_maintenance(&mut owner)
+                .await
+                .unwrap_err()
+                .to_string();
+            done.await.unwrap();
+            assert!(owner.orientation.is_none() && owner.rebuild.is_none());
+            assert!(error.contains(if orientation_panics {
+                "orientation"
+            } else {
+                "rebuild"
+            }));
+            assert_eq!(
+                drain_note_maintenance(&mut owner)
+                    .await
+                    .unwrap_err()
+                    .to_string(),
+                error
+            );
+        }
+    }
 
     #[tokio::test(flavor = "multi_thread")]
     async fn note_watcher_drain_is_in_place_and_idempotent() {

@@ -27,7 +27,6 @@ use crate::agents::AgentRegistry;
 use crate::context::budget::ContextBudgetConfig;
 use crate::mcp::manager::McpManagerHandle;
 use crate::memory::store::raw_memory::RawMemoryStore;
-use crate::memory::store::MemoryBackend;
 use crate::providers::{AiProvider, DefaultProviderHandle};
 use crate::session::service::SessionService;
 use crate::tools::service::ToolService;
@@ -167,13 +166,7 @@ pub struct AgentHarnessRunner {
     /// recall message (`HarnessDeps::recall_context`). `None` preserves the
     /// old behaviour (boot path for tests / env without a memory backend).
     pub memory_context_provider:
-        Option<Arc<crate::thinker::memory_context_provider::MemoryContextProvider>>,
-
-    /// `SQLite` memory backend, threaded into the per-run `ContextCompactor` so
-    /// it can reuse the hierarchical session summaries written by
-    /// `SessionCompactor` for zero-API-cost compaction. `None` (tests / boot
-    /// without a memory backend) keeps the LLM summarization path.
-    pub memory_backend: Option<MemoryBackend>,
+        Option<Arc<crate::thinker::memory_context_provider::RuntimeMemoryContext>>,
 
     /// Raw-memory store used by the session-summary reuse reader. The derived
     /// SQLite backend stores notes and metadata; raw bodies live in Markdown.

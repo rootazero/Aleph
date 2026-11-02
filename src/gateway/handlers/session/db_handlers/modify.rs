@@ -33,9 +33,8 @@ async fn purge_session_artifacts(session_key: &str) {
 /// what was in it* must not have it read back to them one session later. The
 /// session key is stable, so a session deleted today typically already has a
 /// snapshot from an earlier close of the same key — that is the one this
-/// removes. (The delete path no longer manufactures a *fresh* one: it goes
-/// through `emit_session_end_raw_without_resume`, because that write lands long
-/// after this handler returns and no purge here could catch it.)
+/// removes. The delete path also disables resume capture, so a late session-end
+/// task cannot manufacture a fresh snapshot after this purge.
 ///
 /// Best-effort, like [`purge_session_artifacts`]. `remove_for_session` owns the
 /// id→directory-name mapping; the call site must not re-derive it.
@@ -171,7 +170,7 @@ pub async fn handle_delete_db(
     request: JsonRpcRequest,
     manager: Arc<dyn SessionStore>,
 ) -> JsonRpcResponse {
-    handle_delete_db_inner(request, manager, None).await
+    handle_delete_db_inner(request, manager, None, None).await
 }
 
 /// Variant accepting an explicit raw-memory writer for the `SessionEnd` capture.
@@ -182,13 +181,24 @@ pub async fn handle_delete_db_with_capture(
     manager: Arc<dyn SessionStore>,
     writer: Arc<dyn crate::memory::store::raw_memory::RawMemoryStore>,
 ) -> JsonRpcResponse {
-    handle_delete_db_inner(request, manager, Some(writer)).await
+    handle_delete_db_inner(request, manager, Some(writer), None).await
+}
+
+/// Capture derived work through the server's canonical Memory source.
+pub async fn handle_delete_db_with_runtime_capture(
+    request: JsonRpcRequest,
+    manager: Arc<dyn SessionStore>,
+    writer: Arc<dyn crate::memory::store::raw_memory::RawMemoryStore>,
+    runtime: Arc<crate::memory::runtime::MemoryRuntime>,
+) -> JsonRpcResponse {
+    handle_delete_db_inner(request, manager, Some(writer), Some(runtime)).await
 }
 
 async fn handle_delete_db_inner(
     request: JsonRpcRequest,
     manager: Arc<dyn SessionStore>,
     writer: Option<Arc<dyn crate::memory::store::raw_memory::RawMemoryStore>>,
+    runtime: Option<Arc<crate::memory::runtime::MemoryRuntime>>,
 ) -> JsonRpcResponse {
     let session_key_str = match &request.params {
         Some(Value::Object(map)) => map.get("session_key").and_then(|v| v.as_str()),
@@ -270,20 +280,25 @@ async fn handle_delete_db_inner(
                         // file this session's memory under a name nothing else
                         // ever looks up.
                         //
-                        // The `_without_resume` entry point is the one that
-                        // does NOT also write a `resume.json` of the
-                        // conversation being deleted; the tail capture into
-                        // `RawMemoryStore` (this function's documented purpose)
-                        // is unchanged.
-                        crate::gateway::session_manager::ops::emit_session_end_raw_without_resume(
+                        // Deleted sessions retain their raw tail but never create a resume snapshot.
+                        crate::gateway::session_manager::ops::capture_session_end(
+                            runtime.clone(),
                             Arc::clone(w),
-                            session_key.agent_id().to_string(),
-                            session_key.to_key_string(),
-                            tail,
-                            crate::memory::store::raw_memory::SessionEndReason::Disconnect,
-                            owner_user_id,
-                            scope_id,
-                        );
+                            crate::memory::store::raw_memory::RawMemory::new(
+                                tail,
+                                crate::memory::store::raw_memory::RawMemorySource::SessionEnd {
+                                    reason: crate::memory::store::raw_memory::SessionEndReason::Disconnect,
+                                },
+                            )
+                            .with_agent(session_key.agent_id())
+                            .with_session(session_key.to_key_string()),
+                            crate::scope::ScopeAttribution::from_persisted(
+                                owner_user_id.as_deref(),
+                                scope_id.as_deref(),
+                            ),
+                            false,
+                        )
+                        .await;
                     }
                 }
             }

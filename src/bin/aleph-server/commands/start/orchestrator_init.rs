@@ -98,10 +98,9 @@ pub(in crate::commands::start) async fn initialize_orchestrator(
     // hybrid retrieval entirely). When `Some`, AgentHarnessRunner uses it to
     // assemble the system prompt before each turn. None disables only the
     // memory-driven prompt sections; AgentRoleLayer still renders.
-    memory_context_provider: Option<Arc<alephcore::thinker::MemoryContextProvider>>,
-    // SQLite memory backend, threaded into the per-run `ContextCompactor` so it
-    // can reuse hierarchical session summaries for zero-API-cost compaction.
-    memory_backend: Option<alephcore::memory::store::MemoryBackend>,
+    memory_context_provider: Option<
+        Arc<alephcore::thinker::memory_context_provider::RuntimeMemoryContext>,
+    >,
     // Markdown-backed raw memory store used by compaction summary reuse.
     raw_memory_store: Option<Arc<dyn alephcore::memory::store::raw_memory::RawMemoryStore>>,
     // Tool catalog — owns the `ToolHealthCache` whose snapshot
@@ -438,7 +437,6 @@ pub(in crate::commands::start) async fn initialize_orchestrator(
             .and_then(|p| p.context_window),
         power,
         memory_context_provider,
-        memory_backend,
         raw_memory_store,
         // Summary-reuse reads must resolve the same project-scoped storage id
         // the session-compactor writes use (see harness_bridge/mod.rs field doc).

@@ -27,34 +27,6 @@ use super::helpers::{
     body_text_sha256, collect_edges_between, load_note_content_from_disk, row_to_entry,
 };
 
-macro_rules! lock_conn {
-    ($self:expr) => {{
-        // Recover from a poisoned mutex instead of failing permanently: a panic
-        // while some other note-store call held the lock must not brick every
-        // subsequent note operation (the poison flag is sticky). The connection
-        // is still usable — the panicking op simply didn't commit. Mirrors the
-        // `.unwrap_or_else(|e| e.into_inner())` recovery used elsewhere (P7).
-        // Wrapped in `Ok` so the existing `lock_conn!(self)?` call sites keep
-        // their fallible shape without a per-site change. The recovery is
-        // logged so a poison event is visible to operators (a silent
-        // into_inner() is the exact failure mode that hid the half-committed
-        // statement bug for years). The explicit Ok::<_, AlephError> keeps
-        // the return type pinned through the match arms; the per-site `?`
-        // relies on the From<Mutex<...>> impl, which is non-unique here.
-        match $self.conn.lock() {
-            Ok(g) => Ok::<_, AlephError>(g),
-            Err(poisoned) => {
-                tracing::warn!(
-                    caller = stringify!($self),
-                    "notes store: SQLite mutex was poisoned by a prior panic; \
-                     recovering (this should be rare)"
-                );
-                Ok::<_, AlephError>(poisoned.into_inner())
-            }
-        }
-    }};
-}
-
 #[async_trait]
 impl NoteStore for SqliteMemoryBackend {
     // rust-doctor-disable-next-line high-cyclomatic-complexity
@@ -64,7 +36,7 @@ impl NoteStore for SqliteMemoryBackend {
         agent_id: &str,
         category: &str,
     ) -> Result<(), AlephError> {
-        let conn = lock_conn!(self)?;
+        self.with_connection(|conn| {
 
         // Store titles/filenames extensionless: a title carrying ".md" would
         // otherwise produce a doubled "*.md.md" path on disk reads.
@@ -454,103 +426,106 @@ impl NoteStore for SqliteMemoryBackend {
         .map_err(|e| AlephError::config(format!("index_note insert: {e}")))?;
 
         Ok(())
+        })
     }
 
     // rust-doctor-disable-next-line high-cyclomatic-complexity
     async fn remove_note_index(&self, path: &str, agent_id: &str) -> Result<(), AlephError> {
-        let conn = lock_conn!(self)?;
+        self.with_connection(|conn| {
+            // Wrap all four DELETEs in a single transaction so a crash mid-removal
+            // cannot leave an orphan `notes_fts_meta` row. Without this, recreating
+            // a note with the same body would match the stale hash and skip the
+            // FTS rewrite, silently making the recreated note search-invisible.
+            let tx = conn
+                .unchecked_transaction()
+                .map_err(|e| AlephError::config(format!("remove_note_index tx begin: {e}")))?;
 
-        // Wrap all four DELETEs in a single transaction so a crash mid-removal
-        // cannot leave an orphan `notes_fts_meta` row. Without this, recreating
-        // a note with the same body would match the stale hash and skip the
-        // FTS rewrite, silently making the recreated note search-invisible.
-        let tx = conn
-            .unchecked_transaction()
-            .map_err(|e| AlephError::config(format!("remove_note_index tx begin: {e}")))?;
-
-        tx.execute(
-            "DELETE FROM notes_index WHERE path = ?1 AND agent_id = ?2",
-            params![path, agent_id],
-        )
-        .map_err(|e| AlephError::config(format!("remove_note_index index: {e}")))?;
-
-        tx.execute(
-            "DELETE FROM notes_links WHERE from_note = ?1 AND agent_id = ?2",
-            params![path, agent_id],
-        )
-        .map_err(|e| AlephError::config(format!("remove_note_index outgoing links: {e}")))?;
-
-        // D1 tombstone semantics: inbound rows are marked, never destroyed —
-        // the linking note's body keeps its [[link]] text and the row revives
-        // via backfill_inbound_links if a same-name note is recreated.
-        tx.execute(
-            "UPDATE notes_links SET status = 'tombstone' WHERE to_note = ?1 AND agent_id = ?2",
-            params![path, agent_id],
-        )
-        .map_err(|e| AlephError::config(format!("remove_note_index tombstone inbound: {e}")))?;
-
-        tx.execute(
-            "DELETE FROM notes_fts WHERE path = ?1 AND agent_id = ?2",
-            params![path, agent_id],
-        )
-        .map_err(|e| AlephError::config(format!("remove_note_index fts: {e}")))?;
-
-        tx.execute(
-            "DELETE FROM notes_fts_trigram WHERE path = ?1 AND agent_id = ?2",
-            params![path, agent_id],
-        )
-        .map_err(|e| AlephError::config(format!("remove_note_index fts_trigram: {e}")))?;
-
-        tx.execute(
-            "DELETE FROM notes_fts_meta WHERE agent_id = ?1 AND path = ?2",
-            params![agent_id, path],
-        )
-        .map_err(|e| AlephError::config(format!("remove_note_index fts meta: {e}")))?;
-
-        tx.execute(
-            "DELETE FROM notes_sources WHERE agent_id = ?1 AND note_path = ?2",
-            params![agent_id, path],
-        )
-        .map_err(|e| AlephError::config(format!("remove_note_index sources: {e}")))?;
-
-        // Fact-level provenance rows are keyed by (agent_id, note_path); a
-        // permanent delete must clear them too, otherwise every removed note
-        // leaks orphan provenance rows (an unbounded growth over time).
-        tx.execute(
-            "DELETE FROM notes_provenance WHERE agent_id = ?1 AND note_path = ?2",
-            params![agent_id, path],
-        )
-        .map_err(|e| AlephError::config(format!("remove_note_index provenance: {e}")))?;
-
-        // Clear the embedding too: an orphan vector for a deleted note keeps
-        // occupying KNN slots forever (retrieval skips it on the missing file,
-        // but it still displaces real notes from the top-K). The vec0 virtual
-        // tables are per-dimension; the map row tells us the shared rowid.
-        let vec_rowid: Option<i64> = tx
-            .query_row(
-                "SELECT rowid FROM notes_vec_map WHERE path = ?1 AND agent_id = ?2",
+            tx.execute(
+                "DELETE FROM notes_index WHERE path = ?1 AND agent_id = ?2",
                 params![path, agent_id],
-                |row| row.get(0),
             )
-            .optional()
-            .map_err(|e| AlephError::config(format!("remove_note_index vec map lookup: {e}")))?;
-        if let Some(rowid) = vec_rowid {
-            for table in vec::all_notes_vec_tables() {
-                // Table name comes from an internal static allowlist (`EMBEDDING_DIM_TABLES`).
-                // rust-doctor-disable-next-line sql-injection-risk
-                tx.execute(
-                    &format!("DELETE FROM {table} WHERE rowid = ?1"),
-                    params![rowid],
-                )
-                .map_err(|e| AlephError::config(format!("remove_note_index {table}: {e}")))?;
-            }
-            tx.execute("DELETE FROM notes_vec_map WHERE rowid = ?1", params![rowid])
-                .map_err(|e| AlephError::config(format!("remove_note_index vec map: {e}")))?;
-        }
+            .map_err(|e| AlephError::config(format!("remove_note_index index: {e}")))?;
 
-        tx.commit()
-            .map_err(|e| AlephError::config(format!("remove_note_index tx commit: {e}")))?;
-        Ok(())
+            tx.execute(
+                "DELETE FROM notes_links WHERE from_note = ?1 AND agent_id = ?2",
+                params![path, agent_id],
+            )
+            .map_err(|e| AlephError::config(format!("remove_note_index outgoing links: {e}")))?;
+
+            // D1 tombstone semantics: inbound rows are marked, never destroyed —
+            // the linking note's body keeps its [[link]] text and the row revives
+            // via backfill_inbound_links if a same-name note is recreated.
+            tx.execute(
+                "UPDATE notes_links SET status = 'tombstone' WHERE to_note = ?1 AND agent_id = ?2",
+                params![path, agent_id],
+            )
+            .map_err(|e| AlephError::config(format!("remove_note_index tombstone inbound: {e}")))?;
+
+            tx.execute(
+                "DELETE FROM notes_fts WHERE path = ?1 AND agent_id = ?2",
+                params![path, agent_id],
+            )
+            .map_err(|e| AlephError::config(format!("remove_note_index fts: {e}")))?;
+
+            tx.execute(
+                "DELETE FROM notes_fts_trigram WHERE path = ?1 AND agent_id = ?2",
+                params![path, agent_id],
+            )
+            .map_err(|e| AlephError::config(format!("remove_note_index fts_trigram: {e}")))?;
+
+            tx.execute(
+                "DELETE FROM notes_fts_meta WHERE agent_id = ?1 AND path = ?2",
+                params![agent_id, path],
+            )
+            .map_err(|e| AlephError::config(format!("remove_note_index fts meta: {e}")))?;
+
+            tx.execute(
+                "DELETE FROM notes_sources WHERE agent_id = ?1 AND note_path = ?2",
+                params![agent_id, path],
+            )
+            .map_err(|e| AlephError::config(format!("remove_note_index sources: {e}")))?;
+
+            // Fact-level provenance rows are keyed by (agent_id, note_path); a
+            // permanent delete must clear them too, otherwise every removed note
+            // leaks orphan provenance rows (an unbounded growth over time).
+            tx.execute(
+                "DELETE FROM notes_provenance WHERE agent_id = ?1 AND note_path = ?2",
+                params![agent_id, path],
+            )
+            .map_err(|e| AlephError::config(format!("remove_note_index provenance: {e}")))?;
+
+            // Clear the embedding too: an orphan vector for a deleted note keeps
+            // occupying KNN slots forever (retrieval skips it on the missing file,
+            // but it still displaces real notes from the top-K). The vec0 virtual
+            // tables are per-dimension; the map row tells us the shared rowid.
+            let vec_rowid: Option<i64> = tx
+                .query_row(
+                    "SELECT rowid FROM notes_vec_map WHERE path = ?1 AND agent_id = ?2",
+                    params![path, agent_id],
+                    |row| row.get(0),
+                )
+                .optional()
+                .map_err(|e| {
+                    AlephError::config(format!("remove_note_index vec map lookup: {e}"))
+                })?;
+            if let Some(rowid) = vec_rowid {
+                for table in vec::all_notes_vec_tables() {
+                    // Table name comes from an internal static allowlist (`EMBEDDING_DIM_TABLES`).
+                    // rust-doctor-disable-next-line sql-injection-risk
+                    tx.execute(
+                        &format!("DELETE FROM {table} WHERE rowid = ?1"),
+                        params![rowid],
+                    )
+                    .map_err(|e| AlephError::config(format!("remove_note_index {table}: {e}")))?;
+                }
+                tx.execute("DELETE FROM notes_vec_map WHERE rowid = ?1", params![rowid])
+                    .map_err(|e| AlephError::config(format!("remove_note_index vec map: {e}")))?;
+            }
+
+            tx.commit()
+                .map_err(|e| AlephError::config(format!("remove_note_index tx commit: {e}")))?;
+            Ok(())
+        })
     }
 
     async fn get_note_index(
@@ -558,7 +533,7 @@ impl NoteStore for SqliteMemoryBackend {
         path: &str,
         agent_id: &str,
     ) -> Result<Option<NoteIndexEntry>, AlephError> {
-        let conn = lock_conn!(self)?;
+        self.with_connection(|conn| {
 
         let mut stmt = conn
             .prepare(
@@ -574,6 +549,7 @@ impl NoteStore for SqliteMemoryBackend {
             .map_err(|e| AlephError::config(format!("get_note_index query: {e}")))?;
 
         Ok(result)
+        })
     }
 
     async fn list_notes(&self, agent_id: &str) -> Result<Vec<NoteIndexEntry>, AlephError> {
@@ -603,41 +579,46 @@ impl NoteStore for SqliteMemoryBackend {
     }
 
     async fn count_all_notes(&self) -> Result<i64, AlephError> {
-        let conn = lock_conn!(self)?;
-        conn.query_row("SELECT COUNT(*) FROM notes_index", [], |row| row.get(0))
-            .map_err(|e| AlephError::config(format!("count_all_notes failed: {e}")))
+        self.with_connection(|conn| {
+            conn.query_row("SELECT COUNT(*) FROM notes_index", [], |row| row.get(0))
+                .map_err(|e| AlephError::config(format!("count_all_notes failed: {e}")))
+        })
     }
 
     async fn count_notes(&self, agent_id: &str) -> Result<i64, AlephError> {
-        let conn = lock_conn!(self)?;
-        conn.query_row(
-            "SELECT COUNT(*) FROM notes_index WHERE agent_id = ?1",
-            params![agent_id],
-            |row| row.get(0),
-        )
-        .map_err(|e| AlephError::config(format!("count_notes failed: {e}")))
+        self.with_connection(|conn| {
+            conn.query_row(
+                "SELECT COUNT(*) FROM notes_index WHERE agent_id = ?1",
+                params![agent_id],
+                |row| row.get(0),
+            )
+            .map_err(|e| AlephError::config(format!("count_notes failed: {e}")))
+        })
     }
 
     async fn community_ids(
         &self,
         agent_id: &str,
     ) -> Result<std::collections::HashMap<String, i64>, AlephError> {
-        let conn = lock_conn!(self)?;
-        let mut stmt = conn
-            .prepare("SELECT node_path, community_id FROM notes_graph_cache WHERE agent_id = ?1")
-            .map_err(|e| AlephError::config(format!("community_ids prepare: {e}")))?;
-        let rows = stmt
-            .query_map(params![agent_id], |r| {
-                Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?))
-            })
-            .map_err(|e| AlephError::config(format!("community_ids query: {e}")))?;
-        let mut map = std::collections::HashMap::new();
-        for row in rows {
-            let (path, cid) =
-                row.map_err(|e| AlephError::config(format!("community_ids row: {e}")))?;
-            map.insert(path, cid);
-        }
-        Ok(map)
+        self.with_connection(|conn| {
+            let mut stmt = conn
+                .prepare(
+                    "SELECT node_path, community_id FROM notes_graph_cache WHERE agent_id = ?1",
+                )
+                .map_err(|e| AlephError::config(format!("community_ids prepare: {e}")))?;
+            let rows = stmt
+                .query_map(params![agent_id], |r| {
+                    Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?))
+                })
+                .map_err(|e| AlephError::config(format!("community_ids query: {e}")))?;
+            let mut map = std::collections::HashMap::new();
+            for row in rows {
+                let (path, cid) =
+                    row.map_err(|e| AlephError::config(format!("community_ids row: {e}")))?;
+                map.insert(path, cid);
+            }
+            Ok(map)
+        })
     }
 
     async fn get_outgoing_links(
@@ -645,22 +626,23 @@ impl NoteStore for SqliteMemoryBackend {
         path: &str,
         agent_id: &str,
     ) -> Result<Vec<String>, AlephError> {
-        let conn = lock_conn!(self)?;
+        self.with_connection(|conn| {
+            let mut stmt = conn
+                .prepare("SELECT to_note FROM notes_links WHERE from_note = ?1 AND agent_id = ?2")
+                .map_err(|e| AlephError::config(format!("get_outgoing_links prepare: {e}")))?;
 
-        let mut stmt = conn
-            .prepare("SELECT to_note FROM notes_links WHERE from_note = ?1 AND agent_id = ?2")
-            .map_err(|e| AlephError::config(format!("get_outgoing_links prepare: {e}")))?;
+            let rows = stmt
+                .query_map(params![path, agent_id], |row| row.get::<_, String>(0))
+                .map_err(|e| AlephError::config(format!("get_outgoing_links query: {e}")))?;
 
-        let rows = stmt
-            .query_map(params![path, agent_id], |row| row.get::<_, String>(0))
-            .map_err(|e| AlephError::config(format!("get_outgoing_links query: {e}")))?;
-
-        let mut links = Vec::new();
-        for row in rows {
-            links
-                .push(row.map_err(|e| AlephError::config(format!("get_outgoing_links row: {e}")))?);
-        }
-        Ok(links)
+            let mut links = Vec::new();
+            for row in rows {
+                links.push(
+                    row.map_err(|e| AlephError::config(format!("get_outgoing_links row: {e}")))?,
+                );
+            }
+            Ok(links)
+        })
     }
 
     async fn get_incoming_links(
@@ -668,22 +650,23 @@ impl NoteStore for SqliteMemoryBackend {
         path: &str,
         agent_id: &str,
     ) -> Result<Vec<String>, AlephError> {
-        let conn = lock_conn!(self)?;
+        self.with_connection(|conn| {
+            let mut stmt = conn
+                .prepare("SELECT from_note FROM notes_links WHERE to_note = ?1 AND agent_id = ?2")
+                .map_err(|e| AlephError::config(format!("get_incoming_links prepare: {e}")))?;
 
-        let mut stmt = conn
-            .prepare("SELECT from_note FROM notes_links WHERE to_note = ?1 AND agent_id = ?2")
-            .map_err(|e| AlephError::config(format!("get_incoming_links prepare: {e}")))?;
+            let rows = stmt
+                .query_map(params![path, agent_id], |row| row.get::<_, String>(0))
+                .map_err(|e| AlephError::config(format!("get_incoming_links query: {e}")))?;
 
-        let rows = stmt
-            .query_map(params![path, agent_id], |row| row.get::<_, String>(0))
-            .map_err(|e| AlephError::config(format!("get_incoming_links query: {e}")))?;
-
-        let mut links = Vec::new();
-        for row in rows {
-            links
-                .push(row.map_err(|e| AlephError::config(format!("get_incoming_links row: {e}")))?);
-        }
-        Ok(links)
+            let mut links = Vec::new();
+            for row in rows {
+                links.push(
+                    row.map_err(|e| AlephError::config(format!("get_incoming_links row: {e}")))?,
+                );
+            }
+            Ok(links)
+        })
     }
 
     async fn get_incoming_links_any(
@@ -692,28 +675,30 @@ impl NoteStore for SqliteMemoryBackend {
         filename: &str,
         agent_id: &str,
     ) -> Result<Vec<String>, AlephError> {
-        let conn = lock_conn!(self)?;
-
-        let mut stmt = conn
-            .prepare(
-                "SELECT from_note FROM notes_links \
+        self.with_connection(|conn| {
+            let mut stmt = conn
+                .prepare(
+                    "SELECT from_note FROM notes_links \
                  WHERE to_note IN (?1, ?2) AND agent_id = ?3",
-            )
-            .map_err(|e| AlephError::config(format!("get_incoming_links_any prepare: {e}")))?;
+                )
+                .map_err(|e| AlephError::config(format!("get_incoming_links_any prepare: {e}")))?;
 
-        let rows = stmt
-            .query_map(params![path, filename, agent_id], |row| {
-                row.get::<_, String>(0)
-            })
-            .map_err(|e| AlephError::config(format!("get_incoming_links_any query: {e}")))?;
+            let rows = stmt
+                .query_map(params![path, filename, agent_id], |row| {
+                    row.get::<_, String>(0)
+                })
+                .map_err(|e| AlephError::config(format!("get_incoming_links_any query: {e}")))?;
 
-        let mut links = Vec::new();
-        for row in rows {
-            links.push(
-                row.map_err(|e| AlephError::config(format!("get_incoming_links_any row: {e}")))?,
-            );
-        }
-        Ok(links)
+            let mut links = Vec::new();
+            for row in rows {
+                links.push(
+                    row.map_err(|e| {
+                        AlephError::config(format!("get_incoming_links_any row: {e}"))
+                    })?,
+                );
+            }
+            Ok(links)
+        })
     }
 
     async fn add_link_with_relation(
@@ -723,16 +708,17 @@ impl NoteStore for SqliteMemoryBackend {
         to_note: &str,
         relation: &str,
     ) -> Result<(), AlephError> {
-        let conn = lock_conn!(self)?;
-        conn.execute(
-            "INSERT INTO notes_links (agent_id, from_note, to_note, to_raw, relation, status) \
+        self.with_connection(|conn| {
+            conn.execute(
+                "INSERT INTO notes_links (agent_id, from_note, to_note, to_raw, relation, status) \
              VALUES (?1, ?2, ?3, ?3, ?4, 'active') \
              ON CONFLICT(agent_id, from_note, to_note) \
              DO UPDATE SET relation = excluded.relation",
-            params![agent_id, from_note, to_note, relation],
-        )
-        .map_err(|e| AlephError::config(format!("add_link_with_relation: {e}")))?;
-        Ok(())
+                params![agent_id, from_note, to_note, relation],
+            )
+            .map_err(|e| AlephError::config(format!("add_link_with_relation: {e}")))?;
+            Ok(())
+        })
     }
 
     async fn get_typed_relations(
@@ -740,23 +726,26 @@ impl NoteStore for SqliteMemoryBackend {
         path: &str,
         agent_id: &str,
     ) -> Result<Vec<(String, String)>, AlephError> {
-        let conn = lock_conn!(self)?;
-        let mut stmt = conn
-            .prepare(
-                "SELECT to_note, relation FROM notes_links \
+        self.with_connection(|conn| {
+            let mut stmt = conn
+                .prepare(
+                    "SELECT to_note, relation FROM notes_links \
                  WHERE from_note = ?1 AND agent_id = ?2 AND relation IS NOT NULL",
-            )
-            .map_err(|e| AlephError::config(format!("get_typed_relations prepare: {e}")))?;
-        let rows = stmt
-            .query_map(params![path, agent_id], |row| {
-                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
-            })
-            .map_err(|e| AlephError::config(format!("get_typed_relations query: {e}")))?;
-        let mut out = Vec::new();
-        for row in rows {
-            out.push(row.map_err(|e| AlephError::config(format!("get_typed_relations row: {e}")))?);
-        }
-        Ok(out)
+                )
+                .map_err(|e| AlephError::config(format!("get_typed_relations prepare: {e}")))?;
+            let rows = stmt
+                .query_map(params![path, agent_id], |row| {
+                    Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+                })
+                .map_err(|e| AlephError::config(format!("get_typed_relations query: {e}")))?;
+            let mut out = Vec::new();
+            for row in rows {
+                out.push(
+                    row.map_err(|e| AlephError::config(format!("get_typed_relations row: {e}")))?,
+                );
+            }
+            Ok(out)
+        })
     }
 
     async fn search_notes_fts(
@@ -864,7 +853,7 @@ impl NoteStore for SqliteMemoryBackend {
         agent_id: &str,
         limit: usize,
     ) -> Result<(Vec<NoteIndexEntry>, Vec<GraphEdgeRow>), AlephError> {
-        let conn = lock_conn!(self)?;
+        self.with_connection(|conn| {
 
         // Top notes by link_count (outgoing) + recency
         let mut stmt = conn
@@ -896,6 +885,7 @@ impl NoteStore for SqliteMemoryBackend {
         let edges = collect_edges_between(&conn, &visible, agent_id)?;
 
         Ok((entries, edges))
+        })
     }
 
     // rust-doctor-disable-next-line high-cyclomatic-complexity
@@ -906,7 +896,7 @@ impl NoteStore for SqliteMemoryBackend {
         depth: u8,
         limit: usize,
     ) -> Result<(Vec<NoteIndexEntry>, Vec<(String, String)>, bool), AlephError> {
-        let conn = lock_conn!(self)?;
+        self.with_connection(|conn| {
 
         // BFS from center
         let mut visited: HashSet<String> = HashSet::new();
@@ -994,6 +984,7 @@ impl NoteStore for SqliteMemoryBackend {
             .collect();
 
         Ok((entries, edges, truncated))
+        })
     }
 
     // rust-doctor-disable-next-line high-cyclomatic-complexity
@@ -1013,85 +1004,85 @@ impl NoteStore for SqliteMemoryBackend {
         // full-graph scan (mirrors get_neighbors' visit discipline).
         const MAX_VISITS: usize = 10_000;
 
-        let conn = lock_conn!(self)?;
+        self.with_connection(|conn| {
+            // BFS over notes_links in both directions, remembering the edge that
+            // first discovered each node so the path can be reconstructed.
+            // `came_from`: discovered_node -> (predecessor, connecting-edge relation).
+            let mut came_from: HashMap<String, (String, Option<String>)> = HashMap::new();
+            let mut visited: HashSet<String> = HashSet::new();
+            let mut queue: VecDeque<(String, u8)> = VecDeque::new();
 
-        // BFS over notes_links in both directions, remembering the edge that
-        // first discovered each node so the path can be reconstructed.
-        // `came_from`: discovered_node -> (predecessor, connecting-edge relation).
-        let mut came_from: HashMap<String, (String, Option<String>)> = HashMap::new();
-        let mut visited: HashSet<String> = HashSet::new();
-        let mut queue: VecDeque<(String, u8)> = VecDeque::new();
+            visited.insert(from.to_string());
+            queue.push_back((from.to_string(), 0));
+            let mut truncated = false;
+            let mut found = false;
 
-        visited.insert(from.to_string());
-        queue.push_back((from.to_string(), 0));
-        let mut truncated = false;
-        let mut found = false;
+            'bfs: while let Some((node, d)) = queue.pop_front() {
+                if d >= max_depth {
+                    // A frontier node left unexpanded: an unreached target may still
+                    // be reachable beyond the depth cap.
+                    truncated = true;
+                    continue;
+                }
+                if visited.len() >= MAX_VISITS {
+                    truncated = true;
+                    break;
+                }
 
-        'bfs: while let Some((node, d)) = queue.pop_front() {
-            if d >= max_depth {
-                // A frontier node left unexpanded: an unreached target may still
-                // be reachable beyond the depth cap.
-                truncated = true;
-                continue;
-            }
-            if visited.len() >= MAX_VISITS {
-                truncated = true;
-                break;
-            }
-
-            // Outgoing (from=node → to=nbr) then incoming (from=nbr → to=node);
-            // the connection graph is undirected, so both discover neighbours.
-            for sql in [
-                "SELECT to_note, relation FROM notes_links \
+                // Outgoing (from=node → to=nbr) then incoming (from=nbr → to=node);
+                // the connection graph is undirected, so both discover neighbours.
+                for sql in [
+                    "SELECT to_note, relation FROM notes_links \
                  WHERE from_note = ?1 AND agent_id = ?2",
-                "SELECT from_note, relation FROM notes_links \
+                    "SELECT from_note, relation FROM notes_links \
                  WHERE to_note = ?1 AND agent_id = ?2",
-            ] {
-                let mut stmt = conn
-                    .prepare(sql)
-                    .map_err(|e| AlephError::config(format!("find_path prepare: {e}")))?;
-                let rows = stmt
-                    .query_map(params![node, agent_id], |row| {
-                        Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?))
-                    })
-                    .map_err(|e| AlephError::config(format!("find_path query: {e}")))?;
-                for r in rows {
-                    let (nbr, rel) =
-                        r.map_err(|e| AlephError::config(format!("find_path row: {e}")))?;
-                    // rust-doctor-disable-next-line excessive-clone
-                    if visited.insert(nbr.clone()) {
+                ] {
+                    let mut stmt = conn
+                        .prepare(sql)
+                        .map_err(|e| AlephError::config(format!("find_path prepare: {e}")))?;
+                    let rows = stmt
+                        .query_map(params![node, agent_id], |row| {
+                            Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?))
+                        })
+                        .map_err(|e| AlephError::config(format!("find_path query: {e}")))?;
+                    for r in rows {
+                        let (nbr, rel) =
+                            r.map_err(|e| AlephError::config(format!("find_path row: {e}")))?;
                         // rust-doctor-disable-next-line excessive-clone
-                        came_from.insert(nbr.clone(), (node.clone(), rel));
-                        if nbr == to {
-                            found = true;
-                            break 'bfs;
+                        if visited.insert(nbr.clone()) {
+                            // rust-doctor-disable-next-line excessive-clone
+                            came_from.insert(nbr.clone(), (node.clone(), rel));
+                            if nbr == to {
+                                found = true;
+                                break 'bfs;
+                            }
+                            queue.push_back((nbr, d + 1));
                         }
-                        queue.push_back((nbr, d + 1));
                     }
                 }
             }
-        }
 
-        if !found {
-            return Ok((None, truncated));
-        }
+            if !found {
+                return Ok((None, truncated));
+            }
 
-        // Reconstruct the walk by following predecessors from `to` back to
-        // `from`, then reverse to get `from → to` order.
-        let mut path: Vec<(String, String, Option<String>)> = Vec::new();
-        let mut cursor = to.to_string();
-        while cursor != from {
-            let (pred, rel) = match came_from.get(&cursor) {
+            // Reconstruct the walk by following predecessors from `to` back to
+            // `from`, then reverse to get `from → to` order.
+            let mut path: Vec<(String, String, Option<String>)> = Vec::new();
+            let mut cursor = to.to_string();
+            while cursor != from {
+                let (pred, rel) = match came_from.get(&cursor) {
+                    // rust-doctor-disable-next-line excessive-clone
+                    Some(v) => v.clone(),
+                    None => break, // defensive: unreachable once `to` is in came_from
+                };
                 // rust-doctor-disable-next-line excessive-clone
-                Some(v) => v.clone(),
-                None => break, // defensive: unreachable once `to` is in came_from
-            };
-            // rust-doctor-disable-next-line excessive-clone
-            path.push((pred.clone(), cursor.clone(), rel));
-            cursor = pred;
-        }
-        path.reverse();
-        Ok((Some(path), false))
+                path.push((pred.clone(), cursor.clone(), rel));
+                cursor = pred;
+            }
+            path.reverse();
+            Ok((Some(path), false))
+        })
     }
 
     async fn get_outgoing_link_rows(
@@ -1099,36 +1090,38 @@ impl NoteStore for SqliteMemoryBackend {
         path: &str,
         agent_id: &str,
     ) -> Result<Vec<OutgoingLinkRow>, AlephError> {
-        let conn = lock_conn!(self)?;
-
-        let mut stmt = conn
-            .prepare(
-                "SELECT to_note, to_raw, relation, label, confidence, resolved_by, status \
+        self.with_connection(|conn| {
+            let mut stmt = conn
+                .prepare(
+                    "SELECT to_note, to_raw, relation, label, confidence, resolved_by, status \
                  FROM notes_links WHERE from_note = ?1 AND agent_id = ?2",
-            )
-            .map_err(|e| AlephError::config(format!("get_outgoing_link_rows prepare: {e}")))?;
+                )
+                .map_err(|e| AlephError::config(format!("get_outgoing_link_rows prepare: {e}")))?;
 
-        let rows = stmt
-            .query_map(params![path, agent_id], |row| {
-                Ok(OutgoingLinkRow {
-                    to_note: row.get::<_, String>(0)?,
-                    to_raw: row.get::<_, String>(1)?,
-                    relation: row.get::<_, Option<String>>(2)?,
-                    label: row.get::<_, Option<String>>(3)?,
-                    confidence: row.get::<_, f32>(4)?,
-                    resolved_by: row.get::<_, Option<String>>(5)?,
-                    status: row.get::<_, String>(6)?,
+            let rows = stmt
+                .query_map(params![path, agent_id], |row| {
+                    Ok(OutgoingLinkRow {
+                        to_note: row.get::<_, String>(0)?,
+                        to_raw: row.get::<_, String>(1)?,
+                        relation: row.get::<_, Option<String>>(2)?,
+                        label: row.get::<_, Option<String>>(3)?,
+                        confidence: row.get::<_, f32>(4)?,
+                        resolved_by: row.get::<_, Option<String>>(5)?,
+                        status: row.get::<_, String>(6)?,
+                    })
                 })
-            })
-            .map_err(|e| AlephError::config(format!("get_outgoing_link_rows query: {e}")))?;
+                .map_err(|e| AlephError::config(format!("get_outgoing_link_rows query: {e}")))?;
 
-        let mut out = Vec::new();
-        for row in rows {
-            out.push(
-                row.map_err(|e| AlephError::config(format!("get_outgoing_link_rows row: {e}")))?,
-            );
-        }
-        Ok(out)
+            let mut out = Vec::new();
+            for row in rows {
+                out.push(
+                    row.map_err(|e| {
+                        AlephError::config(format!("get_outgoing_link_rows row: {e}"))
+                    })?,
+                );
+            }
+            Ok(out)
+        })
     }
 
     async fn find_by_filename(
@@ -1159,62 +1152,65 @@ impl NoteStore for SqliteMemoryBackend {
     }
 
     async fn prune_orphan_vectors(&self, agent_id: &str) -> Result<usize, AlephError> {
-        let conn = lock_conn!(self)?;
-        let tx = conn
-            .unchecked_transaction()
-            .map_err(|e| AlephError::config(format!("prune_orphan_vectors tx begin: {e}")))?;
+        self.with_connection(|conn| {
+            let tx = conn
+                .unchecked_transaction()
+                .map_err(|e| AlephError::config(format!("prune_orphan_vectors tx begin: {e}")))?;
 
-        // Collect map rowids whose path has no notes_index row.
-        let orphan_rowids: Vec<i64> = {
-            let mut stmt = tx
-                .prepare(
-                    "SELECT m.rowid FROM notes_vec_map m \
+            // Collect map rowids whose path has no notes_index row.
+            let orphan_rowids: Vec<i64> = {
+                let mut stmt = tx
+                    .prepare(
+                        "SELECT m.rowid FROM notes_vec_map m \
                      WHERE m.agent_id = ?1 \
                        AND NOT EXISTS (SELECT 1 FROM notes_index n \
                                        WHERE n.path = m.path AND n.agent_id = m.agent_id)",
-                )
-                .map_err(|e| AlephError::config(format!("prune_orphan_vectors prepare: {e}")))?;
-            let rows = stmt
-                .query_map(params![agent_id], |row| row.get::<_, i64>(0))
-                .map_err(|e| AlephError::config(format!("prune_orphan_vectors query: {e}")))?;
-            rows.collect::<std::result::Result<Vec<_>, _>>()
-                .map_err(|e| AlephError::config(format!("prune_orphan_vectors rows: {e}")))?
-        };
+                    )
+                    .map_err(|e| {
+                        AlephError::config(format!("prune_orphan_vectors prepare: {e}"))
+                    })?;
+                let rows = stmt
+                    .query_map(params![agent_id], |row| row.get::<_, i64>(0))
+                    .map_err(|e| AlephError::config(format!("prune_orphan_vectors query: {e}")))?;
+                rows.collect::<std::result::Result<Vec<_>, _>>()
+                    .map_err(|e| AlephError::config(format!("prune_orphan_vectors rows: {e}")))?
+            };
 
-        // Bound each round-trip: 5 000 rowids × 6 statements (5 vec tables + 1
-        // map) per batch = 30 k round-trips in the worst case. The previous
-        // per-rowid loop made it N × 6, which on a 50 k-note vault held the
-        // connection mutex for many seconds and starved concurrent recall.
-        // SQLite's SQLITE_MAX_VARIABLE_NUMBER is 32 766 by default; 5 000 leaves
-        // generous headroom for other bind usage in the same statement.
-        const BATCH_SIZE: usize = 5_000;
-        for chunk in orphan_rowids.chunks(BATCH_SIZE) {
-            for table in vec::all_notes_vec_tables() {
-                // Table name comes from an internal static allowlist
-                // (`EMBEDDING_DIM_TABLES`), so the format! here is safe.
-                // rust-doctor-disable-next-line sql-injection-risk
-                let sql = format!("DELETE FROM {table} WHERE rowid IN (");
+            // Bound each round-trip: 5 000 rowids × 6 statements (5 vec tables + 1
+            // map) per batch = 30 k round-trips in the worst case. The previous
+            // per-rowid loop made it N × 6, which on a 50 k-note vault held the
+            // connection mutex for many seconds and starved concurrent recall.
+            // SQLite's SQLITE_MAX_VARIABLE_NUMBER is 32 766 by default; 5 000 leaves
+            // generous headroom for other bind usage in the same statement.
+            const BATCH_SIZE: usize = 5_000;
+            for chunk in orphan_rowids.chunks(BATCH_SIZE) {
+                for table in vec::all_notes_vec_tables() {
+                    // Table name comes from an internal static allowlist
+                    // (`EMBEDDING_DIM_TABLES`), so the format! here is safe.
+                    // rust-doctor-disable-next-line sql-injection-risk
+                    let sql = format!("DELETE FROM {table} WHERE rowid IN (");
+                    let placeholders = std::iter::repeat_n("?", chunk.len())
+                        .collect::<Vec<_>>()
+                        .join(",");
+                    let sql = format!("{sql}{placeholders})");
+                    let binds = rusqlite::params_from_iter(chunk.iter().copied());
+                    tx.execute(&sql, binds).map_err(|e| {
+                        AlephError::config(format!("prune_orphan_vectors {table}: {e}"))
+                    })?;
+                }
                 let placeholders = std::iter::repeat_n("?", chunk.len())
                     .collect::<Vec<_>>()
                     .join(",");
-                let sql = format!("{sql}{placeholders})");
+                let sql = format!("DELETE FROM notes_vec_map WHERE rowid IN ({placeholders})");
                 let binds = rusqlite::params_from_iter(chunk.iter().copied());
-                tx.execute(&sql, binds).map_err(|e| {
-                    AlephError::config(format!("prune_orphan_vectors {table}: {e}"))
-                })?;
+                tx.execute(&sql, binds)
+                    .map_err(|e| AlephError::config(format!("prune_orphan_vectors map: {e}")))?;
             }
-            let placeholders = std::iter::repeat_n("?", chunk.len())
-                .collect::<Vec<_>>()
-                .join(",");
-            let sql = format!("DELETE FROM notes_vec_map WHERE rowid IN ({placeholders})");
-            let binds = rusqlite::params_from_iter(chunk.iter().copied());
-            tx.execute(&sql, binds)
-                .map_err(|e| AlephError::config(format!("prune_orphan_vectors map: {e}")))?;
-        }
 
-        tx.commit()
-            .map_err(|e| AlephError::config(format!("prune_orphan_vectors commit: {e}")))?;
-        Ok(orphan_rowids.len())
+            tx.commit()
+                .map_err(|e| AlephError::config(format!("prune_orphan_vectors commit: {e}")))?;
+            Ok(orphan_rowids.len())
+        })
     }
 
     async fn upsert_embedding(
@@ -1226,76 +1222,82 @@ impl NoteStore for SqliteMemoryBackend {
         content_hash: &str,
     ) -> Result<(), AlephError> {
         let table = vec::notes_vec_table_for_dim(dim)?;
-        let conn = lock_conn!(self)?;
-        let now = chrono::Utc::now().timestamp();
+        self.with_connection(|conn| {
+            let now = chrono::Utc::now().timestamp();
 
-        // Upsert the mapping row to get a stable numeric rowid, recording which
-        // version of the note this vector was computed from. The freshness
-        // columns are updated on conflict too — a re-embed of an existing note
-        // must move its provenance forward, or the row would keep claiming the
-        // version it was first embedded at.
-        conn.execute(
-            "INSERT INTO notes_vec_map (path, agent_id, embedded_hash, embedded_at) \
+            // Upsert the mapping row to get a stable numeric rowid, recording which
+            // version of the note this vector was computed from. The freshness
+            // columns are updated on conflict too — a re-embed of an existing note
+            // must move its provenance forward, or the row would keep claiming the
+            // version it was first embedded at.
+            conn.execute(
+                "INSERT INTO notes_vec_map (path, agent_id, embedded_hash, embedded_at) \
              VALUES (?1, ?2, ?3, ?4) \
              ON CONFLICT(agent_id, path) \
              DO UPDATE SET embedded_hash = excluded.embedded_hash, \
                            embedded_at = excluded.embedded_at",
-            params![path, agent_id, content_hash, now],
-        )
-        .map_err(|e| AlephError::config(format!("upsert_embedding map insert: {e}")))?;
-
-        let rowid: i64 = conn
-            .query_row(
-                "SELECT rowid FROM notes_vec_map WHERE path = ?1 AND agent_id = ?2",
-                params![path, agent_id],
-                |row| row.get(0),
+                params![path, agent_id, content_hash, now],
             )
-            .map_err(|e| AlephError::config(format!("upsert_embedding map lookup: {e}")))?;
+            .map_err(|e| AlephError::config(format!("upsert_embedding map insert: {e}")))?;
 
-        // Delete any existing embedding for this rowid across ALL dimension
-        // tables, not just the current one: a re-embed at a new dimension (e.g.
-        // 768 -> 1024) would otherwise orphan the old-dim row at this same rowid,
-        // leaving a stale vector permanently occupying a KNN slot in the other
-        // table. Mirrors the sweep in `remove_note_index`.
-        for t in vec::all_notes_vec_tables() {
-            // Table name comes from an internal static allowlist (`EMBEDDING_DIM_TABLES`).
+            let rowid: i64 = conn
+                .query_row(
+                    "SELECT rowid FROM notes_vec_map WHERE path = ?1 AND agent_id = ?2",
+                    params![path, agent_id],
+                    |row| row.get(0),
+                )
+                .map_err(|e| AlephError::config(format!("upsert_embedding map lookup: {e}")))?;
+
+            // Delete any existing embedding for this rowid across ALL dimension
+            // tables, not just the current one: a re-embed at a new dimension (e.g.
+            // 768 -> 1024) would otherwise orphan the old-dim row at this same rowid,
+            // leaving a stale vector permanently occupying a KNN slot in the other
+            // table. Mirrors the sweep in `remove_note_index`.
+            for t in vec::all_notes_vec_tables() {
+                // Table name comes from an internal static allowlist (`EMBEDDING_DIM_TABLES`).
+                // rust-doctor-disable-next-line sql-injection-risk
+                conn.execute(&format!("DELETE FROM {t} WHERE rowid = ?1"), params![rowid])
+                    .map_err(|e| {
+                        AlephError::config(format!("upsert_embedding delete vec {t}: {e}"))
+                    })?;
+            }
+
+            // Insert new embedding
+            let blob = vec::embedding_to_blob(embedding);
+            // Table name is validated by `vec::notes_vec_table_for_dim` against a static allowlist.
             // rust-doctor-disable-next-line sql-injection-risk
-            conn.execute(&format!("DELETE FROM {t} WHERE rowid = ?1"), params![rowid])
-                .map_err(|e| AlephError::config(format!("upsert_embedding delete vec {t}: {e}")))?;
-        }
+            conn.execute(
+                &format!("INSERT INTO {table}(rowid, embedding) VALUES (?1, ?2)"),
+                params![rowid, blob],
+            )
+            .map_err(|e| AlephError::config(format!("upsert_embedding insert vec: {e}")))?;
 
-        // Insert new embedding
-        let blob = vec::embedding_to_blob(embedding);
-        // Table name is validated by `vec::notes_vec_table_for_dim` against a static allowlist.
-        // rust-doctor-disable-next-line sql-injection-risk
-        conn.execute(
-            &format!("INSERT INTO {table}(rowid, embedding) VALUES (?1, ?2)"),
-            params![rowid, blob],
-        )
-        .map_err(|e| AlephError::config(format!("upsert_embedding insert vec: {e}")))?;
-
-        Ok(())
+            Ok(())
+        })
     }
 
     async fn stale_vector_paths(&self, agent_id: &str) -> Result<Vec<String>, AlephError> {
-        let conn = lock_conn!(self)?;
-        let mut stmt = conn
-            .prepare(
-                "SELECT n.path FROM notes_index n \
+        self.with_connection(|conn| {
+            let mut stmt = conn
+                .prepare(
+                    "SELECT n.path FROM notes_index n \
                  LEFT JOIN notes_vec_map m ON m.path = n.path AND m.agent_id = n.agent_id \
                  WHERE n.agent_id = ?1 \
                    AND (m.path IS NULL OR m.embedded_hash != n.content_hash) \
                  ORDER BY n.path",
-            )
-            .map_err(|e| AlephError::config(format!("stale_vector_paths prepare: {e}")))?;
-        let rows = stmt
-            .query_map(params![agent_id], |row| row.get::<_, String>(0))
-            .map_err(|e| AlephError::config(format!("stale_vector_paths query: {e}")))?;
-        let mut out = Vec::new();
-        for row in rows {
-            out.push(row.map_err(|e| AlephError::config(format!("stale_vector_paths row: {e}")))?);
-        }
-        Ok(out)
+                )
+                .map_err(|e| AlephError::config(format!("stale_vector_paths prepare: {e}")))?;
+            let rows = stmt
+                .query_map(params![agent_id], |row| row.get::<_, String>(0))
+                .map_err(|e| AlephError::config(format!("stale_vector_paths query: {e}")))?;
+            let mut out = Vec::new();
+            for row in rows {
+                out.push(
+                    row.map_err(|e| AlephError::config(format!("stale_vector_paths row: {e}")))?,
+                );
+            }
+            Ok(out)
+        })
     }
 
     async fn hybrid_search_notes(
@@ -1459,59 +1461,59 @@ impl NoteStore for SqliteMemoryBackend {
         agent_id: &str,
         dim_hint: u32,
     ) -> Result<Option<Vec<f32>>, AlephError> {
-        let conn = lock_conn!(self)?;
+        self.with_connection(|conn| {
+            // Look up rowid via notes_vec_map
+            let rowid: Option<i64> = conn
+                .query_row(
+                    "SELECT rowid FROM notes_vec_map WHERE path = ?1 AND agent_id = ?2",
+                    params![path, agent_id],
+                    |row| row.get(0),
+                )
+                .ok();
 
-        // Look up rowid via notes_vec_map
-        let rowid: Option<i64> = conn
-            .query_row(
-                "SELECT rowid FROM notes_vec_map WHERE path = ?1 AND agent_id = ?2",
-                params![path, agent_id],
-                |row| row.get(0),
-            )
-            .ok();
+            let Some(rowid) = rowid else {
+                return Ok(None);
+            };
 
-        let Some(rowid) = rowid else {
-            return Ok(None);
-        };
+            let table = vec::notes_vec_table_for_dim(dim_hint)?;
 
-        let table = vec::notes_vec_table_for_dim(dim_hint)?;
+            let sql = format!("SELECT embedding FROM {table} WHERE rowid = ?1");
+            let blob: Option<Vec<u8>> = conn.query_row(&sql, params![rowid], |row| row.get(0)).ok();
 
-        let sql = format!("SELECT embedding FROM {table} WHERE rowid = ?1");
-        let blob: Option<Vec<u8>> = conn.query_row(&sql, params![rowid], |row| row.get(0)).ok();
-
-        Ok(blob.map(|b| {
-            // Decode strictly: a blob whose byte length is not a multiple of 4
-            // (or whose decoded length disagrees with the table's dimension)
-            // is corrupt, not a vector — returning a wrong-length Vec<f32>
-            // would silently poison downstream cosine similarity. `chunks_exact`
-            // drops a trailing partial f32 silently, so validate first.
-            if b.len() % 4 != 0 {
-                tracing::warn!(
-                    path = %path,
-                    blob_len = b.len(),
-                    "get_embedding: stored embedding blob is not a multiple of 4 bytes; \
-                     treating as missing"
-                );
-                return Vec::new();
-            }
-            let decoded: Vec<f32> = b
-                .as_chunks::<4>()
-                .0
-                .iter()
-                .map(|chunk| f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]))
-                .collect();
-            if decoded.len() != dim_hint as usize {
-                tracing::warn!(
-                    path = %path,
-                    expected_dim = dim_hint,
-                    actual_dim = decoded.len(),
-                    "get_embedding: stored embedding dimension disagrees with table; \
-                     treating as missing"
-                );
-                return Vec::new();
-            }
-            decoded
-        }))
+            Ok(blob.map(|b| {
+                // Decode strictly: a blob whose byte length is not a multiple of 4
+                // (or whose decoded length disagrees with the table's dimension)
+                // is corrupt, not a vector — returning a wrong-length Vec<f32>
+                // would silently poison downstream cosine similarity. `chunks_exact`
+                // drops a trailing partial f32 silently, so validate first.
+                if b.len() % 4 != 0 {
+                    tracing::warn!(
+                        path = %path,
+                        blob_len = b.len(),
+                        "get_embedding: stored embedding blob is not a multiple of 4 bytes; \
+                         treating as missing"
+                    );
+                    return Vec::new();
+                }
+                let decoded: Vec<f32> = b
+                    .as_chunks::<4>()
+                    .0
+                    .iter()
+                    .map(|chunk| f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]))
+                    .collect();
+                if decoded.len() != dim_hint as usize {
+                    tracing::warn!(
+                        path = %path,
+                        expected_dim = dim_hint,
+                        actual_dim = decoded.len(),
+                        "get_embedding: stored embedding dimension disagrees with table; \
+                         treating as missing"
+                    );
+                    return Vec::new();
+                }
+                decoded
+            }))
+        })
     }
 
     async fn vector_search(
@@ -1522,7 +1524,7 @@ impl NoteStore for SqliteMemoryBackend {
         limit: usize,
     ) -> Result<Vec<(String, f32)>, AlephError> {
         let table = vec::notes_vec_table_for_dim(dim)?;
-        let conn = lock_conn!(self)?;
+        self.with_connection(|conn| {
         let blob = vec::embedding_to_blob(embedding);
 
         // Overshoot k to account for agent_id post-filtering. Bound the result
@@ -1612,73 +1614,74 @@ impl NoteStore for SqliteMemoryBackend {
         results.truncate(limit);
 
         Ok(results)
+        })
     }
 
     async fn relink_unresolved(&self, agent_id: &str) -> Result<usize, AlephError> {
-        let conn = lock_conn!(self)?;
-
-        let mut stmt = conn
-            .prepare(
-                "SELECT id, to_raw FROM notes_links \
+        self.with_connection(|conn| {
+            let mut stmt = conn
+                .prepare(
+                    "SELECT id, to_raw FROM notes_links \
                  WHERE agent_id = ?1 AND status = 'dangling'",
-            )
-            .map_err(|e| AlephError::config(format!("relink prep: {e}")))?;
-
-        let rows: Vec<(i64, String)> = stmt
-            .query_map(params![agent_id], |r| {
-                Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?))
-            })
-            .map_err(|e| AlephError::config(format!("relink scan: {e}")))?
-            .filter_map(|r| r.ok())
-            .collect();
-
-        // One prefetched context for every dangling row (was per-row double
-        // query in the old resolve_target-mirroring code — this fixes the N+1).
-        let resolve_ctx = super::helpers::build_resolve_context(&conn, agent_id)
-            .map_err(|e| AlephError::config(format!("relink resolve ctx: {e}")))?;
-
-        let mut updated = 0usize;
-        let tx = conn
-            .unchecked_transaction()
-            .map_err(|e| AlephError::config(format!("relink transaction: {e}")))?;
-        for (id, raw) in rows {
-            let r = crate::memory::notes::links::resolve(&raw, &resolve_ctx);
-            if let Some(target) = &r.target {
-                // `OR IGNORE`: two dangling variants on the same from_note can
-                // both resolve to the same target once it exists (tier-4
-                // normalized matching makes this easy, e.g. "[[Rust Guide]]"
-                // and "[[rust guide]]"). The second UPDATE would otherwise
-                // violate UNIQUE(agent_id, from_note, to_note) and — with no
-                // transaction wrapping this loop — abort the whole pass,
-                // leaving every remaining dangling row unprocessed while
-                // earlier updates stay applied. `OR IGNORE` skips the losing
-                // row instead of erroring.
-                let changed = tx
-                    .execute(
-                        "UPDATE OR IGNORE notes_links SET to_note = ?1, confidence = ?2, \
-                                resolved_by = ?3, status = 'active' WHERE id = ?4",
-                        params![target, r.confidence, r.resolved_by.map(|s| s.as_str()), id],
-                    )
-                    .map_err(|e| AlephError::config(format!("relink update: {e}")))?;
-
-                // If the UPDATE was ignored, this row is now a redundant
-                // dangling duplicate of the edge that won — remove it. A
-                // no-op when the UPDATE above succeeded, since status is
-                // already 'active' by the time this runs.
-                tx.execute(
-                    "DELETE FROM notes_links WHERE id = ?1 AND status = 'dangling'",
-                    params![id],
                 )
-                .map_err(|e| AlephError::config(format!("relink cleanup: {e}")))?;
+                .map_err(|e| AlephError::config(format!("relink prep: {e}")))?;
 
-                if changed > 0 {
-                    updated += 1;
+            let rows: Vec<(i64, String)> = stmt
+                .query_map(params![agent_id], |r| {
+                    Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?))
+                })
+                .map_err(|e| AlephError::config(format!("relink scan: {e}")))?
+                .filter_map(|r| r.ok())
+                .collect();
+
+            // One prefetched context for every dangling row (was per-row double
+            // query in the old resolve_target-mirroring code — this fixes the N+1).
+            let resolve_ctx = super::helpers::build_resolve_context(&conn, agent_id)
+                .map_err(|e| AlephError::config(format!("relink resolve ctx: {e}")))?;
+
+            let mut updated = 0usize;
+            let tx = conn
+                .unchecked_transaction()
+                .map_err(|e| AlephError::config(format!("relink transaction: {e}")))?;
+            for (id, raw) in rows {
+                let r = crate::memory::notes::links::resolve(&raw, &resolve_ctx);
+                if let Some(target) = &r.target {
+                    // `OR IGNORE`: two dangling variants on the same from_note can
+                    // both resolve to the same target once it exists (tier-4
+                    // normalized matching makes this easy, e.g. "[[Rust Guide]]"
+                    // and "[[rust guide]]"). The second UPDATE would otherwise
+                    // violate UNIQUE(agent_id, from_note, to_note) and — with no
+                    // transaction wrapping this loop — abort the whole pass,
+                    // leaving every remaining dangling row unprocessed while
+                    // earlier updates stay applied. `OR IGNORE` skips the losing
+                    // row instead of erroring.
+                    let changed = tx
+                        .execute(
+                            "UPDATE OR IGNORE notes_links SET to_note = ?1, confidence = ?2, \
+                                resolved_by = ?3, status = 'active' WHERE id = ?4",
+                            params![target, r.confidence, r.resolved_by.map(|s| s.as_str()), id],
+                        )
+                        .map_err(|e| AlephError::config(format!("relink update: {e}")))?;
+
+                    // If the UPDATE was ignored, this row is now a redundant
+                    // dangling duplicate of the edge that won — remove it. A
+                    // no-op when the UPDATE above succeeded, since status is
+                    // already 'active' by the time this runs.
+                    tx.execute(
+                        "DELETE FROM notes_links WHERE id = ?1 AND status = 'dangling'",
+                        params![id],
+                    )
+                    .map_err(|e| AlephError::config(format!("relink cleanup: {e}")))?;
+
+                    if changed > 0 {
+                        updated += 1;
+                    }
                 }
             }
-        }
-        tx.commit()
-            .map_err(|e| AlephError::config(format!("relink commit: {e}")))?;
-        Ok(updated)
+            tx.commit()
+                .map_err(|e| AlephError::config(format!("relink commit: {e}")))?;
+            Ok(updated)
+        })
     }
 
     async fn backfill_inbound_links(
@@ -1690,78 +1693,79 @@ impl NoteStore for SqliteMemoryBackend {
         if keys.is_empty() {
             return Ok(0);
         }
-        let conn = lock_conn!(self)?;
-        let placeholders: Vec<String> = (2..=keys.len() + 1).map(|i| format!("?{i}")).collect();
-        let sql = format!(
-            "SELECT id, to_raw FROM notes_links \
+        self.with_connection(|conn| {
+            let placeholders: Vec<String> = (2..=keys.len() + 1).map(|i| format!("?{i}")).collect();
+            let sql = format!(
+                "SELECT id, to_raw FROM notes_links \
              WHERE agent_id = ?1 AND status IN ('dangling','tombstone') \
                AND to_raw IN ({})",
-            placeholders.join(", ")
-        );
-        let mut params_v: Vec<Box<dyn rusqlite::types::ToSql>> =
-            vec![Box::new(agent_id.to_string())];
-        for k in keys {
-            // rust-doctor-disable-next-line excessive-clone
-            params_v.push(Box::new(k.clone()));
-        }
-        let params_ref: Vec<&dyn rusqlite::types::ToSql> =
-            params_v.iter().map(|p| p.as_ref()).collect();
-        let rows: Vec<(i64, String)> = {
-            let mut stmt = conn
-                .prepare(&sql)
-                .map_err(|e| AlephError::config(format!("backfill prep: {e}")))?;
-            let scanned: Vec<(i64, String)> = stmt
-                .query_map(params_ref.as_slice(), |r| {
-                    Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?))
-                })
-                .map_err(|e| AlephError::config(format!("backfill scan: {e}")))?
-                .filter_map(|r| r.ok())
-                .collect();
-            scanned
-        };
-        if rows.is_empty() {
-            return Ok(0);
-        }
-        let ctx = super::helpers::build_resolve_context(&conn, agent_id)
-            .map_err(|e| AlephError::config(format!("backfill ctx: {e}")))?;
-        let mut revived = 0usize;
-        let tx = conn
-            .unchecked_transaction()
-            .map_err(|e| AlephError::config(format!("backfill transaction: {e}")))?;
-        for (id, raw) in rows {
-            let r = links::resolve(&raw, &ctx);
-            if let Some(target) = r.target {
-                // UNIQUE(agent_id, from_note, to_note) defense, mirroring
-                // relink_unresolved above: reviving this row's to_note can
-                // collide with another row already occupying that (from, to)
-                // key on the same from_note (e.g. the source note was
-                // manually re-linked to the target through a different raw
-                // wikilink text while this row was still dangling/tombstone).
-                // `UPDATE OR IGNORE` skips the losing row instead of erroring
-                // out mid-pass; the follow-up DELETE clears the now-redundant
-                // loser so it doesn't linger as a permanent duplicate.
-                let changed = tx
-                    .execute(
-                        "UPDATE OR IGNORE notes_links SET to_note = ?1, confidence = ?2, \
+                placeholders.join(", ")
+            );
+            let mut params_v: Vec<Box<dyn rusqlite::types::ToSql>> =
+                vec![Box::new(agent_id.to_string())];
+            for k in keys {
+                // rust-doctor-disable-next-line excessive-clone
+                params_v.push(Box::new(k.clone()));
+            }
+            let params_ref: Vec<&dyn rusqlite::types::ToSql> =
+                params_v.iter().map(|p| p.as_ref()).collect();
+            let rows: Vec<(i64, String)> = {
+                let mut stmt = conn
+                    .prepare(&sql)
+                    .map_err(|e| AlephError::config(format!("backfill prep: {e}")))?;
+                let scanned: Vec<(i64, String)> = stmt
+                    .query_map(params_ref.as_slice(), |r| {
+                        Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?))
+                    })
+                    .map_err(|e| AlephError::config(format!("backfill scan: {e}")))?
+                    .filter_map(|r| r.ok())
+                    .collect();
+                scanned
+            };
+            if rows.is_empty() {
+                return Ok(0);
+            }
+            let ctx = super::helpers::build_resolve_context(&conn, agent_id)
+                .map_err(|e| AlephError::config(format!("backfill ctx: {e}")))?;
+            let mut revived = 0usize;
+            let tx = conn
+                .unchecked_transaction()
+                .map_err(|e| AlephError::config(format!("backfill transaction: {e}")))?;
+            for (id, raw) in rows {
+                let r = links::resolve(&raw, &ctx);
+                if let Some(target) = r.target {
+                    // UNIQUE(agent_id, from_note, to_note) defense, mirroring
+                    // relink_unresolved above: reviving this row's to_note can
+                    // collide with another row already occupying that (from, to)
+                    // key on the same from_note (e.g. the source note was
+                    // manually re-linked to the target through a different raw
+                    // wikilink text while this row was still dangling/tombstone).
+                    // `UPDATE OR IGNORE` skips the losing row instead of erroring
+                    // out mid-pass; the follow-up DELETE clears the now-redundant
+                    // loser so it doesn't linger as a permanent duplicate.
+                    let changed = tx
+                        .execute(
+                            "UPDATE OR IGNORE notes_links SET to_note = ?1, confidence = ?2, \
                                 resolved_by = ?3, status = 'active' WHERE id = ?4",
-                        params![target, r.confidence, r.resolved_by.map(|s| s.as_str()), id],
-                    )
-                    .map_err(|e| AlephError::config(format!("backfill update: {e}")))?;
+                            params![target, r.confidence, r.resolved_by.map(|s| s.as_str()), id],
+                        )
+                        .map_err(|e| AlephError::config(format!("backfill update: {e}")))?;
 
-                tx.execute(
+                    tx.execute(
                     "DELETE FROM notes_links WHERE id = ?1 AND status IN ('dangling', 'tombstone')",
                     params![id],
                 )
                 .map_err(|e| AlephError::config(format!("backfill cleanup: {e}")))?;
 
-                if changed > 0 {
-                    revived += 1;
+                    if changed > 0 {
+                        revived += 1;
+                    }
                 }
             }
-        }
-        tx.commit()
-            .map_err(|e| AlephError::config(format!("backfill commit: {e}")))?;
-        Ok(revived)
+            tx.commit()
+                .map_err(|e| AlephError::config(format!("backfill commit: {e}")))?;
+            Ok(revived)
+        })
     }
 
     // -----------------------------------------------------------------
@@ -1769,103 +1773,111 @@ impl NoteStore for SqliteMemoryBackend {
     // -----------------------------------------------------------------
 
     async fn load_graph_snapshot(&self, agent_id: &str) -> Result<GraphSnapshot, AlephError> {
-        let conn = lock_conn!(self)?;
+        self.with_connection(|conn| {
+            // Collect (path, category) first so the prepared-statement borrow is
+            // released before the per-node `notes_sources` lookups reuse `conn`.
+            let node_meta: Vec<(String, String)> = {
+                let mut stmt = conn
+                    .prepare("SELECT path, category FROM notes_index WHERE agent_id = ?1")
+                    .map_err(|e| {
+                        AlephError::config(format!("load_graph_snapshot nodes prep: {e}"))
+                    })?;
+                let rows = stmt
+                    .query_map(params![agent_id], |r| {
+                        Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+                    })
+                    .map_err(|e| {
+                        AlephError::config(format!("load_graph_snapshot nodes query: {e}"))
+                    })?;
+                // rust-doctor-disable-next-line unnecessary-allocation
+                let mut out = Vec::new();
+                for row in rows {
+                    out.push(row.map_err(|e| {
+                        AlephError::config(format!("load_graph_snapshot node row: {e}"))
+                    })?);
+                }
+                out
+            };
 
-        // Collect (path, category) first so the prepared-statement borrow is
-        // released before the per-node `notes_sources` lookups reuse `conn`.
-        let node_meta: Vec<(String, String)> = {
-            let mut stmt = conn
-                .prepare("SELECT path, category FROM notes_index WHERE agent_id = ?1")
-                .map_err(|e| AlephError::config(format!("load_graph_snapshot nodes prep: {e}")))?;
-            let rows = stmt
-                .query_map(params![agent_id], |r| {
-                    Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
-                })
-                .map_err(|e| AlephError::config(format!("load_graph_snapshot nodes query: {e}")))?;
-            // rust-doctor-disable-next-line unnecessary-allocation
-            let mut out = Vec::new();
-            for row in rows {
-                out.push(row.map_err(|e| {
-                    AlephError::config(format!("load_graph_snapshot node row: {e}"))
-                })?);
-            }
-            out
-        };
-
-        let mut nodes = Vec::with_capacity(node_meta.len());
-        // One query for ALL source refs instead of N prepared statements — the
-        // previous per-node loop issued a prepare+query per node, which on a
-        // large vault is thousands of round-trips on a shared connection.
-        let mut source_rows: Vec<(String, String)> = Vec::new();
-        {
-            let mut s2 = conn
-                .prepare(
-                    "SELECT note_path, source_ref FROM notes_sources \
-                     WHERE agent_id = ?1 ORDER BY note_path",
-                )
-                .map_err(|e| {
-                    AlephError::config(format!("load_graph_snapshot sources prep: {e}"))
-                })?;
-            let srows = s2
-                .query_map(params![agent_id], |r| {
-                    Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
-                })
-                .map_err(|e| {
-                    AlephError::config(format!("load_graph_snapshot sources query: {e}"))
-                })?;
-            for s in srows {
-                source_rows.push(s.map_err(|e| {
-                    AlephError::config(format!("load_graph_snapshot source row: {e}"))
-                })?);
-            }
-        }
-        // Consume in one pass: `source_rows` is sorted by note_path, so a
-        // single walk groups refs per node without extra allocation.
-        let mut src_iter = source_rows.into_iter().peekable();
-        for (path, category) in node_meta {
-            // rust-doctor-disable-next-line unnecessary-allocation
-            let mut sources = Vec::new();
-            while src_iter
-                .peek()
-                .is_some_and(|(p, _)| p.as_str() == path.as_str())
+            let mut nodes = Vec::with_capacity(node_meta.len());
+            // One query for ALL source refs instead of N prepared statements — the
+            // previous per-node loop issued a prepare+query per node, which on a
+            // large vault is thousands of round-trips on a shared connection.
+            let mut source_rows: Vec<(String, String)> = Vec::new();
             {
-                sources.push(src_iter.next().unwrap().1);
+                let mut s2 = conn
+                    .prepare(
+                        "SELECT note_path, source_ref FROM notes_sources \
+                     WHERE agent_id = ?1 ORDER BY note_path",
+                    )
+                    .map_err(|e| {
+                        AlephError::config(format!("load_graph_snapshot sources prep: {e}"))
+                    })?;
+                let srows = s2
+                    .query_map(params![agent_id], |r| {
+                        Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+                    })
+                    .map_err(|e| {
+                        AlephError::config(format!("load_graph_snapshot sources query: {e}"))
+                    })?;
+                for s in srows {
+                    source_rows.push(s.map_err(|e| {
+                        AlephError::config(format!("load_graph_snapshot source row: {e}"))
+                    })?);
+                }
             }
-            nodes.push(GraphNode {
-                path,
-                category,
-                sources,
-            });
-        }
+            // Consume in one pass: `source_rows` is sorted by note_path, so a
+            // single walk groups refs per node without extra allocation.
+            let mut src_iter = source_rows.into_iter().peekable();
+            for (path, category) in node_meta {
+                // rust-doctor-disable-next-line unnecessary-allocation
+                let mut sources = Vec::new();
+                while src_iter
+                    .peek()
+                    .is_some_and(|(p, _)| p.as_str() == path.as_str())
+                {
+                    sources.push(src_iter.next().unwrap().1);
+                }
+                nodes.push(GraphNode {
+                    path,
+                    category,
+                    sources,
+                });
+            }
 
-        // Resolved edges only (skip unresolved bare-filename links).
-        let mut edges = Vec::new();
-        {
-            let mut stmt = conn
-                .prepare(
-                    "SELECT from_note, to_note, relation, confidence FROM notes_links \
+            // Resolved edges only (skip unresolved bare-filename links).
+            let mut edges = Vec::new();
+            {
+                let mut stmt = conn
+                    .prepare(
+                        "SELECT from_note, to_note, relation, confidence FROM notes_links \
                      WHERE agent_id = ?1 AND to_note <> '' AND instr(to_note, '/') > 0 \
                      AND status = 'active'",
-                )
-                .map_err(|e| AlephError::config(format!("load_graph_snapshot edges prep: {e}")))?;
-            let rows = stmt
-                .query_map(params![agent_id], |r| {
-                    Ok(GraphEdge {
-                        from: r.get::<_, String>(0)?,
-                        to: r.get::<_, String>(1)?,
-                        rel_type: r.get::<_, Option<String>>(2)?,
-                        confidence: r.get::<_, f32>(3)?,
+                    )
+                    .map_err(|e| {
+                        AlephError::config(format!("load_graph_snapshot edges prep: {e}"))
+                    })?;
+                let rows = stmt
+                    .query_map(params![agent_id], |r| {
+                        Ok(GraphEdge {
+                            from: r.get::<_, String>(0)?,
+                            to: r.get::<_, String>(1)?,
+                            rel_type: r.get::<_, Option<String>>(2)?,
+                            confidence: r.get::<_, f32>(3)?,
+                        })
                     })
-                })
-                .map_err(|e| AlephError::config(format!("load_graph_snapshot edges query: {e}")))?;
-            for row in rows {
-                edges.push(row.map_err(|e| {
-                    AlephError::config(format!("load_graph_snapshot edge row: {e}"))
-                })?);
+                    .map_err(|e| {
+                        AlephError::config(format!("load_graph_snapshot edges query: {e}"))
+                    })?;
+                for row in rows {
+                    edges.push(row.map_err(|e| {
+                        AlephError::config(format!("load_graph_snapshot edge row: {e}"))
+                    })?);
+                }
             }
-        }
 
-        Ok(GraphSnapshot { nodes, edges })
+            Ok(GraphSnapshot { nodes, edges })
+        })
     }
 
     async fn replace_co_recall_links(
@@ -1874,42 +1886,44 @@ impl NoteStore for SqliteMemoryBackend {
         rows: &[(String, String, f32)],
     ) -> Result<(), AlephError> {
         use crate::memory::notes::graph::CO_RECALLED_RELATION;
-        let conn = lock_conn!(self)?;
-        // Wrap DELETE + INSERT loop in a single transaction so a mid-loop
-        // failure cannot leave the co-recall edge set half-replaced (the full
-        // refresh must be all-or-nothing), and so the per-row INSERTs don't each
-        // autocommit (one fsync per row) during a dream recompute.
-        let tx = conn
-            .unchecked_transaction()
-            .map_err(|e| AlephError::config(format!("replace_co_recall_links tx begin: {e}")))?;
-        // Full refresh: the co-recall edge set is re-aggregated from
-        // `recall_signals` every dream cycle, so stale pairs must not linger.
-        tx.execute(
-            "DELETE FROM notes_links WHERE agent_id = ?1 AND relation = ?2",
-            params![agent_id, CO_RECALLED_RELATION],
-        )
-        .map_err(|e| AlephError::config(format!("replace_co_recall_links delete: {e}")))?;
-        // DO NOTHING on conflict: an existing semantic link (wikilink / typed
-        // relation) for the pair always wins over the behavioral edge.
-        for (from, to, confidence) in rows {
+        self.with_connection(|conn| {
+            // Wrap DELETE + INSERT loop in a single transaction so a mid-loop
+            // failure cannot leave the co-recall edge set half-replaced (the full
+            // refresh must be all-or-nothing), and so the per-row INSERTs don't each
+            // autocommit (one fsync per row) during a dream recompute.
+            let tx = conn.unchecked_transaction().map_err(|e| {
+                AlephError::config(format!("replace_co_recall_links tx begin: {e}"))
+            })?;
+            // Full refresh: the co-recall edge set is re-aggregated from
+            // `recall_signals` every dream cycle, so stale pairs must not linger.
             tx.execute(
-                "INSERT INTO notes_links \
+                "DELETE FROM notes_links WHERE agent_id = ?1 AND relation = ?2",
+                params![agent_id, CO_RECALLED_RELATION],
+            )
+            .map_err(|e| AlephError::config(format!("replace_co_recall_links delete: {e}")))?;
+            // DO NOTHING on conflict: an existing semantic link (wikilink / typed
+            // relation) for the pair always wins over the behavioral edge.
+            for (from, to, confidence) in rows {
+                tx.execute(
+                    "INSERT INTO notes_links \
                    (agent_id, from_note, to_note, to_raw, relation, confidence, status) \
                  VALUES (?1, ?2, ?3, ?3, ?4, ?5, 'active') \
                  ON CONFLICT(agent_id, from_note, to_note) DO NOTHING",
-                params![
-                    agent_id,
-                    from,
-                    to,
-                    CO_RECALLED_RELATION,
-                    f64::from(*confidence)
-                ],
-            )
-            .map_err(|e| AlephError::config(format!("replace_co_recall_links insert: {e}")))?;
-        }
-        tx.commit()
-            .map_err(|e| AlephError::config(format!("replace_co_recall_links tx commit: {e}")))?;
-        Ok(())
+                    params![
+                        agent_id,
+                        from,
+                        to,
+                        CO_RECALLED_RELATION,
+                        f64::from(*confidence)
+                    ],
+                )
+                .map_err(|e| AlephError::config(format!("replace_co_recall_links insert: {e}")))?;
+            }
+            tx.commit().map_err(|e| {
+                AlephError::config(format!("replace_co_recall_links tx commit: {e}"))
+            })?;
+            Ok(())
+        })
     }
 
     async fn replace_mention_links(
@@ -1918,7 +1932,7 @@ impl NoteStore for SqliteMemoryBackend {
         rows: &[(String, String)],
     ) -> Result<(), AlephError> {
         use crate::memory::notes::links::mentions::{MENTION_CONFIDENCE, MENTION_RELATION};
-        let conn = lock_conn!(self)?;
+        self.with_connection(|conn| {
         // Wrap DELETE + INSERT loop in a single transaction so a mid-loop
         // failure cannot leave the mention edge set half-replaced (the full
         // refresh must be all-or-nothing).
@@ -1947,6 +1961,7 @@ impl NoteStore for SqliteMemoryBackend {
         tx.commit()
             .map_err(|e| AlephError::config(format!("replace_mention_links tx commit: {e}")))?;
         Ok(())
+        })
     }
 
     async fn replace_graph_cache(
@@ -1955,29 +1970,30 @@ impl NoteStore for SqliteMemoryBackend {
         rows: &[(String, usize, f32, usize)],
     ) -> Result<(), AlephError> {
         let now = chrono::Utc::now().timestamp();
-        let conn = lock_conn!(self)?;
-        conn.execute(
-            "DELETE FROM notes_graph_cache WHERE agent_id = ?1",
-            params![agent_id],
-        )
-        .map_err(|e| AlephError::config(format!("replace_graph_cache delete: {e}")))?;
-        for (path, comm, coh, deg) in rows {
+        self.with_connection(|conn| {
             conn.execute(
-                "INSERT OR REPLACE INTO notes_graph_cache \
+                "DELETE FROM notes_graph_cache WHERE agent_id = ?1",
+                params![agent_id],
+            )
+            .map_err(|e| AlephError::config(format!("replace_graph_cache delete: {e}")))?;
+            for (path, comm, coh, deg) in rows {
+                conn.execute(
+                    "INSERT OR REPLACE INTO notes_graph_cache \
                  (agent_id, node_path, community_id, cohesion, degree, updated_at) \
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-                params![
-                    agent_id,
-                    path,
-                    *comm as i64,
-                    f64::from(*coh),
-                    *deg as i64,
-                    now
-                ],
-            )
-            .map_err(|e| AlephError::config(format!("replace_graph_cache insert: {e}")))?;
-        }
-        Ok(())
+                    params![
+                        agent_id,
+                        path,
+                        *comm as i64,
+                        f64::from(*coh),
+                        *deg as i64,
+                        now
+                    ],
+                )
+                .map_err(|e| AlephError::config(format!("replace_graph_cache insert: {e}")))?;
+            }
+            Ok(())
+        })
     }
 
     async fn replace_graph_insights(
@@ -1986,21 +2002,22 @@ impl NoteStore for SqliteMemoryBackend {
         rows: &[(String, String)],
     ) -> Result<(), AlephError> {
         let now = chrono::Utc::now().timestamp();
-        let conn = lock_conn!(self)?;
-        conn.execute(
-            "DELETE FROM notes_graph_insights WHERE agent_id = ?1",
-            params![agent_id],
-        )
-        .map_err(|e| AlephError::config(format!("replace_graph_insights delete: {e}")))?;
-        for (kind, payload) in rows {
+        self.with_connection(|conn| {
             conn.execute(
-                "INSERT INTO notes_graph_insights (agent_id, kind, payload, created_at) \
-                 VALUES (?1, ?2, ?3, ?4)",
-                params![agent_id, kind, payload, now],
+                "DELETE FROM notes_graph_insights WHERE agent_id = ?1",
+                params![agent_id],
             )
-            .map_err(|e| AlephError::config(format!("replace_graph_insights insert: {e}")))?;
-        }
-        Ok(())
+            .map_err(|e| AlephError::config(format!("replace_graph_insights delete: {e}")))?;
+            for (kind, payload) in rows {
+                conn.execute(
+                    "INSERT INTO notes_graph_insights (agent_id, kind, payload, created_at) \
+                 VALUES (?1, ?2, ?3, ?4)",
+                    params![agent_id, kind, payload, now],
+                )
+                .map_err(|e| AlephError::config(format!("replace_graph_insights insert: {e}")))?;
+            }
+            Ok(())
+        })
     }
 
     async fn read_graph_insights(
@@ -2008,44 +2025,55 @@ impl NoteStore for SqliteMemoryBackend {
         agent_id: &str,
         kind: Option<&str>,
     ) -> Result<Vec<(String, String)>, AlephError> {
-        let conn = lock_conn!(self)?;
-        let mut out = Vec::new();
-        match kind {
-            Some(k) => {
-                let mut stmt = conn
-                    .prepare(
-                        "SELECT kind, payload FROM notes_graph_insights \
+        self.with_connection(|conn| {
+            let mut out = Vec::new();
+            match kind {
+                Some(k) => {
+                    let mut stmt = conn
+                        .prepare(
+                            "SELECT kind, payload FROM notes_graph_insights \
                          WHERE agent_id = ?1 AND kind = ?2",
-                    )
-                    .map_err(|e| AlephError::config(format!("read_graph_insights prep: {e}")))?;
-                let rows = stmt
-                    .query_map(params![agent_id, k], |r| {
-                        Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
-                    })
-                    .map_err(|e| AlephError::config(format!("read_graph_insights query: {e}")))?;
-                for row in rows {
-                    out.push(row.map_err(|e| {
-                        AlephError::config(format!("read_graph_insights row: {e}"))
-                    })?);
+                        )
+                        .map_err(|e| {
+                            AlephError::config(format!("read_graph_insights prep: {e}"))
+                        })?;
+                    let rows = stmt
+                        .query_map(params![agent_id, k], |r| {
+                            Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+                        })
+                        .map_err(|e| {
+                            AlephError::config(format!("read_graph_insights query: {e}"))
+                        })?;
+                    for row in rows {
+                        out.push(row.map_err(|e| {
+                            AlephError::config(format!("read_graph_insights row: {e}"))
+                        })?);
+                    }
+                }
+                None => {
+                    let mut stmt = conn
+                        .prepare(
+                            "SELECT kind, payload FROM notes_graph_insights WHERE agent_id = ?1",
+                        )
+                        .map_err(|e| {
+                            AlephError::config(format!("read_graph_insights prep: {e}"))
+                        })?;
+                    let rows = stmt
+                        .query_map(params![agent_id], |r| {
+                            Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+                        })
+                        .map_err(|e| {
+                            AlephError::config(format!("read_graph_insights query: {e}"))
+                        })?;
+                    for row in rows {
+                        out.push(row.map_err(|e| {
+                            AlephError::config(format!("read_graph_insights row: {e}"))
+                        })?);
+                    }
                 }
             }
-            None => {
-                let mut stmt = conn
-                    .prepare("SELECT kind, payload FROM notes_graph_insights WHERE agent_id = ?1")
-                    .map_err(|e| AlephError::config(format!("read_graph_insights prep: {e}")))?;
-                let rows = stmt
-                    .query_map(params![agent_id], |r| {
-                        Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
-                    })
-                    .map_err(|e| AlephError::config(format!("read_graph_insights query: {e}")))?;
-                for row in rows {
-                    out.push(row.map_err(|e| {
-                        AlephError::config(format!("read_graph_insights row: {e}"))
-                    })?);
-                }
-            }
-        }
-        Ok(out)
+            Ok(out)
+        })
     }
 
     async fn community_peers(
@@ -2054,61 +2082,63 @@ impl NoteStore for SqliteMemoryBackend {
         node_path: &str,
         limit: usize,
     ) -> Result<Vec<String>, AlephError> {
-        let conn = lock_conn!(self)?;
-        let cid: Option<i64> = conn
-            .query_row(
-                "SELECT community_id FROM notes_graph_cache \
+        self.with_connection(|conn| {
+            let cid: Option<i64> = conn
+                .query_row(
+                    "SELECT community_id FROM notes_graph_cache \
                  WHERE agent_id = ?1 AND node_path = ?2",
-                params![agent_id, node_path],
-                |r| r.get(0),
-            )
-            .optional()
-            .map_err(|e| AlephError::config(format!("community_peers lookup: {e}")))?;
-        let Some(cid) = cid else {
-            return Ok(vec![]);
-        };
-        let mut stmt = conn
-            .prepare(
-                "SELECT node_path FROM notes_graph_cache \
+                    params![agent_id, node_path],
+                    |r| r.get(0),
+                )
+                .optional()
+                .map_err(|e| AlephError::config(format!("community_peers lookup: {e}")))?;
+            let Some(cid) = cid else {
+                return Ok(vec![]);
+            };
+            let mut stmt = conn
+                .prepare(
+                    "SELECT node_path FROM notes_graph_cache \
                  WHERE agent_id = ?1 AND community_id = ?2 AND node_path <> ?3 \
                  LIMIT ?4",
-            )
-            .map_err(|e| AlephError::config(format!("community_peers prepare: {e}")))?;
-        let rows = stmt
-            .query_map(params![agent_id, cid, node_path, limit as i64], |r| {
-                r.get::<_, String>(0)
-            })
-            .map_err(|e| AlephError::config(format!("community_peers query: {e}")))?;
-        let mut out = Vec::new();
-        for row in rows {
-            out.push(row.map_err(|e| AlephError::config(format!("community_peers row: {e}")))?);
-        }
-        Ok(out)
+                )
+                .map_err(|e| AlephError::config(format!("community_peers prepare: {e}")))?;
+            let rows = stmt
+                .query_map(params![agent_id, cid, node_path, limit as i64], |r| {
+                    r.get::<_, String>(0)
+                })
+                .map_err(|e| AlephError::config(format!("community_peers query: {e}")))?;
+            let mut out = Vec::new();
+            for row in rows {
+                out.push(row.map_err(|e| AlephError::config(format!("community_peers row: {e}")))?);
+            }
+            Ok(out)
+        })
     }
 
     async fn relation_type_counts(&self, agent_id: &str) -> Result<Vec<(String, i64)>, AlephError> {
-        let conn = lock_conn!(self)?;
-        let mut stmt = conn
-            .prepare(
-                "SELECT COALESCE(relation, 'link') AS rel, COUNT(*) AS n \
+        self.with_connection(|conn| {
+            let mut stmt = conn
+                .prepare(
+                    "SELECT COALESCE(relation, 'link') AS rel, COUNT(*) AS n \
                  FROM notes_links \
                  WHERE agent_id = ?1 AND status = 'active' \
                  GROUP BY rel \
                  ORDER BY n DESC, rel",
-            )
-            .map_err(|e| AlephError::config(format!("relation_type_counts prepare: {e}")))?;
-        let rows = stmt
-            .query_map(params![agent_id], |r| {
-                Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?))
-            })
-            .map_err(|e| AlephError::config(format!("relation_type_counts query: {e}")))?;
-        let mut out = Vec::new();
-        for row in rows {
-            out.push(
-                row.map_err(|e| AlephError::config(format!("relation_type_counts row: {e}")))?,
-            );
-        }
-        Ok(out)
+                )
+                .map_err(|e| AlephError::config(format!("relation_type_counts prepare: {e}")))?;
+            let rows = stmt
+                .query_map(params![agent_id], |r| {
+                    Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?))
+                })
+                .map_err(|e| AlephError::config(format!("relation_type_counts query: {e}")))?;
+            let mut out = Vec::new();
+            for row in rows {
+                out.push(
+                    row.map_err(|e| AlephError::config(format!("relation_type_counts row: {e}")))?,
+                );
+            }
+            Ok(out)
+        })
     }
 
     async fn replace_graph_related(
@@ -2116,31 +2146,32 @@ impl NoteStore for SqliteMemoryBackend {
         agent_id: &str,
         rows: &[(String, String, f32)],
     ) -> Result<(), AlephError> {
-        let conn = lock_conn!(self)?;
-        // Wrap DELETE + INSERT loop in a single transaction so a mid-loop
-        // failure cannot leave the related-edge set half-replaced (the full
-        // refresh must be all-or-nothing), and so the per-row INSERTs don't each
-        // autocommit (one fsync per row) during a dream recompute.
-        let tx = conn
-            .unchecked_transaction()
-            .map_err(|e| AlephError::config(format!("replace_graph_related tx begin: {e}")))?;
-        tx.execute(
-            "DELETE FROM notes_graph_related WHERE agent_id = ?1",
-            params![agent_id],
-        )
-        .map_err(|e| AlephError::config(format!("replace_graph_related delete: {e}")))?;
-        for (node, related, score) in rows {
+        self.with_connection(|conn| {
+            // Wrap DELETE + INSERT loop in a single transaction so a mid-loop
+            // failure cannot leave the related-edge set half-replaced (the full
+            // refresh must be all-or-nothing), and so the per-row INSERTs don't each
+            // autocommit (one fsync per row) during a dream recompute.
+            let tx = conn
+                .unchecked_transaction()
+                .map_err(|e| AlephError::config(format!("replace_graph_related tx begin: {e}")))?;
             tx.execute(
-                "INSERT OR REPLACE INTO notes_graph_related \
+                "DELETE FROM notes_graph_related WHERE agent_id = ?1",
+                params![agent_id],
+            )
+            .map_err(|e| AlephError::config(format!("replace_graph_related delete: {e}")))?;
+            for (node, related, score) in rows {
+                tx.execute(
+                    "INSERT OR REPLACE INTO notes_graph_related \
                  (agent_id, node_path, related_path, score) \
                  VALUES (?1, ?2, ?3, ?4)",
-                params![agent_id, node, related, f64::from(*score)],
-            )
-            .map_err(|e| AlephError::config(format!("replace_graph_related insert: {e}")))?;
-        }
-        tx.commit()
-            .map_err(|e| AlephError::config(format!("replace_graph_related tx commit: {e}")))?;
-        Ok(())
+                    params![agent_id, node, related, f64::from(*score)],
+                )
+                .map_err(|e| AlephError::config(format!("replace_graph_related insert: {e}")))?;
+            }
+            tx.commit()
+                .map_err(|e| AlephError::config(format!("replace_graph_related tx commit: {e}")))?;
+            Ok(())
+        })
     }
 
     async fn related_peers(
@@ -2149,24 +2180,25 @@ impl NoteStore for SqliteMemoryBackend {
         node_path: &str,
         limit: usize,
     ) -> Result<Vec<(String, f32)>, AlephError> {
-        let conn = lock_conn!(self)?;
-        let mut stmt = conn
-            .prepare(
-                "SELECT related_path, score FROM notes_graph_related \
+        self.with_connection(|conn| {
+            let mut stmt = conn
+                .prepare(
+                    "SELECT related_path, score FROM notes_graph_related \
                  WHERE agent_id = ?1 AND node_path = ?2 \
                  ORDER BY score DESC LIMIT ?3",
-            )
-            .map_err(|e| AlephError::config(format!("related_peers prepare: {e}")))?;
-        let rows = stmt
-            .query_map(params![agent_id, node_path, limit as i64], |r| {
-                Ok((r.get::<_, String>(0)?, r.get::<_, f64>(1)? as f32))
-            })
-            .map_err(|e| AlephError::config(format!("related_peers query: {e}")))?;
-        let mut out = Vec::new();
-        for row in rows {
-            out.push(row.map_err(|e| AlephError::config(format!("related_peers row: {e}")))?);
-        }
-        Ok(out)
+                )
+                .map_err(|e| AlephError::config(format!("related_peers prepare: {e}")))?;
+            let rows = stmt
+                .query_map(params![agent_id, node_path, limit as i64], |r| {
+                    Ok((r.get::<_, String>(0)?, r.get::<_, f64>(1)? as f32))
+                })
+                .map_err(|e| AlephError::config(format!("related_peers query: {e}")))?;
+            let mut out = Vec::new();
+            for row in rows {
+                out.push(row.map_err(|e| AlephError::config(format!("related_peers row: {e}")))?);
+            }
+            Ok(out)
+        })
     }
 
     async fn related_edges_between(
@@ -2175,40 +2207,41 @@ impl NoteStore for SqliteMemoryBackend {
         visible: &std::collections::HashSet<String>,
         per_node: usize,
     ) -> Result<Vec<(String, String, f32)>, AlephError> {
-        let conn = lock_conn!(self)?;
-        let mut stmt = conn
-            .prepare(
-                "SELECT node_path, related_path, score FROM notes_graph_related \
+        self.with_connection(|conn| {
+            let mut stmt = conn
+                .prepare(
+                    "SELECT node_path, related_path, score FROM notes_graph_related \
                  WHERE agent_id = ?1 ORDER BY node_path, score DESC",
-            )
-            .map_err(|e| AlephError::config(format!("related_edges prep: {e}")))?;
-        let rows = stmt
-            .query_map(params![agent_id], |r| {
-                Ok((
-                    r.get::<_, String>(0)?,
-                    r.get::<_, String>(1)?,
-                    r.get::<_, f64>(2)? as f32,
-                ))
-            })
-            .map_err(|e| AlephError::config(format!("related_edges query: {e}")))?;
-        let mut out = Vec::new();
-        let mut count_for: std::collections::HashMap<String, usize> =
-            std::collections::HashMap::new();
-        for row in rows {
-            let (node, related, score) =
-                row.map_err(|e| AlephError::config(format!("related_edges row: {e}")))?;
-            if !visible.contains(&node) || !visible.contains(&related) {
-                continue;
+                )
+                .map_err(|e| AlephError::config(format!("related_edges prep: {e}")))?;
+            let rows = stmt
+                .query_map(params![agent_id], |r| {
+                    Ok((
+                        r.get::<_, String>(0)?,
+                        r.get::<_, String>(1)?,
+                        r.get::<_, f64>(2)? as f32,
+                    ))
+                })
+                .map_err(|e| AlephError::config(format!("related_edges query: {e}")))?;
+            let mut out = Vec::new();
+            let mut count_for: std::collections::HashMap<String, usize> =
+                std::collections::HashMap::new();
+            for row in rows {
+                let (node, related, score) =
+                    row.map_err(|e| AlephError::config(format!("related_edges row: {e}")))?;
+                if !visible.contains(&node) || !visible.contains(&related) {
+                    continue;
+                }
+                // rust-doctor-disable-next-line excessive-clone
+                let c = count_for.entry(node.clone()).or_insert(0);
+                if *c >= per_node {
+                    continue; // rows are score-DESC within node_path → top-K kept
+                }
+                *c += 1;
+                out.push((node, related, score));
             }
-            // rust-doctor-disable-next-line excessive-clone
-            let c = count_for.entry(node.clone()).or_insert(0);
-            if *c >= per_node {
-                continue; // rows are score-DESC within node_path → top-K kept
-            }
-            *c += 1;
-            out.push((node, related, score));
-        }
-        Ok(out)
+            Ok(out)
+        })
     }
 
     // -----------------------------------------------------------------
@@ -2223,7 +2256,7 @@ impl NoteStore for SqliteMemoryBackend {
         confidence: f32,
         reason: &str,
     ) -> Result<String, AlephError> {
-        let conn = lock_conn!(self)?;
+        self.with_connection(|conn| {
         let id = uuid::Uuid::new_v4().to_string();
         let now_ts = chrono::Utc::now().timestamp();
 
@@ -2236,6 +2269,7 @@ impl NoteStore for SqliteMemoryBackend {
         .map_err(|e| AlephError::config(format!("enqueue_review insert: {e}")))?;
 
         Ok(id)
+        })
     }
 
     async fn list_pending_review(
@@ -2243,39 +2277,41 @@ impl NoteStore for SqliteMemoryBackend {
         agent_id: &str,
         earlier_than: i64,
     ) -> Result<Vec<ReviewQueueRow>, AlephError> {
-        let conn = lock_conn!(self)?;
-
-        let mut stmt = conn
-            .prepare(
-                "SELECT id, agent_id, candidate_json, severity, confidence, reason, \
+        self.with_connection(|conn| {
+            let mut stmt = conn
+                .prepare(
+                    "SELECT id, agent_id, candidate_json, severity, confidence, reason, \
                         status, retry_count, created_at \
                  FROM notes_review_queue \
                  WHERE agent_id = ?1 AND status = 'pending' AND created_at < ?2 \
                  ORDER BY created_at ASC",
-            )
-            .map_err(|e| AlephError::config(format!("list_pending_review prepare: {e}")))?;
+                )
+                .map_err(|e| AlephError::config(format!("list_pending_review prepare: {e}")))?;
 
-        let rows = stmt
-            .query_map(params![agent_id, earlier_than], |row| {
-                Ok(ReviewQueueRow {
-                    id: row.get(0)?,
-                    agent_id: row.get(1)?,
-                    candidate_json: row.get(2)?,
-                    severity: row.get(3)?,
-                    confidence: row.get::<_, f64>(4)? as f32,
-                    reason: row.get(5)?,
-                    status: row.get(6)?,
-                    retry_count: row.get(7)?,
-                    created_at: row.get(8)?,
+            let rows = stmt
+                .query_map(params![agent_id, earlier_than], |row| {
+                    Ok(ReviewQueueRow {
+                        id: row.get(0)?,
+                        agent_id: row.get(1)?,
+                        candidate_json: row.get(2)?,
+                        severity: row.get(3)?,
+                        confidence: row.get::<_, f64>(4)? as f32,
+                        reason: row.get(5)?,
+                        status: row.get(6)?,
+                        retry_count: row.get(7)?,
+                        created_at: row.get(8)?,
+                    })
                 })
-            })
-            .map_err(|e| AlephError::config(format!("list_pending_review query: {e}")))?;
+                .map_err(|e| AlephError::config(format!("list_pending_review query: {e}")))?;
 
-        let mut out = Vec::new();
-        for r in rows {
-            out.push(r.map_err(|e| AlephError::config(format!("list_pending_review row: {e}")))?);
-        }
-        Ok(out)
+            let mut out = Vec::new();
+            for r in rows {
+                out.push(
+                    r.map_err(|e| AlephError::config(format!("list_pending_review row: {e}")))?,
+                );
+            }
+            Ok(out)
+        })
     }
 
     async fn mark_review_decided(
@@ -2284,62 +2320,65 @@ impl NoteStore for SqliteMemoryBackend {
         new_status: &str,
         decision_actor: &str,
     ) -> Result<(), AlephError> {
-        let conn = lock_conn!(self)?;
-        let now_ts = chrono::Utc::now().timestamp();
-        conn.execute(
-            "UPDATE notes_review_queue \
+        self.with_connection(|conn| {
+            let now_ts = chrono::Utc::now().timestamp();
+            conn.execute(
+                "UPDATE notes_review_queue \
              SET status = ?1, decision_actor = ?2, decided_at = ?3 \
              WHERE id = ?4",
-            params![new_status, decision_actor, now_ts, queue_id],
-        )
-        .map_err(|e| AlephError::config(format!("mark_review_decided update: {e}")))?;
-        Ok(())
+                params![new_status, decision_actor, now_ts, queue_id],
+            )
+            .map_err(|e| AlephError::config(format!("mark_review_decided update: {e}")))?;
+            Ok(())
+        })
     }
 
     async fn increment_review_retry(&self, queue_id: &str) -> Result<i64, AlephError> {
-        let conn = lock_conn!(self)?;
-        conn.execute(
-            "UPDATE notes_review_queue SET retry_count = retry_count + 1 WHERE id = ?1",
-            params![queue_id],
-        )
-        .map_err(|e| AlephError::config(format!("increment_review_retry update: {e}")))?;
-        let count: i64 = conn
-            .query_row(
-                "SELECT retry_count FROM notes_review_queue WHERE id = ?1",
+        self.with_connection(|conn| {
+            conn.execute(
+                "UPDATE notes_review_queue SET retry_count = retry_count + 1 WHERE id = ?1",
                 params![queue_id],
-                |row| row.get(0),
             )
-            .map_err(|e| AlephError::config(format!("increment_review_retry read: {e}")))?;
-        Ok(count)
+            .map_err(|e| AlephError::config(format!("increment_review_retry update: {e}")))?;
+            let count: i64 = conn
+                .query_row(
+                    "SELECT retry_count FROM notes_review_queue WHERE id = ?1",
+                    params![queue_id],
+                    |row| row.get(0),
+                )
+                .map_err(|e| AlephError::config(format!("increment_review_retry read: {e}")))?;
+            Ok(count)
+        })
     }
 
     async fn archive_review(&self, queue_id: &str, final_status: &str) -> Result<(), AlephError> {
-        let conn = lock_conn!(self)?;
-        // Wrap INSERT + DELETE in a single transaction so a crash mid-archive
-        // cannot leave a row in both tables (or in neither).
-        let tx = conn
-            .unchecked_transaction()
-            .map_err(|e| AlephError::config(format!("archive_review tx begin: {e}")))?;
-        let now_ts = chrono::Utc::now().timestamp();
+        self.with_connection(|conn| {
+            // Wrap INSERT + DELETE in a single transaction so a crash mid-archive
+            // cannot leave a row in both tables (or in neither).
+            let tx = conn
+                .unchecked_transaction()
+                .map_err(|e| AlephError::config(format!("archive_review tx begin: {e}")))?;
+            let now_ts = chrono::Utc::now().timestamp();
 
-        tx.execute(
-            "INSERT INTO notes_review_archive \
+            tx.execute(
+                "INSERT INTO notes_review_archive \
              (id, agent_id, candidate_json, final_status, reason, created_at, archived_at) \
              SELECT id, agent_id, candidate_json, ?1, reason, created_at, ?2 \
              FROM notes_review_queue WHERE id = ?3",
-            params![final_status, now_ts, queue_id],
-        )
-        .map_err(|e| AlephError::config(format!("archive_review insert: {e}")))?;
+                params![final_status, now_ts, queue_id],
+            )
+            .map_err(|e| AlephError::config(format!("archive_review insert: {e}")))?;
 
-        tx.execute(
-            "DELETE FROM notes_review_queue WHERE id = ?1",
-            params![queue_id],
-        )
-        .map_err(|e| AlephError::config(format!("archive_review delete: {e}")))?;
+            tx.execute(
+                "DELETE FROM notes_review_queue WHERE id = ?1",
+                params![queue_id],
+            )
+            .map_err(|e| AlephError::config(format!("archive_review delete: {e}")))?;
 
-        tx.commit()
-            .map_err(|e| AlephError::config(format!("archive_review tx commit: {e}")))?;
-        Ok(())
+            tx.commit()
+                .map_err(|e| AlephError::config(format!("archive_review tx commit: {e}")))?;
+            Ok(())
+        })
     }
 
     async fn list_review_archive(
@@ -2347,31 +2386,34 @@ impl NoteStore for SqliteMemoryBackend {
         agent_id: &str,
         limit: usize,
     ) -> Result<Vec<ReviewArchiveRow>, AlephError> {
-        let conn = lock_conn!(self)?;
-        let mut stmt = conn
-            .prepare(
-                "SELECT id, candidate_json, final_status, reason, created_at, archived_at \
+        self.with_connection(|conn| {
+            let mut stmt = conn
+                .prepare(
+                    "SELECT id, candidate_json, final_status, reason, created_at, archived_at \
                  FROM notes_review_archive WHERE agent_id = ?1 \
                  ORDER BY archived_at DESC LIMIT ?2",
-            )
-            .map_err(|e| AlephError::config(format!("list_review_archive prepare: {e}")))?;
-        let rows = stmt
-            .query_map(params![agent_id, limit as i64], |r| {
-                Ok(ReviewArchiveRow {
-                    id: r.get(0)?,
-                    candidate_json: r.get(1)?,
-                    final_status: r.get(2)?,
-                    reason: r.get(3)?,
-                    created_at: r.get(4)?,
-                    archived_at: r.get(5)?,
+                )
+                .map_err(|e| AlephError::config(format!("list_review_archive prepare: {e}")))?;
+            let rows = stmt
+                .query_map(params![agent_id, limit as i64], |r| {
+                    Ok(ReviewArchiveRow {
+                        id: r.get(0)?,
+                        candidate_json: r.get(1)?,
+                        final_status: r.get(2)?,
+                        reason: r.get(3)?,
+                        created_at: r.get(4)?,
+                        archived_at: r.get(5)?,
+                    })
                 })
-            })
-            .map_err(|e| AlephError::config(format!("list_review_archive query: {e}")))?;
-        let mut out = Vec::new();
-        for row in rows {
-            out.push(row.map_err(|e| AlephError::config(format!("list_review_archive row: {e}")))?);
-        }
-        Ok(out)
+                .map_err(|e| AlephError::config(format!("list_review_archive query: {e}")))?;
+            let mut out = Vec::new();
+            for row in rows {
+                out.push(
+                    row.map_err(|e| AlephError::config(format!("list_review_archive row: {e}")))?,
+                );
+            }
+            Ok(out)
+        })
     }
 
     async fn prune_review_archive(
@@ -2379,15 +2421,16 @@ impl NoteStore for SqliteMemoryBackend {
         agent_id: &str,
         older_than_secs: i64,
     ) -> Result<usize, AlephError> {
-        let conn = lock_conn!(self)?;
-        let cutoff = chrono::Utc::now().timestamp() - older_than_secs;
-        let n = conn
-            .execute(
-                "DELETE FROM notes_review_archive WHERE agent_id = ?1 AND archived_at < ?2",
-                params![agent_id, cutoff],
-            )
-            .map_err(|e| AlephError::config(format!("prune_review_archive: {e}")))?;
-        Ok(n)
+        self.with_connection(|conn| {
+            let cutoff = chrono::Utc::now().timestamp() - older_than_secs;
+            let n = conn
+                .execute(
+                    "DELETE FROM notes_review_archive WHERE agent_id = ?1 AND archived_at < ?2",
+                    params![agent_id, cutoff],
+                )
+                .map_err(|e| AlephError::config(format!("prune_review_archive: {e}")))?;
+            Ok(n)
+        })
     }
 
     /// Phase C2.7 — return the most recent `created_at` recall signal for
@@ -2399,18 +2442,19 @@ impl NoteStore for SqliteMemoryBackend {
         agent_id: &str,
         note_path: &str,
     ) -> Result<Option<i64>, AlephError> {
-        let conn = lock_conn!(self)?;
-        let v: Option<i64> = conn
-            .query_row(
-                "SELECT MAX(created_at) FROM recall_signals \
+        self.with_connection(|conn| {
+            let v: Option<i64> = conn
+                .query_row(
+                    "SELECT MAX(created_at) FROM recall_signals \
                  WHERE note_path = ?1 AND agent_id = ?2",
-                params![note_path, agent_id],
-                |r| r.get(0),
-            )
-            .optional()
-            .map_err(|e| AlephError::config(format!("recall last hit: {e}")))?
-            .flatten();
-        Ok(v)
+                    params![note_path, agent_id],
+                    |r| r.get(0),
+                )
+                .optional()
+                .map_err(|e| AlephError::config(format!("recall last hit: {e}")))?
+                .flatten();
+            Ok(v)
+        })
     }
 
     async fn recall_hit_counts(
@@ -2426,42 +2470,44 @@ impl NoteStore for SqliteMemoryBackend {
         if note_paths.is_empty() {
             return Ok(out);
         }
-        let conn = lock_conn!(self)?;
-        for chunk in note_paths.chunks(SQLITE_MAX_VARS - 1) {
-            let placeholders: Vec<String> = (1..=chunk.len()).map(|i| format!("?{i}")).collect();
-            let agent_ph = format!("?{}", chunk.len() + 1);
-            let sql = format!(
-                "SELECT note_path, COUNT(*) AS signal_count \
+        self.with_connection(|conn| {
+            for chunk in note_paths.chunks(SQLITE_MAX_VARS - 1) {
+                let placeholders: Vec<String> =
+                    (1..=chunk.len()).map(|i| format!("?{i}")).collect();
+                let agent_ph = format!("?{}", chunk.len() + 1);
+                let sql = format!(
+                    "SELECT note_path, COUNT(*) AS signal_count \
                  FROM recall_signals \
                  WHERE note_path IN ({}) AND agent_id = {agent_ph} \
                  GROUP BY note_path",
-                placeholders.join(", ")
-            );
-            let mut stmt = conn
-                .prepare(&sql)
-                .map_err(|e| AlephError::config(format!("recall_hit_counts prepare: {e}")))?;
-            let mut rows = stmt
-                .query(rusqlite::params_from_iter(
-                    chunk
-                        .iter()
-                        .cloned()
-                        .chain(std::iter::once(agent_id.to_string())),
-                ))
-                .map_err(|e| AlephError::config(format!("recall_hit_counts query: {e}")))?;
-            while let Some(row) = rows
-                .next()
-                .map_err(|e| AlephError::config(format!("recall_hit_counts row: {e}")))?
-            {
-                let note_path: String = row
-                    .get(0)
-                    .map_err(|e| AlephError::config(format!("recall_hit_counts note_path: {e}")))?;
-                let signal_count: i64 = row
-                    .get(1)
-                    .map_err(|e| AlephError::config(format!("recall_hit_counts count: {e}")))?;
-                out.insert(note_path, signal_count);
+                    placeholders.join(", ")
+                );
+                let mut stmt = conn
+                    .prepare(&sql)
+                    .map_err(|e| AlephError::config(format!("recall_hit_counts prepare: {e}")))?;
+                let mut rows = stmt
+                    .query(rusqlite::params_from_iter(
+                        chunk
+                            .iter()
+                            .cloned()
+                            .chain(std::iter::once(agent_id.to_string())),
+                    ))
+                    .map_err(|e| AlephError::config(format!("recall_hit_counts query: {e}")))?;
+                while let Some(row) = rows
+                    .next()
+                    .map_err(|e| AlephError::config(format!("recall_hit_counts row: {e}")))?
+                {
+                    let note_path: String = row.get(0).map_err(|e| {
+                        AlephError::config(format!("recall_hit_counts note_path: {e}"))
+                    })?;
+                    let signal_count: i64 = row
+                        .get(1)
+                        .map_err(|e| AlephError::config(format!("recall_hit_counts count: {e}")))?;
+                    out.insert(note_path, signal_count);
+                }
             }
-        }
-        Ok(out)
+            Ok(out)
+        })
     }
 
     async fn record_recall_hits(
@@ -2492,18 +2538,21 @@ impl NoteStore for SqliteMemoryBackend {
     }
 
     async fn sources_of(&self, agent_id: &str, note_path: &str) -> Result<Vec<String>, AlephError> {
-        let conn = lock_conn!(self)?;
-        let mut stmt = conn
-            .prepare("SELECT source_ref FROM notes_sources WHERE agent_id = ?1 AND note_path = ?2")
-            .map_err(|e| AlephError::config(format!("sources_of prepare: {e}")))?;
-        let rows = stmt
-            .query_map(params![agent_id, note_path], |r| r.get::<_, String>(0))
-            .map_err(|e| AlephError::config(format!("sources_of query: {e}")))?;
-        let mut out = Vec::new();
-        for r in rows {
-            out.push(r.map_err(|e| AlephError::config(format!("sources_of row: {e}")))?);
-        }
-        Ok(out)
+        self.with_connection(|conn| {
+            let mut stmt = conn
+                .prepare(
+                    "SELECT source_ref FROM notes_sources WHERE agent_id = ?1 AND note_path = ?2",
+                )
+                .map_err(|e| AlephError::config(format!("sources_of prepare: {e}")))?;
+            let rows = stmt
+                .query_map(params![agent_id, note_path], |r| r.get::<_, String>(0))
+                .map_err(|e| AlephError::config(format!("sources_of query: {e}")))?;
+            let mut out = Vec::new();
+            for r in rows {
+                out.push(r.map_err(|e| AlephError::config(format!("sources_of row: {e}")))?);
+            }
+            Ok(out)
+        })
     }
 
     async fn notes_citing(
@@ -2511,43 +2560,44 @@ impl NoteStore for SqliteMemoryBackend {
         agent_id: &str,
         source_ref: &str,
     ) -> Result<Vec<String>, AlephError> {
-        let conn = lock_conn!(self)?;
-        // Both provenance tables, not just `notes_sources`. They record two
-        // different citations and neither contains the other: `notes_sources`
-        // is note-level (`source_notes` frontmatter, with the batch-id
-        // fallback), `notes_provenance` is fact-level (an inline
-        // `<!-- src: ... -->` marker the model attached to one line). A note
-        // can quote a raw in a single fact without that raw ever reaching its
-        // frontmatter list, and reading only the first table reports that note
-        // as not citing it.
-        //
-        // Three documents already describe this as the union — the trait doc
-        // here, MEMORY_SYSTEM.md's read-API list, and RAW_MEMORY.md, which
-        // builds the raw-retention invariant ("do not delete a row while
-        // `notes_citing` is non-empty") on top of it. A future GC honouring
-        // that invariant against the narrower query would delete raws that are
-        // still quoted, and the evidence chain would go to `pruned: true`.
-        //
-        // `UNION` (not `UNION ALL`) dedups a note that cites both ways;
-        // `ORDER BY` keeps the caller's list stable across runs.
-        let mut stmt = conn
-            .prepare(
-                "SELECT note_path FROM notes_sources \
+        self.with_connection(|conn| {
+            // Both provenance tables, not just `notes_sources`. They record two
+            // different citations and neither contains the other: `notes_sources`
+            // is note-level (`source_notes` frontmatter, with the batch-id
+            // fallback), `notes_provenance` is fact-level (an inline
+            // `<!-- src: ... -->` marker the model attached to one line). A note
+            // can quote a raw in a single fact without that raw ever reaching its
+            // frontmatter list, and reading only the first table reports that note
+            // as not citing it.
+            //
+            // Three documents already describe this as the union — the trait doc
+            // here, MEMORY_SYSTEM.md's read-API list, and RAW_MEMORY.md, which
+            // builds the raw-retention invariant ("do not delete a row while
+            // `notes_citing` is non-empty") on top of it. A future GC honouring
+            // that invariant against the narrower query would delete raws that are
+            // still quoted, and the evidence chain would go to `pruned: true`.
+            //
+            // `UNION` (not `UNION ALL`) dedups a note that cites both ways;
+            // `ORDER BY` keeps the caller's list stable across runs.
+            let mut stmt = conn
+                .prepare(
+                    "SELECT note_path FROM notes_sources \
                  WHERE agent_id = ?1 AND source_ref = ?2 \
                  UNION \
                  SELECT note_path FROM notes_provenance \
                  WHERE agent_id = ?1 AND source_id = ?2 \
                  ORDER BY note_path",
-            )
-            .map_err(|e| AlephError::config(format!("notes_citing prepare: {e}")))?;
-        let rows = stmt
-            .query_map(params![agent_id, source_ref], |r| r.get::<_, String>(0))
-            .map_err(|e| AlephError::config(format!("notes_citing query: {e}")))?;
-        let mut out = Vec::new();
-        for r in rows {
-            out.push(r.map_err(|e| AlephError::config(format!("notes_citing row: {e}")))?);
-        }
-        Ok(out)
+                )
+                .map_err(|e| AlephError::config(format!("notes_citing prepare: {e}")))?;
+            let rows = stmt
+                .query_map(params![agent_id, source_ref], |r| r.get::<_, String>(0))
+                .map_err(|e| AlephError::config(format!("notes_citing query: {e}")))?;
+            let mut out = Vec::new();
+            for r in rows {
+                out.push(r.map_err(|e| AlephError::config(format!("notes_citing row: {e}")))?);
+            }
+            Ok(out)
+        })
     }
 }
 
@@ -2562,12 +2612,13 @@ impl SqliteMemoryBackend {
         new_status: &str,
         agent_id: &str,
     ) -> Result<(), AlephError> {
-        let conn = lock_conn!(self)?;
+        self.with_connection(|conn| {
         conn.execute(
             "UPDATE notes_links SET status = ?1 WHERE agent_id = ?2 AND from_note = ?3 AND to_raw = ?4",
             params![new_status, agent_id, from_path, to_raw],
         )
         .map_err(|e| AlephError::config(format!("set_link_status_for_test: {e}")))?;
         Ok(())
+        })
     }
 }

@@ -44,7 +44,11 @@ impl BuiltinToolRegistry {
         crate::builtin_tools::skill_status::SkillStatusTool,
         crate::builtin_tools::skill_install::SkillInstallTool,
         crate::builtin_tools::skill_manage::SkillManageTool,
-        Option<crate::builtin_tools::note_manage::NoteManageTool>,
+        Option<
+            crate::builtin_tools::runtime::RuntimeTool<
+                crate::builtin_tools::note_manage::NoteManageTool,
+            >,
+        >,
         Option<crate::builtin_tools::session_complete::SessionCompleteTool>,
         Option<crate::builtin_tools::memory_reflect::MemoryReflectTool>,
     )> {
@@ -86,7 +90,9 @@ impl BuiltinToolRegistry {
                         &td.description,
                         ToolSource::Builtin,
                     );
-                    ut = ut.with_parameters_schema(td.parameters.clone());
+                    ut = ut
+                        .with_parameters_schema(td.parameters.clone())
+                        .with_services(td.services.clone());
                     tools.insert(td.name.clone(), ut);
                 }
             }
@@ -170,7 +176,9 @@ impl BuiltinToolRegistry {
                         &td.description,
                         ToolSource::Builtin,
                     );
-                    ut = ut.with_parameters_schema(td.parameters.clone());
+                    ut = ut
+                        .with_parameters_schema(td.parameters.clone())
+                        .with_services(td.services.clone());
                     tools.insert(td.name.clone(), ut);
                 }
             }
@@ -230,7 +238,9 @@ impl BuiltinToolRegistry {
                         &td.description,
                         ToolSource::Builtin,
                     );
-                    ut = ut.with_parameters_schema(td.parameters.clone());
+                    ut = ut
+                        .with_parameters_schema(td.parameters.clone())
+                        .with_services(td.services.clone());
                     tools.insert(td.name.clone(), ut);
                 }
                 info!(
@@ -274,7 +284,9 @@ impl BuiltinToolRegistry {
                             &td.description,
                             ToolSource::Builtin,
                         );
-                        ut = ut.with_parameters_schema(td.parameters.clone());
+                        ut = ut
+                            .with_parameters_schema(td.parameters.clone())
+                            .with_services(td.services.clone());
                         tools.insert(td.name.clone(), ut);
                     }
                 }
@@ -305,7 +317,9 @@ impl BuiltinToolRegistry {
                     &td.description,
                     ToolSource::Builtin,
                 );
-                ut = ut.with_parameters_schema(td.parameters.clone());
+                ut = ut
+                    .with_parameters_schema(td.parameters.clone())
+                    .with_services(td.services.clone());
                 tools.insert(td.name.clone(), ut);
             }
             info!("Registered task_review tool (leader acceptance)");
@@ -368,7 +382,9 @@ impl BuiltinToolRegistry {
                         &td.description,
                         ToolSource::Builtin,
                     );
-                    ut = ut.with_parameters_schema(td.parameters.clone());
+                    ut = ut
+                        .with_parameters_schema(td.parameters.clone())
+                        .with_services(td.services.clone());
                     tools.insert(td.name.clone(), ut);
                 }
             }
@@ -422,60 +438,29 @@ impl BuiltinToolRegistry {
                     &td.description,
                     ToolSource::Builtin,
                 );
-                ut = ut.with_parameters_schema(td.parameters.clone());
+                ut = ut
+                    .with_parameters_schema(td.parameters.clone())
+                    .with_services(td.services.clone());
                 tools.insert(td.name.clone(), ut);
             }
         }
         info!("Registered skill management tools (skill_status, skill_install, skill_manage)");
 
-        // Note management tool — unified CRUD for all note categories
-        let note_manage_tool = if let Some(ref db) = config.memory_db {
-            // Fail closed: the note directory must be the configured one.
-            // The old fallback was a shared, predictable path
-            // (`<temp>/aleph/memory/note`), where any local process can
-            // pre-create the directory or a symlink and redirect the writes.
-            // There is no safe alternative location, so the registry
-            // construction fails instead of picking one.
-            let memory_dir = crate::utils::paths::get_note_memory_dir().map_err(|e| {
-                crate::error::AlephError::config(format!(
-                    "Cannot build the note_manage tool: the note memory directory \
-                     could not be resolved: {e}"
-                ))
-            })?;
-            let mut tool =
-                crate::builtin_tools::note_manage::NoteManageTool::new(memory_dir, db.clone())
-                    .with_project_scoping(config.memory_project_scoped);
-            // Wire the embedder so `query` runs hybrid (vector + FTS) search;
-            // without it the action silently degrades to FTS-only, which the
-            // unicode61 tokenizer makes near-useless for CJK queries.
-            if let Some(ref embedder) = config.embedder {
-                tool = tool.with_embedder(Arc::clone(embedder));
-            }
-            // Wire the event-sourcing handler so note create/update/delete
-            // actions feed the per-note event log that the memory_timeline
-            // tool reads. Event-log only (no note_indexer) — note_manage owns
-            // the notes-filesystem write path.
-            if let Some(ref state_db) = config.state_db {
-                let handler = Arc::new(crate::memory::events::handler::MemoryCommandHandler::new(
-                    Arc::clone(state_db),
-                ));
-                tool = tool.with_command_handler(handler);
-            }
-
-            // Register note_manage tool schema
-            {
-                use crate::tools::AlephTool;
-                let td = tool.definition();
-                let mut ut = UnifiedTool::new(
-                    format!("builtin:{}", td.name),
-                    &td.name,
-                    &td.description,
-                    ToolSource::Builtin,
-                );
-                ut = ut.with_parameters_schema(td.parameters.clone());
-                tools.insert(td.name.clone(), ut);
-            }
-            info!("Registered note_manage tool");
+        // Keep only the stable source; a call constructs its admitted tool.
+        let note_manage_tool = if let Some(runtime) = &config.memory_runtime {
+            let tool = crate::builtin_tools::runtime::RuntimeTool::<
+                crate::builtin_tools::note_manage::NoteManageTool,
+            >::new(runtime.clone());
+            let td = crate::tools::AlephTool::definition(&tool);
+            let ut = UnifiedTool::new(
+                format!("builtin:{}", td.name),
+                &td.name,
+                &td.description,
+                ToolSource::Builtin,
+            )
+            .with_parameters_schema(td.parameters)
+            .with_services(td.services);
+            tools.insert(td.name, ut);
             Some(tool)
         } else {
             None
@@ -492,6 +477,9 @@ impl BuiltinToolRegistry {
             if let Some(ref reg) = config.capture_registry {
                 tool = tool.with_capture_registry(Arc::clone(reg));
             }
+            if let Some(runtime) = &config.memory_runtime {
+                tool = tool.with_memory_runtime(Arc::downgrade(runtime));
+            }
 
             // Register tool schema
             {
@@ -503,7 +491,9 @@ impl BuiltinToolRegistry {
                     &td.description,
                     ToolSource::Builtin,
                 );
-                ut = ut.with_parameters_schema(td.parameters.clone());
+                ut = ut
+                    .with_parameters_schema(td.parameters.clone())
+                    .with_services(td.services.clone());
                 tools.insert(td.name.clone(), ut);
             }
             info!("Registered session_complete tool");
@@ -533,7 +523,9 @@ impl BuiltinToolRegistry {
                     &td.description,
                     ToolSource::Builtin,
                 );
-                ut = ut.with_parameters_schema(td.parameters.clone());
+                ut = ut
+                    .with_parameters_schema(td.parameters.clone())
+                    .with_services(td.services.clone());
                 tools.insert(td.name.clone(), ut);
                 info!("Registered memory_reflect tool");
             }
@@ -578,6 +570,7 @@ impl BuiltinToolRegistry {
                 ToolSource::Builtin,
             );
             ut.parameters_schema = Some(schema);
+            ut.services = MemoryTraceTool::services();
             tools.insert(MemoryTraceTool::NAME.to_string(), ut);
             info!("Registered memory_trace tool");
         }
@@ -599,6 +592,7 @@ impl BuiltinToolRegistry {
                 ToolSource::Builtin,
             );
             ut.parameters_schema = Some(schema);
+            ut.services = NoteGraphQueryTool::services();
             tools.insert(NoteGraphQueryTool::NAME.to_string(), ut);
             info!("Registered note_graph_query tool");
         }

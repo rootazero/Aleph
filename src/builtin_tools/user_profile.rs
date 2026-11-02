@@ -34,6 +34,10 @@ impl Clone for UserProfileTool {
 }
 
 impl UserProfileTool {
+    pub(crate) fn services() -> Vec<aleph_slot_api::capability::Service> {
+        vec![crate::memory::runtime::required_service()]
+    }
+
     /// Model-facing description — the single source for both the static
     /// catalog (`BUILTIN_TOOL_DEFINITIONS`) and the registry constructor.
     /// A catalog entry shadows whatever the constructor registers under the

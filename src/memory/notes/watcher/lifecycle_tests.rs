@@ -6,8 +6,8 @@ use tokio::sync::Notify;
 
 use super::spawn_note_vault_watcher;
 use crate::memory::embedding_provider::EmbeddingProvider;
-use crate::memory::notes::NoteIndexer;
 use crate::memory::notes::store::NoteStore;
+use crate::memory::notes::NoteIndexer;
 use crate::memory::store::SqliteMemoryBackend;
 
 struct BlockingEmbedder {
@@ -132,6 +132,7 @@ async fn cancelled_shutdown_retains_stop_and_consumer_handles() {
         consumer_release_rx.await.unwrap();
     });
     let mut watcher = super::NoteVaultWatcher {
+        root: std::path::PathBuf::new(),
         debouncer: None,
         consumer_handle: Some(consumer_handle),
         stop_handle: Some(stop_handle),
@@ -165,6 +166,7 @@ async fn consumer_join_failure_stays_failed_after_producer_stop() {
         panic!("consumer lifecycle test panic");
     });
     let mut watcher = super::NoteVaultWatcher {
+        root: std::path::PathBuf::new(),
         debouncer: None,
         consumer_handle: Some(consumer_handle),
         stop_handle: Some(stop_handle),
@@ -205,6 +207,7 @@ async fn producer_and_consumer_completion_are_observed_independently() {
         panic!("producer lifecycle test panic");
     });
     let mut watcher = super::NoteVaultWatcher {
+        root: std::path::PathBuf::new(),
         debouncer: None,
         consumer_handle: Some(consumer_handle),
         stop_handle: Some(stop_handle),
@@ -254,6 +257,38 @@ async fn successful_shutdown_is_idempotent_and_replacement_receives_edits() {
         .await
     );
     replacement.shutdown().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn owned_registration_failure_keeps_native_and_consumer_completion_observable() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("notes");
+    tokio::fs::create_dir_all(&root).await.unwrap();
+    let runtime = crate::memory::runtime::MemoryRuntime::new(
+        crate::memory::runtime::MemoryRuntimeConfig {
+            metadata_path: dir.path().join("owned.db"),
+            note_memory_dir: root.clone(),
+        },
+        Arc::new(crate::capability::ownership::OwnershipTree::new()),
+    );
+    let mut watcher = super::prepare_owned_note_vault_watcher(
+        note_indexer(root.clone(), &dir.path().join("standalone.db")),
+        Arc::downgrade(&runtime),
+    )
+    .unwrap();
+    let consumer = watcher.consumer_handle.as_ref().unwrap().id();
+    tokio::fs::remove_dir(&root).await.unwrap();
+    assert!(watcher.start_watching().is_err());
+    assert!(watcher.debouncer.is_some());
+    assert_eq!(watcher.consumer_handle.as_ref().unwrap().id(), consumer);
+    watcher.shutdown().await.unwrap();
+    assert!(watcher.debouncer.is_none());
+    assert!(watcher.stop_handle.is_none());
+    assert!(watcher.consumer_handle.is_none());
+    assert_eq!(
+        runtime.status().state,
+        crate::memory::runtime::MemoryState::Off
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]

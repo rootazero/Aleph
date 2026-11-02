@@ -213,6 +213,10 @@ impl AlephTool for MemoryBrowseTool {
          Action 'list' with no path shows categories; with a category name shows files in it. \
          Action 'read' with 'category/filename' returns the markdown content of that note.";
 
+    fn services() -> Vec<aleph_slot_api::capability::Service> {
+        vec![crate::memory::runtime::required_service()]
+    }
+
     type Args = MemoryBrowseArgs;
     type Output = MemoryBrowseOutput;
 

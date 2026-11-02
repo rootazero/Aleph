@@ -48,6 +48,7 @@
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
+use std::sync::Weak;
 use std::time::Duration;
 
 use notify::{RecommendedWatcher, RecursiveMode};
@@ -73,6 +74,7 @@ const MAX_PATHS_PER_BATCH: usize = 128;
 /// Must be held for as long as the vault should stay reconciled — the debouncer
 /// owns the platform watch handle and the background thread that feeds it.
 pub struct NoteVaultWatcher {
+    root: PathBuf,
     debouncer: Option<Debouncer<RecommendedWatcher, RecommendedCache>>,
     consumer_handle: Option<tokio::task::JoinHandle<()>>,
     stop_handle: Option<tokio::task::JoinHandle<()>>,
@@ -155,6 +157,30 @@ pub fn spawn_note_vault_watcher<S>(
 where
     S: NoteStore + Send + Sync + 'static,
 {
+    let mut watcher = prepare_note_vault_watcher(indexer, None)?;
+    watcher.start_watching()?;
+    Ok(watcher)
+}
+
+/// Return the native owner before fallible watch registration. The source
+/// installs this value in its bundle before calling `start_watching`.
+pub(crate) fn prepare_owned_note_vault_watcher<S>(
+    indexer: Arc<NoteIndexer<S>>,
+    runtime: Weak<crate::memory::runtime::MemoryRuntime>,
+) -> Result<NoteVaultWatcher, AlephError>
+where
+    S: NoteStore + Send + Sync + 'static,
+{
+    prepare_note_vault_watcher(indexer, Some(runtime))
+}
+
+fn prepare_note_vault_watcher<S>(
+    indexer: Arc<NoteIndexer<S>>,
+    runtime: Option<Weak<crate::memory::runtime::MemoryRuntime>>,
+) -> Result<NoteVaultWatcher, AlephError>
+where
+    S: NoteStore + Send + Sync + 'static,
+{
     let root = indexer.memory_dir().to_path_buf();
     if !root.is_dir() {
         return Err(AlephError::config(format!(
@@ -179,7 +205,7 @@ where
     // debounce window: at most one message per DEBOUNCE_MS, each carrying the
     // paths that settled in it. The size a batch can reach is bounded instead —
     // see MAX_PATHS_PER_BATCH.
-    let mut debouncer = new_debouncer(
+    let debouncer = new_debouncer(
         Duration::from_millis(DEBOUNCE_MS),
         None,
         move |result: DebounceEventResult| match result {
@@ -242,21 +268,26 @@ where
     )
     .map_err(|e| AlephError::config(format!("note vault watcher: {e}")))?;
 
-    debouncer
-        .watch(&root, RecursiveMode::Recursive)
-        .map_err(|e| {
-            AlephError::config(format!("note vault watcher: watch {}: {e}", root.display()))
-        })?;
-
     let watch_root = root.clone();
     let consumer_handle = handle.spawn(async move {
         while let Some(paths) = rx.recv().await {
-            reconcile_batch(&indexer, &watch_root, paths).await;
+            let work = reconcile_batch(&indexer, &watch_root, paths);
+            if let Some(runtime) = &runtime {
+                let Some(runtime) = runtime.upgrade() else {
+                    break;
+                };
+                let Ok(operation) = runtime.operation() else {
+                    continue;
+                };
+                operation.scope(work).await;
+                continue;
+            }
+            work.await;
         }
     });
 
-    tracing::info!(root = %root.display(), "Watching note vault for external edits");
     Ok(NoteVaultWatcher {
+        root,
         debouncer: Some(debouncer),
         consumer_handle: Some(consumer_handle),
         stop_handle: None,
@@ -265,6 +296,23 @@ where
 }
 
 impl NoteVaultWatcher {
+    pub(crate) fn start_watching(&mut self) -> Result<(), AlephError> {
+        let debouncer = self
+            .debouncer
+            .as_mut()
+            .ok_or_else(|| AlephError::other("note vault watcher is already stopping"))?;
+        debouncer
+            .watch(&self.root, RecursiveMode::Recursive)
+            .map_err(|error| {
+                AlephError::config(format!(
+                    "note vault watcher: watch {}: {error}",
+                    self.root.display()
+                ))
+            })?;
+        tracing::info!(root = %self.root.display(), "Watching note vault for external edits");
+        Ok(())
+    }
+
     /// Stop the producer and drain every batch already accepted by its consumer.
     ///
     /// The debouncer stop runs in one retained blocking task because the

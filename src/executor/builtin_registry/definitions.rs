@@ -322,6 +322,18 @@ pub const BUILTIN_TOOL_DEFINITIONS: &[BuiltinToolDefinition] = &[
     // Memory lifecycle & knowledge-wiki tools — require a memory backend / wiki /
     // profile synthesizer; created dynamically in BuiltinToolRegistry::with_config().
     BuiltinToolDefinition {
+        name: "memory_runtime_status",
+        description: <crate::builtin_tools::runtime_control::MemoryRuntimeStatusTool as crate::tools::AlephTool>::DESCRIPTION,
+    },
+    BuiltinToolDefinition {
+        name: "memory_runtime_start",
+        description: <crate::builtin_tools::runtime_control::MemoryRuntimeStartTool as crate::tools::AlephTool>::DESCRIPTION,
+    },
+    BuiltinToolDefinition {
+        name: "memory_runtime_stop",
+        description: <crate::builtin_tools::runtime_control::MemoryRuntimeStopTool as crate::tools::AlephTool>::DESCRIPTION,
+    },
+    BuiltinToolDefinition {
         name: "memory_reflect",
         description: <crate::builtin_tools::memory_reflect::MemoryReflectTool as crate::tools::AlephTool>::DESCRIPTION,
     },
@@ -956,11 +968,13 @@ pub fn create_tool_boxed(
         // enforce; `WebFetchTool::new()` hardcodes the default policy, whose
         // lists are empty. The sibling `google_meet` arm passes the
         // configured policy — the two arms must agree.
-        "web_fetch" => Some(Box::new(WebFetchTool::new().with_ssrf_policy(
-            config
-                .and_then(|c| c.ssrf_policy.clone())
-                .unwrap_or_default(),
-        ))),
+        "web_fetch" => Some(Box::new(
+            WebFetchTool::new().with_ssrf_policy(
+                config
+                    .and_then(|c| c.ssrf_policy.clone())
+                    .unwrap_or_default(),
+            ),
+        )),
         "google_meet" => Some(Box::new(
             crate::builtin_tools::google_meet::GoogleMeetTool::new(
                 config.and_then(|c| c.google_meet_bridge.clone()),
@@ -1231,7 +1245,10 @@ pub fn create_tool_boxed(
         // Memory lifecycle & knowledge-wiki tools require a memory backend / wiki /
         // profile synthesizer + per-session context — built dynamically in
         // BuiltinToolRegistry::with_config(), same as note_manage below.
-        "memory_reflect"
+        "memory_runtime_status"
+        | "memory_runtime_start"
+        | "memory_runtime_stop"
+        | "memory_reflect"
         | "recall_context"
         | "memory_trace"
         | "governance_metrics"
@@ -3691,6 +3708,29 @@ mod tests {
     }
 
     #[test]
+    fn production_memory_registration_preserves_its_resource_dependency() {
+        let map = unconditional_registry_map();
+        let remember = map
+            .get("remember")
+            .expect("production remember declaration");
+        assert_eq!(
+            remember.services,
+            vec![aleph_slot_api::capability::Service {
+                relation: aleph_slot_api::capability::ServiceRelation::Requires,
+                target: aleph_slot_api::capability::CapabilityId {
+                    namespace: "aleph/resources".into(),
+                    name: "memory.runtime".into(),
+                },
+            }],
+        );
+        assert!(map
+            .get("file_read")
+            .expect("file reader declaration")
+            .services
+            .is_empty());
+    }
+
+    #[test]
     fn registry_schema_bytes_ratchet() {
         let map = unconditional_registry_map();
         let mut sizes: Vec<(&str, usize)> = map
@@ -3894,6 +3934,14 @@ mod tests {
     /// in `builder/optional_tools.rs`, which asserts the schema IS present
     /// once the handle is wired — the class (b) fact that this count alone
     /// cannot show.
+    ///
+    /// 2026-11-02: 135 -> 138 for `memory_runtime_status`,
+    /// `memory_runtime_start`, and `memory_runtime_stop` — class (b): they
+    /// require the canonical runtime source. The live registry lifecycle test
+    /// `registered_runtime_controls_work_while_memory_is_off` verifies their
+    /// real schemas, dispatch, and absence of Memory admission dependencies;
+    /// `flag_user_correction_and_governance_metrics_require_the_runtime`
+    /// verifies that legacy storage alone cannot register them.
     #[test]
     fn tools_without_an_unconditional_schema_are_pinned() {
         let map = unconditional_registry_map();
@@ -3910,8 +3958,8 @@ mod tests {
         missing.dedup();
 
         assert!(
-            missing.len() <= 135,
-            "{} tools have no schema in the unconditionally-built registry map, up from the 135 \
+            missing.len() <= 138,
+            "{} tools have no schema in the unconditionally-built registry map, up from the 138 \
              recorded here, so `registry_schema_bytes_ratchet` does not bound them. Three ways in, \
              and they are not equally fine. (a) The tool ships with no parameters at all — free, \
              and fine. (b) It registers only once a dependency is live, so its schema is unmeasured \

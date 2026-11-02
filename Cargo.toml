@@ -521,6 +521,10 @@ name = "memory_modes_integration"
 required-features = ["test-helpers"]
 
 [[test]]
+name = "memory_runtime_lifecycle"
+required-features = ["test-helpers"]
+
+[[test]]
 name = "compactor_e2e_probe"
 required-features = ["test-helpers"]
 

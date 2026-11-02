@@ -12,7 +12,34 @@
 //! would make that decision silently instead of explicitly.
 
 use regex::Regex;
+use std::borrow::Cow;
 use std::sync::OnceLock;
+
+const PRIVATE_KEY_BEGIN: &str = r"-----BEGIN[A-Z ]*PRIVATE KEY-----";
+const PRIVATE_KEY_END: &str = r"-----END[A-Z ]*PRIVATE KEY-----";
+
+/// Redact a truncated PEM tail before complete blocks receive their replacement.
+pub(crate) fn mask_incomplete_private_key(text: &str) -> Cow<'_, str> {
+    static MARKERS: OnceLock<(Regex, Regex)> = OnceLock::new();
+    let markers = MARKERS.get_or_init(|| {
+        (
+            Regex::new(PRIVATE_KEY_BEGIN).unwrap(),
+            Regex::new(PRIVATE_KEY_END).unwrap(),
+        )
+    });
+    let mut cursor = 0;
+    while let Some(begin) = markers.0.find_at(text, cursor) {
+        if let Some(end) = markers.1.find_at(text, begin.end()) {
+            cursor = end.end();
+            continue;
+        }
+        return Cow::Owned(format!(
+            "{}-----BEGIN PRIVATE KEY----- ***REDACTED***",
+            &text[..begin.start()]
+        ));
+    }
+    Cow::Borrowed(text)
+}
 
 #[derive(Clone)]
 pub(crate) struct SecretPattern {
@@ -115,7 +142,7 @@ pub(crate) fn secret_masker_patterns() -> Vec<SecretPattern> {
                     replacement: "$1 ***REDACTED***",
                 },
                 SecretPattern {
-                    regex: Regex::new(r"-----BEGIN[A-Z ]*PRIVATE KEY-----[\s\S]*?-----END[A-Z ]*PRIVATE KEY-----").unwrap(),
+                    regex: Regex::new(&format!("{PRIVATE_KEY_BEGIN}[\\s\\S]*?{PRIVATE_KEY_END}")).unwrap(),
                     replacement: "-----BEGIN PRIVATE KEY-----\n***REDACTED***\n-----END PRIVATE KEY-----",
                 },
                 SecretPattern {
@@ -150,6 +177,12 @@ pub(crate) fn secret_masker_patterns() -> Vec<SecretPattern> {
                     // on the SAME line as the header; it requires a base64
                     // character so that this rule's own replacement — which
                     // puts a space after the header — is not matched again.
+                    //
+                    // `mask_incomplete_private_key` above already truncates a
+                    // key whose END marker is missing, so this rule is the
+                    // SECOND line of defense: it catches the case where a
+                    // later END marker belongs to a DIFFERENT key and the
+                    // helper therefore let the first key through.
                     //
                     // The replacement is one line on purpose: a multi-line
                     // replacement written back into a single hunk line would
@@ -247,7 +280,7 @@ pub(crate) fn leak_detector_assets() -> LeakDetectorAssets {
                 },
                 LeakPatternDef {
                     name: "private_key",
-                    regex: Regex::new(r"-----BEGIN[A-Z ]*PRIVATE KEY-----").unwrap(),
+                    regex: Regex::new(PRIVATE_KEY_BEGIN).unwrap(),
                     action: super::leak_detector::LeakAction::Block,
                 },
                 LeakPatternDef {

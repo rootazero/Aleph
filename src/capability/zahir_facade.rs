@@ -13,20 +13,29 @@
 //! pretending it delivered every event.
 
 use crate::capability::backend::{CapabilityBackend, ToolBackendAdapter, TOOL_NAMESPACE};
-use crate::capability::descriptor::{CapabilityId, CapabilityRevision, ProjectionMetadata};
+use crate::capability::descriptor::{
+    CapabilityDescriptor, CapabilityId, CapabilityRevision, ProjectionMetadata, ServiceRelation,
+};
 use crate::capability::facade::{
-    BackendLease, CapabilityChange, CapabilityChangeStream, CapabilitySnapshot, Cursor, Projection,
-    Reference, ResolveError, Scope, TransportTarget, Zahir,
+    BackendLease, BackendSourceEvidence, CapabilityChange, CapabilityChangeStream,
+    CapabilitySnapshot, Cursor, Projection, Reference, ResolveError, Scope, TransportTarget, Zahir,
 };
 use crate::capability::ownership::{
-    LifetimeScope, OwnerGeneration, OwnerRef, OwnershipTree, RegisterError, VisibilityScope,
+    BindingValidationError, CapturedBinding, LifetimeScope, OwnerGeneration, OwnerRef,
+    OwnershipTree, RegisterError, VisibilityScope,
 };
 use crate::capability::provider::ProviderHandle;
+use crate::memory::runtime::{MemoryHandle, MemoryOperation, MemoryRuntime};
 use crate::sync_primitives::Arc;
 use crate::tools::registry::{
     CanonicalEntryLease, RegistryChange, RegistryEntry, RegistryPublication, RegistrySnapshot,
     ToolHandlerRegistry,
 };
+use std::sync::Weak;
+#[cfg(test)]
+#[path = "zahir_facade_memory_tests.rs"]
+mod memory_tests;
+
 use std::collections::HashMap;
 use tokio::sync::broadcast::{self, error::TryRecvError};
 
@@ -85,12 +94,14 @@ pub(crate) struct FacadeEntriesSnapshot {
     /// under ONE mutex so a concurrent `bump` cannot mix generations (owner
     /// cut). Per-binding generations, NOT a registry revision.
     pub(crate) owner_generations: HashMap<CapabilityId, OwnerGeneration>,
+    pub(crate) resources: Vec<CapabilityDescriptor>,
 }
 
 /// The one live [`Zahir`] implementation.
 pub struct ZahirFacade {
     adapter: ToolBackendAdapter,
     tree: Arc<OwnershipTree>,
+    memory: Option<Arc<MemoryRuntime>>,
 }
 
 impl ZahirFacade {
@@ -102,6 +113,21 @@ impl ZahirFacade {
         Arc::new(Self {
             adapter: ToolBackendAdapter { registry },
             tree,
+            memory: None,
+        })
+    }
+
+    /// Compose the concrete Memory source without a second registry.
+    #[must_use]
+    pub fn new_with_memory(
+        registry: ToolHandlerRegistry,
+        tree: Arc<OwnershipTree>,
+        memory: Arc<MemoryRuntime>,
+    ) -> Arc<Self> {
+        Arc::new(Self {
+            adapter: ToolBackendAdapter { registry },
+            tree,
+            memory: Some(memory),
         })
     }
 
@@ -236,6 +262,11 @@ impl ZahirFacade {
             registry_cursor,
             registry_closed,
             owner_generations,
+            resources: if registry_closed {
+                Vec::new()
+            } else {
+                self.resources_in_scope(scope)
+            },
         }
     }
 
@@ -408,16 +439,159 @@ impl ZahirFacade {
                     .owner_of(&reference.id, &reference.visibility)
                     .ok_or(ResolveError::NotVisible)?;
                 Ok(BackendLease {
+                    source: BackendSourceEvidence::Tool {
+                        provider_generation,
+                        canonical_entry,
+                    },
+                    required_resources: descriptor
+                        .services
+                        .iter()
+                        .filter(|service| service.relation == ServiceRelation::Requires)
+                        .map(|service| {
+                            self.resolve_resource(&Reference {
+                                id: service.target.clone(),
+                                visibility: reference.visibility.clone(),
+                            })
+                        })
+                        .collect::<Result<Vec<_>, _>>()?,
                     descriptor,
                     owner_generation,
                     owner,
-                    provider_generation,
-                    canonical_entry,
                 })
             }
             None if self.tree.is_revoked(&reference.id) => Err(ResolveError::Revoked),
             None => Err(ResolveError::NotVisible),
         }
+    }
+    fn memory_source(&self) -> Result<&Arc<MemoryRuntime>, ResolveError> {
+        self.memory
+            .as_ref()
+            .filter(|memory| memory.is_backed_by_tree(&self.tree))
+            .ok_or(ResolveError::Unknown)
+    }
+
+    fn resources_in_scope(&self, scope: &Scope) -> Vec<CapabilityDescriptor> {
+        self.memory_source()
+            .and_then(|memory| memory.descriptor(&scope.visibility))
+            .into_iter()
+            .filter(|descriptor| ToolBackendAdapter::descriptor_in_scope(descriptor, scope))
+            .collect()
+    }
+
+    fn resolve_resource(&self, reference: &Reference) -> Result<BackendLease, ResolveError> {
+        if reference.id != crate::memory::runtime::resource_id()
+            || self.adapter.registry.is_closed()
+        {
+            return Err(ResolveError::Unknown);
+        }
+        let memory = self.memory_source()?;
+        let handle = memory.capture(reference)?;
+        let descriptor = memory.descriptor(&reference.visibility)?;
+        Ok(BackendLease {
+            descriptor,
+            owner_generation: handle.binding.generation,
+            owner: handle.binding.owner,
+            source: BackendSourceEvidence::MemoryResource(Arc::downgrade(memory)),
+            required_resources: Vec::new(),
+        })
+    }
+
+    fn resource_handle(&self, lease: &BackendLease) -> Result<MemoryHandle, ResolveError> {
+        let BackendSourceEvidence::MemoryResource(source) = &lease.source else {
+            return Err(ResolveError::Unknown);
+        };
+        let memory = self.memory_source()?;
+        if !Weak::ptr_eq(source, &Arc::downgrade(memory))
+            || lease.descriptor.id != crate::memory::runtime::resource_id()
+            || !lease.required_resources.is_empty()
+            || memory.descriptor(&lease.descriptor.visibility)? != lease.descriptor
+        {
+            return Err(ResolveError::Unknown);
+        }
+        Ok(MemoryHandle {
+            runtime: source.clone(),
+            binding: Self::binding(lease),
+        })
+    }
+
+    fn binding(lease: &BackendLease) -> CapturedBinding {
+        CapturedBinding {
+            capability: lease.descriptor.id.clone(),
+            visibility: lease.descriptor.visibility.clone(),
+            generation: lease.owner_generation,
+            owner: lease.owner.clone(),
+            lifetime: lease.descriptor.lifetime,
+        }
+    }
+
+    /// Commit one admission with both captured bindings under the same tree gate.
+    pub(crate) fn admit_memory(
+        &self,
+        lease: &BackendLease,
+    ) -> Result<Option<MemoryOperation>, ResolveError> {
+        if lease.required_resources.is_empty() {
+            self.validate_completion(lease)?;
+            return Ok(None);
+        }
+        let [resource] = lease.required_resources.as_slice() else {
+            return Err(ResolveError::Unknown);
+        };
+        let BackendSourceEvidence::Tool {
+            canonical_entry, ..
+        } = &lease.source
+        else {
+            return Err(ResolveError::Unknown);
+        };
+        let handle = self.resource_handle(resource)?;
+        handle.with_admission(|admission| {
+            self.adapter
+                .registry
+                .with_current_capture(canonical_entry, || {
+                    self.tree
+                        .with_current_bindings(
+                            &[Self::binding(lease), handle.binding.clone()],
+                            || admission.commit(),
+                        )
+                        .map(Some)
+                        .map_err(|_| ResolveError::StaleOwner)
+                })?
+        })
+    }
+    pub(crate) fn validate_completion(&self, lease: &BackendLease) -> Result<(), ResolveError> {
+        let BackendSourceEvidence::Tool {
+            canonical_entry,
+            provider_generation,
+        } = &lease.source
+        else {
+            return Err(ResolveError::Unknown);
+        };
+        if canonical_entry.provider_generation() != *provider_generation {
+            return Err(ResolveError::StaleProvider);
+        }
+        let descriptor =
+            crate::capability::backend::to_descriptor(&canonical_entry.entry().descriptor);
+        if descriptor.id != lease.descriptor.id
+            || descriptor.revision != lease.descriptor.revision
+            || descriptor.schema.fingerprint != lease.descriptor.schema.fingerprint
+        {
+            return Err(ResolveError::Unknown);
+        }
+        // The same publication gate used at admission excludes registry close
+        // and replacement through the Tool-only completion check. Resource
+        // rotation is deliberately absent: this work was already admitted.
+        self.adapter
+            .registry
+            .with_current_capture(canonical_entry, || {
+                self.tree
+                    .with_current_bindings(std::slice::from_ref(&Self::binding(lease)), || ())
+                    .map_err(|error| match error {
+                        BindingValidationError::Revoked => ResolveError::Revoked,
+                        BindingValidationError::MissingBinding
+                        | BindingValidationError::Disposed => ResolveError::Unknown,
+                        BindingValidationError::GenerationMismatch
+                        | BindingValidationError::BindingMismatch => ResolveError::StaleOwner,
+                    })
+            })?
     }
 }
 
@@ -431,7 +605,7 @@ impl Zahir for ZahirFacade {
             };
         }
         self.reconcile_snapshot(&source_snapshot);
-        let capabilities = source_snapshot
+        let mut capabilities: Vec<_> = source_snapshot
             .entries()
             .values()
             .map(|entry| crate::capability::backend::to_descriptor(entry.descriptor.as_ref()))
@@ -446,6 +620,7 @@ impl Zahir for ZahirFacade {
                     .is_some()
             })
             .collect();
+        capabilities.extend(self.resources_in_scope(&scope));
         CapabilitySnapshot {
             capabilities,
             committed_cursor: Cursor(source_snapshot.revision()),
@@ -453,78 +628,37 @@ impl Zahir for ZahirFacade {
     }
 
     fn resolve(&self, reference: Reference) -> Result<BackendLease, ResolveError> {
+        if reference.id == crate::memory::runtime::resource_id() {
+            return self.resolve_resource(&reference);
+        }
         if reference.id.namespace != crate::capability::backend::TOOL_NAMESPACE {
             return Err(ResolveError::Unknown);
         }
-        let snapshot = self.adapter.registry.snapshot_state();
-        if snapshot.is_closed() {
+        if self.adapter.registry.is_closed() {
             return Err(ResolveError::Unknown);
         }
-        let canonical_entry = snapshot
+        let canonical_entry = self
+            .adapter
+            .registry
             .capture_entry(&reference.id.name)
             .ok_or(ResolveError::Unknown)?;
         self.resolve_with_capture(reference, canonical_entry)
     }
 
     fn validate_lease(&self, lease: &BackendLease) -> Result<(), ResolveError> {
-        let provider = self.adapter.registry.provider();
-        provider
-            .acquire_call(lease.provider_generation)
-            .map_err(|_| ResolveError::StaleProvider)?;
-
-        // ① binding location — the lease's own visibility selects the binding.
-        match self
-            .tree
-            .generation(&lease.descriptor.id, &lease.descriptor.visibility)
-        {
-            Some(current) => {
-                // ② owner generation — a stale lease must fail closed.
-                if current != lease.owner_generation {
-                    return Err(ResolveError::StaleOwner);
-                }
-                // ③ owner identity — an ownership TRANSFER keeps the tree
-                // epoch, so the generation above cannot see it. The binding's
-                // owner must still be the one the lease was minted for.
-                match self.tree.owner_of(&lease.descriptor.id, &lease.descriptor.visibility) {
-                    Some(owner) if owner == lease.owner => {}
-                    Some(_) => return Err(ResolveError::StaleOwner),
-                    None => return Err(ResolveError::Unknown),
-                }
-            }
-            None if self.tree.is_revoked(&lease.descriptor.id) => {
-                return Err(ResolveError::Revoked)
-            }
-            None => return Err(ResolveError::Unknown),
+        if matches!(&lease.source, BackendSourceEvidence::MemoryResource(_)) {
+            let handle = self.resource_handle(lease)?;
+            return handle.with_admission(|_| {
+                self.tree
+                    .with_current_bindings(std::slice::from_ref(&handle.binding), || ())
+                    .map_err(|_| ResolveError::StaleOwner)
+            });
         }
-        // ③ descriptor freshness — the current descriptor must still match the
-        // lease's (revision + schema fingerprint). A replacement or unregister
-        // closes to `Unknown`.
-        let current = self
-            .adapter
-            .registry
-            .capture_entry(&lease.descriptor.id.name);
-        if !current
-            .as_ref()
-            .is_some_and(|entry| lease.canonical_entry.validate_capture(entry))
-        {
-            return Err(ResolveError::Unknown);
+        self.validate_completion(lease)?;
+        for resource in &lease.required_resources {
+            self.validate_lease(resource)?;
         }
-        match current {
-            Some(entry)
-                if {
-                    let current =
-                        crate::capability::backend::to_descriptor(&entry.entry().descriptor);
-                    current.id == lease.descriptor.id
-                        && current.revision == lease.descriptor.revision
-                        && current.schema.fingerprint == lease.descriptor.schema.fingerprint
-                } =>
-            {
-                provider
-                    .acquire_call(lease.provider_generation)
-                    .map_err(|_| ResolveError::StaleProvider)
-            }
-            _ => Err(ResolveError::Unknown),
-        }
+        Ok(())
     }
 
     fn subscribe(&self, scope: Scope, _cursor: Cursor) -> CapabilityChangeStream {
@@ -714,7 +848,7 @@ mod tests {
         let lease = facade
             .resolve(ref_for(&id))
             .expect("initial provider is ready");
-        assert_eq!(lease.provider_generation, 1);
+        assert_eq!(lease.tool_provider_generation().unwrap(), 1);
 
         provider.transition(ProviderState::Stopping).unwrap();
         assert!(facade.describe(scope_all()).capabilities.is_empty());
@@ -745,7 +879,7 @@ mod tests {
             Err(ResolveError::StaleProvider)
         );
         let fresh = facade.resolve(ref_for(&id)).unwrap();
-        assert_eq!(fresh.provider_generation, 2);
+        assert_eq!(fresh.tool_provider_generation().unwrap(), 2);
         assert_eq!(facade.validate_lease(&fresh), Ok(()));
         provider.transition(ProviderState::Failed).unwrap();
         assert!(facade.describe(scope_all()).capabilities.is_empty());
@@ -769,7 +903,10 @@ mod tests {
         provider.transition(ProviderState::Starting).unwrap();
         provider.transition(ProviderState::Ready).unwrap();
 
-        assert_eq!(provider.generation(), lease.provider_generation + 1);
+        assert_eq!(
+            provider.generation(),
+            lease.tool_provider_generation().unwrap() + 1
+        );
         assert_eq!(
             tree.generation(&id, &VisibilityScope::default()),
             owner_generation
@@ -811,16 +948,25 @@ mod tests {
         provider.transition(ProviderState::Starting).unwrap();
         provider.transition(ProviderState::Ready).unwrap();
 
-        if provider.acquire_call(lease.provider_generation).is_ok() {
-            *receipt.lock().unwrap() = Some(lease.provider_generation);
+        if provider
+            .acquire_call(lease.tool_provider_generation().unwrap())
+            .is_ok()
+        {
+            *receipt.lock().unwrap() = Some(lease.tool_provider_generation().unwrap());
         }
         assert_eq!(*receipt.lock().unwrap(), None);
 
         let fresh = host.resolve(ref_for(&id)).expect("fresh resolve succeeds");
-        if provider.acquire_call(fresh.provider_generation).is_ok() {
-            *receipt.lock().unwrap() = Some(fresh.provider_generation);
+        if provider
+            .acquire_call(fresh.tool_provider_generation().unwrap())
+            .is_ok()
+        {
+            *receipt.lock().unwrap() = Some(fresh.tool_provider_generation().unwrap());
         }
-        assert_eq!(*receipt.lock().unwrap(), Some(fresh.provider_generation));
+        assert_eq!(
+            *receipt.lock().unwrap(),
+            Some(fresh.tool_provider_generation().unwrap())
+        );
     }
 
     #[test]
@@ -864,7 +1010,9 @@ mod tests {
             .resolve_with_capture(ref_for(&id), captured.clone())
             .expect("resolve supplied canonical entry");
 
-        assert_eq!(lease.canonical_entry, captured);
+        assert!(
+            matches!(&lease.source, BackendSourceEvidence::Tool { canonical_entry, .. } if canonical_entry == &captured)
+        );
         assert_eq!(
             lease.descriptor.revision.0,
             captured.entry().descriptor.revision

@@ -4,6 +4,102 @@ use tempfile::TempDir;
 
 const AGENT: &str = "default";
 
+#[tokio::test]
+async fn runtime_rebuild_category_tasks_keep_source_operation() {
+    use crate::memory::runtime::{MemoryRuntime, MemoryRuntimeConfig};
+
+    let root = TempDir::new().unwrap();
+    let note_dir = root.path().join("notes");
+    let runtime = MemoryRuntime::new(
+        MemoryRuntimeConfig {
+            metadata_path: root.path().join("metadata.db"),
+            note_memory_dir: note_dir.clone(),
+        },
+        Arc::new(crate::capability::ownership::OwnershipTree::new()),
+    );
+    runtime.start().await.unwrap();
+    let category = setup_category_dir(&note_dir, AGENT, "reference").await;
+    fs::write(
+        category.join("owned.md"),
+        sample_md(
+            "reference",
+            &["A category retains its source operation."],
+            &[],
+        ),
+    )
+    .await
+    .unwrap();
+    let operation = runtime.operation().unwrap();
+    let backend = operation.backend().clone();
+    let indexer = NoteIndexer::new(note_dir, backend.clone());
+    let report = operation
+        .run(async move { Ok(indexer.full_rebuild_all(AGENT, 0).await) })
+        .await
+        .unwrap();
+    assert_eq!(
+        report.total.indexed, 1,
+        "category tasks must inherit admission"
+    );
+    assert_eq!(report.total.errors, 0);
+    assert!(report.failed.is_empty());
+    assert_eq!(
+        operation
+            .clone()
+            .scope(async { backend.count_all_notes().await })
+            .await
+            .unwrap(),
+        1
+    );
+    drop(operation);
+    runtime.stop().await.unwrap();
+}
+
+#[tokio::test]
+async fn reconcile_corpus_drains_category_tasks_after_first_error() {
+    for panic_first in [false, true] {
+        let mut set = tokio::task::JoinSet::new();
+        let (failed, failure_ready) = tokio::sync::oneshot::channel();
+        set.spawn(async move {
+            failed.send(()).unwrap();
+            if panic_first {
+                panic!("category lifecycle test panic");
+            }
+            Err(AlephError::config("first category failure"))
+        });
+        failure_ready.await.unwrap();
+        let (release, gate) = tokio::sync::oneshot::channel();
+        let (finished, done) = tokio::sync::oneshot::channel();
+        set.spawn(async move {
+            gate.await.unwrap();
+            finished.send(()).unwrap();
+            Ok(IndexStats {
+                indexed: 1,
+                ..IndexStats::default()
+            })
+        });
+        use std::future::Future;
+        let error = {
+            let mut drain = std::pin::pin!(drain_category_tasks(&mut set));
+            assert!(
+                drain
+                    .as_mut()
+                    .poll(&mut std::task::Context::from_waker(std::task::Waker::noop()))
+                    .is_pending(),
+                "a category error must not return before the other category finishes"
+            );
+            release.send(()).unwrap();
+            drain.await.unwrap_err().to_string()
+        };
+        done.await.unwrap();
+        assert!(set.is_empty());
+        assert!(error.contains(if panic_first {
+            "full_rebuild join:"
+        } else {
+            "first category failure"
+        }));
+    }
+}
+
 fn create_test_db() -> (tempfile::TempDir, Arc<SqliteMemoryBackend>) {
     let (scratch, db_path) = crate::utils::scratch::scratch_root();
     // rust-doctor-disable-next-line unwrap-in-production

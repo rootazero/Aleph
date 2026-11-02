@@ -1,8 +1,8 @@
 # Startup note maintenance owned drain / 启动笔记维护任务所有权收尾设计
 
-**Status / 状态:** Unimplemented planning proposal / 未实施规划提案
+**Status / 状态:** Implemented on local `note-maintenance-drain`; see [execution evidence and limits](../runs/2026-11-01-note-maintenance-drain-run.md). / 已在本地分支实施，验证与边界见实施记录。
 
-This package follows the completed bounded `NoteVaultWatcher` shutdown slice. It is planning material only. The companion restart prompt becomes production authorization only when the user explicitly asks to execute it in a later session. / 本 package 接续已完成的 `NoteVaultWatcher` 有界收尾；这里只写规划，不构成生产改动授权。后续会话明确执行 restart prompt 才构成实施授权。
+This design followed the completed bounded `NoteVaultWatcher` shutdown slice. It was originally planning material only; the user explicitly authorized its execution on 2026-11-01. The original design below records that decision's scope; the linked run records implementation and actual evidence. / 本设计原为不构成授权的规划材料；用户于 2026-11-01 明确授权执行。下文保留原设计范围，实际实施与证据以 run 为准。
 
 ## Intent and place in the Capability Core roadmap / 意图与路线位置
 

@@ -923,14 +923,15 @@ mod tests {
             sites.iter().filter(|s| !s.is_slot).count(),
             sites.iter().filter(|s| s.is_slot).count(),
         );
-        // Measured from this worktree after the raw first-caller handle's module
-        // removal: 0 raw + 55 slots = 55. Keep the sum guard for future changes;
-        // investigate a drift before editing it (判据 §17).
+        // Measured from this worktree after the Memory/Dream capability slots
+        // moved under MemoryRuntime: 0 raw + 49 slots = 49. Keep the sum
+        // guard for future changes; investigate a drift before editing it
+        // (判据 §17).
         assert_eq!(
             raw + slots,
-            55,
+            49,
             "capability handle total drifted: {raw} raw + {slots} slots = {}, not \
-             55. Never assert either side alone: raw shrinks and slots grows as \
+             49. Never assert either side alone: raw shrinks and slots grows as \
              migration proceeds, so only the SUM is stable. A drift means either \
              a census recogniser regressed (see the module doc's recogniser blind \
              spots) or a handle genuinely left the corpus — investigate before \
@@ -1796,12 +1797,8 @@ impl S { fn method(&mut self, cfg: &Cfg) { let _ = cfg; } }
     /// unterminated case is now its own answer ([`block_at_checked`]) and the
     /// fallback index is only ever a fallback.
     fn block_at(lines: &[String], start: usize) -> (String, usize) {
-        block_at_checked(lines, start).unwrap_or_else(|| {
-            (
-                lines[start..].join("\n"),
-                lines.len().saturating_sub(1),
-            )
-        })
+        block_at_checked(lines, start)
+            .unwrap_or_else(|| (lines[start..].join("\n"), lines.len().saturating_sub(1)))
     }
 
     /// `(body, index_of_closing_line)` for the block opening at `start`, or
@@ -2241,9 +2238,7 @@ impl S { fn method(&mut self, cfg: &Cfg) { let _ = cfg; } }
     /// derive it twice: the conditional-site scan needs the NAMES (to match
     /// call sites) and the SLOT SETS (to know which handle a site installs),
     /// and the second is only in the table.
-    fn install_wrapper_names(
-        cw: &CapWrappers,
-    ) -> std::collections::BTreeSet<String> {
+    fn install_wrapper_names(cw: &CapWrappers) -> std::collections::BTreeSet<String> {
         cw.installs.keys().cloned().collect()
     }
 
@@ -2638,16 +2633,11 @@ impl S { fn method(&mut self, cfg: &Cfg) { let _ = cfg; } }
         }
 
         assert!(
-            sites.len() >= 20,
-            "examined only {} conditional installs; 20 were measured on \
-             2026-09-04 (19 on 2026-08-25, plus the heartbeat service's boot \
-             gate), and this floor sits flush against that measurement on \
-             purpose. An earlier draft left it at 15 — four below — and the \
-             slack was not caution, it was already-issued permission: it turned \
-             a mutation the guard CAN see (reverting the if-with-no-`else` fix, \
-             which costs exactly two sites) into a documented 'boundary'. \
-             Zero-or-few is how this guard reports 'all clear' about sites it \
-             never read.",
+            sites.len() >= 17,
+            "examined only {} conditional installs; 17 are present after the \
+             Memory/Dream capability slots moved under MemoryRuntime. Keep this \
+             floor aligned with the current source-derived inventory and \
+             investigate any further drift before editing it.",
             sites.len()
         );
 
@@ -3065,18 +3055,11 @@ impl S { fn method(&mut self, cfg: &Cfg) { let _ = cfg; } }
         }
 
         assert_eq!(
-            gates, 19,
-            "examined {gates} gated blocks that install a capability; 19 were \
-             measured after the opt-in telecom public-history startup gate was \
-             added (2026-10-12); 18 were measured on 2026-09-24 (17 lexical + the orchestrator gate, which is \
-             reached only through the one-hop rule). A count that moved without a capability \
-             being added or removed means the block reader stopped matching — \
-             which is how this guard would report 'all clear' about blocks it \
-             never opened. Last moved 2026-09-24: 17 -> 18, the two-store gate at \
-             `start/mod.rs` that installs `teams/background-stores` (declined in \
-             its `else`). Before that, 2026-09-04: 16 -> 17, the `[heartbeat] \
-             enabled` gate at `start/mod.rs` that now installs \
-             `heartbeat/service`."
+            gates, 16,
+            "examined {gates} gated blocks that install a capability; 16 remain \
+             after the Memory/Dream capability slots moved under MemoryRuntime. \
+             Keep this count aligned with the current source-derived inventory \
+             and investigate further drift before editing it."
         );
         assert!(
             offenders.is_empty(),
@@ -3125,11 +3108,11 @@ impl S { fn method(&mut self, cfg: &Cfg) { let _ = cfg; } }
     fn every_decline_wrapper_has_a_production_caller() {
         let w = capability_wrappers();
         assert!(
-            w.declines.len() >= 24,
-            "derived only {} decline wrappers; >=24 expected — the live count on \
-             2026-08-25, so this floor sits flush against its own measurement. \
-             A derivation that stopped matching makes this guard pass by finding \
-             nothing.",
+            w.declines.len() >= 19,
+            "derived only {} decline wrappers; >=19 expected after the \
+             Memory/Dream capability slots moved under MemoryRuntime. Keep this \
+             floor aligned with the current source-derived inventory and \
+             investigate further drift before editing it.",
             w.declines.len()
         );
         let test_only = test_only_module_files();
