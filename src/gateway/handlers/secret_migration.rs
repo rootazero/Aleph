@@ -121,11 +121,20 @@ fn migrate_ai_providers(cfg: &mut Config, vault: &SharedTokenManager) -> usize {
 fn migrate_generation_providers(cfg: &mut Config, vault: &SharedTokenManager) -> usize {
     let mut count = 0;
 
+    // Every provider map, enumerated from one list so the migration cannot
+    // drift from the maps the runtime reads: the legacy flat map plus the
+    // five typed ones. `generation_providers/helpers.rs` resolves a provider
+    // by falling back to the legacy map and reads its key from the vault
+    // under `gen:{name}`; a map missing here keeps its plaintext key on disk
+    // until the first `Config::save_*` of the section drops it, because
+    // `GenerationProviderConfig::api_key` is `skip_serializing`.
     let categories = [
+        &mut cfg.generation.providers,
         &mut cfg.generation.image_providers,
         &mut cfg.generation.video_providers,
         &mut cfg.generation.speech_providers,
         &mut cfg.generation.audio_providers,
+        &mut cfg.generation.transcription_providers,
     ];
 
     // We need to collect names first due to borrow checker
@@ -133,9 +142,10 @@ fn migrate_generation_providers(cfg: &mut Config, vault: &SharedTokenManager) ->
         let names: Vec<String> = providers.keys().cloned().collect();
         for name in names {
             if let Some(provider) = providers.get_mut(&name) {
-                if let Some(ref key) = provider.api_key {
+                let vault_key = format!("gen:{name}");
+                let plaintext = provider.api_key.clone();
+                if let Some(ref key) = plaintext {
                     if !key.is_empty() {
-                        let vault_key = format!("gen:{name}");
                         match vault.store_secret(&vault_key, key) {
                             Ok(_) => {
                                 provider.api_key = None;
@@ -146,6 +156,17 @@ fn migrate_generation_providers(cfg: &mut Config, vault: &SharedTokenManager) ->
                                 tracing::error!(provider = %name, error = %e, "Failed to store generation provider secret");
                             }
                         }
+                    }
+                }
+                // `GenerationProviderConfig::api_key` is `skip_serializing`, so
+                // the vault is the only durable home for the key. Restore the
+                // runtime copy from the vault — right after a migration, and
+                // on every later start where config.toml no longer carries
+                // the key at all. Without this the migration would leave the
+                // provider with no key for the generation factory to read.
+                if provider.api_key.is_none() {
+                    if let Some(secret) = super::resolve_vault_secret(&vault_key, vault) {
+                        provider.api_key = Some(secret);
                     }
                 }
             }
