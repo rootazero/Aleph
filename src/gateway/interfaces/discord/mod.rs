@@ -958,13 +958,18 @@ impl Channel for DiscordChannel {
 
         // R2 D3: per-guild startup audit. Fires after the gateway ready
         // handshake so the rows describe the bot's actual start state, not
-        // a pre-handshake guess. `bot_permissions=0` is the "unverified"
-        // failsafe — a real implementation would fetch the bitfield via
-        // REST per guild, but the post-incident question this row answers
-        // is "did the bot come up at all and announce itself", not "did it
-        // come up with every required permission". `for_config` already
-        // short-circuits when `allowed_guilds` is empty (the spec rule:
-        // no fabrication for guilds we haven't joined yet).
+        // a pre-handshake guess. The verdict comes from a MEASUREMENT: the
+        // bot's effective permission bitfield is fetched per guild over
+        // REST. The previous `bot_permissions=0` was not an "unverified"
+        // failsafe — zero bits mean every required permission is missing,
+        // so every healthy start recorded a `Critical` `ExecBlocked` row
+        // for a violation that never happened. When the bitfield cannot be
+        // fetched we record an UNVERIFIED row instead: "we could not look"
+        // is not "the bot is broken", and a fabricated refusal row is
+        // worse than a missing row.
+        //
+        // `allowed_guilds` empty means no rows at all (the spec rule: no
+        // fabrication for guilds we haven't joined yet).
         //
         // `restart_channel` re-invokes this path, so a wedged channel that
         // comes back through the health monitor will produce a fresh
@@ -972,11 +977,22 @@ impl Channel for DiscordChannel {
         // If that becomes noisy in practice, gate it behind an
         // `AtomicBool` field on `DiscordChannel`.
         if let Some(log) = crate::security::audit::global() {
-            let entries = crate::gateway::interfaces::discord::security::startup_audit::for_config(
-                &self.config,
-                0,
-            );
-            for entry in entries {
+            let http = self.http.clone();
+            for guild_id in self.config.allowed_guilds.iter().copied() {
+                let entry = match http.as_ref() {
+                    Some(http) => match api::audit_guild_permissions(http, guild_id).await {
+                        Ok(audit) => security::startup_audit::for_audit(&audit),
+                        Err(e) => {
+                            tracing::warn!(
+                                guild_id,
+                                error = %e,
+                                "Discord startup audit: permission bitfield unavailable; recording an unverified row"
+                            );
+                            security::startup_audit::unverified(guild_id)
+                        }
+                    },
+                    None => security::startup_audit::unverified(guild_id),
+                };
                 log.log(entry).await;
             }
         }
