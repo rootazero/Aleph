@@ -451,6 +451,30 @@ impl ExtensionManager {
                     summary
                         .errors
                         .push(format!("{}: {}", dir_path.display(), error));
+                    if let Some(winner) = winners.get(&fallback_id) {
+                        // A higher-priority copy of this id already parsed and
+                        // won the shadowing contest. This copy is a broken
+                        // shadowed source, not the plugin: registering its
+                        // error row would replace the healthy winner with an
+                        // error row and take a working plugin out of the
+                        // registry.
+                        self.plugin_registry
+                            .write()
+                            .await
+                            .add_diagnostic(PluginDiagnostic {
+                                level: DiagnosticLevel::Warn,
+                                message: format!(
+                                    "{} could not be parsed and is shadowed by the copy at {}: {}",
+                                    dir_path.display(),
+                                    winner.display(),
+                                    error
+                                ),
+                                plugin_id: Some(fallback_id.clone()),
+                                source: Some("discovery".to_string()),
+                            });
+                        failed_plugin_ids.insert(fallback_id.clone());
+                        continue;
+                    }
                     if failed_plugin_ids.insert(fallback_id.clone()) {
                         self.plugin_registry
                             .write()
@@ -4932,6 +4956,44 @@ handler = "handler"
             manager.mount("alpha").await,
             Err(MountError::AlreadyMounted(_))
         ));
+    }
+
+    #[tokio::test]
+    async fn a_malformed_lower_priority_copy_does_not_replace_the_healthy_winner() {
+        let tmp = tempfile::tempdir().unwrap();
+        let _home = isolated_home(tmp.path());
+        // The project copy (priority 20) is healthy.
+        write_static_plugin(tmp.path(), "alpha");
+        // The global copy (priority 10) of the same id is malformed. It is
+        // discovered after the winner and must not take the winner's row.
+        let global_dir = tmp.path().join("aleph-state/plugins/alpha");
+        std::fs::create_dir_all(global_dir.join(".claude-plugin")).unwrap();
+        std::fs::write(
+            global_dir.join(".claude-plugin/plugin.toml"),
+            "name = \"alpha\"\nversion = \n",
+        )
+        .unwrap();
+
+        let (manager, _) = isolated_manager(tmp.path()).await;
+        manager.load_all().await.unwrap();
+
+        let row = manager
+            .get_plugin_record("alpha")
+            .await
+            .expect("the healthy copy keeps the row");
+        assert!(row.status.is_active(), "{:?}", row.status);
+        assert_eq!(
+            row.root_dir,
+            tmp.path().join("plugins/alpha"),
+            "the winning copy is the project one"
+        );
+        let diagnostics = manager.get_plugin_registry().await.diagnostics().to_vec();
+        assert!(
+            diagnostics
+                .iter()
+                .any(|d| d.message.contains("shadowed") && d.message.contains("alpha")),
+            "{diagnostics:?}"
+        );
     }
 
     #[tokio::test]
