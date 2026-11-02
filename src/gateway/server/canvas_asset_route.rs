@@ -236,7 +236,7 @@ async fn serve_canvas_asset(
     } else {
         RateLimitScope::RpcHeavy
     };
-    let key = RateLimitKey::new(&client_ip.to_string(), scope);
+    let key = RateLimitKey::for_caller(&client_ip.to_string(), scope, resolved.local);
     if let Err(e) = state.rate_limiter.check_and_record(&key) {
         return (
             StatusCode::TOO_MANY_REQUESTS,
@@ -305,7 +305,11 @@ async fn serve_canvas_asset(
     // than here: this route and the artifact route were carrying two copies
     // of it, and the copy is how the `bytes=1-` hole got duplicated.
     if has_range && verdict.is_bulk_read(total) {
-        let narrow = RateLimitKey::new(&client_ip.to_string(), RateLimitScope::RpcHeavy);
+        let narrow = RateLimitKey::for_caller(
+            &client_ip.to_string(),
+            RateLimitScope::RpcHeavy,
+            resolved.local,
+        );
         if let Err(e) = state.rate_limiter.check_and_record(&narrow) {
             return (
                 StatusCode::TOO_MANY_REQUESTS,

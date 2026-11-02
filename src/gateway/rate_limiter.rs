@@ -61,14 +61,34 @@ pub struct RateLimitKey {
     pub identity: String,
     /// Which rate-limit bucket this key belongs to.
     pub scope: RateLimitScope,
+    /// Whether the caller is on the loopback interface.
+    ///
+    /// This is a fact about the *transport*, never a property of `identity`:
+    /// behind a trusted proxy the identity is the forwarded address, and a
+    /// client chooses what it puts there. The loopback exemption reads this
+    /// bit, so a forged `X-Forwarded-For: 127.0.0.1` no longer buys a caller
+    /// every limit in the box.
+    pub is_loopback: bool,
 }
 
 impl RateLimitKey {
+    /// A key for a caller that is not on the loopback interface.
     #[must_use]
     pub fn new(identity: &str, scope: RateLimitScope) -> Self {
+        Self::for_caller(identity, scope, false)
+    }
+
+    /// A key for a caller whose loopback-ness is known.
+    ///
+    /// `is_loopback` must be a transport fact — the peer address of an
+    /// unproxied connection, or a resolved client's trusted local bit — and
+    /// never an address parsed out of a request header.
+    #[must_use]
+    pub fn for_caller(identity: &str, scope: RateLimitScope, is_loopback: bool) -> Self {
         Self {
             identity: identity.to_owned(),
             scope,
+            is_loopback,
         }
     }
 }
@@ -97,7 +117,7 @@ pub struct RateLimitConfig {
     pub rpc_write: WindowConfig,
     pub rpc_heavy: WindowConfig,
     pub rpc_realtime: WindowConfig,
-    /// If `true`, requests from loopback addresses bypass all limits.
+    /// If `true`, requests from a proven loopback transport bypass all limits.
     pub exempt_loopback: bool,
     /// Hard cap on the number of distinct `(identity, scope)` entries held in
     /// memory. Bounds heap growth against a flood of unique identities
@@ -387,8 +407,11 @@ impl RateLimiter {
     /// Returns `Ok(())` when the request is permitted, or a
     /// [`RateLimitError`] describing why it was rejected.
     pub fn check_and_record(&self, key: &RateLimitKey) -> Result<(), RateLimitError> {
-        // Loopback exemption
-        if self.config.exempt_loopback && is_loopback(&key.identity) {
+        // Loopback exemption. Keyed on the trusted transport bit, not on the
+        // identity string: behind a trusted proxy the identity is the
+        // forwarded address, so a client that forges `X-Forwarded-For:
+        // 127.0.0.1` would otherwise drop every limit it has.
+        if self.config.exempt_loopback && key.is_loopback {
             return Ok(());
         }
 
@@ -541,22 +564,6 @@ pub fn scope_for_method(method: &str) -> RateLimitScope {
 }
 
 // ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-/// Check whether an identity string represents a loopback address.
-///
-/// Handles both bare IPs ("127.0.0.1") and socket-address strings
-/// that include a port suffix ("127.0.0.1:54321", "[`::1`]:8080").
-fn is_loopback(identity: &str) -> bool {
-    identity == "127.0.0.1"
-        || identity == "::1"
-        || identity == "localhost"
-        || identity.starts_with("127.0.0.1:")
-        || identity.starts_with("[::1]:")
-}
-
-// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
@@ -663,7 +670,7 @@ mod tests {
 
         // rpc_default limit is 10, but loopback is exempt
         for addr in &["127.0.0.1", "::1", "localhost"] {
-            let key = RateLimitKey::new(addr, RateLimitScope::RpcDefault);
+            let key = RateLimitKey::for_caller(addr, RateLimitScope::RpcDefault, true);
             for i in 0..100 {
                 assert!(
                     limiter.check_and_record(&key).is_ok(),
@@ -671,6 +678,25 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn test_a_loopback_looking_identity_is_not_exempt() {
+        let limiter = RateLimiter::new(test_config());
+
+        // The identity is the resolved client address: behind a trusted proxy
+        // it is the forwarded one, which the client chose. Reading the
+        // exemption off the identity let a forged `X-Forwarded-For:
+        // 127.0.0.1` drop every limit.
+        let forged = RateLimitKey::new("127.0.0.1", RateLimitScope::RpcDefault);
+        let mut limited = false;
+        for _ in 0..100 {
+            if limiter.check_and_record(&forged).is_err() {
+                limited = true;
+                break;
+            }
+        }
+        assert!(limited, "a forged loopback identity must not be exempt");
     }
 
     #[test]
