@@ -244,6 +244,25 @@ pub fn register_run(
     register(&lane.to_key_string(), max_per_session, run_id)
 }
 
+/// Join the FIFO lane a run was already recorded on.
+///
+/// The wait lane's durable records persist the lane they were admitted to, so
+/// a reinjected run re-enters that lane instead of re-deriving it: a later
+/// change to the derivation rule must not move a queued message onto another
+/// session, where it would wait behind strangers and take a slot from them.
+///
+/// The one production caller is the reinjection path, whose lane key is read
+/// back from the record instead of chosen. An arrival path that has a request
+/// in hand still goes through [`register_run`], which derives the lane.
+#[must_use]
+pub fn register_run_in_lane(
+    lane_key: &str,
+    max_per_session: usize,
+    run_id: &str,
+) -> Option<TicketGuard> {
+    register(lane_key, max_per_session, run_id)
+}
+
 /// Signal that `session_key`'s run slot is free, so its front waiter may try.
 ///
 /// Called from the engine's `SessionRunRegistry::release` — the one place a
