@@ -740,6 +740,50 @@ mod tests {
         assert!(!tools.contains_key("local_voice"));
     }
 
+    /// The other half of the gate: with the Config handle wired, the tool IS
+    /// advertised AND carries a schema.
+    ///
+    /// The negative test above pins the gate; this one pins what the gate
+    /// costs. `local_voice` is class (b) in
+    /// `tools_without_an_unconditional_schema_are_pinned` — it registers only
+    /// once a live dependency is present, so the deterministic map this
+    /// count is measured against cannot reach it and
+    /// `registry_schema_bytes_ratchet` does not bound its bytes. That is a
+    /// statement about what a session-less test can build, not about what
+    /// production ships: the schema DOES ship in every deployment that has
+    /// a Config handle, which is every deployment. Without this test the
+    /// residue would be indistinguishable from a tool that lost its schema.
+    #[test]
+    fn local_voice_registers_with_a_schema_when_the_config_handle_is_live() {
+        let mut tools = HashMap::new();
+        BuiltinToolRegistry::register_optional_tools(
+            &mut tools,
+            &None,
+            &None,
+            &None,
+            &None,
+            &None,
+            &None,
+            &BuiltinToolConfig {
+                config: Some(Arc::new(tokio::sync::RwLock::new(
+                    crate::config::Config::default(),
+                ))),
+                ..Default::default()
+            },
+            &None,
+            &None,
+            &None,
+        );
+        let tool = tools
+            .get("local_voice")
+            .expect("local_voice must register once the Config handle is live");
+        assert!(
+            tool.parameters_schema.is_some(),
+            "local_voice must carry a schema when the Config handle is live — the tool is \
+             advertised to the model, so a missing schema hands it a surface it cannot fill"
+        );
+    }
+
     /// The session_search handler is built from the GatewayContext. A session
     /// store alone is not enough, and advertising the tool anyway produced a
     /// fully-schemaed tool whose every call failed with
