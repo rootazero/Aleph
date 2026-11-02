@@ -9,7 +9,10 @@ use std::sync::LazyLock;
 /// Regex for matching code fence opening/closing lines.
 /// Matches: optional indent (0-3 spaces) + fence marker (``` or ~~~) + optional language tag
 static FENCE_REGEX: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"^( {0,3})(`{3,}|~{3,})(.*)$").expect("hardcoded fence regex must compile")
+    match Regex::new(r"^( {0,3})(`{3,}|~{3,})(.*)$") {
+        Ok(re) => re,
+        Err(e) => panic!("hardcoded fence regex must compile: {e}"),
+    }
 });
 
 /// A span representing a code fence block in text.
@@ -157,7 +160,7 @@ pub fn parse_fence_spans(text: &str) -> Vec<FenceSpan> {
                 } else {
                     current_fence = Some(open);
                 }
-            } else {
+            } else if !(marker.starts_with('`') && info.contains('`')) {
                 let language = if info.is_empty() {
                     None
                 } else {
@@ -206,7 +209,10 @@ pub fn parse_fence_spans(text: &str) -> Vec<FenceSpan> {
 /// Returns `true` if the index is outside all fence spans.
 #[must_use]
 pub fn is_safe_fence_break(spans: &[FenceSpan], index: usize) -> bool {
-    !spans.iter().any(|span| span.contains(index))
+    !spans.iter().any(|span| {
+        let closing_marker_len = span.indent.len() + span.marker.len();
+        index > span.start && index < span.end.saturating_add(closing_marker_len)
+    })
 }
 
 /// Find the fence span containing the given index, if any.
