@@ -220,12 +220,27 @@ fn parse_inline_role(spec: &str) -> Option<Persona> {
 /// Quoted segments (both `"..."` and `'...'`) are returned as single tokens
 /// with the quotes stripped. Unquoted words are split on whitespace.
 fn tokenize(input: &str) -> Vec<String> {
+    const MAX_COMMAND_INPUT_LEN: usize = 8192;
+    const MAX_TOKENS: usize = 128;
+
+    let input = if input.len() > MAX_COMMAND_INPUT_LEN {
+        match input.char_indices().nth(MAX_COMMAND_INPUT_LEN) {
+            Some((idx, _)) => &input[..idx],
+            None => input,
+        }
+    } else {
+        input
+    };
+
     let mut tokens = Vec::new();
     let mut chars = input.chars().peekable();
     let mut current = String::new();
     let mut quoted = String::new();
 
     while let Some(&ch) = chars.peek() {
+        if tokens.len() >= MAX_TOKENS {
+            break;
+        }
         match ch {
             '"' | '\'' => {
                 if !current.is_empty() {
@@ -280,7 +295,7 @@ fn tokenize(input: &str) -> Vec<String> {
         }
     }
 
-    if !current.is_empty() {
+    if !current.is_empty() && tokens.len() < MAX_TOKENS {
         tokens.push(current);
     }
 
