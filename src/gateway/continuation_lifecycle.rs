@@ -162,6 +162,13 @@ pub(crate) async fn retire_side_session_now(
     };
     let side_str = side.to_key_string();
 
+    // Serialise with seeding. A side question in flight holds this same lock
+    // while it copies the main transcript into the side session, so retiring
+    // without it can interleave: the seeder would write the transcript back
+    // AFTER this function deleted it, and the side thread would end up holding
+    // exactly the content the retirement was asked to remove.
+    let _seeding = crate::gateway::btw::seed::gate::acquire(&side).await;
+
     // 1. The SSOT event log (and, through `retire_from`, its FTS mirror).
     //    `Ok(0)` when no event store is installed, which is what makes this
     //    safe in tests and in stores that never had one.
