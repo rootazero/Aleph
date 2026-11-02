@@ -52,8 +52,8 @@ impl OAuthTokens {
                 .as_secs()
                 .try_into()
                 .unwrap_or(i64::MAX);
-            // Add 5 minute buffer (saturating to prevent overflow on adversarial values)
-            expires_at.saturating_sub(300) < now
+            // Add 1 minute buffer (saturating to prevent overflow on adversarial values)
+            expires_at.saturating_sub(60) < now
         } else {
             false
         }
@@ -325,8 +325,8 @@ impl OAuthStorage {
         // would otherwise see the previous (pre-write) file.
         #[cfg(unix)]
         {
-            if let Ok(file) = std::fs::File::open(&self.file_path) {
-                let _ = file.sync_all();
+            if let Ok(file) = tokio::fs::File::open(&self.file_path).await {
+                let _ = file.sync_all().await;
             }
         }
 
