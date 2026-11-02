@@ -570,7 +570,7 @@ impl SessionKey {
         let s = s.trim();
         let parts: Vec<&str> = s.split(':').collect();
 
-        if parts.len() < 3 || !parts[0].eq_ignore_ascii_case("agent") {
+        if parts.len() < 3 || !parts.first().is_some_and(|p| p.eq_ignore_ascii_case("agent")) {
             return None;
         }
 
@@ -583,34 +583,38 @@ impl SessionKey {
         // would silently drop every layer above the innermost subagent, collapsing
         // a sub-subagent session into its grandparent's session.
         if let Some(pos) = parts.iter().rposition(|&p| p == "subagent") {
-            if pos >= 2 && pos + 1 < parts.len() {
-                let parent_str = parts[..pos].join(":");
-                if parts[pos + 1].is_empty() {
-                    return None;
-                }
-                // Mirror the constructor: sanitize the subagent_id so a path
-                // like `agent:main:main:subagent:../etc/passwd` cannot inject
-                // an unsanitized component downstream. Round-trip via
-                // `to_key_string` is now symmetric with `SessionKey::subagent`.
-                let subagent_id = sanitize_component(parts[pos + 1]);
-                if subagent_id.is_empty() {
-                    return None;
-                }
-                if let Some(parent_key) = Self::parse_with_depth(&parent_str, depth + 1) {
-                    return Some(Self::Subagent {
-                        parent_key: Box::new(parent_key),
-                        subagent_id,
-                    });
+            if pos >= 2 {
+                if let (Some(parent_slice), Some(&raw_subagent_id)) =
+                    (parts.get(..pos), parts.get(pos + 1))
+                {
+                    if raw_subagent_id.is_empty() {
+                        return None;
+                    }
+                    // Mirror the constructor: sanitize the subagent_id so a path
+                    // like `agent:main:main:subagent:../etc/passwd` cannot inject
+                    // an unsanitized component downstream. Round-trip via
+                    // `to_key_string` is now symmetric with `SessionKey::subagent`.
+                    let subagent_id = sanitize_component(raw_subagent_id);
+                    if subagent_id.is_empty() {
+                        return None;
+                    }
+                    let parent_str = parent_slice.join(":");
+                    if let Some(parent_key) = Self::parse_with_depth(&parent_str, depth + 1) {
+                        return Some(Self::Subagent {
+                            parent_key: Box::new(parent_key),
+                            subagent_id,
+                        });
+                    }
                 }
             }
         }
 
-        let agent_id = normalize_agent_id(parts[1]);
+        let agent_id = normalize_agent_id(parts.get(1)?);
         if agent_id.is_empty() {
             return None;
         }
 
-        let rest = &parts[2..];
+        let rest = parts.get(2..)?;
 
         if let Some((rest_no_epoch, epoch)) = Self::strip_epoch(rest) {
             if let Some(key) = Self::parse_rest(&agent_id, rest_no_epoch, epoch) {
@@ -635,25 +639,24 @@ impl SessionKey {
     }
 
     fn strip_epoch<'a>(rest: &'a [&'a str]) -> Option<(&'a [&'a str], u32)> {
-        let last = rest.last()?;
+        let (last, prefix) = rest.split_last()?;
+        if prefix.is_empty() {
+            return None;
+        }
         let n_str = last.strip_prefix('s')?;
         let n = n_str.parse::<u32>().ok()?;
         // Accept epoch 0 (s0) so that keys like agent:id:main:s0 are
         // parsed as Main with epoch 0 rather than falling through to
         // the [task_type, task_id] catch-all and becoming a Task.
-        if rest.len() > 1 {
-            // Only treat a trailing `:sN` as an epoch when the stripped rest
-            // is a known epoch-bearing shape. For 2-segment rests, the first
-            // segment must be `main` (Main) or a DM marker; otherwise a Task
-            // whose `task_id` happens to match `s[0-9]+` (e.g. `cron:s7`)
-            // would round-trip as Main and break routing.
-            if rest.len() == 2 && !matches!(rest[0], "main" | "peer" | "dm") {
-                return None;
-            }
-            Some((&rest[..rest.len() - 1], n))
-        } else {
-            None
+        // Only treat a trailing `:sN` as an epoch when the stripped rest
+        // is a known epoch-bearing shape. For 2-segment rests, the first
+        // segment must be `main` (Main) or a DM marker; otherwise a Task
+        // whose `task_id` happens to match `s[0-9]+` (e.g. `cron:s7`)
+        // would round-trip as Main and break routing.
+        if rest.len() == 2 && !matches!(rest.first().copied(), Some("main" | "peer" | "dm")) {
+            return None;
         }
+        Some((prefix, n))
     }
 
     fn parse_rest(agent_id: &str, rest: &[&str], epoch: u32) -> Option<Self> {
@@ -755,11 +758,11 @@ impl SessionKey {
         }
         let parts: Vec<&str> = s.split(':').collect();
 
-        if parts.len() < 3 || !parts[0].eq_ignore_ascii_case("agent") {
+        if parts.len() < 3 || !parts.first().is_some_and(|p| p.eq_ignore_ascii_case("agent")) {
             return None;
         }
 
-        let agent_id = normalize_agent_id(parts[1]);
+        let agent_id = normalize_agent_id(parts.get(1)?);
 
         match parts.get(2..) {
             Some(&["peer", ref rest @ ..]) if !rest.is_empty() => Some(Self::DirectMessage {
