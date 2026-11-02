@@ -37,31 +37,37 @@ const CONSERVATIVE_PATTERNS: &[(&str, &str)] = &[
 ];
 
 fn conservative_redact(text: &str) -> String {
-    let mut out = String::with_capacity(text.len());
-    let mut remaining = text;
+    let mut current = text.to_string();
     for (needle, replacement) in CONSERVATIVE_PATTERNS {
-        while let Some(idx) = remaining
-            .to_ascii_lowercase()
-            .find(&needle.to_ascii_lowercase())
-        {
-            out.push_str(&remaining[..idx]);
+        let needle_lower = needle.to_ascii_lowercase();
+        let mut out = String::with_capacity(current.len());
+        let mut remaining = current.as_str();
+        while let Some(idx) = remaining.to_ascii_lowercase().find(&needle_lower) {
+            let prefix = remaining.get(..idx).unwrap_or("");
+            out.push_str(prefix);
             out.push_str(replacement);
-            // Consume the value following the needle (up to the next
-            // whitespace, delimiter, or quote) so the credential itself does
-            // not survive into the trailing slice — e.g. for input
-            // "Authorization: Bearer xyz" this drops "xyz" along with the
-            // needle. Without this, `out` would end with the replacement and
-            // `remaining` would still hold the secret, leaking it into the
-            // final `out.push_str(remaining)` below.
-            remaining = &remaining[idx + needle.len()..];
-            let val_end = remaining
-                .find(|c: char| c.is_whitespace() || matches!(c, '&' | ',' | '"' | '\''))
-                .unwrap_or(remaining.len());
-            remaining = &remaining[val_end..];
+            let after_needle = remaining.get(idx + needle.len()..).unwrap_or("");
+            let val_end = if after_needle.starts_with('"') {
+                after_needle
+                    .get(1..)
+                    .and_then(|tail| tail.find('"').map(|end| end + 2))
+                    .unwrap_or(after_needle.len())
+            } else if after_needle.starts_with('\'') {
+                after_needle
+                    .get(1..)
+                    .and_then(|tail| tail.find('\'').map(|end| end + 2))
+                    .unwrap_or(after_needle.len())
+            } else {
+                after_needle
+                    .find(|c: char| c.is_whitespace() || matches!(c, '&' | ',' | '"' | '\''))
+                    .unwrap_or(after_needle.len())
+            };
+            remaining = after_needle.get(val_end..).unwrap_or("");
         }
+        out.push_str(remaining);
+        current = out;
     }
-    out.push_str(remaining);
-    out
+    current
 }
 
 /// Redact secrets and PII from an MCP-originated error string.
