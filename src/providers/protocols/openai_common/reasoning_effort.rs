@@ -53,18 +53,8 @@ fn normalize_for_family(model: &str) -> String {
 /// Strip a trailing `-YYYY-MM-DD` snapshot suffix, returning the head when the
 /// pattern matches (e.g. `gpt-5-2025-04-16` → `gpt-5`).
 fn strip_date_suffix(s: &str) -> Option<&str> {
-    if s.len() < 11 {
-        return None;
-    }
-    let split = s.len() - 11;
-    // `s` is a provider/config-supplied model id. The `-YYYY-MM-DD` suffix is
-    // pure ASCII, so a non-char-boundary at `split` means the tail contains a
-    // multi-byte char and cannot match the pattern. Bail instead of slicing on
-    // a non-boundary, which would panic.
-    if !s.is_char_boundary(split) {
-        return None;
-    }
-    let tail = &s[split..];
+    let split = s.len().checked_sub(11)?;
+    let tail = s.get(split..)?;
     // Pattern: '-' DDDD '-' DD '-' DD
     let pat = ['-', 'd', 'd', 'd', 'd', '-', 'd', 'd', '-', 'd', 'd'];
     let mut chars = tail.chars();
@@ -78,7 +68,7 @@ fn strip_date_suffix(s: &str) -> Option<&str> {
             return None;
         }
     }
-    Some(&s[..split])
+    s.get(..split)
 }
 
 /// Parse the minor version `n` from `gpt-5.<n>` ids (`None` for plain `gpt-5`).
@@ -95,8 +85,8 @@ fn minor_of(id: &str) -> Option<u32> {
 /// `moonshotai/kimi-k3` would be caught by the `moonshot` catch-all and lose
 /// the effort it gets when the same model is reached directly.
 fn strip_routing_prefix(id: &str) -> &str {
-    match id.rfind('/') {
-        Some(i) => &id[i + 1..],
+    match id.rsplit_once('/') {
+        Some((_, rest)) => rest,
         None => id,
     }
 }

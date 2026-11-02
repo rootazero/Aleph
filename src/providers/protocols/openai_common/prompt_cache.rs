@@ -85,7 +85,7 @@ pub fn derive_prompt_cache_key(payload: &RequestPayload<'_>) -> Option<String> {
         use std::fmt::Write as _;
         let mut key = String::with_capacity(28);
         key.push_str("pck_");
-        for byte in &digest[..12] {
+        for byte in digest.iter().take(12) {
             let _ = write!(key, "{byte:02x}");
         }
         Some(key)
@@ -110,8 +110,12 @@ pub fn derive_prompt_cache_key(payload: &RequestPayload<'_>) -> Option<String> {
 pub fn clamp_prompt_cache_key(key: &str) -> Cow<'_, str> {
     // `char_indices` finds the byte offset of the 65th char without counting the
     // whole string when it is long; fall through to borrow when short enough.
-    match key.char_indices().nth(PROMPT_CACHE_KEY_MAX_CHARS) {
-        Some((byte_idx, _)) => Cow::Owned(key[..byte_idx].to_string()),
+    match key
+        .char_indices()
+        .nth(PROMPT_CACHE_KEY_MAX_CHARS)
+        .and_then(|(byte_idx, _)| key.get(..byte_idx))
+    {
+        Some(clamped) => Cow::Owned(clamped.to_string()),
         None => Cow::Borrowed(key),
     }
 }

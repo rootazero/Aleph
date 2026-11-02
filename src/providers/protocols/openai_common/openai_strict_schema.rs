@@ -257,8 +257,7 @@ fn lenient_rewrite_node(node: &mut Value) {
                     .iter()
                     .position(|t| t.as_str().is_some_and(|s| s != "null"));
                 if let (Some(_), Some(other)) = (null_idx, other_idx) {
-                    // rust-doctor-disable-next-line excessive-clone
-                    let other_type = types[other].clone();
+                    let other_type = types.get(other).cloned().unwrap_or(Value::Null);
                     let mut non_null_branch: serde_json::Map<String, Value> = map
                         .iter()
                         .filter(|(k, _)| k.as_str() != "type")
@@ -373,8 +372,7 @@ fn normalize_node(
                     .iter()
                     .position(|t| t.as_str().is_some_and(|s| s != "null"));
                 if let (Some(_), Some(other)) = (null_idx, other_idx) {
-                    // rust-doctor-disable-next-line excessive-clone
-                    let other_type = types[other].clone();
+                    let other_type = types.get(other).cloned().unwrap_or(Value::Null);
                     let mut non_null_branch: serde_json::Map<String, Value> = map
                         .iter()
                         .filter(|(k, _)| k.as_str() != "type")

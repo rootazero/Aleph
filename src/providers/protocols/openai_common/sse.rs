@@ -70,15 +70,13 @@ pub fn sse_event_stream(response: reqwest::Response) -> BoxStream<'static, Resul
                 let mut events = Vec::new();
 
                 while let Some(newline_pos) = buf_guard.iter().position(|&b| b == b'\n') {
-                    let line_bytes = buf_guard[..newline_pos].to_vec();
+                    let line_bytes = buf_guard
+                        .get(..newline_pos)
+                        .map_or_else(Vec::new, <[u8]>::to_vec);
                     buf_guard.drain(..=newline_pos);
 
-                    let line = String::from_utf8(line_bytes).map_err(|e| {
-                        AlephError::network(format!(
-                            "Invalid UTF-8 in SSE stream: {}",
-                            String::from_utf8_lossy(e.as_bytes())
-                        ))
-                    })?;
+                    let line = String::from_utf8(line_bytes)
+                        .unwrap_or_else(|e| String::from_utf8_lossy(e.as_bytes()).into_owned());
 
                     if let Some(event) = parse_sse_line(&line)? {
                         events.push(event);
