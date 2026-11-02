@@ -570,8 +570,9 @@ impl McpTransport for SseTransport {
                 Err(_) => {
                     tracing::debug!(
                         server = %self.server_name,
-                        "SSE listener did not exit within grace; abandoning handle"
+                        "SSE listener did not exit within grace; aborting handle"
                     );
+                    self.abort_handle.abort();
                 }
             }
         }
