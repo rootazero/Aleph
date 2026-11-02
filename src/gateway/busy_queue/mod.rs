@@ -531,6 +531,23 @@ pub fn cancel_queued_run(run_id: &str) -> bool {
     found
 }
 
+/// The session that owns the queued run `run_id`, if it is still waiting.
+///
+/// Inverse of the lookup inside [`cancel_queued_run`]: the lane is keyed by
+/// session, the ticket by run id, and a run id on its own says nothing about
+/// who owns it until the lanes are searched. The gateway's run-ownership gate
+/// needs that owner: possession of a run id must not be authority to cancel
+/// someone else's run.
+pub fn session_of_queued_run(run_id: &str) -> Option<String> {
+    let map = lock();
+    map.iter().find_map(|(key, lane)| {
+        lane.tickets
+            .iter()
+            .find(|t| t.run_id == run_id && !t.cancelled)
+            .map(|_| key.clone())
+    })
+}
+
 /// Total messages waiting across all sessions, plus the per-session breakdown
 /// (deepest first). Feeds `gateway.metrics.run_concurrency` so an operator can
 /// see backlog the same way they see run-slot saturation.

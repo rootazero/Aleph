@@ -381,6 +381,32 @@ impl AgentRunManager {
         self.active_runs.read().await.get(run_id).cloned()
     }
 
+    /// The session that owns `run_id`, from whichever table holds it.
+    ///
+    /// Three places know a run's owner and the manager holds only one of
+    /// them: its own `active_runs` (Panel-started runs), the execution
+    /// engine (channel / CLI / cron / team runs it admitted), and the busy
+    /// queue (a run still waiting for its lane — it has a run id but no
+    /// engine entry yet). Resolving from the manager's table alone saw the
+    /// first kind and was blind to the other two, which is how a member
+    /// could cancel another member's engine run by quoting its id.
+    pub async fn session_key_of_run(&self, run_id: &str) -> Option<SessionKey> {
+        let managed = self
+            .active_runs
+            .read()
+            .await
+            .get(run_id)
+            .map(|state| state.session_key.clone());
+        if let Some(session_key) = managed {
+            return Some(session_key);
+        }
+        if let Some(session_key) = self.execution_adapter.session_of_run(run_id).await {
+            return Some(session_key);
+        }
+        crate::gateway::busy_queue::session_of_queued_run(run_id)
+            .and_then(|key| SessionKey::from_key_string(&key))
+    }
+
     /// Cancel an active run
     pub async fn cancel_run(&self, run_id: &str) -> bool {
         // Forward to the execution engine FIRST: firing the run's
@@ -1147,19 +1173,32 @@ struct RunIdParams {
 /// response it already returned for an unknown run id, byte-for-byte, so this
 /// gate opens no existence oracle of its own.
 ///
-/// A run the manager has no record of resolves to `None` — the caller then
-/// answers as it always has for an unknown id.
+/// The run → session step consults every table that knows a run's owner
+/// (the manager's own runs, the execution engine's, the busy queue's), not
+/// just the manager's: a run the manager never started is still someone's
+/// run, and "this table has no record of it" is not evidence that nobody
+/// owns it.
+///
+/// A run no table knows resolves to `None` — the caller then answers as it
+/// always has for an unknown id.
 pub(crate) async fn caller_may_address_run(
     run_id: &str,
     run_manager: &AgentRunManager,
     session_store: &dyn crate::gateway::session_store::SessionStore,
 ) -> bool {
-    let Some(state) = run_manager.get_run_status(run_id).await else {
+    // Resolve the run to the session that OWNS it before deciding anything.
+    // The manager's own table only holds the runs it started: a channel,
+    // CLI, cron or team run lives in the execution engine, and a run still
+    // waiting for its busy lane lives in the queue. Resolving from the
+    // manager's table alone made every foreign engine run look like an
+    // unknown id — and "unknown" was answered with permission, so quoting
+    // someone else's run id was enough to cancel it.
+    let Some(session_key) = run_manager.session_key_of_run(run_id).await else {
         // Unknown run: nothing to protect, and the caller's existing
         // "not found" answer is the correct one either way.
         return true;
     };
-    match session_store.get_metadata(&state.session_key).await {
+    match session_store.get_metadata(&session_key).await {
         Ok(Some(meta)) => crate::gateway::visibility::session_visible(&meta),
         // No row yet: a run is accepted before `ensure_session` writes its row,
         // so this is the ordinary first-turn window, not a foreign session.
