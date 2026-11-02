@@ -134,7 +134,7 @@ mod tests {
             agent_registry: None,
             provider_configs: Arc::new(Vec::new()),
             created_at: 0,
-            embedding_provider: None,
+            memory_runtime: None,
         }
     }
 
