@@ -49,7 +49,7 @@ const MAX_TRAVERSAL_STEPS: usize = 1024;
 /// A pre-computed view of one node's place in the governance topology. Cheaper
 /// to render than re-walking the graph per consumer (the prompt and the
 /// status both ask "who watches me?" today and each builds its own answer).
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NodeSubgraph {
     /// The node itself. `None` for an unknown id — callers map that to
     /// "session is not governed, render nothing" (same as
@@ -83,7 +83,7 @@ pub struct NodeSubgraph {
 /// inspector never calls `delete_node`. Output mirrors the lint findings the
 /// real removal would trigger plus the ACL rows that lose enforcement, so
 /// operators can see the blast radius before committing.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ImpactReport {
     /// The node the simulation was asked about. The inspector answers
     /// `Ok(None)` if the node does not exist, so the caller can short-circuit.
@@ -116,7 +116,7 @@ pub struct ImpactReport {
 /// 1. Node count by kind, edge count by kind.
 /// 2. Naked-loop count (from lint).
 /// 3. Whether any chain is unanchored.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TopologySummary {
     pub node_counts_by_kind: Vec<(NodeKind, usize)>,
     pub edge_counts_by_kind: Vec<(EdgeKind, usize)>,
