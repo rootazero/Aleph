@@ -11,10 +11,11 @@ use crate::capability::ownership::{
     VisibilityScope,
 };
 use crate::capability::provider::{ProviderCallError, ProviderHandle, ProviderLifecycleError};
-use crate::sync_primitives::{Arc, MutexGuard};
+use crate::sync_primitives::{Arc, AtomicBool, MutexGuard, Ordering};
 use crate::tools::descriptor::canonicalize_json;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
+use std::time::Duration;
 use tracing::warn;
 
 #[allow(dead_code)] // Cold declaration schema is not mounted in production yet.
@@ -279,6 +280,58 @@ pub(super) fn lock_runtime(
     }
 }
 
+/// Upper bound on how long a channel retirement waits for in-flight work.
+///
+/// The drain is a backstop: an admission ticket leaked by a panic used to leave
+/// it waiting forever. The bound is generous because a live send can sit in a
+/// rate-limit backoff for longer than a minute.
+const BOUND_DRAIN_TIMEOUT: Duration = Duration::from_secs(300);
+
+/// The admission ticket for one unit of bound work.
+///
+/// `active_work` is the count the retirement drain waits on. The release used
+/// to happen only on the completion path, so a panic between admission and
+/// completion leaked the ticket and the drain then waited forever. The drop
+/// fallback releases the ticket when the completion path never ran.
+struct ActiveWorkRelease {
+    entry: Arc<ChannelRegistrationEntry>,
+    released: AtomicBool,
+}
+
+impl ActiveWorkRelease {
+    fn new(entry: Arc<ChannelRegistrationEntry>) -> Self {
+        Self {
+            entry,
+            released: AtomicBool::new(false),
+        }
+    }
+
+    /// Mark the ticket as released by the completion path.
+    ///
+    /// Called before the decrement so that a panic in the decrement cannot make
+    /// the drop fallback release the same ticket twice.
+    fn mark_released(&self) {
+        self.released.store(true, Ordering::Release);
+    }
+
+    /// Release the ticket if the completion path did not release it.
+    fn release_once(&self) {
+        if self.released.swap(true, Ordering::AcqRel) {
+            return;
+        }
+        let (mut runtime, _poisoned) = lock_runtime(&self.entry);
+        runtime.active_work = runtime.active_work.saturating_sub(1);
+        drop(runtime);
+        self.entry.drained.notify_waiters();
+    }
+}
+
+impl Drop for ActiveWorkRelease {
+    fn drop(&mut self) {
+        self.release_once();
+    }
+}
+
 pub(super) struct OwnedForwarder {
     pub(super) cancel: tokio_util::sync::CancellationToken,
     pub(super) task: tokio::task::JoinHandle<()>,
@@ -448,13 +501,16 @@ impl super::ChannelRegistry {
                         };
                         runtime.active_work += 1;
                         let source = self.clone();
+                        let release = ActiveWorkRelease::new(entry.clone());
                         runtime.executions.push(tokio::spawn(async move {
                             let operation = {
                                 let channel = ticket.observation.capture.channel.read().await;
                                 channel.send(message)
                             };
                             let result = operation.await;
-                            source.complete_bound_work(ticket, result, sender).await;
+                            source
+                                .complete_bound_work(ticket, result, sender, &release)
+                                .await;
                         }));
                         Ok(receiver)
                     },
@@ -468,6 +524,7 @@ impl super::ChannelRegistry {
         ticket: AdmittedWork,
         result: super::ChannelResult<super::SendResult>,
         sender: tokio::sync::oneshot::Sender<BoundCompletion>,
+        release: &ActiveWorkRelease,
     ) {
         let _source = self.lifecycle_sync.lock().await;
         let observation = &ticket.observation;
@@ -507,6 +564,7 @@ impl super::ChannelRegistry {
                             if runtime.retiring {
                                 return Err(ChannelBindingError::Retiring);
                             }
+                            release.mark_released();
                             runtime.active_work = runtime
                                 .active_work
                                 .checked_sub(1)
@@ -525,6 +583,7 @@ impl super::ChannelRegistry {
         };
         if let Err(error) = accepted {
             let (mut runtime, _poisoned) = lock_runtime(original);
+            release.mark_released();
             runtime.active_work = runtime
                 .active_work
                 .checked_sub(1)
@@ -1061,14 +1120,22 @@ impl super::ChannelRegistry {
             let notified = entry.drained.notified();
             tokio::pin!(notified);
             notified.as_mut().enable();
-            let drained = {
+            let (drained, outstanding) = {
                 let (runtime, _poisoned) = lock_runtime(entry);
-                runtime.active_work == 0
+                (runtime.active_work == 0, runtime.active_work)
             };
             if drained {
                 break;
             }
-            notified.await;
+            if tokio::time::timeout(BOUND_DRAIN_TIMEOUT, notified).await.is_err() {
+                return Err(self.bound_cleanup_error(
+                    entry,
+                    format!(
+                        "timed out after {}s waiting for {outstanding} admitted work items to drain",
+                        BOUND_DRAIN_TIMEOUT.as_secs()
+                    ),
+                ));
+            }
         }
         let (executions, forwarder) = {
             let (mut runtime, _poisoned) = lock_runtime(entry);
