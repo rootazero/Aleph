@@ -413,7 +413,7 @@ pub fn compute_runtime_state_blocks(
             let label = match tools.as_slice() {
                 [] => String::new(),
                 [single] => (*single).to_string(),
-                many => format!("{} (+{} more)", many[0], many.len() - 1),
+                [first, rest @ ..] => format!("{first} (+{} more)", rest.len()),
             };
             crate::tools::runtime_state::RuntimeStateFragment::unavailable(label, reason)
         })

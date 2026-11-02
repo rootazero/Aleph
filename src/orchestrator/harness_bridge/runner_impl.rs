@@ -16,7 +16,7 @@ use crate::orchestrator::errors::FlowError;
 use crate::orchestrator::flow_spec::{FlowInput, FlowSpec};
 use crate::routing::session_key::SessionKey;
 use crate::sandbox::Sandbox;
-use crate::session::events::SessionEvent;
+use crate::session::events::{SessionEvent, SessionEventRecord};
 use crate::session::service::SessionId;
 
 use super::*;
@@ -934,27 +934,36 @@ impl HarnessRunner for AgentHarnessRunner {
         // the history / start a new session" advice `i18n::render_loop_halt`
         // carries for it — was structurally unreachable on every surface.
         //
-        // On the failure arm a session-read error must NOT replace the run's
-        // own error (that would swap the real cause for "session read: .."),
-        // so the scan there falls back to an empty log: the harness-sourced
-        // fields still land and the log-sourced ones stay zero.
-        let records = match self
+        // A session-read error must NOT replace the run's own outcome: it
+        // swaps the real cause ("session read: ..") for the cause of a run
+        // that may well have succeeded. On the SUCCESS arm it did worse
+        // than that: it returned `FlowError::Internal`, which discarded a
+        // run that had actually succeeded AND skipped the terminal settle
+        // below (`cb.on_complete_with_outcome`) — the gateway then
+        // synthesized its own placeholder outcome for a run that had
+        // produced text. The settle is owed on BOTH arms, so a read failure
+        // is logged and the outcome is built from what is still known: the
+        // harness-sourced fields land, the log-sourced ones stay empty (no
+        // `final_text`, zero `iterations` / `tool_calls_made`).
+        let (records, session_read_failed) = match self
             .session_service
             .get_events(&session_id, None, None)
             .await
         {
-            Ok(records) => records,
-            Err(e) if run_result.is_err() => {
+            Ok(records) => (records, false),
+            Err(e) => {
                 tracing::warn!(
                     error = %e,
-                    "session read failed while settling a failed run; \
+                    "session read failed while settling the run; \
                      reporting harness-sourced accounting only"
                 );
-                Vec::new()
+                (Vec::new(), true)
             }
-            Err(e) => return Err(FlowError::Internal(format!("session read: {e}"))),
         };
 
+        let mut final_text = String::new();
+        let mut iterations: u32 = 0;
+        let mut tool_calls_made: u32 = 0;
         // Scope the per-run counters to THIS run: only count events emitted
         // after this run's own `RunStarted` marker. A reused session
         // (`FlowInput::History` / `FlowInput::Resume` / `SessionStrategy::Reuse`)
@@ -964,30 +973,34 @@ impl HarnessRunner for AgentHarnessRunner {
         // `token_breakdown` / `tool_timeline` read from the harness accessors
         // below. It would also let a run that produces no new text return a
         // stale prior-turn answer as `final_text`.
-        //
-        // Marker emitted at `SessionEvent::RunStarted { run_id: run_marker_id }`
-        // just before `harness.run`; all seeded history/user events precede it.
-        // `rposition` takes the LAST opener under this id: the fallback retry
-        // loop can leave earlier brackets of the same run in this log. On a
-        // compaction-driven session split the adopted child's log carries the
-        // split's own opener under this same id AFTER the carried tail (the
-        // parent's copied opener is filtered out of the tail, F14), so the
-        // scan counts only what the run produced after the split; the pre-split
-        // part stays in the parent's log.
-        let run_scan_start = records
-            .iter()
-            .rposition(|r| {
-                matches!(
-                    &r.event,
-                    SessionEvent::RunStarted { run_id, .. } if run_id == &run_marker_id
-                )
-            })
-            .map_or(0, |i| i + 1);
-
-        let mut final_text = String::new();
-        let mut iterations: u32 = 0;
-        let mut tool_calls_made: u32 = 0;
-        for r in &records[run_scan_start..] {
+        let run_records: &[SessionEventRecord] = match per_run_records(&records, &run_marker_id) {
+            Some(slice) => slice,
+            None => {
+                // A MISSING marker is not "scan from the beginning". The
+                // marker is emitted by `SessionEvent::RunStarted` immediately
+                // before `harness.run`, so its absence means this log does
+                // not describe this run at all (truncated, rotated, or read
+                // from another session). The old `map_or(0, |i| i + 1)`
+                // widened the scan to the WHOLE log in that case: a stale
+                // prior-turn answer could be returned as `final_text`, and
+                // `iterations` / `tool_calls_made` counted events this run
+                // never produced. A missing marker now contributes no events
+                // (empty `final_text`, zero counters) and is reported.
+                //
+                // A failed read has already been reported above; its empty
+                // log carries no marker by construction, so the missing
+                // marker here is a consequence, not a second anomaly.
+                if !session_read_failed {
+                    tracing::warn!(
+                        run_id = %run_marker_id,
+                        "session log has no RunStarted marker for this run; \
+                         reporting no log-sourced accounting"
+                    );
+                }
+                &[]
+            }
+        };
+        for r in run_records {
             match &r.event {
                 SessionEvent::AssistantMessage { content, .. } => {
                     // P5: dropped the 8-layer JSON field extraction
@@ -1321,6 +1334,40 @@ impl HarnessRunner for AgentHarnessRunner {
             None => raw,
         })
     }
+}
+
+/// The slice of `records` that THIS run produced.
+///
+/// `None` means the log carries no `RunStarted` marker for `run_marker_id` —
+/// i.e. the log does not describe this run at all (truncated, rotated, or read
+/// from another session). `Some` is the slice that starts AFTER the marker, so
+/// the caller never counts events this run did not produce.
+///
+/// `rposition` takes the LAST opener under this id: the fallback retry loop can
+/// leave earlier brackets of the same run in this log. On a compaction-driven
+/// session split the adopted child's log carries the split's own opener under
+/// this same id AFTER the carried tail (the parent's copied opener is filtered
+/// out of the tail, F14), so the scan counts only what the run produced after
+/// the split; the pre-split part stays in the parent's log.
+///
+/// A MISSING marker is deliberately NOT "scan from the beginning": the old
+/// `map_or(0, |i| i + 1)` widened the scan to the WHOLE log, so a stale
+/// prior-turn answer could be returned as `final_text` and the counters
+/// counted events this run never produced.
+fn per_run_records<'a>(
+    records: &'a [SessionEventRecord],
+    run_marker_id: &str,
+) -> Option<&'a [SessionEventRecord]> {
+    let start = records
+        .iter()
+        .rposition(|r| {
+            matches!(
+                &r.event,
+                SessionEvent::RunStarted { run_id, .. } if run_id == run_marker_id
+            )
+        })
+        .map(|i| i + 1)?;
+    records.get(start..)
 }
 
 /// Cross-run tokenizer-calibration carry-over slot, keyed by serving model id.

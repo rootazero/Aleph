@@ -66,6 +66,13 @@
 //! that does not implement the verb reports `unsupported` rather than "nothing
 //! to do". The counts are logged because a silent zero is indistinguishable
 //! from a backfill that never ran.
+//!
+//! "Nothing to do" is also not one answer but two: a room whose session row
+//! already carries attribution, and a room whose session row does not exist at
+//! all. The store verb cannot tell them apart — both come back as "no row was
+//! written" — so this pass probes the row and counts the missing one as a
+//! FAILURE. A pass that reports a missing conversation as a success is a pass
+//! that says "nothing to do" about a room nobody can read.
 
 use crate::gateway::router::SessionKey;
 use crate::gateway::security::store::OWNER_USER_ID;
@@ -87,7 +94,13 @@ pub struct BackfillReport {
     pub already_stamped: usize,
     /// `current_session_key` values that are not parseable session keys.
     pub unparseable: usize,
-    /// The store refused or failed the write.
+    /// The store refused the write, the write failed, or the session row the
+    /// room names does not exist at all.
+    ///
+    /// The last case is a FAILURE, not a success: the store answered "I wrote
+    /// no row" for a row that is not there, and counting that as "already
+    /// stamped" reported a healthy pass for a room whose conversation was
+    /// never persisted.
     pub failed: usize,
 }
 
@@ -146,7 +159,39 @@ pub async fn backfill_legacy_room_attribution(
                     "room attribution backfill: stamped a legacy room conversation"
                 );
             }
-            Ok(false) => report.already_stamped += 1,
+            Ok(false) => {
+                // `Ok(false)` means "no row was written", and the store has
+                // TWO reasons for that: the row already carries attribution
+                // (the steady state this pass exists to reach), or the row
+                // does not exist at all. They are not the same answer — the
+                // file backend returns `Ok(false)` for both, and the sqlite
+                // backend's `UPDATE ... WHERE owner_user_id IS NULL AND
+                // scope_id IS NULL` cannot tell them apart either. Counting
+                // the missing row as "already stamped" reported a healthy
+                // pass for a room whose conversation was never persisted, so
+                // the probe below tells the two apart.
+                match sessions.get_metadata(&key).await {
+                    Ok(Some(_)) => report.already_stamped += 1,
+                    Ok(None) => {
+                        report.failed += 1;
+                        tracing::warn!(
+                            project = %project.id,
+                            session_key = %raw_key,
+                            "room attribution backfill: the room's session row does not exist"
+                        );
+                    }
+                    Err(e) => {
+                        report.failed += 1;
+                        tracing::warn!(
+                            project = %project.id,
+                            session_key = %raw_key,
+                            error = %e,
+                            "room attribution backfill: cannot read the session row to tell \
+                             'already stamped' from 'no such row'"
+                        );
+                    }
+                }
+            }
             Err(SessionStoreError::Unsupported) => {
                 report.failed += 1;
                 tracing::warn!(
@@ -265,5 +310,47 @@ mod tests {
         let after = sessions.get_metadata(&key).await.unwrap().expect("row");
         assert_eq!(after.owner_user_id.as_deref(), Some("u-bob"));
         assert_eq!(after.scope_id.as_deref(), Some("personal:u-bob"));
+    }
+
+    /// The store's "no row was written" covers TWO situations — the row
+    /// already carries attribution, and the row is not there at all — and only
+    /// the second one is a failure. Counting it as "already stamped" reported
+    /// a healthy pass for a room whose conversation was never persisted.
+    #[tokio::test]
+    async fn a_room_whose_session_row_does_not_exist_is_a_failure_not_a_success() {
+        let _guard = ROSTER_TEST_GUARD.lock().unwrap_or_else(|e| e.into_inner());
+        let dir = tempfile::tempdir().unwrap();
+        let store = ProjectStore::new(rusqlite::Connection::open_in_memory().unwrap());
+        store.create_schema().unwrap();
+        let project = store.add_for(dir.path(), None, Some("u-alice")).unwrap();
+
+        let sessions = FileSessionStore::new(FileSessionStoreConfig {
+            base_dir: dir.path().join("sessions"),
+            ..FileSessionStoreConfig::default()
+        })
+        .expect("file session store");
+        // A conversation that was never created: the room names a key, and no
+        // row was ever persisted under it.
+        let key = SessionKey::Main {
+            agent_id: "main".into(),
+            main_key: "never-created".into(),
+            epoch: 0,
+        };
+        store
+            .claim_session_key(&project.id, &key.to_key_string())
+            .unwrap();
+
+        let report = backfill_legacy_room_attribution(&store, &sessions).await;
+        assert_eq!(report.scanned, 1);
+        assert_eq!(report.stamped, 0, "there was no row to stamp");
+        assert_eq!(
+            report.already_stamped, 0,
+            "a missing row is not a row that already had attribution"
+        );
+        assert_eq!(report.failed, 1, "a missing row is a failure");
+        assert!(
+            !report.is_quiet(),
+            "a failure must not be reported as a quiet pass"
+        );
     }
 }

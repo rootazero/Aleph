@@ -1,10 +1,14 @@
 //! Context-budget derivation and building.
 
+use std::collections::HashMap;
+
 use crate::config::types::phase6_wiring::ModelThresholdToml;
 use crate::config::types::ProviderConfig;
 use crate::config::Config;
 use crate::context::budget::ContextBudgetConfig;
-use crate::providers::model_catalog::{capabilities_for, resolve_context_window_with_override};
+use crate::providers::model_catalog::{
+    capabilities_for, resolve_context_window, resolve_context_window_with_override,
+};
 
 /// Default model context-window estimate (tokens) used when neither the
 /// primary provider nor the capability catalog reveals the active model's
@@ -21,7 +25,44 @@ const DEFAULT_OUTPUT_RESERVE: u64 = 8_192;
 /// Floor for the derived usable budget. A mis-declared tiny window (or a
 /// reserve ≥ window) must never collapse the budget to zero/near-zero, which
 /// would force compaction or a final reply on the very first turn.
+///
+/// The floor is applied ONLY when the window itself is larger than it (see
+/// [`usable_budget`]): the budget must never exceed the model's real context
+/// window.
 const MIN_USABLE_BUDGET: u64 = 16_384;
+
+/// The usable input budget for a `window` with `reserve` tokens held back for
+/// the reply.
+///
+/// The [`MIN_USABLE_BUDGET`] floor keeps a mis-declared tiny window (or a
+/// reserve ≥ window) from collapsing the budget to zero/near-zero, which
+/// would force compaction on the very first turn. But the floor must NEVER
+/// push the budget PAST the window: it applies only when the window itself is
+/// larger than the floor. With a window at or below the floor the declared
+/// window wins and what fits is `window - reserve` — otherwise a 16k-window
+/// provider would be handed a 16k prompt (the whole window, with no room left
+/// for the reply) and every turn would fail with a context-length error.
+fn usable_budget(window: u64, reserve: u64) -> u64 {
+    let fits = window.saturating_sub(reserve);
+    if window > MIN_USABLE_BUDGET {
+        // The window can afford the floor — apply it.
+        fits.max(MIN_USABLE_BUDGET)
+    } else if fits == 0 {
+        // The reserve swallows the whole window (a contradictory declaration):
+        // keep the window as the budget rather than a zero budget, which would
+        // disable context management entirely.
+        window
+    } else {
+        fits
+    }
+}
+
+/// The name the global failover chain reports (`FailoverProvider::name()`
+/// returns the literal `"failover"`). It is a WRAPPER name, not a provider
+/// key: the chain fronts the primary route, so a run served through it is
+/// sized by the PRIMARY's declared window — never by a provider that happens
+/// to be called "failover".
+const FAILOVER_CHAIN_NAME: &str = "failover";
 
 /// Floor for the derived summarizer-input budget. Below this the window
 /// selection would admit barely a handful of turns, so every compaction
@@ -119,6 +160,11 @@ const WARNING_SPIKE_HEADROOM_TOKENS: f64 = 48_000.0;
 /// cannot drive the compaction trigger absurdly low (summarizing nearly every
 /// turn). Operators with tiny windows can still set an explicit
 /// `warning_threshold` to go lower.
+///
+/// NOT a floor on the RESULT: a configured `critical_threshold` below this
+/// value (e.g. 0.35 — "compact earlier") must still yield a warning line
+/// BELOW the critical line, or the threshold-ordering gate rejects the whole
+/// budget and the run silently loses every context-management feature.
 const MIN_AUTO_WARNING_THRESHOLD: f64 = 0.40;
 
 /// Window-aware *default* warning (compaction) fraction, used only when neither
@@ -127,20 +173,24 @@ const MIN_AUTO_WARNING_THRESHOLD: f64 = 0.40;
 /// Keeps a model-independent *absolute* token band of
 /// [`WARNING_SPIKE_HEADROOM_TOKENS`] below the effective `critical` line: a wide
 /// 1M window resolves to the historical [`DEFAULT_WARNING_THRESHOLD`], while a
-/// narrow 200k window automatically compacts earlier. Floored at
-/// [`MIN_AUTO_WARNING_THRESHOLD`] and capped at [`DEFAULT_WARNING_THRESHOLD`],
-/// so the result is always in a sane range; the single-arg `min`/`max` avoid the
-/// `f64::clamp` min>max panic risk for a pathologically low configured critical
-/// (which the downstream threshold-ordering validation rejects anyway).
-#[allow(clippy::manual_clamp)] // intentional min/max chain; see doc above re: clamp panic risk
+/// narrow 200k window automatically compacts earlier. Capped at
+/// [`DEFAULT_WARNING_THRESHOLD`], so the result is always in a sane range.
+///
+/// The result is ALWAYS strictly below the `critical` line: a configured
+/// `critical_threshold` of e.g. 0.35 ("compact earlier") must still produce a
+/// valid warning/critical ORDERING — otherwise the startup threshold-ordering
+/// gate rejects the whole budget and the run loses compaction AND critical
+/// escalation (only a warn! is emitted). The auto line therefore lands at most
+/// at `critical * 0.9`, and the [`MIN_AUTO_WARNING_THRESHOLD`] floor applies
+/// only where it does not push the line past the critical.
 fn window_aware_warning_default(usable: u64, critical: f64) -> f64 {
     if usable == 0 {
-        return DEFAULT_WARNING_THRESHOLD.min(critical);
+        return DEFAULT_WARNING_THRESHOLD.min(critical * 0.9);
     }
     let spike_fraction = WARNING_SPIKE_HEADROOM_TOKENS / usable as f64;
     (critical - spike_fraction)
-        .min(DEFAULT_WARNING_THRESHOLD)
-        .max(MIN_AUTO_WARNING_THRESHOLD)
+        .clamp(MIN_AUTO_WARNING_THRESHOLD, DEFAULT_WARNING_THRESHOLD)
+        .min(critical * 0.9)
 }
 
 /// Historical fixed count of recent messages compaction keeps verbatim (never
@@ -209,10 +259,11 @@ struct DerivedBudget {
 ///     [`DEFAULT_OUTPUT_RESERVE`]
 ///
 /// `usable = window.saturating_sub(reserve)`, floored at [`MIN_USABLE_BUDGET`]
-/// so a mis-declared window can never collapse the budget. Static (no harness
-/// involvement): a 200k-window model and a 1M-window model get proportionally
-/// different absolute compaction trigger points once the warning/critical
-/// fractions are applied.
+/// so a mis-declared window can never collapse the budget — but never ABOVE the
+/// window itself (see [`usable_budget`]). Static (no harness involvement): a
+/// 200k-window model and a 1M-window model get proportionally different
+/// absolute compaction trigger points once the warning/critical fractions are
+/// applied.
 fn derive_token_budget(primary: Option<&ProviderConfig>, model: Option<&str>) -> DerivedBudget {
     let caps = model.and_then(capabilities_for);
     let (window, source) = primary
@@ -225,7 +276,7 @@ fn derive_token_budget(primary: Option<&ProviderConfig>, model: Option<&str>) ->
         .map(u64::from)
         .or_else(|| caps.map(|c| u64::from(c.max_output_tokens)))
         .unwrap_or(DEFAULT_OUTPUT_RESERVE);
-    let usable = window.saturating_sub(reserve).max(MIN_USABLE_BUDGET);
+    let usable = usable_budget(window, reserve);
     DerivedBudget {
         usable,
         window,
@@ -514,6 +565,17 @@ pub struct ContextBudgetRefiner {
     /// [`derive_token_budget`]'s reserve precedence for that provider).
     primary_provider_key: String,
     primary_max_tokens: Option<u32>,
+    /// Declared context window + max-output reserve PER PROVIDER, keyed by the
+    /// lower-cased provider key.
+    ///
+    /// The primary's declared window may only size the primary's own runs. A
+    /// run served by another provider (an explicit per-run provider
+    /// directive, or a per-hint override) has to be sized by THAT
+    /// provider's window — sizing it by the primary's turned a 32k-window
+    /// provider's run into a 200k-window budget, and the prompt gate then
+    /// admitted ~6x the model's real input capacity on every turn.
+    provider_windows: HashMap<String, u32>,
+    provider_max_tokens: HashMap<String, u32>,
 }
 
 /// Capture the refinement inputs from `[context_budget]`. Returns `None`
@@ -536,10 +598,30 @@ pub fn build_context_budget_refiner(
             .providers
             .get(primary_provider_key)
             .and_then(|p| p.max_tokens),
+        provider_windows: config
+            .providers
+            .iter()
+            .filter_map(|(name, p)| p.context_window.map(|w| (name.to_ascii_lowercase(), w)))
+            .collect(),
+        provider_max_tokens: config
+            .providers
+            .iter()
+            .filter_map(|(name, p)| p.max_tokens.map(|m| (name.to_ascii_lowercase(), m)))
+            .collect(),
     })
 }
 
 impl ContextBudgetRefiner {
+    /// The primary's declared context window, if it declared one.
+    ///
+    /// The refiner does not store the primary's window separately: the
+    /// caller threads it in per run as the `window_override` (it is the
+    /// primary's `[providers]` entry, resolved at boot). This helper keeps
+    /// that plumbing in one place for the failover-chain arm.
+    fn primary_window_override(&self, window_override: Option<u32>) -> Option<u32> {
+        window_override.filter(|&w| w > 0)
+    }
+
     /// Re-key `base` (the chain-minimum startup config) onto the model serving
     /// this run.
     ///
@@ -575,18 +657,44 @@ impl ContextBudgetRefiner {
         if caps.is_none() && window_override.is_none_or(|w| w == 0) {
             return base.clone();
         }
-        let window = u64::from(resolve_context_window_with_override(
-            window_override,
-            serving_model,
-        ));
-        let reserve = if serving_provider.eq_ignore_ascii_case(&self.primary_provider_key) {
+        // The window may only come from the PRIMARY's declaration when the
+        // serving provider IS the primary. A different serving provider is
+        // sized by its OWN declared window (falling back to the model
+        // catalog), never by the primary's — otherwise a run served by a
+        // 32k-window provider is budgeted at the primary's 200k window and
+        // the prompt gate admits far more than the model can take.
+        let serving_key = serving_provider.to_ascii_lowercase();
+        let is_primary = serving_key == self.primary_provider_key.to_ascii_lowercase();
+        let window = if is_primary {
+            u64::from(resolve_context_window_with_override(
+                window_override,
+                serving_model,
+            ))
+        } else {
+            // The failover CHAIN fronts the primary route, so a run served
+            // through it is sized by the primary — its name is a wrapper
+            // name, not a provider key.
+            let chain_window = if serving_provider.eq_ignore_ascii_case(FAILOVER_CHAIN_NAME) {
+                self.primary_window_override(window_override)
+            } else {
+                None
+            };
+            chain_window
+                .or_else(|| self.provider_windows.get(&serving_key).copied())
+                .map(u64::from)
+                .unwrap_or_else(|| u64::from(resolve_context_window(serving_model)))
+        };
+        let reserve = if is_primary {
             self.primary_max_tokens.map(u64::from)
         } else {
-            None
+            self.provider_max_tokens
+                .get(&serving_key)
+                .copied()
+                .map(u64::from)
         }
         .or_else(|| caps.map(|c| u64::from(c.max_output_tokens)))
         .unwrap_or(DEFAULT_OUTPUT_RESERVE);
-        let serving_usable = window.saturating_sub(reserve).max(MIN_USABLE_BUDGET);
+        let serving_usable = usable_budget(window, reserve);
 
         let token_budget = match self.explicit_token_budget {
             Some(explicit) => explicit,
@@ -975,12 +1083,62 @@ mod tests {
 
     #[test]
     fn derive_floors_tiny_or_inverted_window() {
-        // window < reserve must not underflow/collapse the budget.
+        // window < reserve must not underflow/collapse the budget — and the
+        // budget must never exceed the model's real window.
+        //
+        // The floor (`MIN_USABLE_BUDGET` = 16384) used to be applied
+        // UNCONDITIONALLY, so a provider declaring `context_window = 4000`
+        // was handed a 16384-token budget — 4x the window it actually has.
+        // The prompt gate then admitted far more than the model could take
+        // and every turn failed with a context-length error. The floor now
+        // applies only when the window itself is larger than it.
         let mut pc = ProviderConfig::test_config("x");
         pc.context_window = Some(4_000);
         pc.max_tokens = Some(8_000);
         let d = derive_token_budget(Some(&pc), Some("x"));
-        assert_eq!(d.usable, MIN_USABLE_BUDGET);
+        assert!(
+            d.usable > 0,
+            "a tiny window must not collapse the budget to zero"
+        );
+        assert!(
+            d.usable <= d.window,
+            "the usable budget must never exceed the declared window \
+             (got usable={} window={})",
+            d.usable,
+            d.window
+        );
+        assert_eq!(
+            d.usable, 4_000,
+            "the declared window wins when it is below the floor"
+        );
+    }
+
+    #[test]
+    fn derive_keeps_the_floor_only_when_the_window_can_afford_it() {
+        // A window exactly AT the floor with a smaller reserve: what fits is
+        // `window - reserve`, and the floor must not inflate it back to the
+        // whole window.
+        let mut pc = ProviderConfig::test_config("y");
+        pc.context_window = Some(u32::try_from(MIN_USABLE_BUDGET).unwrap_or(u32::MAX));
+        pc.max_tokens = Some(8_192);
+        let d = derive_token_budget(Some(&pc), Some("y"));
+        assert_eq!(
+            d.usable,
+            MIN_USABLE_BUDGET - 8_192,
+            "the floor must not push the budget past what the window fits"
+        );
+        assert!(d.usable <= d.window);
+    }
+
+    #[test]
+    fn derive_applies_the_floor_when_the_window_is_larger() {
+        // A window well above the floor keeps the floor as its lower bound.
+        let mut pc = ProviderConfig::test_config("z");
+        pc.context_window = Some(1_000_000);
+        pc.max_tokens = Some(64_000);
+        let d = derive_token_budget(Some(&pc), Some("z"));
+        assert_eq!(d.usable, 1_000_000 - 64_000);
+        assert!(d.usable > MIN_USABLE_BUDGET);
     }
 
     #[test]
