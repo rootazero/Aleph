@@ -488,9 +488,10 @@ pub async fn handle_get_full_config(
 /// Handle config.patch RPC method
 ///
 /// Delegates to `ConfigPatcher` for the full pipeline: schema validation,
-/// conflict detection, backup, and atomic save. Channel secrets are stripped
-/// to the vault by `store_and_strip_channel_secrets` before the patch (LLM
-/// provider keys go through `vault_store`, never the patch body). When
+/// conflict detection, backup, and atomic save. Channel secrets are lifted out
+/// of the patch and stored in the vault only AFTER the patch has been applied
+/// (LLM provider keys go through `vault_store`, never the patch body), so a
+/// dry run or a rejected patch never rotates a live credential. When
 /// `health_check` is set on a `providers.*` patch, the affected provider is
 /// probed for reachability and the verdict returned in `result.health_check`.
 ///
@@ -548,19 +549,30 @@ pub async fn handle_patch_config(
     }
 
     let path = patch_request.path.clone();
+    let dry_run = patch_request.dry_run;
 
+    // A channel secret is the one part of a config patch that must not become
+    // live before the patch it belongs to is known to be good. Persisting it
+    // first meant a DRY RUN rotated the live credential (the run changed no
+    // config, yet the secret it carried was already stored), and a patch the
+    // validator REJECTED left the new credential live over a config that
+    // never changed — a rotation the operator did not get, on a credential
+    // they thought they were only previewing.
+    //
+    // So the secret is extracted here (held in memory, never written) and
+    // stored only after the patch has been applied.
+    let mut pending_secrets: Vec<super::channel::ChannelSecret> = Vec::new();
     if let Some(channel_id) = path.strip_prefix("channels.") {
-        if let serde_json::Value::Object(ref mut _map) = patch_request.patch {
-            let stripped_count = super::channel::store_and_strip_channel_secrets(
+        if patch_request.patch.is_object() {
+            pending_secrets = super::channel::extract_channel_secrets(
                 channel_id,
                 &mut patch_request.patch,
-                &vault,
             );
-            if stripped_count > 0 {
+            if !pending_secrets.is_empty() {
                 tracing::info!(
                     channel = %channel_id,
-                    count = stripped_count,
-                    "Routed channel secrets to vault before config patch"
+                    count = pending_secrets.len(),
+                    "Held channel secrets out of the config patch until it is applied"
                 );
             }
         }
@@ -577,6 +589,32 @@ pub async fn handle_patch_config(
             );
         }
     };
+
+    // Now that the patch is applied, the channel secrets it carried may
+    // become live. A dry run applied nothing, so it must change no
+    // credential either. A failure here is reported as a failure: the
+    // credential stays as it was, so the operator's rotation did not
+    // half-happen, and the error names the field that did not land.
+    if !dry_run {
+        for secret in &pending_secrets {
+            if let Err(e) = vault.store_secret(&secret.key, &secret.value) {
+                tracing::error!(
+                    channel = %secret.key,
+                    field = secret.field,
+                    error = %e,
+                    "Config applied, but the channel secret could not be stored"
+                );
+                return JsonRpcResponse::error(
+                    req.id,
+                    INTERNAL_ERROR,
+                    format!(
+                        "Config applied, but storing the channel secret '{}' failed: {e}",
+                        secret.field
+                    ),
+                );
+            }
+        }
+    }
 
     // Broadcast ConfigChanged event — but only when something actually changed.
     // The patcher now treats a value-identical patch as a no-op (empty diff,
