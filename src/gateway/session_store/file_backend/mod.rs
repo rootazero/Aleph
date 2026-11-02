@@ -1069,11 +1069,17 @@ impl SessionStore for FileSessionStore {
             meta.input_tokens += msg.input_tokens;
             meta.output_tokens += msg.output_tokens;
         }
-        let path = self.transcript_path(&new_key_str);
         tokio::fs::create_dir_all(self.session_dir(&new_key_str))
             .await
             .map_err(|e| SessionStoreError::DatabaseError(format!("Create dir failed: {e}")))?;
-        write_transcript_atomic(&path, &checkpoint_messages).await?;
+        // Lock FIRST: the transcript rewrite and the metadata commit are one
+        // critical section. Writing the transcript before taking the lock
+        // left a window in which a concurrent `append_message` on the
+        // branched session could write between the rewrite and the commit
+        // and be lost by the rewrite.
+        let mut guard = self.lock_metadata(&new_key_str).await?;
+        self.write_transcript_locked(&guard, &new_key_str, &checkpoint_messages)
+            .await?;
         // P1 data isolation: this is a freshly-created session (new_key), so
         // it gets the same owner/scope stamp `get_or_create`'s CREATE branch
         // gives every other new session — no-op outside any `scope::
@@ -1081,7 +1087,6 @@ impl SessionStore for FileSessionStore {
         // legacy/owner-owned under `visibility::session_visible`, invisible
         // to the member who just created it (see the trait doc on this fn).
         meta.stamp_attribution();
-        let mut guard = self.lock_metadata(&new_key_str).await?;
         guard.insert(meta);
         let meta = guard.commit().await?;
         self.emit_session_changed(&new_key_str, "checkpoint-branch", Some(&meta));
