@@ -52,7 +52,7 @@ impl DreamStage for MentionWeaveStage {
         };
 
         // Parse + scan off the async runtime (CPU-bound over the whole corpus).
-        let edges = tokio::task::spawn_blocking(move || {
+        let edges = super::compute_owned("mention_weave", move || {
             let docs: Vec<MentionDoc> = hydrated
                 .into_iter()
                 .filter_map(|r| {
@@ -70,8 +70,7 @@ impl DreamStage for MentionWeaveStage {
                 .collect();
             scan_mentions(&docs)
         })
-        .await
-        .map_err(|e| AlephError::other(format!("mention_weave join: {e}")))?;
+        .await?;
 
         let (edges, dropped) = apply_cycle_cap(edges, MAX_MENTIONS_PER_CYCLE);
         if dropped > 0 {

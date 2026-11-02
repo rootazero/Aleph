@@ -26,6 +26,8 @@ pub struct BuiltinToolConfig {
     pub generation_registry: Option<Arc<RwLock<GenerationProviderRegistry>>>,
     /// Shared config handle for `ConfigReadTool`
     pub config: Option<Arc<tokio::sync::RwLock<Config>>>,
+    /// Stable Memory source; constructing a registry does not start it.
+    pub memory_runtime: Option<Arc<crate::memory::runtime::MemoryRuntime>>,
     /// Memory backend for `memory_search` and `memory_browse` tools
     pub memory_db: Option<MemoryBackend>,
     /// Raw session memory, independent of the derived notes/vector backend.

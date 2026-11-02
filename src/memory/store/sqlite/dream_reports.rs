@@ -118,37 +118,34 @@ pub struct DreamPipelineStat {
 impl SqliteMemoryBackend {
     /// Insert a dream pipeline report into the audit log.
     pub fn insert_dream_report(&self, report: &PersistedDreamReport) -> Result<(), AlephError> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| AlephError::config(format!("Mutex poisoned: {e}")))?;
-
-        conn.execute(
-            "INSERT INTO dream_reports \
+        self.with_connection(|conn| {
+            conn.execute(
+                "INSERT INTO dream_reports \
              (id, pipeline_type, started_at, finished_at, duration_ms, \
               synthesis_count, notes_consolidated, notes_woven, notes_archived, \
               feedback_distilled, errors, namespace, evolution_json, decision_json) \
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
-            params![
-                report.id,
-                report.pipeline_type,
-                report.started_at,
-                report.finished_at,
-                report.duration_ms,
-                report.synthesis_count,
-                report.notes_consolidated,
-                report.notes_woven,
-                report.notes_archived,
-                report.feedback_distilled,
-                report.errors,
-                report.namespace,
-                report.evolution_json,
-                report.decision_json,
-            ],
-        )
-        .map_err(|e| AlephError::config(format!("insert_dream_report: {e}")))?;
+                params![
+                    report.id,
+                    report.pipeline_type,
+                    report.started_at,
+                    report.finished_at,
+                    report.duration_ms,
+                    report.synthesis_count,
+                    report.notes_consolidated,
+                    report.notes_woven,
+                    report.notes_archived,
+                    report.feedback_distilled,
+                    report.errors,
+                    report.namespace,
+                    report.evolution_json,
+                    report.decision_json,
+                ],
+            )
+            .map_err(|e| AlephError::config(format!("insert_dream_report: {e}")))?;
 
-        Ok(())
+            Ok(())
+        })
     }
 
     /// Query recent dream reports, ordered by `started_at` descending.
@@ -164,50 +161,47 @@ impl SqliteMemoryBackend {
         namespace: Option<&str>,
         limit: usize,
     ) -> Result<Vec<PersistedDreamReport>, AlephError> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| AlephError::config(format!("Mutex poisoned: {e}")))?;
-
-        let mut stmt = conn
-            .prepare(
-                "SELECT id, pipeline_type, started_at, finished_at, duration_ms, \
+        self.with_connection(|conn| {
+            let mut stmt = conn
+                .prepare(
+                    "SELECT id, pipeline_type, started_at, finished_at, duration_ms, \
                  synthesis_count, notes_consolidated, notes_woven, notes_archived, \
                  feedback_distilled, errors, namespace, evolution_json, decision_json \
                  FROM dream_reports \
                  WHERE (?1 IS NULL OR namespace = ?1) \
                  ORDER BY started_at DESC LIMIT ?2",
-            )
-            .map_err(|e| AlephError::config(format!("recent_dream_reports prepare: {e}")))?;
+                )
+                .map_err(|e| AlephError::config(format!("recent_dream_reports prepare: {e}")))?;
 
-        let rows = stmt
-            .query_map(params![namespace, limit as i64], |row| {
-                Ok(PersistedDreamReport {
-                    id: row.get("id")?,
-                    pipeline_type: row.get("pipeline_type")?,
-                    started_at: row.get("started_at")?,
-                    finished_at: row.get("finished_at")?,
-                    duration_ms: row.get("duration_ms")?,
-                    synthesis_count: row.get("synthesis_count")?,
-                    notes_consolidated: row.get("notes_consolidated")?,
-                    notes_woven: row.get("notes_woven")?,
-                    notes_archived: row.get("notes_archived")?,
-                    feedback_distilled: row.get("feedback_distilled")?,
-                    errors: row.get("errors")?,
-                    namespace: row.get("namespace")?,
-                    evolution_json: row.get("evolution_json")?,
-                    decision_json: row.get("decision_json")?,
+            let rows = stmt
+                .query_map(params![namespace, limit as i64], |row| {
+                    Ok(PersistedDreamReport {
+                        id: row.get("id")?,
+                        pipeline_type: row.get("pipeline_type")?,
+                        started_at: row.get("started_at")?,
+                        finished_at: row.get("finished_at")?,
+                        duration_ms: row.get("duration_ms")?,
+                        synthesis_count: row.get("synthesis_count")?,
+                        notes_consolidated: row.get("notes_consolidated")?,
+                        notes_woven: row.get("notes_woven")?,
+                        notes_archived: row.get("notes_archived")?,
+                        feedback_distilled: row.get("feedback_distilled")?,
+                        errors: row.get("errors")?,
+                        namespace: row.get("namespace")?,
+                        evolution_json: row.get("evolution_json")?,
+                        decision_json: row.get("decision_json")?,
+                    })
                 })
-            })
-            .map_err(|e| AlephError::config(format!("recent_dream_reports query: {e}")))?;
+                .map_err(|e| AlephError::config(format!("recent_dream_reports query: {e}")))?;
 
-        let mut results = Vec::new();
-        for row in rows {
-            results.push(
-                row.map_err(|e| AlephError::config(format!("recent_dream_reports row: {e}")))?,
-            );
-        }
-        Ok(results)
+            let mut results = Vec::new();
+            for row in rows {
+                results.push(
+                    row.map_err(|e| AlephError::config(format!("recent_dream_reports row: {e}")))?,
+                );
+            }
+            Ok(results)
+        })
     }
 
     /// Per-corpus dream history, most recently active first, capped at `limit`.
@@ -220,16 +214,12 @@ impl SqliteMemoryBackend {
         &self,
         limit: usize,
     ) -> Result<Vec<DreamNamespaceStat>, AlephError> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| AlephError::config(format!("Mutex poisoned: {e}")))?;
-
-        // `id` breaks the ORDER BY tie deterministically: the base cycle and its
-        // project sub-cycles can finish inside the same second.
-        let mut stmt = conn
-            .prepare(
-                "SELECT namespace, runs, started_at, pipeline_type, decision_json FROM ( \
+        self.with_connection(|conn| {
+            // `id` breaks the ORDER BY tie deterministically: the base cycle and its
+            // project sub-cycles can finish inside the same second.
+            let mut stmt = conn
+                .prepare(
+                    "SELECT namespace, runs, started_at, pipeline_type, decision_json FROM ( \
                    SELECT namespace, started_at, pipeline_type, decision_json, \
                           COUNT(*) OVER (PARTITION BY namespace) AS runs, \
                           ROW_NUMBER() OVER ( \
@@ -238,28 +228,31 @@ impl SqliteMemoryBackend {
                      FROM dream_reports \
                  ) WHERE rn = 1 \
                  ORDER BY started_at DESC LIMIT ?1",
-            )
-            .map_err(|e| AlephError::config(format!("dream_namespace_rollup prepare: {e}")))?;
+                )
+                .map_err(|e| AlephError::config(format!("dream_namespace_rollup prepare: {e}")))?;
 
-        let rows = stmt
-            .query_map(params![limit as i64], |row| {
-                Ok(DreamNamespaceStat {
-                    namespace: row.get("namespace")?,
-                    runs: row.get::<_, i64>("runs")?.max(0) as u64,
-                    last_started_at: row.get("started_at")?,
-                    last_pipeline_type: row.get("pipeline_type")?,
-                    last_decision_json: row.get("decision_json")?,
+            let rows = stmt
+                .query_map(params![limit as i64], |row| {
+                    Ok(DreamNamespaceStat {
+                        namespace: row.get("namespace")?,
+                        runs: row.get::<_, i64>("runs")?.max(0) as u64,
+                        last_started_at: row.get("started_at")?,
+                        last_pipeline_type: row.get("pipeline_type")?,
+                        last_decision_json: row.get("decision_json")?,
+                    })
                 })
-            })
-            .map_err(|e| AlephError::config(format!("dream_namespace_rollup query: {e}")))?;
+                .map_err(|e| AlephError::config(format!("dream_namespace_rollup query: {e}")))?;
 
-        let mut results = Vec::new();
-        for row in rows {
-            results.push(
-                row.map_err(|e| AlephError::config(format!("dream_namespace_rollup row: {e}")))?,
-            );
-        }
-        Ok(results)
+            let mut results = Vec::new();
+            for row in rows {
+                results.push(
+                    row.map_err(|e| {
+                        AlephError::config(format!("dream_namespace_rollup row: {e}"))
+                    })?,
+                );
+            }
+            Ok(results)
+        })
     }
 
     /// Dream activity grouped by `pipeline_type` for runs of `namespace` started
@@ -279,14 +272,10 @@ impl SqliteMemoryBackend {
         namespace: &str,
         since_started_at: i64,
     ) -> Result<Vec<DreamPipelineStat>, AlephError> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| AlephError::config(format!("Mutex poisoned: {e}")))?;
-
-        let mut stmt = conn
-            .prepare(
-                "SELECT pipeline_type, count(*) AS runs, \
+        self.with_connection(|conn| {
+            let mut stmt = conn
+                .prepare(
+                    "SELECT pipeline_type, count(*) AS runs, \
                  COALESCE(sum(synthesis_count), 0) AS synthesis_sum, \
                  COALESCE(sum(notes_consolidated), 0) AS consolidated_sum, \
                  COALESCE(sum(notes_woven), 0) AS woven_sum, \
@@ -296,34 +285,35 @@ impl SqliteMemoryBackend {
                  WHERE started_at > ?1 AND namespace = ?2 \
                  GROUP BY pipeline_type \
                  ORDER BY pipeline_type ASC",
-            )
-            .map_err(|e| {
-                AlephError::config(format!("dream_report_distribution_since prepare: {e}"))
-            })?;
+                )
+                .map_err(|e| {
+                    AlephError::config(format!("dream_report_distribution_since prepare: {e}"))
+                })?;
 
-        let rows = stmt
-            .query_map(params![since_started_at, namespace], |row| {
-                Ok(DreamPipelineStat {
-                    pipeline_type: row.get("pipeline_type")?,
-                    runs: row.get::<_, i64>("runs")?.max(0) as u64,
-                    synthesis_sum: row.get("synthesis_sum")?,
-                    consolidated_sum: row.get("consolidated_sum")?,
-                    woven_sum: row.get("woven_sum")?,
-                    archived_sum: row.get("archived_sum")?,
-                    feedback_distilled_sum: row.get("feedback_distilled_sum")?,
+            let rows = stmt
+                .query_map(params![since_started_at, namespace], |row| {
+                    Ok(DreamPipelineStat {
+                        pipeline_type: row.get("pipeline_type")?,
+                        runs: row.get::<_, i64>("runs")?.max(0) as u64,
+                        synthesis_sum: row.get("synthesis_sum")?,
+                        consolidated_sum: row.get("consolidated_sum")?,
+                        woven_sum: row.get("woven_sum")?,
+                        archived_sum: row.get("archived_sum")?,
+                        feedback_distilled_sum: row.get("feedback_distilled_sum")?,
+                    })
                 })
-            })
-            .map_err(|e| {
-                AlephError::config(format!("dream_report_distribution_since query: {e}"))
-            })?;
+                .map_err(|e| {
+                    AlephError::config(format!("dream_report_distribution_since query: {e}"))
+                })?;
 
-        let mut results = Vec::new();
-        for row in rows {
-            results.push(row.map_err(|e| {
-                AlephError::config(format!("dream_report_distribution_since row: {e}"))
-            })?);
-        }
-        Ok(results)
+            let mut results = Vec::new();
+            for row in rows {
+                results.push(row.map_err(|e| {
+                    AlephError::config(format!("dream_report_distribution_since row: {e}"))
+                })?);
+            }
+            Ok(results)
+        })
     }
 }
 

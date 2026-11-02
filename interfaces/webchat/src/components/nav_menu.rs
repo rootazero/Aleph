@@ -97,6 +97,7 @@ pub fn NavMenu() -> impl IntoView {
         <div class="relative border-t border-border-subtle px-2.5 py-1.5 flex-shrink-0">
             // Trigger
             <button
+                data-panel-nav-toggle=""
                 on:click=move |_| open.update(|v| *v = !*v)
                 class=move || {
                     let base = "w-full flex items-center gap-2.5 px-2.5 py-1.5 rounded-lg text-nav";
@@ -141,6 +142,7 @@ pub fn NavMenu() -> impl IntoView {
                         let is_active = move || current.get() == m;
                         view! {
                             <button
+                                data-panel-nav=route
                                 on:click=move |_| {
                                     open.set(false);
                                     nav(route, Default::default());

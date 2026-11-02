@@ -1248,6 +1248,28 @@ pub async fn handle_connection(
                                             }
                                         }
 
+                                        #[cfg(feature = "native-qa")]
+                                        if req.method == "connect" {
+                                            let snapshot = dispatch::CallerSnapshot::read(
+                                                &ctx.connections,
+                                                &conn_id,
+                                                ctx.client_is_local,
+                                            )
+                                            .await;
+                                            let observer = ctx.middleware_chain.native_qa_observer();
+                                            let authorized = serde_json::from_str::<serde_json::Value>(&response)
+                                                .ok()
+                                                .and_then(|value| value.get("result").cloned())
+                                                .and_then(|result| result.get("authorized").and_then(serde_json::Value::as_bool))
+                                                .unwrap_or(false);
+                                            crate::gateway::native_qa::observe_connect(
+                                                &observer,
+                                                snapshot.verified_user,
+                                                snapshot.device_id,
+                                                authorized,
+                                            );
+                                        }
+
                                         response
                                     }
                                 }

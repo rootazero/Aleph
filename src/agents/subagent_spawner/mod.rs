@@ -61,6 +61,7 @@ pub struct SpawnerBase {
     pub raw_memory_writer: Option<Arc<dyn RawMemoryStore>>,
     /// Optional capture-filter registry threaded into the delegation emit.
     pub capture_registry: Option<Arc<MemoryExtensionRegistry>>,
+    pub memory_runtime: Option<std::sync::Weak<crate::memory::runtime::MemoryRuntime>>,
     /// Parent agent identity stamped onto the emitted `RawMemory` row.
     /// `None` falls back to `"default"` to match the A2A path's behaviour.
     pub parent_agent_id: Option<String>,
@@ -1006,7 +1007,9 @@ pub async fn spawn(base: &SpawnerBase, req: SpawnRequest<'_>) -> Result<LoopRunR
                         "[no final response: the sub-agent stopped at its iteration limit]"
                             .to_string()
                     }
-                    _ => "[no final response: the sub-agent ended without producing one]".to_string(),
+                    _ => {
+                        "[no final response: the sub-agent ended without producing one]".to_string()
+                    }
                 };
                 if let Some(ref parent_str) = base.parent_session_id {
                     if let Some(parent_id) = parent_session_id_of(parent_str) {
@@ -1049,7 +1052,9 @@ pub async fn spawn(base: &SpawnerBase, req: SpawnRequest<'_>) -> Result<LoopRunR
                         base.parent_session_id.clone(),
                         req.agent_def.id.clone(),
                         base.capture_registry.clone(),
-                    );
+                        base.memory_runtime.clone(),
+                    )
+                    .await;
                 }
 
                 Ok(result)

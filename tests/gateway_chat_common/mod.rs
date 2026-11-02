@@ -209,7 +209,6 @@ pub fn orchestrator_with_stub(runner: Arc<StubHarnessRunner>) -> Arc<Orchestrato
         default_max_iterations: 200,
         power: None,
         memory_context_provider: None,
-        memory_backend: None,
         raw_memory_store: None,
         memory_project_scoped: false,
         tool_catalog: None,

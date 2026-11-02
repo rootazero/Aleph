@@ -31,6 +31,35 @@ pub async fn insert_with_capture_filter(
     Ok(decision)
 }
 
+pub(crate) async fn insert_with_runtime_capture_filter(
+    store: &Arc<dyn RawMemoryStore>,
+    registry: &Arc<MemoryExtensionRegistry>,
+    runtime: Option<&std::sync::Weak<crate::memory::runtime::MemoryRuntime>>,
+    ctx: &CaptureCtx,
+    raw: RawMemory,
+) -> Result<CaptureDecision, AlephError> {
+    let Some(runtime) = runtime else {
+        return insert_with_capture_filter(store, registry, ctx, raw).await;
+    };
+    let operation = runtime
+        .upgrade()
+        .and_then(|runtime| runtime.operation().ok());
+    let Some(operation) = operation else {
+        store.insert_raw_memory(&raw).await?;
+        return Ok(CaptureDecision::Allow);
+    };
+    let store = store.clone();
+    let registry = registry.clone();
+    let ctx = ctx.clone();
+    operation
+        .run(async move { insert_with_capture_filter(&store, &registry, &ctx, raw).await })
+        .await
+}
+
+#[cfg(test)]
+#[path = "capture_lifecycle_tests.rs"]
+mod lifecycle;
+
 #[cfg(test)]
 mod tests {
     use super::*;

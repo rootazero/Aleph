@@ -1,4 +1,4 @@
-use crate::exec::secret_patterns::secret_masker_patterns;
+use crate::exec::secret_patterns::{mask_incomplete_private_key, secret_masker_patterns};
 use regex::{NoExpand, Regex};
 use std::borrow::Cow;
 use std::sync::{Arc, LazyLock, RwLock};
@@ -104,7 +104,7 @@ impl SecretMasker {
         // `replace_all` returns a borrow on no-match; only promote to an
         // owned accumulator when a pattern actually fires, so clean text
         // costs zero copies instead of one full allocation per pattern.
-        let mut result = Cow::Borrowed(text);
+        let mut result = mask_incomplete_private_key(text);
         for (regex, replacement) in SECRET_PATTERNS.iter() {
             if let Cow::Owned(masked) = regex.replace_all(&result, *replacement) {
                 result = Cow::Owned(masked);
@@ -568,6 +568,22 @@ MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQ...
     /// file ships the header and the first body lines. A key body continues
     /// past the text, so the only safe reading is "from the BEGIN marker to
     /// the end of the text".
+    #[test]
+    fn complete_private_keys_preserve_surrounding_prose() {
+        let input = "before\n-----BEGIN RSA PRIVATE KEY-----\nFIRSTBODY\n-----END RSA PRIVATE KEY-----\nbetween\n-----BEGIN EC PRIVATE KEY-----\nSECONDBODY\n-----END EC PRIVATE KEY-----\nafter";
+        let output = SecretMasker::new().mask(input);
+        assert_eq!(output, "before\n-----BEGIN PRIVATE KEY-----\n***REDACTED***\n-----END PRIVATE KEY-----\nbetween\n-----BEGIN PRIVATE KEY-----\n***REDACTED***\n-----END PRIVATE KEY-----\nafter");
+    }
+
+    #[test]
+    fn complete_block_before_truncated_key_keeps_only_safe_prefix() {
+        let input = "-----BEGIN RSA PRIVATE KEY-----\nFIRSTBODY\n-----END RSA PRIVATE KEY-----\nsafe prose\n-----BEGIN EC PRIVATE KEY-----\nTRUNCATEDBODY";
+        let masker = SecretMasker::new();
+        let output = masker.mask(input);
+        assert_eq!(output, "-----BEGIN PRIVATE KEY-----\n***REDACTED***\n-----END PRIVATE KEY-----\nsafe prose\n-----BEGIN PRIVATE KEY----- ***REDACTED***");
+        assert_eq!(masker.mask(&output), output);
+    }
+
     #[test]
     fn a_private_key_without_its_end_marker_is_redacted() {
         let masker = SecretMasker::new();

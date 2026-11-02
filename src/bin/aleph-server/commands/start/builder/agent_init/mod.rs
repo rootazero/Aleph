@@ -50,9 +50,6 @@ pub(in crate::commands::start) struct AgentHandlersResult {
     pub agent_registry: Option<Arc<AgentRegistry>>,
     pub default_provider: Option<Arc<dyn alephcore::providers::AiProvider>>,
     pub tool_catalog: Option<Arc<alephcore::tool_metadata::ToolCatalog>>,
-    pub embedder: Option<std::sync::Arc<dyn alephcore::memory::EmbeddingProvider>>,
-    pub compression_service:
-        Option<std::sync::Arc<alephcore::memory::compression::CompressionService>>,
     /// Multi-provider registry for routing and hot-switching
     pub multi_registry: Option<Arc<alephcore::MultiProviderRegistry>>,
     /// Deferred injection cell for `ChannelRegistry` (created after agent handlers)
@@ -105,16 +102,9 @@ pub(in crate::commands::start) struct AgentHandlersResult {
     pub orchestrator_cell: Option<
         std::sync::Arc<std::sync::OnceLock<std::sync::Arc<alephcore::orchestrator::Orchestrator>>>,
     >,
-    /// Phase 6 follow-up: `MemoryContextProvider` exposed for the orchestrator
-    /// path so `AgentHarnessRunner` can build the per-turn system prompt with
-    /// curated memory + hybrid retrieval. `ExecutionEngine` receives a clone via
-    /// `with_memory_context_provider`; the orchestrator path needs its own
-    /// reference because it does not hold an `ExecutionEngine`.
-    pub memory_context_provider: Option<Arc<alephcore::thinker::MemoryContextProvider>>,
-    /// Raw memory store exposed for the orchestrator path so the per-run
-    /// `ContextCompactor` can reuse hierarchical session summaries for
-    /// zero-API-cost compaction.
-    pub memory_backend: Option<alephcore::memory::store::MemoryBackend>,
+    /// Stable prompt entry; concrete context services belong to the runtime bundle.
+    pub memory_context_provider:
+        Option<Arc<alephcore::thinker::memory_context_provider::RuntimeMemoryContext>>,
     /// Memory-extension registry (capture-filter + `on_delegation` hooks).
     /// Exposed so the A2A outbound `A2ASubAgent` can route its delegation
     /// writes through the same capture filter the engine/compactor use;
@@ -135,7 +125,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
     full_config: &FullGatewayConfig,
     app_config: &alephcore::Config,
     app_config_arc: Arc<tokio::sync::RwLock<alephcore::Config>>,
-    memory_db: &alephcore::memory::store::MemoryBackend,
+    memory_runtime: Arc<alephcore::memory::runtime::MemoryRuntime>,
     raw_store: Arc<dyn alephcore::memory::store::raw_memory::RawMemoryStore>,
     workspace_manager: Option<Arc<alephcore::gateway::AgentEnvStore>>,
     agent_manager: Arc<alephcore::AgentManager>,
@@ -152,9 +142,6 @@ pub(in crate::commands::start) async fn register_agent_handlers(
     // `node_manage`. The same Arc the gateway auth layer and `cluster.enroll`
     // write through — a second store would fork the fleet roster.
     security_store: Arc<alephcore::gateway::security::SecurityStore>,
-    // Spec 5 Task 12: wiki orientation handle for DreamDaemon + MemoryContextProvider + tools.
-    orientation: Option<std::sync::Arc<dyn alephcore::memory::notes::orientation::NoteOrientation>>,
-    note_memory_dir: Option<std::path::PathBuf>,
     // Phase 3 Task 8: sandbox for exec-class tools.
     sandbox: Option<Arc<dyn alephcore::sandbox::Sandbox>>,
     // P4 T5: store tools dep seam — catalog cache and marketplace configs.
@@ -206,15 +193,6 @@ pub(in crate::commands::start) async fn register_agent_handlers(
     let tool_catalog = Arc::new(alephcore::tool_metadata::ToolCatalog::with_health(
         tool_health.clone(),
     ));
-    let mut embedder_out: Option<std::sync::Arc<dyn alephcore::memory::EmbeddingProvider>> = None;
-    // Long-lived embedding manager (B5.2): hoisted so the compound ingestor's
-    // embedding queue has a real producer/consumer instead of the manager
-    // being constructed locally and dropped.
-    let mut embedding_manager_out: Option<std::sync::Arc<alephcore::memory::EmbeddingManager>> =
-        None;
-    let mut compression_out: Option<
-        std::sync::Arc<alephcore::memory::compression::CompressionService>,
-    > = None;
     // Assigned unconditionally below (from `build_multi_provider_registry`)
     // before any read, so deferred init keeps the dead initial value out.
     let multi_reg: Option<Arc<alephcore::MultiProviderRegistry>>;
@@ -228,32 +206,17 @@ pub(in crate::commands::start) async fn register_agent_handlers(
     let mut orch_cell_out: Option<
         std::sync::Arc<std::sync::OnceLock<std::sync::Arc<alephcore::orchestrator::Orchestrator>>>,
     > = None;
-    // Phase 6 follow-up: hold the same MemoryContextProvider that gets injected
-    // into the (legacy) ExecutionEngine so the orchestrator path can build a
-    // system prompt with curated memory + hybrid retrieval.
-    let mut mcp_for_orchestrator: Option<Arc<alephcore::thinker::MemoryContextProvider>> = None;
+    let memory_default_agent = router.default_agent().to_owned();
+    let mcp_for_orchestrator = Some(Arc::new(
+        alephcore::thinker::memory_context_provider::RuntimeMemoryContext::new(
+            memory_runtime.clone(),
+        ),
+    ));
     // F5 (per-team usage): lift `resilience_db` out of the real-engine branch so
     // the `teams.usage` RPC handler can scan `task_traces` for ProviderUsage
     // events scoped to a team's members. `None` in the simulated branch (no
     // state.db == no historical usage to aggregate).
     let mut state_db_out: Option<Arc<alephcore::resilience::StateDatabase>> = None;
-
-    let resolve_note_memory_dir = || -> Option<std::path::PathBuf> {
-        if let Some(ref dir) = note_memory_dir {
-            return Some(dir.clone());
-        }
-        match alephcore::utils::paths::get_note_memory_dir() {
-            Ok(dir) => Some(dir),
-            Err(e) => {
-                if !daemon {
-                    eprintln!("Warning: Failed to resolve note memory directory: {e}.");
-                }
-                tracing::warn!(error = %e, "Failed to resolve note memory directory");
-                None
-            }
-        }
-    };
-    let note_dir = resolve_note_memory_dir();
 
     // Coord + snapshot stores (single shared connection to coord.db).
     let (coord_store, snapshot_store) = init_coord_and_snapshot(event_bus.clone(), daemon).await;
@@ -401,32 +364,6 @@ pub(in crate::commands::start) async fn register_agent_handlers(
     let dispatch_signal = std::sync::Arc::new(tokio::sync::Notify::new());
 
     if let Some(provider_registry) = provider_registry {
-        // Create embedding provider from app config for memory tools
-        let embedder: Option<std::sync::Arc<dyn alephcore::memory::EmbeddingProvider>> = {
-            let embedding_settings = &app_config.memory.embedding;
-            let manager = alephcore::memory::EmbeddingManager::new(embedding_settings.clone());
-            match manager.init().await {
-                Ok(()) => {
-                    let provider = manager.get_active_provider().await;
-                    if provider.is_some() && !daemon {
-                        println!("  Embedding provider initialized for memory tools");
-                    }
-                    // Keep the manager alive: its pending queue feeds the
-                    // compound ingestor's write-tail embedding flush.
-                    if provider.is_some() {
-                        embedding_manager_out = Some(std::sync::Arc::new(manager));
-                    }
-                    provider
-                }
-                Err(e) => {
-                    if !daemon {
-                        eprintln!("  Warning: Failed to initialize embedding provider: {e}");
-                    }
-                    None
-                }
-            }
-        };
-
         // Extract Tavily API key from search config (legacy fallback for the
         // case where SearchRegistry can't be built — keeps the old behaviour).
         let tavily_api_key = app_config
@@ -488,33 +425,11 @@ pub(in crate::commands::start) async fn register_agent_handlers(
             .await;
 
         // Capture embedder before it's moved into tool_config
-        embedder_out = embedder.clone();
 
         // Get extension manager for plugin tool execution
         let extension_manager = {
             use alephcore::gateway::handlers::plugins::get_extension_manager;
             get_extension_manager().ok().map(Arc::clone)
-        };
-
-        // Spec 7 T9: construct FsProfileSynthesizer from the note_memory_dir + AI provider.
-        // Constructed before tool_config so we can inject into BuiltinToolConfig, and later
-        // into MemoryContextProvider and CompressionService.
-        let profile_synth: Option<
-            std::sync::Arc<dyn alephcore::memory::notes::profile::synthesizer::ProfileSynthesizer>,
-        > = {
-            use alephcore::memory::notes::profile::synthesizer::FsProfileSynthesizer;
-            let prov = provider_registry.default_provider();
-            note_dir.clone().map(|note_dir| {
-                let mut synth = FsProfileSynthesizer::new(note_dir, prov);
-                if let Some(ref wiki) = orientation {
-                    synth = synth.with_orientation(wiki.clone());
-                }
-                synth = synth.with_config(&app_config.memory.profile);
-                std::sync::Arc::new(synth)
-                    as std::sync::Arc<
-                        dyn alephcore::memory::notes::profile::synthesizer::ProfileSynthesizer,
-                    >
-            })
         };
 
         // Strategic planner provider — resolved ONCE here, above the Think→Act
@@ -582,9 +497,8 @@ pub(in crate::commands::start) async fn register_agent_handlers(
 
         // Build tool config with memory backend, embedder, search API key, and agent management deps
         let tool_config = alephcore::executor::BuiltinToolConfig {
-            memory_db: Some(memory_db.clone()),
+            memory_runtime: Some(memory_runtime.clone()),
             raw_memory_store: Some(raw_store.clone()),
-            embedder,
             tavily_api_key,
             search_handle: Some(search_handle.clone()),
             agent_registry: Some(agent_registry.clone()),
@@ -621,11 +535,6 @@ pub(in crate::commands::start) async fn register_agent_handlers(
             browser_live_producer,
             // Spec 4 Task 11: thread capture-filter registry into session_complete tool.
             capture_registry: Some(memory_ext_registry.clone()),
-            // Spec 5 Task 12: wiki orientation tools.
-            orientation: orientation.clone(),
-            note_memory_dir: note_memory_dir.clone(),
-            // Spec 7 Task 9: user profile tool.
-            profile_synthesizer: profile_synth.clone(),
             // Phase 3 Task 8: sandbox for exec-class tools.
             sandbox: sandbox.clone(),
             // Without the live Config arc, BuiltinToolRegistry constructor at
@@ -818,113 +727,11 @@ pub(in crate::commands::start) async fn register_agent_handlers(
         // Grab handles to OnceCell's before wrapping in Arc.
         // We'll inject GatewayContext after ExecutionAdapter is created (breaks circular dep).
         // ChannelRegistry is injected after channel initialization.
-        // MemoryContextProvider is injected after the MCP is constructed below
-        // (Spec A Task 17 — enables the `remember` tool).
         let gateway_context_cell = tool_registry.gateway_context_cell();
         channel_reg_cell = Some(tool_registry.channel_registry_cell());
         clar_mgr_cell = Some(tool_registry.clarification_manager_cell());
-        let mcp_cell_for_tools = tool_registry.memory_context_provider_cell();
 
-        // Spec 2 Task 8: construct Arc<MemoryReflector> and inject into memory_reflect tool.
-        // Requires embedder (for retrieval) and a default provider (for LLM synthesis).
-        // On failure we log a warning and continue — memory_reflect will return a clear error.
-        // Ensure default provider is available for the reflector / query-filer
-        // wiring below.  Previously this assignment happened ~140 lines later,
-        // which left both subsystems permanently disabled at startup.
         default_prov = Some(provider_registry.default_provider());
-        if let (Some(emb), Some(prov)) = (embedder_out.clone(), default_prov.clone()) {
-            use alephcore::memory::reflector::{
-                fs_reflector::RecallWriter, recall_signals::SignalRow, MemoryReflector,
-            };
-            use alephcore::memory::store::sqlite::recall_signals::RecallHit;
-
-            // Build a fresh assembler dedicated to the reflector (same config as MCP).
-            // This provider is built for its `assembler()` alone and never
-            // renders the curated envelope, so the section is passed for
-            // uniformity rather than need — but it is passed, because a second
-            // construction site quietly holding different budgets from the
-            // first is exactly how `[memory.curated]` went inert to begin with.
-            let reflector_mcp = super::init_memory_context_provider(
-                memory_db,
-                raw_store.clone(),
-                Some(emb),
-                Some(prov.clone()),
-                app_config.memory.assembler_config(),
-                app_config.memory.injection_mode,
-                app_config.memory.curated.into(),
-                app_config.memory.orientation.max_tokens,
-            );
-            let reflector_assembler = reflector_mcp.assembler();
-
-            // Build the recall-signal writer closure: translates SignalRow → record_signals.
-            let store_for_writer = memory_db.clone();
-            let writer: RecallWriter = Arc::new(move |row: SignalRow| {
-                let store = store_for_writer.clone();
-                Box::pin(async move {
-                    let hit = RecallHit {
-                        note_path: row.note_path.clone(),
-                        score: f64::from(row.score),
-                    };
-                    store
-                        .record_signals(
-                            &row.query_text,
-                            &row.channel,
-                            &[hit],
-                            row.session_id.as_deref(),
-                            &row.agent_id,
-                            &row.namespace,
-                        )
-                        .map(|_| ())
-                })
-            });
-
-            let reflector = Arc::new(MemoryReflector::new(reflector_assembler, prov, writer));
-            tool_registry.set_memory_reflector(reflector);
-            // Startup-time guard: the `memory_reflect` tool silently returns
-            // an error string if its reflector is missing. Surfacing the
-            // wiring decision here (instead of only at first call) keeps a
-            // misconfigured deploy from looking like a model issue later.
-            if !daemon {
-                println!("  memory_reflect tool: MemoryReflector wired");
-            }
-        } else if !daemon {
-            eprintln!(
-                "  memory_reflect tool: MemoryReflector NOT wired (no embedder or default provider). \
-                 Calls will return an error; configure an embedder + provider to enable it."
-            );
-        }
-
-        // Spec 8 Task 8: construct DefaultQueryFiler and inject into memory_reflect tool.
-        // Requires a default provider (for the LLM novelty gate).
-        // On failure we log and continue — filing is fire-and-forget.
-        if app_config.memory.query_filer.enabled {
-            if let Some(ref prov) = default_prov {
-                use alephcore::memory::notes::query_filer::{DefaultQueryFiler, QueryFiler};
-                use alephcore::memory::notes::NoteIndexer;
-
-                if let Some(ref note_dir) = note_dir {
-                    let indexer_arc =
-                        std::sync::Arc::new(NoteIndexer::new(note_dir.clone(), memory_db.clone()));
-                    let query_filer: std::sync::Arc<dyn QueryFiler> =
-                        std::sync::Arc::new(DefaultQueryFiler {
-                            store: memory_db.clone(),
-                            indexer: indexer_arc,
-                            provider: prov.clone(),
-                            orientation: orientation.clone(),
-                            memory_dir: note_dir.clone(),
-                            config: app_config.memory.query_filer.clone(),
-                        });
-                    tool_registry.set_query_filer(query_filer);
-                    if !daemon {
-                        println!("  query_filer: DefaultQueryFiler wired into memory_reflect");
-                    }
-                }
-            } else if !daemon {
-                println!("  query_filer: skipped (no AI provider available)");
-            }
-        } else if !daemon {
-            println!("  query_filer: disabled in config");
-        }
 
         let tool_registry = Arc::new(tool_registry);
         let tool_registry_for_heartbeat = tool_registry.clone();
@@ -1028,20 +835,16 @@ pub(in crate::commands::start) async fn register_agent_handlers(
                 }
             }
         };
-        let mut engine = ExecutionEngine::new(
-            engine_config,
-            provider_registry,
-            tool_registry,
-            tools,
-            Some(memory_db.clone()),
-        )
-        .with_raw_memory_writer(raw_store.clone())
-        .with_app_config(app_config_arc.clone())
-        .with_tool_health(tool_health.clone())
-        // Share the one parser cell with `chat.send` and `agent.run`, so the
-        // slash surfaces resolve `/foo` identically.
-        // Filled by `init_tool_catalog` further down, before readiness.
-        .with_command_parser_cell(command_parser_cell.clone());
+        let mut engine =
+            ExecutionEngine::new(engine_config, provider_registry, tool_registry, tools)
+                .with_raw_memory_writer(raw_store.clone())
+                .with_memory_runtime(memory_runtime.clone())
+                .with_app_config(app_config_arc.clone())
+                .with_tool_health(tool_health.clone())
+                // Share the one parser cell with `chat.send` and `agent.run`, so the
+                // slash surfaces resolve `/foo` identically.
+                // Filled by `init_tool_catalog` further down, before readiness.
+                .with_command_parser_cell(command_parser_cell.clone());
         if let Some(ref state_db) = resilience_db {
             engine = engine.with_state_database(state_db.clone());
         }
@@ -1061,141 +864,6 @@ pub(in crate::commands::start) async fn register_agent_handlers(
         // session_complete tool already use; unconditional so it does not depend
         // on the compactor being configured.
         engine = engine.with_capture_registry(memory_ext_registry.clone());
-
-        // Create event-sourced memory command handler (requires state_db + memory_db)
-        let command_handler: Option<
-            std::sync::Arc<alephcore::memory::events::handler::MemoryCommandHandler>,
-        > = if let Some(ref state_db_arc) = resilience_db {
-            Some(super::init_command_handler(state_db_arc, memory_db, daemon).await)
-        } else {
-            None
-        };
-
-        // Create compression service for Layer 1 -> Layer 2 fact extraction
-        let compression_svc: Option<
-            std::sync::Arc<alephcore::memory::compression::CompressionService>,
-        > = if let Some(ref emb) = embedder_out {
-            default_prov.as_ref().map(|prov| {
-                // Spec 6 T10: construct DefaultCompoundIngestor and inject into CompressionService.
-                let compound_ingestor: Option<
-                    std::sync::Arc<dyn alephcore::memory::notes::ingest::CompoundIngestor>,
-                > = if app_config.memory.compound_ingest.enabled {
-                    use alephcore::memory::notes::ingest::{
-                        ingestor::DefaultCompoundIngestor, retrieve::RelatedBudget,
-                    };
-                    use alephcore::memory::notes::NoteIndexer;
-
-                    let cfg = &app_config.memory.compound_ingest;
-                    let budget = RelatedBudget {
-                        max_related_pages: cfg.max_related_pages,
-                        preview_char_cap: cfg.related_preview_char_cap,
-                        total_byte_cap: cfg.related_total_byte_cap,
-                        dedup_enabled: cfg.dedup_enabled,
-                        dedup_similarity_threshold: cfg.dedup_similarity_threshold,
-                        dedup_noop_threshold: cfg.dedup_noop_threshold,
-                    };
-                    if let Some(ref note_dir) = note_dir {
-                        let indexer = std::sync::Arc::new(NoteIndexer::new(
-                            note_dir.clone(),
-                            memory_db.clone(),
-                        ));
-                        Some(std::sync::Arc::new(DefaultCompoundIngestor {
-                            store: memory_db.clone(),
-                            indexer,
-                            provider: prov.clone(),
-                            embedder: emb.clone(),
-                            orientation: orientation.clone(),
-                            memory_dir: note_dir.clone(),
-                            budget,
-                            // Same ceiling the boot sweep uses. The ingest-time
-                            // caller is what covers a *live* process whose
-                            // `remove_dir_all` failed — boot only catches what a
-                            // dead one left behind, and this daemon is resident.
-                            tx_residue_gc_seconds: cfg.tx_residue_gc_seconds,
-                            // B5.2 closed: the manager is hoisted above and
-                            // lives as long as the ingestor, so the ingest
-                            // tail pushes each touched note into the pending
-                            // queue and flushes — fresh notes are visible to
-                            // vector search without a manual reembed.
-                            embedding_manager: embedding_manager_out.clone(),
-                            // Admission governance gate (Phase C2). Wired to
-                            // config but OFF by default (`governance_enabled =
-                            // false`), so existing deployments keep byte-
-                            // identical immediate-admit ingest. Flipping the
-                            // flag routes low-confidence / high-severity-under-
-                            // confidence / contradicting Creates through the
-                            // gate → `notes_review_queue` → `NoteReviewStage`
-                            // (LLM re-adjudication) next dream cycle.
-                            gate: if cfg.governance_enabled {
-                                let gate =
-                                    alephcore::memory::notes::governance::gate::DefaultNoteWriteGate::new(
-                                        memory_db.clone(),
-                                        alephcore::memory::notes::governance::gate::GateThresholds::default(),
-                                    );
-                                Some(std::sync::Arc::new(gate)
-                                    as std::sync::Arc<
-                                        dyn alephcore::memory::notes::governance::gate::NoteWriteGate,
-                                    >)
-                            } else {
-                                None
-                            },
-                        }))
-                    } else {
-                        None
-                    }
-                } else {
-                    None
-                };
-
-                super::init_compression_service(
-                    memory_db,
-                    raw_store.clone(),
-                    prov.clone(),
-                    emb.clone(),
-                    &app_config.policies.memory.compression,
-                    daemon,
-                    compound_ingestor,
-                    profile_synth.clone(),
-                    Some(memory_ext_registry.clone()),
-                )
-            })
-        } else {
-            None
-        };
-
-        if let Some(ref cs) = compression_svc {
-            engine = engine.with_compression_service(cs.clone());
-        }
-        compression_out = compression_svc;
-
-        // Start DreamDaemon with command handler so decay mutations are event-sourced.
-        // Spec 5 Task 12: thread wiki handle into DreamDaemon for IndexRefresherStage.
-        // The embedder is required to build a DreamContext (SkillDistill stage).
-        //
-        // Dreaming runs unattended every night and its LLM stages are all small
-        // classification / summarization calls, so route them to the cheap tier
-        // ([memory.dreaming] model, else the preset's aux model). Falls back to
-        // the main provider when no cheap tier resolves.
-        let dream_prov = alephcore::orchestrator::build_dream_provider(
-            app_config,
-            &app_config
-                .general
-                .default_provider
-                .clone()
-                .unwrap_or_default(),
-        )
-        .or_else(|| default_prov.clone());
-
-        alephcore::memory::ensure_dream_daemon_with_orientation(
-            memory_db.clone(),
-            std::sync::Arc::new(app_config.memory.clone()),
-            dream_prov,
-            command_handler,
-            orientation.clone(),
-            embedder_out.clone(),
-            note_memory_dir.clone(),
-            Some(raw_store.clone()),
-        );
 
         // Create session compactor for intra-session context compression
         {
@@ -1217,7 +885,9 @@ pub(in crate::commands::start) async fn register_agent_handlers(
                 // Spec 1 G1: wire pre-compress hook so chunks are captured before summarisation.
                 compactor = compactor.with_raw_memory_writer(raw_store.clone());
                 // Spec 4 Task 11: wire capture-filter registry.
-                compactor = compactor.with_capture_registry(memory_ext_registry.clone());
+                compactor = compactor
+                    .with_capture_registry(memory_ext_registry.clone())
+                    .with_memory_runtime(Arc::downgrade(&memory_runtime));
                 let compactor = std::sync::Arc::new(compactor);
                 engine = engine.with_session_compactor(compactor);
                 if !daemon {
@@ -1226,161 +896,6 @@ pub(in crate::commands::start) async fn register_agent_handlers(
             } else if !daemon {
                 println!("  Session compactor: disabled");
             }
-        }
-
-        // Wire memory context provider for Markdown-backed raw memory and metadata index augmentation.
-        // When an AiProvider is available the assembler drives its LLM re-rank
-        // path (Spec 1, B strategy); otherwise the deterministic skeleton runs.
-        // Spec 4 Task 11: extension registry threaded in for on_retrieve dispatch.
-        // Spec 5 Task 12: wiki handle threaded in for build_orientation_user_message.
-        // Wired unconditionally: without an embedder the assembler degrades to
-        // FTS-only retrieval, so notes auto-recall, orientation, and profile
-        // injection all survive a deployment with no embedding provider.
-        {
-            let mcp = super::init_memory_context_provider_with_extensions(
-                memory_db,
-                raw_store.clone(),
-                embedder_out.clone(),
-                default_prov.clone(),
-                app_config.memory.assembler_config(),
-                // `memory.injection_mode` — Tools deployments must not have
-                // orientation/profile/memory auto-injected into prompts.
-                app_config.memory.injection_mode,
-                // `[memory.curated]` — this is the provider that renders the
-                // curated envelope, so this is the call that makes the section
-                // mean anything at all.
-                app_config.memory.curated.into(),
-                // `[memory.orientation] max_tokens` — threaded like curated so
-                // the knob is real at the provider that renders orientation.
-                app_config.memory.orientation.max_tokens,
-                Some(memory_ext_registry.clone()),
-                orientation.clone(),
-                profile_synth.clone(),
-            );
-            // Spec A Task 17 — inject MCP into the tool registry so the
-            // `remember` tool can resolve the per-agent CuratedMemoryStore.
-            if let Err(e) = mcp_cell_for_tools.set(mcp.clone()) {
-                tracing::warn!("Failed to set MCP cell for tools: {}", e);
-            }
-
-            // Spec A Task 18 — wire post-compression invalidation:
-            //   1) compression run completes → MCP drops cached
-            //      <CuratedMemory> snapshots for that agent
-            //   2) session ends → MCP drops snapshots for that session_key
-            // Both hooks are fire-and-forget; cache freshness, never gating.
-            if let Some(ref cs) = compression_out {
-                let mcp_hook: std::sync::Arc<
-                    dyn alephcore::memory::compression::PostCompressionHook,
-                > = mcp.clone();
-                cs.add_post_hook(mcp_hook).await;
-            }
-            alephcore::thinker::memory_context_provider::register_session_end_mcp(mcp.clone());
-
-            // Real-time Memory Pillar 2 — register the CompressionService for the
-            // on-session-end flush. The session-end path reads this cell and
-            // spawns an immediate compress→link flush, guarded in a FlushRegistry
-            // so a back-to-back follow-on session can await consolidated memory.
-            if let Some(ref cs) = compression_out {
-                alephcore::thinker::memory_context_provider::register_session_end_compression(
-                    cs.clone(),
-                );
-            } else {
-                alephcore::thinker::memory_context_provider::decline_session_end_compression(
-                    "no CompressionService was built (it needs a provider and an \
-                     embedder, and `[memory.compression]` must be on), so pending \
-                     raw memories are not flushed into linked notes at session \
-                     end. The periodic path still consolidates them; only the \
-                     immediacy is lost.",
-                );
-            }
-
-            // Spec B Task 9 — register SessionEndSummarizer for on-session-end
-            // summary production. Requires an AiProvider for the synthesizer
-            // fallback path; skip silently if none is configured.
-            if let Some(ref prov) = default_prov {
-                use alephcore::memory::assembler::hybrid::AiProviderSummaryLlm;
-                use alephcore::memory::session_search_summary::{
-                    end_hook::SessionEndSummarizer, synthesizer::SummarySynthesizer,
-                };
-                // Prose wrapper, NOT `AiProviderReranker` — both consumers
-                // below (the /end-summary synthesizer and SessionReflector)
-                // ask the model for plain text in a shape their own prompt
-                // defines; the reranker pins a "strict JSON, no prose" system
-                // message that would break both.
-                let summary_llm: std::sync::Arc<
-                    dyn alephcore::memory::session_search_summary::synthesizer::SummaryLlm,
-                > = AiProviderSummaryLlm::new(prov.clone());
-                let synthesizer = std::sync::Arc::new(SummarySynthesizer::new(
-                    raw_store.clone(),
-                    session_store.clone(),
-                    summary_llm.clone(),
-                ));
-                let summarizer = std::sync::Arc::new(SessionEndSummarizer {
-                    store: raw_store.clone(),
-                    synthesizer,
-                });
-                alephcore::thinker::memory_context_provider::register_session_end_summarizer(
-                    summarizer,
-                );
-
-                // Batch 2 — session-end reflection ("lessons learned"). Opt-in: only
-                // registered when [memory.reflection] enabled = true, so the
-                // disabled default adds zero session-end overhead. Reuses the
-                // same prose SummaryLlm wrapper as the Spec B summarizer. The
-                // cooldown watermark persists to compression_metadata so a
-                // daemon restart cannot reset the per-agent throttle.
-                if app_config.memory.reflection.enabled {
-                    use alephcore::memory::session_reflection::SessionReflector;
-                    let reflector = std::sync::Arc::new(
-                        SessionReflector::new(
-                            raw_store.clone(),
-                            session_store.clone(),
-                            summary_llm.clone(),
-                            app_config.memory.reflection.clone(),
-                        )
-                        .with_cooldown_store(memory_db.clone()),
-                    );
-                    alephcore::thinker::memory_context_provider::register_session_reflector(
-                        reflector,
-                    );
-                    // Open-loop injection: surface last session's unresolved
-                    // follow-ups in the next session's curated context (R5).
-                    alephcore::thinker::memory_context_provider::set_open_loop_inject(
-                        app_config.memory.reflection.open_loop_inject_prompt,
-                    );
-                } else {
-                    // Note the asymmetry: `set_open_loop_inject(false)` a few
-                    // lines up is an INSTALL of `false`. This arm never reaches
-                    // the setter at all, which is a different fact.
-                    const NO_REFLECTION: &str =
-                        "`[memory.reflection] enabled = false`: no session-end \
-                         lesson distillation runs, and last session's open loops \
-                         are never injected into the next session's context.";
-                    alephcore::thinker::memory_context_provider::decline_session_reflector(
-                        NO_REFLECTION,
-                    );
-                    alephcore::thinker::memory_context_provider::decline_open_loop_inject(
-                        NO_REFLECTION,
-                    );
-                }
-            } else {
-                // One missing input, three handles. `register_session_end_mcp`
-                // above is NOT among them — it ran unconditionally in this
-                // block.
-                const NO_PROVIDER: &str =
-                    "the provider registry produced no default provider, so no \
-                     summary LLM could be built: session-end summaries, lesson \
-                     reflection and open-loop injection are all off. Set \
-                     `[general] default_provider` to a configured provider.";
-                alephcore::thinker::memory_context_provider::decline_session_end_summarizer(
-                    NO_PROVIDER,
-                );
-                alephcore::thinker::memory_context_provider::decline_session_reflector(NO_PROVIDER);
-                alephcore::thinker::memory_context_provider::decline_open_loop_inject(NO_PROVIDER);
-            }
-
-            mcp_for_orchestrator = Some(mcp.clone());
-            engine = engine.with_memory_context_provider(mcp);
         }
 
         // Wire session manager + event bus for auto-topic generation on first message
@@ -2022,12 +1537,6 @@ pub(in crate::commands::start) async fn register_agent_handlers(
              created, so no API key and no `[providers]` entry resolved. Configure \
              a provider (or set ANTHROPIC_API_KEY / OPENAI_API_KEY) and restart.";
         alephcore::mcp::decline_sampling_llm(NO_ENGINE);
-        alephcore::memory::decline_dream_daemon(NO_ENGINE);
-        alephcore::thinker::memory_context_provider::decline_session_end_mcp(NO_ENGINE);
-        alephcore::thinker::memory_context_provider::decline_session_end_compression(NO_ENGINE);
-        alephcore::thinker::memory_context_provider::decline_session_end_summarizer(NO_ENGINE);
-        alephcore::thinker::memory_context_provider::decline_session_reflector(NO_ENGINE);
-        alephcore::thinker::memory_context_provider::decline_open_loop_inject(NO_ENGINE);
         alephcore::search::decline_global_search_handle(NO_ENGINE);
         if !daemon {
             println!(
@@ -2044,6 +1553,60 @@ pub(in crate::commands::start) async fn register_agent_handlers(
         );
         let simple_adapter: Arc<dyn alephcore::gateway::ExecutionAdapter> = simple_engine;
         let fallback_agent_registry = Arc::new(AgentRegistry::new());
+        let mut fallback_resolver = alephcore::AgentDefinitionResolver::new();
+        let fallback_agents = fallback_resolver.resolve_all(
+            &app_config.agents,
+            &app_config.profiles,
+            &app_config.providers,
+        );
+        for agent in fallback_agents {
+            fallback_agent_registry
+                .register_config(
+                    alephcore::gateway::AgentInstanceConfig::from_resolved(&agent),
+                    session_store.clone(),
+                )
+                .await;
+        }
+        fallback_agent_registry
+            .set_raw_memory_writer(raw_store.clone())
+            .await;
+        let tool_registry = Arc::new(
+            BuiltinToolRegistry::with_config(alephcore::executor::BuiltinToolConfig {
+                memory_runtime: Some(memory_runtime.clone()),
+                raw_memory_store: Some(raw_store.clone()),
+                session_manager: Some(session_store.clone()),
+                agent_registry: Some(fallback_agent_registry.clone()),
+                agent_manager: Some(agent_manager.clone()),
+                workspace_manager: workspace_manager.clone(),
+                event_bus: Some(event_bus.clone()),
+                shared_token_manager: Some(shared_token_mgr.clone()),
+                generation_registry: Some(generation_registry.clone()),
+                capture_registry: Some(memory_ext_registry.clone()),
+                sandbox: sandbox.clone(),
+                config: Some(app_config_arc.clone()),
+                tool_context: Some(alephcore::tools::new_tool_context_handle()),
+                injection_mode: app_config.memory.injection_mode,
+                memory_project_scoped: app_config.memory.project_scoped,
+                ..Default::default()
+            })
+            .await?,
+        );
+        let gateway_ctx = Arc::new(alephcore::gateway::context::GatewayContext::new(
+            session_store.clone(),
+            fallback_agent_registry.clone(),
+            simple_adapter.clone(),
+            Arc::new(alephcore::gateway::inter_agent_policy::AgentToAgentPolicy::default()),
+        ));
+        if tool_registry
+            .gateway_context_cell()
+            .set(gateway_ctx)
+            .is_err()
+        {
+            tracing::warn!("Failed to set simulated gateway context");
+        }
+        channel_reg_cell = Some(tool_registry.channel_registry_cell());
+        clar_mgr_cell = Some(tool_registry.clarification_manager_cell());
+        tool_reg_out = Some(tool_registry);
         let fallback_run_manager = Arc::new(
             AgentRunManager::new(
                 router.clone(),
@@ -2105,9 +1668,8 @@ pub(in crate::commands::start) async fn register_agent_handlers(
 
     // Fill the unified dispatch registry (command discovery + resolution)
     // built near the top of this function. AI-provider-independent — maps
-    // command names to metadata, registers the command/tool RPC handlers and
-    // spawns the memory producer scheduler. See `tool_catalog_init.rs`.
-    // `tool_reg_out` is `None` in simulated mode.
+    // command names to metadata and registers the command/tool RPC handlers.
+    // The same builtin registry also exposes controls without an AI provider.
     tool_catalog_out = Some(
         init_tool_catalog(
             server,
@@ -2115,8 +1677,6 @@ pub(in crate::commands::start) async fn register_agent_handlers(
             app_config,
             tool_reg_out.clone(),
             &command_parser_cell,
-            &raw_store,
-            &memory_ext_registry,
             daemon,
             tool_catalog.clone(),
             canonical_tools,
@@ -2130,12 +1690,24 @@ pub(in crate::commands::start) async fn register_agent_handlers(
     register_common_handlers(
         server,
         &run_manager,
-        session_store,
+        session_store.clone(),
         &router,
         &agent_reg,
         full_config,
         daemon,
     );
+
+    memory_runtime.configure_services(alephcore::memory::runtime::MemoryServicesConfig {
+        app_config: app_config_arc.clone(),
+        raw_store: raw_store.clone(),
+        session_store: Some(session_store),
+        provider: default_prov.clone(),
+        extensions: memory_ext_registry.clone(),
+        state_db: state_db_out.clone(),
+        default_agent_id: memory_default_agent,
+        curated_root: alephcore::utils::paths::get_config_dir()?.join("agents"),
+        snapshot_dir: alephcore::utils::paths::get_data_dir()?.join("sessions"),
+    })?;
 
     Ok(AgentHandlersResult {
         // Both branches (real-execution at line ~1443 and simulated-fallback at
@@ -2152,8 +1724,6 @@ pub(in crate::commands::start) async fn register_agent_handlers(
         agent_registry: agent_reg,
         default_provider: default_prov,
         tool_catalog: tool_catalog_out,
-        embedder: embedder_out,
-        compression_service: compression_out,
         multi_registry: multi_reg,
         channel_registry_cell: channel_reg_cell,
         clarification_manager_cell: clar_mgr_cell,
@@ -2176,7 +1746,6 @@ pub(in crate::commands::start) async fn register_agent_handlers(
         message_store: message_store.clone(),
         orchestrator_cell: orch_cell_out,
         memory_context_provider: mcp_for_orchestrator,
-        memory_backend: Some(memory_db.clone()),
         memory_ext_registry: memory_ext_registry.clone(),
     })
 }

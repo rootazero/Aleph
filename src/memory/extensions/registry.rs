@@ -384,6 +384,33 @@ impl MemoryExtensionRegistry {
     /// Wired at the subagent spawn site (`src/agents/subagent_tool/spawn.rs`):
     /// fired fire-and-forget with a trimmed `result_summary` after the child
     /// run completes (or panics/errors, surfaced as `(error) …`).
+    pub(crate) async fn dispatch_owned_on_delegation(
+        self: &Arc<Self>,
+        runtime: Option<&std::sync::Weak<crate::memory::runtime::MemoryRuntime>>,
+        ctx: DelegationCtx,
+    ) {
+        let Some(runtime) = runtime else {
+            self.dispatch_on_delegation(&ctx).await;
+            return;
+        };
+        let Some(operation) = runtime
+            .upgrade()
+            .and_then(|runtime| runtime.operation().ok())
+        else {
+            return;
+        };
+        let registry = self.clone();
+        if let Err(error) = operation
+            .run(async move {
+                registry.dispatch_on_delegation(&ctx).await;
+                Ok(())
+            })
+            .await
+        {
+            warn!(%error, "owned delegation callback failed");
+        }
+    }
+
     pub async fn dispatch_on_delegation(&self, ctx: &DelegationCtx) {
         for ext in self.snapshot() {
             let name = ext.name().to_string();
@@ -395,6 +422,10 @@ impl MemoryExtensionRegistry {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "delegation_lifecycle_tests.rs"]
+mod lifecycle;
 
 #[cfg(test)]
 mod tests {

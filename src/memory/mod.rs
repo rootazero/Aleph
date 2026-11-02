@@ -38,6 +38,7 @@ pub mod reembed;
 pub mod reflector;
 pub mod rerank;
 pub mod ripple;
+pub mod runtime;
 pub mod scratchpad;
 pub mod session_compactor;
 pub mod session_memory_mode;
@@ -66,10 +67,7 @@ pub use context::{
 pub use context_comptroller::{
     ArbitratedContext, ComptrollerConfig, ContextComptroller, TokenBudget,
 };
-pub use dreaming::{
-    decline_dream_daemon, ensure_dream_daemon, ensure_dream_daemon_with_orientation, DailyInsight,
-    DreamStatus,
-};
+pub use dreaming::{DailyInsight, DreamStatus};
 pub use embedding_manager::EmbeddingManager;
 pub use embedding_provider::{
     create_provider as create_embedding_provider, truncate_and_normalize, EmbeddingProvider,

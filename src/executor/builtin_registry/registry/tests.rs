@@ -84,24 +84,49 @@ fn never_returns_literal_agent_namespace_prefix() {
 async fn flag_user_correction_files_under_the_turns_agent_not_the_boot_agent() {
     use crate::executor::builtin_registry::{BuiltinToolConfig, BuiltinToolRegistry};
     use crate::executor::tool_registry::ToolRegistry;
+    use crate::memory::runtime::{MemoryRuntime, MemoryRuntimeConfig, MemoryServicesConfig};
     use crate::memory::store::raw_memory::RawMemoryStore;
-    use crate::memory::store::sqlite::SqliteMemoryBackend;
-    use crate::memory::store::MemoryBackend;
     use crate::routing::SessionKey;
     use crate::sync_primitives::Arc;
     use crate::tools::turn_context::{TurnContext, TURN_CONTEXT};
 
     let _home = crate::utils::paths::IsolatedAlephHome::new();
-    let db: MemoryBackend = Arc::new(SqliteMemoryBackend::in_memory().unwrap());
     let raw_dir = tempfile::tempdir().unwrap();
     let raw_store = Arc::new(
         crate::memory::store::markdown::MarkdownSessionStore::new(raw_dir.path())
             .await
             .unwrap(),
     );
+    let runtime = MemoryRuntime::new(
+        MemoryRuntimeConfig {
+            metadata_path: raw_dir.path().join("metadata.db"),
+            note_memory_dir: raw_dir.path().join("notes"),
+        },
+        Arc::new(crate::capability::ownership::OwnershipTree::new()),
+    );
+    let mut memory = crate::config::MemoryConfig::default();
+    memory.embedding.providers.clear();
+    memory.profile.enabled = false;
+    memory.dreaming.enabled = false;
+    runtime
+        .configure_services(MemoryServicesConfig {
+            app_config: Arc::new(tokio::sync::RwLock::new(crate::Config {
+                memory,
+                ..Default::default()
+            })),
+            raw_store: raw_store.clone(),
+            session_store: None,
+            provider: None,
+            extensions: Arc::new(crate::memory::extensions::MemoryExtensionRegistry::new()),
+            state_db: None,
+            default_agent_id: crate::routing::DEFAULT_AGENT_ID.into(),
+            curated_root: raw_dir.path().join("curated"),
+            snapshot_dir: raw_dir.path().join("snapshots"),
+        })
+        .unwrap();
+    runtime.start().await.unwrap();
     let registry = BuiltinToolRegistry::with_config(BuiltinToolConfig {
-        memory_db: Some(Arc::clone(&db)),
-        raw_memory_store: Some(raw_store.clone()),
+        memory_runtime: Some(runtime.clone()),
         ..Default::default()
     })
     .await
@@ -152,6 +177,7 @@ async fn flag_user_correction_files_under_the_turns_agent_not_the_boot_agent() {
         base.is_empty(),
         "nothing may land under the boot-time base agent"
     );
+    runtime.stop().await.unwrap();
 }
 
 /// The tree-search pair reaches `execute_tool` and comes back with results.

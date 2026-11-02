@@ -175,9 +175,8 @@ impl PiiEngine {
     /// when `[privacy]` is off" as a natural
     /// [`crate::capability::CapabilitySlot::decline`] site. There is no such
     /// absence: this installs an engine unconditionally, whatever `[privacy]`
-    /// says, so `[privacy]` off is an INSTALL of a disabled config — the same
-    /// asymmetry [`crate::thinker::memory_context_provider::set_open_loop_inject`]
-    /// documents for `false`. Boot calls this once, unconditionally
+    /// says, so `[privacy]` off is an INSTALL of a disabled config.
+    /// Boot calls this once, unconditionally
     /// (`start/mod.rs`, right after the bind address resolves). Confirmed on a
     /// live daemon 2026-08-25: `pii/engine` appears in none of the 22
     /// not-installed findings a provider-less boot reports.

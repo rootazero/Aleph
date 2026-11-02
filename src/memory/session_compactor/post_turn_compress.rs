@@ -2,7 +2,7 @@ use super::{CompressResult, SessionCompactor};
 use crate::error::AlephError;
 use crate::gateway::agent_instance::AgentInstance;
 use crate::gateway::router::SessionKey;
-use crate::memory::extensions::insert_with_capture_filter;
+use crate::memory::extensions::insert_helper::insert_with_runtime_capture_filter;
 use crate::memory::extensions::types::CaptureCtx;
 use crate::memory::store::raw_memory::{RawMemory, RawMemorySource, RawMemoryStore};
 use crate::sync_primitives::Arc;
@@ -24,6 +24,7 @@ const MAX_INFLIGHT_PRECOMPRESS: usize = 8;
 async fn write_precompress_raw(
     writer: Arc<dyn RawMemoryStore>,
     registry: Option<Arc<crate::memory::extensions::MemoryExtensionRegistry>>,
+    runtime: Option<std::sync::Weak<crate::memory::runtime::MemoryRuntime>>,
     raw: RawMemory,
 ) {
     if let Some(registry) = registry {
@@ -37,7 +38,10 @@ async fn write_precompress_raw(
             session_id: raw.session_id.clone(),
             source_hint: "pre_compress".into(),
         };
-        if let Err(e) = insert_with_capture_filter(&writer, &registry, &ctx, raw).await {
+        if let Err(e) =
+            insert_with_runtime_capture_filter(&writer, &registry, runtime.as_ref(), &ctx, raw)
+                .await
+        {
             tracing::warn!("pre_compress raw_memory write failed: {e}");
         }
     } else if let Err(e) = writer.insert_raw_memory(&raw).await {
@@ -189,7 +193,12 @@ impl SessionCompactor {
                         // same "there is room now" the await is here for.
                         let _ = precompress_set.join_next().await;
                     }
-                    precompress_set.spawn(write_precompress_raw(writer, registry_opt, raw));
+                    precompress_set.spawn(write_precompress_raw(
+                        writer,
+                        registry_opt,
+                        self.memory_runtime.clone(),
+                        raw,
+                    ));
                 }
             }
 
@@ -227,7 +236,15 @@ impl SessionCompactor {
                     session_id: Some(session_id.clone()),
                     source_hint: "session_compressed".into(),
                 };
-                match insert_with_capture_filter(&store, registry, &ctx, raw).await {
+                match insert_with_runtime_capture_filter(
+                    &store,
+                    registry,
+                    self.memory_runtime.as_ref(),
+                    &ctx,
+                    raw,
+                )
+                .await
+                {
                     Ok(_) => true,
                     Err(e) => {
                         warn!(

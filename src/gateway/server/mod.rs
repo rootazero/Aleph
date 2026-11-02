@@ -443,7 +443,7 @@ pub struct GatewayServer {
     /// Provider configs for /v1/models listing
     pub openai_provider_configs: Vec<(String, crate::config::ProviderConfig)>,
     /// Embedding provider for /v1/embeddings
-    pub embedding_provider: Option<Arc<dyn crate::memory::EmbeddingProvider>>,
+    pub memory_runtime: Option<Arc<crate::memory::runtime::MemoryRuntime>>,
     /// Phase 5 Orchestrator (flow composition). Populated at boot after
     /// agent registry + session + tool + provider + sandbox are assembled.
     /// Task 10 (Gateway `run_agent_loop` replacement) consumes this.
@@ -484,6 +484,9 @@ pub struct GatewayServer {
     device_token_mgr: Option<Arc<crate::gateway::security::DeviceTokenManager>>,
     /// One device selection map shared by RPC discovery and HTTP delivery.
     panel_projects: Option<Arc<crate::gateway::panel_project_context::PanelProjectSelector>>,
+    /// Optional QA-only after-auth observer for the isolated native project helper.
+    #[cfg(feature = "native-qa")]
+    native_qa_observer: Option<crate::gateway::native_qa::NativeQaRpcObserverHandle>,
     /// Security store handle for the node `last_seen_at` stamping in the
     /// WS connect/disconnect paths. See `GatewaySharedState::security_store`.
     security_store: Option<Arc<crate::gateway::security::SecurityStore>>,
@@ -575,7 +578,7 @@ impl GatewayServer {
             openai_agent_registry: None,
             openai_provider_map: Arc::new(HashMap::new()),
             openai_provider_configs: Vec::new(),
-            embedding_provider: None,
+            memory_runtime: None,
             orchestrator: None,
             admin_router: None,
             reconciler_handle: None,
@@ -583,6 +586,8 @@ impl GatewayServer {
             shared_token_mgr: None,
             device_token_mgr: None,
             security_store: None,
+            #[cfg(feature = "native-qa")]
+            native_qa_observer: None,
             canvas_store: None,
             mcp_face: None,
             browser_viewer: None,
@@ -642,7 +647,7 @@ impl GatewayServer {
             openai_agent_registry: None,
             openai_provider_map: Arc::new(HashMap::new()),
             openai_provider_configs: Vec::new(),
-            embedding_provider: None,
+            memory_runtime: None,
             orchestrator: None,
             admin_router: None,
             reconciler_handle: None,
@@ -650,6 +655,8 @@ impl GatewayServer {
             shared_token_mgr: None,
             device_token_mgr: None,
             security_store: None,
+            #[cfg(feature = "native-qa")]
+            native_qa_observer: None,
             canvas_store: None,
             mcp_face: None,
             browser_viewer: None,
@@ -777,6 +784,17 @@ impl GatewayServer {
             ),
         ));
         self.device_token_mgr = Some(manager);
+    }
+
+    /// Install the QA-only after-auth observer used by the isolated native
+    /// project acceptance helper. It receives only typed redacted facts after
+    /// normal Gateway authorization and contextual dispatch return.
+    #[cfg(feature = "native-qa")]
+    pub fn set_native_qa_observer(
+        &mut self,
+        observer: crate::gateway::native_qa::NativeQaRpcObserverHandle,
+    ) {
+        self.native_qa_observer = Some(observer);
     }
 
     /// Install the `SecurityStore` so the WS node connect/disconnect paths
@@ -932,6 +950,9 @@ impl GatewayServer {
         let middleware_chain =
             MiddlewareChain::new(self.handlers.clone(), self.rate_limiter.clone())
                 .with_panel_projects(self.panel_projects.clone());
+        #[cfg(feature = "native-qa")]
+        let middleware_chain =
+            middleware_chain.with_native_qa_observer(self.native_qa_observer.clone());
 
         // Wire the embedded-PTY subsystem only when the live application
         // policy admits Terminal runtime effects. A missing or locked Config
@@ -1020,7 +1041,7 @@ impl GatewayServer {
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap_or_default()
                 .as_secs(),
-            embedding_provider: self.embedding_provider.clone(),
+            memory_runtime: self.memory_runtime.clone(),
         });
         let openai = openai_routes(openai_state);
 

@@ -244,6 +244,8 @@ pub use crate::descriptor::ToolSource;
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ToolDefinitionMetadata {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub services: Vec<crate::capability::Service>,
     #[serde(default)]
     pub hidden_from_llm: bool,
     #[serde(default)]
@@ -309,6 +311,7 @@ impl ToolDefinition {
             input_schema: descriptor.input_schema.clone(),
             source: descriptor.source.clone(),
             metadata: ToolDefinitionMetadata {
+                services: descriptor.services.clone(),
                 requires_approval: descriptor.requires_confirmation,
                 idempotent: descriptor.idempotent,
                 concurrent_safe: descriptor.concurrent_safe,
@@ -339,6 +342,7 @@ impl ToolDefinition {
             description: self.description.clone(),
             parameters: self.input_schema.clone(),
             requires_confirmation: self.metadata.requires_approval,
+            services: self.metadata.services.clone(),
             category,
             strict: false,
         }
@@ -524,6 +528,7 @@ mod metadata_tests {
     #[test]
     fn metadata_max_duration_ms_round_trips_through_json() {
         let original = ToolDefinitionMetadata {
+            services: Vec::new(),
             hidden_from_llm: false,
             requires_approval: false,
             tags: Vec::new(),

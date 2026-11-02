@@ -686,89 +686,40 @@ impl BuiltinToolRegistry {
                 | crate::config::types::memory::MemoryInjectionMode::Hybrid,
         );
 
-        // Create memory tools if backend and embedder are provided
+        // Retrieval adapters retain only the source and caller-updated configuration.
         let (
             memory_search_tool,
             memory_browse_tool,
             memory_explore_tool,
             memory_workspace_handle,
             memory_session_key_handle,
-        ) = if !expose_retrieval_tools {
-            (None, None, None, None, None)
-        } else if let (Some(ref db), Some(ref embedder), Some(ref raw_store)) = (
-            &config.memory_db,
-            &config.embedder,
-            &config.raw_memory_store,
-        ) {
-            // Cross-encoder rerank + retrieval-scoring config (both disabled by
-            // default → no behaviour change). Read once to avoid re-locking.
-            let (rerank_cfg, scoring_cfg, expansion_cfg): (
-                Option<crate::memory::rerank::RerankConfig>,
-                Option<crate::config::types::memory::RetrievalScoringConfig>,
-                Option<crate::config::types::memory::ExpansionConfig>,
-            ) = match &config.config {
-                Some(cfg) => {
-                    let guard = cfg.read().await;
-                    (
-                        Some(guard.memory.rerank.clone()),
-                        Some(guard.memory.retrieval_scoring.clone()),
-                        Some(guard.memory.expansion.clone()),
-                    )
-                }
-                None => (None, None, None),
-            };
-            let search_tool = MemorySearchTool::new_with_config(
-                db.clone(),
-                raw_store.clone(),
-                Arc::clone(embedder),
-                rerank_cfg.as_ref(),
-                scoring_cfg.as_ref(),
-                expansion_cfg.as_ref(),
-            )
-            .with_project_scoping(config.memory_project_scoped);
-            let ws_handle = search_tool.default_workspace_handle();
-            let sk_handle = search_tool.default_session_key_handle();
-            let note_memory_dir = crate::utils::paths::get_note_memory_dir().unwrap_or_else(|_| {
-                // No home branch: `get_note_memory_dir` fails either because
-                // there is no home (so re-deriving one cannot help) or because
-                // creating the directory failed (so re-deriving the *same*
-                // path cannot help either). The only spelling that added
-                // anything was the one that ignored `ALEPH_HOME`.
-                std::env::temp_dir()
-                    .join("aleph")
-                    .join("memory")
-                    .join("note")
-            });
-            let browse_tool = MemoryBrowseTool::new(note_memory_dir, "default".to_string())
-                .with_project_scoping(config.memory_project_scoped);
-            let explore_tool = MemoryExploreTool::new(db.clone(), Arc::clone(embedder))
-                .with_project_scoping(config.memory_project_scoped);
-            info!("Created memory_search, memory_browse, and memory_explore tools");
-            (
-                Some(search_tool),
-                Some(browse_tool),
-                Some(explore_tool),
-                Some(ws_handle),
-                Some(sk_handle),
-            )
-        } else if config.memory_db.is_some() {
-            let note_memory_dir = crate::utils::paths::get_note_memory_dir().unwrap_or_else(|_| {
-                // No home branch: `get_note_memory_dir` fails either because
-                // there is no home (so re-deriving one cannot help) or because
-                // creating the directory failed (so re-deriving the *same*
-                // path cannot help either). The only spelling that added
-                // anything was the one that ignored `ALEPH_HOME`.
-                std::env::temp_dir()
-                    .join("aleph")
-                    .join("memory")
-                    .join("note")
-            });
-            let browse_tool = MemoryBrowseTool::new(note_memory_dir, "default".to_string())
-                .with_project_scoping(config.memory_project_scoped);
-            info!("Created memory_browse tool (no embedder for memory_search)");
-            (None, Some(browse_tool), None, None, None)
-        } else {
-            (None, None, None, None, None)
+        ) = match config
+            .memory_runtime
+            .as_ref()
+            .filter(|_| expose_retrieval_tools)
+        {
+            Some(runtime) => {
+                let search_tool =
+                    crate::builtin_tools::runtime::RuntimeTool::<MemorySearchTool>::new(
+                        runtime.clone(),
+                    );
+                let workspace = search_tool.default_workspace_handle();
+                let session_key = search_tool.default_session_key_handle();
+                (
+                    Some(search_tool),
+                    Some(
+                        crate::builtin_tools::runtime::RuntimeTool::<MemoryBrowseTool>::new(
+                            runtime.clone(),
+                        ),
+                    ),
+                    Some(crate::builtin_tools::runtime::RuntimeTool::<
+                        MemoryExploreTool,
+                    >::new(runtime.clone())),
+                    Some(workspace),
+                    Some(session_key),
+                )
+            }
+            None => (None, None, None, None, None),
         };
 
         // Create memory timeline tool if StateDatabase is provided.
@@ -805,29 +756,24 @@ impl BuiltinToolRegistry {
             crate::builtin_tools::generation::SpeechGenerateTool::new(Arc::clone(registry))
         });
 
-        // Build wiki tools (Spec 5 Task 12).
-        // `note_orient` is an on-demand retrieval surface: in Context mode the
-        // orientation is injected automatically, so the tool is not built.
-        let note_orient_tool = if expose_retrieval_tools {
-            config.orientation.as_ref().map(|wiki| {
-                use crate::memory::notes::orientation::types::TokenBudget;
-                crate::builtin_tools::note_orient::NoteOrientTool::new(
-                    Arc::clone(wiki),
-                    TokenBudget::default(),
-                )
-            })
-        } else {
-            None
-        };
-
-        let note_schema_tool = config
-            .note_memory_dir
+        let note_orient_tool = config
+            .memory_runtime
             .as_ref()
-            .map(|dir| crate::builtin_tools::note_schema::NoteSchemaTool::new(dir.clone()));
-
-        // Build user profile tool (Spec 7 Task 9)
-        let user_profile_tool = config.profile_synthesizer.as_ref().map(|synth| {
-            crate::builtin_tools::user_profile::UserProfileTool::new(Arc::clone(synth))
+            .filter(|_| expose_retrieval_tools)
+            .map(|runtime| {
+                crate::builtin_tools::runtime::RuntimeTool::<
+                    crate::builtin_tools::note_orient::NoteOrientTool,
+                >::new(runtime.clone())
+            });
+        let note_schema_tool = config.memory_runtime.as_ref().map(|runtime| {
+            crate::builtin_tools::runtime::RuntimeTool::<
+                crate::builtin_tools::note_schema::NoteSchemaTool,
+            >::new(runtime.clone())
+        });
+        let user_profile_tool = config.memory_runtime.as_ref().map(|runtime| {
+            crate::builtin_tools::runtime::RuntimeTool::<
+                crate::builtin_tools::user_profile::UserProfileTool,
+            >::new(runtime.clone())
         });
 
         // Build tool metadata
@@ -877,7 +823,9 @@ impl BuiltinToolRegistry {
                     &td.description,
                     ToolSource::Builtin,
                 );
-                ut = ut.with_parameters_schema(td.parameters.clone());
+                ut = ut
+                    .with_parameters_schema(td.parameters.clone())
+                    .with_services(td.services.clone());
                 tools.insert(td.name.clone(), ut);
             }
             // The count comes from the collection itself: a hand-written number
@@ -927,7 +875,9 @@ impl BuiltinToolRegistry {
                     &td.description,
                     ToolSource::Builtin,
                 );
-                ut = ut.with_parameters_schema(td.parameters.clone());
+                ut = ut
+                    .with_parameters_schema(td.parameters.clone())
+                    .with_services(td.services.clone());
                 tools.insert(td.name.clone(), ut);
             }
             // The names come from the collection itself: a hand-written list
@@ -965,7 +915,9 @@ impl BuiltinToolRegistry {
                     &td.description,
                     ToolSource::Builtin,
                 );
-                ut = ut.with_parameters_schema(td.parameters.clone());
+                ut = ut
+                    .with_parameters_schema(td.parameters.clone())
+                    .with_services(td.services.clone());
                 tools.insert(td.name.clone(), ut);
             }
             info!("Registered schemas for media_understand, audio_transcribe, document_extract");
@@ -996,7 +948,9 @@ impl BuiltinToolRegistry {
                 &td.description,
                 ToolSource::Builtin,
             );
-            ut = ut.with_parameters_schema(td.parameters.clone());
+            ut = ut
+                .with_parameters_schema(td.parameters.clone())
+                .with_services(td.services.clone());
             tools.insert(td.name.clone(), ut);
             info!("Registered schema for capability_projection_diagnostics");
         }
@@ -1016,7 +970,9 @@ impl BuiltinToolRegistry {
                 &td.description,
                 ToolSource::Builtin,
             );
-            ut = ut.with_parameters_schema(td.parameters.clone());
+            ut = ut
+                .with_parameters_schema(td.parameters.clone())
+                .with_services(td.services.clone());
             tools.insert(td.name.clone(), ut);
             info!("Registered schema for config_audit");
         }
@@ -1040,7 +996,9 @@ impl BuiltinToolRegistry {
                 &td.description,
                 ToolSource::Builtin,
             );
-            ut = ut.with_parameters_schema(td.parameters.clone());
+            ut = ut
+                .with_parameters_schema(td.parameters.clone())
+                .with_services(td.services.clone());
             tools.insert(td.name.clone(), ut);
             info!("Registered schema for hub_catalog_sync");
 
@@ -1055,7 +1013,9 @@ impl BuiltinToolRegistry {
                 &td.description,
                 ToolSource::Builtin,
             );
-            ut = ut.with_parameters_schema(td.parameters.clone());
+            ut = ut
+                .with_parameters_schema(td.parameters.clone())
+                .with_services(td.services.clone());
             tools.insert(td.name.clone(), ut);
             info!("Registered schema for hub_catalog_search");
 
@@ -1069,7 +1029,9 @@ impl BuiltinToolRegistry {
                 &td.description,
                 ToolSource::Builtin,
             );
-            ut = ut.with_parameters_schema(td.parameters.clone());
+            ut = ut
+                .with_parameters_schema(td.parameters.clone())
+                .with_services(td.services.clone());
             tools.insert(td.name.clone(), ut);
             info!("Registered schema for hub_resolve_spec");
 
@@ -1089,7 +1051,9 @@ impl BuiltinToolRegistry {
                     &td.description,
                     ToolSource::Builtin,
                 );
-                ut = ut.with_parameters_schema(td.parameters.clone());
+                ut = ut
+                    .with_parameters_schema(td.parameters.clone())
+                    .with_services(td.services.clone());
                 tools.insert(td.name.clone(), ut);
                 info!("Registered schema for hub_install_run");
             }
@@ -1105,7 +1069,9 @@ impl BuiltinToolRegistry {
                 &td.description,
                 ToolSource::Builtin,
             );
-            ut = ut.with_parameters_schema(td.parameters.clone());
+            ut = ut
+                .with_parameters_schema(td.parameters.clone())
+                .with_services(td.services.clone());
             tools.insert(td.name.clone(), ut);
             info!("Registered schema for hub_fetch_docs");
         }
@@ -1123,7 +1089,9 @@ impl BuiltinToolRegistry {
                 &td.description,
                 ToolSource::Builtin,
             );
-            ut = ut.with_parameters_schema(td.parameters.clone());
+            ut = ut
+                .with_parameters_schema(td.parameters.clone())
+                .with_services(td.services.clone());
             tools.insert(td.name.clone(), ut);
             info!("Registered schema for hub_install_verify");
         }
@@ -1141,7 +1109,9 @@ impl BuiltinToolRegistry {
                 &td.description,
                 ToolSource::Builtin,
             );
-            ut = ut.with_parameters_schema(td.parameters.clone());
+            ut = ut
+                .with_parameters_schema(td.parameters.clone())
+                .with_services(td.services.clone());
             tools.insert(td.name.clone(), ut);
             info!("Registered schema for tool_usage");
         }
@@ -1308,6 +1278,7 @@ impl BuiltinToolRegistry {
             loop_graph_tool,
             strategy_tool: strategy_tool.with_session_key_handle(memory_session_key_handle.clone()),
             memory_search_tool,
+            memory_runtime: config.memory_runtime.clone(),
             memory_context_provider: Arc::new(tokio::sync::OnceCell::new()),
             node_registry: Arc::new(tokio::sync::OnceCell::new()),
             node_security_store: Arc::new(tokio::sync::OnceCell::new()),
@@ -1375,11 +1346,6 @@ impl BuiltinToolRegistry {
                 crate::builtin_tools::heartbeat_manage::HeartbeatToggleTool::new(Arc::clone(svc))
             }),
             heartbeat_report_tool: crate::builtin_tools::heartbeat_manage::HeartbeatReportTool,
-            // Phase 3 Task 19 — flag_user_correction tool (R9: everything is a tool).
-            // Only the backend handle is stored: the tool itself is built per
-            // call, in the dispatch arm, because its agent id must be the one
-            // executing the turn. See `build_flag_user_correction`.
-            flag_user_correction_db: config.memory_db.clone(),
             raw_memory_store: config.raw_memory_store.clone(),
             browser_open_tool,
             browser_companion_tool,
@@ -1518,30 +1484,8 @@ impl BuiltinToolRegistry {
             diagnostics_control: config.diagnostics_control.clone(),
             memory_project_scoped: config.memory_project_scoped,
             recall_context_db: config.memory_db.clone(),
-            memory_trace_db: config.memory_db.clone(),
             tools,
         })
-    }
-
-    /// The single construction point for `flag_user_correction`.
-    ///
-    /// Built per call rather than once at boot because `agent_id` is not a
-    /// boot-time fact. Corrections are namespaced per agent — `FeedbackDistill`
-    /// reads one agent's corpus at a time — and the registry is constructed
-    /// once, in `agent_init`, where no turn context exists yet. The identity
-    /// baked in there is therefore always the base agent, so every correction
-    /// a non-base agent recorded landed in a corpus that agent's distillation
-    /// never reads.
-    pub(crate) fn build_flag_user_correction(
-        db: &crate::memory::store::MemoryBackend,
-        raw_store: Arc<dyn crate::memory::store::raw_memory::RawMemoryStore>,
-        agent_id: String,
-    ) -> crate::builtin_tools::FlagUserCorrectionTool {
-        crate::builtin_tools::FlagUserCorrectionTool::new(raw_store, agent_id)
-            // Same backend `remember` audits to and `memory_trace` reads back, so
-            // "why isn't that in memory?" covers rung 2 of the destination ladder
-            // and not just rung 1.
-            .with_decision_log(Some(db.clone()))
     }
 }
 

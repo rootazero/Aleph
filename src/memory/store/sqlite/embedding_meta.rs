@@ -21,31 +21,33 @@ impl SqliteMemoryBackend {
     /// Read the recorded embedding signature, or `None` if a reembed has never
     /// run (fresh store or data predating this feature).
     pub fn get_embedding_signature(&self) -> Result<Option<String>, AlephError> {
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
-        let mut stmt = conn
-            .prepare("SELECT value FROM compression_metadata WHERE key = ?1")
-            .map_err(|e| AlephError::config(format!("get_embedding_signature prepare: {e}")))?;
+        self.with_connection(|conn| {
+            let mut stmt = conn
+                .prepare("SELECT value FROM compression_metadata WHERE key = ?1")
+                .map_err(|e| AlephError::config(format!("get_embedding_signature prepare: {e}")))?;
 
-        match stmt.query_row(params![EMBEDDING_SIGNATURE_KEY], |row| {
-            row.get::<_, String>(0)
-        }) {
-            Ok(value) => Ok(Some(value)),
-            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
-            Err(e) => Err(AlephError::config(format!("get_embedding_signature: {e}"))),
-        }
+            match stmt.query_row(params![EMBEDDING_SIGNATURE_KEY], |row| {
+                row.get::<_, String>(0)
+            }) {
+                Ok(value) => Ok(Some(value)),
+                Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+                Err(e) => Err(AlephError::config(format!("get_embedding_signature: {e}"))),
+            }
+        })
     }
 
     /// Persist the embedding signature. Idempotent — a single row is kept.
     pub fn set_embedding_signature(&self, signature: &str) -> Result<(), AlephError> {
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
-        conn.execute(
-            "INSERT INTO compression_metadata (key, value) \
+        self.with_connection(|conn| {
+            conn.execute(
+                "INSERT INTO compression_metadata (key, value) \
              VALUES (?1, ?2) \
              ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-            params![EMBEDDING_SIGNATURE_KEY, signature],
-        )
-        .map_err(|e| AlephError::config(format!("set_embedding_signature: {e}")))?;
-        Ok(())
+                params![EMBEDDING_SIGNATURE_KEY, signature],
+            )
+            .map_err(|e| AlephError::config(format!("set_embedding_signature: {e}")))?;
+            Ok(())
+        })
     }
 }
 

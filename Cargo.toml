@@ -167,6 +167,7 @@ loom = ["dep:loom"]
 # feature does not compile it and does not need the fake peer. The integration
 # tests get `aleph-cdp/testkit` through the dev-dependency, as before.
 test-helpers = []
+native-qa = []
 # Control plane UI (Leptos/WASM dashboard)
 control-plane = []
 # Disabled test modules awaiting rewrite
@@ -410,6 +411,13 @@ path = "src/bin/aleph-migrate/main.rs"
 test = false
 bench = false
 
+[[bin]]
+name = "aleph-panel-native-qa-gateway"
+path = "src/bin/aleph-panel-native-qa-gateway/main.rs"
+required-features = ["native-qa"]
+test = false
+bench = false
+
 [dev-dependencies]
 # Task9 independent source import guard only. Never used by normal library code.
 syn = { version = "=3.0.9", default-features = false, features = ["full", "parsing", "printing", "visit"] }
@@ -510,6 +518,10 @@ required-features = ["test-helpers"]
 # surface where `scratch` is configured out, and rustc reports E0433.
 [[test]]
 name = "memory_modes_integration"
+required-features = ["test-helpers"]
+
+[[test]]
+name = "memory_runtime_lifecycle"
 required-features = ["test-helpers"]
 
 [[test]]

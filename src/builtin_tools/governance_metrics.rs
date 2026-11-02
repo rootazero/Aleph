@@ -115,6 +115,10 @@ fn now_epoch_secs() -> i64 {
 
 #[async_trait]
 impl AlephTool for GovernanceMetricsTool {
+    fn services() -> Vec<aleph_slot_api::capability::Service> {
+        vec![crate::memory::runtime::required_service()]
+    }
+
     const NAME: &'static str = "governance_metrics";
     const DESCRIPTION: &'static str = r#"Read-only governance reality probe for the loop-governance audit ring.
 

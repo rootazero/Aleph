@@ -44,14 +44,27 @@ const MAX_QUERY_TERMS: usize = 16;
 
 /// Read-only owner-memory search driver.
 pub struct OwnerMemoryReadDriver {
-    db: MemoryBackend,
+    source: OwnerMemorySource,
     partitions: Vec<String>,
+}
+
+enum OwnerMemorySource {
+    Backend(MemoryBackend),
+    Runtime(Arc<crate::memory::runtime::MemoryRuntime>),
 }
 
 impl OwnerMemoryReadDriver {
     /// Search only the owner's personal scope. Never fall back to the
     /// cross-project/global base partition without proving its provenance.
     pub fn new(db: MemoryBackend) -> Self {
+        Self::with_source(OwnerMemorySource::Backend(db))
+    }
+
+    pub fn from_runtime(runtime: Arc<crate::memory::runtime::MemoryRuntime>) -> Self {
+        Self::with_source(OwnerMemorySource::Runtime(runtime))
+    }
+
+    fn with_source(source: OwnerMemorySource) -> Self {
         let base = crate::gateway::agent_env::DEFAULT_AGENT;
         let owner = crate::memory::project_scope::scoped_agent_id(
             base,
@@ -62,7 +75,7 @@ impl OwnerMemoryReadDriver {
             "owner memory scope must be the proven owner-specific partition"
         );
         Self {
-            db,
+            source,
             partitions: vec![owner],
         }
     }
@@ -72,13 +85,28 @@ impl OwnerMemoryReadDriver {
             return Ok(Vec::new());
         };
         let partitions = self.partitions.clone();
-        self.db
-            .with_conn(move |conn| {
+        let (db, operation) = match &self.source {
+            OwnerMemorySource::Backend(db) => (db.clone(), None),
+            OwnerMemorySource::Runtime(runtime) => {
+                let operation = match runtime.operation() {
+                    Ok(operation) => operation,
+                    Err(_) => return Ok(Vec::new()),
+                };
+                (operation.backend().clone(), Some(operation))
+            }
+        };
+        let task = async move {
+            db.with_conn(move |conn| {
                 let _read_only =
                     QueryOnlyGuard::new(conn).map_err(|e| AlephError::other(e.to_string()))?;
                 select_notes(conn, &expr, &partitions).map_err(|e| AlephError::other(e.to_string()))
             })
             .await
+        };
+        match operation {
+            Some(operation) => operation.run(task).await,
+            None => task.await,
+        }
     }
 }
 
@@ -271,6 +299,58 @@ mod tests {
         q: &str,
     ) -> Result<PrivateReadResult, PrivateReadError> {
         d.read(&scope(), q, &CancellationToken::new()).await
+    }
+
+    #[tokio::test]
+    async fn owner_runtime_read_uses_each_admitted_bundle() {
+        let root = tempfile::tempdir().unwrap();
+        let runtime = crate::memory::runtime::MemoryRuntime::new(
+            crate::memory::runtime::MemoryRuntimeConfig {
+                metadata_path: root.path().join("memory.db"),
+                note_memory_dir: root.path().join("notes"),
+            },
+            Arc::new(crate::capability::ownership::OwnershipTree::new()),
+        );
+        let driver = OwnerMemoryReadDriver::from_runtime(runtime.clone());
+        assert_eq!(
+            read(&driver, "dentist").await.unwrap(),
+            PrivateReadResult::Unavailable
+        );
+        for index in 0..2 {
+            runtime.start().await.unwrap();
+            let operation = runtime.operation().unwrap();
+            let db = operation.backend().clone();
+            operation
+                .scope(async {
+                    insert(
+                        &db,
+                        "main__u-owner",
+                        &format!("{index}.md"),
+                        "dentist owned result",
+                    )
+                    .await;
+                    insert(
+                        &db,
+                        "main",
+                        &format!("base-{index}.md"),
+                        "dentist BASE-CANARY",
+                    )
+                    .await;
+                })
+                .await;
+            let result = read(&driver, "dentist").await.unwrap();
+            runtime.stop().await.unwrap();
+            let PrivateReadResult::Transient(body) = result else {
+                panic!("the runtime driver must read the real admitted owner partition");
+            };
+            assert!(body.contains("owned result"));
+            assert!(!body.contains("BASE-CANARY"));
+            assert!(db.ensure_available().is_err());
+            assert_eq!(
+                read(&driver, "dentist").await.unwrap(),
+                PrivateReadResult::Unavailable
+            );
+        }
     }
 
     #[tokio::test]

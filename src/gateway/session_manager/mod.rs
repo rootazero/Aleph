@@ -7,6 +7,8 @@
 //! This module manages sessions with `SQLite` persistence, automatic
 //! compaction, and lifecycle management.
 
+#[cfg(test)]
+mod memory_lifecycle_tests;
 pub(crate) mod ops;
 #[cfg(test)]
 mod tests;
@@ -229,6 +231,8 @@ pub struct SessionManager {
     pub(super) conn: Arc<Mutex<Connection>>,
     /// Optional writer for Spec 1 memory capture hooks.
     pub(super) raw_memory_writer: Option<Arc<dyn crate::memory::store::raw_memory::RawMemoryStore>>,
+    /// Borrow the derived resource source without cycling through SessionStore.
+    pub(super) memory_runtime: Option<std::sync::Weak<crate::memory::runtime::MemoryRuntime>>,
     /// Optional event bus for publishing session lifecycle events.
     pub(super) event_bus: Option<Arc<super::event_bus::GatewayEventBus>>,
 }
@@ -256,6 +260,7 @@ impl SessionManager {
             config,
             conn: Arc::new(Mutex::new(conn)),
             raw_memory_writer: None,
+            memory_runtime: None,
             event_bus: None,
         })
     }
@@ -266,6 +271,16 @@ impl SessionManager {
         writer: Arc<dyn crate::memory::store::raw_memory::RawMemoryStore>,
     ) -> Self {
         self.raw_memory_writer = Some(writer);
+        self
+    }
+
+    /// Attach the same Memory source while raw storage keeps its own lifetime.
+    #[must_use]
+    pub fn with_memory_runtime(
+        mut self,
+        runtime: &Arc<crate::memory::runtime::MemoryRuntime>,
+    ) -> Self {
+        self.memory_runtime = Some(Arc::downgrade(runtime));
         self
     }
 

@@ -1,6 +1,8 @@
 # Restart prompt: startup note maintenance owned drain / 重启实施提示
 
-**Status / 状态: Unimplemented / 未实施。** This prompt is a production implementation authorization template for a later session. The current planning session only writes and commits the design, plan and prompt. Planning documents alone are not authorization. Execute production changes only after the user explicitly asks to execute this prompt. / 本 prompt 是后续会话的生产实施授权模板；本轮只写并提交 design、plan、prompt。规划文档本身不构成授权，只有用户明确要求执行本 prompt 才能改生产代码。
+**Execution update / 执行更新 (2026-11-01):** The user explicitly authorized this prompt, and the bounded slice is implemented on local `note-maintenance-drain`. See [actual execution evidence and limits](../runs/2026-11-01-note-maintenance-drain-run.md). The original restart template below is retained as a historical scope record. / 已明确授权并在本地实施，下文保留原始重启模板，不代表仍待重复实施。
+
+**Original planning status / 原规划状态: Unimplemented / 未实施。** This prompt is a production implementation authorization template for a later session. The current planning session only writes and commits the design, plan and prompt. Planning documents alone are not authorization. Execute production changes only after the user explicitly asks to execute this prompt. / 本 prompt 是后续会话的生产实施授权模板；本轮只写并提交 design、plan、prompt。规划文档本身不构成授权，只有用户明确要求执行本 prompt 才能改生产代码。
 
 ## Mission / 目标
 

@@ -559,8 +559,8 @@ fn startup_and_default_constructors_forward_the_single_runtime_tree() {
         "../../../bin/aleph-server/commands/start/mod.rs"
     ));
     let construct = "letownership_tree=Arc::new(OwnershipTree::new());";
-    let install = "initialize_extension_manager(args.daemon,Arc::clone(&ownership_tree)).await;";
-    let mount = "ProjectionHost::mount_with_diagnostics((*tool_registry_phase2).clone(),Arc::clone(&ownership_tree),diagnostics_enabled,";
+    let install = "initialize_extension_manager(args.daemon,Arc::clone(&ownership_tree)).await?;";
+    let mount = "ProjectionHost::mount_with_memory((*tool_registry_phase2).clone(),Arc::clone(&ownership_tree),memory_runtime.clone(),diagnostics_enabled,";
     assert_eq!(startup.matches(construct).count(), 1);
     assert!(startup.find(construct).unwrap() < startup.find(install).unwrap());
     assert!(startup.find(install).unwrap() < startup.find(mount).unwrap());

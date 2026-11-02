@@ -114,7 +114,9 @@ impl BuiltinToolRegistry {
                             &td.description,
                             ToolSource::Builtin,
                         );
-                        ut = ut.with_parameters_schema(td.parameters.clone());
+                        ut = ut
+                            .with_parameters_schema(td.parameters.clone())
+                            .with_services(td.services.clone());
                         tools.insert(td.name.clone(), ut);
                     }
                 }
@@ -226,7 +228,9 @@ impl BuiltinToolRegistry {
                         &td.description,
                         ToolSource::Builtin,
                     );
-                    ut = ut.with_parameters_schema(td.parameters.clone());
+                    ut = ut
+                        .with_parameters_schema(td.parameters.clone())
+                        .with_services(td.services.clone());
                     tools.insert(td.name.clone(), ut);
                 }
             }
@@ -271,7 +275,9 @@ impl BuiltinToolRegistry {
                         &td.description,
                         ToolSource::Builtin,
                     );
-                    ut = ut.with_parameters_schema(td.parameters.clone());
+                    ut = ut
+                        .with_parameters_schema(td.parameters.clone())
+                        .with_services(td.services.clone());
                     tools.insert(td.name.clone(), ut);
                 }
                 info!("Registered team_snapshot tool");
@@ -301,7 +307,9 @@ impl BuiltinToolRegistry {
                     &td.description,
                     ToolSource::Builtin,
                 );
-                ut = ut.with_parameters_schema(td.parameters.clone());
+                ut = ut
+                    .with_parameters_schema(td.parameters.clone())
+                    .with_services(td.services.clone());
                 tools.insert(td.name.clone(), ut);
             }
             info!("Registered team_usage tool");
@@ -326,7 +334,9 @@ impl BuiltinToolRegistry {
                     &td.description,
                     ToolSource::Builtin,
                 );
-                ut = ut.with_parameters_schema(td.parameters.clone());
+                ut = ut
+                    .with_parameters_schema(td.parameters.clone())
+                    .with_services(td.services.clone());
                 tools.insert(td.name.clone(), ut);
             }
             info!("Registered team_acp_member tool");
@@ -351,7 +361,9 @@ impl BuiltinToolRegistry {
                     &td.description,
                     ToolSource::Builtin,
                 );
-                ut = ut.with_parameters_schema(td.parameters.clone());
+                ut = ut
+                    .with_parameters_schema(td.parameters.clone())
+                    .with_services(td.services.clone());
                 tools.insert(td.name.clone(), ut);
             }
             info!("Registered team_workflow_canvas tool");
@@ -378,7 +390,9 @@ impl BuiltinToolRegistry {
                     &td.description,
                     ToolSource::Builtin,
                 );
-                ut = ut.with_parameters_schema(td.parameters.clone());
+                ut = ut
+                    .with_parameters_schema(td.parameters.clone())
+                    .with_services(td.services.clone());
                 tools.insert(td.name.clone(), ut);
             }
             info!("Registered workflow_step_review tool");
@@ -410,7 +424,9 @@ impl BuiltinToolRegistry {
                     &td.description,
                     ToolSource::Builtin,
                 );
-                ut = ut.with_parameters_schema(td.parameters.clone());
+                ut = ut
+                    .with_parameters_schema(td.parameters.clone())
+                    .with_services(td.services.clone());
                 tools.insert(td.name.clone(), ut);
             }
             info!("Registered workflow template tool");
@@ -435,7 +451,9 @@ impl BuiltinToolRegistry {
                     &td.description,
                     ToolSource::Builtin,
                 );
-                ut = ut.with_parameters_schema(td.parameters.clone());
+                ut = ut
+                    .with_parameters_schema(td.parameters.clone())
+                    .with_services(td.services.clone());
                 tools.insert(td.name.clone(), ut);
             }
             info!("Registered team_task_control tool");
@@ -460,7 +478,9 @@ impl BuiltinToolRegistry {
                     &td.description,
                     ToolSource::Builtin,
                 );
-                ut = ut.with_parameters_schema(td.parameters.clone());
+                ut = ut
+                    .with_parameters_schema(td.parameters.clone())
+                    .with_services(td.services.clone());
                 tools.insert(td.name.clone(), ut);
             }
             info!("Registered task_exit_journal tool");
@@ -492,7 +512,9 @@ impl BuiltinToolRegistry {
                     &td.description,
                     ToolSource::Builtin,
                 );
-                ut = ut.with_parameters_schema(td.parameters.clone());
+                ut = ut
+                    .with_parameters_schema(td.parameters.clone())
+                    .with_services(td.services.clone());
                 tools.insert(td.name.clone(), ut);
             }
 

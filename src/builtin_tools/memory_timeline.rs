@@ -130,6 +130,10 @@ impl Clone for MemoryTimelineTool {
 
 #[async_trait]
 impl AlephTool for MemoryTimelineTool {
+    fn services() -> Vec<aleph_slot_api::capability::Service> {
+        vec![crate::memory::runtime::required_service()]
+    }
+
     const NAME: &'static str = "memory_timeline";
     const DESCRIPTION: &'static str =
         "View the complete lifecycle of a memory fact — creation, modification, \

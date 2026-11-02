@@ -91,8 +91,8 @@ impl MemoryContextProvider {
             orientation_snapshots: Arc::new(TokioRwLock::new(HashMap::new())),
             curated_stores: Arc::new(DashMap::new()),
             curated_config: CuratedConfig::default(),
-            #[cfg(test)]
             curated_root_override: None,
+            open_loop_inject: false,
             project_scoped: false,
         }
     }
@@ -101,6 +101,13 @@ impl MemoryContextProvider {
     #[must_use]
     pub const fn with_injection_mode(mut self, mode: MemoryInjectionMode) -> Self {
         self.injection_mode = mode;
+        self
+    }
+
+    /// Bind open-loop injection to this provider's activation snapshot.
+    #[must_use]
+    pub const fn with_open_loop_injection(mut self, enabled: bool) -> Self {
+        self.open_loop_inject = enabled;
         self
     }
 
@@ -185,8 +192,8 @@ impl MemoryContextProvider {
             orientation_snapshots: Arc::new(TokioRwLock::new(HashMap::new())),
             curated_stores: Arc::new(DashMap::new()),
             curated_config: CuratedConfig::default(),
-            #[cfg(test)]
             curated_root_override: None,
+            open_loop_inject: false,
             project_scoped: false,
         }
     }
@@ -215,6 +222,46 @@ impl MemoryContextProvider {
                 .join("memory")
                 .join("note")
         });
+        // Read snapshots from wherever `SnapshotWriter` puts them. Use the
+        // reader `default_path()` hands back rather than re-deriving the path:
+        // the two halves resolve `ALEPH_HOME` (via `utils::paths`), and the old
+        // shape called `default_path()` only as an `Option` discriminator and
+        // then rebuilt `~/.aleph/data/sessions` from `dirs::home_dir()`. Under
+        // `ALEPH_HOME` that wrote here and read there, so the resume chain was
+        // not merely ignoring the knob — it was severed end to end.
+        let snapshots = Arc::new(SnapshotReader::default_path().unwrap_or_else(|| {
+            let fallback = memory_dir.parent().map_or_else(
+                || {
+                    tracing::warn!("Memory dir has no parent, using memory_dir for sessions");
+                    memory_dir.clone()
+                },
+                |p| p.join("sessions"),
+            );
+            SnapshotReader::new(fallback)
+        }));
+        Self::assemble_at(
+            memory_dir,
+            snapshots,
+            memory_db,
+            raw_store,
+            embedder,
+            provider,
+            assembler_config,
+            config,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn assemble_at(
+        memory_dir: std::path::PathBuf,
+        snapshots: Arc<SnapshotReader>,
+        memory_db: MemoryBackend,
+        raw_store: Arc<dyn RawMemoryStore>,
+        embedder: Option<Arc<dyn EmbeddingProvider>>,
+        provider: Option<Arc<dyn AiProvider>>,
+        assembler_config: AssemblerConfig,
+        config: MemoryContextConfig,
+    ) -> Self {
         let indexer = Arc::new(NoteIndexer::new(memory_dir.clone(), memory_db.clone()));
         // Wire the same retrieval-time refinements as the on-demand
         // `memory_search` tool: cross-encoder rerank + recency/reinforcement/MMR
@@ -234,23 +281,6 @@ impl MemoryContextProvider {
                 .with_scoring_config(&assembler_config.retrieval_scoring)
                 .with_expansion_config(&assembler_config.expansion),
         );
-        // Read snapshots from wherever `SnapshotWriter` puts them. Use the
-        // reader `default_path()` hands back rather than re-deriving the path:
-        // the two halves resolve `ALEPH_HOME` (via `utils::paths`), and the old
-        // shape called `default_path()` only as an `Option` discriminator and
-        // then rebuilt `~/.aleph/data/sessions` from `dirs::home_dir()`. Under
-        // `ALEPH_HOME` that wrote here and read there, so the resume chain was
-        // not merely ignoring the knob — it was severed end to end.
-        let snapshots = Arc::new(SnapshotReader::default_path().unwrap_or_else(|| {
-            let fallback = memory_dir.parent().map_or_else(
-                || {
-                    tracing::warn!("Memory dir has no parent, using memory_dir for sessions");
-                    memory_dir.clone()
-                },
-                |p| p.join("sessions"),
-            );
-            SnapshotReader::new(fallback)
-        }));
         let feedback_floor = FeedbackFloorLoader::new(memory_dir.clone());
         let profile = UserProfileLoader::new(memory_dir);
         let reranker: Arc<dyn crate::memory::assembler::hybrid::LlmReranker> = match provider {
@@ -285,8 +315,8 @@ impl MemoryContextProvider {
             orientation_snapshots: Arc::new(TokioRwLock::new(HashMap::new())),
             curated_stores: Arc::new(DashMap::new()),
             curated_config: CuratedConfig::default(),
-            #[cfg(test)]
             curated_root_override: None,
+            open_loop_inject: false,
             project_scoped,
         }
     }
@@ -330,6 +360,11 @@ impl MemoryContextProvider {
         self
     }
 
+    pub(crate) fn with_curated_root(mut self, root: std::path::PathBuf) -> Self {
+        self.curated_root_override = Some(root);
+        self
+    }
+
     /// Test-only: redirect the curated root to a tempdir path (so tests don't
     /// touch the real `~/.aleph/agents/<id>/MEMORY.md`).
     #[cfg(test)]
@@ -354,11 +389,8 @@ impl MemoryContextProvider {
     /// cannot be resolved, falls back to a temp-dir prefix so we never
     /// panic in a degraded environment.
     pub(crate) fn agent_memory_path(&self, agent_id: &str) -> std::path::PathBuf {
-        #[cfg(test)]
-        {
-            if let Some(root) = &self.curated_root_override {
-                return root.join(agent_id).join("MEMORY.md");
-            }
+        if let Some(root) = &self.curated_root_override {
+            return root.join(agent_id).join("MEMORY.md");
         }
         let base = crate::discovery::aleph_home_dir().unwrap_or_else(|_| {
             tracing::warn!(

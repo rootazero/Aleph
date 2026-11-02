@@ -114,7 +114,10 @@ pub struct BuiltinToolRegistry {
     /// Strategy tool instance (persistent planner output, R8).
     pub(crate) strategy_tool: crate::builtin_tools::StrategyTool,
     /// Memory search tool instance (optional - requires `memory_db` + embedder)
-    pub(crate) memory_search_tool: Option<crate::builtin_tools::MemorySearchTool>,
+    pub(crate) memory_search_tool:
+        Option<crate::builtin_tools::runtime::RuntimeTool<crate::builtin_tools::MemorySearchTool>>,
+    /// The sole Memory lifecycle source; per-call adapters retain no bundle.
+    pub(crate) memory_runtime: Option<Arc<crate::memory::runtime::MemoryRuntime>>,
     /// Memory context provider — used by the `remember` tool to resolve the
     /// per-agent `CuratedMemoryStore`. Uses `OnceCell` for deferred injection:
     /// the registry is wrapped in `Arc` before the MCP is constructed.
@@ -135,18 +138,13 @@ pub struct BuiltinToolRegistry {
     pub(crate) gateway_event_bus:
         Arc<tokio::sync::OnceCell<Arc<crate::gateway::event_bus::GatewayEventBus>>>,
     /// Memory browse tool instance (optional - requires `memory_db`)
-    pub(crate) memory_browse_tool: Option<crate::builtin_tools::MemoryBrowseTool>,
+    pub(crate) memory_browse_tool:
+        Option<crate::builtin_tools::runtime::RuntimeTool<crate::builtin_tools::MemoryBrowseTool>>,
     /// Memory explore tool instance (optional - requires `memory_db` + embedder)
-    pub(crate) memory_explore_tool: Option<crate::builtin_tools::MemoryExploreTool>,
+    pub(crate) memory_explore_tool:
+        Option<crate::builtin_tools::runtime::RuntimeTool<crate::builtin_tools::MemoryExploreTool>>,
     /// Memory timeline tool instance (optional - requires `StateDatabase`)
     pub(crate) memory_timeline_tool: Option<crate::builtin_tools::MemoryTimelineTool>,
-    /// Phase 3 self-evolution path α — backend for `flag_user_correction`,
-    /// which records user-correction signals into `raw_memory` under
-    /// <aleph://correction/{id>}. The handle rather than a constructed tool:
-    /// the tool's agent id must be resolved per call (see
-    /// `BuiltinToolRegistry::build_flag_user_correction`). `None` disables the
-    /// tool — it requires a memory backend.
-    pub(crate) flag_user_correction_db: Option<crate::memory::store::MemoryBackend>,
     pub(crate) raw_memory_store: Option<Arc<dyn crate::memory::store::raw_memory::RawMemoryStore>>,
     /// Shared workspace handle for memory tools — written by `ExecutionEngine` after workspace resolution
     pub(crate) memory_workspace_handle: Option<Arc<RwLock<String>>>,
@@ -336,8 +334,12 @@ pub struct BuiltinToolRegistry {
     pub(crate) skill_status_tool: crate::builtin_tools::skill_status::SkillStatusTool,
     pub(crate) skill_install_tool: crate::builtin_tools::skill_install::SkillInstallTool,
     pub(crate) skill_manage_tool: crate::builtin_tools::skill_manage::SkillManageTool,
-    /// Unified note management tool (optional - requires `memory_db`)
-    pub(crate) note_manage_tool: Option<crate::builtin_tools::note_manage::NoteManageTool>,
+    /// The adapter holds the stable source rather than a concrete indexer.
+    pub(crate) note_manage_tool: Option<
+        crate::builtin_tools::runtime::RuntimeTool<
+            crate::builtin_tools::note_manage::NoteManageTool,
+        >,
+    >,
     /// Session-complete tool (optional - requires `memory_db`)
     pub(crate) session_complete_tool:
         Option<crate::builtin_tools::session_complete::SessionCompleteTool>,
@@ -350,12 +352,22 @@ pub struct BuiltinToolRegistry {
     /// `channel_registry_cell`). Used by the `ask_user` tool.
     pub(crate) clarification_manager_cell:
         Arc<tokio::sync::OnceCell<Arc<crate::clarification::ClarificationManager>>>,
-    /// Wiki orient tool (Spec 5 Task 12) — optional, requires wiki handle.
-    pub(crate) note_orient_tool: Option<crate::builtin_tools::note_orient::NoteOrientTool>,
-    /// Note schema tool (Spec 5 Task 12) — always Some when `note_memory_dir` is set.
-    pub(crate) note_schema_tool: Option<crate::builtin_tools::note_schema::NoteSchemaTool>,
-    /// User profile tool (Spec 7 Task 9) — optional, requires `ProfileSynthesizer`.
-    pub(crate) user_profile_tool: Option<crate::builtin_tools::user_profile::UserProfileTool>,
+    /// Manual note tools resolve the current admitted bundle on each call.
+    pub(crate) note_orient_tool: Option<
+        crate::builtin_tools::runtime::RuntimeTool<
+            crate::builtin_tools::note_orient::NoteOrientTool,
+        >,
+    >,
+    pub(crate) note_schema_tool: Option<
+        crate::builtin_tools::runtime::RuntimeTool<
+            crate::builtin_tools::note_schema::NoteSchemaTool,
+        >,
+    >,
+    pub(crate) user_profile_tool: Option<
+        crate::builtin_tools::runtime::RuntimeTool<
+            crate::builtin_tools::user_profile::UserProfileTool,
+        >,
+    >,
     /// Hub catalog search (optional - requires CatalogCache). Supplies the
     /// `entry_id` that resolve-spec / install-run take.
     pub(crate) hub_catalog_search_tool: Option<crate::builtin_tools::hub::HubCatalogSearchTool>,
@@ -386,7 +398,6 @@ pub struct BuiltinToolRegistry {
     #[allow(dead_code)]
     pub(crate) recall_context_db: Option<crate::memory::store::MemoryBackend>,
     /// Memory backend for the `memory_trace` tool (evidence-chain walk).
-    pub(crate) memory_trace_db: Option<crate::memory::store::MemoryBackend>,
     /// Capability-runtime diagnostic control surface for
     /// `capability_projection_diagnostics` (enablement gate). Mirrors the
     /// `BuiltinToolConfig::diagnostics_control` slot: when `None` the

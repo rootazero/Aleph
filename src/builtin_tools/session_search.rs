@@ -24,6 +24,10 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use tracing::debug;
 
+#[cfg(test)]
+#[path = "session_search_lifecycle_tests.rs"]
+mod lifecycle_tests;
+
 use super::error::ToolError;
 use crate::error::Result;
 use crate::gateway::context::GatewayContext;
@@ -134,6 +138,8 @@ pub struct SessionSearchTool {
     /// `SummarySynthesizer` for lazy on-demand fallback synthesis. `None` when
     /// no `AiProvider` is configured; fallback skips synthesis and marks hit as unavailable.
     synthesizer: Option<Arc<SummarySynthesizer>>,
+    #[cfg(test)]
+    evidence_fetches: Arc<std::sync::atomic::AtomicUsize>,
 }
 
 impl SessionSearchTool {
@@ -148,6 +154,8 @@ impl SessionSearchTool {
             caller_agent_id: caller_agent_id.into(),
             assembler,
             synthesizer,
+            #[cfg(test)]
+            evidence_fetches: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
         }
     }
 
@@ -265,6 +273,9 @@ impl SessionSearchTool {
 
             // ③ Build hits, fetching evidence_quotes per surviving session.
             for c in &survivors {
+                if !self.is_accessible(&c.agent_id) {
+                    continue;
+                }
                 // P1/P2 isolation. Checked BEFORE the evidence fetch: the
                 // quotes are raw transcript bytes, so a denied session must
                 // cost neither an FTS round trip nor a chance to leak one.
@@ -288,9 +299,6 @@ impl SessionSearchTool {
                     source: source_from_path(&c.fact_path),
                 });
             }
-
-            // ④ A2A filter.
-            hits.retain(|h| self.is_accessible(&h.agent_id));
         }
 
         // ⑤ Lazy fallback: raw FTS5 hits whose session has no summary fact yet.
@@ -373,6 +381,9 @@ impl SessionSearchTool {
         session_key: &str,
         max_quotes: usize,
     ) -> Result<Vec<String>> {
+        #[cfg(test)]
+        self.evidence_fetches
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         let raw = self
             .context
             .session_store()

@@ -11,7 +11,9 @@ use crate::capability::descriptor::{
 };
 use crate::capability::facade::{CapabilitySnapshot, Cursor, Scope};
 use crate::capability::ownership::{LifetimeScope, OwnerRef, VisibilityScope};
-use crate::tools::descriptor::{canonicalize_json, ReplayPolicy, ToolCapabilityDescriptor, ToolSource};
+use crate::tools::descriptor::{
+    canonicalize_json, canonicalize_services, ReplayPolicy, ToolCapabilityDescriptor, ToolSource,
+};
 use sha2::{Digest, Sha256};
 
 /// Namespace under which the tool backend registers its capabilities.
@@ -58,7 +60,11 @@ impl ToolBackendAdapter {
 
     /// Whether a descriptor falls inside `scope`, including its behavior facet.
     pub(super) fn descriptor_in_scope(descriptor: &CapabilityDescriptor, scope: &Scope) -> bool {
-        Self::in_scope(&descriptor.id, scope)
+        scope.kind.is_none_or(|kind| descriptor.kind == kind)
+            && scope
+                .namespace
+                .as_ref()
+                .is_none_or(|namespace| descriptor.id.namespace == *namespace)
             && scope.facet.is_none_or(|facet| descriptor.supports(facet))
     }
 
@@ -119,6 +125,7 @@ impl CapabilityBackend for ToolBackendAdapter {
 pub(super) fn to_descriptor(tool: &ToolCapabilityDescriptor) -> CapabilityDescriptor {
     let mut schema_bytes = Vec::new();
     canonicalize_json(&tool.input_schema, &mut schema_bytes);
+    canonicalize_services(&tool.services, &mut schema_bytes);
     let digest = Sha256::digest(&schema_bytes);
     let mut fingerprint = [0u8; 32];
     fingerprint.copy_from_slice(&digest);
@@ -137,7 +144,7 @@ pub(super) fn to_descriptor(tool: &ToolCapabilityDescriptor) -> CapabilityDescri
         lifetime: LifetimeScope::Runtime,
         visibility: VisibilityScope::default(),
         owner: OwnerRef::Runtime,
-        services: Vec::new(),
+        services: tool.services.clone(),
         metadata: ProjectionMetadata::default(),
         facets: tool_facets(tool),
     }
@@ -146,7 +153,10 @@ pub(super) fn to_descriptor(tool: &ToolCapabilityDescriptor) -> CapabilityDescri
 pub(super) fn tool_facets(tool: &ToolCapabilityDescriptor) -> CapabilityFacets {
     let facets = CapabilityFacets::new().with(CapabilityFacet::Callable);
     if tool.replay_policy == ReplayPolicy::Unsafe
-        || matches!(tool.source, ToolSource::Mcp { .. } | ToolSource::Extension { .. })
+        || matches!(
+            tool.source,
+            ToolSource::Mcp { .. } | ToolSource::Extension { .. }
+        )
     {
         return facets.with(CapabilityFacet::ExternalEffect);
     }
@@ -198,6 +208,25 @@ mod tests {
         FakeHandler {
             name: name.to_string(),
         }
+    }
+
+    #[test]
+    fn required_resource_roundtrips_canonical_metadata() {
+        let dependency = json!([{
+            "relation": "requires", "target": {"namespace": "aleph/resources", "name": "memory.runtime"}
+        }]);
+        let mut wire = serde_json::to_value(fake_def("memory_search")).unwrap();
+        wire["metadata"]["services"] = dependency.clone();
+        let descriptor =
+            ToolCapabilityDescriptor::from_definition(&serde_json::from_value(wire).unwrap(), 1);
+        let services = to_descriptor(&descriptor).services;
+        assert_eq!(services.len(), 1);
+        assert_eq!(services[0].target.namespace, "aleph/resources");
+        assert_eq!(services[0].target.name, "memory.runtime");
+        assert_eq!(
+            services[0].relation,
+            crate::capability::descriptor::ServiceRelation::Requires
+        );
     }
 
     #[test]

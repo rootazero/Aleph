@@ -102,6 +102,8 @@ pub struct HostSnapshot {
     /// Registry entries in scope, keyed by tool name, SHARED behind an [`Arc`]
     /// so cloning a snapshot is cheap.
     pub entries: Arc<HashMap<String, RegistryEntry>>,
+    /// Pure Resource descriptors, never callable registry entries.
+    pub resources: Vec<crate::capability::descriptor::CapabilityDescriptor>,
     /// The registry revision `entries` were frozen from (registry cut).
     pub registry_cursor: Cursor,
     /// The registry close flag from the same frozen state (registry cut).
@@ -110,10 +112,15 @@ pub struct HostSnapshot {
     pub owner_generations: HashMap<CapabilityId, OwnerGeneration>,
 }
 
+#[cfg(test)]
+#[path = "projection_host_memory_tests.rs"]
+mod memory_tests;
+
 impl HostSnapshot {
     fn from_facade(f: FacadeEntriesSnapshot) -> Self {
         HostSnapshot {
             entries: f.entries,
+            resources: f.resources,
             registry_cursor: f.registry_cursor,
             registry_closed: f.registry_closed,
             owner_generations: f.owner_generations,
@@ -542,7 +549,29 @@ impl ProjectionHost {
         tree: Arc<OwnershipTree>,
         diagnostics_enabled: bool,
     ) -> Arc<Self> {
-        Self::mount_internal(registry, tree, DEFAULT_PENDING_CAPACITY, diagnostics_enabled)
+        Self::mount_internal(
+            registry,
+            tree,
+            DEFAULT_PENDING_CAPACITY,
+            diagnostics_enabled,
+        )
+    }
+
+    /// Mount the canonical Tool sources plus the concrete Memory Resource.
+    #[must_use]
+    pub fn mount_with_memory(
+        registry: ToolHandlerRegistry,
+        tree: Arc<OwnershipTree>,
+        memory: Arc<crate::memory::runtime::MemoryRuntime>,
+        diagnostics_enabled: bool,
+    ) -> Arc<Self> {
+        Self::mount_sources(
+            registry,
+            tree,
+            Some(memory),
+            DEFAULT_PENDING_CAPACITY,
+            diagnostics_enabled,
+        )
     }
 
     fn mount_internal(
@@ -551,7 +580,20 @@ impl ProjectionHost {
         capacity: usize,
         diagnostics_enabled: bool,
     ) -> Arc<Self> {
-        let facade = ZahirFacade::new(registry.clone(), Arc::clone(&tree));
+        Self::mount_sources(registry, tree, None, capacity, diagnostics_enabled)
+    }
+
+    fn mount_sources(
+        registry: ToolHandlerRegistry,
+        tree: Arc<OwnershipTree>,
+        memory: Option<Arc<crate::memory::runtime::MemoryRuntime>>,
+        capacity: usize,
+        diagnostics_enabled: bool,
+    ) -> Arc<Self> {
+        let facade = match memory {
+            Some(memory) => ZahirFacade::new_with_memory(registry.clone(), tree.clone(), memory),
+            None => ZahirFacade::new(registry.clone(), tree.clone()),
+        };
         // Subscribe to BOTH live sources BEFORE reading the initial snapshot
         // (subscribe-before-snapshot).
         let registry_rx = registry.subscribe_publications();
@@ -559,11 +601,10 @@ impl ProjectionHost {
 
         let default_scope = Scope::default();
         let initial = HostSnapshot::from_facade(facade.snapshot_entries_in_scope(&default_scope));
-        let default_consumer =
-            Arc::new(ConsumerState::new(
-                default_scope,
-                capacity.max(MIN_PENDING_CAPACITY),
-            ));
+        let default_consumer = Arc::new(ConsumerState::new(
+            default_scope,
+            capacity.max(MIN_PENDING_CAPACITY),
+        ));
         // Enqueue the initial snapshot into the DEFAULT delivery queue BEFORE
         // the source/applier tasks spawn, so the REAL default applier applies
         // it (Ruling16). `applied` starts `None`; no publisher state may
@@ -653,7 +694,6 @@ impl ProjectionHost {
     ) -> Arc<Self> {
         Self::mount_internal(registry, tree, capacity, true)
     }
-
 
     /// Wait until the default consumer has actually applied a snapshot.
     ///
@@ -1787,6 +1827,7 @@ mod tests {
             concurrent_safe: false,
             max_duration_ms: None,
             revision: 0,
+            services: Vec::new(),
             implementation_contract: None,
         }
     }

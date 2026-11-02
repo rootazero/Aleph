@@ -81,7 +81,9 @@ impl BuiltinToolRegistry {
                 &td.description,
                 ToolSource::Builtin,
             );
-            ut = ut.with_parameters_schema(td.parameters.clone());
+            ut = ut
+                .with_parameters_schema(td.parameters.clone())
+                .with_services(td.services.clone());
             tools.insert(td.name.clone(), ut);
             tool
         };
@@ -176,7 +178,9 @@ impl BuiltinToolRegistry {
                         &td.description,
                         ToolSource::Builtin,
                     );
-                    ut = ut.with_parameters_schema(td.parameters.clone());
+                    ut = ut
+                        .with_parameters_schema(td.parameters.clone())
+                        .with_services(td.services.clone());
                     tools.insert(td.name.clone(), ut);
                 }
             }
@@ -295,7 +299,9 @@ impl BuiltinToolRegistry {
                     &td.description,
                     ToolSource::Builtin,
                 );
-                ut = ut.with_parameters_schema(td.parameters.clone());
+                ut = ut
+                    .with_parameters_schema(td.parameters.clone())
+                    .with_services(td.services.clone());
                 tools.insert(td.name.clone(), ut);
             }
             info!("Registered A2A outbound tools (a2a_delegate, a2a_agents)");

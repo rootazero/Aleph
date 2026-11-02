@@ -65,15 +65,10 @@ pub struct ExecutionEngine<P: ThinkerProviderRegistry + 'static, R: ToolRegistry
     /// no `browser_*`). `None` in tests / non-gateway contexts, which is
     /// fail-open: every tool stays visible.
     pub(super) tool_health: Option<Arc<crate::tool_metadata::ToolHealthCache>>,
-    /// Memory backend for auto-memorization of conversations
-    #[allow(dead_code)]
-    pub(super) memory_backend: Option<crate::memory::store::MemoryBackend>,
     /// Raw-memory writer, independent of the derived SQLite indexes.
     pub(super) raw_memory_writer: Option<Arc<dyn crate::memory::store::raw_memory::RawMemoryStore>>,
-    /// Compression service for turn-based fact extraction
-    pub(super) compression_service: Option<Arc<crate::memory::compression::CompressionService>>,
-    /// Memory context provider for SQLite-backed prompt augmentation
-    pub(super) memory_context_provider: Option<Arc<crate::thinker::MemoryContextProvider>>,
+    /// Stable source accessor; concrete compression services belong to each activation.
+    pub(super) memory_runtime: Option<Arc<crate::memory::runtime::MemoryRuntime>>,
     /// Live app config handle. Read once per turn (not snapshotted at boot) so
     /// an `[policies.exec_tier]` / `[policies.tool_permissions]` change takes
     /// effect on the very next tool call without a restart. `None` in tests /
@@ -156,7 +151,6 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
         provider_registry: Arc<P>,
         tool_registry: Arc<R>,
         tools: Vec<UnifiedTool>,
-        memory_backend: Option<crate::memory::store::MemoryBackend>,
     ) -> Self {
         let engine = Self {
             session_run_registry: Arc::new(Default::default()),
@@ -171,10 +165,8 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
             tools: Arc::new(tools),
             workspace_manager: None,
             tool_health: None,
-            memory_backend,
             raw_memory_writer: None,
-            compression_service: None,
-            memory_context_provider: None,
+            memory_runtime: None,
             app_config: None,
             session_compactor: None,
             session_manager: None,
@@ -255,22 +247,12 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
         self.continuation_deps.clone()
     }
 
-    /// Set a compression service for automatic turn-based compression.
-    pub fn with_compression_service(
+    /// Admit turn-based compression through the current Memory activation.
+    pub fn with_memory_runtime(
         mut self,
-        service: Arc<crate::memory::compression::CompressionService>,
+        runtime: Arc<crate::memory::runtime::MemoryRuntime>,
     ) -> Self {
-        self.compression_service = Some(service);
-        self
-    }
-
-    /// Set a memory context provider for SQLite-backed prompt augmentation.
-    #[must_use]
-    pub fn with_memory_context_provider(
-        mut self,
-        provider: Arc<crate::thinker::MemoryContextProvider>,
-    ) -> Self {
-        self.memory_context_provider = Some(provider);
+        self.memory_runtime = Some(runtime);
         self
     }
 

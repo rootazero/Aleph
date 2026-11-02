@@ -145,6 +145,16 @@ where
         self.snapshot.load_full()
     }
 
+    /// Observe a snapshot while publication is excluded through callback return.
+    pub(crate) fn with_current<R>(&self, read: impl FnOnce(&VersionedSnapshot<T>) -> R) -> R {
+        let _reentrancy = ReentrancyGuard::enter(std::ptr::from_ref(self) as usize);
+        let _guard = self
+            .mutation_lock
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        read(&self.snapshot.load_full())
+    }
+
     #[must_use]
     pub(crate) fn revision(&self) -> u64 {
         self.snapshot.load().revision
@@ -264,6 +274,38 @@ mod tests {
     use super::*;
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use std::thread;
+
+    #[test]
+    fn readonly_gate_holds_publication_without_mutation_or_events() {
+        let registry = VersionedRegistry::<u64, u64>::new(7);
+        let before = registry.snapshot();
+        let mut events = registry.subscribe();
+        let mut projected = registry.subscribe_projected();
+        let calls = std::cell::Cell::new(0);
+        assert_eq!(
+            registry.with_current(|current| {
+                assert!(
+                    registry.mutation_lock.try_lock().is_err(),
+                    "read callback must hold the real mutation mutex"
+                );
+                calls.set(calls.get() + 1);
+                assert_eq!(current.value, 7);
+                current.revision
+            }),
+            0
+        );
+        assert_eq!(calls.get(), 1);
+        assert!(Arc::ptr_eq(&before, &registry.snapshot()));
+        assert!(events.try_recv().is_err());
+        assert!(projected.try_recv().is_err());
+    }
+
+    #[test]
+    #[should_panic(expected = "versioned registry re-entrancy")]
+    fn readonly_gate_rejects_same_registry_mutation() {
+        let registry = VersionedRegistry::<u64, u64>::new(7);
+        registry.with_current(|_| registry.close());
+    }
 
     #[derive(Clone, Debug, PartialEq, Eq)]
     struct ProjectionEvent {

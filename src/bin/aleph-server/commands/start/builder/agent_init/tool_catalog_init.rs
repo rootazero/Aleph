@@ -28,8 +28,6 @@ pub(super) async fn init_tool_catalog(
     app_config: &alephcore::Config,
     tool_reg_out: Option<Arc<BuiltinToolRegistry>>,
     command_parser_cell: &Arc<tokio::sync::RwLock<Option<Arc<alephcore::command::CommandParser>>>>,
-    raw_store: &Arc<dyn alephcore::memory::store::raw_memory::RawMemoryStore>,
-    memory_ext_registry: &std::sync::Arc<alephcore::memory::extensions::MemoryExtensionRegistry>,
     daemon: bool,
     tool_catalog: Arc<alephcore::tool_metadata::ToolCatalog>,
     canonical_tools: Arc<alephcore::tools::ToolHandlerRegistry>,
@@ -412,21 +410,6 @@ pub(super) async fn init_tool_catalog(
         *cell = Some(parser);
         if !daemon {
             println!("  CommandParser: injected into chat.send / agent.run");
-        }
-    }
-
-    // ── Spec 4 Task 11: spawn MemoryProducerScheduler ────────────────────
-    {
-        use alephcore::memory::extensions::MemoryProducerScheduler;
-        let scheduler = std::sync::Arc::new(MemoryProducerScheduler::new(
-            memory_ext_registry.clone(),
-            raw_store.clone(),
-        ));
-        let _scheduler_handle = scheduler.spawn();
-        // JoinHandle intentionally leaked here — the task runs for the
-        // server lifetime. Shutdown via process exit.
-        if !daemon {
-            println!("  MemoryProducerScheduler: spawned");
         }
     }
 

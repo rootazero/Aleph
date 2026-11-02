@@ -219,6 +219,7 @@ mod tests {
             concurrent_safe: false,
             max_duration_ms: None,
             revision: 0,
+            services: Vec::new(),
             implementation_contract: None,
         }
     }

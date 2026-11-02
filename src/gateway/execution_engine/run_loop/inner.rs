@@ -1247,6 +1247,9 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                 if let Some(cr) = self.capture_registry.as_ref() {
                     t = t.with_capture_registry(cr.clone());
                 }
+                if let Some(runtime) = self.memory_runtime.as_ref() {
+                    t = t.with_memory_runtime(Arc::downgrade(runtime));
+                }
                 if let Some(ref mgr) = self.teammate_manager {
                     t = t.with_teammate_manager(mgr.clone());
                 }

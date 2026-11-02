@@ -85,6 +85,11 @@ pub trait AlephTool: Clone + Send + Sync + 'static {
     /// (`result_processing::read_backstop_tokens`).
     const MAX_RESULT_TOKENS: Option<usize> = None;
 
+    /// Dependencies belong to the declaring tool and survive every adapter.
+    fn services() -> Vec<aleph_slot_api::capability::Service> {
+        Vec::new()
+    }
+
     /// Input argument type (must derive `JsonSchema` for auto-schema generation)
     type Args: Serialize + DeserializeOwned + JsonSchema + Send;
 
@@ -144,6 +149,7 @@ pub trait AlephTool: Clone + Send + Sync + 'static {
         ToolDefinition::new(Self::NAME, Self::DESCRIPTION, parameters, self.category())
             .with_confirmation(self.requires_confirmation())
             .with_strict(self.strict_schema())
+            .with_services(Self::services())
     }
 
     /// Format an LLM-facing prose for an argument validation failure.

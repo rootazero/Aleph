@@ -14,6 +14,40 @@ use crate::capability::descriptor::{
 };
 use crate::capability::ownership::{OwnerGeneration, OwnerRef, VisibilityScope};
 
+use crate::memory::runtime::MemoryRuntime;
+use std::sync::Weak;
+
+/// Source identity is kind-specific; Resources never manufacture Tool entries.
+#[derive(Debug, Clone)]
+pub enum BackendSourceEvidence {
+    Tool {
+        canonical_entry: crate::tools::registry::CanonicalEntryLease,
+        provider_generation: u64,
+    },
+    MemoryResource(Weak<MemoryRuntime>),
+}
+
+impl PartialEq for BackendSourceEvidence {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (
+                Self::Tool {
+                    canonical_entry: a,
+                    provider_generation: ag,
+                },
+                Self::Tool {
+                    canonical_entry: b,
+                    provider_generation: bg,
+                },
+            ) => a == b && ag == bg,
+            (Self::MemoryResource(a), Self::MemoryResource(b)) => Weak::ptr_eq(a, b),
+            _ => false,
+        }
+    }
+}
+
+impl Eq for BackendSourceEvidence {}
+
 /// A scope selecting which capabilities a facade operation targets.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Scope {
@@ -70,14 +104,21 @@ pub struct BackendLease {
     /// without moving the tree epoch. The captured owner is what makes such a
     /// transfer fail closed at `validate_lease` time.
     pub owner: OwnerRef,
-    /// Generation of the provider instance that resolved this lease. A
-    /// provider restart invalidates the lease even when the tool descriptor
-    /// itself has not changed.
-    pub provider_generation: u64,
-    /// Captured by the canonical registry read boundary, including the producer
-    /// owner tuple when present. Visibility ownership still belongs to the tree;
-    /// this capture is not a transport authority.
-    pub(crate) canonical_entry: crate::tools::registry::CanonicalEntryLease,
+    pub source: BackendSourceEvidence,
+    /// Fixed dependencies captured before approval; never resolved again at use.
+    pub(crate) required_resources: Vec<BackendLease>,
+}
+
+impl BackendLease {
+    pub(crate) fn tool_provider_generation(&self) -> Option<u64> {
+        match &self.source {
+            BackendSourceEvidence::Tool {
+                provider_generation,
+                ..
+            } => Some(*provider_generation),
+            BackendSourceEvidence::MemoryResource(_) => None,
+        }
+    }
 }
 
 /// Closed error set for `Zahir::resolve` / `Zahir::validate_lease`.
@@ -405,8 +446,12 @@ mod tests {
             CapabilityChange::Registered { .. }
         ));
         assert!(matches!(stream.changes[1], CapabilityChange::Invalidated));
-        assert!(matches!(stream.changes[2], CapabilityChange::Replaced { ref id, revision: CapabilityRevision(2) } if id == &cap_id("ns", "x")));
-        assert!(matches!(stream.changes[3], CapabilityChange::Registered { ref id, revision: CapabilityRevision(1) } if id == &cap_id("ns", "y")));
+        assert!(
+            matches!(stream.changes[2], CapabilityChange::Replaced { ref id, revision: CapabilityRevision(2) } if id == &cap_id("ns", "x"))
+        );
+        assert!(
+            matches!(stream.changes[3], CapabilityChange::Registered { ref id, revision: CapabilityRevision(1) } if id == &cap_id("ns", "y"))
+        );
     }
 
     #[test]

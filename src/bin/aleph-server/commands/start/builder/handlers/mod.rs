@@ -93,6 +93,8 @@ mod core;
 mod extensions;
 mod mcp;
 mod memory;
+#[cfg(test)]
+mod memory_lifecycle_tests;
 mod session;
 mod settings;
 mod system;

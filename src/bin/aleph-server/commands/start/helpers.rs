@@ -437,49 +437,10 @@ pub(super) async fn initialize_extension_manager(
     Ok(())
 }
 
-/// Failsafe budget for the graceful teardown after a shutdown signal. Matches
-/// the SIGTERM→SIGKILL escalation window used by `aleph stop`
-/// (`daemon::stop_running_process`): if the orderly path (axum drain, monitor
-/// shutdown, hooks, plugin stop) has not finished by then — e.g. a long-lived
-/// WebSocket keeps `axum::serve` from returning — force the exit rather than
-/// hang until the supervisor's SIGKILL.
-const SHUTDOWN_FAILSAFE: std::time::Duration = std::time::Duration::from_secs(5);
-
-/// The orderly path's share of [`SHUTDOWN_FAILSAFE`] for stopping browsers.
-///
-/// **Derived here, in the crate that owns the watchdog, and not in
-/// `alephcore`.** It was briefly `browser::engine::ENGINE_ORDERLY_SHUTDOWN_BUDGET`
-/// at 35.5 s — seven times the failsafe it runs inside. The watchdog above is
-/// spawned with its `JoinHandle` dropped, so nothing cancels it and the orderly
-/// block races it: at 35.5 s the process is force-exited mid-wait, the browsers
-/// are still not stopped, and the projector flush, monitor shutdown, MCP stop,
-/// endpoint cleanup and `GatewayStop` hooks that used to run are skipped too.
-///
-/// **Widening the failsafe is not the alternative.** Its own doc matches it to
-/// `aleph stop`'s escalation window, measured at `daemon.rs`: SIGTERM ≤5 s then
-/// SIGKILL ≤2 s. Past 5 s the supervisor's SIGKILL lands instead of our
-/// `exit(0)`, which skips even the wedged path's reaps — strictly worse. The
-/// 5 s is an external ceiling, so the budget has to fit inside it.
-///
-/// **Half**, because the engine stop is one step of the orderly teardown and
-/// everything after it has to fit in the same 5 s. Half is the largest share
-/// that leaves an equal one for all the rest, and it is still 2.5x the wedged
-/// path's budget — so the orderly caller does wait meaningfully longer, which
-/// was the whole point of giving it its own number. When the lock cannot be had
-/// inside it, `shutdown_all` reports the leak rather than waiting past its own
-/// deadline.
+/// Preserve the existing browser-specific stop budget. Memory cleanup is
+/// awaited separately and has no process-wide deadline that can skip joins.
 pub(super) const ORDERLY_BROWSER_STOP_BUDGET: std::time::Duration =
-    std::time::Duration::from_millis((SHUTDOWN_FAILSAFE.as_millis() / 2) as u64);
-
-/// The relation, enforced at compile time rather than left to two constants
-/// that happen to be ordered correctly today — the construction D9 arrived at
-/// after "widen the multiple" turned out to be advice that could switch a guard
-/// off. Moving either constant without the other stops the build.
-const _: () = assert!(
-    ORDERLY_BROWSER_STOP_BUDGET.as_millis() * 2 <= SHUTDOWN_FAILSAFE.as_millis(),
-    "the orderly browser-stop budget must leave at least as much of the failsafe \
-     for the rest of the orderly teardown as it takes for itself"
-);
+    std::time::Duration::from_millis(2500);
 
 /// Spawn Ctrl-C and SIGTERM handlers; return the oneshot receiver for `run_until_shutdown`.
 ///
@@ -487,7 +448,7 @@ const _: () = assert!(
 /// `run_until_shutdown` via the oneshot, so the post-run teardown in
 /// `start_server` (memory/health monitor shutdown, endpoint cleanup,
 /// GatewayStop hooks, plugin stop) runs for supervised SIGTERM stops too, not
-/// just interactive Ctrl-C. A [`SHUTDOWN_FAILSAFE`] watchdog bounds the exit.
+/// just interactive Ctrl-C. The owner awaits cleanup before the process returns.
 pub(super) fn setup_graceful_shutdown(args: &Args) -> tokio::sync::oneshot::Receiver<()> {
     use alephcore::gateway::shutdown_forensics::snapshot_shutdown_context;
 
@@ -546,118 +507,6 @@ pub(super) fn setup_graceful_shutdown(args: &Args) -> tokio::sync::oneshot::Rece
         if let Err(e) = shutdown_tx.send(()) {
             tracing::warn!("Failed to send shutdown signal: {:?}", e);
         }
-        // Watchdog: if the process is still alive after the failsafe budget,
-        // the orderly path is stuck — exit. On the happy path `start_server`
-        // returns first and the process exits before this fires.
-        tokio::time::sleep(SHUTDOWN_FAILSAFE).await;
-        tracing::warn!(
-            "graceful shutdown did not complete within {}s; forcing exit",
-            SHUTDOWN_FAILSAFE.as_secs()
-        );
-        // The orderly teardown in `start_server` never ran, so its reap of
-        // detached background `bash` jobs never ran either — and the
-        // `std::process::exit(0)` below skips every remaining destructor.
-        // A wedged shutdown usually coincides with load, which is exactly
-        // when a long `cargo build` is most likely to be in flight, so this
-        // is the case where orphans are most likely, not least. Idempotent
-        // with the `start_server` call site.
-        // Managed companions are skipped by the bash reaper; drain them with a
-        // short bound (resource closed first, then kill + wait).
-        let _ = tokio::time::timeout(
-            std::time::Duration::from_secs(3),
-            alephcore::builtin_tools::browser_tools::companion::shutdown_all_companions(),
-        )
-        .await;
-        let reaped = alephcore::builtin_tools::bash_exec::kill_all_running_background();
-        // Another thing the skipped destructors would have done: `main`'s
-        // `InstanceLock` removes its holder sidecar in `Drop`, and `Drop` is
-        // exactly what `std::process::exit(0)` never runs. Without this the
-        // sidecar outlives the exit naming a dead PID and the next `aleph
-        // doctor` reports "a crashed daemon left it behind" for a shutdown
-        // that was merely slow. Still holding the lock here — the OS releases
-        // it at exit — so no successor can have written a record yet. One
-        // `unlink`, the cheapest line in this block, so it goes before the
-        // terminal and browser stops by the same ordering-by-cost rule the
-        // browser comment spells out.
-        let records = alephcore::utils::instance_lock::remove_held_holder_records_before_exit();
-        if records > 0 {
-            tracing::warn!(
-                count = records,
-                "removed instance-lock holder record before forced exit"
-            );
-        }
-        // The bash reaper's twin (see the orderly site in `start/mod.rs` for
-        // why it is the journal, not the shell, that needs it): one journal
-        // write plus one synchronous kill per open terminal, so a wedged stop
-        // is not read by the next boot as a crash that interrupted every open
-        // terminal. After the unlink (cheaper), before the browser stop and
-        // the 2 s sleep (both dearer).
-        if let Some(manager) = alephcore::gateway::pty::try_manager() {
-            match tokio::time::timeout(std::time::Duration::from_secs(1), manager.deactivate())
-                .await
-            {
-                Ok(Ok(())) => tracing::warn!("stopped terminal driver before forced exit"),
-                Ok(Err(error)) => tracing::warn!(%error, "terminal driver forced shutdown failed"),
-                Err(_) => {
-                    tracing::warn!(state = ?manager.lifecycle_snapshot(), "terminal driver join pending at forced exit")
-                }
-            }
-        }
-        // The wedged path. `std::process::exit(0)` below skips the orderly
-        // block entirely, so the browser stop has to be here too — and this is
-        // the path that matters most: `SHUTDOWN_FAILSAFE` is matched to
-        // `aleph-server stop`'s own SIGTERM->SIGKILL window, and the comment
-        // above notes a wedged shutdown usually coincides with load. A browser
-        // leaked here is leaked on exactly the shutdowns most likely to happen.
-        //
-        // **Before the 2 s sleep below, not after it.** This block has already
-        // spent the whole 5 s failsafe, and that failsafe is matched to the
-        // window `aleph-server stop` gives before its own SIGKILL — so every
-        // line past this point may simply never execute. Ordering by cost is
-        // therefore the rule: the browser stop is hard-bounded — a synchronous
-        // playwright half (`kill()` plus a bounded `wait()`) and an engine half
-        // capped by `ENGINE_SHUTDOWN_BUDGET` — so putting it first costs the
-        // bash reap at most that budget, while putting it last is what would
-        // spend the browser's only chance on a sleep it does not need.
-        //
-        // That cap covers the engine registry's LOCK as well as its kills. It
-        // briefly did not, and this comment did not know: a launch in flight
-        // holds that lock across a 30 s spawn deadline, so this block could
-        // block ~35 s, the external SIGKILL from `aleph-server stop` would land
-        // first, and neither the browsers nor the bash orphans below would be
-        // reaped. Naming a number from another crate turns that number from
-        // "can change" into "must not change without telling this line"
-        // (判据 §1) — so the figure is deliberately not repeated here; read it
-        // off the constant.
-        // Idempotent with the `start_server` call site.
-        let browsers = alephcore::browser::manager::shutdown_browsers_global(
-            alephcore::browser::engine::ENGINE_SHUTDOWN_BUDGET,
-        )
-        .await;
-        if browsers > 0 {
-            tracing::warn!(
-                count = browsers,
-                "stopped managed browsers before forced exit"
-            );
-        }
-        if reaped > 0 {
-            // `abort()` only *marks* the task; the runtime drops its
-            // `tokio::process::Child` — and so fires `kill_on_drop` — on the
-            // next scheduler pass. `process::exit` gives it none, so yield
-            // briefly. Bounded and small: a wedged shutdown is already 5s late.
-            tracing::warn!(
-                count = reaped,
-                "reaping background bash jobs before forced exit"
-            );
-            // 2s gives the runtime enough scheduler passes for
-            // `tokio::process::Child::kill_on_drop` to fire on every
-            // reaped process before `process::exit` teardown. 250ms was
-            // observed insufficient for a long `cargo build` to receive
-            // SIGKILL through the tokio → Child → kill_on_drop chain,
-            // leaving the workspace writable after the daemon exits.
-            tokio::time::sleep(std::time::Duration::from_secs(2)).await;
-        }
-        std::process::exit(0);
     });
 
     shutdown_rx
@@ -719,213 +568,25 @@ mod tests {
         assert!(line.contains("version=26.7.24"));
     }
 
-    /// Both daemon exit paths must reap detached background `bash` jobs.
-    ///
-    /// This is a SOURCE pin, and deliberately so: the effect is "no orphan
-    /// OS process survives the daemon", which needs a real daemon boot, a
-    /// real backgrounded child and a real `SIGTERM` to observe — untestable
-    /// from a unit test, and the reason this wire sat cut while *two* doc
-    /// comments asserted it existed (`process_registry.rs`'s
-    /// `ProcessRegistry::shutdown` doc, and FEATURE_LOCATOR §3.7). What the
-    /// pin buys is precise: deleting either call fails a test by name
-    /// instead of silently re-orphaning every long build.
-    ///
-    /// On the wedged path the browser stop must come BEFORE the 2 s
-    /// `kill_on_drop` sleep.
-    ///
-    /// Position is the substance here, not tidiness. That block has already
-    /// spent `SHUTDOWN_FAILSAFE`, which is matched to the window
-    /// `aleph-server stop` allows before its own SIGKILL, so every line after
-    /// the sleep may simply never execute — and a wedged shutdown "usually
-    /// coincides with load", i.e. the case where that is likeliest. Round-1
-    /// review found this exact statement on the wrong side of the sleep; a
-    /// source pin is what keeps it from drifting back, since no unit test can
-    /// observe a 5 s race against an external signal.
+    /// The single orderly funnel retains every existing child reaper.
     #[test]
-    fn the_browser_stop_precedes_the_kill_on_drop_sleep() {
-        let src = include_str!("helpers.rs").replace('\r', "");
-        // Comments stripped as well as the test module: this searches for a
-        // CALL by containment, so a comment spelling `shutdown_browsers_global(`
-        // would satisfy `find` and could even be positioned to satisfy the
-        // ordering below. Same fix as its siblings in this file and in
-        // `browser::manager` — carried to the whole class rather than to the
-        // member that was named (判据 §16). The floor is taken on the PREFIX
-        // first, because `code_text` shrinks the text on its own and a floor
-        // measured after it cannot detect the condition its message names;
-        // that comment claimed "same fix as its two siblings" while lacking
-        // the half of it the siblings have.
+    fn orderly_teardown_runs_every_reaper() {
+        let src = include_str!("mod.rs").replace('\r', "");
         let prefix = alephcore::utils::source_scan::production_prefix(&src);
         assert!(
             prefix.len() < src.len(),
-            "the #[cfg(test)] bound matched nothing — this test would then be \
-             reading its own source"
+            "production boundary must exclude tests"
         );
         let production = alephcore::utils::source_scan::code_text(&prefix);
-        let stop = production
-            .find("shutdown_browsers_global(")
-            .expect("the wedged path must stop the managed browsers");
-        let sleep = production
-            .find("tokio::time::sleep(std::time::Duration::from_secs(2))")
-            .expect("the kill_on_drop sleep must still be there to be ordered against");
-        assert!(
-            stop < sleep,
-            "the browser stop sits after the 2s kill_on_drop sleep — on a \
-             wedged shutdown the external SIGKILL can land first, and the \
-             browser then outlives the daemon"
-        );
-    }
-
-    /// The two exit paths must pass DIFFERENT shutdown budgets.
-    ///
-    /// They have opposite economics and one number cannot serve both: the
-    /// wedged path is racing an external SIGKILL and should give up, the
-    /// orderly path has 5 s of projector flush after it and must not, because
-    /// an engine it fails to stop can be orphaned permanently rather than
-    /// deferred (the boot sweep declines to act on an unreadable argv). A
-    /// single budget derived from the wedged caller is what made the orderly
-    /// one wrong, and nothing said so — so this says so.
-    ///
-    /// A source pin because the difference is a decision, not an effect: both
-    /// calls do the same thing, and only the constant they name distinguishes
-    /// them.
-    #[test]
-    fn the_two_exit_paths_pass_different_shutdown_budgets() {
-        // Floors on the prefixes, before `code_text` — same reason as every
-        // other member of this class: `code_text` shrinks the text by itself,
-        // so a floor taken after it is always satisfied.
-        let wedged_src = include_str!("helpers.rs").replace('\r', "");
-        let wedged_prefix = alephcore::utils::source_scan::production_prefix(&wedged_src);
-        assert!(
-            wedged_prefix.len() < wedged_src.len(),
-            "helpers.rs: the #[cfg(test)] bound matched nothing"
-        );
-        let orderly_src = include_str!("mod.rs").replace('\r', "");
-        let orderly_prefix = alephcore::utils::source_scan::production_prefix(&orderly_src);
-        assert!(
-            orderly_prefix.len() < orderly_src.len(),
-            "start/mod.rs: the #[cfg(test)] bound matched nothing"
-        );
-        let wedged = alephcore::utils::source_scan::code_text(&wedged_prefix);
-        let orderly = alephcore::utils::source_scan::code_text(&orderly_prefix);
-        assert!(
-            wedged.contains("ENGINE_SHUTDOWN_BUDGET")
-                && !wedged.contains("ORDERLY_BROWSER_STOP_BUDGET("),
-            "the wedged-exit path must spend the failsafe budget: it is already \
-             past SHUTDOWN_FAILSAFE and exit(0) follows"
-        );
-        assert!(
-            orderly.contains("shutdown_browsers_global(ORDERLY_BROWSER_STOP_BUDGET)"),
-            "the orderly path must PASS the orderly budget — not merely import \
-             it. Asserting the bare name was satisfied by the import line \
-             alone, so the call site could converge on the wedged budget with this \
-             guard green; measured, by the mutation that was meant to redden it. \
-             Giving up early there can orphan a browser permanently, not merely \
-             defer it"
-        );
-        // And that budget must be DERIVED from the watchdog it races, not
-        // quoted from another crate. F1 was exactly that: 35.5 s inside a 5 s
-        // failsafe, so the force-exit skipped everything below the browser stop.
-        assert!(
-            wedged.contains("ORDERLY_BROWSER_STOP_BUDGET: std::time::Duration")
-                && wedged.contains("SHUTDOWN_FAILSAFE.as_millis()"),
-            "the orderly budget must be defined in this file and derived from \
-             SHUTDOWN_FAILSAFE — a constant in another crate cannot know about \
-             the watchdog it runs inside"
-        );
-    }
-
-    /// Deliberately covers BOTH exit sites AND every reaper (the list below:
-    /// background jobs, browsers, PTYs — named by the list, not counted
-    /// here). The two sites are not
-    /// redundant — `start_server`'s call is the orderly path (and the only one
-    /// reached when `run_until_shutdown` returns an error rather than a
-    /// signal), while this file's is the wedged path, where the failsafe
-    /// `std::process::exit(0)` skips the orderly block entirely.
-    ///
-    /// The browser reaper joined this pin because it is the same shape with
-    /// the same failure mode: `std::process::Child` does not kill on drop, and
-    /// under `attach --cdp` playwright-cli was never the browser's parent, so
-    /// a missing call leaks a Chromium — and leaks it on precisely the loaded
-    /// shutdowns the failsafe exists for.
-    ///
-    /// The PTY reaper (`pty::manager().close_all()`) joined for the journal's
-    /// sake as much as the shell's: the bash reaper records `killed` on every
-    /// job it aborts, and a clean stop that closed no terminal left every open
-    /// PTY row `running` on disk — which the next boot tombstoned as a shell
-    /// the restart *interrupted*, and the terminal faces then rendered that
-    /// verdict to the person who had merely restarted the server.
-    #[test]
-    fn both_daemon_exit_paths_run_every_reaper() {
         for reaper in [
             "kill_all_running_background",
             "shutdown_browsers_global",
             "close_all",
         ] {
-            for (label, raw) in [
-                ("start/helpers.rs", include_str!("helpers.rs")),
-                ("start/mod.rs", include_str!("mod.rs")),
-            ] {
-                let src = raw.replace('\r', "");
-                let prefix = alephcore::utils::source_scan::production_prefix(&src);
-                // Non-vacuity: prove the bound actually cut something off in
-                // the file that HAS a test module, so the split is doing real
-                // work. Taken on the PREFIX, before `code_text` below, because
-                // `code_text` shrinks the text on its own and would make this
-                // hold even for a prefix that matched nothing.
-                if label.ends_with("helpers.rs") {
-                    assert!(
-                        prefix.len() < src.len(),
-                        "{label}: the #[cfg(test)] bound matched nothing — this \
-                         test would then be reading its own source"
-                    );
-                }
-                // Comments stripped as well as the test module. The `ident(`
-                // trick below narrows what a stray mention can satisfy, but it
-                // does not close it: a comment spelling
-                // `// shutdown_browsers_global()` satisfies `contains` just as
-                // well as the call does, and this guard was non-vacuous only
-                // because no such comment happened to exist. Its twin in
-                // `browser::manager` was fixed first and this is the same fix
-                // carried across, rather than left for someone to rediscover
-                // here (判据 §16).
-                let production = alephcore::utils::source_scan::code_text(&prefix);
-                // Assert on the CALL (`ident(`), not the bare name: the prose
-                // above and the explanatory comments at both sites also spell
-                // the identifier, so `contains(reaper)` alone would stay green
-                // if someone deleted the statement and kept the comment.
-                assert!(
-                    production.contains(&format!("{reaper}(")),
-                    "{label} must call {reaper}() on its exit path — a child \
-                     process this daemon owns outlives it otherwise"
-                );
-            }
+            assert!(
+                production.contains(&format!("{reaper}(")),
+                "the common teardown must still call {reaper}()"
+            );
         }
-    }
-
-    /// The forced-exit path skips `main`'s `InstanceLock::drop`, so it has to
-    /// remove the holder sidecar itself — otherwise every wedged shutdown
-    /// leaves a record naming a dead PID and `aleph doctor` reports a crashed
-    /// daemon. Only this file is pinned: the orderly path returns from `main`
-    /// and `Drop` handles it there, so `start/mod.rs` has nothing to call.
-    /// Same call-not-name discipline as the reaper pin above.
-    #[test]
-    fn the_forced_exit_path_removes_the_holder_sidecar_itself() {
-        let src = include_str!("helpers.rs").replace('\r', "");
-        let production = alephcore::utils::source_scan::production_prefix(&src);
-        assert!(
-            production.len() < src.len(),
-            "the #[cfg(test)] bound matched nothing — this test would be reading its own source"
-        );
-        let call = "remove_held_holder_records_before_exit(";
-        let call_at = production.find(call).unwrap_or_else(|| {
-            panic!("start/helpers.rs must call {call}) on its forced-exit path")
-        });
-        let exit_at = production
-            .rfind("std::process::exit(0)")
-            .expect("the forced-exit path ends in std::process::exit(0)");
-        assert!(
-            call_at < exit_at,
-            "the sidecar removal must run before the forced exit, not after it"
-        );
     }
 }

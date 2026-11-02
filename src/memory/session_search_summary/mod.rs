@@ -65,9 +65,9 @@
 //!   placeholders; the actual implementation in this module will use
 //!   `RawMemoryStore` / Markdown-backed raw memory / `RawMemory` naming throughout.
 //!
-//! - Spec A's `register_session_end_mcp` pattern in `src/thinker/memory_context_provider/helpers.rs`.
-//!   Uses `tokio::sync::OnceCell<Arc<MemoryContextProvider>>` for single registration (idempotent, subsequent calls are no-op).
-//!   Functions: `register_session_end_mcp(mcp: Arc<MemoryContextProvider>)` and `session_end_mcp() -> Option<Arc<MemoryContextProvider>>`.
+//! - Session-end work is admitted and retained by `MemoryRuntime`; each
+//!   activation owns its context and summarizer. Session storage remains
+//!   available independently of derived Memory lifecycle.
 //!
 //! - `PostCompressionHook` trait at `src/memory/compression/service.rs:28`.
 //!   Signature: `async fn on_compression_complete<'a>(&'a self, agent_id: &'a str) -> BoxFuture<'a, ()>`.
