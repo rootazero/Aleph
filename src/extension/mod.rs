@@ -1553,6 +1553,16 @@ pub fn default_plugins_dir() -> std::path::PathBuf {
 /// grep for the name found the bug's own alibi and nothing else.
 #[must_use]
 pub fn plugin_data_dir(plugin_id: &str) -> std::path::PathBuf {
+    plugin_data_root().join(plugin_id)
+}
+
+/// Root of the per-plugin persistent data directories: `<plugins_root>/data/`.
+///
+/// The parent of every [`plugin_data_dir`], derived from the same path
+/// helper so that the watcher exclusion and the `${ALEPH_PLUGIN_DATA}`
+/// expansion can never point at different trees.
+#[must_use]
+pub fn plugin_data_root() -> std::path::PathBuf {
     default_plugins_dir()
         .parent()
         .map_or_else(
@@ -1560,7 +1570,6 @@ pub fn plugin_data_dir(plugin_id: &str) -> std::path::PathBuf {
             std::path::Path::to_path_buf,
         )
         .join("data")
-        .join(plugin_id)
 }
 
 /// Reject a plugin install destination whose leaf is a symlink (including
