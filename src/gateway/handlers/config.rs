@@ -941,27 +941,42 @@ pub async fn handle_update_tool_permissions(
     let updated = {
         let mut cfg = config.write().await;
 
+        // The live config IS the execution policy — the engine reads it per
+        // turn. Mutating it in place and saving afterwards meant a failed
+        // save left the NEW policy live while the caller was told the write
+        // failed: a policy change nobody asked for, nobody was told about,
+        // and nothing on disk to explain it.
+        //
+        // So the change is built on a candidate, the candidate is persisted,
+        // and only a successful write swaps it into the live config. The
+        // write lock is held across all three, so no concurrent writer can
+        // slip a change in between the clone and the swap.
+        let mut candidate = cfg.clone();
+
         if let Some(tier) = tier {
-            cfg.policies.exec_tier = tier;
+            candidate.policies.exec_tier = tier;
         }
         if let Some(mode) = mode {
-            cfg.policies.mode = mode;
+            candidate.policies.mode = mode;
         }
         if let Some(default) = params.default {
-            cfg.policies.tool_permissions.default = default;
+            candidate.policies.tool_permissions.default = default;
         }
         if let Some(overrides) = params.overrides {
-            cfg.policies.tool_permissions.overrides = overrides;
+            candidate.policies.tool_permissions.overrides = overrides;
         }
 
-        // Save to file
-        if let Err(e) = cfg.save_incremental(&["policies"]) {
+        // Persist first: a failed write must not reach the live config.
+        if let Err(e) = candidate.save_incremental(&["policies"]) {
             return JsonRpcResponse::error(
                 request.id,
                 INTERNAL_ERROR,
                 format!("Failed to save configuration: {e}"),
             );
         }
+
+        // On disk and live now agree.
+        *cfg = candidate;
 
         info!(
             exec_tier = cfg.policies.exec_tier.id(),
