@@ -588,7 +588,14 @@ impl AgentHarness {
             parent_cancel,
         )
         .await
-        .map_err(|_| HarnessError::Cancelled)?;
+        .map_err(|e| match e {
+            crate::context::fabric::runtime::ContextFabricError::Cancelled => {
+                HarnessError::Cancelled
+            }
+            other => HarnessError::Llm(crate::error::AlephError::other(format!(
+                "context fabric preflight failed: {other}"
+            ))),
+        })?;
 
         // 2b. Task-10 budget check: evaluate context pressure before issuing
         // the LLM call. The sensor sees the real system prompt and tool-schema
