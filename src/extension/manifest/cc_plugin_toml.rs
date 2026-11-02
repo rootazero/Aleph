@@ -11,6 +11,7 @@ use serde::Deserialize;
 use serde_json::Value as JsonValue;
 
 use crate::extension::error::{ExtensionError, ExtensionResult};
+use crate::extension::manifest::cc_plugin_json::KIND_SIDECAR;
 use crate::extension::manifest::component_source::{self, ComponentSource};
 use crate::extension::manifest::declared_sections::AlephSuperset;
 use crate::extension::manifest::toml_types::{
@@ -241,6 +242,9 @@ pub fn parse_cc_plugin_toml_content(
     validate_plugin_id(&plugin_id)
         .map_err(|reason| ExtensionError::invalid_plugin_name(&raw_name, reason))?;
 
+    // Read before `toml.aleph` is moved out below.
+    let declares_servers = toml.mcp_servers.is_some() || plugin_dir.join(KIND_SIDECAR).is_file();
+
     // Determine kind and entry from [aleph] section
     let mut superset = AlephSuperset::default();
     let (kind, entry, aleph_extensions) = if let Some(aleph) = toml.aleph {
@@ -286,6 +290,22 @@ pub fn parse_cc_plugin_toml_content(
         };
 
         (kind, entry, Some((aleph_ext, permissions)))
+    } else if declares_servers {
+        // A Claude Code MCP plugin declares no `[aleph]` block — its servers
+        // ARE its runtime. Without this inference the manifest parsed as
+        // `Static` and `lifecycle::mount` never started a single server (the
+        // `mcp_server` effect keys on `kind == Mcp`). Which servers, from
+        // which source (inline object, path, or `.mcp.json`), is the
+        // adapter's one reader's answer — `component_source::resolve_mcp_servers`;
+        // this line only decides the kind. The JSON dialect
+        // (`parse_cc_plugin_json_content`) has carried the same inference
+        // since it was written; the TOML dialect never did, so the
+        // *documented-preferred* manifest could not be an MCP plugin at all.
+        (
+            PluginKind::Mcp,
+            default_entry_for_kind(PluginKind::Mcp),
+            None,
+        )
     } else {
         (PluginKind::Static, ".".to_string(), None)
     };
@@ -642,6 +662,40 @@ runtime = "wasm"
 "#;
         let manifest = parse_cc_plugin_toml_content(content, &test_dir()).unwrap();
         assert_eq!(manifest.entry, PathBuf::from("plugin.wasm"));
+    }
+
+    /// The TOML dialect must infer the MCP runtime the way the JSON dialect
+    /// does. A Claude Code MCP plugin declares no `[aleph]` block — its
+    /// servers ARE its runtime — so without the inference the manifest
+    /// parsed as `Static` and `lifecycle::mount` never started a server.
+    #[test]
+    fn cc_toml_infers_the_mcp_kind_from_declared_servers() {
+        let dir = tempfile::tempdir().unwrap();
+        let declared = parse_cc_plugin_toml_content(
+            r#"
+name = "mcp-plugin"
+version = "0.1.0"
+
+mcp-servers = "./servers.json"
+"#,
+            dir.path(),
+        )
+        .unwrap();
+        assert_eq!(declared.kind, PluginKind::Mcp);
+        assert_eq!(declared.entry, PathBuf::from(".mcp.json"));
+
+        // The sidecar form: no `mcp-servers` key, a `.mcp.json` next to the
+        // manifest.
+        std::fs::write(dir.path().join(".mcp.json"), r#"{"mcpServers":{}}"#).unwrap();
+        let sidecar = parse_cc_plugin_toml_content(
+            r#"
+name = "sidecar-plugin"
+version = "0.1.0"
+"#,
+            dir.path(),
+        )
+        .unwrap();
+        assert_eq!(sidecar.kind, PluginKind::Mcp);
     }
 
     #[test]
