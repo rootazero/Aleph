@@ -6353,6 +6353,14 @@ Maintenance drain borrows stored handles in place, preserves pending IDs on canc
 
 No whole-Memory cold/enable/stop/re-enable, shared-store closure, generic supervisor or Capability/Zahir/MCP/ACP integration is established. Early startup errors remain outside this slice; common-funnel normal/error reachability is static source evidence, not live-server/OS-signal E2E. Next is a separate Memory resource census before any global lifecycle switch. / 不宣称所有 Memory writer 停止，不增加原生卸载、隔离、RSS 或硬停机时限承诺。
 
+### Bounded Memory runtime lifecycle / 有界 Memory 运行时生命周期（2026-11-02）
+
+The current production slice is source-owned by one \`MemoryRuntime\`: it owns derived resources, admission and retained work, while canonical Tool publication and OwnershipTree generation keep their separate authorities. Off preserves raw chat and Markdown session archival and rejects new derived Memory work; admitted work drains before the derived bundle is closed, and a later start builds a fresh bundle so old derived resource and Tool handles do not survive restart. Raw session storage remains separately owned. / 当前生产切片由一个 \`MemoryRuntime\` 负责派生资源、准入与保留任务；canonical Tool 发布与 OwnershipTree generation 仍由各自权威负责。Off 保留 raw chat 与 Markdown 归档并拒绝新的派生 Memory 工作；已准入工作在派生 bundle 关闭前排空，后续 start 创建新 bundle，旧派生 resource 与 Tool handle 不跨重启存活。raw session storage 仍独立持有。
+
+Observed evidence: focused clean suites selected 422/422; the final session-store target selected 98/98; Core test and server checks exited 0; workspace clippy, Linux desktop cross check and Panel WASM check exited 0; providerless live QA selected 100/100; configured-provider live QA selected 108/108 across SIGTERM and SIGINT/restart, raw/archive, Memory start/stop/restart, refusal semantics, held provider work, orderly cleanup, endpoint removal and SQLite integrity. The configured run exposed and then closed a real FileSessionStore reused-key archive collision by retrying same-day destinations as \`<key>-1\`, capped at 1024. / 已观察证据包括 focused 422/422、session-store 98/98、Core/server 检查 0、clippy/Linux desktop/Panel WASM 0、providerless 100/100 与 configured 108/108；configured 场景先暴露复用 key 的真实归档冲突，随后以 \`<key>-1\` 等序号目录修复并验证，冲突上限 1024。
+
+This entry is a bounded lifecycle record, not a claim that every Memory writer stops, that the process unloads native code, that RSS is reclaimed, or that external effects are exactly once. The required workspace test remains disclosed as exit 101 with target-specific failures. See the [lifecycle run](../superpowers/runs/2026-11-01-memory-runtime-lifecycle-run.md) and [approved design](../superpowers/specs/2026-11-01-memory-runtime-lifecycle-design.md) for the full evidence and deferred scope. / 该条目是有界生命周期记录，不宣称所有 Memory writer 停止、native code 卸载、RSS 回收或外部效果 exactly once；workspace 测试仍如实记录为 exit 101 及其 target 失败。完整证据与 deferred scope 见运行记录和设计文档。
+
 ## Reference links / 参考链接
 
 - [Architecture](ARCHITECTURE.md) - System overview
