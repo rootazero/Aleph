@@ -39,7 +39,7 @@ use crate::sync_primitives::Arc;
 use crate::utils::paths::display_string;
 use serde::Deserialize;
 use serde_json::json;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use tokio::sync::RwLock;
 
 /// The handler-facing config handle. Mirrors what other hot-reload-aware
@@ -349,15 +349,17 @@ pub async fn handle_create_dir(request: JsonRpcRequest, config: SharedConfig) ->
     if trimmed.is_empty() {
         return JsonRpcResponse::error(request.id, INVALID_PARAMS, "name cannot be empty");
     }
-    if trimmed.contains(std::path::MAIN_SEPARATOR)
-        || trimmed.contains('/')
-        || trimmed == "."
-        || trimmed == ".."
-    {
+    // The name is JOINED onto the parent below, so it has to be a plain
+    // single component — "separator-free" is not enough. On Windows
+    // `Path::join` DROPS the parent when the name carries a drive prefix:
+    // `parent = C:\work\project` + `name = "D:outside"` resolves to
+    // `D:outside` (that drive's CWD), i.e. the new directory lands outside
+    // the allowed parent even though the name contains no separator.
+    if !is_plain_child_name(trimmed) {
         return JsonRpcResponse::error(
             request.id,
             INVALID_PARAMS,
-            "name must not contain path separators or be '.'/'..'",
+            "name must be a single plain path component (no separators, no drive prefix, not '.'/'..')",
         );
     }
 
@@ -380,9 +382,18 @@ pub async fn handle_create_dir(request: JsonRpcRequest, config: SharedConfig) ->
     // The parent check above cannot see this: with `allowed_roots = ["~"]` the
     // parent `~` is legitimately in scope while `~/.ssh` is a denied leaf. The
     // target does not exist yet, so it cannot be canonicalised — but it is
-    // built by joining onto an already-canonical parent, and `name` is
-    // separator-free and not `.`/`..` (checked above), so it is canonical by
-    // construction.
+    // built by joining onto an already-canonical parent, and `name` is a plain
+    // component (checked above), so it is canonical by construction.
+    // Belt and braces: prove the joined path still hangs off the canonical
+    // parent before anything is created — `join` is only expected to append,
+    // but the joined path is the one that reaches the filesystem.
+    if target.parent() != Some(parent_canon.as_path()) {
+        return JsonRpcResponse::error(
+            request.id,
+            OUT_OF_SCOPE,
+            "name does not resolve to a child of the requested parent",
+        );
+    }
     if let Err(msg) = refuse_if_denied(&target) {
         return JsonRpcResponse::error(request.id, OUT_OF_SCOPE, &msg);
     }
@@ -400,6 +411,38 @@ pub async fn handle_create_dir(request: JsonRpcRequest, config: SharedConfig) ->
     // (the new dir definitely exists now, so canonicalize won't fail).
     let canon = std::fs::canonicalize(&target).unwrap_or(target);
     JsonRpcResponse::success(request.id, json!({ "path": display_string(&canon) }))
+}
+
+/// Is `name` exactly one plain path component — no separator, no `.`/`..`,
+/// no drive prefix, no root?
+fn is_plain_child_name(name: &str) -> bool {
+    let mut components = Path::new(name).components();
+    let Some(Component::Normal(part)) = components.next() else {
+        return false;
+    };
+    if components.next().is_some() {
+        return false;
+    }
+    // `Path` drops a trailing separator and normalises away redundant
+    // separators, so the component has to equal the name verbatim.
+    if part != std::ffi::OsStr::new(name) {
+        return false;
+    }
+    !has_drive_prefix(name)
+}
+
+/// Does `name` carry a Windows drive prefix (`C:`, `C:foo`)?
+///
+/// Spelled out in ASCII because the platform's own parser only recognises a
+/// prefix on Windows: a Unix server must reject a `C:foo` name too, so the
+/// same client cannot pick a name that escapes on one platform and silently
+/// creates an odd file on another. One ASCII letter — a real Windows drive
+/// prefix is a single letter.
+fn has_drive_prefix(name: &str) -> bool {
+    let Some((drive, _)) = name.split_once(':') else {
+        return false;
+    };
+    drive.len() == 1 && drive.chars().all(|c| c.is_ascii_alphabetic())
 }
 
 // ─── fs.read_file ────────────────────────────────────────────────────────────
@@ -630,6 +673,31 @@ mod tests {
         let cfg = cfg_with_roots(vec![root.to_string_lossy().to_string()]);
 
         for evil in ["foo/bar", "..", ".", " "] {
+            let r = req(
+                "fs.create_dir",
+                json!({ "parent": root.to_string_lossy(), "name": evil }),
+            );
+            let resp = handle_create_dir(r, cfg.clone()).await;
+            assert_eq!(
+                resp.error.expect("expected error").code,
+                INVALID_PARAMS,
+                "name '{evil}' should have been rejected"
+            );
+        }
+    }
+
+    /// A drive-relative name is not a child of the parent at all: on Windows
+    /// `Path::join` DROPS the parent when the name carries a drive prefix, so
+    /// `parent = C:\work` + `name = "D:outside"` used to create the directory
+    /// against D's CWD — outside the allowed parent. The name carries no
+    /// separator, so the old separator check let it through.
+    #[tokio::test]
+    async fn create_dir_rejects_a_drive_relative_name() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path().to_path_buf();
+        let cfg = cfg_with_roots(vec![root.to_string_lossy().to_string()]);
+
+        for evil in ["D:outside", "C:foo", "d:"] {
             let r = req(
                 "fs.create_dir",
                 json!({ "parent": root.to_string_lossy(), "name": evil }),
