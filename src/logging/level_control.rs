@@ -13,7 +13,7 @@ use crate::logging::LoggingError;
 /// `#[repr(u8)]` matches the `AtomicU8` storage backing — `#[repr(C)]` would
 /// compile to whatever the platform ABI picks (typically `c_int` = 4 bytes),
 /// which would be misleading.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
 #[repr(u8)]
 pub enum LogLevel {
     Error,
@@ -25,6 +25,12 @@ pub enum LogLevel {
 }
 
 impl LogLevel {
+    /// Convert to string slice (alias for `to_filter_string`).
+    #[must_use]
+    pub const fn as_str(&self) -> &'static str {
+        self.to_filter_string()
+    }
+
     /// Convert to `EnvFilter` string
     #[must_use]
     pub const fn to_filter_string(&self) -> &'static str {
@@ -103,6 +109,12 @@ impl LogLevel {
             4 => Some(Self::Trace),
             _ => None,
         }
+    }
+}
+
+impl std::fmt::Display for LogLevel {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
     }
 }
 
@@ -294,6 +306,9 @@ mod tests {
         assert_eq!(LogLevel::Info.to_filter_string(), "info");
         assert_eq!(LogLevel::Debug.to_filter_string(), "debug");
         assert_eq!(LogLevel::Trace.to_filter_string(), "trace");
+        assert_eq!(LogLevel::Info.as_str(), "info");
+        assert_eq!(format!("{}", LogLevel::Debug), "debug");
+        assert!(LogLevel::Error < LogLevel::Warn);
     }
 
     #[test]
