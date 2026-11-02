@@ -166,6 +166,9 @@ pub(crate) fn install_git_skill(
     // Last path segment is the on-disk skill name; the guard above guarantees it
     // is non-empty and free of `..`.
     let safe_name = leaf.rsplit(['/', '\\']).next().unwrap_or(&leaf).to_string();
+    if safe_name.contains(':') || safe_name.chars().any(|c| c.is_control()) {
+        return Err(format!("unsafe skill name '{safe_name}'"));
+    }
     // Restrict accepted git URL schemes to HTTPS (`https://`). SCP-style SSH
     // (`git@host:…`) used to be accepted for compatibility but opens SSH
     // Trust-On-First-Use — a catalog entry that declared `git_url: "git@…"`
@@ -239,9 +242,30 @@ pub(crate) fn install_git_skill(
             "staged skill failed post-copy integrity re-check (cache may have been tampered with): {e}"
         ));
     }
+    let had_existing = target.exists();
+    let backup = skills_dir.join(".staging").join(format!(
+        "{}-{nonce}-backup",
+        safe_name,
+        nonce = mcp_server_id(&entry.id)
+    ));
+    if had_existing {
+        let _ = std::fs::remove_dir_all(&backup);
+        if let Err(e) = std::fs::rename(&target, &backup) {
+            let _ = std::fs::remove_dir_all(&staging);
+            return Err(format!("Failed to back up existing skill '{safe_name}': {e}"));
+        }
+    }
+
     if let Err(e) = std::fs::rename(&staging, &target) {
         let _ = std::fs::remove_dir_all(&staging);
+        if had_existing {
+            let _ = std::fs::rename(&backup, &target);
+        }
         return Err(e.to_string());
+    }
+
+    if had_existing {
+        let _ = std::fs::remove_dir_all(&backup);
     }
 
     // Stamp manifest as Github so official sync skips it.

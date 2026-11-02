@@ -115,7 +115,9 @@ pub fn primer_entries() -> Vec<ExtensionEntry> {
 /// Returns `None` for non-preset ids, unknown slugs, or presets without
 /// guidance.
 pub fn post_install_for(entry_id: &str) -> Option<&'static str> {
-    let slug = entry_id.strip_prefix(&format!("{ALEPH_HUB_ID}:"))?;
+    let slug = entry_id
+        .strip_prefix(ALEPH_HUB_ID)
+        .and_then(|s| s.strip_prefix(':'))?;
     presets::find(slug)?.post_install.as_deref()
 }
 
