@@ -4,9 +4,9 @@
 - Date / 日期: 2026-11-01
 - Branch / 分支: `native-context-qa`; base / 基线: `cb6790e8e` (local main / 本地 main).
 - Contract / 契约: `aleph-native-project-context-run-v1`.
-- Status / 状态: **BLOCKED — native acceptance remains incomplete / native 验收未完成**.
-- Current preflight / 当前预检: `node qa/native_ipc/native_project_runner.mjs --repo-root . --execute` exits `5`, reason `endpoint_transition_requires_approved_native_driver`, before creating a listener, shell, credential, or native-owned root.
-- The runner now has an executable fail-closed entry point and exports the exact cleanup adapter, but it intentionally stops before native mutation when no approved endpoint/lease driver is supplied. / runner 已有可执行的 fail-closed 入口并导出 exact cleanup 适配器；没有批准的 endpoint/lease driver 时会在 native mutation 前停止。
+- Status / 状态: **BLOCKED — native authenticated project context was not proven / native authenticated project context 未证明**.
+- Latest controlled run / 最近受控运行: `node qa/native_ipc/native_project_runner.mjs --repo-root . --execute` launched the QA WebView2 shell within the approved 120-second, one-launch budget. It reached `helper_ready: PASS`, then stopped at `protected_pairing: BLOCKED / pairing_surface_unavailable`; the runner exited `3` as `AMBIGUOUS` because the helper did not emit the required stopped facts. No native trace, protected credential, or Gateway receipt was produced.
+- Cleanup / 清理: read-only process inspection found no owned helper or shell. The feature-enabled reaper returned `absent:true` for both exact `delete-exact` and `check-absent`; the owned root was removed afterward. This external cleanup proves resource absence, but it does not upgrade the runner's `AMBIGUOUS` result to PASS.
 
 ## Corrected source audit / 源码审计更正
 
@@ -21,12 +21,13 @@ The controls now expose additive `data-panel-*` observation attributes. The QA m
 ## Remaining blockers and implementation gaps / 真实阻塞与实施缺口
 
 1. **Native launch and endpoint/lease transition / native 启动与 endpoint/lease 切换**: the Panel network ConnectionSection is read-only. The existing native `set_connection_target` command and bundled connection-page paths exist, but the current bounded remote-page DOM driver cannot drive that transition while the old page/lease is active. Command registration alone is not proof of a callable remote UI path. The driver must not call `invoke` or edit markers and then call that an in-flight lease transition. Approved design §3, phase 8 explicitly requires `BLOCKED` for this case.
-2. **Native orchestration / native 编排**: the runner now has an executable read-only/preflight entry point and an exact six-step cleanup adapter. The adapter is covered by fakes and enforces shell → helper → exact device revoke → exact credential delete → independent absence → root removal. It has not been connected to a real WebView2 process or OS keyring run; that remains gated by the native launch prerequisites below.
-3. **Launch prerequisites / 启动前置条件**: no numeric GUI window budget was established in the approved design. No current shell/WASM/reaper served-provenance bundle or native launch preflight was completed. Historical budgets and launch permissions were not reused.
+2. **Native orchestration and cleanup / native 编排与清理**: a real QA WebView2 launch was performed under the approved budget. The shell binary hash matched and the monitor connected, but the page exposed neither the TokenWall nor the Browser pairing notice. The runner therefore obtained no `panel_credential_save`, native trace, helper receipt or protected persistence evidence. The exact cleanup adapter correctly stopped at `helper_stopped` when the helper did not provide its required stopped facts; external CIM plus the feature-enabled exact reaper then proved absence and removed the root.
+3. **Endpoint/lease and late-result phases / endpoint/lease 与延迟结果阶段**: the current bounded monitor has no product-supported way to prove an in-flight endpoint/lease transition or selected-project identity at the required boundary. These phases remain `BLOCKED`; no product UI/API expansion is claimed.
+4. **No further launch in this run / 本轮不再启动**: the approved 120-second, one-launch budget has been consumed. A new launch would require explicit new authorization.
 
-These are not grounds to fabricate native evidence. No Windows Tauri/WebView2 window or OS credential operation was launched in this continuation. No further product UI/API expansion is claimed or silently approved.
+These results do not establish native acceptance. The fresh shell/WASM/reaper provenance was prepared, but the authenticated pairing path never became available in the real WebView2 page. No product UI/API expansion is claimed or silently approved.
 
-以上缺口均保留为未完成项。本轮没有启动 Tauri/WebView2 或访问 OS credential；没有伪造 native marker、覆盖 `__TAURI_INTERNALS__`，也没有用 helper 控制命令代替真实项目选择。
+这些结果不能升级为 native 验收通过。fresh shell/WASM/reaper provenance 已准备并使用，真实 WebView2 页面却没有可用的认证 pairing surface；没有暗中新增产品 UI/API，也没有用 helper 控制命令代替真实项目选择。
 
 ## Exercised Gateway helper / 已实际运行的 Gateway helper
 
@@ -63,11 +64,11 @@ Receipt corrections also replace the unrelated presence/health/config version wi
 | Pure protocol, evidence, cleanup order / 纯协议与顺序 | PASS in Node tests | No real cleanup or keyring operation / 无真实清理与 keyring |
 | DOM driver / DOM 驱动 | PASS in source-extracted JS VM | No WebView2 rendering or IPC / 无真实渲染或 IPC |
 | Production Gateway fixture / 生产 Gateway fixture | PASS for the Node WS/HTTP smoke above | Not a native actor / 非 native caller |
-| Native credential IPC / native credential IPC | NOT_RUN | No shell child trace / 无 shell trace |
-| OS protected persistence and exact absence / OS 持久化与精确缺失 | NOT_RUN | No OS-store operation / 未访问 OS store |
-| Real community load in WebView2 / 真实 WebView2 社区加载 | NOT_RUN | No fresh served shell/WASM proof / 无新 shell/WASM 证据 |
+| Native credential IPC / native credential IPC | NOT_RUN | WebView2 launched, but pairing surface was unavailable before any credential command / 已启动 WebView2，但 pairing surface 不可用，未执行 credential command |
+| OS protected persistence and exact absence / OS 持久化与精确缺失 | NOT_RUN; external exact absence cleanup PASS | No credential was saved; exact reaper absence was proven outside the runner / 未保存 credential；runner 外部已证明 exact absence |
+| Real community load in WebView2 / 真实 WebView2 社区加载 | NOT_RUN | The shell reached the page, but authentication did not reach the Panel project UI / 页面已加载，但认证未抵达 Panel 项目 UI |
 | Endpoint/lease native phase / native endpoint 与 lease | BLOCKED | No supported current driver transition / 当前 driver 无可用切换链路 |
-| Complete desktop runtime / 完整桌面 runtime | NOT_RUN | Required native phases incomplete / native 阶段未完成 |
+| Complete desktop runtime / 完整桌面 runtime | BLOCKED/AMBIGUOUS | Pairing was unavailable and the runner could not prove helper stopped facts / pairing 不可用且 runner 未能证明 helper stopped facts |
 
 ## Verification / 验证
 
@@ -81,7 +82,7 @@ Receipt corrections also replace the unrelated presence/health/config version wi
 - Earlier Panel checks timed out during compilation; an intermediate `E0382` from the added `aria-pressed` closure was fixed by removing that unnecessary attribute. Final compilation passed. / 早先超时和中途编译错误均披露，不冒充首次全绿。
 - Protocol RED/GREEN regressions now prevent empty, partial or duplicate phases from passing and prevent a blocked phase from hiding cleanup ambiguity. Run identifiers use the full 64-hex digest.
 - Provenance regressions exposed that arbitrary `kind/reason` text could enter the ledger. The boundary now accepts only the implemented fixed source-map/hash labels and rejects raw path/token text before storage. / provenance 字段已限制为已实现的固定标签；先 RED 再 GREEN，拒绝将路径或 token 文本写入台账。
-- The executable runner was checked in both modes: default mode exits `4` with `NOT_RUN/preflight_only`; `--execute` exits `5` with `BLOCKED/endpoint_transition_requires_approved_native_driver` and records no native mutation.
+- The executable runner was checked in both modes: default mode remains `NOT_RUN/preflight_only`; the authorized native mode launched WebView2 and exited `3` with `AMBIGUOUS`, stopping at `protected_pairing/pairing_surface_unavailable`. It recorded no native trace or credential receipt. / runner 默认模式仍为 `NOT_RUN/preflight_only`；受控 native 模式实际启动 WebView2，因 `protected_pairing/pairing_surface_unavailable` 以 `AMBIGUOUS`、exit 3 结束，未记录 native trace 或 credential receipt。
 - Changed Rust files passed targeted `rustfmt --check`; `python qa/browser_live/check_docs.py` and `git diff --check` passed. / 改动 Rust 文件格式、文档检查与 diff 空白检查通过。
 - Fixture behavior is verified through the independent built-helper Node WS/HTTP tests rather than a monolithic Core lib-test or a new public test shim. / fixture 使用独立 helper 的真实 WS/HTTP 测试，未增加 public test shim 或重跑 monolithic Core 配置。
 - Commits use per-invocation `core.hooksPath=/dev/null` because the existing shared formatting hook is blocked by unrelated baseline files; targeted changed-file formatting passes, and no global hook configuration was changed. / 沿用单次提交绕过既有基线 hook 阻塞，未修改全局 hook 配置；改动文件格式已单独验证。
@@ -100,6 +101,6 @@ The fresh read-only whole-branch reviewer `del_mvxlbhy5_sr3x` returned three fin
 
 ## Not done / 未做与未验证
 
-No real Windows shell launch; protected OS save/load/delete; same-device native reload/relaunch; native trace/monitor handshake; native A/B/Global, cross-user, delayed-result, endpoint/lease or revocation phase; exact OS absence proof; full fresh shell/WASM/reaper provenance; full workspace tests or monolithic Core lib-test. No daily daemon/default release/production credential changes, no old connection-file read, no merge and no push.
+A real QA WebView2 shell launch occurred within the approved one-launch budget, reached the page, and stopped at `pairing_surface_unavailable`; no protected OS save/load/delete, same-device native reload, native project A/B/Global, endpoint/lease or revocation evidence was obtained. The exact absence cleanup was completed externally after the runner's helper-stop proof failed. No daily daemon/default release/production credential changes, no old connection-file read, no merge and no push.
 
-未做：真实 native 运行、OS protected persistence 与缺失验证、native 全矩阵、完整 provenance、全 workspace/monolithic tests。隔离分支保留；日常 daemon、默认 release、生产 credential 与旧连接文件未动，未 merge、未 push。只有 native 全链路与隔离/撤销、provenance、cleanup 均有真实证据时，本阶段才能完成。
+未做：protected OS save/load/delete、same-device native reload、native project A/B/Global、endpoint/lease 与 revoke 的 native 证据；runner 的 helper stopped proof 失败后，外部完成了 exact absence cleanup。已实际启动一次 QA WebView2 并到达页面，但 pairing surface 不可用。日常 daemon、默认 release、生产 credential 与旧连接文件未动，未 merge、未 push。
