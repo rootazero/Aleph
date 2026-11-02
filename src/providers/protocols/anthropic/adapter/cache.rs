@@ -210,17 +210,16 @@ pub(super) fn inject_cache_control_into_recent_messages(
         }
         match msg.get_mut("content") {
             None | Some(serde_json::Value::Null) => {}
-            Some(serde_json::Value::String(s)) => {
-                if let Some(obj) = msg.as_object_mut() {
-                    obj.insert(
-                        "content".to_string(),
-                        serde_json::json!([{
-                            "type": "text",
-                            "text": std::mem::take(s),
-                            "cache_control": cc_json.clone(),
-                        }]),
-                    );
-                }
+            Some(content @ serde_json::Value::String(_)) => {
+                let s = match std::mem::take(content) {
+                    serde_json::Value::String(s) => s,
+                    _ => unreachable!(),
+                };
+                *content = serde_json::json!([{
+                    "type": "text",
+                    "text": s,
+                    "cache_control": cc_json.clone(),
+                }]);
                 remaining -= 1;
             }
             Some(serde_json::Value::Array(blocks)) => {
