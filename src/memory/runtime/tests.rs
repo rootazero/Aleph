@@ -343,8 +343,17 @@ async fn starting_factory_restores_dream_health_before_public_admission() {
         (restored - 0.73).abs() < 1e-9,
         "the real constructor must read persisted health during Starting, got {restored}"
     );
+    let scheduling = operation
+        .clone()
+        .scope(async { crate::memory::dreaming::daemon_status() })
+        .await;
     drop(operation);
     runtime.stop().await.unwrap();
+    assert_eq!(
+        scheduling.map(|status| status.enabled),
+        Some(true),
+        "Dream status must describe this admitted activation rather than a global slot"
+    );
 }
 
 #[tokio::test]

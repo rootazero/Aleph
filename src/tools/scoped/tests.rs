@@ -3,6 +3,9 @@ use super::*;
 #[path = "memory_runtime_tests.rs"]
 mod memory_runtime;
 
+#[path = "memory_runtime_boundary_tests.rs"]
+mod memory_runtime_boundary;
+
 // HookExecutor + make_command_hook are only exercised by the cfg(unix) hook tests below.
 #[cfg(unix)]
 use crate::extension::hooks::HookExecutor;

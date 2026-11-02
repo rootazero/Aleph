@@ -5,6 +5,8 @@
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
+pub mod runtime;
+
 use super::super::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR};
 use super::parse_params;
 use crate::memory::store::raw_memory::RawMemoryStore;
@@ -713,15 +715,18 @@ pub async fn handle_trace(
         );
     }
 
-    let note_memory_dir = match crate::utils::paths::get_note_memory_dir() {
-        Ok(d) => d,
-        Err(e) => {
-            return JsonRpcResponse::error(
-                request.id,
-                INTERNAL_ERROR,
-                format!("memory.trace: note dir: {e}"),
-            )
-        }
+    let note_memory_dir = match crate::memory::runtime::MemoryOperation::current() {
+        Some(operation) => operation.note_memory_dir().to_path_buf(),
+        None => match crate::utils::paths::get_note_memory_dir() {
+            Ok(directory) => directory,
+            Err(error) => {
+                return JsonRpcResponse::error(
+                    request.id,
+                    INTERNAL_ERROR,
+                    format!("memory.trace: note dir: {error}"),
+                )
+            }
+        },
     };
 
     // Composed AFTER the visibility gate, which judges the base id the caller

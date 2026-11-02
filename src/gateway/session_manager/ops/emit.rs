@@ -37,7 +37,7 @@ impl SessionManager {
     }
 
     /// Raw persistence uses the session writer even when derived admission is closed.
-    pub(crate) fn capture_session_end(
+    pub(crate) async fn capture_session_end(
         &self,
         writer: Arc<dyn RawMemoryStore>,
         raw: RawMemory,
@@ -52,11 +52,12 @@ impl SessionManager {
             raw,
             scope,
             resume_snapshot,
-        );
+        )
+        .await;
     }
 }
 
-pub(crate) fn capture_session_end(
+pub(crate) async fn capture_session_end(
     runtime: Option<Arc<crate::memory::runtime::MemoryRuntime>>,
     writer: Arc<dyn RawMemoryStore>,
     raw: RawMemory,
@@ -64,10 +65,6 @@ pub(crate) fn capture_session_end(
     resume_snapshot: bool,
 ) {
     if raw.content.is_empty() {
-        return;
-    }
-    if tokio::runtime::Handle::try_current().is_err() {
-        tracing::warn!("no tokio runtime for session_end emit; skipping");
         return;
     }
     if let Some(runtime) = runtime {
@@ -78,12 +75,12 @@ pub(crate) fn capture_session_end(
             }
         }
     }
-    emit_raw(writer, raw);
+    emit_raw(writer, raw).await;
 }
 
 /// Standalone raw fixture entry; derived services require explicit runtime injection.
 #[cfg(test)]
-pub(crate) fn emit_session_end_raw(
+pub(crate) async fn emit_session_end_raw(
     writer: Arc<dyn RawMemoryStore>,
     agent_id: String,
     session_id: String,
@@ -100,17 +97,12 @@ pub(crate) fn emit_session_end_raw(
         RawMemory::new(tail, RawMemorySource::SessionEnd { reason })
             .with_agent(agent_id)
             .with_session(session_id),
-    );
+    )
+    .await;
 }
 
-fn emit_raw(writer: Arc<dyn RawMemoryStore>, raw: RawMemory) {
-    if let Ok(runtime) = tokio::runtime::Handle::try_current() {
-        runtime.spawn(async move {
-            if let Err(error) = writer.insert_raw_memory(&raw).await {
-                tracing::warn!("session_end raw_memory write failed: {error}");
-            }
-        });
-        return;
+async fn emit_raw(writer: Arc<dyn RawMemoryStore>, raw: RawMemory) {
+    if let Err(error) = writer.insert_raw_memory(&raw).await {
+        tracing::warn!("session_end raw_memory write failed: {error}");
     }
-    tracing::warn!("no tokio runtime for session_end emit; skipping");
 }

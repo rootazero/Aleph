@@ -457,6 +457,34 @@ impl ToolRegistry for BuiltinToolRegistry {
                 })
             }
 
+            "memory_runtime_status" => Box::pin(async move {
+                let runtime = self
+                    .memory_runtime
+                    .as_ref()
+                    .ok_or_else(|| AlephError::tool("Memory runtime is not configured"))?;
+                crate::builtin_tools::runtime_control::MemoryRuntimeStatusTool::new(runtime.clone())
+                    .call_json(arguments)
+                    .await
+            }),
+            "memory_runtime_start" => Box::pin(async move {
+                let runtime = self
+                    .memory_runtime
+                    .as_ref()
+                    .ok_or_else(|| AlephError::tool("Memory runtime is not configured"))?;
+                crate::builtin_tools::runtime_control::MemoryRuntimeStartTool::new(runtime.clone())
+                    .call_json(arguments)
+                    .await
+            }),
+            "memory_runtime_stop" => Box::pin(async move {
+                let runtime = self
+                    .memory_runtime
+                    .as_ref()
+                    .ok_or_else(|| AlephError::tool("Memory runtime is not configured"))?;
+                crate::builtin_tools::runtime_control::MemoryRuntimeStopTool::new(runtime.clone())
+                    .call_json(arguments)
+                    .await
+            }),
+
             // The probe resolves the current admitted bundle on each call.
             "governance_metrics" => Box::pin(async move {
                 let runtime = self.memory_runtime.as_ref().ok_or_else(|| {

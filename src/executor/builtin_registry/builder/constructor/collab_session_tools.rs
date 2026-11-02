@@ -477,6 +477,9 @@ impl BuiltinToolRegistry {
             if let Some(ref reg) = config.capture_registry {
                 tool = tool.with_capture_registry(Arc::clone(reg));
             }
+            if let Some(runtime) = &config.memory_runtime {
+                tool = tool.with_memory_runtime(Arc::downgrade(runtime));
+            }
 
             // Register tool schema
             {

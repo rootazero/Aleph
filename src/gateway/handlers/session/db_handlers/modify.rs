@@ -297,7 +297,8 @@ async fn handle_delete_db_inner(
                                 scope_id.as_deref(),
                             ),
                             false,
-                        );
+                        )
+                        .await;
                     }
                 }
             }

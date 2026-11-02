@@ -2,6 +2,7 @@
 
 mod bundle;
 mod context;
+mod embedding;
 mod operation;
 mod search;
 mod services;
@@ -13,6 +14,8 @@ mod tasks;
 mod service_lifecycle_tests;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod watcher_lifecycle_tests;
 
 use std::future::Future;
 use std::path::PathBuf;
@@ -30,6 +33,7 @@ use tokio::sync::Notify;
 use tokio::task::JoinHandle;
 
 pub(crate) use context::carry;
+pub use embedding::MemoryEmbeddingBatch;
 pub use operation::{MemoryHandle, MemoryOperation};
 pub(crate) use search::MemorySearchSettings;
 pub use services::MemoryServicesConfig;
@@ -421,6 +425,7 @@ impl MemoryRuntime {
                     .scope(bundle.initialize(
                         &self.config,
                         self.services_config.get().and_then(Option::as_ref),
+                        self,
                     ))
                     .await
                 {
@@ -468,6 +473,18 @@ impl MemoryRuntime {
             let changed = self.changed.notified();
             tokio::pin!(changed);
             changed.as_mut().enable();
+            let draining = {
+                let inner = self.inner.lock().unwrap_or_else(|error| error.into_inner());
+                (inner.status.state == MemoryState::Draining)
+                    .then(|| inner.bundle.clone())
+                    .flatten()
+            };
+            if let Some(bundle) = draining {
+                if let Err(error) = bundle.drain_watcher().await {
+                    let mut inner = self.inner.lock().unwrap_or_else(|error| error.into_inner());
+                    Self::record_error(&mut inner, error.to_string());
+                }
+            }
             let ready_to_close = {
                 let inner = self.inner.lock().unwrap_or_else(|error| error.into_inner());
                 inner.status.state == MemoryState::Draining && inner.admitted == 0

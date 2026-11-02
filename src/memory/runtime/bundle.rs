@@ -1,3 +1,4 @@
+use std::path::PathBuf;
 use std::sync::Weak;
 
 use crate::error::AlephError;
@@ -9,9 +10,11 @@ use super::services::MemoryServices;
 use super::{MemoryOperation, MemoryRuntime, MemoryRuntimeConfig, MemoryServicesConfig};
 
 pub(super) struct MemoryBundle {
+    pub(super) note_memory_dir: PathBuf,
     pub(super) backend: Arc<SqliteMemoryBackend>,
     stop: watch::Sender<bool>,
     services: Mutex<Option<Arc<MemoryServices>>>,
+    watcher: tokio::sync::Mutex<Option<crate::memory::notes::watcher::NoteVaultWatcher>>,
 }
 
 impl MemoryBundle {
@@ -20,9 +23,11 @@ impl MemoryBundle {
         owner: Weak<MemoryRuntime>,
     ) -> Result<Arc<Self>, AlephError> {
         Ok(Arc::new(Self {
+            note_memory_dir: config.note_memory_dir.clone(),
             backend: Arc::new(SqliteMemoryBackend::new(&config.metadata_path)?.with_runtime(owner)),
             stop: watch::channel(false).0,
             services: Mutex::new(None),
+            watcher: tokio::sync::Mutex::new(None),
         }))
     }
 
@@ -30,16 +35,30 @@ impl MemoryBundle {
         &self,
         config: &MemoryRuntimeConfig,
         inputs: Option<&MemoryServicesConfig>,
+        runtime: &Arc<MemoryRuntime>,
     ) -> Result<(), AlephError> {
         std::fs::create_dir_all(&config.note_memory_dir).map_err(|error| {
             AlephError::other(format!("memory notes initialization failed: {error}"))
         })?;
         if let Some(inputs) = inputs {
             let services = MemoryServices::initialize(config, inputs, self.backend.clone()).await?;
+            let indexer = services.indexer.clone();
             *self
                 .services
                 .lock()
                 .unwrap_or_else(|error| error.into_inner()) = Some(services);
+            let mut watcher = self.watcher.lock().await;
+            *watcher = Some(
+                crate::memory::notes::watcher::prepare_owned_note_vault_watcher(
+                    indexer,
+                    Arc::downgrade(runtime),
+                )?,
+            );
+            // Keep the native owner in the bundle even if registration fails.
+            watcher
+                .as_mut()
+                .expect("watcher was installed")
+                .start_watching()?;
         }
         Ok(())
     }
@@ -93,6 +112,24 @@ impl MemoryBundle {
                 tracing::warn!(%corpus, %error, "Note corpus left unreconciled at startup");
             }
         })?;
+        let embedding = services.embedding.clone();
+        let backend = self.backend.clone();
+        operation.spawn(async move {
+            if let Some(provider) = embedding.get_active_provider().await {
+                use crate::memory::embedding_signature;
+                let current = embedding_signature::provider_signature(provider.as_ref());
+                let stored = backend.get_embedding_signature().ok().flatten();
+                if let embedding_signature::SignatureStatus::Mismatch { stored, current } =
+                    embedding_signature::compare(stored.as_deref(), &current)
+                {
+                    tracing::warn!(
+                        stored = %stored,
+                        current = %current,
+                        "Embedding model changed since notes were last embedded — run memory.reembed to keep retrieval accurate."
+                    );
+                }
+            }
+        })?;
         if let Some(service) = &services.compression {
             runtime.retain_worker(
                 service
@@ -121,6 +158,14 @@ impl MemoryBundle {
                     self.subscribe_stop(),
                 ));
             }
+        }
+        Ok(())
+    }
+
+    pub(super) async fn drain_watcher(&self) -> Result<(), AlephError> {
+        let mut watcher = self.watcher.lock().await;
+        if let Some(watcher) = watcher.as_mut() {
+            watcher.shutdown().await?;
         }
         Ok(())
     }

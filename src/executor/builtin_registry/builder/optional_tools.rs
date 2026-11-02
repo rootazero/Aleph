@@ -120,6 +120,30 @@ impl BuiltinToolRegistry {
         if config.memory_runtime.is_some() {
             reg(
                 tools,
+                "memory_runtime_status",
+                crate::builtin_tools::runtime_control::MemoryRuntimeStatusTool::DESCRIPTION,
+                super::core_tools::tool_schema::<
+                    crate::builtin_tools::runtime_control::RuntimeControlArgs,
+                >("memory_runtime_status"),
+            );
+            reg(
+                tools,
+                "memory_runtime_start",
+                crate::builtin_tools::runtime_control::MemoryRuntimeStartTool::DESCRIPTION,
+                super::core_tools::tool_schema::<
+                    crate::builtin_tools::runtime_control::RuntimeControlArgs,
+                >("memory_runtime_start"),
+            );
+            reg(
+                tools,
+                "memory_runtime_stop",
+                crate::builtin_tools::runtime_control::MemoryRuntimeStopTool::DESCRIPTION,
+                super::core_tools::tool_schema::<
+                    crate::builtin_tools::runtime_control::RuntimeControlArgs,
+                >("memory_runtime_stop"),
+            );
+            reg(
+                tools,
                 "flag_user_correction",
                 crate::builtin_tools::FlagUserCorrectionTool::DESCRIPTION,
                 super::core_tools::tool_schema::<
@@ -718,6 +742,9 @@ mod tests {
         );
         assert!(!with_raw_store.contains_key("flag_user_correction"));
         assert!(!with_raw_store.contains_key("governance_metrics"));
+        assert!(!with_raw_store.contains_key("memory_runtime_status"));
+        assert!(!with_raw_store.contains_key("memory_runtime_start"));
+        assert!(!with_raw_store.contains_key("memory_runtime_stop"));
 
         let mut with_runtime = HashMap::new();
         BuiltinToolRegistry::register_optional_tools(

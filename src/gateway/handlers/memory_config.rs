@@ -242,26 +242,41 @@ pub async fn handle_retrieve_with_trace(
 
     let limit = params.limit.unwrap_or(10);
 
-    // Snapshot the three scoring configs, then drop the lock before retrieval.
-    let (rerank_cfg, scoring_cfg, expansion_cfg) = {
-        let cfg = app_config.read().await;
-        (
-            cfg.memory.rerank.clone(),
-            cfg.memory.retrieval_scoring.clone(),
-            cfg.memory.expansion.clone(),
-        )
-    };
-
-    let memory_dir = match crate::utils::paths::get_note_memory_dir() {
-        Ok(d) => d,
-        Err(e) => {
-            return JsonRpcResponse::error(
-                request.id,
-                INTERNAL_ERROR,
-                format!("note memory dir unavailable: {e}"),
-            );
-        }
-    };
+    // Admitted calls use the immutable activation snapshot. Standalone
+    // compatibility callers retain their existing live-config behavior.
+    let (rerank_cfg, scoring_cfg, expansion_cfg, memory_dir) =
+        if let Some(operation) = crate::memory::runtime::MemoryOperation::current() {
+            let services = match operation.services() {
+                Ok(services) => services,
+                Err(error) => {
+                    return JsonRpcResponse::error(request.id, INTERNAL_ERROR, error.to_string());
+                }
+            };
+            (
+                services.config.rerank.clone(),
+                services.config.retrieval_scoring.clone(),
+                services.config.expansion.clone(),
+                operation.note_memory_dir().to_path_buf(),
+            )
+        } else {
+            let memory_dir = match crate::utils::paths::get_note_memory_dir() {
+                Ok(directory) => directory,
+                Err(error) => {
+                    return JsonRpcResponse::error(
+                        request.id,
+                        INTERNAL_ERROR,
+                        format!("note memory dir unavailable: {error}"),
+                    );
+                }
+            };
+            let config = app_config.read().await;
+            (
+                config.memory.rerank.clone(),
+                config.memory.retrieval_scoring.clone(),
+                config.memory.expansion.clone(),
+                memory_dir,
+            )
+        };
     let indexer = Arc::new(NoteIndexer::new(memory_dir, Arc::clone(&db)));
     let embedder: Arc<dyn EmbeddingProvider> =
         embedder.unwrap_or_else(|| Arc::new(UnavailableEmbedder));

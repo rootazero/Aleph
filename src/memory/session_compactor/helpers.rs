@@ -1,6 +1,6 @@
 use super::SessionCompactor;
 use crate::error::AlephError;
-use crate::memory::extensions::insert_with_capture_filter;
+use crate::memory::extensions::insert_helper::insert_with_runtime_capture_filter;
 use crate::memory::extensions::types::CaptureCtx;
 use crate::memory::store::raw_memory::{RawMemory, RawMemorySource};
 use crate::providers::adapter::RequestPayload;
@@ -160,7 +160,15 @@ impl SessionCompactor {
                 session_id: Some(session_id.to_string()),
                 source_hint: "session_compressed".into(),
             };
-            if let Err(e) = insert_with_capture_filter(&store, registry, &ctx, raw).await {
+            if let Err(e) = insert_with_runtime_capture_filter(
+                &store,
+                registry,
+                self.memory_runtime.as_ref(),
+                &ctx,
+                raw,
+            )
+            .await
+            {
                 warn!(error = %e, session = %session_id, seq, "Failed to store raw chunk to raw_memories");
             }
         } else if let Err(e) = self.database.insert_raw_memory(&raw).await {
@@ -255,7 +263,14 @@ impl SessionCompactor {
                 session_id: Some(session_id.to_string()),
                 source_hint: "session_compressed".into(),
             };
-            insert_with_capture_filter(&store, registry, &ctx, raw).await?;
+            insert_with_runtime_capture_filter(
+                &store,
+                registry,
+                self.memory_runtime.as_ref(),
+                &ctx,
+                raw,
+            )
+            .await?;
         } else {
             self.database.insert_raw_memory(&raw).await?;
         }

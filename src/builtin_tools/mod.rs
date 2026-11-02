@@ -113,6 +113,7 @@ pub mod project_manage;
 pub mod recall_context;
 pub mod recall_events;
 pub mod remember;
+pub mod runtime_control;
 pub mod runtime_manage;
 pub mod scratchpad;
 pub mod scratchpad_registry;

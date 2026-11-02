@@ -17,13 +17,13 @@ pub mod stages;
 pub mod strategy;
 pub mod validation;
 
-use crate::capability::{CapabilitySlot, MissingSemantics, SlotStatus};
 use crate::config::types::memory::MemoryDecayPolicy;
 use crate::config::{DreamingConfig as ConfigDreamingConfig, MemoryConfig};
 use crate::error::AlephError;
 use crate::memory::embedding_provider::EmbeddingProvider;
 use crate::memory::notes::store::{NoteIndexEntry, NoteStore};
 use crate::memory::notes::NoteIndexer;
+use crate::memory::runtime::MemoryOperation;
 use crate::memory::store::raw_memory::RawMemoryStore;
 use crate::memory::store::sqlite::SqliteMemoryBackend;
 use crate::memory::store::{DreamStore, MemoryBackend};
@@ -463,32 +463,6 @@ const RECALL_SIGNAL_RETENTION_DAYS: u32 = 90;
 
 static LAST_ACTIVITY_TS: Lazy<AtomicI64> = Lazy::new(|| AtomicI64::new(now_timestamp()));
 
-/// `IndistinguishableDefault`, derived from the reader that exists to answer an
-/// operator question: [`daemon_status`] returns `None`, and its own doc
-/// instructs every caller to render that as **"not running"**, never as an
-/// error — "an install with dreaming off is healthy, not broken."
-///
-/// That instruction is right and it is also the defect. `daemon_status` is the
-/// zero-side-effect answer to *"why didn't dreaming run tonight?"*, and with
-/// this handle uninstalled it answers "because dreaming is not running" — the
-/// same words it gives a machine whose operator deliberately set
-/// `[memory.dreaming] enabled = false`. The second reader, [`try_run_now`], is
-/// honest by contrast ("DreamDaemon not initialized"), but it is the admin RPC,
-/// not the surface anyone reads first.
-static DREAM_DAEMON: CapabilitySlot<Arc<DreamDaemon>> = CapabilitySlot::new(
-    "memory/dream-daemon",
-    MissingSemantics::IndistinguishableDefault {
-        reads_as: "\"dreaming is not running\" -- word for word what an install \
-                   with [memory.dreaming] disabled reports",
-    },
-);
-
-/// The handle above, type-erased for the roster — see
-/// [`crate::spend::global_ledger_slot`] for why this shape.
-pub(crate) const fn dream_daemon_slot() -> &'static dyn SlotStatus {
-    &DREAM_DAEMON
-}
-
 pub(crate) fn now_timestamp() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -551,18 +525,21 @@ fn idle_seconds() -> i64 {
     (now - last).max(0)
 }
 
-/// Force-trigger a dream cycle on the globally-registered daemon.
+/// Force-trigger a dream cycle in the admitted Memory bundle.
 ///
 /// Returns the resulting [`DreamReport`] on success, or an error explaining
 /// why the cycle could not run (no daemon registered, already running, etc.).
 /// Bypasses scheduling checks (window, idle threshold, already-ran-today) —
 /// intended for the `dreaming.run_now` admin RPC and E2E test harnesses.
 pub async fn try_run_now() -> Result<DreamReport, AlephError> {
-    let daemon = DREAM_DAEMON
-        .get()
-        .cloned()
+    let operation = MemoryOperation::current()
         .ok_or_else(|| AlephError::other("DreamDaemon not initialized"))?;
-    daemon.run_now().await
+    let daemon = operation
+        .services()?
+        .dream
+        .clone()
+        .ok_or_else(|| AlephError::other("DreamDaemon not initialized"))?;
+    operation.run(async move { daemon.run_now().await }).await
 }
 
 /// Read-only snapshot of the daemon's scheduling preconditions — the
@@ -581,13 +558,13 @@ pub async fn try_run_now() -> Result<DreamReport, AlephError> {
 /// spectrum whose expensive end is a column of dashes.
 pub type DaemonStatusSnapshot = aleph_protocol::dreaming::DaemonStatus;
 
-/// Snapshot the registered daemon's gates, or `None` when no daemon exists in
-/// this process (memory disabled, or a unit-test binary — `ensure_dream_daemon`
-/// no-ops under `cfg!(test)`). Callers must render `None` as "not running",
-/// never as an error: an install with dreaming off is healthy, not broken.
+/// Snapshot the admitted bundle's daemon gates. Without an admitted bundle
+/// or an enabled daemon, callers render `None` as "not running".
 #[must_use]
 pub fn daemon_status() -> Option<DaemonStatusSnapshot> {
-    let daemon = DREAM_DAEMON.get()?;
+    let operation = MemoryOperation::current()?;
+    let services = operation.services().ok()?;
+    let daemon = services.dream.as_ref()?;
     Some(DaemonStatusSnapshot {
         enabled: daemon.config.enabled,
         within_window: daemon.is_within_window(),
@@ -618,138 +595,6 @@ const STALE_RUNNING_SLACK_SECS: i64 = 600;
 #[must_use]
 pub fn running_status_is_stale(last_run_at: i64, max_duration_seconds: u32, now: i64) -> bool {
     now - last_run_at > i64::from(max_duration_seconds) + STALE_RUNNING_SLACK_SECS
-}
-
-/// Ensure `DreamDaemon` is running (once) when memory is enabled.
-pub fn ensure_dream_daemon(
-    database: MemoryBackend,
-    config: Arc<MemoryConfig>,
-    provider: Option<Arc<dyn AiProvider>>,
-    command_handler: Option<Arc<crate::memory::events::handler::MemoryCommandHandler>>,
-) {
-    ensure_dream_daemon_with_orientation(
-        database,
-        config,
-        provider,
-        command_handler,
-        None,
-        None,
-        None,
-        None,
-    );
-}
-
-/// Ensure `DreamDaemon` is running (once) when memory is enabled, with optional orientation handle.
-pub fn ensure_dream_daemon_with_orientation(
-    database: MemoryBackend,
-    config: Arc<MemoryConfig>,
-    provider: Option<Arc<dyn AiProvider>>,
-    command_handler: Option<Arc<crate::memory::events::handler::MemoryCommandHandler>>,
-    orientation: Option<Arc<dyn crate::memory::notes::orientation::NoteOrientation>>,
-    embedder: Option<Arc<dyn EmbeddingProvider>>,
-    note_memory_dir: Option<PathBuf>,
-    raw_store: Option<Arc<dyn RawMemoryStore>>,
-) {
-    // Four distinct reasons this function can return without a daemon, and one
-    // that is not a reason at all. Each gets its own `because`: an operator
-    // reading "dreaming did not start" needs to know WHICH of these it was,
-    // and a sentence true of all four is actionable for none.
-    if cfg!(test) {
-        DREAM_DAEMON.decline(
-            "built with cfg(test): the nightly daemon never starts under the \
-             test harness, so no unit test can be woken by a real cycle",
-        );
-        return;
-    }
-
-    if !config.enabled {
-        DREAM_DAEMON.decline("memory is off for this deployment: `[memory] enabled = false`");
-        return;
-    }
-
-    if !config.dreaming.enabled {
-        DREAM_DAEMON.decline(
-            "memory is on but nightly dreaming is off: `[memory.dreaming] enabled = false`",
-        );
-        return;
-    }
-
-    // NOT a decline: the daemon is already installed, so the outcome is
-    // `Installed` and stamping over it would report a live capability missing.
-    if DREAM_DAEMON.get().is_some() {
-        return;
-    }
-
-    let handle = match tokio::runtime::Handle::try_current() {
-        Ok(handle) => handle,
-        Err(_) => {
-            warn!("DreamDaemon not started: no Tokio runtime available");
-            DREAM_DAEMON.decline(
-                "no Tokio runtime on the calling thread: the daemon needs a \
-                 runtime handle to spawn its nightly task, and boot reached \
-                 this from a blocking context",
-            );
-            return;
-        }
-    };
-
-    let daemon_builder = match DreamDaemon::from_config(database, &config) {
-        Ok(d) => d.with_optional_raw_store(raw_store),
-        Err(err) => {
-            warn!(error = %err, "DreamDaemon not started: invalid config");
-            DREAM_DAEMON.decline(
-                "`[memory.dreaming]` did not validate — the \"DreamDaemon not \
-                 started: invalid config\" warning names the failing field",
-            );
-            return;
-        }
-    };
-
-    let daemon_builder = if let Some(handler) = command_handler {
-        daemon_builder.with_command_handler(handler)
-    } else {
-        daemon_builder
-    };
-
-    let daemon_builder = if let Some(p) = provider {
-        daemon_builder.with_provider(p)
-    } else {
-        daemon_builder
-    };
-
-    let daemon_builder = if let Some(e) = embedder {
-        daemon_builder.with_embedder(e)
-    } else {
-        daemon_builder
-    };
-
-    let daemon_builder = if let Some(dir) = note_memory_dir {
-        daemon_builder.with_note_memory_dir(dir)
-    } else {
-        daemon_builder
-    };
-
-    let daemon = if let Some(w) = orientation {
-        Arc::new(daemon_builder.with_orientation(w))
-    } else {
-        Arc::new(daemon_builder)
-    };
-
-    // rust-doctor-disable-next-line excessive-clone
-    if DREAM_DAEMON.install(daemon.clone()) {
-        daemon.start_background_task_with_handle(handle);
-        info!("DreamDaemon background task started");
-    }
-}
-
-/// Record that boot reached this slot and had nothing to install.
-///
-/// For the arms OUTSIDE this module: boot's agent-engine branch is what calls
-/// [`ensure_dream_daemon_with_orientation`] at all, so a deployment with no
-/// provider registry never reaches any of the five reasons that function
-/// records. `because` is quoted verbatim to an operator.
-pub fn decline_dream_daemon(because: &'static str) {
-    DREAM_DAEMON.decline(because);
 }
 
 /// Daily insight summary record.
@@ -3537,34 +3382,6 @@ mod tests {
         assert_eq!(
             maintained, CONFIGURED_BUDGET,
             "the night's budget is the CONFIGURED ceiling, not the compiled-in default"
-        );
-    }
-
-    /// The `reads_as` sentence reaches an operator, so the fallback it names
-    /// is asserted.
-    ///
-    /// Premise stated out loud: `ensure_dream_daemon_with_orientation` returns
-    /// early under `cfg!(test)`, so no library test can install this daemon and
-    /// an uninstalled read is observable here.
-    #[test]
-    fn the_accessor_exposes_this_handle_to_the_roster() {
-        let slot = dream_daemon_slot();
-        assert_eq!(slot.id(), "memory/dream-daemon");
-        let MissingSemantics::IndistinguishableDefault { reads_as } = slot.missing() else {
-            panic!(
-                "expected IndistinguishableDefault, got {:?}",
-                slot.missing()
-            );
-        };
-        assert!(
-            reads_as.contains("not running"),
-            "must name what daemon_status() tells an operator; got {reads_as:?}"
-        );
-        assert!(
-            daemon_status().is_none(),
-            "a daemon got installed inside a test binary, so the cfg!(test) \
-             early return in ensure_dream_daemon_with_orientation is gone -- \
-             and with it this guard's premise"
         );
     }
 }

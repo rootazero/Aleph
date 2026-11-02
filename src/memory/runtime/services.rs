@@ -67,6 +67,7 @@ pub(crate) struct MemoryServices {
     pub(crate) query_filer: Option<Arc<dyn QueryFiler>>,
     pub(super) producer: Arc<MemoryProducerScheduler>,
     pub(crate) reconciler: Option<Arc<MemoryCommandHandler>>,
+    pub(crate) reembed: Arc<crate::gateway::handlers::memory::ReembedState>,
 }
 
 impl MemoryServices {
@@ -297,6 +298,7 @@ impl MemoryServices {
             query_filer,
             producer,
             reconciler,
+            reembed: Arc::new(crate::gateway::handlers::memory::ReembedState::new()),
         }))
     }
 }

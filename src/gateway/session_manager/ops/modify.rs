@@ -162,104 +162,109 @@ impl SessionManager {
         topic: Option<String>,
     ) -> Result<(), SessionManagerError> {
         let key_str = key.to_key_string();
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| SessionManagerError::DatabaseError(format!("Lock error: {e}")))?;
+        let capture = {
+            let conn = self
+                .conn
+                .lock()
+                .map_err(|e| SessionManagerError::DatabaseError(format!("Lock error: {e}")))?;
 
-        // Check current state - can't close if already stopped
-        let current_state: Option<String> = conn
-            .query_row(
-                "SELECT state FROM sessions WHERE key = ?",
-                params![&key_str],
-                |row| row.get(0),
-            )
-            .ok();
-
-        if current_state.as_deref() == Some("stopped") {
-            return Ok(());
-        }
-
-        // Spec 1 G3-A: capture the conversation tail for end-of-session digest extraction.
-        if let Some(writer) = self.raw_memory_writer.clone() {
-            let agent_id = key.agent_id().to_string();
-            let session_id = key_str.clone();
-            let tail = self
-                .read_recent_messages(&conn, &key_str, 64)
-                .unwrap_or_default();
-            // Review fix: the session-end reflector (spawned inside
-            // `emit_session_end_raw`) needs this session's P1 scope columns
-            // to write OPEN_LOOPS.md through the same composed id the
-            // curated-envelope reader resolves — the ambient task-local
-            // scope is not reliably live on this session-close path, so
-            // derive it from the persisted row instead (a `.ok()` miss on a
-            // legacy/pre-P1 row degrades to `(None, None)`, the pre-P1
-            // unscoped behaviour).
-            let (owner_user_id, scope_id): (Option<String>, Option<String>) = conn
+            // Check current state - can't close if already stopped
+            let current_state: Option<String> = conn
                 .query_row(
-                    "SELECT owner_user_id, scope_id FROM sessions WHERE key = ?",
+                    "SELECT state FROM sessions WHERE key = ?",
                     params![&key_str],
-                    |row| Ok((row.get(0)?, row.get(1)?)),
+                    |row| row.get(0),
                 )
-                .unwrap_or((None, None));
-            self.capture_session_end(
-                writer,
-                crate::memory::store::raw_memory::RawMemory::new(
-                    tail,
-                    crate::memory::store::raw_memory::RawMemorySource::SessionEnd {
-                        reason: crate::memory::store::raw_memory::SessionEndReason::Disconnect,
-                    },
+                .ok();
+
+            if current_state.as_deref() == Some("stopped") {
+                return Ok(());
+            }
+
+            // Spec 1 G3-A: capture the conversation tail for end-of-session digest extraction.
+            let capture = self.raw_memory_writer.clone().map(|writer| {
+                let agent_id = key.agent_id().to_string();
+                let session_id = key_str.clone();
+                let tail = self
+                    .read_recent_messages(&conn, &key_str, 64)
+                    .unwrap_or_default();
+                // Review fix: the session-end reflector (spawned inside
+                // `emit_session_end_raw`) needs this session's P1 scope columns
+                // to write OPEN_LOOPS.md through the same composed id the
+                // curated-envelope reader resolves — the ambient task-local
+                // scope is not reliably live on this session-close path, so
+                // derive it from the persisted row instead (a `.ok()` miss on a
+                // legacy/pre-P1 row degrades to `(None, None)`, the pre-P1
+                // unscoped behaviour).
+                let (owner_user_id, scope_id): (Option<String>, Option<String>) = conn
+                    .query_row(
+                        "SELECT owner_user_id, scope_id FROM sessions WHERE key = ?",
+                        params![&key_str],
+                        |row| Ok((row.get(0)?, row.get(1)?)),
+                    )
+                    .unwrap_or((None, None));
+                (
+                    writer,
+                    crate::memory::store::raw_memory::RawMemory::new(
+                        tail,
+                        crate::memory::store::raw_memory::RawMemorySource::SessionEnd {
+                            reason: crate::memory::store::raw_memory::SessionEndReason::Disconnect,
+                        },
+                    )
+                    .with_agent(agent_id)
+                    .with_session(session_id),
+                    crate::scope::ScopeAttribution::from_persisted(
+                        owner_user_id.as_deref(),
+                        scope_id.as_deref(),
+                    ),
                 )
-                .with_agent(agent_id)
-                .with_session(session_id),
-                crate::scope::ScopeAttribution::from_persisted(
-                    owner_user_id.as_deref(),
-                    scope_id.as_deref(),
-                ),
-                true,
-            );
-        }
+            });
 
-        let existing_json: Option<String> = conn
-            .query_row(
-                "SELECT metadata FROM sessions WHERE key = ?",
-                params![&key_str],
-                |row| row.get(0),
-            )
-            .optional()
-            .map_err(|e| SessionManagerError::DatabaseError(e.to_string()))?
-            .flatten();
+            let existing_json: Option<String> = conn
+                .query_row(
+                    "SELECT metadata FROM sessions WHERE key = ?",
+                    params![&key_str],
+                    |row| row.get(0),
+                )
+                .optional()
+                .map_err(|e| SessionManagerError::DatabaseError(e.to_string()))?
+                .flatten();
 
-        let mut identity_meta = SessionIdentityMeta::from_json_str(existing_json.as_deref());
-        identity_meta
-            .custom
-            .insert("status".to_string(), serde_json::json!("closed"));
-        if let Some(t) = topic {
+            let mut identity_meta = SessionIdentityMeta::from_json_str(existing_json.as_deref());
             identity_meta
                 .custom
-                .insert("topic".to_string(), serde_json::json!(t));
-        }
+                .insert("status".to_string(), serde_json::json!("closed"));
+            if let Some(t) = topic {
+                identity_meta
+                    .custom
+                    .insert("topic".to_string(), serde_json::json!(t));
+            }
 
-        let meta_json = identity_meta
-            .to_json_string()
+            let meta_json = identity_meta
+                .to_json_string()
+                .map_err(|e| SessionManagerError::DatabaseError(e.to_string()))?;
+
+            conn.execute(
+                "UPDATE sessions SET metadata = ?, state = 'stopped' WHERE key = ?",
+                params![&meta_json, &key_str],
+            )
             .map_err(|e| SessionManagerError::DatabaseError(e.to_string()))?;
 
-        conn.execute(
-            "UPDATE sessions SET metadata = ?, state = 'stopped' WHERE key = ?",
-            params![&meta_json, &key_str],
-        )
-        .map_err(|e| SessionManagerError::DatabaseError(e.to_string()))?;
+            // The scratchpad binding table is process-global and mirrored
+            // write-through to disk on every scratchpad tool call, but nothing
+            // ever pruned it: a binding left by an epoch that has since been
+            // superseded can never be addressed again, yet is rewritten forever.
+            // Closing epoch N is the moment epochs < N are known to be dead.
+            crate::builtin_tools::scratchpad_registry::clear_superseded_epochs(
+                &key.base_key_pattern(),
+                key.epoch(),
+            );
 
-        // The scratchpad binding table is process-global and mirrored
-        // write-through to disk on every scratchpad tool call, but nothing
-        // ever pruned it: a binding left by an epoch that has since been
-        // superseded can never be addressed again, yet is rewritten forever.
-        // Closing epoch N is the moment epochs < N are known to be dead.
-        crate::builtin_tools::scratchpad_registry::clear_superseded_epochs(
-            &key.base_key_pattern(),
-            key.epoch(),
-        );
-
+            capture
+        };
+        if let Some((writer, raw, scope)) = capture {
+            self.capture_session_end(writer, raw, scope, true).await;
+        }
         Ok(())
     }
 

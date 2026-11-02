@@ -10,7 +10,7 @@ use crate::cli::Args;
 
 use alephcore::capability::diagnostic_control::{DiagnosticControl, DiagnosticError};
 use alephcore::capability::ownership::OwnershipTree;
-use alephcore::capability::projection_host::{ProjectionHost, ProjectionShutdownOutcome};
+use alephcore::capability::projection_host::ProjectionHost;
 use alephcore::executor::BuiltinToolRegistry;
 use alephcore::gateway::pairing_store::SqlitePairingStore;
 use alephcore::gateway::router::AgentRouter;
@@ -28,19 +28,17 @@ use alephcore::ProviderRegistry as _; // trait needed for .default_provider()
 
 mod builder;
 use builder::{
-    drain_note_maintenance, drain_note_vault_watcher, initialize_channels,
-    initialize_inbound_router, initialize_vault, load_app_config, register_agent_handlers,
-    register_agents_handlers, register_artifact_handlers, register_browser_viewer_handlers,
-    register_canvas_handlers, register_config_handlers, register_core_handlers,
-    register_cron_handlers, register_daemon_handlers, register_extensions_handlers,
-    register_extensions_install_handlers, register_fs_handlers, register_graph_handlers,
-    register_group_chat_handlers, register_heartbeat_handlers, register_identity_handlers,
-    register_mcp_config_handlers, register_mcp_handlers, register_memory_handlers,
-    register_oauth_handlers, register_projects_handlers, register_pty_handlers,
-    register_session_handlers, register_session_management_handlers, register_teams_handlers,
-    register_voice_capability_handlers, register_workspace_handlers, setup_config_watcher,
-    spawn_note_index_rebuild, spawn_note_orientation_bootstrap, start_webchat_server,
-    NoteMaintenanceOwner,
+    initialize_channels, initialize_inbound_router, initialize_vault, load_app_config,
+    register_agent_handlers, register_agents_handlers, register_artifact_handlers,
+    register_browser_viewer_handlers, register_canvas_handlers, register_config_handlers,
+    register_core_handlers, register_cron_handlers, register_daemon_handlers,
+    register_extensions_handlers, register_extensions_install_handlers, register_fs_handlers,
+    register_graph_handlers, register_group_chat_handlers, register_heartbeat_handlers,
+    register_identity_handlers, register_mcp_config_handlers, register_mcp_handlers,
+    register_memory_handlers, register_oauth_handlers, register_projects_handlers,
+    register_pty_handlers, register_session_handlers, register_session_management_handlers,
+    register_teams_handlers, register_voice_capability_handlers, register_workspace_handlers,
+    setup_config_watcher, start_webchat_server,
 };
 
 mod orchestrator_init;
@@ -90,6 +88,15 @@ fn startup_diagnostics_control(
 
 /// Start the gateway server
 pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
+    let mut startup_resources = builder::StartupResources::new();
+    let result = start_server_body(args, &mut startup_resources).await;
+    startup_resources.finish(result).await
+}
+
+async fn start_server_body(
+    args: &Args,
+    startup_resources: &mut builder::StartupResources,
+) -> Result<(), Box<dyn std::error::Error>> {
     use alephcore::gateway::server::GatewayConfig as ServerConfig;
 
     // Mark process boot as early as possible so shutdown-forensics +
@@ -243,6 +250,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         },
         ownership_tree.clone(),
     );
+    startup_resources.install_memory(memory_runtime.clone());
     initialize_extension_manager(args.daemon, Arc::clone(&ownership_tree)).await?;
 
     // Shared MCP-target ToolHandlerRegistry. The Phase 2 facade chain
@@ -284,6 +292,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         memory_runtime.clone(),
         diagnostics_enabled,
     );
+    startup_resources.install_projection_host(projection_host.clone());
     alephcore::capability::projection_host::set_projection_host(Arc::clone(&projection_host));
     if !projection_host.wait_until_ready().await {
         return Err("projection host closed before startup readiness".into());
@@ -296,22 +305,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     )
     .map_err(|error| format!("failed to install capability diagnostics: {error:?}"))?;
 
-    // The host is retained in a process slot (see `projection_host_slot()`)
-    // so it survives every early `?` in the post-mount bootstrap body that
-    // drops this local binding. We do NOT wrap the ~3700-line post-mount
-    // body in a drain macro: doing so honestly would require every fallible
-    // post-mount call to opt in, and silently skipping any one would invert
-    // "all exits drain" into "no exit drains". The honest accounting is
-    // therefore:
-    //
-    // * the orderly AND fatal `run_until_shutdown` funnel below explicitly
-    //   awaits `close_and_await` before any registry-owning scope is
-    //   disposed, so the real production path drains;
-    // * an early `?` before `run_until_shutdown` returns leaves the host
-    //   Arc alive in the slot but the source/applier workers may keep
-    //   running until process exit; this is a known gap to escalate to the
-    //   controller rather than a universal drain framework (per
-    //   task-5-boot-drain-preflight.md).
+    // StartupResources retains the host across every fallible startup step.
 
     // First production consumer of `ToolHandlerRegistry::subscribe`.  Logs every
     // MCP-driven register/unregister so operators can see exactly when
@@ -437,33 +431,6 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     if !args.daemon {
         println!("Desktop capabilities: in-process (native)");
     }
-
-    // Initialize memory backend (SQLite + sqlite-vec)
-    let data_dir = alephcore::utils::paths::get_data_dir()
-        .map_err(|e| format!("Error: Failed to resolve data directory: {e}. Memory backend requires a persistent directory."))?;
-    let db_path = aleph_home.join("metadata.db");
-
-    // Notify user if old LanceDB data directory exists
-    let lance_path = data_dir.join("memory.lance");
-    if lance_path.exists() {
-        println!("  Note: Old LanceDB data found at {lance_path:?}. Run: rm -rf {lance_path:?}");
-    }
-
-    let memory_db: Arc<alephcore::memory::store::SqliteMemoryBackend> =
-        match alephcore::memory::store::SqliteMemoryBackend::new(&db_path) {
-            Ok(backend) => {
-                if !args.daemon {
-                    println!("Memory backend initialized (SQLite + sqlite-vec)");
-                }
-                Arc::new(backend.with_retrieval_tuning(
-                    loaded_app_config.memory.rrf_k,
-                    loaded_app_config.memory.bm25_bonus_weight,
-                ))
-            }
-            Err(e) => {
-                return Err(format!("Error: Failed to initialize memory backend: {e}").into());
-            }
-        };
 
     // Raw memories and the session projector share one Markdown store/metadata connection.
     // A missing raw store is a startup error, never a silent fallback to SQLite.
@@ -1166,13 +1133,6 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     // (mirrors how WebFetch is wired) instead of hardcoded defaults.
     let webhook_ssrf_policy = loaded_app_config.ssrf.clone();
 
-    // Same reason, one field: the boot note-index pass sweeps abandoned `.tx`
-    // apply-staging trees, and its age ceiling is an operator setting.
-    let tx_residue_max_age = loaded_app_config
-        .memory
-        .compound_ingest
-        .tx_residue_gc_seconds;
-
     // Wrap app config in Arc<RwLock> early so agent handlers can read output_mode dynamically
     let app_config = Arc::new(tokio::sync::RwLock::new(loaded_app_config));
 
@@ -1450,21 +1410,6 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         }
     };
 
-    // Construct NoteOrientation and bootstrap the default agent's SCHEMA.md (Spec 5 Task 12).
-    // Must be built before register_agent_handlers so it can be threaded into DreamDaemon,
-    // MemoryContextProvider, and the builtin tool registry.
-    let note_memory_dir = alephcore::utils::paths::get_note_memory_dir()
-        .map_err(|e| format!("Error: Failed to resolve note memory directory: {e}. Note storage requires a persistent directory."))?;
-    let wiki: std::sync::Arc<dyn alephcore::memory::notes::orientation::NoteOrientation> = {
-        use alephcore::memory::notes::orientation::FsNoteOrientation;
-        std::sync::Arc::new(FsNoteOrientation::new(
-            note_memory_dir.clone(),
-            memory_db.clone(),
-        ))
-    };
-    let note_orientation_task =
-        spawn_note_orientation_bootstrap(wiki.clone(), default_agent_id.clone());
-
     // A2A outbound tool handle — created empty so the builtin tool registry
     // (built inside register_agent_handlers) can register the `a2a_delegate` /
     // `a2a_agents` tools. The A2A subsystem fills it below once A2ASubAgent and
@@ -1545,7 +1490,6 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         &full_config,
         &*app_config.read().await,
         app_config.clone(),
-        &memory_db,
         memory_runtime.clone(),
         raw_store.clone(),
         workspace_manager.clone(),
@@ -1557,8 +1501,6 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         args.daemon,
         auth_bundle.auth_ctx.shared_token_mgr.clone(),
         auth_bundle.security_store.clone(),
-        Some(wiki.clone()),
-        Some(note_memory_dir.clone()),
         Some(sandbox.clone()),
         early_catalog_cache,
         early_marketplace_configs,
@@ -1568,6 +1510,9 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         diagnostics_control,
     )
     .await?;
+    if app_config.read().await.memory.enabled {
+        memory_runtime.start().await?;
+    }
 
     // MCP tool bridge — now that `agent_result.tool_catalog` exists,
     // spawn the bridge with the tool-catalog handle so each registered MCP
@@ -1865,7 +1810,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         server.openai_provider_map = Arc::new(provider_map);
         server.openai_provider_configs = provider_configs;
     }
-    server.embedding_provider = agent_result.embedder.clone();
+    server.memory_runtime = Some(memory_runtime.clone());
 
     // Phase 5 Task 9: assemble the Orchestrator once all five input services
     // are available. Gated on `default_provider` + `session_service_for_orchestrator`
@@ -2267,19 +2212,16 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     }
     register_memory_handlers(
         &mut server,
-        &memory_db,
         &raw_store,
-        &agent_result.compression_service,
-        &agent_result.embedder,
         &event_bus,
         &app_config,
-        &auth_bundle.auth_ctx.shared_token_mgr,
         // Curated (`MEMORY.md`) hot-tier RPCs resolve their per-scope store
         // through the same provider the `remember` tool uses, so the Panel
         // reads exactly the file the tool writes. `None` in a gateway with no
         // agent runtime: those three methods then answer SERVICE_UNAVAILABLE
         // rather than serving a convincing empty hot tier.
         agent_result.memory_context_provider.clone(),
+        &memory_runtime,
         args.daemon,
     );
     register_session_management_handlers(
@@ -2380,7 +2322,6 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
             wm,
             agent_result.agent_registry.as_ref(),
             &event_bus,
-            &memory_db,
             args.daemon,
         );
     }
@@ -2606,60 +2547,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         );
     }
 
-    // NoteIndexer — the canonical write+reindex path. Built once and shared
-    // between graph.update_note (panel node editor) and the startup full_rebuild
-    // below, so we never construct two indexers over the same memory dir.
-    // The embedder is attached: this indexer backs both `graph.update_note`
-    // (the panel node editor) and the vault watcher below, and both hand it a
-    // note whose *bytes just changed*. Without embed-on-write those two writers
-    // leave the note's vector describing the previous body — the note stays
-    // findable by keyword and quietly drops out of semantic recall — until
-    // somebody runs a whole-corpus `reembed_all`. `None` (no embedding provider
-    // configured) is a graceful no-op, exactly as it is for every other writer.
-    let note_indexer = {
-        let indexer =
-            alephcore::memory::notes::NoteIndexer::new(note_memory_dir.clone(), memory_db.clone());
-        Arc::new(match agent_result.embedder.clone() {
-            Some(embedder) => indexer.with_embedder(embedder),
-            None => indexer,
-        })
-    };
-
-    // Graph visualization handlers (wired with MemoryBackend + default agent +
-    // the shared NoteIndexer for the write path)
-    // No default agent id: every `graph.*` handler takes `agent_id` off the
-    // request (defaulting internally), so the parameter was read by nothing.
-    register_graph_handlers(&mut server, &memory_db, Some(&note_indexer));
-
-    // Reconcile the note index with disk at startup, across EVERY corpus under
-    // ~/.aleph/memory/note/ — not just the default agent. Each project
-    // namespace and session scope (`{base}__proj-…` / `__u-…` / `__p-…`) and
-    // each non-default agent is a corpus in exactly the same sense, and used to
-    // be reconciled by nothing at all. Once that pass exists, the vault watcher
-    // below keeps it true for the rest of the process's life.
-    let note_rebuild_task = spawn_note_index_rebuild(
-        note_indexer.clone(),
-        default_agent_id.clone(),
-        tx_residue_max_age,
-    );
-    let mut note_maintenance = NoteMaintenanceOwner::new(note_orientation_task, note_rebuild_task);
-
-    // Vault watcher: pick up markdown edited outside Aleph. Every agent
-    // directory gets an `.obsidian/` vault config written into it, i.e. the
-    // product tells the user to open their memory in Obsidian — but until now
-    // an edit made there stayed invisible to search, links, and the graph until
-    // the next restart (and, before the pass above, forever for any corpus but
-    // the default agent's). Best-effort: a watch that cannot be established is
-    // logged and the server runs exactly as it did before.
-    let mut note_vault_watcher = match alephcore::memory::notes::watcher::spawn_note_vault_watcher(
-        note_indexer.clone(),
-    ) {
-        Ok(w) => Some(w),
-        Err(e) => {
-            tracing::warn!(error = %e, "Note vault watcher unavailable; external edits to the note vault will only be picked up at restart");
-            None
-        }
-    };
+    register_graph_handlers(&mut server, &memory_runtime);
 
     // Identity handlers operate on the default agent's identity files
     // (`~/.aleph/agents/{id}/SOUL.md` …) — the single source of truth shared
@@ -2743,7 +2631,8 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
                 let a2a_sub_agent = Arc::new(
                     A2ASubAgent::new(smart_router, client_pool.clone())
                         .with_raw_memory_writer(raw_store.clone())
-                        .with_capture_registry(agent_result.memory_ext_registry.clone()),
+                        .with_capture_registry(agent_result.memory_ext_registry.clone())
+                        .with_memory_runtime(Arc::downgrade(&memory_runtime)),
                 );
 
                 // 10. Publish the late-bound handle so the `a2a_delegate` and
@@ -3097,10 +2986,10 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
                                     tracing::warn!("Failed to init dedup schema: {}", e);
                                 }
                                 let dedup_conn = Arc::new(tokio::sync::Mutex::new(conn));
-                                Arc::new(DedupEngine::new(
+                                Arc::new(DedupEngine::from_runtime(
                                     hb_state.config.dedup.clone(),
                                     dedup_conn,
-                                    agent_result.embedder.clone(),
+                                    memory_runtime.clone(),
                                 ))
                             }
                             Err(e) => {
@@ -3672,9 +3561,11 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
                 // witness from its concrete registered SMS transport. The
                 // factory still attaches no hosted relay or credentials.
                 Some(alephcore::gateway::telecom::PrivateTurnWiring::new(
-                    Arc::new(alephcore::gateway::telecom::OwnerMemoryReadDriver::new(
-                        memory_db.clone(),
-                    )),
+                    Arc::new(
+                        alephcore::gateway::telecom::OwnerMemoryReadDriver::from_runtime(
+                            memory_runtime.clone(),
+                        ),
+                    ),
                 ))
             }
         }
@@ -4059,7 +3950,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     // every `gateway.memory_monitor_secs` seconds. `0` disables. Bound to
     // graceful shutdown so the final "[MEMORY] reason=shutdown" line lands
     // on both the Ctrl-C and SIGTERM paths (unified in
-    // `setup_graceful_shutdown`; only its failsafe force-exit skips this).
+    // `setup_graceful_shutdown` signals the same owned cleanup path for both.
     let mut memory_monitor = alephcore::gateway::memory_monitor::MemoryMonitor::start(
         full_config.gateway.memory_monitor_secs,
     );
@@ -4073,37 +3964,8 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
 
     let shutdown_rx = setup_graceful_shutdown(args);
     let run_result = server.run_until_shutdown(shutdown_rx).await;
-    if let Err(error) = drain_note_vault_watcher(&mut note_vault_watcher).await {
-        tracing::warn!(%error, "note vault watcher shutdown failed; continuing server teardown");
-    }
-    if let Err(error) = drain_note_maintenance(&mut note_maintenance).await {
-        tracing::warn!(%error, "note maintenance drain failed; continuing server teardown");
-    }
-    // Close the projection host before any registry-owning scope is disposed.
-    // This funnel is reached by both the orderly shutdown (`shutdown_rx`
-    // fired) and the fatal `run_until_shutdown` error path, so closing here
-    // is the single explicit drain boundary the controller preflight calls
-    // for. The outcome is reported (worker join failures are warn-logged
-    // rather than propagated), so a non-quiescent close does not silently
-    // become `Ok` and the rest of the existing common teardown still runs.
-    match Arc::clone(&projection_host).close_and_await().await {
-        ProjectionShutdownOutcome {
-            source_joined: true,
-            applier_joined: true,
-            ..
-        } => {
-            tracing::debug!("projection host drained before registry-scope dispose");
-        }
-        outcome => {
-            tracing::warn!(
-                source_joined = outcome.source_joined,
-                applier_joined = outcome.applier_joined,
-                source_failed = outcome.source_failed,
-                applier_failed = outcome.applier_failed,
-                "projection host did not quiesce before registry-scope dispose; \
-                 continuing teardown so other shared resources still drain"
-            );
-        }
+    if let Err(error) = startup_resources.cleanup().await {
+        tracing::warn!(%error, "Memory and projection cleanup failed; continuing sibling teardown");
     }
     // Dispose the builtin router scope first so it runs before the bash reaper
     // and any other registry-touching teardown. Taking rather than borrowing
@@ -4152,15 +4014,14 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     // error, which no signal-handler placement covers. It must also precede
     // the ledger drain further down, whose comment claims everything that can
     // dispatch a tool has already stopped — background bash was the
-    // counterexample. Idempotent, so the wedged-shutdown failsafe in
-    // `helpers.rs` may call it again for free; the awaits that follow give the
-    // runtime the scheduler pass it needs to drop each aborted task's `Child`.
+    // counterexample. Idempotent; the awaits that follow give the runtime the
+    // scheduler pass it needs to drop each aborted task's `Child`.
     //
     // Managed `browser_companion` children are deliberately skipped by that
     // reaper (it would kill them without closing their published resource
     // first), so they are drained here: resource closed, grants revoked, then
-    // kill and wait for the real exit. Bounded, because a child that will not
-    // die must not wedge the shutdown (the failsafe in `helpers.rs` follows).
+    // kill and wait for the real exit. An unconfirmed companion exit is
+    // reported separately from the Memory source's completion barrier.
     match tokio::time::timeout(
         std::time::Duration::from_secs(15),
         alephcore::builtin_tools::browser_tools::companion::shutdown_all_companions(),
@@ -4200,13 +4061,8 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     // every restart leaves a Chromium behind for the next boot's sweep to
     // find — and on a host where argv is unreadable that sweep declines to
     // act, by design, so the leak would be permanent.
-    // The ORDERLY budget — larger than the wedged path's, because an engine
-    // this path fails to stop is not merely deferred to the next boot's sweep
-    // (that sweep declines to act on a pid whose argv it cannot read, so on
-    // such a host the browser is orphaned for good) — but still strictly
-    // inside `SHUTDOWN_FAILSAFE`, because this block RACES the watchdog that
-    // spends it. An earlier version passed 35.5 s and was force-exited
-    // mid-wait, losing the browsers AND everything below.
+    // Browser reaping retains its own bounded child-exit policy; it does not
+    // impose a deadline on the source-owned Memory drain above.
     let browsers =
         alephcore::browser::manager::shutdown_browsers_global(ORDERLY_BROWSER_STOP_BUDGET).await;
     if browsers > 0 {
@@ -4242,10 +4098,8 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
             tracing::warn!(error = %e, "MCP manager orderly shutdown failed");
         }
     }
-    // Spec C: cleanup endpoint discovery file regardless of outcome. Both
-    // Ctrl-C and SIGTERM reach here via the unified oneshot path; only the
-    // shutdown failsafe force-exit can skip it — the stale file is then
-    // overwritten on next start.
+    // Spec C: cleanup endpoint discovery regardless of the original run result.
+    // Both Ctrl-C and SIGTERM reach this common cleanup path.
     if let Some(dir) = ipc_data_dir.as_deref() {
         if let Err(e) = alephcore::cli::endpoint::remove_endpoint(dir) {
             tracing::warn!(
@@ -4256,8 +4110,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         }
     }
 
-    // Notify extension hooks of shutdown (best-effort; runs on both Ctrl-C
-    // and SIGTERM via the unified graceful path, bounded by its failsafe).
+    // Notify extension hooks of shutdown on both Ctrl-C and SIGTERM.
     alephcore::extension::hooks::fire_global_observer(
         alephcore::extension::HookEvent::GatewayStop,
         "gateway",
@@ -4296,48 +4149,22 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         svc.request_shutdown();
     }
 
-    // PR-1 / BIN-R4-02: await the spawned timer loops with a bounded
-    // timeout so request_shutdown's flag-flip is paired with the loops
-    // actually winding down. Without this join, a subsequent teardown
-    // step (drain alert_dispatcher_fn, flush tools_changed_sink,
-    // rotate logs, etc.) races against the loop's next tick. The 5s
-    // budget matches the documented ledger-drain window elsewhere in
-    // the shutdown sequence; log at warn if a loop does not finish in
-    // time and proceed regardless — a stuck loop should not block the
-    // rest of teardown.
-    const TIMER_LOOP_DRAIN: std::time::Duration = std::time::Duration::from_secs(5);
-    if let Some(handle) = cron_timer_handle.take() {
-        match tokio::time::timeout(TIMER_LOOP_DRAIN, handle).await {
-            Ok(Ok(())) => {
-                tracing::info!("cron timer loop: drained cleanly");
-            }
-            Ok(Err(e)) => {
-                tracing::warn!(error = %e, "cron timer loop: join error after shutdown");
-            }
-            Err(_) => {
-                tracing::warn!(
-                    timeout_secs = TIMER_LOOP_DRAIN.as_secs(),
-                    "cron timer loop: did not exit within drain window; continuing teardown"
-                );
+    // Retain each real loop until it has observed shutdown and completed its
+    // current dispatch. Dropping a timed-out JoinHandle would detach that work
+    // and let it race the resource disposal below.
+    if let Some(handle) = cron_timer_handle.as_mut() {
+        match handle.await {
+            Ok(()) => tracing::info!("cron timer loop: drained cleanly"),
+            Err(error) => {
+                tracing::warn!(%error, "cron timer loop: join error after shutdown");
             }
         }
     }
-    if let Some(handle) = heartbeat_timer_handle.take() {
-        match tokio::time::timeout(TIMER_LOOP_DRAIN, handle).await {
-            Ok(Ok(())) => {
-                tracing::info!("heartbeat timer loop: drained cleanly");
-            }
-            Ok(Err(e)) => {
-                tracing::warn!(
-                    error = %e,
-                    "heartbeat timer loop: join error after shutdown"
-                );
-            }
-            Err(_) => {
-                tracing::warn!(
-                    timeout_secs = TIMER_LOOP_DRAIN.as_secs(),
-                    "heartbeat timer loop: did not exit within drain window; continuing teardown"
-                );
+    if let Some(handle) = heartbeat_timer_handle.as_mut() {
+        match handle.await {
+            Ok(()) => tracing::info!("heartbeat timer loop: drained cleanly"),
+            Err(error) => {
+                tracing::warn!(%error, "heartbeat timer loop: join error after shutdown");
             }
         }
     }
@@ -4742,12 +4569,14 @@ mod tests {
         );
         let production = alephcore::utils::source_scan::code_text(&production);
 
-        let close_at = production.find("close_and_await(").expect(
-            "start/mod.rs must call close_and_await in production — \
-                 the host retains its Arc in a process slot, so without \
-                 an explicit close the orderly/fatal shutdown funnel leaks \
-                 the source and applier workers for the rest of the process",
+        let close_at = production
+            .find("startup_resources.cleanup()")
+            .expect("the common shutdown funnel must await its source-owned cleanup");
+        let owner = include_str!("builder/startup_resources.rs");
+        let owner = alephcore::utils::source_scan::code_text(
+            &alephcore::utils::source_scan::production_prefix(owner),
         );
+        assert!(owner.contains("close_and_await("));
         let scope_take_at = production.find("builtin_registration_scope.take()").expect(
             "builtin_registration_scope.take() must exist in production — \
                  the sibling builtin-scope dispose census depends on it",

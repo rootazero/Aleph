@@ -1,5 +1,6 @@
+use crate::memory::extensions::insert_helper::insert_with_runtime_capture_filter;
 use crate::memory::extensions::types::CaptureCtx;
-use crate::memory::extensions::{insert_with_capture_filter, MemoryExtensionRegistry};
+use crate::memory::extensions::MemoryExtensionRegistry;
 use crate::memory::namespace::NamespaceScope;
 use crate::memory::store::raw_memory::RawMemoryStore;
 use crate::sync_primitives::Arc;
@@ -20,6 +21,7 @@ pub struct TranscriptIndexer {
     /// When set, transcript raw-memory rows go through `insert_with_capture_filter`.
     /// Task 11 wires the real registry at startup; `None` falls back to direct insert.
     capture_registry: Option<Arc<MemoryExtensionRegistry>>,
+    memory_runtime: Option<std::sync::Weak<crate::memory::runtime::MemoryRuntime>>,
 }
 
 impl TranscriptIndexer {
@@ -29,6 +31,7 @@ impl TranscriptIndexer {
             database,
             config: TranscriptIndexerConfig::default(),
             capture_registry: None,
+            memory_runtime: None,
         }
     }
 
@@ -38,6 +41,7 @@ impl TranscriptIndexer {
             database,
             config,
             capture_registry: None,
+            memory_runtime: None,
         }
     }
 
@@ -48,6 +52,15 @@ impl TranscriptIndexer {
     /// at startup; `None` preserves current behaviour.
     pub fn with_capture_registry(mut self, registry: Arc<MemoryExtensionRegistry>) -> Self {
         self.capture_registry = Some(registry);
+        self
+    }
+
+    /// Bind capture callbacks to their source without owning its resources.
+    pub fn with_memory_runtime(
+        mut self,
+        runtime: std::sync::Weak<crate::memory::runtime::MemoryRuntime>,
+    ) -> Self {
+        self.memory_runtime = Some(runtime);
         self
     }
 
@@ -114,9 +127,15 @@ impl TranscriptIndexer {
                         session_id: Some(session_key.to_string()),
                         source_hint: "transcript".into(),
                     };
-                    insert_with_capture_filter(&store, registry, &ctx, raw)
-                        .await
-                        .map(|_| ())
+                    insert_with_runtime_capture_filter(
+                        &store,
+                        registry,
+                        self.memory_runtime.as_ref(),
+                        &ctx,
+                        raw,
+                    )
+                    .await
+                    .map(|_| ())
                 } else {
                     self.database.insert_raw_memory(&raw).await
                 };

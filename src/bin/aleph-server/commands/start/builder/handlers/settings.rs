@@ -1,6 +1,4 @@
-use super::{
-    config_handlers, workspace_handlers, AgentEnvStore, Arc, GatewayServer, MemoryBackend,
-};
+use super::{config_handlers, workspace_handlers, AgentEnvStore, Arc, GatewayServer};
 use alephcore::gateway::AgentRegistry;
 
 pub(in crate::commands::start) fn register_workspace_handlers(
@@ -11,7 +9,6 @@ pub(in crate::commands::start) fn register_workspace_handlers(
     agent_registry: Option<&Arc<AgentRegistry>>,
     // Event bus for Bound/Unbound lifecycle events (Panel cross-surface sync).
     event_bus: &Arc<alephcore::gateway::event_bus::GatewayEventBus>,
-    _memory_db: &MemoryBackend,
     daemon: bool,
 ) {
     register_handler!(

@@ -196,6 +196,7 @@ impl SubagentTool {
         // X1 C2: capture on_delegation inputs before the task/registry are
         // moved into the spawned future.
         let deleg_registry = self.memory.capture_registry.clone();
+        let deleg_memory_runtime = self.memory.memory_runtime.clone();
         // Shared source for the delegation-ctx (`_deleg_*`) and announce
         // (`announce_*`) bindings — one clone per field instead of two.
         let parent_agent_id = self.agent_resolution.parent_agent_id.clone();
@@ -314,7 +315,8 @@ impl SubagentTool {
                     task: deleg_task,
                     result_summary,
                 };
-                reg.dispatch_on_delegation(&ctx).await;
+                reg.dispatch_owned_on_delegation(deleg_memory_runtime.as_ref(), ctx)
+                    .await;
             }
 
             // The tracker's single-source classifier, so live + cold-start
@@ -462,6 +464,9 @@ impl SubagentTool {
         }
         if let Some(reg) = self.memory.capture_registry.clone() {
             runtime = runtime.with_capture_registry(reg);
+        }
+        if let Some(owner) = self.memory.memory_runtime.clone() {
+            runtime = runtime.with_memory_runtime(owner);
         }
         if let Some(sid) = self.memory.parent_session_id.clone() {
             runtime = runtime.with_parent_session_id(sid);

@@ -135,6 +135,10 @@ impl MemoryOperation {
         Weak::ptr_eq(&self.inner.runtime, &Arc::downgrade(runtime))
     }
 
+    pub(crate) fn note_memory_dir(&self) -> &std::path::Path {
+        &self.inner.bundle.note_memory_dir
+    }
+
     pub(crate) fn services(&self) -> Result<Arc<super::services::MemoryServices>, AlephError> {
         self.inner.bundle.services()
     }

@@ -44,6 +44,9 @@ pub static TOOL_CATEGORIES: &[ToolCategory] = &[
         id: "memory_knowledge",
         name: "记忆与知识",
         tools: &[
+            "memory_runtime_status",
+            "memory_runtime_start",
+            "memory_runtime_stop",
             "memory_search",
             "memory_browse",
             "memory_explore",

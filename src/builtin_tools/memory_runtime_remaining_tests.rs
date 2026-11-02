@@ -38,6 +38,54 @@ async fn registry_fixture() -> (Fixture, BuiltinToolRegistry) {
 }
 
 #[tokio::test]
+async fn registered_runtime_controls_work_while_memory_is_off() {
+    let (fixture, registry) = registry_fixture().await;
+    let status = registry
+        .execute_tool("memory_runtime_status", json!({}))
+        .await
+        .expect("the registered status control must be callable before Memory admission");
+    assert_eq!(status["state"], "off");
+    for name in [
+        "memory_runtime_status",
+        "memory_runtime_start",
+        "memory_runtime_stop",
+    ] {
+        let definition = registry
+            .get_tool(name)
+            .expect("each control must be discoverable while Off");
+        assert!(
+            definition.services.is_empty(),
+            "a control must not require its stopped resource"
+        );
+    }
+    for _ in 0..2 {
+        let started = registry
+            .execute_tool("memory_runtime_start", json!({}))
+            .await
+            .unwrap();
+        assert_eq!(started["state"], "running");
+        let captured = fixture
+            .runtime
+            .capture(&crate::capability::facade::Reference {
+                id: crate::memory::runtime::resource_id(),
+                visibility: crate::capability::ownership::VisibilityScope::default(),
+            })
+            .unwrap();
+        let stopped = registry
+            .execute_tool("memory_runtime_stop", json!({}))
+            .await
+            .unwrap();
+        assert_eq!(stopped["state"], "off");
+        assert!(captured.admit().is_err());
+    }
+    let stopped = registry
+        .execute_tool("memory_runtime_stop", json!({}))
+        .await
+        .unwrap();
+    assert_eq!(stopped["state"], "off");
+}
+
+#[tokio::test]
 async fn registered_reflection_uses_runtime_across_restart() {
     let (fixture, registry) = registry_fixture().await;
     for _ in 0..2 {

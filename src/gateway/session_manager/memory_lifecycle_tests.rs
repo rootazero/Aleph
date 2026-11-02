@@ -1,5 +1,3 @@
-use std::time::Duration;
-
 use crate::capability::ownership::OwnershipTree;
 use crate::gateway::router::SessionKey;
 use crate::memory::extensions::MemoryExtensionRegistry;
@@ -64,22 +62,14 @@ async fn session_close_preserves_raw_off_and_drains_derived_when_running() {
         .await
         .unwrap();
     sessions.close_session(&cold, None).await.unwrap();
-    tokio::time::timeout(Duration::from_secs(10), async {
-        loop {
-            if raw
-                .get_unprocessed_raw_memories("cold-agent", 20)
-                .await
-                .unwrap()
-                .iter()
-                .any(|row| matches!(row.source, RawMemorySource::SessionEnd { .. }))
-            {
-                break;
-            }
-            tokio::task::yield_now().await;
-        }
-    })
-    .await
-    .unwrap();
+    assert!(
+        raw.get_unprocessed_raw_memories("cold-agent", 20)
+            .await
+            .unwrap()
+            .iter()
+            .any(|row| matches!(row.source, RawMemorySource::SessionEnd { .. })),
+        "cold session close must observe its actual archive before returning"
+    );
     assert_eq!(runtime.status().state, MemoryState::Off);
     assert_eq!(sessions.get_history(&cold, None).await.unwrap().len(), 1);
 
