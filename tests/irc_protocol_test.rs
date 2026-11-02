@@ -8,6 +8,8 @@ fn test_irc_config() -> IrcConfig {
         nick: "testbot".to_string(),
         password: None,
         channels: vec!["#test".to_string()],
+        allowed_users: Vec::new(),
+        require_mention: false,
         use_tls: false,
         realname: "Test Bot".to_string(),
     }
