@@ -41,13 +41,18 @@ impl DreamStage for CorpusNarrativeStage {
         let cur_purpose = purpose_gen.read().await;
 
         // Recent-note previews (most-recently-updated first).
-        let mut sorted_notes: Vec<&_> = ctx.notes.iter().collect();
-        sorted_notes.sort_by_key(|n| std::cmp::Reverse(n.updated_at));
+        let targets: Vec<(String, String)> = {
+            let mut sorted: Vec<&_> = ctx.notes.iter().collect();
+            sorted.sort_by_key(|n| std::cmp::Reverse(n.updated_at));
+            sorted
+                .into_iter()
+                .take(PREVIEW_NOTES)
+                .map(|n| (n.path.clone(), n.category.clone()))
+                .collect()
+        };
         let mut previews = Vec::new();
-        for note in sorted_notes.iter().take(PREVIEW_NOTES) {
-            let path = &note.path;
-            let cat = &note.category;
-            let content = ctx.load_content(path).await.unwrap_or_default();
+        for (path, cat) in targets {
+            let content = ctx.load_content(&path).await.unwrap_or_default();
             let preview: String = content.chars().take(160).collect();
             previews.push(format!("- {path} ({cat}): {preview}"));
         }
