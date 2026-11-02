@@ -703,6 +703,9 @@ fn is_owned_by_current_process(meta: &std::fs::Metadata) -> bool {
     #[cfg(unix)]
     {
         use std::os::unix::fs::MetadataExt as _;
+        // SAFETY: `libc::geteuid()` is a POSIX system call that reads the effective
+        // user ID of the calling process. It takes no arguments, dereferences no pointers,
+        // performs no side effects, cannot fail, and is always thread-safe.
         let euid = unsafe { libc::geteuid() };
         meta.uid() == euid
     }

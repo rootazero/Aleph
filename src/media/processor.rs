@@ -449,7 +449,8 @@ fn human_size(bytes: u64) -> String {
     if unit == 0 {
         format!("{bytes} B")
     } else {
-        format!("{value:.1} {}", UNITS[unit])
+        let suffix = UNITS.get(unit).copied().unwrap_or("GB");
+        format!("{value:.1} {suffix}")
     }
 }
 
