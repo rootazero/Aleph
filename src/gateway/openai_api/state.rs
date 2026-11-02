@@ -12,10 +12,10 @@ use crate::providers::http_provider::HttpProvider;
 pub struct OpenAiApiState {
     pub server_id: String,
     /// Closure returning the *current* bearer token accepted by the
-    /// OpenAI-compatible `/v1/*` routes. Returns `None` for dev-open mode
-    /// (any bearer accepted); `Some(token)` rejects mismatched bearers
-    /// with 401 in `completions/mod.rs` before reaching the per-agent
-    /// busy-lock or the LLM.
+    /// OpenAI-compatible `/v1/*` routes. `None` means no shared token is
+    /// resident — the token manager was never wired, or the token could not be
+    /// provisioned at boot — and the `/v1/*` routes then reject every request
+    /// with 401 rather than accepting any bearer (see `super::auth::authorize`).
     ///
     /// This is a closure rather than a snapshot `Option<String>` so that
     /// `SharedTokenManager::rotate` immediately revokes the previously

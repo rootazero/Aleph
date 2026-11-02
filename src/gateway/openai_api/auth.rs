@@ -1,6 +1,9 @@
 //! Authentication helpers for the OpenAI-compatible API.
 
+use axum::http::HeaderMap;
 use serde_json::json;
+
+use super::state::OpenAiApiState;
 
 /// Extract a bearer token from an Authorization header value.
 ///
@@ -20,6 +23,28 @@ pub fn extract_bearer_token(header_value: &str) -> Option<&str> {
     } else {
         Some(token)
     }
+}
+
+/// Authorize a `/v1/*` request against the live shared token.
+///
+/// Fails closed. `None` means no shared token is resident — the token manager
+/// was never wired into the server, or the token could not be provisioned at
+/// boot — and the request is rejected instead of being accepted with any
+/// bearer token: without a resident token there is nothing to compare
+/// against, so accepting would hand the LLM surface to anonymous callers.
+pub fn authorize(state: &OpenAiApiState, headers: &HeaderMap) -> Result<(), ApiError> {
+    let auth_header = headers
+        .get("authorization")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+    let token = extract_bearer_token(auth_header)
+        .ok_or_else(|| ApiError::Unauthorized("Missing or invalid Authorization header".into()))?;
+    let expected = (state.api_token)()
+        .ok_or_else(|| ApiError::Unauthorized("Invalid API key".into()))?;
+    if !crate::security::secret_equal(Some(token), Some(expected.as_str())) {
+        return Err(ApiError::Unauthorized("Invalid API key".into()));
+    }
+    Ok(())
 }
 
 /// API error types for the OpenAI-compatible endpoint.
@@ -92,7 +117,56 @@ impl ApiError {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+
+    use axum::http::header::AUTHORIZATION;
+    use axum::http::HeaderMap;
+
     use super::*;
+    use crate::sync_primitives::Arc;
+
+    fn state_with_token(token: Option<String>) -> OpenAiApiState {
+        OpenAiApiState {
+            server_id: "test".to_owned(),
+            api_token: Arc::new(move || token.clone()),
+            execution_adapter: None,
+            provider_map: Arc::new(HashMap::new()),
+            agent_registry: None,
+            provider_configs: Arc::new(Vec::new()),
+            created_at: 0,
+            embedding_provider: None,
+        }
+    }
+
+    fn headers(bearer: &str) -> HeaderMap {
+        let mut h = HeaderMap::new();
+        h.insert(AUTHORIZATION, format!("Bearer {bearer}").parse().unwrap());
+        h
+    }
+
+    #[test]
+    fn a_missing_resident_token_rejects_every_bearer() {
+        let state = state_with_token(None);
+        assert!(matches!(
+            authorize(&state, &headers("anything")),
+            Err(ApiError::Unauthorized(_))
+        ));
+    }
+
+    #[test]
+    fn the_resident_token_is_accepted() {
+        let state = state_with_token(Some("aleph-token".to_owned()));
+        assert!(authorize(&state, &headers("aleph-token")).is_ok());
+    }
+
+    #[test]
+    fn a_wrong_bearer_is_rejected() {
+        let state = state_with_token(Some("aleph-token".to_owned()));
+        assert!(matches!(
+            authorize(&state, &headers("wrong")),
+            Err(ApiError::Unauthorized(_))
+        ));
+    }
 
     #[test]
     fn test_extract_bearer_token() {

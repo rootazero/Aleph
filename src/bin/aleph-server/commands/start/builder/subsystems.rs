@@ -150,7 +150,10 @@ pub(in crate::commands::start) fn initialize_vault(
                 info!("vault master token provisioned (first start)");
             }
             Err(e) => {
-                warn!("Failed to generate shared token: {}", e);
+                warn!(
+                    "Failed to generate shared token: {} — token-gated surfaces (/v1, /v1/admin) will reject every request",
+                    e
+                );
             }
         },
     }
