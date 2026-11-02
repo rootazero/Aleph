@@ -298,8 +298,22 @@ pub async fn handle_create(request: JsonRpcRequest, cron: SharedCronService) -> 
     job.stamp_current_scope();
 
     // Optional fields
-    if let Some(enabled) = params.get("enabled").and_then(|v| v.as_bool()) {
-        job.enabled = enabled;
+    //
+    // `enabled` and `session_target` decide where the work runs. A value the
+    // RPC cannot parse must be refused, not dropped: `cron.update` already
+    // refuses a malformed `session_target`, and a create that answered
+    // `success` while quietly keeping the default left the caller believing
+    // the job runs where they asked for.
+    match params.get("enabled") {
+        None | Some(Value::Null) => {} // absent or explicit null == default
+        Some(Value::Bool(flag)) => job.enabled = *flag,
+        Some(_) => {
+            return JsonRpcResponse::error(
+                request.id,
+                INVALID_PARAMS,
+                "enabled must be a boolean",
+            );
+        }
     }
     match parse_failure_alert(params) {
         Ok(Some(alert)) => job.failure_alert = alert,
@@ -319,9 +333,16 @@ pub async fn handle_create(request: JsonRpcRequest, cron: SharedCronService) -> 
             .filter_map(|t| t.as_str().map(|s| s.to_string()))
             .collect();
     }
-    if let Some(st) = params.get("session_target") {
-        if let Ok(target) = serde_json::from_value::<SessionTarget>(st.clone()) {
-            job.session_target = target;
+    if let Some(st) = params.get("session_target").filter(|v| !v.is_null()) {
+        match serde_json::from_value::<SessionTarget>(st.clone()) {
+            Ok(target) => job.session_target = target,
+            Err(e) => {
+                return JsonRpcResponse::error(
+                    request.id,
+                    INVALID_PARAMS,
+                    format!("Invalid session_target: {e}"),
+                );
+            }
         }
     }
     if let Some(tv) = params.get("timeout_ms") {
@@ -393,8 +414,18 @@ pub async fn handle_update(request: JsonRpcRequest, cron: SharedCronService) -> 
     if let Some(prompt) = params.get("prompt").and_then(|v| v.as_str()) {
         updates.prompt = Some(prompt.to_string());
     }
-    if let Some(enabled) = params.get("enabled").and_then(|v| v.as_bool()) {
-        updates.enabled = Some(enabled);
+    // Explicit null = no-op (back-compat); a present-but-malformed value is
+    // rejected to avoid a silent no-op that looks like a successful update.
+    match params.get("enabled") {
+        None | Some(Value::Null) => {}
+        Some(Value::Bool(flag)) => updates.enabled = Some(*flag),
+        Some(_) => {
+            return JsonRpcResponse::error(
+                request.id,
+                INVALID_PARAMS,
+                "enabled must be a boolean",
+            );
+        }
     }
     // Explicit null = no-op (back-compat); a present-but-malformed value is
     // rejected to avoid a silent no-op that looks like a successful update.
@@ -1028,6 +1059,70 @@ mod tests {
         let (code, message) = error_of(response);
         assert_eq!(code, INVALID_PARAMS, "message was: {message}");
         assert!(message.contains("itself"), "{message}");
+    }
+
+    /// A `session_target` the RPC cannot parse must be refused, not dropped.
+    ///
+    /// The create face used to answer `success` and keep the default target
+    /// while the caller believed the job ran where they asked — the update
+    /// face already refused the same value, so the two faces disagreed about
+    /// the same request.
+    #[tokio::test]
+    async fn a_malformed_session_target_is_invalid_params_not_a_silent_default() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let cron = live_service(&dir);
+
+        let response = handle_create(
+            request(
+                "cron.create",
+                json!({
+                    "name": "mis-targeted",
+                    "schedule_kind": { "kind": "every", "every_ms": 60_000 },
+                    "session_target": "Main",
+                }),
+            ),
+            cron.clone(),
+        )
+        .await;
+
+        let (code, message) = error_of(response);
+        assert_eq!(code, INVALID_PARAMS, "message was: {message}");
+        assert!(
+            message.contains("Invalid session_target"),
+            "the refusal must name the field: {message}"
+        );
+
+        let jobs = cron.lock().await.list_jobs().await.unwrap();
+        assert!(jobs.is_empty());
+    }
+
+    /// `enabled` decides whether the job runs at all. A non-boolean value
+    /// was dropped in silence, so the job was created enabled while the
+    /// caller asked for something else.
+    #[tokio::test]
+    async fn a_non_boolean_enabled_is_invalid_params() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let cron = live_service(&dir);
+
+        let response = handle_create(
+            request(
+                "cron.create",
+                json!({
+                    "name": "badly-enabled",
+                    "schedule_kind": { "kind": "every", "every_ms": 60_000 },
+                    "enabled": "false",
+                }),
+            ),
+            cron.clone(),
+        )
+        .await;
+
+        let (code, message) = error_of(response);
+        assert_eq!(code, INVALID_PARAMS, "message was: {message}");
+        assert!(message.contains("enabled"), "{message}");
+
+        let jobs = cron.lock().await.list_jobs().await.unwrap();
+        assert!(jobs.is_empty());
     }
 
     /// An id that is not in the store is `RESOURCE_NOT_FOUND`, not "the server
