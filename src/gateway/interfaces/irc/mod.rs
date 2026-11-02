@@ -24,6 +24,8 @@
 //! port = 6667
 //! nick = "alephbot"
 //! channels = ["#aleph", "#test"]
+//! allowed_users = ["alice"]   # empty = every sender is allowed
+//! require_mention = false     # only accept channel messages addressing the bot
 //! ```
 
 pub mod config;

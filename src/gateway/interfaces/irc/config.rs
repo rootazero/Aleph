@@ -32,6 +32,14 @@ pub struct IrcConfig {
     /// IRC channels to join (e.g., `["#aleph", "#test"]`)
     pub channels: Vec<String>,
 
+    /// Nicks allowed to talk to the bot (empty = every sender is allowed)
+    #[serde(default)]
+    pub allowed_users: Vec<String>,
+
+    /// Require channel messages to address the bot by nick (default: false)
+    #[serde(default)]
+    pub require_mention: bool,
+
     /// Use TLS (recommended; default false to preserve legacy plaintext deployments)
     #[serde(default)]
     pub use_tls: bool,
@@ -49,6 +57,8 @@ impl Default for IrcConfig {
             nick: String::new(),
             password: None,
             channels: Vec::new(),
+            allowed_users: Vec::new(),
+            require_mention: false,
             use_tls: false,
             realname: "Aleph Bot".to_string(),
         }
@@ -75,6 +85,20 @@ impl IrcConfig {
         Ok(())
     }
 
+    /// Whether a sender nick may talk to the bot.
+    ///
+    /// An empty allowlist allows every sender; a non-empty list is matched
+    /// case-insensitively because IRC nicks are case-insensitive (RFC 2812).
+    #[must_use]
+    pub fn is_user_allowed(&self, nick: &str) -> bool {
+        if self.allowed_users.is_empty() {
+            return true;
+        }
+        self.allowed_users
+            .iter()
+            .any(|allowed| allowed.eq_ignore_ascii_case(nick))
+    }
+
     /// Format the server address as `host:port`
     #[must_use]
     pub fn addr(&self) -> String {
@@ -94,6 +118,8 @@ mod tests {
         assert_eq!(config.port, 6667);
         assert!(config.password.is_none());
         assert!(config.channels.is_empty());
+        assert!(config.allowed_users.is_empty());
+        assert!(!config.require_mention);
         assert!(!config.use_tls);
         assert_eq!(config.realname, "Aleph Bot");
     }
@@ -164,6 +190,31 @@ mod tests {
             ..Default::default()
         };
         assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn test_is_user_allowed_empty_allowlist_allows_every_sender() {
+        let config = IrcConfig::default();
+        assert!(config.is_user_allowed("anyone"));
+    }
+
+    #[test]
+    fn test_is_user_allowed_filters_by_nick() {
+        let config = IrcConfig {
+            allowed_users: vec!["alice".to_string()],
+            ..Default::default()
+        };
+        assert!(config.is_user_allowed("alice"));
+        assert!(!config.is_user_allowed("mallory"));
+    }
+
+    #[test]
+    fn test_is_user_allowed_ignores_case() {
+        let config = IrcConfig {
+            allowed_users: vec!["Alice".to_string()],
+            ..Default::default()
+        };
+        assert!(config.is_user_allowed("alice"));
     }
 
     #[test]
