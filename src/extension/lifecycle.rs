@@ -3988,7 +3988,7 @@ handler = "handler"
             .cleanup_report
             .iter()
             .any(|s| s.step == "registry_row" && s.error.is_none()));
-        assert!(PluginsConfig::load(&cfg_path).is_enabled_for("qa-wasm", PluginOrigin::Workspace));
+        assert!(PluginsConfig::load(&cfg_path).unwrap().is_enabled_for("qa-wasm", PluginOrigin::Workspace));
         assert!(manager
             .plugins_config
             .read()
@@ -4018,7 +4018,7 @@ handler = "handler"
         assert!(outcome.persisted);
         assert_eq!(outcome.runtime_outcome, PluginRuntimeOutcome::NotDiscovered);
         assert_eq!(outcome.actual_state, "not_discovered");
-        assert!(!PluginsConfig::load(&path).is_enabled_for("absent", PluginOrigin::Global));
+        assert!(!PluginsConfig::load(&path).unwrap().is_enabled_for("absent", PluginOrigin::Global));
         assert!(manager.get_plugin_record("absent").await.is_none());
     }
 
@@ -4063,7 +4063,7 @@ handler = "handler"
             Poll::Ready(())
         })
         .await;
-        assert!(!PluginsConfig::load(&path).is_enabled_for("alpha", PluginOrigin::Workspace));
+        assert!(!PluginsConfig::load(&path).unwrap().is_enabled_for("alpha", PluginOrigin::Workspace));
         assert!(!manager
             .plugins_config
             .read()
@@ -4078,7 +4078,7 @@ handler = "handler"
         assert_eq!(enabled.runtime_outcome, PluginRuntimeOutcome::Mounted);
         assert_eq!(enabled.actual_state, "loaded");
         assert_ne!(disabled.operation_id, enabled.operation_id);
-        assert!(PluginsConfig::load(&path).is_enabled_for("alpha", PluginOrigin::Workspace));
+        assert!(PluginsConfig::load(&path).unwrap().is_enabled_for("alpha", PluginOrigin::Workspace));
         assert!(manager
             .get_plugin_record("alpha")
             .await
@@ -4234,7 +4234,7 @@ handler = "handler"
             assert_eq!(outcome["actual_state"], "failed");
             assert!(!outcome["cleanup_report"].as_array().unwrap().is_empty());
         }
-        assert!(PluginsConfig::load(&path).is_enabled_for("qa-wasm", PluginOrigin::Workspace));
+        assert!(PluginsConfig::load(&path).unwrap().is_enabled_for("qa-wasm", PluginOrigin::Workspace));
         assert!(manager.scope_steps("qa-wasm").is_none());
     }
 

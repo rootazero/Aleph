@@ -862,6 +862,15 @@ impl ExtensionManager {
         &self,
         candidate: super::plugin_state::PluginsConfig,
     ) -> crate::error::Result<()> {
+        // The document could not be read at construction, so the in-memory
+        // copy is a stand-in, not the operator's file. Saving it now would
+        // overwrite the operator's trust decisions with the stand-in.
+        if let Some(reason) = &self.plugins_config_error {
+            return Err(crate::error::AlephError::config(format!(
+                "plugins config could not be read ({reason}); repair {path} and restart before changing plugin preferences",
+                path = self.plugins_config_path.display()
+            )));
+        }
         candidate.save(&self.plugins_config_path).await?;
         *self.plugins_config.write().await = candidate;
         Ok(())

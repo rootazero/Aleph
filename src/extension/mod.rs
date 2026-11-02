@@ -271,6 +271,14 @@ pub struct ExtensionManager {
     /// construction against the same root the skill twin uses.
     plugins_config_path: PathBuf,
 
+    /// Set when the durable document could not be read at construction.
+    ///
+    /// `Some(reason)` means the in-memory document is the restricted
+    /// stand-in, not the operator's file: plugin preferences must not be
+    /// written back until the file is repaired, because saving now would
+    /// overwrite the operator's trust decisions with a stand-in document.
+    plugins_config_error: Option<String>,
+
     /// Test-only extra plugin parents; see [`ExtensionConfig::extra_plugin_parents`].
     #[cfg(test)]
     extra_plugin_parents: Vec<crate::discovery::ProjectPluginParent>,
@@ -458,8 +466,27 @@ impl ExtensionManager {
                 .join("data")
                 .join(crate::extension::plugin_state::PLUGINS_CONFIG_FILE)
         });
-        let loaded_plugins_config =
-            crate::extension::plugin_state::PluginsConfig::load(&plugins_config_path);
+        // An unreadable / malformed document is not "no preferences": the
+        // default document has `enforce = false`, so degrading to it would
+        // switch owner-trust enforcement OFF and load every plugin the
+        // operator had refused. Run restricted instead (enforcement ON, empty
+        // allowlist) and refuse to write over the operator's file until it is
+        // repaired.
+        let (loaded_plugins_config, plugins_config_error) =
+            match crate::extension::plugin_state::PluginsConfig::load(&plugins_config_path) {
+                Ok(cfg) => (cfg, None),
+                Err(e) => {
+                    tracing::error!(
+                        error = %e,
+                        path = %plugins_config_path.display(),
+                        "plugins config could not be read; owner trust enforcement stays ON with an empty allowlist until the operator repairs the file"
+                    );
+                    (
+                        crate::extension::plugin_state::PluginsConfig::restricted_until_repaired(),
+                        Some(e.to_string()),
+                    )
+                }
+            };
         // Derived here, once, from the document just read. The policy has a
         // live handle (`set_owner_trust_policy`) because the trust tool has to
         // change it without a restart, but its *initial* value has exactly one
@@ -501,6 +528,7 @@ impl ExtensionManager {
             owner_trust_policy: Arc::new(crate::sync_primitives::RwLock::new(owner_trust_policy)),
             plugins_config,
             plugins_config_path,
+            plugins_config_error,
             #[cfg(test)]
             extra_plugin_parents: config.extra_plugin_parents.clone(),
         })
@@ -1914,7 +1942,7 @@ mod tests {
             .unwrap()
             .changed());
         assert!(
-            !crate::extension::plugin_state::PluginsConfig::load(&cfg_path)
+            !crate::extension::plugin_state::PluginsConfig::load(&cfg_path).unwrap()
                 .is_enabled_for("quiet-plugin", PluginOrigin::Workspace),
             "the preference must reach disk, not just the in-memory registry"
         );
@@ -1931,6 +1959,53 @@ mod tests {
             !after.unwrap().status.is_active(),
             "the disable did not survive the restart — is `load_all` still \
              reading plugins.toml?"
+        );
+    }
+
+    /// An unreadable `plugins.toml` must not be read as "no preferences".
+    ///
+    /// The default document has `enforce = false`, so degrading to it would
+    /// switch owner-trust enforcement OFF exactly when the operator's trust
+    /// decisions are unreadable — the one direction a trust decision may not
+    /// fail in. The manager therefore runs restricted (enforcement ON, empty
+    /// allowlist) and refuses to overwrite the operator's file.
+    #[tokio::test]
+    async fn an_unreadable_preferences_document_keeps_trust_enforced() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cfg_path = tmp.path().join("plugins.toml");
+        let broken = "this is not toml {{{";
+        std::fs::write(&cfg_path, broken).unwrap();
+
+        let manager = ExtensionManager::new(ExtensionConfig {
+            discovery: DiscoveryConfig {
+                working_dir: tmp.path().to_path_buf(),
+                scan_claude_dirs: false,
+                scan_project_dirs: false,
+                max_upward_depth: 0,
+                claude_home_override: None,
+            },
+            plugins_config_path: Some(cfg_path.clone()),
+            ..ExtensionConfig::default()
+        })
+        .await
+        .unwrap();
+
+        let policy = manager.current_owner_trust_policy();
+        assert!(
+            !policy.allows("stray", PluginOrigin::Workspace),
+            "an unreadable trust document must refuse plugins, not admit them"
+        );
+
+        // The operator's file must survive: a write now would replace it with
+        // a document the operator never wrote.
+        assert!(
+            manager.set_plugin_enabled("stray", false).await.is_err(),
+            "a preference write must fail while the document is unreadable"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&cfg_path).unwrap(),
+            broken,
+            "the unreadable document must not be overwritten"
         );
     }
 
@@ -2012,7 +2087,7 @@ mod tests {
             "the legacy marker's intent must be honoured on the migrating load"
         );
         assert!(
-            !crate::extension::plugin_state::PluginsConfig::load(&cfg_path)
+            !crate::extension::plugin_state::PluginsConfig::load(&cfg_path).unwrap()
                 .is_enabled_for("old-timer", PluginOrigin::Workspace),
             "and be written into the durable document"
         );

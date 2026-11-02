@@ -147,7 +147,7 @@ async fn a_claude_cache_plugin_loads_disabled_and_never_writes_under_claude_home
     );
     assert!(!detail.contains("by the operator"), "{detail:?}");
     assert!(
-        !PluginsConfig::load(&cfg_path).entries.contains_key("qa-cc"),
+        !PluginsConfig::load(&cfg_path).unwrap().entries.contains_key("qa-cc"),
         "loading records no preference: the foreign marker is not migrated into a disable"
     );
 
@@ -160,7 +160,7 @@ async fn a_claude_cache_plugin_loads_disabled_and_never_writes_under_claude_home
     assert!(row(&info, "qa-cc").unwrap().enabled);
     // The one bit Aleph owns lives in Aleph's own document, and survives a
     // fresh load.
-    assert!(PluginsConfig::load(&cfg_path).is_enabled_for("qa-cc", PluginOrigin::ClaudeCache));
+    assert!(PluginsConfig::load(&cfg_path).unwrap().is_enabled_for("qa-cc", PluginOrigin::ClaudeCache));
     manager.load_all().await.unwrap();
     let info = manager.get_plugin_info().await;
     assert_eq!(row(&info, "qa-cc").unwrap().status, "loaded");
@@ -344,7 +344,7 @@ async fn an_unreadable_index_forgets_nothing() {
     manager.load_all().await.unwrap();
     assert!(row(&manager.get_plugin_info().await, "keep").is_none());
     assert!(
-        PluginsConfig::load(&cfg_path).is_enabled_for("keep", PluginOrigin::ClaudeCache),
+        PluginsConfig::load(&cfg_path).unwrap().is_enabled_for("keep", PluginOrigin::ClaudeCache),
         "an unknown index must not cost the operator their opt-in"
     );
 
@@ -419,11 +419,11 @@ async fn the_rpc_face_enables_and_disables_a_claude_cache_row() {
     assert!(off.is_success(), "{off:?}");
     let info = manager.get_plugin_info().await;
     assert_eq!(row(&info, "rpc-cc").unwrap().status, "disabled");
-    assert!(!PluginsConfig::load(&cfg_path).is_enabled_for("rpc-cc", PluginOrigin::ClaudeCache));
+    assert!(!PluginsConfig::load(&cfg_path).unwrap().is_enabled_for("rpc-cc", PluginOrigin::ClaudeCache));
 
     let unknown = set_enabled_via_registry(&manager, None, "nothing-found", true).await;
     assert!(unknown.is_error(), "{unknown:?}");
-    assert!(!PluginsConfig::load(&cfg_path)
+    assert!(!PluginsConfig::load(&cfg_path).unwrap()
         .entries
         .contains_key("nothing-found"));
     assert_eq!(
@@ -515,7 +515,7 @@ async fn the_model_may_disable_but_not_enable_a_claude_cache_row() {
         ),
         ""
     );
-    assert!(!PluginsConfig::load(&cfg_path)
+    assert!(!PluginsConfig::load(&cfg_path).unwrap()
         .entries
         .contains_key("model-cc"));
     let info = manager.get_plugin_info().await;
@@ -534,7 +534,7 @@ async fn the_model_may_disable_but_not_enable_a_claude_cache_row() {
         .await
         .expect_err("an id nothing discovered cannot be pre-enabled");
     assert!(pre.to_string().contains("not-listed-yet"), "{pre}");
-    assert!(!PluginsConfig::load(&cfg_path)
+    assert!(!PluginsConfig::load(&cfg_path).unwrap()
         .entries
         .contains_key("not-listed-yet"));
 
@@ -547,7 +547,7 @@ async fn the_model_may_disable_but_not_enable_a_claude_cache_row() {
         .expect("disabling is the fail-safe direction");
     let info = manager.get_plugin_info().await;
     assert_eq!(row(&info, "model-cc").unwrap().status, "disabled");
-    assert!(!PluginsConfig::load(&cfg_path).is_enabled_for("model-cc", PluginOrigin::ClaudeCache));
+    assert!(!PluginsConfig::load(&cfg_path).unwrap().is_enabled_for("model-cc", PluginOrigin::ClaudeCache));
 }
 
 /// Fix round 1, F2 (ruling 5 on the usage face) — while Claude Code's index
