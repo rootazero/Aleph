@@ -36,8 +36,6 @@ pub enum RateLimitScope {
     /// pushes one ~200 ms PCM frame per RPC — a steady 5 req/s per active mic —
     /// which would exhaust `RpcDefault` in seconds and kill live transcription.
     RpcRealtime,
-    /// Webhook authentication attempts.
-    WebhookAuth,
 }
 
 impl fmt::Display for RateLimitScope {
@@ -48,7 +46,6 @@ impl fmt::Display for RateLimitScope {
             Self::RpcWrite => write!(f, "rpc_write"),
             Self::RpcHeavy => write!(f, "rpc_heavy"),
             Self::RpcRealtime => write!(f, "rpc_realtime"),
-            Self::WebhookAuth => write!(f, "webhook_auth"),
         }
     }
 }
@@ -170,7 +167,7 @@ impl WindowTomlConfig {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct RateLimitTomlConfig {
-    /// `[gateway.rate_limit.auth]` — also governs webhook auth attempts.
+    /// `[gateway.rate_limit.auth]` — the authentication (handshake) window.
     pub auth: WindowTomlConfig,
     /// `[gateway.rate_limit.rpc_default]`
     pub rpc_default: WindowTomlConfig,
@@ -246,7 +243,7 @@ impl RateLimitConfig {
     /// Look up the [`WindowConfig`] for a given scope.
     const fn config_for(&self, scope: &RateLimitScope) -> &WindowConfig {
         match scope {
-            RateLimitScope::Auth | RateLimitScope::WebhookAuth => &self.auth,
+            RateLimitScope::Auth => &self.auth,
             RateLimitScope::RpcDefault => &self.rpc_default,
             RateLimitScope::RpcWrite => &self.rpc_write,
             RateLimitScope::RpcHeavy => &self.rpc_heavy,
