@@ -1192,6 +1192,25 @@ impl DeliveryStore {
         Ok(Self::hydrate(&conn, raw))
     }
 
+    /// How many live records are still queued for this conversation.
+    ///
+    /// The inline flush uses it to tell a *harmless* skip (the drainer holds
+    /// the gate, but this conversation has nothing queued, so there is nothing
+    /// to overtake) from a real ordering violation (a backlog exists and the
+    /// live send will jump ahead of it).
+    pub fn pending_for_conversation(
+        &self,
+        channel_id: &str,
+        conversation_id: &str,
+    ) -> rusqlite::Result<i64> {
+        self.guard().query_row(
+            "SELECT COUNT(*) FROM outbound_deliveries
+             WHERE channel_id = ?1 AND conversation_id = ?2",
+            params![channel_id, conversation_id],
+            |r| r.get(0),
+        )
+    }
+
     /// Turn claimed raw rows into records, dropping any whose payload no longer
     /// deserializes so a poison row can never wedge the queue. Shared by both
     /// claim paths so "what a claimed record is" has one definition.
@@ -2041,9 +2060,14 @@ async fn deliver_one(
 ///
 /// - It never runs while the background drainer holds the gate
 ///   ([`try_lock`](tokio::sync::Mutex::try_lock)): the drainer is already
-///   delivering this conversation in order, and blocking a user-facing send
-///   behind a whole drain tick is worse than the one-tick reorder window that
-///   skipping leaves.
+///   delivering the conversations it claimed, in order, and blocking a
+///   user-facing send behind a whole drain tick is worse than the one-tick
+///   reorder window that skipping leaves.
+///   The gate covers the drainer's *whole* pass, though — and a pass can be
+///   long (a rate-limit backoff sleeps up to `max_retry_after` per attempt) —
+///   so a send arriving while the drainer works on *other* conversations does
+///   overtake its own backlog. That case is reported at `warn` with the
+///   backlog depth instead of passing silently.
 /// - It never spends the backlog's retry budget — see [`AttemptMode::Inline`].
 /// - It stops at [`DeliveryQueueConfig::inline_flush_max`] records and says so,
 ///   rather than letting one send block on an unbounded backlog.
@@ -2062,10 +2086,30 @@ pub(super) async fn flush_conversation(
         return;
     }
     let Ok(_gate) = store.drain_gate.try_lock() else {
-        debug!(
-            channel = %channel_id,
-            "delivery queue: drain in progress; skipping the inline flush for this send"
-        );
+        // The drainer holds the gate for its whole pass, so the backlog is not
+        // being flushed ahead of this send — it is being delivered *by the
+        // drainer*, in order, for the conversations the drainer claimed. For
+        // any other conversation this send overtakes its own backlog, and the
+        // drainer may be holding the gate for a long time (a rate-limit
+        // backoff sleeps up to `max_retry_after` per attempt). That is an
+        // ordering violation, so it is reported — with the backlog depth,
+        // which is what makes it actionable. With nothing queued there is
+        // nothing to overtake, and the skip is the boring case.
+        let backlog = store
+            .pending_for_conversation(channel_id, conversation_id)
+            .unwrap_or(0);
+        if backlog > 0 {
+            warn!(
+                channel = %channel_id,
+                backlog,
+                "delivery queue: drain in progress; this send may overtake the queued backlog for its conversation"
+            );
+        } else {
+            debug!(
+                channel = %channel_id,
+                "delivery queue: drain in progress; nothing queued for this conversation"
+            );
+        }
         return;
     };
 
