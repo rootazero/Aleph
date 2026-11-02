@@ -48,7 +48,7 @@ impl<S: NoteStore + Send + Sync + 'static> CompoundIngestor for DefaultCompoundI
             }
         }
         // rust-doctor-disable-next-line excessive-clone
-        let source = raws[0].source.clone();
+        let source = raws.first().map(|r| r.source.clone()).unwrap_or_default();
         // rust-doctor-disable-next-line excessive-clone
         let batch_ids: Vec<String> = raws.iter().map(|r| r.id.clone()).collect();
         // Related-page gathering is best-effort context enrichment for the
