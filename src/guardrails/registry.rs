@@ -334,6 +334,9 @@ impl GuardrailRegistry {
                 GuardrailDecision::Block { .. } => return d,
             }
         }
+        if !rewritten && warns.is_empty() {
+            return GuardrailDecision::Allow;
+        }
         // Serializing the (possibly rewritten) args is the registry's contract with
         // its caller: the result lands in `Replacement.text` so the harness can
         // hand the rewritten args to the tool. If a rewrite happened but the
