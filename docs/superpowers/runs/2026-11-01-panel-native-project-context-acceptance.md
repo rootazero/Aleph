@@ -94,9 +94,14 @@ Ignored local evidence / ignored 本地证据: `.superpowers/sdd/2026-11-01-pane
 
 The latest completed read-only whole-branch review found six actionable issues: cleanup lifecycle ordering, stale receipt cursor handling, tautological artifact hashes, an unenforced window deadline, a missing cleanup phase, and a connect receipt whose authorization flag was hard-coded. Those issues were corrected after the review: the helper now closes its Gateway listener while retaining a controlled stdin until exact device revoke and EOF; receipt waits require `seq > cursor`; `build.json` must contain and match shell/helper/reaper/WASM digests; the runner checks one shared 120-second deadline; cleanup rewrites the `cleanup` phase from the actual six-step result; and connect observation derives `authorized` from the real response. Focused validation was rerun. This review was substantive and found issues; it is not a clean review.
 
-The fresh read-only whole-branch reviewer `del_mvxlbhy5_sr3x` returned three findings and ended with **SIGTERM**. This is a substantive written review, not a clean-exit review. It ran no tests. The earlier focused reviewer `del_mvxkn3my_zrsk` also ended SIGTERM and produced no usable findings. A later fresh reviewer `del_mvxz7fqg_6lk4` also ended **SIGTERM** before producing findings; it must not be described as a clean review.
+A further fresh read-only whole-branch review was attempted after the hardening commit, but the reviewer timed out after 600 seconds without returning a report. It is disclosed as a timeout and cannot be called a clean review. The completed validation below and the source audit are the available acceptance evidence for this delivery.
 
-完整分支 fresh reviewer 有书面结论，但进程 SIGTERM，不能称 clean review；另一个 focused reviewer 没有可用结论。三项处理如下：
+
+Earlier reviews remain disclosed: `del_mvxlbhy5_sr3x` returned three findings and ended SIGTERM; `del_mvxkn3my_zrsk` ended SIGTERM with no usable findings; and `del_mvxz7fqg_6lk4` ended SIGTERM before findings. None is a clean-exit review.
+
+此前审查仍如实保留：`del_mvxlbhy5_sr3x` 有三项书面 findings 后 SIGTERM；`del_mvxkn3my_zrsk` SIGTERM 且无可用结论；`del_mvxz7fqg_6lk4` 在返回 findings 前 SIGTERM。均不能称 clean review。
+
+三项处理如下：
 
 - **HIGH, fixed after the earlier review / 已在此前 review 后修复**: the earlier asset-only helper receipt gap was closed by the feature-gated Core observer and real helper WS smoke. The observer records only final authenticated connect/select/discovery outcomes and the smoke covers authenticated refusal; these remain helper evidence, not native evidence.
 - **MEDIUM, fixed / 已修复**: revealing an already-open Projects menu toggled it closed. Added meaningful failing coverage, then fixed and passed the driver regressions.
