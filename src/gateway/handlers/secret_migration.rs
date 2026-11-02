@@ -249,20 +249,38 @@ fn migrate_channels(cfg: &mut Config, vault: &SharedTokenManager) -> usize {
 
 // ── Voice streaming ─────────────────────────────────────────────────────────
 
+/// Vault key holding the streaming ASR bearer token.
+///
+/// The name is `voice_streaming:api_key`, not `voice.streaming:api_key`: every
+/// other key in this module is `<prefix>:<field>`, and `voice.streaming` is a
+/// TOML path in `config.toml`, not a key name. The config doc comment in
+/// `config/types/voice_local.rs` quotes this same name.
+const VOICE_STREAMING_API_KEY: &str = "voice_streaming:api_key";
+
 fn migrate_voice_streaming(cfg: &mut Config, vault: &SharedTokenManager) -> usize {
-    let api_key = &cfg.voice_local.streaming.api_key;
-    if api_key.is_empty() {
-        return 0;
-    }
-    match vault.store_secret("voice_streaming:api_key", api_key) {
-        Ok(_) => {
-            tracing::info!("Migrated voice.streaming.api_key to vault");
-            cfg.voice_local.streaming.api_key = String::new();
-            1
+    let plaintext = cfg.voice_local.streaming.api_key.clone();
+    let mut count = 0;
+    if !plaintext.is_empty() {
+        match vault.store_secret(VOICE_STREAMING_API_KEY, &plaintext) {
+            Ok(_) => {
+                tracing::info!("Migrated voice.streaming.api_key to vault");
+                count += 1;
+            }
+            Err(e) => {
+                tracing::error!(error = %e, "Failed to store voice streaming secret");
+                return 0;
+            }
         }
-        Err(e) => {
-            tracing::error!(error = %e, "Failed to store voice streaming secret");
-            0
-        }
     }
+    // `StreamingConfig::api_key` is `skip_serializing`, so the vault is the
+    // only durable home for the token — config.toml never carries it again
+    // once the migration has run. Rehydrate the in-memory config from the
+    // vault so the streaming ASR bearer token reaches the adapter on this
+    // start *and* on every later start, where config.toml has no key to
+    // migrate. Without this read the migration wrote a vault key nothing
+    // looked at and streaming ASR silently ran unauthenticated.
+    if let Some(secret) = super::resolve_vault_secret(VOICE_STREAMING_API_KEY, vault) {
+        cfg.voice_local.streaming.api_key = secret;
+    }
+    count
 }
