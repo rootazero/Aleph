@@ -821,16 +821,6 @@ static IRC_FIELDS: &[FieldDef] = &[
         options: &[],
     },
     FieldDef {
-        key: "use_tls",
-        label: "Use TLS",
-        kind: FieldKind::Toggle,
-        placeholder: "",
-        help: "Enable TLS encryption",
-        required: false,
-        default_value: "false",
-        options: &[],
-    },
-    FieldDef {
         key: "allowed_users",
         label: "Allowed Users",
         kind: FieldKind::TagList,

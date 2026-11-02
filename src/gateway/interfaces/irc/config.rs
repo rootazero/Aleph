@@ -18,7 +18,7 @@ pub struct IrcConfig {
     /// IRC server hostname (e.g., "irc.libera.chat")
     pub server: String,
 
-    /// IRC server port (default: 6667 for plaintext, 6697 for TLS)
+    /// IRC server port (default: 6667)
     #[serde(default = "default_port")]
     pub port: u16,
 
@@ -40,7 +40,8 @@ pub struct IrcConfig {
     #[serde(default)]
     pub require_mention: bool,
 
-    /// Use TLS (recommended; default false to preserve legacy plaintext deployments)
+    /// Use TLS — not supported by this adapter, which always connects in
+    /// plaintext. Setting it makes the channel refuse to start.
     #[serde(default)]
     pub use_tls: bool,
 
@@ -81,6 +82,14 @@ impl IrcConfig {
             if !ch.starts_with('#') && !ch.starts_with('&') {
                 return Err(format!("channel '{ch}' must start with '#' or '&'"));
             }
+        }
+        if self.use_tls {
+            return Err(
+                "IRC TLS is not implemented by this adapter — it always connects in plaintext. \
+                 Remove `use_tls`, or run the connection through a TLS tunnel and point \
+                 `server`/`port` at it."
+                    .to_string(),
+            );
         }
         Ok(())
     }
@@ -215,6 +224,19 @@ mod tests {
             ..Default::default()
         };
         assert!(config.is_user_allowed("alice"));
+    }
+
+    #[test]
+    fn test_validate_rejects_tls() {
+        let config = IrcConfig {
+            server: "irc.libera.chat".to_string(),
+            nick: "alephbot".to_string(),
+            channels: vec!["#test".to_string()],
+            use_tls: true,
+            ..Default::default()
+        };
+        let err = config.validate().unwrap_err();
+        assert!(err.contains("TLS is not implemented"));
     }
 
     #[test]

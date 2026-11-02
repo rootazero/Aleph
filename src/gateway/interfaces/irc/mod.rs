@@ -11,6 +11,10 @@
 //! - **Auth:** NICK/USER registration, optional `NickServ` IDENTIFY
 //! - **Keepalive:** PING/PONG automatic response
 //!
+//! The connection is plaintext: the adapter has no TLS support, so a config
+//! that sets `use_tls` is rejected. Run the connection through a TLS tunnel
+//! when the transport must be encrypted.
+//!
 //! # Usage
 //!
 //! ```toml
@@ -123,6 +127,13 @@ impl Channel for IrcChannel {
     async fn start(&mut self) -> ChannelResult<()> {
         // Validate configuration
         self.config.validate().map_err(ChannelError::ConfigError)?;
+
+        if self.config.password.is_some() {
+            tracing::warn!(
+                "IRC NickServ password will be sent in cleartext: this adapter connects in \
+                 plaintext (run the connection through a TLS tunnel to protect it)"
+            );
+        }
 
         self.channel_state
             .set_status(ChannelStatus::Connecting)
@@ -364,16 +375,31 @@ mod tests {
 
         let config = serde_json::json!({
             "server": "irc.libera.chat",
-            "port": 6697,
+            "port": 6667,
             "nick": "alephbot",
             "password": "secret",
             "channels": ["#aleph", "#test"],
-            "use_tls": true,
+            "use_tls": false,
             "realname": "Aleph IRC Bot"
         });
 
         let result = factory.create(config).await;
         assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_factory_create_rejects_tls() {
+        let factory = IrcChannelFactory;
+
+        let config = serde_json::json!({
+            "server": "irc.libera.chat",
+            "nick": "alephbot",
+            "channels": ["#aleph"],
+            "use_tls": true
+        });
+
+        let result = factory.create(config).await;
+        assert!(result.is_err());
     }
 
     #[tokio::test]
