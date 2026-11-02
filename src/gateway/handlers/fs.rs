@@ -274,10 +274,27 @@ pub async fn handle_list_dir(request: JsonRpcRequest, config: SharedConfig) -> J
         if !params.show_hidden && name.starts_with('.') {
             continue;
         }
-        // `file_type()` follows symlinks; we deliberately resolve so the
-        // displayed `is_dir` matches what the next `list_dir` would do.
-        let is_dir = entry.file_type().await.is_ok_and(|t| t.is_dir());
         let full = entry.path();
+        // `file_type()` reports the LINK itself, not its target, so a
+        // symlinked directory used to be listed as a file and the picker
+        // offered it as one. Resolve the link and classify the TARGET —
+        // but only when the target is still inside the allowed roots and is
+        // not a denied leaf: following a link out of scope would advertise
+        // a path the scope check refuses. An unresolvable link is not a
+        // directory.
+        let file_type = entry.file_type().await.ok();
+        let is_dir = if file_type.as_ref().is_some_and(|t| t.is_symlink()) {
+            match tokio::fs::canonicalize(&full).await {
+                Ok(target) => {
+                    roots.iter().any(|root| target.starts_with(root))
+                        && refuse_if_denied(&target).is_ok()
+                        && target.is_dir()
+                }
+                Err(_) => false,
+            }
+        } else {
+            file_type.as_ref().is_some_and(|t| t.is_dir())
+        };
         entries.push(json!({
             "name": name,
             "path": display_string(&full),
@@ -647,6 +664,52 @@ mod tests {
             parent2.is_null(),
             "expected parent OUT of scope, got {parent2}"
         );
+    }
+
+    /// A symlinked directory IS a directory: `DirEntry::file_type` reports
+    /// the link, not its target, so the picker used to offer it as a file.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn list_dir_resolves_a_symlinked_directory_to_a_directory() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path().to_path_buf();
+        tokio::fs::create_dir(root.join("real")).await.unwrap();
+        std::os::unix::fs::symlink(root.join("real"), root.join("link")).unwrap();
+
+        let cfg = cfg_with_roots(vec![root.to_string_lossy().to_string()]);
+        let r = req("fs.list_dir", json!({ "path": root.to_string_lossy() }));
+        let resp = handle_list_dir(r, cfg).await;
+        let entries = resp.result.expect("expected success")["entries"]
+            .as_array()
+            .unwrap()
+            .clone();
+        assert!(entries
+            .iter()
+            .any(|e| e["name"] == "link" && e["is_dir"] == true));
+    }
+
+    /// …but a link that leaves the allowed roots is not a directory: the
+    /// target is out of scope, so it must not be advertised as one.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn list_dir_does_not_call_an_out_of_scope_symlink_a_directory() {
+        let tmp = TempDir::new().unwrap();
+        let scope = tmp.path().join("scope");
+        let outside = tmp.path().join("outside");
+        tokio::fs::create_dir(&scope).await.unwrap();
+        tokio::fs::create_dir(&outside).await.unwrap();
+        std::os::unix::fs::symlink(&outside, scope.join("escape")).unwrap();
+
+        let cfg = cfg_with_roots(vec![scope.to_string_lossy().to_string()]);
+        let r = req("fs.list_dir", json!({ "path": scope.to_string_lossy() }));
+        let resp = handle_list_dir(r, cfg).await;
+        let entries = resp.result.expect("expected success")["entries"]
+            .as_array()
+            .unwrap()
+            .clone();
+        assert!(entries
+            .iter()
+            .any(|e| e["name"] == "escape" && e["is_dir"] == false));
     }
 
     #[tokio::test]
