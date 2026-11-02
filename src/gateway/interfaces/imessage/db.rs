@@ -61,6 +61,32 @@ fn resolve_attachment_path(raw: &str) -> Option<PathBuf> {
     path.exists().then_some(path)
 }
 
+/// Resolve a raw `attachment.filename` to an existing path that lives UNDER
+/// `root`.
+///
+/// `attachment.filename` is a value read out of `chat.db`, not a path this
+/// process produced: it names a file on this machine, and whatever it points
+/// at is read and handed to the model. A path outside the Messages directory
+/// is therefore not an attachment — it is an attempt to pull a local file
+/// into the conversation.
+///
+/// The comparison runs on canonicalized paths, so a symlink inside the root
+/// that points outside of it is rejected as well. A missing root resolves
+/// nothing (fail closed).
+fn resolve_contained_attachment(root: Option<&Path>, raw: &str) -> Option<PathBuf> {
+    let root = root?;
+    let canonical = resolve_attachment_path(raw)?.canonicalize().ok()?;
+    if !canonical.starts_with(root) {
+        debug!(
+            path = %canonical.display(),
+            root = %root.display(),
+            "Refusing attachment outside the Messages directory"
+        );
+        return None;
+    }
+    Some(canonical)
+}
+
 /// Raw message data from the database
 #[derive(Debug)]
 pub struct RawMessage {
@@ -117,6 +143,13 @@ pub struct MessagesDb {
     /// (0 = unlimited). Oversized attachments keep their metadata but omit
     /// the local path so the agent is not forced to load a huge file.
     max_attachment_size: u64,
+    /// Canonicalized directory the attachments must live under — the
+    /// directory that holds `chat.db` (`~/Library/Messages` in the default
+    /// setup, whose `Attachments/` subdirectory holds the files).
+    ///
+    /// `None` means "no attachment may be resolved": the containment root is
+    /// unknown, so the answer is no.
+    attachments_root: Option<PathBuf>,
 }
 
 impl MessagesDb {
@@ -138,11 +171,18 @@ impl MessagesDb {
 
         debug!("Starting from message ROWID: {}", last_rowid);
 
+        // Attachments must live under the directory that holds `chat.db`
+        // (`~/Library/Messages`, whose `Attachments/` subdirectory holds the
+        // files). A missing or unresolvable directory leaves the root unset,
+        // which disables attachment resolution entirely (fail closed).
+        let attachments_root = path.parent().and_then(|dir| dir.canonicalize().ok());
+
         Ok(Self {
             conn,
             last_message_rowid: last_rowid,
             include_attachments: true,
             max_attachment_size: 0,
+            attachments_root,
         })
     }
 
@@ -155,6 +195,9 @@ impl MessagesDb {
             last_message_rowid: 0,
             include_attachments: true,
             max_attachment_size: 0,
+            // No database path means no containment root — no attachment is
+            // resolved.
+            attachments_root: None,
         }
     }
 
@@ -231,6 +274,11 @@ impl MessagesDb {
         })?;
 
         let mut messages = Vec::new();
+
+        // Hoisted out of the message loop so the attachment closure below
+        // borrows no part of `self`.
+        let max_attachment_size = self.max_attachment_size;
+        let attachments_root = self.attachments_root.clone();
 
         for row_result in rows {
             let raw = row_result?;
@@ -341,10 +389,12 @@ impl MessagesDb {
                         // is the user-facing basename. Resolve the real path so
                         // the agent can actually read the file, honoring the
                         // configured size cap (0 = unlimited).
-                        let within_size = self.max_attachment_size == 0
-                            || (a.total_bytes as u64) <= self.max_attachment_size;
+                        let within_size = max_attachment_size == 0
+                            || (a.total_bytes as u64) <= max_attachment_size;
                         let resolved_path = if within_size {
-                            a.filename.as_deref().and_then(resolve_attachment_path)
+                            a.filename.as_deref().and_then(|raw| {
+                                resolve_contained_attachment(attachments_root.as_deref(), raw)
+                            })
                         } else {
                             None
                         };
@@ -542,6 +592,37 @@ mod tests {
     fn test_resolve_attachment_path_missing() {
         // A non-existent path resolves to None (don't hand the agent a dead path).
         assert!(resolve_attachment_path("/nonexistent/aleph/imsg/attachment.heic").is_none());
+    }
+
+    #[test]
+    fn test_attachment_outside_the_messages_root_is_refused() {
+        let (_scratch, dir) = crate::utils::scratch::scratch_root();
+        std::fs::create_dir_all(&dir).unwrap();
+        let root = dir.join("messages");
+        std::fs::create_dir_all(&root).unwrap();
+        let inside = root.join("attachment.bin");
+        std::fs::write(&inside, b"x").unwrap();
+        let outside = dir.join("outside.bin");
+        std::fs::write(&outside, b"x").unwrap();
+
+        let canonical_root = root.canonicalize().unwrap();
+        assert!(
+            resolve_contained_attachment(Some(canonical_root.as_path()), &inside.to_string_lossy())
+                .is_some(),
+            "a file inside the Messages directory resolves"
+        );
+        assert!(
+            resolve_contained_attachment(
+                Some(canonical_root.as_path()),
+                &outside.to_string_lossy()
+            )
+            .is_none(),
+            "a file outside the Messages directory does not resolve"
+        );
+        assert!(
+            resolve_contained_attachment(None, &inside.to_string_lossy()).is_none(),
+            "without a containment root nothing resolves"
+        );
     }
 
     /// Build a minimal in-memory chat.db subset with the columns
