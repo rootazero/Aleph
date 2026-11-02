@@ -771,12 +771,19 @@ impl SessionStore for FileSessionStore {
             return Ok(DeleteResult { deleted: false });
         }
         let date = chrono::Utc::now().format("%Y-%m-%d").to_string();
+        // The archive directory name must be spelled the SAME way the session
+        // directory is (`sanitize_key_for_dir`), not with the raw key: a raw
+        // key always contains the `:` separator, which is illegal in a
+        // Windows file name (os error 123), and a segment containing `/`
+        // would escape `.archive/<date>/` on POSIX. The archived session is
+        // still identified by its key — `sweep_archive_events` reads the key
+        // out of `metadata.json`, not out of the directory name.
         let archive_dir = self
             .config
             .base_dir
             .join(".archive")
             .join(date)
-            .join(&key_str);
+            .join(sanitize_key_for_dir(&key_str));
         if let Some(parent) = archive_dir.parent() {
             tokio::fs::create_dir_all(parent).await.map_err(|e| {
                 SessionStoreError::DatabaseError(format!("Create archive dir failed: {e}"))
