@@ -129,6 +129,38 @@ fn do_http_fetch(kernel: &WasmCapabilityKernel, request: &str) -> String {
     }
 }
 
+/// Headers that name a target other than the URL the allowlist validated.
+///
+/// The allowlist matches on the URL (scheme, host, path, method). A guest
+/// that can set these headers can name a different target through the
+/// server's own virtual-host / path-rewrite handling — `Host` for the
+/// former, `X-Forwarded-Host` / `X-Original-URL` / `X-Rewrite-URL` for the
+/// latter — so the host-routing headers cannot come from the guest.
+const HOST_ROUTING_HEADERS: &[&str] = &[
+    "host",
+    "forwarded",
+    "x-forwarded-host",
+    "x-forwarded-port",
+    "x-forwarded-proto",
+    "x-forwarded-server",
+    "x-original-host",
+    "x-original-url",
+    "x-rewrite-url",
+];
+
+/// Drop every host-routing header from the outbound header list.
+///
+/// Called *after* credential injection: a `CredentialInject::Header` binding
+/// names its header freely, so it can reintroduce a `Host` the guest's own
+/// headers were not allowed to set.
+fn strip_host_routing_headers(headers: &mut Vec<(String, String)>) {
+    headers.retain(|(name, _)| {
+        !HOST_ROUTING_HEADERS
+            .iter()
+            .any(|blocked| name.eq_ignore_ascii_case(blocked))
+    });
+}
+
 fn try_http_fetch(kernel: &WasmCapabilityKernel, request: &str) -> Result<String, String> {
     let req: HttpRequest =
         serde_json::from_str(request).map_err(|e| format!("invalid request: {e}"))?;
@@ -233,6 +265,13 @@ fn try_http_fetch(kernel: &WasmCapabilityKernel, request: &str) -> Result<String
         }
     }
 
+    // The URL is the only thing the allowlist checked, so the headers must
+    // not be able to name another target: strip them here, after the
+    // injection loop, so a `Header` binding cannot reintroduce one either.
+    // With no `Host` of its own, the client derives it from the URL — the
+    // host the allowlist matched.
+    strip_host_routing_headers(&mut egress_headers);
+
     // Run the blocking client on a dedicated OS thread: reqwest::blocking spins
     // its own runtime internally, which would panic if nested inside the host's
     // tokio worker. A fresh std thread carries no ambient runtime.
@@ -304,4 +343,27 @@ fn try_http_fetch(kernel: &WasmCapabilityKernel, request: &str) -> Result<String
         "body": body_text,
     })
     .to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::strip_host_routing_headers;
+
+    /// The allowlist validated the URL; a guest-supplied header must not be
+    /// able to name a different host or path than the one it validated.
+    #[test]
+    fn host_routing_headers_are_stripped() {
+        let mut headers = vec![
+            ("Host".to_string(), "evil.example".to_string()),
+            ("x-forwarded-host".to_string(), "evil.example".to_string()),
+            ("X-Original-URL".to_string(), "/admin".to_string()),
+            ("Authorization".to_string(), "Bearer token".to_string()),
+        ];
+        strip_host_routing_headers(&mut headers);
+        assert_eq!(
+            headers,
+            vec![("Authorization".to_string(), "Bearer token".to_string())],
+            "host-routing headers must not reach egress"
+        );
+    }
 }
