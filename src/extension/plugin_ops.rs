@@ -1092,8 +1092,8 @@ mod tests {
         .await
         .unwrap();
 
-        assert!(manager.set_trust_enforced(true));
-        assert!(manager.set_plugin_trusted("alpha", true));
+        assert!(manager.set_trust_enforced(true).await);
+        assert!(manager.set_plugin_trusted("alpha", true).await);
         assert!(
             manager
                 .current_owner_trust_policy()
