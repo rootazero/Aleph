@@ -181,9 +181,12 @@ impl InboundMessageRouter {
             .await?;
 
         if created {
+            // The pairing code IS the credential: anyone who can read the log
+            // stream can approve themselves. It belongs in the outbound
+            // message to the owner only — never in the log.
             info!(
-                "Created new pairing request for {}:{} with code {}",
-                channel_id, sender_id, code
+                "Created new pairing request for {}:{} (code redacted)",
+                channel_id, sender_id
             );
         } else {
             info!(
@@ -214,7 +217,10 @@ impl InboundMessageRouter {
                 channel_id, sender_id, e
             );
         } else {
-            info!("Sent pairing code {} to {}:{}", code, channel_id, sender_id);
+            info!(
+                "Sent pairing code (redacted) to {}:{}",
+                channel_id, sender_id
+            );
         }
 
         Ok(())
