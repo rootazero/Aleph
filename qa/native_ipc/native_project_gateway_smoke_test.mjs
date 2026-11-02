@@ -20,6 +20,57 @@ test("helper refuses an unowned root before creating fixture state", async () =>
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
+test("helper reports an unconfirmed exact device as already revoked", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "aleph-shell-qa-"));
+  const panel = join(root, "panel");
+  await mkdir(panel, { recursive: true });
+  await writeFile(join(panel, "index.html"), "<!doctype html><html><body>qa</body></html>");
+  const nonce = "57".repeat(16);
+  await writeFile(join(root, ".qa-owned"), nonce);
+  const child = spawn(binary, ["--owned-root", root, "--nonce", nonce, "--panel-root", panel], { stdio: ["pipe", "pipe", "pipe"] });
+  t.after(async () => {
+    if (child.exitCode === null) {
+      child.kill();
+      await new Promise((resolve) => child.once("close", resolve));
+    }
+    await rm(root, { recursive: true, force: true });
+  });
+  const messages = [];
+  let buffer = "";
+  child.stdout.setEncoding("utf8");
+  child.stdout.on("data", (chunk) => {
+    buffer += chunk;
+    for (;;) {
+      const end = buffer.indexOf("\n");
+      if (end < 0) return;
+      messages.push(JSON.parse(buffer.slice(0, end)));
+      buffer = buffer.slice(end + 1);
+    }
+  });
+  const waitFor = async (predicate) => {
+    const deadline = Date.now() + 10_000;
+    while (Date.now() < deadline) {
+      const found = messages.find(predicate);
+      if (found) return found;
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    throw new Error("helper_timeout");
+  };
+  const send = (id, command, fields = {}) => child.stdin.write(`${JSON.stringify({ v: 1, type: "command", run: nonce, id, command, ...fields })}\n`);
+  await waitFor((message) => message.type === "ready");
+  send(1, "issue_pairing", { user: "alice", device: "device-a" });
+  await waitFor((message) => message.type === "pairing");
+  send(2, "shutdown");
+  await waitFor((message) => message.type === "stopped");
+  send(3, "revoke_exact", { device: "device-a" });
+  const response = await waitFor((message) => message.type === "ack" || message.type === "error");
+  assert.equal(response.type, "error");
+  assert.equal(response.code, "already_revoked");
+  child.stdin.end();
+  await new Promise((resolve) => child.once("close", resolve));
+  assert.equal(child.exitCode, 0);
+});
+
 test("disposable Gateway helper authenticates and serves actor-bound project bytes", async (t) => {
   const root = await mkdtemp(join(tmpdir(), "aleph-shell-qa-"));
   let socket;

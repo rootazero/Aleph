@@ -6,8 +6,34 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { createEvidenceLedger } from "./native_project_evidence.mjs";
-import { createHelper, waitReceipt, businessWait, cleanupNativeRun } from "./native_project_native_io.mjs";
+import { createHelper, waitReceipt, businessWait, cleanupNativeRun, waitForPairingSurface } from "./native_project_native_io.mjs";
 import { createRunState } from "./native_project_run_core.mjs";
+
+
+test("pairing surface polling waits through an initial empty DOM", async () => {
+  const responses = [
+    { dom: { tokenWall: false, tokenInput: false, pairingNotice: false, pairDesktop: false } },
+    { dom: { tokenWall: true, tokenInput: true, pairingNotice: false, pairDesktop: false } },
+  ];
+  const seen = [];
+  const result = await waitForPairingSurface(async () => {
+    seen.push(true);
+    return responses.shift();
+  }, { deadline: Date.now() + 1_000, timeoutMs: 100, intervalMs: 1 });
+  assert.equal(result.surface, "token_wall");
+  assert.equal(seen.length, 2);
+});
+
+test("pairing surface polling preserves unavailable after its bounded wait", async () => {
+  await assert.rejects(
+    waitForPairingSurface(async () => ({ dom: { tokenWall: false, tokenInput: false, pairingNotice: false, pairDesktop: false } }), {
+      deadline: Date.now() + 1_000,
+      timeoutMs: 20,
+      intervalMs: 1,
+    }),
+    /pairing_surface_unavailable/,
+  );
+});
 
 function fixture(t) {
   const root = mkdtempSync(join(tmpdir(), "aleph-native-io-test-"));

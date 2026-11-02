@@ -12,7 +12,7 @@
 
 ## Global Constraints
 
-- Do not launch WebView2, write OS credentials, touch the daily daemon or port `18790`, read old token-bearing connection files, merge, or push without a new explicit user instruction and launch budget.
+- Do not launch WebView2 or write OS credentials without explicit authorization. The user later authorized fresh artifacts and at most two bounded launches, each using the runner's 120-second business deadline; those two slots are now consumed. No third launch is permitted by this plan.
 - Keep the product path unchanged: `projects.rs` → `DashboardState::select_panel_project` → `PANEL_PROJECT_SELECT_METHOD`.
 - Do not add hidden pairing UI, direct invoke, browser-storage credentials, synthetic DOM, fake actor, `actor=None`, or a test endpoint.
 - Native evidence remains layered: Rust trace, Gateway receipt, DOM monitor, artifact/process provenance, and exact cleanup cannot substitute for one another.
@@ -290,9 +290,9 @@
 
   Run the separate QA preparation command against the already built artifacts. Inspect only redacted manifest fields and verify that the runner consumes it rather than creating a self-pin.
 
-- [x] **Step 4: Produce the preflight report and stop at the launch gate**
+- [x] **Step 4: Produce the preflight report and execute the separately authorized bounded launches**
 
-  Do not invoke WebView2. Report the exact new budget needed for the next step and ask the user only after the code, tests, provenance preparation, and reviewable preflight are complete.
+  The preflight report was produced before launch. The user then explicitly authorized fresh artifacts and at most two bounded native launches. Both launches used the existing product path and the 120-second business deadline; no third launch was performed. The first ended `AMBIGUOUS` after `pairing_surface_unavailable` and incomplete exact revoke proof. After the localized polling/helper repair, the second ended `BLOCKED/native_run_failed` with all six cleanup facts true. No native credential or protected persistence proof was obtained.
 
 - [x] **Step 5: Commit the reviewable implementation**
 

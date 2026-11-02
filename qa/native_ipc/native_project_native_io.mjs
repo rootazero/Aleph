@@ -39,6 +39,18 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+export async function waitForPairingSurface(inspect, { deadline, timeoutMs = 10_000, intervalMs = 100 } = {}) {
+  const surfaceDeadline = Math.min(deadline, Date.now() + timeoutMs);
+  while (Date.now() < surfaceDeadline) {
+    const response = await inspect(Math.max(1, surfaceDeadline - Date.now()));
+    const surface = classifyPairingSurface(response?.dom);
+    if (surface !== "pairing_surface_unavailable") return { surface, dom: response.dom };
+    await sleep(Math.min(intervalMs, Math.max(1, surfaceDeadline - Date.now())));
+  }
+  throw new Error("pairing_surface_unavailable");
+}
+
+
 function ownedRoot(nonce) {
   const root = mkdtempSync(join(realpathSync(tmpdir()), ROOT_PREFIX));
   writeFileSync(join(root, ".qa-owned"), nonce, { flag: "wx" });
@@ -276,11 +288,13 @@ export async function runNativeProjectNative({ repoRoot = process.cwd(), windowM
     trace = spawned.trace;
     monitorConnection = await businessWait(deadline, MONITOR_TIMEOUT_MS, (timeout) => monitor.accept(timeout));
     if (!monitorConnection?.authenticated) throw new Error("monitor_auth_failed");
-    const initial = await monitorCommand("inspect", {}, 5_000);
-    if (!initial?.ack) throw new Error("initial_dom_inspect_failed");
-    if (classifyPairingSurface(initial.dom) === "token_wall") {
+    const initial = await waitForPairingSurface(
+      (timeout) => monitorCommand("inspect", {}, timeout),
+      { deadline, timeoutMs: 10_000, intervalMs: 100 },
+    );
+    if (initial.surface === "token_wall") {
       // Continue through the real token-wall controls below.
-    } else if (classifyPairingSurface(initial.dom) === "browser_pairing") {
+    } else if (initial.surface === "browser_pairing") {
       const revealBrowser = await monitorCommand("reveal_browser", {}, 15_000);
       if (!revealBrowser?.ack) throw new Error("browser_reveal_failed");
       const askPair = await monitorCommand("ask_pair", {}, 15_000);

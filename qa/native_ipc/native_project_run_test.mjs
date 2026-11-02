@@ -19,6 +19,7 @@ test("unsupported endpoint transition blocks before native mutation; source pres
   assert.deepEqual(result.evidence.receipts, []);
   assert.equal(exitCode(result), EXIT.BLOCKED);
   assert.equal("nonce" in publicReport(result), false);
+  assert.equal(publicReport({ ...result, reason: "native_run_failed" }).reason, "native_run_failed");
   assert.match(result.run, /^[0-9a-f]{64}$/);
 });
 

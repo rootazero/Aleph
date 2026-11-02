@@ -682,7 +682,23 @@ async fn control_loop(
                 continue;
             }
             let mut fixture = fixture.lock().await;
-            let actual = resolve_device(&mut fixture, device)?;
+            let actual = match resolve_device(&mut fixture, device) {
+                Ok(actual) => actual,
+                Err(error) if error.to_string() == "device_not_found" => {
+                    write_json(
+                        &mut output,
+                        &ErrorMessage {
+                            v: 1,
+                            r#type: "error",
+                            run: &run,
+                            code: "already_revoked",
+                        },
+                    )
+                    .await?;
+                    continue;
+                }
+                Err(error) => return Err(error),
+            };
             let revoked = fixture.tokens.revoke_panel_device(&actual)?;
             if !revoked {
                 write_json(
@@ -896,6 +912,7 @@ fn resolve_device(fixture: &mut Fixture, label: &str) -> anyhow::Result<String> 
         })
         .map(|device| device.device_id)
         .collect::<Vec<_>>();
+    anyhow::ensure!(!candidates.is_empty(), "device_not_found");
     anyhow::ensure!(candidates.len() == 1, "ambiguous_device");
     fixture
         .bindings

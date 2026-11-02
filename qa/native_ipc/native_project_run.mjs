@@ -63,6 +63,7 @@ export function publicReport(result) {
     contract: RUN_CONTRACT,
     run: result.run,
     outcome: result.outcome,
+    reason: result.reason ?? null,
     phases: result.phases,
     cleanup: result.cleanup,
     evidence: result.evidence,

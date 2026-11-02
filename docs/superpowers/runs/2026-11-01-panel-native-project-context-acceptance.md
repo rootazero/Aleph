@@ -131,7 +131,41 @@ A fresh read-only whole-branch review of commit `0defd4f3f` was dispatched after
 
 提交 `0defd4f3f` 后已发起 fresh read-only whole-branch review，但 reviewer 在 600 秒后超时且没有返回报告。本次只能记录为 timeout，不能称 clean review；没有把缺失的审查结果默认为 PASS。
 
-## Not done / 未做与未验证
+## 2026-11-02 authorized fresh-artifact runs / 2026-11-02 获授权 fresh artifact 运行
+
+The user authorized fresh Panel artifacts, an independent provenance manifest, and up to two bounded native launches, each using the runner's 120-second business deadline. No third launch is authorized or performed.
+
+用户授权重新构建 Panel artifact、独立 provenance manifest，并最多进行两次受限 native launch；每次使用 runner 的 120 秒 business deadline。没有授权或执行第三次启动。
+
+Fresh preparation succeeded: `panel-modular` WASM output, native-qa helper, QA shell, and exact credential reaper were built with a memory gate before each Cargo command and `CARGO_BUILD_JOBS=1`. The manifest was written separately with exclusive creation and independently validated at revision `b986ad3b799965b29c15b1b5e9b0efc15fa21408`. No existing manifest was overwritten; one prior manifest from this same authorized preparation was removed only to regenerate after the helper binary changed, then inspected successfully.
+
+fresh preparation 成功：`panel-modular` WASM、native-qa helper、QA shell 与 exact credential reaper 均已构建；每个 Cargo 命令前运行 memory gate，并固定 `CARGO_BUILD_JOBS=1`。manifest 通过独立 exclusive creation 写入，并在 revision `b986ad3b799965b29c15b1b5e9b0efc15fa21408` 独立校验。没有覆盖既有 manifest；helper 二进制变更后，仅删除本次授权准备产生的 manifest 并重新生成，随后检查通过。
+
+The first launch reached the real shell and monitor, then classified the page as `pairing_surface_unavailable` on its immediate DOM inspection. Cleanup proved shell/helper stop but could not prove exact device revocation because pairing had not been confirmed; the helper's previous control path exited before returning a stable no-credential result. The first run is therefore `AMBIGUOUS`, not PASS. This also exposed a boot timing gap: the runner had inspected only once.
+
+第一次启动到达真实 shell 与 monitor，但 immediate DOM inspect 将页面分类为 `pairing_surface_unavailable`。cleanup 证明 shell/helper 已停止，却无法证明 exact device revoke，因为 pairing 尚未确认；当时 helper control path 在返回稳定的 no-credential 结果前退出。因此第一次结果为 `AMBIGUOUS`，不是 PASS。该运行同时暴露了 runner 只 inspect 一次的启动时序缺口。
+
+The focused RED/GREEN repairs were:
+
+- `waitForPairingSurface` polls existing monitor `inspect` for at most 10 seconds and preserves `pairing_surface_unavailable` after the bounded wait; it adds no selector, IPC, hidden UI, or product route.
+- The helper's exact revoke returns fixed `already_revoked` when `resolve_device` finds no candidate for a declared binding; multiple candidates still return `ambiguous_device` and terminate fail-closed.
+- Node helper/native I/O regressions and the built helper smoke passed; the full Node suite passed 65/65.
+
+修复经过 RED/GREEN：
+
+- `waitForPairingSurface` 使用已有 monitor `inspect` 最多轮询 10 秒，超时后仍返回 `pairing_surface_unavailable`；没有增加 selector、IPC、隐藏 UI 或产品 route。
+- helper 的 exact revoke 在声明的 binding 没有候选设备时返回固定 `already_revoked`；多候选仍返回 `ambiguous_device` 并 fail-closed 退出。
+- Node helper/native I/O 回归与重建 helper smoke 通过；全套 Node 测试 65/65 通过。
+
+After rebuilding the changed helper and regenerating the independent manifest, the second and final authorized launch reached the real shell and completed all six cleanup proofs: shell stopped, helper stopped, exact devices revoked, exact credential deleted, exact absence proved, and owned root removed. The run still ended `BLOCKED`: `protected_pairing` was `BLOCKED/native_run_failed`; there were no helper receipts, native credential trace, or protected persistence proof. The CLI at that point emitted only the fixed redacted `native_run_failed` label, so the underlying runtime cause is unresolved and no finer claim is made. The second run's cleanup is a real `PASS`, but it cannot upgrade the blocked protected phase.
+
+重建变更后的 helper 并重新生成独立 manifest 后，第二次也是最后一次授权启动到达真实 shell，并完成六步 cleanup proof：shell stopped、helper stopped、exact devices revoked、exact credential deleted、exact absence proved、owned root removed。运行仍以 `BLOCKED` 结束：`protected_pairing` 为 `BLOCKED/native_run_failed`；没有 helper receipts、native credential trace 或 protected persistence proof。当时 CLI 只输出固定脱敏的 `native_run_failed`，因此底层 runtime 原因仍未解析，不作更细推断。第二次 cleanup 的确为 `PASS`，但不能升级 blocked protected phase。
+
+The exact reports are retained in the ignored SDD workspace: `native-launch-1.log`, `native-launch-2.log`, `preflight-before-launch-2.log`, helper lifecycle build output, and final Cargo logs. These logs contain only bounded/redacted runner output; they are not additional native proof.
+
+精确报告保存在 ignored SDD workspace：`native-launch-1.log`、`native-launch-2.log`、`preflight-before-launch-2.log`、helper lifecycle build output 与 final Cargo logs。这些日志只包含有界/脱敏 runner 输出，不构成额外 native proof。
+
+
 
 A real QA WebView2 shell launch occurred within the approved one-launch budget, reached the page, and stopped at `pairing_surface_unavailable`; no protected OS save/load/delete, same-device native reload, native project A/B/Global, endpoint/lease or revocation evidence was obtained. The exact absence cleanup was completed externally after the runner's helper-stop proof failed. No daily daemon/default release/production credential changes, no old connection-file read, no merge and no push.
 
