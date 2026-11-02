@@ -30,6 +30,39 @@ fn message_pre_validated_mention(message: &crate::gateway::channel::InboundMessa
         .any(|m| matches!(m, MessageMeta::AppMention))
 }
 
+/// Strip the punctuation that clings to a mention token — `"@aleph,"`,
+/// `"aleph."`, `"（aleph）"` — so the comparison sees the name itself.
+///
+/// The leading `@` is KEPT: it is what separates an explicitly addressed
+/// handle from a bare word, and the bare word is not a mention unless the
+/// channel configured the bot's name.
+fn mention_token(token: &str) -> &str {
+    token.trim_matches(|c: char| !c.is_alphanumeric() && c != '@')
+}
+
+/// Whether `tokens` contains `name`'s word sequence as a contiguous run of
+/// whole tokens — the whole-word form of `text.contains(name)`.
+///
+/// A configured name may carry its own `@` prefix (`"@aleph"`); it is
+/// stripped here so the comparison sees the name itself, exactly like the
+/// tokens do.
+fn contains_word_sequence(tokens: &[&str], name: &str) -> bool {
+    let name_words: Vec<&str> = name
+        .split_whitespace()
+        .map(mention_token)
+        .map(|word| word.strip_prefix('@').unwrap_or(word))
+        .collect();
+    if name_words.is_empty() || name_words.len() > tokens.len() {
+        return false;
+    }
+    tokens.windows(name_words.len()).any(|window| {
+        window
+            .iter()
+            .zip(&name_words)
+            .all(|(token, word)| token.eq_ignore_ascii_case(word))
+    })
+}
+
 impl InboundMessageRouter {
     /// Check if message is permitted
     pub(super) async fn check_permission(
@@ -143,19 +176,40 @@ impl InboundMessageRouter {
     }
 
     /// Check if bot was mentioned in message
+    ///
+    /// A mention is a WHOLE TOKEN, never a substring: "the aleph roadmap"
+    /// mentions nobody. The default pattern list used to hold the bare
+    /// string `"aleph"`, so `require_mention` was satisfied by any group
+    /// message containing those five letters — for every channel that never
+    /// configured a `bot_name` the group gate was a no-op.
+    ///
+    /// What counts as a mention:
+    /// - a configured `bot_name`, matched as a whole word (its `@` prefix is
+    ///   optional). Naming the bot is opt-in per channel, so only an operator
+    ///   who configured it gets the bare name as a trigger.
+    /// - otherwise an explicitly addressed handle — `"@aleph"` / `"@bot"` —
+    ///   which still needs the `@`.
     pub(super) fn check_mention(&self, text: &str, config: &ChannelConfig) -> bool {
-        let text_lower = text.to_lowercase();
+        let tokens: Vec<&str> = text.split_whitespace().map(mention_token).collect();
+        let cores: Vec<&str> = tokens
+            .iter()
+            .copied()
+            .map(|t| t.strip_prefix('@').unwrap_or(t))
+            .collect();
 
-        // Check bot name
+        // Check bot name — whole word, so "alphabet" is not "aleph".
         if let Some(bot_name) = &config.bot_name {
-            if text_lower.contains(&bot_name.to_lowercase()) {
+            if contains_word_sequence(&cores, bot_name) {
                 return true;
             }
         }
 
-        // Check common patterns
-        let patterns = ["@aleph", "@bot", "aleph"];
-        patterns.iter().any(|p| text_lower.contains(p))
+        // Check common patterns — these apply to every channel, so they stay
+        // explicitly addressed.
+        tokens.iter().zip(&cores).any(|(token, core)| {
+            token.starts_with('@')
+                && (core.eq_ignore_ascii_case("aleph") || core.eq_ignore_ascii_case("bot"))
+        })
     }
 
     /// Send pairing request to unknown sender
