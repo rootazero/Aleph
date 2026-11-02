@@ -33,6 +33,40 @@ pub(crate) const SESSION_COLUMNS: &str =
      parent_session_key, compaction_count, derived_title, \
      estimated_cost_usd, owner_user_id, scope_id, last_message_preview";
 
+impl SessionManager {
+    /// Run a blocking SQLite section OFF the async runtime.
+    ///
+    /// `rusqlite` is a synchronous driver: the query runs on whichever thread
+    /// calls it. Called inline from an `async fn`, a scan parks a tokio worker
+    /// for its whole duration — `list_sessions` has no `LIMIT` and
+    /// `search_messages` is an FTS5 query over the whole corpus — so the
+    /// runtime's worker budget is spent on a disk read.
+    ///
+    /// The connection guard is taken INSIDE the blocking task, not before it:
+    /// `std::sync::MutexGuard` is `!Send` and cannot cross the thread
+    /// boundary, so the `Arc` is what moves and the guard is what stays put.
+    ///
+    /// The closure must not read ambient scope: task-locals do not cross the
+    /// thread boundary (`crate::scope::current_scope()` is `None` on a
+    /// blocking thread), so anything scope-derived is captured on the calling
+    /// side and handed in.
+    pub(super) async fn query_blocking<T, F>(&self, f: F) -> Result<T, SessionManagerError>
+    where
+        F: FnOnce(&rusqlite::Connection) -> Result<T, SessionManagerError> + Send + 'static,
+        T: Send + 'static,
+    {
+        let conn = self.conn.clone();
+        tokio::task::spawn_blocking(move || {
+            let guard = conn
+                .lock()
+                .map_err(|e| SessionManagerError::DatabaseError(format!("Lock error: {e}")))?;
+            f(&guard)
+        })
+        .await
+        .map_err(|e| SessionManagerError::DatabaseError(format!("SQLite task failed: {e}")))?
+    }
+}
+
 pub(crate) fn map_session_metadata(
     row: &rusqlite::Row,
 ) -> Result<SessionMetadata, rusqlite::Error> {
