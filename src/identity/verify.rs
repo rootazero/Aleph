@@ -110,7 +110,7 @@ pub enum ChainFault {
 }
 
 /// The outcome of verifying one agent's chain.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct ChainReport {
     pub agent_id: String,
     /// `true` only when `faults` is empty.
@@ -400,8 +400,14 @@ pub(super) fn walk_chain(
                 anchor_seq: anchor.seq,
                 last_seq: last.seq,
             });
-        } else if last.seq == anchor.seq && anchor.hash != Some(last.hash.as_slice()) {
-            faults.push(ChainFault::AnchorMismatch { seq: last.seq });
+        } else if last.seq == anchor.seq {
+            let matches = match anchor.hash {
+                Some(h) => secret_equal_bytes(h, &last.hash),
+                None => false,
+            };
+            if !matches {
+                faults.push(ChainFault::AnchorMismatch { seq: last.seq });
+            }
         }
     }
 

@@ -109,7 +109,7 @@ impl ArtifactError {
 /// `Deserialize` is safe here — unlike [`NewRecord`](super::record::NewRecord),
 /// this document is *input to a verifier*, never to a writer: nothing that
 /// parses an envelope can turn it into a ledger row.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ArtifactSignature {
     /// Envelope format version — see `ENVELOPE_VERSION`.
     pub v: u32,

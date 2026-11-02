@@ -16,7 +16,7 @@ use serde::Serialize;
 /// Deliberately small and closed. Every variant below has a real producer —
 /// a declared-but-never-constructed variant is how an audit surface starts
 /// lying about coverage.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum LedgerAction {
     /// A non-idempotent (mutating) tool call ran to completion.
@@ -106,7 +106,7 @@ impl FromStr for LedgerAction {
 }
 
 /// How the recorded action ended.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum LedgerOutcome {
     Ok,
@@ -156,7 +156,7 @@ impl FromStr for LedgerOutcome {
 /// `signer_fp` and `at_ms` are assigned by the writer, never by the caller.
 ///
 /// Not `Deserialize` — see the module doc.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NewRecord {
     /// The acting agent. Resolved at the chokepoint from `TURN_CONTEXT`, never
     /// taken from tool arguments.
@@ -276,7 +276,7 @@ impl NewRecord {
 }
 
 /// A materialized ledger row.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct LedgerRecord {
     pub agent_id: String,
     pub seq: i64,
