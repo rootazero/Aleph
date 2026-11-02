@@ -178,9 +178,6 @@ test("disposable Gateway helper authenticates and serves actor-bound project byt
   child.stdin.write(`${JSON.stringify({ v: 1, type: "command", run: nonce, id: 21, command: "set_fixture", action: "select_a" })}\n`);
 
   assert.equal((await waitFor(message => message.type === "error" && message.code === "bad_state")).code, "bad_state");
-  child.stdin.write(`${JSON.stringify({ v: 1, type: "command", run: nonce, id: 40, command: "revoke_exact", device: "device-a" })}\n`);
-  await waitFor(message => message.type === "ack" && message.id === 40);
-  assert.equal((await fetch(assetUrl, { headers, signal: AbortSignal.timeout(5000) })).status, 404);
   socket.close();
   child.stdin.write(`${JSON.stringify({ v: 1, type: "command", run: nonce, id: 2, command: "set_fixture", action: "unbind_workspace" })}\n`);
   assert.equal((await waitFor((message) => message.type === "ack" && message.id === 2)).command, "set_fixture");
@@ -192,6 +189,9 @@ test("disposable Gateway helper authenticates and serves actor-bound project byt
   const stopped = await waitFor((message) => message.type === "stopped");
   assert.equal(stopped.listenerClosed, true);
   assert.equal(stopped.fixtureClosed, true);
+  child.stdin.write(`${JSON.stringify({ v: 1, type: "command", run: nonce, id: 40, command: "revoke_exact", device: "device-a" })}\n`);
+  assert.equal((await waitFor((message) => (message.type === "ack" || message.type === "error") && message.id === 40)).type, "ack");
+  child.stdin.end();
   if (child.exitCode === null) {
     await new Promise((resolve, reject) => {
       const timer = setTimeout(() => reject(new Error("helper_exit_timeout")), 10_000);

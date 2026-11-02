@@ -87,6 +87,15 @@ test("exact cleanup stops at the first failed proof and cannot pass", async () =
   assert.equal(result.outcome, "AMBIGUOUS");
   assert.equal(rootRemoved, false);
   assert.equal(result.cleanup.length, 4);
+  assert.equal(result.phases.at(-1).name, "cleanup");
+  assert.equal(result.phases.at(-1).outcome, "BLOCKED");
+});
+
+test("exact cleanup records its phase after all six proofs", async () => {
+  const state = PHASES.filter((name) => name !== "cleanup").reduce((current, name) => addPhase(current, makePhase(name, "PASS")), createRunState({ run, nonce, origin: "http://127.0.0.1:30123" }));
+  const result = await performExactCleanup(state, [() => true, () => true, () => true, () => true, () => true, () => true]);
+  assert.deepEqual(result.phases.at(-1), { name: "cleanup", outcome: "PASS", reason: null });
+  assert.equal(result.outcome, "PASS");
 });
 
 test("provenance is bounded to fixed value-free entries", () => {

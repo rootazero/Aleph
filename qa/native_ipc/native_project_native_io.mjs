@@ -107,32 +107,42 @@ function createHelper(binary, root, nonce, panelRoot) {
       await waitFor((message) => message.type === "stopped", 10_000);
     }
     if (child.exitCode === null && child.signalCode === null) {
-      await new Promise((resolve) => {
-        const timer = setTimeout(resolve, 10_000);
-        child.once("close", () => { clearTimeout(timer); resolve(); });
-      });
+      return {
+        stopped: stoppedMessage?.listenerClosed === true && stoppedMessage?.fixtureClosed === true,
+        listenerClosed: stoppedMessage?.listenerClosed === true,
+        fixtureClosed: stoppedMessage?.fixtureClosed === true,
+      };
     }
-    const stopped = messages.find((message) => message.type === "stopped");
     return {
-      stopped: stopped?.listenerClosed === true && stopped?.fixtureClosed === true && child.exitCode === 0,
-      listenerClosed: stopped?.listenerClosed === true,
-      fixtureClosed: stopped?.fixtureClosed === true,
+      stopped: false,
+      listenerClosed: stoppedMessage?.listenerClosed === true,
+      fixtureClosed: stoppedMessage?.fixtureClosed === true,
     };
   };
   const revokeExact = async (device) => {
     const request = send("revoke_exact", { device });
     const message = await waitFor((candidate) => (candidate.type === "ack" || candidate.type === "error") && candidate.id === request.id, 8_000);
-    return message.type === "ack" || message.code === "already_revoked";
+    const ok = message.type === "ack" || message.code === "already_revoked";
+    if (ok && !closed) {
+      child.stdin.end();
+      if (child.exitCode === null) {
+        await new Promise((resolve) => {
+          const timer = setTimeout(resolve, 10_000);
+          child.once("close", () => { clearTimeout(timer); resolve(); });
+        });
+      }
+    }
+    return ok && child.exitCode === 0;
   };
   return { child, messages, closed: () => closed, waitFor, send, waitAck, revokeExact, stop };
 }
 
-async function waitReceipt(helper, cursor, predicate, ledger) {
+async function waitReceipt(helper, cursor, predicate, ledger, deadline) {
   let after = cursor;
-  const deadline = Date.now() + RECEIPT_TIMEOUT_MS;
-  while (Date.now() < deadline) {
+  const receiptDeadline = Math.min(Date.now() + RECEIPT_TIMEOUT_MS, deadline);
+  while (Date.now() < receiptDeadline) {
     const request = helper.send("receipt_since", { after });
-    const message = await helper.waitFor((candidate) => candidate.type === "receipt" || (candidate.type === "error" && candidate.id === request.id), 5_000);
+    const message = await helper.waitFor((candidate) => (candidate.type === "receipt" && candidate.seq > after) || (candidate.type === "error" && candidate.id === request.id), Math.max(1, Math.min(5_000, receiptDeadline - Date.now())));
     if (message.type === "receipt") {
       recordHelperMessage(ledger, message);
       after = message.seq;
@@ -159,17 +169,27 @@ function paths(repoRoot) {
   };
 }
 
-function assertArtifacts(repoRoot, p) {
+function assertArtifacts(p) {
   for (const path of Object.values(p)) assert.equal(existsSync(path), true, "native_artifact_missing");
   assert.equal(existsSync(join(p.panel, "index.html")), true, "fresh_panel_missing");
   assert.equal(existsSync(p.panelEvidence), true, "fresh_panel_provenance_missing");
   assert.match(readFileSync(join(p.panel, "index.html"), "utf8"), /aleph_panel\.js/);
+  const provenance = JSON.parse(readFileSync(p.panelEvidence, "utf8"));
+  const expected = provenance.artifact_sha256;
+  if (expected === null || typeof expected !== "object") throw new Error("artifact_hash_manifest_missing");
+  for (const [name, path] of [["shell", p.shell], ["helper", p.helper], ["reaper", p.reaper]]) {
+    if (typeof expected[name] !== "string" || !/^[0-9a-f]{64}$/.test(expected[name])) throw new Error("artifact_hash_manifest_missing");
+    if (sha256File(path) !== expected[name]) throw new Error("artifact_hash_mismatch");
+  }
+  if (typeof provenance.wasm_sha256 !== "string" || sha256File(join(p.panel, "aleph_panel_bg.wasm")) !== provenance.wasm_sha256) {
+    throw new Error("wasm_hash_mismatch");
+  }
 }
 
 export async function runNativeProjectNative({ repoRoot = process.cwd(), windowMs = WINDOW_MS } = {}) {
   if (!Number.isInteger(windowMs) || windowMs < 1_000 || windowMs > WINDOW_MS) return { outcome: "INVALID", reason: "window_budget" };
   const p = paths(repoRoot);
-  assertArtifacts(repoRoot, p);
+  assertArtifacts(p);
   const nonce = randomBytes(32).toString("hex");
   const run = createHash("sha256").update(nonce).digest("hex");
   const ledger = createEvidenceLedger({ run, nonce, origin: "<DISPOSABLE_ORIGIN>" });
@@ -189,6 +209,16 @@ export async function runNativeProjectNative({ repoRoot = process.cwd(), windowM
   let failure = null;
   let result = null;
   const started = Date.now();
+  const deadline = started + windowMs;
+  const assertWithinWindow = () => {
+    if (Date.now() >= deadline) throw new Error("window_budget_exceeded");
+  };
+  const monitorCommand = async (...args) => {
+    assertWithinWindow();
+    const response = await monitorConnection.command(...args);
+    assertWithinWindow();
+    return response;
+  };
   const phase = (name, outcome, reason = null) => { state = mark(state, name, outcome, reason); };
   try {
     root = ownedRoot(nonce);
@@ -223,73 +253,73 @@ export async function runNativeProjectNative({ repoRoot = process.cwd(), windowM
     trace = spawned.trace;
     monitorConnection = await monitor.accept(MONITOR_TIMEOUT_MS);
     if (!monitorConnection?.authenticated) throw new Error("monitor_auth_failed");
-    const initial = await monitorConnection.command("inspect", {}, 5_000);
+    const initial = await monitorCommand("inspect", {}, 5_000);
     if (!initial?.ack) throw new Error("initial_dom_inspect_failed");
     if (initial.dom?.tokenWall !== true && initial.dom?.tokenInput !== true) {
       if (initial.dom?.pairDesktop === true) {
-        const revealBrowser = await monitorConnection.command("reveal_browser", {}, 15_000);
+        const revealBrowser = await monitorCommand("reveal_browser", {}, 15_000);
         if (!revealBrowser?.ack) throw new Error("browser_reveal_failed");
-        const askPair = await monitorConnection.command("ask_pair", {}, 15_000);
+        const askPair = await monitorCommand("ask_pair", {}, 15_000);
         if (!askPair?.ack) throw new Error("pairing_wall_failed");
       } else {
         throw new Error("pairing_surface_unavailable");
       }
     }
-    const submit = await monitorConnection.command("submit_ticket", { ticket: pairing.ticket }, 20_000);
+    const submit = await monitorCommand("submit_ticket", { ticket: pairing.ticket }, 20_000);
     if (!submit?.ack) throw new Error("ticket_submit_failed");
     const save = await trace.wait("panel_credential_save", { timeoutMs: 30_000 });
     if (!save) throw new Error("native_save_missing");
     recordNativeTrace(ledger, save, { auth: nonce, pid: shellRecord.pid });
     const confirm = helper.send("confirm_pairing", { device: "device-a" });
     await helper.waitAck(confirm.id);
-    const connectReceipt = await waitReceipt(helper, cursor, (message) => message.operation === "connect", ledger);
+    const connectReceipt = await waitReceipt(helper, cursor, (message) => message.operation === "connect", ledger, deadline);
     cursor = connectReceipt.seq;
     phase("protected_pairing", "PASS");
 
-    const reload = await monitorConnection.command("reload", {}, 15_000);
+    const reload = await monitorCommand("reload", {}, 15_000);
     if (!reload?.ack) throw new Error("reload_command_failed");
     monitorConnection = await monitor.accept(MONITOR_TIMEOUT_MS);
     if (!monitorConnection?.authenticated) throw new Error("reload_monitor_failed");
     const reloadLoad = await trace.wait("panel_credential_load", { timeoutMs: 30_000 });
     if (!reloadLoad || reloadLoad.credentialPresent !== true) throw new Error("protected_reload_missing");
     recordNativeTrace(ledger, reloadLoad, { auth: nonce, pid: shellRecord.pid });
-    const reloadReceipt = await waitReceipt(helper, cursor, (message) => message.operation === "connect" && message.result === "authorized", ledger);
+    const reloadReceipt = await waitReceipt(helper, cursor, (message) => message.operation === "connect" && message.result === "authorized", ledger, deadline);
     cursor = reloadReceipt.seq;
     phase("protected_reload", "PASS");
 
-    const reveal = await monitorConnection.command("reveal_projects", {}, 15_000);
+    const reveal = await monitorCommand("reveal_projects", {}, 15_000);
     if (!reveal?.ack) throw new Error("projects_route_failed");
-    const globalReceipt = await waitReceipt(helper, cursor, (message) => message.operation === "discovery" && message.project === "global", ledger);
+    const globalReceipt = await waitReceipt(helper, cursor, (message) => message.operation === "discovery" && message.project === "global", ledger, deadline);
     cursor = globalReceipt.seq;
     phase("global_discovery", "PASS");
 
-    const selectA = await monitorConnection.command("select_project_a", {}, 15_000);
+    const selectA = await monitorCommand("select_project_a", {}, 15_000);
     if (!selectA?.ack) throw new Error("project_a_control_failed");
-    const selectAReceipt = await waitReceipt(helper, cursor, (message) => message.operation === "select" && message.project === "project-a", ledger);
+    const selectAReceipt = await waitReceipt(helper, cursor, (message) => message.operation === "select" && message.project === "project-a", ledger, deadline);
     cursor = selectAReceipt.seq;
-    const discoveryAReceipt = await waitReceipt(helper, cursor, (message) => message.operation === "discovery" && message.project === "project-a", ledger);
+    const discoveryAReceipt = await waitReceipt(helper, cursor, (message) => message.operation === "discovery" && message.project === "project-a", ledger, deadline);
     cursor = discoveryAReceipt.seq;
-    const assetAReceipt = await waitReceipt(helper, cursor, (message) => message.operation === "asset" && message.project === "project-a" && message.result === "asset_ok", ledger);
+    const assetAReceipt = await waitReceipt(helper, cursor, (message) => message.operation === "asset" && message.project === "project-a" && message.result === "asset_ok", ledger, deadline);
     cursor = assetAReceipt.seq;
     phase("project_a", "PASS");
 
-    const selectB = await monitorConnection.command("select_project_b", {}, 15_000);
+    const selectB = await monitorCommand("select_project_b", {}, 15_000);
     if (!selectB?.ack) throw new Error("project_b_control_failed");
-    const selectBReceipt = await waitReceipt(helper, cursor, (message) => message.operation === "select" && message.project === "project-b", ledger);
+    const selectBReceipt = await waitReceipt(helper, cursor, (message) => message.operation === "select" && message.project === "project-b", ledger, deadline);
     cursor = selectBReceipt.seq;
-    const discoveryBReceipt = await waitReceipt(helper, cursor, (message) => message.operation === "discovery" && message.project === "project-b", ledger);
+    const discoveryBReceipt = await waitReceipt(helper, cursor, (message) => message.operation === "discovery" && message.project === "project-b", ledger, deadline);
     cursor = discoveryBReceipt.seq;
     phase("project_b_same_revision", "PASS");
 
     const hold = helper.send("hold_response", { gate: "asset_a" });
     await helper.waitAck(hold.id);
-    const delayedSelectA = await monitorConnection.command("select_project_a", {}, 15_000);
+    const delayedSelectA = await monitorCommand("select_project_a", {}, 15_000);
     if (!delayedSelectA?.ack) throw new Error("delayed_project_a_control_failed");
-    const delayedReceipt = await waitReceipt(helper, cursor, (message) => message.operation === "asset" && message.project === "project-a" && message.result === "asset_ok", ledger);
+    const delayedReceipt = await waitReceipt(helper, cursor, (message) => message.operation === "asset" && message.project === "project-a" && message.result === "asset_ok", ledger, deadline);
     cursor = delayedReceipt.seq;
-    const delayedSelectB = await monitorConnection.command("select_project_b", {}, 15_000);
+    const delayedSelectB = await monitorCommand("select_project_b", {}, 15_000);
     if (!delayedSelectB?.ack) throw new Error("delayed_project_b_control_failed");
-    await waitReceipt(helper, cursor, (message) => message.operation === "select" && message.project === "project-b", ledger);
+    await waitReceipt(helper, cursor, (message) => message.operation === "select" && message.project === "project-b", ledger, deadline);
     const release = helper.send("release_response", { gate: "asset_a" });
     await helper.waitAck(release.id);
     phase("late_a_fenced", "BLOCKED", "dom_monitor_has_no_selected_project_identity");

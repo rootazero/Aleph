@@ -84,6 +84,14 @@ export async function performExactCleanup(state, operations) {
     next = recordCleanup(next, { name: CLEANUP_STEPS[index], ok });
     if (!ok) break;
   }
+  const cleanupComplete = next.cleanup.length === CLEANUP_STEPS.length && next.cleanup.every((step) => step.ok === true);
+  next = {
+    ...next,
+    phases: [
+      ...next.phases.filter((phase) => phase.name !== "cleanup"),
+      { name: "cleanup", outcome: cleanupComplete ? "PASS" : "BLOCKED", reason: cleanupComplete ? null : "cleanup_incomplete" },
+    ],
+  };
   return finishRun(next);
 }
 

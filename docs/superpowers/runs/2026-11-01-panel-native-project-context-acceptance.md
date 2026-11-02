@@ -72,11 +72,12 @@ Receipt corrections also replace the unrelated presence/health/config version wi
 
 ## Verification / 验证
 
-- `node --test qa/native_ipc/*_test.mjs`: **37 passed, 0 failed, 0 skipped**.
+- `node --test qa/native_ipc/*_test.mjs`: **38 passed, 0 failed, 0 skipped**.
 - `node qa/native_ipc/panel_driver.mjs --self-test`: **37/37**, JS VM only / 仅 JS VM。
 - `node qa/native_ipc/run-real.mjs --self-test`: **15/15 + 45/45**, pure fakes/owned loopback only / 仅纯 fake 与自有 loopback。
-- Guarded `CARGO_BUILD_JOBS=1 cargo build --features native-qa --bin aleph-panel-native-qa-gateway`: **passed**; final incremental build 12.74s. Existing `src/extension/projection.rs` `panel_snapshot` dead-code warning remains.
+- Guarded `CARGO_BUILD_JOBS=1 cargo build --features native-qa --bin aleph-panel-native-qa-gateway`: **passed**; final incremental build 16.02s. Existing `src/extension/projection.rs` `panel_snapshot` dead-code warning remains.
 - Guarded `CARGO_BUILD_JOBS=1 cargo check --bin aleph-server`: **passed**; the default build keeps the observer surface compiled out. Guarded `CARGO_BUILD_JOBS=1 cargo check --features native-qa --bin aleph-panel-native-qa-gateway`: **passed**; only the existing `src/extension/projection.rs` `panel_snapshot` dead-code warning remains.
+- Guarded `CARGO_BUILD_JOBS=1 cargo build -p aleph-client --example qa_credential_reaper --features qa-service`: **passed**; the exact reaper used for cleanup was feature-enabled. / 用启用 `qa-service` 的 exact reaper 完成了清理验证。
 - Guarded `CARGO_BUILD_JOBS=1 cargo check -p aleph-panel --lib --no-default-features --features panel-modular`: **passed**; final check 1m14s. Existing `PanelTabDescriptor` unused-import warning remains. This is a native-target library check, not a fresh WASM build.
 - Every Cargo invocation was preceded by `python qa/browser_live/check_memory.py` from the worktree root; Cargo ran serially in the same dev profile/target. / 每次 Cargo 前均运行 memory gate，固定单 job、同 profile/target。
 - Earlier Panel checks timed out during compilation; an intermediate `E0382` from the added `aria-pressed` closure was fixed by removing that unnecessary attribute. Final compilation passed. / 早先超时和中途编译错误均披露，不冒充首次全绿。
@@ -90,6 +91,8 @@ Receipt corrections also replace the unrelated presence/health/config version wi
 Ignored local evidence / ignored 本地证据: `.superpowers/sdd/2026-11-01-panel-native-project-context-acceptance/`. It contains compiler logs/status and a redacted preflight report; it does not contain native trace, protected persistence or cleanup proof. / 其中编译日志与脱敏预检不能升级为 native 证据。
 
 ## Independent review / 独立审查
+
+The latest completed read-only whole-branch review found six actionable issues: cleanup lifecycle ordering, stale receipt cursor handling, tautological artifact hashes, an unenforced window deadline, a missing cleanup phase, and a connect receipt whose authorization flag was hard-coded. Those issues were corrected after the review: the helper now closes its Gateway listener while retaining a controlled stdin until exact device revoke and EOF; receipt waits require `seq > cursor`; `build.json` must contain and match shell/helper/reaper/WASM digests; the runner checks one shared 120-second deadline; cleanup rewrites the `cleanup` phase from the actual six-step result; and connect observation derives `authorized` from the real response. Focused validation was rerun. This review was substantive and found issues; it is not a clean review.
 
 The fresh read-only whole-branch reviewer `del_mvxlbhy5_sr3x` returned three findings and ended with **SIGTERM**. This is a substantive written review, not a clean-exit review. It ran no tests. The earlier focused reviewer `del_mvxkn3my_zrsk` also ended SIGTERM and produced no usable findings. A later fresh reviewer `del_mvxz7fqg_6lk4` also ended **SIGTERM** before producing findings; it must not be described as a clean review.
 

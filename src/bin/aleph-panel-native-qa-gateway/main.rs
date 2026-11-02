@@ -402,7 +402,14 @@ async fn run() -> anyhow::Result<()> {
         })
         .await
     });
-    let control = control_loop(run.clone(), fixture, gateway_state, server, shutdown_tx).await;
+    let control = control_loop(
+        run.clone(),
+        fixture,
+        gateway_state,
+        Some(server),
+        Some(shutdown_tx),
+    )
+    .await;
     control
 }
 
@@ -410,8 +417,8 @@ async fn control_loop(
     run: String,
     fixture: Arc<Mutex<Fixture>>,
     gateway_state: Arc<Mutex<GatewayState>>,
-    server: tokio::task::JoinHandle<Result<(), std::io::Error>>,
-    shutdown: oneshot::Sender<()>,
+    mut server: Option<tokio::task::JoinHandle<Result<(), std::io::Error>>>,
+    mut shutdown: Option<oneshot::Sender<()>>,
 ) -> anyhow::Result<()> {
     let mut input = BufReader::new(tokio::io::stdin()).lines();
     let mut output = tokio::io::BufWriter::new(tokio::io::stdout());
@@ -744,8 +751,12 @@ async fn control_loop(
             continue;
         }
         if command.command == "shutdown" {
-            let _ = shutdown.send(());
-            server.await??;
+            if let Some(shutdown) = shutdown.take() {
+                let _ = shutdown.send(());
+            }
+            if let Some(server) = server.take() {
+                server.await??;
+            }
             write_json(
                 &mut output,
                 &Stopped {
@@ -757,7 +768,7 @@ async fn control_loop(
                 },
             )
             .await?;
-            return Ok(());
+            continue;
         }
         write_json(
             &mut output,
@@ -770,8 +781,12 @@ async fn control_loop(
         )
         .await?;
     }
-    let _ = shutdown.send(());
-    server.await??;
+    if let Some(shutdown) = shutdown.take() {
+        let _ = shutdown.send(());
+    }
+    if let Some(server) = server.take() {
+        server.await??;
+    }
     Ok(())
 }
 
