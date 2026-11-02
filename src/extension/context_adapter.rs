@@ -605,6 +605,14 @@ mod tests {
         write_memory_probe_guest(&manifest.entry_path().unwrap(), 32 * 1024 * 1024);
         let mut ordinary = manifest.clone();
         ordinary.aleph_extensions = None;
+        // Every plugin now carries the mounted VM limits, so the control has
+        // to mount a budget that actually admits the 32 MiB allocation.
+        ordinary.wasm_resource_limits = Some(WasmResourceLimits {
+            memory_mb: 64,
+            fuel: 1_000_000_000,
+            timeout_secs: 2,
+            ..Default::default()
+        });
         let mut runtime = WasmRuntime::new();
         runtime.load_plugin(&ordinary).unwrap();
         assert_eq!(

@@ -322,21 +322,20 @@ impl WasmRuntime {
         // reloaded).
         let mut extism_manifest =
             ExtismManifest::new([Wasm::data(wasm_bytes)]).with_timeout(call_timeout);
-        if has_contexts {
-            // WASM pages are 64 KiB; memory_mb is measured in MiB. Apply the
-            // existing mounted limits to the VM, not just the host kernel.
-            let pages = memory_pages.ok_or_else(|| {
-                ExtensionError::Runtime(
-                    "context WASM memory limit must be positive and fit in pages".into(),
-                )
-            })?;
-            if fuel == 0 {
-                return Err(ExtensionError::Runtime(
-                    "context WASM fuel limit must be positive".into(),
-                ));
-            }
-            extism_manifest = extism_manifest.with_memory_max(pages);
+        // WASM pages are 64 KiB; memory_mb is measured in MiB. Apply the
+        // mounted limits to the VM, not just the host kernel — for every
+        // plugin, context guests or not: an ordinary marketplace plugin is
+        // untrusted code too and must not be able to allocate the default
+        // 4 GiB or spin without fuel.
+        let pages = memory_pages.ok_or_else(|| {
+            ExtensionError::Runtime("WASM memory limit must be positive and fit in pages".into())
+        })?;
+        if fuel == 0 {
+            return Err(ExtensionError::Runtime(
+                "WASM fuel limit must be positive".into(),
+            ));
         }
+        extism_manifest = extism_manifest.with_memory_max(pages);
 
         // The operator's configuration, as Extism config keys. Scalars are
         // passed in their natural spelling and structured values as JSON, so
@@ -355,6 +354,7 @@ impl WasmRuntime {
 
         let mut builder = PluginBuilder::new(extism_manifest)
             .with_wasi(!has_contexts)
+            .with_fuel_limit(fuel)
             .with_function(
                 "log",
                 [PTR, PTR],
@@ -396,7 +396,7 @@ impl WasmRuntime {
                 memdump: None,
                 ..Default::default()
             };
-            builder = builder.with_fuel_limit(fuel).with_debug_options(debug);
+            builder = builder.with_debug_options(debug);
             // Extism installs these independently of our `log` import. Its
             // linker explicitly permits namespaced host functions to shadow
             // builtins, so raw context cannot escape through PDK logging.
@@ -707,5 +707,28 @@ pub(crate) mod tests {
     fn test_wasm_runtime_unload_returns_false() {
         let mut runtime = WasmRuntime::new();
         assert!(!runtime.unload_plugin("any-plugin"));
+    }
+
+    #[test]
+    fn ordinary_plugin_vm_enforces_the_mounted_memory_limit() {
+        use self::guest_fixture::{
+            call_guest_raw, manifest_with_guest, write_memory_probe_guest, PAYLOAD_A,
+        };
+
+        let directory = tempfile::tempdir().unwrap();
+        let mut manifest = manifest_with_guest(directory.path(), "ordinary", PAYLOAD_A);
+        manifest.wasm_resource_limits = Some(WasmResourceLimits {
+            memory_mb: 10,
+            fuel: 1_000_000_000,
+            timeout_secs: 2,
+            ..Default::default()
+        });
+        write_memory_probe_guest(&manifest.entry_path().unwrap(), 32 * 1024 * 1024);
+        let mut runtime = WasmRuntime::new();
+        runtime.load_plugin(&manifest).unwrap();
+        assert!(
+            call_guest_raw(&runtime, &manifest.id).is_err(),
+            "ordinary guest allocated 32 MiB despite its mounted 10 MiB VM limit"
+        );
     }
 }
