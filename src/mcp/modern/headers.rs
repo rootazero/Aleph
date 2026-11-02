@@ -337,7 +337,7 @@ pub fn extract_param_headers(
             Value::String(s) => s.clone(),
             Value::Bool(b) => b.to_string(),
             Value::Number(n) => match n.as_i64() {
-                Some(i) if i.abs() <= JS_SAFE_INTEGER => i.to_string(),
+                Some(i) if (-JS_SAFE_INTEGER..=JS_SAFE_INTEGER).contains(&i) => i.to_string(),
                 _ => {
                     tracing::warn!(
                         header = %annotation.suffix,
