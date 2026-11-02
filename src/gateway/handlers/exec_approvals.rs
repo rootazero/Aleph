@@ -147,8 +147,15 @@ async fn approval_addressable_by_caller(
         return false;
     };
     if let Some(originator) = originator_narrows_within_room(record, &meta) {
+        // BOTH facts, not either one. The originator is who the card belongs
+        // to; the caller's current visibility of the session is whether that
+        // person may still act in this room at all. Asking for only the
+        // first let a REMOVED member's card fall through to the
+        // roster-wide branch below — i.e. removing the originator WIDENED
+        // the card to the whole room, the opposite of what removal means.
         return crate::gateway::caller_identity::current_caller_user().as_deref()
-            == Some(originator);
+            == Some(originator)
+            && visibility::session_visible(&meta);
     }
     visibility::session_visible(&meta)
 }
@@ -172,29 +179,53 @@ async fn approval_addressable_by_caller(
 /// case where a paired channel member resolves their own fallback card via
 /// plain session ownership.
 ///
-/// So the check is scope-gated AND resolution-gated: `Some(originator)` only
+/// So the check is scope-gated AND namespace-gated: `Some(originator)` only
 /// when the session is a Project (room) — the ONE case `session_visible` is
 /// roster-wide rather than an exact owner match, which is precisely the case
 /// D3 ("route to the speaker, not the whole room") needs narrowed — AND the
-/// originator resolves against THAT room's roster, via the same
-/// `projects::roster::is_member` predicate `owner_and_scope_visible_to`
-/// already uses for this scope kind. A raw channel-platform id is never on
-/// any room's roster, so the fallback case above is untouched: `None` here
-/// keeps exactly today's `session_visible` behaviour for it.
+/// originator is an Aleph principal rather than a raw channel-platform id.
+///
+/// The namespace is read from the ID ITSELF, never from whether that id
+/// happens to be on the room's roster right now. Roster membership is
+/// mutable state, and reading it here made the card's audience depend on it:
+/// removing the originator from the room flipped the narrowing OFF and the
+/// card widened to the whole room — removal handed the card to everyone else
+/// instead of taking it away. The id's namespace does not change when a
+/// person is removed from a room.
+///
+/// A raw channel-platform id is never an Aleph principal, so the fallback
+/// case above is untouched: `None` here keeps exactly today's
+/// `session_visible` behaviour for it.
 fn originator_narrows_within_room<'a>(
     record: &'a crate::exec::manager::ExecApprovalRecord,
     meta: &crate::gateway::session_store::types::SessionMetadata,
 ) -> Option<&'a str> {
     let originator = record.originator_user_id.as_deref()?;
-    let project_id = match meta
+    let scope = meta
         .scope_id
         .as_deref()
-        .and_then(crate::scope::ScopeId::parse)
-    {
-        Some(crate::scope::ScopeId::Project(p)) => p,
-        _ => return None,
-    };
-    crate::projects::roster::is_member(&project_id, originator).then_some(originator)
+        .and_then(crate::scope::ScopeId::parse)?;
+    if !matches!(scope, crate::scope::ScopeId::Project(_)) {
+        return None;
+    }
+    if !is_aleph_principal_id(originator) {
+        return None;
+    }
+    Some(originator)
+}
+
+/// Is `id` an Aleph principal id (`u-<suffix>`) rather than a raw
+/// channel-platform sender id?
+///
+/// The two producers of `originator_user_id` write two different id
+/// namespaces into the same field, and only one of them is an Aleph user:
+/// `teams::broadcast` stamps the room speaker's `u-*` id, while
+/// `inbound_router::executor` stamps the raw platform sender id. The Aleph
+/// user namespace is the `u-` prefix (users are minted as `u-<uuid>`), and
+/// `current_caller_user()` is always an Aleph `u-*` id — so an id outside
+/// that namespace can never be the caller this gate compares against.
+fn is_aleph_principal_id(id: &str) -> bool {
+    id.strip_prefix("u-").is_some_and(|suffix| !suffix.is_empty())
 }
 
 /// Handle exec.approval.resolve
@@ -731,6 +762,54 @@ mod tests {
         assert!(
             !response.is_success(),
             "a different room member must not resolve bob's card"
+        );
+        drop(guard);
+    }
+
+    /// Removing the originator from the room must not hand their card to the
+    /// rest of the room. The narrowing used to be decided by whether the
+    /// originator was still ON the roster, so removing them flipped the card
+    /// from "only the speaker" to "everyone in the room" — the opposite of
+    /// what removal means.
+    #[tokio::test]
+    async fn a_removed_originators_card_does_not_widen_to_the_room() {
+        let manager = temp_manager();
+        let (_tmp, sess) = sessions();
+        let guard = crate::projects::roster::TEST_GUARD
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        crate::projects::roster::publish(crate::projects::roster::RosterSnapshot::from_pairs([
+            ("p-room".to_string(), "u-alice".to_string()),
+            ("p-room".to_string(), "u-bob".to_string()),
+            ("p-room".to_string(), "u-carol".to_string()),
+        ]));
+        create_project_session(&sess, "agent:main:main", "u-alice", "p-room").await;
+        let id = park_approval_from(&manager, "agent:main:main", "u-bob");
+
+        // The room owner removes bob from the roster.
+        crate::projects::roster::publish(crate::projects::roster::RosterSnapshot::from_pairs([
+            ("p-room".to_string(), "u-alice".to_string()),
+            ("p-room".to_string(), "u-carol".to_string()),
+        ]));
+
+        let carol = as_member(
+            "u-carol",
+            handle_approval_resolve(resolve_request(&id), manager.clone(), sess.clone()),
+        )
+        .await;
+        assert!(
+            !carol.is_success(),
+            "removing the originator must not widen their card to the room"
+        );
+
+        let bob = as_member(
+            "u-bob",
+            handle_approval_resolve(resolve_request(&id), manager, sess),
+        )
+        .await;
+        assert!(
+            !bob.is_success(),
+            "a removed member must not keep a live card in the room"
         );
         drop(guard);
     }
