@@ -106,7 +106,7 @@ use hooks::{HookExecutor, HookInput, HookRegistry, ShellHookConsent};
 use manifest::adapter::AdapterRegistry;
 #[allow(unused_imports)]
 use serde::{Deserialize, Serialize}; // for OwnerTrustPolicyConfig
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Weak;
 use tokio::sync::{Mutex, RwLock};
@@ -209,7 +209,15 @@ pub struct ExtensionManager {
     /// Skill System v2 (independent bounded context)
     skill_system: crate::skill::SkillSystem,
 
-    /// Active plugin tools keyed by short tool name.
+    /// Active plugin tools keyed by their namespaced key
+    /// (`plugin_id:tool_name`).
+    ///
+    /// A short tool name is NOT unique across plugins, so every
+    /// registration is kept: dropping the loser of that contest here took
+    /// the tool away from the project that owns it, before any visibility
+    /// question was asked. The short-name winner is decided per view — see
+    /// [`Self::active_plugin_tools_snapshot`] (no project to scope by) and
+    /// [`Self::active_plugin_tools_visible_to`] (visibility first).
     ///
     /// This is a sync snapshot so runtime systems like the agent loop can
     /// cheaply read tool metadata and revision state without awaiting locks.
@@ -1250,7 +1258,10 @@ impl projection::Views {
             plugin_tools.sort_by(|a, b| a.name.cmp(&b.name));
 
             for tool in plugin_tools {
-                active_tools.entry(tool.name.clone()).or_insert(tool);
+                // Keyed by the namespaced key: two plugins may expose the
+                // same short name, and both registrations have to survive
+                // until visibility has decided which one a session sees.
+                active_tools.insert(namespaced_component_key(&tool.plugin_id, &tool.name), tool);
             }
         }
 
@@ -1336,7 +1347,12 @@ impl ExtensionManager {
             .revision()
     }
 
-    /// Snapshot of active plugin tools keyed by short tool name.
+    /// Snapshot of active plugin tools, one entry per short tool name.
+    ///
+    /// This view has no project to scope by, so the short-name contest is
+    /// settled globally: the lexicographically first plugin id wins, the
+    /// same winner this view has always published. The index keeps every
+    /// registration — see [`Self::active_plugin_tools`].
     pub fn active_plugin_tools_snapshot(&self) -> Vec<ToolRegistration> {
         let tools = self
             .active_plugin_tools
@@ -1344,6 +1360,8 @@ impl ExtensionManager {
             .unwrap_or_else(|e| e.into_inner());
         let mut snapshot: Vec<ToolRegistration> = tools.values().cloned().collect();
         snapshot.sort_by(|a, b| a.name.cmp(&b.name).then(a.plugin_id.cmp(&b.plugin_id)));
+        let mut seen = HashSet::new();
+        snapshot.retain(|tool| seen.insert(tool.name.clone()));
         snapshot
     }
 
@@ -1355,10 +1373,23 @@ impl ExtensionManager {
         &self,
         ctx: &visibility::VisibilityCtx,
     ) -> Vec<ToolRegistration> {
-        self.active_plugin_tools_snapshot()
-            .into_iter()
+        let tools = self
+            .active_plugin_tools
+            .read()
+            .unwrap_or_else(|e| e.into_inner());
+        // Visibility FIRST. A tool this session may see is not dropped
+        // because a plugin the session cannot see claimed the same short
+        // name; the short-name contest is settled among the visible
+        // plugins only.
+        let mut visible: Vec<ToolRegistration> = tools
+            .values()
             .filter(|tool| self.plugin_visible(&tool.plugin_id, ctx))
-            .collect()
+            .cloned()
+            .collect();
+        visible.sort_by(|a, b| a.name.cmp(&b.name).then(a.plugin_id.cmp(&b.plugin_id)));
+        let mut seen = HashSet::new();
+        visible.retain(|tool| seen.insert(tool.name.clone()));
+        visible
     }
 
     /// The visibility key of a registered plugin, any status. `None` = unknown id.
@@ -1383,20 +1414,28 @@ impl ExtensionManager {
     }
 
     /// Resolve an active plugin tool by short name or `plugin_id:name`.
+    ///
+    /// An explicit `plugin_id:name` names its owner and resolves to that
+    /// registration directly. A bare short name is ambiguous across
+    /// plugins: the winner is the one
+    /// [`Self::active_plugin_tools_snapshot`] publishes — the
+    /// lexicographically first plugin id.
     pub fn resolve_active_plugin_tool(&self, name: &str) -> Option<ToolRegistration> {
         let tools = self
             .active_plugin_tools
             .read()
             .unwrap_or_else(|e| e.into_inner());
 
-        if let Some(tool) = tools.get(name) {
-            return Some(tool.clone());
+        if let Some((plugin_id, short_name)) = name.split_once(':') {
+            return tools
+                .get(&namespaced_component_key(plugin_id, short_name))
+                .cloned();
         }
 
-        let (plugin_id, short_name) = name.split_once(':')?;
         tools
-            .get(short_name)
-            .filter(|tool| tool.plugin_id == plugin_id)
+            .values()
+            .filter(|tool| tool.name == name)
+            .min_by(|a, b| a.plugin_id.cmp(&b.plugin_id))
             .cloned()
     }
 
@@ -2404,6 +2443,85 @@ mod tests {
         assert_eq!(names(&nowhere), vec!["p2_global_tool"]);
         // The unfiltered snapshot still holds both: the filter is per request.
         assert_eq!(manager.active_plugin_tools_snapshot().len(), 2);
+    }
+
+    /// A short tool name is not unique across plugins. The tool index kept
+    /// only the global winner of that contest, so a project plugin's tool
+    /// was deleted before the session in that project ever asked for it.
+    #[tokio::test]
+    async fn a_project_tool_survives_another_plugin_claiming_the_same_short_name() {
+        use crate::extension::visibility::{canonical_root, ScopeKey, VisibilityCtx};
+        let _home = hermetic_home();
+        let proj = tempfile::tempdir().unwrap();
+        let manager = ExtensionManager::with_defaults().await.unwrap();
+        {
+            let mut registry = manager.get_plugin_registry_mut().await;
+            let mut project_plugin = PluginRecord::new(
+                "proj-alpha".into(),
+                "Project Alpha".into(),
+                PluginKind::Wasm,
+                PluginOrigin::Workspace,
+            );
+            project_plugin.scope_key = ScopeKey::project(proj.path());
+            registry.register_plugin(project_plugin);
+            registry.register_tool(ToolRegistration {
+                name: "shared_tool".into(),
+                description: "the project's own tool".into(),
+                parameters: serde_json::json!({"type": "object"}),
+                handler: "tool_proj_alpha".into(),
+                plugin_id: "proj-alpha".into(),
+            });
+            let mut global_plugin = PluginRecord::new(
+                "global-alpha".into(),
+                "Global Alpha".into(),
+                PluginKind::Wasm,
+                PluginOrigin::Global,
+            );
+            global_plugin.scope_key = ScopeKey::Global;
+            registry.register_plugin(global_plugin);
+            registry.register_tool(ToolRegistration {
+                name: "shared_tool".into(),
+                description: "the global tool".into(),
+                parameters: serde_json::json!({"type": "object"}),
+                handler: "tool_global_alpha".into(),
+                plugin_id: "global-alpha".into(),
+            });
+        }
+        manager.sync_runtime_snapshots().await;
+
+        let owners = |ctx: &VisibilityCtx| -> Vec<String> {
+            manager
+                .active_plugin_tools_visible_to(ctx)
+                .into_iter()
+                .filter(|tool| tool.name == "shared_tool")
+                .map(|tool| tool.plugin_id)
+                .collect()
+        };
+        let in_p = VisibilityCtx {
+            project_root: Some(canonical_root(proj.path())),
+        };
+        let nowhere = VisibilityCtx { project_root: None };
+
+        assert_eq!(
+            owners(&in_p),
+            vec!["proj-alpha".to_string()],
+            "the project plugin's tool must not be deleted by the global plugin claiming the same short name"
+        );
+        assert_eq!(owners(&nowhere), vec!["global-alpha".to_string()]);
+        assert_eq!(
+            manager
+                .resolve_active_plugin_tool("proj-alpha:shared_tool")
+                .map(|tool| tool.plugin_id),
+            Some("proj-alpha".to_string()),
+            "an explicit namespace resolves to its own registration"
+        );
+        assert_eq!(
+            manager
+                .resolve_active_plugin_tool("shared_tool")
+                .map(|tool| tool.plugin_id),
+            Some("global-alpha".to_string()),
+            "a bare short name resolves to the global winner"
+        );
     }
 
     /// Face ⑤: the owner decoded from a plugin server id is a key the
