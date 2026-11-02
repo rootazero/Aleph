@@ -199,9 +199,12 @@ impl MutationGate {
         let sets: Vec<&HashSet<(String, String)>> = self.merge_history.iter().collect();
 
         for window in sets.windows(MERGE_CYCLE_THRESHOLD) {
-            let repeated = window[0]
+            let Some((first, rest)) = window.split_first() else {
+                continue;
+            };
+            let repeated = first
                 .iter()
-                .find(|pair| window[1..].iter().all(|set| set.contains(*pair)));
+                .find(|pair| rest.iter().all(|set| set.contains(*pair)));
             if let Some(pair) = repeated {
                 return Some(format!(
                     "merge cycle: ({}, {}) repeated {MERGE_CYCLE_THRESHOLD} consecutive cycles",
@@ -226,9 +229,13 @@ impl MutationGate {
         }
         let cycles: Vec<&HashMap<String, String>> = self.synthesis_history.iter().collect();
 
-        for (path, digest) in cycles[0] {
+        let Some((first, rest)) = cycles.split_first() else {
+            return None;
+        };
+
+        for (path, digest) in *first {
             let mut previous = digest;
-            let flipped = cycles[1..].iter().all(|cycle| {
+            let flipped = rest.iter().all(|cycle| {
                 cycle.get(path).is_some_and(|d| {
                     let changed = d != previous;
                     previous = d;

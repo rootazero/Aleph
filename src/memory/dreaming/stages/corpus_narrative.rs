@@ -41,14 +41,13 @@ impl DreamStage for CorpusNarrativeStage {
         let cur_purpose = purpose_gen.read().await;
 
         // Recent-note previews (most-recently-updated first).
-        let mut idx: Vec<usize> = (0..ctx.notes.len()).collect();
-        idx.sort_by_key(|&i| std::cmp::Reverse(ctx.notes[i].updated_at));
-        idx.truncate(PREVIEW_NOTES);
+        let mut sorted_notes: Vec<&_> = ctx.notes.iter().collect();
+        sorted_notes.sort_by_key(|n| std::cmp::Reverse(n.updated_at));
         let mut previews = Vec::new();
-        for &i in &idx {
-            let path = ctx.notes[i].path.clone();
-            let cat = ctx.notes[i].category.clone();
-            let content = ctx.load_content(&path).await.unwrap_or_default();
+        for note in sorted_notes.iter().take(PREVIEW_NOTES) {
+            let path = &note.path;
+            let cat = &note.category;
+            let content = ctx.load_content(path).await.unwrap_or_default();
             let preview: String = content.chars().take(160).collect();
             previews.push(format!("- {path} ({cat}): {preview}"));
         }
@@ -63,11 +62,18 @@ If a current purpose is given, refine it minimally rather than rewriting wholesa
         );
 
         let msgs = vec![UnifiedMessage::user(&prompt)];
-        let response = ctx
+        let response = match ctx
             .provider
             .process(RequestPayload::new(&msgs).with_system(Some(system)))
             .await
-            .map_err(|e| AlephError::other(format!("corpus narrative LLM call failed: {e}")))?;
+        {
+            Ok(r) => r,
+            Err(e) if super::is_provider_exhausted(&e) => {
+                tracing::warn!(error = %e, "corpus_narrative: provider exhausted — aborting dream cycle");
+                return Err(e);
+            }
+            Err(e) => return Err(AlephError::other(format!("corpus narrative LLM call failed: {e}"))),
+        };
         let text = response.text_content();
 
         // Split on the sentinel; fall back to overview-only if absent.

@@ -349,7 +349,10 @@ async fn mark_stale(ctx: &DreamContext, path: &str) {
     // Find the first newline after the opening `---` and insert `stale: true`
     // on the very next line inside the frontmatter.
     // content[3..] skips the opening "---".
-    let after_open = &content[3..];
+    let after_open = match content.get(3..) {
+        Some(s) => s,
+        None => return,
+    };
     let first_nl = match after_open.find('\n') {
         Some(pos) => pos,
         None => return, // Malformed — don't touch.
@@ -357,11 +360,11 @@ async fn mark_stale(ctx: &DreamContext, path: &str) {
 
     // Insert position: right after the opening `---\n`
     let insert_at = 3 + first_nl + 1; // 3 = len("---"), +1 to move past '\n'
-    let updated = format!(
-        "{}stale: true\n{}",
-        &content[..insert_at],
-        &content[insert_at..]
-    );
+    let (prefix, suffix) = match (content.get(..insert_at), content.get(insert_at..)) {
+        (Some(p), Some(s)) => (p, s),
+        _ => return,
+    };
+    let updated = format!("{prefix}stale: true\n{suffix}");
 
     if let Err(e) = atomic_write_file(&file_path, &updated).await {
         tracing::warn!(path = %file_path.display(), error = %e, "NoteDrift: failed to write stale marker");

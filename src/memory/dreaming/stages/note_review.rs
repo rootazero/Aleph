@@ -182,14 +182,23 @@ impl DreamStage for NoteReviewStage {
                     // otherwise win over the rewrite on serialization.
                     admitted.note.body = None;
                     admitted.bypass_review = true;
-                    let _ = ctx
+                    if let Err(e) = ctx
                         .indexer
                         .write_note(&admitted.agent_id, &admitted.category, &admitted.note)
-                        .await;
-                    let _ = store
+                        .await
+                    {
+                        tracing::warn!(error = %e, queue_id = %row.id, "note_review rewrite write_note failed; leaving row queued");
+                        continue;
+                    }
+                    if let Err(e) = store
                         .mark_review_decided(&row.id, "rewritten", "llm_review")
-                        .await;
-                    let _ = store.archive_review(&row.id, "rewritten").await;
+                        .await
+                    {
+                        tracing::warn!(error = %e, queue_id = %row.id, "note_review rewrite mark_decided failed");
+                    }
+                    if let Err(e) = store.archive_review(&row.id, "rewritten").await {
+                        tracing::warn!(error = %e, queue_id = %row.id, "note_review rewrite archive failed");
+                    }
                 }
             }
         }
@@ -236,15 +245,16 @@ const REVIEW_SYSTEM: &str = "You are a memory governance reviewer. A candidate n
 /// severity) and its candidate note (category / title / facts). Facts are capped
 /// so a large note cannot blow the prompt budget.
 fn build_review_prompt(row: &ReviewQueueRow, candidate: &CandidateNote) -> String {
-    let facts: String = candidate
-        .note
-        .facts
-        .iter()
-        .map(|f| format!("- {f}\n"))
-        .collect::<String>()
-        .chars()
-        .take(1500)
-        .collect();
+    let mut facts = String::new();
+    for f in &candidate.note.facts {
+        if facts.chars().count() >= 1500 {
+            break;
+        }
+        facts.push_str("- ");
+        facts.push_str(f);
+        facts.push('\n');
+    }
+    let facts: String = facts.chars().take(1500).collect();
     format!(
         "Defer reason: {reason}\n\
          Confidence: {conf:.2}   Severity: {sev}\n\
@@ -279,7 +289,8 @@ fn parse_review_verdict(text: &str) -> Option<ReviewVerdict> {
     if end <= start {
         return None;
     }
-    let raw: RawVerdict = serde_json::from_str(&text[start..=end]).ok()?;
+    let json_slice = text.get(start..=end)?;
+    let raw: RawVerdict = serde_json::from_str(json_slice).ok()?;
     match raw.verdict.trim().to_lowercase().as_str() {
         "approve" => Some(ReviewVerdict::Approve),
         "reject" => Some(ReviewVerdict::Reject(raw.reason)),
