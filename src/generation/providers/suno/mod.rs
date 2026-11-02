@@ -118,13 +118,19 @@ impl SunoProvider {
             && ids
                 .chars()
                 .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-' || c == ',');
-        if !valid {
+        let safe_ids = if valid {
+            std::borrow::Cow::Borrowed(ids)
+        } else {
             tracing::warn!(
                 ids = %ids,
-                "suno get_url received disallowed ids; falling back to literal"
+                "suno get_url received disallowed ids; percent-encoding query parameter"
             );
-        }
-        format!("{}/api/get?ids={}", self.base_url, ids)
+            std::borrow::Cow::Owned(
+                percent_encoding::utf8_percent_encode(ids, percent_encoding::NON_ALPHANUMERIC)
+                    .to_string(),
+            )
+        };
+        format!("{}/api/get?ids={}", self.base_url, safe_ids)
     }
 
     fn parse_error(&self, status: reqwest::StatusCode, body: &str) -> GenerationError {
