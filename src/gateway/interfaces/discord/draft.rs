@@ -266,19 +266,20 @@ impl DraftChunker {
         let mut out = Vec::new();
         let mut remaining = piece;
         while remaining.chars().count() > self.max_chars {
-            let cap = self.max_chars;
+            // `cap` is a BYTE offset, but it is derived from the CHARACTER
+            // budget: it is the byte offset at which `max_chars` characters
+            // have been consumed. Using the character count directly as a
+            // byte offset would cut multi-byte text at a third of the
+            // intended length — and, worse, slice inside a codepoint.
+            let cap = char_ceiling(remaining, self.max_chars);
             // Walk the candidate split points in priority order. We pick
             // the LATEST split point that still fits the cap so each chunk
             // is as full as possible.
-            let split_at = find_split_index(remaining, cap).unwrap_or_else(|| {
-                // No good boundary found — hard cut at the cap (in chars,
-                // not bytes, to avoid splitting a multi-byte codepoint).
-                let mut end = cap;
-                while end > 0 && !remaining.is_char_boundary(end) {
-                    end -= 1;
-                }
-                end
-            });
+            let split_at = find_split_index(remaining, cap).unwrap_or(cap);
+            // The boundary preferences add a fixed byte count past the
+            // needle they matched, which can land inside a multi-byte
+            // codepoint — snap down before splitting.
+            let split_at = floor_char_boundary(remaining, split_at);
             let (head, _tail) = remaining.split_at(split_at);
             // Trim trailing whitespace from `head` so the next chunk
             // doesn't start with a stray space.
@@ -310,7 +311,8 @@ impl DraftChunker {
 }
 
 /// Locate the latest boundary index ≤ `cap` in `text`. Returns `None` if
-/// no boundary was found (caller falls back to a hard cut).
+/// no boundary was found (caller falls back to a hard cut). `cap` is a BYTE
+/// budget — the caller derives it from the character budget.
 fn find_split_index(text: &str, cap: usize) -> Option<usize> {
     if text.len() <= cap {
         return Some(text.len());
@@ -345,16 +347,43 @@ fn find_split_index(text: &str, cap: usize) -> Option<usize> {
     None
 }
 
+/// Largest byte offset in `text` that holds at most `max_chars` characters.
+///
+/// The chunk budget is a CHARACTER budget (Discord counts characters), while
+/// the boundary search works on byte offsets. This converts one into the
+/// other: the returned offset is always a character boundary.
+fn char_ceiling(text: &str, max_chars: usize) -> usize {
+    text.char_indices()
+        .nth(max_chars)
+        .map_or(text.len(), |(offset, _)| offset)
+}
+
+/// Largest byte offset `<= index` that is a character boundary in `text`.
+fn floor_char_boundary(text: &str, index: usize) -> usize {
+    let mut offset = index.min(text.len());
+    while offset > 0 && !text.is_char_boundary(offset) {
+        offset -= 1;
+    }
+    offset
+}
+
 /// Largest byte index `<= cap` such that `text[..idx]` ends with `needle`.
 /// Walks backwards in 64-byte windows to avoid the O(n*m) of a naïve
 /// search; the chunker is on the hot path for every long agent reply.
+///
+/// `cap` is a BYTE budget. Both window ends are snapped down to character
+/// boundaries first: slicing at a byte index inside a multi-byte codepoint
+/// panics, and a character-derived cap lands inside one routinely.
 fn last_index_of(text: &str, needle: &str, cap: usize) -> Option<usize> {
     if needle.is_empty() || cap == 0 || text.len() <= cap {
         // Cap covers the whole string — just rfind.
         return text.rfind(needle).map(|i| i + needle.len());
     }
-    let search_end = cap.min(text.len());
-    let window_start = search_end.saturating_sub(needle.len() + 64);
+    let search_end = floor_char_boundary(text, cap.min(text.len()));
+    let window_start = floor_char_boundary(text, search_end.saturating_sub(needle.len() + 64));
+    if search_end <= window_start {
+        return None;
+    }
     let window = &text[window_start..search_end];
     window
         .rfind(needle)
@@ -622,6 +651,24 @@ mod tests {
             } else {
                 assert!(!chunk.is_last);
             }
+        }
+    }
+
+    #[test]
+    fn multi_byte_text_is_chunked_without_panicking() {
+        // Every character here is three bytes, so a byte budget used as a
+        // character budget (or the other way round) lands the cut inside a
+        // codepoint — which panics on slicing.
+        let c = DraftChunker::new(50, "(more)", "(end)");
+        let text = "中".repeat(500);
+        let out = c.chunk(&text);
+        assert!(!out.is_empty());
+        for chunk in &out {
+            assert!(
+                chunk.text.chars().count() <= 50,
+                "chunk too long: {} chars",
+                chunk.text.chars().count()
+            );
         }
     }
 
