@@ -974,10 +974,6 @@ pub struct DivergentFact {
 }
 
 #[cfg(test)]
-#[path = "handler_lifecycle_tests.rs"]
-mod lifecycle_tests;
-
-#[cfg(test)]
 mod tests {
     use super::*;
     use crate::memory::context::{FactSource, NoteType};
@@ -2104,5 +2100,109 @@ fn reads(conn: &Connection) {
         );
 
         handle.abort();
+    }
+
+    #[tokio::test]
+    async fn reconciler_stop_observes_current_scan() {
+        use std::future::Future;
+
+        let root = tempfile::TempDir::new().unwrap();
+        let note_dir = root.path().join("notes");
+        let runtime = crate::memory::runtime::MemoryRuntime::new(
+            crate::memory::runtime::MemoryRuntimeConfig {
+                metadata_path: root.path().join("metadata.db"),
+                note_memory_dir: note_dir.clone(),
+            },
+            Arc::new(crate::capability::ownership::OwnershipTree::new()),
+        );
+        runtime.start().await.unwrap();
+        let operation = runtime.operation().unwrap();
+        let events = Arc::new(StateDatabase::new(root.path().join("events.db")).unwrap());
+        let gate = Arc::new((
+            tokio::sync::Notify::new(),
+            tokio::sync::Notify::new(),
+            crate::sync_primitives::AtomicBool::new(false),
+        ));
+        let mut handler = MemoryCommandHandler::new(events.clone()).with_note_indexer(Arc::new(
+            NoteIndexer::new(note_dir.clone(), operation.backend().clone()),
+        ));
+        handler.reconcile_gate = Some(gate.clone());
+        let handler = Arc::new(handler);
+        let seed = handler.clone();
+        let fact_id = operation
+            .run(async move {
+                seed.create_fact(CreateNoteCommand {
+                    content: "A reconciler must finish its admitted scan.".into(),
+                    note_type: NoteType::Preference,
+                    path: "/user/preferences/lifecycle".into(),
+                    namespace: "owner".into(),
+                    agent: "default".into(),
+                    source: FactSource::Extracted,
+                    source_memory_ids: vec![],
+                    actor: EventActor::Agent,
+                    correlation_id: None,
+                })
+                .await
+            })
+            .await
+            .unwrap();
+        let missing = note_dir
+            .join("default")
+            .join(NoteType::Preference.to_category_dir())
+            .join(format!("{fact_id}.md"));
+        assert!(missing.is_file());
+        tokio::fs::remove_file(&missing).await.unwrap();
+        drop(operation);
+        runtime.retain_worker(handler.clone().spawn_owned_reconciler_daemon(
+            std::time::Duration::from_secs(3600),
+            runtime.clone(),
+            runtime.worker_stop().unwrap(),
+        ));
+        tokio::time::timeout(std::time::Duration::from_secs(10), gate.0.notified())
+            .await
+            .unwrap();
+        assert!(
+            gate.2.load(crate::sync_primitives::Ordering::SeqCst),
+            "the scan must carry source admission"
+        );
+        assert!(handler.last_reconcile_report().is_none());
+        {
+            let mut stop = Box::pin(runtime.stop());
+            assert!(stop
+                .as_mut()
+                .poll(&mut std::task::Context::from_waker(std::task::Waker::noop()))
+                .is_pending());
+            assert_eq!(
+                runtime.status().state,
+                crate::memory::runtime::MemoryState::Draining
+            );
+        }
+        {
+            let mut retry = Box::pin(runtime.stop());
+            assert!(retry
+                .as_mut()
+                .poll(&mut std::task::Context::from_waker(std::task::Waker::noop()))
+                .is_pending());
+        }
+        gate.1.notify_one();
+        let stopped = tokio::time::timeout(std::time::Duration::from_secs(10), runtime.stop())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(stopped.state, crate::memory::runtime::MemoryState::Off);
+        let report = handler.last_reconcile_report().unwrap();
+        assert_eq!(report.scanned_facts, 1);
+        assert_eq!(report.missing_files.len(), 1);
+        assert_eq!(report.missing_files[0].fact_id, fact_id);
+        assert_eq!(report.missing_files[0].expected_path, missing);
+        assert!(!missing.exists());
+        assert_eq!(
+            events
+                .get_memory_events_for_fact_unscoped(&fact_id)
+                .await
+                .unwrap()
+                .len(),
+            1
+        );
     }
 }

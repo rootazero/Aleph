@@ -3116,7 +3116,7 @@ mod tests {
                 );
                 assert_eq!(
                     facade.validate_lease(&zahir_lease),
-                    Err(ResolveError::Unknown)
+                    Err(ResolveError::StaleProvider)
                 );
                 let projected = facade.describe(Scope::default());
                 assert_eq!(projected.capabilities.len(), legacy.len());
@@ -3143,7 +3143,7 @@ mod tests {
             assert!(!old.validate(&registry.canonical_publication()));
             assert_eq!(
                 facade.validate_lease(&zahir_lease),
-                Err(ResolveError::Unknown)
+                Err(ResolveError::StaleProvider)
             );
             let fresh = facade.resolve(reference).unwrap();
             assert_eq!(facade.validate_lease(&fresh), Ok(()));
@@ -4087,7 +4087,8 @@ mod tests {
         facade.validate_lease(&lease).unwrap();
         assert_eq!(
             PROVIDER_VIEW_CONSTRUCTIONS.with(|count| count.replace(0)),
-            1
+            0,
+            "lease validation reuses the captured callable view"
         );
 
         let publication = registry.canonical_publication();
