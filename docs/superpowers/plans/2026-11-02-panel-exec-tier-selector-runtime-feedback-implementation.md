@@ -232,13 +232,13 @@ Expected: all commands pass; no raw selector error text or forbidden direct tran
 
 - [ ] **Step 4: Rebuild the Panel artifact when source checks pass**
 
-From `D:/Workspace/Aleph/interfaces/webchat`, run:
+From the repository root, change into `interfaces/webchat` and run:
 
 ```bash
 bun run panel:tabs:build -- --clean --output=.panel-live/shell
 ```
 
-Expected: a new `build.json` records the current `cdc4c87f20ac8f1a4a79e7bc4144b9ce721e50da` revision. Regenerate and independently validate provenance only if the acceptance workflow needs fresh artifacts.
+Expected: a new `build.json` records the revision being built (implementation commit `bb1bd7cf8` for this execution). Regenerate and independently validate native provenance only when preparing a separately authorized native acceptance run.
 
 - [ ] **Step 5: Update evidence documentation**
 
@@ -261,4 +261,4 @@ git commit -m "fix(panel): make exec tier selection observable"
 - **Review focus:** All five focus items have explicit tests in Tasks 1–3.
 - **Proportion:** The plan specifies files, interfaces, tests, commands, and boundaries without reproducing implementation bodies.
 
-Plan status: complete and ready for execution-method selection. No product code, build, or WebView2 launch has been performed after the design approval.
+Execution status: completed through Native execution. Selector implementation is committed as `bb1bd7cf8`; Panel modular tests 1623/1623, shared dial tests 5/5, Panel modular check, targeted formatting, locale checks, and isolated WASM build passed. Artifact build ID: `84dae406bd5dba23`, revision `bb1bd7cf803e7b3b17b5cb6f717523ef3dba5a0b`. Command and commit rulings (missing root check script, baseline hook-format failure, consolidated implementation commit, working-tree delivery of final notes) are recorded in the plan-scoped execution ledger. See `docs/superpowers/runs/2026-11-02-panel-exec-tier-selector-runtime-feedback.md` for evidence and limits. No WebView2 launch or independent review was performed for this repair; old native provenance correctly fails the revision gate.
