@@ -278,13 +278,18 @@ pub(super) fn forget_installed(
 /// (`local:{kind}:{backend}`) back to the ledger row that produced it.
 #[must_use]
 pub fn local_ref_addresses(local_ref: &str, backend: &str) -> bool {
-    if local_ref == backend {
+    let backend_id = backend
+        .strip_prefix("local:")
+        .and_then(|rest| rest.split_once(':'))
+        .map(|(_, id)| id)
+        .unwrap_or(backend);
+    if local_ref == backend || local_ref == backend_id {
         return true;
     }
     local_ref
         .rsplit(['/', '\\'])
         .next()
-        .is_some_and(|leaf| leaf == backend)
+        .is_some_and(|leaf| leaf == backend || leaf == backend_id)
 }
 
 #[cfg(test)]

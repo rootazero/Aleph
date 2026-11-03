@@ -18,7 +18,7 @@ pub struct IrcConfig {
     /// IRC server hostname (e.g., "irc.libera.chat")
     pub server: String,
 
-    /// IRC server port (default: 6667 for plaintext, 6697 for TLS)
+    /// IRC server port (default: 6667)
     #[serde(default = "default_port")]
     pub port: u16,
 
@@ -32,7 +32,16 @@ pub struct IrcConfig {
     /// IRC channels to join (e.g., `["#aleph", "#test"]`)
     pub channels: Vec<String>,
 
-    /// Use TLS (recommended; default false to preserve legacy plaintext deployments)
+    /// Nicks allowed to talk to the bot (empty = every sender is allowed)
+    #[serde(default)]
+    pub allowed_users: Vec<String>,
+
+    /// Require channel messages to address the bot by nick (default: false)
+    #[serde(default)]
+    pub require_mention: bool,
+
+    /// Use TLS — not supported by this adapter, which always connects in
+    /// plaintext. Setting it makes the channel refuse to start.
     #[serde(default)]
     pub use_tls: bool,
 
@@ -49,6 +58,8 @@ impl Default for IrcConfig {
             nick: String::new(),
             password: None,
             channels: Vec::new(),
+            allowed_users: Vec::new(),
+            require_mention: false,
             use_tls: false,
             realname: "Aleph Bot".to_string(),
         }
@@ -72,7 +83,29 @@ impl IrcConfig {
                 return Err(format!("channel '{ch}' must start with '#' or '&'"));
             }
         }
+        if self.use_tls {
+            return Err(
+                "IRC TLS is not implemented by this adapter — it always connects in plaintext. \
+                 Remove `use_tls`, or run the connection through a TLS tunnel and point \
+                 `server`/`port` at it."
+                    .to_string(),
+            );
+        }
         Ok(())
+    }
+
+    /// Whether a sender nick may talk to the bot.
+    ///
+    /// An empty allowlist allows every sender; a non-empty list is matched
+    /// case-insensitively because IRC nicks are case-insensitive (RFC 2812).
+    #[must_use]
+    pub fn is_user_allowed(&self, nick: &str) -> bool {
+        if self.allowed_users.is_empty() {
+            return true;
+        }
+        self.allowed_users
+            .iter()
+            .any(|allowed| allowed.eq_ignore_ascii_case(nick))
     }
 
     /// Format the server address as `host:port`
@@ -94,6 +127,8 @@ mod tests {
         assert_eq!(config.port, 6667);
         assert!(config.password.is_none());
         assert!(config.channels.is_empty());
+        assert!(config.allowed_users.is_empty());
+        assert!(!config.require_mention);
         assert!(!config.use_tls);
         assert_eq!(config.realname, "Aleph Bot");
     }
@@ -167,6 +202,44 @@ mod tests {
     }
 
     #[test]
+    fn test_is_user_allowed_empty_allowlist_allows_every_sender() {
+        let config = IrcConfig::default();
+        assert!(config.is_user_allowed("anyone"));
+    }
+
+    #[test]
+    fn test_is_user_allowed_filters_by_nick() {
+        let config = IrcConfig {
+            allowed_users: vec!["alice".to_string()],
+            ..Default::default()
+        };
+        assert!(config.is_user_allowed("alice"));
+        assert!(!config.is_user_allowed("mallory"));
+    }
+
+    #[test]
+    fn test_is_user_allowed_ignores_case() {
+        let config = IrcConfig {
+            allowed_users: vec!["Alice".to_string()],
+            ..Default::default()
+        };
+        assert!(config.is_user_allowed("alice"));
+    }
+
+    #[test]
+    fn test_validate_rejects_tls() {
+        let config = IrcConfig {
+            server: "irc.libera.chat".to_string(),
+            nick: "alephbot".to_string(),
+            channels: vec!["#test".to_string()],
+            use_tls: true,
+            ..Default::default()
+        };
+        let err = config.validate().unwrap_err();
+        assert!(err.contains("TLS is not implemented"));
+    }
+
+    #[test]
     fn test_addr() {
         let config = IrcConfig {
             server: "irc.libera.chat".to_string(),
@@ -194,6 +267,8 @@ mod tests {
             nick: "alephbot".to_string(),
             password: Some("secret123".to_string()),
             channels: vec!["#aleph".to_string(), "#test".to_string()],
+            allowed_users: Vec::new(),
+            require_mention: false,
             use_tls: true,
             realname: "Aleph IRC Bot".to_string(),
         };

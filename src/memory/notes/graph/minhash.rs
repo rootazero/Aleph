@@ -70,6 +70,9 @@ pub fn signature(shingles: &HashSet<u64>) -> [u64; K] {
 
 #[must_use]
 pub fn jaccard_estimate(a: &[u64; K], b: &[u64; K]) -> f32 {
+    if a.iter().all(|&h| h == u64::MAX) || b.iter().all(|&h| h == u64::MAX) {
+        return 0.0;
+    }
     let agree = a.iter().zip(b.iter()).filter(|(x, y)| x == y).count();
     agree as f32 / K as f32
 }

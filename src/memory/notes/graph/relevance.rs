@@ -42,7 +42,7 @@ impl Default for SignalWeights {
 /// Relatedness of nodes `a` and `b` (by index).
 #[must_use]
 pub fn score_pair(g: &GraphIndex, w: &SignalWeights, a: usize, b: usize) -> f32 {
-    if a == b {
+    if a == b || a >= g.len() || b >= g.len() {
         return 0.0;
     }
     let mut s = 0.0;
@@ -127,18 +127,19 @@ pub fn all_related(
     if n == 0 {
         return Vec::new();
     }
-    let threads = threads.clamp(1, n);
-    let chunk = n.div_ceil(threads);
+    let chunk = n.div_ceil(threads.clamp(1, n));
     let mut out: Vec<Vec<(String, Vec<(String, f32)>)>> = Vec::new();
     std::thread::scope(|scope| {
-        let handles: Vec<_> = (0..threads)
-            .map(|t| {
-                let start = t * chunk;
-                let end = ((t + 1) * chunk).min(n);
+        let handles: Vec<_> = (0..n)
+            .step_by(chunk)
+            .map(|start| {
+                let end = (start + chunk).min(n);
                 scope.spawn(move || {
                     let mut part = Vec::with_capacity(end.saturating_sub(start));
                     for i in start..end {
-                        part.push((g.nodes[i].path.clone(), related(g, w, i, k)));
+                        if let Some(node) = g.nodes.get(i) {
+                            part.push((node.path.clone(), related(g, w, i, k)));
+                        }
                     }
                     part
                 })

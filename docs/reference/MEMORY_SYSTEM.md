@@ -41,7 +41,7 @@ Gateway / Agent Loop
  queries: NoteFactRetrieval.retrieve() → ScoredFact<MemoryFact>
 ```
 
-Gateway writes conversation turns to Markdown raw memory through `RawMemoryStore`. `CompressionService` periodically drains pending metadata-index rows, reads their Markdown bodies, asks an LLM to extract durable facts, and writes them back as Markdown notes under `~/.aleph/memory/note/{agent}/{category}/`. `NoteIndexer` keeps the separate SQLite notes side (index, wikilinks, FTS5, per-dimension vec0 tables) in sync on every note write. Offline, the Dream Daemon consolidates clusters, resolves drift, synthesizes insights, lints schemas, decays weak notes, and emits digests. Queries flow through `NoteFactRetrieval` and return `ScoredFact<MemoryFact>` — see [RETRIEVAL.md](RETRIEVAL.md).
+Gateway writes conversation turns to Markdown raw memory through `RawMemoryStore`. `CompressionService` periodically drains pending metadata-index rows, reads their Markdown bodies, asks an LLM to extract durable facts, and writes them back as Markdown notes under `~/.aleph/memory/note/{agent}/{category}/`. `NoteIndexer` keeps the separate SQLite notes side (index, wikilinks, FTS5, per-dimension vec0 tables) in sync on every note write. Offline, the Dream Daemon consolidates clusters, resolves drift, synthesizes insights, lints schemas, decays weak notes, and emits digests. Queries flow through `NoteFactRetrieval` and return `ScoredFact<MemoryFact>` — see [RETRIEVAL.md](memory/RETRIEVAL.md).
 
 ### 3.1 Cognitive-layer view (working → episodic → semantic → raw)
 
@@ -61,6 +61,8 @@ Retrieved items are stamped with their layer in the assembled memory context (ma
 **Embeddings** are pluggable via the `EmbeddingProvider` trait (OpenAI / SiliconFlow / Ollama through the OpenAI-compatible `RemoteEmbeddingProvider`); the **data-stays-local** requirement is met today by pointing it at a local **Ollama**. A *bundled* in-binary ONNX backend is intentionally **not** added — it would pull a heavy single-purpose native dependency into core (violates redline R3 核心轻量化) for a privacy goal the local-Ollama path already satisfies. It remains a clean future addition behind the same trait if the trade-off changes.
 
 ## Runtime lifecycle boundary / 运行时生命周期边界
+
+The [current-state locator](FEATURE_LOCATOR.md#current-state--当前现状) is the cross-subsystem entry for this bounded contract and its deferred boundaries. / [当前现状入口](FEATURE_LOCATOR.md#current-state--当前现状) 是该有界契约及其 deferred 边界的跨子系统入口。
 
 The current production slice adds one source-owned \`MemoryRuntime\` for derived Memory resources, admission and retained work. Off keeps raw chat and Markdown session archival available while rejecting new derived Memory operations. Work admitted before stop drains through the source owner; a later start constructs a fresh derived bundle, so old derived resource and Tool handles do not survive restart. Raw session storage remains separately owned, and Runtime/resource authority is distinct from canonical Tool publication. / 当前生产切片以一个 source-owned \`MemoryRuntime\` 统一负责派生 Memory 资源、准入与保留任务。Off 时 raw chat 与 Markdown session 归档继续可用，新的派生 Memory 操作被拒绝；stop 前已准入工作由 source owner 排空，重新 start 构造新的派生 bundle，旧派生资源与 Tool handle 不跨重启存活。raw session storage 仍独立持有，Runtime/resource 权威与 canonical Tool 发布权威分离。
 

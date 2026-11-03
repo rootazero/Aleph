@@ -285,7 +285,7 @@ impl FailoverProvider {
     }
 
     /// Build the ordered candidate list for one request in explicit order.
-    async fn candidates(&self) -> CandidatePlan {
+    fn candidates(&self) -> CandidatePlan {
         let primary = self.primary.current();
         let primary_name = primary.name().to_string();
         let primary_models = self
@@ -502,7 +502,7 @@ impl FailoverProvider {
             RequestRequirements::from_request(messages, tools.is_some_and(|t| !t.is_empty()));
 
         Box::pin(async move {
-            let mut plan = self.candidates().await;
+            let mut plan = self.candidates();
             let total = plan.candidates.len();
             let mut last_error: Option<AlephError> = None;
             // The route witness's `session_id`, read once: the same

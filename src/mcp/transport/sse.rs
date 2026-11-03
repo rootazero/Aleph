@@ -565,13 +565,15 @@ impl McpTransport for SseTransport {
             guard.take()
         };
         if let Some(handle) = handle {
+            let abort_handle = handle.abort_handle();
             match tokio::time::timeout(Duration::from_millis(100), handle).await {
                 Ok(_) => {}
                 Err(_) => {
                     tracing::debug!(
                         server = %self.server_name,
-                        "SSE listener did not exit within grace; abandoning handle"
+                        "SSE listener did not exit within grace; aborting handle"
                     );
+                    abort_handle.abort();
                 }
             }
         }

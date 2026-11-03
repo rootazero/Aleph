@@ -78,7 +78,10 @@ impl SessionModelProvider {
     ///   backs the metadata contract.
     /// * `default_provider` — the live default resolver for unqualified picks.
     /// * `named` — provider id → provider, for qualified picks.
-    #[allow(clippy::new_ret_no_self)]
+    #[allow(
+        clippy::new_ret_no_self,
+        reason = "returns Arc<dyn AiProvider> trait object for consumer ergonomics"
+    )]
     pub fn new(
         session_key: String,
         fallback: Arc<dyn AiProvider>,

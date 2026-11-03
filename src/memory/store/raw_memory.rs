@@ -448,7 +448,7 @@ pub trait RawMemoryStore: Send + Sync {
     ) -> Result<Vec<RawMemory>, AlephError> {
         let token = source.to_persisted().0;
         let all = self
-            .get_unprocessed_raw_memories(agent_id, limit * 10)
+            .get_unprocessed_raw_memories(agent_id, limit.saturating_mul(10))
             .await?;
         Ok(all
             .into_iter()

@@ -101,7 +101,7 @@ Because A is the first unclosed gate, the phase remains **NO-GO / deferred**. To
 
 ## 6. Verification evidence
 
-Final validation evidence is recorded in [`task-5-report.md`](/Volumes/TBU4/Workspace/Aleph/.superpowers/sdd/2026-10-24-aleph-phase2b-b8-2-feishu-implementation/task-5-report.md). The report records passing format, focused Feishu tests (9/9), `cargo test -p alephcore --lib feishu` (107/107), the full `alephcore` library run (21,521 passed, 20 ignored), workspace compile checks, and Clippy with three unrelated warnings. `qa/channels/run.sh all` passed phases 1 and 2; phase 3 remains **BLOCKED/UNRUN** because `qa/channels/drive_approval.py:38` raised the exact error `ModuleNotFoundError: No module named 'websockets'`.
+Final validation evidence is recorded in the private SDD task-5 report, which is unavailable in the current tree. The report recorded the historical validation results; this document does not claim they were rerun in the current pass.
 
 The focused tests cover disabled boot, explicit enable, lifecycle state, API publication fences, stale publication cleanup, inbound admission/drain, WS join, webhook residuals, replacement ordering/preflight, create/restart intent, and lifecycle serialization. These counts are historical evidence from the implementation validation pass; this documentation pass did not rerun cargo or QA. The source tree was clean before documentation edits began, and this pass leaves exactly three documentation files uncommitted. No Rust source, tests, dependencies, or Git history were changed by this pass.
 

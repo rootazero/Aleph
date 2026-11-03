@@ -137,15 +137,21 @@ async fn seed_history(
     // its whole history — the duplication this guard exists to prevent, caused
     // by the edit that claimed to fix it.
     // Regression covered by `tests::history_input_does_not_reseed_when_log_nonempty`.
+    //
+    // A READ FAILURE is not evidence that the log is empty, so it must not be
+    // read as "empty": the guard used to log a warning and answer "empty",
+    // which re-seeded the ENTIRE prior history into a log that may well have
+    // held it — the same duplication the guard exists to prevent, triggered by
+    // a transient read error instead of by the literal trap above. Fail
+    // CLOSED: the read is the only thing that can answer "is this a
+    // continuation?", so when it cannot answer, the seed refuses rather than
+    // guess.
     const FIRST_EVENT_EXCLUSIVE_END: crate::session::events::EventSeq = 2;
     let existing = service
         .get_events(session_id, None, Some(FIRST_EVENT_EXCLUSIVE_END))
         .await
         .map(|e| !e.is_empty())
-        .unwrap_or_else(|e| {
-            tracing::warn!(error = %e, "session log read failed; treating as empty for seed guard");
-            false
-        });
+        .map_err(|e| FlowError::Internal(format!("session seed: log read failed: {e}")))?;
     if !existing {
         for turn in turns {
             match turn {
@@ -283,4 +289,105 @@ pub(super) async fn emit_message(
         .await
         .map(|_| ())
         .map_err(|e| FlowError::Internal(format!("session seed: {e}")))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::routing::session_key::SessionKey;
+    use crate::session::events::{EventSeq, SessionEventRecord};
+    use crate::session::service::{SessionError, SessionHandle};
+    use async_trait::async_trait;
+    use std::sync::Mutex;
+    use tokio::sync::broadcast;
+
+    /// A service whose log READ fails. Writes are recorded (so the test can
+    /// see what the seed would have written) but the read is the only thing
+    /// the seed's guard depends on.
+    struct UnreadableLog {
+        emitted: Mutex<Vec<SessionEvent>>,
+    }
+
+    #[async_trait]
+    impl SessionService for UnreadableLog {
+        async fn attach(&self, _id: SessionId) -> Result<SessionHandle, SessionError> {
+            Err(SessionError::Storage("log unreadable".into()))
+        }
+
+        async fn get_events(
+            &self,
+            _id: &SessionId,
+            _from: Option<EventSeq>,
+            _to: Option<EventSeq>,
+        ) -> Result<Vec<SessionEventRecord>, SessionError> {
+            Err(SessionError::Storage("log unreadable".into()))
+        }
+
+        async fn emit_event(
+            &self,
+            _id: &SessionId,
+            event: SessionEvent,
+        ) -> Result<EventSeq, SessionError> {
+            let mut emitted = self.emitted.lock().unwrap();
+            emitted.push(event);
+            Ok(u64::try_from(emitted.len()).unwrap_or(u64::MAX))
+        }
+
+        async fn subscribe(
+            &self,
+            _id: &SessionId,
+        ) -> Result<broadcast::Receiver<SessionEventRecord>, SessionError> {
+            Err(SessionError::Storage("log unreadable".into()))
+        }
+
+        async fn wake(&self, _id: &SessionId) -> Result<SessionHandle, SessionError> {
+            Err(SessionError::Storage("log unreadable".into()))
+        }
+
+        async fn detach(&self, _id: &SessionId) -> Result<(), SessionError> {
+            Ok(())
+        }
+    }
+
+    /// A failed log read must NOT be read as "the log is empty". The old
+    /// guard logged a warning and answered "empty", which re-seeded the whole
+    /// prior history into a log that may already have held it — the exact
+    /// duplication the guard exists to prevent. The seed now refuses.
+    #[tokio::test]
+    async fn a_failed_log_read_refuses_to_seed_history() {
+        let service = UnreadableLog {
+            emitted: Mutex::new(Vec::new()),
+        };
+        let sid = SessionKey::ephemeral("seed-read-fail");
+
+        let result = seed_session(
+            &service,
+            &sid,
+            FlowInput::History {
+                turns: vec![FlowHistoryTurn::User(MessageContent {
+                    text: "prior turn".into(),
+                    blocks: Vec::new(),
+                    thinking: None,
+                    thinking_signature: None,
+                })],
+                prompt: "new turn".into(),
+            },
+            PersistedTelecomMarker::Ordinary,
+        )
+        .await;
+
+        assert!(
+            result.is_err(),
+            "an unreadable log must fail the seed, not be treated as an empty one"
+        );
+
+        let emitted = service.emitted.lock().unwrap();
+        let replayed_prior = emitted.iter().any(|e| {
+            matches!(e, SessionEvent::UserMessage { content, .. } if content.text == "prior turn")
+        });
+        assert!(
+            !replayed_prior,
+            "the prior history must not be replayed into a log of unknown contents"
+        );
+    }
 }

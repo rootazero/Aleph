@@ -37,9 +37,7 @@ use crate::gateway::protocol::{
     JsonRpcRequest, JsonRpcResponse, AUTH_REQUIRED, IDEMPOTENCY_KEY_REQUIRED, INTERNAL_ERROR,
     PARSE_ERROR, RATE_LIMITED,
 };
-use crate::gateway::rate_limiter::{
-    scope_for_method, RateLimitError, RateLimitKey, RateLimitScope, RateLimiter,
-};
+use crate::gateway::rate_limiter::{scope_for_method, RateLimitError, RateLimitKey, RateLimiter};
 use crate::gateway::state_version::StateVersionTracker;
 
 use super::per_client_buffer::PerClientBuffer;
@@ -438,27 +436,19 @@ pub async fn handle_connection(
                                     // This layer keys on the CLIENT IP — it is the
                                     // network-origin isolator (the principal-axis
                                     // check lives in middleware/rate_limit.rs).
-                                    // `connect` would otherwise map to the strict
-                                    // Auth scope (10/min + 5-min lockout): every
-                                    // user behind one NAT / reverse-proxy egress
-                                    // shares that single IP bucket, so one client
-                                    // retrying a stale token locked every other
-                                    // user at that address out of the handshake
-                                    // for the full lockout. Remap to the
-                                    // lockout-free default bucket instead — the
-                                    // same remap middleware/rate_limit.rs performs
-                                    // on the pooled "rpc" identity — so a token
-                                    // storm only exhausts the offending origin's
-                                    // own window, which recovers as the window
-                                    // slides.
+                                    // `connect` maps to the strict Auth scope
+                                    // (10/min + 5-min lockout) and that window
+                                    // belongs HERE: the bucket is one network
+                                    // origin, so a token-guessing client
+                                    // throttles its own origin and nothing else.
+                                    // The shared-bucket layer keeps the
+                                    // Auth→RpcDefault remap (it pools every
+                                    // remote caller into one identity, where a
+                                    // lockout would be a cross-client DoS) —
+                                    // see middleware/rate_limit.rs.
                                     if !ctx.client_is_local {
                                     let rl_identity = ctx.client_ip.to_string();
-                                    let rl_scope_raw = scope_for_method(&req.method);
-                                    let rl_scope = if matches!(rl_scope_raw, RateLimitScope::Auth) {
-                                        RateLimitScope::RpcDefault
-                                    } else {
-                                        rl_scope_raw
-                                    };
+                                    let rl_scope = scope_for_method(&req.method);
                                     let rl_key = RateLimitKey::new(&rl_identity, rl_scope);
                                     if let Err(e) = ctx.rate_limiter.check_and_record(&rl_key) {
                                         let rl_response = match e {

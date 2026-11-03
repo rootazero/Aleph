@@ -810,14 +810,12 @@ impl ExtensionManager {
         let _guard = self.load_guard.lock().await;
         let mut candidate = self.plugins_config.read().await.clone();
         let changed = candidate.set_trusted(plugin_id, trusted);
-        let policy = candidate.owner_trust_policy();
         if changed {
             if let Err(e) = self.commit_plugins_config_locked(candidate).await {
                 tracing::warn!(plugin_id, error = %e, "failed to persist plugin trust preference");
                 return false;
             }
         }
-        self.set_owner_trust_policy(policy);
         changed
     }
 
@@ -830,14 +828,12 @@ impl ExtensionManager {
         let _guard = self.load_guard.lock().await;
         let mut candidate = self.plugins_config.read().await.clone();
         let changed = candidate.set_trust_enforced(enforce);
-        let policy = candidate.owner_trust_policy();
         if changed {
             if let Err(e) = self.commit_plugins_config_locked(candidate).await {
                 tracing::warn!(error = %e, "failed to persist owner trust enforcement");
                 return false;
             }
         }
-        self.set_owner_trust_policy(policy);
         changed
     }
 
@@ -858,12 +854,33 @@ impl ExtensionManager {
     /// Persist the candidate before publishing it. Caller MUST hold load_guard:
     /// all writers of this document use that same sequence, including migration.
     /// No config write guard crosses save or runtime reconciliation.
+    ///
+    /// The durable document is the single source for the live owner-trust
+    /// policy, so every successful commit republishes the policy derived from
+    /// the document it just wrote — including a commit that only *removes* a
+    /// trust entry (uninstall). Without that, a removed plugin id stayed in
+    /// the live allowlist and the next plugin claiming that id was trusted
+    /// before it had ever been vetted.
+    ///
+    /// A failed save publishes nothing: the live policy must always describe
+    /// the document that is on disk.
     pub(super) async fn commit_plugins_config_locked(
         &self,
         candidate: super::plugin_state::PluginsConfig,
     ) -> crate::error::Result<()> {
+        // The document could not be read at construction, so the in-memory
+        // copy is a stand-in, not the operator's file. Saving it now would
+        // overwrite the operator's trust decisions with the stand-in.
+        if let Some(reason) = &self.plugins_config_error {
+            return Err(crate::error::AlephError::config(format!(
+                "plugins config could not be read ({reason}); repair {path} and restart before changing plugin preferences",
+                path = self.plugins_config_path.display()
+            )));
+        }
         candidate.save(&self.plugins_config_path).await?;
+        let policy = candidate.owner_trust_policy();
         *self.plugins_config.write().await = candidate;
+        self.set_owner_trust_policy(policy);
         Ok(())
     }
 
@@ -1042,5 +1059,63 @@ impl ExtensionManager {
             Some(record) => record.status.label().to_owned(),
             None => "not_discovered".to_owned(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::extension::types::PluginOrigin;
+
+    /// Uninstalling a plugin must take its trust vouch out of the LIVE
+    /// allowlist, not only out of the durable document.
+    ///
+    /// The durable row was removed while the live policy kept the id, so the
+    /// next plugin to claim that id was trusted before anyone had vetted it —
+    /// the durable document and the live policy were two answers to one
+    /// question.
+    #[tokio::test]
+    async fn forgetting_a_plugin_withdraws_its_live_trust_vouch() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cfg_path = tmp.path().join("plugins.toml");
+        let manager = ExtensionManager::new(crate::extension::ExtensionConfig {
+            discovery: crate::extension::DiscoveryConfig {
+                working_dir: tmp.path().to_path_buf(),
+                scan_claude_dirs: false,
+                scan_project_dirs: false,
+                max_upward_depth: 0,
+                claude_home_override: None,
+            },
+            plugins_config_path: Some(cfg_path.clone()),
+            ..crate::extension::ExtensionConfig::default()
+        })
+        .await
+        .unwrap();
+
+        assert!(manager.set_trust_enforced(true).await);
+        assert!(manager.set_plugin_trusted("alpha", true).await);
+        assert!(
+            manager
+                .current_owner_trust_policy()
+                .allows("alpha", PluginOrigin::Workspace),
+            "control: a vouched plugin is trusted"
+        );
+
+        manager.forget_plugin_preference("alpha").await;
+
+        assert!(
+            !manager
+                .current_owner_trust_policy()
+                .allows("alpha", PluginOrigin::Workspace),
+            "the live allowlist must not keep trusting a plugin that was uninstalled"
+        );
+        assert!(
+            !crate::extension::plugin_state::PluginsConfig::load(&cfg_path)
+                .unwrap()
+                .entries
+                .get("alpha")
+                .is_some_and(|entry| entry.trusted == Some(true)),
+            "the durable vouch must be gone too"
+        );
     }
 }

@@ -459,6 +459,12 @@ impl GenerationProvider for FalProvider {
             }
             let started = Instant::now();
             let model_path = self.resolved_model(&request).to_string();
+            if model_path.contains("..") {
+                return Err(GenerationError::invalid_parameters(
+                    "Invalid model path: path traversal is disallowed",
+                    Some("model".into()),
+                ));
+            }
             let input = self.build_input(&request);
 
             let submit = self.submit(&model_path, &input).await?;

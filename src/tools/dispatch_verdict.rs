@@ -271,7 +271,7 @@ pub(super) fn current_admitted_handler_identity() -> Option<ToolCallIdentity> {
 
 /// Only the registry-owned provider wrapper supplies immutable producer proof.
 /// Ordinary handlers, metadata and replay scopes cannot manufacture it.
-pub(super) async fn with_plugin_publication<F: Future>(
+pub(crate) async fn with_plugin_publication<F: Future>(
     publication: Option<Arc<crate::tools::registry::ReadySnapshot>>,
     future: F,
 ) -> F::Output {
@@ -279,7 +279,7 @@ pub(super) async fn with_plugin_publication<F: Future>(
 }
 
 /// Publish only the descriptor identity checked by the registry boundary.
-pub(super) async fn with_admitted_handler<F: Future>(
+pub(crate) async fn with_admitted_handler<F: Future>(
     identity: ToolCallIdentity,
     future: F,
 ) -> F::Output {
@@ -287,6 +287,23 @@ pub(super) async fn with_admitted_handler<F: Future>(
         .scope(Some(identity), future)
         .await
 }
+
+/// Rebind an already-admitted call to the exact descriptor revision published
+/// by a retained Cold activation. The existing gate verdict is copied; no new
+/// permission decision or transport supplied authority can enter this scope.
+pub(crate) async fn with_rebound_handler<F: Future>(
+    identity: ToolCallIdentity,
+    future: F,
+) -> F::Output {
+    let verdict = current_dispatch_verdict().map(|current| DispatchVerdict {
+        identity,
+        ..current
+    });
+    DISPATCH_VERDICT
+        .scope(verdict, ADMITTED_HANDLER_IDENTITY.scope(Some(identity), future))
+        .await
+}
+
 
 /// Canonical invoke checks both sealed lanes against the entire ambient tuple.
 pub(super) fn invocation_admitted(

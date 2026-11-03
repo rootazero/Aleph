@@ -8,6 +8,35 @@ use aleph_protocol::{AgentTraceEvent, AgentTraceTextKind};
 use rusqlite::Connection;
 use serde_json::Value;
 
+/// Execute a migration body inside an atomic SQLite savepoint.
+///
+/// On success, releases the savepoint. On failure, rolls back changes and
+/// immediately releases the savepoint so no dangling transaction or savepoint
+/// leaks into subsequent connection operations.
+fn with_savepoint<F, R>(conn: &Connection, name: &str, f: F) -> Result<R, AlephError>
+where
+    F: FnOnce() -> Result<R, AlephError>,
+{
+    conn.execute_batch(&format!("SAVEPOINT {name}"))
+        .map_err(|e| AlephError::config(format!("Failed to begin savepoint {name}: {e}")))?;
+
+    match f() {
+        Ok(val) => {
+            conn.execute_batch(&format!("RELEASE {name}"))
+                .map_err(|e| AlephError::config(format!("Failed to commit savepoint {name}: {e}")))?;
+            Ok(val)
+        }
+        Err(err) => {
+            if let Err(rollback_err) =
+                conn.execute_batch(&format!("ROLLBACK TO {name}; RELEASE {name};"))
+            {
+                tracing::warn!(error = %rollback_err, "Rollback and release of savepoint {name} failed");
+            }
+            Err(err)
+        }
+    }
+}
+
 /// Migrate `task_traces` from legacy flat role/content storage to structured
 /// `AgentTraceEvent` storage.
 ///
@@ -16,28 +45,9 @@ use serde_json::Value;
 /// `AgentTraceEvent`, making replay consume the same structured facts as live
 /// panels/debug tools.
 pub fn migrate_task_traces_to_agent_trace(conn: &Connection) -> Result<(), AlephError> {
-    conn.execute_batch("SAVEPOINT migration_task_traces_agent_trace")
-        .map_err(|e| {
-            AlephError::config(format!(
-                "Failed to begin task_traces agent trace migration: {e}"
-            ))
-        })?;
-
-    let result = migrate_task_traces_body(conn);
-
-    match result {
-        Ok(()) => conn
-            .execute_batch("RELEASE migration_task_traces_agent_trace")
-            .map_err(|e| AlephError::config(format!("Failed to commit migration: {e}"))),
-        Err(e) => {
-            if let Err(rollback_err) =
-                conn.execute_batch("ROLLBACK TO migration_task_traces_agent_trace")
-            {
-                tracing::warn!(error = %rollback_err, "Rollback of migration_task_traces_agent_trace failed");
-            }
-            Err(e)
-        }
-    }
+    with_savepoint(conn, "migration_task_traces_agent_trace", || {
+        migrate_task_traces_body(conn)
+    })
 }
 
 fn task_traces_table_exists(conn: &Connection) -> Result<bool, AlephError> {
@@ -214,123 +224,91 @@ fn migrate_task_traces_body(conn: &Connection) -> Result<(), AlephError> {
 /// - Uses savepoint for atomic migration
 /// - Idempotent: skips if the constraint already exists
 pub fn migrate_task_traces_unique_step_index(conn: &Connection) -> Result<(), AlephError> {
-    conn.execute_batch("SAVEPOINT migration_task_traces_unique_step")
-        .map_err(|e| {
-            AlephError::config(format!(
-                "Failed to begin task_traces unique-step migration: {e}"
-            ))
-        })?;
+    with_savepoint(conn, "migration_task_traces_unique_step", || {
+        let table_exists: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='task_traces'",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(|e| AlephError::config(format!("Failed to check task_traces table: {e}")))?;
 
-    let table_exists: i64 = conn
-        .query_row(
-            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='task_traces'",
-            [],
-            |row| row.get(0),
-        )
-        .map_err(|e| {
-            let _ = conn.execute_batch("ROLLBACK TO migration_task_traces_unique_step");
-            AlephError::config(format!("Failed to check task_traces table: {e}"))
-        })?;
+        if table_exists == 0 {
+            // Schema bootstrap path; nothing to migrate.
+            return Ok(());
+        }
 
-    if table_exists == 0 {
-        // Schema bootstrap path; nothing to migrate.
-        conn.execute_batch("RELEASE migration_task_traces_unique_step")
+        let constraint_exists: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master \
+                 WHERE type='index' AND tbl_name='task_traces' \
+                   AND sql LIKE '%UNIQUE%task_id%step_index%'",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(|e| AlephError::config(format!("Failed to check UNIQUE constraint: {e}")))?;
+
+        if constraint_exists > 0 {
+            return Ok(());
+        }
+
+        // Deduplicate any pre-existing duplicate (task_id, step_index) pairs by
+        // keeping the smallest `id` per pair. SQLite ships no row_number(); the
+        // MIN(id) per group + self-join gives us a delete set.
+        let deleted = conn
+            .execute(
+                r#"
+                DELETE FROM task_traces
+                 WHERE id NOT IN (
+                     SELECT MIN(id) FROM task_traces GROUP BY task_id, step_index
+                 )
+                "#,
+                [],
+            )
             .map_err(|e| {
                 AlephError::config(format!(
-                    "Failed to commit task_traces unique-step migration: {e}"
+                    "Failed to dedupe task_traces before adding UNIQUE constraint: {e}"
                 ))
             })?;
-        return Ok(());
-    }
+        if deleted > 0 {
+            tracing::warn!(
+                deleted,
+                "Removed duplicate (task_id, step_index) rows from task_traces before adding UNIQUE constraint"
+            );
+        }
 
-    let constraint_exists: i64 = conn
-        .query_row(
-            "SELECT COUNT(*) FROM sqlite_master \
-             WHERE type='index' AND tbl_name='task_traces' \
-               AND sql LIKE '%UNIQUE%task_id%step_index%'",
-            [],
-            |row| row.get(0),
-        )
-        .map_err(|e| {
-            let _ = conn.execute_batch("ROLLBACK TO migration_task_traces_unique_step");
-            AlephError::config(format!("Failed to check UNIQUE constraint: {e}"))
-        })?;
-
-    if constraint_exists > 0 {
-        conn.execute_batch("RELEASE migration_task_traces_unique_step")
-            .map_err(|e| {
-                AlephError::config(format!(
-                    "Failed to commit task_traces unique-step migration: {e}"
-                ))
-            })?;
-        return Ok(());
-    }
-
-    // Deduplicate any pre-existing duplicate (task_id, step_index) pairs by
-    // keeping the smallest `id` per pair. SQLite ships no row_number(); the
-    // MIN(id) per group + self-join gives us a delete set.
-    let deleted = conn
-        .execute(
+        // SQLite cannot ALTER TABLE … ADD CONSTRAINT; rebuild the table with the
+        // UNIQUE / CHECK constraints in place, then re-apply the index.
+        conn.execute_batch(
             r#"
-            DELETE FROM task_traces
-             WHERE id NOT IN (
-                 SELECT MIN(id) FROM task_traces GROUP BY task_id, step_index
-             )
+            CREATE TABLE task_traces_new (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                task_id TEXT NOT NULL,
+                step_index INTEGER NOT NULL CHECK (step_index >= 0),
+                event_kind TEXT NOT NULL,
+                event_json TEXT NOT NULL,
+                timestamp INTEGER NOT NULL,
+                FOREIGN KEY(task_id) REFERENCES agent_tasks(id) ON DELETE RESTRICT,
+                UNIQUE(task_id, step_index)
+            );
+            INSERT INTO task_traces_new
+                (id, task_id, step_index, event_kind, event_json, timestamp)
+            SELECT id, task_id, step_index, event_kind, event_json, timestamp
+              FROM task_traces;
+            DROP TABLE task_traces;
+            ALTER TABLE task_traces_new RENAME TO task_traces;
+            CREATE INDEX IF NOT EXISTS idx_task_traces_task ON task_traces(task_id, step_index);
             "#,
-            [],
         )
         .map_err(|e| {
             AlephError::config(format!(
-                "Failed to dedupe task_traces before adding UNIQUE constraint: {e}"
-            ))
-        })?;
-    if deleted > 0 {
-        tracing::warn!(
-            deleted,
-            "Removed duplicate (task_id, step_index) rows from task_traces before adding UNIQUE constraint"
-        );
-    }
-
-    // SQLite cannot ALTER TABLE … ADD CONSTRAINT; rebuild the table with the
-    // UNIQUE / CHECK constraints in place, then re-apply the index.
-    conn.execute_batch(
-        r#"
-        CREATE TABLE task_traces_new (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            task_id TEXT NOT NULL,
-            step_index INTEGER NOT NULL CHECK (step_index >= 0),
-            event_kind TEXT NOT NULL,
-            event_json TEXT NOT NULL,
-            timestamp INTEGER NOT NULL,
-            FOREIGN KEY(task_id) REFERENCES agent_tasks(id) ON DELETE RESTRICT,
-            UNIQUE(task_id, step_index)
-        );
-        INSERT INTO task_traces_new
-            (id, task_id, step_index, event_kind, event_json, timestamp)
-        SELECT id, task_id, step_index, event_kind, event_json, timestamp
-          FROM task_traces;
-        DROP TABLE task_traces;
-        ALTER TABLE task_traces_new RENAME TO task_traces;
-        CREATE INDEX IF NOT EXISTS idx_task_traces_task ON task_traces(task_id, step_index);
-        "#,
-    )
-    .map_err(|e| {
-        let _ = conn.execute_batch("ROLLBACK TO migration_task_traces_unique_step");
-        AlephError::config(format!(
-            "Failed to add UNIQUE(task_id, step_index) to task_traces: {e}"
-        ))
-    })?;
-
-    tracing::info!("Added UNIQUE(task_id, step_index) and CHECK(step_index >= 0) to task_traces");
-
-    conn.execute_batch("RELEASE migration_task_traces_unique_step")
-        .map_err(|e| {
-            AlephError::config(format!(
-                "Failed to commit task_traces unique-step migration: {e}"
+                "Failed to add UNIQUE(task_id, step_index) to task_traces: {e}"
             ))
         })?;
 
-    Ok(())
+        tracing::info!("Added UNIQUE(task_id, step_index) and CHECK(step_index >= 0) to task_traces");
+        Ok(())
+    })
 }
 
 /// Migrate to add `channel_offsets` table for persistent polling offset tracking.
@@ -342,53 +320,35 @@ pub fn migrate_task_traces_unique_step_index(conn: &Connection) -> Result<(), Al
 /// - Uses IF NOT EXISTS for idempotent table creation
 /// - Uses savepoint for atomic migration
 pub fn migrate_add_channel_offsets(conn: &Connection) -> Result<(), AlephError> {
-    conn.execute_batch("SAVEPOINT migration_channel_offsets")
-        .map_err(|e| {
-            AlephError::config(format!("Failed to begin channel_offsets migration: {e}"))
-        })?;
-
-    let table_exists: i64 = conn
-        .query_row(
-            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='channel_offsets'",
-            [],
-            |row| row.get(0),
-        )
-        .map_err(|e| {
-            if let Err(rollback_err) = conn.execute_batch("ROLLBACK TO migration_channel_offsets") {
-                tracing::warn!(error = %rollback_err, "Rollback of migration_channel_offsets failed");
-            }
-            AlephError::config(format!("Failed to check channel_offsets table: {e}"))
-        })?;
-
-    if table_exists == 0 {
-        conn.execute_batch(
-            r#"
-            CREATE TABLE channel_offsets (
-                channel_id TEXT PRIMARY KEY,
-                bot_id TEXT NOT NULL,
-                last_update_id INTEGER NOT NULL DEFAULT 0,
-                updated_at INTEGER NOT NULL
+    with_savepoint(conn, "migration_channel_offsets", || {
+        let table_exists: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='channel_offsets'",
+                [],
+                |row| row.get(0),
             )
-            "#,
-        )
-        .map_err(|e| {
-            if let Err(rollback_err) = conn.execute_batch("ROLLBACK TO migration_channel_offsets") {
-                tracing::warn!(error = %rollback_err, "Rollback of migration_channel_offsets failed");
-            }
-            AlephError::config(format!("Failed to create channel_offsets table: {e}"))
-        })?;
+            .map_err(|e| AlephError::config(format!("Failed to check channel_offsets table: {e}")))?;
 
-        tracing::info!("Created channel_offsets table");
-    } else {
-        tracing::debug!("channel_offsets table already exists, skipping creation");
-    }
+        if table_exists == 0 {
+            conn.execute_batch(
+                r#"
+                CREATE TABLE channel_offsets (
+                    channel_id TEXT PRIMARY KEY,
+                    bot_id TEXT NOT NULL,
+                    last_update_id INTEGER NOT NULL DEFAULT 0,
+                    updated_at INTEGER NOT NULL
+                )
+                "#,
+            )
+            .map_err(|e| AlephError::config(format!("Failed to create channel_offsets table: {e}")))?;
 
-    conn.execute_batch("RELEASE migration_channel_offsets")
-        .map_err(|e| {
-            AlephError::config(format!("Failed to commit channel_offsets migration: {e}"))
-        })?;
+            tracing::info!("Created channel_offsets table");
+        } else {
+            tracing::debug!("channel_offsets table already exists, skipping creation");
+        }
 
-    Ok(())
+        Ok(())
+    })
 }
 
 /// Migrate to add `sticker_descriptions` table for Telegram sticker cache.
@@ -400,58 +360,34 @@ pub fn migrate_add_channel_offsets(conn: &Connection) -> Result<(), AlephError> 
 /// - Uses IF NOT EXISTS for idempotent table creation
 /// - Uses savepoint for atomic migration
 pub fn migrate_add_sticker_descriptions(conn: &Connection) -> Result<(), AlephError> {
-    conn.execute_batch("SAVEPOINT migration_sticker_descriptions")
-        .map_err(|e| {
-            AlephError::config(format!(
-                "Failed to begin sticker_descriptions migration: {e}"
-            ))
-        })?;
-
-    let table_exists: i64 = conn
-        .query_row(
-            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='sticker_descriptions'",
-            [],
-            |row| row.get(0),
-        )
-        .map_err(|e| {
-            if let Err(rollback_err) = conn.execute_batch("ROLLBACK TO migration_sticker_descriptions") {
-                tracing::warn!(error = %rollback_err, "Rollback of migration_sticker_descriptions failed");
-            }
-            AlephError::config(format!("Failed to check sticker_descriptions table: {e}"))
-        })?;
-
-    if table_exists == 0 {
-        conn.execute_batch(
-            r#"
-            CREATE TABLE sticker_descriptions (
-                file_unique_id TEXT PRIMARY KEY,
-                description TEXT NOT NULL,
-                cached_at TEXT NOT NULL
+    with_savepoint(conn, "migration_sticker_descriptions", || {
+        let table_exists: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='sticker_descriptions'",
+                [],
+                |row| row.get(0),
             )
-            "#,
-        )
-        .map_err(|e| {
-            if let Err(rollback_err) = conn.execute_batch("ROLLBACK TO migration_sticker_descriptions") {
-                tracing::warn!(error = %rollback_err, "Rollback of migration_sticker_descriptions failed");
-            }
-            AlephError::config(format!(
-                "Failed to create sticker_descriptions table: {e}"
-            ))
-        })?;
+            .map_err(|e| AlephError::config(format!("Failed to check sticker_descriptions table: {e}")))?;
 
-        tracing::info!("Created sticker_descriptions table");
-    } else {
-        tracing::debug!("sticker_descriptions table already exists, skipping creation");
-    }
+        if table_exists == 0 {
+            conn.execute_batch(
+                r#"
+                CREATE TABLE sticker_descriptions (
+                    file_unique_id TEXT PRIMARY KEY,
+                    description TEXT NOT NULL,
+                    cached_at TEXT NOT NULL
+                )
+                "#,
+            )
+            .map_err(|e| AlephError::config(format!("Failed to create sticker_descriptions table: {e}")))?;
 
-    conn.execute_batch("RELEASE migration_sticker_descriptions")
-        .map_err(|e| {
-            AlephError::config(format!(
-                "Failed to commit sticker_descriptions migration: {e}"
-            ))
-        })?;
+            tracing::info!("Created sticker_descriptions table");
+        } else {
+            tracing::debug!("sticker_descriptions table already exists, skipping creation");
+        }
 
-    Ok(())
+        Ok(())
+    })
 }
 
 fn legacy_trace_to_agent_trace(step_index: u32, role: &str, content_json: &str) -> AgentTraceEvent {
@@ -503,50 +439,36 @@ fn extract_legacy_trace_text(content_json: &str) -> String {
 /// - Uses savepoint for atomic migration
 /// - Idempotent: skips if column already exists
 pub fn migrate_add_group_chat_owner(conn: &Connection) -> Result<(), AlephError> {
-    conn.execute_batch("SAVEPOINT migration_group_chat_owner")
-        .map_err(|e| {
-            AlephError::config(format!("Failed to begin group_chat_owner migration: {e}"))
-        })?;
+    with_savepoint(conn, "migration_group_chat_owner", || {
+        let column_exists: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('group_chat_sessions') WHERE name='owner_user_id'",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(|e| {
+                AlephError::config(format!(
+                    "Failed to check group_chat_sessions.owner_user_id column: {e}"
+                ))
+            })?;
 
-    let column_exists: i64 = conn
-        .query_row(
-            "SELECT COUNT(*) FROM pragma_table_info('group_chat_sessions') WHERE name='owner_user_id'",
-            [],
-            |row| row.get(0),
-        )
-        .map_err(|e| {
-            if let Err(rollback_err) = conn.execute_batch("ROLLBACK TO migration_group_chat_owner") {
-                tracing::warn!(error = %rollback_err, "Rollback of migration_group_chat_owner failed");
-            }
-            AlephError::config(format!(
-                "Failed to check group_chat_sessions.owner_user_id column: {e}"
-            ))
-        })?;
+        if column_exists == 0 {
+            conn.execute_batch(
+                "ALTER TABLE group_chat_sessions ADD COLUMN owner_user_id TEXT",
+            )
+            .map_err(|e| {
+                AlephError::config(format!(
+                    "Failed to add owner_user_id column to group_chat_sessions: {e}"
+                ))
+            })?;
 
-    if column_exists == 0 {
-        conn.execute_batch(
-            "ALTER TABLE group_chat_sessions ADD COLUMN owner_user_id TEXT",
-        )
-        .map_err(|e| {
-            if let Err(rollback_err) = conn.execute_batch("ROLLBACK TO migration_group_chat_owner") {
-                tracing::warn!(error = %rollback_err, "Rollback of migration_group_chat_owner failed");
-            }
-            AlephError::config(format!(
-                "Failed to add owner_user_id column to group_chat_sessions: {e}"
-            ))
-        })?;
+            tracing::info!("Added owner_user_id column to group_chat_sessions");
+        } else {
+            tracing::debug!("group_chat_sessions.owner_user_id already exists, skipping");
+        }
 
-        tracing::info!("Added owner_user_id column to group_chat_sessions");
-    } else {
-        tracing::debug!("group_chat_sessions.owner_user_id already exists, skipping");
-    }
-
-    conn.execute_batch("RELEASE migration_group_chat_owner")
-        .map_err(|e| {
-            AlephError::config(format!("Failed to commit group_chat_owner migration: {e}"))
-        })?;
-
-    Ok(())
+        Ok(())
+    })
 }
 
 /// Migrate to add `adjudicated_at_ms` column to `agent_tasks`.
@@ -565,56 +487,34 @@ pub fn migrate_add_group_chat_owner(conn: &Connection) -> Result<(), AlephError>
 /// - Uses savepoint for atomic migration
 /// - Idempotent: skips if column already exists
 pub fn migrate_add_agent_tasks_adjudicated_at(conn: &Connection) -> Result<(), AlephError> {
-    conn.execute_batch("SAVEPOINT migration_agent_tasks_adjudicated")
-        .map_err(|e| {
-            AlephError::config(format!(
-                "Failed to begin agent_tasks_adjudicated migration: {e}"
-            ))
-        })?;
-
-    let column_exists: i64 = conn
-        .query_row(
-            "SELECT COUNT(*) FROM pragma_table_info('agent_tasks') WHERE name='adjudicated_at_ms'",
-            [],
-            |row| row.get(0),
-        )
-        .map_err(|e| {
-            if let Err(rollback_err) =
-                conn.execute_batch("ROLLBACK TO migration_agent_tasks_adjudicated")
-            {
-                tracing::warn!(error = %rollback_err, "Rollback of migration_agent_tasks_adjudicated failed");
-            }
-            AlephError::config(format!(
-                "Failed to check agent_tasks.adjudicated_at_ms column: {e}"
-            ))
-        })?;
-
-    if column_exists == 0 {
-        conn.execute_batch("ALTER TABLE agent_tasks ADD COLUMN adjudicated_at_ms INTEGER")
+    with_savepoint(conn, "migration_agent_tasks_adjudicated", || {
+        let column_exists: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('agent_tasks') WHERE name='adjudicated_at_ms'",
+                [],
+                |row| row.get(0),
+            )
             .map_err(|e| {
-                if let Err(rollback_err) =
-                    conn.execute_batch("ROLLBACK TO migration_agent_tasks_adjudicated")
-                {
-                    tracing::warn!(error = %rollback_err, "Rollback of migration_agent_tasks_adjudicated failed");
-                }
                 AlephError::config(format!(
-                    "Failed to add adjudicated_at_ms column to agent_tasks: {e}"
+                    "Failed to check agent_tasks.adjudicated_at_ms column: {e}"
                 ))
             })?;
 
-        tracing::info!("Added adjudicated_at_ms column to agent_tasks");
-    } else {
-        tracing::debug!("agent_tasks.adjudicated_at_ms already exists, skipping");
-    }
+        if column_exists == 0 {
+            conn.execute_batch("ALTER TABLE agent_tasks ADD COLUMN adjudicated_at_ms INTEGER")
+                .map_err(|e| {
+                    AlephError::config(format!(
+                        "Failed to add adjudicated_at_ms column to agent_tasks: {e}"
+                    ))
+                })?;
 
-    conn.execute_batch("RELEASE migration_agent_tasks_adjudicated")
-        .map_err(|e| {
-            AlephError::config(format!(
-                "Failed to commit agent_tasks_adjudicated migration: {e}"
-            ))
-        })?;
+            tracing::info!("Added adjudicated_at_ms column to agent_tasks");
+        } else {
+            tracing::debug!("agent_tasks.adjudicated_at_ms already exists, skipping");
+        }
 
-    Ok(())
+        Ok(())
+    })
 }
 
 /// Migrate to add `interrupted_by_restart_at_ms` column to `agent_tasks`.
@@ -636,58 +536,36 @@ pub fn migrate_add_agent_tasks_adjudicated_at(conn: &Connection) -> Result<(), A
 /// - Uses savepoint for atomic migration
 /// - Idempotent: skips if column already exists
 pub fn migrate_add_agent_tasks_interrupted_by_restart(conn: &Connection) -> Result<(), AlephError> {
-    conn.execute_batch("SAVEPOINT migration_agent_tasks_interrupted_by_restart")
-        .map_err(|e| {
-            AlephError::config(format!(
-                "Failed to begin agent_tasks_interrupted_by_restart migration: {e}"
-            ))
-        })?;
+    with_savepoint(conn, "migration_agent_tasks_interrupted_by_restart", || {
+        let column_exists: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('agent_tasks') WHERE name='interrupted_by_restart_at_ms'",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(|e| {
+                AlephError::config(format!(
+                    "Failed to check agent_tasks.interrupted_by_restart_at_ms column: {e}"
+                ))
+            })?;
 
-    let column_exists: i64 = conn
-        .query_row(
-            "SELECT COUNT(*) FROM pragma_table_info('agent_tasks') WHERE name='interrupted_by_restart_at_ms'",
-            [],
-            |row| row.get(0),
-        )
-        .map_err(|e| {
-            if let Err(rollback_err) =
-                conn.execute_batch("ROLLBACK TO migration_agent_tasks_interrupted_by_restart")
-            {
-                tracing::warn!(error = %rollback_err, "Rollback of migration_agent_tasks_interrupted_by_restart failed");
-            }
-            AlephError::config(format!(
-                "Failed to check agent_tasks.interrupted_by_restart_at_ms column: {e}"
-            ))
-        })?;
+        if column_exists == 0 {
+            conn.execute_batch(
+                "ALTER TABLE agent_tasks ADD COLUMN interrupted_by_restart_at_ms INTEGER",
+            )
+            .map_err(|e| {
+                AlephError::config(format!(
+                    "Failed to add interrupted_by_restart_at_ms column to agent_tasks: {e}"
+                ))
+            })?;
 
-    if column_exists == 0 {
-        conn.execute_batch(
-            "ALTER TABLE agent_tasks ADD COLUMN interrupted_by_restart_at_ms INTEGER",
-        )
-        .map_err(|e| {
-            if let Err(rollback_err) =
-                conn.execute_batch("ROLLBACK TO migration_agent_tasks_interrupted_by_restart")
-            {
-                tracing::warn!(error = %rollback_err, "Rollback of migration_agent_tasks_interrupted_by_restart failed");
-            }
-            AlephError::config(format!(
-                "Failed to add interrupted_by_restart_at_ms column to agent_tasks: {e}"
-            ))
-        })?;
+            tracing::info!("Added interrupted_by_restart_at_ms column to agent_tasks");
+        } else {
+            tracing::debug!("agent_tasks.interrupted_by_restart_at_ms already exists, skipping");
+        }
 
-        tracing::info!("Added interrupted_by_restart_at_ms column to agent_tasks");
-    } else {
-        tracing::debug!("agent_tasks.interrupted_by_restart_at_ms already exists, skipping");
-    }
-
-    conn.execute_batch("RELEASE migration_agent_tasks_interrupted_by_restart")
-        .map_err(|e| {
-            AlephError::config(format!(
-                "Failed to commit agent_tasks_interrupted_by_restart migration: {e}"
-            ))
-        })?;
-
-    Ok(())
+        Ok(())
+    })
 }
 
 /// Migrate to add `partition` to `memory_events` (r11 D7).
@@ -710,61 +588,40 @@ pub fn migrate_add_agent_tasks_interrupted_by_restart(conn: &Connection) -> Resu
 /// - Uses savepoint for atomic migration
 /// - Idempotent: skips the column when present; the index is `IF NOT EXISTS`
 pub fn migrate_add_memory_events_partition(conn: &Connection) -> Result<(), AlephError> {
-    conn.execute_batch("SAVEPOINT migration_memory_events_partition")
-        .map_err(|e| {
-            AlephError::config(format!(
-                "Failed to begin memory_events_partition migration: {e}"
-            ))
-        })?;
-    let rollback = |conn: &Connection| {
-        if let Err(rollback_err) =
-            conn.execute_batch("ROLLBACK TO migration_memory_events_partition")
-        {
-            tracing::warn!(error = %rollback_err, "Rollback of migration_memory_events_partition failed");
-        }
-    };
-
-    let column_exists: i64 = conn
-        .query_row(
-            "SELECT COUNT(*) FROM pragma_table_info('memory_events') WHERE name='partition'",
-            [],
-            |row| row.get(0),
-        )
-        .map_err(|e| {
-            rollback(conn);
-            AlephError::config(format!(
-                "Failed to check memory_events.partition column: {e}"
-            ))
-        })?;
-
-    if column_exists == 0 {
-        conn.execute_batch("ALTER TABLE memory_events ADD COLUMN partition TEXT")
+    with_savepoint(conn, "migration_memory_events_partition", || {
+        let column_exists: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('memory_events') WHERE name='partition'",
+                [],
+                |row| row.get(0),
+            )
             .map_err(|e| {
-                rollback(conn);
                 AlephError::config(format!(
-                    "Failed to add partition column to memory_events: {e}"
+                    "Failed to check memory_events.partition column: {e}"
                 ))
             })?;
-        tracing::info!("Added partition column to memory_events");
-    } else {
-        tracing::debug!("memory_events.partition already exists, skipping");
-    }
 
-    conn.execute_batch(
-        "CREATE INDEX IF NOT EXISTS idx_me_partition_fact ON memory_events(partition, fact_id)",
-    )
-    .map_err(|e| {
-        rollback(conn);
-        AlephError::config(format!("Failed to create idx_me_partition_fact: {e}"))
-    })?;
+        if column_exists == 0 {
+            conn.execute_batch("ALTER TABLE memory_events ADD COLUMN partition TEXT")
+                .map_err(|e| {
+                    AlephError::config(format!(
+                        "Failed to add partition column to memory_events: {e}"
+                    ))
+                })?;
+            tracing::info!("Added partition column to memory_events");
+        } else {
+            tracing::debug!("memory_events.partition already exists, skipping");
+        }
 
-    conn.execute_batch("RELEASE migration_memory_events_partition")
+        conn.execute_batch(
+            "CREATE INDEX IF NOT EXISTS idx_me_partition_fact ON memory_events(partition, fact_id)",
+        )
         .map_err(|e| {
-            AlephError::config(format!(
-                "Failed to commit memory_events_partition migration: {e}"
-            ))
+            AlephError::config(format!("Failed to create idx_me_partition_fact: {e}"))
         })?;
-    Ok(())
+
+        Ok(())
+    })
 }
 
 /// Attribute legacy `memory_events` rows to the partition their fact lives in.

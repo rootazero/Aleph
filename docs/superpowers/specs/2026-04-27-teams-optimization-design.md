@@ -92,7 +92,7 @@ src/teams/
 | EventHandlerRegistry | `src/event/handler.rs` | 管理事件处理器生命周期 |
 | Sandbox | `src/sandbox/mod.rs` | OS 级沙箱隔离 |
 | WorkspaceSandbox | `src/sandbox/workspace.rs` | 基于目录的 workspace 隔离 |
-| ProcessSupervisor | `src/process_supervisor/` | PTY 进程监控 |
+| ProcessSupervisor | historical source path unavailable in the current tree | PTY 进程监控 |
 
 ---
 
@@ -861,11 +861,11 @@ struct AgentProcessRegistry {
 
 ### 7.2 参考文档
 
-- [Aleph Event System](src/event/mod.rs)
-- [Aleph Sandbox](src/sandbox/mod.rs)
-- [Aleph Process Supervisor](src/process_supervisor/mod.rs)
-- [ClawTeam Event Bus](/Volumes/TBU4/Github/ClawTeam/clawteam/events/bus.py)
-- [Aleph Teams 模块现状](src/teams/mod.rs)
+- [Aleph Event System](../../../src/event/mod.rs)
+- [Aleph Sandbox](../../../src/sandbox/mod.rs)
+- [Aleph Process Supervisor] (historical source path unavailable in the current tree)
+- ClawTeam Event Bus (external comparison; checkout path varies by machine)
+- [Aleph Teams 模块现状](../../../src/teams/mod.rs)
 
 ---
 

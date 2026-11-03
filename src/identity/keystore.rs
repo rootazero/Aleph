@@ -44,7 +44,7 @@ use crate::gateway::security::store::SecurityStore;
 use crate::sync_primitives::{Arc, Mutex};
 
 /// A public key an agent has held. Retired keys are kept, never deleted.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AgentKeyRow {
     pub fingerprint: String,
     pub agent_id: String,
@@ -54,7 +54,7 @@ pub struct AgentKeyRow {
 }
 
 /// An agent's identity: its active key plus its chain anchor.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AgentIdentityRow {
     pub agent_id: String,
     pub active_fingerprint: String,

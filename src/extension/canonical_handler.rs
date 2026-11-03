@@ -6,12 +6,102 @@ use super::runtime_owner::RuntimeOwner;
 use super::PluginLoader;
 use crate::session::events::ToolOutput;
 use crate::sync_primitives::Arc;
+use crate::tools::descriptor::ToolCallIdentity;
 use crate::tools::handlers::ToolHandler;
 use crate::tools::service::{ToolDefinition, ToolDefinitionMetadata, ToolError, ToolSource};
 use serde_json::Value;
 use std::sync::Weak;
 
 /// Weak ownership avoids a receipt -> snapshot -> handler -> owner cycle.
+struct PluginColdHandler {
+    manager: Weak<super::ExtensionManager>,
+    owner: Weak<RuntimeOwner>,
+    owner_generation: u64,
+    registration: ToolRegistration,
+}
+
+#[async_trait::async_trait]
+impl ToolHandler for PluginColdHandler {
+    async fn invoke(&self, input: Value) -> Result<ToolOutput, ToolError> {
+        let error = |cause: String| ToolError::Execution {
+            name: self.registration.name.clone(),
+            cause,
+        };
+        let manager = self
+            .manager
+            .upgrade()
+            .ok_or_else(|| error("extension manager is gone".into()))?;
+        let owner = self
+            .owner
+            .upgrade()
+            .ok_or_else(|| error("runtime owner is gone".into()))?;
+        if !manager.owner_is_current(&owner) || owner.owner_generation != self.owner_generation {
+            return Err(error("cold plugin owner incarnation is stale".into()));
+        }
+        manager
+            .activate_owner(Arc::clone(&owner))
+            .await
+            .map_err(|cause| error(cause.to_string()))?;
+        if !manager.owner_is_current(&owner) || owner.owner_generation != self.owner_generation {
+            return Err(error("activated plugin owner incarnation is stale".into()));
+        }
+        let registry = manager
+            .tool_handler_registry
+            .read()
+            .unwrap_or_else(|error| error.into_inner())
+            .clone()
+            .ok_or_else(|| error("canonical tool registry is unavailable".into()))?;
+        let lease = registry
+            .capture_entry(&self.registration.name)
+            .ok_or_else(|| error("activated plugin tool is not callable".into()))?;
+        if !lease.matches_plugin_owner(&self.registration.plugin_id, self.owner_generation) {
+            return Err(error("activated plugin owner incarnation is stale".into()));
+        }
+        if lease.is_cold_declaration() {
+            return Err(error("plugin activation did not publish Ready".into()));
+        }
+        let publication = lease
+            .entry()
+            .ready
+            .clone()
+            .ok_or_else(|| error("activated plugin tool has no Ready proof".into()))?;
+        let identity = ToolCallIdentity::from_descriptor(&lease.entry().descriptor);
+        crate::tools::dispatch_verdict::with_rebound_handler(
+            identity,
+            crate::tools::dispatch_verdict::with_plugin_publication(
+                Some(publication),
+                lease.entry().handler.invoke(input),
+            ),
+        )
+        .await
+    }
+
+    fn definition(&self) -> ToolDefinition {
+        ToolDefinition {
+            name: self.registration.name.clone(),
+            description: self.registration.description.clone(),
+            input_schema: self.registration.parameters.clone(),
+            source: ToolSource::Extension {
+                plugin_id: self.registration.plugin_id.clone(),
+            },
+            metadata: ToolDefinitionMetadata::default(),
+        }
+    }
+}
+
+pub(super) fn build_cold_handler(
+    manager: Weak<super::ExtensionManager>,
+    owner: &Arc<RuntimeOwner>,
+    registration: ToolRegistration,
+) -> Arc<dyn ToolHandler> {
+    Arc::new(PluginColdHandler {
+        manager,
+        owner: Arc::downgrade(owner),
+        owner_generation: owner.owner_generation,
+        registration,
+    })
+}
+
 struct PluginCanonicalHandler {
     loader: Arc<tokio::sync::RwLock<PluginLoader>>,
     owner: Weak<RuntimeOwner>,

@@ -90,6 +90,8 @@
 
 ## Capability Plane
 
+> Current-state cross-subsystem map: [`FEATURE_LOCATOR.md`](FEATURE_LOCATOR.md#current-state--当前现状). This architecture keeps semantic Capability contracts separate from plugin assembly and preserves the existing authority for each bounded production slice. / 当前现状跨子系统地图：[`FEATURE_LOCATOR.md`](FEATURE_LOCATOR.md#current-state--当前现状)。本架构保持 Capability 语义契约与插件装配分离，并保留各有界生产切片的既有 authority。
+
 Capability is a semantic contract, not another plugin or dependency-injection container. In the first converged slice, a callable Tool is represented by one `ToolCapabilityDescriptor` and one live handler in `ToolHandlerRegistry`. The descriptor is the source for discovery and projection; the handler is the execution implementation. `LoopToolRegistry`, provider metadata, ToolCatalog, MCP bridge, and recovery are consumers of that contract, not parallel registries.
 
 ```text
@@ -188,6 +190,10 @@ The `discovered` bit is a derived cache of completed declaration work. Reload in
 Stage H 在保留 B5/B6 owner 与 publication authority 的前提下，把既有 `ExtensionManager` discovery walk 分成 declaration-only read path。`ensure_discovered()` 扫描、解析并 admission 已安装 extension，发布 declaration row，并将 eligible tool-only WASM 声明为 `RuntimeOwner(Cold)`；它不卸载现有 owner、不清空 owner table、不 mount deferred provider、不读取 guest bytes、不创建 provider resource，也不发布 callable。`plugins.list`、plugin management 的读 action 与 Hub installed reconciliation 使用这条路径；`ensure_loaded()` 与显式 enable/reload/control 仍是 activation boundary，继续走既有 owner 与 canonical `ToolHandlerRegistry` 路径。
 
 `discovered` 只是已完成 declaration work 的派生缓存；reload 会使它失效。它不是 durable enabled state、provider state、generation map 或第二份 owner authority。本 Stage H 只覆盖 ExtensionManager 管理的 tool-only WASM；channel、PTY、memory、MCP 与其他 provider kind 仍 deferred，也不声明 RSS、thread、engine/JIT、executable page 或 OS mapping reclamation。
+
+`Current closure (2026-11-03):` the Stage H declaration read still performs no guest read, provider authentication, or resource creation, but it now publishes metadata-only Cold declarations in the existing canonical Tool registry. An exact permitted canonical Tool call may activate the retained owner through the existing single-flight path; only after Ready publication and identity/generation checks does it re-enter the Ready handler. Read-side `catalog`/`describe`/`resolve`/`project`/ProjectionHost/observer/doctor calls never activate, while transport compatibility remains mounted-only. The dated B5/B6 paragraphs above remain historical evidence where they say that no callable metadata entry is published.
+
+`当前闭合（2026-11-03）：` Stage H 的声明读取仍不读取 guest、不认证 provider、不创建 resource，但现在会在既有 canonical Tool registry 中发布只含 metadata 的 Cold declaration。只有通过权限与 scope 的 exact canonical Tool call 才可能经既有 single-flight 路径激活 retained owner；Ready publication 与 identity/generation 校验完成后，调用才重新进入 Ready handler。`catalog`/`describe`/`resolve`/`project`/ProjectionHost/observer/doctor 等读侧永不激活，transport compatibility 仍保持 mounted-only。上方 B5/B6 日期段落属于历史证据，其中“没有发布 callable metadata entry”的表述不代表当前状态。
 
 ### Current Generic Gateway source-owned capability read/lease slice / 当前 Generic Gateway 源所有 capability read/lease 切片（2026-10-30）
 
@@ -1089,6 +1095,6 @@ retirement 使用短 source-gate fence 与最终 publication commit；真实 cha
 - [Extension System](EXTENSION_SYSTEM.md) - Plugin architecture
 - [Security](SECURITY.md) - Exec approval and permissions
 - [Sandbox](SANDBOX.md) - `Sandbox` trait, `WorkspaceSandbox`, capability pipeline
-- [Skill Sandboxing](SKILL_SANDBOXING.md) - OS-native sandboxing for evolved skills
+- [Skill Sandboxing] (historical reference unavailable in the current tree) - OS-native sandboxing for evolved skills
 - [Skill Model Taxonomy](SKILL_MODEL_TAXONOMY.md) - Four-layer skill type map (Phase 1 of unification 2026-05-20)
 - [Markdown Skill Authoring](MARKDOWN_SKILL_AUTHORING.md) - SKILL.md frontmatter + sandbox modes + host-mode contract

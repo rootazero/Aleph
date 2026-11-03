@@ -334,7 +334,7 @@ async fn serve_artifact(
     } else {
         RateLimitScope::RpcHeavy
     };
-    let key = RateLimitKey::new(&client_ip.to_string(), scope);
+    let key = RateLimitKey::for_caller(&client_ip.to_string(), scope, resolved.local);
     if let Err(e) = state.rate_limiter.check_and_record(&key) {
         return (
             StatusCode::TOO_MANY_REQUESTS,
@@ -410,7 +410,11 @@ async fn serve_artifact(
     // returns a complete usable copy of anything. See
     // [`RangeVerdict::is_bulk_read`] for what this bounds and what it leaves.
     if has_range && verdict.is_bulk_read(total) {
-        let narrow = RateLimitKey::new(&client_ip.to_string(), RateLimitScope::RpcHeavy);
+        let narrow = RateLimitKey::for_caller(
+            &client_ip.to_string(),
+            RateLimitScope::RpcHeavy,
+            resolved.local,
+        );
         if let Err(e) = state.rate_limiter.check_and_record(&narrow) {
             return (
                 StatusCode::TOO_MANY_REQUESTS,

@@ -268,8 +268,15 @@ impl SecretVault {
         &mut self,
         entries: HashMap<String, EncryptedEntry>,
     ) -> Result<(), SecretError> {
-        self.data.entries = entries;
-        self.save()
+        // Put the previous map back when the write fails: the in-memory vault
+        // and the file must agree, otherwise the process keeps serving
+        // ciphertexts the on-disk copy no longer holds.
+        let previous = std::mem::replace(&mut self.data.entries, entries);
+        if let Err(e) = self.save() {
+            self.data.entries = previous;
+            return Err(e);
+        }
+        Ok(())
     }
 
     /// Get the number of entries.

@@ -91,6 +91,12 @@ impl ReplayPreparer for ReplayAdapter {
         let Some(entry) = snapshot.entry(&req.tool_name) else {
             return ReplayPrepare::Refused;
         };
+        if entry.cold.is_some() {
+            // Replay claims are consumed before PermitInvoker runs. A Cold
+            // declaration would otherwise consume a claim and fail after the
+            // handler rebinds to Ready, so replay stays mounted-only.
+            return ReplayPrepare::Refused;
+        }
         let current = ToolCallIdentity::from_descriptor(&entry.descriptor);
         // C5: predicate parity with `boundary_repair::replay_decision`, plus the
         // `closed`/`effective_input` gates above.
@@ -185,6 +191,7 @@ mod tests {
     struct FakeHandler {
         name: String,
         fail: bool,
+        source: ToolSource,
     }
 
     #[async_trait]
@@ -206,7 +213,7 @@ mod tests {
                 name: self.name.clone(),
                 description: String::new(),
                 input_schema: serde_json::json!({}),
-                source: ToolSource::Builtin,
+                source: self.source.clone(),
                 metadata: ToolDefinitionMetadata {
                     idempotent: false,
                     ..Default::default()
@@ -248,6 +255,7 @@ mod tests {
         Arc::new(FakeHandler {
             name: name.into(),
             fail,
+            source: ToolSource::Builtin,
         })
     }
 
@@ -260,6 +268,35 @@ mod tests {
             .expect("register safe tool");
         let identity =
             ToolDescriptorLookup::tool_call_identity(&registry, name).expect("safe identity");
+        (Arc::new(registry), identity)
+    }
+
+    fn register_cold_safe(name: &str) -> (Arc<ToolHandlerRegistry>, ToolCallIdentity) {
+        let registry = ToolHandlerRegistry::new();
+        let plugin_id = "cold-plugin";
+        let source = ToolSource::Extension {
+            plugin_id: plugin_id.into(),
+        };
+        let mut descriptor = safe_desc(name);
+        descriptor.source = source.clone();
+        let handler: Arc<dyn ToolHandler> = Arc::new(FakeHandler {
+            name: name.into(),
+            fail: false,
+            source,
+        });
+        registry
+            .publish_plugin_cold_batch(crate::tools::registry::PluginColdBatch {
+                plugin_id: plugin_id.into(),
+                owner_generation: 1,
+                entries: vec![crate::tools::registry::PluginColdBatchEntry {
+                    descriptor,
+                    handler,
+                    max_result_tokens: None,
+                }],
+            })
+            .expect("publish cold tool");
+        let identity = ToolDescriptorLookup::tool_call_identity(&registry, name)
+            .expect("cold identity");
         (Arc::new(registry), identity)
     }
 
@@ -288,6 +325,13 @@ mod tests {
         assert!(matches!(adapter.prepare(&req), ReplayPrepare::Refused));
     }
 
+    #[test]
+    fn cold_safe_tool_is_refused_before_replay_claim() {
+        let (registry, identity) = register_cold_safe("cold_tool");
+        let adapter = ReplayAdapter::new(registry);
+        let req = request("cold_tool", identity, Some(serde_json::json!({})));
+        assert!(matches!(adapter.prepare(&req), ReplayPrepare::Refused));
+    }
     #[tokio::test]
     async fn some_effective_input_on_safe_tool_is_ready_and_invokes() {
         let (registry, identity) = register_safe("safe_tool");

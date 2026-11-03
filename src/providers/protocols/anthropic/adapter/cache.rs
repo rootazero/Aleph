@@ -12,7 +12,17 @@
 
 use crate::config::types::provider::CacheRetention;
 use crate::config::ProviderConfig;
-use crate::providers::message::CacheControl;
+use crate::providers::message::{CacheControl, EphemeralTtl};
+
+/// Safely convert `CacheControl` to its JSON representation without Serde overhead or `.expect()`.
+fn cache_control_to_json(cc: CacheControl) -> serde_json::Value {
+    match cc {
+        CacheControl::Ephemeral { ttl: None } => serde_json::json!({ "type": "ephemeral" }),
+        CacheControl::Ephemeral {
+            ttl: Some(EphemeralTtl::OneHour),
+        } => serde_json::json!({ "type": "ephemeral", "ttl": "1h" }),
+    }
+}
 
 /// Resolve the effective prompt-cache retention for a request given the
 /// provider config and the target endpoint URL. See spec §2 decision table.
@@ -55,8 +65,7 @@ pub(super) const MAX_CACHE_BREAKPOINTS: usize = 4;
 /// `SystemBlock::cached_text` marker at "ephemeral, no TTL"; this lets the
 /// 1h ephemeral variant take over without re-walking the entire system array.
 pub(super) fn promote_system_marker_ttl(payload: &mut serde_json::Value, cc: CacheControl) {
-    // rust-doctor-disable-next-line unwrap-in-production
-    let cc_json = serde_json::to_value(cc).expect("CacheControl serialize is infallible");
+    let cc_json = cache_control_to_json(cc);
     let Some(arr) = payload.get_mut("system").and_then(|v| v.as_array_mut()) else {
         return;
     };
@@ -87,8 +96,7 @@ pub(super) fn inject_cache_control_into_system_array(
     payload: &mut serde_json::Value,
     cc: CacheControl,
 ) -> bool {
-    // rust-doctor-disable-next-line unwrap-in-production
-    let cc_json = serde_json::to_value(cc).expect("CacheControl serialize is infallible");
+    let cc_json = cache_control_to_json(cc);
 
     match payload.get_mut("system") {
         None | Some(serde_json::Value::Null) => false,
@@ -98,7 +106,9 @@ pub(super) fn inject_cache_control_into_system_array(
                 "text": std::mem::take(s),
                 "cache_control": cc_json,
             }]);
-            payload["system"] = normalized;
+            if let Some(obj) = payload.as_object_mut() {
+                obj.insert("system".to_string(), normalized);
+            }
             true
         }
         Some(serde_json::Value::Array(arr)) => {
@@ -182,8 +192,7 @@ pub(super) fn inject_cache_control_into_recent_messages(
     if max_breakpoints == 0 {
         return;
     }
-    // rust-doctor-disable-next-line unwrap-in-production
-    let cc_json = serde_json::to_value(cc).expect("CacheControl serialize is infallible");
+    let cc_json = cache_control_to_json(cc);
 
     let Some(messages) = payload.get_mut("messages").and_then(|v| v.as_array_mut()) else {
         return;
@@ -201,10 +210,14 @@ pub(super) fn inject_cache_control_into_recent_messages(
         }
         match msg.get_mut("content") {
             None | Some(serde_json::Value::Null) => {}
-            Some(serde_json::Value::String(s)) => {
-                msg["content"] = serde_json::json!([{
+            Some(content @ serde_json::Value::String(_)) => {
+                let s = match std::mem::take(content) {
+                    serde_json::Value::String(s) => s,
+                    _ => unreachable!(),
+                };
+                *content = serde_json::json!([{
                     "type": "text",
-                    "text": std::mem::take(s),
+                    "text": s,
                     "cache_control": cc_json.clone(),
                 }]);
                 remaining -= 1;

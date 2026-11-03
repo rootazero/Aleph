@@ -15,6 +15,8 @@ Aleph 插件系统实现了 **单向兼容 + 超集** 策略：
 
 ## Provider lifecycle foundation / Provider 生命周期基础（2026-10-21）
 
+> Cross-subsystem current-state entry: [`FEATURE_LOCATOR.md`](FEATURE_LOCATOR.md#current-state--当前现状). This document owns plugin discovery and activation semantics; the locator owns the compact cross-subsystem map. / 跨子系统当前现状入口：[`FEATURE_LOCATOR.md`](FEATURE_LOCATOR.md#current-state--当前现状)。本文档拥有插件 discovery 与 activation 语义；locator 拥有紧凑的跨子系统地图。
+
 `src/capability/provider.rs` adds a pure state machine and shared handle for `InProcess` and future `Bridge` providers. It publishes lifecycle transitions and increments a generation for each restart. `ToolHandlerRegistry::new_with_provider` connects that handle to the canonical Tool registry: when the provider is not `Ready`, callable snapshots and resolution fail closed while registration data remains retained. `BackendLease.provider_generation` and `ResolveError::StaleProvider` fence old leases after stop or restart.
 
 The lifecycle contract does not create a second plugin manager. At this 2026-10-21 pre-Stage-F/G/H baseline, `src/extension/lifecycle.rs::ExtensionManager` still owned discovery, mount/unmount effects, and reload; `src/extension/plugin_state.rs` remained the durable enabled configuration. The Provider handle was the Core boundary reserved for later owner-driven integration at that historical point. This dated baseline did not start sidecars, load dynamic libraries, or wire ExtensionManager side effects into the state machine. The current bounded production wiring is recorded below: `ExtensionManager` / `RuntimeOwner` drive ProviderLifecycle transitions only for ExtensionManager-managed tool-only WASM.
@@ -233,6 +235,10 @@ Reload/unmount 继续使用既有 generation、identity 和 binding fences。sta
 `ExtensionManager::ensure_discovered()` 是本阶段有界 tool-only WASM 的读边界。它扫描、解析并应用既有 admission policy，发布既有 declaration row，并为 eligible plugin 创建 `Cold` 状态的 `RuntimeOwner`。它不会调用 `mount_parsed`、读取 guest bytes、构造 Extism instance、打开 provider resource，也不会发布 callable tool。`plugins.list`、Hub 的 installed-plugin reconciliation 以及 `plugin_manage` 的读 action 都使用这条路径；激活后的读取仍观察既有 owner 与 canonical publication，不会重新 mount。`discovered` 只是已完成工作的派生缓存，显式 reload 会使它失效。
 
 `ensure_loaded()` 与显式 enable/reload/control 操作仍是 activation boundary，继续使用既有 owner、generation、admission、disposer 和 `ToolHandlerRegistry` publication 路径；projection、snapshot 或新 registry 都不是 activation authority。本 Stage H 只覆盖 ExtensionManager 管理的 tool-only WASM；channel、PTY、memory、MCP 与其他 provider kind 仍 deferred，也不声明 RSS、thread、engine/JIT、executable page 或 OS mapping reclamation。
+
+`Current closure (2026-11-03):` discovery still performs no guest read or provider authentication, but it now publishes metadata-only Cold tool declarations in the existing canonical registry. An exact permitted canonical Tool call may activate that retained owner through the existing single-flight path; it rebinds to the Ready publication before guest execution. Read-side catalog/describe/resolve/project/observer/doctor calls never activate, and transport compatibility remains mounted-only. The dated Stage H paragraphs above are historical boundary evidence where they say that no callable metadata entry exists.
+
+`当前闭合（2026-11-03）：` discovery 仍不读取 guest 或认证 provider，但现在会在既有 canonical registry 中发布只含 metadata 的 Cold tool declaration。只有通过权限与 scope 的 exact canonical Tool call 才可能经既有 single-flight 路径激活 retained owner，并在 guest 执行前重新绑定到 Ready publication。catalog/describe/resolve/project/observer/doctor 等读侧永不激活，transport compatibility 仍保持 mounted-only。上方 Stage H 的日期段落属于历史边界证据，其中“没有 callable metadata entry”的表述不代表当前状态。
 
 Runtime 与 **origin** 是两个轴。origin（`PluginOrigin`）多了一个值：`ClaudeCache`——`~/.claude/plugins/`
 里 Claude Code 已装的插件（读 `installed_plugins.json`，解析到 `cache/<marketplace>/<plugin>/<version>/`）。

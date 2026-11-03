@@ -997,10 +997,9 @@ pub(crate) fn tool_use_blocks(tool_calls: &[NativeToolCall]) -> Vec<Value> {
                 // `json!({...})` above always yields an Object, but saying so
                 // through `block["…"] = …` trips `clippy::indexing_slicing`:
                 // `Index for Value` panics unlabelled off an Object.
-                let obj = block
-                    .as_object_mut()
-                    .expect("block built from json!(...) must be an Object");
-                obj.insert("thought_signature".into(), Value::String(sig.clone()));
+                if let Some(obj) = block.as_object_mut() {
+                    obj.insert("thought_signature".into(), Value::String(sig.clone()));
+                }
             }
             block
         })
@@ -1020,11 +1019,11 @@ pub(crate) fn canonical_json_string(value: &Value) -> String {
     fn canon(v: &Value) -> Value {
         match v {
             Value::Object(m) => {
-                let mut keys: Vec<&String> = m.keys().collect();
-                keys.sort();
-                let mut out = serde_json::Map::with_capacity(keys.len());
-                for k in keys {
-                    out.insert(k.clone(), canon(&m[k]));
+                let mut entries: Vec<(&String, &Value)> = m.iter().collect();
+                entries.sort_by_key(|(k, _)| *k);
+                let mut out = serde_json::Map::with_capacity(entries.len());
+                for (k, v) in entries {
+                    out.insert(k.clone(), canon(v));
                 }
                 Value::Object(out)
             }

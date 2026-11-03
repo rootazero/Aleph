@@ -163,7 +163,10 @@ impl DreamStage for NoteLintStage {
                     continue;
                 }
 
-                let corrected_target = fuzzy_matches[0].to_string();
+                let Some(corrected_target) = fuzzy_matches.first() else {
+                    continue;
+                };
+                let corrected_target = corrected_target.to_string();
                 if corrected_target == target {
                     // Identical — nothing to rewrite (shouldn't happen given empty candidates above,
                     // but guard against it)
@@ -328,11 +331,11 @@ fn ensure_frontmatter(content: &str, default_category: &str) -> Option<String> {
     }
 
     // Parse the frontmatter section to check for missing fields
-    let after_open = &trimmed[3..];
+    let after_open = trimmed.get(3..)?;
     let close_pos = after_open.find("---")?;
 
-    let yaml_section = &after_open[..close_pos];
-    let body_after = &after_open[close_pos + 3..];
+    let yaml_section = after_open.get(..close_pos)?;
+    let body_after = after_open.get(close_pos + 3..)?;
 
     let has_category = yaml_section.contains("category:");
     let has_tags = yaml_section.contains("tags:");

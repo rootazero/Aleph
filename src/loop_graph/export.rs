@@ -202,12 +202,17 @@ fn dot_escape(s: &str) -> String {
 }
 
 fn truncate_chars(s: &str, max: usize) -> String {
-    if s.chars().count() <= max {
-        return s.to_string();
+    let mut char_count = 0;
+    for (byte_idx, _) in s.char_indices() {
+        if char_count == max {
+            let mut out = String::with_capacity(byte_idx + '…'.len_utf8());
+            out.push_str(&s[..byte_idx]);
+            out.push('…');
+            return out;
+        }
+        char_count += 1;
     }
-    let mut out: String = s.chars().take(max).collect();
-    out.push('…');
-    out
+    s.to_string()
 }
 
 #[cfg(test)]

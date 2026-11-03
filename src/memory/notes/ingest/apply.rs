@@ -158,8 +158,7 @@ fn ensure_origin_marker(line: &str) -> String {
         regex::Regex::new(
             r"<!--\s*(?:src:[^,]+,\s*)?origin:\s*(?:raw_source|prior_note|inferred|legacy|system)\s*,\s*inferred:\s*(?:true|false)\s*-->",
         )
-        // rust-doctor-disable-next-line unwrap-in-production
-        .unwrap()
+        .expect("origin marker regex must compile")
     });
     if RE.is_match(line) {
         line.to_string()
@@ -553,9 +552,18 @@ impl<'a, S: NoteStore + Send + Sync + 'static> CompoundApplyTx<'a, S> {
             // rust-doctor-disable-next-line excessive-clone
             moved.push((s.staged_path.clone(), s.target_path.clone()));
 
-            self.store
+            if let Err(e) = self
+                .store
                 .index_note(&s.note, self.agent_id, &s.category)
-                .await?;
+                .await
+            {
+                for (from, to) in moved.iter().rev() {
+                    if let Err(rollback_err) = tokio::fs::rename(to, from).await {
+                        tracing::warn!(error = %rollback_err, from = %to.display(), to = %from.display(), "undo rename failed during rollback");
+                    }
+                }
+                return Err(e.into());
+            }
 
             match s.op_label {
                 "create" => report.created += 1,
@@ -589,10 +597,11 @@ impl<'a, S: NoteStore + Send + Sync + 'static> CompoundApplyTx<'a, S> {
         }
 
         for (old_path, new_path) in &self.pending_supersedes {
-            let _ = self.mark_superseded(old_path, new_path).await;
-            report.superseded += 1;
-            // rust-doctor-disable-next-line excessive-clone
-            report.touched_paths.push(old_path.clone());
+            if self.mark_superseded(old_path, new_path).await.unwrap_or(false) {
+                report.superseded += 1;
+                // rust-doctor-disable-next-line excessive-clone
+                report.touched_paths.push(old_path.clone());
+            }
         }
 
         if let Err(e) = tokio::fs::remove_dir_all(&self.tx_root).await {
@@ -667,10 +676,10 @@ impl<'a, S: NoteStore + Send + Sync + 'static> CompoundApplyTx<'a, S> {
         }
     }
 
-    async fn mark_superseded(&self, old_path: &str, new_path: &str) -> Result<(), AlephError> {
+    async fn mark_superseded(&self, old_path: &str, new_path: &str) -> Result<bool, AlephError> {
         let (category, filename) = match split_path(old_path) {
             Ok(p) => p,
-            Err(_) => return Ok(()),
+            Err(_) => return Ok(false),
         };
         let safe = sanitize_title(&filename)?;
         let disk = self
@@ -682,13 +691,13 @@ impl<'a, S: NoteStore + Send + Sync + 'static> CompoundApplyTx<'a, S> {
             .await
             .map_err(|e| AlephError::other(format!("supersede: stat old: {e}")))?
         {
-            return Ok(());
+            return Ok(false);
         }
         let body = tokio::fs::read_to_string(&disk)
             .await
             .map_err(|e| AlephError::other(format!("supersede: read old: {e}")))?;
         if body.contains("## Superseded by") {
-            return Ok(());
+            return Ok(false);
         }
         let marker = format!(
             "\n## Superseded by [[{new_path}]] ({})\n",
@@ -711,7 +720,7 @@ impl<'a, S: NoteStore + Send + Sync + 'static> CompoundApplyTx<'a, S> {
             );
             self.store.index_note(&n, self.agent_id, &category).await?;
         }
-        Ok(())
+        Ok(true)
     }
 
     pub async fn rollback(mut self) {

@@ -21,6 +21,7 @@
 //!   except for connections already walled at `"guest"` (see that function).
 
 use std::collections::HashMap;
+use std::sync::Weak;
 
 use serde_json::Value;
 use tokio::sync::RwLock;
@@ -509,6 +510,13 @@ pub async fn handle_update(
         }
     }
 
+    // One authority change, one guard: the store write and the live re-stamp
+    // below must not interleave with another request's for the SAME user, or
+    // the older role wins the re-stamp and a demotion is undone on every live
+    // connection of that user. Held across the write AND the re-stamp (and the
+    // deactivation sweep that follows it), released when this handler returns.
+    let _role_guard = role_update_guard(&params.user_id).lock_owned().await;
+
     // Read the prior state BEFORE the write: the transition detail
     // (`active→deactivated`) is what the audit entry and the receipt both
     // report, and after `update_user` commits there is nothing left to diff
@@ -676,6 +684,48 @@ pub async fn handle_update(
             format!("failed to read updated user: {e}"),
         ),
     }
+}
+
+/// How many dead guard slots may pile up before the table is pruned.
+const ROLE_GUARD_PRUNE_AT: usize = 128;
+
+/// Resolve the guard for `user_id`, creating it if no live holder exists.
+///
+/// Per-user guards that serialize `users.update` for one principal.
+///
+/// The store write and the live re-stamp are ONE authority change, and they
+/// have to happen in that order under one lock: the wire role lives in
+/// `ConnectionState.caller_role`, so a role that is committed but never
+/// re-stamped (or re-stamped from a value the store has already moved past)
+/// leaves the open connection holding authority the store no longer grants.
+///
+/// Without this guard two administrators could update the same user's role at
+/// once: request A commits `admin` and pauses before it takes the connection
+/// map's lock, request B commits `member` and re-stamps `member`, and A —
+/// resuming with the older role — re-stamps `admin`. The demotion is undone
+/// on every live session of that user, silently, and the store says `member`.
+///
+/// Keyed by user, not global: two administrators updating two DIFFERENT users
+/// must not serialise against each other.
+///
+/// The upgrade-or-insert happens under the table's own mutex, so two tasks
+/// racing on the same key always resolve to the SAME guard — the check and
+/// the insert cannot interleave.
+fn role_update_guard(user_id: &str) -> Arc<tokio::sync::Mutex<()>> {
+    static GUARDS: std::sync::OnceLock<
+        std::sync::Mutex<HashMap<String, Weak<tokio::sync::Mutex<()>>>>,
+    > = std::sync::OnceLock::new();
+    let slots = GUARDS.get_or_init(|| std::sync::Mutex::new(HashMap::new()));
+    let mut slots = slots.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(live) = slots.get(user_id).and_then(Weak::upgrade) {
+        return live;
+    }
+    if slots.len() >= ROLE_GUARD_PRUNE_AT {
+        slots.retain(|_, w| w.strong_count() > 0);
+    }
+    let fresh = Arc::new(tokio::sync::Mutex::new(()));
+    slots.insert(user_id.to_string(), Arc::downgrade(&fresh));
+    fresh
 }
 
 /// Re-stamp `caller_role` **and the event scope** on every live connection

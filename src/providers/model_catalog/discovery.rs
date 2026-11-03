@@ -180,7 +180,7 @@ pub async fn refresh_models(
         )
     };
     let _permit = lock.lock().await;
-    if let Some(cached) = cached_models(provider, base_url) {
+    if let Some(cached) = cached_models_async(provider, base_url).await {
         if cached.fetched_at >= started {
             return Ok(cached);
         }
@@ -222,7 +222,7 @@ pub async fn refresh_models(
         base_url: Some(base_url.to_string()),
         models,
     };
-    write_cache(&listing);
+    write_cache(&listing).await;
     Ok(listing)
 }
 
@@ -264,6 +264,15 @@ async fn read_bounded(response: reqwest::Response) -> Result<String, BodyError> 
     // A listing that is not UTF-8 is not a listing. Reported as transport
     // rather than shape only because the bytes never became a document.
     String::from_utf8(body).map_err(|e| BodyError::Transport(e.to_string()))
+}
+
+/// Read a provider's cached listing asynchronously, if one was ever written
+/// **for the same `base_url`**.
+pub async fn cached_models_async(provider: &str, base_url: &str) -> Option<DiscoveredModels> {
+    let path = cache_path(provider)?;
+    let raw = tokio::fs::read_to_string(path).await.ok()?;
+    let listing: DiscoveredModels = serde_json::from_str(&raw).ok()?;
+    (listing.base_url.as_deref() == Some(base_url)).then_some(listing)
 }
 
 /// Read a provider's cached listing, if one was ever written **for the same
@@ -412,20 +421,20 @@ fn cache_path(provider: &str) -> Option<PathBuf> {
 /// must degrade discovery to "works, just not cached", never fail the caller's
 /// refresh. Written via temp-file + rename so a concurrent reader never sees a
 /// half-written listing.
-fn write_cache(listing: &DiscoveredModels) {
+async fn write_cache(listing: &DiscoveredModels) {
     let Some(path) = cache_path(&listing.provider) else {
         return;
     };
     let Some(parent) = path.parent() else { return };
-    if std::fs::create_dir_all(parent).is_err() {
+    if tokio::fs::create_dir_all(parent).await.is_err() {
         return;
     }
     let Ok(json) = serde_json::to_string(listing) else {
         return;
     };
     let tmp = path.with_extension("json.tmp");
-    if std::fs::write(&tmp, json).is_ok() && std::fs::rename(&tmp, &path).is_err() {
-        let _ = std::fs::remove_file(&tmp);
+    if tokio::fs::write(&tmp, json).await.is_ok() && tokio::fs::rename(&tmp, &path).await.is_err() {
+        let _ = tokio::fs::remove_file(&tmp).await;
     }
 }
 
@@ -651,8 +660,8 @@ mod tests {
         assert!(!stale.is_fresh(CACHE_TTL));
     }
 
-    #[test]
-    fn cache_only_answers_for_the_same_base_url() {
+    #[tokio::test]
+    async fn cache_only_answers_for_the_same_base_url() {
         // `cache_path` resolves under `get_config_dir()`: without a private
         // `$ALEPH_HOME` this writes into the real `~/.aleph` and races every
         // test that points `$ALEPH_HOME` somewhere else.
@@ -667,7 +676,8 @@ mod tests {
             fetched_at: now_secs(),
             base_url: Some(url_a.into()),
             models: Vec::new(),
-        });
+        })
+        .await;
 
         assert!(
             cached_models(provider, url_a).is_some(),

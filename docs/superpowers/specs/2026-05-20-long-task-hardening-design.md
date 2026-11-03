@@ -2,7 +2,7 @@
 
 **Date**: 2026-05-20
 **Branch**: `feat/long-task-hardening` (worktree)
-**Predecessor**: [Long-Task Wiring Cycle](../../../../.claude/projects/-Volumes-TBU4-Workspace-Aleph/memory/project_long_task_wiring_cycle.md) (closed 2026-05-19)
+**Predecessor:** private historical wiring note unavailable in the current tree; this design records the resulting scope locally.
 
 ## Why
 
@@ -213,7 +213,7 @@ For each orphan module:
 
 ### Acceptance
 
-`cargo check -p alephcore` clean; `cargo test -p alephcore --lib` no new failures beyond [baseline](../../../../.claude/projects/-Volumes-TBU4-Workspace-Aleph/memory/project_baseline_test_failures.md).
+`cargo check -p alephcore` clean; `cargo test -p alephcore --lib` no new failures beyond the private historical baseline note, unavailable in the current tree.
 
 ## Out of scope (deferred)
 

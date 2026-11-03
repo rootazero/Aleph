@@ -120,22 +120,20 @@ impl StateDatabase {
 
     /// Insert a single trace entry
     pub async fn insert_trace(&self, trace: &TaskTrace) -> Result<i64, AlephError> {
-        let trace = trace.clone();
+        let event_json = serde_json::to_string(&trace.event)
+            .map_err(|e| AlephError::config(format!("Failed to serialize trace event: {e}")))?;
+        let task_id = trace.task_id.clone();
+        let step_index = trace.step_index;
+        let event_kind = trace.event_kind();
+        let timestamp = trace.timestamp;
+
         self.with_conn(move |conn| {
-            let event_json = serde_json::to_string(&trace.event)
-                .map_err(|e| AlephError::config(format!("Failed to serialize trace event: {e}")))?;
             conn.execute(
                 r#"
                 INSERT INTO task_traces (task_id, step_index, event_kind, event_json, timestamp)
                 VALUES (?1, ?2, ?3, ?4, ?5)
                 "#,
-                params![
-                    trace.task_id,
-                    trace.step_index,
-                    trace.event_kind(),
-                    event_json,
-                    trace.timestamp,
-                ],
+                params![task_id, step_index, event_kind, event_json, timestamp],
             )
             .map_err(|e| AlephError::config(format!("Failed to insert trace: {e}")))?;
 

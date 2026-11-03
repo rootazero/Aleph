@@ -216,7 +216,11 @@ impl MemoryCommandHandler {
                             }
                             found = true;
                         }
-                        _ => continue,
+                        Ok(_) => continue,
+                        Err(e) => {
+                            tracing::warn!(fact_id, agent_id, error = %e, "Notes dual-write: find_by_filename failed");
+                            continue;
+                        }
                     }
                 }
                 if !found {
@@ -913,20 +917,14 @@ impl MemoryCommandHandler {
 /// shared `last_reconcile` slot.
 async fn run_one_tick(
     handler: &MemoryCommandHandler,
-    last_reconcile: &Mutex<Option<ReconcileReport>>,
+    _last_reconcile: &Mutex<Option<ReconcileReport>>,
 ) {
-    match handler.reconcile_once().await {
-        Ok(report) => {
-            let mut guard = last_reconcile.lock().unwrap_or_else(|e| e.into_inner());
-            *guard = Some(report);
-        }
-        Err(e) => {
-            tracing::warn!(
-                error = %e,
-                "Reconciler daemon tick failed; prior report (if any) preserved. \
-                 Next tick will retry."
-            );
-        }
+    if let Err(e) = handler.reconcile_once().await {
+        tracing::warn!(
+            error = %e,
+            "Reconciler daemon tick failed; prior report (if any) preserved. \
+             Next tick will retry."
+        );
     }
 }
 

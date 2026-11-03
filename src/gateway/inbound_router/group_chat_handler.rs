@@ -6,7 +6,8 @@ use tracing::{error, info};
 use crate::gateway::channel::{InboundMessage, OutboundMessage};
 use crate::gateway::handlers::group_chat::SharedOrchestrator;
 use crate::group_chat::{
-    DefaultGroupChatCommandParser, GroupChatExecutor, GroupChatRequest, GroupChatStatus,
+    DefaultGroupChatCommandParser, GroupChatExecutor, GroupChatRequest, GroupChatSession,
+    GroupChatStatus,
 };
 
 use super::types::RoutingError;
@@ -277,6 +278,22 @@ impl InboundMessageRouter {
             session_id_hint.to_string()
         };
 
+        // An addressed session id is a bearer token: check it belongs to this
+        // conversation BEFORE ending it — `end_session` removes the session
+        // from the orchestrator, so the check has to come first.
+        {
+            let handle = {
+                let orch_guard = orch.lock().await;
+                orch_guard
+                    .get_session(&session_id)
+                    .ok_or_else(|| format!("Session not found: {session_id}"))?
+            };
+            let session = handle.lock().await;
+            if !session_visible_to_conversation(&session, msg) {
+                return Err(format!("Session not found: {session_id}"));
+            }
+        }
+
         // End the session via orchestrator (removes from map + persists)
         let session_handle = {
             let mut orch_guard = orch.lock().await;
@@ -329,6 +346,15 @@ impl InboundMessageRouter {
         };
 
         let mut session = session_handle.lock().await;
+
+        // An addressed session id is a bearer token: it has to prove that the
+        // session belongs to THIS conversation and that its owner is visible
+        // to the sender. Checked before the round-limit branch — that branch
+        // ENDS the session, so an unchecked foreign id could kill somebody
+        // else's group chat and learn from the distinct error that it existed.
+        if !session_visible_to_conversation(&session, msg) {
+            return Err(format!("Session not found: {session_id}"));
+        }
 
         // Check round limit
         if session.current_round >= max_rounds {
@@ -392,4 +418,21 @@ impl InboundMessageRouter {
             }
         }
     }
+}
+
+/// Whether `session` may be driven from the conversation `msg` came from.
+///
+/// Two things have to hold. The session has to belong to THIS conversation —
+/// its `source_session_key` is the creator's `channel:conversation` key — and
+/// the sender has to be allowed to see it, which is the same owner predicate
+/// the RPC path uses (`crate::gateway::visibility`), not a second inlined
+/// membership check.
+fn session_visible_to_conversation(session: &GroupChatSession, msg: &InboundMessage) -> bool {
+    let expected_key = format!(
+        "{}:{}",
+        msg.channel_id.as_str(),
+        msg.conversation_id.as_str()
+    );
+    session.source_session_key == expected_key
+        && crate::gateway::visibility::stamped_owner_visible(session.owner_user_id.as_deref())
 }

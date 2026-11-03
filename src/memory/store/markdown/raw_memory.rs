@@ -91,6 +91,7 @@ fn recover_raw_deletions(db: &mut Connection, base: &Path) -> Result<(), AlephEr
         // The deletion committed, or a previous recovery already restored it.
         std::fs::remove_file(&backup).map_err(storage_error)?;
     }
+    tx.commit().map_err(storage_error)?;
     Ok(())
 }
 
@@ -155,11 +156,8 @@ fn dashboard_filter(
     let mut values = Vec::new();
     if let Some(agents) = agents {
         predicate.push_str(" AND agent_id IN (SELECT value FROM json_each(?1))");
-        values.push(
-            serde_json::to_string(agents)
-                .expect("string slice serialization")
-                .into(),
-        );
+        let serialized = serde_json::to_string(agents).unwrap_or_else(|_| "[]".to_string());
+        values.push(serialized.into());
     }
     let needle = query
         .map(str::trim)

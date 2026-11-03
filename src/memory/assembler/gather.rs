@@ -73,9 +73,9 @@ impl Gatherer {
             self.project_scoped,
             crate::projects::current_project_root().as_deref(),
         );
-        let (notes, snapshot, raws, profile, feedback_floor, daily_insight) = tokio::join!(
+        let snapshot = self.fetch_snapshot(&input.agent_id, input.session_id.as_deref());
+        let (notes, raws, profile, feedback_floor, daily_insight) = tokio::join!(
             self.fetch_notes(&input.query, &input.agent_id, input.pool_limit),
-            self.fetch_snapshot(&input.agent_id, input.session_id.as_deref()),
             self.fetch_raws(&input.agent_id, input.session_id.as_deref(), &input.filter),
             async {
                 match user_floor_id.as_deref() {
@@ -211,7 +211,7 @@ impl Gatherer {
         }
     }
 
-    async fn fetch_snapshot(&self, agent_id: &str, session_id: Option<&str>) -> Vec<Candidate> {
+    fn fetch_snapshot(&self, agent_id: &str, session_id: Option<&str>) -> Vec<Candidate> {
         // The snapshot is partitioned like every other source this function's
         // siblings gather: notes go through `session_read_ids`, the profile
         // floor through `profile_floor_id`, and the snapshot through

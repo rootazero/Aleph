@@ -19,6 +19,7 @@ use super::types::{ImageGenerationResponse, DEFAULT_TIMEOUT_SECS};
 /// around 25 MB; we mirror the cap on the fetch side so a hostile upstream
 /// cannot OOM the process before the multipart upload is built.
 const OPENAI_IMAGE_MAX_DOWNLOAD_BYTES: usize = 25 * 1024 * 1024;
+const MAX_BASE64_IMAGE_BYTES: usize = OPENAI_IMAGE_MAX_DOWNLOAD_BYTES * 4 / 3 + 4;
 
 /// Implementation of image editing for OpenAI-compatible API
 pub(crate) async fn edit_image_impl(
@@ -116,6 +117,16 @@ pub(crate) async fn edit_image_impl(
             reference_image
         };
 
+        if base64_data.len() > MAX_BASE64_IMAGE_BYTES {
+            return Err(GenerationError::invalid_parameters(
+                format!(
+                    "Base64 image data exceeds maximum size limit ({} bytes)",
+                    OPENAI_IMAGE_MAX_DOWNLOAD_BYTES
+                ),
+                Some("reference_image".to_string()),
+            ));
+        }
+
         let image_bytes = base64::engine::general_purpose::STANDARD
             .decode(base64_data)
             .map_err(|e| {
@@ -135,6 +146,16 @@ pub(crate) async fn edit_image_impl(
     // Add optional mask if provided via extra params
     if let Some(mask_value) = request.params.extra.get("mask") {
         if let Some(mask_str) = mask_value.as_str() {
+            if mask_str.len() > MAX_BASE64_IMAGE_BYTES {
+                return Err(GenerationError::invalid_parameters(
+                    format!(
+                        "Base64 mask data exceeds maximum size limit ({} bytes)",
+                        OPENAI_IMAGE_MAX_DOWNLOAD_BYTES
+                    ),
+                    Some("mask".to_string()),
+                ));
+            }
+
             let mask_bytes = base64::engine::general_purpose::STANDARD
                 .decode(mask_str)
                 .map_err(|e| {

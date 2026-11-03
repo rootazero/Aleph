@@ -73,6 +73,10 @@ impl ProtocolAdapter for OpenAiProtocol {
             "stream_options": { "include_usage": true },
         });
 
+        let Some(body_obj) = body.as_object_mut() else {
+            return Err(AlephError::provider("request body is not a JSON object"));
+        };
+
         // Add optional parameters (per-request overrides provider config)
         if let Some(max_tokens) = payload.max_tokens.or(config.max_tokens) {
             // Operator-declared `ModelCompat::uses_max_completion_tokens`
@@ -83,19 +87,19 @@ impl ProtocolAdapter for OpenAiProtocol {
             } else {
                 "max_tokens"
             };
-            body[field] = json!(max_tokens);
+            body_obj.insert(field.to_string(), json!(max_tokens));
         }
         if let Some(temp) = payload.temperature.or(config.temperature) {
-            body["temperature"] = json!(temp);
+            body_obj.insert("temperature".to_string(), json!(temp));
         }
         if let Some(top_p) = config.top_p {
-            body["top_p"] = json!(top_p);
+            body_obj.insert("top_p".to_string(), json!(top_p));
         }
         if let Some(freq) = config.frequency_penalty {
-            body["frequency_penalty"] = json!(freq);
+            body_obj.insert("frequency_penalty".to_string(), json!(freq));
         }
         if let Some(pres) = config.presence_penalty {
-            body["presence_penalty"] = json!(pres);
+            body_obj.insert("presence_penalty".to_string(), json!(pres));
         }
 
         // Add reasoning_effort for thinking models, clamped to the values the
@@ -109,7 +113,7 @@ impl ProtocolAdapter for OpenAiProtocol {
                         &effort,
                     )
                 {
-                    body["reasoning_effort"] = json!(clamped);
+                    body_obj.insert("reasoning_effort".to_string(), json!(clamped));
                 }
             }
         }
@@ -122,7 +126,7 @@ impl ProtocolAdapter for OpenAiProtocol {
                 .filter(|s| !s.is_empty())
                 .collect();
             if !sequences.is_empty() {
-                body["stop"] = json!(sequences);
+                body_obj.insert("stop".to_string(), json!(sequences));
             }
         }
 
@@ -140,7 +144,7 @@ impl ProtocolAdapter for OpenAiProtocol {
             if let Some(key) =
                 super::super::openai_common::prompt_cache::derive_prompt_cache_key(payload)
             {
-                body["prompt_cache_key"] = json!(key);
+                body_obj.insert("prompt_cache_key".to_string(), json!(key));
             }
             // Extended cache retention (24h) — official OpenAI only; the
             // user's `cache_retention = long` knob maps to it (the Anthropic
@@ -151,7 +155,7 @@ impl ProtocolAdapter for OpenAiProtocol {
             ) && policy.endpoint_class
                 == super::super::openai_common::provider_policy::EndpointClass::OpenAiPublic
             {
-                body["prompt_cache_retention"] = json!("24h");
+                body_obj.insert("prompt_cache_retention".to_string(), json!("24h"));
             }
         }
 
@@ -161,7 +165,7 @@ impl ProtocolAdapter for OpenAiProtocol {
                 if let Some(v) =
                     to_chat_response_format(fmt, policy.capabilities.supports_strict_schema)
                 {
-                    body["response_format"] = v;
+                    body_obj.insert("response_format".to_string(), v);
                 }
             }
         }
@@ -169,17 +173,17 @@ impl ProtocolAdapter for OpenAiProtocol {
         // seed: emit only when capability-enabled
         if let Some(seed) = config.seed {
             if policy.capabilities.supports_seed {
-                body["seed"] = json!(seed);
+                body_obj.insert("seed".to_string(), json!(seed));
             }
         }
 
         // logprobs + top_logprobs: emit only when capability-enabled
         if let Some(want_logprobs) = config.logprobs {
             if policy.capabilities.supports_logprobs {
-                body["logprobs"] = json!(want_logprobs);
+                body_obj.insert("logprobs".to_string(), json!(want_logprobs));
                 if want_logprobs {
                     if let Some(top_n) = config.top_logprobs {
-                        body["top_logprobs"] = json!(top_n);
+                        body_obj.insert("top_logprobs".to_string(), json!(top_n));
                     }
                 }
             }
@@ -237,17 +241,18 @@ impl ProtocolAdapter for OpenAiProtocol {
                     }
                 })
                 .collect();
-            body["tools"] = serde_json::to_value(&tools)
-                .map_err(|e| AlephError::provider(format!("Failed to serialize tools: {e}")))?;
+            body_obj.insert(
+                "tools".to_string(),
+                serde_json::to_value(&tools)
+                    .map_err(|e| AlephError::provider(format!("Failed to serialize tools: {e}")))?,
+            );
         }
 
-        if let Some(obj) = body.as_object_mut() {
-            policy.apply(obj);
-        }
+        policy.apply(body_obj);
 
         // Add tool_choice if specified
         if let Some(ref choice) = payload.tool_choice {
-            body["tool_choice"] = match choice {
+            let tc = match choice {
                 ToolChoice::Auto => json!("auto"),
                 ToolChoice::Required => json!("required"),
                 ToolChoice::Specific(name) => {
@@ -255,11 +260,12 @@ impl ProtocolAdapter for OpenAiProtocol {
                 }
                 ToolChoice::None => json!("none"),
             };
+            body_obj.insert("tool_choice".to_string(), tc);
         }
 
         // parallel_tool_calls: emit only when config explicitly sets it
         if let Some(parallel) = config.parallel_tool_calls {
-            body["parallel_tool_calls"] = json!(parallel);
+            body_obj.insert("parallel_tool_calls".to_string(), json!(parallel));
         }
 
         // service_tier: opt-in latency/cost tier ("auto" | "default" | "flex" |
@@ -269,7 +275,7 @@ impl ProtocolAdapter for OpenAiProtocol {
         // adapter, which already wires it — this closes the OpenAI dead wire.
         if let Some(ref tier) = config.service_tier {
             if policy.capabilities.supports_service_tier {
-                body["service_tier"] = json!(tier);
+                body_obj.insert("service_tier".to_string(), json!(tier));
             }
         }
 
@@ -412,7 +418,10 @@ impl ProtocolAdapter for OpenAiProtocol {
                 // Complete lines (up to \n) are safe to decode as UTF-8 since
                 // SSE data lines are always complete JSON terminated by newline.
                 if let Some(pos) = state.line_buf.iter().position(|&b| b == b'\n') {
-                    let line_bytes = state.line_buf[..pos].to_vec();
+                    let line_bytes = state
+                        .line_buf
+                        .get(..pos)
+                        .map_or_else(Vec::new, <[u8]>::to_vec);
                     state.line_buf.drain(..=pos);
 
                     let line = String::from_utf8(line_bytes)

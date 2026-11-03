@@ -697,30 +697,21 @@ struct SessionLockGuard {
 
 impl Drop for SessionLockGuard {
     fn drop(&mut self) {
-        // Use `try_lock` so the `Drop` impl never blocks during stack
-        // unwinding. The previous form called `self.active.lock()` directly;
-        // if a prior panic held the mutex and another thread was parked on
-        // it, the drop impl would block forever and deadlock the runtime.
+        // `lock()` cannot deadlock here: every holder of `active` does a
+        // two-line, await-free `HashSet` operation (the dispatch insert and
+        // the sandbox-failure remove), so no holder can ever be parked on
+        // this mutex while another one waits for it.
         //
-        // `try_lock` here is best-effort: losing the race means we leave
-        // the entry in `active_sessions` until the next dispatch sees the
-        // conflict and the operator clears it. Surfacing the loss as a
-        // warning gives operators a signal; the alternative — recovering
-        // from a poisoned mutex — was the source of the original review
-        // finding because it silently reused a connection state that
-        // might have been mid-statement.
-        match self.active.try_lock() {
-            Ok(mut guard) => {
-                guard.remove(&self.key);
-            }
-            Err(_) => {
-                tracing::warn!(
-                    key = %self.key,
-                    "SessionLockGuard: active_sessions lock contended during drop; \
-                     entry will be retained until the next successful dispatch"
-                );
-            }
-        }
+        // A POISONED mutex returns `Err` from `lock()` immediately instead
+        // of blocking, and the guard it carries is exactly the state this
+        // drop exists to clean up — so the poison is recovered rather than
+        // skipped. Skipping it would leak the key into `active_sessions`
+        // for the lifetime of the process: no operator-facing API clears a
+        // stale key, and every later dispatch on that key then fails with
+        // `FlowError::SessionConflict`, which the gateway reports as a
+        // fatal dispatch failure.
+        let mut guard = self.active.lock().unwrap_or_else(|e| e.into_inner());
+        guard.remove(&self.key);
     }
 }
 

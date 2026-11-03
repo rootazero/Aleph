@@ -244,6 +244,25 @@ pub fn register_run(
     register(&lane.to_key_string(), max_per_session, run_id)
 }
 
+/// Join the FIFO lane a run was already recorded on.
+///
+/// The wait lane's durable records persist the lane they were admitted to, so
+/// a reinjected run re-enters that lane instead of re-deriving it: a later
+/// change to the derivation rule must not move a queued message onto another
+/// session, where it would wait behind strangers and take a slot from them.
+///
+/// The one production caller is the reinjection path, whose lane key is read
+/// back from the record instead of chosen. An arrival path that has a request
+/// in hand still goes through [`register_run`], which derives the lane.
+#[must_use]
+pub fn register_run_in_lane(
+    lane_key: &str,
+    max_per_session: usize,
+    run_id: &str,
+) -> Option<TicketGuard> {
+    register(lane_key, max_per_session, run_id)
+}
+
 /// Signal that `session_key`'s run slot is free, so its front waiter may try.
 ///
 /// Called from the engine's `SessionRunRegistry::release` — the one place a
@@ -510,6 +529,23 @@ pub fn cancel_queued_run(run_id: &str) -> bool {
         wake.notify_waiters();
     }
     found
+}
+
+/// The session that owns the queued run `run_id`, if it is still waiting.
+///
+/// Inverse of the lookup inside [`cancel_queued_run`]: the lane is keyed by
+/// session, the ticket by run id, and a run id on its own says nothing about
+/// who owns it until the lanes are searched. The gateway's run-ownership gate
+/// needs that owner: possession of a run id must not be authority to cancel
+/// someone else's run.
+pub fn session_of_queued_run(run_id: &str) -> Option<String> {
+    let map = lock();
+    map.iter().find_map(|(key, lane)| {
+        lane.tickets
+            .iter()
+            .find(|t| t.run_id == run_id && !t.cancelled)
+            .map(|_| key.clone())
+    })
 }
 
 /// Total messages waiting across all sessions, plus the per-session breakdown

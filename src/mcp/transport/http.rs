@@ -265,7 +265,9 @@ impl HttpTransport {
         safe_fetch(
             &self.config.url,
             &SsrfPolicy::default(),
-            SafeFetchRequest::post(body, self.config.timeout).with_headers(headers),
+            SafeFetchRequest::post(body, self.config.timeout)
+                .with_headers(headers)
+                .with_max_body_bytes(MAX_RESPONSE_BYTES),
         )
         .await
         .map_err(|e| {

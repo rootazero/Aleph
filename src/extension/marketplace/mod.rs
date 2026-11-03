@@ -450,6 +450,18 @@ impl MarketplaceManager {
                 "Plugin '{plugin_name}' is not installed in scope '{scope}'. Use 'install' first."
             ));
         }
+        // Same symlink gate as install: an update writes into the scope
+        // install directory just like an install does, so a symlinked
+        // destination must fail closed here too instead of relying on the
+        // swap's rename to neutralise it. The check runs before the
+        // marketplace lookup so a planted symlink never reaches the swap.
+        if let Err(e) =
+            crate::extension::ensure_plugin_destination_is_safe(&install_dir, &installed_path)
+        {
+            return Err(format!(
+                "Refusing to update '{plugin_name}' into unsafe location: {e}"
+            ));
+        }
 
         let mut results = self.search_plugin(plugin_name);
         if let Some(mkt) = marketplace_name {
@@ -689,6 +701,37 @@ mod tests {
         // Nothing to compare against on the candidate side → no-op.
         assert!(!should_update(Some("1.0.0"), None));
         assert!(!should_update(None, None));
+    }
+
+    /// A symlinked install destination must not be swapped into place.
+    ///
+    /// The install path refuses a destination whose leaf is a symlink; the
+    /// update path used to skip that gate and lean on the swap's rename to
+    /// neutralise it.
+    #[cfg(unix)]
+    #[test]
+    fn update_refuses_a_symlinked_install_destination() {
+        use std::os::unix::fs::symlink;
+
+        let project = tempfile::TempDir::new().unwrap();
+        let install_dir = project.path().join(".aleph/plugins");
+        std::fs::create_dir_all(&install_dir).unwrap();
+        let outside = project.path().join("outside");
+        std::fs::create_dir_all(&outside).unwrap();
+        symlink(&outside, install_dir.join("victim")).unwrap();
+
+        let cache = tempfile::TempDir::new().unwrap();
+        let mgr = MarketplaceManager::new(HashMap::new(), Some(cache.path().to_path_buf()));
+        let error = mgr
+            .update_to_scope(
+                "victim",
+                None,
+                crate::extension::types::PluginScope::Project,
+                Some(project.path()),
+                true,
+            )
+            .expect_err("a symlinked install destination must not be updated");
+        assert!(error.contains("Refusing to update"), "got: {error}");
     }
 
     fn make_github_config(source: &str) -> MarketplaceConfig {

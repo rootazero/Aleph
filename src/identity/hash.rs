@@ -36,6 +36,7 @@ const DOMAIN: &[u8] = b"aleph-agent-ledger-v1";
 
 /// The fields a chain digest commits to. Borrowed rather than owned so the
 /// writer can hash before it has built the final record.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Preimage<'a> {
     pub agent_id: &'a str,
     pub seq: i64,

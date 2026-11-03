@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:executing-plans（每个 PR 一个 task，串行执行）。Steps 用 `- [ ]` 跟踪。
 
-**Goal:** 按 [`docs/reference/CODE_ORGANIZATION.md`](../reference/CODE_ORGANIZATION.md) Pattern A/C/D 拆分 7 个超大文件（3 P0 + 4 P2），把 6 个因 Rust 语言约束或单概念纵深无法拆的文件登记为「声明遗留」，行为零变更，pub API 零变更。
+**Goal:** 按 [`docs/reference/CODE_ORGANIZATION.md`](../../reference/CODE_ORGANIZATION.md) Pattern A/C/D 拆分 7 个超大文件（3 P0 + 4 P2），把 6 个因 Rust 语言约束或单概念纵深无法拆的文件登记为「声明遗留」，行为零变更，pub API 零变更。
 
 **Architecture:** 7 个独立 PR 串行推进；每个 PR 内部分步完成「复制 → 子模块化 → 删旧 → 验证 → commit」。`mod.rs` 留最薄入口（re-export + 公共类型），子模块按职责拆分。`source_scan` 测试守卫一律改为按模块路径而非文件名 derive。
 

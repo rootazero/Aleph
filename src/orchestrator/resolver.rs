@@ -107,10 +107,17 @@ pub fn resolve_session(input: SessionResolveInput) -> Result<SessionResolution, 
             // fresh session rather than InvalidConfig, which would make every
             // dispatch to the flow fail. The parent link, when present, is
             // still carried.
+            //
+            // The fallback is indistinguishable from a genuine Fresh
+            // resolution (both yield `parent_session_key: None`), so the
+            // loss of the session lineage is reported at `warn!` — an
+            // operator reading the logs has to be able to see it.
             let Some(parent) = parent else {
-                tracing::debug!(
+                tracing::warn!(
                     strategy = "Child",
-                    "resolve_session: Child strategy with no runtime parent — falling back to Fresh"
+                    "resolve_session: Child strategy with no runtime parent — falling back \
+                     to Fresh; the session lineage is lost (the resolved session carries no \
+                     parent link)"
                 );
                 return Ok(SessionResolution {
                     session_key: (input.fresh_key_fn)(),

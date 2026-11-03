@@ -399,7 +399,7 @@ impl OsSandboxDriverTrait for WindowsSandboxDriver {
 
 ## Sources & References
 
-- **Origin document:** [docs/brainstorms/2026-04-23-sandbox-phase3-windows-requirements.md](docs/brainstorms/2026-04-23-sandbox-phase3-windows-requirements.md)
+- **Origin document:** [docs/brainstorms/2026-04-23-sandbox-phase3-windows-requirements.md](../brainstorms/2026-04-23-sandbox-phase3-windows-requirements.md)
 - Related code: `src/sandbox/platforms/macos/seatbelt.rs`
 - Related code: `src/sandbox/platforms/linux/bwrap.rs`
 - External reference: codex `windows-sandbox-rs` — Restricted Token + ACL + Job Object 模式

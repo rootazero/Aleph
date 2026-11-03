@@ -32,9 +32,53 @@ fn ssh_key_begin_regex() -> &'static Regex {
 
 pub struct SshKeyRule;
 
+/// Minimum length of a line that counts as part of a PEM base64 body.
+///
+/// A PEM body is wrapped at 64 characters; 16 is a deliberately low bar so a
+/// truncated key still contributes its body, while short prose after a
+/// header does not.
+const BASE64_BODY_MIN_LINE_LEN: usize = 16;
+
 impl SshKeyRule {
     pub const fn new() -> Self {
         Self
+    }
+
+    /// End offset of the contiguous base64 body that follows a PEM header.
+    ///
+    /// Walks the lines after `header_end` and advances over every line whose
+    /// trimmed content is at least [`BASE64_BODY_MIN_LINE_LEN`] characters
+    /// drawn from the base64 alphabet (`A-Za-z0-9`, `+`, `/` and `=` padding).
+    /// Returns the offset just past the last such line, or `header_end` when
+    /// the header is not followed by a body.
+    fn base64_body_end(text: &str, header_end: usize) -> usize {
+        // The body starts on the line after the header.
+        let Some(nl) = text[header_end..].find('\n') else {
+            return header_end;
+        };
+        let mut pos = header_end + nl + 1;
+        let mut end = header_end;
+        while pos <= text.len() {
+            let line_end = text[pos..].find('\n').map_or(text.len(), |i| pos + i);
+            let line = text[pos..line_end].trim();
+            if !Self::is_base64_body_line(line) {
+                break;
+            }
+            end = line_end;
+            if line_end >= text.len() {
+                break;
+            }
+            pos = line_end + 1;
+        }
+        end
+    }
+
+    /// Whether a line looks like part of a PEM base64 body.
+    fn is_base64_body_line(line: &str) -> bool {
+        line.len() >= BASE64_BODY_MIN_LINE_LEN
+            && line
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b == b'+' || b == b'/' || b == b'=')
     }
 }
 
@@ -54,9 +98,11 @@ impl PiiRule for SshKeyRule {
     /// not pair (`cat rsa.pem ec.pem` truncated mid-file) is never accepted as
     /// one block spanning unrelated keys.
     ///
-    /// A header with no matching footer yields no match, and scanning resumes
-    /// just past that header — a truncated key at the top of a log must not
-    /// hide a well-formed one below it.
+    /// A header with no matching footer still redacts the header **and** the
+    /// base64 body that follows it — emitting nothing for a truncated key
+    /// leaked the whole body in plaintext. Scanning resumes just past that
+    /// body, so a truncated key at the top of a log must not hide a
+    /// well-formed one below it.
     fn detect(&self, text: &str) -> Vec<PiiMatch> {
         let re = ssh_key_begin_regex();
         let mut results = Vec::new();
@@ -68,7 +114,23 @@ impl PiiRule for SshKeyRule {
             let label = caps.get(1).map_or("", |m| m.as_str());
             let footer = format!("-----END {label} KEY-----");
             let Some(offset) = text[header.end()..].find(&footer) else {
-                cursor = header.end();
+                // Truncated PEM: the footer never arrives. The base64 body
+                // after the header is still key material, so it is redacted
+                // together with the header.
+                let body_end = Self::base64_body_end(text, header.end());
+                if body_end > header.end() {
+                    results.push(PiiMatch {
+                        rule_name: self.name().to_string(),
+                        start: header.start(),
+                        end: body_end,
+                        matched_text: text[header.start()..body_end].to_string(),
+                        severity: self.severity(),
+                        placeholder: self.placeholder().to_string(),
+                    });
+                    cursor = body_end;
+                } else {
+                    cursor = header.end();
+                }
                 continue;
             };
             let end = header.end() + offset + footer.len();
@@ -213,6 +275,27 @@ mod tests {
         let matches = rule().detect(text);
         assert_eq!(matches.len(), 1);
         assert!(matches[0].matched_text.contains("ecdata"));
+    }
+
+    /// A truncated PEM has no footer to pair with, but its base64 body is
+    /// still key material: emitting nothing for it left the whole body in
+    /// plaintext. The body is redacted together with the header, and the scan
+    /// resumes after it so a later well-formed key is still found.
+    #[test]
+    fn a_truncated_key_redacts_its_body() {
+        let text = "-----BEGIN RSA PRIVATE KEY-----\nMIIEowIBAAKCAQEAwKl3RT1abcdef\nnext line";
+        let matches = rule().detect(text);
+        assert_eq!(matches.len(), 1, "a truncated key must still be redacted");
+        assert!(
+            matches[0]
+                .matched_text
+                .contains("MIIEowIBAAKCAQEAwKl3RT1abcdef"),
+            "the base64 body must be inside the redacted span"
+        );
+        assert!(
+            !matches[0].matched_text.contains("next line"),
+            "text after the body must not be swallowed"
+        );
     }
 
     /// Two well-formed blocks in one payload are two separate matches, so

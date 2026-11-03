@@ -101,6 +101,46 @@ pub fn report_channel_secret_presence(
     }
 }
 
+/// A channel secret lifted out of a config object.
+pub struct ChannelSecret {
+    /// The config field the secret came from (`bot_token`, …).
+    pub field: &'static str,
+    /// The vault key the secret is stored under.
+    pub key: String,
+    /// The plaintext value.
+    pub value: String,
+}
+
+/// Lift the channel secrets out of a config object WITHOUT persisting them.
+///
+/// Splitting extraction from persistence is what lets a caller decide WHEN a
+/// secret may become live: `config.patch` must not rotate a credential before
+/// the patch it belongs to is known to be good (see
+/// [`crate::gateway::handlers::config::handle_patch_config`]).
+///
+/// The secrets are removed from the config, so the plaintext cannot ride
+/// along into `config.toml`.
+pub fn extract_channel_secrets(channel_id: &str, config: &mut Value) -> Vec<ChannelSecret> {
+    let obj = match config.as_object_mut() {
+        Some(o) => o,
+        None => return Vec::new(),
+    };
+    let mut found = Vec::new();
+    for &field in CHANNEL_SECRET_FIELDS {
+        let value = match obj.get(field).and_then(|v| v.as_str()) {
+            Some(s) if !s.is_empty() => s.to_string(),
+            _ => continue,
+        };
+        obj.remove(field);
+        found.push(ChannelSecret {
+            field,
+            key: channel_vault_key(channel_id, field),
+            value,
+        });
+    }
+    found
+}
+
 /// Extract secret fields from config, store them in vault, and remove from config.
 /// Returns the number of secrets migrated.
 pub fn store_and_strip_channel_secrets(
@@ -108,25 +148,20 @@ pub fn store_and_strip_channel_secrets(
     config: &mut Value,
     vault: &SharedTokenManager,
 ) -> usize {
-    let obj = match config.as_object_mut() {
-        Some(o) => o,
-        None => return 0,
-    };
     let mut count = 0;
-    for &field in CHANNEL_SECRET_FIELDS {
-        let value = match obj.get(field).and_then(|v| v.as_str()) {
-            Some(s) if !s.is_empty() => s.to_string(),
-            _ => continue,
-        };
-        let key = channel_vault_key(channel_id, field);
-        match vault.store_secret(&key, &value) {
+    for secret in extract_channel_secrets(channel_id, config) {
+        match vault.store_secret(&secret.key, &secret.value) {
             Ok(_) => {
-                obj.remove(field);
                 count += 1;
-                tracing::info!(channel = %channel_id, field, "Migrated channel secret to vault");
+                tracing::info!(channel = %channel_id, field = secret.field, "Migrated channel secret to vault");
             }
             Err(e) => {
-                tracing::error!(channel = %channel_id, field, error = %e, "Failed to store channel secret in vault");
+                tracing::error!(channel = %channel_id, field = secret.field, error = %e, "Failed to store channel secret in vault");
+                // The vault is unavailable, so the plaintext stays in the
+                // config as the fallback credential it was before.
+                if let Some(obj) = config.as_object_mut() {
+                    obj.insert(secret.field.to_string(), Value::String(secret.value));
+                }
             }
         }
     }

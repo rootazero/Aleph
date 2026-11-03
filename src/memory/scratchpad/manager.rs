@@ -212,7 +212,7 @@ impl ScratchpadSnapshot {
         }
         out.push_str("Plan:\n");
         let shown = limits.map_or(self.items.len(), |l| l.max_items.min(self.items.len()));
-        for item in &self.items[..shown] {
+        for item in self.items.iter().take(shown) {
             out.push_str("- ");
             out.push_str(item.status.glyph());
             out.push(' ');
@@ -285,7 +285,10 @@ fn clamp_chars(s: &str, max: usize) -> std::borrow::Cow<'_, str> {
     }
     match s.char_indices().nth(max) {
         None => std::borrow::Cow::Borrowed(s),
-        Some((byte_idx, _)) => std::borrow::Cow::Owned(format!("{}…", &s[..byte_idx])),
+        Some((byte_idx, _)) => std::borrow::Cow::Owned(format!(
+            "{}…",
+            s.get(..byte_idx).unwrap_or(s)
+        )),
     }
 }
 
@@ -391,16 +394,21 @@ impl ScratchpadManager {
         // Keep one generation of the previous file beside the live one. The
         // plan is the only durable record of a multi-step run's progress, and
         // every mutating action rewrites the whole document.
-        if self.exists() {
-            let backup_path = self.scratchpad_path().with_extension("md.bak");
-            if let Ok(existing) = fs::read_to_string(self.scratchpad_path()).await {
+        let live_path = self.scratchpad_path();
+        match fs::read_to_string(&live_path).await {
+            Ok(existing) => {
+                let backup_path = live_path.with_extension("md.bak");
                 if let Err(e) = fs::write(&backup_path, &existing).await {
                     tracing::warn!(error = %e, path = %backup_path.display(), "scratchpad backup write failed");
                 }
             }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => {
+                tracing::warn!(error = %e, path = %live_path.display(), "scratchpad read for backup failed");
+            }
         }
 
-        crate::utils::atomic_write::atomic_write_file(&self.scratchpad_path(), content).await
+        crate::utils::atomic_write::atomic_write_file(&live_path, content).await
     }
 
     /// Delete this project's scratchpad file and its backup sidecar.
@@ -640,10 +648,11 @@ impl ScratchpadManager {
             if is_item && body != "- [ ] ..." {
                 let this = count;
                 count += 1;
-                let indent = &line[..line.len() - trimmed.len()];
+                let indent_len = line.len().saturating_sub(trimmed.len());
+                let indent = line.get(..indent_len).unwrap_or("");
                 // All three markers are exactly 5 ASCII bytes; the slice keeps
                 // the item text and any trailing newline intact.
-                let after_marker = &trimmed[5..];
+                let after_marker = trimmed.get(5..).unwrap_or("");
                 if this == item_index {
                     out.push_str(indent);
                     out.push_str("- ");
@@ -690,10 +699,13 @@ impl ScratchpadManager {
         let now = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ");
 
         if let Some(pos) = content.find("_Last updated:") {
-            if let Some(end) = content[pos..].find("_\n") {
-                let before = &content[..pos];
-                let after = &content[pos + end + 2..];
-                content = format!("{before}_Last updated: {now}_\n{after}");
+            if let Some(rest) = content.get(pos..) {
+                if let Some(end) = rest.find("_\n").or_else(|| rest.find("_\r\n")) {
+                    let end_offset = if rest[end..].starts_with("_\r\n") { 3 } else { 2 };
+                    if let (Some(before), Some(after)) = (content.get(..pos), content.get(pos + end + end_offset..)) {
+                        content = format!("{before}_Last updated: {now}_\n{after}");
+                    }
+                }
             }
         }
 

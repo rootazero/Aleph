@@ -610,11 +610,8 @@ impl SessionManager {
         limit: Option<usize>,
     ) -> Result<Vec<MessageRecord>, SessionManagerError> {
         let key_str = key.to_key_string();
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| SessionManagerError::DatabaseError(format!("Lock error: {e}")))?;
-        Self::read_history_locked(&conn, &key_str, limit, None)
+        self.query_blocking(move |conn| Self::read_history_locked(conn, &key_str, limit, None))
+            .await
     }
 
     /// The SQL-side [`SessionStore::history_page`]: a window of the transcript
@@ -640,18 +637,13 @@ impl SessionManager {
         before: Option<chrono::DateTime<chrono::Utc>>,
     ) -> Result<HistoryPage, SessionManagerError> {
         let key_str = key.to_key_string();
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| SessionManagerError::DatabaseError(format!("Lock error: {e}")))?;
-        let total = Self::count_history_locked(&conn, &key_str).ok();
-        let rows = Self::read_history_locked(
-            &conn,
-            &key_str,
-            limit,
-            before.map(|b| b.timestamp_millis()),
-        )?;
-        Ok(HistoryPage { rows, total })
+        let before_ms = before.map(|b| b.timestamp_millis());
+        self.query_blocking(move |conn| {
+            let total = Self::count_history_locked(conn, &key_str).ok();
+            let rows = Self::read_history_locked(conn, &key_str, limit, before_ms)?;
+            Ok(HistoryPage { rows, total })
+        })
+        .await
     }
 
     /// Reset (clear) a session

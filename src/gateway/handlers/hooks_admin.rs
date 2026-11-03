@@ -234,41 +234,121 @@ pub(crate) fn append_user_hook(
     Ok(())
 }
 
-/// Drop entries from `event`, under EVERY key of the file that names the
-/// same event: keys are written as given (`PreToolUse` and
-/// `before_tool_call` can both exist), so an exact-key lookup would miss
-/// the groups filed under the other spelling. `needle` filters by
-/// substring across the group's action fields; `None` removes every entry
-/// for the event. Returns how many groups were removed.
-pub(crate) fn remove_user_hooks(event: &str, needle: Option<&str>) -> Result<usize, String> {
+/// What to remove from an event's entries.
+pub(crate) enum HookRemoval {
+    /// Every group filed under the event.
+    All,
+    /// The groups whose action fields contain the needle.
+    Command(String),
+    /// The group at this position in the flattened, canonically ordered list
+    /// of the event's groups.
+    Index(usize),
+}
+
+/// Drop groups from every key of the hooks file that names `event`.
+///
+/// Keys are written as given (`PreToolUse` and `before_tool_call` can both
+/// exist), so an exact-key lookup would miss the groups filed under the
+/// other spelling. Both removal faces — the RPC and the `hooks_manage` tool
+/// — resolve the event the same way here, so they cannot drift apart.
+/// Returns how many groups were removed.
+pub(crate) fn remove_event_groups(
+    events: &mut Map<String, Value>,
+    event: &str,
+    removal: HookRemoval,
+) -> Result<usize, String> {
     let target = crate::extension::hooks::parse_event(event)
         .ok_or_else(|| format!("unknown event: {event}"))?;
-    let (path, _exists, mut events) = read_hooks_file()?;
-    let keys: Vec<String> = events
+    let mut keys: Vec<String> = events
         .keys()
         .filter(|key| crate::extension::hooks::parse_event(key) == Some(target))
         .cloned()
         .collect();
+    // Canonical order: the `index` arm has to address the same group no
+    // matter how the file happens to be ordered.
+    keys.sort();
     if keys.is_empty() {
         return Err(format!("no entries for event {event}"));
     }
 
     let mut removed = 0;
-    for key in keys {
-        let Some(arr) = events.get_mut(&key).and_then(|v| v.as_array_mut()) else {
-            continue;
-        };
-        let before = arr.len();
-        match needle {
-            Some(n) => arr.retain(|grp| !group_matches_substring(grp, n)),
-            None => arr.clear(),
+    match removal {
+        HookRemoval::All => {
+            for key in &keys {
+                let Some(arr) = events.get_mut(key).and_then(|v| v.as_array_mut()) else {
+                    continue;
+                };
+                removed += arr.len();
+                arr.clear();
+            }
         }
-        removed += before - arr.len();
-        // Don't leave empty arrays cluttering the file.
-        if arr.is_empty() {
-            events.remove(&key);
+        HookRemoval::Command(needle) => {
+            for key in &keys {
+                let Some(arr) = events.get_mut(key).and_then(|v| v.as_array_mut()) else {
+                    continue;
+                };
+                let before = arr.len();
+                arr.retain(|grp| !group_matches_substring(grp, &needle));
+                removed += before - arr.len();
+            }
+        }
+        HookRemoval::Index(idx) => {
+            // The index addresses the flattened list of the event's groups:
+            // every group under every key that names the event.
+            let total: usize = keys
+                .iter()
+                .map(|key| {
+                    events
+                        .get(key)
+                        .and_then(|v| v.as_array())
+                        .map_or(0, |arr| arr.len())
+                })
+                .sum();
+            if idx >= total {
+                return Err(format!("index {idx} out of range (len={total})"));
+            }
+            let mut seen = 0;
+            for key in &keys {
+                let len = events
+                    .get(key)
+                    .and_then(|v| v.as_array())
+                    .map_or(0, |arr| arr.len());
+                if idx < seen + len {
+                    if let Some(arr) = events.get_mut(key).and_then(|v| v.as_array_mut()) {
+                        arr.remove(idx - seen);
+                        removed += 1;
+                    }
+                    break;
+                }
+                seen += len;
+            }
         }
     }
+
+    // Don't leave empty arrays cluttering the file.
+    for key in &keys {
+        let empty = events
+            .get(key)
+            .and_then(|v| v.as_array())
+            .is_some_and(|arr| arr.is_empty());
+        if empty {
+            events.remove(key);
+        }
+    }
+    Ok(removed)
+}
+
+/// Remove entries for `event` from the global user hooks file.
+///
+/// `needle` filters by substring across the group's action fields; `None`
+/// removes every entry for the event. Returns how many groups were removed.
+pub(crate) fn remove_user_hooks(event: &str, needle: Option<&str>) -> Result<usize, String> {
+    let (path, _exists, mut events) = read_hooks_file()?;
+    let removal = match needle {
+        Some(n) => HookRemoval::Command(n.to_string()),
+        None => HookRemoval::All,
+    };
+    let removed = remove_event_groups(&mut events, event, removal)?;
     write_hooks_file(&path, &events)?;
     trigger_reload();
     Ok(removed)
@@ -340,7 +420,9 @@ struct RemoveParams {
     /// When omitted, `index` must be set.
     #[serde(default)]
     command: Option<String>,
-    /// Zero-based index of the group inside `events.<event>` to drop.
+    /// Zero-based index of the group to drop, counted over the flattened
+    /// list of the event's groups: every group under every key that names
+    /// the event, the keys in sorted order.
     #[serde(default)]
     index: Option<usize>,
 }
@@ -361,49 +443,31 @@ pub async fn handle_hooks_remove(request: JsonRpcRequest) -> JsonRpcResponse {
         }
         None => return JsonRpcResponse::error(request.id, INVALID_PARAMS, "missing params"),
     };
-    if params.command.is_none() && params.index.is_none() {
-        return JsonRpcResponse::error(
-            request.id,
-            INVALID_PARAMS,
-            "must set either `command` (substring filter) or `index`",
-        );
-    }
+    // `index` wins over `command`: it addresses one specific group.
+    let removal = match (params.index, params.command) {
+        (Some(idx), _) => HookRemoval::Index(idx),
+        (None, Some(needle)) => HookRemoval::Command(needle),
+        (None, None) => {
+            return JsonRpcResponse::error(
+                request.id,
+                INVALID_PARAMS,
+                "must set either `command` (substring filter) or `index`",
+            );
+        }
+    };
 
     let (path, _exists, mut events) = match read_hooks_file() {
         Ok(v) => v,
         Err(e) => return JsonRpcResponse::error(request.id, INTERNAL_ERROR, e),
     };
 
-    let arr = match events.get_mut(&params.event).and_then(|v| v.as_array_mut()) {
-        Some(a) => a,
-        None => {
-            return JsonRpcResponse::error(
-                request.id,
-                INVALID_PARAMS,
-                format!("no entries for event {}", params.event),
-            );
-        }
+    // The removal resolves the event aliases the same way the `hooks_manage`
+    // tool does, so a hook filed under `PreToolUse` is also removed by the
+    // canonical `before_tool_call` spelling.
+    let removed = match remove_event_groups(&mut events, &params.event, removal) {
+        Ok(n) => n,
+        Err(e) => return JsonRpcResponse::error(request.id, INVALID_PARAMS, e),
     };
-
-    let before_len = arr.len();
-    if let Some(idx) = params.index {
-        if idx >= arr.len() {
-            return JsonRpcResponse::error(
-                request.id,
-                INVALID_PARAMS,
-                format!("index {idx} out of range (len={})", arr.len()),
-            );
-        }
-        arr.remove(idx);
-    } else if let Some(needle) = &params.command {
-        arr.retain(|grp| !group_matches_substring(grp, needle));
-    }
-    let removed = before_len - arr.len();
-
-    // Don't leave empty arrays cluttering the file.
-    if arr.is_empty() {
-        events.remove(&params.event);
-    }
 
     if let Err(e) = write_hooks_file(&path, &events) {
         return JsonRpcResponse::error(request.id, INTERNAL_ERROR, e);
@@ -642,5 +706,50 @@ mod tests {
         assert!(group_matches_substring(&group, "rm -rf"));
         assert!(group_matches_substring(&group, "example.com"));
         assert!(!group_matches_substring(&group, "nothing-here"));
+    }
+
+    /// A hook filed under the PascalCase alias is removed by the canonical
+    /// spelling too. The RPC face used to look the exact key up, so it
+    /// answered "no entries for event" while the tool face removed it.
+    #[test]
+    fn a_hook_filed_under_an_alias_is_removed_by_its_canonical_name() {
+        let mut events: Map<String, Value> = serde_json::from_str(
+            r#"{
+                "PreToolUse": [{ "hooks": [{ "type": "command", "command": "echo one" }] }],
+                "before_tool_call": [{ "hooks": [{ "type": "command", "command": "echo two" }] }]
+            }"#,
+        )
+        .unwrap();
+
+        let removed = remove_event_groups(
+            &mut events,
+            "before_tool_call",
+            HookRemoval::Command("echo one".to_string()),
+        )
+        .unwrap();
+        assert_eq!(removed, 1);
+        assert!(!events.contains_key("PreToolUse"));
+        assert_eq!(events["before_tool_call"].as_array().unwrap().len(), 1);
+    }
+
+    /// The index arm addresses the flattened list of the event's groups, so
+    /// it names one group instead of one group under one spelling.
+    #[test]
+    fn the_index_arm_spans_every_key_that_names_the_event() {
+        let mut events: Map<String, Value> = serde_json::from_str(
+            r#"{
+                "before_tool_call": [{ "hooks": [{ "type": "command", "command": "one" }] }],
+                "PreToolUse": [{ "hooks": [{ "type": "command", "command": "two" }] }]
+            }"#,
+        )
+        .unwrap();
+
+        let removed =
+            remove_event_groups(&mut events, "before_tool_call", HookRemoval::Index(0)).unwrap();
+        assert_eq!(removed, 1);
+        // `PreToolUse` sorts before `before_tool_call`, so index 0 is the
+        // group filed under the alias.
+        assert!(!events.contains_key("PreToolUse"));
+        assert_eq!(events["before_tool_call"].as_array().unwrap().len(), 1);
     }
 }

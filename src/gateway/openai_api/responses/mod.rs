@@ -16,7 +16,7 @@ use crate::providers::adapter::RequestPayload;
 use crate::providers::message::UnifiedMessage;
 use crate::providers::AiProvider;
 
-use super::auth::{extract_bearer_token, ApiError};
+use super::auth::{authorize, ApiError};
 use super::completions::passthrough::{convert_openai_tools, convert_tool_choice};
 use super::state::OpenAiApiState;
 use super::stream;
@@ -73,17 +73,7 @@ pub async fn handle(
     Json(req): Json<ResponsesRequest>,
 ) -> Result<Response, ApiError> {
     // Auth check — same pattern as completions/embeddings
-    let auth_header = headers
-        .get("authorization")
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("");
-    let token = extract_bearer_token(auth_header)
-        .ok_or_else(|| ApiError::Unauthorized("Missing or invalid Authorization header".into()))?;
-    if let Some(expected) = (state.api_token)() {
-        if !crate::security::secret_equal(Some(token), Some(expected.as_str())) {
-            return Err(ApiError::Unauthorized("Invalid API key".into()));
-        }
-    }
+    authorize(&state, &headers)?;
 
     // Provider lookup
     let provider = state

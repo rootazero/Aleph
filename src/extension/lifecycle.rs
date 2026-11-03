@@ -451,6 +451,30 @@ impl ExtensionManager {
                     summary
                         .errors
                         .push(format!("{}: {}", dir_path.display(), error));
+                    if let Some(winner) = winners.get(&fallback_id) {
+                        // A higher-priority copy of this id already parsed and
+                        // won the shadowing contest. This copy is a broken
+                        // shadowed source, not the plugin: registering its
+                        // error row would replace the healthy winner with an
+                        // error row and take a working plugin out of the
+                        // registry.
+                        self.plugin_registry
+                            .write()
+                            .await
+                            .add_diagnostic(PluginDiagnostic {
+                                level: DiagnosticLevel::Warn,
+                                message: format!(
+                                    "{} could not be parsed and is shadowed by the copy at {}: {}",
+                                    dir_path.display(),
+                                    winner.display(),
+                                    error
+                                ),
+                                plugin_id: Some(fallback_id.clone()),
+                                source: Some("discovery".to_string()),
+                            });
+                        failed_plugin_ids.insert(fallback_id.clone());
+                        continue;
+                    }
                     if failed_plugin_ids.insert(fallback_id.clone()) {
                         self.plugin_registry
                             .write()
@@ -796,6 +820,64 @@ impl ExtensionManager {
         }
     }
 
+    /// Write an admission refusal onto the plugin's registry row.
+    ///
+    /// The refusal has to be visible: "refused by policy" and "not installed"
+    /// must not render the same.
+    async fn record_admission_refusal(&self, id: &str, origin: PluginOrigin, error: &MountError) {
+        let mut reg = self.plugin_registry.write().await;
+        let Some(row) = reg.get_plugin_mut(id) else {
+            return;
+        };
+        match error {
+            MountError::Blocked { .. } => {
+                row.status = PluginStatus::Blocked(format!("{origin:?}"));
+                row.error = Some(error.to_string());
+            }
+            MountError::Disabled(_) => {
+                row.status = PluginStatus::Disabled;
+                row.error = None;
+            }
+            MountError::NotEnabled(_) => {
+                row.status = PluginStatus::Disabled;
+                row.error = Some(error.to_string());
+            }
+            _ => {}
+        }
+    }
+
+    /// The parsed identity of a plugin must be the id that was authorised.
+    ///
+    /// Returns the reason the mount must not proceed, or `None` when the
+    /// parsed plugin claims the requested id. Both the adapter output and the
+    /// manifest are checked: the row, the capability registrations and the
+    /// WASM module all key off these two ids, and they are only equal when
+    /// nobody changed the directory under the registry.
+    fn identity_mismatch(
+        id: &str,
+        output: &AdapterOutput,
+        manifest: Option<&PluginManifest>,
+    ) -> Option<String> {
+        if output.plugin_id != id {
+            return Some(format!(
+                "plugin directory parses as id '{}' but '{}' was authorised; \
+                 re-discover the plugin before mounting it",
+                output.plugin_id, id
+            ));
+        }
+        let Some(manifest) = manifest else {
+            return None;
+        };
+        if manifest.id != id {
+            return Some(format!(
+                "plugin manifest declares id '{}' but '{}' was authorised; \
+                 re-discover the plugin before mounting it",
+                manifest.id, id
+            ));
+        }
+        None
+    }
+
     // ── Mount ─────────────────────────────────────────────────────────────
 
     async fn mount_inner(&self, id: &str) -> Result<PluginStatus, MountError> {
@@ -825,24 +907,7 @@ impl ExtensionManager {
             .ok_or_else(|| MountError::NotFound(id.to_string()))?;
 
         if let Err(e) = self.admit(id, origin).await {
-            let mut reg = self.plugin_registry.write().await;
-            if let Some(row) = reg.get_plugin_mut(id) {
-                match &e {
-                    MountError::Blocked { .. } => {
-                        row.status = PluginStatus::Blocked(format!("{origin:?}"));
-                        row.error = Some(e.to_string());
-                    }
-                    MountError::Disabled(_) => {
-                        row.status = PluginStatus::Disabled;
-                        row.error = None;
-                    }
-                    MountError::NotEnabled(_) => {
-                        row.status = PluginStatus::Disabled;
-                        row.error = Some(e.to_string());
-                    }
-                    _ => {}
-                }
-            }
+            self.record_admission_refusal(id, origin, &e).await;
             return Err(e);
         }
 
@@ -881,6 +946,32 @@ impl ExtensionManager {
                 });
             }
         };
+        // The id that was authorised is the id that must run.
+        //
+        // The trust decision and the operator's preference were made for the
+        // id in the registry row; the code that runs comes from re-parsing
+        // the plugin directory. A directory that now declares a different id
+        // would otherwise run under the new id with the authorisation of the
+        // old one — the operator vouched for `allowed`, and `replacement`
+        // would run with that vouch behind it.
+        if let Some(reason) = Self::identity_mismatch(id, &output, manifest.as_ref()) {
+            let mut reg = self.plugin_registry.write().await;
+            if let Some(row) = reg.get_plugin_mut(id) {
+                row.status = PluginStatus::Error(reason.clone());
+                row.error = Some(reason.clone());
+            }
+            return Err(MountError::Parse {
+                id: id.to_string(),
+                reason,
+            });
+        }
+        // Re-check admission for the identity that is about to run: the
+        // operator's preference and the trust policy may have changed
+        // between the first check and the parse.
+        if let Err(e) = self.admit(id, origin).await {
+            self.record_admission_refusal(id, origin, &e).await;
+            return Err(e);
+        }
         let record = Self::build_record(&output, root_dir, origin, scope_key, manifest.as_ref());
         if super::runtime_owner::eligible(&output, manifest.as_ref()) {
             return Ok(self
@@ -1351,7 +1442,9 @@ impl ExtensionManager {
                 // before the retained task can be scheduled.
                 owner.close_admission();
                 let initial = owner.provider.state();
-                let state_error = if !owner.failures.lock().unwrap().is_empty() {
+                let state_error = if owner.is_publication_only_failure() {
+                    false
+                } else if !owner.failures.lock().unwrap().is_empty() {
                     true
                 } else {
                     match initial {
@@ -1508,9 +1601,23 @@ impl OwnerStopContext {
         }
         if matches!(initial, ProviderState::Cold | ProviderState::Disabled) {
             if initial == ProviderState::Cold {
+                let receipt = owner.receipt.lock().unwrap().take();
+                if let Some(receipt) = receipt {
+                    if let Err(error) = receipt.revoke() {
+                        *owner.receipt.lock().unwrap() = Some(receipt);
+                        owner
+                            .failures
+                            .lock()
+                            .unwrap()
+                            .push(OwnerFailure::Revoke(error));
+                        let _ = owner.provider.transition(ProviderState::Failed);
+                        return Err(residual());
+                    }
+                }
                 let _ = owner.provider.transition(ProviderState::Disabled);
             }
             self.views.plugin_registry.write().await.disable_plugin(id);
+            self.owners.lock().unwrap().remove(id);
             return Err(UnmountError::NotMounted(id.clone()));
         }
         let receipt = owner.receipt.lock().unwrap().clone();
@@ -1864,9 +1971,12 @@ handler = "handler"
         assert_eq!(probe.guest_instance_created(), 0);
         assert_eq!(probe.guest_instance_dropped(), 0);
         drop(loader);
-        assert_eq!(canonical.revision(), revision);
-        assert!(canonical.canonical_publication().entries().is_empty());
-        assert!(canonical.capture_entry("lazy_tool").is_none());
+        assert_eq!(canonical.revision(), revision + 1);
+        let publication = canonical.canonical_publication();
+        assert_eq!(publication.entries().len(), 1);
+        assert!(canonical
+            .capture_entry("lazy_tool")
+            .is_some_and(|lease| lease.is_cold_declaration()));
     }
 
     #[tokio::test]
@@ -1900,8 +2010,11 @@ handler = "handler"
         assert_eq!(probe.guest_instance_created(), 0);
         assert_eq!(probe.guest_instance_dropped(), 0);
         drop(loader);
-        assert_eq!(canonical.revision(), 0);
-        assert!(canonical.canonical_publication().entries().is_empty());
+        assert_eq!(canonical.revision(), 1);
+        assert_eq!(canonical.canonical_publication().entries().len(), 1);
+        assert!(canonical
+            .capture_entry("lazy_tool")
+            .is_some_and(|lease| lease.is_cold_declaration()));
     }
 
     #[tokio::test]
@@ -1921,7 +2034,7 @@ handler = "handler"
         let cold_owner = manager
             .runtime_owner("lazy-wasm")
             .expect("discovery must declare the owner");
-        assert_eq!(canonical.revision(), 0);
+        assert_eq!(canonical.revision(), 1);
         b6_set_desired_enabled(&manager, "lazy-wasm").await;
 
         manager.ensure_loaded().await.unwrap();
@@ -1932,9 +2045,11 @@ handler = "handler"
         assert!(Arc::ptr_eq(&cold_owner, &ready_owner));
         assert_eq!(
             ready_owner.provider.state(),
-            crate::capability::provider::ProviderState::Ready
+            crate::capability::provider::ProviderState::Ready,
+            "{}",
+            ready_owner.failure_summary()
         );
-        assert_eq!(canonical.revision(), 1);
+        assert_eq!(canonical.revision(), 2);
         assert_eq!(canonical.canonical_publication().entries().len(), 1);
         assert!(canonical.capture_entry("lazy_tool").is_some());
     }
@@ -1967,7 +2082,7 @@ handler = "handler"
             crate::capability::provider::ProviderState::Cold
         );
         assert!(!manager.plugin_loader.read().await.is_loaded("lazy-wasm"));
-        assert_eq!(canonical.revision(), 0);
+        assert_eq!(canonical.revision(), 3);
     }
 
     #[tokio::test]
@@ -2001,7 +2116,7 @@ handler = "handler"
         .await
         .unwrap();
         assert_eq!(listed.data.as_array().unwrap().len(), 1);
-        assert_eq!(canonical.revision(), 0);
+        assert_eq!(canonical.revision(), 1);
         let loader = manager.plugin_loader.read().await;
         assert!(!loader.is_loaded("lazy-wasm"));
         let probe = loader.wasm_load_probe();
@@ -2024,7 +2139,7 @@ handler = "handler"
         .await
         .unwrap();
         assert_eq!(enabled.data["ok"], true);
-        assert_eq!(canonical.revision(), 1);
+        assert_eq!(canonical.revision(), 2);
         assert!(manager.plugin_loader.read().await.is_loaded("lazy-wasm"));
     }
 
@@ -2500,9 +2615,20 @@ handler = "handler"
             .await
             .list_tools_for_plugin("lazy-wasm")
             .is_empty());
-        assert!(canonical.canonical_publication().entries().is_empty());
-        assert!(facade.describe(Scope::default()).capabilities.is_empty());
-        assert!(facade
+        assert!(manager
+            .active_plugin_tools_snapshot()
+            .iter()
+            .any(|tool| tool.plugin_id == "lazy-wasm" && tool.name == "lazy_tool"));
+        assert!(manager
+            .mounted_plugin_tools_snapshot()
+            .iter()
+            .all(|tool| tool.plugin_id != "lazy-wasm"));
+        assert_eq!(canonical.canonical_publication().entries().len(), 2);
+        assert!(canonical
+            .capture_entry("lazy_tool")
+            .is_some_and(|lease| lease.is_cold_declaration()));
+        assert!(!facade.describe(Scope::default()).capabilities.is_empty());
+        assert!(!facade
             .project(TransportTarget::Mcp, Scope::default())
             .capabilities
             .is_empty());
@@ -2568,6 +2694,77 @@ handler = "handler"
         assert!(manager.unmount("lazy-wasm").await.unwrap().all_ok());
     }
 
+    #[tokio::test]
+    async fn stage_f_first_canonical_call_activates_cold_owner_once() {
+        use crate::capability::provider::ProviderState;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let _home = isolated_home(tmp.path());
+        let (manager, canonical, owner) = b3_cold_manager(tmp.path()).await;
+        assert_eq!(owner.provider.state(), ProviderState::Cold);
+        let loader = manager.plugin_loader.read().await;
+        let probe = loader.wasm_load_probe();
+        assert_eq!(probe.guest_byte_reads(), 0);
+        assert_eq!(probe.guest_instance_created(), 0);
+        drop(loader);
+
+        let output = b3_call_canonical(canonical.clone(), "lazy_tool")
+            .await
+            .expect("the first canonical call activates and executes the Cold owner");
+        assert_eq!(output.value, serde_json::json!("A"));
+        assert_eq!(owner.provider.state(), ProviderState::Ready);
+        let loader = manager.plugin_loader.read().await;
+        let probe = loader.wasm_load_probe();
+        assert_eq!(probe.guest_byte_reads(), 1);
+        assert_eq!(probe.guest_instance_created(), 1);
+        drop(loader);
+        assert!(canonical
+            .capture_entry("lazy_tool")
+            .is_some_and(|lease| !lease.is_cold_declaration()));
+        assert!(manager.unmount("lazy-wasm").await.unwrap().all_ok());
+    }
+    #[tokio::test]
+    async fn stage_f_denied_cold_canonical_call_does_not_activate_owner() {
+        use crate::tools::service::ToolService;
+        let tmp = tempfile::tempdir().unwrap();
+        let _home = isolated_home(tmp.path());
+        let (manager, canonical, owner) = b3_cold_manager(tmp.path()).await;
+        let service = b4_canonical_service(canonical.clone());
+        let denied = service
+            .execute("lazy_tool", serde_json::json!({}))
+            .await;
+        assert!(matches!(denied, Err(crate::tools::service::ToolError::PermissionDenied { .. })));
+        assert_eq!(owner.provider.state(), crate::capability::provider::ProviderState::Cold);
+        let loader = manager.plugin_loader.read().await;
+        let probe = loader.wasm_load_probe();
+        assert_eq!(probe.guest_byte_reads(), 0);
+        assert_eq!(probe.guest_instance_created(), 0);
+        drop(loader);
+        assert!(manager
+            .set_plugin_enabled("lazy-wasm", false)
+            .await
+            .is_ok());
+    }
+
+    #[tokio::test]
+    async fn stage_f_concurrent_first_canonical_calls_share_one_activation() {
+        let tmp = tempfile::tempdir().unwrap();
+        let _home = isolated_home(tmp.path());
+        let (manager, canonical, owner) = b3_cold_manager(tmp.path()).await;
+        let (left, right) = tokio::join!(
+            b3_call_canonical(canonical.clone(), "lazy_tool"),
+            b3_call_canonical(canonical.clone(), "lazy_tool"),
+        );
+        assert_eq!(left.unwrap().value, serde_json::json!("A"));
+        assert_eq!(right.unwrap().value, serde_json::json!("A"));
+        assert_eq!(owner.provider.state(), crate::capability::provider::ProviderState::Ready);
+        let loader = manager.plugin_loader.read().await;
+        let probe = loader.wasm_load_probe();
+        assert_eq!(probe.guest_byte_reads(), 1);
+        assert_eq!(probe.guest_instance_created(), 1);
+        drop(loader);
+        assert!(manager.unmount("lazy-wasm").await.unwrap().all_ok());
+    }
     #[tokio::test]
     async fn stage_g_production_host_replacement_fences_stale_facade_and_drops_exact_owner() {
         use crate::extension::plugin_state::PluginRuntimeOutcome;
@@ -3742,7 +3939,12 @@ handler = "handler"
                 .value,
             serde_json::json!("A")
         );
+        assert!(loser.is_publication_only_failure());
+        let loser_cleanup = other.unmount("lazy-wasm").await;
+        assert!(loser_cleanup.is_ok());
+        assert!(other.runtime_owner("lazy-wasm").is_none());
         manager.unmount("lazy-wasm").await.unwrap();
+        assert!(other.reload_plugin("lazy-wasm").await.is_ok());
     }
 
     #[tokio::test]
@@ -3988,7 +4190,7 @@ handler = "handler"
             .cleanup_report
             .iter()
             .any(|s| s.step == "registry_row" && s.error.is_none()));
-        assert!(PluginsConfig::load(&cfg_path).is_enabled_for("qa-wasm", PluginOrigin::Workspace));
+        assert!(PluginsConfig::load(&cfg_path).unwrap().is_enabled_for("qa-wasm", PluginOrigin::Workspace));
         assert!(manager
             .plugins_config
             .read()
@@ -4018,7 +4220,7 @@ handler = "handler"
         assert!(outcome.persisted);
         assert_eq!(outcome.runtime_outcome, PluginRuntimeOutcome::NotDiscovered);
         assert_eq!(outcome.actual_state, "not_discovered");
-        assert!(!PluginsConfig::load(&path).is_enabled_for("absent", PluginOrigin::Global));
+        assert!(!PluginsConfig::load(&path).unwrap().is_enabled_for("absent", PluginOrigin::Global));
         assert!(manager.get_plugin_record("absent").await.is_none());
     }
 
@@ -4063,7 +4265,7 @@ handler = "handler"
             Poll::Ready(())
         })
         .await;
-        assert!(!PluginsConfig::load(&path).is_enabled_for("alpha", PluginOrigin::Workspace));
+        assert!(!PluginsConfig::load(&path).unwrap().is_enabled_for("alpha", PluginOrigin::Workspace));
         assert!(!manager
             .plugins_config
             .read()
@@ -4078,7 +4280,7 @@ handler = "handler"
         assert_eq!(enabled.runtime_outcome, PluginRuntimeOutcome::Mounted);
         assert_eq!(enabled.actual_state, "loaded");
         assert_ne!(disabled.operation_id, enabled.operation_id);
-        assert!(PluginsConfig::load(&path).is_enabled_for("alpha", PluginOrigin::Workspace));
+        assert!(PluginsConfig::load(&path).unwrap().is_enabled_for("alpha", PluginOrigin::Workspace));
         assert!(manager
             .get_plugin_record("alpha")
             .await
@@ -4234,7 +4436,7 @@ handler = "handler"
             assert_eq!(outcome["actual_state"], "failed");
             assert!(!outcome["cleanup_report"].as_array().unwrap().is_empty());
         }
-        assert!(PluginsConfig::load(&path).is_enabled_for("qa-wasm", PluginOrigin::Workspace));
+        assert!(PluginsConfig::load(&path).unwrap().is_enabled_for("qa-wasm", PluginOrigin::Workspace));
         assert!(manager.scope_steps("qa-wasm").is_none());
     }
 
@@ -4865,6 +5067,97 @@ handler = "handler"
             manager.mount("alpha").await,
             Err(MountError::AlreadyMounted(_))
         ));
+    }
+
+    #[tokio::test]
+    async fn a_malformed_lower_priority_copy_does_not_replace_the_healthy_winner() {
+        let tmp = tempfile::tempdir().unwrap();
+        let _home = isolated_home(tmp.path());
+        // The project copy (priority 20) is healthy.
+        write_static_plugin(tmp.path(), "alpha");
+        // The global copy (priority 10) of the same id is malformed. It is
+        // discovered after the winner and must not take the winner's row.
+        let global_dir = tmp.path().join("aleph-state/plugins/alpha");
+        std::fs::create_dir_all(global_dir.join(".claude-plugin")).unwrap();
+        std::fs::write(
+            global_dir.join(".claude-plugin/plugin.toml"),
+            "name = \"alpha\"\nversion = \n",
+        )
+        .unwrap();
+
+        let (manager, _) = isolated_manager(tmp.path()).await;
+        manager.load_all().await.unwrap();
+
+        let row = manager
+            .get_plugin_record("alpha")
+            .await
+            .expect("the healthy copy keeps the row");
+        assert!(row.status.is_active(), "{:?}", row.status);
+        assert_eq!(
+            row.root_dir,
+            tmp.path().join("plugins/alpha"),
+            "the winning copy is the project one"
+        );
+        let diagnostics = manager.get_plugin_registry().await.diagnostics().to_vec();
+        assert!(
+            diagnostics
+                .iter()
+                .any(|d| d.message.contains("shadowed") && d.message.contains("alpha")),
+            "{diagnostics:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_plugin_that_changed_its_id_is_not_mounted_under_the_authorised_id() {
+        let tmp = tempfile::tempdir().unwrap();
+        let _home = isolated_home(tmp.path());
+        write_static_plugin(tmp.path(), "alpha");
+        let (manager, _) = isolated_manager(tmp.path()).await;
+        let catalog = std::sync::Arc::new(crate::tool_metadata::ToolCatalog::new());
+        manager.set_tool_catalog(catalog.clone());
+        manager.load_all().await.unwrap();
+        manager.unmount("alpha").await.unwrap();
+
+        // The directory is swapped under the registry row: the id the
+        // operator authorised is `alpha`, the plugin now declares
+        // `replacement`. Mounting `alpha` must not run `replacement` with
+        // `alpha`'s authorisation.
+        std::fs::write(
+            tmp.path().join("plugins/alpha/.claude-plugin/plugin.toml"),
+            "name = \"replacement\"\nversion = \"1.0.0\"\n",
+        )
+        .unwrap();
+
+        let error = manager
+            .mount("alpha")
+            .await
+            .expect_err("a changed identity must not mount");
+        assert!(
+            matches!(&error, MountError::Parse { id, reason }
+                if id == "alpha" && reason.contains("re-discover")),
+            "{error:?}"
+        );
+        assert!(manager.scope_steps("alpha").is_none(), "no scope started");
+        let row = manager.get_plugin_record("alpha").await.unwrap();
+        assert!(
+            matches!(row.status, PluginStatus::Error(_)),
+            "the row must say why: {:?}",
+            row.error
+        );
+        assert!(
+            manager.get_plugin_record("replacement").await.is_none(),
+            "the new id never becomes a row"
+        );
+        let names: Vec<String> = catalog
+            .list_all()
+            .await
+            .into_iter()
+            .map(|t| t.name)
+            .collect();
+        assert!(
+            !names.iter().any(|name| name.starts_with("replacement:")),
+            "{names:?}"
+        );
     }
 
     #[tokio::test]

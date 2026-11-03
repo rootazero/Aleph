@@ -110,9 +110,12 @@ impl GroupChatExecutor {
                 // Dedupe the warn across rounds — without this, a misconfigured
                 // persona produces N×M log lines (N rounds × M occurrences per
                 // round) and drowns the tracing output.
-                let first_miss = self
-                    .lock_provider_fallback_warned()
-                    .insert((persona.id.clone(), provider_name.clone()));
+                const MAX_PROVIDER_FALLBACK_WARNED: usize = 256;
+                let mut set = self.lock_provider_fallback_warned();
+                if set.len() >= MAX_PROVIDER_FALLBACK_WARNED {
+                    set.clear();
+                }
+                let first_miss = set.insert((persona.id.clone(), provider_name.clone()));
                 if first_miss {
                     tracing::warn!(
                         subsystem = "group_chat",

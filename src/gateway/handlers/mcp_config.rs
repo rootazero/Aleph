@@ -389,10 +389,33 @@ pub async fn handle_update(
     }
 
     // Restart cleanly so the running client picks up the new config.
-    // Ignore removal error — the server may already be stopped/absent; add_server below is the authoritative step.
-    let _ = mcp.remove_server(&params.id).await;
+    //
+    // The swap is explicit. The removal is not optional — it is the step that
+    // drops the old entry from the store — so a failure is reported instead of
+    // being swallowed into the next call's error. And a failed re-add puts
+    // the previous configuration back, because the removal already succeeded
+    // and leaving the server unregistered would destroy a working entry.
+    if let Err(e) = mcp.remove_server(&params.id).await {
+        return JsonRpcResponse::error(
+            request.id,
+            INTERNAL_ERROR,
+            format!(
+                "Failed to remove MCP server '{}' before the update: {e}",
+                params.id
+            ),
+        );
+    }
     if let Err(e) = mcp.add_server(new_cfg).await {
-        return JsonRpcResponse::error(request.id, INTERNAL_ERROR, e.to_string());
+        let restore = mcp.add_server(existing).await;
+        let restore_note = match restore {
+            Ok(()) => "; the previous configuration was restored".to_string(),
+            Err(re) => format!("; restoring the previous configuration failed too: {re}"),
+        };
+        return JsonRpcResponse::error(
+            request.id,
+            INTERNAL_ERROR,
+            format!("Failed to add the updated MCP server: {e}{restore_note}"),
+        );
     }
 
     publish_mcp_change(&event_bus, "updated", &existing.name);

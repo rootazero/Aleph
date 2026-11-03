@@ -131,21 +131,24 @@ impl ProtocolAdapter for GeminiProtocol {
 
         // Add tool_config if tool_choice is specified
         if let Some(ref choice) = payload.tool_choice {
-            use crate::providers::adapter::ToolChoice;
-            body["tool_config"] = match choice {
-                ToolChoice::Auto => {
-                    serde_json::json!({"function_calling_config": {"mode": "AUTO"}})
-                }
-                ToolChoice::Required => {
-                    serde_json::json!({"function_calling_config": {"mode": "ANY"}})
-                }
-                ToolChoice::Specific(name) => serde_json::json!({"function_calling_config": {
-                    "mode": "ANY", "allowed_function_names": [name]
-                }}),
-                ToolChoice::None => {
-                    serde_json::json!({"function_calling_config": {"mode": "NONE"}})
-                }
-            };
+            if let Some(body_obj) = body.as_object_mut() {
+                use crate::providers::adapter::ToolChoice;
+                let config = match choice {
+                    ToolChoice::Auto => {
+                        serde_json::json!({"function_calling_config": {"mode": "AUTO"}})
+                    }
+                    ToolChoice::Required => {
+                        serde_json::json!({"function_calling_config": {"mode": "ANY"}})
+                    }
+                    ToolChoice::Specific(name) => serde_json::json!({"function_calling_config": {
+                        "mode": "ANY", "allowed_function_names": [name]
+                    }}),
+                    ToolChoice::None => {
+                        serde_json::json!({"function_calling_config": {"mode": "NONE"}})
+                    }
+                };
+                body_obj.insert("tool_config".to_string(), config);
+            }
         }
 
         Ok(self
@@ -260,7 +263,10 @@ impl ProtocolAdapter for GeminiProtocol {
                 // Complete lines (up to \n) are safe to decode as UTF-8 since
                 // SSE data lines are always complete JSON terminated by newline.
                 if let Some(pos) = state.line_buf.iter().position(|&b| b == b'\n') {
-                    let line_bytes = state.line_buf[..pos].to_vec();
+                    let line_bytes = state
+                        .line_buf
+                        .get(..pos)
+                        .map_or_else(Vec::new, <[u8]>::to_vec);
                     state.line_buf.drain(..=pos);
 
                     let line = String::from_utf8(line_bytes)
