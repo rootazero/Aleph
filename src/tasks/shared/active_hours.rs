@@ -12,7 +12,7 @@
 //! `TZ` env var (a deliberate divergence from openclaw, which used the
 //! host's local zone and broke when servers were containerised).
 
-use chrono::{Datelike, NaiveTime, TimeZone, Timelike};
+use chrono::{Datelike, TimeZone, Timelike};
 use chrono_tz::Tz;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};

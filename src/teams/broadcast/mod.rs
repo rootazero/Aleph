@@ -480,7 +480,7 @@ impl GroupChatBroadcaster {
         publish_team_event(
             &team_id,
             "fanout",
-            serde_json::json!({ "run_id": tree.run_id.as_str(), "status": "started" }),
+            serde_json::json!({ "run_id": &*tree.run_id, "status": "started" }),
         );
         let leader_first = self.maybe_plan_team_strategy(&team_id, &content).await;
         let budget = Arc::new(AtomicUsize::new(0));
@@ -501,7 +501,7 @@ impl GroupChatBroadcaster {
         publish_team_event(
             &team_id,
             "fanout",
-            serde_json::json!({ "run_id": tree.run_id.as_str(), "status": "settled" }),
+            serde_json::json!({ "run_id": &*tree.run_id, "status": "settled" }),
         );
     }
 
@@ -804,9 +804,9 @@ impl GroupChatBroadcaster {
             tree.cancel.child_token(),
             format!("team-chat member {agent_id} (team {team_id})"),
             SpawnMeta {
-                parent_id: Some(tree.run_id.as_ref().clone()),
+                parent_id: Some(tree.run_id.to_string()),
                 depth: chain_depth.saturating_add(1),
-                root_session: tree.run_id.as_ref().clone(),
+                root_session: tree.run_id.to_string(),
                 model: None,
                 child_session: None,
             },
