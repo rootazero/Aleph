@@ -163,18 +163,24 @@ fn scan_single_brace_keyword(
 ) {
     let needle = format!("{{{keyword}}}");
     let mut start = 0usize;
-    while let Some(rel) = prompt[start..].find(&needle) {
+    while let Some(rel) = prompt.get(start..).and_then(|sub| sub.find(&needle)) {
         let at = start + rel;
         // Word-boundary on the LEFT: the byte before `{` must not be a word
         // char, otherwise `{now` is part of `prefix{now}` and the user's
         // intent is ambiguous (the audit errs on the side of catching it,
         // and the user can decide; matching only the bare `{now}` form would
         // miss `prefix{now}` entirely, which is the worse failure mode).
-        let left_ok = at == 0 || !prompt[..at].chars().next_back().is_some_and(is_word_char);
+        let left_ok = at == 0
+            || !prompt
+                .get(..at)
+                .unwrap_or("")
+                .chars()
+                .next_back()
+                .is_some_and(is_word_char);
         // `{{keyword}}` (named-arg) guard: the byte before `{` must not be
         // another `{`. Without it, `{{now}}` matches the `{now}` substring
         // starting at byte 1.
-        let not_double_brace = at == 0 || prompt.as_bytes()[at - 1] != b'{';
+        let not_double_brace = at == 0 || prompt.as_bytes().get(at.saturating_sub(1)) != Some(&b'{');
         // Word-boundary on the RIGHT: the byte after `}` must not be a word
         // char, otherwise `{now}s` is a word that starts with the
         // placeholder (matching it would suggest renaming `now` to `nowstamp`
@@ -205,20 +211,23 @@ fn scan_single_brace_keyword(
 fn scan_random_family(prompt: &str, keyword: &str, out: &mut Vec<DeterminismFinding>) {
     let prefix = '{';
     let mut idx = 0usize;
-    while let Some(rel) = prompt[idx..].find(prefix) {
+    while let Some(rel) = prompt.get(idx..).and_then(|sub| sub.find(prefix)) {
         let at = idx + rel;
         let after_brace = at + 1;
         // Check the keyword starts at `after_brace`.
-        if !prompt[after_brace..].starts_with(keyword) {
+        if !prompt
+            .get(after_brace..)
+            .is_some_and(|sub| sub.starts_with(keyword))
+        {
             idx = at + 1;
             continue;
         }
         let kw_end = after_brace + keyword.len();
         let suffix_start = kw_end;
         // Determine the end of the placeholder: optional `:N` of digits, then `}`.
-        let (placeholder_end, body_end) = match &prompt.as_bytes()[suffix_start..] {
-            [b'}', ..] => (suffix_start + 1, suffix_start + 1),
-            [b':', rest @ ..] => {
+        let (placeholder_end, body_end) = match prompt.as_bytes().get(suffix_start..) {
+            Some([b'}', ..]) => (suffix_start + 1, suffix_start + 1),
+            Some([b':', rest @ ..]) => {
                 // Collect digits after the colon. An empty `:}` is a malformed
                 // placeholder — skip it; the prompt author intended a length
                 // and got the parser, not the model.
@@ -239,12 +248,19 @@ fn scan_random_family(prompt: &str, keyword: &str, out: &mut Vec<DeterminismFind
         };
         // Word-boundary checks identical to the keyword case, plus the
         // `{{keyword}}` guard (the byte before `{` must not be another `{`).
-        let left_ok = at == 0 || !prompt[..at].chars().next_back().is_some_and(is_word_char);
-        let not_double_brace = at == 0 || prompt.as_bytes()[at - 1] != b'{';
+        let left_ok = at == 0
+            || !prompt
+                .get(..at)
+                .unwrap_or("")
+                .chars()
+                .next_back()
+                .is_some_and(is_word_char);
+        let not_double_brace =
+            at == 0 || prompt.as_bytes().get(at.saturating_sub(1)) != Some(&b'{');
         let right_ok =
             placeholder_end >= prompt.len() || !is_word_char_in_str_at(prompt, placeholder_end);
         if left_ok && not_double_brace && right_ok {
-            let snippet = prompt[at..placeholder_end].to_string();
+            let snippet = prompt.get(at..placeholder_end).unwrap_or("").to_string();
             out.push(DeterminismFinding {
                 kind: DeterminismFindingKind::RandomValue,
                 column: at,
@@ -266,11 +282,10 @@ const fn is_word_char(c: char) -> bool {
 /// an ASCII word char), which is the conservative answer — non-ASCII bytes
 /// never count as word chars in the audit's boundary check.
 fn is_word_char_in_str_at(s: &str, i: usize) -> bool {
-    // SAFETY: the caller guarantees `i < s.len()` (the only call site checks
-    // against `prompt.len()` before invoking). A mid-codepoint byte cannot
-    // match an ASCII alphanum; this returns false for it, which is the right
-    // boundary answer.
-    s.as_bytes()[i].is_ascii_alphanumeric() || s.as_bytes()[i] == b'_'
+    s.as_bytes()
+        .get(i)
+        .copied()
+        .is_some_and(|b| b.is_ascii_alphanumeric() || b == b'_')
 }
 
 #[cfg(test)]

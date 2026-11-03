@@ -364,12 +364,7 @@ pub fn parallel_groups_for(
     }
     label_order
         .into_iter()
-        .map(|label| {
-            // Unreachable in practice: the entry was inserted above. If
-            // the map ever gets mutated between the two loops, that is a
-            // bug worth a panic rather than a silent empty group.
-            groups.remove(&label).expect("label entry missing")
-        })
+        .map(|label| groups.remove(&label).unwrap_or_default())
         .collect()
 }
 
@@ -496,7 +491,9 @@ pub async fn materialize(
     let mut task_ids = Vec::with_capacity(def.steps.len());
 
     for &idx in &order {
-        let step = &def.steps[idx];
+        let Some(step) = def.steps.get(idx) else {
+            continue;
+        };
 
         // depends_on resolves to already-created task ids because we iterate
         // in topological order — a dependency is always materialised first.

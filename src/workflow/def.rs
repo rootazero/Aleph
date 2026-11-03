@@ -503,22 +503,30 @@ impl WorkflowDef {
                         step.id
                     )));
                 };
-                dependents[j].push(i);
-                indegree[i] += 1;
+                if let Some(dep_vec) = dependents.get_mut(j) {
+                    dep_vec.push(i);
+                }
+                if let Some(deg) = indegree.get_mut(i) {
+                    *deg += 1;
+                }
             }
         }
 
         // Seed with all roots, preserving list order for deterministic output.
         let mut queue: VecDeque<usize> = (0..self.steps.len())
-            .filter(|&i| indegree[i] == 0)
+            .filter(|&i| indegree.get(i).copied() == Some(0))
             .collect();
         let mut order = Vec::with_capacity(self.steps.len());
         while let Some(i) = queue.pop_front() {
             order.push(i);
-            for &child in &dependents[i] {
-                indegree[child] -= 1;
-                if indegree[child] == 0 {
-                    queue.push_back(child);
+            if let Some(children) = dependents.get(i) {
+                for &child in children {
+                    if let Some(deg) = indegree.get_mut(child) {
+                        *deg = deg.saturating_sub(1);
+                        if *deg == 0 {
+                            queue.push_back(child);
+                        }
+                    }
                 }
             }
         }
@@ -579,8 +587,8 @@ fn scan_prompt(
     let mut out = String::with_capacity(template.len());
     let mut rest = template;
     while let Some(pos) = rest.find('{') {
-        out.push_str(&rest[..pos]);
-        let at = &rest[pos..];
+        out.push_str(rest.get(..pos).unwrap_or(""));
+        let at = rest.get(pos..).unwrap_or("");
         if let Some(after) = at.strip_prefix("{{") {
             // Identifier chars only; the first char that is not one ends the
             // candidate name (and `}}` must follow immediately).
@@ -592,9 +600,9 @@ fn scan_prompt(
             if !name.is_empty() && tail.starts_with("}}") {
                 match lookup(name) {
                     Some(value) => out.push_str(&value),
-                    None => out.push_str(&at[..name_len + 4]),
+                    None => out.push_str(at.get(..name_len + 4).unwrap_or("")),
                 }
-                rest = &tail[2..];
+                rest = tail.strip_prefix("}}").unwrap_or(tail);
                 continue;
             }
             // Not a placeholder — emit the braces and resume after them, so a
@@ -609,7 +617,7 @@ fn scan_prompt(
             continue;
         }
         out.push('{');
-        rest = &at[1..];
+        rest = at.strip_prefix('{').unwrap_or(at);
     }
     out.push_str(rest);
     out
