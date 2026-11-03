@@ -130,9 +130,9 @@ pub fn parse_workflow_js(src: &str) -> Result<ImportOutcome> {
 /// `EMBED_SUFFIX` that follows it.  Only the first embed block is considered.
 fn extract_embedded(src: &str) -> Option<String> {
     let start = src.find(EMBED_PREFIX)? + EMBED_PREFIX.len();
-    let rest = &src[start..];
+    let rest = src.get(start..)?;
     let end = rest.find(EMBED_SUFFIX)?;
-    Some(rest[..end].trim().to_string())
+    Some(rest.get(..end)?.trim().to_string())
 }
 
 /// Light-weight scan of a hand-written `.workflow.js`.
@@ -531,7 +531,8 @@ fn phase_plan(
 fn scan_meta_field(src: &str, field: &str) -> Option<String> {
     let key = format!("{field}:");
     let pos = src.find(&key)? + key.len();
-    read_first_string_literal(&src[pos..])
+    let rest = src.get(pos..)?;
+    read_first_string_literal(rest)
 }
 
 #[cfg(test)]

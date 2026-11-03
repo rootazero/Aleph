@@ -30,7 +30,9 @@ pub(super) fn contains_call_like_keyword(skeleton: &str, keyword: &str) -> bool 
         if !leading_ok {
             return false;
         }
-        skeleton[at + keyword.len()..].trim_start().starts_with('(')
+        skeleton
+            .get(at + keyword.len()..)
+            .is_some_and(|s| s.trim_start().starts_with('('))
     })
 }
 
@@ -93,13 +95,13 @@ pub(super) fn scan_events(src: &str, consts: &ConstTable) -> Vec<ScanEvent> {
     let mut paren_depth: i32 = 0;
     let mut parallel_watch: Vec<i32> = Vec::new();
     while i < n {
-        let c = chars[i];
+        let Some(&c) = chars.get(i) else { break; };
         // Skip string-literal bodies so their contents are never tokenised
         // (parens inside a prompt must not perturb the depth count).
         if c == '\'' || c == '"' || c == '`' {
             i += 1;
             while i < n {
-                let d = chars[i];
+                let Some(&d) = chars.get(i) else { break; };
                 if d == '\\' {
                     i += 2; // skip the escaped char so \" / \' does not close early
                     continue;
@@ -114,18 +116,18 @@ pub(super) fn scan_events(src: &str, consts: &ConstTable) -> Vec<ScanEvent> {
         // Identifier? Consume it, then check for a following `(`.
         if c.is_alphabetic() || c == '_' {
             let start = i;
-            while i < n && (chars[i].is_alphanumeric() || chars[i] == '_') {
+            while i < n && chars.get(i).copied().is_some_and(|c| c.is_alphanumeric() || c == '_') {
                 i += 1;
             }
-            let ident: String = chars[start..i].iter().collect();
+            let ident: String = chars.get(start..i).map(|s| s.iter().collect()).unwrap_or_default();
             if ident == "phase" || ident == "agent" || ident == "parallel" || ident == "clarify" {
                 let mut j = i;
-                while j < n && chars[j].is_whitespace() {
+                while j < n && chars.get(j).copied().is_some_and(char::is_whitespace) {
                     j += 1;
                 }
-                if j < n && chars[j] == '(' {
+                if j < n && chars.get(j) == Some(&'(') {
                     // The call's argument list, as a char slice (paren consumed).
-                    let after = &chars[j + 1..];
+                    let after = chars.get(j + 1..).unwrap_or(&[]);
                     match ident.as_str() {
                         // A phase title is always a plain literal.
                         "phase" => {

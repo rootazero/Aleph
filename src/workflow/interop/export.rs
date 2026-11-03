@@ -65,7 +65,7 @@ pub fn render_workflow_js(manifest: &WorkflowManifest) -> String {
                 // in the body, but every step's `phase` is preserved losslessly
                 // via the embed-block manifest.
                 if let Some(&first) = layer.first() {
-                    if let Some(ph) = manifest.steps[first].phase.as_deref() {
+                    if let Some(ph) = manifest.steps.get(first).and_then(|s| s.phase.as_deref()) {
                         if last_phase != Some(ph) {
                             out.push_str(&format!("phase({})\n", js_str(ph)));
                             last_phase = Some(ph);
@@ -73,17 +73,21 @@ pub fn render_workflow_js(manifest: &WorkflowManifest) -> String {
                     }
                 }
                 if layer.len() == 1 {
-                    out.push_str(&format!(
-                        "await {}\n",
-                        render_step_call(&manifest.steps[layer[0]])
-                    ));
+                    if let Some(step) = layer.first().and_then(|&idx| manifest.steps.get(idx)) {
+                        out.push_str(&format!(
+                            "await {}\n",
+                            render_step_call(step)
+                        ));
+                    }
                 } else {
                     out.push_str("await parallel([\n");
                     for &i in layer {
-                        out.push_str(&format!(
-                            "  () => {},\n",
-                            render_step_call(&manifest.steps[i])
-                        ));
+                        if let Some(step) = manifest.steps.get(i) {
+                            out.push_str(&format!(
+                                "  () => {},\n",
+                                render_step_call(step)
+                            ));
+                        }
                     }
                     out.push_str("])\n");
                 }
@@ -121,7 +125,7 @@ fn effective_phases(
         None => (0..manifest.steps.len()).collect(),
     };
     for i in order {
-        if let Some(ph) = manifest.steps[i].phase.as_deref() {
+        if let Some(ph) = manifest.steps.get(i).and_then(|s| s.phase.as_deref()) {
             if seen.insert(ph.to_string()) {
                 out.push(WorkflowPhase {
                     title: ph.to_string(),
@@ -195,11 +199,16 @@ fn partial_fan_in_steps(manifest: &WorkflowManifest, levels: Option<&[Vec<usize>
     let mut prev: HashSet<usize> = HashSet::new();
     for layer in levels {
         for &i in layer {
-            let actual: HashSet<usize> = manifest.steps[i]
-                .depends_on
-                .iter()
-                .filter_map(|d| index_of.get(d.as_str()).copied())
-                .collect();
+            let actual: HashSet<usize> = manifest
+                .steps
+                .get(i)
+                .map(|s| {
+                    s.depends_on
+                        .iter()
+                        .filter_map(|d| index_of.get(d.as_str()).copied())
+                        .collect()
+                })
+                .unwrap_or_default();
             if actual != prev {
                 offenders.push(i);
             }
@@ -231,14 +240,14 @@ fn partial_fan_in_notes_at(
 ) -> Vec<String> {
     partial_fan_in_steps(manifest, levels)
         .into_iter()
-        .map(|i| {
-            let step = &manifest.steps[i];
+        .filter_map(|i| {
+            let step = manifest.steps.get(i)?;
             let deps = if step.depends_on.is_empty() {
                 "nothing".to_string()
             } else {
                 step.depends_on.join(", ")
             };
-            format!("{} depends on: {deps}", step.id)
+            Some(format!("{} depends on: {deps}", step.id))
         })
         .collect()
 }
@@ -433,23 +442,31 @@ fn topo_levels(manifest: &WorkflowManifest) -> Option<Vec<Vec<usize>>> {
     for (i, s) in manifest.steps.iter().enumerate() {
         for d in &s.depends_on {
             let j = *index_of.get(d.as_str())?;
-            dependents[j].push(i);
-            indegree[i] += 1;
+            if let Some(dep_vec) = dependents.get_mut(j) {
+                dep_vec.push(i);
+            }
+            if let Some(deg) = indegree.get_mut(i) {
+                *deg += 1;
+            }
         }
     }
 
     let mut placed = 0usize;
     let mut levels: Vec<Vec<usize>> = Vec::new();
-    let mut current: Vec<usize> = (0..n).filter(|&i| indegree[i] == 0).collect();
+    let mut current: Vec<usize> = (0..n).filter(|&i| indegree.get(i).copied() == Some(0)).collect();
     let mut next: Vec<usize> = Vec::new();
     while !current.is_empty() {
         placed += current.len();
         next.clear();
         for &i in &current {
-            for &c in &dependents[i] {
-                indegree[c] -= 1;
-                if indegree[c] == 0 {
-                    next.push(c);
+            if let Some(children) = dependents.get(i) {
+                for &c in children {
+                    if let Some(deg) = indegree.get_mut(c) {
+                        *deg = deg.saturating_sub(1);
+                        if *deg == 0 {
+                            next.push(c);
+                        }
+                    }
                 }
             }
         }
