@@ -82,7 +82,7 @@ fn register_for_exit(pid: Option<u32>, dir: PathBuf) {
             return;
         };
         for (pid, dir) in doomed.drain(..) {
-            if let Some(pid) = pid {
+            if let Some(pid) = pid.filter(|&p| p > 0) {
                 // SAFETY: `kill(pid, 0)` is the standard "is this pid alive?"
                 // probe and never delivers a signal. Without it, a recycled
                 // PID between spawn and atexit (different process now reusing

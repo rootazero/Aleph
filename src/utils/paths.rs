@@ -806,14 +806,17 @@ fn unsafe_agent_id_reason(agent_id: &str) -> Option<&'static str> {
     if agent_id.is_empty() {
         return Some("must not be empty");
     }
+    if agent_id.trim().is_empty() {
+        return Some("must not be blank or whitespace-only");
+    }
     if agent_id.contains('\0') {
         return Some("must not contain null bytes");
     }
     if agent_id.contains('/') || agent_id.contains('\\') {
         return Some("must be a single path component, with no '/' or '\\' separator");
     }
-    if agent_id.contains("..") {
-        return Some("must not contain '..' (path traversal)");
+    if agent_id == "." || agent_id.contains("..") {
+        return Some("must not be '.' or contain '..' (path traversal)");
     }
     if is_windows_reserved_name(agent_id) {
         // Naming the stem rule, not just the device list: the reason an id
@@ -881,7 +884,8 @@ pub(crate) fn is_windows_reserved_name(name: &str) -> bool {
     // Trim AFTER cutting, so `con . txt` reduces to `con` the way Win32 does.
     let stem = name
         .find(['.', ':'])
-        .map_or(name, |i| &name[..i])
+        .and_then(|i| name.get(..i))
+        .unwrap_or(name)
         .trim_end();
     RESERVED.iter().any(|r| stem.eq_ignore_ascii_case(r))
 }
