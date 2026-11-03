@@ -316,7 +316,8 @@ pub fn action_fingerprint(tool: &str, detail: &str) -> String {
     hasher.update(tool.as_bytes());
     hasher.update([0x1fu8]);
     hasher.update(detail.as_bytes());
-    hex::encode(&hasher.finalize()[..16])
+    let hash = hasher.finalize();
+    hex::encode(hash.get(..16).unwrap_or(hash.as_slice()))
 }
 
 impl DenialLedger {

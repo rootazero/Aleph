@@ -164,6 +164,7 @@ impl CommandPolicy {
 
     /// Compile the static catastrophic floor. Infallible — the hardline patterns
     /// are known-good and covered by a compile test (mirrors [`Self::defaults`]).
+    #[allow(clippy::expect_used)]
     fn compile_hardline() -> (RegexSet, Vec<String>, Vec<String>) {
         let defs = rules::hardline_rules();
         let patterns: Vec<&str> = defs.iter().map(|r| r.pattern).collect();
@@ -181,6 +182,7 @@ impl CommandPolicy {
     /// given enforcement mode, plus the always-on hardline floor. Infallible —
     /// the default patterns are known-good and covered by a compile test.
     #[must_use]
+    #[allow(clippy::expect_used)]
     pub fn defaults(enforcement: EnforcementMode) -> Self {
         let rules = default_rules().into_iter().map(|r| {
             (
@@ -250,12 +252,10 @@ impl CommandPolicy {
             while tail_start < len && !command_text.is_char_boundary(tail_start) {
                 tail_start += 1;
             }
-            scan_buf = format!(
-                "{}\n{}\n{}",
-                &command_text[..head_end],
-                &command_text[mid_start..mid_end],
-                &command_text[tail_start..]
-            );
+            let head = command_text.get(..head_end).unwrap_or("");
+            let mid = command_text.get(mid_start..mid_end).unwrap_or("");
+            let tail = command_text.get(tail_start..).unwrap_or("");
+            scan_buf = format!("{head}\n{mid}\n{tail}");
             &scan_buf
         };
 
@@ -274,10 +274,12 @@ impl CommandPolicy {
         // (including `Off`) and present even in a `hardline_only` policy.
         let hardline_hits = self.hardline.matches(scan);
         for idx in hardline_hits.iter() {
-            // rust-doctor-disable-next-line excessive-clone
-            eval.blocked.push(self.hardline_names[idx].clone());
-            // rust-doctor-disable-next-line excessive-clone
-            block_reason.get_or_insert_with(|| self.hardline_descriptions[idx].clone());
+            if let Some(name) = self.hardline_names.get(idx) {
+                eval.blocked.push(name.clone());
+            }
+            if let Some(desc) = self.hardline_descriptions.get(idx) {
+                block_reason.get_or_insert_with(|| desc.clone());
+            }
         }
 
         // Tunable ruleset: honour the enforcement mode; `Off` skips it entirely.
@@ -287,21 +289,28 @@ impl CommandPolicy {
                 let effective = match self.enforcement {
                     // Observation mode downgrades every tunable Block to a Warn.
                     EnforcementMode::Warn => RuleAction::Warn,
-                    EnforcementMode::Block => self.actions[idx],
-                    EnforcementMode::Off => unreachable!("handled above"),
+                    EnforcementMode::Block => match self.actions.get(idx) {
+                        Some(&act) => act,
+                        None => continue,
+                    },
+                    EnforcementMode::Off => continue,
                 };
                 match effective {
                     RuleAction::Block => {
-                        // rust-doctor-disable-next-line excessive-clone
-                        eval.blocked.push(self.names[idx].clone());
-                        // rust-doctor-disable-next-line excessive-clone
-                        block_reason.get_or_insert_with(|| self.descriptions[idx].clone());
+                        if let Some(name) = self.names.get(idx) {
+                            eval.blocked.push(name.clone());
+                        }
+                        if let Some(desc) = self.descriptions.get(idx) {
+                            block_reason.get_or_insert_with(|| desc.clone());
+                        }
                     }
                     RuleAction::Warn => {
-                        // rust-doctor-disable-next-line excessive-clone
-                        eval.warned.push(self.names[idx].clone());
-                        // rust-doctor-disable-next-line excessive-clone
-                        warn_reason.get_or_insert_with(|| self.descriptions[idx].clone());
+                        if let Some(name) = self.names.get(idx) {
+                            eval.warned.push(name.clone());
+                        }
+                        if let Some(desc) = self.descriptions.get(idx) {
+                            warn_reason.get_or_insert_with(|| desc.clone());
+                        }
                     }
                 }
             }
@@ -379,10 +388,14 @@ pub fn command_text(cmd: &SandboxCommand) -> String {
                 let budget = remaining.saturating_sub(ELISION.len());
                 let head_len = budget / 2;
                 let head_end = floor_boundary(text, head_len);
-                let tail_start = ceil_boundary(text, text.len() - (budget - head_len));
-                s.push_str(&text[..head_end]);
+                let tail_start = ceil_boundary(text, text.len().saturating_sub(budget - head_len));
+                if let Some(h) = text.get(..head_end) {
+                    s.push_str(h);
+                }
                 s.push_str(ELISION);
-                s.push_str(&text[tail_start..]);
+                if let Some(t) = text.get(tail_start..) {
+                    s.push_str(t);
+                }
             }
         }
     }
@@ -404,6 +417,9 @@ fn floor_boundary(s: &str, mut i: usize) -> usize {
 
 /// Smallest char boundary `>= i`.
 fn ceil_boundary(s: &str, mut i: usize) -> usize {
+    if i >= s.len() {
+        return s.len();
+    }
     while i < s.len() && !s.is_char_boundary(i) {
         i += 1;
     }
