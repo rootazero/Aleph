@@ -23,6 +23,8 @@ export async function runNativeProject({ repoRoot = process.cwd(), execute = fal
         receipts: native.ledger.receipts,
         nativeTrace: native.ledger.nativeTrace,
         provenance: native.ledger.provenance,
+        events: native.ledger.events,
+        failureSummary: native.ledger.failureSummary ?? null,
       },
     });
   }
@@ -56,7 +58,7 @@ function parseArgs(argv) {
 if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(fileURLToPath(import.meta.url))) {
   const args = parseArgs(process.argv.slice(2));
   const result = args === null
-    ? { contract: RUN_CONTRACT, outcome: "NOT_RUN", reason: "invalid_args", phases: [], cleanup: [], evidence: { helperMessages: [], receipts: [], nativeTrace: [], provenance: [] } }
+    ? { contract: RUN_CONTRACT, outcome: "NOT_RUN", reason: "invalid_args", phases: [], cleanup: [], evidence: { helperMessages: [], receipts: [], nativeTrace: [], provenance: [], events: [], failureSummary: null } }
     : await runNativeProject({ ...args, driver: args.execute ? "native" : null, deps: { windowMs: 120_000 } });
   process.stdout.write(`${JSON.stringify(publicReport(result))}\n`);
   process.exitCode = args === null ? 4 : exitCode(result);
