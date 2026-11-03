@@ -140,9 +140,9 @@
 - [x] **Step 2: Run `cargo check -p alephcore --tests`** and `cargo check -p alephcore --bin aleph-server` serially with `CARGO_BUILD_JOBS=1 CARGO_INCREMENTAL=0`; run justified clippy only after checks pass.
 - [x] **Step 3: Run documentation scanner self-test, repository scan, UTF-8/trailing-whitespace checks, Markdown diff check, and locator structure checks; record the classified link totals.
 - [x] **Step 4: Update the bilingual run record** with the Rust gap, implementation evidence, test results, link categories, review findings/fixes, remaining unrelated failures, and explicit non-actions. Do not claim universal lifecycle ownership, native unload, RSS reduction, process isolation, or exactly-once effects.
-- [ ] **Step 5: Obtain a fresh read-only review of the entire diff** focused on Cold/Ready proof, authority duplication, stale generation, stop/reload cleanup, canonical versus compatibility routing, historical-document truthfulness, and link classification.
-- [ ] **Step 6: Fix concrete review findings and rerun only affected checks**, then update the run record with the final verdict.
-- [ ] **Step 7: Commit locally** with a conventional message such as `feat(extension): activate cold tools on canonical calls`; verify `git status --short`, `git diff --check`, and no push/merge.
+- [x] **Step 5: Obtain a fresh read-only review of the entire diff** focused on Cold/Ready proof, authority duplication, stale generation, stop/reload cleanup, canonical versus compatibility routing, historical-document truthfulness, and link classification.
+- [x] **Step 6: Fix concrete review findings and rerun only affected checks**, then update the run record with the final verdict.
+- [x] **Step 7: Commit locally** with a conventional message such as `feat(extension): activate cold tools on canonical calls`; verify `git status --short`, `git diff --check`, and no push/merge.
 
 ## Self-review
 

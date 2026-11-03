@@ -82,7 +82,7 @@ The first whole-diff review did not reach a Clean/APPROVE verdict: its read-only
 - A final fresh read-only whole-diff review returned **Clean / APPROVE** with no P0–P2 findings. It inspected all 55 tracked changed files and 4 untracked files, including Rust authority paths, documentation repairs, the scanner, design, plan and run record. It confirmed Cold/Ready proof separation, receipt ownership, provider/owner generation fencing, canonical versus mounted-only routing, Safe Replay refusal, and scanner consistency.
 - The reviewer did not run Cargo, as required; the Cargo evidence above is from the main agent under the memory gate.
 
-The review gate is complete. The local conventional commit is the remaining delivery action; no push or merge is authorized.
+The review gate and local conventional commit are complete (`4b6da265a`). No push or merge was performed. / 审查与本地提交已完成（`4b6da265a`），未推送或合并。
 
 ## Scope limits / 范围边界
 - This record does not claim universal Capability lifecycle ownership, a universal scheduler, native unload, RSS reduction, process isolation, or exactly-once external effects. Feishu→Zahir, MCP lazy activation outside the Tool slice, EffectClaim production, Safe Replay, remaining Capability kinds and other deferred integrations remain deferred/NO-GO. Historical validation claims in old documents were not rerun merely because their links were repaired.
