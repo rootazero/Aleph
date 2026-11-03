@@ -86,8 +86,22 @@ fn ingress_reductions_summary(
 /// context is unchanged. Mirrors the fence-escaping in
 /// [`crate::security::content_sanitizer::wrap_external_content`].
 fn escape_reminder_boundary(s: &str) -> String {
-    s.replace("</system-reminder>", "&lt;/system-reminder&gt;")
-        .replace("<system-reminder>", "&lt;system-reminder&gt;")
+    let mut out = String::with_capacity(s.len());
+    let mut rest = s;
+    while let Some(idx) = rest.find('<') {
+        out.push_str(&rest[..idx]);
+        let candidate = &rest[idx..];
+        let lower = candidate.to_ascii_lowercase();
+        if lower.starts_with("</system-reminder") || lower.starts_with("<system-reminder") {
+            out.push_str("&lt;");
+            rest = &candidate[1..];
+        } else {
+            out.push('<');
+            rest = &candidate[1..];
+        }
+    }
+    out.push_str(rest);
+    out
 }
 
 /// Wrap a tool result `Value` with `<system-reminder>` blocks for each
@@ -549,10 +563,13 @@ impl ScopedToolService {
                 }
             }
             approved_by_operator_gate = self.check_operator_gate(name, &effective_input).await?;
+            // A hook's prior question does not authorize rewritten arguments against
+            // system safety floors or destructive-argument confirmation gates.
+            // Only true operator authorization can bypass confirmation.
             self.check_confirmation_gate(
                 name,
                 &effective_input,
-                approved_by_operator_gate || hook_authorized,
+                approved_by_operator_gate,
                 descriptor,
             )
             .await?;
@@ -584,14 +601,10 @@ impl ScopedToolService {
         // Route to subagent tool if name matches; otherwise route into the
         // inner LoopToolRegistry. Both paths share the retry/Layer 2/sanitize
         // pipeline below.
-        let routing = if let Some(entry) = captured.as_ref() {
-            RoutingTarget::Canonical(
-                entry.clone(),
-                captured_lease.clone().expect("captured lease"),
-                captured_backend_lease
-                    .clone()
-                    .expect("captured backend lease"),
-            )
+        let routing = if let (Some(entry), Some(lease), Some(backend_lease)) =
+            (captured.as_ref(), captured_lease.as_ref(), captured_backend_lease.as_ref())
+        {
+            RoutingTarget::Canonical(entry.clone(), lease.clone(), backend_lease.clone())
         } else if self
             .subagent_tool
             .as_ref()
@@ -644,9 +657,13 @@ impl ScopedToolService {
         // input. A call that never reaches this line (gate denial, hook
         // refusal, post-rewrite re-check) leaves `capture` at `None`.
         if captured.is_some() && crate::approval::current_tool_call_id().is_none() {
+            let reason = "canonical dispatch has no call identity";
+            if let Some(ref l) = ledger {
+                l.commit_refusal(&effective_input, reason).await;
+            }
             return Err(ToolError::PermissionDenied {
                 name: name.into(),
-                reason: "canonical dispatch has no call identity".into(),
+                reason: reason.into(),
             });
         }
         *capture = Some(effective_input.clone());
@@ -2432,15 +2449,12 @@ fn bound_error_body(body: &str) -> std::borrow::Cow<'_, str> {
         .map_or(body.len(), |(i, _)| i);
     let tail_start = body
         .char_indices()
-        .nth(total - ERROR_BODY_TAIL_CHARS)
+        .nth(total.saturating_sub(ERROR_BODY_TAIL_CHARS))
         .map_or(0, |(i, _)| i);
-    let elided = total - ERROR_BODY_HEAD_CHARS - ERROR_BODY_TAIL_CHARS;
-    std::borrow::Cow::Owned(format!(
-        "{}\n…[{} chars elided]…\n{}",
-        &body[..head_end],
-        elided,
-        &body[tail_start..]
-    ))
+    let elided = total.saturating_sub(ERROR_BODY_HEAD_CHARS + ERROR_BODY_TAIL_CHARS);
+    let head = body.get(..head_end).unwrap_or(body);
+    let tail = body.get(tail_start..).unwrap_or("");
+    std::borrow::Cow::Owned(format!("{head}\n…[{elided} chars elided]…\n{tail}"))
 }
 
 /// True iff `cause` reads as the tool reporting its own mid-execution

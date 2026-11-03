@@ -304,7 +304,7 @@ struct ResolvedMedia {
 fn stop_by(caller_deadline: Instant) -> Instant {
     caller_deadline
         .checked_sub(HARVEST_RETURN_MARGIN)
-        .unwrap_or(caller_deadline)
+        .unwrap_or_else(Instant::now)
 }
 
 /// What the model is told about an item the budget never reached.
