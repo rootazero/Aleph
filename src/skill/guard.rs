@@ -144,12 +144,13 @@ pub fn scan_content(file: &str, content: &[u8]) -> ScanVerdict {
     let mut findings = Vec::new();
 
     for idx in PATTERN_SET.matches(&text).into_iter() {
-        let p = &PATTERNS[idx];
-        findings.push(Finding {
-            file: file.to_string(),
-            pattern_id: p.id,
-            level: p.level,
-        });
+        if let Some(p) = PATTERNS.get(idx) {
+            findings.push(Finding {
+                file: file.to_string(),
+                pattern_id: p.id,
+                level: p.level,
+            });
+        }
     }
     // Defer to the crate-wide invisible-char SSOT (`security::unicode_guard`)
     // instead of a local list: it also covers the U+E0000 tag block (ASCII
@@ -244,7 +245,7 @@ fn scan_skill_directory_inner(dir: &std::path::Path, verdicts: &mut Vec<ScanVerd
         if let Ok(file_type) = entry.file_type() {
             if file_type.is_dir() && !file_type.is_symlink() {
                 scan_skill_directory_inner(&path, verdicts);
-            } else if file_type.is_file() {
+            } else if file_type.is_file() || (file_type.is_symlink() && std::fs::metadata(&path).map(|m| m.is_file()).unwrap_or(false)) {
                 let label = path
                     .file_name()
                     .map(|n| n.to_string_lossy().to_string())

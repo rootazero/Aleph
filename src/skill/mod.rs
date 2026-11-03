@@ -1129,17 +1129,17 @@ fn compat_root_of(path: &Path) -> Option<crate::domain::skill::CompatRoot> {
             _ => None,
         })
         .collect();
-    comps.windows(2).find_map(|w| {
-        if w[1] != std::ffi::OsStr::new("skills") {
-            return None;
+    comps.windows(2).find_map(|w| match w {
+        [c0, c1] if *c1 == std::ffi::OsStr::new("skills") => {
+            if *c0 == std::ffi::OsStr::new(".claude") {
+                Some(CompatRoot::Claude)
+            } else if *c0 == std::ffi::OsStr::new(".agents") {
+                Some(CompatRoot::Agents)
+            } else {
+                None
+            }
         }
-        if w[0] == std::ffi::OsStr::new(".claude") {
-            Some(CompatRoot::Claude)
-        } else if w[0] == std::ffi::OsStr::new(".agents") {
-            Some(CompatRoot::Agents)
-        } else {
-            None
-        }
+        _ => None,
     })
 }
 
@@ -1158,9 +1158,12 @@ fn is_workspace_aleph_skills(path: &Path) -> bool {
             _ => None,
         })
         .collect();
-    comps
-        .windows(2)
-        .any(|w| w[0] == std::ffi::OsStr::new(".aleph") && w[1] == std::ffi::OsStr::new("skills"))
+    comps.windows(2).any(|w| {
+        matches!(
+            w,
+            [c0, c1] if *c0 == std::ffi::OsStr::new(".aleph") && *c1 == std::ffi::OsStr::new("skills")
+        )
+    })
 }
 
 #[cfg(test)]
