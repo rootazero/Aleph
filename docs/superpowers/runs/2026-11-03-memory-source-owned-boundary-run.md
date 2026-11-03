@@ -1,7 +1,7 @@
 # Memory source-owned boundary run / Memory source-owned 边界运行记录
 
 - Date / 日期: 2026-11-03
-- Status / 状态: Tasks 1–4 implemented and documented; Task 5 verification and initial review complete, follow-up review and local delivery pending / Tasks 1–4 已实施并记录；Task 5 验证与首轮审阅完成，后续复审与本地交付待完成
+- Status / 状态: Complete; Tasks 1–5 and final review delivered in local commit `a4fa8088f`; local `main` is clean and ahead of `origin/main` by five commits / 已完成；Tasks 1–5 与最终审阅已由本地提交 `a4fa8088f` 交付；本地 `main` 工作区干净，领先 `origin/main` 五个提交
 - Branch / 分支: local `main`; no remote operation authorized / 本地 `main`；未授权远端操作
 - Approved scope / 已批准范围: [design](../specs/2026-11-03-memory-source-owned-boundary-design.md) · [plan](../plans/2026-11-03-memory-source-owned-boundary-plan.md)
 
@@ -77,21 +77,17 @@ Final fresh read-only Pi review (model `88api/gpt-6.1-sol`) 对比 `540ef79e2` �
 
 
 
-独立只读 Pi 审阅覆盖 `540ef79e2` 之后的完整 diff 与当前改动，未确认生产正确性/安全缺陷；指出 generation 测试的报告空值断言可能有竞态、compression admission 描述过宽、Failed 覆盖归属错误及缺少真实 HTTP stop 效果。已移除竞态断言，新增同一 router stop 前 200/stop 后 503 的效果测试，并修正证据表述与 Failed 测试归属。第二轮独立审阅发现 `FEATURE_LOCATOR.md` 仍对 generation 与 Failed 测试证据过度表述；现已同步改为仅陈述 handler identity 换代，Failed 归属独立测试，并收窄 compression admission 的位置。
-
-
-
-Task 5 verification and final review are complete; local commit and clean-tree verification remain pending. Linux/Windows native execution remains unrun. Do not fetch, push, merge, force-reset or switch branches.
+Task 5 checks and final independent review are complete. Local delivery commit `a4fa8088f4dcd6f939909069da8e08266983accb` is on `main`; final worktree is clean, branch is ahead of `origin/main` by five commits, and `4b6da265a` remains an ancestor. No remote operation was performed. Linux/Windows native execution remains unrun.
 
 This slice does not establish universal all-writer Memory stop, universal scheduling, native unload, RSS reclamation, process isolation or external exactly-once. It does not migrate raw/archive ownership, implement early-startup whole-runtime cleanup, complete remaining consumer/RPC/task integrations, or make deferred Channel/Feishu/Terminal/MCP/EffectClaim/Safe Replay changes. / 本切片不证明 universal all-writer Memory stop、universal scheduling、native unload、RSS 回收、进程隔离或外部 exactly-once；不迁移 raw/archive ownership，不实现 whole-runtime early-startup cleanup，不完成剩余 consumer/RPC/task integration，也不推进 deferred Channel/Feishu/Terminal/MCP/EffectClaim/Safe Replay。
 
 ## Final result / 最终结果
 
-Task 5 checks and final independent review are complete; local delivery and clean-tree verification remain. / Task 5 checks and final independent review are complete; local commit and clean-tree verification remain pending. / Task 5 检查与最终独立审阅已完成；本地提交与 clean-tree 验证待完成。
+Task 5 checks and final independent review are complete; local delivery commit `a4fa8088f4dcd6f939909069da8e08266983accb` is on `main` and the worktree is clean. / Task 5 检查与最终独立审阅已完成；本地交付提交 `a4fa8088f4dcd6f939909069da8e08266983accb` 已在 `main`，工作区干净。
 
 ## Next independent slice / 下一独立切片
 
-After evidence-backed review, prioritize a separate source census for runtime-operation escapes and remaining derived consumers/RPC handlers, then design their admission using existing `MemoryRuntime` rather than widening the current closure or claiming a universal stop. Keep raw session/tool archival independent. / 完成本切片证据审阅后，优先单独盘点逃逸 runtime operation 的路径与剩余 derived consumer/RPC handler，再基于现有 `MemoryRuntime` 设计其 admission；不扩大本闭合范围，也不宣称 universal stop。raw session/tool 归档继续独立持有。
+Next: close the remaining Admin HTTP effect-test gaps where deterministic real fixtures exist, and compare the full-suite failure names against the pinned pre-slice baseline. The bounded handoff is [prompt](../prompts/2026-11-03-memory-source-owned-validation-closure-prompt.md) and [plan](../plans/2026-11-03-memory-source-owned-validation-closure-plan.md). This is validation only; it does not authorize Memory lifecycle expansion. A separate census of remaining derived consumers/RPC operation escapes remains a later slice. / 下一步：在真实 fixture 可确定性观测的范围内补齐 Admin HTTP 效果测试，并将全量失败测试名与固定 pre-slice 基线对照。有界交接见 [prompt](../prompts/2026-11-03-memory-source-owned-validation-closure-prompt.md) 与 [plan](../plans/2026-11-03-memory-source-owned-validation-closure-plan.md)。本任务仅做验证，不授权扩展 Memory lifecycle。剩余 derived consumer/RPC operation escape census 留待之后独立切片。
 
 ---
 
