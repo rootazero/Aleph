@@ -64,7 +64,9 @@ pub async fn approve(
         "approved": true,
     });
     if let Some(r) = reason {
-        params["reason"] = Value::String(r.to_string());
+        if let Some(map) = params.as_object_mut() {
+            map.insert("reason".to_string(), Value::String(r.to_string()));
+        }
     }
 
     let result: Value = client.call("mcp.respond_approval", Some(params)).await?;
@@ -94,7 +96,9 @@ pub async fn reject(
         "approved": false,
     });
     if let Some(r) = reason {
-        params["reason"] = Value::String(r.to_string());
+        if let Some(map) = params.as_object_mut() {
+            map.insert("reason".to_string(), Value::String(r.to_string()));
+        }
     }
 
     let result: Value = client.call("mcp.respond_approval", Some(params)).await?;

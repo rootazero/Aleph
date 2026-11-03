@@ -16,11 +16,13 @@ pub async fn list(
     let (client, _events) = AlephClient::connect(server_url, config).await?;
 
     let mut params = serde_json::json!({});
-    if let Some(p) = plugin {
-        params["plugin_id"] = Value::String(p.to_string());
-    }
-    if let Some(s) = state {
-        params["state"] = Value::String(s.to_string());
+    if let Some(map) = params.as_object_mut() {
+        if let Some(p) = plugin {
+            map.insert("plugin_id".to_string(), Value::String(p.to_string()));
+        }
+        if let Some(s) = state {
+            map.insert("state".to_string(), Value::String(s.to_string()));
+        }
     }
 
     let result: Value = client.call("services.list", Some(params)).await?;

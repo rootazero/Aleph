@@ -63,8 +63,8 @@ pub fn print_table(headers: &[&str], rows: &[Vec<String>], json_mode: bool, raw:
 
     for row in rows {
         for (i, cell) in row.iter().enumerate() {
-            if i < col_count {
-                widths[i] = widths[i].max(display_width(cell));
+            if let Some(w) = widths.get_mut(i) {
+                *w = (*w).max(display_width(cell));
             }
         }
     }
@@ -83,7 +83,8 @@ pub fn print_table(headers: &[&str], rows: &[Vec<String>], json_mode: bool, raw:
         .iter()
         .enumerate()
         .map(|(i, h)| {
-            let padded = pad_to(h, widths[i]);
+            let width = widths.get(i).copied().unwrap_or(0);
+            let padded = pad_to(h, width);
             paint(Style::Header, &padded)
         })
         .collect();
@@ -107,13 +108,9 @@ pub fn print_table(headers: &[&str], rows: &[Vec<String>], json_mode: bool, raw:
             .iter()
             .enumerate()
             .map(|(i, cell)| {
-                let w = if i < col_count {
-                    widths[i]
-                } else {
-                    display_width(cell)
-                };
+                let w = widths.get(i).copied().unwrap_or_else(|| display_width(cell));
                 let padded = pad_to(cell, w);
-                if i < col_count && status_cols[i] {
+                if status_cols.get(i).copied().unwrap_or(false) {
                     let style = status_style(cell);
                     paint(style, &padded)
                 } else {

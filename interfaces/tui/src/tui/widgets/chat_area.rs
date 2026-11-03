@@ -854,7 +854,9 @@ fn build_visible_lines_anchored(
         let hi = end.min(header_height);
         let body_hi = hi.min(header_height - 1);
         if start < body_hi {
-            out.extend(header[start..body_hi].iter().cloned());
+            if let Some(slice) = header.get(start..body_hi) {
+                out.extend(slice.iter().cloned());
+            }
         }
         if hi == header_height {
             out.push(Line::default());
@@ -862,7 +864,7 @@ fn build_visible_lines_anchored(
     }
     pos += header_height;
     for (idx, _message) in messages.iter().enumerate() {
-        let height = heights[idx];
+        let height = heights.get(idx).copied().unwrap_or(0);
         let mstart = pos;
         pos += height;
         if pos <= start || mstart >= end {
@@ -877,7 +879,9 @@ fn build_visible_lines_anchored(
             if Some(idx) == streaming_idx {
                 copy_streaming_slice(streaming_content.as_ref(), lo, body_hi, &mut out);
             } else if let Some(entry) = cache.entries.get(&idx) {
-                out.extend(entry.lines[lo..body_hi].iter().cloned());
+                if let Some(slice) = entry.lines.get(lo..body_hi) {
+                    out.extend(slice.iter().cloned());
+                }
                 // Rows [lo, body_hi) of this message land at out-indices
                 // `mstart + i - start`; a toggle outside that slice is
                 // scrolled off and has no cell to be clicked in.
@@ -1177,7 +1181,8 @@ fn render_user_message(
     if lines.len() == start {
         lines.push(Line::default());
     }
-    for line in &mut lines[start..] {
+    let slice = lines.get_mut(start..).unwrap_or(&mut []);
+    for line in slice {
         // Keep the line style for Paragraph and put the same background on
         // every emitted span, so markdown foregrounds cannot erase the user
         // surface. Explicitly fill trailing cells because a line's style is

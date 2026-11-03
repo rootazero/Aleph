@@ -187,7 +187,18 @@ async fn run_all_checks(server_url: &str, config: &CliConfig) -> Vec<DoctorCheck
     }
 
     // 4. Sandbox (independent of daemon — uses sibling binary directly)
-    checks.push(check_sandbox_summary());
+    let sandbox_check = tokio::task::spawn_blocking(check_sandbox_summary)
+        .await
+        .unwrap_or_else(|e| {
+            DoctorCheck::fail(
+                "sandbox",
+                "profile",
+                "Active sandbox summary (aleph-server sandbox-debug)",
+                false,
+                format!("failed to run sandbox check task: {e}"),
+            )
+        });
+    checks.push(sandbox_check);
     checks
 }
 

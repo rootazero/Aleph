@@ -73,7 +73,9 @@ fn logo_row(row: usize) -> Line<'static> {
     let mut spans: Vec<Span<'static>> = Vec::new();
     let mut run = String::new();
     let mut owner = None;
-    for (ch, tag) in ALEPH_LOGO[row].chars().zip(ALEPH_LOGO_MASK[row].chars()) {
+    let logo_row_str = ALEPH_LOGO.get(row).copied().unwrap_or("");
+    let mask_row_str = ALEPH_LOGO_MASK.get(row).copied().unwrap_or("");
+    for (ch, tag) in logo_row_str.chars().zip(mask_row_str.chars()) {
         let next = tag.to_digit(10).map(|d| d as usize);
         if next != owner && !run.is_empty() {
             spans.push(logo_span(std::mem::take(&mut run), owner, &palette));
@@ -94,7 +96,9 @@ fn logo_span(
 ) -> Span<'static> {
     match owner {
         Some(i) => {
-            let (rgb, fallback) = LOGO_HUES[i];
+            let Some(&(rgb, fallback)) = LOGO_HUES.get(i) else {
+                return Span::raw(text);
+            };
             Span::styled(
                 text,
                 Style::default()
@@ -311,10 +315,12 @@ fn abbreviate_home(path: &str, home: Option<&str>) -> String {
     let Some(home) = home else {
         return path.to_string();
     };
-    if home.is_empty() || !path.starts_with(home) {
+    if home.is_empty() {
         return path.to_string();
     }
-    let rest = &path[home.len()..];
+    let Some(rest) = path.strip_prefix(home) else {
+        return path.to_string();
+    };
     if rest.is_empty() {
         return "~".to_string();
     }
