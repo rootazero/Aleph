@@ -140,7 +140,12 @@ fn window_token_budget(window_tokens: u64, fraction: f64, floor: usize, ceil: us
 /// this module measures through, so a seeded factor applies uniformly to the
 /// fast path and the binary search.
 fn estimate_with_factor(content: &str, factor: f64) -> usize {
-    (crate::context::budget::pressure::estimate_tokens_smart(content) as f64 * factor).round()
+    let safe_factor = if factor.is_finite() && factor > 0.0 {
+        factor
+    } else {
+        1.0
+    };
+    (crate::context::budget::pressure::estimate_tokens_smart(content) as f64 * safe_factor).round()
         as usize
 }
 
@@ -165,7 +170,7 @@ fn char_byte_offset(s: &str, n: usize) -> usize {
 
 /// First `n` characters of `s` as an owned string (UTF-8 safe).
 fn take_chars(s: &str, n: usize) -> String {
-    s[..char_byte_offset(s, n)].to_string()
+    s.get(..char_byte_offset(s, n)).unwrap_or(s).to_string()
 }
 
 /// Truncate content preserving head and tail, UTF-8 safe.
@@ -202,10 +207,10 @@ pub fn truncate_with_head_tail(
 
     let usable = max_chars - reserved_chars;
     let sum = head_ratio + tail_ratio;
-    let head_chars = if sum == 0.0 {
+    let head_chars = if sum <= 0.0 || !sum.is_finite() || head_ratio < 0.0 || tail_ratio < 0.0 {
         usable / 2
     } else {
-        (usable as f64 * head_ratio / sum) as usize
+        ((usable as f64 * head_ratio / sum) as usize).min(usable)
     };
     let tail_chars = usable.saturating_sub(head_chars);
 
@@ -237,12 +242,9 @@ pub fn truncate_with_head_tail(
     let head_end = char_byte_offset(content, head_chars);
     let tail_start = char_byte_offset(content, total_chars.saturating_sub(tail_chars));
 
-    let result = format!(
-        "{}{}{}",
-        &content[..head_end],
-        marker,
-        &content[tail_start..]
-    );
+    let head = content.get(..head_end).unwrap_or(content);
+    let tail = content.get(tail_start..).unwrap_or("");
+    let result = format!("{head}{marker}{tail}");
 
     // Safety net in *characters* (the marker can nudge the total over budget).
     if result.chars().count() > max_chars {
