@@ -76,14 +76,14 @@ impl SkillStatusEntry {
         api_key_set: bool,
         usage: Option<UsageStats>,
     ) -> Self {
-        let disabled = entry_config.and_then(|c| c.enabled).is_some_and(|e| !e);
+        let mut disabled = entry_config.and_then(|c| c.enabled).is_some_and(|e| !e);
 
         let scope = entry_config
             .and_then(|c| c.scope_override.clone())
             .unwrap_or_else(|| manifest.scope().clone());
 
         let mut missing = MissingRequirements::default();
-        let eligible = match eligibility {
+        let mut eligible = match eligibility {
             EligibilityResult::Eligible => true,
             EligibilityResult::Ineligible(reasons) => {
                 for reason in reasons {
@@ -98,11 +98,7 @@ impl SkillStatusEntry {
                             missing.os.push(os.as_str().to_string());
                         }
                         IneligibilityReason::Disabled => {
-                            // Surfaced by the `disabled` field (set just below
-                            // when `entry_config.enabled == Some(false)`); the
-                            // Disabled reason covers the manifest-level
-                            // `eligibility.enabled: false` case which has no
-                            // entry_config counterpart.
+                            disabled = true;
                         }
                     }
                 }
@@ -113,6 +109,7 @@ impl SkillStatusEntry {
         if let Some(env_name) = manifest.primary_env() {
             if !api_key_set && !missing.env.iter().any(|e| e == env_name) {
                 missing.env.push(env_name.to_string());
+                eligible = false;
             }
         }
 

@@ -70,7 +70,11 @@ impl CoOccurrenceLog {
                 tracing::warn!(error = %e, path = %self.path.display(), "corrupted cooccur sidecar; resetting");
                 Vec::new()
             }),
-            Err(_) => Vec::new(),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Vec::new(),
+            Err(e) => {
+                tracing::warn!(error = %e, path = %self.path.display(), "failed to read cooccur sidecar; using empty list");
+                Vec::new()
+            }
         }
     }
 
