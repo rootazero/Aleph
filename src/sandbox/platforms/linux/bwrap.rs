@@ -577,6 +577,13 @@ impl OsSandboxDriverTrait for BubblewrapDriver {
     ) -> Result<OsSandboxProfile, SandboxError> {
         let policy = SandboxPolicy::from(capabilities);
         let args = self.generate_args(&policy, cwd)?;
+        for arg in &args {
+            if arg.contains('\n') || arg.contains('\r') {
+                return Err(SandboxError::ProfileGeneration(format!(
+                    "bwrap argument contains newline characters: {arg:?}"
+                )));
+            }
+        }
         let contents = args.join("\n");
         // SP-2: serialize the landlock/seccomp policy for sandbox-init.
         // The init binary applies these inside bwrap's namespace before

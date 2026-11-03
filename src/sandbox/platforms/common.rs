@@ -127,9 +127,9 @@ pub fn truncate_output(buf: Vec<u8>, max_bytes: usize) -> (Vec<u8>, u64) {
     let marker = elision_marker(dropped);
 
     let mut out = Vec::with_capacity(head_end + marker.len() + (orig_len - tail_start));
-    out.extend_from_slice(&buf[..head_end]);
+    out.extend_from_slice(buf.get(..head_end).unwrap_or(&buf));
     out.extend_from_slice(marker.as_bytes());
-    out.extend_from_slice(&buf[tail_start..]);
+    out.extend_from_slice(buf.get(tail_start..).unwrap_or(&[]));
     (out, dropped)
 }
 
@@ -163,7 +163,7 @@ fn back_off_to_boundary(buf: &[u8], limit: usize) -> usize {
         return buf.len();
     }
     let mut end = limit;
-    while end > 0 && (buf[end] & 0xC0) == 0x80 {
+    while end > 0 && matches!(buf.get(end), Some(&b) if (b & 0xC0) == 0x80) {
         end -= 1;
     }
     end
@@ -173,7 +173,7 @@ fn back_off_to_boundary(buf: &[u8], limit: usize) -> usize {
 /// *right* side is kept.
 fn advance_to_boundary(buf: &[u8], from: usize) -> usize {
     let mut start = from.min(buf.len());
-    while start < buf.len() && (buf[start] & 0xC0) == 0x80 {
+    while matches!(buf.get(start), Some(&b) if (b & 0xC0) == 0x80) {
         start += 1;
     }
     start
@@ -271,9 +271,9 @@ impl Drained {
         let dropped = total.saturating_sub(kept as u64);
         let marker = elision_marker(dropped);
         let mut out = Vec::with_capacity(kept + marker.len());
-        out.extend_from_slice(&head[..head_end]);
+        out.extend_from_slice(head.get(..head_end).unwrap_or(&head));
         out.extend_from_slice(marker.as_bytes());
-        out.extend_from_slice(&tail[tail_from..]);
+        out.extend_from_slice(tail.get(tail_from..).unwrap_or(&[]));
         (out, dropped)
     }
 }
@@ -333,7 +333,7 @@ where
         if n == 0 {
             break;
         }
-        let bytes = &chunk[..n];
+        let bytes = chunk.get(..n).unwrap_or(&chunk);
         if let Some((live, stream)) = &tee {
             live.push(*stream, bytes);
         }
@@ -342,8 +342,8 @@ where
         // rolling window, so the two never hold the same byte twice and
         // `total - head - tail` is the exact size of the hole between them.
         let take = head_cap.saturating_sub(head.len()).min(n);
-        head.extend_from_slice(&bytes[..take]);
-        let overflow = &bytes[take..];
+        head.extend_from_slice(bytes.get(..take).unwrap_or(bytes));
+        let overflow = bytes.get(take..).unwrap_or(&[]);
         if !overflow.is_empty() && tail_cap > 0 {
             tail.extend(overflow.iter().copied());
             if tail.len() > tail_cap {
