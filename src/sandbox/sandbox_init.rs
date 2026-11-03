@@ -339,6 +339,7 @@ fn rewrite_proxy_env_value(proxy_url: &str, local_port: u16) -> Option<String> {
 /// - 68 → proxy-route bridge activation failed (Phase B netns bridge); fail
 ///   closed rather than run the target with broken egress control.
 #[cfg(target_os = "linux")]
+#[allow(clippy::print_stderr, clippy::exit)]
 pub fn run_init(args: Vec<String>) -> ! {
     use std::os::unix::process::CommandExt as _;
     use std::process::Command;
@@ -399,6 +400,7 @@ pub fn run_init(args: Vec<String>) -> ! {
 }
 
 #[cfg(not(target_os = "linux"))]
+#[allow(clippy::print_stderr, clippy::exit)]
 pub fn run_init(_args: Vec<String>) -> ! {
     eprintln!("aleph sandbox-init: only supported on Linux");
     std::process::exit(78); // EX_CONFIG: unsupported on this platform
@@ -422,8 +424,8 @@ struct ParsedInitArgs {
 fn parse_init_args(args: &[String]) -> Result<ParsedInitArgs, String> {
     let mut policy_json: Option<&str> = None;
     let mut i = 0;
-    while i < args.len() {
-        match args[i].as_str() {
+    while let Some(arg) = args.get(i) {
+        match arg.as_str() {
             "--policy" => {
                 let v = args
                     .get(i + 1)
@@ -447,7 +449,7 @@ fn parse_init_args(args: &[String]) -> Result<ParsedInitArgs, String> {
         .ok_or_else(|| "missing target program after `--`".to_string())?
         // rust-doctor-disable-next-line excessive-clone
         .clone();
-    let target_args = args[i + 1..].to_vec();
+    let target_args = args.get(i + 1..).map(|s| s.to_vec()).unwrap_or_default();
 
     Ok(ParsedInitArgs {
         policy,
@@ -659,8 +661,13 @@ fn set_parent_death_signal() -> std::io::Result<()> {
     // rust-doctor-disable-next-line unsafe-block-audit
     let rc = unsafe { libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGTERM) };
     if rc != 0 {
-        Err(std::io::Error::last_os_error())
-    } else if parent_pid == 1 {
+        return Err(std::io::Error::last_os_error());
+    }
+    // Re-check parent PID. If the parent died before prctl took effect,
+    // the child was adopted by init/subreaper (getppid != parent_pid).
+    // rust-doctor-disable-next-line unsafe-block-audit
+    let current_ppid = unsafe { libc::getppid() };
+    if parent_pid == 1 || current_ppid != parent_pid {
         Err(std::io::Error::other("parent process already exited"))
     } else {
         Ok(())
