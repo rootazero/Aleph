@@ -189,7 +189,7 @@ fn extract_from_generic_code_block(response: &str) -> Option<String> {
 /// * `Some(index)` - The index of the matching closing brace '}'
 /// * `None` - No matching brace found
 fn find_matching_brace(s: &str, start: usize) -> Option<usize> {
-    let mut depth = 0;
+    let mut depth: usize = 0;
     let mut in_string = false;
     let mut escape_next = false;
 

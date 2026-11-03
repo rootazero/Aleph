@@ -667,9 +667,9 @@ impl ToolResultStore {
             tracing::error!(
                 session = %self.session,
                 "ToolResultStore::cleanup invoked on session-scoped handle; \
-                 delegating to purge_all() to preserve other concurrent sessions"
+                 delegating to purge_all_sync() to preserve other concurrent sessions"
             );
-            self.purge_all();
+            self.purge_all_sync();
             return;
         }
         if self.inner.base_dir.exists() {

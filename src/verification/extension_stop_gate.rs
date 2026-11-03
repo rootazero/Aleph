@@ -35,7 +35,7 @@ use std::collections::HashMap;
 use async_trait::async_trait;
 use tokio_util::sync::CancellationToken;
 
-use crate::extension::hooks::{HookContext, HookExecutor, HookResult};
+use crate::extension::hooks::{HookContext, HookExecutor, HookResult, PermissionDecision};
 use crate::extension::HookEvent;
 use crate::sync_primitives::Mutex;
 use crate::verification::turn_verifier::{TurnVerifier, TurnVerifyContext, VerifierVerdict};
@@ -98,7 +98,7 @@ fn decide(hr: &HookResult) -> StopDecision {
     if hr
         .permission_decision
         .as_ref()
-        .is_some_and(|d| matches!(d, aleph_protocol::PermissionDecision::Ask { .. }))
+        .is_some_and(|d| matches!(d, PermissionDecision::Ask { .. }))
     {
         let reason = hr
             .deny_reason

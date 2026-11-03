@@ -831,9 +831,7 @@ impl PluginBatchRegistration {
                 revision,
             )))
         })?;
-        let revision = result.ok_or_else(|| ToolError::RegistryClosed {
-            name: "batch_withdraw".into(),
-        })?;
+        let revision = result.ok_or(PluginPublicationError::Closed)?;
         Ok(revision)
     }
 }
