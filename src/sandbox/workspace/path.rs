@@ -76,5 +76,6 @@ pub(crate) fn session_key_to_filename(sid: &SessionId) -> String {
     let mut hasher = Sha256::new();
     hasher.update(json.as_bytes());
     let digest = hasher.finalize();
-    hex::encode(&digest[..16])
+    let prefix = digest.get(..16).unwrap_or(digest.as_slice());
+    hex::encode(prefix)
 }

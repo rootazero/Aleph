@@ -178,6 +178,12 @@ pub(super) async fn handle(inbound: TcpStream, allowlist: AllowList) -> Result<(
     wr.write_all(b"HTTP/1.1 200 Connection Established\r\nProxy-Agent: aleph-sandbox\r\n\r\n")
         .await?;
 
+    // Flush any pipelined bytes that BufReader swallowed ahead of the splice.
+    let buffered = rd.buffer();
+    if !buffered.is_empty() {
+        upstream.write_all(buffered).await?;
+    }
+
     // Re-join the inbound halves into a single stream for symmetric splice.
     let mut inbound = rd
         .into_inner()

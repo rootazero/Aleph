@@ -66,10 +66,9 @@ impl AllowList {
         self.wildcard_suffix.iter().any(|suffix| {
             // Single-label child only: "x.example.com" matches "example.com"
             // wildcard, but "a.b.example.com" and "example.com" itself do not.
-            host.ends_with(suffix.as_ref())
-                && host.len() > suffix.len() + 1
-                && host.as_bytes()[host.len() - suffix.len() - 1] == b'.'
-                && !host[..host.len() - suffix.len() - 1].contains('.')
+            host.strip_suffix(suffix.as_ref())
+                .and_then(|prefix| prefix.strip_suffix('.'))
+                .map_or(false, |label| !label.is_empty() && !label.contains('.'))
         })
     }
 
