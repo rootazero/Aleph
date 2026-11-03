@@ -315,7 +315,7 @@ fn runtime_error(capability: &str, reason: &str, stderr: Option<&str>) -> AlephE
                 while start > 0 && !s.is_char_boundary(start) {
                     start -= 1;
                 }
-                &s[start..]
+                s.get(start..).unwrap_or(s)
             } else {
                 s
             };

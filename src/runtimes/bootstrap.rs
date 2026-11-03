@@ -161,14 +161,11 @@ pub async fn install(name: &str) -> Result<BootstrapResult, BootstrapError> {
             expected: format!("binary '{name}' on PATH after install"),
         });
     }
-    // `probe_result.found == true` is the only path that yields a
-    // `bin_path: Some(..)` (see `probe_system_path` / `ProbeResult::not_found`),
-    // so the `None` arm is unreachable. `expect` documents the invariant and
-    // surfaces a panic if a future refactor breaks it.
-    let bin_path = probe_result.bin_path.take().expect(
-        "probe::probe invariant: found=true implies bin_path=Some — \
-         see ProbeResult::not_found for the inverse",
-    );
+    let Some(bin_path) = probe_result.bin_path.take() else {
+        return Ok(BootstrapResult::PathNotFound {
+            expected: format!("binary '{name}' executable path after install"),
+        });
+    };
 
     // 3. Run post-install actions.
     for action in spec.post_install {
