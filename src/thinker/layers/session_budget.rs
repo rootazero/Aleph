@@ -57,7 +57,7 @@ impl PromptLayer for SessionBudgetLayer {
             "- **Iteration cap**: {cap} — the Think→Act loop is forced to wrap up after this many turns.\n"
         ));
         output.push_str(
-            "- Front-load the most decisive action and pace yourself toward a final answer before the cap; at the cap the harness emits a final reply regardless of progress.\n",
+            "- Front-load the most decisive action and pace yourself toward a final answer before the cap; at the cap the harness emits a final reply regardless of progress.\n\n",
         );
     }
 }

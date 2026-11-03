@@ -112,7 +112,7 @@ impl PromptLayer for ExtraFilesLayer {
             // `do_not_reveal_secrets.md` would render its section header as
             // `[BLOCKED: …]` (THINK-001, high).
             let safe_name = sanitize_header(&file.name);
-            let safe = sanitize_identity_content(&file.name, &file.content);
+            let safe = sanitize_identity_content(&safe_name, &file.content);
             sections.push(format!("### {}\n{}", safe_name, safe));
         }
 

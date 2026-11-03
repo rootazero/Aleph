@@ -33,6 +33,13 @@ impl PromptLayer for CuratedMemoryLayer {
         if let Some(text) = &input.curated_memory_envelope {
             if !text.trim().is_empty() {
                 output.push_str(text);
+                if !text.ends_with("\n\n") {
+                    if text.ends_with('\n') {
+                        output.push('\n');
+                    } else {
+                        output.push_str("\n\n");
+                    }
+                }
             }
         }
     }
