@@ -6,6 +6,7 @@ use crate::memory::notes::profile::{
 };
 use crate::memory::runtime::{MemoryOperation, MemoryRuntime, MemoryRuntimeConfig, MemoryState};
 use crate::memory::store::markdown::MarkdownSessionStore;
+use crate::memory::store::sqlite::SqliteMemoryBackend;
 use crate::memory::store::raw_memory::{
     RawMemory, RawMemorySource, RawMemoryStore, SessionEndReason,
 };
@@ -142,6 +143,38 @@ impl Fixture {
         )
         .with_compound_ingestor(Arc::new(Ingestor { phase }))
     }
+
+    fn standalone_runtime_bound_service(&self) -> CompressionService {
+        let mut config = CompressionConfig::default();
+        config.scheduler.turn_threshold = 1;
+        CompressionService::new(
+            Arc::new(SqliteMemoryBackend::new(self.dir.path()).unwrap()),
+            self.raw.clone(),
+            crate::providers::create_mock_provider(),
+            Arc::new(
+                crate::memory::embedding_provider::tests::MockEmbeddingProvider::new(8, "unused"),
+            ),
+            config,
+        )
+        .require_runtime()
+    }
+}
+
+#[tokio::test]
+async fn runtime_bound_compression_rejects_unadmitted_fallback() {
+    let fixture = Fixture::new(RawMemorySource::Transcript).await;
+    let service = Arc::new(fixture.standalone_runtime_bound_service());
+
+    drop(fixture.operation);
+    fixture.runtime.stop().await.unwrap();
+    service.record_turn_and_maybe_compress();
+
+    assert_eq!(
+        service.get_scheduler().get_pending_turns(),
+        0,
+        "runtime-bound compression must not consume a turn or spawn detached derived work without admission"
+    );
+    assert_eq!(fixture.raw.count_unprocessed("default").await.unwrap(), 1);
 }
 
 #[tokio::test]
