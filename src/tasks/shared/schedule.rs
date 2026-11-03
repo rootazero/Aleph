@@ -60,7 +60,7 @@ pub fn compute_next_every(
     // Future manual trigger: last_run_at is in the future
     if let Some(last) = last_run_at_ms {
         if last > now_ms {
-            return Some(last + every_ms);
+            return last.checked_add(every_ms);
         }
     }
 
@@ -79,7 +79,7 @@ pub fn compute_next_every(
     // checked for `<= 0`, not an upper bound) can't overflow i64 — a panic in
     // debug or a wrapped past-timestamp in release that `advance_next_run`
     // would then spin on. Out-of-range results collapse to `None`.
-    let elapsed = i128::from(now_ms - anchor_ms);
+    let elapsed = i128::from(now_ms) - i128::from(anchor_ms);
     let every = i128::from(every_ms);
     let periods = (elapsed + every - 1) / every; // ceil division
     let next = i128::from(anchor_ms) + periods * every;
@@ -154,8 +154,8 @@ pub fn compute_backoff_ms(consecutive_errors: u32) -> i64 {
     if consecutive_errors == 0 {
         return 0;
     }
-    let idx = (consecutive_errors.saturating_sub(1) as usize).min(BACKOFF_TIERS_MS.len() - 1);
-    BACKOFF_TIERS_MS[idx]
+    let idx = (consecutive_errors.saturating_sub(1) as usize).min(BACKOFF_TIERS_MS.len().saturating_sub(1));
+    BACKOFF_TIERS_MS.get(idx).copied().unwrap_or(3_600_000)
 }
 
 /// Compute backoff delay, raising the floor for *window-bounded* error
