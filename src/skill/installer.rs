@@ -212,15 +212,12 @@ const fn install_kind_index(kind: &InstallKind) -> usize {
     }
 }
 
-// Rank tables for `select_best_install`. Lower values are preferred.
+// Rank mapping for `select_best_install`. Lower values are preferred.
 // Scoop and Winget are the Windows system managers, ranked alongside Brew
 // (the macOS system manager): high when system managers are preferred, just
 // after Brew otherwise. Scoop outranks Winget because it targets CLI/dev
 // tools (Winget leans toward desktop apps). OS filtering runs before ranking,
 // so these only compete on Windows in practice.
-const PREFER_BREW_RANKS: [u8; 8] = [0, 1, 2, 3, 4, 5, 6, 7];
-const PREFER_UV_RANKS: [u8; 8] = [2, 3, 4, 0, 1, 5, 6, 7];
-
 const fn install_kind_rank(kind: &InstallKind, prefer_brew: bool) -> u8 {
     let idx = install_kind_index(kind);
     if prefer_brew {
