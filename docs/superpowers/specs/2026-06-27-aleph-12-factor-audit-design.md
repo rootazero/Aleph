@@ -77,7 +77,7 @@
   1. 一句话引子（这一节是叠加映射层，**不改 R/P，不设新红线**）；
   2. **精简映射表**（12 行：Factor → 一句话 → 已对应 R/P → ✅/⚠️），由 §3 母表蒸馏；
   3. **4 条采纳条款 A1–A4**（见 §5，每条 ≤ 6 行，交叉引用 R/P，**显式标注「采纳·非红线」**）；
-  4. 指针：`> 逐 factor 证据、锚点与模块改造建议清单见 [TWELVE_FACTOR_AUDIT.md](docs/reference/TWELVE_FACTOR_AUDIT.md)`。
+  4. 指针：`> 逐 factor 证据、锚点与模块改造建议清单见 [TWELVE_FACTOR_AUDIT.md](../../reference/TWELVE_FACTOR_AUDIT.md)`。
 - **同时**：在 CLAUDE.md `## 📚 文档索引` 的表格里登记新文档（Tier 2）。
 
 ### 4.2 第二层 — 新建 `docs/reference/TWELVE_FACTOR_AUDIT.md`（Tier 2，按需加载）

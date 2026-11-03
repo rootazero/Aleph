@@ -303,7 +303,7 @@ Streaming Token Flow:
 
 ## Sources & References
 
-- **Origin document:** [docs/brainstorms/2026-04-04-telegram-streaming-delivery-requirements.md](docs/brainstorms/2026-04-04-telegram-streaming-delivery-requirements.md)
+- **Origin document:** [docs/brainstorms/2026-04-04-telegram-streaming-delivery-requirements.md](../brainstorms/2026-04-04-telegram-streaming-delivery-requirements.md)
 - Related code: `src/gateway/streaming.rs`, `src/gateway/reply_emitter.rs`, `src/gateway/interfaces/telegram/delivery.rs`
 - teloxide v0.13 `ApiError` enum — `MessageNotModified`, `MessageCantBeEdited`, `EditedMessageIsTooLong`
 - OpenClaw reference: `extensions/telegram/polling-session.ts` — 800ms debounce validation

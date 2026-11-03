@@ -236,6 +236,10 @@ Reload/unmount 继续使用既有 generation、identity 和 binding fences。sta
 
 `ensure_loaded()` 与显式 enable/reload/control 操作仍是 activation boundary，继续使用既有 owner、generation、admission、disposer 和 `ToolHandlerRegistry` publication 路径；projection、snapshot 或新 registry 都不是 activation authority。本 Stage H 只覆盖 ExtensionManager 管理的 tool-only WASM；channel、PTY、memory、MCP 与其他 provider kind 仍 deferred，也不声明 RSS、thread、engine/JIT、executable page 或 OS mapping reclamation。
 
+`Current closure (2026-11-03):` discovery still performs no guest read or provider authentication, but it now publishes metadata-only Cold tool declarations in the existing canonical registry. An exact permitted canonical Tool call may activate that retained owner through the existing single-flight path; it rebinds to the Ready publication before guest execution. Read-side catalog/describe/resolve/project/observer/doctor calls never activate, and transport compatibility remains mounted-only. The dated Stage H paragraphs above are historical boundary evidence where they say that no callable metadata entry exists.
+
+`当前闭合（2026-11-03）：` discovery 仍不读取 guest 或认证 provider，但现在会在既有 canonical registry 中发布只含 metadata 的 Cold tool declaration。只有通过权限与 scope 的 exact canonical Tool call 才可能经既有 single-flight 路径激活 retained owner，并在 guest 执行前重新绑定到 Ready publication。catalog/describe/resolve/project/observer/doctor 等读侧永不激活，transport compatibility 仍保持 mounted-only。上方 Stage H 的日期段落属于历史边界证据，其中“没有 callable metadata entry”的表述不代表当前状态。
+
 Runtime 与 **origin** 是两个轴。origin（`PluginOrigin`）多了一个值：`ClaudeCache`——`~/.claude/plugins/`
 里 Claude Code 已装的插件（读 `installed_plugins.json`，解析到 `cache/<marketplace>/<plugin>/<version>/`）。
 **只读发现**：Aleph 永不写 `~/.claude/`，不读 `settings.json`；这一 origin 的插件**默认 disabled**

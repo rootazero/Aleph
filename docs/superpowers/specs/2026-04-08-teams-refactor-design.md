@@ -8,7 +8,7 @@
 
 Teams 模块参考了学术界关于团队协作的研究，内置了 Explorer（探索者）和 Critic（批评者）角色，包含完整的 ReviewScore 评审系统。这属于过度设计 — Aleph 作为通用 AI agent，不应内置特定的对抗性角色和评审流程。角色定义应由用户在创建 team 时根据需要自行设置。
 
-参考项目：[ClawTeam](/Volumes/TBU4/Github/ClawTeam) — 聚焦团队基础设施（消息、任务、生命周期），角色只是字符串标签。
+参考项目：[ClawTeam]（external comparison; checkout path varies by machine）— 聚焦团队基础设施（消息、任务、生命周期），角色只是字符串标签。
 
 ## 设计原则
 

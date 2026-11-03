@@ -76,7 +76,7 @@ use super::hooks::HookRegistry;
 use super::visibility::ScopeKey;
 use super::{ExtensionManager, PluginRegistry, ToolRegistration};
 use crate::discovery::DiscoveryManager;
-use crate::sync_primitives::{Arc, AtomicU64, RwLock as StdRwLock};
+use crate::sync_primitives::{Arc, AtomicU64, Mutex as StdMutex, RwLock as StdRwLock};
 
 /// The handles the views are derived from and published to — exactly what
 /// `lifecycle.rs::after_transition` touches, and nothing else of the manager.
@@ -93,6 +93,8 @@ pub(super) struct Views {
     pub(super) active_plugin_tools: Arc<StdRwLock<HashMap<String, ToolRegistration>>>,
     pub(super) plugin_scope_keys: Arc<StdRwLock<HashMap<String, ScopeKey>>>,
     pub(super) plugin_tool_revision: Arc<AtomicU64>,
+    pub(super) runtime_owners:
+        Arc<StdMutex<HashMap<String, Arc<super::runtime_owner::RuntimeOwner>>>>,
     pub(super) owner_trust_policy:
         Arc<crate::sync_primitives::RwLock<crate::extension::plugin_trust::OwnerTrustPolicy>>,
     pub(super) panel_publication:
@@ -110,6 +112,7 @@ impl ExtensionManager {
             active_plugin_tools: Arc::clone(&self.active_plugin_tools),
             plugin_scope_keys: Arc::clone(&self.plugin_scope_keys),
             plugin_tool_revision: Arc::clone(&self.plugin_tool_revision),
+            runtime_owners: Arc::clone(&self.runtime_owners),
             owner_trust_policy: Arc::clone(&self.owner_trust_policy),
             panel_publication: Arc::clone(&self.panel_publication),
         }

@@ -41,7 +41,7 @@ Gateway / Agent Loop
  queries: NoteFactRetrieval.retrieve() → ScoredFact<MemoryFact>
 ```
 
-Gateway writes conversation turns to Markdown raw memory through `RawMemoryStore`. `CompressionService` periodically drains pending metadata-index rows, reads their Markdown bodies, asks an LLM to extract durable facts, and writes them back as Markdown notes under `~/.aleph/memory/note/{agent}/{category}/`. `NoteIndexer` keeps the separate SQLite notes side (index, wikilinks, FTS5, per-dimension vec0 tables) in sync on every note write. Offline, the Dream Daemon consolidates clusters, resolves drift, synthesizes insights, lints schemas, decays weak notes, and emits digests. Queries flow through `NoteFactRetrieval` and return `ScoredFact<MemoryFact>` — see [RETRIEVAL.md](RETRIEVAL.md).
+Gateway writes conversation turns to Markdown raw memory through `RawMemoryStore`. `CompressionService` periodically drains pending metadata-index rows, reads their Markdown bodies, asks an LLM to extract durable facts, and writes them back as Markdown notes under `~/.aleph/memory/note/{agent}/{category}/`. `NoteIndexer` keeps the separate SQLite notes side (index, wikilinks, FTS5, per-dimension vec0 tables) in sync on every note write. Offline, the Dream Daemon consolidates clusters, resolves drift, synthesizes insights, lints schemas, decays weak notes, and emits digests. Queries flow through `NoteFactRetrieval` and return `ScoredFact<MemoryFact>` — see [RETRIEVAL.md](memory/RETRIEVAL.md).
 
 ### 3.1 Cognitive-layer view (working → episodic → semantic → raw)
 

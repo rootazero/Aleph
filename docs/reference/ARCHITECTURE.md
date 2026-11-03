@@ -191,6 +191,10 @@ Stage H 在保留 B5/B6 owner 与 publication authority 的前提下，把既有
 
 `discovered` 只是已完成 declaration work 的派生缓存；reload 会使它失效。它不是 durable enabled state、provider state、generation map 或第二份 owner authority。本 Stage H 只覆盖 ExtensionManager 管理的 tool-only WASM；channel、PTY、memory、MCP 与其他 provider kind 仍 deferred，也不声明 RSS、thread、engine/JIT、executable page 或 OS mapping reclamation。
 
+`Current closure (2026-11-03):` the Stage H declaration read still performs no guest read, provider authentication, or resource creation, but it now publishes metadata-only Cold declarations in the existing canonical Tool registry. An exact permitted canonical Tool call may activate the retained owner through the existing single-flight path; only after Ready publication and identity/generation checks does it re-enter the Ready handler. Read-side `catalog`/`describe`/`resolve`/`project`/ProjectionHost/observer/doctor calls never activate, while transport compatibility remains mounted-only. The dated B5/B6 paragraphs above remain historical evidence where they say that no callable metadata entry is published.
+
+`当前闭合（2026-11-03）：` Stage H 的声明读取仍不读取 guest、不认证 provider、不创建 resource，但现在会在既有 canonical Tool registry 中发布只含 metadata 的 Cold declaration。只有通过权限与 scope 的 exact canonical Tool call 才可能经既有 single-flight 路径激活 retained owner；Ready publication 与 identity/generation 校验完成后，调用才重新进入 Ready handler。`catalog`/`describe`/`resolve`/`project`/ProjectionHost/observer/doctor 等读侧永不激活，transport compatibility 仍保持 mounted-only。上方 B5/B6 日期段落属于历史证据，其中“没有发布 callable metadata entry”的表述不代表当前状态。
+
 ### Current Generic Gateway source-owned capability read/lease slice / 当前 Generic Gateway 源所有 capability read/lease 切片（2026-10-30）
 
 The bounded Generic Gateway implementation now has a source-owned asynchronous read/lease surface over existing `ChannelRegistry` Bound entries. `describe_bound_capabilities`, `list_bound_capabilities`, and `project_bound_capabilities` share one source publication cut. `resolve_bound_capability` captures source evidence, validates provider generation and ownership without holding source locks, then revalidates the source cut before returning `BoundChannelCapture`. This is a derived read model over `ChannelRegistry`, `ProviderHandle`, and `OwnershipTree`; it is not a second registry, descriptor catalog, runtime table, `CapabilityBackend`, or universal `ZahirFacade` mount.
@@ -1091,6 +1095,6 @@ retirement 使用短 source-gate fence 与最终 publication commit；真实 cha
 - [Extension System](EXTENSION_SYSTEM.md) - Plugin architecture
 - [Security](SECURITY.md) - Exec approval and permissions
 - [Sandbox](SANDBOX.md) - `Sandbox` trait, `WorkspaceSandbox`, capability pipeline
-- [Skill Sandboxing](SKILL_SANDBOXING.md) - OS-native sandboxing for evolved skills
+- [Skill Sandboxing] (historical reference unavailable in the current tree) - OS-native sandboxing for evolved skills
 - [Skill Model Taxonomy](SKILL_MODEL_TAXONOMY.md) - Four-layer skill type map (Phase 1 of unification 2026-05-20)
 - [Markdown Skill Authoring](MARKDOWN_SKILL_AUTHORING.md) - SKILL.md frontmatter + sandbox modes + host-mode contract

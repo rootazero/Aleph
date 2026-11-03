@@ -1014,10 +1014,10 @@ Each key gets an inline `# comment` with the default value and one-line semantic
 ```markdown
 ## 8. Subdocument Navigation
 
-- [Notes (L1)](memory/NOTES.md) — markdown-first persistent knowledge, indexing, `note_manage` tool.
-- [Raw Memory (L0)](memory/RAW_MEMORY.md) — ephemeral session data, compression input.
-- [Dream Daemon](memory/DREAM_DAEMON.md) — 6-stage offline notes consolidation.
-- [Retrieval](memory/RETRIEVAL.md) — hybrid search, scoring, tools, audit.
+- [Notes (L1)](../../reference/memory/NOTES.md) — markdown-first persistent knowledge, indexing, `note_manage` tool.
+- [Raw Memory (L0)](../../reference/memory/RAW_MEMORY.md) — ephemeral session data, compression input.
+- [Dream Daemon](../../reference/memory/DREAM_DAEMON.md) — 6-stage offline notes consolidation.
+- [Retrieval](../../reference/memory/RETRIEVAL.md) — hybrid search, scoring, tools, audit.
 ```
 
 - [ ] **Step 9: Write §9 Troubleshooting**
@@ -1159,8 +1159,8 @@ grep -rn "MEMORY_SYSTEM\.md\|facts\.db\|FactRetrieval\|MemoryStore" docs/referen
 
 Replace stale claims with a forward-link. Example rewrite:
 
-- Before: `"See [Memory System](MEMORY_SYSTEM.md) for Facts DB details."`
-- After:  `"See [Memory System](MEMORY_SYSTEM.md) for the data-layer overview; drill into [Notes](memory/NOTES.md), [Raw Memory](memory/RAW_MEMORY.md), [Dream Daemon](memory/DREAM_DAEMON.md), or [Retrieval](memory/RETRIEVAL.md)."`
+- Before: `"See [Memory System](../../reference/MEMORY_SYSTEM.md) for Facts DB details."`
+- After:  `"See [Memory System](../../reference/MEMORY_SYSTEM.md) for the data-layer overview; drill into [Notes](../../reference/memory/NOTES.md), [Raw Memory](../../reference/memory/RAW_MEMORY.md), [Dream Daemon](../../reference/memory/DREAM_DAEMON.md), or [Retrieval](../../reference/memory/RETRIEVAL.md)."`
 
 Do not rewrite body content of upstream docs. Only update the memory citation.
 

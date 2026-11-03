@@ -21,7 +21,7 @@
 
 ## Current state / 当前现状
 
-> Date / 日期: 2026-11-02
+> Date / 日期: 2026-11-03
 
 > This section is the current-state entry for architecture and lifecycle questions. The historical and round-specific entries below remain evidence indexes; they do not override this section or the owning reference documents.
 > 本节是架构与生命周期问题的当前现状入口。下方历史轮次词条仍是证据索引，不覆盖本节或各事实所属的 reference 文档。
@@ -34,9 +34,9 @@ Capability 是带有 owner、scope、effects、mount/activation 与 revoke 边�
 
 ### Tool/Plugin production slice / Tool/Plugin 当前生产切片
 
-The production activation slice is bounded to ExtensionManager-managed, tool-only WASM. `ExtensionManager` / `RuntimeOwner` perform discovery, effect execution, and durable enabled-state transitions; `ToolHandlerRegistry` remains the callable authority. `ProviderHandle` publishes committed provider state and generation, while `BackendLease` and call admission reject stale provider or owner generations. Discovery and read-side `describe`, `resolve`, `project`, catalog, observer, and doctor paths do not start or authenticate providers. Explicit load/enable/reload paths are activation boundaries. See [`PLUGIN_SYSTEM.md`](PLUGIN_SYSTEM.md), [`TOOL_SYSTEM.md`](TOOL_SYSTEM.md), [`src/capability/provider.rs`](../../src/capability/provider.rs), and [`src/capability/backend.rs`](../../src/capability/backend.rs).
+The production activation slice is bounded to ExtensionManager-managed, tool-only WASM. `ExtensionManager` / `RuntimeOwner` perform discovery, effect execution, and durable enabled-state transitions; `ToolHandlerRegistry` remains the callable authority. `ProviderHandle` publishes committed provider state and generation, while `BackendLease` and call admission reject stale provider or owner generations. Discovery and read-side `describe`, `resolve`, `project`, catalog, observer, and doctor paths do not start or authenticate providers. An exact permitted canonical Tool call may trigger retained single-flight Cold→Starting→Ready activation; the Ready publication and identity/generation checks complete before guest execution. Explicit load/enable/reload paths remain activation boundaries, while transport compatibility remains mounted-only. See [`PLUGIN_SYSTEM.md`](PLUGIN_SYSTEM.md), [`TOOL_SYSTEM.md`](TOOL_SYSTEM.md), [`src/capability/provider.rs`](../../src/capability/provider.rs), and [`src/capability/backend.rs`](../../src/capability/backend.rs).
 
-当前生产 activation 切片只覆盖由 `ExtensionManager` 管理的 tool-only WASM。`ExtensionManager` / `RuntimeOwner` 负责 discovery、effects 执行与 durable enabled-state transition；`ToolHandlerRegistry` 仍是 callable authority。`ProviderHandle` 发布已提交的 provider state 与 generation，`BackendLease` 和 call admission 则拒绝 stale provider 或 owner generation。discovery 以及 read-side 的 `describe`、`resolve`、`project`、catalog、observer、doctor 路径不会启动或认证 provider；显式 load/enable/reload 路径才是 activation boundary。详见 [`PLUGIN_SYSTEM.md`](PLUGIN_SYSTEM.md)、[`TOOL_SYSTEM.md`](TOOL_SYSTEM.md)、[`src/capability/provider.rs`](../../src/capability/provider.rs) 与 [`src/capability/backend.rs`](../../src/capability/backend.rs)。
+当前生产 activation 切片只覆盖由 `ExtensionManager` 管理的 tool-only WASM。`ExtensionManager` / `RuntimeOwner` 负责 discovery、effects 执行与 durable enabled-state transition；`ToolHandlerRegistry` 仍是 callable authority。`ProviderHandle` 发布已提交的 provider state 与 generation，`BackendLease` 和 call admission 则拒绝 stale provider 或 owner generation。discovery 以及 read-side 的 `describe`、`resolve`、`project`、catalog、observer、doctor 路径不会启动或认证 provider；精确通过 permission/scope 的 canonical Tool 首次调用可以触发 retained single-flight 的 Cold→Starting→Ready activation，Ready publication 与 identity/generation 校验完成后才执行 guest。显式 load/enable/reload 仍是 activation boundary；transport compatibility 仍只支持 mounted owner。详见 [`PLUGIN_SYSTEM.md`](PLUGIN_SYSTEM.md)、[`TOOL_SYSTEM.md`](TOOL_SYSTEM.md)、[`src/capability/provider.rs`](../../src/capability/provider.rs) 与 [`src/capability/backend.rs`](../../src/capability/backend.rs)。
 
 ### Provider lifecycle boundary / Provider lifecycle 边界
 
@@ -50,18 +50,22 @@ The production activation slice is bounded to ExtensionManager-managed, tool-onl
 
 `MemoryRuntime` 是 bounded derived Memory bundle 的当前 lifecycle authority：它负责 runtime-bound backend access、准入的 `MemoryOperation`、retained workers、跨 spawned work 的 operation context 以及 shutdown cleanup。跨 spawned work 必须显式携带 `MemoryOperation`；source-owned operation boundary 会在 admitted `MemoryOperation` 下保留 callback 及其关联写入。raw chat、Markdown archival 与 raw session-search path 在 Memory Off 或 unbound 时仍可独立使用。这不表示 universal Memory scheduler、覆盖每个 Memory writer 的 stop gate、process isolation、native unload、RSS reclamation 或 exactly-once external effects。源码 census 与 33 行 boundary ledger 见 [`2026-11-02-memory-derived-writer-boundary-run.md`](../superpowers/runs/2026-11-02-memory-derived-writer-boundary-run.md)；所属契约见 [`MEMORY_SYSTEM.md`](MEMORY_SYSTEM.md)。
 
-### Independent and deferred surfaces / 独立与 deferred surface
+## Deferred boundaries / Deferred 边界
 
 Gateway `ChannelRegistry` remains the Gateway lifecycle authority; `PtyManager` remains the bounded Terminal lifecycle authority; neither is thereby mounted as a Zahir Capability backend. Memory retains its own runtime authority. MCP lazy activation, EffectClaim production, automatic Safe Replay, universal durable scheduling, remaining Capability kinds, and production Feishu → Zahir remain deferred or NO-GO. Research documents describe direction and design evidence only: [`aleph_modularization_plan.md`](../research/aleph_modularization_plan.md) and [`Everything-externally-composable-is-a-Capability.md`](../research/Everything-externally-composable-is-a-Capability.md) must not be read as current production wiring.
 
 Gateway 的 lifecycle authority 仍是 `ChannelRegistry`；bounded Terminal lifecycle authority 仍是 `PtyManager`；这不表示它们已经 mount 成 Zahir Capability backend。Memory 保留自己的 runtime authority。MCP lazy activation、EffectClaim production、automatic Safe Replay、universal durable scheduling、其余 Capability kinds 与 production Feishu → Zahir 仍是 deferred 或 NO-GO。研究文档只描述方向与设计证据：[`aleph_modularization_plan.md`](../research/aleph_modularization_plan.md) 与 [`Everything-externally-composable-is-a-Capability.md`](../research/Everything-externally-composable-is-a-Capability.md) 不应被当作当前 production wiring。
 
+## Historical dictionary / 历史词典
+
+The dictionary below preserves round-specific implementation evidence and earlier locator language. Its status marks are historical evidence, not a replacement for the current-state and deferred sections above. When an older entry conflicts with current source, follow the current entry and its owning reference document, then use the old entry only to understand the evidence trail.
+下方词典保留按轮次记录的实现证据与旧定位话术。状态标记属于历史证据，不能替代上面的当前现状与 deferred 边界；如果旧词条与当前源码冲突，以当前入口及其所属 reference 文档为准，再把旧词条用于理解证据链。
+
 ---
 
 
-
-| 层 | 你的口语关键词 | 规范名 (EN) | 主锚点 | 状态 |
-|----|----------------|-------------|--------|------|
+| Domain / 域 | Symptom / 症状 | Feature / 特性 | Evidence / 证据 | Status / 状态 |
+| --- | --- | --- | --- | --- |
 | Harness | 切到 explore/coder 就没有记忆了 / 换个 agent 名字每轮都从头 / session store 里一堆孤儿行 | Per-Agent Preset Session Loss | `orchestrator/presets/default_flows.toml`（7→1）+ `resolver::resolve_session` Child 无父兜底 | ✅ (§3.16①, 2026-08-20) |
 | Harness | flow 重载完重启就没了 / `~/.aleph/flows` 不生效 / 想给某个 agent 单独钉模型 | Flow Catalog Single Composer + Per-Agent Model Pin | `orchestrator/loader.rs::load_catalog`（boot 与 `gateway.flow.reload` 同源）+ `llm.rs::pick_llm` `BrainRef::Strict` | ✅ (§3.16②, 2026-08-20) |
 | Harness | prompt 太长的报错被重试三次 / 明明是致命错却换 provider 重来 | Auth Status Digit-Boundary Match | `harness_bridge/error.rs` → `llm_retry::has_status_code`（删重复实现） | ✅ (§3.16③, 2026-08-20) |

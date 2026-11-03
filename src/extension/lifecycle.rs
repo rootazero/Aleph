@@ -1351,7 +1351,9 @@ impl ExtensionManager {
                 // before the retained task can be scheduled.
                 owner.close_admission();
                 let initial = owner.provider.state();
-                let state_error = if !owner.failures.lock().unwrap().is_empty() {
+                let state_error = if owner.is_publication_only_failure() {
+                    false
+                } else if !owner.failures.lock().unwrap().is_empty() {
                     true
                 } else {
                     match initial {
@@ -1508,9 +1510,23 @@ impl OwnerStopContext {
         }
         if matches!(initial, ProviderState::Cold | ProviderState::Disabled) {
             if initial == ProviderState::Cold {
+                let receipt = owner.receipt.lock().unwrap().take();
+                if let Some(receipt) = receipt {
+                    if let Err(error) = receipt.revoke() {
+                        *owner.receipt.lock().unwrap() = Some(receipt);
+                        owner
+                            .failures
+                            .lock()
+                            .unwrap()
+                            .push(OwnerFailure::Revoke(error));
+                        let _ = owner.provider.transition(ProviderState::Failed);
+                        return Err(residual());
+                    }
+                }
                 let _ = owner.provider.transition(ProviderState::Disabled);
             }
             self.views.plugin_registry.write().await.disable_plugin(id);
+            self.owners.lock().unwrap().remove(id);
             return Err(UnmountError::NotMounted(id.clone()));
         }
         let receipt = owner.receipt.lock().unwrap().clone();
@@ -1864,9 +1880,12 @@ handler = "handler"
         assert_eq!(probe.guest_instance_created(), 0);
         assert_eq!(probe.guest_instance_dropped(), 0);
         drop(loader);
-        assert_eq!(canonical.revision(), revision);
-        assert!(canonical.canonical_publication().entries().is_empty());
-        assert!(canonical.capture_entry("lazy_tool").is_none());
+        assert_eq!(canonical.revision(), revision + 1);
+        let publication = canonical.canonical_publication();
+        assert_eq!(publication.entries().len(), 1);
+        assert!(canonical
+            .capture_entry("lazy_tool")
+            .is_some_and(|lease| lease.is_cold_declaration()));
     }
 
     #[tokio::test]
@@ -1900,8 +1919,11 @@ handler = "handler"
         assert_eq!(probe.guest_instance_created(), 0);
         assert_eq!(probe.guest_instance_dropped(), 0);
         drop(loader);
-        assert_eq!(canonical.revision(), 0);
-        assert!(canonical.canonical_publication().entries().is_empty());
+        assert_eq!(canonical.revision(), 1);
+        assert_eq!(canonical.canonical_publication().entries().len(), 1);
+        assert!(canonical
+            .capture_entry("lazy_tool")
+            .is_some_and(|lease| lease.is_cold_declaration()));
     }
 
     #[tokio::test]
@@ -1921,7 +1943,7 @@ handler = "handler"
         let cold_owner = manager
             .runtime_owner("lazy-wasm")
             .expect("discovery must declare the owner");
-        assert_eq!(canonical.revision(), 0);
+        assert_eq!(canonical.revision(), 1);
         b6_set_desired_enabled(&manager, "lazy-wasm").await;
 
         manager.ensure_loaded().await.unwrap();
@@ -1932,9 +1954,11 @@ handler = "handler"
         assert!(Arc::ptr_eq(&cold_owner, &ready_owner));
         assert_eq!(
             ready_owner.provider.state(),
-            crate::capability::provider::ProviderState::Ready
+            crate::capability::provider::ProviderState::Ready,
+            "{}",
+            ready_owner.failure_summary()
         );
-        assert_eq!(canonical.revision(), 1);
+        assert_eq!(canonical.revision(), 2);
         assert_eq!(canonical.canonical_publication().entries().len(), 1);
         assert!(canonical.capture_entry("lazy_tool").is_some());
     }
@@ -1967,7 +1991,7 @@ handler = "handler"
             crate::capability::provider::ProviderState::Cold
         );
         assert!(!manager.plugin_loader.read().await.is_loaded("lazy-wasm"));
-        assert_eq!(canonical.revision(), 0);
+        assert_eq!(canonical.revision(), 3);
     }
 
     #[tokio::test]
@@ -2001,7 +2025,7 @@ handler = "handler"
         .await
         .unwrap();
         assert_eq!(listed.data.as_array().unwrap().len(), 1);
-        assert_eq!(canonical.revision(), 0);
+        assert_eq!(canonical.revision(), 1);
         let loader = manager.plugin_loader.read().await;
         assert!(!loader.is_loaded("lazy-wasm"));
         let probe = loader.wasm_load_probe();
@@ -2024,7 +2048,7 @@ handler = "handler"
         .await
         .unwrap();
         assert_eq!(enabled.data["ok"], true);
-        assert_eq!(canonical.revision(), 1);
+        assert_eq!(canonical.revision(), 2);
         assert!(manager.plugin_loader.read().await.is_loaded("lazy-wasm"));
     }
 
@@ -2500,9 +2524,20 @@ handler = "handler"
             .await
             .list_tools_for_plugin("lazy-wasm")
             .is_empty());
-        assert!(canonical.canonical_publication().entries().is_empty());
-        assert!(facade.describe(Scope::default()).capabilities.is_empty());
-        assert!(facade
+        assert!(manager
+            .active_plugin_tools_snapshot()
+            .iter()
+            .any(|tool| tool.plugin_id == "lazy-wasm" && tool.name == "lazy_tool"));
+        assert!(manager
+            .mounted_plugin_tools_snapshot()
+            .iter()
+            .all(|tool| tool.plugin_id != "lazy-wasm"));
+        assert_eq!(canonical.canonical_publication().entries().len(), 2);
+        assert!(canonical
+            .capture_entry("lazy_tool")
+            .is_some_and(|lease| lease.is_cold_declaration()));
+        assert!(!facade.describe(Scope::default()).capabilities.is_empty());
+        assert!(!facade
             .project(TransportTarget::Mcp, Scope::default())
             .capabilities
             .is_empty());
@@ -2568,6 +2603,77 @@ handler = "handler"
         assert!(manager.unmount("lazy-wasm").await.unwrap().all_ok());
     }
 
+    #[tokio::test]
+    async fn stage_f_first_canonical_call_activates_cold_owner_once() {
+        use crate::capability::provider::ProviderState;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let _home = isolated_home(tmp.path());
+        let (manager, canonical, owner) = b3_cold_manager(tmp.path()).await;
+        assert_eq!(owner.provider.state(), ProviderState::Cold);
+        let loader = manager.plugin_loader.read().await;
+        let probe = loader.wasm_load_probe();
+        assert_eq!(probe.guest_byte_reads(), 0);
+        assert_eq!(probe.guest_instance_created(), 0);
+        drop(loader);
+
+        let output = b3_call_canonical(canonical.clone(), "lazy_tool")
+            .await
+            .expect("the first canonical call activates and executes the Cold owner");
+        assert_eq!(output.value, serde_json::json!("A"));
+        assert_eq!(owner.provider.state(), ProviderState::Ready);
+        let loader = manager.plugin_loader.read().await;
+        let probe = loader.wasm_load_probe();
+        assert_eq!(probe.guest_byte_reads(), 1);
+        assert_eq!(probe.guest_instance_created(), 1);
+        drop(loader);
+        assert!(canonical
+            .capture_entry("lazy_tool")
+            .is_some_and(|lease| !lease.is_cold_declaration()));
+        assert!(manager.unmount("lazy-wasm").await.unwrap().all_ok());
+    }
+    #[tokio::test]
+    async fn stage_f_denied_cold_canonical_call_does_not_activate_owner() {
+        use crate::tools::service::ToolService;
+        let tmp = tempfile::tempdir().unwrap();
+        let _home = isolated_home(tmp.path());
+        let (manager, canonical, owner) = b3_cold_manager(tmp.path()).await;
+        let service = b4_canonical_service(canonical.clone());
+        let denied = service
+            .execute("lazy_tool", serde_json::json!({}))
+            .await;
+        assert!(matches!(denied, Err(crate::tools::service::ToolError::PermissionDenied { .. })));
+        assert_eq!(owner.provider.state(), crate::capability::provider::ProviderState::Cold);
+        let loader = manager.plugin_loader.read().await;
+        let probe = loader.wasm_load_probe();
+        assert_eq!(probe.guest_byte_reads(), 0);
+        assert_eq!(probe.guest_instance_created(), 0);
+        drop(loader);
+        assert!(manager
+            .set_plugin_enabled("lazy-wasm", false)
+            .await
+            .is_ok());
+    }
+
+    #[tokio::test]
+    async fn stage_f_concurrent_first_canonical_calls_share_one_activation() {
+        let tmp = tempfile::tempdir().unwrap();
+        let _home = isolated_home(tmp.path());
+        let (manager, canonical, owner) = b3_cold_manager(tmp.path()).await;
+        let (left, right) = tokio::join!(
+            b3_call_canonical(canonical.clone(), "lazy_tool"),
+            b3_call_canonical(canonical.clone(), "lazy_tool"),
+        );
+        assert_eq!(left.unwrap().value, serde_json::json!("A"));
+        assert_eq!(right.unwrap().value, serde_json::json!("A"));
+        assert_eq!(owner.provider.state(), crate::capability::provider::ProviderState::Ready);
+        let loader = manager.plugin_loader.read().await;
+        let probe = loader.wasm_load_probe();
+        assert_eq!(probe.guest_byte_reads(), 1);
+        assert_eq!(probe.guest_instance_created(), 1);
+        drop(loader);
+        assert!(manager.unmount("lazy-wasm").await.unwrap().all_ok());
+    }
     #[tokio::test]
     async fn stage_g_production_host_replacement_fences_stale_facade_and_drops_exact_owner() {
         use crate::extension::plugin_state::PluginRuntimeOutcome;
@@ -3742,7 +3848,12 @@ handler = "handler"
                 .value,
             serde_json::json!("A")
         );
+        assert!(loser.is_publication_only_failure());
+        let loser_cleanup = other.unmount("lazy-wasm").await;
+        assert!(loser_cleanup.is_ok());
+        assert!(other.runtime_owner("lazy-wasm").is_none());
         manager.unmount("lazy-wasm").await.unwrap();
+        assert!(other.reload_plugin("lazy-wasm").await.is_ok());
     }
 
     #[tokio::test]

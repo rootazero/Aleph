@@ -1,4 +1,5 @@
-//! Tool-only WASM activation ownership. No callable registry or durable intent.
+//! Tool-only WASM activation ownership. Canonical Tool publication is shared
+//! with the existing ToolHandlerRegistry; this module owns owner lifetimes.
 
 use super::error::{ExtensionError, ExtensionResult};
 use super::{ExtensionManager, PluginStatus};
@@ -14,7 +15,8 @@ use super::manifest::{adapter::AdapterOutput, PluginManifest};
 use super::runtime::wasm::WasmMountIdentity;
 use crate::tools::descriptor::ToolCapabilityDescriptor;
 use crate::tools::registry::{
-    PluginBatch, PluginBatchEntry, PluginBatchRegistration, PluginPublicationError,
+    PluginBatch, PluginBatchEntry, PluginBatchRegistration, PluginColdBatch, PluginColdBatchEntry,
+    PluginPublicationError,
 };
 
 // Incarnation IDs, not OwnershipTree generations or canonical revisions. Only
@@ -111,6 +113,23 @@ impl RuntimeOwner {
             .join("; ")
     }
 
+    pub(super) fn is_publication_only_failure(&self) -> bool {
+        self.receipt.lock().unwrap().is_none()
+            && self.identity.lock().unwrap().is_none()
+            && self
+                .failures
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|failure| matches!(failure, OwnerFailure::Publication(_)))
+            && self
+                .failures
+                .lock()
+                .unwrap()
+                .iter()
+                .all(|failure| matches!(failure, OwnerFailure::Publication(_)))
+    }
+
     pub fn close_admission(&self) {
         self.admission_open.store(false, Ordering::Release);
         self.stop_requested.notify_waiters();
@@ -194,8 +213,66 @@ impl ExtensionManager {
         let id = record.id.clone();
         record.status = PluginStatus::Cold;
         let owner = Arc::new(RuntimeOwner::new(output, manifest, record.clone()));
-        self.runtime_owners.lock().unwrap().insert(id, owner);
+        self.runtime_owners
+            .lock()
+            .unwrap()
+            .insert(id, Arc::clone(&owner));
         self.plugin_registry.write().await.register_plugin(record);
+        let registry = self
+            .tool_handler_registry
+            .read()
+            .unwrap_or_else(|error| error.into_inner())
+            .clone();
+        let manager = self.activation_manager().ok();
+        if let (Some(registry), Some(manager)) = (registry, manager) {
+            let entries = owner
+                .output
+                .capabilities
+                .iter()
+                .filter_map(|capability| match capability {
+                    super::capability::CapabilityDeclaration::Tool(registration) => {
+                        Some(registration.clone())
+                    }
+                    _ => None,
+                })
+                .map(|registration| {
+                    let handler = super::canonical_handler::build_cold_handler(
+                        std::sync::Arc::downgrade(&manager),
+                        &owner,
+                        registration.clone(),
+                    );
+                    let descriptor =
+                        ToolCapabilityDescriptor::from_definition(&handler.definition(), 0);
+                    PluginColdBatchEntry {
+                        descriptor,
+                        handler,
+                        max_result_tokens: None,
+                    }
+                })
+                .collect();
+            let receipt = registry.publish_plugin_cold_batch(PluginColdBatch {
+                plugin_id: owner.record.id.clone(),
+                owner_generation: owner.owner_generation,
+                entries,
+            });
+            match receipt {
+                Ok(receipt) => *owner.receipt.lock().unwrap() = Some(receipt),
+                Err(error) => {
+                    let reason = error.to_string();
+                    owner.close_admission();
+                    owner
+                        .failures
+                        .lock()
+                        .unwrap()
+                        .push(OwnerFailure::Publication(error));
+                    let _ = owner.provider.transition(ProviderState::Failed);
+                    self.plugin_registry.write().await.register_plugin(
+                        owner.record.clone().with_error(reason.clone()),
+                    );
+                    return PluginStatus::Error(reason);
+                }
+            }
+        }
         PluginStatus::Cold
     }
 
@@ -336,8 +413,10 @@ impl ExtensionManager {
         let publication = match publication {
             Ok(batch) => {
                 let canonical = self.tool_handler_registry.read().unwrap().clone();
+                let replacing = owner.receipt.lock().unwrap().clone();
                 match canonical {
-                    Some(canonical) => canonical.publish_plugin_batch_with_ready_commit(batch),
+                    Some(canonical) => canonical
+                        .publish_plugin_batch_with_ready_replacement(batch, replacing.as_ref()),
                     None => Err(PluginPublicationError::InvalidIdentity(
                         "plugin producer reconciliation is not mounted",
                     )),

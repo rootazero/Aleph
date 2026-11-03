@@ -976,7 +976,7 @@ Expected: 通过。
 
 - [ ] **Step 3: 行为验证（手动，构建后）**
 
-Run: `just wasm`（重编 WASM）后按 [DESKTOP_SHELL.md](../reference/DESKTOP_SHELL.md) 刷新运行中 daemon 的 binary。
+Run: `just wasm`（重编 WASM）后按 [DESKTOP_SHELL.md](../../reference/DESKTOP_SHELL.md) 刷新运行中 daemon 的 binary。
 手动核对成功判据 §2：
 1. 会话 A 发一条长回复 → 立刻点"新建对话"开 B → A 的标签红点仍亮、A 回复继续；切回 A 转录完整。
 2. 切 tab / 点侧栏 session → 不中断任何 run。
