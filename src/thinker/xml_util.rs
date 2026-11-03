@@ -90,6 +90,7 @@ pub(crate) fn close_block(out: &mut String, name: &str) {
 }
 
 /// Check if a string is a valid XML element or attribute identifier.
+#[allow(dead_code)]
 #[must_use]
 pub(crate) fn is_valid_xml_name(name: &str) -> bool {
     let mut chars = name.chars();
@@ -103,6 +104,7 @@ pub(crate) fn is_valid_xml_name(name: &str) -> bool {
 }
 
 /// Wrap content in a safe CDATA section, neutralizing any embedded `]]>` terminator.
+#[allow(dead_code)]
 #[must_use]
 pub(crate) fn wrap_cdata(s: &str) -> String {
     let neutralized = s.replace("]]>", "]]]]><![CDATA[>");
