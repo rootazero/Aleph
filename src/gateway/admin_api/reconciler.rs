@@ -112,9 +112,7 @@ mod tests {
     use axum::http::{Request, StatusCode};
     use tower::ServiceExt;
 
-    async fn test_runtime(
-        enabled: bool,
-    ) -> (Arc<MemoryRuntime>, tempfile::TempDir) {
+    async fn test_runtime(enabled: bool) -> (Arc<MemoryRuntime>, tempfile::TempDir) {
         let tmp = tempfile::tempdir().unwrap();
         let mut config = crate::Config::default();
         config.memory.embedding.providers.clear();
@@ -122,7 +120,9 @@ mod tests {
         config.memory.profile.enabled = false;
         config.memory.reflection.enabled = false;
         config.memory.reconciler.enabled = enabled;
-        let raw_store = MarkdownSessionStore::new(&tmp.path().join("raw")).await.unwrap();
+        let raw_store = MarkdownSessionStore::new(&tmp.path().join("raw"))
+            .await
+            .unwrap();
         let runtime = MemoryRuntime::new_with_services(
             MemoryRuntimeConfig {
                 metadata_path: tmp.path().join("memory/metadata.db"),
@@ -146,9 +146,7 @@ mod tests {
         (runtime, tmp)
     }
 
-    async fn test_state(
-        memory_runtime: Option<Arc<MemoryRuntime>>,
-    ) -> (AdminApiState, String) {
+    async fn test_state(memory_runtime: Option<Arc<MemoryRuntime>>) -> (AdminApiState, String) {
         // We only need the reconciler-relevant field for these tests;
         // the rest can be defaults from any caller that wires them up.
         let tmp = tempfile::TempDir::new().unwrap();
@@ -200,6 +198,42 @@ mod tests {
             .unwrap();
         let resp = app.oneshot(req).await.unwrap();
         assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
+    }
+
+    #[tokio::test]
+    async fn get_latest_returns_503_after_runtime_stop() {
+        let (runtime, _runtime_tmp) = test_runtime(true).await;
+        runtime.start().await.unwrap();
+        runtime
+            .current_reconciler()
+            .unwrap()
+            .reconcile_once()
+            .await
+            .unwrap();
+        let (state, token) = test_state(Some(runtime.clone())).await;
+        let app = crate::gateway::admin_api::router(state);
+        let request = || {
+            Request::builder()
+                .uri("/reconciler/latest")
+                .header("authorization", format!("Bearer {token}"))
+                .body(Body::empty())
+                .unwrap()
+        };
+
+        let before_stop = app.clone().oneshot(request()).await.unwrap();
+        assert_eq!(before_stop.status(), StatusCode::OK);
+        runtime.stop().await.unwrap();
+        let after_stop = app.clone().oneshot(request()).await.unwrap();
+        assert_eq!(after_stop.status(), StatusCode::SERVICE_UNAVAILABLE);
+        runtime.start().await.unwrap();
+        runtime
+            .current_reconciler()
+            .unwrap()
+            .reconcile_once()
+            .await
+            .unwrap();
+        let after_restart = app.oneshot(request()).await.unwrap();
+        assert_eq!(after_restart.status(), StatusCode::OK);
     }
 
     #[tokio::test]

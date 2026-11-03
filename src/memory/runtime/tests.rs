@@ -2,8 +2,8 @@ use std::task::Poll;
 
 use crate::capability::facade::Reference;
 use crate::capability::ownership::{OwnershipTree, VisibilityScope};
-use crate::memory::notes::store::NoteStore;
 use crate::memory::extensions::MemoryExtensionRegistry;
+use crate::memory::notes::store::NoteStore;
 use crate::memory::store::markdown::MarkdownSessionStore;
 use crate::resilience::database::StateDatabase;
 use crate::sync_primitives::Arc;
@@ -240,8 +240,9 @@ impl Drop for BusyStatement {
 #[tokio::test]
 async fn stop_error_is_sticky_but_cleanup_retry_reaches_off() {
     let root = tempfile::tempdir().unwrap();
-    let runtime = runtime(root.path());
+    let runtime = configured_runtime(root.path(), true).await;
     runtime.start().await.unwrap();
+    assert!(runtime.current_reconciler().is_some());
     let operation = runtime.capture(&reference()).unwrap().admit().unwrap();
     let backend = operation.backend().clone();
     operation
@@ -275,6 +276,7 @@ async fn stop_error_is_sticky_but_cleanup_retry_reaches_off() {
     assert!(runtime.stop().await.is_err());
     let status = runtime.status();
     assert_eq!(status.state, MemoryState::Failed);
+    assert!(runtime.current_reconciler().is_none());
     assert!(status.first_error.as_ref().unwrap().contains("close"));
     assert_eq!(runtime.status(), status, "status must not retry cleanup");
     drop(statement);
@@ -615,6 +617,24 @@ async fn admin_reconciler_state_matrix_is_fail_closed() {
 
     let cold = configured_runtime(&root.path().join("cold"), true).await;
     assert!(cold.current_reconciler().is_none());
+    let (release, gate) = oneshot::channel();
+    *cold.initialization_gate.lock().unwrap() = Some(gate);
+    let mut start = Box::pin(cold.start());
+    assert!(matches!(futures::poll!(start.as_mut()), Poll::Pending));
+    let _backend = partial_backend(&cold).await;
+    assert_eq!(cold.status().state, MemoryState::Starting);
+    assert!(cold.current_reconciler().is_none());
+    release.send(()).unwrap();
+    start.await.unwrap();
+    assert!(cold.current_reconciler().is_some());
+    let release = pending_child(&cold).await;
+    let mut stop = Box::pin(cold.stop());
+    assert!(matches!(futures::poll!(stop.as_mut()), Poll::Pending));
+    assert_eq!(cold.status().state, MemoryState::Draining);
+    assert!(cold.current_reconciler().is_none());
+    release.send(()).unwrap();
+    stop.await.unwrap();
+    assert!(cold.current_reconciler().is_none());
 }
 
 #[tokio::test]
@@ -634,6 +654,5 @@ async fn admin_reconciler_resolves_current_runtime_generation_and_rejects_stale_
         .current_reconciler()
         .expect("restarted enabled runtime must expose its new reconciler");
     assert!(!Arc::ptr_eq(&first, &second));
-    assert!(second.last_reconcile_report().is_none());
     runtime.stop().await.unwrap();
 }

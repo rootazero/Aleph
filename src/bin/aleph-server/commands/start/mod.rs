@@ -4514,6 +4514,26 @@ mod tests {
         );
     }
 
+    #[test]
+    fn production_startup_uses_only_the_runtime_owned_memory_reconciler() {
+        let src = include_str!("mod.rs").replace('\r', "");
+        let production = alephcore::utils::source_scan::production_prefix(&src);
+        assert!(production.len() < src.len());
+        let production = alephcore::utils::source_scan::code_text(&production);
+        assert!(
+            !production.contains("spawn_reconciler_daemon("),
+            "server startup must not retain a second, unowned Memory reconciler"
+        );
+
+        let bundle = include_str!("../../../../memory/runtime/bundle.rs");
+        let bundle = alephcore::utils::source_scan::production_prefix(bundle);
+        let bundle = alephcore::utils::source_scan::code_text(&bundle);
+        assert!(
+            bundle.contains("spawn_owned_reconciler_daemon("),
+            "the runtime bundle must retain the single production reconciler"
+        );
+    }
+
     /// Task5 shutdown census. The host must be closed BEFORE
     /// `builtin_registration_scope.take()` runs, because the scope's
     /// dispose drops the registry-owning scope and any host worker still
