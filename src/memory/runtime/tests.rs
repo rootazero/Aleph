@@ -7,7 +7,10 @@ use crate::memory::notes::store::NoteStore;
 use crate::memory::store::markdown::MarkdownSessionStore;
 use crate::resilience::database::StateDatabase;
 use crate::sync_primitives::Arc;
+use axum::body::Body;
+use axum::http::{Request, StatusCode};
 use tokio::sync::oneshot;
+use tower::ServiceExt;
 
 use super::{resource_id, MemoryRuntime, MemoryRuntimeConfig, MemoryState};
 
@@ -237,6 +240,28 @@ impl Drop for BusyStatement {
     }
 }
 
+/// Prepare a statement that is never finalized, so the next
+/// `Connection::close` on that backend returns `SQLITE_BUSY` — the real
+/// stop failure this file exercises.
+fn unfinalized_statement(
+    backend: &crate::memory::store::sqlite::SqliteMemoryBackend,
+) -> BusyStatement {
+    let guard = backend.conn().lock().unwrap();
+    let mut statement = std::ptr::null_mut();
+    // A genuine unfinalized SQLite statement makes Connection::close return SQLITE_BUSY.
+    let result = unsafe {
+        rusqlite::ffi::sqlite3_prepare_v2(
+            guard.as_ref().unwrap().handle(),
+            c"SELECT 1".as_ptr(),
+            -1,
+            &mut statement,
+            std::ptr::null_mut(),
+        )
+    };
+    assert_eq!(result, rusqlite::ffi::SQLITE_OK);
+    BusyStatement(statement)
+}
+
 #[tokio::test]
 async fn stop_error_is_sticky_but_cleanup_retry_reaches_off() {
     let root = tempfile::tempdir().unwrap();
@@ -257,22 +282,7 @@ async fn stop_error_is_sticky_but_cleanup_retry_reaches_off() {
         }))
         .await
         .unwrap();
-    let statement = {
-        let guard = backend.conn().lock().unwrap();
-        let mut statement = std::ptr::null_mut();
-        // A genuine unfinalized SQLite statement makes Connection::close return SQLITE_BUSY.
-        let result = unsafe {
-            rusqlite::ffi::sqlite3_prepare_v2(
-                guard.as_ref().unwrap().handle(),
-                c"SELECT 1".as_ptr(),
-                -1,
-                &mut statement,
-                std::ptr::null_mut(),
-            )
-        };
-        assert_eq!(result, rusqlite::ffi::SQLITE_OK);
-        BusyStatement(statement)
-    };
+    let statement = unfinalized_statement(&backend);
     assert!(runtime.stop().await.is_err());
     let status = runtime.status();
     assert_eq!(status.state, MemoryState::Failed);
@@ -635,6 +645,76 @@ async fn admin_reconciler_state_matrix_is_fail_closed() {
     release.send(()).unwrap();
     stop.await.unwrap();
     assert!(cold.current_reconciler().is_none());
+}
+
+/// The admin reconciler endpoint must answer `503` while the runtime is
+/// still Starting: there is no current reconciler generation yet.
+#[tokio::test]
+async fn admin_reconciler_endpoint_is_unavailable_while_the_runtime_is_starting() {
+    let root = tempfile::tempdir().unwrap();
+    let runtime = configured_runtime(root.path(), true).await;
+    let (release, gate) = oneshot::channel();
+    *runtime.initialization_gate.lock().unwrap() = Some(gate);
+    let mut start = Box::pin(runtime.start());
+    assert!(matches!(futures::poll!(start.as_mut()), Poll::Pending));
+    let _backend = partial_backend(&runtime).await;
+    assert_eq!(runtime.status().state, MemoryState::Starting);
+
+    let (state, token) = crate::gateway::admin_api::test_admin_state(Some(runtime.clone()));
+    let app = crate::gateway::admin_api::router(state);
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/reconciler/latest")
+                .header("authorization", format!("Bearer {token}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        response.status(),
+        StatusCode::SERVICE_UNAVAILABLE,
+        "a starting runtime must not serve a reconciler report"
+    );
+
+    release.send(()).unwrap();
+    start.await.unwrap();
+}
+
+/// The admin reconciler endpoint must answer `503` after a real stop
+/// failure left the runtime in the Failed state.
+#[tokio::test]
+async fn admin_reconciler_endpoint_is_unavailable_after_a_real_stop_failure() {
+    let root = tempfile::tempdir().unwrap();
+    let runtime = configured_runtime(root.path(), true).await;
+    runtime.start().await.unwrap();
+    let operation = runtime.capture(&reference()).unwrap().admit().unwrap();
+    let backend = operation.backend().clone();
+    let statement = unfinalized_statement(&backend);
+    drop(operation);
+    assert!(runtime.stop().await.is_err());
+    assert_eq!(runtime.status().state, MemoryState::Failed);
+
+    let (state, token) = crate::gateway::admin_api::test_admin_state(Some(runtime.clone()));
+    let app = crate::gateway::admin_api::router(state);
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/reconciler/latest")
+                .header("authorization", format!("Bearer {token}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        response.status(),
+        StatusCode::SERVICE_UNAVAILABLE,
+        "a failed runtime must not serve a reconciler report"
+    );
+
+    drop(statement);
 }
 
 #[tokio::test]

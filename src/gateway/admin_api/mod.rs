@@ -94,6 +94,40 @@ pub(crate) fn test_session_store(
     )
 }
 
+/// A throwaway authenticated admin state for router tests.
+///
+/// Shared by the admin router test modules: the reconciler endpoint tests and
+/// the Memory runtime lifecycle tests both need a real `AdminApiState` (bearer
+/// token, agent manager, session store) to drive the real router. `None` for
+/// `memory_runtime` models a server that never mounted Memory.
+#[cfg(test)]
+pub(crate) fn test_admin_state(
+    memory_runtime: Option<Arc<crate::memory::runtime::MemoryRuntime>>,
+) -> (AdminApiState, String) {
+    let tmp = tempfile::TempDir::new().expect("admin state temp dir");
+    let security_store = Arc::new(
+        crate::gateway::security::SecurityStore::open(tmp.path().join("vault.db"))
+            .expect("security store"),
+    );
+    let shared_token = Arc::new(crate::gateway::security::SharedTokenManager::new(
+        security_store,
+        tmp.path().join("vault"),
+    ));
+    let token = shared_token.generate_token().expect("shared token");
+    let state = AdminApiState {
+        shared_token,
+        agent_manager: Arc::new(crate::config::agent_manager::AgentManager::new(
+            tmp.path().join("config.toml"),
+            tmp.path().join("workspaces"),
+            tmp.path().join("agents"),
+            tmp.path().join("trash"),
+        )),
+        session_store: test_session_store(tmp.path()),
+        memory_runtime,
+    };
+    (state, token)
+}
+
 fn admin_unauthorized(message: &str) -> Response {
     let body = serde_json::json!({
         "error": {
