@@ -359,6 +359,11 @@ impl GoalStore {
             rusqlite::params![session_id],
         )
         .map_err(|e| AlephError::other(format!("goal delete: {e}")))?;
+        tx.execute(
+            "DELETE FROM settle_notified WHERE session_id = ?1",
+            rusqlite::params![session_id],
+        )
+        .map_err(|e| AlephError::other(format!("goal delete: {e}")))?;
         tx.commit()
             .map_err(|e| AlephError::other(format!("goal delete: {e}")))
     }
@@ -560,6 +565,7 @@ impl GoalStore {
         // barrier is satisfied, so drop the stale wait fields on this claim's
         // write path instead of carrying them into renders forever. An
         // unsatisfied barrier is handled below, after the in-flight gate.
+        let original_waiting_until_ms = current.waiting_until_ms;
         let current = if current
             .waiting_until_ms
             .is_some_and(|until| now_ms != 0 && until <= now_ms)
@@ -602,7 +608,7 @@ impl GoalStore {
         // the Idle-return path persists the clear as the comment claims.
         let dirty = goal.baseline_captured != current.baseline_captured
             || goal.workspace != current.workspace
-            || goal.waiting_until_ms != current.waiting_until_ms;
+            || goal.waiting_until_ms != original_waiting_until_ms;
         // Budget enforcement needs the live total; without one (or without a
         // budget at all) pass 0 so only the iteration/deadline caps apply.
         let tokens_now = if goal.token_budget.is_some() {
@@ -1029,7 +1035,7 @@ impl GoalStore {
     /// objectives and accumulated lessons destroyed. Each owner session resumes
     /// its own with `goal(action='update', status='active')`.
     pub fn pause_all_active(&self, note: &str, now_ms: u64) -> Result<Vec<String>> {
-        let conn = self.lock();
+        let mut conn = self.lock();
         let mut stmt = conn
             .prepare("SELECT json FROM goals")
             .map_err(|e| AlephError::other(format!("goal pause_all prepare: {e}")))?;
@@ -1047,11 +1053,14 @@ impl GoalStore {
             }
         }
         drop(stmt);
+        let tx = conn
+            .transaction()
+            .map_err(|e| AlephError::other(format!("goal pause_all tx: {e}")))?;
         let mut paused = Vec::with_capacity(active.len());
         for goal in active {
             let session = goal.session_id.clone();
             Self::put_locked(
-                &conn,
+                &tx,
                 &goal
                     .with_status(GoalStatus::Paused, now_ms)
                     .with_note(Some(note.to_string()), now_ms)
@@ -1060,6 +1069,8 @@ impl GoalStore {
             )?;
             paused.push(session);
         }
+        tx.commit()
+            .map_err(|e| AlephError::other(format!("goal pause_all commit: {e}")))?;
         Ok(paused)
     }
 
@@ -1083,7 +1094,7 @@ impl GoalStore {
     /// principal OWNS. See [`Self::count_owned_by`].
     pub fn pause_all_owned_by(&self, user_id: &str) -> Result<usize> {
         let now_ms = now_ms();
-        let conn = self.lock();
+        let mut conn = self.lock();
         let mut stmt = conn
             .prepare("SELECT json FROM goals")
             .map_err(|e| AlephError::other(format!("goal pause_all_owned_by prepare: {e}")))?;
@@ -1104,11 +1115,14 @@ impl GoalStore {
             }
         }
         drop(stmt);
+        let tx = conn
+            .transaction()
+            .map_err(|e| AlephError::other(format!("goal pause_all_owned_by tx: {e}")))?;
         let note = format!("Account '{user_id}' was deactivated — pursuit frozen.");
         let count = targets.len();
         for goal in targets {
             Self::put_locked(
-                &conn,
+                &tx,
                 &goal
                     .with_status(GoalStatus::Paused, now_ms)
                     .with_note(Some(note.clone()), now_ms)
@@ -1116,6 +1130,8 @@ impl GoalStore {
                     .with_pending_continuation(None),
             )?;
         }
+        tx.commit()
+            .map_err(|e| AlephError::other(format!("goal pause_all_owned_by commit: {e}")))?;
         Ok(count)
     }
 
@@ -1470,6 +1486,17 @@ impl GoalStore {
                 merged.scope_id = live.scope_id.clone();
                 merged.author_user_id = live.author_user_id.clone();
                 let outcome = if live.status == expected_status {
+                    // If live cleared its wait barrier concurrently (e.g. via
+                    // GoalWakeService on task settlement or claim_locked elapsed clear),
+                    // do not resurrect the stale barrier from next unless next explicitly
+                    // set a new or different barrier.
+                    if live.waiting_on_task.is_none() && next.waiting_on_task.is_some() {
+                        merged.waiting_on_task = None;
+                        merged.waiting_reason = live.waiting_reason.clone();
+                    }
+                    if live.waiting_until_ms.is_none() && next.waiting_until_ms.is_some() {
+                        merged.waiting_until_ms = None;
+                    }
                     FieldUpdate::Committed
                 } else {
                     // A concurrent lifecycle transition won the gap — keep its

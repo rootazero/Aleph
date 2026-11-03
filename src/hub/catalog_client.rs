@@ -83,7 +83,11 @@ fn sanitize_generated_at(raw: &str) -> Option<String> {
     // Day/month digit sanity on the fixed-width slots so the parser never
     // hands a downstream consumer bytes it can re-parse. Full date validation
     // would need `chrono` so we keep it cheap.
-    for slot in [&bytes[0..4], &bytes[5..7], &bytes[8..10]] {
+    let slots = match (bytes.get(0..4), bytes.get(5..7), bytes.get(8..10)) {
+        (Some(y), Some(m), Some(d)) => [y, m, d],
+        _ => return None,
+    };
+    for slot in slots {
         if !slot.iter().all(|b| b.is_ascii_digit()) {
             return None;
         }

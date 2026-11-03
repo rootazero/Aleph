@@ -213,6 +213,9 @@ impl GroupChatExecutor {
         if session.status != GroupChatStatus::Active {
             return Err(GroupChatError::SessionInactive(session.id.clone()));
         }
+        if session.cancel_token.is_cancelled() {
+            return Err(GroupChatError::SessionInactive(session.id.clone()));
+        }
 
         // Transactional staging: build every (turn, message) pair for this round
         // BEFORE mutating `session.history` or persisting to the DB. If a persona
@@ -357,6 +360,12 @@ impl GroupChatExecutor {
         // mutating session.history or persisting to DB. If any persona call
         // fails, the snapshot is restored and no partial turn is committed.
         let mut prior_discussion = String::new();
+        // Deduplicate persona respondents and clamp count to total participants
+        let mut seen = std::collections::HashSet::new();
+        plan.respondents.retain(|r| seen.insert(r.persona_id.clone()));
+        if plan.respondents.len() > session.participants.len() {
+            plan.respondents.truncate(session.participants.len());
+        }
         let total_respondents = plan.respondents.len();
         plan.respondents.sort_by_key(|r| r.order);
         let session_id = session.id.clone();
@@ -369,11 +378,15 @@ impl GroupChatExecutor {
         }
         let mut prepared: Vec<PreparedResponse> = Vec::with_capacity(total_respondents);
         for (i, respondent) in plan.respondents.iter().enumerate() {
-            // Find the persona in the session participants
+            // Find the persona in the session participants (support case-insensitive and display name matching)
             let persona = session
                 .participants
                 .iter()
-                .find(|p| p.id == respondent.persona_id)
+                .find(|p| {
+                    p.id == respondent.persona_id
+                        || p.id.eq_ignore_ascii_case(&respondent.persona_id)
+                        || p.name.eq_ignore_ascii_case(&respondent.persona_id)
+                })
                 .ok_or_else(|| GroupChatError::PersonaNotFound(respondent.persona_id.clone()))?;
 
             // Build persona prompt with cumulative prior discussion

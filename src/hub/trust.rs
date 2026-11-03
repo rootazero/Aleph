@@ -171,12 +171,15 @@ pub fn scan_for_injection(text: &str) -> Vec<InjectionFinding> {
     let (stripped, _removed) = crate::security::unicode_guard::strip_invisible_chars(text);
     // NBSP-rendered-as-space: turn U+00A0 into an ASCII space and fold, then
     // match. Catches "ignore\u{00A0}previous" while still triggering the
-    // invisible_char finding above.
+    // invisible_char finding above. Also perform a compound pass that replaces
+    // NBSP AND strips invisible characters to close hybrid evasions.
     let nbsp_replaced: String = text.replace('\u{00A0}', " ");
+    let (compound_stripped, _) = crate::security::unicode_guard::strip_invisible_chars(&nbsp_replaced);
     let lower_stripped = stripped.to_lowercase();
     let lower_nbsp = nbsp_replaced.to_lowercase();
+    let lower_compound = compound_stripped.to_lowercase();
     for needle in SUSPICIOUS {
-        if lower_stripped.contains(needle) || lower_nbsp.contains(needle) {
+        if lower_stripped.contains(needle) || lower_nbsp.contains(needle) || lower_compound.contains(needle) {
             out.push(InjectionFinding {
                 kind: "suspicious_phrase".into(),
                 detail: (*needle).into(),

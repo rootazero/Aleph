@@ -87,10 +87,24 @@ impl Persona {
                 "persona id must not be empty".into(),
             ));
         }
+        let id_lower = self.id.trim().to_ascii_lowercase();
+        if matches!(id_lower.as_str(), "coordinator" | "system" | "user" | "admin") {
+            return Err(GroupChatError::InvalidPersona(format!(
+                "persona id '{}' uses a reserved identifier",
+                self.id
+            )));
+        }
         if self.name.is_empty() {
             return Err(GroupChatError::InvalidPersona(
                 "persona name must not be empty".into(),
             ));
+        }
+        let name_lower = self.name.trim().to_ascii_lowercase();
+        if matches!(name_lower.as_str(), "coordinator" | "system" | "user" | "admin") {
+            return Err(GroupChatError::InvalidPersona(format!(
+                "persona name '{}' uses a reserved identifier",
+                self.name
+            )));
         }
         if self.system_prompt.is_empty() {
             return Err(GroupChatError::InvalidPersona(

@@ -184,7 +184,7 @@ impl GroupChatSession {
             return;
         }
         if round < self.current_round {
-            tracing::debug!(
+            tracing::warn!(
                 subsystem = "group_chat",
                 session_id = %self.id,
                 attempt = round,
@@ -237,7 +237,7 @@ impl GroupChatSession {
         if window_rounds == 0 || self.current_round <= window_rounds {
             return self.build_history_text();
         }
-        let cutoff = self.current_round - window_rounds;
+        let cutoff = self.current_round.saturating_sub(window_rounds);
         let mut text = String::new();
         let mut older_turns = 0usize;
         let mut older_rounds_seen: std::collections::BTreeSet<u32> =
