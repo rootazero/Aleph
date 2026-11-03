@@ -258,6 +258,7 @@ impl InProcessActorSessionService {
             if should_remove {
                 senders.remove(&cleanup_id);
                 broadcasters.remove(&cleanup_id);
+                cleanup_svc.wake_locks.write().await.remove(&cleanup_id);
             }
         });
 
@@ -320,7 +321,13 @@ impl SessionService for InProcessActorSessionService {
     ) -> Result<Vec<EventSeq>, SessionError> {
         let sender = match self.sender_for(id).await {
             Some(s) => s,
-            None => self.spawn_actor(id, None).await?,
+            None => {
+                let _lock = self.wake_lock_for(id).await;
+                match self.sender_for(id).await {
+                    Some(s) => s,
+                    None => self.spawn_actor(id, None).await?,
+                }
+            }
         };
         let (tx, rx) = oneshot::channel();
         sender
