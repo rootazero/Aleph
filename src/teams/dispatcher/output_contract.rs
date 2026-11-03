@@ -152,14 +152,15 @@ pub fn validate_step_output(task: &CoordTask, final_text: &str) -> SchemaOutcome
 /// tagged with a language hint) from `s`, leaving any inner content
 /// untouched. Returns `s` unchanged when no fence is present.
 fn strip_code_fence(s: &str) -> &str {
-    let rest = s.strip_prefix("```").unwrap_or(s);
+    let trimmed = s.trim();
+    let Some(rest) = trimmed.strip_prefix("```") else {
+        return trimmed;
+    };
     // After the opening fence, a language tag is allowed (e.g. ```json). It
     // must be on the same line; consume to the first newline if present so
     // we do not nibble the document body.
-    let rest = match rest.find('\n') {
-        Some(i) if rest[..i].chars().all(|c| c != '`') && rest[..i].trim().len() < 32 => {
-            &rest[i + 1..]
-        }
+    let rest = match rest.split_once('\n') {
+        Some((tag, body)) if tag.chars().all(|c| c != '`') && tag.trim().len() < 32 => body,
         _ => rest,
     };
     rest.strip_suffix("```").unwrap_or(rest).trim()

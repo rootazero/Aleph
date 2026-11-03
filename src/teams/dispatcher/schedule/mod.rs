@@ -239,8 +239,9 @@ impl TeamDispatcher {
                     tracing::error!(
                         task_id = %task_id_for_log,
                         panic = ?panic_payload,
-                        "dispatcher run_task panicked; adapter dropped the task silently"
+                        "dispatcher run_task panicked; clearing running registration"
                     );
+                    dispatcher.running.lock().await.remove(&task_id_for_log);
                 }
             });
         }

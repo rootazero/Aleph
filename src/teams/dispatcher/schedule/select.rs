@@ -261,15 +261,16 @@ pub fn select_schedulable(
     }
 
     let mut picked: Vec<CoordTask> = Vec::with_capacity(available_slots);
-    let mut consumed = vec![false; candidates.len()];
+    let mut candidates_with_state: Vec<(CoordTask, bool)> =
+        candidates.iter().cloned().map(|t| (t, false)).collect();
 
     while picked.len() < available_slots {
         // Pick the eligible candidate whose owner is least loaded; ties resolve
         // to the earliest in priority/FIFO order (first un-consumed wins).
         let mut best: Option<usize> = None;
         let mut best_load = usize::MAX;
-        for (i, task) in candidates.iter().enumerate() {
-            if consumed[i] {
+        for (i, (task, consumed)) in candidates_with_state.iter().enumerate() {
+            if *consumed {
                 continue;
             }
             let owner = task.owner.as_deref().unwrap_or("");
@@ -285,10 +286,12 @@ pub fn select_schedulable(
         let Some(i) = best else {
             break; // nothing left that is both un-consumed and under cap
         };
-        consumed[i] = true;
-        let owner = candidates[i].owner.clone().unwrap_or_default();
-        *load.entry(owner).or_insert(0) += 1;
-        picked.push(candidates[i].clone());
+        if let Some((task, consumed)) = candidates_with_state.get_mut(i) {
+            *consumed = true;
+            let owner = task.owner.clone().unwrap_or_default();
+            *load.entry(owner).or_insert(0) += 1;
+            picked.push(task.clone());
+        }
     }
 
     picked
