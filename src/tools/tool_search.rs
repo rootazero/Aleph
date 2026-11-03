@@ -137,7 +137,9 @@ impl Bm25 {
     fn score(&self, q_tokens: &[String], doc_idx: usize) -> f64 {
         const K1: f64 = 1.5;
         const B: f64 = 0.75;
-        let toks = &self.doc_tokens[doc_idx];
+        let Some(toks) = self.doc_tokens.get(doc_idx) else {
+            return 0.0;
+        };
         let dl = toks.len() as f64;
         let mut tf: HashMap<&str, usize> = HashMap::new();
         for t in toks {
@@ -170,7 +172,11 @@ impl Bm25 {
         scored.sort_by(|a, b| {
             b.1.partial_cmp(&a.1)
                 .unwrap_or(std::cmp::Ordering::Equal)
-                .then_with(|| self.docs[a.0].name.cmp(&self.docs[b.0].name))
+                .then_with(|| {
+                    let name_a = self.docs.get(a.0).map(|d| d.name.as_str()).unwrap_or("");
+                    let name_b = self.docs.get(b.0).map(|d| d.name.as_str()).unwrap_or("");
+                    name_a.cmp(name_b)
+                })
         });
         scored.truncate(k);
         scored

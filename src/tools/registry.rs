@@ -831,7 +831,10 @@ impl PluginBatchRegistration {
                 revision,
             )))
         })?;
-        Ok(result.expect("exact batch withdrawal commits or errors"))
+        let revision = result.ok_or_else(|| ToolError::RegistryClosed {
+            name: "batch_withdraw".into(),
+        })?;
+        Ok(revision)
     }
 }
 
@@ -1135,7 +1138,9 @@ impl ToolHandlerRegistry {
                 }
                 if let Some(previous) = replacing {
                     previous.validate_current(&self.shared, current)?;
-                    let old = &previous.entries[0].1;
+                    let Some((_, old)) = previous.entries.first() else {
+                        return Err(PluginPublicationError::InvalidIdentity("replacement handle has no entries"));
+                    };
                     if old.plugin_id != batch.plugin_id
                         || batch.owner_generation <= old.owner_generation
                         || (old.provider.same_instance(&batch.provider)
@@ -1196,7 +1201,7 @@ impl ToolHandlerRegistry {
                     revision, tool_changes: changes, catalog_changed: false,
                 }, PluginBatchRegistration { entries: receipt })))
             })?;
-        Ok(result.expect("plugin publication commits or errors"))
+        result.ok_or(PluginPublicationError::Closed)
     }
 
     /// Register a new capability. Rejects a descriptor that fails validation, a
@@ -1269,7 +1274,9 @@ impl ToolHandlerRegistry {
             )))
         })?;
         // These shell operations always commit or return a ToolError.
-        let revision = revision.expect("successful registration transaction commits");
+        let revision = revision.ok_or_else(|| ToolError::RegistryClosed {
+            name: name.clone(),
+        })?;
         Ok(RegistrationHandle {
             shared: Arc::downgrade(&self.shared),
             name,
@@ -1349,7 +1356,9 @@ impl ToolHandlerRegistry {
             )))
         })?;
         // These shell operations always commit or return a ToolError.
-        let revision = revision.expect("successful registration transaction commits");
+        let revision = revision.ok_or_else(|| ToolError::RegistryClosed {
+            name: name.clone(),
+        })?;
         Ok(RegistrationHandle {
             shared: Arc::downgrade(&self.shared),
             name,
@@ -1814,7 +1823,9 @@ impl ToolHandlerRegistry {
                 assigned,
             )))
         })?;
-        let revision = revision.expect("successful pair registration commits");
+        let revision = revision.ok_or_else(|| ToolError::RegistryClosed {
+            name: first_name.clone(),
+        })?;
         Ok((
             RegistrationHandle {
                 shared: Arc::downgrade(&self.shared),
