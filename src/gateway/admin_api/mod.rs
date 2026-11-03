@@ -32,13 +32,10 @@ pub struct AdminApiState {
     /// same store the JSON-RPC surface uses, so both faces of `agent.resume`
     /// resolve a session key identically.
     pub session_store: Arc<dyn crate::gateway::session_store::SessionStore>,
-    /// Memory command handler whose `last_reconcile_report` is exposed
-    /// through `/v1/admin/reconciler/latest`. `None` is permitted for
-    /// the `bin-aleph` CLI subcommands that don't need the reconciler
-    /// surface (they only touch secrets / resume), but the production
-    /// `bin/aleph-server/commands/start` wires a real handler so the
-    /// endpoint reports the most recent scan.
-    pub memory_handler: Option<Arc<crate::memory::MemoryCommandHandler>>,
+    /// Memory runtime used to resolve the current derived reconciler generation
+    /// for `/v1/admin/reconciler/latest`. `None` is permitted for the `bin-aleph`
+    /// CLI subcommands that do not mount Memory.
+    pub memory_runtime: Option<Arc<crate::memory::runtime::MemoryRuntime>>,
 }
 
 pub fn router(state: AdminApiState) -> Router {
@@ -136,7 +133,7 @@ mod tests {
             shared_token,
             agent_manager,
             session_store: test_session_store(dir.path()),
-            memory_handler: None,
+            memory_runtime: None,
         });
         (app, token, dir)
     }
