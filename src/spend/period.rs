@@ -114,7 +114,7 @@ pub fn retention_cutoff_ms_in<Tz: TimeZone>(
         // asking for *its* start — `period_start_ms_in` of a boundary that
         // is already a period start would be a no-op and the walk would
         // never move.
-        boundary = period_start_ms_in(boundary - 1, period, tz);
+        boundary = period_start_ms_in(boundary.saturating_sub(1), period, tz);
     }
     boundary
 }
@@ -168,9 +168,7 @@ pub fn period_end_ms_in<Tz: TimeZone>(now_ms: i64, period: SpendPeriod, tz: &Tz)
     // 25h local day (see `local_midnight`'s doc and the DST test above).
     let date = to_local(now_ms, tz).date_naive();
     let next_period_start_date = match period {
-        SpendPeriod::Day => date
-            .succ_opt()
-            .expect("a spend event's calendar date is never chrono::NaiveDate::MAX"),
+        SpendPeriod::Day => date.succ_opt().unwrap_or(date),
         SpendPeriod::Month => next_month(date),
     };
     local_midnight(tz, next_period_start_date).timestamp_millis()
@@ -206,19 +204,18 @@ fn to_local<Tz: TimeZone>(now_ms: i64, tz: &Tz) -> DateTime<Tz> {
 
 /// The first day of `date`'s calendar month.
 fn first_of_month(date: NaiveDate) -> NaiveDate {
-    NaiveDate::from_ymd_opt(date.year(), date.month(), 1)
-        .expect("day 1 of any valid month is itself always a valid date")
+    NaiveDate::from_ymd_opt(date.year(), date.month(), 1).unwrap_or(date)
 }
 
 /// A date in the calendar month after `date`'s (always the 1st — the only
 /// day this module ever asks [`first_of_month`] to resolve next).
 fn next_month(date: NaiveDate) -> NaiveDate {
     let (year, month) = if date.month() == 12 {
-        (date.year() + 1, 1)
+        (date.year().saturating_add(1), 1)
     } else {
         (date.year(), date.month() + 1)
     };
-    NaiveDate::from_ymd_opt(year, month, 1).expect("month 1..=12 with day 1 is always a valid date")
+    NaiveDate::from_ymd_opt(year, month, 1).unwrap_or(date)
 }
 
 /// Local midnight of `date` in `tz`, resolved through the DST-aware path
@@ -228,9 +225,7 @@ fn next_month(date: NaiveDate) -> NaiveDate {
 /// implementation that gets "the next boundary" by adding a constant
 /// number of hours instead of asking the calendar.
 fn local_midnight<Tz: TimeZone>(tz: &Tz, date: NaiveDate) -> DateTime<Tz> {
-    let naive = date
-        .and_hms_opt(0, 0, 0)
-        .expect("00:00:00 is always a valid NaiveTime");
+    let naive = date.and_time(chrono::NaiveTime::MIN);
     if let Some(dt) = tz.from_local_datetime(&naive).earliest() {
         return dt;
     }
