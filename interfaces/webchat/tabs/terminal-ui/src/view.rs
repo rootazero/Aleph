@@ -50,7 +50,12 @@ async fn terminal_event_tick() {
 // single-threaded browser runtime. This marker keeps local WASM resources in
 // that hook; no instance is ever sent to another thread.
 struct LocalCleanup<T>(T);
+// SAFETY: LocalCleanup wraps resources that remain strictly within the
+// single-threaded browser/WASM execution environment and are never transferred
+// across thread boundaries.
 unsafe impl<T> Send for LocalCleanup<T> {}
+// SAFETY: Same as Send above; instances are accessed only from the single-threaded
+// UI event loop in browser/WASM.
 unsafe impl<T> Sync for LocalCleanup<T> {}
 
 impl LocalCleanup<(Rc<Cell<bool>>, Rc<RefCell<Vec<TerminalEventStream>>>)> {
@@ -1107,20 +1112,23 @@ fn write_error(text: &TerminalText, error: &str) -> String {
 
 fn encode_base64(bytes: &[u8]) -> String {
     const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let lookup = |idx: usize| -> char {
+        TABLE.get(idx).map(|&b| b as char).unwrap_or('=')
+    };
     let mut output = String::with_capacity(bytes.len().div_ceil(3) * 4);
     for chunk in bytes.chunks(3) {
-        let first = chunk[0];
+        let first = chunk.first().copied().unwrap_or(0);
         let second = chunk.get(1).copied().unwrap_or(0);
         let third = chunk.get(2).copied().unwrap_or(0);
-        output.push(TABLE[(first >> 2) as usize] as char);
-        output.push(TABLE[((first << 4 | second >> 4) & 0x3f) as usize] as char);
+        output.push(lookup((first >> 2) as usize));
+        output.push(lookup(((first << 4 | second >> 4) & 0x3f) as usize));
         output.push(if chunk.len() > 1 {
-            TABLE[((second << 2 | third >> 6) & 0x3f) as usize] as char
+            lookup(((second << 2 | third >> 6) & 0x3f) as usize)
         } else {
             '='
         });
         output.push(if chunk.len() > 2 {
-            TABLE[(third & 0x3f) as usize] as char
+            lookup((third & 0x3f) as usize)
         } else {
             '='
         });

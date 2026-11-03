@@ -35,10 +35,11 @@ pub(crate) struct SentenceSplitter {
 /// Longest shared leading run of two strings, backed off to a char boundary that
 /// is valid in BOTH — safe to use as a byte offset into either.
 fn common_prefix_len(a: &str, b: &str) -> usize {
-    let (ab, bb) = (a.as_bytes(), b.as_bytes());
-    let max = ab.len().min(bb.len());
     let mut i = 0;
-    while i < max && ab[i] == bb[i] {
+    for (x, y) in a.bytes().zip(b.bytes()) {
+        if x != y {
+            break;
+        }
         i += 1;
     }
     while i > 0 && (!a.is_char_boundary(i) || !b.is_char_boundary(i)) {
@@ -79,9 +80,11 @@ impl SentenceSplitter {
         let mut iter = new.char_indices().peekable();
         while let Some((i, ch)) = iter.next() {
             // Track ``` fences on their own: toggle and cut the segment around them.
-            if ch == '`' && new[i..].starts_with("```") {
+            if ch == '`' && new.get(i..).is_some_and(|s| s.starts_with("```")) {
                 // flush text before the fence marker
-                self.take_segment(&new[seg_start..i], &mut out);
+                if let Some(seg) = new.get(seg_start..i) {
+                    self.take_segment(seg, &mut out);
+                }
                 self.in_code_fence = !self.in_code_fence;
                 // skip the marker itself
                 let after = i + 3;
@@ -100,19 +103,21 @@ impl SentenceSplitter {
                 let end = i + ch.len_utf8();
                 // Don't split "3.5" style decimals: '.' flanked by ascii digits.
                 if ch == '.' {
-                    let prev_digit = new[..i]
-                        .chars()
-                        .next_back()
+                    let prev_digit = new
+                        .get(..i)
+                        .and_then(|s| s.chars().next_back())
                         .is_some_and(|c| c.is_ascii_digit());
-                    let next_digit = new[end..]
-                        .chars()
-                        .next()
+                    let next_digit = new
+                        .get(end..)
+                        .and_then(|s| s.chars().next())
                         .is_some_and(|c| c.is_ascii_digit());
                     if prev_digit && next_digit {
                         continue;
                     }
                 }
-                self.take_segment(&new[seg_start..end], &mut out);
+                if let Some(seg) = new.get(seg_start..end) {
+                    self.take_segment(seg, &mut out);
+                }
                 seg_start = end;
             }
         }

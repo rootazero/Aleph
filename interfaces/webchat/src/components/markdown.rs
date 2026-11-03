@@ -161,7 +161,7 @@ fn is_dark_mode() -> bool {
 fn strip_syntect_background(html: String) -> String {
     let after_open = html
         .find('>')
-        .map(|i| &html[i + 1..])
+        .and_then(|i| html.get(i + 1..))
         .unwrap_or(html.as_str());
     let inner = after_open
         .trim_end_matches('\n')
@@ -315,10 +315,13 @@ fn extend_stable_prefix(
     }
     match shared_ui_logic::markdown_stream::safe_freeze_offset(revealed_prefix, *cached_offset) {
         Some(new_offset) if new_offset > *cached_offset => {
-            let delta = &revealed_prefix[*cached_offset..new_offset];
-            cached_html.push_str(&render_streaming(delta));
-            *cached_offset = new_offset;
-            true
+            if let Some(delta) = revealed_prefix.get(*cached_offset..new_offset) {
+                cached_html.push_str(&render_streaming(delta));
+                *cached_offset = new_offset;
+                true
+            } else {
+                false
+            }
         }
         _ => false,
     }
@@ -351,7 +354,8 @@ fn advance_byte_cursor(content: &str, prev: (usize, usize), revealed: usize) -> 
     };
     let mut chars_done = base.0;
     let mut bytes = base.1;
-    for ch in content[bytes..].chars() {
+    let slice = content.get(bytes..).unwrap_or("");
+    for ch in slice.chars() {
         if chars_done >= revealed {
             break;
         }

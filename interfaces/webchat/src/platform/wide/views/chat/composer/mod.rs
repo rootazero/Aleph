@@ -903,10 +903,7 @@ pub(crate) fn InputArea() -> impl IntoView {
 
             // Auto-enter "/namespace " when seen for the first time.
             if ns.is_none() && !after_slash.is_empty() {
-                let parts: Vec<&str> = after_slash.splitn(2, ' ').collect();
-                if parts.len() == 2 {
-                    let maybe_ns = parts[0];
-                    let sub_query = parts[1];
+                if let Some((maybe_ns, sub_query)) = after_slash.split_once(' ') {
                     if let Some(parent) = cmds.iter().find(|c| c.key == maybe_ns && c.is_namespace)
                     {
                         current_namespace.set(Some(parent.key.clone()));
@@ -926,8 +923,8 @@ pub(crate) fn InputArea() -> impl IntoView {
 
             let query = if let Some(ref ns_key) = ns {
                 let prefix = format!("{ns_key} ");
-                if after_slash.starts_with(&prefix) {
-                    &after_slash[prefix.len()..]
+                if let Some(rest) = after_slash.strip_prefix(&prefix) {
+                    rest
                 } else if after_slash == ns_key.as_str() {
                     ""
                 } else {
@@ -987,8 +984,9 @@ pub(crate) fn InputArea() -> impl IntoView {
         if let Some(at) = mention_at.get_untracked() {
             let before = text.get(..at).unwrap_or("");
             let query_start = at + 1;
-            let query_end = text[query_start..]
-                .find(|c: char| c.is_whitespace())
+            let query_end = text
+                .get(query_start..)
+                .and_then(|s| s.find(|c: char| c.is_whitespace()))
                 .map(|rel| query_start + rel)
                 .unwrap_or(text.len());
             let after = text.get(query_end..).unwrap_or("");
@@ -1104,15 +1102,15 @@ pub(crate) fn InputArea() -> impl IntoView {
                     "Tab" => {
                         ev.prevent_default();
                         let idx = selected_index.get_untracked();
-                        if idx < count {
-                            select_palette_entry(entries[idx].clone());
+                        if let Some(entry) = entries.get(idx).cloned() {
+                            select_palette_entry(entry);
                         }
                     }
                     "Enter" if !ev.shift_key() => {
                         ev.prevent_default();
                         let idx = selected_index.get_untracked();
-                        if idx < count {
-                            select_palette_entry(entries[idx].clone());
+                        if let Some(entry) = entries.get(idx).cloned() {
+                            select_palette_entry(entry);
                         }
                     }
                     "Escape" => {
@@ -1177,21 +1175,22 @@ pub(crate) fn InputArea() -> impl IntoView {
             if ev.key() == "Enter" && !ev.shift_key() {
                 let text = input_text.get_untracked();
                 let trimmed = text.trim();
-                if trimmed.starts_with('/') && !trimmed.contains(' ') {
-                    let maybe_ns = &trimmed[1..];
-                    let cmds = all_commands.get_untracked();
-                    if let Some(parent) = cmds.iter().find(|c| c.key == maybe_ns && c.is_namespace)
-                    {
-                        ev.prevent_default();
-                        current_namespace.set(Some(parent.key.clone()));
-                        input_text.set(format!("/{} ", parent.key));
-                        let labels = palette_labels();
-                        let ns = Some(parent.key.clone());
-                        let entries = build_palette_entries(&cmds, &ns, "", &labels);
-                        palette_entries.set(entries);
-                        selected_index.set(0);
-                        show_palette.set(true);
-                        return;
+                if let Some(maybe_ns) = trimmed.strip_prefix('/') {
+                    if !maybe_ns.contains(' ') {
+                        let cmds = all_commands.get_untracked();
+                        if let Some(parent) = cmds.iter().find(|c| c.key == maybe_ns && c.is_namespace)
+                        {
+                            ev.prevent_default();
+                            current_namespace.set(Some(parent.key.clone()));
+                            input_text.set(format!("/{} ", parent.key));
+                            let labels = palette_labels();
+                            let ns = Some(parent.key.clone());
+                            let entries = build_palette_entries(&cmds, &ns, "", &labels);
+                            palette_entries.set(entries);
+                            selected_index.set(0);
+                            show_palette.set(true);
+                            return;
+                        }
                     }
                 }
                 ev.prevent_default();
@@ -1288,8 +1287,9 @@ pub(crate) fn InputArea() -> impl IntoView {
         if let Some(at) = mention_at.get_untracked() {
             let before = text.get(..at).unwrap_or("");
             let query_start = at + 1;
-            let query_end = text[query_start..]
-                .find(|c: char| c.is_whitespace())
+            let query_end = text
+                .get(query_start..)
+                .and_then(|s| s.find(|c: char| c.is_whitespace()))
                 .map(|rel| query_start + rel)
                 .unwrap_or(text.len());
             let after = text.get(query_end..).unwrap_or("");

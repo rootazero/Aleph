@@ -1,4 +1,4 @@
-fn main() {
+fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Expose the workspace version (root VERSION file) as ALEPH_VERSION so the
     // panic-recovery crash log can record which build crashed. Mirrors the root
     // build.rs version injection; CLAUDE.md forbids hardcoding version numbers.
@@ -14,18 +14,22 @@ fn main() {
     // order at the seam, the exact thing a locale file exists to avoid. It is a
     // build option rather than a cargo feature in leptos_i18n 0.6.
     let cfg = leptos_i18n_build::Config::new("en")
-        .expect("Failed to create i18n config")
+        .map_err(|e| std::io::Error::other(format!("Failed to create i18n config: {e}")))?
         .add_locale("zh")
-        .expect("Failed to add zh locale")
+        .map_err(|e| std::io::Error::other(format!("Failed to add zh locale: {e}")))?
         .parse_options(leptos_i18n_build::ParseOptions::new().interpolate_display(true));
 
     let infos = leptos_i18n_build::TranslationsInfos::parse(cfg)
-        .expect("Failed to parse i18n translations");
+        .map_err(|e| std::io::Error::other(format!("Failed to parse i18n translations: {e}")))?;
 
     infos.rerun_if_locales_changed();
 
-    let out_dir = std::path::PathBuf::from(std::env::var("OUT_DIR").unwrap());
+    let out_dir = std::env::var_os("OUT_DIR")
+        .ok_or_else(|| std::io::Error::other("OUT_DIR environment variable is not set"))?;
+    let out_dir = std::path::PathBuf::from(out_dir);
     infos
         .generate_i18n_module(out_dir.join("i18n"))
-        .expect("Failed to generate i18n module");
+        .map_err(|e| std::io::Error::other(format!("Failed to generate i18n module: {e}")))?;
+
+    Ok(())
 }
