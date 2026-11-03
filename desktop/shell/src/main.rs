@@ -197,7 +197,7 @@ const QA_MONITOR_NONCE_PLACEHOLDER: &str = "__QA_MONITOR_NONCE__";
 ///
 /// DOM side: after `hello` the page accepts ONLY fixed snake_case commands
 /// `ask_pair | submit_ticket | reload | inspect | reveal_browser | reveal_projects`
-/// plus the fixed `select_project_a/b`, `select_global`, and `open_project_a/b` actions (envelope
+/// plus fixed `select_project_a/b`, `select_global`, `open_project_a/b`, and `navigate_projects/project_a/project_b` actions (envelope
 /// `{v:1,type:'command',run,id,command[,ticket]}`: exact key set, `run` == this
 /// document's run token, `id` strictly sequential from 0, one command in flight). It
 /// never evaluates harness text, never takes a selector, and never calls
@@ -213,6 +213,8 @@ const QA_MONITOR_NONCE_PLACEHOLDER: &str = "__QA_MONITOR_NONCE__";
 /// `reveal_projects` opens the real navigation menu and polls the Projects route
 /// with the same bound. Project actions only click existing Global/project/tab
 /// buttons; none receives an id, selector, URL, or RPC payload from the harness.
+/// Fixed navigation actions accept no route argument and assign only `/projects`
+/// or the QA fixture's `/panel/project-{a,b}/overview` paths.
 /// Selectors are the compile-time table `SEL` (stable DOM attributes). The ticket
 /// lives only in the handler's local variable: it is never stored in a module
 /// variable, emitted, logged or put in a URL. `command_ack` carries only a fixed
@@ -228,7 +230,7 @@ const QA_MONITOR_JS: &str = r#"(function () {
   var V = 1;
   var CONTRACT = 'aleph-qa-monitor-v1';
   var MAX_SEQ = 512;
-  var ACTIONS = ['ask_pair', 'submit_ticket', 'reload', 'inspect', 'reveal_browser', 'reveal_projects', 'select_project_a', 'select_project_b', 'select_global', 'open_project_a', 'open_project_b'];
+  var ACTIONS = ['ask_pair', 'submit_ticket', 'reload', 'inspect', 'reveal_browser', 'reveal_projects', 'select_project_a', 'select_project_b', 'select_global', 'open_project_a', 'open_project_b', 'navigate_projects', 'navigate_project_a', 'navigate_project_b'];
   var MAX_COMMAND_CHARS = 4096;
   var MAX_TICKET_CHARS = 2048;
   var SEL = {
@@ -250,6 +252,8 @@ const QA_MONITOR_JS: &str = r#"(function () {
     globalProject: '[data-panel-global]',
     tabA: '[data-panel-shell] button[data-panel-plugin="project-a"]',
     tabB: '[data-panel-shell] button[data-panel-plugin="project-b"]',
+    panelShell: '[data-panel-shell]',
+    panelContent: '[data-panel-content-root]',
     navToggle: '[data-panel-nav-toggle]',
     projectsRoute: '[data-panel-nav="/projects"]'
   };
@@ -344,7 +348,11 @@ const QA_MONITOR_JS: &str = r#"(function () {
       layoutToggle: toggle !== null,
       layoutToggleEnabled: enabledButton(toggle),
       browserTab: tab !== null,
-      browserTabEnabled: enabledButton(tab)
+      browserTabEnabled: enabledButton(tab),
+      panelShell: q(SEL.panelShell) !== null,
+      panelTabA: q(SEL.tabA) !== null,
+      panelTabB: q(SEL.tabB) !== null,
+      panelContent: q(SEL.panelContent) !== null
     };
     emit('dom_state', st);
     done('inspect', true);
@@ -435,6 +443,14 @@ const QA_MONITOR_JS: &str = r#"(function () {
     done('reload', true);
     setTimeout(function () { try { window.location.reload(); } catch (_) {} }, 100);
   }
+  function navigatePanel(action) {
+    var route = action === 'navigate_projects' ? '/projects'
+      : action === 'navigate_project_a' ? '/panel/project-a/overview'
+      : action === 'navigate_project_b' ? '/panel/project-b/overview' : null;
+    if (route === null) { done(action, false); return; }
+    done(action, true);
+    setTimeout(function () { try { window.location.assign(route); } catch (_) {} }, 100);
+  }
   function onCommand(raw) {
     if (ended || !helloSent) { return; }
     if (busy) { ack('refused', false); return; }
@@ -452,6 +468,7 @@ const QA_MONITOR_JS: &str = r#"(function () {
       else if (act.action === 'submit_ticket') { submitTicket(act); }
       else if (act.action === 'reveal_browser') { revealBrowser(); }
       else if (act.action === 'reveal_projects') { revealProjects(); }
+      else if (['navigate_projects', 'navigate_project_a', 'navigate_project_b'].indexOf(act.action) !== -1) { navigatePanel(act.action); }
       else if (['select_project_a', 'select_project_b', 'select_global', 'open_project_a', 'open_project_b'].indexOf(act.action) !== -1) { projectAction(act.action); }
       else { reload(); }
     } catch (_) { done(act.action, false); }

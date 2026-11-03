@@ -24,6 +24,7 @@ export async function runNativeProject({ repoRoot = process.cwd(), execute = fal
         nativeTrace: native.ledger.nativeTrace,
         provenance: native.ledger.provenance,
         events: native.ledger.events,
+        diagnostics: native.ledger.diagnostics,
         failureSummary: native.ledger.failureSummary ?? null,
       },
     });

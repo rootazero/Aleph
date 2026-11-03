@@ -5,7 +5,14 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 
-import { createNativeProvenance, prepareNativeProvenance, readNativeProvenance, validateNativeProvenance } from "./native_project_provenance.mjs";
+import { createNativeProvenance, nativeArtifactPaths, prepareNativeProvenance, readNativeProvenance, validateNativeProvenance } from "./native_project_provenance.mjs";
+
+test("native artifact paths bind Panel provenance to the staged shell bundle", () => {
+  const files = nativeArtifactPaths("D:/Workspace/Aleph");
+  assert.equal(files.panelManifest, join("D:/Workspace/Aleph", "interfaces", "webchat", ".panel-live", "shell", "build.json"));
+  assert.equal(files.panelDescriptor, join("D:/Workspace/Aleph", "interfaces", "webchat", ".panel-live", "shell", "manifest.json"));
+  assert.equal(files.wasm, join("D:/Workspace/Aleph", "interfaces", "webchat", ".panel-live", "shell", "aleph_panel_bg.wasm"));
+});
 
 function fixture(t) {
   const root = mkdtempSync(join(tmpdir(), "native-provenance-test-"));

@@ -269,5 +269,5 @@ test("finished evidence combines the closed run state with bounded evidence", ()
   const state = completePhases(createRunState({ run, nonce, origin: ledger.origin }));
   const result = finishEvidence(state, ledger);
   assert.equal(result.outcome, "AMBIGUOUS");
-  assert.deepEqual(Object.keys(result.evidence), ["helperMessages", "receipts", "nativeTrace", "provenance", "events", "failureSummary"]);
+  assert.deepEqual(Object.keys(result.evidence), ["helperMessages", "receipts", "nativeTrace", "provenance", "events", "diagnostics", "failureSummary"]);
 });
