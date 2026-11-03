@@ -17,7 +17,11 @@ pub fn compute_stagger_offset(job_id: &str, stagger_ms: i64) -> i64 {
     }
 
     let hash = Sha256::digest(job_id.as_bytes());
-    let head = u32::from_be_bytes([hash[0], hash[1], hash[2], hash[3]]);
+    let head = hash
+        .get(..4)
+        .and_then(|s| s.try_into().ok())
+        .map(u32::from_be_bytes)
+        .unwrap_or(0);
     i64::from(head) % stagger_ms
 }
 
@@ -51,7 +55,7 @@ pub fn compute_staggered_next(
         // `staggered` is already past. Advance by exactly enough whole
         // windows to land strictly after `now_ms` — a single-window advance
         // only covers up to one window of lag.
-        let lag = now_ms - staggered;
+        let lag = now_ms.saturating_sub(staggered);
         // saturating_add on the ceiling protects against the pathological
         // (stagger_ms = 1, lag = i64::MAX) edge case where `windows + 1`
         // would otherwise wrap to i64::MIN.
