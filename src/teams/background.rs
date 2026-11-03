@@ -110,6 +110,12 @@ impl TeamTaskStores {
                         CoordTaskStatus::Pending | CoordTaskStatus::Blocked
                     )
             }) {
+                // Re-verify current task status to avoid TOCTOU race with in-flight worker start
+                if let Ok(Some(current)) = self.tasks.get_task(&task.id).await {
+                    if !matches!(current.status, CoordTaskStatus::Pending | CoordTaskStatus::Blocked) {
+                        continue;
+                    }
+                }
                 let update = CoordTaskUpdate {
                     status: Some(CoordTaskStatus::Paused),
                     result: Some(reason.clone()),

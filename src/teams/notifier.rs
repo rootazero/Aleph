@@ -86,13 +86,13 @@ impl TeamNotifier {
     }
 
     /// Send a system notification to the team's leader (best-effort).
-    async fn notify_leader(&self, team_id: &str, subject: &str, content: String) {
+    async fn notify_leader(&self, team_id: &str, subject: &str, content: String) -> bool {
         if team_id.is_empty() {
-            return; // teamless task — nobody to notify
+            return false; // teamless task — nobody to notify
         }
         let leader = match self.team_store.get_team(team_id).await {
             Ok(Some(team)) => team.leader_id,
-            Ok(None) => return,
+            Ok(None) => return false,
             Err(e) => {
                 // `Err` is a transient store failure, distinct from
                 // `Ok(None)` (the team really does not exist). The original
@@ -106,7 +106,7 @@ impl TeamNotifier {
                     error = %e,
                     "TeamNotifier: get_team failed; leader notification dropped (transient store error)"
                 );
-                return;
+                return false;
             }
         };
         // Batched, fire-and-forget: same-subject bursts collapse to one delivery
@@ -125,6 +125,7 @@ impl TeamNotifier {
                 attachments: vec![],
             })
             .await;
+        true
     }
 
     /// New (non-terminal) task activity on a team: release its completion
@@ -301,15 +302,23 @@ impl EventHandler for TeamNotifier {
                         return Ok(vec![]);
                     }
                     let summary = result_summary.as_deref().unwrap_or("");
-                    self.notify_leader(
-                        team_id,
-                        "Team work complete",
-                        format!(
-                            "All tasks for this team have finished. \
-                             Last completed task: `{task_id}`.\n\n{summary}"
-                        ),
-                    )
-                    .await;
+                    let notified = self
+                        .notify_leader(
+                            team_id,
+                            "Team work complete",
+                            format!(
+                                "All tasks for this team have finished. \
+                                 Last completed task: `{task_id}`.\n\n{summary}"
+                            ),
+                        )
+                        .await;
+                    if !notified {
+                        let mut done = self
+                            .completed_teams
+                            .lock()
+                            .unwrap_or_else(|e| e.into_inner());
+                        done.remove(team_id);
+                    }
                 }
             // TeamNotifier subscribes to TeamTaskCompleted, TeamTaskFailed, and
             // TeamTaskUpdated (see `subscriptions()`); only the "waiting_review"
