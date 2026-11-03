@@ -306,7 +306,7 @@ pub fn team_of_fanout_run(run_id: &str) -> Option<String> {
 /// per-run CancellationToken path. Pure scaffolding — no reasoning (keeps R10).
 #[derive(Clone)]
 struct FanoutTree {
-    run_id: Arc<String>,
+    run_id: Arc<str>,
     cancel: CancellationToken,
 }
 
@@ -445,7 +445,7 @@ impl GroupChatBroadcaster {
                 MAX_TRACKED_FANOUTS,
             );
         let tree = FanoutTree {
-            run_id: Arc::new(tree_run_id.clone()),
+            run_id: Arc::from(tree_run_id.as_str()),
             cancel: CancellationToken::new(),
         };
         let _tree_reg = RunningRegistration::register(
@@ -735,7 +735,7 @@ impl GroupChatBroadcaster {
         human_ids.sort();
         let human_roster: String = human_ids
             .into_iter()
-            .map(|uid| format!("{}(human)", labels[uid]))
+            .map(|uid| format!("{}(human)", labels.get(uid).map_or("", String::as_str)))
             .collect::<Vec<_>>()
             .join(", ");
         let history: Vec<(String, String)> = raw

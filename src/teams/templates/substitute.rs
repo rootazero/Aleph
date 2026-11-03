@@ -15,21 +15,24 @@ pub fn substitute(input: &str, vars: &HashMap<&str, &str>) -> String {
     let bytes = input.as_bytes();
     let mut i = 0;
     while i < bytes.len() {
-        if bytes[i] == b'{' {
-            if let Some(end_rel) = bytes[i + 1..].iter().position(|&b| b == b'}') {
-                let end = i + 1 + end_rel;
-                let key = &input[i + 1..end];
-                if let Some(value) = vars.get(key) {
-                    out.push_str(value);
-                    i = end + 1;
-                    continue;
+        if bytes.get(i).copied() == Some(b'{') {
+            if let Some(sub) = bytes.get(i + 1..) {
+                if let Some(end_rel) = sub.iter().position(|&b| b == b'}') {
+                    let end = i + 1 + end_rel;
+                    if let Some(key) = input.get(i + 1..end) {
+                        if let Some(value) = vars.get(key) {
+                            out.push_str(value);
+                            i = end + 1;
+                            continue;
+                        }
+                    }
                 }
             }
         }
         // SAFETY: byte index `i` always lies on a UTF-8 char boundary because
         // we only advance past whole `{...}` segments (ASCII) above, otherwise
         // we copy one char at a time below.
-        let ch = match input[i..].chars().next() {
+        let ch = match input.get(i..).and_then(|s| s.chars().next()) {
             Some(c) => c,
             None => break,
         };

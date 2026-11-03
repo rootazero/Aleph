@@ -194,6 +194,41 @@ impl TeamTemplate {
                 }
             }
         }
+
+        // Cycle check using Kahn's algorithm
+        let mut in_deg: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
+        let mut adj: std::collections::HashMap<&str, Vec<&str>> = std::collections::HashMap::new();
+        for t in &self.tasks {
+            in_deg.entry(t.key.as_str()).or_insert(0);
+            for dep in &t.depends_on {
+                adj.entry(dep.as_str()).or_default().push(t.key.as_str());
+                *in_deg.entry(t.key.as_str()).or_insert(0) += 1;
+            }
+        }
+        let mut q: std::collections::VecDeque<&str> = in_deg
+            .iter()
+            .filter_map(|(&k, &deg)| if deg == 0 { Some(k) } else { None })
+            .collect();
+        let mut visited = 0usize;
+        while let Some(u) = q.pop_front() {
+            visited += 1;
+            if let Some(neighbors) = adj.get(u) {
+                for &v in neighbors {
+                    if let Some(deg) = in_deg.get_mut(v) {
+                        *deg = deg.saturating_sub(1);
+                        if *deg == 0 {
+                            q.push_back(v);
+                        }
+                    }
+                }
+            }
+        }
+        if visited != in_deg.len() {
+            return Err(TeamTemplateError::Materialize(
+                "template task graph contains a cycle".to_string(),
+            ));
+        }
+
         Ok(())
     }
 }

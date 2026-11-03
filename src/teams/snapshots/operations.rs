@@ -38,20 +38,30 @@ pub(super) fn topo_sort_and_count_edges(tasks: &[CoordTask]) -> Result<(Vec<usiz
     for (i, t) in tasks.iter().enumerate() {
         for dep in &t.dependencies {
             if let Some(&j) = id_to_idx.get(dep.as_str()) {
-                in_degree[i] += 1;
-                children[j].push(i);
+                if let Some(deg) = in_degree.get_mut(i) {
+                    *deg += 1;
+                }
+                if let Some(child_list) = children.get_mut(j) {
+                    child_list.push(i);
+                }
                 edge_count += 1;
             }
         }
     }
-    let mut queue: VecDeque<usize> = (0..n).filter(|&i| in_degree[i] == 0).collect();
+    let mut queue: VecDeque<usize> = (0..n)
+        .filter(|&i| in_degree.get(i).copied() == Some(0))
+        .collect();
     let mut order: Vec<usize> = Vec::with_capacity(n);
     while let Some(i) = queue.pop_front() {
         order.push(i);
-        for &c in &children[i] {
-            in_degree[c] -= 1;
-            if in_degree[c] == 0 {
-                queue.push_back(c);
+        if let Some(child_list) = children.get(i) {
+            for &c in child_list {
+                if let Some(deg) = in_degree.get_mut(c) {
+                    *deg = deg.saturating_sub(1);
+                    if *deg == 0 {
+                        queue.push_back(c);
+                    }
+                }
             }
         }
     }
@@ -334,7 +344,9 @@ pub async fn restore_snapshot(
     }
 
     for idx in topo_order {
-        let snap = &payload.tasks[idx];
+        let Some(snap) = payload.tasks.get(idx) else {
+            continue;
+        };
         if id_map.contains_key(&snap.id) {
             continue; // already live; we don't mutate live tasks
         }

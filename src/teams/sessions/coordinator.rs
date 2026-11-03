@@ -136,7 +136,7 @@ impl SessionCoordinator {
 
         // If this was the final round, notify participants
         if turn_number == session.max_rounds {
-            let _ = self
+            if let Err(e) = self
                 .msg_router
                 .send(SendRequest {
                     team_id: session.team_id.clone(),
@@ -153,7 +153,10 @@ impl SessionCoordinator {
                     reply_to: None,
                     attachments: vec![],
                 })
-                .await;
+                .await
+            {
+                tracing::warn!(error = %e, session_id = %session.id, "failed to send final round notification");
+            }
         }
 
         Ok(())
@@ -188,7 +191,7 @@ impl SessionCoordinator {
             .await?;
 
         // Log SessionConcluded event
-        let _ = self
+        if let Err(e) = self
             .event_store
             .log_event(NewTeamEvent {
                 team_id: session.team_id.clone(),
@@ -200,12 +203,15 @@ impl SessionCoordinator {
                     "agreed_by": outcome.agreed_by,
                 }),
             })
-            .await;
+            .await
+        {
+            tracing::warn!(error = %e, session_id = %session_id, "failed to log SessionConcluded event");
+        }
 
         // Save conclusion as artifact if there is an associated thread_id
         // (we use thread_id as a proxy for a task reference)
         if let Some(ref thread_id) = session.thread_id {
-            let _ = self
+            if let Err(e) = self
                 .artifact_store
                 .create_artifact(NewArtifact {
                     task_id: thread_id.clone(),
@@ -223,7 +229,10 @@ impl SessionCoordinator {
                     assignee: None,
                     priority: 0,
                 })
-                .await;
+                .await
+            {
+                tracing::warn!(error = %e, session_id = %session_id, "failed to create session conclusion artifact");
+            }
         }
 
         debug!(session_id = %session_id, "Session finalized");
