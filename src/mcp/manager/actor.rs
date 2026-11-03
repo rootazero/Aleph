@@ -290,7 +290,8 @@ impl McpManagerActor {
 
         let mut to_restart: Vec<String> = Vec::new();
         for (server_id, client) in probes {
-            let alive = client.check_server_health().await.values().all(|&ok| ok);
+            let health_map = client.check_server_health().await;
+            let alive = !health_map.is_empty() && health_map.values().all(|&ok| ok);
             if alive {
                 if let Some(health) = self.health_states.get_mut(&server_id) {
                     health.record_success();
@@ -427,10 +428,9 @@ impl McpManagerActor {
                 let instructions = self.aggregate_instructions().await;
                 let _ = respond_to.send(instructions);
             }
-            McpCommand::Shutdown { .. } => {
-                // Handled in the run() loop directly to ensure ACK is sent
-                // after shutdown_all() completes
-                unreachable!("Shutdown is handled in run() loop");
+            McpCommand::Shutdown { respond_to } => {
+                let _ = respond_to.send(());
+                return false;
             }
             McpCommand::SetSamplingCallback {
                 callback,

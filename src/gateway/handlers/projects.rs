@@ -97,10 +97,11 @@
 //! derivation `gateway::visibility` exists to prevent, and it would miss both
 //! the fail-closed and the no-oracle halves.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use tokio::io::AsyncReadExt;
 
 use super::super::protocol::{
     JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR, INVALID_PARAMS, PERMISSION_DENIED,
@@ -1173,16 +1174,31 @@ pub async fn handle_workspace_read(
         Ok(p) => p,
         Err(refusal) => return workspace_refusal(request.id, &refusal, &params.rel_path),
     };
-    if file.is_dir() {
+    // A regular file only: the preview reads it, and a fifo or a device node
+    // would either block the read forever or answer with bytes that are not
+    // the file at all.
+    let meta = match tokio::fs::metadata(&file).await {
+        Ok(m) => m,
+        Err(_) => return workspace_refusal(request.id, &PathRefusal::Missing, &params.rel_path),
+    };
+    if meta.is_dir() {
         return JsonRpcResponse::error(
             request.id,
             INVALID_PARAMS,
             "That path is a directory; use projects.workspace.list".to_string(),
         );
     }
+    if !meta.is_file() {
+        return JsonRpcResponse::error(
+            request.id,
+            INVALID_PARAMS,
+            "That path is not a regular file".to_string(),
+        );
+    }
 
-    let Ok(bytes) = std::fs::read(&file) else {
-        return workspace_refusal(request.id, &PathRefusal::Missing, &params.rel_path);
+    let bytes = match read_preview_bytes(&file).await {
+        Ok(b) => b,
+        Err(_) => return workspace_refusal(request.id, &PathRefusal::Missing, &params.rel_path),
     };
     let sniff = bytes.len().min(WORKSPACE_BINARY_SNIFF_BYTES);
     if bytes[..sniff].contains(&0) {
@@ -1213,6 +1229,20 @@ pub async fn handle_workspace_read(
         request.id,
         json!({ "content": content, "truncated": truncated }),
     )
+}
+
+/// Read the first `WORKSPACE_READ_MAX_BYTES + 1` bytes of `path`.
+///
+/// One byte past the cap, because that byte is the only way to learn the file
+/// is longer than the preview without reading the rest of it. The cap used to
+/// bound the RESPONSE only — the whole file was loaded into memory and then cut
+/// down to 64 KiB, so a multi-gigabyte log took the process down with it.
+async fn read_preview_bytes(path: &Path) -> std::io::Result<Vec<u8>> {
+    let file = tokio::fs::File::open(path).await?;
+    let mut reader = file.take((WORKSPACE_READ_MAX_BYTES + 1) as u64);
+    let mut buf = Vec::with_capacity(WORKSPACE_READ_MAX_BYTES + 1);
+    reader.read_to_end(&mut buf).await?;
+    Ok(buf)
 }
 #[cfg(test)]
 mod tests {

@@ -14,8 +14,8 @@
 //!   `AuthorityChange` row per guild at healthy / degraded
 //!   `HealthStatus`; one `ExecBlocked` row at critical
 //!   `HealthStatus`. The discord channel's `start()` (line 2's
-//!   responsibility) calls [`startup_audit::for_config`] for each
-//!   configured guild and feeds the rows through
+//!   responsibility) measures each configured guild's permissions and
+//!   feeds the rows through
 //!   [`crate::security::audit::SecurityAuditLog::log`].
 
 pub mod audit_hooks;

@@ -120,8 +120,10 @@ pub struct StreamingConfig {
     /// closing the prior audit finding where the conditional skip left a
     /// real key persisting until the migration ran. `schemars(skip)` keeps
     /// the secret out of the generated JSON Schema. The runtime value lives
-    /// exclusively in the vault under `voice.streaming:api_key` after
-    /// `migrate_voice_streaming` runs at startup (see `secret_migration.rs`).
+    /// exclusively in the vault under `voice_streaming:api_key` after
+    /// `migrate_voice_streaming` runs at startup (see `secret_migration.rs`),
+    /// which also rehydrates the field from that key — the vault is the
+    /// source, this field is the runtime copy.
     #[serde(default, skip_serializing)]
     #[schemars(skip)]
     pub api_key: String,

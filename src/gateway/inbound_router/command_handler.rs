@@ -11,6 +11,19 @@ use crate::providers::message::UnifiedMessage;
 use super::types::RoutingError;
 use super::InboundMessageRouter;
 
+/// Outcome of a `/stop` cancellation attempt.
+///
+/// `Failed` is deliberately distinct from `NotRunning`: "there was nothing to
+/// stop" and "stopping did not work, so the work keeps running" are different
+/// facts. Reporting the first when the second happened tells the user the
+/// wrong thing about their own session — and makes a failed cancellation look
+/// like a completed one.
+enum StopOutcome {
+    Stopped(String),
+    NotRunning,
+    Failed,
+}
+
 /// Strip @botname suffix from Telegram-style slash commands.
 ///
 /// In Telegram groups, commands are sent as `/command@botname args`.
@@ -432,22 +445,23 @@ impl InboundMessageRouter {
             );
         }
 
-        let cancelled = match self.execution_adapter.as_ref() {
-            Some(adapter) => adapter
-                .cancel_session(&ctx.session_key)
-                .await
-                .unwrap_or_else(|e| {
+        let outcome = match self.execution_adapter.as_ref() {
+            Some(adapter) => match adapter.cancel_session(&ctx.session_key).await {
+                Ok(Some(run_id)) => StopOutcome::Stopped(run_id),
+                Ok(None) => StopOutcome::NotRunning,
+                Err(e) => {
                     warn!(
                         session = %ctx.session_key.to_key_string(),
                         error = %e,
                         "[Router] /stop: cancel_session failed"
                     );
-                    None
-                }),
-            None => None,
+                    StopOutcome::Failed
+                }
+            },
+            None => StopOutcome::NotRunning,
         };
 
-        if let Some(ref run_id) = cancelled {
+        if let StopOutcome::Stopped(ref run_id) = outcome {
             info!(
                 session = %ctx.session_key.to_key_string(),
                 run_id = %run_id,
@@ -457,10 +471,10 @@ impl InboundMessageRouter {
 
         let locale = self.resolve_locale().await;
         let mut reply_text = crate::gateway::i18n::t(
-            if cancelled.is_some() {
-                crate::gateway::i18n::Msg::RunStopped
-            } else {
-                crate::gateway::i18n::Msg::NoActiveRun
+            match outcome {
+                StopOutcome::Stopped(_) => crate::gateway::i18n::Msg::RunStopped,
+                StopOutcome::NotRunning => crate::gateway::i18n::Msg::NoActiveRun,
+                StopOutcome::Failed => crate::gateway::i18n::Msg::StopFailed,
             },
             locale,
         );

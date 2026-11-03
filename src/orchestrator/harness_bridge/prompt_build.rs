@@ -130,7 +130,13 @@ impl AgentHarnessRunner {
     /// floored at 20k chars/file & 100k total) so a runaway file cannot blow the
     /// context budget. Returns `None` when the
     /// section is absent, disabled, or yields no content.
-    pub(crate) fn load_prompt_extra_files(
+    ///
+    /// Async because it is called from the async prompt build and the disk
+    /// reads are blocking: `std::fs::read` on the runtime's worker thread
+    /// stalls every other task sharing that thread. The size cap is checked
+    /// against the file's METADATA length before the contents are read — see
+    /// the `MAX_FILE_BYTES` comment below.
+    pub(crate) async fn load_prompt_extra_files(
         &self,
         workspace: Option<&std::path::Path>,
     ) -> Option<Vec<crate::thinker::prompt_layer::ExtraPromptFile>> {
@@ -161,6 +167,12 @@ impl AgentHarnessRunner {
         // is the documented upper bound in characters; the 4× factor covers the
         // UTF-8 worst case without giving an attacker a way to OOM the run by
         // pointing at a multi-gigabyte file.
+        //
+        // The cap is checked against the METADATA length, BEFORE the contents
+        // are read. Reading first materialises the whole file — however large
+        // — and only then rejects it, so the cap bounded nothing it was meant
+        // to bound. The post-read check below is kept as a second line of
+        // defence for a file that grew between the two reads.
         const MAX_FILE_BYTES: usize = 4 * 1024 * 1024;
         for raw in &cfg.paths {
             if total >= total_max_chars {
@@ -193,7 +205,27 @@ impl AgentHarnessRunner {
                     None => path.to_path_buf(),
                 }
             };
-            let bytes = match std::fs::read(&resolved) {
+            let size = match tokio::fs::metadata(&resolved).await {
+                Ok(m) => m.len(),
+                Err(e) => {
+                    tracing::debug!(
+                        path = %resolved.display(),
+                        error = %e,
+                        "[prompt.extra_files] unreadable; skipping"
+                    );
+                    continue;
+                }
+            };
+            if size > MAX_FILE_BYTES as u64 {
+                tracing::warn!(
+                    path = %resolved.display(),
+                    size = size,
+                    limit = MAX_FILE_BYTES,
+                    "[prompt.extra_files] file exceeds hard byte cap; skipping"
+                );
+                continue;
+            }
+            let bytes = match tokio::fs::read(&resolved).await {
                 Ok(b) => b,
                 Err(e) => {
                     tracing::debug!(
@@ -456,12 +488,34 @@ impl AgentHarnessRunner {
             },
         );
         let identity_files = if is_safe_agent_path_component(agent_id) {
-            crate::discovery::aleph_agents_dir().ok().map(|agents_dir| {
-                crate::thinker::identity_files::IdentityFiles::load(
-                    &agents_dir.join(agent_id),
-                    &identity_cfg,
-                )
-            })
+            match crate::discovery::aleph_agents_dir() {
+                Ok(agents_dir) => {
+                    let identity_dir = agents_dir.join(agent_id);
+                    // `IdentityFiles::load` walks the agent directory and reads
+                    // each file with blocking `std::fs` calls. This function is
+                    // async, so running that on a runtime worker thread stalls
+                    // every other task sharing the thread — hand it to the
+                    // blocking pool instead.
+                    match tokio::task::spawn_blocking(move || {
+                        crate::thinker::identity_files::IdentityFiles::load(
+                            &identity_dir,
+                            &identity_cfg,
+                        )
+                    })
+                    .await
+                    {
+                        Ok(files) => Some(files),
+                        Err(e) => {
+                            tracing::warn!(
+                                error = %e,
+                                "[prompt.identity_files] identity file load panicked; skipping identity files"
+                            );
+                            None
+                        }
+                    }
+                }
+                Err(_) => None,
+            }
         } else {
             None
         };
@@ -486,9 +540,28 @@ impl AgentHarnessRunner {
         // assembled prompt stays byte-identical for the no-project case. Both
         // sets render through `ExtraFilesLayer` (same sanitization boundary).
         let extra_files = {
-            let mut files = self.load_prompt_extra_files(workspace).unwrap_or_default();
+            let mut files = self
+                .load_prompt_extra_files(workspace)
+                .await
+                .unwrap_or_default();
             if let Some(ws) = workspace {
-                files.extend(crate::thinker::project_instructions::load_project_instructions(ws));
+                // `load_project_instructions` walks up the directory tree
+                // looking for `CLAUDE.md` / `AGENTS.md` with blocking `std::fs`
+                // calls — blocking pool, for the same reason as above.
+                let ws = ws.to_path_buf();
+                match tokio::task::spawn_blocking(move || {
+                    crate::thinker::project_instructions::load_project_instructions(&ws)
+                })
+                .await
+                {
+                    Ok(project_files) => files.extend(project_files),
+                    Err(e) => {
+                        tracing::warn!(
+                            error = %e,
+                            "[prompt.extra_files] project instruction scan panicked; skipping project instructions"
+                        );
+                    }
+                }
             }
             (!files.is_empty()).then_some(files)
         };
@@ -528,29 +601,38 @@ impl AgentHarnessRunner {
         // Best-effort: any IO error (or an empty ledger) leaves this `None` and
         // the layer emits nothing. Mirrors `ledger::build_enhanced_path`'s
         // on-disk load — pure data wiring, no cognition (R10-safe).
-        let runtime_capabilities = crate::runtimes::get_runtimes_dir()
-            .ok()
-            .map(|dir| {
-                let ledger =
-                    crate::runtimes::CapabilityLedger::load_or_create(dir.join("ledger.json"));
-                crate::runtimes::format_entries_for_prompt(&ledger.list_ready())
-            })
-            .filter(|s| !s.is_empty());
+        let runtime_capabilities = match crate::runtimes::get_runtimes_dir() {
+            Ok(dir) => {
+                let ledger_path = dir.join("ledger.json");
+                // `CapabilityLedger::load_or_create` reads (and may create) the
+                // ledger file with blocking `std::fs` calls — blocking pool.
+                match tokio::task::spawn_blocking(move || {
+                    let ledger = crate::runtimes::CapabilityLedger::load_or_create(ledger_path);
+                    crate::runtimes::format_entries_for_prompt(&ledger.list_ready())
+                })
+                .await
+                {
+                    Ok(s) => Some(s),
+                    Err(e) => {
+                        tracing::warn!(
+                            error = %e,
+                            "[prompt.runtime_caps] capability ledger load panicked; skipping runtime capabilities"
+                        );
+                        None
+                    }
+                }
+            }
+            Err(_) => None,
+        };
+        let runtime_capabilities = runtime_capabilities.filter(|s| !s.is_empty());
         let runtime_caps_phase_ms = runtime_caps_phase_start.elapsed().as_millis() as u64;
 
         // Sub-agent catalog: surface the delegatable agents so `AgentCatalogLayer`
         // (priority 1060) renders `<available_agents>`. This field had NO
         // production population site — the layer was inert and the model
         // discovered agents only reactively (by guessing an id and reading the
-        // error). The delegatable set is the builtin sub-agents (explore / coder /
-        // researcher / plan / verify) ∪ the registry's registered sub-agents
-        // (user / project defs, folded in by `register_from_dirs`) ∪ the
-        // plugin-shipped sub-agents published by `ExtensionManager::load_all`
-        // (bridged via `crate::agents::plugin_subagents`). Precedence: registry
-        // entries win id collisions over builtins (a user override), and plugin
-        // agents fold in insert-if-absent so they never shadow a
-        // builtin/user/project id — mirroring `AgentRegistry::resolve`'s three
-        // passes so the catalog matches exactly what `delegate` can spawn.
+        // error). The set, its precedence and its (now deterministic) render
+        // order live in `build_agent_catalog` below.
         // Session-stable, so it sits in the cached stable prefix without
         // re-keying. That sentence was aspirational until 2026-08-03: the layer
         // declared `Dynamic` at priority 1704, so this content actually rode the
@@ -559,34 +641,10 @@ impl AgentHarnessRunner {
         // says `Stable` and a test pins it. **A comment asserting where content
         // lands is only as good as the layer that decides it; check the
         // `stability()` before trusting one.**
-        let available_agents = {
-            use crate::agents::AgentMode;
-            let mut by_id: std::collections::HashMap<String, crate::agents::AgentDef> =
-                crate::agents::builtin_agents()
-                    .into_iter()
-                    .filter(|a| a.mode == AgentMode::SubAgent)
-                    .map(|a| (a.id.clone(), a))
-                    .collect();
-            for a in self.agent_registry.list_subagents() {
-                by_id.insert(a.id.clone(), a);
-            }
-            // Plugin sub-agents last, insert-if-absent (lowest precedence),
-            // and only those this session may see — `visibility` was derived
-            // above for the skill snapshot; same value, same run.
-            for a in crate::agents::visible_plugin_subagents(&visibility) {
-                by_id.entry(a.id.clone()).or_insert(a);
-            }
-            (!by_id.is_empty()).then(|| {
-                by_id
-                    .into_values()
-                    .map(|a| crate::thinker::prompt_layer::AgentCatalogEntry {
-                        id: a.id,
-                        description: a.description,
-                        when_to_use: a.when_to_use,
-                    })
-                    .collect::<Vec<_>>()
-            })
-        };
+        let available_agents = build_agent_catalog(
+            self.agent_registry.list_subagents(),
+            crate::agents::visible_plugin_subagents(&visibility),
+        );
         // Resolved BEFORE the bail-out below, not beside the other
         // `resolved_context` fields further down, because the bail-out is a
         // list of "is there anything to say" and a room's roster is one of the
@@ -1017,6 +1075,62 @@ async fn resolve_prompt_context(
     resolved_context
 }
 
+/// Assemble the delegatable sub-agent catalog rendered by
+/// `AgentCatalogLayer` (priority 1060).
+///
+/// The delegatable set is the builtin sub-agents (explore / coder /
+/// researcher / plan / verify) ∪ the registry's registered sub-agents (user /
+/// project defs, folded in by `register_from_dirs`) ∪ the plugin-shipped
+/// sub-agents published by `ExtensionManager::load_all` (bridged via
+/// `crate::agents::plugin_subagents`).
+///
+/// Precedence: registry entries win id collisions over builtins (a user
+/// override), and plugin agents fold in insert-if-absent so they never shadow
+/// a builtin/user/project id — mirroring `AgentRegistry::resolve`'s three
+/// passes so the catalog matches exactly what `delegate` can spawn.
+///
+/// ORDER is by id, not by insertion. The layer declares itself `Stable` and
+/// therefore rides the cached stable prefix, so a `HashMap`-ordered list would
+/// change the prompt bytes from one run to the next — the sort is what makes
+/// "stable" true of the CONTENT, not just of the layer's declaration. The
+/// sort does NOT change precedence: the insert order above still decides
+/// WHICH agent wins an id collision; the sort only fixes the ORDER the
+/// winners are listed in.
+fn build_agent_catalog(
+    registry_subagents: Vec<crate::agents::AgentDef>,
+    plugin_subagents: Vec<crate::agents::AgentDef>,
+) -> Option<Vec<crate::thinker::prompt_layer::AgentCatalogEntry>> {
+    use crate::agents::AgentMode;
+    let mut by_id: std::collections::HashMap<String, crate::agents::AgentDef> =
+        crate::agents::builtin_agents()
+            .into_iter()
+            .filter(|a| a.mode == AgentMode::SubAgent)
+            .map(|a| (a.id.clone(), a))
+            .collect();
+    for a in registry_subagents {
+        by_id.insert(a.id.clone(), a);
+    }
+    // Plugin sub-agents last, insert-if-absent (lowest precedence), and only
+    // those this session may see — the caller already applied `visibility`
+    // (the same value the skill snapshot used; same run).
+    for a in plugin_subagents {
+        by_id.entry(a.id.clone()).or_insert(a);
+    }
+    if by_id.is_empty() {
+        return None;
+    }
+    let mut entries: Vec<crate::thinker::prompt_layer::AgentCatalogEntry> = by_id
+        .into_values()
+        .map(|a| crate::thinker::prompt_layer::AgentCatalogEntry {
+            id: a.id,
+            description: a.description,
+            when_to_use: a.when_to_use,
+        })
+        .collect();
+    entries.sort_by(|a, b| a.id.cmp(&b.id));
+    Some(entries)
+}
+
 /// Resolve the hard per-run iteration cap for the harness loop.
 ///
 /// D2 precedence (highest → lowest, first positive value wins):
@@ -1106,10 +1220,19 @@ pub(crate) fn agent_identity_dir_exists(agent_id: &str) -> bool {
 
 /// Reject any value that would let `agent_id` escape `~/.aleph/agents/` when
 /// passed to `Path::join`: empty, `.`, `..`, or anything containing a path
-/// separator. Request-borne identifiers must satisfy it; anything else is
-/// silently treated as a non-existent agent.
+/// separator. A colon is rejected too: on Windows `C:` / `C:foo` is a drive
+/// prefix (`Path::join` would produce a path rooted outside the agents
+/// directory), and on NTFS `file:stream` is an alternate-data-stream suffix —
+/// both let a request-borne id point somewhere it should not. Request-borne
+/// identifiers must satisfy it; anything else is silently treated as a
+/// non-existent agent.
 fn is_safe_agent_path_component(s: &str) -> bool {
-    !s.is_empty() && s != "." && s != ".." && !s.contains('/') && !s.contains('\\')
+    !s.is_empty()
+        && s != "."
+        && s != ".."
+        && !s.contains('/')
+        && !s.contains('\\')
+        && !s.contains(':')
 }
 
 /// The system-prompt budget for one run (feature 1.2).
@@ -1251,5 +1374,85 @@ mod orientation_wiring_tests {
             .await
             .unwrap();
         assert!(msg.is_none(), "Tools mode must not auto-inject orientation");
+    }
+}
+
+#[cfg(test)]
+mod agent_catalog_tests {
+    use super::{build_agent_catalog, is_safe_agent_path_component};
+    use crate::agents::{AgentDef, AgentMode};
+
+    /// The catalog was assembled in a `HashMap` and flattened with
+    /// `into_values()`, so the rendered `<available_agents>` block came out in
+    /// whatever order the hash seed produced — different on every process
+    /// start, for content the layer declares `Stable` and the prompt cache
+    /// therefore keeps. The order is now by id.
+    #[test]
+    fn the_agent_catalog_is_rendered_in_id_order() {
+        let registry = vec![
+            AgentDef::new("zeta-override", AgentMode::SubAgent).with_description("registry zeta"),
+            AgentDef::new("alpha-override", AgentMode::SubAgent).with_description("registry alpha"),
+        ];
+        let plugin =
+            vec![AgentDef::new("mid-plugin", AgentMode::SubAgent).with_description("plugin mid")];
+
+        let catalog = build_agent_catalog(registry, plugin).expect("the catalog is never empty");
+
+        let ids: Vec<&str> = catalog.iter().map(|e| e.id.as_str()).collect();
+        let mut sorted = ids.clone();
+        sorted.sort_unstable();
+        assert_eq!(ids, sorted, "the catalog must be rendered in id order");
+    }
+
+    /// The sort changes the ORDER, not the PRECEDENCE: a registry entry still
+    /// wins an id collision over the builtin, and a plugin entry still folds in
+    /// insert-if-absent — it never shadows a builtin or a registry entry.
+    #[test]
+    fn catalog_precedence_is_unchanged_by_the_sort() {
+        let registry = vec![
+            AgentDef::new("explore", AgentMode::SubAgent).with_description("registry explore")
+        ];
+        let plugin = vec![
+            AgentDef::new("explore", AgentMode::SubAgent).with_description("plugin explore"),
+            AgentDef::new("plugin-only", AgentMode::SubAgent).with_description("plugin only"),
+        ];
+
+        let catalog = build_agent_catalog(registry, plugin).expect("the catalog is never empty");
+
+        let explore = catalog
+            .iter()
+            .find(|e| e.id == "explore")
+            .expect("explore is a builtin sub-agent");
+        assert_eq!(
+            explore.description, "registry explore",
+            "a registry entry must still win an id collision over the builtin"
+        );
+
+        let plugin_only = catalog
+            .iter()
+            .find(|e| e.id == "plugin-only")
+            .expect("a plugin-only id must be present");
+        assert_eq!(plugin_only.description, "plugin only");
+    }
+
+    /// A Windows drive prefix (`C:`, `C:foo`) passes every other check but
+    /// escapes the agents directory on Windows; `file:stream` is the same
+    /// separator abused as an NTFS alternate data stream. Both are rejected.
+    #[test]
+    fn agent_path_components_reject_drive_prefixes_and_streams() {
+        assert!(!is_safe_agent_path_component("C:"));
+        assert!(!is_safe_agent_path_component("C:foo"));
+        assert!(!is_safe_agent_path_component("foo:bar"));
+
+        // The rejections that were already there.
+        assert!(!is_safe_agent_path_component(""));
+        assert!(!is_safe_agent_path_component("."));
+        assert!(!is_safe_agent_path_component(".."));
+        assert!(!is_safe_agent_path_component("a/b"));
+        assert!(!is_safe_agent_path_component("a\\b"));
+
+        // Ordinary agent ids still pass.
+        assert!(is_safe_agent_path_component("explore"));
+        assert!(is_safe_agent_path_component("my-agent_1"));
     }
 }

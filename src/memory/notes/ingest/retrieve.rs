@@ -184,7 +184,7 @@ pub async fn gather_related<S: NoteStore + Send + Sync + 'static>(
 fn first_body_bullet(raw: &str) -> Option<String> {
     let body = if let Some(rest) = raw.strip_prefix("---\n") {
         if let Some(end) = rest.find("\n---") {
-            &rest[end + 4..]
+            rest.get(end + 4..).unwrap_or("")
         } else {
             rest
         }

@@ -206,8 +206,12 @@ impl CuratedMemoryStore {
             }
             // rust-doctor-disable-next-line excessive-clone
             let mut new_entries = st.entries.clone();
-            // rust-doctor-disable-next-line excessive-clone
-            new_entries[idx] = new_content.clone();
+            if let Some(entry) = new_entries.get_mut(idx) {
+                // rust-doctor-disable-next-line excessive-clone
+                *entry = new_content.clone();
+            } else {
+                return Err(CuratedError::NoMatch(old_substr.to_string()));
+            }
             let used = super::budget::used_chars(&new_entries);
             if used > self.char_limit {
                 return Err(CuratedError::OverBudget {
@@ -219,7 +223,7 @@ impl CuratedMemoryStore {
             // Replacing legacy entry de-legacys the file if the user shrinks/curates.
             if st.legacy
                 && st.entries.len() == 1
-                && !st.entries[0].contains(super::format::ENTRY_DELIMITER)
+                && st.entries.first().is_some_and(|e| !e.contains(super::format::ENTRY_DELIMITER))
             {
                 // Still single-entry → effectively still curated form, drop legacy flag
                 st.legacy = false;
@@ -459,12 +463,16 @@ fn match_unique(entries: &[String], old_substr: &str) -> Result<usize, CuratedEr
         return Err(CuratedError::NoMatch(old_substr.to_string()));
     }
     if matches.len() > 1 {
-        let unique: std::collections::HashSet<_> = matches.iter().map(|&i| &entries[i]).collect();
+        let unique: std::collections::HashSet<_> =
+            matches.iter().filter_map(|&i| entries.get(i)).collect();
         if unique.len() > 1 {
             return Err(CuratedError::Ambiguous(old_substr.to_string()));
         }
     }
-    Ok(matches[0])
+    matches
+        .first()
+        .copied()
+        .ok_or_else(|| CuratedError::NoMatch(old_substr.to_string()))
 }
 
 /// Apply one batch op against the evolving working state. No budget check
@@ -504,11 +512,15 @@ fn apply_one(st: &mut StoreState, op: &BatchOp) -> Result<(), CuratedError> {
             {
                 return Err(CuratedError::Duplicate);
             }
-            st.entries[idx] = content.to_string();
+            if let Some(entry) = st.entries.get_mut(idx) {
+                *entry = content.to_string();
+            } else {
+                return Err(CuratedError::NoMatch(content.to_string()));
+            }
             // Replacing legacy entry de-legacys the file if the user shrinks/curates.
             if st.legacy
                 && st.entries.len() == 1
-                && !st.entries[0].contains(super::format::ENTRY_DELIMITER)
+                && st.entries.first().is_some_and(|e| !e.contains(super::format::ENTRY_DELIMITER))
             {
                 st.legacy = false;
             }

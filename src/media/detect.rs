@@ -108,18 +108,12 @@ fn detect_image_magic(bytes: &[u8]) -> Option<MediaType> {
     // DHT, 0x4F is the JP2 container header. Refusing unknown markers
     // (Motion-JPEG-in-AVI byte streams, JPEG-XL codestream-in-JPEG-
     // wrapper, etc.) keeps the false-positive surface narrow.
-    if bytes.len() >= 4
-        && bytes[0] == 0xFF
-        && bytes[1] == 0xD8
-        && bytes[2] == 0xFF
-        && matches!(
-            bytes[3],
-            0xE0..=0xEF | 0xDB | 0xC0..=0xC3 | 0xC4 | 0x4F
-        )
-    {
-        return Some(MediaType::Image {
-            format: MediaImageFormat::Jpeg,
-        });
+    if let [0xFF, 0xD8, 0xFF, b3, ..] = bytes {
+        if matches!(b3, 0xE0..=0xEF | 0xDB | 0xC0..=0xC3 | 0xC4 | 0x4F) {
+            return Some(MediaType::Image {
+                format: MediaImageFormat::Jpeg,
+            });
+        }
     }
     // GIF: GIF87a or GIF89a
     if bytes.starts_with(b"GIF8") {
@@ -128,7 +122,7 @@ fn detect_image_magic(bytes: &[u8]) -> Option<MediaType> {
         });
     }
     // WebP: RIFF....WEBP
-    if bytes.len() >= 12 && bytes.starts_with(b"RIFF") && &bytes[8..12] == b"WEBP" {
+    if bytes.starts_with(b"RIFF") && bytes.get(8..12) == Some(b"WEBP") {
         return Some(MediaType::Image {
             format: MediaImageFormat::WebP,
         });
@@ -165,10 +159,10 @@ fn detect_audio_magic(bytes: &[u8]) -> Option<MediaType> {
     // `bytes[2]` to be `01` (Layer III) so MP2 / AAC ADTS streams are
     // not silently classified as MP3 and routed into a provider that
     // would 400 on the wrong mime type.
-    let mp3_sync = bytes.len() >= 3
-        && bytes[0] == 0xFF
-        && (bytes[1] & 0xE0) == 0xE0
-        && (bytes[2] >> 1) & 0b11 == 0b01;
+    let mp3_sync = match bytes {
+        [0xFF, b1, b2, ..] => (b1 & 0xE0) == 0xE0 && (b2 >> 1) & 0b11 == 0b01,
+        _ => false,
+    };
     if bytes.starts_with(b"ID3") || mp3_sync {
         return Some(MediaType::Audio {
             format: AudioFormat::Mp3,
@@ -176,7 +170,7 @@ fn detect_audio_magic(bytes: &[u8]) -> Option<MediaType> {
         });
     }
     // WAV: RIFF....WAVE
-    if bytes.len() >= 12 && bytes.starts_with(b"RIFF") && &bytes[8..12] == b"WAVE" {
+    if bytes.starts_with(b"RIFF") && bytes.get(8..12) == Some(b"WAVE") {
         return Some(MediaType::Audio {
             format: AudioFormat::Wav,
             duration_secs: None,
@@ -200,10 +194,10 @@ fn detect_audio_magic(bytes: &[u8]) -> Option<MediaType> {
 }
 
 fn detect_ftyp_magic(bytes: &[u8]) -> Option<MediaType> {
-    if bytes.len() < 12 || &bytes[4..8] != b"ftyp" {
+    if bytes.get(4..8) != Some(b"ftyp") {
         return None;
     }
-    let brand = &bytes[8..12];
+    let brand = bytes.get(8..12)?;
     if brand == b"M4A " || brand == b"M4B " {
         return Some(MediaType::Audio {
             format: AudioFormat::M4a,
@@ -246,10 +240,12 @@ pub async fn detect_from_path(path: &std::path::Path) -> Result<MediaType, Media
     if let Ok(mut f) = tokio::fs::File::open(path).await {
         use tokio::io::AsyncReadExt;
         let mut buf = [0u8; 16];
-        if f.read_exact(&mut buf).await.is_ok() && buf.len() >= 4 {
-            let magic_result = detect_by_magic(&buf);
-            if magic_result != MediaType::Unknown {
-                return Ok(magic_result);
+        if let Ok(n) = f.read(&mut buf).await {
+            if n >= 4 {
+                let magic_result = detect_by_magic(&buf[..n]);
+                if magic_result != MediaType::Unknown {
+                    return Ok(magic_result);
+                }
             }
         }
     }

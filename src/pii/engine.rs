@@ -93,10 +93,16 @@ impl FilterResult {
         }
     }
 
-    /// True if any PII was detected (blocked or warned)
+    /// True if any PII was detected (blocked, warned, or skipped)
+    ///
+    /// A detection whose offsets failed validation is counted in
+    /// [`FilterResult::skipped_count`] and nowhere else: nothing was
+    /// replaced and nothing was warned about. Folding the skipped count in
+    /// here keeps "was any PII seen?" from answering "no" while a detection
+    /// is being dropped on the floor.
     #[must_use]
     pub const fn has_detections(&self) -> bool {
-        self.blocked_count > 0 || self.warned_count > 0
+        self.blocked_count > 0 || self.warned_count > 0 || self.skipped_count > 0
     }
 }
 
@@ -403,7 +409,7 @@ impl PiiEngine {
             (std::cmp::Reverse(blocks), std::cmp::Reverse(m.severity))
         });
 
-        let deduped = dedup_overlapping(all_matches);
+        let deduped = dedup_overlapping(text, all_matches);
 
         // Sort by start descending so we can replace from back to front
         // without invalidating earlier offsets.
@@ -508,21 +514,86 @@ fn policy_has_any_override(policy: &crate::config::PlatformPiiPolicy) -> bool {
 /// The caller must pre-sort `matches` by priority descending — redacting
 /// (Block) matches first, then severity descending. When two matches overlap,
 /// the earlier (higher-priority) one in the pre-sorted input is retained.
-fn dedup_overlapping(matches: Vec<PiiMatch>) -> Vec<PiiMatch> {
+///
+/// A retained match that is NARROWER than the match it overlaps does not
+/// cancel the wider one: the wider match is trimmed to the part(s) the
+/// retained match does not cover, and every surviving part is emitted as its
+/// own [`PiiMatch`] — same rule name, severity and placeholder, with
+/// `matched_text` re-sliced from `text` at that part's offsets. Dropping the
+/// wider match whole left the text it covered OUTSIDE the narrow span in
+/// cleartext (e.g. the domain half of an email whose local part matched a
+/// narrower rule). The emitted parts stay mutually disjoint, so the caller's
+/// back-to-front `replace_range` loop stays valid.
+///
+/// `text` is the text the matches were detected in; it is needed to re-slice
+/// `matched_text` for the trimmed parts.
+fn dedup_overlapping(text: &str, matches: Vec<PiiMatch>) -> Vec<PiiMatch> {
     if matches.len() <= 1 {
         return matches;
     }
 
-    let mut result: Vec<PiiMatch> = Vec::new();
+    // Kept spans, ordered by `start`. Every emitted span is trimmed against
+    // the spans kept before it, so no two kept spans cover the same text.
+    let mut kept: Vec<PiiMatch> = Vec::new();
+
     for m in matches {
-        let overlaps = result
-            .iter()
-            .any(|existing| m.start < existing.end && m.end > existing.start);
-        if !overlaps {
-            result.push(m);
+        // The kept spans are ordered by `start`. A kept span that starts
+        // before the candidate can still overlap it — it may contain it — so
+        // the scan starts at the last kept span that starts before the
+        // candidate. That is at most one step back, because the kept spans
+        // do not overlap each other.
+        let mut first = kept.partition_point(|k| k.start < m.start);
+        while first > 0 && kept[first - 1].end > m.start {
+            first -= 1;
+        }
+
+        // Subtract the kept spans from `[m.start, m.end)`.
+        let mut parts: Vec<(usize, usize)> = vec![(m.start, m.end)];
+        for existing in &kept[first..] {
+            // The kept spans are ordered by `start`, so once one starts at or
+            // after the candidate's end, no later one can overlap it either.
+            if existing.start >= m.end {
+                break;
+            }
+            let mut trimmed: Vec<(usize, usize)> = Vec::with_capacity(parts.len() + 1);
+            for &(s, e) in parts.iter() {
+                if existing.end <= s || existing.start >= e {
+                    // Disjoint from the kept span — the part survives whole.
+                    trimmed.push((s, e));
+                } else {
+                    if existing.start > s {
+                        trimmed.push((s, existing.start));
+                    }
+                    if existing.end < e {
+                        trimmed.push((existing.end, e));
+                    }
+                }
+            }
+            parts = trimmed;
+            if parts.is_empty() {
+                break;
+            }
+        }
+
+        for (s, e) in parts {
+            // An inverted range carries no text; there is nothing to redact.
+            if s > e {
+                continue;
+            }
+            let part = PiiMatch {
+                rule_name: m.rule_name.clone(),
+                start: s,
+                end: e,
+                matched_text: text.get(s..e).unwrap_or_default().to_string(),
+                severity: m.severity,
+                placeholder: m.placeholder.clone(),
+            };
+            let at = kept.partition_point(|k| k.start < part.start);
+            kept.insert(at, part);
         }
     }
-    result
+
+    kept
 }
 
 #[cfg(test)]
@@ -913,6 +984,116 @@ mod tests {
             "Low-severity match should be discarded, but got: {}",
             result.text
         );
+    }
+
+    #[test]
+    fn dedup_overlapping_trims_a_wider_loser_to_its_uncovered_parts() {
+        // The retained ("winner") span is NARROWER than the overlapping one.
+        // Dropping the wider match whole left "ab" and "fgh" — the parts it
+        // covered outside the winner — unredacted, so the wider match is
+        // trimmed to the parts the winner does not cover instead.
+        let text = "abcdefghij";
+        let winner = PiiMatch {
+            rule_name: "api_key".to_string(),
+            start: 2,
+            end: 5,
+            matched_text: "cde".to_string(),
+            severity: PiiSeverity::Critical,
+            placeholder: "[REDACTED]".to_string(),
+        };
+        let loser = PiiMatch {
+            rule_name: "email".to_string(),
+            start: 0,
+            end: 8,
+            matched_text: "abcdefgh".to_string(),
+            severity: PiiSeverity::Medium,
+            placeholder: "[EMAIL]".to_string(),
+        };
+
+        let out = dedup_overlapping(text, vec![winner, loser]);
+
+        let spans: Vec<(usize, usize)> = out.iter().map(|m| (m.start, m.end)).collect();
+        assert_eq!(
+            spans,
+            [(0, 2), (2, 5), (5, 8)],
+            "the wider loser must survive only where the winner does not cover it"
+        );
+        // The trimmed parts keep the loser's identity ...
+        assert_eq!(out[0].rule_name, "email");
+        assert_eq!(out[0].placeholder, "[EMAIL]");
+        assert_eq!(out[0].severity, PiiSeverity::Medium);
+        // ... and their matched_text is re-sliced from the source text.
+        assert_eq!(out[0].matched_text, "ab");
+        assert_eq!(out[2].matched_text, "fgh");
+        // The winner itself survives whole.
+        assert_eq!(out[1].start, 2);
+        assert_eq!(out[1].end, 5);
+        assert_eq!(out[1].matched_text, "cde");
+    }
+
+    #[test]
+    fn dedup_overlapping_drops_a_fully_covered_loser() {
+        // A loser that is entirely inside the winner has nothing left after
+        // the trim — it must not be emitted at all (no zero-width remnant).
+        let text = "abcdefghij";
+        let winner = PiiMatch {
+            rule_name: "id_card".to_string(),
+            start: 0,
+            end: 10,
+            matched_text: text.to_string(),
+            severity: PiiSeverity::Critical,
+            placeholder: "[ID_CARD]".to_string(),
+        };
+        let loser = PiiMatch {
+            rule_name: "phone".to_string(),
+            start: 2,
+            end: 5,
+            matched_text: "cde".to_string(),
+            severity: PiiSeverity::High,
+            placeholder: "[PHONE]".to_string(),
+        };
+
+        let out = dedup_overlapping(text, vec![winner, loser]);
+
+        assert_eq!(out.len(), 1, "a fully covered loser must be dropped");
+        assert_eq!((out[0].start, out[0].end), (0, 10));
+        assert_eq!(out[0].rule_name, "id_card");
+    }
+
+    #[test]
+    fn a_narrower_winner_does_not_leave_the_wider_match_half_in_cleartext() {
+        // End-to-end shape of the trimming: the api_key rule (Critical)
+        // outranks the email rule (Medium) and wins the overlap, but its
+        // span is narrower. The email's remaining parts ("alice@" and
+        // ".com") used to be dropped along with the losing match and stayed
+        // in cleartext.
+        let config = PrivacyConfig {
+            email: PiiAction::Block,
+            ..Default::default()
+        };
+        let engine = PiiEngine::new(config);
+        let result = engine.filter("alice@sk-abcdefghijklmnopqrstuvwxyz.com");
+        assert!(
+            !result.text.contains("alice@") && !result.text.contains(".com"),
+            "the email parts outside the api_key span must be redacted too, got: {}",
+            result.text
+        );
+        assert!(result.text.contains("[REDACTED]"));
+        assert_eq!(result.blocked_count, 3, "one api_key plus two email parts");
+    }
+
+    #[test]
+    fn has_detections_counts_a_skipped_detection() {
+        // A detection whose offsets failed validation lands in
+        // `skipped_count` only — asking "was any PII detected?" must not
+        // answer "no" while that detection is being dropped.
+        let result = FilterResult {
+            text: "text".to_string(),
+            blocked_count: 0,
+            warned_count: 0,
+            skipped_count: 1,
+        };
+        assert!(result.has_detections());
     }
 
     /// The variant is the operator-facing severity of this handle going

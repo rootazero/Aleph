@@ -625,7 +625,9 @@ impl LoopRegistry {
                 // would run a full turn out of bounds.
                 let wake = now_ms.saturating_add(delay_ms);
                 let out_of_bounds = pursuit::fires_out_of_bounds(s, wake, now_ms);
-                if pursuit::exhausted(s, 0, now_ms) || out_of_bounds {
+                let deadline_expired = s.deadline_ms.is_some_and(|d| now_ms != 0 && now_ms > d);
+                let iteration_overflow = s.max_iterations.is_some_and(|max| s.iterations_used > max);
+                if deadline_expired || out_of_bounds || iteration_overflow {
                     let bound_at = if out_of_bounds { wake } else { now_ms };
                     let note = pursuit::stop_reason_note(s, 0, bound_at);
                     let stopped = s
@@ -682,7 +684,7 @@ impl LoopRegistry {
     pub fn commit_field_update(&self, next: LoopState, reschedule: bool) -> bool {
         let mut map = self.lock();
         match map.get(&next.session_id) {
-            Some(live) if live.is_adjustable() => {
+            Some(live) if live.is_adjustable() && live.instance == next.instance => {
                 let pending = if reschedule {
                     None
                 } else {

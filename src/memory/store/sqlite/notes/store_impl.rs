@@ -1836,7 +1836,9 @@ impl NoteStore for SqliteMemoryBackend {
                     .peek()
                     .is_some_and(|(p, _)| p.as_str() == path.as_str())
                 {
-                    sources.push(src_iter.next().unwrap().1);
+                    if let Some((_, src)) = src_iter.next() {
+                        sources.push(src);
+                    }
                 }
                 nodes.push(GraphNode {
                     path,

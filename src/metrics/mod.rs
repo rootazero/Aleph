@@ -130,7 +130,12 @@ fn metrics_runtime() -> MetricsRuntime {
 impl MetricsRuntime {
     #[must_use]
     fn warning_threshold_ms(&self, target_ms: u64) -> u64 {
-        (target_ms as f64 * self.warning_multiplier) as u64
+        let raw = target_ms as f64 * self.warning_multiplier;
+        if raw >= u64::MAX as f64 {
+            u64::MAX
+        } else {
+            raw as u64
+        }
     }
 }
 

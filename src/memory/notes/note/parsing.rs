@@ -14,8 +14,7 @@ use super::types::{FactProvenance, ProvenanceOrigin};
 pub static PROVENANCE_RE: std::sync::LazyLock<Regex> = std::sync::LazyLock::new(|| {
     Regex::new(
         r"<!--\s*(?:src:\s*([^,]+?),\s*)?origin:\s*(raw_source|prior_note|inferred|legacy|system)\s*,\s*inferred:\s*(true|false)\s*-->",
-    // rust-doctor-disable-next-line unwrap-in-production
-    ).unwrap()
+    ).expect("provenance marker regex must compile")
 });
 
 /// Parse a fact-line list and return one `FactProvenance` per fact, defaulting
@@ -36,15 +35,15 @@ pub fn extract_provenance_markers(body: &str, facts: &[String]) -> Vec<FactProve
             let prov = PROVENANCE_RE
                 .captures(raw_line)
                 .map(|c| FactProvenance {
-                    origin: match &c[2] {
-                        "raw_source" => ProvenanceOrigin::RawSource,
-                        "prior_note" => ProvenanceOrigin::PriorNote,
-                        "inferred" => ProvenanceOrigin::Inferred,
-                        "system" => ProvenanceOrigin::System,
+                    origin: match c.get(2).map(|m| m.as_str()) {
+                        Some("raw_source") => ProvenanceOrigin::RawSource,
+                        Some("prior_note") => ProvenanceOrigin::PriorNote,
+                        Some("inferred") => ProvenanceOrigin::Inferred,
+                        Some("system") => ProvenanceOrigin::System,
                         _ => ProvenanceOrigin::Legacy,
                     },
                     source_id: c.get(1).map(|m| m.as_str().trim().to_string()),
-                    inferred: &c[3] == "true",
+                    inferred: c.get(3).is_some_and(|m| m.as_str() == "true"),
                 })
                 .unwrap_or_default();
             out.push(prov);
@@ -225,17 +224,16 @@ pub fn split_frontmatter(
 ) -> Result<(Frontmatter, ExtraFrontmatter, String), AlephError> {
     let trimmed = content.trim();
 
-    if !trimmed.starts_with("---") {
+    let Some(after_open) = trimmed.strip_prefix("---") else {
         return Err(AlephError::ConfigError {
             message: "Note missing YAML frontmatter (must start with ---)".to_string(),
             suggestion: None,
         });
-    }
+    };
 
     // Find the closing fence: a whole line equal to `---`. A plain substring
     // find would cut the YAML mid-line for values containing `---` (e.g.
     // `title: phase---2`), producing a permanently unparseable note.
-    let after_open = &trimmed[3..];
     let mut fence: Option<(usize, usize)> = None; // (yaml_end, body_start)
     let mut pos = 0usize;
     for line in after_open.split_inclusive('\n') {
@@ -250,8 +248,11 @@ pub fn split_frontmatter(
         suggestion: None,
     })?;
 
-    let yaml_str = &after_open[..yaml_end];
-    let body = after_open[body_start..].trim().to_string();
+    let yaml_str = after_open.get(..yaml_end).ok_or_else(|| AlephError::ConfigError {
+        message: "Invalid UTF-8 boundary in YAML frontmatter".to_string(),
+        suggestion: None,
+    })?;
+    let body = after_open.get(body_start..).map_or_else(String::new, |b| b.trim().to_string());
 
     let fm: Frontmatter = crate::yaml::from_str(yaml_str).map_err(|e| AlephError::ConfigError {
         message: format!("Failed to parse YAML frontmatter: {e}"),
@@ -286,8 +287,12 @@ pub fn parse_date_to_unix(date: &Option<String>) -> Result<i64, AlephError> {
         suggestion: Some("Use RFC3339 or YYYY-MM-DD format".to_string()),
     })?;
 
-    // rust-doctor-disable-next-line unwrap-in-production
-    let dt = nd.and_hms_opt(0, 0, 0).expect("midnight is always valid");
+    let dt = nd
+        .and_hms_opt(0, 0, 0)
+        .ok_or_else(|| AlephError::ConfigError {
+            message: format!("Invalid time for date '{s}'"),
+            suggestion: None,
+        })?;
     Ok(dt.and_utc().timestamp())
 }
 
@@ -336,7 +341,8 @@ pub fn extract_facts(body: &str) -> Vec<String> {
             if let Some(c) = current.take() {
                 out.push(c);
             }
-            current = Some(trimmed_start[2..].to_string());
+            let fact_content = trimmed_start.strip_prefix("- ").unwrap_or(trimmed_start);
+            current = Some(fact_content.to_string());
         } else if is_blank {
             if let Some(c) = current.take() {
                 out.push(c);

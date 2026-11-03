@@ -104,8 +104,12 @@ impl DreamStage for NoteConsolidateStage {
                 title_heuristic_candidates(&ctx, indices)
             };
 
+            let mut consumed: std::collections::HashSet<usize> = std::collections::HashSet::new();
             // Process each candidate pair
             for (idx_a, idx_b) in pairs {
+                if consumed.contains(&idx_a) || consumed.contains(&idx_b) {
+                    continue;
+                }
                 if pairs_checked >= self.max_pairs {
                     budget_exhausted = true;
                     break;
@@ -115,6 +119,8 @@ impl DreamStage for NoteConsolidateStage {
                 match result {
                     Ok(true) => {
                         consolidated += 1;
+                        consumed.insert(idx_a);
+                        consumed.insert(idx_b);
                     }
                     Ok(false) => {} // COEXIST — no action
                     // An exhausted provider (429/403) is a deliberate cycle
@@ -124,8 +130,8 @@ impl DreamStage for NoteConsolidateStage {
                     Err(e) if super::is_provider_exhausted(&e) => return Err(e),
                     Err(e) => {
                         tracing::warn!(
-                            note_a = ctx.notes[idx_a].path,
-                            note_b = ctx.notes[idx_b].path,
+                            note_a = ctx.notes.get(idx_a).map(|n| n.path.as_str()).unwrap_or("?"),
+                            note_b = ctx.notes.get(idx_b).map(|n| n.path.as_str()).unwrap_or("?"),
                             error = %e,
                             "NoteConsolidate: pair consolidation failed"
                         );
@@ -266,24 +272,24 @@ fn title_heuristic_candidates(ctx: &DreamContext, indices: &[usize]) -> Vec<(usi
     // Extract (index, lowercase_title) pairs
     let titles: Vec<(usize, String)> = indices
         .iter()
-        .map(|&i| {
-            let filename = ctx.notes[i]
+        .filter_map(|&i| {
+            let note = ctx.notes.get(i)?;
+            let filename = note
                 .path
                 .split('/')
                 .nth(1)
-                .unwrap_or(&ctx.notes[i].path)
+                .unwrap_or(&note.path)
                 .to_lowercase();
-            (i, filename)
+            Some((i, filename))
         })
         .collect();
 
     for i in 0..titles.len() {
         for j in (i + 1)..titles.len() {
-            let (idx_a, title_a) = &titles[i];
-            let (idx_b, title_b) = &titles[j];
-
-            if is_title_similar(title_a, title_b) {
-                pairs.push((*idx_a, *idx_b));
+            if let (Some((idx_a, title_a)), Some((idx_b, title_b))) = (titles.get(i), titles.get(j)) {
+                if is_title_similar(title_a, title_b) {
+                    pairs.push((*idx_a, *idx_b));
+                }
             }
         }
     }

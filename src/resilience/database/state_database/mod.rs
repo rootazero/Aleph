@@ -12,27 +12,11 @@ use crate::sync_primitives::{Arc, Mutex};
 use rusqlite::{params, Connection, OptionalExtension};
 use std::path::PathBuf;
 
+// SAFETY: `sqlite3_vec_init` is exported by the linked `sqlite-vec` C library.
+// Its signature matches the canonical SQLite extension entrypoint:
+// `int sqlite3_vec_init(sqlite3 *db, char **pzErrMsg, const sqlite3_api_routines *pApi)`.
+// Declaring it with these exact C FFI types prevents ABI mismatch and stack corruption.
 unsafe extern "C" {
-    /// Direct extern declaration of the sqlite-vec auto-extension entrypoint.
-    ///
-    /// The upstream `sqlite-vec` crate exposes `sqlite3_vec_init` with an
-    /// argument-less stub (`pub fn sqlite3_vec_init();`), but the real C symbol
-    /// has the canonical 3-arg SQLite extension signature declared in
-    /// `sqlite-vec.h`:
-    ///
-    /// ```c
-    /// int sqlite3_vec_init(sqlite3 *db,
-    ///                      char **pzErrMsg,
-    ///                      const sqlite3_api_routines *pApi);
-    /// ```
-    ///
-    /// Declaring the symbol ourselves with the correct signature makes the
-    /// **linker** enforce ABI compatibility: a future sqlite-vec release that
-    /// adds attributes, changes arity, or changes the calling convention will
-    /// fail to link here instead of silently corrupting the stack on every
-    /// extension load. The previous implementation used
-    /// `std::mem::transmute(sqlite3_vec_init as *const ())` to bridge the
-    /// 0-arg stub and the 3-arg real signature — that erased the contract.
     fn sqlite3_vec_init(
         db: *mut rusqlite::ffi::sqlite3,
         pz_err_msg: *mut *mut std::ffi::c_char,
@@ -47,6 +31,8 @@ mod tests;
 /// Default embedding dimension for vector search
 pub const DEFAULT_EMBEDDING_DIM: u32 = 1024;
 
+static SQLITE_VEC_INIT: std::sync::OnceLock<Result<(), String>> = std::sync::OnceLock::new();
+
 /// State database for resilience state management (agent events, tasks, traces)
 pub struct StateDatabase {
     pub(crate) conn: Arc<Mutex<Connection>>,
@@ -60,23 +46,24 @@ impl StateDatabase {
         // Register sqlite-vec extension before opening any connection.
         //
         // SAFETY: `sqlite3_auto_extension` stores the entrypoint for later
-        // invocation by SQLite when a new connection is opened. We pass the
-        // FFI symbol with its real signature (declared above), so SQLite's
-        // 3-arg call lands on a function with the matching arity and
-        // calling convention. `sqlite3_auto_extension` is idempotent for a
-        // given pointer, so re-registering from every `new()` /
-        // `in_memory()` is safe — SQLite checks the entrypoint slot before
-        // appending.
-        // rust-doctor-disable-next-line unsafe-block-audit
-        unsafe {
-            let rc = rusqlite::ffi::sqlite3_auto_extension(Some(sqlite3_vec_init));
+        // invocation by SQLite when a new connection is opened. Invoking this
+        // within a OnceLock guarantees that `sqlite3_auto_extension` is called
+        // exactly once, eliminating data races across concurrent tests or threads.
+        let init_result = SQLITE_VEC_INIT.get_or_init(|| {
+            let rc = unsafe { rusqlite::ffi::sqlite3_auto_extension(Some(sqlite3_vec_init)) };
             if rc != rusqlite::ffi::SQLITE_OK {
-                return Err(AlephError::config(format!(
+                Err(format!(
                     "Failed to register sqlite-vec extension: error code {rc}"
-                )));
+                ))
+            } else {
+                Ok(())
             }
+        });
+
+        match init_result {
+            Ok(()) => Ok(()),
+            Err(msg) => Err(AlephError::config(msg.clone())),
         }
-        Ok(())
     }
 
     /// Create the database schema
@@ -390,7 +377,15 @@ impl StateDatabase {
             .map_err(|e| AlephError::config(format!("Failed to check schema_info table: {e}")))?;
 
         if !table_exists {
-            return Ok(false);
+            // Check if memories table exists (old database without schema_info)
+            let memories_exists: bool = conn
+                .query_row(
+                    "SELECT COUNT(*) > 0 FROM sqlite_master WHERE type='table' AND name='memories'",
+                    [],
+                    |row| row.get(0),
+                )
+                .map_err(|e| AlephError::config(format!("Failed to check memories table: {e}")))?;
+            return Ok(memories_exists);
         }
 
         let stored: Option<String> = conn
@@ -422,7 +417,16 @@ impl StateDatabase {
                     Ok(true)
                 }
             },
-            None => Ok(false),
+            None => {
+                let memories_exists: bool = conn
+                    .query_row(
+                        "SELECT COUNT(*) > 0 FROM sqlite_master WHERE type='table' AND name='memories'",
+                        [],
+                        |row| row.get(0),
+                    )
+                    .map_err(|e| AlephError::config(format!("Failed to check memories table: {e}")))?;
+                Ok(memories_exists)
+            }
         }
     }
 
@@ -461,61 +465,7 @@ impl StateDatabase {
 
     /// Check if database needs migration due to dimension change
     fn check_needs_migration(conn: &Connection) -> Result<bool, AlephError> {
-        // Check if schema_info table exists
-        let table_exists: bool = conn
-            .query_row(
-                "SELECT COUNT(*) > 0 FROM sqlite_master WHERE type='table' AND name='schema_info'",
-                [],
-                |row| row.get(0),
-            )
-            .map_err(|e| AlephError::config(format!("Failed to check schema_info table: {e}")))?;
-
-        if !table_exists {
-            // Check if memories table exists (old database without schema_info)
-            let memories_exists: bool = conn
-                .query_row(
-                    "SELECT COUNT(*) > 0 FROM sqlite_master WHERE type='table' AND name='memories'",
-                    [],
-                    |row| row.get(0),
-                )
-                .map_err(|e| AlephError::config(format!("Failed to check memories table: {e}")))?;
-
-            // If old memories table exists but no schema_info, needs migration
-            return Ok(memories_exists);
-        }
-
-        // Check current dimension in schema_info
-        let current_dimension: Option<String> = conn
-            .query_row(
-                "SELECT value FROM schema_info WHERE key = 'embedding_dimension'",
-                [],
-                |row| row.get(0),
-            )
-            .optional()
-            .map_err(|e| AlephError::config(format!("Failed to read embedding dimension: {e}")))?;
-
-        match current_dimension {
-            Some(dim_str) => match dim_str.parse::<u32>() {
-                Ok(dim) if dim == DEFAULT_EMBEDDING_DIM => Ok(false), // Already at current dimension
-                Ok(dim) => {
-                    tracing::info!(
-                        stored_dim = dim,
-                        current_dim = DEFAULT_EMBEDDING_DIM,
-                        "Embedding dimension mismatch detected"
-                    );
-                    Ok(true) // Needs migration (different dimension)
-                }
-                Err(_) => {
-                    tracing::warn!(
-                        stored_dim = %dim_str,
-                        current_dim = DEFAULT_EMBEDDING_DIM,
-                        "Invalid stored embedding dimension, treating as mismatch"
-                    );
-                    Ok(true)
-                }
-            },
-            None => Ok(true), // No dimension stored, needs migration
-        }
+        Self::check_dimension_change(conn, DEFAULT_EMBEDDING_DIM)
     }
 
     /// Serialize embedding vector to bytes (f32 array -> bytes)
@@ -550,26 +500,13 @@ impl StateDatabase {
     ) -> Result<Option<String>, AlephError> {
         let file_unique_id = file_unique_id.to_string();
         self.with_conn(move |conn| {
-            let mut stmt = conn
-                .prepare(
-                    "SELECT description FROM sticker_descriptions WHERE file_unique_id = ?1 LIMIT 1",
-                )
-                .map_err(|e| AlephError::config(format!("Failed to prepare sticker query: {e}")))?;
-            let mut rows = stmt
-                .query(params![file_unique_id])
-                .map_err(|e| AlephError::config(format!("Failed to query sticker description: {e}")))?;
-            if let Some(row) = rows
-                .next()
-                .map_err(|e| AlephError::config(format!("Failed to read sticker row: {e}")))?
-            {
-                row.get(0)
-                    .map_err(|e| {
-                        AlephError::config(format!("Failed to deserialize sticker description: {e}"))
-                    })
-                    .map(Some)
-            } else {
-                Ok(None)
-            }
+            conn.query_row(
+                "SELECT description FROM sticker_descriptions WHERE file_unique_id = ?1 LIMIT 1",
+                params![file_unique_id],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|e| AlephError::config(format!("Failed to query sticker description: {e}")))
         })
         .await
     }

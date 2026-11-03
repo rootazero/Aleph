@@ -264,7 +264,10 @@ impl HybridAssembler {
         Ok(slots)
     }
 
-    #[allow(clippy::too_many_arguments)]
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "internal packaging helper aggregating pipeline metrics, candidate stats, and timing across retrieval stages"
+    )]
     fn pack_envelope(
         &self,
         query: &str,

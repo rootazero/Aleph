@@ -150,7 +150,7 @@ impl PinnedHead {
 /// The out-of-band values an auditor brings to a verification. Empty means
 /// "check internal consistency only", which is worth saying out loud every time
 /// — see the module doc.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ExportPins {
     /// Root fingerprints previously taken off-box. Any match counts.
     pub roots: Vec<String>,
@@ -222,7 +222,7 @@ impl ExportError {
 /// A public key the exported chain names. Retired keys are included — records
 /// signed before a rotation can only be checked against the key that signed
 /// them.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ExportedKey {
     pub fingerprint: String,
     /// Ed25519 public key, hex.
@@ -244,7 +244,7 @@ pub struct ExportedKey {
 /// fence on [`NewRecord`](super::record::NewRecord) is the same idea; keeping
 /// the two forms distinct is what stops a supplied blob from drifting into the
 /// writer.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ExportedRecord {
     pub seq: i64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -328,7 +328,7 @@ impl ExportedRecord {
 /// `default` + `skip_serializing_if` keeps documents exported before signing
 /// existed parseable — they land as `None` and verify with the same verdicts
 /// they always did, the absence reported rather than smoothed over.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ExportSignature {
     /// Always `EXPORT_SIGNATURE_SCHEME` today; anything else is malformed,
     /// not a negotiation.
@@ -343,7 +343,7 @@ pub struct ExportSignature {
 
 /// One agent's chain, its keys and its anchor, in a form that needs nothing
 /// from this installation to check.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ChainExport {
     pub format: String,
     pub agent_id: String,
@@ -511,7 +511,7 @@ impl SignerSource for ExportKeyring {
 }
 
 /// The verdict on an exported chain.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct ExportReport {
     pub agent_id: String,
     /// `true` only when there are no faults **and** no supplied pin failed.

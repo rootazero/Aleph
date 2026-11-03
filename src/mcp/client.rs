@@ -449,9 +449,12 @@ impl McpClient {
 
     /// Stop all external servers
     pub async fn stop_all(&self) -> Result<()> {
-        let mut servers = self.external_servers.write().await;
+        let to_close: Vec<(String, Arc<McpServerConnection>)> = {
+            let mut servers = self.external_servers.write().await;
+            servers.drain().collect()
+        };
 
-        for (name, connection) in servers.drain() {
+        for (name, connection) in to_close {
             tracing::info!(server = %name, "Stopping external MCP server");
             if let Err(e) = connection.close().await {
                 tracing::warn!(

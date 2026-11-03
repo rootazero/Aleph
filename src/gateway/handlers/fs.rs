@@ -39,7 +39,7 @@ use crate::sync_primitives::Arc;
 use crate::utils::paths::display_string;
 use serde::Deserialize;
 use serde_json::json;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use tokio::sync::RwLock;
 
 /// The handler-facing config handle. Mirrors what other hot-reload-aware
@@ -274,10 +274,27 @@ pub async fn handle_list_dir(request: JsonRpcRequest, config: SharedConfig) -> J
         if !params.show_hidden && name.starts_with('.') {
             continue;
         }
-        // `file_type()` follows symlinks; we deliberately resolve so the
-        // displayed `is_dir` matches what the next `list_dir` would do.
-        let is_dir = entry.file_type().await.is_ok_and(|t| t.is_dir());
         let full = entry.path();
+        // `file_type()` reports the LINK itself, not its target, so a
+        // symlinked directory used to be listed as a file and the picker
+        // offered it as one. Resolve the link and classify the TARGET —
+        // but only when the target is still inside the allowed roots and is
+        // not a denied leaf: following a link out of scope would advertise
+        // a path the scope check refuses. An unresolvable link is not a
+        // directory.
+        let file_type = entry.file_type().await.ok();
+        let is_dir = if file_type.as_ref().is_some_and(|t| t.is_symlink()) {
+            match tokio::fs::canonicalize(&full).await {
+                Ok(target) => {
+                    roots.iter().any(|root| target.starts_with(root))
+                        && refuse_if_denied(&target).is_ok()
+                        && target.is_dir()
+                }
+                Err(_) => false,
+            }
+        } else {
+            file_type.as_ref().is_some_and(|t| t.is_dir())
+        };
         entries.push(json!({
             "name": name,
             "path": display_string(&full),
@@ -349,15 +366,17 @@ pub async fn handle_create_dir(request: JsonRpcRequest, config: SharedConfig) ->
     if trimmed.is_empty() {
         return JsonRpcResponse::error(request.id, INVALID_PARAMS, "name cannot be empty");
     }
-    if trimmed.contains(std::path::MAIN_SEPARATOR)
-        || trimmed.contains('/')
-        || trimmed == "."
-        || trimmed == ".."
-    {
+    // The name is JOINED onto the parent below, so it has to be a plain
+    // single component — "separator-free" is not enough. On Windows
+    // `Path::join` DROPS the parent when the name carries a drive prefix:
+    // `parent = C:\work\project` + `name = "D:outside"` resolves to
+    // `D:outside` (that drive's CWD), i.e. the new directory lands outside
+    // the allowed parent even though the name contains no separator.
+    if !is_plain_child_name(trimmed) {
         return JsonRpcResponse::error(
             request.id,
             INVALID_PARAMS,
-            "name must not contain path separators or be '.'/'..'",
+            "name must be a single plain path component (no separators, no drive prefix, not '.'/'..')",
         );
     }
 
@@ -380,9 +399,18 @@ pub async fn handle_create_dir(request: JsonRpcRequest, config: SharedConfig) ->
     // The parent check above cannot see this: with `allowed_roots = ["~"]` the
     // parent `~` is legitimately in scope while `~/.ssh` is a denied leaf. The
     // target does not exist yet, so it cannot be canonicalised — but it is
-    // built by joining onto an already-canonical parent, and `name` is
-    // separator-free and not `.`/`..` (checked above), so it is canonical by
-    // construction.
+    // built by joining onto an already-canonical parent, and `name` is a plain
+    // component (checked above), so it is canonical by construction.
+    // Belt and braces: prove the joined path still hangs off the canonical
+    // parent before anything is created — `join` is only expected to append,
+    // but the joined path is the one that reaches the filesystem.
+    if target.parent() != Some(parent_canon.as_path()) {
+        return JsonRpcResponse::error(
+            request.id,
+            OUT_OF_SCOPE,
+            "name does not resolve to a child of the requested parent",
+        );
+    }
     if let Err(msg) = refuse_if_denied(&target) {
         return JsonRpcResponse::error(request.id, OUT_OF_SCOPE, &msg);
     }
@@ -400,6 +428,38 @@ pub async fn handle_create_dir(request: JsonRpcRequest, config: SharedConfig) ->
     // (the new dir definitely exists now, so canonicalize won't fail).
     let canon = std::fs::canonicalize(&target).unwrap_or(target);
     JsonRpcResponse::success(request.id, json!({ "path": display_string(&canon) }))
+}
+
+/// Is `name` exactly one plain path component — no separator, no `.`/`..`,
+/// no drive prefix, no root?
+fn is_plain_child_name(name: &str) -> bool {
+    let mut components = Path::new(name).components();
+    let Some(Component::Normal(part)) = components.next() else {
+        return false;
+    };
+    if components.next().is_some() {
+        return false;
+    }
+    // `Path` drops a trailing separator and normalises away redundant
+    // separators, so the component has to equal the name verbatim.
+    if part != std::ffi::OsStr::new(name) {
+        return false;
+    }
+    !has_drive_prefix(name)
+}
+
+/// Does `name` carry a Windows drive prefix (`C:`, `C:foo`)?
+///
+/// Spelled out in ASCII because the platform's own parser only recognises a
+/// prefix on Windows: a Unix server must reject a `C:foo` name too, so the
+/// same client cannot pick a name that escapes on one platform and silently
+/// creates an odd file on another. One ASCII letter — a real Windows drive
+/// prefix is a single letter.
+fn has_drive_prefix(name: &str) -> bool {
+    let Some((drive, _)) = name.split_once(':') else {
+        return false;
+    };
+    drive.len() == 1 && drive.chars().all(|c| c.is_ascii_alphabetic())
 }
 
 // ─── fs.read_file ────────────────────────────────────────────────────────────
@@ -606,6 +666,52 @@ mod tests {
         );
     }
 
+    /// A symlinked directory IS a directory: `DirEntry::file_type` reports
+    /// the link, not its target, so the picker used to offer it as a file.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn list_dir_resolves_a_symlinked_directory_to_a_directory() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path().to_path_buf();
+        tokio::fs::create_dir(root.join("real")).await.unwrap();
+        std::os::unix::fs::symlink(root.join("real"), root.join("link")).unwrap();
+
+        let cfg = cfg_with_roots(vec![root.to_string_lossy().to_string()]);
+        let r = req("fs.list_dir", json!({ "path": root.to_string_lossy() }));
+        let resp = handle_list_dir(r, cfg).await;
+        let entries = resp.result.expect("expected success")["entries"]
+            .as_array()
+            .unwrap()
+            .clone();
+        assert!(entries
+            .iter()
+            .any(|e| e["name"] == "link" && e["is_dir"] == true));
+    }
+
+    /// …but a link that leaves the allowed roots is not a directory: the
+    /// target is out of scope, so it must not be advertised as one.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn list_dir_does_not_call_an_out_of_scope_symlink_a_directory() {
+        let tmp = TempDir::new().unwrap();
+        let scope = tmp.path().join("scope");
+        let outside = tmp.path().join("outside");
+        tokio::fs::create_dir(&scope).await.unwrap();
+        tokio::fs::create_dir(&outside).await.unwrap();
+        std::os::unix::fs::symlink(&outside, scope.join("escape")).unwrap();
+
+        let cfg = cfg_with_roots(vec![scope.to_string_lossy().to_string()]);
+        let r = req("fs.list_dir", json!({ "path": scope.to_string_lossy() }));
+        let resp = handle_list_dir(r, cfg).await;
+        let entries = resp.result.expect("expected success")["entries"]
+            .as_array()
+            .unwrap()
+            .clone();
+        assert!(entries
+            .iter()
+            .any(|e| e["name"] == "escape" && e["is_dir"] == false));
+    }
+
     #[tokio::test]
     async fn create_dir_makes_a_subdirectory_inside_scope() {
         let tmp = TempDir::new().unwrap();
@@ -630,6 +736,31 @@ mod tests {
         let cfg = cfg_with_roots(vec![root.to_string_lossy().to_string()]);
 
         for evil in ["foo/bar", "..", ".", " "] {
+            let r = req(
+                "fs.create_dir",
+                json!({ "parent": root.to_string_lossy(), "name": evil }),
+            );
+            let resp = handle_create_dir(r, cfg.clone()).await;
+            assert_eq!(
+                resp.error.expect("expected error").code,
+                INVALID_PARAMS,
+                "name '{evil}' should have been rejected"
+            );
+        }
+    }
+
+    /// A drive-relative name is not a child of the parent at all: on Windows
+    /// `Path::join` DROPS the parent when the name carries a drive prefix, so
+    /// `parent = C:\work` + `name = "D:outside"` used to create the directory
+    /// against D's CWD — outside the allowed parent. The name carries no
+    /// separator, so the old separator check let it through.
+    #[tokio::test]
+    async fn create_dir_rejects_a_drive_relative_name() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path().to_path_buf();
+        let cfg = cfg_with_roots(vec![root.to_string_lossy().to_string()]);
+
+        for evil in ["D:outside", "C:foo", "d:"] {
             let r = req(
                 "fs.create_dir",
                 json!({ "parent": root.to_string_lossy(), "name": evil }),

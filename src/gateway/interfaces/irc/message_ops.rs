@@ -89,6 +89,24 @@ pub fn nick_from_prefix(prefix: &str) -> &str {
     prefix.split('!').next().unwrap_or(prefix)
 }
 
+/// Whether a message text addresses the bot by its nick.
+///
+/// The text must start with the bot's nick followed by a separator (`:`, `,`
+/// or whitespace), so `alephbot: hi` addresses the bot while `alephbotica`
+/// does not.
+#[must_use]
+fn addresses_bot(text: &str, own_nick: &str) -> bool {
+    let text = text.trim_start();
+    let Some(prefix) = text.get(..own_nick.len()) else {
+        return false;
+    };
+    if !prefix.eq_ignore_ascii_case(own_nick) {
+        return false;
+    }
+    let rest = &text[own_nick.len()..];
+    rest.starts_with(':') || rest.starts_with(',') || rest.starts_with(char::is_whitespace)
+}
+
 /// Convert an IRC PRIVMSG to an `InboundMessage`.
 ///
 /// Returns `None` if:
@@ -96,12 +114,14 @@ pub fn nick_from_prefix(prefix: &str) -> &str {
 /// - The message is from the bot itself (case-insensitive comparison)
 /// - The message body is empty
 /// - No prefix (sender info) is present
+/// - The sender is outside `IrcConfig::allowed_users`
+/// - A channel message does not address the bot and `require_mention` is set
 #[must_use]
 pub fn convert_privmsg(
     parsed: &IrcLine,
     channel_id: &ChannelId,
     own_nick: &str,
-    _config: &IrcConfig,
+    config: &IrcConfig,
 ) -> Option<InboundMessage> {
     if parsed.command != "PRIVMSG" {
         return None;
@@ -115,6 +135,12 @@ pub fn convert_privmsg(
         return None;
     }
 
+    // Senders outside the allowlist never reach the bot (an empty allowlist
+    // allows everyone, which is the pre-existing behaviour).
+    if !config.is_user_allowed(sender_nick) {
+        return None;
+    }
+
     let target = parsed.params.first()?;
     let text = parsed.trailing.as_deref().unwrap_or("");
     if text.is_empty() {
@@ -123,6 +149,12 @@ pub fn convert_privmsg(
 
     // Determine if this is a channel message (group) or a DM
     let is_group = target.starts_with('#') || target.starts_with('&');
+
+    // In a channel, only messages that address the bot are accepted when a
+    // mention is required — a direct message is addressed by construction.
+    if is_group && config.require_mention && !addresses_bot(text, own_nick) {
+        return None;
+    }
 
     // For group messages, conversation_id is the channel name.
     // For DMs, conversation_id is the sender's nick (so replies go back to them).
@@ -807,5 +839,117 @@ mod tests {
         let config = make_config();
         let msg = convert_privmsg(&parsed, &channel_id, "alephbot", &config);
         assert!(msg.is_none()); // No target means no valid message
+    }
+
+    // ==================== Allowlist and Mention Tests ====================
+
+    fn privmsg(sender: &str, target: &str, text: &str) -> IrcLine {
+        IrcLine {
+            prefix: Some(format!("{sender}!{sender}@host")),
+            command: "PRIVMSG".to_string(),
+            params: vec![target.to_string()],
+            trailing: Some(text.to_string()),
+        }
+    }
+
+    #[test]
+    fn test_sender_outside_the_allowlist_is_dropped() {
+        let parsed = privmsg("mallory", "#test", "hello");
+        let channel_id = ChannelId::new("irc");
+        let config = IrcConfig {
+            allowed_users: vec!["alice".to_string()],
+            ..make_config()
+        };
+
+        let msg = convert_privmsg(&parsed, &channel_id, "alephbot", &config);
+        assert!(msg.is_none());
+    }
+
+    #[test]
+    fn test_sender_inside_the_allowlist_is_accepted() {
+        let parsed = privmsg("alice", "#test", "hello");
+        let channel_id = ChannelId::new("irc");
+        let config = IrcConfig {
+            allowed_users: vec!["Alice".to_string()],
+            ..make_config()
+        };
+
+        let msg = convert_privmsg(&parsed, &channel_id, "alephbot", &config).unwrap();
+        assert_eq!(msg.sender_id.as_str(), "alice");
+    }
+
+    #[test]
+    fn test_a_dm_from_an_unknown_nick_is_dropped() {
+        let parsed = privmsg("mallory", "alephbot", "hello");
+        let channel_id = ChannelId::new("irc");
+        let config = IrcConfig {
+            allowed_users: vec!["alice".to_string()],
+            ..make_config()
+        };
+
+        let msg = convert_privmsg(&parsed, &channel_id, "alephbot", &config);
+        assert!(msg.is_none());
+    }
+
+    #[test]
+    fn test_a_channel_message_without_a_mention_is_dropped() {
+        let parsed = privmsg("alice", "#test", "just chatting");
+        let channel_id = ChannelId::new("irc");
+        let config = IrcConfig {
+            require_mention: true,
+            ..make_config()
+        };
+
+        let msg = convert_privmsg(&parsed, &channel_id, "alephbot", &config);
+        assert!(msg.is_none());
+    }
+
+    #[test]
+    fn test_a_channel_message_addressing_the_bot_is_accepted() {
+        let parsed = privmsg("alice", "#test", "alephbot: hello there");
+        let channel_id = ChannelId::new("irc");
+        let config = IrcConfig {
+            require_mention: true,
+            ..make_config()
+        };
+
+        let msg = convert_privmsg(&parsed, &channel_id, "alephbot", &config).unwrap();
+        assert_eq!(msg.text, "alephbot: hello there");
+    }
+
+    #[test]
+    fn test_a_nick_prefix_is_not_a_mention() {
+        let parsed = privmsg("alice", "#test", "alephbotica hello");
+        let channel_id = ChannelId::new("irc");
+        let config = IrcConfig {
+            require_mention: true,
+            ..make_config()
+        };
+
+        let msg = convert_privmsg(&parsed, &channel_id, "alephbot", &config);
+        assert!(msg.is_none());
+    }
+
+    #[test]
+    fn test_a_direct_message_needs_no_mention() {
+        let parsed = privmsg("alice", "alephbot", "hello");
+        let channel_id = ChannelId::new("irc");
+        let config = IrcConfig {
+            require_mention: true,
+            ..make_config()
+        };
+
+        let msg = convert_privmsg(&parsed, &channel_id, "alephbot", &config).unwrap();
+        assert!(!msg.is_group);
+    }
+
+    #[test]
+    fn test_an_empty_allowlist_allows_every_sender() {
+        let parsed = privmsg("mallory", "#test", "hello");
+        let channel_id = ChannelId::new("irc");
+        let config = make_config();
+
+        let msg = convert_privmsg(&parsed, &channel_id, "alephbot", &config).unwrap();
+        assert_eq!(msg.sender_id.as_str(), "mallory");
     }
 }

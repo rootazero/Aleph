@@ -140,6 +140,25 @@ fn db_err(e: impl std::fmt::Display) -> ProjectError {
     ProjectError::Db(e.to_string())
 }
 
+/// True when `e` is SQLite refusing a UNIQUE constraint — the refusal the
+/// owner-keyed workspace index raises when the folder is already registered
+/// for that owner.
+///
+/// The index is the arbiter of "this folder is already registered": the race
+/// between two concurrent adds of the same folder is supposed to be decided
+/// by it, and the loser of that race has to be answered with the row that
+/// now holds the folder, not with a server fault. Flattening every database
+/// error into [`ProjectError::Db`] erased that distinction, so a caller whose
+/// folder WAS registered was told the server failed.
+fn is_unique_violation(e: &rusqlite::Error) -> bool {
+    matches!(
+        e,
+        rusqlite::Error::SqliteFailure(inner, _)
+            if inner.code == rusqlite::ErrorCode::ConstraintViolation
+                && inner.extended_code == rusqlite::ffi::SQLITE_CONSTRAINT_UNIQUE
+    )
+}
+
 fn now_secs() -> i64 {
     SystemTime::now()
         .duration_since(SystemTime::UNIX_EPOCH)
@@ -314,10 +333,32 @@ impl ProjectStore {
 
     /// Full boot-time migration: schema, one-time `projects.json` adoption,
     /// then publish the roster projection.
+    ///
+    /// The legacy adoption is deliberately NON-FATAL. `projects.json` is a
+    /// one-time convenience import; the SQLite catalogue is the source of
+    /// truth, and the roster publish below is what makes that catalogue
+    /// visible at all — `roster::is_member` is the whole room authorization
+    /// predicate. A malformed legacy file used to propagate its parse error
+    /// through the `?` and return BEFORE the publish, so a corrupt
+    /// convenience file made every room invisible for the whole process
+    /// lifetime while the catalogue behind it was perfectly intact. Both
+    /// failure modes are logged, and the migration carries on to the publish.
     pub fn migrate(&self) -> Result<(), ProjectError> {
         self.create_schema()?;
-        if let Ok(dir) = crate::utils::paths::get_config_dir() {
-            self.migrate_from_json(&dir.join("projects.json"))?;
+        match crate::utils::paths::get_config_dir() {
+            Ok(dir) => {
+                if let Err(e) = self.migrate_from_json(&dir.join("projects.json")) {
+                    tracing::warn!(
+                        error = %e,
+                        "projects: legacy projects.json adoption failed; continuing with the \
+                         SQLite catalogue"
+                    );
+                }
+            }
+            Err(e) => tracing::warn!(
+                error = %e,
+                "projects: config dir unavailable; skipping legacy projects.json adoption"
+            ),
         }
         self.republish_roster()
     }
@@ -352,6 +393,22 @@ impl ProjectStore {
         self.with_conn(|conn| {
             for entry in &legacy.projects {
                 let id = mint_id();
+                // Canonicalise the way every other write path does.
+                // `Project::workspace_path` is documented as "canonicalised at
+                // insert time", and the only lookup — `find_by_path_for` —
+                // probes with `canonical_dir(path)`. A legacy row whose
+                // spelling differs from the canonical one (a symlinked
+                // component, a trailing slash, a `..` segment) would never be
+                // matched by that lookup, and the partial unique index
+                // compares the RAW string — so a later `add_for` would insert
+                // a SECOND row for the same folder. Canonicalisation can
+                // fail for a directory that is gone; the raw spelling is
+                // kept then, so the row is still adopted rather than dropped.
+                let stored_path = if entry.path.is_absolute() {
+                    std::fs::canonicalize(&entry.path).unwrap_or_else(|_| entry.path.clone())
+                } else {
+                    entry.path.clone()
+                };
                 let changed = conn
                     .execute(
                         "INSERT OR IGNORE INTO projects
@@ -362,7 +419,7 @@ impl ProjectStore {
                             id,
                             entry.name,
                             OWNER_USER_ID,
-                            entry.path.to_string_lossy(),
+                            stored_path.to_string_lossy(),
                             entry.created_at,
                             entry.last_used_at,
                         ],
@@ -447,25 +504,13 @@ impl ProjectStore {
         };
 
         self.with_conn(|conn| {
-            conn.execute(
-                "INSERT INTO projects
-                    (id, name, owner_user_id, workspace_path, status,
-                     created_at, updated_at, last_used_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6, ?6)",
-                rusqlite::params![
-                    project.id,
-                    project.name,
-                    project.owner_user_id,
-                    project
-                        .workspace_path
-                        .as_ref()
-                        .map(|p| p.to_string_lossy().to_string()),
-                    project.status.as_str(),
-                    now,
-                ],
-            )
-            .map_err(db_err)?;
-            conn.execute(
+            // The project row and the owner's membership row are ONE fact: a
+            // project whose owner is not a member is invisible to its own
+            // creator. Two writes without a transaction could leave the
+            // catalogue holding one half of that fact, so the pair is atomic.
+            let tx = conn.unchecked_transaction().map_err(db_err)?;
+            Self::insert_project_row(&tx, &project, now)?;
+            tx.execute(
                 "INSERT OR IGNORE INTO project_members (project_id, user_id, added_at)
                  VALUES (?1, ?2, ?3)",
                 rusqlite::params![
@@ -475,9 +520,55 @@ impl ProjectStore {
                 ],
             )
             .map_err(db_err)?;
+            tx.commit().map_err(db_err)?;
             Self::republish_roster_locked(conn)
         })?;
         Ok(project)
+    }
+
+    /// Insert one project row, keeping the owner-keyed workspace index's
+    /// refusal distinguishable from a genuine database fault.
+    ///
+    /// A UNIQUE refusal means the folder is ALREADY registered for that
+    /// owner — a fact the caller can act on: `add_for` takes the winning row
+    /// and `create` answers "already exists". Every other failure is a fault
+    /// and stays a [`ProjectError::Db`].
+    fn insert_project_row(
+        conn: &Connection,
+        project: &Project,
+        now: i64,
+    ) -> Result<(), ProjectError> {
+        conn.execute(
+            "INSERT INTO projects
+                (id, name, owner_user_id, workspace_path, status,
+                 created_at, updated_at, last_used_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6, ?6)",
+            rusqlite::params![
+                project.id,
+                project.name,
+                project.owner_user_id,
+                project
+                    .workspace_path
+                    .as_ref()
+                    .map(|p| p.to_string_lossy().to_string()),
+                project.status.as_str(),
+                now,
+            ],
+        )
+        .map_err(|e| {
+            if is_unique_violation(&e) {
+                match &project.workspace_path {
+                    Some(path) => ProjectError::AlreadyExists(path.clone()),
+                    // A workspace-less project can only collide on its own
+                    // freshly minted id — that is a fault, not an "already
+                    // exists".
+                    None => ProjectError::Db(e.to_string()),
+                }
+            } else {
+                db_err(e)
+            }
+        })?;
+        Ok(())
     }
 
     pub fn get(&self, id: &str) -> Result<Option<Project>, ProjectError> {
@@ -627,14 +718,21 @@ impl ProjectStore {
                 )));
             }
 
-            let changed = conn
+            // The project row and its membership rows are ONE fact: a
+            // project row without its membership rows is a room nobody can
+            // see, and membership rows without their project are orphans.
+            // Two writes without a transaction could leave the catalogue
+            // holding one half of that fact, so the pair is atomic.
+            let tx = conn.unchecked_transaction().map_err(db_err)?;
+            let changed = tx
                 .execute("DELETE FROM projects WHERE id = ?1", [id])
                 .map_err(db_err)?;
             if changed == 0 {
                 return Err(ProjectError::NotFound(id.to_string()));
             }
-            conn.execute("DELETE FROM project_members WHERE project_id = ?1", [id])
+            tx.execute("DELETE FROM project_members WHERE project_id = ?1", [id])
                 .map_err(db_err)?;
+            tx.commit().map_err(db_err)?;
             Self::republish_roster_locked(conn)
         })
     }
@@ -867,19 +965,28 @@ impl ProjectStore {
             // DO UPDATE arm, where `excluded.label` could no longer tell an
             // omitted label from a cleared one. `RETURNING` makes the receipt
             // report the stored value, not the argument.
-            let stored_label: Option<String> = conn
+            //
+            // `bound_by` follows the SAME keep/clear/replace rule (`?5`), for
+            // the same reason: a re-bind that simply omits the operator must
+            // not erase the operator that is already recorded on the row, and
+            // `excluded.bound_by` could not tell an omitted operator from a
+            // deliberately cleared one.
+            let (stored_label, stored_bound_by): (Option<String>, Option<String>) = conn
                 .query_row(
                     "INSERT INTO project_channel_bindings
                          (project_id, channel_id, peer_kind, peer_id, bound_by, bound_at, label)
-                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, NULLIF(?7, ''))
+                     VALUES (?1, ?2, ?3, ?4, NULLIF(?5, ''), ?6, NULLIF(?7, ''))
                      ON CONFLICT(channel_id, peer_kind, peer_id) DO UPDATE SET
                          label = CASE
                              WHEN ?7 IS NULL THEN project_channel_bindings.label
                              ELSE NULLIF(?7, '')
                          END,
-                         bound_by = excluded.bound_by,
+                         bound_by = CASE
+                             WHEN ?5 IS NULL THEN project_channel_bindings.bound_by
+                             ELSE NULLIF(?5, '')
+                         END,
                          bound_at = excluded.bound_at
-                     RETURNING label",
+                     RETURNING label, bound_by",
                     rusqlite::params![
                         project_id,
                         channel_key,
@@ -889,7 +996,12 @@ impl ProjectStore {
                         now,
                         label
                     ],
-                    |r| r.get::<_, Option<String>>(0),
+                    |r| {
+                        Ok((
+                            r.get::<_, Option<String>>(0)?,
+                            r.get::<_, Option<String>>(1)?,
+                        ))
+                    },
                 )
                 .map_err(db_err)?;
             Ok(ChannelBinding {
@@ -897,7 +1009,7 @@ impl ProjectStore {
                 channel_id: channel_key.clone(),
                 peer_kind,
                 peer_id: peer_key.clone(),
-                bound_by: bound_by.map(str::to_string),
+                bound_by: stored_bound_by,
                 bound_at: now,
                 label: stored_label,
             })
@@ -1018,11 +1130,22 @@ impl ProjectStore {
     /// **Returns `Option`, not `Result`** — the only lookup on this type that
     /// swallows its own error, and the reason it can is that both callers had
     /// already ruled the same way on a degraded catalogue: a SQLite hiccup
-    /// must turn into neither a mis-scoped turn nor a refused one. The cost is
-    /// bounded (the row is then stamped the way it was stamped before rooms
-    /// existed); the alternative makes a transient database fault look like a
-    /// permissions failure. A ruling both callers share is exactly the thing
-    /// that must not be written twice.
+    /// must turn into neither a mis-scoped turn nor a refused one. A ruling
+    /// both callers share is exactly the thing that must not be written twice,
+    /// so the swallow stays here — but it is NOT free, and the old claim that
+    /// "the cost is bounded (the row is then stamped the way it was stamped
+    /// before rooms existed)" was simply wrong: a swallowed lookup error
+    /// answers "not-a-room" for a key a room may well own, and on a room's
+    /// FIRST message the producer's personal stamp is then written
+    /// permanently — `stamp_attribution` is create-only and the backfill
+    /// predicate cannot heal it (see [`Self::project_for_session_key`]). The
+    /// room can end up invisible to every member INCLUDING its owner while
+    /// `projects.list` keeps listing it. The swallow is therefore surfaced at
+    /// ERROR level, naming the fault: a database failure is not a missing
+    /// room, and an operator has to be able to tell the two apart in the log.
+    /// The alternative — propagating the error — makes a transient database
+    /// fault look like a permissions failure, which is the ruling the callers
+    /// share.
     ///
     /// What the callers do **not** share is what a `None` *means* to them —
     /// "leave the producer's stamp alone" after admission, "fall through to
@@ -1037,9 +1160,11 @@ impl ProjectStore {
         let claimed = match self.project_for_session_key(&session_key.to_key_string()) {
             Ok(pid) => pid,
             Err(e) => {
-                tracing::warn!(
+                tracing::error!(
                     error = %e,
-                    "projects: room claim lookup failed; treating the key as not-a-room"
+                    "projects: room claim lookup FAILED (database fault, not a missing room); \
+                     the key is treated as not-a-room and a room's first message may be \
+                     stamped personal"
                 );
                 None
             }
@@ -1050,9 +1175,11 @@ impl ProjectStore {
         let bound = match self.project_for_bound_session(session_key) {
             Ok(pid) => pid,
             Err(e) => {
-                tracing::warn!(
+                tracing::error!(
                     error = %e,
-                    "projects: conversation binding lookup failed; treating the key as not-a-room"
+                    "projects: conversation binding lookup FAILED (database fault, not a \
+                     missing room); the key is treated as not-a-room and a room's first \
+                     message may be stamped personal"
                 );
                 None
             }
@@ -1252,6 +1379,15 @@ impl ProjectStore {
     /// DEAD on the far side, so the implicit lookup would silently resolve to
     /// the legacy owner and file a member's folder into the owner's recents.
     /// Capture the owner before the boundary and hand it in here.
+    ///
+    /// The find and the create run under ONE lock acquisition, and the
+    /// create is the arbiter of "is this folder already registered": the
+    /// owner-keyed workspace index refuses the second row, and that refusal
+    /// is answered with the row that holds the folder instead of a server
+    /// fault. The find and the create used to be two separate locked
+    /// operations, so two concurrent adds of the same folder could both miss
+    /// the find — and the loser then hit the unique index and answered 500
+    /// for a folder that WAS registered.
     pub fn add_for(
         &self,
         path: &Path,
@@ -1259,31 +1395,60 @@ impl ProjectStore {
         owner: Option<&str>,
     ) -> Result<Project, ProjectError> {
         let absolute = canonical_dir(path)?;
-        if let Some(existing) = self.find_by_path_for(&absolute, owner)? {
-            let renamed = name
-                .as_deref()
-                .map(str::trim)
-                .filter(|n| !n.is_empty())
-                .map(str::to_string);
-            self.with_conn(|conn| {
-                match &renamed {
-                    Some(n) => conn.execute(
-                        "UPDATE projects SET last_used_at = ?2, updated_at = ?2, name = ?3
-                         WHERE id = ?1",
-                        rusqlite::params![existing.id, now_secs(), n],
-                    ),
-                    None => conn.execute(
-                        "UPDATE projects SET last_used_at = ?2 WHERE id = ?1",
-                        rusqlite::params![existing.id, now_secs()],
-                    ),
-                }
-                .map_err(db_err)?;
-                Ok(())
-            })?;
-            return self.require(&existing.id);
-        }
+        let renamed = name
+            .as_deref()
+            .map(str::trim)
+            .filter(|n| !n.is_empty())
+            .map(str::to_string);
         let display = resolve_display_name(&absolute, name)?;
-        self.create(&display, owner, Some(&absolute))
+        let now = now_secs();
+        let candidate = Project {
+            id: mint_id(),
+            name: display,
+            owner_user_id: owner.map(str::to_string),
+            workspace_path: Some(absolute.clone()),
+            status: ProjectStatus::Active,
+            created_at: now,
+            updated_at: now,
+            last_used_at: now,
+            current_session_key: None,
+        };
+        let id = self.with_conn(|conn| {
+            if let Some(existing) = Self::find_by_path_locked(conn, &absolute, owner)? {
+                Self::touch_registered_row(conn, &existing.id, renamed.as_deref())?;
+                return Ok(existing.id);
+            }
+            let tx = conn.unchecked_transaction().map_err(db_err)?;
+            match Self::insert_project_row(&tx, &candidate, now) {
+                Ok(()) => {
+                    tx.execute(
+                        "INSERT OR IGNORE INTO project_members (project_id, user_id, added_at)
+                         VALUES (?1, ?2, ?3)",
+                        rusqlite::params![
+                            candidate.id,
+                            candidate.owner_user_id.as_deref().unwrap_or(OWNER_USER_ID),
+                            now
+                        ],
+                    )
+                    .map_err(db_err)?;
+                    tx.commit().map_err(db_err)?;
+                    Self::republish_roster_locked(conn)?;
+                    Ok(candidate.id.clone())
+                }
+                Err(ProjectError::AlreadyExists(_)) => {
+                    // The index is the arbiter: the folder IS registered —
+                    // another writer got there first — so take that row
+                    // instead of failing the call with a server fault.
+                    drop(tx);
+                    let existing = Self::find_by_path_locked(conn, &absolute, owner)?
+                        .ok_or_else(|| ProjectError::AlreadyExists(absolute.clone()))?;
+                    Self::touch_registered_row(conn, &existing.id, renamed.as_deref())?;
+                    Ok(existing.id)
+                }
+                Err(e) => Err(e),
+            }
+        })?;
+        self.require(&id)
     }
 
     /// Materialise a fresh empty directory at `<parent>/<name>` then register
@@ -1303,7 +1468,20 @@ impl ProjectStore {
             return Err(ProjectError::AlreadyExists(target));
         }
         std::fs::create_dir_all(&target)?;
-        self.add(&target, Some(trimmed.to_string()))
+        // The directory exists BEFORE the registration, so a registration
+        // failure would leave an orphan directory on disk: the caller is told
+        // the whole operation failed, and the folder is still there — ready
+        // to be picked up later by somebody who never asked for it. Undo the
+        // half that succeeded (best effort: `remove_dir` only removes an
+        // EMPTY directory, and something may have been written into it in
+        // the meantime).
+        match self.add(&target, Some(trimmed.to_string())) {
+            Ok(project) => Ok(project),
+            Err(e) => {
+                let _ = std::fs::remove_dir(&target);
+                Err(e)
+            }
+        }
     }
 
     /// Look up the CURRENT CALLER's project bound to `path`.
@@ -1332,21 +1510,61 @@ impl ProjectStore {
         owner: Option<&str>,
     ) -> Result<Option<Project>, ProjectError> {
         let canonical = canonical_dir(path)?;
+        self.with_conn(|conn| Self::find_by_path_locked(conn, &canonical, owner))
+    }
+
+    /// The query behind [`Self::find_by_path_for`], without the lock and
+    /// without re-canonicalising the path.
+    ///
+    /// A private `fn(&Connection, ...)` rather than a `&self` method, for the
+    /// same reason [`Self::has_channel_binding`] is one: [`Self::add_for`]
+    /// runs inside a [`Self::with_conn`] closure and `with_conn`'s lock is not
+    /// reentrant, so it cannot call back into a locking method. The caller
+    /// hands in a path it has already canonicalised.
+    fn find_by_path_locked(
+        conn: &Connection,
+        canonical: &Path,
+        owner: Option<&str>,
+    ) -> Result<Option<Project>, ProjectError> {
         let owner_key = owner.unwrap_or(OWNER_USER_ID);
-        self.with_conn(|conn| {
-            conn.query_row(
-                "SELECT id, name, owner_user_id, workspace_path, status,
-                        created_at, updated_at, last_used_at, current_session_key
-                 FROM projects
-                 WHERE workspace_path = ?1
-                   AND COALESCE(owner_user_id, ?3) = ?2
-                   AND status = 'active'",
-                rusqlite::params![canonical.to_string_lossy(), owner_key, OWNER_USER_ID],
-                row_to_project,
-            )
-            .optional()
-            .map_err(db_err)
-        })
+        conn.query_row(
+            "SELECT id, name, owner_user_id, workspace_path, status,
+                    created_at, updated_at, last_used_at, current_session_key
+             FROM projects
+             WHERE workspace_path = ?1
+               AND COALESCE(owner_user_id, ?3) = ?2
+               AND status = 'active'",
+            rusqlite::params![canonical.to_string_lossy(), owner_key, OWNER_USER_ID],
+            row_to_project,
+        )
+        .optional()
+        .map_err(db_err)
+    }
+
+    /// Refresh the recency of a row that already holds the folder, and apply
+    /// an explicit rename.
+    ///
+    /// A private `fn(&Connection, ...)` for the same reason
+    /// [`Self::find_by_path_locked`] is one — [`Self::add_for`] runs inside a
+    /// [`Self::with_conn`] closure, and `with_conn`'s lock is not reentrant.
+    fn touch_registered_row(
+        conn: &Connection,
+        id: &str,
+        renamed: Option<&str>,
+    ) -> Result<(), ProjectError> {
+        match renamed {
+            Some(n) => conn.execute(
+                "UPDATE projects SET last_used_at = ?2, updated_at = ?2, name = ?3
+                 WHERE id = ?1",
+                rusqlite::params![id, now_secs(), n],
+            ),
+            None => conn.execute(
+                "UPDATE projects SET last_used_at = ?2 WHERE id = ?1",
+                rusqlite::params![id, now_secs()],
+            ),
+        }
+        .map_err(db_err)?;
+        Ok(())
     }
 
     // -- helpers -----------------------------------------------------------

@@ -40,16 +40,17 @@ impl StateDatabase {
         &self,
         envelope: &MemoryEventEnvelope,
     ) -> Result<i64, AlephError> {
+        let event_json = serde_json::to_string(&envelope.event)
+            .map_err(|e| AlephError::other(format!("Failed to serialize event: {e}")))?;
+        let actor = envelope.actor.to_string();
+        let tier = if envelope.event.is_skeleton() {
+            "skeleton"
+        } else {
+            "pulse"
+        };
         let envelope = envelope.clone();
-        self.with_conn(move |conn| {
-            let event_json = serde_json::to_string(&envelope.event)
-                .map_err(|e| AlephError::other(format!("Failed to serialize event: {e}")))?;
-            let tier = if envelope.event.is_skeleton() {
-                "skeleton"
-            } else {
-                "pulse"
-            };
 
+        self.with_conn(move |conn| {
             // Single statement: compute next seq for this fact_id and INSERT in
             // one go. SQLite serializes this through its per-connection write
             // lock, so two concurrent appends on the same fact_id cannot both
@@ -59,14 +60,13 @@ impl StateDatabase {
                 INSERT INTO memory_events (fact_id, seq, event_type, event_json, actor, tier, timestamp, correlation_id, partition)
                 SELECT ?1,
                        COALESCE((SELECT MAX(seq) FROM memory_events WHERE fact_id = ?1), 0) + 1,
-                       ?3, ?4, ?5, ?6, ?7, ?8, ?9
+                       ?2, ?3, ?4, ?5, ?6, ?7, ?8
                 "#,
                 params![
                     envelope.fact_id,
-                    envelope.fact_id, // fact_id appears twice: once for the row, once for the sub-query scope
                     envelope.event.event_type_tag(),
                     event_json,
-                    envelope.actor.to_string(),
+                    actor,
                     tier,
                     envelope.timestamp,
                     envelope.correlation_id,
@@ -243,9 +243,17 @@ impl StateDatabase {
     /// Recognizes both the new `NoteMigrated` tag and the legacy `FactMigrated`
     /// tag for backward compatibility with pre-R2.2 event stores.
     pub async fn has_migration_events(&self) -> Result<bool, AlephError> {
-        let new_count = self.count_memory_events(Some("NoteMigrated")).await?;
-        let legacy_count = self.count_memory_events(Some("FactMigrated")).await?;
-        Ok(new_count + legacy_count > 0)
+        self.with_conn(|conn| {
+            let exists: bool = conn
+                .query_row(
+                    "SELECT EXISTS(SELECT 1 FROM memory_events WHERE event_type IN ('NoteMigrated', 'FactMigrated'))",
+                    [],
+                    |row| row.get(0),
+                )
+                .map_err(|e| AlephError::other(format!("Failed to probe migration events: {e}")))?;
+            Ok(exists)
+        })
+        .await
     }
 
     /// Count total memory events, optionally filtered by event type.

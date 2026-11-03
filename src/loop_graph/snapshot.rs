@@ -85,7 +85,7 @@ pub struct EventRecord {
 /// Public full record — what `get_snapshot` returns, with the parsed rows
 /// restored to typed values (so callers do not have to round-trip through JSON
 /// to do anything useful with the contents).
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Snapshot {
     pub summary: SnapshotSummary,
     pub nodes: Vec<GraphNode>,

@@ -239,7 +239,8 @@ impl PiiSecretsGuardrail {
                         .await?,
                 )),
                 Value::Array(items) => {
-                    let mut out = Vec::with_capacity(items.len());
+                    let cap = items.len().min(MAX_SCAN_NODES as usize);
+                    let mut out = Vec::with_capacity(cap);
                     for item in items {
                         out.push(
                             self.scan_tool_args_at_depth(
@@ -256,7 +257,8 @@ impl PiiSecretsGuardrail {
                     Ok(Value::Array(out))
                 }
                 Value::Object(map) => {
-                    let mut out = serde_json::Map::with_capacity(map.len());
+                    let cap = map.len().min(MAX_SCAN_NODES as usize);
+                    let mut out = serde_json::Map::with_capacity(cap);
                     for (key, val) in map {
                         let new_key = self
                             .scan_tool_arg_leaf(key, resolver_ref, warnings, sources)

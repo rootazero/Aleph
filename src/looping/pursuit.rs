@@ -159,7 +159,10 @@ pub fn tick_prompt(state: &LoopState, tokens_now: u64, now_ms: u64) -> String {
 fn remaining_quota_clause(state: &LoopState, n: u32, tokens_now: u64, now_ms: u64) -> String {
     let mut quota = String::new();
     if let Some(max) = state.max_iterations {
-        quota.push_str(&format!(" {} tick(s) left before the cap.", max - n));
+        quota.push_str(&format!(
+            " {} tick(s) left before the cap.",
+            max.saturating_sub(n)
+        ));
     }
     if let Some(deadline) = state.deadline_ms {
         if now_ms != 0 && deadline > now_ms {

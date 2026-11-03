@@ -451,6 +451,30 @@ impl ExtensionManager {
                     summary
                         .errors
                         .push(format!("{}: {}", dir_path.display(), error));
+                    if let Some(winner) = winners.get(&fallback_id) {
+                        // A higher-priority copy of this id already parsed and
+                        // won the shadowing contest. This copy is a broken
+                        // shadowed source, not the plugin: registering its
+                        // error row would replace the healthy winner with an
+                        // error row and take a working plugin out of the
+                        // registry.
+                        self.plugin_registry
+                            .write()
+                            .await
+                            .add_diagnostic(PluginDiagnostic {
+                                level: DiagnosticLevel::Warn,
+                                message: format!(
+                                    "{} could not be parsed and is shadowed by the copy at {}: {}",
+                                    dir_path.display(),
+                                    winner.display(),
+                                    error
+                                ),
+                                plugin_id: Some(fallback_id.clone()),
+                                source: Some("discovery".to_string()),
+                            });
+                        failed_plugin_ids.insert(fallback_id.clone());
+                        continue;
+                    }
                     if failed_plugin_ids.insert(fallback_id.clone()) {
                         self.plugin_registry
                             .write()
@@ -796,6 +820,64 @@ impl ExtensionManager {
         }
     }
 
+    /// Write an admission refusal onto the plugin's registry row.
+    ///
+    /// The refusal has to be visible: "refused by policy" and "not installed"
+    /// must not render the same.
+    async fn record_admission_refusal(&self, id: &str, origin: PluginOrigin, error: &MountError) {
+        let mut reg = self.plugin_registry.write().await;
+        let Some(row) = reg.get_plugin_mut(id) else {
+            return;
+        };
+        match error {
+            MountError::Blocked { .. } => {
+                row.status = PluginStatus::Blocked(format!("{origin:?}"));
+                row.error = Some(error.to_string());
+            }
+            MountError::Disabled(_) => {
+                row.status = PluginStatus::Disabled;
+                row.error = None;
+            }
+            MountError::NotEnabled(_) => {
+                row.status = PluginStatus::Disabled;
+                row.error = Some(error.to_string());
+            }
+            _ => {}
+        }
+    }
+
+    /// The parsed identity of a plugin must be the id that was authorised.
+    ///
+    /// Returns the reason the mount must not proceed, or `None` when the
+    /// parsed plugin claims the requested id. Both the adapter output and the
+    /// manifest are checked: the row, the capability registrations and the
+    /// WASM module all key off these two ids, and they are only equal when
+    /// nobody changed the directory under the registry.
+    fn identity_mismatch(
+        id: &str,
+        output: &AdapterOutput,
+        manifest: Option<&PluginManifest>,
+    ) -> Option<String> {
+        if output.plugin_id != id {
+            return Some(format!(
+                "plugin directory parses as id '{}' but '{}' was authorised; \
+                 re-discover the plugin before mounting it",
+                output.plugin_id, id
+            ));
+        }
+        let Some(manifest) = manifest else {
+            return None;
+        };
+        if manifest.id != id {
+            return Some(format!(
+                "plugin manifest declares id '{}' but '{}' was authorised; \
+                 re-discover the plugin before mounting it",
+                manifest.id, id
+            ));
+        }
+        None
+    }
+
     // ── Mount ─────────────────────────────────────────────────────────────
 
     async fn mount_inner(&self, id: &str) -> Result<PluginStatus, MountError> {
@@ -825,24 +907,7 @@ impl ExtensionManager {
             .ok_or_else(|| MountError::NotFound(id.to_string()))?;
 
         if let Err(e) = self.admit(id, origin).await {
-            let mut reg = self.plugin_registry.write().await;
-            if let Some(row) = reg.get_plugin_mut(id) {
-                match &e {
-                    MountError::Blocked { .. } => {
-                        row.status = PluginStatus::Blocked(format!("{origin:?}"));
-                        row.error = Some(e.to_string());
-                    }
-                    MountError::Disabled(_) => {
-                        row.status = PluginStatus::Disabled;
-                        row.error = None;
-                    }
-                    MountError::NotEnabled(_) => {
-                        row.status = PluginStatus::Disabled;
-                        row.error = Some(e.to_string());
-                    }
-                    _ => {}
-                }
-            }
+            self.record_admission_refusal(id, origin, &e).await;
             return Err(e);
         }
 
@@ -881,6 +946,32 @@ impl ExtensionManager {
                 });
             }
         };
+        // The id that was authorised is the id that must run.
+        //
+        // The trust decision and the operator's preference were made for the
+        // id in the registry row; the code that runs comes from re-parsing
+        // the plugin directory. A directory that now declares a different id
+        // would otherwise run under the new id with the authorisation of the
+        // old one — the operator vouched for `allowed`, and `replacement`
+        // would run with that vouch behind it.
+        if let Some(reason) = Self::identity_mismatch(id, &output, manifest.as_ref()) {
+            let mut reg = self.plugin_registry.write().await;
+            if let Some(row) = reg.get_plugin_mut(id) {
+                row.status = PluginStatus::Error(reason.clone());
+                row.error = Some(reason.clone());
+            }
+            return Err(MountError::Parse {
+                id: id.to_string(),
+                reason,
+            });
+        }
+        // Re-check admission for the identity that is about to run: the
+        // operator's preference and the trust policy may have changed
+        // between the first check and the parse.
+        if let Err(e) = self.admit(id, origin).await {
+            self.record_admission_refusal(id, origin, &e).await;
+            return Err(e);
+        }
         let record = Self::build_record(&output, root_dir, origin, scope_key, manifest.as_ref());
         if super::runtime_owner::eligible(&output, manifest.as_ref()) {
             return Ok(self
@@ -4099,7 +4190,7 @@ handler = "handler"
             .cleanup_report
             .iter()
             .any(|s| s.step == "registry_row" && s.error.is_none()));
-        assert!(PluginsConfig::load(&cfg_path).is_enabled_for("qa-wasm", PluginOrigin::Workspace));
+        assert!(PluginsConfig::load(&cfg_path).unwrap().is_enabled_for("qa-wasm", PluginOrigin::Workspace));
         assert!(manager
             .plugins_config
             .read()
@@ -4129,7 +4220,7 @@ handler = "handler"
         assert!(outcome.persisted);
         assert_eq!(outcome.runtime_outcome, PluginRuntimeOutcome::NotDiscovered);
         assert_eq!(outcome.actual_state, "not_discovered");
-        assert!(!PluginsConfig::load(&path).is_enabled_for("absent", PluginOrigin::Global));
+        assert!(!PluginsConfig::load(&path).unwrap().is_enabled_for("absent", PluginOrigin::Global));
         assert!(manager.get_plugin_record("absent").await.is_none());
     }
 
@@ -4174,7 +4265,7 @@ handler = "handler"
             Poll::Ready(())
         })
         .await;
-        assert!(!PluginsConfig::load(&path).is_enabled_for("alpha", PluginOrigin::Workspace));
+        assert!(!PluginsConfig::load(&path).unwrap().is_enabled_for("alpha", PluginOrigin::Workspace));
         assert!(!manager
             .plugins_config
             .read()
@@ -4189,7 +4280,7 @@ handler = "handler"
         assert_eq!(enabled.runtime_outcome, PluginRuntimeOutcome::Mounted);
         assert_eq!(enabled.actual_state, "loaded");
         assert_ne!(disabled.operation_id, enabled.operation_id);
-        assert!(PluginsConfig::load(&path).is_enabled_for("alpha", PluginOrigin::Workspace));
+        assert!(PluginsConfig::load(&path).unwrap().is_enabled_for("alpha", PluginOrigin::Workspace));
         assert!(manager
             .get_plugin_record("alpha")
             .await
@@ -4345,7 +4436,7 @@ handler = "handler"
             assert_eq!(outcome["actual_state"], "failed");
             assert!(!outcome["cleanup_report"].as_array().unwrap().is_empty());
         }
-        assert!(PluginsConfig::load(&path).is_enabled_for("qa-wasm", PluginOrigin::Workspace));
+        assert!(PluginsConfig::load(&path).unwrap().is_enabled_for("qa-wasm", PluginOrigin::Workspace));
         assert!(manager.scope_steps("qa-wasm").is_none());
     }
 
@@ -4976,6 +5067,97 @@ handler = "handler"
             manager.mount("alpha").await,
             Err(MountError::AlreadyMounted(_))
         ));
+    }
+
+    #[tokio::test]
+    async fn a_malformed_lower_priority_copy_does_not_replace_the_healthy_winner() {
+        let tmp = tempfile::tempdir().unwrap();
+        let _home = isolated_home(tmp.path());
+        // The project copy (priority 20) is healthy.
+        write_static_plugin(tmp.path(), "alpha");
+        // The global copy (priority 10) of the same id is malformed. It is
+        // discovered after the winner and must not take the winner's row.
+        let global_dir = tmp.path().join("aleph-state/plugins/alpha");
+        std::fs::create_dir_all(global_dir.join(".claude-plugin")).unwrap();
+        std::fs::write(
+            global_dir.join(".claude-plugin/plugin.toml"),
+            "name = \"alpha\"\nversion = \n",
+        )
+        .unwrap();
+
+        let (manager, _) = isolated_manager(tmp.path()).await;
+        manager.load_all().await.unwrap();
+
+        let row = manager
+            .get_plugin_record("alpha")
+            .await
+            .expect("the healthy copy keeps the row");
+        assert!(row.status.is_active(), "{:?}", row.status);
+        assert_eq!(
+            row.root_dir,
+            tmp.path().join("plugins/alpha"),
+            "the winning copy is the project one"
+        );
+        let diagnostics = manager.get_plugin_registry().await.diagnostics().to_vec();
+        assert!(
+            diagnostics
+                .iter()
+                .any(|d| d.message.contains("shadowed") && d.message.contains("alpha")),
+            "{diagnostics:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_plugin_that_changed_its_id_is_not_mounted_under_the_authorised_id() {
+        let tmp = tempfile::tempdir().unwrap();
+        let _home = isolated_home(tmp.path());
+        write_static_plugin(tmp.path(), "alpha");
+        let (manager, _) = isolated_manager(tmp.path()).await;
+        let catalog = std::sync::Arc::new(crate::tool_metadata::ToolCatalog::new());
+        manager.set_tool_catalog(catalog.clone());
+        manager.load_all().await.unwrap();
+        manager.unmount("alpha").await.unwrap();
+
+        // The directory is swapped under the registry row: the id the
+        // operator authorised is `alpha`, the plugin now declares
+        // `replacement`. Mounting `alpha` must not run `replacement` with
+        // `alpha`'s authorisation.
+        std::fs::write(
+            tmp.path().join("plugins/alpha/.claude-plugin/plugin.toml"),
+            "name = \"replacement\"\nversion = \"1.0.0\"\n",
+        )
+        .unwrap();
+
+        let error = manager
+            .mount("alpha")
+            .await
+            .expect_err("a changed identity must not mount");
+        assert!(
+            matches!(&error, MountError::Parse { id, reason }
+                if id == "alpha" && reason.contains("re-discover")),
+            "{error:?}"
+        );
+        assert!(manager.scope_steps("alpha").is_none(), "no scope started");
+        let row = manager.get_plugin_record("alpha").await.unwrap();
+        assert!(
+            matches!(row.status, PluginStatus::Error(_)),
+            "the row must say why: {:?}",
+            row.error
+        );
+        assert!(
+            manager.get_plugin_record("replacement").await.is_none(),
+            "the new id never becomes a row"
+        );
+        let names: Vec<String> = catalog
+            .list_all()
+            .await
+            .into_iter()
+            .map(|t| t.name)
+            .collect();
+        assert!(
+            !names.iter().any(|name| name.starts_with("replacement:")),
+            "{names:?}"
+        );
     }
 
     #[tokio::test]

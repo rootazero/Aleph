@@ -1,35 +1,23 @@
 //! Consolidated unit tests for the harness_bridge module.
-#![allow(unused_imports)]
 
 use crate::sync_primitives::Arc;
 use std::collections::HashMap;
 
-use async_trait::async_trait;
 use tokio::sync::{broadcast, Mutex};
 use tokio_util::sync::CancellationToken;
 
 use crate::agents::AgentRegistry;
-use crate::context::budget::{ContextBudget, ContextBudgetConfig};
-use crate::context::compact::compactor::{CompactorConfig, ContextCompactor};
-use crate::harness::agent::AgentHarness;
 use crate::harness::callback::HarnessCallback;
-use crate::harness::deps::HarnessDeps;
-use crate::mcp::manager::McpManagerHandle;
-use crate::memory::store::MemoryBackend;
 use crate::orchestrator::dispatch::{FlowOutcome, FlowStreamEvent, HarnessRunner};
 use crate::orchestrator::errors::FlowError;
 use crate::orchestrator::flow_spec::{FlowInput, FlowSpec};
-use crate::providers::{AiProvider, DefaultProviderHandle};
+use crate::providers::AiProvider;
 use crate::routing::session_key::SessionKey;
-use crate::sandbox::Sandbox;
 use crate::session::events::SessionEvent;
 use crate::session::service::{SessionId, SessionService};
-use crate::tools::service::ToolService;
-use crate::verification::VerifierChain;
 
 use super::context_blocks::*;
 use super::prompt_build::*;
-use super::runner_impl::*;
 use super::*;
 
 use crate::gateway::telecom::persisted_marker::{PersistedTelecomMarker, MARKER_VERSION};
@@ -1355,12 +1343,19 @@ async fn a_failed_run_does_not_report_itself_completed() {
 /// The window per call site is the call's own balanced parentheses, not a line
 /// count — `think.rs` spells the argument fully-qualified across three lines,
 /// and a fixed window would either miss it or read into the next statement.
+///
+/// The scan reads PRODUCTION code only: `production_code_text` returns an
+/// empty string for a declared test module, so a file under `src/` that is
+/// test code cannot come back as "100% production" and be scanned as if it
+/// shipped. It also blanks every literal's payload, so a `)` inside a string
+/// can no longer truncate the argument window.
 #[test]
 fn no_site_records_a_completed_terminate_reason() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
     let mut sites = 0usize;
     for (path, src) in crate::utils::source_scan::rust_sources_under(&root) {
-        let code = crate::utils::source_scan::production_code_lines(&src);
+        let code =
+            crate::utils::source_scan::production_code_text(std::path::Path::new(&path), &src);
         let bytes = code.as_bytes();
         for (at, _) in code.match_indices("set_terminate_reason(") {
             let open = at + "set_terminate_reason".len();
@@ -1390,6 +1385,13 @@ fn no_site_records_a_completed_terminate_reason() {
             );
         }
     }
+    // The floor is derived from the production call sites the scanner above
+    // now sees. Nine `set_terminate_reason(` occurrences exist in production
+    // code: the definition at `src/harness/agent.rs:351` plus eight call
+    // sites — `src/harness/agent.rs:374`, `:413`, `:556`, `:623` and
+    // `src/harness/agent/think.rs:1224`, `:1280`, `:1284`, `:1691`. The
+    // floor of 8 sits one below that count, so one site can be removed
+    // without the guard going blind while a bulk deletion still trips it.
     assert!(
         sites >= 8,
         "expected the harness loop's cap sites to still record reasons; found \

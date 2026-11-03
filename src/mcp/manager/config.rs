@@ -152,8 +152,8 @@ impl McpPersistentConfig {
         // and the next `load` reading the old (pre-rename) file.
         #[cfg(unix)]
         {
-            if let Ok(file) = std::fs::File::open(&temp_path) {
-                let _ = file.sync_all();
+            if let Ok(file) = tokio::fs::File::open(&temp_path).await {
+                let _ = file.sync_all().await;
             }
         }
 
@@ -174,8 +174,8 @@ impl McpPersistentConfig {
         // Same defensive pattern as auth/storage.rs::save_to_file.
         #[cfg(unix)]
         if let Some(parent) = path.parent() {
-            if let Ok(dir) = std::fs::File::open(parent) {
-                if let Err(e) = dir.sync_all() {
+            if let Ok(dir) = tokio::fs::File::open(parent).await {
+                if let Err(e) = dir.sync_all().await {
                     tracing::warn!(
                         parent = %parent.display(),
                         error = %e,
@@ -272,8 +272,10 @@ fn expand_env_var(s: &str) -> Option<String> {
     // Static regex compiled once, reused on every call
     static ENV_VAR_RE: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();
     let re = ENV_VAR_RE.get_or_init(|| {
-        Regex::new(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}")
-            .unwrap_or_else(|_| unreachable!("hardcoded regex is valid"))
+        match Regex::new(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}") {
+            Ok(re) => re,
+            Err(e) => panic!("hardcoded regex is valid: {e}"),
+        }
     });
 
     let mut result = s.to_string();

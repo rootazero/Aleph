@@ -6,8 +6,7 @@ use regex::Regex;
 
 /// Regex matching `[[target]]` and `[[target|alias]]` wikilinks.
 static WIKILINK_RE: LazyLock<Regex> = LazyLock::new(|| {
-    // rust-doctor-disable-next-line unwrap-in-production
-    Regex::new(r"\[\[([^\]\|]+)(?:\|([^\]]*))?\]\]").unwrap()
+    Regex::new(r"\[\[([^\]\|]+)(?:\|([^\]]*))?\]\]").expect("wikilink regex must compile")
 });
 
 /// Extract all wikilink targets from `text`.
@@ -19,7 +18,7 @@ static WIKILINK_RE: LazyLock<Regex> = LazyLock::new(|| {
 pub fn extract_wikilinks(text: &str) -> Vec<String> {
     WIKILINK_RE
         .captures_iter(text)
-        .map(|cap| cap[1].to_string())
+        .filter_map(|cap| cap.get(1).map(|m| m.as_str().to_string()))
         .collect()
 }
 
@@ -43,13 +42,13 @@ pub fn extract_wikilinks_with_alias(text: &str) -> Vec<(String, Option<String>)>
 pub fn rewrite_wikilinks(text: &str, old_name: &str, new_name: &str) -> String {
     WIKILINK_RE
         .replace_all(text, |caps: &regex::Captures| {
-            if &caps[1] == old_name {
+            if caps.get(1).is_some_and(|m| m.as_str() == old_name) {
                 match caps.get(2) {
                     Some(alias) => format!("[[{new_name}|{}]]", alias.as_str()),
                     None => format!("[[{new_name}]]"),
                 }
             } else {
-                caps[0].to_string()
+                caps.get(0).map_or("", |m| m.as_str()).to_string()
             }
         })
         .into_owned()
@@ -108,7 +107,8 @@ pub fn rewrite_relation_targets(text: &str, old_title: &str, new_title: &str) ->
 fn rewrite_relation_line(line: &str, old_title: &str, new_title: &str) -> String {
     let (body, term) = split_line_terminator(line);
     let trimmed = body.trim_start();
-    let indent = &body[..body.len() - trimmed.len()];
+    let indent_len = body.len().saturating_sub(trimmed.len());
+    let indent = body.get(..indent_len).unwrap_or("");
     let Some(after_dash) = trimmed.strip_prefix('-') else {
         return line.to_string();
     };
@@ -136,12 +136,10 @@ fn swap_title_segment(value: &str, old_title: &str, new_title: &str) -> Option<S
 
 /// Strip a single pair of surrounding ASCII single/double quotes, if present.
 fn strip_simple_quotes(s: &str) -> &str {
-    let bytes = s.as_bytes();
-    if bytes.len() >= 2
-        && (bytes[0] == b'"' || bytes[0] == b'\'')
-        && bytes[bytes.len() - 1] == bytes[0]
-    {
-        &s[1..s.len() - 1]
+    if let Some(inner) = s.strip_prefix('"').and_then(|t| t.strip_suffix('"')) {
+        inner
+    } else if let Some(inner) = s.strip_prefix('\'').and_then(|t| t.strip_suffix('\'')) {
+        inner
     } else {
         s
     }

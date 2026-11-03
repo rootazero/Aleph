@@ -304,12 +304,13 @@ fn flatten_union(parent: &mut serde_json::Map<String, Value>, variants: &[Value]
             .iter()
             .position(|v| v.get("type").and_then(|t| t.as_str()) == Some("null"));
         if let Some(idx) = null_idx {
-            let non_null = &variants[1 - idx];
-            if let Some(obj) = non_null.as_object() {
-                for (k, v) in obj {
-                    if !UNSUPPORTED_KEYWORDS.contains(&k.as_str()) {
-                        // rust-doctor-disable-next-line excessive-clone
-                        parent.insert(k.clone(), v.clone());
+            if let Some(non_null) = variants.get(1 - idx) {
+                if let Some(obj) = non_null.as_object() {
+                    for (k, v) in obj {
+                        if !UNSUPPORTED_KEYWORDS.contains(&k.as_str()) {
+                            // rust-doctor-disable-next-line excessive-clone
+                            parent.insert(k.clone(), v.clone());
+                        }
                     }
                 }
             }
@@ -406,9 +407,9 @@ fn try_merge_enum(variants: &[Value]) -> Option<(String, Vec<Value>)> {
             c.clone()
         } else {
             let e = obj.get("enum").and_then(|e| e.as_array())?;
-            if e.len() == 1 {
+            if let [single] = e.as_slice() {
                 // rust-doctor-disable-next-line excessive-clone
-                e[0].clone()
+                single.clone()
             } else {
                 return None;
             }

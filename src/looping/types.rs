@@ -490,7 +490,7 @@ impl LoopState {
 /// so the two countdowns cannot drift.
 fn next_tick_line(state: &LoopState, now_ms: u64) -> Option<String> {
     match state.cadence {
-        Cadence::ModelPaced { .. } => Some(match state.next_wake_ms {
+        Cadence::ModelPaced { .. } => Some(match state.next_wake_ms.or(state.pending_tick_wake_ms) {
             // `now_ms == 0` (clock unavailable) still gets a sensible line —
             // "unset" tells the operator the fallback cadence is in effect
             // rather than swallowing the line.

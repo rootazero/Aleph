@@ -132,15 +132,26 @@ impl SharedTokenManager {
     /// even if the token file is lost.
     pub fn generate_token(&self) -> Result<String, SharedTokenError> {
         let token = format!("aleph-{}", Uuid::new_v4());
-        let hash = hmac_sign(&self.secret, &token);
+        self.commit_token(&token)?;
+        Ok(token)
+    }
+
+    /// Persist `token` as the live shared token and make it the in-memory one.
+    ///
+    /// Validation only ever compares against the persisted HMAC hash, so this
+    /// is the moment the previous token stops being accepted. Callers that must
+    /// keep the old token working until another store is in sync (see
+    /// [`Self::reset_token`]) therefore call this last.
+    fn commit_token(&self, token: &str) -> Result<(), SharedTokenError> {
+        let hash = hmac_sign(&self.secret, token);
 
         self.store
-            .set_shared_token_with_secret(&hash, &self.secret, Some(&token))
+            .set_shared_token_with_secret(&hash, &self.secret, Some(token))
             .map_err(|e| SharedTokenError::Storage(e.to_string()))?;
 
         let mut current = self.current_token.lock().unwrap_or_else(|e| e.into_inner());
-        *current = Some(token.clone());
-        Ok(token)
+        *current = Some(token.to_owned());
+        Ok(())
     }
 
     /// Validate a token against the stored hash.
@@ -304,71 +315,83 @@ impl SharedTokenManager {
     /// Reset the token and re-encrypt all vault entries with the new token.
     ///
     /// Flow:
-    /// 1. Decrypt all entries with current token
-    /// 2. Generate new token (updates HMAC, `current_token`)
-    /// 3. Re-encrypt all entries with new token
-    /// 4. Atomically replace vault entries
+    /// 1. Decrypt all entries with the current token and re-encrypt them
+    ///    with a freshly minted token that is not persisted yet
+    /// 2. Commit the re-encrypted vault
+    /// 3. Persist the new token; if that fails, roll the vault back to the
+    ///    old ciphertexts so the still-live old token can decrypt them
+    ///
+    /// The vault is committed before the token flips because the vault write
+    /// is the failure-prone step (filesystem), and because the rollback must
+    /// not depend on the component that just failed (the token store).
     pub fn reset_token(&self) -> Result<String, SharedTokenError> {
         use std::collections::HashMap;
 
         let old_crypto = self.crypto()?;
+        let new_token = format!("aleph-{}", Uuid::new_v4());
+        let new_crypto = SecretsCrypto::new(new_token.clone());
 
-        // 1. Decrypt all entries with old token
-        let vault = self.vault.read().unwrap_or_else(|e| e.into_inner());
-        // Plaintext name/value pairs are held in `Zeroizing<String>` so the
-        // decrypted secrets are wiped from the heap on drop — including every
-        // early-return error path below — instead of lingering as plain
-        // `String`s until the allocator reuses the pages (audit secrets I-1;
-        // same zeroize-on-drop invariant as `DecryptedSecret` and the
-        // `Zeroizing<[u8; 32]>` derived keys in `secrets::crypto`).
-        let mut plaintext_entries: Vec<(Zeroizing<String>, Zeroizing<String>, EncryptedEntry)> =
-            Vec::new();
-        for (name, entry) in vault.entries() {
-            let decrypted = old_crypto
-                .decrypt(&entry.ciphertext, &entry.nonce, &entry.salt)
-                .map_err(|e| {
-                    SharedTokenError::Storage(format!("Decrypt failed for '{name}': {e}"))
-                })?;
-            plaintext_entries.push((
-                Zeroizing::new(name.clone()),
-                Zeroizing::new(decrypted),
-                entry.clone(),
-            ));
-        }
-        drop(vault);
-
-        // 2. Generate new token (updates HMAC hash, current_token)
-        let new_token = self.generate_token()?;
-        let new_crypto = self.crypto()?;
-
-        // 3. Re-encrypt all entries with new token
         let mut new_entries = HashMap::new();
-        for (mut name, plaintext, old_entry) in plaintext_entries {
-            let encrypted = new_crypto.encrypt(plaintext.as_str()).map_err(|e| {
-                SharedTokenError::Storage(format!("Re-encrypt failed for '{}': {e}", name.as_str()))
+        let mut old_entries = HashMap::new();
+
+        // The vault write lock is held for the whole rotation: the replacement
+        // below drops every entry it does not carry, so a concurrent
+        // `store_secret` must not be able to slip in between the read and the
+        // replace — and it must not be able to write an entry under the old
+        // key either, after the vault has been re-encrypted.
+        let mut vault = self.vault.write().unwrap_or_else(|e| e.into_inner());
+
+        // 1. Decrypt all entries with the old token, re-encrypting each one
+        //    with the new token.
+        // The decrypted value is held in `Zeroizing<String>` so it is wiped
+        // from the heap on drop — including every early-return error path
+        // below — instead of lingering as a plain `String` until the
+        // allocator reuses the pages (audit secrets I-1; same zeroize-on-drop
+        // invariant as `DecryptedSecret` and the `Zeroizing<[u8; 32]>` derived
+        // keys in `secrets::crypto`).
+        for (name, entry) in vault.entries() {
+            let decrypted = Zeroizing::new(
+                old_crypto
+                    .decrypt(&entry.ciphertext, &entry.nonce, &entry.salt)
+                    .map_err(|e| {
+                        SharedTokenError::Storage(format!("Decrypt failed for '{name}': {e}"))
+                    })?,
+            );
+            let encrypted = new_crypto.encrypt(decrypted.as_str()).map_err(|e| {
+                SharedTokenError::Storage(format!("Re-encrypt failed for '{name}': {e}"))
             })?;
-            // Move the name out of its `Zeroizing` wrapper (leaving an empty
-            // string behind to be wiped) so it can key the replacement map —
-            // the vault format is unchanged.
-            let name = std::mem::take(&mut *name);
+            old_entries.insert(name.clone(), entry.clone());
             new_entries.insert(
-                name,
+                name.clone(),
                 EncryptedEntry {
                     ciphertext: encrypted.ciphertext,
                     nonce: encrypted.nonce,
                     salt: encrypted.salt,
-                    created_at: old_entry.created_at,
+                    created_at: entry.created_at,
                     updated_at: chrono::Utc::now().timestamp(),
-                    metadata: old_entry.metadata,
+                    metadata: entry.metadata.clone(),
                 },
             );
         }
 
-        // 4. Atomic replace
-        let mut vault = self.vault.write().unwrap_or_else(|e| e.into_inner());
+        // 2. Commit the re-encrypted vault. The old token is still the live
+        //    credential here, so a failure leaves the vault exactly as it was
+        //    and the old token still decrypts it.
         vault
             .replace_all(new_entries)
             .map_err(|e| SharedTokenError::Storage(e.to_string()))?;
+
+        // 3. Persist the new token. If this fails the vault is already
+        //    encrypted under the new key, so put the old ciphertexts back: the
+        //    old token is still the live one and it can still decrypt them.
+        if let Err(e) = self.commit_token(&new_token) {
+            vault.replace_all(old_entries).map_err(|rollback| {
+                SharedTokenError::Storage(format!(
+                    "token rotation failed ({e}) and the vault rollback failed as well ({rollback}); the stored secrets may be unreadable"
+                ))
+            })?;
+            return Err(e);
+        }
 
         Ok(new_token)
     }
@@ -553,6 +576,30 @@ mod tests {
         // Old token no longer validates
         assert!(!mgr.validate(&old_token).unwrap());
         assert!(mgr.validate(&new_token).unwrap());
+    }
+
+    /// A rotation must not be able to destroy the stored secrets when the
+    /// vault write fails: the old code had already persisted the new token by
+    /// then, which left every entry encrypted under a key nobody held.
+    #[test]
+    fn a_failed_vault_write_during_rotation_keeps_the_old_token_working() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let vault_path = dir.path().join("test.vault");
+        let store = Arc::new(SecurityStore::in_memory().unwrap());
+        let mgr = SharedTokenManager::new(store, vault_path.clone());
+
+        let old_token = mgr.generate_token().unwrap();
+        mgr.store_secret("anthropic", "sk-ant-secret").unwrap();
+
+        // Every vault write fails from here on: the vault path is a directory,
+        // so the atomic rename cannot land.
+        std::fs::remove_file(&vault_path).unwrap();
+        std::fs::create_dir(&vault_path).unwrap();
+
+        assert!(mgr.reset_token().is_err());
+        assert!(mgr.validate(&old_token).unwrap());
+        let secret = mgr.get_secret("anthropic").unwrap().unwrap();
+        assert_eq!(secret.expose(), "sk-ant-secret");
     }
 
     #[test]

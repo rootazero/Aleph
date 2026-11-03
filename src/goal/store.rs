@@ -17,7 +17,7 @@ use crate::goal::types::{Goal, GoalStatus};
 fn now_ms() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |d| d.as_millis() as u64)
+        .map_or(0, |d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX))
 }
 
 /// A claimed continuation presumed dead once this long past its due wake — the
@@ -375,7 +375,17 @@ impl GoalStore {
             )
             .optional()
             .map_err(|e| AlephError::other(format!("goal get: {e}")))?;
-        Ok(row.and_then(|j| serde_json::from_str::<Goal>(&j).ok()))
+        Ok(row.and_then(|j| match serde_json::from_str::<Goal>(&j) {
+            Ok(goal) => Some(goal),
+            Err(e) => {
+                tracing::error!(
+                    session_id = %session_id,
+                    error = %e,
+                    "failed to deserialize stored goal JSON"
+                );
+                None
+            }
+        }))
     }
 
     /// Write a goal under an already-held connection lock (see [`Self::get_locked`]).

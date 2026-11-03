@@ -170,78 +170,35 @@ impl StateDatabase {
         status: TaskStatus,
     ) -> Result<(), AlephError> {
         let task_id = task_id.to_string();
+        let status_str = status.to_string();
         let now = chrono::Utc::now().timestamp();
         self.with_conn(move |conn| {
-            // Wrap all updates in a transaction so started_at / completed_at
-            // stay in sync with status even on crash.
-            let tx = conn
-                .transaction()
-                .map_err(|e| AlephError::config(format!("Failed to begin transaction: {e}")))?;
-
-            // Run the main status UPDATE first. Bail out with the not-found
-            // error BEFORE the side executes fire — otherwise a typo'd
-            // task_id would still write `started_at` / `completed_at`
-            // UPDATE records into the WAL (matching zero rows but still
-            // costing a savepoint + log entry per side execute), only to
-            // roll everything back via `tx` drop on the error path. The
-            // 0-check belongs next to the main UPDATE; everything else is
-            // gated on that.
-            let updated = tx
+            let updated = conn
                 .execute(
                     r#"
                     UPDATE agent_tasks
-                    SET status = ?1, updated_at = ?2
+                    SET status = ?1,
+                        updated_at = ?2,
+                        started_at = CASE
+                            WHEN ?1 = 'running' AND started_at IS NULL THEN ?2
+                            ELSE started_at
+                        END,
+                        completed_at = CASE
+                            WHEN ?1 IN ('completed', 'failed') AND completed_at IS NULL THEN ?2
+                            ELSE completed_at
+                        END
                     WHERE id = ?3
                     "#,
-                    params![status.to_string(), now, task_id],
+                    params![status_str, now, task_id],
                 )
                 .map_err(|e| AlephError::config(format!("Failed to update task status: {e}")))?;
 
             if updated == 0 {
-                // Surface a typed error so callers can distinguish
-                // "task vanished" from "infrastructure broke". Dropping
-                // the uncommitted `tx` here is the correct rollback path —
-                // no rows were touched, and we never paid the cost of the
-                // side executes below.
-                //
-                // The WHERE clause matches only on `id`, so this fires for
-                // both "task vanished" and "task already in a status where
-                // the row is invisible to us" — but a no-op update on an
-                // existing row would have returned `updated == 1` and
-                // overwritten the status. So in practice: if we got 0
-                // rows, the task_id genuinely does not exist; status
-                // equality is NOT a cause here (the UPDATE clobbers).
                 return Err(AlephError::config(format!(
                     "update_task_status: task_id {task_id:?} not found"
                 )));
             }
 
-            // Update started_at for Running status
-            if status == TaskStatus::Running {
-                tx.execute(
-                    "UPDATE agent_tasks SET started_at = ?1 WHERE id = ?2 AND started_at IS NULL",
-                    params![now, task_id],
-                )
-                .map_err(|e| {
-                    AlephError::config(format!("Failed to update started_at: {e}"))
-                })?;
-            }
-
-            // Update completed_at for terminal states only when currently
-            // NULL — preserves the originally-recorded completion time on
-            // idempotent re-applies of the same terminal status.
-            if matches!(status, TaskStatus::Completed | TaskStatus::Failed) {
-                tx.execute(
-                    "UPDATE agent_tasks SET completed_at = ?1 WHERE id = ?2 AND completed_at IS NULL",
-                    params![now, task_id],
-                )
-                .map_err(|e| {
-                    AlephError::config(format!("Failed to update completed_at: {e}"))
-                })?;
-            }
-
-            tx.commit()
-                .map_err(|e| AlephError::config(format!("Failed to commit transaction: {e}")))?;
             Ok(())
         })
         .await

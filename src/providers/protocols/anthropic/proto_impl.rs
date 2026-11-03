@@ -84,8 +84,11 @@ impl AnthropicProtocol {
         // Keep the accumulated messages and next input index in one dispatch context.
         let mut context = (Vec::new(), 0);
         while context.1 < messages.len() {
+            let Some(msg) = messages.get(context.1) else {
+                break;
+            };
             dispatch_unified_message(
-                &messages[context.1],
+                msg,
                 &mut context,
                 |(result, i), content| {
                     // rust-doctor-disable-next-line unnecessary-allocation
@@ -145,7 +148,7 @@ impl AnthropicProtocol {
                         });
                     }
                     if blocks.len() == 1 {
-                        if let ContentBlock::Text { text, .. } = &blocks[0] {
+                        if let Some(ContentBlock::Text { text, .. }) = blocks.first() {
                             result.push(Message {
                                 role: "user".to_string(),
                                 content: MessageContent::Text {
@@ -285,12 +288,12 @@ impl AnthropicProtocol {
                     // rust-doctor-disable-next-line unnecessary-allocation
                     let mut image_blocks = Vec::new();
                     while *i < messages.len() {
-                        if let UnifiedMessage::ToolResult {
+                        if let Some(UnifiedMessage::ToolResult {
                             tool_call_id,
                             content,
                             is_error,
                             ..
-                        } = &messages[*i]
+                        }) = messages.get(*i)
                         {
                             // rust-doctor-disable-next-line unnecessary-allocation
                             let mut parts = Vec::new();

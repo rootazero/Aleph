@@ -289,9 +289,10 @@ async fn serve_asset(
     }
     if state
         .rate_limiter
-        .check_and_record(&RateLimitKey::new(
+        .check_and_record(&RateLimitKey::for_caller(
             &client.ip.to_string(),
             RateLimitScope::RpcHeavy,
+            client.local,
         ))
         .is_err()
     {

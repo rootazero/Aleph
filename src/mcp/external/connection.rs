@@ -1005,6 +1005,7 @@ impl McpServerConnection {
                 }
                 Err(e) => {
                     tracing::debug!(server = %self.name, error = %e, "Expired tools list refresh failed");
+                    self.cache_expiry.write().await.tools = Some(now + Duration::from_secs(15));
                 }
             }
         }
@@ -1037,6 +1038,7 @@ impl McpServerConnection {
                 }
                 Err(e) => {
                     tracing::debug!(server = %self.name, error = %e, "Expired prompts list refresh failed");
+                    self.cache_expiry.write().await.prompts = Some(now + Duration::from_secs(15));
                 }
             }
         }

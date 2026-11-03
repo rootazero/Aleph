@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 /// What a graph node stands for. Loop kinds are *bindings* to existing
 /// entities (goal/cron/heartbeat/daemon/team/workflow) — never copies of
 /// their state.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 #[non_exhaustive]
 pub enum NodeKind {
@@ -101,6 +101,12 @@ impl NodeKind {
     }
 }
 
+impl std::fmt::Display for NodeKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
 /// The six-verb closed edge vocabulary. Deliberately NOT free text (unlike
 /// memory-note relations): the set only grows when a new verb brings its
 /// consumer with it.
@@ -111,7 +117,7 @@ impl NodeKind {
 /// deterministic conflict detector is on the NOT-build list (GRAPH_LAYER.md
 /// §4.3). If you came here hunting for `Arbitrates`'s missing consumer: there
 /// isn't one, and building it would violate R7.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 #[non_exhaustive]
 pub enum EdgeKind {
@@ -167,8 +173,14 @@ impl EdgeKind {
     }
 }
 
+impl std::fmt::Display for EdgeKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
 /// First-class provenance: who put this node/edge in the graph.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 #[non_exhaustive]
 pub enum Origin {
@@ -192,6 +204,12 @@ impl Origin {
             "llm" => Some(Self::Llm),
             _ => None,
         }
+    }
+}
+
+impl std::fmt::Display for Origin {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
     }
 }
 
@@ -339,6 +357,7 @@ mod tests {
             NodeKind::Root,
         ] {
             assert_eq!(NodeKind::parse(k.as_str()), Some(k));
+            assert_eq!(format!("{k}"), k.as_str());
         }
         for e in [
             EdgeKind::Watches,
@@ -349,7 +368,9 @@ mod tests {
             EdgeKind::Feeds,
         ] {
             assert_eq!(EdgeKind::parse(e.as_str()), Some(e));
+            assert_eq!(format!("{e}"), e.as_str());
         }
+        assert_eq!(format!("{}", Origin::Human), "human");
         assert_eq!(NodeKind::parse("bogus"), None);
         assert_eq!(EdgeKind::parse("likes"), None, "vocabulary is closed");
     }

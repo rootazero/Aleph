@@ -501,8 +501,8 @@ pub(crate) fn patch_confidence_frontmatter(content: &str, new_conf: f32) -> Opti
     // newline that precedes it so the body (everything from that `\n---`) is
     // preserved verbatim.
     let close_rel = rest.find("\n---")?;
-    let fm = &rest[..close_rel];
-    let after = &rest[close_rel..];
+    let fm = rest.get(..close_rel)?;
+    let after = rest.get(close_rel..)?;
 
     let new_line = format!("confidence: {new_conf:.4}");
     let mut lines: Vec<String> = fm.lines().map(str::to_string).collect();

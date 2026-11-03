@@ -1219,11 +1219,15 @@ own comment recorded that those numbers had already needed changing once.
   extension.
 
 Two limits carried deliberately. There is **no read face**: an operator can set
-the ceilings but still cannot ask a running server what they are. And `Auth` and
-`WebhookAuth` share one window (`RateLimitConfig::config_for` fans both into
-`auth`), so writing `[gateway.rate_limit.auth]` retunes webhook auth too and
-nothing says so — unchanged behaviour, but the section makes it visible for the
-first time.
+the ceilings but still cannot ask a running server what they are. And there is
+**no separate webhook-auth window**: the `WebhookAuth` scope never had a
+producer — the webhook receiver authenticates by HMAC signature and never
+classified its attempts into a rate-limit scope — so it was removed instead of
+being left as a second spelling of `auth`. `[gateway.rate_limit.auth]` is the
+handshake window (`connect`: 10 attempts/min, 5-minute lockout), enforced per
+client IP by the WebSocket dispatch loop; the shared-bucket layer keeps the
+handshake in the lockout-free default bucket so one token-guessing client
+cannot lock every remote Panel out of the handshake.
 
 ### Reverse proxies (opt-in `X-Forwarded-For` resolution)
 
