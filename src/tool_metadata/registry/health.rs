@@ -319,8 +319,7 @@ impl ToolHealthCache {
                     let mut writer = self.cache.lock_writer();
                     let remove = match writer.flights.get_mut(&self.name) {
                         Some(flight) if Arc::ptr_eq(&flight.cell, &self.cell) => {
-                            debug_assert!(flight.participants > 0);
-                            flight.participants -= 1;
+                            flight.participants = flight.participants.saturating_sub(1);
                             flight.participants == 0
                         }
                         _ => false,
@@ -353,20 +352,19 @@ impl ToolHealthCache {
         let ttl = registration.probe.ttl();
 
         let mut writer = self.lock_writer();
-        let current_registration = self.probes.load().get(name).cloned();
-        let current = writer.flights.get_mut(name);
-        let is_current = current_registration
-            .as_ref()
-            .is_some_and(|current| Arc::ptr_eq(current, &registration))
-            && current
-                .as_ref()
-                .is_some_and(|flight| Arc::ptr_eq(&flight.cell, &cell));
-        if !is_current {
+        let is_reg_current = self
+            .probes
+            .load()
+            .get(name)
+            .is_some_and(|curr| Arc::ptr_eq(curr, &registration));
+        let Some(flight) = writer.flights.get_mut(name) else {
+            drop(writer);
+            return self.current_result_or_healthy(name);
+        };
+        if !is_reg_current || !Arc::ptr_eq(&flight.cell, &cell) {
             drop(writer);
             return self.current_result_or_healthy(name);
         }
-
-        let flight = current.expect("current flight was checked above");
         if !flight.published {
             let cached = CachedProbe {
                 result: result.clone(),
