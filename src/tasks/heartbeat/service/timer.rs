@@ -6,6 +6,7 @@
 //! back results.
 
 use crate::sync_primitives::Arc;
+use futures::FutureExt;
 use tokio::sync::Semaphore;
 use tokio::time::{sleep, Duration};
 use tracing::{debug, error, info, warn};
@@ -167,12 +168,24 @@ pub async fn run_heartbeat_loop(
                         return;
                     }
                 };
-                let result = execute_heartbeat_tick(&task, wake_reason.as_deref(), &ctx).await;
-                writeback_one(&state, &task_id, result, wake_reason.is_some(), &ctx).await;
-                // Push a `StateChanged` frame so the panel (which dropped
-                // polling) refreshes the task's runtime state after each run.
-                if let Some(emitter) = &ctx.change_emitter {
-                    emitter(&task_id);
+                let run_res = std::panic::AssertUnwindSafe(async {
+                    execute_heartbeat_tick(&task, wake_reason.as_deref(), &ctx).await
+                })
+                .catch_unwind()
+                .await;
+                match run_res {
+                    Ok(result) => {
+                        writeback_one(&state, &task_id, result, wake_reason.is_some(), &ctx).await;
+                        // Push a `StateChanged` frame so the panel (which dropped
+                        // polling) refreshes the task's runtime state after each run.
+                        if let Some(emitter) = &ctx.change_emitter {
+                            emitter(&task_id);
+                        }
+                    }
+                    Err(_) => {
+                        error!(task_id = %task_id, "heartbeat: task panicked during tick; clearing running marker");
+                        clear_running_marker(&state, &task_id).await;
+                    }
                 }
             });
         }
@@ -284,7 +297,7 @@ async fn collect_due_tasks(
                 } else {
                     // Permanently closed — push very far out so we stop polling
                     // it but the task survives for the operator to fix.
-                    gated_ids.push((task.id.clone(), now_ms + 86_400_000));
+                    gated_ids.push((task.id.clone(), now_ms.saturating_add(86_400_000)));
                 }
             }
         }
