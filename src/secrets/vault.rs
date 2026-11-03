@@ -45,12 +45,15 @@ static CORRUPT_BACKUP_COUNTER: AtomicU64 = AtomicU64::new(0);
 pub struct SecretVault {
     data: VaultData,
     path: PathBuf,
+    /// A failed load must never be followed by an empty-vault overwrite.
+    load_error: Option<String>,
 }
 
 impl SecretVault {
     /// Open or create a vault at the given path.
     pub fn open(path: impl Into<PathBuf>) -> Result<Self, SecretError> {
         let path = path.into();
+        Self::prepare_parent(&path)?;
         let io = Self::io_for(&path);
 
         let data = match io.read()? {
@@ -81,10 +84,7 @@ impl SecretVault {
                         SecretError::Serialization(format!("Failed to deserialize vault: {e}"))
                     })?;
                 if data.version > VAULT_VERSION {
-                    return Err(SecretError::Serialization(format!(
-                        "Vault version {} is newer than supported version {}. Please upgrade Aleph.",
-                        data.version, VAULT_VERSION
-                    )));
+                    return Err(SecretError::UnsupportedVersion(data.version));
                 }
                 data
             }
@@ -97,7 +97,11 @@ impl SecretVault {
             }
         };
 
-        Ok(Self { data, path })
+        Ok(Self {
+            data,
+            path,
+            load_error: None,
+        })
     }
 
     /// Build a `VaultIo` for the configured vault path.
@@ -105,27 +109,23 @@ impl SecretVault {
         VaultIo::new_with_path(path.to_path_buf())
     }
 
-    /// Open the vault, or recover gracefully if an existing file is unreadable.
+    /// Recover malformed vault data only; preserve I/O failures and newer formats.
     ///
-    /// `open()` returns `Err` *only* when a vault file is present but cannot be
-    /// loaded — corruption, an incompatible future version, or an I/O error. A
-    /// missing file is not an error; it yields a fresh empty vault. Because of
-    /// that, the tempting `open(path).unwrap_or_else(|_| empty(path))` shortcut
-    /// is a data-loss trap: it routes the present-but-unreadable case straight
-    /// into an empty in-memory vault, and the next `save()` atomically
-    /// overwrites the original file, destroying every stored secret.
-    ///
-    /// This helper instead renames the unreadable file aside to
-    /// `<path>.corrupt-<unix_ts>` before returning a fresh vault, so the
-    /// original bytes are preserved for recovery and the daemon still starts
-    /// (graceful degradation per P7). If the rename itself fails the directory
-    /// is almost certainly not writable, so the subsequent `save()` would fail
-    /// too and no silent overwrite occurs.
+    /// This compatibility API cannot return a load error. Those failures produce
+    /// an empty view with writes disabled, and subsequent writes return the load
+    /// error. A malformed file is renamed aside before a writable vault is returned.
+    /// Failed backup renames also disable writes to protect the original file.
     pub fn open_or_backup(path: impl Into<PathBuf>) -> Self {
         let path = path.into();
         match Self::open(&path) {
             Ok(vault) => vault,
             Err(open_err) => {
+                if !matches!(open_err, SecretError::Serialization(_)) {
+                    tracing::error!(error = %open_err, "Vault load failed; preserving file and disabling writes");
+                    let mut vault = Self::empty(path);
+                    vault.load_error = Some(open_err.to_string());
+                    return vault;
+                }
                 if path.exists() {
                     // Disambiguate the backup suffix so two recoveries within
                     // the same wall-clock second don't race `fs::rename` and
@@ -146,14 +146,11 @@ impl SecretVault {
                             "Vault file could not be loaded; moved aside to preserve it. \
                              Starting with an empty vault."
                         ),
-                        Err(rename_err) => tracing::error!(
-                            path = %path.display(),
-                            error = %open_err,
-                            rename_error = %rename_err,
-                            "Vault file could not be loaded and could not be backed up; \
-                             the directory is likely not writable so secrets are not at risk \
-                             of being overwritten."
-                        ),
+                        Err(rename_err) => {
+                            let mut vault = Self::empty(path);
+                            vault.load_error = Some(format!("Vault recovery failed: {rename_err}"));
+                            return vault;
+                        }
                     }
                 }
                 Self::empty(path)
@@ -169,18 +166,45 @@ impl SecretVault {
                 entries: HashMap::new(),
             },
             path: path.into(),
+            load_error: None,
         }
+    }
+
+    /// Prepare the directory before either lock-file creation or vault writes.
+    fn prepare_parent(path: &Path) -> Result<(), SecretError> {
+        if path.as_os_str().is_empty() {
+            return Err(SecretError::Io(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "Cannot determine a safe vault path; configure an absolute ALEPH_HOME or home directory",
+            )));
+        }
+        if let Some(parent) = path
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+        {
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
+                std::fs::DirBuilder::new()
+                    .recursive(true)
+                    .mode(0o700)
+                    .create(parent)?;
+                std::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o700))?;
+            }
+            #[cfg(not(unix))]
+            std::fs::create_dir_all(parent)?;
+        }
+        Ok(())
     }
 
     /// Save vault to disk with atomic write + fcntl lock via `VaultIo`.
     fn save(&self) -> Result<(), SecretError> {
+        if let Some(error) = &self.load_error {
+            return Err(SecretError::Io(std::io::Error::other(error.clone())));
+        }
+        Self::prepare_parent(&self.path)?;
         let bytes = bincode::serialize(&self.data)
             .map_err(|e| SecretError::Serialization(format!("Failed to serialize vault: {e}")))?;
-
-        // Ensure parent directory exists
-        if let Some(parent) = self.path.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
 
         // Atomic temp+fsync+rename serialised via fs2 fcntl lock on
         // `secrets.vault.lock`. Defense-in-depth even if the singleton lock
@@ -228,8 +252,18 @@ impl SecretVault {
         }
         entry.updated_at = now;
 
-        self.data.entries.insert(name.to_string(), entry);
-        self.save()?;
+        let previous = self.data.entries.insert(name.to_string(), entry);
+        if let Err(e) = self.save() {
+            match previous {
+                Some(previous) => {
+                    self.data.entries.insert(name.to_string(), previous);
+                }
+                None => {
+                    self.data.entries.remove(name);
+                }
+            }
+            return Err(e);
+        }
 
         info!(name = name, "Secret stored in vault");
         Ok(())
@@ -237,12 +271,18 @@ impl SecretVault {
 
     /// Delete a secret by name.
     pub fn delete(&mut self, name: &str) -> Result<bool, SecretError> {
-        let removed = self.data.entries.remove(name).is_some();
-        if removed {
-            self.save()?;
+        let previous = self.data.entries.remove(name);
+        if previous.is_some() {
+            if let Err(e) = self.save() {
+                if let Some(previous) = previous {
+                    self.data.entries.insert(name.to_string(), previous);
+                }
+                return Err(e);
+            }
             info!(name = name, "Secret deleted from vault");
+            return Ok(true);
         }
-        Ok(removed)
+        Ok(false)
     }
 
     /// Check if a secret exists.
@@ -291,23 +331,16 @@ impl SecretVault {
         self.data.entries.is_empty()
     }
 
-    /// Get the default vault path.
-    ///
-    /// Falls back to `secrets.vault` in the current working directory only
-    /// when the platform config directory cannot be determined (extremely
-    /// rare). Callers that need a guaranteed absolute path should verify
-    /// the result.
+    /// Returns an absolute per-user path when the platform config directory is available.
+    /// An empty path is returned when no safe user directory can be determined; callers
+    /// then fail closed rather than writing relative to the process working directory.
     #[must_use]
     pub fn default_path() -> PathBuf {
-        crate::utils::paths::get_config_dir().map_or_else(|e| {
-                tracing::warn!(
-                    error = %e,
-                    fallback = "secrets.vault",
-                    "Failed to determine config directory; vault will be created in the current working directory. \
-                     This is a fallback path — review permissions and ensure backups."
-                );
-                PathBuf::from("secrets.vault")
-            }, |d| d.join("secrets.vault"))
+        crate::utils::paths::get_config_dir()
+            .ok()
+            .filter(|path| path.is_absolute())
+            .map(|d| d.join("secrets.vault"))
+            .unwrap_or_default()
     }
 }
 
@@ -542,12 +575,8 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let path = dir.path().join("data.vault");
 
-        // Simulate an existing vault that `open()` rejects (future version).
-        let future_data = VaultData {
-            version: VAULT_VERSION + 1,
-            entries: HashMap::new(),
-        };
-        std::fs::write(&path, bincode::serialize(&future_data).unwrap()).unwrap();
+        // Simulate an existing vault with malformed serialized data.
+        std::fs::write(&path, b"not a vault").unwrap();
         let original_bytes = std::fs::read(&path).unwrap();
 
         // The dangerous `open().unwrap_or_else(empty)` would discard this and
@@ -588,6 +617,91 @@ mod tests {
     }
 
     #[test]
+    fn test_failed_save_restores_set_and_delete() {
+        let dir = TempDir::new().unwrap();
+        let mut vault = test_vault(&dir);
+        let crypto = SecretsCrypto::new("test");
+        vault.set("key", make_entry(&crypto, "original")).unwrap();
+        let original = bincode::serialize(vault.entries()).unwrap();
+        // A regular file as parent deterministically prevents all writes.
+        let blocked = dir.path().join("blocked");
+        std::fs::write(&blocked, b"file").unwrap();
+        vault.path = blocked.join("vault");
+        assert!(vault.set("new", make_entry(&crypto, "new")).is_err());
+        assert!(vault
+            .set("key", make_entry(&crypto, "replacement"))
+            .is_err());
+        assert!(vault.delete("key").is_err());
+        assert_eq!(bincode::serialize(vault.entries()).unwrap(), original);
+    }
+
+    #[test]
+    fn test_open_or_backup_preserves_io_errors_and_future_versions() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("future.vault");
+        let bytes = bincode::serialize(&VaultData {
+            version: VAULT_VERSION + 1,
+            entries: HashMap::new(),
+        })
+        .unwrap();
+        std::fs::write(&path, &bytes).unwrap();
+        let mut vault = SecretVault::open_or_backup(&path);
+        assert!(vault
+            .set("key", make_entry(&SecretsCrypto::new("test"), "value"))
+            .is_err());
+        assert_eq!(std::fs::read(&path).unwrap(), bytes);
+        let io_path = dir.path().join("directory.vault");
+        std::fs::create_dir(&io_path).unwrap();
+        let mut vault = SecretVault::open_or_backup(&io_path);
+        assert!(vault
+            .set("key", make_entry(&SecretsCrypto::new("test"), "value"))
+            .is_err());
+        assert!(io_path.is_dir());
+        assert!(!std::fs::read_dir(dir.path())
+            .unwrap()
+            .filter_map(Result::ok)
+            .any(|entry| entry.file_name().to_string_lossy().contains(".corrupt-")));
+    }
+
+    #[test]
+    fn test_empty_path_fails_closed() {
+        assert!(matches!(
+            SecretVault::open(PathBuf::new()),
+            Err(SecretError::Io(_))
+        ));
+        let mut vault = SecretVault::open_or_backup(PathBuf::new());
+        assert!(vault
+            .set("key", make_entry(&SecretsCrypto::new("test"), "value"))
+            .is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_vault_directory_is_owner_only() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = TempDir::new().unwrap();
+        let parent = dir.path().join("private");
+        let path = parent.join("secrets.vault");
+        let mut vault = SecretVault::open(&path).unwrap();
+        assert_eq!(
+            std::fs::metadata(&parent).unwrap().permissions().mode() & 0o777,
+            0o700
+        );
+        std::fs::set_permissions(&parent, std::fs::Permissions::from_mode(0o755)).unwrap();
+        vault
+            .set("key", make_entry(&SecretsCrypto::new("test"), "value"))
+            .unwrap();
+        assert_eq!(
+            std::fs::metadata(&parent).unwrap().permissions().mode() & 0o777,
+            0o700
+        );
+        assert_eq!(
+            std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+    }
+
+    #[test]
     fn test_version_check_rejects_future_version() {
         let dir = TempDir::new().unwrap();
         let path = dir.path().join("future.vault");
@@ -601,6 +715,6 @@ mod tests {
         std::fs::write(&path, bytes).unwrap();
 
         let result = SecretVault::open(&path);
-        assert!(matches!(result, Err(SecretError::Serialization(_))));
+        assert!(matches!(result, Err(SecretError::UnsupportedVersion(_))));
     }
 }

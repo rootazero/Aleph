@@ -502,9 +502,16 @@ impl SecurityAuditLog {
         self.dropped_count.clone()
     }
 
-    fn note_dropped(&self) {
+    fn note_dropped(&self, event_type: AuditEventType, subject: &str, closed: bool) {
         let count = self.dropped_count.fetch_add(1, Ordering::AcqRel) + 1;
-        if count == 1 || count.is_multiple_of(100) {
+        if closed {
+            error!(
+                event_type = %event_type,
+                subject,
+                dropped_count = count,
+                "Security audit log receiver closed; dropping entry"
+            );
+        } else if count == 1 || count.is_multiple_of(100) {
             error!("Security audit log channel full, dropping entry (total dropped: {count})");
         }
     }
@@ -512,19 +519,36 @@ impl SecurityAuditLog {
     /// `detail` is sanitised here, at the chokepoint every production entry
     /// flows through, rather than at each producer — see `sanitize_detail`.
     ///
+    /// The audit sink is best-effort and retains its `()` API: a closed receiver
+    /// loses entries, and this method reports that loss at error level with only
+    /// the event type and subject identity, never the entry detail.
+    ///
     /// Async because of `block_on_full`: with the knob off (default) this is
     /// a `try_send` that completes immediately; with it on, a full channel
     /// applies backpressure to the producer instead of dropping the entry.
     pub async fn log(&self, mut entry: AuditEntry) {
         sanitize_detail(&mut entry.detail);
+        let event_type = entry.event_type;
+        let subject = entry
+            .session_id
+            .as_deref()
+            .or(entry.actor_user.as_deref())
+            .unwrap_or("<none>")
+            .to_string();
         if self.block_on_full {
-            // A send error means the receiver is gone — the entry is lost
-            // exactly as if the channel had been full, so count it as one.
             if self.sender.send(entry).await.is_err() {
-                self.note_dropped();
+                self.note_dropped(event_type, &subject, true);
             }
-        } else if self.sender.try_send(entry).is_err() {
-            self.note_dropped();
+        } else {
+            match self.sender.try_send(entry) {
+                Ok(()) => {}
+                Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
+                    self.note_dropped(event_type, &subject, false)
+                }
+                Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {
+                    self.note_dropped(event_type, &subject, true)
+                }
+            }
         }
     }
 }

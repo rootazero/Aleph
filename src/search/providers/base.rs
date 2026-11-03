@@ -27,6 +27,9 @@ use crate::search::SearchResult;
 use reqwest::{RequestBuilder, Response, StatusCode};
 use std::time::Duration;
 
+/// Maximum successful response body read for provider APIs.
+const MAX_RESPONSE_BODY_BYTES: u64 = 8 * 1024 * 1024;
+
 /// How much of a failing response's body reaches the error message.
 ///
 /// Enough for a vendor's `{"error":"..."}` envelope, short enough that a
@@ -39,6 +42,7 @@ const ERROR_BODY_MAX_CHARS: usize = 300;
 pub(crate) fn build_client() -> Result<reqwest::Client> {
     reqwest::Client::builder()
         .timeout(Duration::from_secs(30))
+        .redirect(reqwest::redirect::Policy::none())
         .build()
         .map_err(|e| AlephError::network(e.to_string()))
 }
@@ -50,7 +54,7 @@ pub(crate) fn build_client() -> Result<reqwest::Client> {
 /// It is deliberately not "no redaction needed by default": every caller of
 /// [`send`] has to answer the question, and answering it wrong is visible at
 /// the call site rather than buried in a helper nobody reads.
-fn redact(msg: String, secret: Option<&str>) -> String {
+pub(crate) fn redact(msg: String, secret: Option<&str>) -> String {
     match secret {
         Some(s) if !s.is_empty() => msg.replace(s, "***REDACTED***"),
         _ => msg,
@@ -129,15 +133,59 @@ async fn check_status(
 /// mean different things to whoever is diagnosing, and the status code is
 /// already carrying the part we are sure of.
 async fn body_excerpt(response: Response, secret: Option<&str>) -> String {
-    let Ok(body) = response.text().await else {
+    let Ok(body) = read_capped(response, MAX_RESPONSE_BODY_BYTES).await else {
         return String::new();
     };
     let body = body.trim();
     if body.is_empty() {
         return String::new();
     }
-    let excerpt = crate::utils::text_format::truncate_chars(body, ERROR_BODY_MAX_CHARS);
-    format!(" — {}", redact(excerpt.to_string(), secret))
+    let redacted = redact(body.to_string(), secret);
+    let excerpt = crate::utils::text_format::truncate_chars(&redacted, ERROR_BODY_MAX_CHARS);
+    format!(" — {excerpt}")
+}
+
+/// Read a response body without allowing an unexpectedly large payload to
+/// consume unbounded memory. A body over the limit is an invalid response.
+pub(crate) async fn read_capped(response: Response, max: u64) -> Result<String> {
+    use futures_util::StreamExt;
+
+    let mut body = Vec::new();
+    let mut stream = response.bytes_stream();
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.map_err(|e| AlephError::network(e.to_string()))?;
+        if body.len() as u64 + chunk.len() as u64 > max {
+            return Err(AlephError::invalid_response(format!(
+                "response body exceeds {max} bytes"
+            )));
+        }
+        body.extend_from_slice(&chunk);
+    }
+    Ok(String::from_utf8_lossy(&body).into_owned())
+}
+
+/// Validate an operator-configured provider URL immediately before dispatch.
+pub(crate) async fn validate_request_url(
+    url: &str,
+    provider_name: &str,
+    allow_private_network: bool,
+) -> Result<()> {
+    let mut policy = crate::security::ssrf::SsrfPolicy::default();
+    policy.allow_private_network = allow_private_network;
+    let mut url_for_validation = url::Url::parse(url)
+        .map_err(|e| AlephError::network(format!("{provider_name} URL validation failed: {e}")))?;
+    if url_for_validation.password().is_some() || !url_for_validation.username().is_empty() {
+        url_for_validation
+            .set_username("")
+            .map_err(|_| AlephError::network(format!("{provider_name} URL validation failed")))?;
+        url_for_validation
+            .set_password(None)
+            .map_err(|_| AlephError::network(format!("{provider_name} URL validation failed")))?;
+    }
+    crate::security::ssrf::validate_url_with_pinned(url_for_validation.as_str(), &policy)
+        .await
+        .map(|_| ())
+        .map_err(|e| AlephError::network(format!("{provider_name} URL validation failed: {e}")))
 }
 
 /// Parse JSON response body with provider-specific error context.
@@ -156,7 +204,8 @@ pub(crate) async fn parse_json<T: serde::de::DeserializeOwned>(
     provider_name: &str,
     secret: Option<&str>,
 ) -> Result<T> {
-    response.json::<T>().await.map_err(|e| {
+    let body = read_capped(response, MAX_RESPONSE_BODY_BYTES).await?;
+    serde_json::from_str::<T>(&body).map_err(|e| {
         AlephError::invalid_response(redact(
             format!("Failed to parse {provider_name} response: {e}"),
             secret,
@@ -258,6 +307,7 @@ pub(crate) enum HostVerdict {
 /// precisely what the switch exists for.
 pub(crate) fn classify_ssrf_target_host(host: &str, allow_private_network: bool) -> HostVerdict {
     use std::net::IpAddr;
+    let host = strip_ipv6_brackets(host);
     if let Ok(addr) = host.parse::<IpAddr>() {
         if crate::security::ssrf::ip::is_cloud_metadata(addr) {
             return HostVerdict::Reject("points at a cloud instance-metadata endpoint");
@@ -287,6 +337,12 @@ pub(crate) fn classify_ssrf_target_host(host: &str, allow_private_network: bool)
         };
     }
     HostVerdict::Allow
+}
+
+fn strip_ipv6_brackets(host: &str) -> &str {
+    host.strip_prefix('[')
+        .and_then(|host| host.strip_suffix(']'))
+        .unwrap_or(host)
 }
 
 /// Reject an operator-configured upstream host that would turn the search

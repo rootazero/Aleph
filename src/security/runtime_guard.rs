@@ -445,72 +445,64 @@ impl RuntimeSecurityGuard {
         text: &str,
         context: &SecurityContext,
     ) -> Result<GuardResult, SecurityGuardError> {
-        if !self.config.leak_detection {
-            return Ok(GuardResult::Clean {
-                text: text.to_string(),
-            });
-        }
+        let mut current_text = text.to_string();
+        let mut reasons = Vec::new();
+        let mut warnings = Vec::new();
 
-        let exec_scan = {
-            let detector = self.exec_leak_detector.lock().await;
-            detector.scan_inbound(text)
-        };
-
-        let secret_scan = {
-            let detector = self.secret_leak_detector.lock().await;
-            detector.scan_inbound(text)
-        };
-
-        // Handle secret leak detector block
-        if let LeakDecision::Block { reason, .. } = secret_scan {
-            self.log_audit(
-                context,
-                AuditEventType::EnvInjectionDetected,
-                AuditSeverity::Critical,
-                format!("inbound secret leak blocked: {reason}"),
-            )
-            .await;
-            return Ok(GuardResult::Blocked {
-                reason: format!("Secret leak detector: {reason}"),
-            });
-        }
-
-        if exec_scan.has_blocks() {
-            let detail = format!(
-                "inbound exec leak blocked; findings={}",
-                exec_scan.findings.len()
-            );
-            self.log_audit(
-                context,
-                AuditEventType::ExecBlocked,
-                AuditSeverity::Critical,
-                detail,
-            )
-            .await;
-            return Ok(GuardResult::Blocked {
-                reason: "Leak detector found sensitive data in inbound content".to_string(),
-            });
-        }
-
-        // Honor `Redact`-action findings (e.g. bearer tokens) before any other
-        // pass-through. Without this the matched secret would be returned to the
-        // caller untouched, since it is neither a block nor a warning.
-        if exec_scan.has_redacts() {
-            let redacted = {
+        if self.config.leak_detection {
+            let exec_scan = {
                 let detector = self.exec_leak_detector.lock().await;
-                detector.redact(text)
+                detector.scan_inbound(text)
             };
-            self.log_audit(
-                context,
-                AuditEventType::LeakWarning,
-                AuditSeverity::Warn,
-                "inbound leak detector redacted sensitive token".to_string(),
-            )
-            .await;
-            return Ok(GuardResult::Redacted {
-                text: redacted,
-                reasons: vec!["Inbound leak detector redacted sensitive token".to_string()],
-            });
+
+            let secret_scan = {
+                let detector = self.secret_leak_detector.lock().await;
+                detector.scan_inbound(text)
+            };
+
+            // Handle secret leak detector block
+            if let LeakDecision::Block { reason, .. } = secret_scan {
+                self.log_audit(
+                    context,
+                    AuditEventType::EnvInjectionDetected,
+                    AuditSeverity::Critical,
+                    format!("inbound secret leak blocked: {reason}"),
+                )
+                .await;
+                return Ok(GuardResult::Blocked {
+                    reason: format!("Secret leak detector: {reason}"),
+                });
+            }
+
+            if exec_scan.has_blocks() {
+                let detail = format!(
+                    "inbound exec leak blocked; findings={}",
+                    exec_scan.findings.len()
+                );
+                self.log_audit(
+                    context,
+                    AuditEventType::ExecBlocked,
+                    AuditSeverity::Critical,
+                    detail,
+                )
+                .await;
+                return Ok(GuardResult::Blocked {
+                    reason: "Leak detector found sensitive data in inbound content".to_string(),
+                });
+            }
+
+            if exec_scan.has_redacts() {
+                let detector = self.exec_leak_detector.lock().await;
+                current_text = detector.redact(&current_text);
+                self.log_audit(
+                    context,
+                    AuditEventType::LeakWarning,
+                    AuditSeverity::Warn,
+                    "inbound leak detector redacted sensitive token".to_string(),
+                )
+                .await;
+                reasons.push("Inbound leak detector redacted sensitive token".to_string());
+            }
         }
 
         // Inbound PII filtering: scrub sensitive data echoed back by LLM
@@ -520,7 +512,7 @@ impl RuntimeSecurityGuard {
                 // dropped before the audit awaits below.
                 let result = {
                     let engine_guard = engine.read().unwrap_or_else(|e| e.into_inner());
-                    engine_guard.filter(text)
+                    engine_guard.filter(&current_text)
                 };
                 if result.blocked_count > 0 {
                     self.log_audit(
@@ -532,10 +524,13 @@ impl RuntimeSecurityGuard {
                     .await;
                     return Ok(GuardResult::Redacted {
                         text: result.text,
-                        reasons: vec![format!(
-                            "Inbound PII detected and redacted ({} blocks)",
-                            result.blocked_count
-                        )],
+                        reasons: {
+                            reasons.push(format!(
+                                "Inbound PII detected and redacted ({} blocks)",
+                                result.blocked_count
+                            ));
+                            reasons
+                        },
                     });
                 } else if result.warned_count > 0 {
                     self.log_audit(
@@ -547,18 +542,31 @@ impl RuntimeSecurityGuard {
                     .await;
                     return Ok(GuardResult::Warned {
                         text: result.text,
-                        warnings: vec![format!(
-                            "Inbound PII detected ({} warnings)",
-                            result.warned_count
-                        )],
+                        warnings: {
+                            warnings.push(format!(
+                                "Inbound PII detected ({} warnings)",
+                                result.warned_count
+                            ));
+                            warnings
+                        },
                     });
                 }
             }
         }
 
-        Ok(GuardResult::Clean {
-            text: text.to_string(),
-        })
+        if !reasons.is_empty() {
+            return Ok(GuardResult::Redacted {
+                text: current_text,
+                reasons,
+            });
+        }
+        if !warnings.is_empty() {
+            return Ok(GuardResult::Warned {
+                text: current_text,
+                warnings,
+            });
+        }
+        Ok(GuardResult::Clean { text: current_text })
     }
 }
 
@@ -706,6 +714,53 @@ mod tests {
         }
     }
 
+    #[tokio::test]
+    async fn inbound_pii_filter_runs_when_leak_detection_disabled() {
+        let mut config = SecurityGuardConfig::default();
+        config.leak_detection = false;
+        let guard = RuntimeSecurityGuard::new_without_audit(config);
+        let result = guard
+            .process_inbound("Call me at 13812345678", &SecurityContext::default())
+            .await
+            .unwrap();
+        match result {
+            GuardResult::Redacted { text, .. } => assert!(!text.contains("13812345678")),
+            other => panic!("Expected PII redaction, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn inbound_pii_filter_runs_after_leak_redaction() {
+        let guard = RuntimeSecurityGuard::default_guard();
+        let result = guard
+            .process_inbound(
+                "Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9 and call 13812345678",
+                &SecurityContext::default(),
+            )
+            .await
+            .unwrap();
+        match result {
+            GuardResult::Redacted { text, .. } => {
+                assert!(!text.contains("13812345678"));
+                assert!(!text.contains("Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9"));
+            }
+            other => panic!("Expected leak and PII redaction, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn inbound_without_security_filters_stays_clean() {
+        let mut config = SecurityGuardConfig::default();
+        config.leak_detection = false;
+        config.pii_filtering = false;
+        let guard = RuntimeSecurityGuard::new_without_audit(config);
+        let text = "Call me at 13812345678";
+        let result = guard
+            .process_inbound(text, &SecurityContext::default())
+            .await
+            .unwrap();
+        assert!(matches!(result, GuardResult::Clean { text: value } if value == text));
+    }
     #[tokio::test]
     async fn test_inbound_clean_for_normal_text() {
         let guard = RuntimeSecurityGuard::default_guard();

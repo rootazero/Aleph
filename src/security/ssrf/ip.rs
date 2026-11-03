@@ -96,9 +96,11 @@ const fn is_multicast_or_reserved_ipv4(octets: [u8; 4]) -> bool {
 /// `2002:xxxx::`  (6to4), `2001:0000::` (Teredo with XOR decode),
 /// `::x.x.x.x` (IPv4-compatible, deprecated).
 ///
-/// Note: NAT64 is detected by prefix only and returns `Ipv4Addr::UNSPECIFIED`
-/// (0.0.0.0) so the caller in `is_blocked_ipv6` blocks the address at the v4
-/// stage via the `0.0.0.0/8` rule — see the NAT64 block comment below.
+/// NAT64 (`64:ff9b::/32`) is classified separately by [`is_nat64`] and is
+/// blocked outright by every caller *before* any embedded-IPv4 or
+/// private-network exception logic runs; for the Well-Known Prefix the real
+/// embedded IPv4 (octets 12..16) is still returned so it is classified
+/// correctly rather than replaced by a sentinel.
 fn extract_embedded_ipv4(ip: &Ipv6Addr) -> Option<Ipv4Addr> {
     let segments = ip.segments();
     let octets = ip.octets();
@@ -117,8 +119,10 @@ fn extract_embedded_ipv4(ip: &Ipv6Addr) -> Option<Ipv4Addr> {
     // of bypasses; NAT64 is an ISP-level transition mechanism, not a route we ever
     // want an SSRF to take, so any address matching the 32-bit NAT64 identifier is
     // blocked outright. Caller of `is_blocked_ipv6` handles the actual block.
-    if segments[0] == 0x0064 && segments[1] == 0xff9b {
-        return Some(Ipv4Addr::UNSPECIFIED);
+    if is_nat64(ip) {
+        return Some(Ipv4Addr::new(
+            octets[12], octets[13], octets[14], octets[15],
+        ));
     }
 
     // 2002:xxxx:xxxx:: — 6to4 (RFC 3056), IPv4 in bits 16-47
@@ -150,6 +154,14 @@ fn extract_embedded_ipv4(ip: &Ipv6Addr) -> Option<Ipv4Addr> {
     None
 }
 
+/// Returns true for any address in the NAT64 prefix family (`64:ff9b::/32`,
+/// covering the Well-Known Prefix and the RFC 6052 §2.2 network-specific
+/// variants). Such addresses are never a legitimate SSRF target.
+fn is_nat64(ip: &Ipv6Addr) -> bool {
+    let segments = ip.segments();
+    segments[0] == 0x0064 && segments[1] == 0xff9b
+}
+
 /// Returns true if the IPv6 address falls in any blocked range.
 ///
 /// Blocks: `::1` (loopback), :: (unspecified), `fe80::/10` (link-local),
@@ -162,6 +174,11 @@ pub(crate) fn is_blocked_ipv6(ip: Ipv6Addr) -> bool {
     }
     // :: — unspecified
     if ip.is_unspecified() {
+        return true;
+    }
+
+    // 64:ff9b::/32 — NAT64, blocked regardless of the embedded IPv4.
+    if is_nat64(&ip) {
         return true;
     }
 
@@ -244,10 +261,32 @@ fn is_policy_loopback(ip: IpAddr) -> bool {
     }
 }
 
+/// Returns true for the unspecified address (`0.0.0.0/8`, `::`) including
+/// when smuggled inside an IPv6 transition form. Connecting to `0.0.0.0`
+/// reaches services bound to loopback on Linux, so it is part of the floor.
+fn is_policy_unspecified(ip: IpAddr) -> bool {
+    match ip {
+        IpAddr::V4(v4) => v4.octets()[0] == 0,
+        IpAddr::V6(v6) => {
+            if v6.is_unspecified() {
+                return true;
+            }
+            if let Some(mapped) = v6.to_ipv4_mapped() {
+                return mapped.octets()[0] == 0;
+            }
+            if let Some(embedded) = extract_embedded_ipv4(&v6) {
+                return embedded.octets()[0] == 0;
+            }
+            false
+        }
+    }
+}
+
 /// Returns true if the IP should be blocked under the given policy.
 ///
-/// When `allow_private_network` is true, only loopback and cloud metadata
-/// (169.254.169.254 / `fd00:ec2::254`) are blocked — the non-negotiable floor.
+/// When `allow_private_network` is true, only NAT64, unspecified
+/// (`0.0.0.0/8` / `::`), loopback and cloud metadata (169.254.169.254 /
+/// `fd00:ec2::254`) are blocked — the non-negotiable floor.
 /// Otherwise the full blocklist applies. When the policy is disabled
 /// (`enabled == false`), all IPs are allowed.
 pub(crate) fn is_ip_blocked_by_policy(ip: IpAddr, policy: &SsrfPolicy) -> bool {
@@ -256,8 +295,12 @@ pub(crate) fn is_ip_blocked_by_policy(ip: IpAddr, policy: &SsrfPolicy) -> bool {
     }
     if policy.allow_private_network {
         // Floor that holds even for trusted internal hosts: never reach the
-        // loopback interface or a cloud metadata endpoint.
-        is_policy_loopback(ip) || is_cloud_metadata(ip)
+        // loopback interface (directly or via the unspecified address), a
+        // cloud metadata endpoint, or anything behind a NAT64 translator.
+        matches!(ip, IpAddr::V6(v6) if is_nat64(&v6))
+            || is_policy_unspecified(ip)
+            || is_policy_loopback(ip)
+            || is_cloud_metadata(ip)
     } else {
         is_blocked_ip(ip)
     }
@@ -563,5 +606,34 @@ mod tests {
         };
         let mapped = Ipv4Addr::new(169, 254, 169, 254).to_ipv6_mapped();
         assert!(is_ip_blocked_by_policy(IpAddr::V6(mapped), &policy));
+    }
+
+    #[test]
+    fn private_policy_still_blocks_nat64() {
+        let policy = SsrfPolicy::for_allowlisted_host();
+        for a in ["64:ff9b::7f00:1", "64:ff9b::a9fe:a9fe", "64:ff9b::808:808"] {
+            let addr: Ipv6Addr = a.parse().unwrap();
+            assert!(is_ip_blocked_by_policy(IpAddr::V6(addr), &policy), "{a}");
+        }
+    }
+
+    #[test]
+    fn nat64_wkp_embedded_ipv4_is_extracted() {
+        let addr: Ipv6Addr = "64:ff9b::a9fe:a9fe".parse().unwrap();
+        assert_eq!(extract_embedded_ipv4(&addr), Some(METADATA_IPV4));
+        assert!(is_cloud_metadata(IpAddr::V6(addr)));
+    }
+
+    #[test]
+    fn private_policy_blocks_unspecified() {
+        let policy = SsrfPolicy::for_allowlisted_host();
+        for a in ["0.0.0.0", "::", "::ffff:0.0.0.0", "0.1.2.3"] {
+            let ip: IpAddr = a.parse().unwrap();
+            assert!(is_ip_blocked_by_policy(ip, &policy), "{a}");
+        }
+        assert!(!is_ip_blocked_by_policy(
+            IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1)),
+            &policy
+        ));
     }
 }

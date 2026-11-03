@@ -142,6 +142,17 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_render_preserves_malformed_markers_and_resolves_valid_ones() {
+        let resolver = MockResolver::new().with("key", "value");
+        let long_name = "a".repeat(129);
+        let input = format!("{{{{secret:}}}} {{{{secret:bad name}}}} {{{{secret:{long_name}}}}} {{{{secret:key}}}} {{{{secret:unfinished");
+        let (rendered, injected) = render_with_secrets(&input, &resolver).await.unwrap();
+        assert_eq!(rendered, input.replace("{{secret:key}}", "value"));
+        assert_eq!(injected.len(), 1);
+        assert_eq!(injected[0].name, "key");
+    }
+
+    #[tokio::test]
     async fn test_render_replaces_placeholder() {
         let resolver = MockResolver::new().with("api_key", "sk-ant-secret-123");
         let input = "Authorization: Bearer {{secret:api_key}}";

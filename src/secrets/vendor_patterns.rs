@@ -20,8 +20,8 @@
 /// `(label, regex_source)` pairs.
 ///
 /// `label` is the human-readable secret class surfaced in leak-block reasons;
-/// `regex_source` is the flavor-agnostic pattern body (no anchors so it can be
-/// scanned mid-text, identical to the legacy catalogs).
+/// `regex_source` is scanned mid-text, with token boundaries where needed
+/// to avoid matching credential-shaped fragments inside ordinary identifiers.
 pub const VENDOR_SECRET_PATTERNS: &[(&str, &str)] = &[
     // Slack bot/user/refresh tokens (`xoxb-`, `xoxp-`, …) and app-level tokens.
     ("Slack Token", r"xox[baprs]-[A-Za-z0-9-]{10,}"),
@@ -48,9 +48,14 @@ pub const VENDOR_SECRET_PATTERNS: &[(&str, &str)] = &[
     ("PyPI Token", r"pypi-[A-Za-z0-9_\-]{16,}"),
     ("DigitalOcean Token", r"dop_v1_[a-f0-9]{64}"),
     ("Google OAuth Token", r"ya29\.[A-Za-z0-9_\-]{20,}"),
-    // `<bot-id>:<35-char-secret>` — distinctive enough for the blocking path.
-    ("Telegram Bot Token", r"\d{8,10}:[A-Za-z0-9_-]{35}"),
-    ("Twilio API Key", r"SK[0-9a-fA-F]{32}"),
+    // ASCII word boundaries also work for byte scanners without UTF-8 mode.
+    // Telegram's final character can be '-' (a non-word character), so consume
+    // a delimiter or end-of-input rather than requiring a trailing word boundary.
+    (
+        "Telegram Bot Token",
+        r"(?-u:\b)[0-9]{8,10}:[A-Za-z0-9_-]{35}(?:[^A-Za-z0-9_-]|$)",
+    ),
+    ("Twilio API Key", r"(?-u:\b)SK[0-9a-fA-F]{32}(?-u:\b)"),
 ];
 
 #[cfg(test)]
@@ -70,6 +75,59 @@ mod tests {
         for (label, src) in VENDOR_SECRET_PATTERNS {
             regex::bytes::Regex::new(src)
                 .unwrap_or_else(|e| panic!("{label} bytes pattern failed to compile: {e}"));
+        }
+    }
+
+    #[test]
+    fn vendor_tokens_require_boundaries_and_complete_lengths() {
+        let twilio = Regex::new(
+            VENDOR_SECRET_PATTERNS
+                .iter()
+                .find(|(label, _)| *label == "Twilio API Key")
+                .unwrap()
+                .1,
+        )
+        .unwrap();
+        let telegram = Regex::new(
+            VENDOR_SECRET_PATTERNS
+                .iter()
+                .find(|(label, _)| *label == "Telegram Bot Token")
+                .unwrap()
+                .1,
+        )
+        .unwrap();
+        let twilio_key = format!("SK{}", "a".repeat(32));
+        let telegram_key = format!("123456789:{}-", "a".repeat(34));
+        assert!(twilio.is_match(&format!("key={twilio_key}")));
+        assert!(telegram.is_match(&format!("token={telegram_key}")));
+        assert!(telegram.is_match(&format!("token={telegram_key}, done")));
+        for text in [
+            format!("TASK{twilio_key}"),
+            format!("{twilio_key}b"),
+            format!("x{twilio_key}"),
+        ] {
+            assert!(!twilio.is_match(&text));
+        }
+        for text in [
+            format!("id1{telegram_key}"),
+            format!("{telegram_key}a"),
+            format!("x{telegram_key}"),
+        ] {
+            assert!(!telegram.is_match(&text));
+        }
+        // Verify both consumers keep genuine keys redacted, including a '-'
+        // ending Telegram secret where a trailing word boundary would fail.
+        for token in [&twilio_key, &telegram_key] {
+            let super::super::leak_detector::LeakDecision::Block {
+                redacted_content, ..
+            } = super::super::leak_detector::LeakDetector::new().scan_outbound(token)
+            else {
+                panic!("Expected Block");
+            };
+            assert!(!redacted_content.contains(token.as_str()));
+            assert!(super::super::leak_detector::default_patterns_bytes()
+                .iter()
+                .any(|(_, regex)| regex.is_match(token.as_bytes())));
         }
     }
 

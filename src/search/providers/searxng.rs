@@ -1,6 +1,6 @@
 use crate::error::{AlephError, Result};
 use crate::search::providers::base::{
-    build_client, parse_json, reject_ssrf_target_host, retain_usable, send,
+    build_client, parse_json, reject_ssrf_target_host, retain_usable, send, validate_request_url,
 };
 use crate::search::{SearchCapabilities, SearchOptions, SearchProvider, SearchResult};
 use async_trait::async_trait;
@@ -67,7 +67,9 @@ pub struct SearxngProvider {
     engines: Option<String>,
     /// Minimum spacing between consecutive requests to this backend.
     min_interval: Duration,
-    /// Timestamp of the last dispatched request, for rate throttling.
+    /// Whether request-time SSRF validation may reach private networks.
+    allow_private_network: bool,
+    /// Timestamp of the last reserved request slot, for rate throttling.
     last_request: Mutex<Option<Instant>>,
 }
 
@@ -117,9 +119,12 @@ impl SearxngProvider {
         }
 
         let trimmed = base_url.trim_end_matches('/').to_string();
-        if !(trimmed.len() >= 7
-            && (trimmed[..7].eq_ignore_ascii_case("http://")
-                || (trimmed.len() >= 8 && trimmed[..8].eq_ignore_ascii_case("https://"))))
+        if !(trimmed
+            .get(..7)
+            .is_some_and(|p| p.eq_ignore_ascii_case("http://"))
+            || trimmed
+                .get(..8)
+                .is_some_and(|p| p.eq_ignore_ascii_case("https://")))
         {
             return Err(AlephError::invalid_config(
                 "SearXNG base URL must use http:// or https:// scheme",
@@ -150,6 +155,7 @@ impl SearxngProvider {
             base_url: trimmed,
             url_password,
             client: build_client()?,
+            allow_private_network,
             engines: engines.filter(|s| !s.is_empty()),
             min_interval: resolve_min_interval(min_request_interval_ms),
             last_request: Mutex::new(None),
@@ -165,34 +171,19 @@ impl SearxngProvider {
         if self.min_interval.is_zero() {
             return;
         }
-        // Compute the sleep deadline under the lock, then release it before
-        // awaiting. Holding a `tokio::sync::Mutex` across `tokio::time::sleep`
-        // serializes every concurrent search through the same backend behind
-        // the first caller's HTTP round-trip — the throttle is supposed to
-        // protect the upstream engines from *its own* request rate, not to
-        // serialize other backends. Standard release-and-await pattern.
+        // Reserve the next dispatch slot while holding the lock. The
+        // reservation is visible to concurrent callers before they sleep.
         let sleep_for = {
-            let last = self.last_request.lock().await;
-            last.map(|prev| {
-                let elapsed = prev.elapsed();
-                if elapsed < self.min_interval {
-                    self.min_interval - elapsed
-                } else {
-                    Duration::ZERO
-                }
-            })
-            .unwrap_or(Duration::ZERO)
+            let mut last = self.last_request.lock().await;
+            let now = Instant::now();
+            let sleep_for = last
+                .map(|prev| self.min_interval.saturating_sub(now.duration_since(prev)))
+                .unwrap_or(Duration::ZERO);
+            *last = Some(now + sleep_for);
+            sleep_for
         };
         if !sleep_for.is_zero() {
             tokio::time::sleep(sleep_for).await;
-        }
-        // Re-acquire briefly to stamp the dispatch time. A second caller who
-        // raced in during the sleep will see this stamp and start a new sleep
-        // of their own — still rate-limited, but in parallel rather than
-        // serialized.
-        {
-            let mut last = self.last_request.lock().await;
-            *last = Some(Instant::now());
         }
     }
 }
@@ -206,6 +197,7 @@ impl SearchProvider for SearxngProvider {
         // Space requests out before dispatching so a burst doesn't suspend
         // the upstream engines (see `throttle` / `DEFAULT_MIN_INTERVAL_MS`).
         self.throttle().await;
+        validate_request_url(&url, NAME, self.allow_private_network).await?;
 
         let secret = self.url_password.as_deref();
         let response = send(

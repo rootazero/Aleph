@@ -41,6 +41,8 @@ pub struct SearchAnswer {
     pub results: Vec<SearchResult>,
     /// Which backend answered. Not always the one the chain starts with.
     pub provider: String,
+    /// The individual backends that contributed results, in answer order.
+    pub providers: Vec<String>,
     /// Sentences from `crate::search::notes` naming what this answer is
     /// missing and which lever the caller can pull. Empty is the common case.
     pub notes: Vec<String>,
@@ -150,26 +152,19 @@ impl SearchRegistry {
         self.web_fetch_fallback.is_some()
     }
 
-    /// Build a one-backend registry from a bare `TAVILY_API_KEY`.
-    ///
-    /// This replaces a second implementation of "how do I search" that lived
-    /// in `SearchTool` and read the environment itself. That path predated
-    /// `SearchOptions` and ignored all of it, so every parameter the tool face
-    /// accepts would have been accepted, reported as applied, and dropped on
-    /// any machine without a `[search]` block — which is the zero-config
-    /// install, not a corner case.
-    ///
-    /// No SERP fallback is armed: `[search].web_fetch_fallback` is the switch
-    /// for that, and an install with no `[search]` block has not touched it.
+    /// Build a one-backend registry from a Tavily API key supplied by the
+    /// caller (normally configuration hydrated from the vault).
     #[must_use]
-    pub fn from_env_only(api_key: &str) -> Option<Self> {
+    pub fn from_tavily_key(api_key: &str) -> Option<Self> {
         if api_key.trim().is_empty() {
             return None;
         }
         let provider = match crate::search::providers::TavilyProvider::new(api_key.to_string()) {
             Ok(p) => p,
             Err(e) => {
-                log::warn!("TAVILY_API_KEY is set but unusable, so no backend was built: {e}");
+                log::warn!(
+                    "Tavily key supplied by config/vault is unusable, so no backend was built: {e}"
+                );
                 return None;
             }
         };
@@ -185,7 +180,7 @@ impl SearchRegistry {
     /// twice — one of them under a comment reading "must mirror
     /// `builder/constructor/mod.rs:48`", which is a fact with two authors and
     /// no compiler between them. Order: the registry built from `[search]`,
-    /// else one synthesised from a bare key, else an empty one.
+    /// else one synthesised from a Tavily key supplied by config/vault, else an empty one.
     ///
     /// Never `None`. A machine with nothing configured still registers the
     /// tool and fails, when called, with a message naming what to set: a
@@ -197,7 +192,7 @@ impl SearchRegistry {
             return Arc::clone(registry);
         }
         api_key
-            .and_then(Self::from_env_only)
+            .and_then(Self::from_tavily_key)
             .map_or_else(|| Arc::new(Self::new(UNCONFIGURED_DEFAULT)), Arc::new)
     }
 
@@ -210,8 +205,9 @@ impl SearchRegistry {
     /// disabled, or no usable backend was constructed — caller should
     /// then leave `BuiltinToolConfig.search_handle = None`, and
     /// [`SearchRegistry::for_tool`] will synthesize a one-backend registry
-    /// from a bare `TAVILY_API_KEY` (via [`SearchRegistry::from_env_only`])
-    /// when the `search` tool is built.
+    /// from a Tavily key supplied by config/vault (via
+    /// [`SearchRegistry::from_tavily_key`]) when the `search` block is absent
+    /// and the caller has verified that the configured default is Tavily.
     ///
     /// `allow_private_network` is the operator's `[ssrf]` switch, forwarded
     /// to provider construction: it admits loopback / private `base_url`s
@@ -301,7 +297,8 @@ impl SearchRegistry {
         if !any_added {
             log::warn!(
                 "[search] block parsed but no provider was constructable — \
-                 search tool will fall back to TAVILY_API_KEY env var"
+                 search tool will use the configured Tavily key only when the \
+                 default backend kind is Tavily"
             );
             return None;
         }
@@ -481,7 +478,8 @@ impl SearchRegistry {
         }
         SearchAnswer {
             results,
-            provider,
+            provider: provider.clone(),
+            providers: vec![provider],
             notes,
         }
     }
@@ -529,7 +527,11 @@ impl SearchRegistry {
             .cloned()
             .collect();
         names.sort_by_key(|n| {
-            let have = self.providers[n].capabilities(options);
+            let have = self
+                .providers
+                .get(n)
+                .map(|provider| provider.capabilities(options))
+                .unwrap_or_default();
             let satisfies = (!want.domain_filter || have.domain_filter)
                 && (!want.recency || have.recency)
                 && (!want.full_content || have.full_content);
@@ -610,11 +612,19 @@ impl SearchRegistry {
         let named = self.resolve_named(&options.providers)?;
         let asked = named.len();
 
-        let outcomes = futures::future::join_all(
-            named
-                .iter()
-                .map(|(name, p)| async move { (name.clone(), p.search(query, options).await) }),
-        )
+        let outcomes = futures::future::join_all(named.iter().map(|(name, p)| async move {
+            let result = tokio::time::timeout(
+                std::time::Duration::from_secs(options.validated_timeout().min(60)),
+                p.search(query, options),
+            )
+            .await
+            .unwrap_or_else(|_| {
+                Err(AlephError::network(format!(
+                    "search provider '{name}' timed out"
+                )))
+            });
+            (name.clone(), result)
+        }))
         .await;
 
         let mut answered: Vec<String> = Vec::new();
@@ -659,7 +669,10 @@ impl SearchRegistry {
             notes.extend(Self::degradation_notes(
                 options,
                 name,
-                self.providers[name].capabilities(options),
+                self.providers
+                    .get(name)
+                    .map(|provider| provider.capabilities(options))
+                    .unwrap_or_default(),
             ));
         }
         if answered.len() < asked {
@@ -678,6 +691,7 @@ impl SearchRegistry {
             // because `provider_used` is read to answer "who said this", and
             // the per-result `provider` fields it summarises are these names.
             provider: answered.join("+"),
+            providers: answered,
             notes,
         })
     }
@@ -736,8 +750,10 @@ impl SearchRegistry {
         for (query, outcome) in queries.iter().zip(outcomes) {
             match outcome {
                 Ok(mut answer) => {
-                    if !providers.contains(&answer.provider) {
-                        providers.push(answer.provider.clone());
+                    for provider in answer.providers {
+                        if !providers.contains(&provider) {
+                            providers.push(provider);
+                        }
                     }
                     // A query that found nothing still answered — that is not
                     // a failure. But its `all_empty` note is true of *this*
@@ -858,7 +874,9 @@ impl SearchRegistry {
         // already dropped anything not in `self.providers`, so the lookup
         // below cannot miss.
         for provider_name in self.ordered_candidates(options) {
-            let provider = &self.providers[&provider_name];
+            let Some(provider) = self.providers.get(&provider_name) else {
+                continue;
+            };
             if !provider.is_available() {
                 // Not recorded against health: this costs no round trip, and
                 // `is_available` will keep answering false until the operator
@@ -869,8 +887,13 @@ impl SearchRegistry {
                 unavailable.push(msg);
                 continue;
             }
-            match provider.search(query, options).await {
-                Ok(results) if !results.is_empty() => {
+            match tokio::time::timeout(
+                std::time::Duration::from_secs(options.validated_timeout().min(60)),
+                provider.search(query, options),
+            )
+            .await
+            {
+                Ok(Ok(results)) if !results.is_empty() => {
                     if provider_name != self.default_provider {
                         log::info!("Search succeeded with fallback provider '{provider_name}'");
                     }
@@ -886,7 +909,7 @@ impl SearchRegistry {
                         0,
                     ));
                 }
-                Ok(_) => {
+                Ok(Ok(_)) => {
                     // Answering "nothing" is not a reason to stop asking: a
                     // fallback list exists precisely because backends
                     // disagree about what exists. Keep trying the rest of
@@ -903,7 +926,19 @@ impl SearchRegistry {
                     // not that the web is empty. Same word, different fact.)
                     empty.push(provider_name);
                 }
-                Err(e) => {
+                Ok(Err(e)) => {
+                    let kind = SearchErrorKind::of(&e);
+                    self.health.note_failure(&provider_name, &e);
+                    log::warn!(
+                        target: "search",
+                        "provider={provider_name} kind={} {e}",
+                        kind.as_str()
+                    );
+                    errors.push(failure_line(&provider_name, kind, &e));
+                }
+                Err(_) => {
+                    let e =
+                        AlephError::network(format!("search provider '{provider_name}' timed out"));
                     let kind = SearchErrorKind::of(&e);
                     self.health.note_failure(&provider_name, &e);
                     log::warn!(
@@ -928,8 +963,13 @@ impl SearchRegistry {
                 target: "search",
                 "no provider returned results; attempting WebFetch SERP fallback"
             );
-            match fallback.search(query, options).await {
-                Ok(results) => {
+            match tokio::time::timeout(
+                std::time::Duration::from_secs(options.validated_timeout().min(60)),
+                fallback.search(query, options),
+            )
+            .await
+            {
+                Ok(Ok(results)) => {
                     // The scraper forwards only the timeout and the result
                     // count (see [`WebFetchSerpFallback::search`]), so it
                     // carries none of the dimensions a caller can ask for.
@@ -943,8 +983,14 @@ impl SearchRegistry {
                         empty.len() + 1,
                     ));
                 }
-                Err(e) => {
+                Ok(Err(e)) => {
                     let kind = SearchErrorKind::of(&e);
+                    errors.push(failure_line(WEB_FETCH_FALLBACK_NAME, kind, &e));
+                }
+                Err(_) => {
+                    let e = AlephError::network("WebFetch SERP fallback timed out");
+                    let kind = SearchErrorKind::of(&e);
+                    self.health.note_failure(WEB_FETCH_FALLBACK_NAME, &e);
                     errors.push(failure_line(WEB_FETCH_FALLBACK_NAME, kind, &e));
                 }
             }
@@ -965,7 +1011,7 @@ impl SearchRegistry {
                 // to look for a failure instead of for a setting.
                 Err(AlephError::invalid_config(
                     "no search backend is configured: add a backend under [search] in \
-                     config.toml, or set TAVILY_API_KEY in the environment",
+                     config.toml, or provide a Tavily key in config/vault",
                 ))
             }
             None if errors.is_empty() => {
@@ -993,7 +1039,11 @@ impl SearchRegistry {
             Some(first) => {
                 // Somebody answered — with nothing. `empty` is in chain order,
                 // so the first entry is the backend whose answer this is.
-                let have = self.providers[first].capabilities(options);
+                let have = self
+                    .providers
+                    .get(first)
+                    .map(|provider| provider.capabilities(options))
+                    .unwrap_or_default();
                 Ok(Self::answer(
                     options,
                     first.clone(),
@@ -1032,21 +1082,21 @@ mod tests {
         );
     }
 
-    /// Zero-config still works: a machine with TAVILY_API_KEY and no [search]
+    /// Zero-config still works with a Tavily key supplied by config/vault and no [search]
     /// block gets a one-backend registry, not a second code path that ignores
     /// every option the tool face accepts.
     #[test]
-    fn an_env_only_install_still_gets_a_registry() {
-        let reg = SearchRegistry::from_env_only("tvly-test").expect("registry");
+    fn a_config_supplied_tavily_key_still_gets_a_registry() {
+        let reg = SearchRegistry::from_tavily_key("tvly-test").expect("registry");
         assert_eq!(reg.default_options().max_results, 5);
         assert!(reg.get_provider("tavily").is_some());
     }
 
     #[test]
     fn no_key_and_no_config_yields_no_registry_rather_than_a_second_path() {
-        assert!(SearchRegistry::from_env_only("").is_none());
+        assert!(SearchRegistry::from_tavily_key("").is_none());
         assert!(
-            SearchRegistry::from_env_only("   ").is_none(),
+            SearchRegistry::from_tavily_key("   ").is_none(),
             "an all-whitespace key is unset, not a credential"
         );
     }

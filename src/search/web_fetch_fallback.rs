@@ -37,7 +37,15 @@
 //!   mechanical iteration over a fixed list.
 
 use crate::error::{AlephError, Result};
-use crate::search::providers::base::{build_client, retain_usable, send};
+use crate::search::providers::base::{build_client, read_capped, retain_usable, send};
+
+/// Hard ceiling on a mirror's response body.
+///
+/// The mirrors are unauthenticated public endpoints, but the body is read
+/// before it is parsed, so an oversized (or hostile) response would
+/// otherwise be buffered whole. The parsers only need the result-list
+/// region of the page, so 8 MiB is far above any real SERP page.
+const MAX_MIRROR_BODY_BYTES: u64 = 8 * 1024 * 1024;
 use crate::search::providers::duckduckgo::{parse_ddg_html, parse_ddg_lite_html};
 use crate::search::{SearchOptions, SearchResult};
 use crate::sync_primitives::{Mutex, MutexGuard};
@@ -217,7 +225,7 @@ impl WebFetchSerpFallback {
             None,
         )
         .await?;
-        let body = response.text().await.map_err(|e| {
+        let body = read_capped(response, MAX_MIRROR_BODY_BYTES).await.map_err(|e| {
             AlephError::provider(format!("Failed to read {} body: {}", mirror.name, e))
         })?;
 
