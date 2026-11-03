@@ -6,10 +6,10 @@ use crate::memory::notes::profile::{
 };
 use crate::memory::runtime::{MemoryOperation, MemoryRuntime, MemoryRuntimeConfig, MemoryState};
 use crate::memory::store::markdown::MarkdownSessionStore;
-use crate::memory::store::sqlite::SqliteMemoryBackend;
 use crate::memory::store::raw_memory::{
     RawMemory, RawMemorySource, RawMemoryStore, SessionEndReason,
 };
+use crate::memory::store::sqlite::SqliteMemoryBackend;
 use crate::sync_primitives::{Arc, AtomicBool, Ordering};
 use std::pin::pin;
 use std::task::Poll;
@@ -232,6 +232,50 @@ async fn compression_threshold_and_profile_children_are_observed() {
             1
         );
     }
+}
+
+#[tokio::test]
+async fn admitted_flush_drains_before_runtime_stop_completes() {
+    use crate::memory::flush::{flush_agent_memory, FlushRegistry};
+
+    let fixture = Fixture::new(RawMemorySource::Transcript).await;
+    let phase = Arc::new(Phase::default());
+    let service = Arc::new(fixture.service(Some(phase.clone())));
+    let registry = FlushRegistry::new();
+    let guard = registry.begin("default");
+    let mut ready = pin!(registry.await_ready("default", Duration::from_secs(10)));
+    assert!(matches!(futures::poll!(&mut ready), Poll::Pending));
+
+    let (sent, received) = tokio::sync::oneshot::channel();
+    let flush_service = service.clone();
+    fixture
+        .operation
+        .spawn(async move {
+            flush_agent_memory(guard, "default".into(), flush_service).await;
+            sent.send(()).unwrap();
+        })
+        .unwrap();
+    tokio::time::timeout(Duration::from_secs(10), phase.entered.notified())
+        .await
+        .unwrap();
+    assert!(phase.admitted.load(Ordering::SeqCst));
+
+    drop(fixture.operation);
+    let mut stop = pin!(fixture.runtime.stop());
+    assert!(matches!(futures::poll!(&mut stop), Poll::Pending));
+    assert_eq!(fixture.runtime.status().state, MemoryState::Draining);
+    phase.release.notify_one();
+    received.await.unwrap();
+    assert!(ready.await);
+    assert_eq!(
+        tokio::time::timeout(Duration::from_secs(10), &mut stop)
+            .await
+            .unwrap()
+            .unwrap()
+            .state,
+        MemoryState::Off
+    );
+    assert_eq!(fixture.raw.count_unprocessed("default").await.unwrap(), 0);
 }
 
 #[tokio::test]

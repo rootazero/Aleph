@@ -138,6 +138,7 @@ impl CompressionService {
         self
     }
 
+    /// Register a hook that runs after each successful
     /// per-agent `compress_default_notes` call.
     ///
     /// `&self` (not `&mut self`) so callers holding `Arc<CompressionService>`
@@ -250,6 +251,16 @@ impl CompressionService {
         &self,
         workspace_id: &str,
     ) -> Result<CompressionResult, AlephError> {
+        // Admission must precede raw consumption and extension/file effects,
+        // not just the eventual SQLite projection.
+        let _operation = match self.database.operation()? {
+            None if self.runtime_bound => {
+                return Err(AlephError::other(
+                    "runtime-bound compression requires an admitted Memory operation",
+                ));
+            }
+            operation => operation,
+        };
         let start = Instant::now();
 
         // Serialize compressions for this agent — see `ingest_locks`. Held across
@@ -727,9 +738,7 @@ impl CompressionService {
             }
         };
         if self.runtime_bound && operation.is_none() {
-            tracing::debug!(
-                "runtime-bound compression skipped without Memory admission"
-            );
+            tracing::debug!("runtime-bound compression skipped without Memory admission");
             return;
         }
         // Count the turn exactly once at the threshold crossing.
@@ -761,12 +770,6 @@ impl CompressionService {
                 if let Err(error) = operation.spawn(crate::memory::runtime::carry(task)) {
                     tracing::warn!(%error, "threshold task could not be retained by Memory");
                 }
-                return;
-            }
-            if self.runtime_bound {
-                tracing::debug!(
-                    "runtime-bound compression skipped without Memory admission"
-                );
                 return;
             }
             tokio::spawn(task);
