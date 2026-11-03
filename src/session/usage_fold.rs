@@ -31,14 +31,14 @@ impl UsageTotals {
         if let SessionEvent::AssistantMessage { usage, .. } = event {
             match usage {
                 Some(u) => {
-                    self.input += u64::from(u.input);
-                    self.output += u64::from(u.output);
-                    self.cache_read += u64::from(u.cache_read);
-                    self.cache_creation += u64::from(u.cache_creation);
-                    self.reasoning += u64::from(u.reasoning);
-                    self.with_usage += 1;
+                    self.input = self.input.saturating_add(u64::from(u.input));
+                    self.output = self.output.saturating_add(u64::from(u.output));
+                    self.cache_read = self.cache_read.saturating_add(u64::from(u.cache_read));
+                    self.cache_creation = self.cache_creation.saturating_add(u64::from(u.cache_creation));
+                    self.reasoning = self.reasoning.saturating_add(u64::from(u.reasoning));
+                    self.with_usage = self.with_usage.saturating_add(1);
                 }
-                None => self.without_usage += 1,
+                None => self.without_usage = self.without_usage.saturating_add(1),
             }
         }
         self
@@ -68,7 +68,7 @@ pub fn run_usage_totals(slice: &[SessionEventRecord]) -> Option<(EventSeq, Usage
     let start = slice
         .iter()
         .rposition(|r| matches!(r.event, SessionEvent::RunStarted { .. }))?;
-    let anchor = slice[start].seq;
+    let anchor = slice.get(start)?.seq;
     slice
         .get(start..)
         .map(session_usage_totals)

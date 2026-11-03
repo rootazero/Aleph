@@ -399,8 +399,11 @@ pub struct RunReduction {
 /// record `seq: 1` is still a slice. Only a *decrease* is the shape that
 /// derives a false anchor and a false disposition.
 pub fn validate_slice(events: &[SessionEventRecord]) -> Result<(), LogContradiction> {
-    match events.windows(2).find(|w| w[1].seq < w[0].seq) {
-        Some(w) => Err(LogContradiction::OutOfOrderSlice { at_seq: w[1].seq }),
+    match events.windows(2).find(|w| matches!(w, [prev, next] if next.seq < prev.seq)) {
+        Some(w) => {
+            let at_seq = w.get(1).map_or(0, |r| r.seq);
+            Err(LogContradiction::OutOfOrderSlice { at_seq })
+        }
         None => Ok(()),
     }
 }
@@ -515,7 +518,7 @@ pub fn reduce_disposition(
         .iter()
         .rposition(|r| matches!(r.event, SessionEvent::RunFinished { .. }))
         .map_or(0, |i| i + 1);
-    let tail = &markers[since_finish..];
+    let tail = markers.get(since_finish..).unwrap_or(&[]);
     let stamps_in = |slice: &[SessionEventRecord]| {
         let n = slice
             .iter()
@@ -542,13 +545,15 @@ pub fn reduce_disposition(
     });
     match last_user {
         Some(i)
-            if !tail[i + 1..]
+            if !tail
+                .get(i + 1..)
+                .unwrap_or(&[])
                 .iter()
                 .any(|r| matches!(r.event, SessionEvent::AssistantMessage { .. })) =>
         {
             Ok(RunDisposition::Unanswered {
-                user_seq: tail[i].seq,
-                attempts: stamps_in(&tail[i + 1..]),
+                user_seq: tail.get(i).map_or(0, |r| r.seq),
+                attempts: stamps_in(tail.get(i + 1..).unwrap_or(&[])),
             })
         }
         _ => Ok(RunDisposition::Clean),
@@ -974,7 +979,9 @@ pub fn own_work_start(events: &[SessionEventRecord]) -> usize {
         return 0;
     };
     let after = forked_at + 1;
-    events[after..]
+    events
+        .get(after..)
+        .unwrap_or(&[])
         .iter()
         .position(|r| matches!(r.event, SessionEvent::TurnStarted { .. }))
         .map_or(events.len(), |i| after + i)

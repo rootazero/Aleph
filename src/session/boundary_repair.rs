@@ -327,11 +327,11 @@ pub async fn repair_boundary_with_policy(
         // for. Saying so here rather than silently dropping it.
         return Ok(RepairReport::default());
     }
-    let mut next = store.load_head_seq(session).await? + 1;
+    let mut next = store.load_head_seq(session).await?.saturating_add(1);
     let mut appended = 0usize;
     for ev in repairs {
         store.append(session, next, &ev, now_ms()).await?;
-        next += 1;
+        next = next.saturating_add(1);
         appended += 1;
     }
     Ok(RepairReport { appended })
@@ -401,7 +401,7 @@ pub async fn repair_and_close_abandoned(
             outcome: RunOutcome::Abandoned,
             at: now_ms(),
         };
-        let seq = store.load_head_seq(session).await? + 1;
+        let seq = store.load_head_seq(session).await?.saturating_add(1);
         store.append(session, seq, &ev, now_ms()).await?;
         closed_run_id = Some(open.run_id.clone());
     }
