@@ -255,15 +255,12 @@ fn fence_mcp_result(mut value: Value, source: &ContentSource) -> Value {
     let Some(blocks) = value
         .get_mut("content")
         .and_then(Value::as_array_mut)
-        .map(std::mem::take)
     else {
         return fence_opaque(&value, source);
     };
-    let fenced: Vec<Value> = blocks
-        .into_iter()
-        .map(|block| fence_block(block, source))
-        .collect();
-    value["content"] = Value::Array(fenced);
+    for block in blocks {
+        *block = fence_block(std::mem::take(block), source);
+    }
     value
 }
 

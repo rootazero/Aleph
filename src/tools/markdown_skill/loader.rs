@@ -141,6 +141,18 @@ impl SkillLoader {
 
     /// Load a single skill file
     async fn load_skill_file(&self, path: &Path) -> Result<MarkdownCliTool> {
+        // Enforce 1 MiB limit before reading to prevent unbounded memory allocation
+        let metadata = fs::metadata(path)
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to read metadata for {}: {e}", path.display()))?;
+        if metadata.len() > 1024 * 1024 {
+            anyhow::bail!(
+                "Skill file {} exceeds 1MiB limit ({} bytes)",
+                path.display(),
+                metadata.len()
+            );
+        }
+
         // Read file
         let content = fs::read_to_string(path)
             .await

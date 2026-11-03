@@ -207,7 +207,7 @@ impl SkillWatcher {
                         Some(name) => {
                             let removed = markdown_skill_registry_owner()
                                 .lock()
-                                .unwrap()
+                                .unwrap_or_else(|e| e.into_inner())
                                 .remove(&name);
                             if removed {
                                 info!(name = %name, "Unregistered deleted markdown skill");
@@ -282,9 +282,15 @@ fn skill_name_from_path(path: &Path) -> Option<String> {
             .and_then(|n| n.to_str())
             .map(str::to_string);
     }
-    if file_name.to_lowercase().ends_with(".skill.md") {
-        let stem_len = file_name.len().saturating_sub(".skill.md".len());
-        return Some(file_name[..stem_len].to_string());
+    let suffix_len = ".skill.md".len();
+    if file_name.len() >= suffix_len {
+        let split_pos = file_name.len() - suffix_len;
+        if file_name.is_char_boundary(split_pos) {
+            let (stem, suffix) = file_name.split_at(split_pos);
+            if suffix.eq_ignore_ascii_case(".skill.md") {
+                return Some(stem.to_string());
+            }
+        }
     }
     None
 }
