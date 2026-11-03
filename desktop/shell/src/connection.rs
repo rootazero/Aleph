@@ -396,7 +396,7 @@ fn default_port_for(raw: &str, scheme: &str) -> u16 {
 fn port_tail_is_explicit(tail: &str) -> bool {
     match tail.find(|c: char| !c.is_ascii_digit()) {
         Some(end) => {
-            let after = &tail[end..];
+            let after = tail.get(end..).unwrap_or("");
             after.is_empty()
                 || after.starts_with('/')
                 || after.starts_with('?')
@@ -416,7 +416,7 @@ fn port_tail_is_explicit(tail: &str) -> bool {
 fn has_explicit_port_in_input(raw: &str) -> bool {
     // Strip scheme if present so we work on `[host]/path` or `host:port/path`.
     let after_scheme = if let Some(pos) = raw.find("://") {
-        &raw[pos + 3..]
+        raw.get(pos + 3..).unwrap_or("")
     } else {
         raw
     };
@@ -431,12 +431,13 @@ fn has_explicit_port_in_input(raw: &str) -> bool {
         // IPv6: `idx` is already one past `]` (i.e. pointing at `:` when a
         // port is present), so check for `:` directly at `idx`.
         Some(idx) if after_scheme.starts_with('[') => {
-            after_scheme[idx..].starts_with(':') && port_tail_is_explicit(&after_scheme[idx + 1..])
+            after_scheme.get(idx..).is_some_and(|s| s.starts_with(':'))
+                && port_tail_is_explicit(after_scheme.get(idx + 1..).unwrap_or(""))
         }
         // Plain host:port — digits after the `:`, terminated by `/`, `?`,
         // `#`, or end-of-string. `host:80?bt=...` is an explicit port 80
         // followed by a query string, not a port labelled `80?bt=...`.
-        Some(colon) => port_tail_is_explicit(&after_scheme[colon + 1..]),
+        Some(colon) => port_tail_is_explicit(after_scheme.get(colon + 1..).unwrap_or("")),
         None => false,
     }
 }
@@ -710,7 +711,9 @@ where
 /// this re-routes to the previous, still-consistent target.
 pub(crate) async fn reroute_current_target(app: tauri::AppHandle) {
     serialize_target_switch(|| async move {
-        let target = load_target();
+        let target = tokio::task::spawn_blocking(load_target)
+            .await
+            .unwrap_or(ConnectionTarget::Local);
         crate::reroute_for_target(&app, target).await;
     })
     .await

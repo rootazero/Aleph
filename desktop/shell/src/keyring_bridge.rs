@@ -634,6 +634,7 @@ fn qa_outcome<T>(
 }
 
 #[tauri::command(rename_all = "snake_case")]
+#[allow(clippy::unreachable)]
 pub async fn panel_credential_load(
     webview: tauri::Webview,
     scope: CommandScope<GatewayCredentialScope>,
@@ -666,6 +667,7 @@ pub async fn panel_credential_load(
 // `rename_all = "snake_case"` pins the wire argument names (`lease_id`,
 // `credential`) the Panel will send; Tauri's default would be camelCase.
 #[tauri::command(rename_all = "snake_case")]
+#[allow(clippy::unreachable)]
 pub async fn panel_credential_save(
     webview: tauri::Webview,
     scope: CommandScope<GatewayCredentialScope>,
@@ -696,6 +698,7 @@ pub async fn panel_credential_save(
 }
 
 #[tauri::command(rename_all = "snake_case")]
+#[allow(clippy::unreachable)]
 pub async fn panel_credential_delete(
     webview: tauri::Webview,
     scope: CommandScope<GatewayCredentialScope>,

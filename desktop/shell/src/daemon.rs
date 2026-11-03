@@ -118,8 +118,11 @@ pub async fn reconcile_for_version(version: &str) {
     }
     tracing::info!("reconciling daemon for app version {version}");
 
-    remove_legacy_autostart();
-    stop_daemon();
+    let _ = tokio::task::spawn_blocking(|| {
+        remove_legacy_autostart();
+        stop_daemon();
+    })
+    .await;
     wait_until_port_closed().await;
 
     if let Some(parent) = marker.parent() {

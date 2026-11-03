@@ -1303,6 +1303,7 @@ fn reveal_panel(handle: &tauri::AppHandle) {
 /// The awaited body of [`reveal_panel`]. `reroute_for_target` calls this
 /// directly (no second spawn) so the switch gate covers the navigation.
 #[cfg(feature = "embedded-core")]
+#[allow(clippy::unused_async)]
 async fn reveal_panel_now(handle: &tauri::AppHandle) {
     navigate_to_target(handle, &connection::load_target());
     focus_window(handle);

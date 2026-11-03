@@ -107,12 +107,15 @@ fn client_to_window(client: &Value) -> Option<WindowInfo> {
     let at = client.get("at").and_then(Value::as_array);
     let size = client.get("size").and_then(Value::as_array);
     let bounds = match (at, size) {
-        (Some(at), Some(size)) if at.len() >= 2 && size.len() >= 2 => Some(BoundingBox {
-            x: at[0].as_f64()?,
-            y: at[1].as_f64()?,
-            w: size[0].as_f64()?,
-            h: size[1].as_f64()?,
-        }),
+        (Some(at), Some(size)) => match (
+            at.get(0).and_then(Value::as_f64),
+            at.get(1).and_then(Value::as_f64),
+            size.get(0).and_then(Value::as_f64),
+            size.get(1).and_then(Value::as_f64),
+        ) {
+            (Some(x), Some(y), Some(w), Some(h)) => Some(BoundingBox { x, y, w, h }),
+            _ => None,
+        },
         _ => None,
     };
 
