@@ -474,7 +474,7 @@ impl ArtifactStore for SqliteArtifactStore {
         if task_ids.is_empty() {
             return Ok(0);
         }
-        let mut conn = self.conn.lock().await;
+        let conn = self.conn.lock().await;
         let placeholders = task_ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
         let params: Vec<&dyn rusqlite::types::ToSql> = task_ids
             .iter()

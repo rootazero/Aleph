@@ -262,7 +262,7 @@ pub fn select_schedulable(
 
     let mut picked: Vec<CoordTask> = Vec::with_capacity(available_slots);
     let mut candidates_with_state: Vec<(CoordTask, bool)> =
-        candidates.iter().cloned().map(|t| (t, false)).collect();
+        candidates.iter().map(|&t| (t.clone(), false)).collect();
 
     while picked.len() < available_slots {
         // Pick the eligible candidate whose owner is least loaded; ties resolve

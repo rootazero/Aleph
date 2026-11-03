@@ -456,7 +456,7 @@ impl GroupChatBroadcaster {
             SpawnMeta {
                 parent_id: None,
                 depth: 0,
-                root_session: tree.run_id.as_ref().clone(),
+                root_session: tree.run_id.to_string(),
                 model: None,
                 child_session: None,
             },
