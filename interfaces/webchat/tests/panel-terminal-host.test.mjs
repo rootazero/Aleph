@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { runInNewContext } from 'node:vm';
 import { chromium } from 'playwright';
 import { createPanelGatewayFixture, terminalPatch } from './fixtures/panel-gateway.mjs';
 
@@ -32,7 +33,18 @@ async function checkPositiveRoutes(origin) {
   for (const route of routes) {
     const response = await fetch(`${origin}${route}`);
     assert.equal(response.status, 200, `staged HTML route must be positive: ${route}`);
-    assert.match(await response.text(), /<base href="\.\/" \/>/, `route must serve final staged HTML: ${route}`);
+    const html = await response.text();
+    assert.doesNotMatch(html, /<base\b/i, `route must not introduce a base element: ${route}`);
+    const host = html.match(/<script\b[^>]*type="module"[^>]*>\s*import init from "([^"]+)"/)?.[1];
+    const css = html.match(/<link\b[^>]*rel="stylesheet"[^>]*href="([^"]*tailwind\.css)"/)?.[1];
+    const loader = html.match(/<script id="panel-loader-bridge">([\s\S]*?)<\/script>/)?.[1];
+    assert.equal(host, '/aleph_panel.js', `route must retain the root host module: ${route}`);
+    assert.equal(css, '/tailwind.css', `route must retain the root stylesheet: ${route}`);
+    assert.ok(loader, `route must retain the loader bridge: ${route}`);
+    const location = new URL(route, origin);
+    assert.equal(new URL(host, location).href, `${origin}/aleph_panel.js`);
+    assert.equal(new URL(css, location).href, `${origin}/tailwind.css`);
+    assert.equal(runInNewContext(`${loader}\npanelLoaderUrl`, { URL, location }), `${origin}/panel_loader.js`, `loader must resolve at root from ${route}`);
   }
   return routes;
 }

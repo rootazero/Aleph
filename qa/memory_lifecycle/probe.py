@@ -20,6 +20,11 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "qa/browser_managed"))
 from qa_rpc import Rpc, ran, ws_connect
 
+IS_WINDOWS = os.name == "nt"
+if IS_WINDOWS:
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    from windows_console import deliver_control_event, prepare_console_parent, spawn_creation_flags
+
 
 def digest(path):
     with path.open("rb") as stream:
@@ -42,6 +47,7 @@ class Probe:
         self.port = free_port()
         self.provider_port = free_port()
         self.checks = []
+        self.first_note = None
         self.completed = False
         self.process = None
         self.provider = None
@@ -59,6 +65,21 @@ class Probe:
         })
         self.env.pop("RUST_MIN_STACK", None)
 
+    def deliver_shutdown_signal(self, sig):
+        """Ask the owned server to shut down through the platform's real control path.
+
+        Windows has no SIGTERM: `Popen.send_signal(SIGTERM)` is `TerminateProcess`
+        (a hard kill) and `send_signal(SIGINT)` raises `ValueError`. The gateway
+        only implements a graceful Windows shutdown for Ctrl-C, so the Windows
+        path delivers a real `CTRL_C_EVENT` console control event instead.
+        """
+        if not IS_WINDOWS:
+            self.process.send_signal(sig)
+            return {"signal": int(sig)}
+        result = deliver_control_event(self.process.pid, "ctrl_c")
+        self.check("Windows console control event delivered", bool(result.get("generated")), result)
+        return result
+
     def check(self, name, condition, detail=""):
         self.checks.append({"name": name, "pass": bool(condition), "detail": detail})
         print(("PASS " if condition else "FAIL ") + name, str(detail)[:350], flush=True)
@@ -75,7 +96,7 @@ class Probe:
             built = json.loads(self.args.build_record.read_text())
             self.check("build provenance digest", built["sha256"] == self.args.sha256)
             provenance["build"] = built
-        (self.root / "artifact.json").write_text(json.dumps(provenance, indent=2) + "\n")
+        (self.root / "artifact.json").write_text(json.dumps(provenance, indent=2) + "\n", encoding="utf-8")
         provider_config = "" if self.args.providerless else f'''[general]
 default_provider = "memory-qa"
 [providers.memory-qa]
@@ -116,7 +137,7 @@ enabled = false
 enabled = false
 [skills]
 enabled = false
-''')
+''', encoding="utf-8")
         if self.args.providerless:
             return
         stream = (self.root / "provider.log").open("w")
@@ -131,9 +152,17 @@ enabled = false
         self.log = self.root / (name + ".log")
         stream = self.log.open("w")
         self.streams.append(stream)
+        spawn_options = {}
+        if IS_WINDOWS:
+            # The gateway's graceful Windows path is Ctrl-C, and a console
+            # control event only reaches processes that share one console.
+            prepare_console_parent()
+            spawn_options["creationflags"] = spawn_creation_flags()
+        else:
+            spawn_options["start_new_session"] = True
         self.process = subprocess.Popen([
             str(self.binary), "--port", str(self.port), "start",
-        ], cwd=self.root, env=self.env, stdout=stream, stderr=subprocess.STDOUT, start_new_session=True)
+        ], cwd=self.root, env=self.env, stdout=stream, stderr=subprocess.STDOUT, **spawn_options)
         deadline = time.monotonic() + 90
         while time.monotonic() < deadline and self.process.poll() is None:
             try:
@@ -181,12 +210,27 @@ enabled = false
         self.check(label + (": providerless reply persisted" if self.args.providerless else ": real provider reply persisted"), has_reply(messages), messages)
         self.check(label + ": user message persisted", any(marker in str(row.get("content", "")) for row in messages))
         deleted = await rpc.call("sessions.delete", {"session_key": key})
-        self.check(label + ": session-tail capture requested", "result" in deleted, deleted)
+        # Windows note: the file backend archives a session by RENAMING its
+        # directory. Windows refuses that rename while the directory still has
+        # an open child handle (ERROR_ACCESS_DENIED / os error 5), and the
+        # store only retries NAME collisions, not this transient denial. Retry
+        # here so one transient sharing violation cannot decide the whole
+        # lifecycle verdict; every attempt is recorded in the check detail.
+        attempts = 1
+        while "result" not in deleted and attempts < 6 and "Archive session failed" in str(deleted):
+            await asyncio.sleep(0.5)
+            deleted = await rpc.call("sessions.delete", {"session_key": key})
+            attempts += 1
+        self.check(
+            label + ": session-tail capture requested",
+            "result" in deleted,
+            {"attempts": attempts, "response": deleted},
+        )
         deadline = time.monotonic() + 10
         found = False
         while time.monotonic() < deadline:
             for path in self.aleph.rglob("*.md"):
-                if marker in path.read_text(errors="replace"):
+                if marker in path.read_text(encoding="utf-8", errors="replace"):
                     found = True
                     break
             if found:
@@ -223,7 +267,7 @@ enabled = false
                     self.check(name + ": real Memory provider entry", False, work.result())
                 await asyncio.sleep(0.05)
             self.check(name + ": real Memory provider entry", entered)
-            self.process.send_signal(sig)
+            self.deliver_shutdown_signal(sig)
             try:
                 code = await asyncio.to_thread(self.process.wait, timeout=5.5)
             except subprocess.TimeoutExpired:
@@ -280,39 +324,49 @@ enabled = false
             if not self.args.providerless:
                 await self.hold_memory_during_signal(rpc, name, sig)
         self.check(name + ": real note persisted", any(self.aleph.rglob("runtime-" + name + ".md")))
+        if first:
+            self.first_note = "runtime-" + name
         if not first:
-            self.check(name + ": previous boot note survived", any(self.aleph.rglob("runtime-sigterm.md")))
+            self.check(name + ": previous boot note survived", any(self.aleph.rglob(self.first_note + ".md")))
         if self.args.providerless:
-            self.process.send_signal(sig)
+            self.deliver_shutdown_signal(sig)
         try:
             code = await asyncio.to_thread(self.process.wait, timeout=45)
         except subprocess.TimeoutExpired:
             self.process.kill()
             code = await asyncio.to_thread(self.process.wait)
             self.check(name + ": signal drain completed", False, "external 45-second guard expired; owned process killed")
-        text = self.log.read_text(errors="replace")
+        text = self.log.read_text(encoding="utf-8", errors="replace")
         for path in (self.aleph / "logs").glob("*"):
             if path.is_file():
                 with path.open("rb") as stream:
                     stream.seek(self.offsets.get(path, 0))
-                    text += stream.read().decode(errors="replace")
-        (self.root / (name + "-combined.log")).write_text(text)
+                    text += stream.read().decode("utf-8", errors="replace")
+        (self.root / (name + "-combined.log")).write_text(text, encoding="utf-8")
         self.check(name + ": orderly process exit", code == 0, code)
-        self.check(name + ": signal path observed", "SIGTERM" in text if sig == signal.SIGTERM else "ctrl_c" in text)
+        if IS_WINDOWS:
+            # Windows has no SIGTERM at all; the graceful path is the Ctrl-C
+            # handler, and the gateway records it as `signal=ctrl_c`.
+            self.check(name + ": signal path observed", "signal=ctrl_c" in text)
+        else:
+            self.check(name + ": signal path observed", "SIGTERM" in text if sig == signal.SIGTERM else "ctrl_c" in text)
         self.check(name + ": watchdog not forced", "forcing exit" not in text and "graceful shutdown did not complete" not in text)
         self.check(name + ": endpoint removed", all(not path.exists() for path in self.endpoints))
         with socket.socket() as client:
             client.settimeout(1)
             self.check(name + ": listener removed", client.connect_ex(("127.0.0.1", self.port)) != 0)
         for path in self.aleph.rglob("*.db"):
-            with sqlite3.connect(f"file:{path}?mode=ro", uri=True) as database:
+            with sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True) as database:
                 self.check(name + ": SQLite integrity " + path.name, database.execute("PRAGMA integrity_check").fetchone()[0] == "ok")
         self.process = None
 
     def cleanup(self):
         for process in [self.process, self.provider]:
             if process is not None and process.poll() is None:
-                process.send_signal(signal.SIGTERM)
+                if IS_WINDOWS and process is self.process:
+                    deliver_control_event(process.pid, "ctrl_c")
+                else:
+                    process.send_signal(signal.SIGTERM)
                 try:
                     process.wait(timeout=15)
                 except subprocess.TimeoutExpired:
@@ -322,7 +376,7 @@ enabled = false
             stream.close()
         if not self.completed:
             self.checks.append({"name": "complete lifecycle scenario", "pass": False, "detail": "scenario ended before all required stages completed"})
-        (self.root / "results.json").write_text(json.dumps({"complete": self.completed, "providerless": self.args.providerless, "checks": self.checks}, indent=2) + "\n")
+        (self.root / "results.json").write_text(json.dumps({"complete": self.completed, "providerless": self.args.providerless, "checks": self.checks}, indent=2) + "\n", encoding="utf-8")
         print(f"Checks: {sum(row['pass'] for row in self.checks)}/{len(self.checks)}; artifacts: {self.root}", flush=True)
 
 
@@ -337,8 +391,14 @@ def main():
     probe = Probe(args)
     try:
         probe.prepare()
-        asyncio.run(probe.scenario("sigterm", signal.SIGTERM, True))
-        asyncio.run(probe.scenario("sigint-restart", signal.SIGINT, False))
+        if IS_WINDOWS:
+            # SIGTERM does not exist on Windows, so the two scenarios are named
+            # after the control event that is actually delivered.
+            first, second = "ctrlc", "ctrlc-restart"
+        else:
+            first, second = "sigterm", "sigint-restart"
+        asyncio.run(probe.scenario(first, signal.SIGINT if IS_WINDOWS else signal.SIGTERM, True))
+        asyncio.run(probe.scenario(second, signal.SIGINT, False))
         probe.check("private binary remained pinned", digest(probe.binary) == args.sha256)
         probe.completed = True
     finally:

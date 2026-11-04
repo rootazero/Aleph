@@ -5,10 +5,69 @@ import { cp, mkdtemp, readFile, readdir, rm, stat, writeFile } from 'node:fs/pro
 import { tmpdir } from 'node:os';
 import { join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { runInNewContext } from 'node:vm';
 import test from 'node:test';
 
 const panel = resolve(fileURLToPath(new URL('..', import.meta.url)));
 const output = process.env.PANEL_OUTPUT_ROOT ? resolve(panel, process.env.PANEL_OUTPUT_ROOT) : null;
+
+function validateHostHtml(html) {
+  assert.doesNotMatch(html, /<base\b/i, 'root-absolute host HTML must not contain a base element');
+  const host = html.match(/<script\b[^>]*type="module"[^>]*>\s*import init from "([^"]+)"/)?.[1];
+  const css = html.match(/<link\b[^>]*rel="stylesheet"[^>]*href="([^"]*tailwind\.css)"/)?.[1];
+  const loader = html.match(/<script id="panel-loader-bridge">([\s\S]*?)<\/script>/)?.[1];
+  assert.equal(host, '/aleph_panel.js', 'host module must use its root asset URL');
+  assert.equal(css, '/tailwind.css', 'stylesheet must use its root asset URL');
+  assert.ok(loader, 'host HTML must retain the loader bridge');
+  for (const route of ['/', '/panel/', '/terminal', '/panel/terminal']) {
+    const location = new URL(route, 'https://panel.test');
+    const loaderUrl = runInNewContext(`${loader}\npanelLoaderUrl`, { URL, location });
+    for (const [asset, url] of [
+      ['aleph_panel.js', new URL(host, location).href],
+      ['tailwind.css', new URL(css, location).href],
+      ['panel_loader.js', loaderUrl],
+    ]) {
+      assert.equal(url, `${location.origin}/${asset}`, `${asset} must resolve at root from ${route}`);
+    }
+  }
+}
+
+test('root-absolute host HTML resolves from nested routes without a build', async (t) => {
+  const generator = await readFile(join(panel, 'scripts/build-panel-tabs.mjs'), 'utf8');
+  const transform = generator.match(/const html = \(await readFile[\s\S]*?(?=\nif \(\/<)/)?.[0];
+  assert.ok(transform, 'production HTML transformation must be present');
+  const html = await runInNewContext(`(async () => { ${transform}; return html; })()`, { readFile, join, panel });
+  const hostTest = await readFile(join(panel, 'tests/panel-terminal-host.test.mjs'), 'utf8');
+  const routeCheck = hostTest.match(/async function checkPositiveRoutes\(origin\) {[\s\S]*?(?=\nasync function runHost)/)?.[0];
+  assert.ok(routeCheck, 'host route assertion must be exercised');
+  const validateRoutes = async (candidate) => {
+    const paths = [];
+    await runInNewContext(`(${routeCheck})('https://panel.test')`, {
+      assert, URL, runInNewContext,
+      fetch: async (url) => {
+        paths.push(new URL(url).pathname);
+        return { status: 200, text: async () => candidate };
+      },
+    });
+    assert.deepEqual(paths, ['/', '/panel/', '/terminal', '/panel/terminal']);
+  };
+  await t.test('generated root assets pass both artifact and host route checks', async () => {
+    validateHostHtml(html);
+    await validateRoutes(html);
+  });
+  for (const [name, invalid] of [
+    ['injected base', html.replace('</head>', '<base href="./" /></head>')],
+    ['relative host module', html.replace('from "/aleph_panel.js"', 'from "aleph_panel.js"')],
+    ['relative stylesheet', html.replace('href="/tailwind.css"', 'href="tailwind.css"')],
+    ['route-relative loader', html.replace("new URL('/panel_loader.js', globalThis.location.origin)", "new URL('panel_loader.js', globalThis.location.href)")],
+  ]) {
+    await t.test(name, async () => {
+      assert.notEqual(invalid, html, `${name} mutation must change the HTML`);
+      assert.throws(() => validateHostHtml(invalid), undefined, `${name} must be rejected`);
+      await assert.rejects(validateRoutes(invalid), undefined, `${name} must fail host route checks`);
+    });
+  }
+});
 
 async function validateOutput(staged) {
   const build = JSON.parse(await readFile(join(staged, 'build.json'), 'utf8'));
@@ -72,7 +131,7 @@ async function validateOutput(staged) {
     assert.equal(typeof build.tools?.[tool], 'string');
     assert.notEqual(build.tools[tool], 'not installed');
   }
-  assert.match(html, /<base href="\.\/" \/>/, 'staged HTML must use a relative public base');
+  validateHostHtml(html);
   assert.doesNotMatch(html, /<(?:link|base)\s+data-trunk/, 'staged HTML must not retain Trunk assets');
   assert.doesNotMatch(html, /tabs\/terminal\/|terminal\.js/, 'initial host HTML must not preload Terminal');
 
@@ -123,7 +182,10 @@ test('stale, missing, wrong-descriptor, and wrong-base candidates fail closed', 
         const path = join(temporary, relative);
         if (name === 'missing Terminal WASM') await rm(path);
         else if (name === 'wrong public base') {
-          await writeFile(path, (await readFile(path, 'utf8')).replace('<base href="./" />', '<base href="/wrong/" />'));
+          const html = await readFile(path, 'utf8');
+          const invalid = html.replace('</head>', '<base href="/wrong/" /></head>');
+          assert.notEqual(invalid, html, 'wrong-base mutation must change the HTML');
+          await writeFile(path, invalid);
         } else {
           const value = JSON.parse(await readFile(path, 'utf8'));
           mutate(value);

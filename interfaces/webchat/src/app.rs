@@ -724,15 +724,79 @@ fn explicit_community_panel(
     crate::panel::projection::PanelProjection,
     aleph_protocol::panel::PanelTabKey,
 )> {
-    if !matches!(discovery.status(), PanelDiscoveryStatus::Ready) {
-        return None;
+    match discovery.status() {
+        PanelDiscoveryStatus::Ready => {
+            leptos::logging::log!("🔍 [routing] Step 1 PASS: discovery.status() = Ready");
+        }
+        status => {
+            leptos::logging::log!(
+                "🔍 [routing] Step 1 FAIL: discovery.status() = {:?}",
+                status
+            );
+            return None;
+        }
     }
-    let key = crate::panel::projection::PanelProjection::explicit_key(path)?;
-    let snapshot = discovery.snapshot()?.clone();
+
+    let key = match crate::panel::projection::PanelProjection::explicit_key(path) {
+        Some(key) => {
+            leptos::logging::log!(
+                "🔍 [routing] Step 2 PASS: explicit_key({}) = {:?}",
+                path,
+                key
+            );
+            key
+        }
+        None => {
+            leptos::logging::log!(
+                "🔍 [routing] Step 2 FAIL: explicit_key({}) returned None",
+                path
+            );
+            return None;
+        }
+    };
+
+    let snapshot = match discovery.snapshot() {
+        Some(snapshot) => {
+            leptos::logging::log!(
+                "🔍 [routing] Step 3 PASS: snapshot exists, revision={}",
+                snapshot.revision
+            );
+            snapshot.clone()
+        }
+        None => {
+            leptos::logging::log!("🔍 [routing] Step 3 FAIL: snapshot() returned None");
+            return None;
+        }
+    };
+
     let projection =
-        crate::panel::projection::PanelProjection::from_snapshot(snapshot.clone()).ok()?;
-    let descriptor = projection.select_explicit(&key, snapshot.revision).ok()?;
-    Some((projection, descriptor.key))
+        match crate::panel::projection::PanelProjection::from_snapshot(snapshot.clone()) {
+            Ok(projection) => {
+                leptos::logging::log!("🔍 [routing] Step 4 PASS: from_snapshot succeeded");
+                projection
+            }
+            Err(error) => {
+                leptos::logging::log!("🔍 [routing] Step 4 FAIL: from_snapshot error: {:?}", error);
+                return None;
+            }
+        };
+
+    match projection.select_explicit(&key, snapshot.revision) {
+        Ok(descriptor) => {
+            leptos::logging::log!(
+                "🔍 [routing] Step 5 PASS: select_explicit succeeded, descriptor.key={:?}",
+                descriptor.key
+            );
+            Some((projection, descriptor.key))
+        }
+        Err(error) => {
+            leptos::logging::log!(
+                "🔍 [routing] Step 5 FAIL: select_explicit error: {:?}",
+                error
+            );
+            None
+        }
+    }
 }
 
 #[component]
