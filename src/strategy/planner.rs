@@ -146,8 +146,8 @@ fn parse_strategy(text: &str) -> Option<Strategy> {
     let bytes = text.as_bytes();
     let mut last_error = None;
     let mut candidates = 0usize;
-    for start in 0..bytes.len() {
-        if bytes[start] != b'{' {
+    for (start, &b) in bytes.iter().enumerate() {
+        if b != b'{' {
             continue;
         }
         // Bounded so prose full of braces cannot turn one response into a
@@ -170,7 +170,10 @@ fn parse_strategy(text: &str) -> Option<Strategy> {
             continue;
         };
         // `{` and `}` are ASCII, so both indices are char boundaries.
-        match serde_json::from_str::<Strategy>(&text[start..=end]) {
+        let Some(slice) = text.get(start..=end) else {
+            continue;
+        };
+        match serde_json::from_str::<Strategy>(slice) {
             Ok(s) => return Some(s),
             Err(e) => last_error = Some(e),
         }
@@ -179,9 +182,12 @@ fn parse_strategy(text: &str) -> Option<Strategy> {
     // brace would otherwise report a "failure" that the next candidate went
     // on to parse successfully.
     if let Some(e) = last_error {
+        let preview_len = text.len().min(200);
+        let preview_end = text.floor_char_boundary(preview_len);
+        let preview = text.get(..preview_end).unwrap_or("");
         tracing::debug!(
             error = ?e,
-            response_preview = %&text[..text.len().min(200)],
+            response_preview = %preview,
             "strategy planner: JSON parse failed"
         );
     }

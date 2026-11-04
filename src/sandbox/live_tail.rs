@@ -89,15 +89,16 @@ impl Ring {
         // Only the last `cap` bytes of a big chunk can possibly survive, so
         // skip straight to them instead of writing each byte over the last.
         let bytes = if bytes.len() > self.cap {
-            &bytes[bytes.len() - self.cap..]
+            let offset = bytes.len().saturating_sub(self.cap);
+            bytes.get(offset..).unwrap_or(bytes)
         } else {
             bytes
         };
         for &b in bytes {
             if self.buf.len() < self.cap {
                 self.buf.push(b);
-            } else {
-                self.buf[self.head] = b;
+            } else if let Some(slot) = self.buf.get_mut(self.head) {
+                *slot = b;
             }
             self.head = (self.head + 1) % self.cap;
         }
@@ -118,8 +119,12 @@ impl Ring {
         if self.buf.len() < self.cap {
             out.extend_from_slice(&self.buf);
         } else {
-            out.extend_from_slice(&self.buf[self.head..]);
-            out.extend_from_slice(&self.buf[..self.head]);
+            if let Some(tail) = self.buf.get(self.head..) {
+                out.extend_from_slice(tail);
+            }
+            if let Some(head) = self.buf.get(..self.head) {
+                out.extend_from_slice(head);
+            }
         }
         trim_to_utf8_boundaries(out)
     }
@@ -130,7 +135,7 @@ impl Ring {
 /// as it was, and the caller's lossy conversion decides how to render it.
 fn trim_to_utf8_boundaries(mut bytes: Vec<u8>) -> Vec<u8> {
     let mut start = 0usize;
-    while start < bytes.len() && (bytes[start] & 0xC0) == 0x80 {
+    while start < bytes.len() && bytes.get(start).copied().is_some_and(|b| (b & 0xC0) == 0x80) {
         start += 1;
     }
     if start > 0 {

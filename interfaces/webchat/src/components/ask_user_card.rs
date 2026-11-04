@@ -60,7 +60,8 @@ fn answer(
     error.set(None);
     spawn_local(async move {
         let outcome = if answers.len() == 1 {
-            ClarificationApi::resolve(&dashboard, &session_key, &answers[0]).await
+            let single_answer = answers.first().map(|s| s.as_str()).unwrap_or("");
+            ClarificationApi::resolve(&dashboard, &session_key, single_answer).await
         } else {
             ClarificationApi::resolve_all(&dashboard, &session_key, &answers).await
         };
@@ -163,7 +164,7 @@ pub fn AskUserCard(ask: PendingAskView) -> impl IntoView {
     // A single question is answered the moment a choice is clicked — that is
     // the interaction this card has always had, and it is still right when
     // there is nothing else to fill in.
-    let instant = questions.len() == 1 && !questions[0].multi_select;
+    let instant = questions.len() == 1 && questions.first().is_some_and(|q| !q.multi_select);
     let session_key = StoredValue::new(ask.session_key.clone());
     let drafts_store = StoredValue::new(drafts.clone());
     let answering = RwSignal::new(false);

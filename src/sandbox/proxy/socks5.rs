@@ -190,10 +190,22 @@ async fn parse_target(
             let mut len_buf = [0u8; 1];
             rd.read_exact(&mut len_buf).await?;
             let len = len_buf[0] as usize;
+            if len == 0 {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "empty domain",
+                ));
+            }
             let mut name = vec![0u8; len];
             rd.read_exact(&mut name).await?;
             let domain = String::from_utf8(name)
                 .map_err(|_| std::io::Error::new(std::io::ErrorKind::InvalidData, "bad domain"))?;
+            if domain.contains('\0') {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "domain contains NUL",
+                ));
+            }
             TargetHost::Domain(domain)
         }
         _ => return Ok(None),

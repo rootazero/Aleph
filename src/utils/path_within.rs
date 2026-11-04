@@ -2,17 +2,15 @@
 
 use std::path::{Component, Path, PathBuf};
 
-/// Returns true iff `target`, lexically normalized, stays within `base`.
-#[must_use]
-pub fn is_path_within(base: &Path, target: &Path) -> bool {
-    if base.as_os_str().is_empty() {
-        return false;
-    }
+fn lexically_normalize(path: &Path) -> Option<PathBuf> {
     let mut normalized = PathBuf::new();
-    for component in target.components() {
+    for component in path.components() {
         match component {
             Component::ParentDir => {
-                normalized.pop();
+                if !normalized.pop() {
+                    // Cannot navigate above the relative or root boundary
+                    return None;
+                }
             }
             Component::Normal(c) => normalized.push(c),
             Component::RootDir => normalized.push(Component::RootDir.as_os_str()),
@@ -20,10 +18,25 @@ pub fn is_path_within(base: &Path, target: &Path) -> bool {
             Component::CurDir => {}
         }
     }
+    Some(normalized)
+}
+
+/// Returns true iff `target`, lexically normalized, stays within `base`.
+#[must_use]
+pub fn is_path_within(base: &Path, target: &Path) -> bool {
+    if base.as_os_str().is_empty() {
+        return false;
+    }
+    let (Some(norm_base), Some(norm_target)) = (
+        lexically_normalize(base),
+        lexically_normalize(target),
+    ) else {
+        return false;
+    };
 
     // strip_prefix succeeds only when base is a true prefix (component-level),
     // so any Ok result means target is either base itself or inside it.
-    normalized.strip_prefix(base).is_ok()
+    norm_target.strip_prefix(&norm_base).is_ok()
 }
 
 #[cfg(test)]

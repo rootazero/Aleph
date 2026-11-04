@@ -142,12 +142,12 @@ pub async fn register_mcp_tools(
                         qualified.clone(),
                         Arc::new(McpServerProbe::new(Arc::clone(&client), server_id)),
                     );
-                    let catalog_id = disp
-                        .register_with_conflict_resolution(
-                            catalog_builder.expect("catalog projection was prepared"),
-                        )
-                        .await;
-                    catalog_entries.push((qualified.clone(), revision, catalog_id));
+                    if let Some(builder) = catalog_builder {
+                        let catalog_id = disp
+                            .register_with_conflict_resolution(builder)
+                            .await;
+                        catalog_entries.push((qualified.clone(), revision, catalog_id));
+                    }
                 }
                 registered.push(qualified);
             }

@@ -79,16 +79,18 @@ pub fn extract_json_robust(response: &str) -> Option<serde_json::Value> {
 
     // Strategy 4: Find first complete JSON object using brace matching
     let mut search_start = 0;
-    while let Some(start) = response[search_start..].find('{') {
+    while let Some(slice) = response.get(search_start..) {
+        let Some(start) = slice.find('{') else { break };
         let abs_start = search_start + start;
         if let Some(end) = find_matching_brace(response, abs_start) {
-            let candidate = &response[abs_start..=end];
-            if let Ok(v) = serde_json::from_str(candidate) {
-                debug!(strategy = "brace_match", "JSON extraction successful");
-                return Some(v);
+            if let Some(candidate) = response.get(abs_start..=end) {
+                if let Ok(v) = serde_json::from_str(candidate) {
+                    debug!(strategy = "brace_match", "JSON extraction successful");
+                    return Some(v);
+                }
             }
         }
-        search_start = abs_start + 1;
+        search_start = abs_start.saturating_add(1);
     }
 
     debug!("JSON extraction failed: no valid JSON found");
@@ -109,22 +111,27 @@ fn extract_from_json_code_block(response: &str) -> Option<String> {
         // advances past `\n`. Without this, ` ```jsonc\n{...}``` was
         // returning `c\n{...}` — a wasted parse attempt and a misleading
         // near-match in debug logs.
-        let content = &response[json_start..];
+        let Some(content) = response.get(json_start..) else {
+            return None;
+        };
         let after_lang = content.find('\n').map_or(content.len(), |i| i + 1);
-        let body = &content[after_lang..];
+        let Some(body) = content.get(after_lang..) else {
+            return None;
+        };
         let content_start = body.find(|c: char| !c.is_whitespace()).unwrap_or(0);
 
         // Find closing ``` that stands on its own line (preceded only by whitespace)
         let mut search_pos = content_start;
-        while let Some(pos) = body[search_pos..].find(end_marker) {
+        while let Some(search_slice) = body.get(search_pos..) {
+            let Some(pos) = search_slice.find(end_marker) else { break };
             let abs_pos = search_pos + pos;
-            let before = &body[..abs_pos];
+            let Some(before) = body.get(..abs_pos) else { break };
             let line_start = before.rfind('\n').map_or(0, |i| i + 1);
-            let line_prefix = &before[line_start..];
+            let Some(line_prefix) = before.get(line_start..) else { break };
             if line_prefix.trim().is_empty() {
-                return Some(body[content_start..abs_pos].trim().to_string());
+                return body.get(content_start..abs_pos).map(|s| s.trim().to_string());
             }
-            search_pos = abs_pos + end_marker.len();
+            search_pos = abs_pos.saturating_add(end_marker.len());
         }
     }
     None
@@ -137,26 +144,29 @@ fn extract_from_generic_code_block(response: &str) -> Option<String> {
     if let Some(start) = response.find(marker) {
         let block_start = start + marker.len();
         // Skip language identifier if present (find first newline)
-        let content_start = response[block_start..]
-            .find('\n')
+        let content_start = response
+            .get(block_start..)
+            .and_then(|s| s.find('\n'))
             .map_or(block_start, |i| block_start + i + 1);
 
         // Find closing ``` that stands on its own line (preceded only by whitespace)
         let mut search_pos = content_start;
-        while let Some(pos) = response[search_pos..].find(marker) {
+        while let Some(search_slice) = response.get(search_pos..) {
+            let Some(pos) = search_slice.find(marker) else { break };
             let abs_pos = search_pos + pos;
-            let before = &response[..abs_pos];
+            let Some(before) = response.get(..abs_pos) else { break };
             let line_start = before.rfind('\n').map_or(0, |i| i + 1);
-            let line_prefix = &before[line_start..];
+            let Some(line_prefix) = before.get(line_start..) else { break };
             if line_prefix.trim().is_empty() {
-                let content = &response[content_start..abs_pos];
-                let trimmed = content.trim();
-                if trimmed.starts_with('{') || trimmed.starts_with('[') {
-                    return Some(trimmed.to_string());
+                if let Some(content) = response.get(content_start..abs_pos) {
+                    let trimmed = content.trim();
+                    if trimmed.starts_with('{') || trimmed.starts_with('[') {
+                        return Some(trimmed.to_string());
+                    }
                 }
                 return None;
             }
-            search_pos = abs_pos + marker.len();
+            search_pos = abs_pos.saturating_add(marker.len());
         }
     }
     None
@@ -179,11 +189,14 @@ fn extract_from_generic_code_block(response: &str) -> Option<String> {
 /// * `Some(index)` - The index of the matching closing brace '}'
 /// * `None` - No matching brace found
 fn find_matching_brace(s: &str, start: usize) -> Option<usize> {
-    let mut depth = 0;
+    let mut depth: usize = 0;
     let mut in_string = false;
     let mut escape_next = false;
 
-    for (i, ch) in s[start..].char_indices() {
+    let Some(search_slice) = s.get(start..) else {
+        return None;
+    };
+    for (i, ch) in search_slice.char_indices() {
         if escape_next {
             escape_next = false;
             continue;
@@ -200,7 +213,10 @@ fn find_matching_brace(s: &str, start: usize) -> Option<usize> {
                 depth += 1;
             }
             '}' if !in_string => {
-                depth -= 1;
+                let Some(new_depth) = depth.checked_sub(1) else {
+                    return None;
+                };
+                depth = new_depth;
                 if depth == 0 {
                     return Some(start + i);
                 }

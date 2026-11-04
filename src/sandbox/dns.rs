@@ -95,8 +95,8 @@ fn is_ip_literal(host: &str) -> bool {
         return true;
     }
     if let Some(rest) = host.strip_prefix('[') {
-        if let Some(end) = rest.find(']') {
-            return IpAddr::from_str(&rest[..end]).is_ok();
+        if let Some((addr, _suffix)) = rest.split_once(']') {
+            return IpAddr::from_str(addr).is_ok();
         }
         return false;
     }

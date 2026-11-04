@@ -103,7 +103,7 @@ pub(super) fn read_first_string_literal_chars(chars: &[char]) -> Option<String> 
 /// Index of the first non-whitespace char at or after `start` (clamped to len).
 pub(super) fn first_non_ws(chars: &[char], start: usize) -> usize {
     let mut i = start;
-    while i < chars.len() && chars[i].is_whitespace() {
+    while chars.get(i).copied().is_some_and(char::is_whitespace) {
         i += 1;
     }
     i
@@ -120,7 +120,7 @@ pub(super) fn read_literal_at(chars: &[char], start: usize) -> Option<(String, u
     let mut i = start + 1;
     let mut out = String::new();
     while i < chars.len() {
-        let c = chars[i];
+        let Some(&c) = chars.get(i) else { break; };
         if c == '\\' {
             let esc = *chars.get(i + 1)?;
             out.push(match esc {
@@ -178,7 +178,7 @@ fn read_joined_array(chars: &[char], start: usize) -> Option<(String, usize)> {
     let mut i = start + 1; // past '['
     let mut parts: Vec<String> = Vec::new();
     loop {
-        while i < n && (chars[i].is_whitespace() || chars[i] == ',') {
+        while i < n && chars.get(i).copied().is_some_and(|c| c.is_whitespace() || c == ',') {
             i += 1;
         }
         match *chars.get(i)? {
@@ -212,7 +212,7 @@ fn parse_join_separator(chars: &[char], start: usize) -> Option<(String, usize)>
     let i = first_non_ws(chars, start);
     // Match the `.join` identifier exactly.
     let dotjoin = ['.', 'j', 'o', 'i', 'n'];
-    if (0..dotjoin.len()).any(|k| chars.get(i + k) != Some(&dotjoin[k])) {
+    if (0..dotjoin.len()).any(|k| chars.get(i + k) != dotjoin.get(k)) {
         return None;
     }
     let i = first_non_ws(chars, i + dotjoin.len());
@@ -253,7 +253,7 @@ pub(super) fn read_clarify_choices(chars: &[char], start: usize) -> Vec<String> 
     let mut j = i + 1; // past '['
     let mut out: Vec<String> = Vec::new();
     loop {
-        while j < n && (chars[j].is_whitespace() || chars[j] == ',') {
+        while j < n && chars.get(j).copied().is_some_and(|c| c.is_whitespace() || c == ',') {
             j += 1;
         }
         match chars.get(j) {
@@ -284,12 +284,12 @@ pub(super) fn skip_value(chars: &[char], start: usize) -> usize {
     let mut i = start;
     let mut depth: i32 = 0;
     while i < n {
-        let c = chars[i];
+        let Some(&c) = chars.get(i) else { break; };
         match c {
             '\'' | '"' | '`' => {
                 i += 1;
                 while i < n {
-                    let d = chars[i];
+                    let Some(&d) = chars.get(i) else { break; };
                     if d == '\\' {
                         i += 2;
                         continue;

@@ -139,11 +139,16 @@ static LEAK_PATTERNS: Lazy<Vec<(&str, Regex)>> = Lazy::new(|| {
         (
             "Anthropic API Key",
             // `\b` left-anchor — see SECRET_PATTERN_SOURCES note above.
-            Regex::new(r"\bsk-ant-[a-zA-Z0-9\-]{20,}").expect("static Anthropic pattern compiles"),
+            Regex::new(r"\bsk-ant-[a-zA-Z0-9_\-]{20,}").expect("static Anthropic pattern compiles"),
+        ),
+        (
+            "OpenAI Project API Key",
+            Regex::new(r"\bsk-proj-[a-zA-Z0-9_\-]{20,}")
+                .expect("static OpenAI project pattern compiles"),
         ),
         (
             "OpenAI API Key",
-            Regex::new(r"\bsk-[a-zA-Z0-9\-]{20,}").expect("static OpenAI pattern compiles"),
+            Regex::new(r"\bsk-[a-zA-Z0-9_\-]{20,}").expect("static OpenAI pattern compiles"),
         ),
         (
             "Google API Key",
@@ -334,20 +339,42 @@ impl LeakDetector {
     /// `replace(matched, REDACTED_INJECTED)` would silently leak the second.
     #[must_use]
     pub fn scan_inbound(&self, content: &str) -> LeakDecision {
-        let (found_labels, redacted) = self.scan_patterns(content);
+        let (found_labels, mut redacted) = self.scan_patterns(content);
+        let matches = self.find_all_injected_substrings(content);
 
-        if !found_labels.is_empty() {
-            return LeakDecision::Block {
-                reason: format!("Inbound leak detected: {}", found_labels.join(", ")),
-                redacted_content: redacted,
+        if !matches.is_empty() {
+            // Redacting only part of a pattern match first can make its remaining
+            // plaintext unrecognizable. Fail closed on such overlaps.
+            let overlap = LEAK_PATTERNS
+                .iter()
+                .map(|(_, regex)| regex)
+                .chain(self.custom_patterns.iter().map(|pattern| &pattern.regex))
+                .flat_map(|regex| regex.find_iter(content))
+                .any(|pattern| {
+                    matches.iter().any(|secret| {
+                        let start = secret.as_ptr() as usize - content.as_ptr() as usize;
+                        pattern.start() < start + secret.len() && start < pattern.end()
+                    })
+                });
+            redacted = if overlap {
+                REDACTED_INJECTED.to_string()
+            } else {
+                let injected_redacted = redact_all_matches(content, &matches, REDACTED_INJECTED);
+                self.scan_patterns(&injected_redacted).1
             };
         }
 
-        let matches = self.find_all_injected_substrings(content);
-        if !matches.is_empty() {
+        if !found_labels.is_empty() || !matches.is_empty() {
+            let mut reasons = found_labels
+                .iter()
+                .map(|label| format!("pattern: {label}"))
+                .collect::<Vec<_>>();
+            if !matches.is_empty() {
+                reasons.push("injected secret value".to_string());
+            }
             return LeakDecision::Block {
-                reason: "Inbound response echoed an injected secret value".to_string(),
-                redacted_content: redact_all_matches(content, &matches, REDACTED_INJECTED),
+                reason: format!("Inbound leak detected: {}", reasons.join(", ")),
+                redacted_content: redacted,
             };
         }
 
@@ -496,10 +523,8 @@ fn redact_all_matches<'c>(content: &'c str, matches: &[&'c str], replacement: &s
     // `find_all_injected_substrings`, but redaction is security-critical:
     // a wrong index produces a silently garbled output that leaks the tail
     // of a secret instead of raising. Sort by pointer-derived offset (not
-    // `start` of the slice, which is `0` for every `&str`), drop any
-    // match that is not actually a sub-slice of `content`, and fall back to
-    // the unmodified content if any ordering anomaly is detected so the
-    // caller surfaces a real error path rather than a partial redaction.
+    // `start` of the slice, which is `0` for every `&str`). Replace the entire
+    // content with a safe placeholder if containment or overlap invariants fail.
     let mut spans: Vec<(usize, usize)> = Vec::with_capacity(matches.len());
     let content_start = content.as_ptr() as usize;
     let content_end = content_start + content.len();
@@ -507,15 +532,13 @@ fn redact_all_matches<'c>(content: &'c str, matches: &[&'c str], replacement: &s
         let s = m.as_ptr() as usize;
         let e = s + m.len();
         if s < content_start || e > content_end || s > e {
-            // Sub-slice invariant violated — bail to the unmodified
-            // content. The caller can decide how to escalate; this function
-            // must not produce a half-redacted output that looks correct.
+            // Do not return plaintext when the sub-slice invariant fails.
             tracing::warn!(
                 match_len = m.len(),
                 "redact_all_matches received a match that is not a sub-slice of content; \
-                 returning content unmodified"
+                 returning a fully redacted placeholder"
             );
-            return content.to_string();
+            return REDACTED_INJECTED.to_string();
         }
         spans.push((s - content_start, e - content_start));
     }
@@ -531,9 +554,10 @@ fn redact_all_matches<'c>(content: &'c str, matches: &[&'c str], replacement: &s
             tracing::warn!(
                 start = start,
                 cursor = cursor,
-                "redact_all_matches received an overlapping match span; returning content unmodified"
+                "redact_all_matches received an overlapping match span; \
+                 returning a fully redacted placeholder"
             );
-            return content.to_string();
+            return REDACTED_INJECTED.to_string();
         }
         out.push_str(&content[cursor..start]);
         out.push_str(replacement);
@@ -546,6 +570,75 @@ fn redact_all_matches<'c>(content: &'c str, matches: &[&'c str], replacement: &s
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_underscore_keys_are_fully_redacted() {
+        let detector = LeakDetector::new();
+        for key in [
+            "sk-ant-abcdefghijklmnopqrst_uvwx1234",
+            "sk-proj-abcdefghijklmnopqrst_uvwx1234",
+            "sk-abcdefghijklmnopqrst_uvwx1234",
+        ] {
+            let LeakDecision::Block {
+                redacted_content, ..
+            } = detector.scan_outbound(key)
+            else {
+                panic!("Expected Block");
+            };
+            assert_eq!(redacted_content, REDACTED_LEAK);
+        }
+    }
+
+    #[test]
+    fn test_inbound_redacts_patterns_and_injected_secrets() {
+        let mut detector = LeakDetector::new();
+        let secret = "vault-secret-value-1234";
+        detector.register_injected(&[InjectedSecret::from_value("key", secret)]);
+        let content = format!("sk-ant-abcdefghijklmnopqrst_uvwx1234 and {secret}");
+        let LeakDecision::Block {
+            reason,
+            redacted_content,
+        } = detector.scan_inbound(&content)
+        else {
+            panic!("Expected Block");
+        };
+        assert!(reason.contains("Anthropic API Key"));
+        assert!(reason.contains("injected secret"));
+        assert_eq!(
+            redacted_content,
+            format!("{REDACTED_LEAK} and {REDACTED_INJECTED}")
+        );
+    }
+
+    #[test]
+    fn test_inbound_overlapping_pattern_and_injected_secret_fails_closed() {
+        let mut detector = LeakDetector::new();
+        detector.register_injected(&[InjectedSecret::from_value("part", "abcdefghijklmnopqrst")]);
+        let LeakDecision::Block {
+            reason,
+            redacted_content,
+        } = detector.scan_inbound("key: sk-ant-abcdefghijklmnopqrst_uvwx1234")
+        else {
+            panic!("Expected Block");
+        };
+        assert!(reason.contains("Anthropic API Key"));
+        assert!(reason.contains("injected secret"));
+        assert_eq!(redacted_content, REDACTED_INJECTED);
+    }
+
+    #[test]
+    fn test_redaction_invariant_failure_never_returns_plaintext() {
+        let content = String::from("secret-value");
+        let unrelated = String::from("secret-value");
+        assert_eq!(
+            redact_all_matches(&content, &[&unrelated], REDACTED_INJECTED),
+            REDACTED_INJECTED
+        );
+        assert_eq!(
+            redact_all_matches(&content, &[&content[..8], &content[4..]], REDACTED_INJECTED),
+            REDACTED_INJECTED
+        );
+    }
 
     #[test]
     fn test_outbound_blocks_known_api_key() {

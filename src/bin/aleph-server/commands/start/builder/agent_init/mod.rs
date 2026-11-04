@@ -369,14 +369,15 @@ pub(in crate::commands::start) async fn register_agent_handlers(
         let tavily_api_key = app_config
             .search
             .as_ref()
+            .filter(|s| s.enabled)
             .and_then(|s| s.backends.get(&s.default_provider))
+            .filter(|b| b.provider_type == "tavily")
             .and_then(|b| b.api_key.clone());
 
         // Build a SearchRegistry from `[search]` config so non-Tavily backends
         // (SearXNG, Brave, etc.) actually reach the `search` builtin tool.
         // Without this, the user can configure `[search.backends.searxng]` all
-        // they want but `SearchTool` falls back to TAVILY_API_KEY env and
-        // reports "No search provider configured" at runtime.
+        // they want but `SearchTool` has no usable configured registry.
         //
         // The operator's `[ssrf] allow_private_network` switch is threaded
         // into provider construction: it is what admits a self-hosted SearXNG

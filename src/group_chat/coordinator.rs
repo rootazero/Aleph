@@ -197,21 +197,28 @@ fn json_safe_field(s: &str) -> String {
 fn strip_markdown_fences(s: &str) -> &str {
     let s = s.trim();
 
-    // Strip leading ```json or ```
-    let s = if let Some(rest) = s.strip_prefix("```json") {
-        rest.trim_start()
-    } else if let Some(rest) = s.strip_prefix("```") {
-        rest.trim_start()
-    } else {
-        return s;
-    };
-
-    // Strip trailing ```
-    if let Some(body) = s.strip_suffix("```") {
-        body.trim()
-    } else {
-        s.trim()
+    // If there is an embedded code fence anywhere, extract inside it
+    if let Some(start_idx) = s.find("```") {
+        let after_fence = &s[start_idx + 3..];
+        let content_start = if let Some(rest) = after_fence.strip_prefix("json") {
+            rest
+        } else {
+            after_fence
+        };
+        let content_start = content_start.trim_start();
+        if let Some(end_idx) = content_start.find("```") {
+            return content_start[..end_idx].trim();
+        }
     }
+
+    // Fallback: if there are JSON braces, extract from first '{' to last '}'
+    if let (Some(first_brace), Some(last_brace)) = (s.find('{'), s.rfind('}')) {
+        if first_brace < last_brace {
+            return &s[first_brace..=last_brace];
+        }
+    }
+
+    s
 }
 
 // =============================================================================

@@ -705,7 +705,9 @@ impl MemoryConfigApi {
     ) -> Result<RetrieveWithTraceResponse, String> {
         let mut params = serde_json::json!({ "query": query, "limit": limit });
         if let Some(agent) = agent_id {
-            params["agent_id"] = serde_json::json!(agent);
+            if let Some(map) = params.as_object_mut() {
+                map.insert("agent_id".to_string(), serde_json::json!(agent));
+            }
         }
         let result = state.rpc_call("memory.retrieve_with_trace", params).await?;
         serde_json::from_value(result)

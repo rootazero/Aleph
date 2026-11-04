@@ -23,6 +23,7 @@ use crate::verification::turn_verifier::{TurnVerifier, TurnVerifyContext, Verifi
 // non-ASCII `final_text` could produce strings ~3× the documented cap.
 
 pub struct StopHookVerifier {
+    #[allow(clippy::rc_buffer)]
     hooks: Arc<Vec<Arc<dyn StopHookHandler>>>,
 }
 

@@ -138,23 +138,17 @@ impl StrategyStore {
     /// when the team itself is torn down.
     pub fn delete_for_session(&self, session_id: &str) -> anyhow::Result<usize> {
         let conn = self.lock();
-        let tx = conn
-            .unchecked_transaction()
+        let rows = conn
+            .execute(
+                "DELETE FROM strategies WHERE key IN (?1, ?2, ?3)",
+                rusqlite::params![
+                    format!("goal:{session_id}"),
+                    format!("loop:{session_id}"),
+                    format!("session:{session_id}"),
+                ],
+            )
             .map_err(|e| AlephError::other(format!("strategy delete_for_session: {e}")))?;
-        let mut total = 0usize;
-        for prefix in ["goal:", "loop:", "session:"] {
-            let key = format!("{prefix}{session_id}");
-            let rows = tx
-                .execute(
-                    "DELETE FROM strategies WHERE key = ?1",
-                    rusqlite::params![key],
-                )
-                .map_err(|e| AlephError::other(format!("strategy delete_for_session: {e}")))?;
-            total += rows;
-        }
-        tx.commit()
-            .map_err(|e| AlephError::other(format!("strategy delete_for_session commit: {e}")))?;
-        Ok(total)
+        Ok(rows)
     }
 
     /// Remove the team-scoped row (`team_key`). Team-scoped strategies

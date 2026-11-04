@@ -23,8 +23,8 @@ pub(crate) struct ParsedInitArgs {
 pub(crate) fn parse_init_args(args: &[String]) -> Result<ParsedInitArgs, String> {
     let mut policy_json: Option<&str> = None;
     let mut i = 0;
-    while i < args.len() {
-        match args[i].as_str() {
+    while let Some(arg) = args.get(i) {
+        match arg.as_str() {
             "--policy" => {
                 let v = args
                     .get(i + 1)
@@ -47,7 +47,7 @@ pub(crate) fn parse_init_args(args: &[String]) -> Result<ParsedInitArgs, String>
         .get(i)
         .ok_or_else(|| "missing target program after `--`".to_string())?
         .clone();
-    let target_args = args[i + 1..].to_vec();
+    let target_args = args.get(i + 1..).map(|s| s.to_vec()).unwrap_or_default();
 
     Ok(ParsedInitArgs {
         policy,

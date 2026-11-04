@@ -492,14 +492,16 @@ impl ArtifactStore for SqliteArtifactStore {
             s.push_str("))");
             s
         };
-        conn.execute(&sql_deps, params.as_slice()).map_err(db_err)?;
         let sql_art = {
             let mut s = String::from("DELETE FROM task_artifacts WHERE task_id IN (");
             s.push_str(&placeholders);
             s.push(')');
             s
         };
-        let n = conn.execute(&sql_art, params.as_slice()).map_err(db_err)?;
+        let tx = conn.unchecked_transaction().map_err(db_err)?;
+        tx.execute(&sql_deps, params.as_slice()).map_err(db_err)?;
+        let n = tx.execute(&sql_art, params.as_slice()).map_err(db_err)?;
+        tx.commit().map_err(db_err)?;
         Ok(n)
     }
 }

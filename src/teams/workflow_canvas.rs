@@ -167,10 +167,10 @@ fn compute_layers<'a>(
     id_to_idx: &HashMap<&str, usize>,
 ) -> HashMap<&'a str, (usize, usize)> {
     let n = tasks.len();
-    let mut indeg: Vec<usize> = (0..n)
-        .map(|i| {
-            tasks[i]
-                .dependencies
+    let mut indeg: Vec<usize> = tasks
+        .iter()
+        .map(|t| {
+            t.dependencies
                 .iter()
                 .filter(|d| id_to_idx.contains_key(d.as_str()))
                 .count()
@@ -178,30 +178,36 @@ fn compute_layers<'a>(
         .collect();
 
     let mut layer_of: Vec<Option<usize>> = vec![None; n];
-    let mut queue: VecDeque<usize> = (0..n).filter(|&i| indeg[i] == 0).collect();
+    let mut queue: VecDeque<usize> = (0..n)
+        .filter(|&i| indeg.get(i).copied() == Some(0))
+        .collect();
     let mut current_layer = 0usize;
 
     while !queue.is_empty() {
         // Stable order within a layer = input order
         let mut layer_idxs: Vec<usize> = queue.iter().copied().collect();
-        layer_idxs.sort();
+        layer_idxs.sort_unstable();
         queue.clear();
         for &i in &layer_idxs {
-            layer_of[i] = Some(current_layer);
+            if let Some(slot) = layer_of.get_mut(i) {
+                *slot = Some(current_layer);
+            }
         }
         // Discover next layer
         for &i in &layer_idxs {
             // Tasks depending on `tasks[i]` (i.e. its dependents) get their
             // in-degree decremented.
             for (j, t) in tasks.iter().enumerate() {
-                if layer_of[j].is_some() {
+                if layer_of.get(j).copied().flatten().is_some() {
                     continue;
                 }
                 for dep in &t.dependencies {
                     if id_to_idx.get(dep.as_str()).copied() == Some(i) {
-                        indeg[j] = indeg[j].saturating_sub(1);
-                        if indeg[j] == 0 {
-                            queue.push_back(j);
+                        if let Some(deg) = indeg.get_mut(j) {
+                            *deg = deg.saturating_sub(1);
+                            if *deg == 0 {
+                                queue.push_back(j);
+                            }
                         }
                     }
                 }
@@ -226,9 +232,11 @@ fn compute_layers<'a>(
 
     let mut out: HashMap<&'a str, (usize, usize)> = HashMap::new();
     for (layer, mut idxs) in layer_groups {
-        idxs.sort(); // stable within layer
+        idxs.sort_unstable(); // stable within layer
         for (row, idx) in idxs.into_iter().enumerate() {
-            out.insert(tasks[idx].id.as_str(), (layer, row));
+            if let Some(task) = tasks.get(idx) {
+                out.insert(task.id.as_str(), (layer, row));
+            }
         }
     }
     out
@@ -314,11 +322,13 @@ fn split_subject(text: &str) -> (String, String) {
     };
     let subject_raw = first.trim();
     // Strip `**bold**` wrapping if the entire subject is bolded.
-    let subject = if subject_raw.starts_with("**") && subject_raw.ends_with("**") {
-        subject_raw
-            .trim_start_matches("**")
-            .trim_end_matches("**")
-            .to_string()
+    let subject = if subject_raw.starts_with("**") && subject_raw.ends_with("**") && subject_raw.len() >= 4 {
+        let inner = &subject_raw[2..subject_raw.len() - 2];
+        if !inner.contains("**") {
+            inner.trim().to_string()
+        } else {
+            subject_raw.to_string()
+        }
     } else {
         subject_raw.to_string()
     };

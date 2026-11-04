@@ -66,7 +66,7 @@ pub struct FirecrawlFetchProvider {
 
 impl FirecrawlFetchProvider {
     pub fn new(base_url: impl Into<String>, api_key: impl Into<String>) -> Result<Self> {
-        let base_url = base_url.into().trim_end_matches('/').to_string();
+        let base_url = base_url.into().trim().trim_end_matches('/').to_string();
         let lower = base_url.to_lowercase();
         if !lower.starts_with("http://") && !lower.starts_with("https://") {
             return Err(AlephError::invalid_config(
@@ -76,10 +76,13 @@ impl FirecrawlFetchProvider {
         // Full URL parse so misconfigured base URLs (e.g. trailing space,
         // empty host, unparseable authority) are rejected at construction
         // rather than producing an opaque transport error on first POST.
-        url::Url::parse(&base_url)
+        let parsed = url::Url::parse(&base_url)
             .map_err(|e| AlephError::invalid_config(format!("invalid Firecrawl base URL: {e}")))?;
-        let api_key = api_key.into();
-        if api_key.trim().is_empty() {
+        if let Some(host) = parsed.host_str() {
+            crate::search::providers::base::reject_ssrf_target_host(NAME, host, false)?;
+        }
+        let api_key = api_key.into().trim().to_string();
+        if api_key.is_empty() {
             return Err(AlephError::invalid_config(
                 "Firecrawl api_key cannot be empty",
             ));
@@ -133,7 +136,12 @@ impl FetchProvider for FirecrawlFetchProvider {
         // be reported as a size-cap answer.
         let bytes = bytes_with_limit(resp, MAX_RESPONSE_BYTES)
             .await
-            .map_err(|e| AlephError::network(format!("firecrawl body read failed: {e}")))?;
+            .map_err(|e| {
+                AlephError::network(crate::search::providers::base::redact(
+                    format!("firecrawl body read failed: {e}"),
+                    Some(self.api_key.as_str()),
+                ))
+            })?;
         let body_bytes = bytes.ok_or_else(|| {
             AlephError::provider(format!(
                 "firecrawl response exceeded {MAX_RESPONSE_BYTES} bytes"

@@ -417,6 +417,8 @@ fn copy_member_capped(
     label: &str,
     member: &str,
 ) -> Result<(), ReleaseError> {
+    // Remove any pre-existing file or symlink to prevent symlink-following attacks
+    let _ = std::fs::remove_file(dest);
     let mut out = std::fs::File::create(dest).map_err(|e| ReleaseError::Io {
         path: dest.display().to_string(),
         source: e,

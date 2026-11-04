@@ -260,6 +260,21 @@ impl PiiSecretsGuardrail {
                     let cap = map.len().min(MAX_SCAN_NODES as usize);
                     let mut out = serde_json::Map::with_capacity(cap);
                     for (key, val) in map {
+                        *nodes = nodes.saturating_add(1);
+                        if *nodes > MAX_SCAN_NODES {
+                            tracing::warn!(
+                                subsystem = "guardrails",
+                                nodes = *nodes,
+                                max = MAX_SCAN_NODES,
+                                "tool-arg scan node budget exceeded on object keys; failing closed"
+                            );
+                            return Err(GuardrailDecision::Block {
+                                reason: format!(
+                                    "tool call arguments contain more than {MAX_SCAN_NODES} JSON nodes"
+                                ),
+                                class: ErrorClass::Unexpected,
+                            });
+                        }
                         let new_key = self
                             .scan_tool_arg_leaf(key, resolver_ref, warnings, sources)
                             .await?;

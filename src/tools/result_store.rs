@@ -664,14 +664,13 @@ impl ToolResultStore {
     /// counterpart.
     pub fn cleanup(&self) {
         if !self.session.is_empty() {
-            panic!(
-                "ToolResultStore::cleanup called on a session-scoped handle \
-                 (session={:?}); this would delete every other concurrent \
-                 session's offloaded output. Use purge_all() to remove only \
-                 this session's artifacts, or call cleanup() from the \
-                 unscoped root handle created by ToolResultStore::new().",
-                self.session,
+            tracing::error!(
+                session = %self.session,
+                "ToolResultStore::cleanup invoked on session-scoped handle; \
+                 delegating to purge_all_sync() to preserve other concurrent sessions"
             );
+            self.purge_all_sync();
+            return;
         }
         if self.inner.base_dir.exists() {
             if let Err(e) = std::fs::remove_dir_all(&self.inner.base_dir) {
@@ -885,7 +884,7 @@ pub fn extract_persisted_ref(text: &str) -> Option<&str> {
 pub fn extract_persisted_path(text: &str) -> Option<&str> {
     let rest = extract_persisted_ref(text)?.strip_prefix(PERSISTED_REF_PREFIX)?;
     let end = rest.rfind(" (")?;
-    Some(&rest[..end])
+    rest.get(..end)
 }
 
 /// Whether `path`'s file **name begins with** `{sanitize(tool_call_id)}_` —
@@ -1016,7 +1015,9 @@ pub fn stabilize_persisted_ref(text: &str) -> std::borrow::Cow<'_, str> {
             // Keep " (<n> tokens, <tool>)]" — the part that still varies with
             // the content rather than with the dispatch.
             if let Some(tail) = line.rfind(" (") {
-                out.push_str(&line[tail..]);
+                if let Some(suffix) = line.get(tail..) {
+                    out.push_str(suffix);
+                }
             }
         } else {
             out.push_str(line);

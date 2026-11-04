@@ -486,7 +486,10 @@ impl Renderer {
                     // A label that already IS its destination (what
                     // `linkify_bare_urls` produces from a bare URL) would
                     // otherwise print the same string twice.
-                    let label: String = self.spans[link.start_span..]
+                    let label: String = self
+                        .spans
+                        .get(link.start_span..)
+                        .unwrap_or(&[])
                         .iter()
                         .map(|s| s.content.as_ref())
                         .collect();
@@ -619,7 +622,9 @@ fn render_table(table: &TableAcc, width: usize, out: &mut Vec<Line<'static>>) {
     let mut widths = vec![0usize; cols];
     for row in &table.rows {
         for (i, cell) in row.iter().enumerate() {
-            widths[i] = widths[i].max(UnicodeWidthStr::width(cell.as_str()));
+            if let Some(w) = widths.get_mut(i) {
+                *w = (*w).max(UnicodeWidthStr::width(cell.as_str()));
+            }
         }
     }
     // Fit the budget by shrinking the widest column first, so one long cell
@@ -634,10 +639,13 @@ fn render_table(table: &TableAcc, width: usize, out: &mut Vec<Line<'static>>) {
         else {
             break;
         };
-        if widths[widest] <= 1 {
+        let Some(w) = widths.get_mut(widest) else {
+            break;
+        };
+        if *w <= 1 {
             break;
         }
-        widths[widest] -= 1;
+        *w -= 1;
     }
 
     let border = style(SemanticColor::Dim);
@@ -807,7 +815,8 @@ pub fn markdown_to_lines_incremental(
                 // the prefix is finished text, so it gets the finished-text
                 // pre-pass (fences and admonitions are whole by definition of
                 // the boundary), which is what `streaming = false` asks for.
-                let lines = Rc::new(markdown_to_lines(&text[..new_offset], width));
+                let prefix_slice = text.get(..new_offset).unwrap_or("");
+                let lines = Rc::new(markdown_to_lines(prefix_slice, width));
                 *cache = Some(StreamPrefix {
                     safe_offset: new_offset,
                     width,
@@ -829,7 +838,7 @@ pub fn markdown_to_lines_incremental(
                 }
             },
         };
-    let tail_text = &text[tail_start..];
+    let tail_text = text.get(tail_start..).unwrap_or("");
     let mut tail = if tail_text.is_empty() {
         Vec::new()
     } else {
@@ -970,7 +979,10 @@ fn wrap_line_spans(spans: &[Span<'static>], width: usize) -> Vec<Line<'static>> 
     let mut row_spans: Vec<Span<'static>> = Vec::new();
     for row in &wrapped {
         let row = row.as_ref();
-        let row_start = plain[cursor..].find(row).map_or(cursor, |off| cursor + off);
+        let row_start = plain
+            .get(cursor..)
+            .and_then(|tail| tail.find(row))
+            .map_or(cursor, |off| cursor + off);
         let row_end = row_start + row.len();
         cursor = row_end;
 

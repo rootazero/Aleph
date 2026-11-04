@@ -397,7 +397,7 @@ pub(crate) fn strip_visibility(line: &str) -> &str {
         // `pub(crate)` / `pub(super)` / `pub(in a::b)` — skip to the matching
         // `)`. Module paths contain no nested parens, so `find` is exact.
         Some(inner) => match inner.find(')') {
-            Some(end) => &inner[end + 1..],
+            Some(end) => inner.get(end + 1..).unwrap_or(""),
             None => return line,
         },
         None => rest,

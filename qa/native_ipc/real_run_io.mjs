@@ -507,6 +507,8 @@ export function createMonitorServer({ nonce, markerOrigin = PANEL_ORIGIN, WebSoc
       run: null,
       closedByHarness: false,
       failed: false,
+      closed: false,
+      failureReason: null,
       _ws: ws,
       async command(action, extra, timeoutMs) {
         if (!ACTIONS.includes(action) || conn.failed || ws.readyState !== 1 || nextId > MAX_COMMAND_ID) return null;
@@ -563,6 +565,7 @@ export function createMonitorServer({ nonce, markerOrigin = PANEL_ORIGIN, WebSoc
       }
       const r = e === null ? { ok: false } : validator.push(e);
       if (!r.ok) {
+        conn.failureReason = ["auth_mismatch", "origin_mismatch", "auth_not_configured", "origin_not_configured"].includes(r.error) ? "monitor_auth_failed" : "monitor_stream_invalid";
         diag.streamInvalid += 1;
         conn.failed = true;
         conn.authenticated = false;
@@ -595,7 +598,18 @@ export function createMonitorServer({ nonce, markerOrigin = PANEL_ORIGIN, WebSoc
         lastDom = Object.fromEntries(Object.entries(e).filter(([k, v]) => typeof v === "boolean" && k !== "v"));
       }
     });
+    ws.on("error", () => {
+      conn.failureReason = "monitor_connection_closed";
+    });
     ws.on("close", () => {
+      conn.closed = true;
+      if (ackWaiter) ackWaiter(null);
+      if (!judged) {
+        judged = true;
+        conn.failureReason ??= "monitor_connection_closed";
+        ready.push(conn);
+        wake();
+      }
       if (current === conn) current = null;
       if (reloadExpected) conn.closedByHarness = true;
     });
@@ -660,6 +674,14 @@ export function createMonitorServer({ nonce, markerOrigin = PANEL_ORIGIN, WebSoc
           clearTimeout(timer);
           res(c);
         };
+      });
+    },
+    diag() {
+      const bounded = (value) => Math.min(1_000_000, Math.max(0, Math.trunc(value)));
+      return Object.freeze({
+        ...Object.fromEntries(Object.entries(diag).filter(([key]) => key !== "refusedOriginKinds" && key !== "installFailedReason").map(([key, value]) => [key, bounded(value)])),
+        refusedOriginKinds: Object.freeze(Object.fromEntries(Object.entries(diag.refusedOriginKinds).map(([key, value]) => [key, bounded(value)]))),
+        installFailedReason: diag.installFailedReason,
       });
     },
     expectReload() {

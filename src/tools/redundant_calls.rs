@@ -241,7 +241,7 @@ fn resolve_request<'a>(
     call_id: &str,
 ) -> Option<(&'a str, &'a serde_json::Value)> {
     let upper = result_idx.min(events.len());
-    events[..upper].iter().rev().find_map(|r| match &r.event {
+    events.get(..upper)?.iter().rev().find_map(|r| match &r.event {
         SessionEvent::ToolCallRequested {
             call_id: id,
             name,

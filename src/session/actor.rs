@@ -261,6 +261,7 @@ impl SessionActor {
                     }
                 },
                 _ = tokio::time::sleep_until(idle_deadline) => {
+                    self.inbox.close();
                     // Drain any commands already buffered in the inbox
                     // before exiting. Without this, a command that lands
                     // between the sleep returning and `run()` returning

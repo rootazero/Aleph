@@ -314,16 +314,14 @@ pub fn transient_park_note(code: &str, delay_ms: u64) -> String {
 /// the two, only bounds whichever one is selected.
 #[must_use]
 pub fn bound_transient_park_delay_ms(hint: Option<Duration>, fallback_ms: u64, max_ms: u64) -> u64 {
-    // The floor is applied before the ceiling, so a `max_ms` under the floor
-    // would invert them and hand back a delay shorter than the 1s spin guard —
-    // silently, since both bounds "applied". No caller passes such a ceiling and
-    // none should; say so where it is enforced rather than in a comment.
+    // Ensure ceiling does not sit below the 1s spin guard floor even in release mode.
+    let effective_max_ms = max_ms.max(1_000);
     debug_assert!(
         max_ms >= 1_000,
         "the park ceiling must not sit under the 1s floor"
     );
     let raw_ms = hint.and_then(|d| u64::try_from(d.as_millis()).ok());
-    raw_ms.unwrap_or(fallback_ms).max(1_000).min(max_ms)
+    raw_ms.unwrap_or(fallback_ms).clamp(1_000, effective_max_ms)
 }
 
 /// Pick the note that explains WHY autonomous pursuit stopped, from the three
@@ -383,7 +381,7 @@ pub fn wait_resume_prompt(goal: &Goal, cause: &str) -> String {
         .waiting_reason
         .as_deref()
         .filter(|r| !r.is_empty())
-        .map(|r| format!(" (you parked it because: {r})"))
+        .map(|r| format!(" (you parked it because: {})", truncate_chars(r, 300)))
         .unwrap_or_default();
     format!(
         "[Resuming your standing goal — {cause}]\nGoal: {}{lessons}\n\nYou had parked \
@@ -444,10 +442,7 @@ pub fn confirm_complete(goal: &Goal, now_ms: u64) -> Goal {
 /// runway left" has a single source of truth across the entire subsystem.
 #[must_use]
 pub fn reopen_after_gate_failure(goal: &Goal, reason: &str, tokens_now: u64, now_ms: u64) -> Goal {
-    let trimmed_lesson: String = format!("Objective gate vetoed: {reason}")
-        .chars()
-        .take(300)
-        .collect();
+    let trimmed_lesson: String = truncate_chars(&format!("Objective gate vetoed: {reason}"), 300);
     // Reopen only if the goal could actually run again — the iteration cap was
     // the only limit consulted here before, so a veto happily reopened a goal
     // whose deadline had passed or whose token budget was spent, and the very

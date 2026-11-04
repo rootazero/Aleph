@@ -274,10 +274,12 @@ impl CapabilityLedger {
 
         for entry in ready_entries {
             if let Some(parent) = entry.bin_path.parent() {
-                let parent_buf = parent.to_path_buf();
-                // rust-doctor-disable-next-line excessive-clone
-                if seen.insert(parent_buf.clone()) {
-                    paths.push(parent_buf);
+                if !parent.as_os_str().is_empty() {
+                    let parent_buf = parent.to_path_buf();
+                    // rust-doctor-disable-next-line excessive-clone
+                    if seen.insert(parent_buf.clone()) {
+                        paths.push(parent_buf);
+                    }
                 }
             }
         }

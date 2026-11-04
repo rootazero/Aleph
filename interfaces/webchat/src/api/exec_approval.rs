@@ -116,7 +116,9 @@ impl ExecApprovalApi {
             "resolved_by": "Operator (Panel)",
         });
         if let Some(reason) = reason.filter(|r| !r.trim().is_empty()) {
-            params["reason"] = serde_json::Value::String(reason);
+            if let Some(map) = params.as_object_mut() {
+                map.insert("reason".to_string(), serde_json::Value::String(reason));
+            }
         }
         state.rpc_call("exec.approval.resolve", params).await?;
         Ok(())

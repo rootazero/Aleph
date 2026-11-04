@@ -174,7 +174,9 @@ impl TextSelection {
             let Some((left, right)) = selection.columns(row, area) else {
                 continue;
             };
-            for glyph in &snapshot.rows[usize::from(row - area.y)] {
+            let row_idx = usize::from(row.saturating_sub(area.y));
+            let row_glyphs = snapshot.rows.get(row_idx).map_or(&[] as &[_], Vec::as_slice);
+            for glyph in row_glyphs {
                 if glyph.start <= right && glyph.end > left {
                     for column in glyph.start..glyph.end {
                         buffer[(column, row)].modifier.insert(Modifier::REVERSED);
@@ -227,7 +229,9 @@ impl TextSelection {
                     .as_ref()
                     .is_some_and(|selection| selection.dragging) =>
             {
-                let selection = self.selection.as_mut().expect("armed selection");
+                let Some(selection) = self.selection.as_mut() else {
+                    return MouseOutcome::Ignored;
+                };
                 selection.end = snapshot.clamp(point);
                 selection.moved |= point != selection.anchor;
                 if matches!(event.kind, MouseEventKind::Up(_)) {
@@ -263,7 +267,9 @@ impl TextSelection {
         for row in start.row..=end.row {
             let (left, right) = selection.columns(row, area)?;
             let mut line = String::new();
-            for glyph in &snapshot.rows[usize::from(row - area.y)] {
+            let row_idx = usize::from(row.saturating_sub(area.y));
+            let row_glyphs = snapshot.rows.get(row_idx).map_or(&[] as &[_], Vec::as_slice);
+            for glyph in row_glyphs {
                 if glyph.start <= right && glyph.end > left {
                     let symbol = snapshot.buffer[(glyph.start, row)].symbol();
                     // Styling lives in Cell fields, never in copied ANSI. Reject

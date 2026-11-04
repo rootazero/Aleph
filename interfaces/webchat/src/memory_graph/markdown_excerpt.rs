@@ -47,18 +47,16 @@ pub fn render_excerpt(src: &str) -> String {
             pending.clear();
             break;
         }
-        match event {
-            Event::Text(t) => {
-                let remaining = MAX_LEN.saturating_sub(chars_used);
-                let take = t.chars().take(remaining).collect::<String>();
-                chars_used += take.chars().count();
-                pending.push_str(&take);
-                continue;
-            }
-            _ => flush_wikilinks(&mut pending, &mut out),
+        if let Event::Text(t) = event {
+            let remaining = MAX_LEN.saturating_sub(chars_used);
+            let take = t.chars().take(remaining).collect::<String>();
+            chars_used += take.chars().count();
+            pending.push_str(&take);
+            continue;
         }
+        flush_wikilinks(&mut pending, &mut out);
         match event {
-            Event::Text(_) => unreachable!("handled above"),
+            Event::Text(_) => {}
             Event::Code(t) => {
                 out.push_str("<code>");
                 out.push_str(&html_escape(&t));
@@ -196,21 +194,39 @@ pub(crate) fn split_wikilinks(text: &str) -> Vec<WikiSegment<'_>> {
             }
             return out;
         };
-        let Some(close_rel) = rest[open + 2..].find("]]") else {
+        let after_open = match rest.get(open + 2..) {
+            Some(s) => s,
+            None => {
+                if !rest.is_empty() {
+                    out.push(WikiSegment::Text(rest));
+                }
+                return out;
+            }
+        };
+        let Some(close_rel) = after_open.find("]]") else {
             if !rest.is_empty() {
                 out.push(WikiSegment::Text(rest));
             }
             return out;
         };
-        let inner = &rest[open + 2..open + 2 + close_rel];
+        let Some(inner) = after_open.get(..close_rel) else {
+            if !rest.is_empty() {
+                out.push(WikiSegment::Text(rest));
+            }
+            return out;
+        };
         if inner.is_empty() || inner.contains("[[") {
             // Empty or nested-open: emit up to and including "[[" as text and rescan.
-            out.push(WikiSegment::Text(&rest[..open + 2]));
-            rest = &rest[open + 2..];
+            if let Some(prefix) = rest.get(..open + 2) {
+                out.push(WikiSegment::Text(prefix));
+            }
+            rest = after_open;
             continue;
         }
         if open > 0 {
-            out.push(WikiSegment::Text(&rest[..open]));
+            if let Some(prefix) = rest.get(..open) {
+                out.push(WikiSegment::Text(prefix));
+            }
         }
         let (target, label) = match inner.split_once('|') {
             Some((t, l)) if !l.is_empty() => (t, Some(l)),
@@ -218,7 +234,10 @@ pub(crate) fn split_wikilinks(text: &str) -> Vec<WikiSegment<'_>> {
             None => (inner, None),
         };
         out.push(WikiSegment::Link { target, label });
-        rest = &rest[open + 2 + close_rel + 2..];
+        rest = match after_open.get(close_rel + 2..) {
+            Some(s) => s,
+            None => "",
+        };
     }
 }
 

@@ -21,15 +21,15 @@ use crate::tools::service::ToolDefinition;
 fn first_sentence_head(desc: &str) -> Option<&str> {
     const ABBREVS: &[&str] = &["e.g", "i.e", "etc", "vs", "cf", "al", "no", "fig"];
     let mut search_from = 0;
-    while let Some(rel) = desc[search_from..].find(". ") {
+    while let Some(rel) = desc.get(search_from..)?.find(". ") {
         let end = search_from + rel; // index of the '.'
-        let head = &desc[..end];
+        let head = desc.get(..end)?;
         let last_word = head
             .rsplit(|c: char| c.is_whitespace())
             .next()
             .unwrap_or("");
         if head.is_empty() || ABBREVS.iter().any(|a| last_word.eq_ignore_ascii_case(a)) {
-            search_from = end + 2;
+            search_from = end.checked_add(2)?;
             continue;
         }
         return Some(head);

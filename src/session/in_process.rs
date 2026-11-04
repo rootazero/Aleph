@@ -91,6 +91,14 @@ impl InProcessActorSessionService {
             .cloned()
     }
 
+    async fn wake_lock_for(&self, id: &SessionId) -> Arc<Mutex<()>> {
+        let mut locks = self.wake_locks.lock().await;
+        locks
+            .entry(id.clone())
+            .or_insert_with(|| Arc::new(Mutex::new(())))
+            .clone()
+    }
+
     async fn spawn_actor(
         &self,
         id: &SessionId,
@@ -258,6 +266,7 @@ impl InProcessActorSessionService {
             if should_remove {
                 senders.remove(&cleanup_id);
                 broadcasters.remove(&cleanup_id);
+                cleanup_svc.wake_locks.lock().await.remove(&cleanup_id);
             }
         });
 
@@ -320,7 +329,14 @@ impl SessionService for InProcessActorSessionService {
     ) -> Result<Vec<EventSeq>, SessionError> {
         let sender = match self.sender_for(id).await {
             Some(s) => s,
-            None => self.spawn_actor(id, None).await?,
+            None => {
+                let wake_lock = self.wake_lock_for(id).await;
+                let _guard = wake_lock.lock().await;
+                match self.sender_for(id).await {
+                    Some(s) => s,
+                    None => self.spawn_actor(id, None).await?,
+                }
+            }
         };
         let (tx, rx) = oneshot::channel();
         sender
@@ -393,13 +409,7 @@ impl SessionService for InProcessActorSessionService {
         // emit duplicate SessionWoken markers. The lock is RELEASED
         // before `spawn_actor` (which is fast — no 5 s wait), so a
         // second wake() does not block the full SHUTDOWN_GRACE.
-        let wake_lock = {
-            let mut locks = self.wake_locks.lock().await;
-            locks
-                .entry(id.clone())
-                .or_insert_with(|| Arc::new(Mutex::new(())))
-                .clone()
-        };
+        let wake_lock = self.wake_lock_for(id).await;
         let _guard = wake_lock.lock().await;
 
         // 1. Shutdown old actor if present.

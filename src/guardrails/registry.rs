@@ -428,7 +428,12 @@ fn screenable_text(event: &SessionEvent) -> Option<&str> {
 
 fn set_screened_text(event: &mut SessionEvent, text: String) {
     match event {
-        SessionEvent::UserMessage { content, .. } => content.text = text,
+        SessionEvent::UserMessage { content, .. } => {
+            content.text = text;
+            // When user message content is replaced or redacted, clear rich
+            // attachments so un-screened blocks do not bypass the guardrail.
+            content.blocks.clear();
+        }
         SessionEvent::SystemMessage { content, .. } => *content = text,
         _ => {}
     }

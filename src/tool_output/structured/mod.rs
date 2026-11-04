@@ -441,10 +441,10 @@ fn clamp_line(line: &str, max_chars: usize) -> Cow<'_, str> {
         // Multi-byte content: more bytes than `max_chars` but fewer characters.
         return Cow::Borrowed(line);
     };
-    let dropped = line[split..].chars().count();
+    let dropped = line.get(split..).map_or(0, |s| s.chars().count());
+    let prefix = line.get(..split).unwrap_or(line);
     Cow::Owned(format!(
-        "{}… (+{dropped} chars, line truncated)",
-        &line[..split]
+        "{prefix}… (+{dropped} chars, line truncated)"
     ))
 }
 
@@ -486,7 +486,9 @@ pub(super) fn render_selected(
         if !out.is_empty() {
             out.push('\n');
         }
-        out.push_str(&clamp_line(lines[idx], profile.line_chars));
+        if let Some(&l) = lines.get(idx) {
+            out.push_str(&clamp_line(l, profile.line_chars));
+        }
         prev = Some(idx);
     }
     if let Some(last) = prev {
@@ -523,7 +525,8 @@ pub(super) fn is_error_signal(line: &str) -> bool {
     // would false-positive on any path containing "e/", so it gets a trimmed
     // prefix check instead.
     let trimmed = line.trim_start();
-    if trimmed.len() >= 2 && trimmed.as_bytes()[1] == b'/' && trimmed.as_bytes()[0] | 0x20 == b'e' {
+    let b = trimmed.as_bytes();
+    if b.len() >= 2 && b.get(1) == Some(&b'/') && b.first().copied().map(|c| c | 0x20) == Some(b'e') {
         return true;
     }
     const NEEDLES: [&str; 10] = [

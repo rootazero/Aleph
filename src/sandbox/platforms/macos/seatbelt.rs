@@ -459,7 +459,11 @@ pub struct SeatbeltDriver {
 /// Escape a string for safe inclusion in SBPL (Sandbox Profile Language).
 /// SBPL uses double quotes for string literals; backslash and quote must be escaped.
 fn escape_sbpl(s: &str) -> String {
-    s.replace('\\', "\\\\").replace('"', "\\\"")
+    s.replace('\\', "\\\\")
+        .replace('"', "\\\"")
+        .replace('\n', "\\n")
+        .replace('\r', "\\r")
+        .replace('\t', "\\t")
 }
 
 /// Recognise the four forms in which a caller may pass an IP-literal host:
@@ -478,7 +482,9 @@ fn host_is_ip_literal(host: &str) -> bool {
     // Bracketed IPv6 with optional `:port`.
     if let Some(rest) = host.strip_prefix('[') {
         if let Some(end) = rest.find(']') {
-            return IpAddr::from_str(&rest[..end]).is_ok();
+            return rest
+                .get(..end)
+                .is_some_and(|ip| IpAddr::from_str(ip).is_ok());
         }
     }
     // IPv4:port (exactly one `:`). Unbracketed IPv6 has multiple colons and

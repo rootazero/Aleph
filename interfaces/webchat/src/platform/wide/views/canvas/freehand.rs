@@ -92,16 +92,23 @@ pub(super) fn stroke_outline(points: &[[f32; 3]], size: f64) -> Vec<(f64, f64)> 
             .collect();
     }
     let n = pts.len();
-    let seg = |i: usize| (pts[i + 1].0 - pts[i].0, pts[i + 1].1 - pts[i].1);
+    let seg = |i: usize| match (pts.get(i), pts.get(i + 1)) {
+        (Some(p0), Some(p1)) => (p1.0 - p0.0, p1.1 - p0.1),
+        _ => (0.0, 0.0),
+    };
     // Per-point unit travel direction; interior points blend toward the
     // central difference of their neighbors (SMOOTHING).
     let mut dirs: Vec<(f64, f64)> = Vec::with_capacity(n);
     for i in 0..n {
-        let forward = if i + 1 < n { seg(i) } else { seg(i - 1) };
+        let forward = if i + 1 < n { seg(i) } else { seg(i.saturating_sub(1)) };
         let base = normalize(forward).unwrap_or((1.0, 0.0));
         let dir = if i > 0 && i + 1 < n {
-            let central = normalize((pts[i + 1].0 - pts[i - 1].0, pts[i + 1].1 - pts[i - 1].1))
-                .unwrap_or(base);
+            let central = match (pts.get(i - 1), pts.get(i + 1)) {
+                (Some(p_prev), Some(p_next)) => {
+                    normalize((p_next.0 - p_prev.0, p_next.1 - p_prev.1)).unwrap_or(base)
+                }
+                _ => base,
+            };
             normalize((
                 base.0 + (central.0 - base.0) * SMOOTHING,
                 base.1 + (central.1 - base.1) * SMOOTHING,
@@ -114,16 +121,17 @@ pub(super) fn stroke_outline(points: &[[f32; 3]], size: f64) -> Vec<(f64, f64)> 
     }
     let mut left: Vec<(f64, f64)> = Vec::with_capacity(n);
     let mut right: Vec<(f64, f64)> = Vec::with_capacity(n);
-    for i in 0..n {
-        let (px, py, pressure) = pts[i];
+    for (i, &(px, py, pressure)) in pts.iter().enumerate() {
         let r = radius_for(size, pressure);
-        let (ox, oy) = (-dirs[i].1 * r, dirs[i].0 * r);
+        let dir = dirs.get(i).copied().unwrap_or((1.0, 0.0));
+        let (ox, oy) = (-dir.1 * r, dir.0 * r);
         left.push((px + ox, py + oy));
         right.push((px - ox, py - oy));
     }
     let mut outline = left;
-    let (ex, ey, _) = pts[n - 1];
-    let end_offset = (outline[n - 1].0 - ex, outline[n - 1].1 - ey);
+    let (ex, ey, _) = pts.last().copied().unwrap_or((fx, fy, fp));
+    let end_pt = outline.last().copied().unwrap_or((ex, ey));
+    let end_offset = (end_pt.0 - ex, end_pt.1 - ey);
     for k in 1..CAP_SEGMENTS {
         let v = rotate(
             end_offset,
@@ -131,10 +139,11 @@ pub(super) fn stroke_outline(points: &[[f32; 3]], size: f64) -> Vec<(f64, f64)> 
         );
         outline.push((ex + v.0, ey + v.1));
     }
-    for i in (0..n).rev() {
-        outline.push(right[i]);
+    for pt in right.iter().rev() {
+        outline.push(*pt);
     }
-    let start_offset = (right[0].0 - fx, right[0].1 - fy);
+    let r0 = right.first().copied().unwrap_or((fx, fy));
+    let start_offset = (r0.0 - fx, r0.1 - fy);
     for k in 1..CAP_SEGMENTS {
         let v = rotate(
             start_offset,

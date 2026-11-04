@@ -496,8 +496,9 @@ fn with_strategy_appends_welded_strategy_block() {
     assert!(with.contains("ship the parser."));
     // The strategy block is appended; the body without it is a strict prefix.
     assert!(with.starts_with(&without));
+    let remainder = with.strip_prefix(&without).unwrap_or("");
     assert_eq!(
-        &with[without.len()..],
+        remainder,
         &format!("<strategy>\n{body}\n</strategy>\n\n")
     );
 }

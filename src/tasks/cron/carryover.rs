@@ -182,7 +182,7 @@ pub fn read(job_id: &str) -> std::io::Result<Option<CarryOver>> {
 pub fn write_at(dir: &std::path::Path, job_id: &str, record: &CarryOver) -> std::io::Result<()> {
     fs::create_dir_all(dir)?;
     let dest = carryover_path_at(dir, job_id);
-    let tmp = dest.with_extension("json.tmp");
+    let tmp = dest.with_extension(format!("tmp.{}", std::process::id()));
     let body = serde_json::to_string_pretty(record)
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
     fs::write(&tmp, body)?;

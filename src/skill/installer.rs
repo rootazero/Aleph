@@ -22,6 +22,7 @@ pub fn build_install_command(spec: &InstallSpec) -> Option<String> {
     // intended install directory.
     fn is_safe_shell_arg(s: &str) -> bool {
         !s.is_empty()
+            && !s.starts_with('-')
             && s.chars()
                 .all(|c| c.is_ascii_alphanumeric() || "-_./:@+=~".contains(c))
     }
@@ -30,9 +31,12 @@ pub fn build_install_command(spec: &InstallSpec) -> Option<String> {
         if !is_safe_shell_arg(s) {
             return false;
         }
-        // Reject any `..` segment — naive path-segment scanning is enough for
-        // an output-path allowlist; this isn't a full canonical-path check.
-        s.split(['/', '\\']).all(|seg| seg != "..")
+        // Reject absolute paths, home dir expansion, and drive colons
+        if s.starts_with('/') || s.starts_with('\\') || s.starts_with('~') || s.contains(':') {
+            return false;
+        }
+        // Reject any `..` or `~` path segment
+        s.split(['/', '\\']).all(|seg| seg != ".." && seg != "~")
     }
 
     if !is_safe_shell_arg(&spec.package) {
@@ -208,21 +212,27 @@ const fn install_kind_index(kind: &InstallKind) -> usize {
     }
 }
 
-// Rank tables for `select_best_install`. Lower values are preferred.
+// Rank mapping for `select_best_install`. Lower values are preferred.
 // Scoop and Winget are the Windows system managers, ranked alongside Brew
 // (the macOS system manager): high when system managers are preferred, just
 // after Brew otherwise. Scoop outranks Winget because it targets CLI/dev
 // tools (Winget leans toward desktop apps). OS filtering runs before ranking,
 // so these only compete on Windows in practice.
-const PREFER_BREW_RANKS: [u8; 8] = [0, 1, 2, 3, 4, 5, 6, 7];
-const PREFER_UV_RANKS: [u8; 8] = [2, 3, 4, 0, 1, 5, 6, 7];
-
 const fn install_kind_rank(kind: &InstallKind, prefer_brew: bool) -> u8 {
     let idx = install_kind_index(kind);
     if prefer_brew {
-        PREFER_BREW_RANKS[idx]
+        idx as u8
     } else {
-        PREFER_UV_RANKS[idx]
+        match kind {
+            InstallKind::Uv => 0,
+            InstallKind::Npm => 1,
+            InstallKind::Brew => 2,
+            InstallKind::Scoop => 3,
+            InstallKind::Winget => 4,
+            InstallKind::Go => 5,
+            InstallKind::Apt => 6,
+            InstallKind::Download => 7,
+        }
     }
 }
 

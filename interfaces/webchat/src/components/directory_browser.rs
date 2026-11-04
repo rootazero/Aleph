@@ -98,9 +98,11 @@ pub fn DirectoryBrowser(
                     if r.len() == 1 {
                         // Single root → skip the roots screen and dive
                         // straight in. Cuts one click for the common case.
-                        let only = r[0].path.clone();
+                        let only = r.first().map(|root| root.path.clone());
                         roots.set(r);
-                        current_path.set(Some(only));
+                        if let Some(path) = only {
+                            current_path.set(Some(path));
+                        }
                     } else {
                         roots.set(r);
                     }

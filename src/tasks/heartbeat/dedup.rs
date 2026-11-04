@@ -179,7 +179,8 @@ impl DedupEngine {
             None => return DedupVerdict::Unavailable,
             Some(c) => {
                 let conn = c.lock().await;
-                let cutoff = chrono::Utc::now().timestamp_millis() - self.config.window_ms as i64;
+                let window_i64 = i64::try_from(self.config.window_ms).unwrap_or(i64::MAX);
+                let cutoff = chrono::Utc::now().timestamp_millis().saturating_sub(window_i64);
                 load_dedup_history(
                     &conn,
                     task_id,
@@ -236,7 +237,8 @@ impl DedupEngine {
             return Ok(0);
         };
         let conn = c.lock().await;
-        let cutoff = chrono::Utc::now().timestamp_millis() - retention_ms as i64;
+        let ret_i64 = i64::try_from(retention_ms).unwrap_or(i64::MAX);
+        let cutoff = chrono::Utc::now().timestamp_millis().saturating_sub(ret_i64);
         cleanup_dedup_records(&conn, cutoff)
     }
 }

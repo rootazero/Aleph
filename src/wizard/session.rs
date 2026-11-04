@@ -327,7 +327,15 @@ impl WizardSession {
     }
 
     /// Answer the current step
+    #[allow(
+        clippy::unused_async,
+        reason = "async interface retained for caller compatibility and future hook integration"
+    )]
     pub async fn answer(&self, step_id: &str, value: Value) -> Result<(), WizardSessionError> {
+        if self.status() == WizardStatus::Cancelled {
+            return Err(WizardSessionError::Cancelled);
+        }
+
         // Snapshot the current step, then drop the lock: validation needs the
         // step's type and options, and the `answers` lock must never be taken
         // while holding `current_step`.

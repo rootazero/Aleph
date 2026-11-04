@@ -35,7 +35,7 @@ use std::collections::HashMap;
 use async_trait::async_trait;
 use tokio_util::sync::CancellationToken;
 
-use crate::extension::hooks::{HookContext, HookExecutor, HookResult};
+use crate::extension::hooks::{HookContext, HookExecutor, HookResult, PermissionDecision};
 use crate::extension::HookEvent;
 use crate::sync_primitives::Mutex;
 use crate::verification::turn_verifier::{TurnVerifier, TurnVerifyContext, VerifierVerdict};
@@ -94,6 +94,20 @@ fn decide(hr: &HookResult) -> StopDecision {
     }
     if hr.prevent_continuation {
         return StopDecision::Halt(hr.stop_message("stop halted by extension hook"));
+    }
+    if hr
+        .permission_decision
+        .as_ref()
+        .is_some_and(|d| matches!(d, PermissionDecision::Ask { .. }))
+    {
+        let reason = hr
+            .deny_reason
+            .clone()
+            .or_else(|| hr.block_reason.clone())
+            .unwrap_or_else(|| {
+                "stop requires user confirmation (permission decision: ask)".to_string()
+            });
+        return StopDecision::Veto(reason);
     }
     if hr.denied || hr.blocked {
         let reason = hr
@@ -157,6 +171,12 @@ impl ExtensionStopHookVerifier {
 
     fn record_veto(&self, session: &str) -> VetoCounters {
         let mut map = self.vetoes.lock().unwrap_or_else(|e| e.into_inner());
+        if map.len() >= 1024 && !map.contains_key(session) {
+            map.retain(|_, v| v.consecutive > 0);
+            if map.len() >= 1024 {
+                map.clear();
+            }
+        }
         let counters = map.entry(session.to_string()).or_default();
         counters.consecutive = counters.consecutive.saturating_add(1);
         counters.total = counters.total.saturating_add(1);

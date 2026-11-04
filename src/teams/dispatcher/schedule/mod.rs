@@ -227,6 +227,7 @@ impl TeamDispatcher {
             // Spawned under the task's resolved authority: a bare spawn loses
             // every task-local, and the member run then executed as an
             // unscoped operator (N1).
+            let cleanup_dispatcher = Arc::clone(&dispatcher);
             launch.spawn(async move {
                 if let Err(panic_payload) = AssertUnwindSafe(async {
                     dispatcher
@@ -239,8 +240,9 @@ impl TeamDispatcher {
                     tracing::error!(
                         task_id = %task_id_for_log,
                         panic = ?panic_payload,
-                        "dispatcher run_task panicked; adapter dropped the task silently"
+                        "dispatcher run_task panicked; clearing running registration"
                     );
+                    cleanup_dispatcher.running.lock().await.remove(&task_id_for_log);
                 }
             });
         }

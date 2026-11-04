@@ -474,13 +474,16 @@ fn check_version_warning(spec: &RuntimeSpec, version: Option<&str>) -> Option<St
 /// the future, this should be replaced by a proper semver parser.
 fn version_lt(actual: &str, minimum: &str) -> bool {
     let parse = |s: &str| -> (u64, u64) {
-        let mut parts = s.split('.');
+        let clean = s.trim_start_matches(|c: char| !c.is_ascii_digit());
+        let mut parts = clean.split('.');
         let major = parts
             .next()
+            .and_then(|p| p.split(|c: char| !c.is_ascii_digit()).next())
             .and_then(|p| p.parse::<u64>().ok())
             .unwrap_or(0);
         let minor = parts
             .next()
+            .and_then(|p| p.split(|c: char| !c.is_ascii_digit()).next())
             .and_then(|p| p.parse::<u64>().ok())
             .unwrap_or(0);
         (major, minor)

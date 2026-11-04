@@ -188,8 +188,8 @@ impl SpendLedger for SqliteSpendLedger {
             (key, period_start_ms),
             CachedRow {
                 usd,
-                unpriced_calls: unpriced_calls as u64,
-                partial_calls: partial_calls as u64,
+                unpriced_calls: unpriced_calls.max(0) as u64,
+                partial_calls: partial_calls.max(0) as u64,
             },
         );
         drop(cache);
@@ -235,8 +235,8 @@ impl SpendLedger for SqliteSpendLedger {
             (key, period_start_ms),
             CachedRow {
                 usd,
-                unpriced_calls: unpriced_calls as u64,
-                partial_calls: partial_calls as u64,
+                unpriced_calls: unpriced_calls.max(0) as u64,
+                partial_calls: partial_calls.max(0) as u64,
             },
         );
         drop(cache);
@@ -244,8 +244,8 @@ impl SpendLedger for SqliteSpendLedger {
 
         Ok(Spent {
             usd,
-            unpriced_calls: unpriced_calls as u64,
-            partial_calls: partial_calls as u64,
+            unpriced_calls: unpriced_calls.max(0) as u64,
+            partial_calls: partial_calls.max(0) as u64,
             period_start_ms,
             // See `Spent::period_end_ms`'s doc.
             period_end_ms: None,
@@ -285,8 +285,8 @@ impl SpendLedger for SqliteSpendLedger {
 
         Ok(Spent {
             usd: usd.unwrap_or(0.0),
-            unpriced_calls: unpriced_calls.unwrap_or(0) as u64,
-            partial_calls: partial_calls.unwrap_or(0) as u64,
+            unpriced_calls: unpriced_calls.unwrap_or(0).max(0) as u64,
+            partial_calls: partial_calls.unwrap_or(0).max(0) as u64,
             period_start_ms: window_start_ms,
             // See `Spent::period_end_ms`'s doc.
             period_end_ms: None,
@@ -341,8 +341,8 @@ impl SpendLedger for SqliteSpendLedger {
                     Principal::from_key(&principal_id),
                     Spent {
                         usd,
-                        unpriced_calls: unpriced_calls as u64,
-                        partial_calls: partial_calls as u64,
+                        unpriced_calls: unpriced_calls.max(0) as u64,
+                        partial_calls: partial_calls.max(0) as u64,
                         period_start_ms,
                         // See `Spent::period_end_ms`'s doc.
                         period_end_ms: None,

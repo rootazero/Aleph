@@ -146,6 +146,7 @@ pub fn run_init(args: Vec<String>) -> ! {
 }
 
 #[cfg(not(target_os = "windows"))]
+#[allow(clippy::print_stderr, clippy::exit)]
 pub fn run_init(_args: Vec<String>) -> ! {
     eprintln!("aleph sandbox-init-windows: only supported on Windows");
     std::process::exit(78); // EX_CONFIG

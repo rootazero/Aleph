@@ -119,6 +119,9 @@ pub(crate) fn mcp_server_id(entry_id: &str) -> String {
             out.push('_');
         }
     }
+    if out.trim_matches('_').is_empty() {
+        return "default_server".to_string();
+    }
     out
 }
 
@@ -166,7 +169,16 @@ pub(crate) fn install_git_skill(
     // Last path segment is the on-disk skill name; the guard above guarantees it
     // is non-empty and free of `..`.
     let safe_name = leaf.rsplit(['/', '\\']).next().unwrap_or(&leaf).to_string();
-    if safe_name.contains(':') || safe_name.chars().any(|c| c.is_control()) {
+    if safe_name.contains(':')
+        || safe_name.starts_with('.')
+        || safe_name.chars().any(|c| c.is_control())
+        || matches!(
+            safe_name.to_ascii_uppercase().as_str(),
+            "CON" | "PRN" | "AUX" | "NUL" | "COM1" | "COM2" | "COM3" | "COM4" | "COM5" | "COM6"
+                | "COM7" | "COM8" | "COM9" | "LPT1" | "LPT2" | "LPT3" | "LPT4" | "LPT5"
+                | "LPT6" | "LPT7" | "LPT8" | "LPT9"
+        )
+    {
         return Err(format!("unsafe skill name '{safe_name}'"));
     }
     // Restrict accepted git URL schemes to HTTPS (`https://`). SCP-style SSH
@@ -242,6 +254,10 @@ pub(crate) fn install_git_skill(
             "staged skill failed post-copy integrity re-check (cache may have been tampered with): {e}"
         ));
     }
+    if target.is_symlink() {
+        let _ = std::fs::remove_dir_all(&staging);
+        return Err(format!("destination '{safe_name}' is a symlink; refusing install"));
+    }
     let had_existing = target.exists();
     let backup = skills_dir.join(".staging").join(format!(
         "{}-{nonce}-backup",
@@ -259,7 +275,13 @@ pub(crate) fn install_git_skill(
     if let Err(e) = std::fs::rename(&staging, &target) {
         let _ = std::fs::remove_dir_all(&staging);
         if had_existing {
-            let _ = std::fs::rename(&backup, &target);
+            if let Err(rollback_err) = std::fs::rename(&backup, &target) {
+                tracing::error!(
+                    %safe_name,
+                    error = %rollback_err,
+                    "failed to restore skill backup during install rollback"
+                );
+            }
         }
         return Err(e.to_string());
     }

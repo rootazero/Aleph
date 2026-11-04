@@ -46,7 +46,10 @@ pub fn scrub_secrets_bytes<'a>(bytes: &'a [u8], injected: &[InjectedSecret]) -> 
             .map(|m| (m.start(), m.end()))
             .collect();
         for (start, end) in local_matches.into_iter().rev() {
-            if is_whitelisted(&working[start..end], injected) {
+            if working
+                .get(start..end)
+                .is_some_and(|slice| is_whitelisted(slice, injected))
+            {
                 continue;
             }
             let replacement = format!("[REDACTED:{name}]").into_bytes();

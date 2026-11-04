@@ -95,27 +95,23 @@ fn parse_tesseract_tsv(tsv: &str) -> OcrResult {
             continue;
         }
         let cols: Vec<&str> = row.split('\t').collect();
-        if cols.len() < 12 {
-            continue;
-        }
         // Word-level rows only.
-        if cols[0].trim() != "5" {
+        if cols.get(0).map(|c| c.trim()) != Some("5") {
             continue;
         }
-        let text = cols[11].trim();
-        if text.is_empty() {
+        let Some(text) = cols.get(11).map(|c| c.trim()).filter(|t| !t.is_empty()) else {
             continue;
-        }
+        };
 
-        let block: u32 = cols[2].trim().parse().unwrap_or(0);
-        let par: u32 = cols[3].trim().parse().unwrap_or(0);
-        let line: u32 = cols[4].trim().parse().unwrap_or(0);
-        let left: f64 = cols[6].trim().parse().unwrap_or(0.0);
-        let top: f64 = cols[7].trim().parse().unwrap_or(0.0);
-        let width: f64 = cols[8].trim().parse().unwrap_or(0.0);
-        let height: f64 = cols[9].trim().parse().unwrap_or(0.0);
+        let block: u32 = cols.get(2).and_then(|c| c.trim().parse().ok()).unwrap_or(0);
+        let par: u32 = cols.get(3).and_then(|c| c.trim().parse().ok()).unwrap_or(0);
+        let line: u32 = cols.get(4).and_then(|c| c.trim().parse().ok()).unwrap_or(0);
+        let left: f64 = cols.get(6).and_then(|c| c.trim().parse().ok()).unwrap_or(0.0);
+        let top: f64 = cols.get(7).and_then(|c| c.trim().parse().ok()).unwrap_or(0.0);
+        let width: f64 = cols.get(8).and_then(|c| c.trim().parse().ok()).unwrap_or(0.0);
+        let height: f64 = cols.get(9).and_then(|c| c.trim().parse().ok()).unwrap_or(0.0);
         // tesseract reports conf as a float 0..100; -1 for non-word levels.
-        let conf: f64 = cols[10].trim().parse().unwrap_or(-1.0);
+        let conf: f64 = cols.get(10).and_then(|c| c.trim().parse().ok()).unwrap_or(-1.0);
 
         let key = (block, par, line);
         let right = left + width;

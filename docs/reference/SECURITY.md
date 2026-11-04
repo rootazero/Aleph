@@ -1760,8 +1760,18 @@ pub struct SsrfPolicy {
     pub blocked_hosts: Vec<String>,       // Blocklist: ["*.malware.com"]
     pub max_redirects: u8,                // Redirect limit (default: 5)
     pub strip_auth_on_cross_origin: bool, // Strip Auth/Cookie on cross-origin redirects (default: true)
+    pub use_system_proxy: bool,           // Let the system proxy resolve the target host (default: false)
 }
 ```
+
+> **`use_system_proxy` (2026-11-03).** The guarded clients pin the target
+> host by resolving it locally and connecting to the pinned address. A system
+> HTTP proxy breaks that guarantee: the proxy performs the DNS resolution, so
+> the address the guard validated is not the address the request reaches.
+> The proxy is therefore disabled for guarded fetches by default
+> (`reqwest::ClientBuilder::no_proxy()`). Operators who must egress through a
+> proxy can set `use_system_proxy = true`, accepting that the SSRF guard then
+> validates the host name only — the resolved address is chosen by the proxy.
 
 ### IP Classification (`ip.rs`)
 

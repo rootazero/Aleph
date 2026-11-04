@@ -80,30 +80,29 @@ impl ToolQuery {
     /// 4. Max depth: 3 levels
     pub async fn resolve_command(&self, input: &str) -> Option<super::types::ResolvedCommand> {
         let trimmed = input.trim();
-        if !trimmed.starts_with('/') {
+        let Some(without_slash) = trimmed.strip_prefix('/') else {
             return None;
-        }
-
-        let without_slash = &trimmed[1..];
+        };
         if without_slash.is_empty() {
             return None;
         }
 
         // Split into words
         let all_words: Vec<&str> = without_slash.split_whitespace().collect();
-        if all_words.is_empty() {
+        let Some((first_word_raw, rest_words)) = all_words.split_first() else {
             return None;
-        }
+        };
 
         // Strip @botname suffix from first word (Telegram: "/gen@mybot" → "gen")
-        let first_word = match all_words[0].split_once('@') {
+        let first_word = match first_word_raw.split_once('@') {
             Some((name, _)) => name.to_lowercase(),
-            None => all_words[0].to_lowercase(),
+            None => first_word_raw.to_lowercase(),
         };
 
         // Build candidate words: first_word (with @botname stripped) + rest
-        let mut words: Vec<String> = vec![first_word];
-        for w in &all_words[1..] {
+        let mut words: Vec<String> = Vec::with_capacity(all_words.len());
+        words.push(first_word);
+        for w in rest_words {
             words.push(w.to_lowercase());
         }
 
@@ -114,9 +113,12 @@ impl ToolQuery {
 
         // Greedy longest-match: try joining progressively fewer words with "_"
         for n in (1..=max_depth).rev() {
-            let candidate = words[..n].join("_");
+            let Some(cand_words) = words.get(..n) else {
+                continue;
+            };
+            let candidate = cand_words.join("_");
             if let Some(tool) = Self::find_best_match(&tools, &candidate) {
-                let remaining: Vec<&str> = all_words[n..].iter().map(|s| s.as_ref()).collect();
+                let remaining = all_words.get(n..).unwrap_or(&[]);
                 let arguments = if remaining.is_empty() {
                     None
                 } else {
@@ -159,8 +161,9 @@ impl ToolQuery {
         // `name.contains('.')` and ranked below the exact tiers, this is
         // strictly additive: it only adds matches the exact tiers missed and
         // can never shadow a real command.
-        let norm = if name.contains('.') {
-            Some(name.replace('.', "_"))
+        let name_lower_input = name.to_lowercase();
+        let norm = if name_lower_input.contains('.') {
+            Some(name_lower_input.replace('.', "_"))
         } else {
             None
         };
@@ -195,13 +198,13 @@ impl ToolQuery {
             let mut alias_hit_norm = false;
             for alias in &tool.aliases {
                 let alias_lower = alias.to_lowercase();
-                alias_hit_name = alias_hit_name || alias_lower == name;
+                alias_hit_name = alias_hit_name || alias_lower == name_lower_input;
                 if let Some(norm) = &norm {
                     alias_hit_norm = alias_hit_norm || alias_lower == *norm;
                 }
             }
 
-            let tier = if name_lower == name {
+            let tier = if name_lower == name_lower_input {
                 // Tier 0: canonical name.
                 Some(0)
             } else if alias_hit_name {
@@ -219,15 +222,17 @@ impl ToolQuery {
             };
 
             if let Some(tier) = tier {
-                if best[tier].is_none_or(|incumbent| replace(incumbent, tool)) {
-                    best[tier] = Some(tool);
+                if let Some(slot) = best.get_mut(tier) {
+                    if slot.is_none_or(|incumbent| replace(incumbent, tool)) {
+                        *slot = Some(tool);
+                    }
                 }
             }
         }
 
         // Cross-tier precedence mirrors the original `.or_else` chain:
         // tier 0 > tier 1 > tier 2.
-        best[0].or(best[1]).or(best[2]).cloned()
+        best.into_iter().flatten().next().cloned()
     }
 
     /// Suggest up to `max` active command names closest to `needle` — an
@@ -325,11 +330,9 @@ impl ToolQuery {
                     return false;
                 }
                 let name_lower = t.name.to_lowercase();
-                if !name_lower.starts_with(&prefix) {
+                let Some(suffix) = name_lower.strip_prefix(&prefix) else {
                     return false;
-                }
-                // Only direct children: no further underscores after prefix
-                let suffix = &name_lower[prefix.len()..];
+                };
                 !suffix.contains('_')
             })
             .cloned()

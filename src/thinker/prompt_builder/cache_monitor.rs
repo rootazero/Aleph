@@ -132,9 +132,10 @@ pub fn stable_prefix_hash(payload: &crate::providers::adapter::RequestPayload<'_
         return None;
     }
     let digest = hasher.finalize();
-    let mut bytes = [0u8; 8];
-    bytes.copy_from_slice(&digest[..8]);
-    Some(u64::from_le_bytes(bytes))
+    digest
+        .get(..8)
+        .and_then(|s| s.try_into().ok())
+        .map(u64::from_le_bytes)
 }
 
 /// The watchdog's tracking key: one counter per prompt-cache **prefix**.
@@ -208,7 +209,7 @@ impl CacheMonitor {
         prefix_hash: Option<u64>,
     ) -> Option<CacheHealthReport> {
         let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
-        state.tick += 1;
+        state.tick = state.tick.saturating_add(1);
         let tick = state.tick;
 
         if !state.map.contains_key(scope) && state.map.len() >= MAX_TRACKED_AGENTS {
@@ -232,7 +233,7 @@ impl CacheMonitor {
         let agent = state.map.entry(scope.to_string()).or_default();
         agent.last_seen = tick;
 
-        agent.total_calls += 1;
+        agent.total_calls = agent.total_calls.saturating_add(1);
 
         let reads = u64::from(cache_read_tokens.unwrap_or(0));
         let writes = u64::from(cache_creation_tokens.unwrap_or(0));
@@ -262,7 +263,7 @@ impl CacheMonitor {
             agent.consecutive_misses = 0;
             agent.warned = false;
         } else if agent.armed {
-            agent.consecutive_misses += 1;
+            agent.consecutive_misses = agent.consecutive_misses.saturating_add(1);
             if agent.consecutive_misses >= 3 && agent.total_calls > 3 && !agent.warned {
                 agent.warned = true;
                 let prefix_changed = match (previous_hash, prefix_hash) {

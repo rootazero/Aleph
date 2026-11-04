@@ -13,7 +13,8 @@ pub struct SecretRef {
     pub end: usize,
 }
 
-/// Extract secret references from a text input.
+/// Extract valid secret references, leaving malformed markers as literal text.
+/// Names are limited to 128 ASCII bytes before allocating or resolving them.
 pub fn extract_secret_refs(input: &str) -> Result<Vec<SecretRef>, SecretError> {
     const PREFIX: &str = "{{secret:";
     const SUFFIX: &str = "}}";
@@ -26,26 +27,21 @@ pub fn extract_secret_refs(input: &str) -> Result<Vec<SecretRef>, SecretError> {
         let name_start = start + PREFIX.len();
 
         let Some(close_offset) = input[name_start..].find(SUFFIX) else {
-            return Err(SecretError::InvalidPlaceholder(
-                "missing closing '}}'".to_string(),
-            ));
+            break;
         };
 
         let end = name_start + close_offset;
         let name = &input[name_start..end];
-        if name.is_empty() {
-            return Err(SecretError::InvalidPlaceholder(
-                "empty secret name".to_string(),
-            ));
-        }
-
-        let valid = name
-            .chars()
-            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '_' | '-' | '.' | ':'));
+        let valid = !name.is_empty()
+            && name.len() <= 128
+            && name
+                .chars()
+                .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '_' | '-' | '.' | ':'));
         if !valid {
-            return Err(SecretError::InvalidPlaceholder(format!(
-                "invalid secret name '{name}'"
-            )));
+            // Resume inside the malformed marker so a later valid marker is
+            // still found, even when nested inside this invalid candidate.
+            cursor = name_start;
+            continue;
         }
 
         let placeholder_end = end + SUFFIX.len();
@@ -84,9 +80,24 @@ mod tests {
     }
 
     #[test]
-    fn test_extract_placeholders_rejects_malformed() {
-        let err = extract_secret_refs("Bearer {{secret:oops").unwrap_err();
-        assert!(format!("{}", err).contains("invalid secret placeholder"));
+    fn test_extract_placeholders_skips_malformed() {
+        assert!(extract_secret_refs("Bearer {{secret:oops")
+            .unwrap()
+            .is_empty());
+        let text = "{{secret:}} {{secret:bad name}} {{secret:oops {{secret:valid}}";
+        let refs = extract_secret_refs(text).unwrap();
+        assert_eq!(refs.len(), 1);
+        assert_eq!(refs[0].name, "valid");
+    }
+
+    #[test]
+    fn test_secret_name_length_limit() {
+        for len in [128, 129] {
+            let text = format!("{{{{secret:{}}}}} {{{{secret:valid}}}}", "a".repeat(len));
+            let refs = extract_secret_refs(&text).unwrap();
+            assert_eq!(refs.len(), if len == 128 { 2 } else { 1 });
+            assert_eq!(refs.last().unwrap().name, "valid");
+        }
     }
 
     #[test]

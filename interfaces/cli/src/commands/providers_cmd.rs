@@ -397,7 +397,7 @@ pub async fn list(
         let wrapped: Vec<ProviderRow<'_>> = providers.iter().map(ProviderRow).collect();
         aleph_protocol::providers::rank_rows(&wrapped, query.unwrap_or_default())
             .into_iter()
-            .map(|m| row_cells(&providers[m.index]))
+            .filter_map(|m| providers.get(m.index).map(row_cells))
             .collect()
     };
 
@@ -509,9 +509,12 @@ pub async fn set_models(
         output::print_json(&result);
     } else {
         println!("Provider '{name}' now offers: {}", models.join(", "));
-        println!("  default: {}", models[0]);
+        if let Some(first) = models.first() {
+            println!("  default: {first}");
+        }
         if models.len() > 1 {
-            println!("  failover: {}", models[1..].join(" → "));
+            let failover = models.get(1..).unwrap_or(&[]).join(" → ");
+            println!("  failover: {failover}");
         }
     }
 

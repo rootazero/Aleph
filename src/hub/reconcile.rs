@@ -140,7 +140,7 @@ pub fn mark_installed_state(
         } else {
             let key = (e.kind.as_str().to_string(), e.name.trim().to_lowercase());
             match by_name.get(&key) {
-                Some(candidates) if candidates.len() == 1 => Some(candidates[0].enabled),
+                Some(candidates) if candidates.len() == 1 => candidates.first().map(|c| c.enabled),
                 Some(candidates) => {
                     // Ambiguous: two installed entries share this name. Prefer
                     // the ledger to disambiguate — the install_origin row ties

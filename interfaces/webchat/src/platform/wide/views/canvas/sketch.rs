@@ -249,10 +249,12 @@ fn sketch_subpath(
     }
     let n = sp.verts.len();
     if n == 0 {
-        out.push(PathCmd::MoveTo {
-            x: round2(pts[0].0),
-            y: round2(pts[0].1),
-        });
+        if let Some(p0) = pts.first() {
+            out.push(PathCmd::MoveTo {
+                x: round2(p0.0),
+                y: round2(p0.1),
+            });
+        }
         return;
     }
     // A corner at vertex `i` (point index `i`) is rounded when both the
@@ -264,14 +266,17 @@ fn sketch_subpath(
         if point_idx == 0 {
             Reach::Line
         } else {
-            sp.verts[point_idx - 1].0
+            sp.verts
+                .get(point_idx - 1)
+                .map(|v| v.0)
+                .unwrap_or(Reach::Line)
         }
     };
     let leave_of = |point_idx: usize| -> Reach {
         if point_idx == n {
             Reach::Line
         } else {
-            sp.verts[point_idx].0
+            sp.verts.get(point_idx).map(|v| v.0).unwrap_or(Reach::Line)
         }
     };
     let prev_of = |i: usize| -> usize {
@@ -295,9 +300,13 @@ fn sketch_subpath(
         if !straight_in || !straight_out || is_end {
             return 0.0;
         }
-        let (p, q) = (pts[prev_of(i)], pts[next_of(i)]);
-        let (lin, lout) = (len(sub(pts[i], p)), len(sub(q, pts[i])));
-        if lin < MIN_SEGMENT || lout < MIN_SEGMENT || turn_angle(p, pts[i], q) < MIN_TURN {
+        let (Some(&p), Some(&q), Some(&pt_i)) =
+            (pts.get(prev_of(i)), pts.get(next_of(i)), pts.get(i))
+        else {
+            return 0.0;
+        };
+        let (lin, lout) = (len(sub(pt_i, p)), len(sub(q, pt_i)));
+        if lin < MIN_SEGMENT || lout < MIN_SEGMENT || turn_angle(p, pt_i, q) < MIN_TURN {
             return 0.0;
         }
         roundness.min(lin / 2.0).min(lout / 2.0)
@@ -315,9 +324,13 @@ fn sketch_subpath(
     // Where the pen starts: past the rounded start corner when closed.
     let r0 = corner_reach(0);
     let start_pt = if r0 > 0.0 {
-        toward(pts[0], pts[1], r0)
+        match (pts.get(0), pts.get(1)) {
+            (Some(&p0), Some(&p1)) => toward(p0, p1, r0),
+            (Some(&p0), None) => p0,
+            _ => (0.0, 0.0),
+        }
     } else {
-        pts[0]
+        pts.first().copied().unwrap_or((0.0, 0.0))
     };
     out.push(mv(start_pt));
 
@@ -327,16 +340,20 @@ fn sketch_subpath(
         let i = if step == n + 1 { 0 } else { step };
         let from_idx = prev_of(i);
         let (reach, target) = if i == 0 {
-            (Reach::Line, pts[0])
+            (Reach::Line, pts.first().copied().unwrap_or((0.0, 0.0)))
         } else {
-            (sp.verts[i - 1].0, pts[i])
+            let reach = sp.verts.get(i - 1).map(|v| v.0).unwrap_or(Reach::Line);
+            let target = pts.get(i).copied().unwrap_or((0.0, 0.0));
+            (reach, target)
         };
         match reach {
             Reach::Line => {
                 let r = corner_reach(i);
                 if r > 0.0 {
-                    let before = toward(target, pts[from_idx], r);
-                    let after = toward(target, pts[next_of(i)], r);
+                    let p_from = pts.get(from_idx).copied().unwrap_or(target);
+                    let p_next = pts.get(next_of(i)).copied().unwrap_or(target);
+                    let before = toward(target, p_from, r);
+                    let after = toward(target, p_next, r);
                     out.push(ln(before));
                     out.push(PathCmd::Quad {
                         x1: round2(target.0),
@@ -349,7 +366,9 @@ fn sketch_subpath(
                 }
             }
             Reach::Quad { c } => {
-                let d = scale(add(deltas[from_idx], deltas[i]), 0.5);
+                let d_from = deltas.get(from_idx).copied().unwrap_or((0.0, 0.0));
+                let d_i = deltas.get(i).copied().unwrap_or((0.0, 0.0));
+                let d = scale(add(d_from, d_i), 0.5);
                 let c = add(c, d);
                 out.push(PathCmd::Quad {
                     x1: round2(c.0),
@@ -359,8 +378,10 @@ fn sketch_subpath(
                 });
             }
             Reach::Cubic { c1, c2 } => {
-                let c1 = add(c1, deltas[from_idx]);
-                let c2 = add(c2, deltas[i]);
+                let d_from = deltas.get(from_idx).copied().unwrap_or((0.0, 0.0));
+                let d_i = deltas.get(i).copied().unwrap_or((0.0, 0.0));
+                let c1 = add(c1, d_from);
+                let c2 = add(c2, d_i);
                 out.push(PathCmd::Cubic {
                     x1: round2(c1.0),
                     y1: round2(c1.1),

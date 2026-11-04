@@ -915,6 +915,9 @@ pub(crate) fn check_with(
 /// principal exactly at the ceiling is denied, not let through for one more
 /// call — see G10.
 fn ceiling_blown(spent_usd: f64, limit_usd: f64) -> bool {
+    if !spent_usd.is_finite() {
+        return true;
+    }
     spent_usd >= limit_usd
 }
 

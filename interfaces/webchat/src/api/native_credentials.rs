@@ -543,17 +543,22 @@ where
     };
 
     let mut params = json!({ "device_name": req.device_name });
-    match &kind {
-        Kind::Bootstrap { ticket, device_id } => {
-            params["device_id"] = json!(device_id);
-            params["bootstrap_ticket"] = json!(ticket);
-        }
-        Kind::Stored { credential } => {
-            params["device_id"] = json!(credential.device_id);
-            params["device_token"] = json!(credential.device_token);
-        }
-        Kind::None => {
-            params["device_id"] = json!(req.auth.ephemeral_id(req.new_device_id));
+    if let Some(map) = params.as_object_mut() {
+        match &kind {
+            Kind::Bootstrap { ticket, device_id } => {
+                map.insert("device_id".to_string(), json!(device_id));
+                map.insert("bootstrap_ticket".to_string(), json!(ticket));
+            }
+            Kind::Stored { credential } => {
+                map.insert("device_id".to_string(), json!(credential.device_id));
+                map.insert("device_token".to_string(), json!(credential.device_token));
+            }
+            Kind::None => {
+                map.insert(
+                    "device_id".to_string(),
+                    json!(req.auth.ephemeral_id(req.new_device_id)),
+                );
+            }
         }
     }
     let presented = !matches!(kind, Kind::None);

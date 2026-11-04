@@ -12,7 +12,7 @@
 //! `TZ` env var (a deliberate divergence from openclaw, which used the
 //! host's local zone and broke when servers were containerised).
 
-use chrono::{Datelike, NaiveTime, TimeZone, Timelike};
+use chrono::{Datelike, TimeZone, Timelike};
 use chrono_tz::Tz;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -128,9 +128,9 @@ impl ActiveHoursSchedule {
         };
         let weekday_idx = dt.weekday().num_days_from_monday() as usize;
         let minute_of_day = (dt.hour() * 60 + dt.minute()) as u16;
-        self.windows[weekday_idx]
-            .iter()
-            .any(|w| w.contains(minute_of_day))
+        self.windows
+            .get(weekday_idx)
+            .map_or(false, |wins| wins.iter().any(|w| w.contains(minute_of_day)))
     }
 
     /// Compute the next ms-since-epoch when this schedule opens, starting
@@ -149,14 +149,12 @@ impl ActiveHoursSchedule {
             let date = (now.date_naive() + chrono::Duration::days(i64::from(day_offset)))
                 .and_hms_opt(0, 0, 0)?;
             let weekday_idx = date.weekday().num_days_from_monday() as usize;
-            for win in &self.windows[weekday_idx] {
+            let Some(day_windows) = self.windows.get(weekday_idx) else {
+                continue;
+            };
+            for win in day_windows {
                 // Build the window's wall-clock start in the schedule's tz.
-                let start_time = NaiveTime::from_hms_opt(
-                    u32::from(win.start_minute / 60),
-                    u32::from(win.start_minute % 60),
-                    0,
-                )?;
-                let start_naive = date.date().and_time(start_time);
+                let start_naive = date + chrono::Duration::minutes(i64::from(win.start_minute));
                 // A window start landing in a DST spring-forward gap (or a
                 // fall-back ambiguity) yields no single local instant. Skip
                 // just this window rather than aborting the whole 7-day search
@@ -173,12 +171,7 @@ impl ActiveHoursSchedule {
                 // If we're already inside this window, "now+1ms" counts as
                 // the next open moment so callers don't get stuck.
                 if start_ms <= now_ms {
-                    let end_time = NaiveTime::from_hms_opt(
-                        u32::from(win.end_minute / 60),
-                        u32::from(win.end_minute % 60),
-                        0,
-                    )?;
-                    let end_naive = date.date().and_time(end_time);
+                    let end_naive = date + chrono::Duration::minutes(i64::from(win.end_minute));
                     // Same DST hazard as the window start above: if the end
                     // wall-clock time is unresolvable, treat this window as
                     // already past and keep scanning later windows/days.

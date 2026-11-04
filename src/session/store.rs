@@ -584,7 +584,9 @@ pub fn migrate_add_session_events(conn: &Connection) -> Result<(), AlephError> {
         .and_then(|()| add_replay_cursor_columns(conn));
 
     if let Err(e) = result {
-        let _ = conn.execute_batch("ROLLBACK TO migration_session_events");
+        let _ = conn.execute_batch(
+            "ROLLBACK TO migration_session_events; RELEASE migration_session_events;",
+        );
         return Err(AlephError::config(format!(
             "Failed to create session_events table: {e}"
         )));
@@ -1956,7 +1958,17 @@ impl SessionEventStore for SqliteEventStore {
         for row in rows {
             let (session_id_str, seq, payload, created_at) =
                 row.map_err(|e| SessionError::Storage(e.to_string()))?;
-            let session_id: SessionId = serde_json::from_str(&session_id_str)?;
+            let session_id: SessionId = match serde_json::from_str(&session_id_str) {
+                Ok(id) => id,
+                Err(e) => {
+                    tracing::warn!(
+                        session_id_str,
+                        %e,
+                        "load_run_markers: skipping row with unparseable session_id"
+                    );
+                    continue;
+                }
+            };
             let seq = u64::try_from(seq)
                 .map_err(|_| SessionError::Storage(format!("stored seq {seq} is negative")))?;
             let decoded = decode_row(seq, created_at, &payload);
@@ -2236,7 +2248,7 @@ fn render_json(value: &serde_json::Value) -> Cow<'_, str> {
 /// UTF-8-safe truncation to at most `max` characters (project rule P7).
 fn cap_chars(s: &str, max: usize) -> String {
     match s.char_indices().nth(max) {
-        Some((byte_idx, _)) => s[..byte_idx].to_string(),
+        Some((byte_idx, _)) => s.get(..byte_idx).unwrap_or(s).to_string(),
         None => s.to_string(),
     }
 }

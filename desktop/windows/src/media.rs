@@ -234,9 +234,9 @@ async fn list_dshow_devices() -> Result<Vec<DshowDevice>> {
 /// Extract the first double-quoted substring from a line, if any.
 fn extract_quoted(s: &str) -> Option<String> {
     let start = s.find('"')?;
-    let rest = &s[start + 1..];
+    let rest = s.get(start + 1..)?;
     let end = rest.find('"')?;
-    Some(rest[..end].to_string())
+    rest.get(..end).map(ToString::to_string)
 }
 
 /// Parse `ffmpeg -list_devices` stderr into [`DshowDevice`] entries.

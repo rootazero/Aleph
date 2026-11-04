@@ -161,6 +161,7 @@ impl MarkdownCliTool {
         }
 
         // Execute with timeout
+        cmd.kill_on_drop(true);
         let timeout = self.execution_timeout();
         let output = tokio::time::timeout(timeout, cmd.no_window().output())
             .await
@@ -224,6 +225,7 @@ impl MarkdownCliTool {
         let output = tokio::time::timeout(
             timeout,
             Command::new("docker")
+                .kill_on_drop(true)
                 .args(&docker_args)
                 .stdout(Stdio::piped())
                 .stderr(Stdio::piped())
@@ -290,8 +292,8 @@ impl MarkdownCliTool {
                     continue;
                 }
                 docker_args.push("-e".to_string());
-                docker_args.push(format!("{env_var}={value}"));
-                tracing::debug!(env_var = %env_var, "Passing env var to container");
+                docker_args.push(env_var.to_string());
+                tracing::debug!(env_var = %env_var, "Passing env var to container via environment inheritance");
             } else {
                 warn!(
                     env_var = %env_var,
@@ -436,6 +438,7 @@ impl MarkdownCliTool {
         }
 
         // Execute with timeout
+        cmd.kill_on_drop(true);
         let timeout = self.execution_timeout();
         let output = tokio::time::timeout(timeout, cmd.no_window().output())
             .await
@@ -620,7 +623,6 @@ fn is_allowed_docker_flag(flag: &str) -> bool {
         "w",
         "env",
         "e",
-        "env-file",
         "label",
         "l",
         "name",
@@ -633,8 +635,6 @@ fn is_allowed_docker_flag(flag: &str) -> bool {
         "i",
         "tty",
         "t",
-        "detach",
-        "d",
         "stop-timeout",
         "shm-size",
         "log-opt",

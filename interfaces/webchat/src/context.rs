@@ -1166,10 +1166,10 @@ impl DashboardState {
         let mut handlers = handlers
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if id < handlers.len() {
+        if let Some(slot) = handlers.get_mut(id) {
             // Vacate the slot instead of removing to preserve indices
             // (ids held by other components must not shift).
-            handlers[id] = None;
+            *slot = None;
         }
     }
 
@@ -1656,13 +1656,19 @@ impl DashboardState {
 
         // Priority: one-time bootstrap ticket > long-lived device token > legacy shared token.
         let credential_kind = if let Some(t) = creds.bootstrap_ticket.as_ref() {
-            params["bootstrap_ticket"] = serde_json::json!(t);
+            if let Some(map) = params.as_object_mut() {
+                map.insert("bootstrap_ticket".to_string(), serde_json::json!(t));
+            }
             "bootstrap"
         } else if let Some(t) = creds.device_token.as_ref() {
-            params["device_token"] = serde_json::json!(t);
+            if let Some(map) = params.as_object_mut() {
+                map.insert("device_token".to_string(), serde_json::json!(t));
+            }
             "device"
         } else if let Some(t) = creds.legacy_token.as_ref() {
-            params["token"] = serde_json::json!(t);
+            if let Some(map) = params.as_object_mut() {
+                map.insert("token".to_string(), serde_json::json!(t));
+            }
             "legacy"
         } else {
             "none"

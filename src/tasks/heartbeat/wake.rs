@@ -71,14 +71,17 @@ impl WakeQueue {
     /// Otherwise the incoming request replaces it.
     pub fn enqueue(&self, req: WakeRequest) {
         let mut map = self.pending.lock().unwrap_or_else(|e| e.into_inner());
-        match map.get(&req.task_id) {
+        let updated = match map.get(&req.task_id) {
             // Keep the existing entry if it has equal or higher priority
-            Some(existing) if existing.priority >= req.priority => {}
+            Some(existing) if existing.priority >= req.priority => false,
             _ => {
                 map.insert(req.task_id.clone(), req);
+                true
             }
+        };
+        if updated {
+            self.notify.notify_one();
         }
-        self.notify.notify_one();
     }
 
     /// Drain all pending wake requests atomically.
@@ -86,7 +89,11 @@ impl WakeQueue {
     /// Returns all pending requests and clears the internal map.
     pub fn drain(&self) -> Vec<WakeRequest> {
         let mut map = self.pending.lock().unwrap_or_else(|e| e.into_inner());
-        map.drain().map(|(_, v)| v).collect()
+        let items: Vec<WakeRequest> = map.drain().map(|(_, v)| v).collect();
+        if map.capacity() > 128 {
+            map.shrink_to(32);
+        }
+        items
     }
 
     /// Wait until at least one wake request has been enqueued.

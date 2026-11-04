@@ -52,7 +52,9 @@ impl ExecGrantsApi {
             "scope": grant.scope,
         });
         if let Some(key) = grant.session_key.as_ref() {
-            params["session_key"] = serde_json::Value::String(key.clone());
+            if let Some(map) = params.as_object_mut() {
+                map.insert("session_key".to_string(), serde_json::Value::String(key.clone()));
+            }
         }
         state.rpc_call("exec.grant.revoke", params).await?;
         Ok(())

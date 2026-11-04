@@ -85,23 +85,39 @@ impl ForceLayout {
         // Repulsion (all pairs).
         for i in 0..self.n {
             for j in (i + 1)..self.n {
-                let d = pos[i].sub(&pos[j]);
+                let (Some(&pos_i), Some(&pos_j)) = (pos.get(i), pos.get(j)) else {
+                    continue;
+                };
+                let d = pos_i.sub(&pos_j);
                 let dist2 = d.dot(&d).max(1.0);
                 let f = REPULSION / dist2;
                 let dir = d.scale(1.0 / dist2.sqrt());
-                force[i] = force[i].add(&dir.scale(f));
-                force[j] = force[j].sub(&dir.scale(f));
+                let force_delta = dir.scale(f);
+                if let Some(fi) = force.get_mut(i) {
+                    *fi = fi.add(&force_delta);
+                }
+                if let Some(fj) = force.get_mut(j) {
+                    *fj = fj.sub(&force_delta);
+                }
             }
         }
         // Springs (edges).
         for &(a, b) in &self.edges {
             let (a, b) = (a as usize, b as usize);
-            let d = pos[b].sub(&pos[a]);
+            let (Some(&pos_a), Some(&pos_b)) = (pos.get(a), pos.get(b)) else {
+                continue;
+            };
+            let d = pos_b.sub(&pos_a);
             let dist = d.length().max(1e-3);
             let f = SPRING_K * (dist - REST_LEN);
             let dir = d.scale(1.0 / dist);
-            force[a] = force[a].add(&dir.scale(f));
-            force[b] = force[b].sub(&dir.scale(f));
+            let force_delta = dir.scale(f);
+            if let Some(fa) = force.get_mut(a) {
+                *fa = fa.add(&force_delta);
+            }
+            if let Some(fb) = force.get_mut(b) {
+                *fb = fb.sub(&force_delta);
+            }
         }
         // Community centroid gravity: pull each node toward its community's
         // centroid so Louvain communities settle as spatial clusters. No-op
@@ -110,17 +126,22 @@ impl ForceLayout {
             let mut sums: HashMap<u32, (Vec3, usize)> = HashMap::new();
             for (i, c) in self.communities.iter().enumerate() {
                 if let Some(cid) = c {
-                    let e = sums.entry(*cid).or_insert((Vec3::zero(), 0));
-                    e.0 = e.0.add(&pos[i]);
-                    e.1 += 1;
+                    if let Some(&p) = pos.get(i) {
+                        let e = sums.entry(*cid).or_insert((Vec3::zero(), 0));
+                        e.0 = e.0.add(&p);
+                        e.1 += 1;
+                    }
                 }
             }
             for (i, c) in self.communities.iter().enumerate() {
                 if let Some(cid) = c {
-                    let (sum, count) = sums[cid];
-                    let centroid = sum.scale(1.0 / count as f32);
-                    let to_centroid = centroid.sub(&pos[i]);
-                    force[i] = force[i].add(&to_centroid.scale(COMMUNITY_PULL));
+                    if let (Some(&(sum, count)), Some(&p)) = (sums.get(cid), pos.get(i)) {
+                        let centroid = sum.scale(1.0 / count as f32);
+                        let to_centroid = centroid.sub(&p);
+                        if let Some(fi) = force.get_mut(i) {
+                            *fi = fi.add(&to_centroid.scale(COMMUNITY_PULL));
+                        }
+                    }
                 }
             }
         }
@@ -128,14 +149,19 @@ impl ForceLayout {
         // Centering + anneal + integrate.
         let mut max_disp = 0.0_f32;
         for i in 0..self.n {
-            force[i] = force[i].sub(&pos[i].scale(CENTER_PULL)).scale(self.alpha);
-            self.vel[i] = self.vel[i].add(&force[i]).scale(DAMPING);
-            let mut disp = self.vel[i];
+            let (Some(fi), Some(p), Some(v)) =
+                (force.get_mut(i), pos.get_mut(i), self.vel.get_mut(i))
+            else {
+                continue;
+            };
+            *fi = fi.sub(&p.scale(CENTER_PULL)).scale(self.alpha);
+            *v = v.add(fi).scale(DAMPING);
+            let mut disp = *v;
             let dl = disp.length();
             if dl > MAX_STEP {
                 disp = disp.scale(MAX_STEP / dl);
             }
-            pos[i] = pos[i].add(&disp);
+            *p = p.add(&disp);
             max_disp = max_disp.max(disp.length());
         }
         self.last_max_disp = max_disp;
@@ -145,8 +171,12 @@ impl ForceLayout {
         // Spring potential + inverse repulsion sum (proxy; lower = more settled).
         let mut e = 0.0;
         for &(a, b) in &self.edges {
-            let d = pos[b as usize].sub(&pos[a as usize]).length() - REST_LEN;
-            e += 0.5 * SPRING_K * d * d;
+            if let (Some(&pos_a), Some(&pos_b)) =
+                (pos.get(a as usize), pos.get(b as usize))
+            {
+                let d = pos_b.sub(&pos_a).length() - REST_LEN;
+                e += 0.5 * SPRING_K * d * d;
+            }
         }
         e
     }

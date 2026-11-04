@@ -99,7 +99,7 @@ pub fn split(content: &str) -> Result<(String, String), NoFrontmatter> {
     }
 
     // Find the end of the opening `---` line
-    let after_opening = match trimmed[3..].find('\n') {
+    let after_opening = match trimmed.get(3..).and_then(|s| s.find('\n')) {
         Some(pos) => 3 + pos + 1,
         None => return Err(NoFrontmatter),
     };
@@ -107,7 +107,7 @@ pub fn split(content: &str) -> Result<(String, String), NoFrontmatter> {
     // Find the closing `---` that appears on its own line (allowing \r for CRLF).
     // We iterate lines so that a `---` inside a YAML value does not falsely
     // terminate the frontmatter.
-    let rest = &trimmed[after_opening..];
+    let rest = trimmed.get(after_opening..).unwrap_or("");
     let closing_pos = rest
         .lines()
         .enumerate()
@@ -124,12 +124,12 @@ pub fn split(content: &str) -> Result<(String, String), NoFrontmatter> {
         })
         .ok_or(NoFrontmatter)?;
 
-    let yaml_str = &rest[..closing_pos];
+    let yaml_str = rest.get(..closing_pos).unwrap_or("");
     // The closing line may carry leading whitespace (matched via `line.trim()`),
     // so skip to the end of the whole delimiter line rather than a fixed `+3`.
-    let closing_line = &rest[closing_pos..];
+    let closing_line = rest.get(closing_pos..).unwrap_or("");
     let body = match closing_line.find('\n') {
-        Some(nl) => &closing_line[nl + 1..],
+        Some(nl) => closing_line.get(nl + 1..).unwrap_or(""),
         None => "", // closing `---` is the final line; no body follows
     };
 
@@ -184,26 +184,30 @@ pub(crate) fn parse_frontmatter_yaml<T: serde::de::DeserializeOwned>(
 fn quote_bare_argument_hint(yaml: &str) -> Option<String> {
     const KEY: &str = "argument-hint:";
     let lines: Vec<&str> = yaml.split_inclusive('\n').collect();
-    let rewritten: String = lines
-        .iter()
-        .enumerate()
-        .map(|(i, line)| {
-            let Some(rest) = line.strip_prefix(KEY) else {
-                return (*line).to_string();
-            };
-            let value = rest.trim_end_matches(['\n', '\r']);
-            let eol = rest.get(value.len()..).unwrap_or_default();
-            let value = value.trim();
-            let continued = lines
-                .get(i + 1)
-                .is_some_and(|next| next.starts_with([' ', '\t']) && !next.trim().is_empty());
-            if !value.starts_with('[') || continued {
-                return (*line).to_string();
-            }
-            let escaped = value.replace('\\', "\\\\").replace('"', "\\\"");
-            format!("{KEY} \"{escaped}\"{eol}")
-        })
-        .collect();
+    let mut rewritten = String::with_capacity(yaml.len());
+    for (i, line) in lines.iter().enumerate() {
+        let Some(rest) = line.strip_prefix(KEY) else {
+            rewritten.push_str(line);
+            continue;
+        };
+        let value = rest.trim_end_matches(['\n', '\r']);
+        let eol = rest.get(value.len()..).unwrap_or_default();
+        let value = value.trim();
+        let continued = lines
+            .get(i + 1)
+            .is_some_and(|next| next.starts_with([' ', '\t']) && !next.trim().is_empty());
+        if !value.starts_with('[') || continued {
+            rewritten.push_str(line);
+            continue;
+        }
+        let escaped = value.replace('\\', "\\\\").replace('"', "\\\"");
+        rewritten.push_str(KEY);
+        rewritten.push(' ');
+        rewritten.push('"');
+        rewritten.push_str(&escaped);
+        rewritten.push('"');
+        rewritten.push_str(eol);
+    }
     (rewritten != yaml).then_some(rewritten)
 }
 

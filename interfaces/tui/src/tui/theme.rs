@@ -21,7 +21,10 @@ const LEGACY_NAMES: &[&str] = &["dark", "light", "terminal"];
 
 #[must_use]
 pub fn spinner_at(tick: usize) -> char {
-    SPINNER_FRAMES[tick % SPINNER_FRAMES.len()]
+    SPINNER_FRAMES
+        .get(tick % SPINNER_FRAMES.len().max(1))
+        .copied()
+        .unwrap_or('⠋')
 }
 
 /// The named built-in palettes and compatibility aliases.
@@ -116,20 +119,19 @@ impl ColorSpec {
             JsonColor::String(value) if value == "terminal" => Ok(Self::Terminal),
             JsonColor::String(value) => {
                 let bytes = value.as_bytes();
-                if bytes.len() != 7 || bytes[0] != b'#' {
+                if bytes.len() != 7 || bytes.first() != Some(&b'#') {
                     return Err(format!(
                         "invalid color {value:?}; use #rrggbb, terminal, or 0..255"
                     ));
                 }
-                let parse = |part: &[u8]| {
-                    std::str::from_utf8(part)
-                        .ok()
+                let parse = |part: Option<&[u8]>| {
+                    part.and_then(|p| std::str::from_utf8(p).ok())
                         .and_then(|s| u8::from_str_radix(s, 16).ok())
                 };
                 match (
-                    parse(&bytes[1..3]),
-                    parse(&bytes[3..5]),
-                    parse(&bytes[5..7]),
+                    parse(bytes.get(1..3)),
+                    parse(bytes.get(3..5)),
+                    parse(bytes.get(5..7)),
                 ) {
                     (Some(r), Some(g), Some(b)) => Ok(Self::Rgb(r, g, b)),
                     _ => Err(format!(
@@ -307,7 +309,8 @@ struct PaletteData {
 
 impl PaletteData {
     fn role(&self, role: SemanticColor) -> &ColorSpec {
-        &self.colors[role_index(role)]
+        let idx = role_index(role);
+        self.colors.get(idx).unwrap_or(&ColorSpec::Terminal)
     }
 }
 
@@ -315,7 +318,7 @@ fn role_index(role: SemanticColor) -> usize {
     ALL_SEMANTIC_COLORS
         .iter()
         .position(|candidate| *candidate == role)
-        .expect("semantic roster must contain every role")
+        .unwrap_or(0)
 }
 
 fn parse_color(value: Option<JsonColor>, field: &str) -> Result<Option<ColorSpec>, String> {
@@ -352,7 +355,11 @@ fn resolve_document(
     }
     for role in ALL_SEMANTIC_COLORS {
         if let Some(value) = document.colors.get(*role) {
-            colors[role_index(*role)] = ColorSpec::parse_json(value.clone())?;
+            let idx = role_index(*role);
+            let parsed = ColorSpec::parse_json(value.clone())?;
+            if let Some(slot) = colors.get_mut(idx) {
+                *slot = parsed;
+            }
         } else if base.is_none() {
             return Err(format!("missing semantic color {role:?}"));
         }
@@ -421,7 +428,10 @@ fn validate_name(name: &str) -> Result<(), String> {
         return Err(format!("reserved theme command name {name:?}"));
     }
     let bytes = name.as_bytes();
-    if bytes.is_empty() || bytes.len() > 64 || !bytes[0].is_ascii_lowercase() {
+    if bytes.is_empty()
+        || bytes.len() > 64
+        || !bytes.first().is_some_and(u8::is_ascii_lowercase)
+    {
         return Err("theme names must match [a-z][a-z0-9-]{0,63}".to_owned());
     }
     if !bytes
@@ -508,7 +518,7 @@ impl Palette {
             };
         }
         let name = preset.builtin_name().unwrap_or("amber");
-        let data = builtin_data(name).expect("checked-in built-in theme must validate");
+        let data = builtin_data(name).unwrap_or_else(|_| terminal_data());
         Self::from_data(data, preset, truecolor)
     }
 
@@ -805,7 +815,8 @@ fn boot_at(root: &Path, env: Option<&str>, stored: Option<&str>, truecolor: bool
             Err(error) => warnings.push(format!("{source} {candidate:?} ignored: {error}")),
         }
     }
-    let palette = load_named(root, "amber", truecolor).expect("amber is a checked-in built-in");
+    let palette = load_named(root, "amber", truecolor)
+        .unwrap_or_else(|_| Palette::for_preset(Preset::Amber, truecolor));
     BootState { palette, warnings }
 }
 

@@ -139,7 +139,7 @@ pub(super) async fn handle(inbound: TcpStream, allowlist: AllowList) -> Result<(
     // pins the connection to a non-SSRF-blocked resolved IP — closing the
     // DNS-rebinding gap where an allowlisted *name* re-resolves to a loopback /
     // metadata / internal address at connect time.
-    let upstream = match tokio::time::timeout(
+    let mut upstream = match tokio::time::timeout(
         UPSTREAM_DIAL_TIMEOUT,
         super::dial::dial_validated(&req.host, req.port, &allowlist),
     )
@@ -178,12 +178,17 @@ pub(super) async fn handle(inbound: TcpStream, allowlist: AllowList) -> Result<(
     wr.write_all(b"HTTP/1.1 200 Connection Established\r\nProxy-Agent: aleph-sandbox\r\n\r\n")
         .await?;
 
+    // Flush any pipelined bytes that BufReader swallowed ahead of the splice.
+    let buffered = rd.buffer();
+    if !buffered.is_empty() {
+        upstream.write_all(buffered).await?;
+    }
+
     // Re-join the inbound halves into a single stream for symmetric splice.
     let mut inbound = rd
         .into_inner()
         .reunite(wr)
         .map_err(|e| std::io::Error::other(format!("{e}")))?;
-    let mut upstream = upstream;
     let _ = tokio::io::copy_bidirectional(&mut inbound, &mut upstream).await;
     Ok(())
 }

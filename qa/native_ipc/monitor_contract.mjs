@@ -34,11 +34,11 @@ import { timingSafeEqual } from "node:crypto";
 // shell) may flip the `monitorNonceAuth` prerequisite, and that is the owner of
 // `real_qa_prep.mjs`'s call, not this module's.
 //
-// Command channel (task56): harness -> page FIXED commands `ask_pair | submit_ticket |
-// reload | inspect | reveal_browser` (see `buildCommand`, `MONITOR_SCHEMA_DOC.commands`). The page answers
-// with `command_ack` (fixed action enum + boolean) and, for `inspect`, `dom_state` (fixed
-// boolean keys). The `ticket` travels harness -> page ONLY and never appears on any
-// page -> harness event.
+// Command channel (task56): harness -> page FIXED commands for pairing, inspection, and bounded navigation
+// (`navigate_projects`, `navigate_project_a`, `navigate_project_b` map to literal QA routes in the
+// shell monitor; no route or selector is accepted from the harness). The page answers with
+// `command_ack` (fixed action enum + boolean) and, for `inspect`, `dom_state` (fixed boolean keys).
+// Ticket content travels harness-to-page only; no page event echoes it.
 //
 // Invariants (each is enforced by `validateEvent` / `StreamValidator`, self-tested in
 // `real_qa_prep.mjs --self-test`):
@@ -116,8 +116,8 @@ export const MONITOR_PORT_MIN = 1024; // == qa_root.rs MONITOR_PORT_MIN
 export const MONITOR_PORT_MAX = 65535;
 
 /** Harness -> page fixed commands (snake_case), == `ACTIONS` in QA_MONITOR_JS. */
-export const ACTIONS = Object.freeze(["ask_pair", "submit_ticket", "reload", "inspect", "reveal_browser", "reveal_projects", "select_project_a", "select_project_b", "select_global", "open_project_a", "open_project_b"]);
-/** `command_ack.action`: the five actions or `refused` (envelope rejected; always ok:false). */
+export const ACTIONS = Object.freeze(["ask_pair", "submit_ticket", "reload", "inspect", "reveal_browser", "reveal_projects", "select_project_a", "select_project_b", "select_global", "open_project_a", "open_project_b", "navigate_projects", "navigate_project_a", "navigate_project_b"]);
+/** `command_ack.action`: a fixed command or `refused` (envelope rejected; always ok:false). */
 export const ACK_ACTIONS = Object.freeze([...ACTIONS, "refused"]);
 /** Fixed boolean keys of `dom_state`, == `inspect()` in QA_MONITOR_JS. */
 export const DOM_STATE_KEYS = Object.freeze([
@@ -137,6 +137,10 @@ export const DOM_STATE_KEYS = Object.freeze([
   "layoutToggleEnabled",
   "browserTab",
   "browserTabEnabled",
+  "panelShell",
+  "panelTabA",
+  "panelTabB",
+  "panelContent",
 ]);
 export const MAX_TICKET_CHARS = 2048; // == QA_MONITOR_JS MAX_TICKET_CHARS
 export const MAX_COMMAND_CHARS = 4096; // == QA_MONITOR_JS MAX_COMMAND_CHARS
@@ -546,6 +550,7 @@ export const MONITOR_SCHEMA_DOC = Object.freeze({
     direction: "harness -> page (incoming only; the page never echoes any command field)",
     envelope: { v: WIRE_VERSION, type: "command", run: "<page run token from hello>", id: "<int, 0.. strictly sequential>", command: ACTIONS, ticket: "<string 1..2048, submit_ticket ONLY>" },
     rules: "exact key set; one in flight; raw <= 4096 chars; wrong run/id/unknown/extra key => command_ack refused ok:false",
+    navigatePanel: "Fixed navigation actions accept no route argument and navigate only to /projects or the QA fixture's /panel/project-{a,b}/overview routes.",
     revealBrowser:
       "reveal_browser (no extra keys): clicks the fixed layout-toggle ONLY if the workspace pane is not already open, then polls <= 20 x 25 ms for the ENABLED fixed workspace-tab-browser button and clicks only it; ok:false when toggle/tab is absent or disabled; ok:true = clicks dispatched (NOT proof the Browser body rendered: use inspect)",
   },

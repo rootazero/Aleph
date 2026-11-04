@@ -98,8 +98,15 @@ impl PromptLayer for MemoryProtocolLayer {
     }
 
     fn inject(&self, output: &mut String, _input: &LayerInput) {
+        if !output.is_empty() && !output.ends_with("\n\n") {
+            if output.ends_with('\n') {
+                output.push('\n');
+            } else {
+                output.push_str("\n\n");
+            }
+        }
         output.push_str(
-            "\n\n## Memory Protocol\n\
+            "## Memory Protocol\n\
              Where a NEW memory goes — ONE destination ladder, first matching rung wins:\n\
              1. Durable user preference / identity fact / standing instruction → `remember` \
              (HOT tier: MEMORY.md, always in-prompt, tiny).\n\
@@ -115,7 +122,7 @@ impl PromptLayer for MemoryProtocolLayer {
              \n\
              Reading back: `memory_search` for a prior decision or fact; `session_search` \
              when the user points at a past conversation (\"last time\", \"that bug we \
-             fixed\").\n",
+             fixed\").\n\n",
         );
     }
 }

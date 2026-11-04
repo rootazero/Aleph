@@ -82,7 +82,7 @@ impl SkillsConfig {
 
     pub fn save(&self, path: &Path) -> std::io::Result<()> {
         let content = toml::to_string_pretty(self).map_err(std::io::Error::other)?;
-        let tmp_path = path.with_extension("toml.tmp");
+        let tmp_path = path.with_extension(format!("toml.tmp.{}", std::process::id()));
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
