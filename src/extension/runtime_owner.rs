@@ -266,9 +266,10 @@ impl ExtensionManager {
                         .unwrap()
                         .push(OwnerFailure::Publication(error));
                     let _ = owner.provider.transition(ProviderState::Failed);
-                    self.plugin_registry.write().await.register_plugin(
-                        owner.record.clone().with_error(reason.clone()),
-                    );
+                    self.plugin_registry
+                        .write()
+                        .await
+                        .register_plugin(owner.record.clone().with_error(reason.clone()));
                     return PluginStatus::Error(reason);
                 }
             }
@@ -434,8 +435,22 @@ impl ExtensionManager {
                     .lock()
                     .unwrap()
                     .push(OwnerFailure::Publication(error));
-                // No batch was committed. Dispose only this fenced mount. A
-                // failed disposer report remains on the owner, without retry.
+                // Ready publication failed, but discovery already published a
+                // cold batch. Withdraw that exact receipt before disposing the
+                // mount; retain it on failure for residual reporting/recovery.
+                let receipt = owner.receipt.lock().unwrap().take();
+                if let Some(receipt) = receipt {
+                    if let Err(error) = receipt.revoke() {
+                        *owner.receipt.lock().unwrap() = Some(receipt);
+                        owner
+                            .failures
+                            .lock()
+                            .unwrap()
+                            .push(OwnerFailure::Revoke(error));
+                    }
+                }
+                // Dispose only this fenced mount. A failed disposer report
+                // remains on the owner, without retry.
                 let scope = self.scopes.lock().unwrap().remove(id);
                 if let Some(scope) = scope {
                     let report = scope.dispose().await;

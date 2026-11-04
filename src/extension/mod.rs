@@ -747,7 +747,7 @@ impl ExtensionManager {
         }
 
         self.discover_declarations().await?;
-        self.views().after_transition().await;
+        self.views().publish_transition_views().await;
         self.cache_state.write().await.discovered = true;
         Ok(())
     }
@@ -796,7 +796,7 @@ impl ExtensionManager {
                 self.publish_plugin_settings().await;
                 self.discover_with_mode(crate::extension::lifecycle::DiscoveryMode::Activation)
                     .await?;
-                self.views().after_transition().await;
+                self.views().publish_transition_views().await;
             }
             let desired_enabled = self.plugins_config.read().await;
             let owners = self
@@ -1294,14 +1294,16 @@ impl projection::Views {
                 owner.provider.state() == crate::capability::provider::ProviderState::Cold
             })
             .flat_map(|owner| {
-                owner.output.capabilities.iter().filter_map(|capability| {
-                    match capability {
+                owner
+                    .output
+                    .capabilities
+                    .iter()
+                    .filter_map(|capability| match capability {
                         crate::extension::capability::CapabilityDeclaration::Tool(registration) => {
                             Some(registration.clone())
                         }
                         _ => None,
-                    }
-                })
+                    })
             })
             .collect()
     }
@@ -1446,10 +1448,32 @@ impl ExtensionManager {
             .filter(|tool| self.plugin_visible(&tool.plugin_id, ctx))
             .cloned()
             .collect();
-        visible.sort_by(|a, b| a.name.cmp(&b.name).then(a.plugin_id.cmp(&b.plugin_id)));
+        // Within one short name, the MOST SPECIFIC scope wins: a project
+        // plugin shadows a global plugin that claims the same name, so a
+        // global plugin can never delete the project's own tool. Ties (two
+        // plugins of the same scope) fall back to the lexicographically
+        // first plugin id.
+        visible.sort_by(|a, b| {
+            a.name.cmp(&b.name).then_with(|| {
+                self.scope_specificity(&b.plugin_id)
+                    .cmp(&self.scope_specificity(&a.plugin_id))
+                    .then_with(|| a.plugin_id.cmp(&b.plugin_id))
+            })
+        });
         let mut seen = HashSet::new();
         visible.retain(|tool| seen.insert(tool.name.clone()));
         visible
+    }
+
+    /// How specific a plugin's scope is: a project plugin (1) shadows a
+    /// global plugin (0) when both claim the same tool short name. An
+    /// unknown plugin id scores 0 — the registry is the only authority on
+    /// scope, and a plugin it cannot name has no claim to shadow.
+    fn scope_specificity(&self, plugin_id: &str) -> u8 {
+        match self.plugin_scope_key(plugin_id) {
+            Some(visibility::ScopeKey::Project(_)) => 1,
+            _ => 0,
+        }
     }
 
     /// The visibility key of a registered plugin, any status. `None` = unknown id.
@@ -2054,7 +2078,8 @@ mod tests {
             .unwrap()
             .changed());
         assert!(
-            !crate::extension::plugin_state::PluginsConfig::load(&cfg_path).unwrap()
+            !crate::extension::plugin_state::PluginsConfig::load(&cfg_path)
+                .unwrap()
                 .is_enabled_for("quiet-plugin", PluginOrigin::Workspace),
             "the preference must reach disk, not just the in-memory registry"
         );
@@ -2199,7 +2224,8 @@ mod tests {
             "the legacy marker's intent must be honoured on the migrating load"
         );
         assert!(
-            !crate::extension::plugin_state::PluginsConfig::load(&cfg_path).unwrap()
+            !crate::extension::plugin_state::PluginsConfig::load(&cfg_path)
+                .unwrap()
                 .is_enabled_for("old-timer", PluginOrigin::Workspace),
             "and be written into the durable document"
         );

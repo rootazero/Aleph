@@ -1,17 +1,17 @@
-use super::registry::{BUILTIN_NAMESPACE, RegistryError, TabRegistry, validate_descriptor};
+use super::registry::{validate_descriptor, RegistryError, TabRegistry, BUILTIN_NAMESPACE};
 #[cfg(test)]
 use super::source::terminal_descriptor;
 use super::source::{
-    BuiltInTerminalSource, PanelUiCapabilityDeclaration, PanelUiCapabilityOrigin,
-    PanelUiCapabilitySnapshot, PanelUiCapabilitySource, terminal_key,
+    terminal_key, BuiltInTerminalSource, PanelUiCapabilityDeclaration, PanelUiCapabilityOrigin,
+    PanelUiCapabilitySnapshot, PanelUiCapabilitySource,
 };
 #[cfg(test)]
 use aleph_protocol::panel::PANEL_UI_API_MAJOR;
-use aleph_protocol::panel::{PanelTabDescriptor, PanelTabKey, PanelTabStatus, PanelUiTrust};
 use aleph_protocol::panel::{
     supported_community_permission, valid_asset_integrity, valid_identity_segment,
     valid_version_segment,
 };
+use aleph_protocol::panel::{PanelTabDescriptor, PanelTabKey, PanelTabStatus, PanelUiTrust};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum PanelRoute {
@@ -269,11 +269,9 @@ fn validate_declaration(
         return Err(PanelProjectionError::InvalidPublicBase);
     }
     if declaration.origin == PanelUiCapabilityOrigin::Community {
-        if !descriptor
-            .entry
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-' | b'/'))
-        {
+        if !descriptor.entry.bytes().all(|byte| {
+            byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-' | b'+' | b'/')
+        }) {
             return Err(PanelProjectionError::InvalidEntry);
         }
         if !valid_version_segment(&declaration.plugin_version) {
@@ -506,15 +504,13 @@ mod tests {
         ))
         .unwrap();
         assert_eq!(projection.registry().source_revision(), 7);
-        assert!(
-            projection
-                .registry()
-                .get(&PanelTabKey {
-                    plugin_id: "community.example".into(),
-                    tab_id: "overview".into(),
-                })
-                .is_some()
-        );
+        assert!(projection
+            .registry()
+            .get(&PanelTabKey {
+                plugin_id: "community.example".into(),
+                tab_id: "overview".into(),
+            })
+            .is_some());
     }
     #[test]
     fn valid_community_declaration_projects_in_deterministic_source_order() {
@@ -741,12 +737,10 @@ mod tests {
             .replace_snapshot(community_snapshot(3, vec![]))
             .unwrap();
         assert_eq!(projection.registry().source_revision(), 3);
-        assert!(
-            projection
-                .registry()
-                .get(&community_declaration(2).descriptor.key)
-                .is_none()
-        );
+        assert!(projection
+            .registry()
+            .get(&community_declaration(2).descriptor.key)
+            .is_none());
 
         let baseline = projection.registry();
         assert_eq!(
@@ -845,10 +839,8 @@ mod tests {
             PanelProjection::explicit_key("/panel/community.example/../outside"),
             None
         );
-        assert!(
-            projection
-                .select_explicit(&declaration.descriptor.key, 6)
-                .is_err()
-        );
+        assert!(projection
+            .select_explicit(&declaration.descriptor.key, 6)
+            .is_err());
     }
 }

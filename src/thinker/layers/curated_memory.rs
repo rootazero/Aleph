@@ -4,9 +4,12 @@
 //!
 //! Reads `LayerInput::curated_memory_envelope` (a pre-rendered XML string
 //! produced by `MemoryContextProvider::build_curated_message`) and injects
-//! it verbatim. The envelope is captured once per session and reused, so
-//! this layer is `LayerStability::Stable` to preserve the prompt prefix
-//! cache across turns.
+//! its CONTENT verbatim. The only thing the layer adds is the blank-line
+//! separator that keeps the next layer from gluing onto the envelope's last
+//! line (same house pattern as `memory_protocol`), so the envelope text
+//! itself is never rewritten. The envelope is captured once per session and
+//! reused, so this layer is `LayerStability::Stable` to preserve the prompt
+//! prefix cache across turns.
 
 use crate::thinker::prompt_layer::{AssemblyPath, LayerInput, LayerStability, PromptLayer};
 
@@ -80,7 +83,7 @@ mod tests {
     }
 
     #[test]
-    fn injects_envelope_verbatim() {
+    fn injects_envelope_content_verbatim_then_one_separator() {
         let layer = CuratedMemoryLayer;
         let config = PromptConfig::default();
         let envelope =
@@ -88,6 +91,15 @@ mod tests {
         let input = LayerInput::basic(&config, &[]).with_curated_envelope(Some(envelope.clone()));
         let mut out = String::new();
         layer.inject(&mut out, &input);
-        assert_eq!(out, envelope);
+        // The envelope content is verbatim; the layer only appends the
+        // blank-line separator the next layer needs.
+        assert_eq!(out, format!("{envelope}\n\n"));
+        // An envelope that already carries the separator is not extended.
+        let mut out = String::new();
+        layer.inject(
+            &mut out,
+            &LayerInput::basic(&config, &[]).with_curated_envelope(Some(format!("{envelope}\n\n"))),
+        );
+        assert_eq!(out, format!("{envelope}\n\n"));
     }
 }
