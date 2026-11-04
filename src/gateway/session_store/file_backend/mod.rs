@@ -1,6 +1,6 @@
 use async_trait::async_trait;
 use std::path::PathBuf;
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
 use crate::gateway::event_bus::GatewayEventBus;
 use crate::gateway::router::SessionKey;
@@ -14,6 +14,34 @@ use crate::gateway::session_store::{RunBill, SessionStore, StampOutcome};
 use crate::sync_primitives::Arc;
 
 pub(crate) mod meta;
+
+#[cfg(all(test, windows))]
+mod archive_diagnostics_tests;
+
+// Six retries allow brief Windows handle contention to clear without making
+// a lasting permission denial unbounded (1575ms total planned backoff).
+const ARCHIVE_SHARING_BACKOFF_MS: [u64; 6] = [25, 50, 100, 200, 400, 800];
+
+#[derive(Debug, PartialEq, Eq)]
+enum ArchiveRenameFailure {
+    Collision,
+    SharingConflict,
+    Terminal,
+}
+
+fn archive_rename_failure(
+    error: &std::io::Error,
+    destination_exists: bool,
+) -> ArchiveRenameFailure {
+    // Windows can report ACCESS_DENIED for an occupied destination too.
+    if destination_exists {
+        return ArchiveRenameFailure::Collision;
+    }
+    if cfg!(windows) && matches!(error.raw_os_error(), Some(5 | 32 | 33)) {
+        return ArchiveRenameFailure::SharingConflict;
+    }
+    ArchiveRenameFailure::Terminal
+}
 
 /// Sanitize a session key into a filesystem-safe directory name.
 ///
@@ -803,29 +831,47 @@ impl SessionStore for FileSessionStore {
         }
         let mut archive_dir = archive_base.clone();
         let mut collision = 0usize;
+        // One sharing budget spans suffix changes; collisions cannot renew it.
+        let mut sharing_retries = 0usize;
         loop {
             match tokio::fs::rename(&dir, &archive_dir).await {
                 Ok(()) => break,
-                Err(error) if archive_dir.exists() => {
-                    collision += 1;
-                    if collision > 1024 {
+                Err(error) => match archive_rename_failure(&error, archive_dir.exists()) {
+                    ArchiveRenameFailure::Collision => {
+                        collision += 1;
+                        if collision > 1024 {
+                            return Err(SessionStoreError::DatabaseError(format!(
+                                "Archive session failed after too many name collisions: {error}"
+                            )));
+                        }
+                        archive_dir = archive_base.with_file_name(format!(
+                            "{}-{collision}",
+                            archive_base
+                                .file_name()
+                                .and_then(|name| name.to_str())
+                                .unwrap_or("session")
+                        ));
+                    }
+                    ArchiveRenameFailure::SharingConflict
+                        if sharing_retries < ARCHIVE_SHARING_BACKOFF_MS.len() =>
+                    {
+                        let delay = ARCHIVE_SHARING_BACKOFF_MS[sharing_retries];
+                        sharing_retries += 1;
+                        tokio::time::sleep(std::time::Duration::from_millis(delay)).await;
+                    }
+                    ArchiveRenameFailure::SharingConflict | ArchiveRenameFailure::Terminal => {
+                        warn!(
+                            attempts = collision + sharing_retries + 1,
+                            sharing_retries,
+                            collision,
+                            error = %error,
+                            "Archive session rename failed"
+                        );
                         return Err(SessionStoreError::DatabaseError(format!(
-                            "Archive session failed after too many name collisions: {error}"
+                            "Archive session failed: {error}"
                         )));
                     }
-                    archive_dir = archive_base.with_file_name(format!(
-                        "{}-{collision}",
-                        archive_base
-                            .file_name()
-                            .and_then(|name| name.to_str())
-                            .unwrap_or("session")
-                    ));
-                }
-                Err(error) => {
-                    return Err(SessionStoreError::DatabaseError(format!(
-                        "Archive session failed: {error}"
-                    )));
-                }
+                },
             }
         }
         self.emit_session_changed(&key_str, "delete", None);
@@ -2577,6 +2623,152 @@ mod reap_tests {
 #[cfg(test)]
 mod archive_tests {
     use super::*;
+
+    #[test]
+    fn rename_failure_classifies_destination_before_os_error() {
+        for code in [5, 32, 33, 13] {
+            assert_eq!(
+                archive_rename_failure(&std::io::Error::from_raw_os_error(code), true),
+                ArchiveRenameFailure::Collision
+            );
+        }
+        for code in [5, 32, 33] {
+            assert_eq!(
+                archive_rename_failure(&std::io::Error::from_raw_os_error(code), false),
+                if cfg!(windows) {
+                    ArchiveRenameFailure::SharingConflict
+                } else {
+                    ArchiveRenameFailure::Terminal
+                }
+            );
+        }
+    }
+
+    #[test]
+    fn rename_failure_does_not_retry_unrelated_or_untyped_errors() {
+        for code in [2, 3, 13, 30, 80, 183] {
+            assert_eq!(
+                archive_rename_failure(&std::io::Error::from_raw_os_error(code), false),
+                ArchiveRenameFailure::Terminal
+            );
+        }
+        assert_eq!(
+            archive_rename_failure(
+                &std::io::Error::from(std::io::ErrorKind::PermissionDenied),
+                false
+            ),
+            ArchiveRenameFailure::Terminal
+        );
+    }
+
+    #[cfg(windows)]
+    #[tokio::test(start_paused = true)]
+    async fn delete_session_bounds_windows_sharing_denial_and_preserves_source() {
+        use std::os::windows::fs::OpenOptionsExt;
+        use std::time::Duration;
+        use tokio::time::Instant;
+
+        let dir = tempfile::tempdir().unwrap();
+        let store = FileSessionStore::new(FileSessionStoreConfig {
+            base_dir: dir.path().to_path_buf(),
+            ..Default::default()
+        })
+        .unwrap();
+        let key = SessionKey::main("main");
+        store.get_or_create(&key).await.unwrap();
+        let source = store.session_dir(&key.to_key_string());
+        // Share reads/writes, but deliberately deny FILE_SHARE_DELETE.
+        let handle = std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .share_mode(3)
+            .open(source.join("held.txt"))
+            .unwrap();
+        let started = Instant::now();
+        let deletion = store.delete_session(&key);
+        tokio::pin!(deletion);
+        tokio::select! {
+            biased;
+            result = &mut deletion => panic!("must wait for the held child: {result:?}"),
+            _ = tokio::time::sleep(Duration::from_millis(1)) => {}
+        }
+        // Introduce a real name collision after the first sharing denial.
+        // The next suffix must not reset the already-started sharing budget.
+        let archive = dir
+            .path()
+            .join(".archive")
+            .join(chrono::Utc::now().format("%Y-%m-%d").to_string());
+        let incumbent = archive.join("agent_main_main");
+        std::fs::create_dir(&incumbent).unwrap();
+        std::fs::write(incumbent.join("original.txt"), b"original").unwrap();
+        let error = deletion.await.unwrap_err().to_string();
+        let elapsed = started.elapsed();
+        println!("held child: {error}; elapsed={elapsed:?}");
+        assert!(error.contains("Archive session failed"), "{error}");
+        assert!(error.contains("os error 5"), "{error}");
+        assert!(source.exists());
+        // A held handle must exhaust a finite backoff, not fail immediately
+        // or spin forever. Keep the handle alive until after both checks.
+        // Six delays of 25, 50, 100, 200, 400, 800ms exhaust the budget.
+        // Allow at most one virtual timer tick of rounding per delay.
+        assert!(elapsed >= Duration::from_millis(1575), "{elapsed:?}");
+        assert!(elapsed <= Duration::from_millis(1581), "{elapsed:?}");
+        drop(handle);
+        assert!(store.delete_session(&key).await.unwrap().deleted);
+        assert_eq!(std::fs::read_dir(&archive).unwrap().count(), 2);
+        assert_eq!(
+            std::fs::read(incumbent.join("original.txt")).unwrap(),
+            b"original"
+        );
+        assert!(archive.join("agent_main_main-1/held.txt").exists());
+    }
+
+    #[cfg(windows)]
+    #[tokio::test(start_paused = true)]
+    async fn delete_session_retries_same_destination_after_child_handle_release() {
+        use std::os::windows::fs::OpenOptionsExt;
+        use std::time::Duration;
+
+        let dir = tempfile::tempdir().unwrap();
+        let store = FileSessionStore::new(FileSessionStoreConfig {
+            base_dir: dir.path().to_path_buf(),
+            ..Default::default()
+        })
+        .unwrap();
+        let key = SessionKey::main("main");
+        store.get_or_create(&key).await.unwrap();
+        let source = store.session_dir(&key.to_key_string());
+        let handle = std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .share_mode(3)
+            .open(source.join("held.txt"))
+            .unwrap();
+        let deletion = store.delete_session(&key);
+        tokio::pin!(deletion);
+        // Paused time cannot auto-advance while Tokio's blocking filesystem
+        // work is running. The biased branch runs the real rename before the
+        // 1ms virtual deadline; only the production backoff can let it expire.
+        tokio::select! {
+            biased;
+            result = &mut deletion => panic!("must wait for the held child: {result:?}"),
+            _ = tokio::time::sleep(Duration::from_millis(1)) => {}
+        }
+        assert!(source.exists());
+        drop(handle);
+        assert!(deletion.await.unwrap().deleted);
+        let archive = dir
+            .path()
+            .join(".archive")
+            .join(chrono::Utc::now().format("%Y-%m-%d").to_string());
+        let names = std::fs::read_dir(archive)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+        assert_eq!(names, vec!["agent_main_main"]);
+    }
 
     #[tokio::test]
     async fn delete_session_reuses_a_key_without_colliding_with_its_archive() {

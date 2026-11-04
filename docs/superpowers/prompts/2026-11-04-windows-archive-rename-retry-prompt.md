@@ -1,10 +1,10 @@
 # Restart prompt: Windows archive rename retry / 重启提示：Windows 归档 rename 重试
 
-**Status / 状态:** Planned, not implemented / 已规划，尚未实施。
+**Status / 状态:** Implemented; scoped Windows acceptance and named baseline comparison complete, full-lib suite still non-green / 已实施，Windows 有界验收与逐名基线对照完成，全量库测试仍未绿。Evidence / 证据：[run record / 运行记录](../runs/2026-11-04-windows-archive-rename-retry-run.md).
 
 **Previous task merged to local `main` / 前序任务已合并到本地 `main`:** `f40fbf061 test(qa): add Windows console control harness for memory lifecycle probe` (pushed to `origin/main` as a fast-forward). The Windows-native Memory lifecycle validation that produced the defect evidence ran on a detached worktree at `4e53aafbe`; its harness changes are now on `main`. / Windows 原生 Memory 生命周期验证在 `4e53aafbe` 的 detached worktree 上跑完，其 harness 改动现已合并到 `main`。
 
-Copy the request below into a fresh session. Discover the active checkout from Git; do not assume an absolute path. / 将下方请求交给新会话。先从 Git 定位实际 checkout，不假设绝对路径。
+The request below is retained as the historical handoff; consult the run record for completed work and remaining limits before resuming. Discover the active checkout from Git; do not assume an absolute path. / 下方保留原交接请求；后续会话先查运行记录中的已完成项与限制，再从 Git 定位实际 checkout，不假设绝对路径。
 
 ---
 

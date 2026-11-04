@@ -210,20 +210,13 @@ enabled = false
         self.check(label + (": providerless reply persisted" if self.args.providerless else ": real provider reply persisted"), has_reply(messages), messages)
         self.check(label + ": user message persisted", any(marker in str(row.get("content", "")) for row in messages))
         deleted = await rpc.call("sessions.delete", {"session_key": key})
-        # Windows note: the file backend archives a session by RENAMING its
-        # directory. Windows refuses that rename while the directory still has
-        # an open child handle (ERROR_ACCESS_DENIED / os error 5), and the
-        # store only retries NAME collisions, not this transient denial. Retry
-        # here so one transient sharing violation cannot decide the whole
-        # lifecycle verdict; every attempt is recorded in the check detail.
+        # One RPC attempt only: bounded archive retries belong to the store.
+        # A terminal production denial must fail this lifecycle check loudly.
         attempts = 1
-        while "result" not in deleted and attempts < 6 and "Archive session failed" in str(deleted):
-            await asyncio.sleep(0.5)
-            deleted = await rpc.call("sessions.delete", {"session_key": key})
-            attempts += 1
         self.check(
             label + ": session-tail capture requested",
-            "result" in deleted,
+            isinstance(deleted.get("result"), dict)
+            and deleted["result"].get("deleted") is True,
             {"attempts": attempts, "response": deleted},
         )
         deadline = time.monotonic() + 10
