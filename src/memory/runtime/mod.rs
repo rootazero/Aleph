@@ -27,6 +27,11 @@ use crate::capability::facade::{Reference, ResolveError};
 use crate::capability::ownership::{
     CapturedBinding, LifetimeScope, OwnerRef, OwnershipTree, RegisterError, VisibilityScope,
 };
+use crate::capability::provider::{
+    ProviderHandle, ProviderId, ProviderLifecycle, ProviderState, ProviderTransport,
+};
+use crate::capability::provider_registry::ProviderRegistration;
+use crate::capability::provider_registry::{ActivationError, ProviderActivator};
 use crate::error::AlephError;
 use crate::sync_primitives::{Arc, Mutex};
 use tokio::sync::Notify;
@@ -52,6 +57,7 @@ pub struct MemoryRuntime {
     tasks: tasks::MemoryTasks,
     pub(crate) search_settings: search::MemorySearchSettings,
     changed: Notify,
+    provider: ProviderHandle,
     #[cfg(test)]
     initialization_gate: Mutex<Option<tokio::sync::oneshot::Receiver<()>>>,
 }
@@ -131,6 +137,13 @@ impl MemoryRuntime {
         ownership: Arc<OwnershipTree>,
         services_config: Option<MemoryServicesConfig>,
     ) -> Arc<Self> {
+        let provider = ProviderHandle::new(ProviderLifecycle::new(
+            ProviderId::new("aleph/providers/memory.runtime").expect("static provider id"),
+            ProviderTransport::InProcess,
+        ));
+        provider
+            .transition(ProviderState::Cold)
+            .expect("new provider must enter Cold");
         Arc::new(Self {
             config,
             services_config: services_config.map_or_else(std::sync::OnceLock::new, |services| {
@@ -150,6 +163,7 @@ impl MemoryRuntime {
             tasks: tasks::MemoryTasks::default(),
             search_settings: search::MemorySearchSettings::default(),
             changed: Notify::new(),
+            provider,
             #[cfg(test)]
             initialization_gate: Mutex::new(None),
         })
@@ -183,6 +197,19 @@ impl MemoryRuntime {
         bundle.current_reconciler()
     }
 
+    pub(crate) fn provider_registration(self: &Arc<Self>) -> ProviderRegistration {
+        ProviderRegistration::new(
+            self.descriptor(&VisibilityScope::default())
+                .expect("memory ownership must be available at registration"),
+            self.provider.clone(),
+        )
+        .with_activator(Arc::new(MemoryActivator::new(self)))
+    }
+
+    pub(crate) fn provider(&self) -> ProviderHandle {
+        self.provider.clone()
+    }
+
     pub fn status(&self) -> MemoryStatus {
         self.inner
             .lock()
@@ -205,6 +232,7 @@ impl MemoryRuntime {
                         self.services_config.get_or_init(|| None);
                         inner.status.state = MemoryState::Starting;
                         inner.rotation_failed = false;
+                        let _ = self.provider.transition(ProviderState::Starting);
                         self.spawn_driver(&mut inner, true);
                         requested = true;
                     }
@@ -387,6 +415,7 @@ impl MemoryRuntime {
             return;
         }
         inner.status.state = MemoryState::Draining;
+        let _ = self.provider.transition(ProviderState::Stopping);
         inner.rotation_failed = match self.ownership.rotate_capability(&resource_id()) {
             Ok(()) => false,
             Err(error) => {
@@ -461,7 +490,10 @@ impl MemoryRuntime {
                         })
                         .and_then(|_| bundle.mount(self, operation));
                     match mounted {
-                        Ok(()) => inner.status.state = MemoryState::Running,
+                        Ok(()) => {
+                            inner.status.state = MemoryState::Running;
+                            let _ = self.provider.transition(ProviderState::Ready);
+                        }
                         Err(error) => {
                             Self::record_error(&mut inner, error.to_string());
                             self.begin_drain(&mut inner);
@@ -518,10 +550,16 @@ impl MemoryRuntime {
                         } else {
                             MemoryState::Off
                         };
+                        let _ = if inner.rotation_failed {
+                            self.provider.transition(ProviderState::Failed)
+                        } else {
+                            self.provider.transition(ProviderState::Stopped)
+                        };
                     }
                     Err(error) => {
                         Self::record_error(&mut inner, error.to_string());
                         inner.status.state = MemoryState::Failed;
+                        let _ = self.provider.transition(ProviderState::Failed);
                     }
                 }
                 self.changed.notify_waiters();
@@ -579,6 +617,29 @@ impl Drop for DriverCompletion {
     fn drop(&mut self) {
         if let Some(runtime) = self.0.upgrade() {
             runtime.changed.notify_waiters();
+        }
+    }
+}
+
+pub(crate) struct MemoryActivator {
+    runtime: std::sync::Weak<MemoryRuntime>,
+}
+
+impl MemoryActivator {
+    pub(crate) fn new(runtime: &Arc<MemoryRuntime>) -> Self {
+        Self {
+            runtime: Arc::downgrade(runtime),
+        }
+    }
+}
+
+impl ProviderActivator for MemoryActivator {
+    fn activate(&self) -> Result<(), ActivationError> {
+        let runtime = self.runtime.upgrade().ok_or(ActivationError::Failed)?;
+        let state = runtime.status().state;
+        match state {
+            MemoryState::Running => Ok(()),
+            _ => Err(ActivationError::Rejected),
         }
     }
 }

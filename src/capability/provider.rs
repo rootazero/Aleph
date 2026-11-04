@@ -252,6 +252,10 @@ impl ProviderHandle {
         self.with_snapshot(|lifecycle| (lifecycle.state(), lifecycle.generation()))
     }
 
+    pub fn provider_id(&self) -> ProviderId {
+        self.with_snapshot(|lifecycle| lifecycle.provider_id().clone())
+    }
+
     /// Opaque instance identity; a matching textual provider id is not authority.
     pub(crate) fn same_instance(&self, other: &Self) -> bool {
         Arc::ptr_eq(&self.lifecycle, &other.lifecycle)

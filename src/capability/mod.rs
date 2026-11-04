@@ -41,6 +41,8 @@ pub mod facade;
 pub mod ownership;
 pub mod projection_host;
 pub mod provider;
+pub mod provider_backend;
+pub mod provider_registry;
 pub(crate) mod versioned_registry;
 pub mod zahir_facade;
 

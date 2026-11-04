@@ -59,7 +59,7 @@ impl ToolBackendAdapter {
     }
 
     /// Whether a descriptor falls inside `scope`, including its behavior facet.
-    pub(super) fn descriptor_in_scope(descriptor: &CapabilityDescriptor, scope: &Scope) -> bool {
+    pub(crate) fn descriptor_in_scope(descriptor: &CapabilityDescriptor, scope: &Scope) -> bool {
         scope.kind.is_none_or(|kind| descriptor.kind == kind)
             && scope
                 .namespace

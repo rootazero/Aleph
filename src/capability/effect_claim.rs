@@ -171,11 +171,19 @@ pub fn reconcile_effect_claim(events: &[EffectClaimEvent]) -> EffectClaimReconci
         }
         if event.terminal_receipt {
             match (current, event.state) {
-                (EffectClaimState::Invoking, state @ (EffectClaimState::Succeeded | EffectClaimState::Failed)) => {
+                (
+                    EffectClaimState::Invoking,
+                    state @ (EffectClaimState::Succeeded | EffectClaimState::Failed),
+                ) => {
                     current = state;
                     terminal = Some(state);
                 }
-                (EffectClaimState::Prepared | EffectClaimState::Claimed | EffectClaimState::Invoking, _) => {
+                (
+                    EffectClaimState::Prepared
+                    | EffectClaimState::Claimed
+                    | EffectClaimState::Invoking,
+                    _,
+                ) => {
                     current = EffectClaimState::Unknown;
                     terminal = Some(EffectClaimState::Unknown);
                 }

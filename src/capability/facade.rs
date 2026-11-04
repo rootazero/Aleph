@@ -13,7 +13,8 @@ use crate::capability::descriptor::{
     ProjectionMetadata,
 };
 use crate::capability::ownership::{OwnerGeneration, OwnerRef, VisibilityScope};
-
+use crate::capability::provider::ProviderId;
+use crate::capability::provider_registry::ActivationError;
 use crate::memory::runtime::MemoryRuntime;
 use std::sync::Weak;
 
@@ -22,6 +23,10 @@ use std::sync::Weak;
 pub enum BackendSourceEvidence {
     Tool {
         canonical_entry: crate::tools::registry::CanonicalEntryLease,
+        provider_generation: u64,
+    },
+    Provider {
+        provider_id: ProviderId,
         provider_generation: u64,
     },
     MemoryResource(Weak<MemoryRuntime>),
@@ -40,6 +45,16 @@ impl PartialEq for BackendSourceEvidence {
                     provider_generation: bg,
                 },
             ) => a == b && ag == bg,
+            (
+                Self::Provider {
+                    provider_id: a_id,
+                    provider_generation: a_generation,
+                },
+                Self::Provider {
+                    provider_id: b_id,
+                    provider_generation: b_generation,
+                },
+            ) => a_id == b_id && a_generation == b_generation,
             (Self::MemoryResource(a), Self::MemoryResource(b)) => Weak::ptr_eq(a, b),
             _ => false,
         }
@@ -116,7 +131,9 @@ impl BackendLease {
                 provider_generation,
                 ..
             } => Some(*provider_generation),
-            BackendSourceEvidence::MemoryResource(_) => None,
+            BackendSourceEvidence::Provider { .. } | BackendSourceEvidence::MemoryResource(_) => {
+                None
+            }
         }
     }
 }
@@ -314,6 +331,7 @@ pub trait Zahir {
     fn describe(&self, scope: Scope) -> CapabilitySnapshot;
     fn resolve(&self, reference: Reference) -> Result<BackendLease, ResolveError>;
     fn validate_lease(&self, lease: &BackendLease) -> Result<(), ResolveError>;
+    fn activate(&self, reference: Reference) -> Result<BackendLease, ActivationError>;
     fn subscribe(&self, scope: Scope, cursor: Cursor) -> CapabilityChangeStream;
     fn project(&self, target: TransportTarget, scope: Scope) -> Projection;
 }
