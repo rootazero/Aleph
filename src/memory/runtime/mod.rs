@@ -171,6 +171,18 @@ impl MemoryRuntime {
         .map_err(|error| AlephError::other(format!("memory unavailable: {error:?}")))
     }
 
+    pub(crate) fn current_reconciler(
+        &self,
+    ) -> Option<Arc<crate::memory::events::handler::MemoryCommandHandler>> {
+        let bundle = {
+            let inner = self.inner.lock().unwrap_or_else(|error| error.into_inner());
+            (inner.status.state == MemoryState::Running)
+                .then(|| inner.bundle.clone())
+                .flatten()
+        }?;
+        bundle.current_reconciler()
+    }
+
     pub fn status(&self) -> MemoryStatus {
         self.inner
             .lock()

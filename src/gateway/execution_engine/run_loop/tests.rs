@@ -2437,6 +2437,7 @@ fn canonical_test_entry(name: &str, server: &'static str) -> crate::tools::regis
         descriptor: Arc::new(descriptor),
         max_result_tokens: None,
         ready: None,
+        cold: None,
     }
 }
 
@@ -2490,6 +2491,7 @@ fn invoking_canonical_test_entry(
         descriptor: Arc::new(descriptor),
         max_result_tokens: None,
         ready: None,
+        cold: None,
     }
 }
 

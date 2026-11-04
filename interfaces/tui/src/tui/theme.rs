@@ -518,7 +518,7 @@ impl Palette {
             };
         }
         let name = preset.builtin_name().unwrap_or("amber");
-        let data = builtin_data(name).unwrap_or_else(terminal_data);
+        let data = builtin_data(name).unwrap_or_else(|_| terminal_data());
         Self::from_data(data, preset, truecolor)
     }
 

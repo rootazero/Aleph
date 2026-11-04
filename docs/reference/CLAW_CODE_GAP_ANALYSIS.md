@@ -76,7 +76,7 @@ Post-dissolution and post-[[harness-r2-minimalism]] the surface is healthy.
 — file-op last-write-wins preflight stage. Implements
 [`PreflightStage`](../../src/context/budget/preflight.rs) and is wired into the
 production `PreflightPipeline` in
-[`orchestrator/harness_bridge.rs`](../../src/orchestrator/harness_bridge.rs)
+[`PreflightPipeline`](../../src/context/budget/preflight.rs)
 alongside `ToolResultPruningStage` and `HistoricalImageStrippingStage`. Runs
 *before* the LLM compactor so token savings happen even when the compactor's
 side-channel LLM call fails.

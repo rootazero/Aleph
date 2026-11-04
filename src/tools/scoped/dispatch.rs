@@ -42,6 +42,61 @@ fn ingress_failed_outcome() -> crate::tool_output::ingress::IngressOutcome {
     }
 }
 
+fn rebind_cold_plugin_capture(
+    registry: &ToolHandlerRegistry,
+    facade: &crate::capability::zahir_facade::ZahirFacade,
+    name: &str,
+    original: &CanonicalEntryLease,
+    backend_lease: &BackendLease,
+) -> Result<(CanonicalEntryLease, BackendLease), ToolError> {
+    let (plugin_id, owner_generation) = original.cold_owner().ok_or_else(|| {
+        ToolError::PermissionDenied {
+            name: name.to_owned(),
+            reason: "Cold plugin capture lost its declaration identity".into(),
+        }
+    })?;
+    let lease = registry.capture_entry(name).ok_or_else(|| ToolError::NotFound {
+        name: name.to_owned(),
+    })?;
+    if !lease.matches_plugin_owner(plugin_id, owner_generation) {
+        return Err(ToolError::PermissionDenied {
+            name: name.to_owned(),
+            reason: "canonical plugin owner was replaced during activation".into(),
+        });
+    }
+    if lease.is_cold_declaration() {
+        return Err(ToolError::PermissionDenied {
+            name: name.to_owned(),
+            reason: "Cold plugin activation completed without a Ready publication".into(),
+        });
+    }
+    let backend = facade
+        .resolve_with_capture(
+            Reference {
+                id: CapabilityId {
+                    namespace: TOOL_NAMESPACE.into(),
+                    name: name.to_owned(),
+                },
+                visibility: backend_lease.descriptor.visibility.clone(),
+            },
+            lease.clone(),
+        )
+        .map_err(|error| ToolError::PermissionDenied {
+            name: name.to_owned(),
+            reason: format!("canonical capability lease cannot be rebound: {error:?}"),
+        })?;
+    if backend.owner_generation != backend_lease.owner_generation
+        || backend.owner != backend_lease.owner
+        || backend.tool_provider_generation() != backend_lease.tool_provider_generation()
+    {
+        return Err(ToolError::PermissionDenied {
+            name: name.to_owned(),
+            reason: "canonical provider or ownership authority changed during activation".into(),
+        });
+    }
+    Ok((lease, backend))
+}
+
 /// Render the ingress reductions summary carried by the `ToolResultPersist`
 /// hook payload: a compact JSON object (`{"compressed": bool, "reductions":
 /// [{field, method, tokens_before, tokens_after}, …]}`), `None` when ingress
@@ -1125,9 +1180,30 @@ impl ScopedToolService {
                                 ),
                             )
                             .await;
+                            if result.is_err() {
+                                return result;
+                            }
                             Self::validate_plugin_capture(registry.as_deref(), &lease)?;
+                            let (validation_lease, validation_backend) = if lease.is_cold_declaration() {
+                                rebind_cold_plugin_capture(
+                                    registry.as_deref().ok_or_else(|| ToolError::PermissionDenied {
+                                        name: entry.descriptor.name.clone(),
+                                        reason: "canonical plugin registry is not mounted".into(),
+                                    })?,
+                                    &facade,
+                                    &entry.descriptor.name,
+                                    &lease,
+                                    &backend_lease,
+                                )?
+                            } else {
+                                (lease.clone(), backend_lease.clone())
+                            };
+                            Self::validate_plugin_capture(
+                                registry.as_deref(),
+                                &validation_lease,
+                            )?;
                             facade
-                                .validate_completion(&backend_lease)
+                                .validate_completion(&validation_backend)
                                 .map_err(|error| ToolError::PermissionDenied {
                                     name: entry.descriptor.name.clone(),
                                     reason: format!(
@@ -1221,13 +1297,27 @@ impl ScopedToolService {
                     ),
                 )
                 .await;
-                // The plugin lease is the primary withdrawal guard: a withdrawn
-                // plugin publication must report its own reason instead of the
-                // generic capability one. The capability lease stays the last
-                // gate before the result leaves the dispatch, so a lease that
-                // went stale while the effect ran still fails closed.
-                self.validate_plugin_lease(&lease)?;
-                facade.validate_lease(&backend_lease).map_err(|error| {
+                if result.is_err() {
+                    return result;
+                }
+                let (validation_lease, validation_backend) = if lease.is_cold_declaration() {
+                    rebind_cold_plugin_capture(
+                        self.canonical_registry.as_deref().ok_or_else(|| {
+                            ToolError::PermissionDenied {
+                                name: entry.descriptor.name.clone(),
+                                reason: "canonical plugin registry is not mounted".into(),
+                            }
+                        })?,
+                        facade,
+                        &entry.descriptor.name,
+                        &lease,
+                        &backend_lease,
+                    )?
+                } else {
+                    (lease.clone(), backend_lease.clone())
+                };
+                self.validate_plugin_lease(&validation_lease)?;
+                facade.validate_lease(&validation_backend).map_err(|error| {
                     ToolError::PermissionDenied {
                         name: entry.descriptor.name.clone(),
                         reason: format!("canonical capability lease became stale: {error:?}"),

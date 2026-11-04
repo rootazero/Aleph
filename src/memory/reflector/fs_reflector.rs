@@ -181,6 +181,93 @@ mod tests {
 
     use crate::memory::reflector::types::Synthesis;
 
+    #[tokio::test]
+    async fn memory_reflector_callback_fails_closed_after_runtime_stop() {
+        use crate::capability::ownership::OwnershipTree;
+        use crate::memory::extensions::MemoryExtensionRegistry;
+        use crate::memory::reflector::recall_signals::SignalRow;
+        use crate::memory::runtime::{MemoryRuntime, MemoryRuntimeConfig, MemoryServicesConfig};
+        use crate::memory::store::markdown::MarkdownSessionStore;
+        use crate::memory::store::sqlite::SqliteMemoryBackend;
+        use crate::sync_primitives::Arc;
+
+        let root = tempfile::tempdir().unwrap();
+        let metadata = root.path().join("memory/metadata.db");
+        let raw = Arc::new(
+            MarkdownSessionStore::new(&root.path().join("memory"))
+                .await
+                .unwrap(),
+        );
+        let mut config = crate::Config::default();
+        config.memory.embedding.providers.clear();
+        config.memory.dreaming.enabled = false;
+        config.memory.profile.enabled = false;
+        let runtime = MemoryRuntime::new_with_services(
+            MemoryRuntimeConfig {
+                metadata_path: metadata.clone(),
+                note_memory_dir: root.path().join("notes"),
+            },
+            Arc::new(OwnershipTree::new()),
+            MemoryServicesConfig {
+                app_config: Arc::new(tokio::sync::RwLock::new(config)),
+                raw_store: raw,
+                session_store: None,
+                provider: Some(crate::providers::create_mock_provider()),
+                extensions: Arc::new(MemoryExtensionRegistry::new()),
+                state_db: None,
+                default_agent_id: "callback-boundary".into(),
+                curated_root: root.path().join("agents"),
+                snapshot_dir: root.path().join("snapshots"),
+            },
+        );
+        runtime.start().await.unwrap();
+        let operation = runtime.operation().unwrap();
+        let services = operation.services().unwrap();
+        let reflector = services.memory_reflector.as_ref().unwrap().clone();
+        let row = SignalRow {
+            note_path: "reference/ownership".into(),
+            agent_id: "callback-boundary".into(),
+            query_text: "retain admitted work".into(),
+            channel: "reflect".into(),
+            score: 0.75,
+            session_id: None,
+            namespace: "owner".into(),
+        };
+        let writer = reflector.recall_writer.clone();
+        let first = row.clone();
+        let (sent, received) = tokio::sync::oneshot::channel();
+        let admitted = operation.clone();
+        let task = tokio::spawn(async move {
+            sent.send(admitted.scope(writer(first)).await).unwrap();
+        });
+        received.await.unwrap().unwrap();
+        task.await.unwrap();
+        assert_eq!(
+            operation
+                .clone()
+                .scope(async {
+                    operation
+                        .backend()
+                        .count_recall_signals_for_channel("reflect")
+                        .unwrap()
+                })
+                .await,
+            1
+        );
+        drop(services);
+        drop(operation);
+        runtime.stop().await.unwrap();
+        assert!((reflector.recall_writer)(row).await.is_err());
+        let inspected = SqliteMemoryBackend::new(&metadata).unwrap();
+        assert_eq!(
+            inspected
+                .count_recall_signals_for_channel("reflect")
+                .unwrap(),
+            1
+        );
+        inspected.close().unwrap();
+    }
+
     /// Verifies the stub shape that the empty-packet short-circuit returns.
     /// The assembler + provider are not exercised here; the real short-circuit
     /// path end-to-end is covered by the Task 9 integration test.

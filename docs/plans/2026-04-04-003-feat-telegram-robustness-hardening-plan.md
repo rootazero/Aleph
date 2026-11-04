@@ -401,6 +401,6 @@ graph TB
 
 ## Sources & References
 
-- **Origin document:** [docs/brainstorms/2026-04-04-telegram-robustness-hardening-requirements.md](docs/brainstorms/2026-04-04-telegram-robustness-hardening-requirements.md)
+- **Origin document:** [docs/brainstorms/2026-04-04-telegram-robustness-hardening-requirements.md](../brainstorms/2026-04-04-telegram-robustness-hardening-requirements.md)
 - Related code: `src/gateway/interfaces/telegram/` (all modules), `src/resilience/database/migration.rs`, `src/gateway/pipeline/media_download.rs`
 - teloxide 0.13.0 API: `Me` struct, `ApiError` variants, `JoinError` methods

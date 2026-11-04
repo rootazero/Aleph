@@ -16,14 +16,46 @@ function digestFile(file) {
 }
 
 export function nativeArtifactPaths(repoRoot) {
+  const panelRoot = path.join(repoRoot, "interfaces", "webchat", ".panel-live", "shell");
   return {
     shell: path.join(repoRoot, "target", "debug", "aleph-desktop-shell.exe"),
     helper: path.join(repoRoot, "target", "debug", "aleph-panel-native-qa-gateway.exe"),
     reaper: path.join(repoRoot, "target", "debug", "examples", "qa_credential_reaper.exe"),
-    wasm: path.join(repoRoot, "interfaces", "webchat", ".panel-live", "shell", "aleph_panel_bg.wasm"),
-    panelManifest: path.join(repoRoot, "interfaces", "webchat", ".panel-live", "build.json"),
+    panelRoot,
+    wasm: path.join(panelRoot, "aleph_panel_bg.wasm"),
+    panelManifest: path.join(panelRoot, "build.json"),
+    panelDescriptor: path.join(panelRoot, "manifest.json"),
+    panelHostJs: path.join(panelRoot, "aleph_panel.js"),
+    panelLoader: path.join(panelRoot, "panel_loader.js"),
+    panelHtml: path.join(panelRoot, "index.html"),
+    panelCss: path.join(panelRoot, "tailwind.css"),
     tauri: path.join(repoRoot, "desktop", "shell", "tauri.qa.conf.json"),
   };
+}
+
+function validatePanelBundle(files, revision) {
+  if (!files.panelRoot) return { ok: true };
+  const required = [files.wasm, files.panelManifest, files.panelDescriptor, files.panelHostJs, files.panelLoader, files.panelHtml, files.panelCss];
+  if (required.some((file) => !existsSync(file))) return { ok: false, reason: "panel_artifact_missing" };
+  let build;
+  try { build = JSON.parse(readFileSync(files.panelManifest, "utf8")); }
+  catch { return { ok: false, reason: "panel_build_manifest_invalid" }; }
+  if (build.revision !== revision) return { ok: false, reason: "panel_build_revision_mismatch" };
+  if (typeof build.build_id !== "string" || !/^[0-9a-f]{16}$/.test(build.build_id)
+    || build.entry !== `./tabs/terminal/${build.build_id}/terminal.js`) {
+    return { ok: false, reason: "panel_build_manifest_invalid" };
+  }
+  let descriptor;
+  try { descriptor = JSON.parse(readFileSync(files.panelDescriptor, "utf8")); }
+  catch { return { ok: false, reason: "panel_descriptor_invalid" }; }
+  if (descriptor?.entry !== build.entry || descriptor?.key?.plugin_id !== "aleph" || descriptor?.key?.tab_id !== "terminal") {
+    return { ok: false, reason: "panel_descriptor_entry_mismatch" };
+  }
+  const terminalRoot = path.join(files.panelRoot, "tabs", "terminal", build.build_id);
+  if (!existsSync(path.join(terminalRoot, "terminal.js")) || !existsSync(path.join(terminalRoot, "terminal_bg.wasm"))) {
+    return { ok: false, reason: "panel_terminal_artifact_missing" };
+  }
+  return { ok: true };
 }
 
 function validateManifestShape(manifest) {
@@ -74,6 +106,8 @@ export function validateNativeProvenance({ manifest, files, revision }) {
     if (digestFile(files.wasm) !== manifest.wasm_sha256) return { ok: false, reason: "wasm_hash_mismatch" };
     if (digestFile(files.panelManifest) !== manifest.panel_manifest_sha256) return { ok: false, reason: "panel_manifest_hash_mismatch" };
     if (digestFile(files.tauri) !== manifest.tauri_config_sha256) return { ok: false, reason: "tauri_config_hash_mismatch" };
+    const panelBundle = validatePanelBundle(files, revision);
+    if (!panelBundle.ok) return panelBundle;
   } catch { return { ok: false, reason: "provenance_artifact_missing" }; }
   return { ok: true };
 }

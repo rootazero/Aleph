@@ -90,6 +90,8 @@
 
 ## Capability Plane
 
+> Current-state cross-subsystem map: [`FEATURE_LOCATOR.md`](FEATURE_LOCATOR.md#current-state--当前现状). This architecture keeps semantic Capability contracts separate from plugin assembly and preserves the existing authority for each bounded production slice. / 当前现状跨子系统地图：[`FEATURE_LOCATOR.md`](FEATURE_LOCATOR.md#current-state--当前现状)。本架构保持 Capability 语义契约与插件装配分离，并保留各有界生产切片的既有 authority。
+
 Capability is a semantic contract, not another plugin or dependency-injection container. In the first converged slice, a callable Tool is represented by one `ToolCapabilityDescriptor` and one live handler in `ToolHandlerRegistry`. The descriptor is the source for discovery and projection; the handler is the execution implementation. `LoopToolRegistry`, provider metadata, ToolCatalog, MCP bridge, and recovery are consumers of that contract, not parallel registries.
 
 ```text
@@ -188,6 +190,24 @@ The `discovered` bit is a derived cache of completed declaration work. Reload in
 Stage H 在保留 B5/B6 owner 与 publication authority 的前提下，把既有 `ExtensionManager` discovery walk 分成 declaration-only read path。`ensure_discovered()` 扫描、解析并 admission 已安装 extension，发布 declaration row，并将 eligible tool-only WASM 声明为 `RuntimeOwner(Cold)`；它不卸载现有 owner、不清空 owner table、不 mount deferred provider、不读取 guest bytes、不创建 provider resource，也不发布 callable。`plugins.list`、plugin management 的读 action 与 Hub installed reconciliation 使用这条路径；`ensure_loaded()` 与显式 enable/reload/control 仍是 activation boundary，继续走既有 owner 与 canonical `ToolHandlerRegistry` 路径。
 
 `discovered` 只是已完成 declaration work 的派生缓存；reload 会使它失效。它不是 durable enabled state、provider state、generation map 或第二份 owner authority。本 Stage H 只覆盖 ExtensionManager 管理的 tool-only WASM；channel、PTY、memory、MCP 与其他 provider kind 仍 deferred，也不声明 RSS、thread、engine/JIT、executable page 或 OS mapping reclamation。
+
+`Current closure (2026-11-03):` the Stage H declaration read still performs no guest read, provider authentication, or resource creation, but it now publishes metadata-only Cold declarations in the existing canonical Tool registry. An exact permitted canonical Tool call may activate the retained owner through the existing single-flight path; only after Ready publication and identity/generation checks does it re-enter the Ready handler. Read-side `catalog`/`describe`/`resolve`/`project`/ProjectionHost/observer/doctor calls never activate, while transport compatibility remains mounted-only. The dated B5/B6 paragraphs above remain historical evidence where they say that no callable metadata entry is published.
+
+`当前闭合（2026-11-03）：` Stage H 的声明读取仍不读取 guest、不认证 provider、不创建 resource，但现在会在既有 canonical Tool registry 中发布只含 metadata 的 Cold declaration。只有通过权限与 scope 的 exact canonical Tool call 才可能经既有 single-flight 路径激活 retained owner；Ready publication 与 identity/generation 校验完成后，调用才重新进入 Ready handler。`catalog`/`describe`/`resolve`/`project`/ProjectionHost/observer/doctor 等读侧永不激活，transport compatibility 仍保持 mounted-only。上方 B5/B6 日期段落属于历史证据，其中“没有发布 callable metadata entry”的表述不代表当前状态。
+
+### Current bounded Tool ProjectionHost mount / 当前有界 Tool ProjectionHost 挂载（2026-11-03）
+
+The production startup path is now source-backed and effect-verified for the bounded Tool-only slice. `src/bin/aleph-server/commands/start/mod.rs:242-305` creates one canonical `ToolHandlerRegistry` and one shared `Arc<OwnershipTree>`, passes them to `ProjectionHost::mount_with_memory`, installs the host, awaits `wait_until_ready`, and only then proceeds to diagnostics and later consumers. `src/capability/projection_host.rs:562-662` constructs `ZahirFacade::new_with_memory`, subscribes to registry and ownership streams before the initial snapshot, queues that snapshot for the default consumer, and starts the source/applier workers. `src/bin/aleph-server/commands/start/builder/startup_resources.rs:25-55` stops Memory before `ProjectionHost::close_and_await`; `src/capability/projection_host.rs:1248-1298` owns the shared cancellation-safe teardown and joins both workers.
+
+The evidence distinguishes static wiring from observable effects. The startup ordering guards passed; real tests observed initial delivery through the default applier followed by fail-closed reads after close, ownership invalidation with unchanged registry revision, Memory Resource discovery with zero fake Tool entries, and lease rejection for custom-principal or foreign-tree authority. Cleanup tests observed Memory/host draining on early errors, preservation of the original startup error, cancellation-safe teardown, both worker joins, and idempotent concurrent close. All 12 named tests selected exactly one test and passed under the required memory gates; the full matrix and command evidence are in [`docs/superpowers/runs/2026-11-03-capability-tool-mount-evidence-run.md`](../superpowers/runs/2026-11-03-capability-tool-mount-evidence-run.md).
+
+This closes only the provider-neutral Tool host and the source-backed Memory Resource composition used by this startup path. `ProjectionHost`/`ZahirFacade` remain derived read/projection/notification surfaces; callable Tool authority remains `ToolHandlerRegistry`, and ownership/provider/generation authorities remain separate. This does not establish universal all-writer Memory stop, native unload, RSS reduction, process isolation, external exactly-once, EffectClaim producer integration, Safe Replay, a universal scheduler, Feishu/channel/Terminal/MCP lazy integration, or mounts for the remaining capability kinds.
+
+当前生产启动路径已经对有界 Tool-only 切片完成源码与效果证据闭合。`src/bin/aleph-server/commands/start/mod.rs:242-305` 创建一个 canonical `ToolHandlerRegistry` 与一个共享 `Arc<OwnershipTree>`，将其传入 `ProjectionHost::mount_with_memory`，安装 host，等待 `wait_until_ready`，然后才进入 diagnostics 与后续 consumer。`src/capability/projection_host.rs:562-662` 构造 `ZahirFacade::new_with_memory`，在 initial snapshot 前订阅 registry 与 ownership stream，把 snapshot 交给 default consumer，再启动 source/applier worker。`src/bin/aleph-server/commands/start/builder/startup_resources.rs:25-55` 先停止 Memory，再执行 `ProjectionHost::close_and_await`；`src/capability/projection_host.rs:1248-1298` 持有共享的 cancellation-safe teardown 并 join 两个 worker。
+
+证据明确区分静态接线与可观察效果：启动顺序守卫通过；真实测试观察到 default applier 的 initial delivery、close 后 fail-closed read、registry revision 不变的 ownership invalidation、零 fake Tool entry 的 Memory Resource discovery，以及对 custom-principal/foreign-tree authority 的 lease 拒绝。清理测试观察到 early error 下的 Memory/host 排空、原始 startup error 保留、取消安全 teardown、两个 worker join 与并发 close 幂等。12 个 named test 均实际选中一个测试并通过，且每次 Cargo 前均通过要求的 memory gate；完整矩阵与命令证据见上述 run record。
+
+本段只闭合 provider-neutral Tool host 与该启动路径使用的 source-backed Memory Resource 组合。`ProjectionHost`/`ZahirFacade` 仍是派生 read/projection/notification surface；callable Tool authority 仍是 `ToolHandlerRegistry`，ownership/provider/generation authority 仍各自独立。本段不建立 universal all-writer Memory stop、native unload、RSS reduction、process isolation、external exactly-once、EffectClaim producer、Safe Replay、universal scheduler、Feishu/channel/Terminal/MCP lazy integration，也不表示其余 capability kind 已挂载。
 
 ### Current Generic Gateway source-owned capability read/lease slice / 当前 Generic Gateway 源所有 capability read/lease 切片（2026-10-30）
 
@@ -1089,6 +1109,6 @@ retirement 使用短 source-gate fence 与最终 publication commit；真实 cha
 - [Extension System](EXTENSION_SYSTEM.md) - Plugin architecture
 - [Security](SECURITY.md) - Exec approval and permissions
 - [Sandbox](SANDBOX.md) - `Sandbox` trait, `WorkspaceSandbox`, capability pipeline
-- [Skill Sandboxing](SKILL_SANDBOXING.md) - OS-native sandboxing for evolved skills
+- [Skill Sandboxing] (historical reference unavailable in the current tree) - OS-native sandboxing for evolved skills
 - [Skill Model Taxonomy](SKILL_MODEL_TAXONOMY.md) - Four-layer skill type map (Phase 1 of unification 2026-05-20)
 - [Markdown Skill Authoring](MARKDOWN_SKILL_AUTHORING.md) - SKILL.md frontmatter + sandbox modes + host-mode contract

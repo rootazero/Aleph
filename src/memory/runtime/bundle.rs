@@ -63,6 +63,22 @@ impl MemoryBundle {
         Ok(())
     }
 
+    pub(super) fn current_reconciler(
+        &self,
+    ) -> Option<Arc<crate::memory::events::handler::MemoryCommandHandler>> {
+        let services = self
+            .services
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .clone()?;
+        services
+            .config
+            .reconciler
+            .enabled
+            .then(|| services.reconciler.clone())
+            .flatten()
+    }
+
     pub(super) fn services(&self) -> Result<Arc<MemoryServices>, AlephError> {
         self.services
             .lock()

@@ -136,6 +136,7 @@ impl MemoryServices {
                     embedder.clone(),
                     CompressionConfig::from_policy(&snapshot.policies.memory.compression),
                 )
+                .require_runtime()
                 .with_extension_registry(inputs.extensions.clone());
                 if memory.compound_ingest.enabled {
                     let compound = &memory.compound_ingest;

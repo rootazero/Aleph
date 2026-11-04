@@ -136,7 +136,7 @@ impl McpFace {
             self.static_tools.iter().map(|t| t.name.clone()).collect();
         if let Some(ext) = crate::extension::try_extension_manager() {
             names.extend(
-                ext.active_plugin_tools_snapshot()
+                ext.mounted_plugin_tools_snapshot()
                     .into_iter()
                     .map(|t| t.name),
             );
@@ -167,7 +167,7 @@ impl McpFace {
             .collect();
         if let Some(ext) = crate::extension::try_extension_manager() {
             unified.extend(
-                ext.active_plugin_tools_snapshot()
+                ext.mounted_plugin_tools_snapshot()
                     .into_iter()
                     .filter(|t| expose.contains(&t.name))
                     .map(

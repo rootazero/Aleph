@@ -9,6 +9,7 @@ use crate::memory::store::markdown::MarkdownSessionStore;
 use crate::memory::store::raw_memory::{
     RawMemory, RawMemorySource, RawMemoryStore, SessionEndReason,
 };
+use crate::memory::store::sqlite::SqliteMemoryBackend;
 use crate::sync_primitives::{Arc, AtomicBool, Ordering};
 use std::pin::pin;
 use std::task::Poll;
@@ -142,6 +143,38 @@ impl Fixture {
         )
         .with_compound_ingestor(Arc::new(Ingestor { phase }))
     }
+
+    fn standalone_runtime_bound_service(&self) -> CompressionService {
+        let mut config = CompressionConfig::default();
+        config.scheduler.turn_threshold = 1;
+        CompressionService::new(
+            Arc::new(SqliteMemoryBackend::new(self.dir.path()).unwrap()),
+            self.raw.clone(),
+            crate::providers::create_mock_provider(),
+            Arc::new(
+                crate::memory::embedding_provider::tests::MockEmbeddingProvider::new(8, "unused"),
+            ),
+            config,
+        )
+        .require_runtime()
+    }
+}
+
+#[tokio::test]
+async fn runtime_bound_compression_rejects_unadmitted_fallback() {
+    let fixture = Fixture::new(RawMemorySource::Transcript).await;
+    let service = Arc::new(fixture.standalone_runtime_bound_service());
+
+    drop(fixture.operation);
+    fixture.runtime.stop().await.unwrap();
+    service.record_turn_and_maybe_compress();
+
+    assert_eq!(
+        service.get_scheduler().get_pending_turns(),
+        0,
+        "runtime-bound compression must not consume a turn or spawn detached derived work without admission"
+    );
+    assert_eq!(fixture.raw.count_unprocessed("default").await.unwrap(), 1);
 }
 
 #[tokio::test]
@@ -199,6 +232,50 @@ async fn compression_threshold_and_profile_children_are_observed() {
             1
         );
     }
+}
+
+#[tokio::test]
+async fn admitted_flush_drains_before_runtime_stop_completes() {
+    use crate::memory::flush::{flush_agent_memory, FlushRegistry};
+
+    let fixture = Fixture::new(RawMemorySource::Transcript).await;
+    let phase = Arc::new(Phase::default());
+    let service = Arc::new(fixture.service(Some(phase.clone())));
+    let registry = FlushRegistry::new();
+    let guard = registry.begin("default");
+    let mut ready = pin!(registry.await_ready("default", Duration::from_secs(10)));
+    assert!(matches!(futures::poll!(&mut ready), Poll::Pending));
+
+    let (sent, received) = tokio::sync::oneshot::channel();
+    let flush_service = service.clone();
+    fixture
+        .operation
+        .spawn(async move {
+            flush_agent_memory(guard, "default".into(), flush_service).await;
+            sent.send(()).unwrap();
+        })
+        .unwrap();
+    tokio::time::timeout(Duration::from_secs(10), phase.entered.notified())
+        .await
+        .unwrap();
+    assert!(phase.admitted.load(Ordering::SeqCst));
+
+    drop(fixture.operation);
+    let mut stop = pin!(fixture.runtime.stop());
+    assert!(matches!(futures::poll!(&mut stop), Poll::Pending));
+    assert_eq!(fixture.runtime.status().state, MemoryState::Draining);
+    phase.release.notify_one();
+    received.await.unwrap();
+    assert!(ready.await);
+    assert_eq!(
+        tokio::time::timeout(Duration::from_secs(10), &mut stop)
+            .await
+            .unwrap()
+            .unwrap()
+            .state,
+        MemoryState::Off
+    );
+    assert_eq!(fixture.raw.count_unprocessed("default").await.unwrap(), 0);
 }
 
 #[tokio::test]

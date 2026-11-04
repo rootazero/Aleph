@@ -10,7 +10,9 @@
 
 **Spec:** [Approved design](../specs/2026-11-01-memory-runtime-lifecycle-design.md), approved by the user on 2026-11-01 after selecting live raw archival. Baseline evidence: [expanded validation](../runs/2026-11-01-memory-lifecycle-expansion-run.md).
 
-**Status / 状态:** Plan for review; not implemented. / 待计划审阅，尚未实施。
+**Status / 状态:** Partially implemented; bounded runtime/backend, watcher and maintenance slices exist, while Tasks 6–10 remain incomplete. The 2026-11-03 source-owned boundary closure covers the reconciler and runtime-bound compression paths only; it does not complete this plan. / **部分实施：** 已有有界 runtime/backend、watcher 与 maintenance 切片；Tasks 6–10 仍未完成。2026-11-03 source-owned boundary closure 仅覆盖 reconciler 与 runtime-bound compression 路径，不代表本计划完成。
+
+**Status note / 状态说明 (2026-11-03):** This plan is a historical implementation roadmap. Completed work and its actual evidence are linked from the [2026-11-03 source-owned boundary run](../runs/2026-11-03-memory-source-owned-boundary-run.md) and the [2026-11-02 lifecycle run](../runs/2026-11-01-memory-runtime-lifecycle-run.md). Do not infer completion of the remaining consumer/RPC, startup/error cleanup, live integration or broad verification tasks from those bounded slices. / 本计划是历史实施路线图。已完成工作的实际证据见 2026-11-03 source-owned boundary 与 2026-11-02 lifecycle 运行记录；不得据此推断尚余 consumer/RPC、startup/error cleanup、live integration 或全面验证任务已完成。
 
 ## Global Constraints
 

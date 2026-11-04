@@ -72,6 +72,8 @@ pub struct CompressionService {
     config: CompressionConfig,
     compound_ingestor: Option<Arc<dyn crate::memory::notes::ingest::CompoundIngestor>>,
     compound_enabled: bool,
+    /// Runtime-created services fail closed when no Memory operation is available.
+    runtime_bound: bool,
     profile_synthesizer: Option<Arc<dyn crate::memory::notes::profile::ProfileSynthesizer>>,
     /// Optional memory-extension registry. When set, `compress_to_notes` fires
     /// `on_pre_compress` and folds the contribution into the ingest prompt.
@@ -123,6 +125,7 @@ impl CompressionService {
             config,
             compound_ingestor: None,
             compound_enabled: false,
+            runtime_bound: false,
             profile_synthesizer: None,
             extension_registry: None,
             post_hooks: TokioRwLock::new(Vec::new()),
@@ -130,7 +133,12 @@ impl CompressionService {
         }
     }
 
-    /// Register a [`PostCompressionHook`] that fires after each successful
+    pub(crate) fn require_runtime(mut self) -> Self {
+        self.runtime_bound = true;
+        self
+    }
+
+    /// Register a hook that runs after each successful
     /// per-agent `compress_default_notes` call.
     ///
     /// `&self` (not `&mut self`) so callers holding `Arc<CompressionService>`
@@ -243,6 +251,16 @@ impl CompressionService {
         &self,
         workspace_id: &str,
     ) -> Result<CompressionResult, AlephError> {
+        // Admission must precede raw consumption and extension/file effects,
+        // not just the eventual SQLite projection.
+        let _operation = match self.database.operation()? {
+            None if self.runtime_bound => {
+                return Err(AlephError::other(
+                    "runtime-bound compression requires an admitted Memory operation",
+                ));
+            }
+            operation => operation,
+        };
         let start = Instant::now();
 
         // Serialize compressions for this agent — see `ingest_locks`. Held across
@@ -408,6 +426,11 @@ impl CompressionService {
                             {
                                 tracing::warn!(%error, "profile task could not be retained by Memory");
                             }
+                        }
+                        Ok(None) if self.runtime_bound => {
+                            tracing::debug!(
+                                "runtime-bound profile update skipped without Memory admission"
+                            );
                         }
                         Ok(None) => {
                             tokio::spawn(task);
@@ -714,6 +737,10 @@ impl CompressionService {
                 return;
             }
         };
+        if self.runtime_bound && operation.is_none() {
+            tracing::debug!("runtime-bound compression skipped without Memory admission");
+            return;
+        }
         // Count the turn exactly once at the threshold crossing.
         let old_turns = self
             .scheduler

@@ -224,10 +224,10 @@ pub struct SkillManageArgs {
 ```
 
 Operations:
-- **create**: validate name → generate embedding → persist to [raw memory](../memory/RAW_MEMORY.md) → synthesize to [notes](../memory/NOTES.md)
+- **create**: validate name → generate embedding → persist to [raw memory](memory/RAW_MEMORY.md) → synthesize to [notes](memory/NOTES.md)
 - **patch**: find by VFS path → update content → regenerate embedding → persist and resynthessize
-- **delete**: mark as deleted in [raw memory](../memory/RAW_MEMORY.md)
-- **list**: query [raw memory](../memory/RAW_MEMORY.md) with category=Skill filter → return name + description list
+- **delete**: mark as deleted in [raw memory](memory/RAW_MEMORY.md)
+- **list**: query [raw memory](memory/RAW_MEMORY.md) with category=Skill filter → return name + description list
 - **export**: dump skill content to SKILL.md file on disk
 
 ### skill_search Tool

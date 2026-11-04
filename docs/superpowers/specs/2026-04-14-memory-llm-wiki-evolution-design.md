@@ -518,10 +518,10 @@ Per-spec estimates:
 
 Each sub-spec gets its own design + plan documents in the same directory.
 
-- [Spec 5 — Orientation Layer](./2026-04-14-memory-llm-wiki-spec5-orientation-design.md) *(TODO)*
-- [Spec 6 — Compound Ingest](./2026-04-14-memory-llm-wiki-spec6-compound-ingest-design.md) *(TODO)*
-- [Spec 7 — User Profile](./2026-04-14-memory-llm-wiki-spec7-user-profile-design.md) *(TODO)*
-- [Spec 8 — Query Filed-back](./2026-04-14-memory-llm-wiki-spec8-query-filed-back-design.md) *(TODO)*
+- [Spec 5 — Orientation Layer](../plans/2026-04-14-memory-llm-wiki-spec5-orientation.md) *(TODO)*
+- [Spec 6 — Compound Ingest](../plans/2026-04-14-memory-llm-wiki-spec6-compound-ingest.md) *(TODO)*
+- [Spec 7 — User Profile] (historical design file unavailable in the current tree; retained here as a deferred sub-spec)
+- [Spec 8 — Query Filed-back](../plans/2026-04-17-memory-llm-wiki-spec8-query-filed-back.md) *(TODO)*
 
 Each sub-spec includes: acceptance criteria, affected files, test matrix, config additions, cleanup list, rollback path.
 

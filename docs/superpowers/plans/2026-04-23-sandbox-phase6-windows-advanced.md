@@ -3,7 +3,7 @@
 **Date**: 2026-04-23
 **Status**: Planning
 **Scope**: Windows 平台沙箱增强 — AppContainer 隔离 + WFP 网络过滤
-**Parent**: [2026-04-23-sandbox-multiplatform-design.md](./2026-04-23-sandbox-multiplatform-design.md)
+**Parent**: [2026-04-23-sandbox-multiplatform-design.md](../specs/2026-04-23-sandbox-multiplatform-design.md)
 
 ---
 

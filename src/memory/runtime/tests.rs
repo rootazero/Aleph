@@ -2,7 +2,10 @@ use std::task::Poll;
 
 use crate::capability::facade::Reference;
 use crate::capability::ownership::{OwnershipTree, VisibilityScope};
+use crate::memory::extensions::MemoryExtensionRegistry;
 use crate::memory::notes::store::NoteStore;
+use crate::memory::store::markdown::MarkdownSessionStore;
+use crate::resilience::database::StateDatabase;
 use crate::sync_primitives::Arc;
 use tokio::sync::oneshot;
 
@@ -15,6 +18,37 @@ fn runtime(root: &std::path::Path) -> Arc<MemoryRuntime> {
             note_memory_dir: root.join("notes"),
         },
         Arc::new(OwnershipTree::new()),
+    )
+}
+
+async fn configured_runtime(
+    root: &std::path::Path,
+    reconciler_enabled: bool,
+) -> Arc<MemoryRuntime> {
+    let mut config = crate::Config::default();
+    config.memory.embedding.providers.clear();
+    config.memory.dreaming.enabled = false;
+    config.memory.profile.enabled = false;
+    config.memory.reflection.enabled = false;
+    config.memory.reconciler.enabled = reconciler_enabled;
+    let raw_store = MarkdownSessionStore::new(&root.join("raw")).await.unwrap();
+    MemoryRuntime::new_with_services(
+        MemoryRuntimeConfig {
+            metadata_path: root.join("memory/metadata.db"),
+            note_memory_dir: root.join("notes"),
+        },
+        Arc::new(OwnershipTree::new()),
+        super::MemoryServicesConfig {
+            app_config: Arc::new(tokio::sync::RwLock::new(config)),
+            raw_store: Arc::new(raw_store),
+            session_store: None,
+            provider: None,
+            extensions: Arc::new(MemoryExtensionRegistry::new()),
+            state_db: Some(Arc::new(StateDatabase::in_memory().unwrap())),
+            default_agent_id: crate::routing::DEFAULT_AGENT_ID.into(),
+            curated_root: root.join("agents"),
+            snapshot_dir: root.join("snapshots"),
+        },
     )
 }
 
@@ -206,8 +240,9 @@ impl Drop for BusyStatement {
 #[tokio::test]
 async fn stop_error_is_sticky_but_cleanup_retry_reaches_off() {
     let root = tempfile::tempdir().unwrap();
-    let runtime = runtime(root.path());
+    let runtime = configured_runtime(root.path(), true).await;
     runtime.start().await.unwrap();
+    assert!(runtime.current_reconciler().is_some());
     let operation = runtime.capture(&reference()).unwrap().admit().unwrap();
     let backend = operation.backend().clone();
     operation
@@ -241,6 +276,7 @@ async fn stop_error_is_sticky_but_cleanup_retry_reaches_off() {
     assert!(runtime.stop().await.is_err());
     let status = runtime.status();
     assert_eq!(status.state, MemoryState::Failed);
+    assert!(runtime.current_reconciler().is_none());
     assert!(status.first_error.as_ref().unwrap().contains("close"));
     assert_eq!(runtime.status(), status, "status must not retry cleanup");
     drop(statement);
@@ -568,4 +604,55 @@ async fn child_panic_keeps_the_first_error_and_observes_its_sibling() {
     assert_eq!(runtime.status().state, MemoryState::Off);
     assert!(runtime.tasks.ids().is_empty());
     assert_eq!(runtime.stop().await.unwrap_err().to_string(), error);
+}
+
+#[tokio::test]
+async fn admin_reconciler_state_matrix_is_fail_closed() {
+    let root = tempfile::tempdir().unwrap();
+    let disabled = configured_runtime(root.path(), false).await;
+    assert!(disabled.current_reconciler().is_none());
+    disabled.start().await.unwrap();
+    assert!(disabled.current_reconciler().is_none());
+    disabled.stop().await.unwrap();
+
+    let cold = configured_runtime(&root.path().join("cold"), true).await;
+    assert!(cold.current_reconciler().is_none());
+    let (release, gate) = oneshot::channel();
+    *cold.initialization_gate.lock().unwrap() = Some(gate);
+    let mut start = Box::pin(cold.start());
+    assert!(matches!(futures::poll!(start.as_mut()), Poll::Pending));
+    let _backend = partial_backend(&cold).await;
+    assert_eq!(cold.status().state, MemoryState::Starting);
+    assert!(cold.current_reconciler().is_none());
+    release.send(()).unwrap();
+    start.await.unwrap();
+    assert!(cold.current_reconciler().is_some());
+    let release = pending_child(&cold).await;
+    let mut stop = Box::pin(cold.stop());
+    assert!(matches!(futures::poll!(stop.as_mut()), Poll::Pending));
+    assert_eq!(cold.status().state, MemoryState::Draining);
+    assert!(cold.current_reconciler().is_none());
+    release.send(()).unwrap();
+    stop.await.unwrap();
+    assert!(cold.current_reconciler().is_none());
+}
+
+#[tokio::test]
+async fn admin_reconciler_resolves_current_runtime_generation_and_rejects_stale_report() {
+    let root = tempfile::tempdir().unwrap();
+    let runtime = configured_runtime(root.path(), true).await;
+    runtime.start().await.unwrap();
+    let first = runtime
+        .current_reconciler()
+        .expect("enabled running runtime must expose its reconciler");
+    first.reconcile_once().await.unwrap();
+    assert!(first.last_reconcile_report().is_some());
+
+    runtime.stop().await.unwrap();
+    runtime.start().await.unwrap();
+    let second = runtime
+        .current_reconciler()
+        .expect("restarted enabled runtime must expose its new reconciler");
+    assert!(!Arc::ptr_eq(&first, &second));
+    runtime.stop().await.unwrap();
 }

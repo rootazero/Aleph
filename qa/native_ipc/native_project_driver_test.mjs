@@ -8,6 +8,23 @@ import { classifyPairingSurface } from './native_project_run.mjs';
 const template = extractMonitorScript(fs.readFileSync(new URL('../../desktop/shell/src/main.rs', import.meta.url), 'utf8'));
 const script = renderMonitorScript(template, { port: 31234, nonce: 'cd'.repeat(16) });
 
+test('inspect reports only fixed Panel mount booleans', () => {
+  const page = createMockPage({ script });
+  page.el('[data-panel-shell]');
+  page.el('[data-panel-shell] button[data-panel-plugin="project-a"]');
+  page.open();
+  const hello = page.events().find(event => event.type === 'hello');
+  page.deliver(buildCommand({ run: hello.run, id: 0, action: 'inspect' }));
+  page.flush();
+  const state = page.events().find(event => event.type === 'dom_state');
+  assert.deepEqual(
+    { panelShell: state.panelShell, panelTabA: state.panelTabA, panelTabB: state.panelTabB, panelContent: state.panelContent },
+    { panelShell: true, panelTabA: true, panelTabB: false, panelContent: false },
+  );
+  assert.deepEqual(Object.keys(state).filter(key => key.startsWith('panel')), ['panelShell', 'panelTabA', 'panelTabB', 'panelContent']);
+  assert.deepEqual(page.invokeLog.calls, []);
+});
+
 test('ordinary fresh Panel with no supported auth surface is classified as unavailable without IPC', () => {
   const page = createMockPage({ script });
   page.open();
@@ -38,6 +55,37 @@ test('reveal_projects uses the already open real route without toggling it close
   assert.deepEqual(page.log.clicks, ['[data-panel-nav="/projects"]']);
   assert.equal(page.events().at(-1).ok, true);
   assert.deepEqual(page.invokeLog.calls, []);
+});
+
+for (const [action, route] of [
+  ['navigate_projects', '/projects'],
+  ['navigate_project_a', '/panel/project-a/overview'],
+  ['navigate_project_b', '/panel/project-b/overview'],
+]) {
+  test(`${action} navigates only to its fixed route without DOM selectors or IPC`, () => {
+    const page = createMockPage({ script });
+    page.open();
+    const hello = page.events().find(event => event.type === 'hello');
+    page.deliver(buildCommand({ run: hello.run, id: 0, action }));
+    page.flush();
+    assert.deepEqual(page.log.navigations, [route]);
+    assert.deepEqual(page.log.clicks, []);
+    assert.deepEqual(page.invokeLog.calls, []);
+    assert.equal(page.events().at(-1).ok, true);
+  });
+}
+
+test('navigation commands refuse caller-supplied route fields', () => {
+  const page = createMockPage({ script });
+  page.open();
+  const hello = page.events().find(event => event.type === 'hello');
+  page.deliver(JSON.stringify({ v: 1, type: 'command', run: hello.run, id: 0, command: 'navigate_project_a', route: '/untrusted' }));
+  page.flush();
+  assert.deepEqual(page.log.navigations, []);
+  assert.deepEqual(page.log.clicks, []);
+  assert.deepEqual(page.invokeLog.calls, []);
+  assert.equal(page.events().at(-1).action, 'refused');
+  assert.equal(page.events().at(-1).ok, false);
 });
 
 // A wrong selector or missing click must fail, even if the monitor acknowledges a command.

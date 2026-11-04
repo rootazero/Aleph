@@ -174,7 +174,7 @@ Capture hooks write Markdown-backed raw records through `RawMemoryStore`. Each r
 
 All producers are synchronous-write / async-extract: each writes exactly one Markdown-backed raw record and returns; extraction runs later in `CompressionService` per its normal schedule. Emission is fire-and-forget (`tokio::spawn`) so hook overhead is kept out of the hot path.
 
-See: [docs/superpowers/specs/2026-04-13-memory-evolution-spec1-capture-hooks-design.md](../../../superpowers/specs/2026-04-13-memory-evolution-spec1-capture-hooks-design.md)
+See: [docs/superpowers/specs/2026-04-13-memory-evolution-spec1-capture-hooks-design.md](../../superpowers/specs/2026-04-13-memory-evolution-spec1-capture-hooks-design.md)
 
 ## 7. Readers
 

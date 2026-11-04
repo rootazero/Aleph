@@ -35,10 +35,10 @@
 - ⚠️ **Criterion 3 (Guard covers only what it knows)** applies to T1.5/T1.6 test additions — tests must exercise real product code paths, not mock-rebuilt implementations that pass trivially.
 - ⚠️ **CLAUDE.md "单分支开发" vs AGENTS.md "分支隔离"** — currently working in `panel-tui-polish` worktree (manual creation). Per CLAUDE.md letter: prefer main + EnterWorktree; per AGENTS.md: explicit worktree isolation. Decision deferred to user at merge time. Doc-only changes (Plan 1) are reversible; code changes (this plan) warrant explicit user decision before merge.
 - 📍 Subsystem routing references:
-  - `interfaces/webchat/` → [DESKTOP_SHELL.md](docs/reference/DESKTOP_SHELL.md) · FL §4.7 §6.8 §6.9
+  - `interfaces/webchat/` → [DESKTOP_SHELL.md](../../reference/DESKTOP_SHELL.md) · FL §4.7 §6.8 §6.9
   - `interfaces/tui/` `interfaces/cli/` `shared/protocol/` → FL §5.4 §5.11 §5.13 §5.23
   - `src/clarification/` `src/builtin_tools/ask_user.rs` → FL §5.3
-  - `src/gateway/handlers/chat.rs` (T2.6) → [GATEWAY.md](docs/reference/GATEWAY.md) · FL §6.9
+  - `src/gateway/handlers/chat.rs` (T2.6) → [GATEWAY.md](../../reference/GATEWAY.md) · FL §6.9
 - 🔧 **Validation set** (per CLAUDE.md "最小可信验证集"): Each commit must include at minimum `cargo test -p <modified-crate> --lib`. Before final merge: full `cargo clippy --workspace --all-targets` + `cargo test -p alephcore --bins --no-run` to verify harness boot tests still compile.
 
 ---

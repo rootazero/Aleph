@@ -1237,6 +1237,7 @@ impl projection::Views {
 
     fn build_active_plugin_tool_index(
         registry: &PluginRegistry,
+        mut cold_tools: Vec<ToolRegistration>,
     ) -> (
         HashMap<String, ToolRegistration>,
         HashMap<String, visibility::ScopeKey>,
@@ -1265,6 +1266,17 @@ impl projection::Views {
             }
         }
 
+        cold_tools.sort_by(|a, b| a.name.cmp(&b.name).then(a.plugin_id.cmp(&b.plugin_id)));
+        for tool in cold_tools {
+            // Keyed by the namespaced key, like every registry entry: the
+            // index keeps one registration per owner, and the short-name
+            // contest is settled per view. A Cold declaration never
+            // replaces a Ready registration of the same owner.
+            active_tools
+                .entry(namespaced_component_key(&tool.plugin_id, &tool.name))
+                .or_insert(tool);
+        }
+
         let scope_keys = registry
             .list_plugins()
             .into_iter()
@@ -1274,10 +1286,31 @@ impl projection::Views {
         (active_tools, scope_keys)
     }
 
+    fn cold_plugin_tools(&self) -> Vec<ToolRegistration> {
+        let owners = self.runtime_owners.lock().unwrap();
+        owners
+            .values()
+            .filter(|owner| {
+                owner.provider.state() == crate::capability::provider::ProviderState::Cold
+            })
+            .flat_map(|owner| {
+                owner.output.capabilities.iter().filter_map(|capability| {
+                    match capability {
+                        crate::extension::capability::CapabilityDeclaration::Tool(registration) => {
+                            Some(registration.clone())
+                        }
+                        _ => None,
+                    }
+                })
+            })
+            .collect()
+    }
+
     pub(crate) async fn refresh_active_plugin_tools(&self) {
+        let cold_tools = self.cold_plugin_tools();
         let (active_tools, scope_keys) = {
             let registry = self.plugin_registry.read().await;
-            Self::build_active_plugin_tool_index(&registry)
+            Self::build_active_plugin_tool_index(&registry, cold_tools)
         };
 
         // Both maps are derived under the one registry read above, but published
@@ -1353,6 +1386,10 @@ impl ExtensionManager {
     /// settled globally: the lexicographically first plugin id wins, the
     /// same winner this view has always published. The index keeps every
     /// registration — see [`Self::active_plugin_tools`].
+    ///
+    /// Admitted Cold declarations are part of this metadata projection: a
+    /// Cold tool is callable metadata, never a Ready proof, and the
+    /// canonical dispatch path activates its owner on the first call.
     pub fn active_plugin_tools_snapshot(&self) -> Vec<ToolRegistration> {
         let tools = self
             .active_plugin_tools
@@ -1365,8 +1402,31 @@ impl ExtensionManager {
         snapshot
     }
 
+    /// Snapshot of plugin tool metadata that the mounted-only transport
+    /// compatibility surfaces may actually invoke. Cold declarations remain
+    /// in the metadata projection for canonical dispatch, but MCP and other
+    /// compatibility adapters do not advertise an uncallable entry.
+    pub fn mounted_plugin_tools_snapshot(&self) -> Vec<ToolRegistration> {
+        let owner_states = self
+            .runtime_owners
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|(id, owner)| (id.clone(), owner.provider.state()))
+            .collect::<std::collections::HashMap<_, _>>();
+        self.active_plugin_tools_snapshot()
+            .into_iter()
+            .filter(|tool| {
+                owner_states.get(&tool.plugin_id).is_none_or(|state| {
+                    matches!(state, crate::capability::provider::ProviderState::Ready)
+                })
+            })
+            .collect()
+    }
+
     /// [`Self::active_plugin_tools_snapshot`] narrowed to the plugins a
-    /// session in `ctx` may see. This is face ① of the visibility predicate;
+    /// session in `ctx` may see. This is the metadata face; canonical
+    /// dispatch still performs permission admission before any activation.
     /// the request-build site (`tool_refresh::active_plugin_tools_for_agent`)
     /// is its only production caller.
     pub fn active_plugin_tools_visible_to(
@@ -1413,13 +1473,17 @@ impl ExtensionManager {
             .is_some_and(|key| visibility::visible_to(&key, ctx))
     }
 
-    /// Resolve an active plugin tool by short name or `plugin_id:name`.
+    /// Resolve a plugin tool from the live metadata projection by short name
+    /// or `plugin_id:name`.
     ///
     /// An explicit `plugin_id:name` names its owner and resolves to that
     /// registration directly. A bare short name is ambiguous across
     /// plugins: the winner is the one
     /// [`Self::active_plugin_tools_snapshot`] publishes — the
     /// lexicographically first plugin id.
+    ///
+    /// Cold declarations are metadata-visible here; the canonical handler
+    /// performs activation only after dispatch admission.
     pub fn resolve_active_plugin_tool(&self, name: &str) -> Option<ToolRegistration> {
         let tools = self
             .active_plugin_tools

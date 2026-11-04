@@ -1,5 +1,7 @@
 # Tool System
 
+> Current-state cross-subsystem map: [`FEATURE_LOCATOR.md`](FEATURE_LOCATOR.md#current-state--当前现状). This document owns callable Tool dispatch and its raw compatibility boundary; it does not imply that deferred Capability kinds are mounted through the Tool registry. / 当前现状跨子系统地图：[`FEATURE_LOCATOR.md`](FEATURE_LOCATOR.md#current-state--当前现状)。本文档拥有 callable Tool dispatch 与 raw compatibility 边界；这不表示 deferred Capability kinds 已通过 Tool registry mount。
+
 > AlephTool trait, built-in tools, and tool development guide
 
 ---
@@ -126,6 +128,10 @@ Public `load_all` and `reload` remain discovery/mount primitives and do not impl
 B6（Tool/Plugin 启动激活）保持 B5 的 Cold discovery 语义，把 enabled 且 eligible 的 tool-only WASM 接入真实 `ExtensionManager::ensure_loaded`。discovery 在 `load_guard` 内执行但不发布 `loaded`；捕获 exact Cold owner 后释放 guard，在 guard 外激活，再重新取 guard 用 proof settle 每个 owner，最后才写入 `cache_state.loaded=true`。`boot_guard` 串行化整个 pass。boot 与显式 enable 共用 `owner_activation_proof`，统一检查 current owner incarnation、provider `Ready`、row `Loaded`、mount identity、batch receipt 与 effect scope。未 attach activation context 时 fail-closed，provider 进入 `Failed`；单个插件失败不会阻断其他插件。
 
 public `load_all` 与 `reload` 仍是 discovery/mount 原语，不隐式激活 Cold，并与 boot pass 互斥。catalog、describe、resolve、`plugins.list`、observer、doctor 等读侧没有 activation 入口。D-C 因此保留这些 discovery-only 路径、未 attach 失败和显式 control 竞态中的 Cold 可见性。B6 只证明 Tool/Plugin slice。Stage H 进一步明确：`ensure_discovered()` 只做 declaration-only discovery；`ensure_loaded()` 与显式 enable/reload/control 仍是 activation boundary。startup catalog 与 agent-run 路径只有在调用既有 load/activation 路径时才是 activation boundary，而 `describe` / `resolve` / `project` / `ProjectionHost` 的 read-side 调用不会启动 provider。B5 lifecycle tests 与单次/并发 `ensure_loaded` 的真实 WASM boot tests 仍覆盖 failure matrix；channel、terminal、memory、MCP、replay、scheduler、EffectClaim 与其他 Capability kinds 仍 deferred，当前 Feishu → Zahir 状态受 B8.2 的 **NO-GO / deferred** 边界约束。
+
+`Current closure (2026-11-03):` the dated B5/B6 paragraphs above remain historical evidence for their explicit-control and boot behavior. Current declaration discovery publishes metadata-only Cold entries in the existing canonical registry; an exact permitted canonical Tool call may activate the retained owner through single-flight activation and re-enter the Ready handler after identity/generation checks. Read-side catalog/describe/resolve/project/observer/doctor calls never activate, and transport compatibility remains mounted-only. No other Capability kind is implied by this closure.
+
+`当前闭合（2026-11-03）：` 上方 B5/B6 日期段落仍是显式 control 与 boot 行为的历史证据。当前 declaration discovery 会在既有 canonical registry 中发布只含 metadata 的 Cold entry；只有通过权限与 scope 的 exact canonical Tool call 才可能经 single-flight 激活 retained owner，并在 identity/generation 校验后重新进入 Ready handler。catalog/describe/resolve/project/observer/doctor 等读侧永不激活，transport compatibility 仍保持 mounted-only。本闭合不表示其他 Capability kind 已接入。
 
 ### B8.2 current Feishu lifecycle re-gate / B8.2 当前 Feishu 生命周期复闸（2026-10-25）
 

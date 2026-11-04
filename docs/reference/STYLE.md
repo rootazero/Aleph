@@ -19,7 +19,7 @@
 
 **Immutability**: Variables are immutable by default. Use `let mut` only when required.
 
-工程规范全文 → [CODE_ORGANIZATION.md](docs/reference/CODE_ORGANIZATION.md) · [DESIGN_PATTERNS.md](docs/reference/DESIGN_PATTERNS.md)
+工程规范全文 → [CODE_ORGANIZATION.md](CODE_ORGANIZATION.md) · [DESIGN_PATTERNS.md](DESIGN_PATTERNS.md)
 
 ---
 

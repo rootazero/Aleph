@@ -50,7 +50,7 @@
 
 ## Frozen shared interfaces / 冻结共享接口
 
-**Normative source:** [`../../../.superpowers/sdd/2026-10-07-panel-browser-workspace/task-1-contract-proposal.md`](../../../.superpowers/sdd/2026-10-07-panel-browser-workspace/task-1-contract-proposal.md) r4, with freeze acceptance and consumption rules recorded in [`../../../.superpowers/sdd/2026-10-07-panel-browser-workspace/task-1-contract-checkpoint.md`](../../../.superpowers/sdd/2026-10-07-panel-browser-workspace/task-1-contract-checkpoint.md). The proposal is **FROZEN FOR TASK 1** and is the sole source of concrete wire fields, serde/schema shapes, validation invariants, and constants. This plan intentionally keeps no competing field sketch. Timestamps are Unix milliseconds and wire IDs remain `String`.
+**Normative source:** historical SDD artifacts under `.superpowers/sdd/2026-10-07-panel-browser-workspace/` are unavailable in the current tree; this plan remains a historical record and does not claim those artifacts are current.
 
 - **Binding and authority:** consume the exact tagged `IssuerIdentity`, `ResourceBinding`, `ViewerBinding`, and `ArtifactBinding` contracts from r4 §§1/4. Effective authority is the exact server-derived issuer/principal/task/resource/target tuple, with permissions `server_policy(...) ∩ request`; artifact issue/consume/exchange/auth fails closed.
 - **Same-target companion:** consume r4's `CompanionCandidate`, `CompanionLayout`, and `CompanionStateHint`. A candidate is revision-scoped state/layout of its containing resource, inherits that resource's already-bound target, and has no `target_id`, `browser_session_id`, or independent `resource_id`; stale/unknown selection creates no target, grant, or WS.

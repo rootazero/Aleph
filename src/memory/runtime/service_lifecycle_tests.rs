@@ -13,6 +13,151 @@ use crate::sync_primitives::{Arc, Ordering};
 use super::{MemoryRuntime, MemoryRuntimeConfig, MemoryServicesConfig};
 
 #[tokio::test]
+async fn session_end_archives_raw_when_derived_memory_is_off() {
+    use crate::memory::store::raw_memory::SessionEndReason;
+
+    let root = tempfile::tempdir().unwrap();
+    let raw = Arc::new(
+        MarkdownSessionStore::new(&root.path().join("memory"))
+            .await
+            .unwrap(),
+    );
+    let runtime = MemoryRuntime::new(
+        MemoryRuntimeConfig {
+            metadata_path: root.path().join("memory/metadata.db"),
+            note_memory_dir: root.path().join("notes"),
+        },
+        Arc::new(OwnershipTree::new()),
+    );
+    runtime.start().await.unwrap();
+    runtime.stop().await.unwrap();
+    assert!(runtime.operation().is_err());
+    let sessions = SessionManager::new(SessionManagerConfig {
+        db_path: root.path().join("sessions.db"),
+        ..Default::default()
+    })
+    .unwrap()
+    .with_memory_runtime(&runtime);
+    let writer = raw.clone();
+    let (sent, received) = tokio::sync::oneshot::channel();
+    let task = tokio::spawn(async move {
+        sessions
+            .capture_session_end(
+                writer,
+                RawMemory::new(
+                    "Raw digest survives derived Off.".into(),
+                    RawMemorySource::SessionEnd {
+                        reason: SessionEndReason::TaskDone,
+                    },
+                )
+                .with_agent("off-archive")
+                .with_session("closed-session"),
+                None,
+                true,
+            )
+            .await;
+        sent.send(()).unwrap();
+    });
+    received.await.unwrap();
+    task.await.unwrap();
+    let rows = raw
+        .get_unprocessed_raw_memories("off-archive", 10)
+        .await
+        .unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].content, "Raw digest survives derived Off.");
+    assert_eq!(rows[0].session_id.as_deref(), Some("closed-session"));
+    assert!(matches!(
+        rows[0].source,
+        RawMemorySource::SessionEnd {
+            reason: SessionEndReason::TaskDone
+        }
+    ));
+    assert!(runtime.operation().is_err());
+}
+
+#[tokio::test]
+async fn flush_does_not_spawn_derived_work_after_runtime_stop() {
+    use crate::memory::flush::{flush_agent_memory, FlushRegistry};
+    use std::pin::pin;
+    use std::task::Poll;
+    use std::time::Duration;
+
+    let root = tempfile::tempdir().unwrap();
+    let raw = Arc::new(
+        MarkdownSessionStore::new(&root.path().join("memory"))
+            .await
+            .unwrap(),
+    );
+    let mut config = crate::Config::default();
+    let mut embedder = EmbeddingProviderConfig::ollama();
+    embedder.api_base = "http://127.0.0.1:9/v1".into();
+    config.memory.embedding.active_provider_id = embedder.id.clone();
+    config.memory.embedding.providers = vec![embedder];
+    config.memory.compound_ingest.enabled = true;
+    config.memory.dreaming.enabled = false;
+    config.memory.profile.enabled = false;
+    let runtime = MemoryRuntime::new_with_services(
+        MemoryRuntimeConfig {
+            metadata_path: root.path().join("memory/metadata.db"),
+            note_memory_dir: root.path().join("notes"),
+        },
+        Arc::new(OwnershipTree::new()),
+        MemoryServicesConfig {
+            app_config: Arc::new(tokio::sync::RwLock::new(config)),
+            raw_store: raw.clone(),
+            session_store: None,
+            provider: Some(crate::providers::create_mock_provider()),
+            extensions: Arc::new(MemoryExtensionRegistry::new()),
+            state_db: None,
+            default_agent_id: "flush-boundary".into(),
+            curated_root: root.path().join("agents"),
+            snapshot_dir: root.path().join("snapshots"),
+        },
+    );
+    runtime.start().await.unwrap();
+    let operation = runtime.operation().unwrap();
+    let services = operation.services().unwrap();
+    let compression = services.compression.as_ref().unwrap().clone();
+    drop(services);
+    drop(operation);
+    runtime.stop().await.unwrap();
+    // Bypassed telemetry is still a real compression effect: consuming its
+    // processed flag must require admission, even without an LLM call.
+    raw.insert_raw_memory(
+        &RawMemory::new(
+            "Tool telemetry must remain pending while derived Memory is Off.".into(),
+            RawMemorySource::ToolInvocation {
+                tool_name: "read".into(),
+                success: true,
+                duration_ms: 1,
+            },
+        )
+        .with_agent("flush-boundary"),
+    )
+    .await
+    .unwrap();
+    let registry = FlushRegistry::new();
+    let guard = registry.begin("flush-boundary");
+    let mut ready = pin!(registry.await_ready("flush-boundary", Duration::from_secs(10)));
+    assert!(matches!(futures::poll!(&mut ready), Poll::Pending));
+    flush_agent_memory(guard, "flush-boundary".into(), compression.clone()).await;
+    assert!(
+        ready.await,
+        "rejected derived work must still release raw readiness"
+    );
+    assert_eq!(
+        raw.count_unprocessed("flush-boundary").await.unwrap(),
+        1,
+        "post-stop compression must not consume raw rows before backend admission"
+    );
+    assert!(compression
+        .compress_to_notes("flush-boundary")
+        .await
+        .is_err());
+}
+
+#[tokio::test]
 async fn review_open_loops_use_each_activation_snapshot() {
     let root = tempfile::tempdir().unwrap();
     let raw = Arc::new(
