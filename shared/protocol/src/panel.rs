@@ -142,13 +142,23 @@ pub fn valid_version_segment(value: &str) -> bool {
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-' | b'+'))
 }
 
+/// Safe path segment shared by manifest admission and browser validation.
+///
+/// A path segment is either an identity segment or a version segment: the
+/// canonical community entry embeds the plugin version, and semver build
+/// metadata carries `+` (path-safe — unlike a query string, a `+` in a path
+/// segment is a literal plus, not a space).
+pub fn valid_path_segment(value: &str) -> bool {
+    valid_version_segment(value)
+}
+
 /// Validate a relative single-file asset path shared by manifest and browser projection.
 pub fn valid_relative_entry(value: &str) -> bool {
     if value.is_empty() || value.starts_with('/') || value.contains('\\') || value.contains(':') {
         return false;
     }
     let path = value.strip_prefix("./").unwrap_or(value);
-    !path.is_empty() && path.split('/').all(valid_identity_segment)
+    !path.is_empty() && path.split('/').all(valid_path_segment)
 }
 
 /// Existing Panel SDK permission vocabulary; generic plugin permissions do not apply.

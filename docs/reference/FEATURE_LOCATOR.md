@@ -6587,6 +6587,14 @@ Observed evidence: focused clean suites selected 422/422; the final session-stor
 
 This entry is a bounded lifecycle record, not a claim that every Memory writer stops, that the process unloads native code, that RSS is reclaimed, or that external effects are exactly once. The required workspace test remains disclosed as exit 101 with target-specific failures. See the [lifecycle run](../superpowers/runs/2026-11-01-memory-runtime-lifecycle-run.md) and [approved design](../superpowers/specs/2026-11-01-memory-runtime-lifecycle-design.md) for the full evidence and deferred scope. / 该条目是有界生命周期记录，不宣称所有 Memory writer 停止、native code 卸载、RSS 回收或外部效果 exactly once；workspace 测试仍如实记录为 exit 101 及其 target 失败。完整证据与 deferred scope 见运行记录和设计文档。
 
+### Windows archive rename retry / Windows 归档 rename 重试（2026-11-04）
+
+The file backend now separates destination collisions from Windows sharing denials. Errors 5/32/33 with no destination receive six same-path retries (25/50/100/200/400/800 ms, nominal total 1575 ms); persistent denial still fails with the OS error, and `<key>-N` plus the 1024 collision cap remain unchanged. Native controlled-handle tests are green. Rebuilt-server acceptance passed providerless 102/102, configured 110/110, and archive 20 cycles × 3 with zero first-attempt failures and preserved prior-file hashes; the aborted full-lib suite and named baseline comparison are recorded separately in the [Windows rename run](../superpowers/runs/2026-11-04-windows-archive-rename-retry-run.md). Both lifecycle QA scripts now record a single delete attempt and fail instead of healing an archive denial. / file backend 已区分目标碰撞与 Windows 共享拒绝：目标不存在且 OS error 为 5/32/33 时，在原路径上按 25/50/100/200/400/800 ms 重试六次，名义总退避 1575 ms；持续拒绝仍携 OS 错误失败，`<key>-N` 与 1024 碰撞上限保持不变。原生受控句柄测试已绿，重建 server 的 providerless 102/102、configured 110/110 与归档 20 轮 × 3 均通过，无首次失败且旧文件哈希保留；中止的全量库测试及其逐名基线对照单独记载。两个生命周期 QA 脚本均只记录一次删除，不再自行治愈归档拒绝。
+
+The full-lib suite remains non-green; tests after the abnormal exit were not executed. Same-name baseline failures do not establish identical causes. / 全量库测试仍未绿，异常退出后的测试未执行；与基线同名失败不等于根因相同。
+
+Attribution did not establish a store-owned transcript leak; the earlier intermittent live handle owner remains unexplained. The no-`[general]` effective SQLite default versus the present-table file default remains a separate finding. Linux/macOS, real UI/desktop QA, RSS reclamation, external-effect exactly-once and cluster/multiprocess placement remain outside this slice. / 归因未证实服务自身 transcript 泄漏，此前间歇性 live 句柄持有者仍未解释。无 `[general]` 时实际 SQLite 默认与有表时 file 默认的差异留作独立问题。Linux/macOS、真机 UI/desktop QA、RSS 回收、外部效果 exactly-once、集群/多进程放置均未在本切片闭合。
+
 ## Reference links / 参考链接
 
 - [Architecture](ARCHITECTURE.md) - System overview

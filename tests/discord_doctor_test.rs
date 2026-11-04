@@ -28,24 +28,25 @@ use alephcore::diagnostics::checks::DiscordChannelHealthCheck;
 #[tokio::test]
 async fn healthy_config_yields_discord_ok_tag() {
     let mut tmp = tempfile::NamedTempFile::new().unwrap();
-    let payload = serde_json::json!({
-        "channels": [{
-            "channel_type": "discord",
-            "config": {
-                "bot_token": "x".repeat(60),
-                "application_id": 999,
-                "slash_commands_enabled": true,
-                "intents": {
-                    "guild_messages": true,
-                    "message_content": true,
-                    "direct_messages": true,
-                },
-                "max_message_length": 2000,
-            }
-        }]
-    });
-    tmp.write_all(serde_json::to_vec(&payload).unwrap().as_slice())
-        .unwrap();
+    // The doctor reads the real config file format: TOML, with one
+    // `[channels.<id>]` table per channel and the channel's own settings
+    // inline.
+    let payload = format!(
+        r#"[channels.discord]
+type = "discord"
+bot_token = "{}"
+application_id = 999
+slash_commands_enabled = true
+max_message_length = 2000
+
+[channels.discord.intents]
+guild_messages = true
+message_content = true
+direct_messages = true
+"#,
+        "x".repeat(60)
+    );
+    tmp.write_all(payload.as_bytes()).unwrap();
 
     let check = DiscordChannelHealthCheck::new(tmp.path().to_path_buf());
     let findings = check.run(Posture::Inspect).await;
@@ -70,22 +71,19 @@ async fn healthy_config_yields_discord_ok_tag() {
 #[tokio::test]
 async fn misaligned_intents_and_missing_application_id_both_surfaced() {
     let mut tmp = tempfile::NamedTempFile::new().unwrap();
-    let payload = serde_json::json!({
-        "channels": [{
-            "channel_type": "discord",
-            "config": {
-                "bot_token": "x".repeat(60),
-                "slash_commands_enabled": true,
-                "application_id": null,
-                "intents": {
-                    "guild_messages": true,
-                    "message_content": false,
-                }
-            }
-        }]
-    });
-    tmp.write_all(serde_json::to_vec(&payload).unwrap().as_slice())
-        .unwrap();
+    let payload = format!(
+        r#"[channels.discord]
+type = "discord"
+bot_token = "{}"
+slash_commands_enabled = true
+
+[channels.discord.intents]
+guild_messages = true
+message_content = false
+"#,
+        "x".repeat(60)
+    );
+    tmp.write_all(payload.as_bytes()).unwrap();
 
     let check = DiscordChannelHealthCheck::new(tmp.path().to_path_buf());
     let findings = check.run(Posture::Inspect).await;
@@ -147,14 +145,11 @@ fn check_metadata_matches_documented_strings() {
 #[tokio::test]
 async fn a_config_without_discord_is_ok_not_misconfigured() {
     let mut tmp = tempfile::NamedTempFile::new().unwrap();
-    let payload = serde_json::json!({
-        "channels": [{
-            "channel_type": "telegram",
-            "config": {"token": "y"}
-        }]
-    });
-    tmp.write_all(serde_json::to_vec(&payload).unwrap().as_slice())
-        .unwrap();
+    let payload = r#"[channels.telegram]
+type = "telegram"
+token = "y"
+"#;
+    tmp.write_all(payload.as_bytes()).unwrap();
 
     let check = DiscordChannelHealthCheck::new(tmp.path().to_path_buf());
     let findings = check.run(Posture::Inspect).await;

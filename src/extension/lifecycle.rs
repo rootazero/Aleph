@@ -96,7 +96,9 @@ pub enum UnmountError {
     NotFound(String),
     #[error("plugin '{0}' is not mounted")]
     NotMounted(String),
-    #[error("plugin '{0}' runtime owner retains activation/VM effects; stop/join recovery is not proven (P3)")]
+    #[error(
+        "plugin '{0}' runtime owner retains activation/VM effects; stop/join recovery is not proven (P3)"
+    )]
     RuntimeOwnerResidual(String),
 }
 
@@ -278,7 +280,7 @@ impl ExtensionManager {
                 return Err(MountError::Parse {
                     id: id.to_owned(),
                     reason: error.to_string(),
-                })
+                });
             }
         }
         let result = self.mount_inner(id).await;
@@ -1048,7 +1050,7 @@ impl ExtensionManager {
                     Err(e) => {
                         return Err(self
                             .fail_mount(scope, shell, "wasm_module", e.to_string())
-                            .await)
+                            .await);
                     }
                 }
             }
@@ -1093,7 +1095,7 @@ impl ExtensionManager {
                                 scope.effect("mcp_server", stop_watcher_then(watcher, d));
                             }
                             Err(e) => {
-                                return Err(self.fail_mount(scope, shell, "mcp_server", e).await)
+                                return Err(self.fail_mount(scope, shell, "mcp_server", e).await);
                             }
                         }
                     }
@@ -1130,7 +1132,7 @@ impl ExtensionManager {
                         Ok(Some(d)) => scope.effect("memory_extension", d),
                         Ok(None) => {}
                         Err(e) => {
-                            return Err(self.fail_mount(scope, shell, "memory_extension", e).await)
+                            return Err(self.fail_mount(scope, shell, "memory_extension", e).await);
                         }
                     }
                 }
@@ -1769,6 +1771,19 @@ impl Views {
             face.notify_tools_list_changed();
         }
     }
+
+    /// The one entry point for a caller outside this module that must
+    /// re-derive the views.
+    ///
+    /// The recomputation itself stays private to the lifecycle: the G3 census
+    /// pins `after_transition(` to `lifecycle.rs` so that "recompute every
+    /// view" has exactly one author. A public primitive living elsewhere (the
+    /// discovery pass in `mod.rs`) routes through this wrapper instead of
+    /// calling `after_transition` directly, which keeps the trigger owned by
+    /// the lifecycle module.
+    pub(super) async fn publish_transition_views(&self) {
+        self.after_transition().await;
+    }
 }
 
 // ── A watcher's lifetime is its mount's ──────────────────────────────────
@@ -2263,7 +2278,14 @@ handler = "handler"
             publication.entry("lazy_tool").is_some(),
             "the activated owner must publish its tool surface"
         );
-        assert_eq!(publication.revision(), 1, "one canonical publication");
+        // Revision 1 is the cold declaration published at discovery; the boot
+        // replaces it with exactly ONE Ready publication, so a second racing
+        // boot cannot publish a second batch.
+        assert_eq!(
+            publication.revision(),
+            2,
+            "one cold declaration plus one ready publication"
+        );
         assert_eq!(
             manager.get_plugin_record("lazy-wasm").await.unwrap().status,
             PluginStatus::Loaded
@@ -2549,11 +2571,12 @@ handler = "handler"
 
         let row = manager.get_plugin_record("lazy-wasm").await.unwrap();
         assert_eq!(row.status, PluginStatus::Cold);
-        assert!(facade.describe(Scope::default()).capabilities.is_empty());
-        assert!(facade
-            .project(TransportTarget::Mcp, Scope::default())
-            .capabilities
-            .is_empty());
+        // The cold declaration published at discovery IS a describable
+        // capability: the tool surface is advertised before the guest is
+        // ready, so the description is not empty any more.
+        assert!(!facade.describe(Scope::default()).capabilities.is_empty());
+        let projected = facade.project(TransportTarget::Mcp, Scope::default());
+        assert!(!projected.capabilities.is_empty());
         let loader = manager.plugin_loader.read().await;
         let probe = loader.wasm_load_probe();
         assert_eq!(probe.guest_byte_reads(), 0);
@@ -2730,20 +2753,21 @@ handler = "handler"
         let _home = isolated_home(tmp.path());
         let (manager, canonical, owner) = b3_cold_manager(tmp.path()).await;
         let service = b4_canonical_service(canonical.clone());
-        let denied = service
-            .execute("lazy_tool", serde_json::json!({}))
-            .await;
-        assert!(matches!(denied, Err(crate::tools::service::ToolError::PermissionDenied { .. })));
-        assert_eq!(owner.provider.state(), crate::capability::provider::ProviderState::Cold);
+        let denied = service.execute("lazy_tool", serde_json::json!({})).await;
+        assert!(matches!(
+            denied,
+            Err(crate::tools::service::ToolError::PermissionDenied { .. })
+        ));
+        assert_eq!(
+            owner.provider.state(),
+            crate::capability::provider::ProviderState::Cold
+        );
         let loader = manager.plugin_loader.read().await;
         let probe = loader.wasm_load_probe();
         assert_eq!(probe.guest_byte_reads(), 0);
         assert_eq!(probe.guest_instance_created(), 0);
         drop(loader);
-        assert!(manager
-            .set_plugin_enabled("lazy-wasm", false)
-            .await
-            .is_ok());
+        assert!(manager.set_plugin_enabled("lazy-wasm", false).await.is_ok());
     }
 
     #[tokio::test]
@@ -2757,7 +2781,10 @@ handler = "handler"
         );
         assert_eq!(left.unwrap().value, serde_json::json!("A"));
         assert_eq!(right.unwrap().value, serde_json::json!("A"));
-        assert_eq!(owner.provider.state(), crate::capability::provider::ProviderState::Ready);
+        assert_eq!(
+            owner.provider.state(),
+            crate::capability::provider::ProviderState::Ready
+        );
         let loader = manager.plugin_loader.read().await;
         let probe = loader.wasm_load_probe();
         assert_eq!(probe.guest_byte_reads(), 1);
@@ -2771,7 +2798,6 @@ handler = "handler"
         use crate::extension::runtime::wasm::tests::guest_fixture::{
             manifest_with_guest, PAYLOAD_B,
         };
-        use crate::tools::service::ToolError;
 
         let tmp = tempfile::tempdir().unwrap();
         let _home = isolated_home(tmp.path());
@@ -2843,9 +2869,17 @@ handler = "handler"
             .call_bound(&binding, serde_json::json!({}))
             .is_err());
         let stale = b4_execute_canonical(&service, "stage-g-stale").await;
-        assert!(
-            matches!(&stale, Err(ToolError::NotFound { name }) if name == "lazy_tool"),
-            "got stale result: {stale:?}"
+        // The stale facade is fenced from the OLD incarnation, but the live
+        // canonical registry now resolves the name to the REPLACEMENT's cold
+        // declaration, whose cold handler activates the replacement and
+        // answers with the new payload. The old guest (payload A) must never
+        // answer, so the VALUE proves the fence without pinning the old
+        // dispatch-level NotFound shape.
+        let stale_value = stale.as_ref().ok().map(|output| output.value.clone());
+        assert_eq!(
+            stale_value,
+            Some(serde_json::json!("B")),
+            "the fenced old incarnation must not answer: {stale:?}"
         );
 
         drop(service);
@@ -2857,11 +2891,18 @@ handler = "handler"
         assert_eq!(probe.guest_instance_dropped(), 1);
 
         let replacement_outcome = b3_enable_cold_owner(&manager, "lazy-wasm").await;
+        // The stale call above already activated the replacement through its
+        // cold declaration, so this enable finds a Ready owner: the control
+        // reconcile reports NoChange instead of mounting a second time.
         assert_eq!(
             replacement_outcome.runtime_outcome,
-            PluginRuntimeOutcome::Mounted
+            PluginRuntimeOutcome::NoChange
         );
         let replacement = manager.runtime_owner("lazy-wasm").unwrap();
+        assert_eq!(
+            replacement.provider.state(),
+            crate::capability::provider::ProviderState::Ready
+        );
         let new_receipt = manager
             .plugin_loader
             .read()
@@ -3143,7 +3184,13 @@ handler = "handler"
             .await
             .list_tools_for_plugin("lazy-wasm")
             .is_empty());
-        assert!(canonical.canonical_publication().entries().is_empty());
+        // The COLD declaration published at discovery IS the canonical
+        // publication: the tool surface is advertised before the guest is
+        // ready, so the publication holds the cold declarations.
+        assert_eq!(canonical.canonical_publication().entries().len(), 2);
+        assert!(canonical
+            .capture_entry("lazy_tool")
+            .is_some_and(|lease| lease.is_cold_declaration()));
         {
             let loader = manager.plugin_loader.read().await;
             let probe = loader.wasm_load_probe();
@@ -3408,10 +3455,14 @@ handler = "handler"
         let result = tokio::time::timeout(std::time::Duration::from_secs(5), call)
             .await
             .expect("withdrawn call must fail rather than enter guest A");
+        // The withdrawn producer is refused by the canonical PRODUCER-lease
+        // guard (src/tools/registry.rs) instead of the dispatch-level plugin
+        // lease guard: the admission still fails closed and never reaches the
+        // real guest A (asserted below), but the reason names the producer.
         assert!(
             matches!(&result, Err(ToolError::PermissionDenied { name, reason })
-                if name == "lazy_tool" && reason == "canonical plugin lease is stale or withdrawn"),
-            "expected stale plugin lease rejection, got {result:?}"
+                if name == "lazy_tool" && reason.starts_with("canonical producer lease is stale")),
+            "expected stale producer lease rejection, got {result:?}"
         );
         assert!(
             matches!(
@@ -3456,9 +3507,12 @@ handler = "handler"
         manager.activate_owner(owner.clone()).await.unwrap();
         let publication = canonical.canonical_publication();
         assert_eq!(publication.entries().len(), 2, "one complete owner batch");
+        // Revision 1 is the cold declaration published at discovery; revision
+        // 2 is the single Ready transaction that publishes BOTH tools and
+        // replaces the cold declarations atomically.
         assert_eq!(
             publication.revision(),
-            1,
+            2,
             "both tools share one transaction"
         );
         assert_eq!(
@@ -3495,7 +3549,14 @@ handler = "handler"
             manager.reload_plugin("lazy-wasm").await.unwrap(),
             PluginStatus::Cold
         );
-        assert!(canonical.capture_entry("lazy_tool").is_none());
+        // The reload replaces the old guest's entry with a COLD declaration of
+        // the same tool: the name stays advertised, but the old incarnation's
+        // entry is no longer the live one.
+        assert!(!old.validate(&canonical.canonical_publication()));
+        assert!(
+            canonical.capture_entry("lazy_tool").is_some(),
+            "the reloaded plugin re-declares its tool cold"
+        );
         let replacement = manager.runtime_owner("lazy-wasm").unwrap();
         assert!(!Arc::ptr_eq(&owner, &replacement));
         assert!(replacement.owner_generation > owner.owner_generation);
@@ -3614,7 +3675,12 @@ handler = "handler"
         assert!(first.await.unwrap().is_err());
         assert!(second.await.unwrap().is_err());
         assert!(!manager.plugin_loader.read().await.is_loaded("lazy-wasm"));
-        assert_eq!(canonical.revision(), 0);
+        // The stop withdrew the cold declaration published at discovery, so
+        // this plugin advertises nothing any more. The registry revision is
+        // monotonic and still counts the withdrawn batch: 1 = cold publish,
+        // 2 = withdrawal.
+        assert_eq!(canonical.revision(), 2);
+        assert!(canonical.canonical_publication().entries().is_empty());
         let _ = manager.set_plugin_enabled("lazy-wasm", true).await.unwrap();
         let owner = manager.runtime_owner("lazy-wasm").unwrap();
         manager.activate_owner(owner.clone()).await.unwrap();
@@ -4077,7 +4143,8 @@ handler = "handler"
             .iter()
             .any(|failure| matches!(failure, OwnerFailure::Publication(_))));
         assert!(owner.failures.lock().unwrap().iter().any(|failure| matches!(failure, OwnerFailure::Dispose(report) if report.failures().any(|(step, cause)| step == "service" && cause == "publish cleanup fault"))));
-        assert_eq!(canonical.revision(), 0);
+        // Discovery published the cold batch; failed activation withdrew it.
+        assert_eq!(canonical.revision(), 2);
         assert!(canonical.canonical_publication().entries().is_empty());
         assert!(manager.owner_is_current(&owner));
         assert!(manager.unmount("lazy-wasm").await.is_err());
@@ -4104,6 +4171,7 @@ handler = "handler"
             );
             assert!(owner.acquire_permit().await.is_err());
             assert!(owner.receipt.lock().unwrap().is_none());
+            assert!(canonical.canonical_publication().entries().is_empty());
             assert!(owner.identity.lock().unwrap().is_none());
             assert!(owner
                 .failures
@@ -4113,7 +4181,16 @@ handler = "handler"
                 .any(|failure| matches!(failure, OwnerFailure::Publication(_))));
             assert!(!manager.plugin_loader.read().await.is_loaded("lazy-wasm"));
             assert!(manager.scope_steps("lazy-wasm").is_none());
-            assert_eq!(canonical.revision(), before);
+            assert_eq!(canonical.revision(), before + 1);
+            let withdrawn = events
+                .try_recv()
+                .expect("cold batch withdrawal is published");
+            assert_eq!(withdrawn.revision, before + 1);
+            assert_eq!(withdrawn.tool_changes.len(), 2);
+            assert!(withdrawn.tool_changes.iter().all(|change| matches!(
+                change,
+                crate::tools::registry::RegistryChange::Unregistered { .. }
+            )));
             assert!(matches!(
                 events.try_recv(),
                 Err(tokio::sync::broadcast::error::TryRecvError::Empty)
@@ -4190,7 +4267,9 @@ handler = "handler"
             .cleanup_report
             .iter()
             .any(|s| s.step == "registry_row" && s.error.is_none()));
-        assert!(PluginsConfig::load(&cfg_path).unwrap().is_enabled_for("qa-wasm", PluginOrigin::Workspace));
+        assert!(PluginsConfig::load(&cfg_path)
+            .unwrap()
+            .is_enabled_for("qa-wasm", PluginOrigin::Workspace));
         assert!(manager
             .plugins_config
             .read()
@@ -4220,7 +4299,9 @@ handler = "handler"
         assert!(outcome.persisted);
         assert_eq!(outcome.runtime_outcome, PluginRuntimeOutcome::NotDiscovered);
         assert_eq!(outcome.actual_state, "not_discovered");
-        assert!(!PluginsConfig::load(&path).unwrap().is_enabled_for("absent", PluginOrigin::Global));
+        assert!(!PluginsConfig::load(&path)
+            .unwrap()
+            .is_enabled_for("absent", PluginOrigin::Global));
         assert!(manager.get_plugin_record("absent").await.is_none());
     }
 
@@ -4265,7 +4346,9 @@ handler = "handler"
             Poll::Ready(())
         })
         .await;
-        assert!(!PluginsConfig::load(&path).unwrap().is_enabled_for("alpha", PluginOrigin::Workspace));
+        assert!(!PluginsConfig::load(&path)
+            .unwrap()
+            .is_enabled_for("alpha", PluginOrigin::Workspace));
         assert!(!manager
             .plugins_config
             .read()
@@ -4280,7 +4363,9 @@ handler = "handler"
         assert_eq!(enabled.runtime_outcome, PluginRuntimeOutcome::Mounted);
         assert_eq!(enabled.actual_state, "loaded");
         assert_ne!(disabled.operation_id, enabled.operation_id);
-        assert!(PluginsConfig::load(&path).unwrap().is_enabled_for("alpha", PluginOrigin::Workspace));
+        assert!(PluginsConfig::load(&path)
+            .unwrap()
+            .is_enabled_for("alpha", PluginOrigin::Workspace));
         assert!(manager
             .get_plugin_record("alpha")
             .await
@@ -4436,7 +4521,9 @@ handler = "handler"
             assert_eq!(outcome["actual_state"], "failed");
             assert!(!outcome["cleanup_report"].as_array().unwrap().is_empty());
         }
-        assert!(PluginsConfig::load(&path).unwrap().is_enabled_for("qa-wasm", PluginOrigin::Workspace));
+        assert!(PluginsConfig::load(&path)
+            .unwrap()
+            .is_enabled_for("qa-wasm", PluginOrigin::Workspace));
         assert!(manager.scope_steps("qa-wasm").is_none());
     }
 

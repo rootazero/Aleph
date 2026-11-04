@@ -262,8 +262,11 @@ async fn test_acquire_and_release_lock() {
     assert_eq!(t.locked_by.as_deref(), Some("agent-1"));
     assert!(t.locked_at.is_some());
 
-    // Re-acquire by same agent (idempotent)
-    store.acquire_lock(&task.id, "agent-1").await.unwrap();
+    // Re-acquire by the same agent is a domain rejection too: a second
+    // dispatcher loop under the same identity must not take over a hold
+    // that is already in flight (it would reset `locked_at`).
+    let re_acquire = store.acquire_lock(&task.id, "agent-1").await;
+    assert!(re_acquire.is_err(), "re-acquire must be rejected");
 
     // Fail by different agent
     let err = store.acquire_lock(&task.id, "agent-2").await;

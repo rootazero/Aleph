@@ -657,11 +657,11 @@ impl ToolResultStore {
     /// **Session-scoped handles must not call this.** A session-scoped
     /// handle (`for_session(...)`) shares the underlying base directory
     /// with every other live session — calling `cleanup()` from one would
-    /// silently delete every other session's offloaded output. This guard
-    /// panics with a pointer to the correct API rather than letting that
-    /// happen at runtime; the boot-time unscoped root is the only safe
-    /// caller, and the deny-breaker's `purge_all` is the per-session
-    /// counterpart.
+    /// silently delete every other session's offloaded output. A
+    /// session-scoped call is therefore refused: it logs the misuse and
+    /// falls back to `purge_all_sync()`, which removes only this session's
+    /// blobs. The boot-time unscoped root is the only safe caller, and the
+    /// deny-breaker's `purge_all` is the per-session counterpart.
     pub fn cleanup(&self) {
         if !self.session.is_empty() {
             tracing::error!(
@@ -1386,13 +1386,38 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "session-scoped handle")]
-    fn cleanup_on_session_scoped_handle_panics() {
+    fn cleanup_on_session_scoped_handle_keeps_the_shared_base_directory() {
         let (_scratch, base) = crate::utils::scratch::scratch_root();
         std::fs::create_dir_all(&base).unwrap();
         let root = Arc::new(ToolResultStore::with_dir_for_tests(base.clone()));
         let scoped = ToolResultStore::for_session(&root, "agent:main:sess-x");
+        let other = ToolResultStore::for_session(&root, "agent:main:sess-y");
+        let own_blob = marker_path(
+            &scoped
+                .persist_if_large("own-call", "bash", &"x".repeat(1000), 1)
+                .expect("persist own result"),
+        );
+        let other_blob = marker_path(
+            &other
+                .persist_if_large("other-call", "bash", &"y".repeat(1000), 1)
+                .expect("persist other result"),
+        );
         scoped.cleanup();
+        assert!(
+            !own_blob.exists(),
+            "cleanup must purge this session's blobs"
+        );
+        assert_eq!(
+            std::fs::read_to_string(other_blob).unwrap(),
+            "y".repeat(1000)
+        );
+        // A session-scoped handle shares the base directory with every other
+        // live session, so `cleanup()` must NOT remove it — it purges this
+        // session's blobs instead of the shared tree.
+        assert!(
+            base.exists(),
+            "a session-scoped cleanup must not remove the shared base directory"
+        );
     }
 
     #[test]

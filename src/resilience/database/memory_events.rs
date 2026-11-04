@@ -918,10 +918,26 @@ mod tests {
             "a new caller of MemoryTimeTraveler::explain_fact picks its own partitions; \
              read through memory_timeline's dispatch arm instead"
         );
-        let bind =
-            crate::utils::source_scan::files_whose_production_code_reads(&root, "for_caller");
+        // Pin method calls, rather than the generic identifier: the rate limiter
+        // has a distinct associated function `RateLimitKey::for_caller`.
+        let mut bind = crate::utils::source_scan::rust_sources_under(&root)
+            .into_iter()
+            .filter(|(rel, text)| {
+                let code = crate::utils::source_scan::production_code_text(
+                    std::path::Path::new(rel),
+                    text,
+                );
+                // The CALL SITE (`.for_caller(`) is the binding; the tool's own
+                // `pub fn for_caller(` is its definition, not a consumer.
+                code.split_whitespace()
+                    .collect::<String>()
+                    .contains(".for_caller(")
+            })
+            .map(|(rel, _)| rel)
+            .collect::<Vec<_>>();
+        bind.sort();
         assert_eq!(
-            bind.into_iter().collect::<Vec<_>>(),
+            bind,
             vec!["src/executor/builtin_registry/registry/tool_registry_impl.rs".to_string()],
             "MemoryTimelineTool::for_caller must be bound only by the registry arm, which \
              derives the partitions (caller_memory_read_partitions + \

@@ -1,18 +1,20 @@
 # Windows FileSessionStore archive rename retry plan / Windows FileSessionStore 归档 rename 重试计划
 
+**Execution status / 执行状态:** Implemented; scoped Windows acceptance and named baseline comparison complete, full-lib suite still non-green / 已实施，Windows 有界验收与逐名基线对照完成，全量库测试仍未绿。See [run record / 运行记录](../runs/2026-11-04-windows-archive-rename-retry-run.md) for executed outcomes and limitations; the original checklist below is retained as planning history / 已执行结果与限制以运行记录为准，下方保留原规划清单。
+
 > **For agentic workers:** execute this plan task-by-task. Steps use checkbox (`- [ ]`) syntax.
 > **For agentic workers:** 按任务逐条执行本计划，步骤使用复选框语法。
 
 **Goal:** Close the Windows-only production gap where `FileSessionStore::delete_session` can fail with `Archive session failed: 拒绝访问 (os error 5)` while archiving a session, so that the "a reused session key never overwrites an old archive" contract holds on Windows natively, with no harness-side masking.
 
-**Architecture:** The archive move stays owned by the file backend. Two production-side changes, both inside `src/gateway/session_store/file_backend/`: (1) the store stops leaving its own transcript handle open across the rename window (explicit close after append), and (2) the archive rename distinguishes a *transient Windows sharing violation* from a *name collision* and retries the former with a bounded, backoff-ed attempt budget while keeping the latter's `<key>-1`, `<key>-2` … contract (cap 1024) untouched. The harness-side retry that currently hides the defect is removed once the production side is proven.
+**Architecture:** The archive move stays owned by the file backend. Inside `src/gateway/session_store/file_backend/`, the archive rename distinguishes a *transient Windows sharing violation* from a *name collision* and retries the former with a bounded, backoff-ed attempt budget while keeping the latter's `<key>-1`, `<key>-2` … contract (cap 1024) untouched. Explicit transcript-handle closure after append is conditional on Task 1's measured attribution establishing that the store's own handle causes the denial; otherwise append/flush/close behaviour stays unchanged. The harness-side retry that currently hides the defect is removed once the production side is proven. / 归档移动仍由 file backend 负责：有界重试 Windows 共享拒绝，保留 `<key>-N` 与 1024 碰撞上限；只有 Task 1 实测归因证实拒绝来自服务自身 transcript 句柄时，才增加显式关闭，否则保持 append/flush/close 行为不变。生产修复验证后移除 harness 重试。
 
 **Tech Stack:** Rust, Tokio, Cargo/libtest, Windows-native MSVC toolchain, Python JSON-RPC QA harness.
 
 **Prior evidence (authority):** the Windows-native run this plan starts from — providerless probe 102/102, configured-provider probe 110/110 (3 of 4 runs), one configured run failing at `ctrlc-stopped: session-tail capture requested` with `Archive session failed: 拒绝访问 (os error 5)`; live archive reuse observed as `agent_main_main_s1`, `-1` … `-19`; unit regression `gateway::session_store::file_backend::archive_tests::delete_session_reuses_a_key_without_colliding_with_its_archive` green.
 **Harness merged into local `main` (authority for the QA tooling):** `f40fbf061 test(qa): add Windows console control harness for memory lifecycle probe` — `qa/memory_lifecycle/windows_console.py`, `qa/memory_lifecycle/archive_check.py`, `qa/memory_lifecycle/probe.py` (Windows console control event delivery, UTF-8 text handling, per-attempt delete recording).
 
-**Status / 状态:** Handoff only; not implemented / 仅交接，尚未实施。
+**Status / 状态:** Implemented; Windows-native acceptance passed; pinned full-suite comparison and local delivery in progress / 已实施，Windows 原生验收通过，固定基线全量对照与本地交付进行中。Evidence / 证据：[run record / 运行记录](../runs/2026-11-04-windows-archive-rename-retry-run.md).
 
 ---
 
@@ -45,7 +47,7 @@
 - The retry must be provably bounded and must not spin: attempt budget, backoff, and the terminal error must all be visible in the code and in the tests.
 - The classifier must not confuse the two Windows meanings of `ERROR_ACCESS_DENIED`: rename-onto-an-existing-directory (a name collision, already handled by the `<key>-N` arm) versus a sharing violation on a destination that does not exist (the new retryable case). A retry that reuses the collision arm would create `<key>-1` archives for a plain denial.
 - The `<key>-1` / `<key>-2` collision contract and its 1024 cap must be unchanged, and the existing archive regression test must stay green and selected.
-- Closing the store's own transcript handle must not lose or reorder transcript bytes, and must not change the flush-before-read contract documented at `file_backend/mod.rs:468`.
+- Closing the store's own transcript handle must not lose or reorder transcript bytes, and must not change the flush-before-read contract documented in `FileSessionStore::append_transcript`.
 - The harness must stop masking the defect: after the production fix, the QA retry loop must be gone, so a regression fails the probe loudly.
 - Every claim in the run record must match what the commands actually printed — no "retries until success", no "flaky but harmless" without a named failure.
 
@@ -88,7 +90,7 @@
 ### Task 2: Production fix inside the file backend
 
 **Files:**
-- Modify: `src/gateway/session_store/file_backend/mod.rs` — `append_transcript` (explicit close) and `delete_session` (rename retry), plus the new private helpers and their unit tests.
+- Modify: `src/gateway/session_store/file_backend/mod.rs` — `delete_session` (rename retry), plus private helpers and tests; modify `append_transcript` only if Task 1 attributes the denial to the store's own handle / 仅在 Task 1 归因证实时修改 transcript 关闭。
 
 **Interfaces:**
 - Produce: `delete_session` archives a session even when the session directory transiently holds an open child handle, within a finite attempt budget; the `<key>-N` collision contract, the 1024 collision cap, and the terminal error's OS-error content are unchanged.

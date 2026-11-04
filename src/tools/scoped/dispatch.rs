@@ -49,15 +49,18 @@ fn rebind_cold_plugin_capture(
     original: &CanonicalEntryLease,
     backend_lease: &BackendLease,
 ) -> Result<(CanonicalEntryLease, BackendLease), ToolError> {
-    let (plugin_id, owner_generation) = original.cold_owner().ok_or_else(|| {
-        ToolError::PermissionDenied {
+    let (plugin_id, owner_generation) =
+        original
+            .cold_owner()
+            .ok_or_else(|| ToolError::PermissionDenied {
+                name: name.to_owned(),
+                reason: "Cold plugin capture lost its declaration identity".into(),
+            })?;
+    let lease = registry
+        .capture_entry(name)
+        .ok_or_else(|| ToolError::NotFound {
             name: name.to_owned(),
-            reason: "Cold plugin capture lost its declaration identity".into(),
-        }
-    })?;
-    let lease = registry.capture_entry(name).ok_or_else(|| ToolError::NotFound {
-        name: name.to_owned(),
-    })?;
+        })?;
     if !lease.matches_plugin_owner(plugin_id, owner_generation) {
         return Err(ToolError::PermissionDenied {
             name: name.to_owned(),
@@ -141,18 +144,40 @@ fn ingress_reductions_summary(
 /// context is unchanged. Mirrors the fence-escaping in
 /// [`crate::security::content_sanitizer::wrap_external_content`].
 fn escape_reminder_boundary(s: &str) -> String {
+    const OPEN_FENCE: &str = "<system-reminder";
+    const CLOSE_FENCE: &str = "</system-reminder";
+
     let mut out = String::with_capacity(s.len());
     let mut rest = s;
     while let Some(idx) = rest.find('<') {
         out.push_str(&rest[..idx]);
         let candidate = &rest[idx..];
         let lower = candidate.to_ascii_lowercase();
-        if lower.starts_with("</system-reminder") || lower.starts_with("<system-reminder") {
-            out.push_str("&lt;");
-            rest = &candidate[1..];
+        let fence = if lower.starts_with(CLOSE_FENCE) {
+            Some(CLOSE_FENCE)
+        } else if lower.starts_with(OPEN_FENCE) {
+            Some(OPEN_FENCE)
         } else {
+            None
+        };
+        let Some(fence) = fence else {
             out.push('<');
             rest = &candidate[1..];
+            continue;
+        };
+        // The fence token's OWN name is copied verbatim (case preserved); only
+        // its angle brackets are escaped, so `</system-reminder>` becomes
+        // `&lt;/system-reminder&gt;` and cannot close the wrapper's fence.
+        let name_len = fence.len() - 1;
+        out.push_str("&lt;");
+        out.push_str(&candidate[1..=name_len]);
+        let tail = &candidate[name_len + 1..];
+        match tail.strip_prefix('>') {
+            Some(after_bracket) => {
+                out.push_str("&gt;");
+                rest = after_bracket;
+            }
+            None => rest = tail,
         }
     }
     out.push_str(rest);
@@ -656,9 +681,11 @@ impl ScopedToolService {
         // Route to subagent tool if name matches; otherwise route into the
         // inner LoopToolRegistry. Both paths share the retry/Layer 2/sanitize
         // pipeline below.
-        let routing = if let (Some(entry), Some(lease), Some(backend_lease)) =
-            (captured.as_ref(), captured_lease.as_ref(), captured_backend_lease.as_ref())
-        {
+        let routing = if let (Some(entry), Some(lease), Some(backend_lease)) = (
+            captured.as_ref(),
+            captured_lease.as_ref(),
+            captured_backend_lease.as_ref(),
+        ) {
             RoutingTarget::Canonical(entry.clone(), lease.clone(), backend_lease.clone())
         } else if self
             .subagent_tool
@@ -1184,24 +1211,25 @@ impl ScopedToolService {
                                 return result;
                             }
                             Self::validate_plugin_capture(registry.as_deref(), &lease)?;
-                            let (validation_lease, validation_backend) = if lease.is_cold_declaration() {
-                                rebind_cold_plugin_capture(
-                                    registry.as_deref().ok_or_else(|| ToolError::PermissionDenied {
-                                        name: entry.descriptor.name.clone(),
-                                        reason: "canonical plugin registry is not mounted".into(),
-                                    })?,
-                                    &facade,
-                                    &entry.descriptor.name,
-                                    &lease,
-                                    &backend_lease,
-                                )?
-                            } else {
-                                (lease.clone(), backend_lease.clone())
-                            };
-                            Self::validate_plugin_capture(
-                                registry.as_deref(),
-                                &validation_lease,
-                            )?;
+                            let (validation_lease, validation_backend) =
+                                if lease.is_cold_declaration() {
+                                    rebind_cold_plugin_capture(
+                                        registry.as_deref().ok_or_else(|| {
+                                            ToolError::PermissionDenied {
+                                                name: entry.descriptor.name.clone(),
+                                                reason: "canonical plugin registry is not mounted"
+                                                    .into(),
+                                            }
+                                        })?,
+                                        &facade,
+                                        &entry.descriptor.name,
+                                        &lease,
+                                        &backend_lease,
+                                    )?
+                                } else {
+                                    (lease.clone(), backend_lease.clone())
+                                };
+                            Self::validate_plugin_capture(registry.as_deref(), &validation_lease)?;
                             facade
                                 .validate_completion(&validation_backend)
                                 .map_err(|error| ToolError::PermissionDenied {
@@ -1317,12 +1345,12 @@ impl ScopedToolService {
                     (lease.clone(), backend_lease.clone())
                 };
                 self.validate_plugin_lease(&validation_lease)?;
-                facade.validate_lease(&validation_backend).map_err(|error| {
-                    ToolError::PermissionDenied {
+                facade
+                    .validate_lease(&validation_backend)
+                    .map_err(|error| ToolError::PermissionDenied {
                         name: entry.descriptor.name.clone(),
                         reason: format!("canonical capability lease became stale: {error:?}"),
-                    }
-                })?;
+                    })?;
                 return result;
             }
             RoutingTarget::Subagent => {

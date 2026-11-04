@@ -207,7 +207,7 @@ impl RuntimeManageTool {
                     ok: false,
                     message: format!("Cannot read the runtime ledger: {e}"),
                     runtimes: Vec::new(),
-                }
+                };
             }
         };
         let guard = ledger.read().await;
@@ -670,7 +670,7 @@ async fn obscura_row() -> RuntimeRow {
                 version: None,
                 purpose: Some(OBSCURA_PURPOSE.to_string()),
                 supported_here: supported,
-            }
+            };
         }
     };
     let (status, path, version) = match pinned {
@@ -1050,11 +1050,14 @@ mod tests {
             spawner.clone(),
         );
         let started = std::time::Instant::now();
-        let out = tool
-            .call(RuntimeManageArgs {
-                action: RuntimeAction::Install,
-                capability: Some("chromium".into()),
-            })
+        let out = crate::sandbox::context::SESSION_ID
+            .scope(
+                crate::routing::session_key::SessionKey::ephemeral("runtime-install-immediate"),
+                tool.call(RuntimeManageArgs {
+                    action: RuntimeAction::Install,
+                    capability: Some("chromium".into()),
+                }),
+            )
             .await
             .expect("tool answers");
         assert!(out.ok, "{}", out.message);
@@ -1488,6 +1491,18 @@ mod tests {
             }
             tokio::time::sleep(std::time::Duration::from_millis(5)).await;
         }
+        // Keep the live-tail assertion above, then join the job so it cannot
+        // leave a running install in the process-global registry for later tests.
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            loop {
+                if matches!(process_registry().poll(job_id, None), PollOutcome::Done(_)) {
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .expect("the fake install must finish");
         assert!(
             !finished_without_ever_seeing_it,
             "the job finished before the live tail ever showed the marker — \

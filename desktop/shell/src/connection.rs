@@ -1403,7 +1403,10 @@ mod tests {
         let body = &src[start..];
         let body = &body[..body.find("\n}\n").unwrap()];
         let gate = body.find("serialize_target_switch(").expect("not gated");
-        let load = body.find("load_target()").expect("does not reload target");
+        // The blocking read was moved off the async thread by
+        // `tokio::task::spawn_blocking(load_target)`; the pin names the
+        // function, not the old direct call syntax.
+        let load = body.find("load_target").expect("does not reload target");
         let nav = body.find("reroute_for_target(").expect("does not reroute");
         assert!(gate < load && load < nav, "target must be read inside gate");
     }

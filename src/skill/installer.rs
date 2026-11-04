@@ -417,16 +417,35 @@ mod tests {
         let spec = InstallSpec {
             id: "tool".to_string(),
             kind: InstallKind::Download,
-            package: "/usr/local/bin/tool".to_string(),
+            // The download destination is RELATIVE to the install directory:
+            // it is interpolated unquoted as curl's `-o` target, so an
+            // absolute path or a `..` segment would let a manifest write
+            // outside the install directory.
+            package: "bin/tool".to_string(),
             bins: vec!["tool".to_string()],
             os: None,
             url: Some("https://example.com/tool".to_string()),
         };
         let cmd = build_install_command(&spec).unwrap();
-        assert_eq!(
-            cmd,
-            "curl -fsSL -o /usr/local/bin/tool 'https://example.com/tool'"
-        );
+        assert_eq!(cmd, "curl -fsSL -o bin/tool 'https://example.com/tool'");
+    }
+
+    #[test]
+    fn download_command_rejects_a_destination_outside_the_install_directory() {
+        for package in ["/usr/local/bin/tool", "../escape/tool", "~/tool"] {
+            let spec = InstallSpec {
+                id: "tool".to_string(),
+                kind: InstallKind::Download,
+                package: package.to_string(),
+                bins: vec!["tool".to_string()],
+                os: None,
+                url: Some("https://example.com/tool".to_string()),
+            };
+            assert!(
+                build_install_command(&spec).is_none(),
+                "{package} must be refused as a download destination"
+            );
+        }
     }
 
     #[test]

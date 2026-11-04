@@ -271,11 +271,9 @@ impl McpPersistentConfig {
 fn expand_env_var(s: &str) -> Option<String> {
     // Static regex compiled once, reused on every call
     static ENV_VAR_RE: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();
-    let re = ENV_VAR_RE.get_or_init(|| {
-        match Regex::new(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}") {
-            Ok(re) => re,
-            Err(e) => panic!("hardcoded regex is valid: {e}"),
-        }
+    let re = ENV_VAR_RE.get_or_init(|| match Regex::new(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}") {
+        Ok(re) => re,
+        Err(e) => panic!("hardcoded regex is valid: {e}"),
     });
 
     let mut result = s.to_string();
@@ -318,7 +316,15 @@ mod tests {
             .unwrap_or_else(|e| e.into_inner());
         let path = McpPersistentConfig::default_path();
         assert!(path.ends_with("mcp_config.json"));
-        assert!(path.to_string_lossy().contains(".aleph"));
+        // The file lives in the CONFIG DIR, which is `~/.aleph` by default
+        // but `$ALEPH_HOME` when the operator (or a test) relocated the
+        // state directory. Asserting the literal ".aleph" would pin the
+        // default location only and would fail for any legitimately
+        // relocated home, so the contract is asserted against the resolved
+        // config dir instead.
+        let expected_parent = crate::utils::paths::get_config_dir()
+            .unwrap_or_else(|_| std::path::PathBuf::from(".aleph"));
+        assert_eq!(path.parent(), Some(expected_parent.as_path()));
     }
 
     #[test]
