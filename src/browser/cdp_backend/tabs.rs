@@ -206,6 +206,21 @@ mod tests {
             "Page.navigate",
             Responder::Reply(json!({ "frameId": "F1", "loaderId": "L1" })),
         );
+        // The landed URL must be OBSERVABLE for the navigation to reach the
+        // document boundary at all: `navigate` reads it from the
+        // `Page.frameNavigated` event or, when the engine omits that event,
+        // from `Page.getFrameTree` — and fails CLOSED (closing the tab) when
+        // neither carries one. The requested URL is not a fallback: an
+        // unobserved landing is not an observation. This fake emits no event,
+        // so the frame tree is the observation.
+        server.on(
+            "Page.getFrameTree",
+            Responder::Reply(json!({
+                "frameTree": { "frame": {
+                    "id": "F1", "loaderId": "L1", "url": "https://ok.example/"
+                }}
+            })),
+        );
         let (_reg, backend) = backend_with(&server, Engine::Chromium, open_guard()).await;
 
         // The load barrier elapses (the fake emits no load event), so
@@ -226,10 +241,10 @@ mod tests {
              empty: {tabs:?}"
         );
         // This URL claim rests on an ordering that is easy to lose: `navigate`
-        // runs `apply_document_boundary` — with the requested URL as the
-        // fallback when no `frameNavigated` arrived — BEFORE it returns the
-        // barrier's timeout error. Move that call after the error return and
-        // this assertion goes red while the one above stays green.
+        // runs `apply_document_boundary` — with the LANDED url it observed —
+        // BEFORE it returns the barrier's timeout error. Move that call after
+        // the error return and this assertion goes red while the one above
+        // stays green.
         assert_eq!(
             tabs[0].url, "https://ok.example/",
             "and it must carry the URL it landed on: {tabs:?}"
@@ -400,6 +415,21 @@ mod tests {
         server.on(
             "Page.navigate",
             Responder::Reply(json!({ "frameId": "F1", "loaderId": "L1" })),
+        );
+        // The landed URL has to be observable for the navigation to land at
+        // all: `navigate` reads it from the `Page.frameNavigated` event or,
+        // when the engine omits that event, from `Page.getFrameTree` — and
+        // fails CLOSED (closing the tab) when neither carries one. The
+        // requested URL is not a fallback: an unobserved landing is not an
+        // observation. This fake emits no event, so the frame tree is the
+        // observation.
+        server.on(
+            "Page.getFrameTree",
+            Responder::Reply(json!({
+                "frameTree": { "frame": {
+                    "id": "F1", "loaderId": "L1", "url": "https://ok.example/"
+                }}
+            })),
         );
         let (_reg, backend) = backend_with(&server, Engine::Chromium, open_guard()).await;
 

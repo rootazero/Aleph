@@ -306,18 +306,26 @@ const RUN_REQUEST_PRODUCERS: &[RunProducer] = &[
         file: "src/gateway/handlers/agent.rs",
         attribution: "stamps",
         attribution_why: "the Panel/RPC path; resolve_attribution + caller_role, the shape every other producer mirrors",
-        ingress: Ingress::Human { stamp_in:"src/gateway/handlers/agent.rs" },
+        ingress: Ingress::Human {
+            stamp_in: "src/gateway/handlers/agent.rs",
+        },
         ingress_why: "`build_run_request` is the one funnel behind every Panel / TUI / CLI run entrance, and it stamps BEFORE the agent-authorization gate — a refused attempt is still a person at the keyboard. An external script driving `chat.send` stamps too; that approximation is accepted, because the alternative (asking the wire who is typing) is a claim the caller controls",
-        authority: Authority::LiveCaller { seam: "current_caller_role" },
+        authority: Authority::LiveCaller {
+            seam: "current_caller_role",
+        },
         authority_why: "an RPC from a live connection; its identity is checked at connect against the device binding, and deactivation revokes that user's devices, so no connection outlives the status",
     },
     RunProducer {
         file: "src/gateway/inbound_router/executor.rs",
         attribution: "stamps",
         attribution_why: "channel inbound; principal from pairing_store::sender_user",
-        ingress: Ingress::Human { stamp_in: "src/gateway/inbound_router/mod.rs" },
+        ingress: Ingress::Human {
+            stamp_in: "src/gateway/inbound_router/mod.rs",
+        },
         ingress_why: "a channel message, stamped UPSTREAM of this file: `handle_message`'s permission-granted arm, not the builder here. A stranger refused by policy is not 'the user', and stamping at the builder would let anyone who can reach the bot hold the sensor open",
-        authority: Authority::LiveCaller { seam: "sender_user" },
+        authority: Authority::LiveCaller {
+            seam: "sender_user",
+        },
         authority_why: "a channel message from a paired sender, resolved at arrival; deactivation withdraws the sender's channel approvals",
     },
     RunProducer {
@@ -335,7 +343,9 @@ const RUN_REQUEST_PRODUCERS: &[RunProducer] = &[
         attribution_why: "from the ambient scope carried across two spawns; both keys added 2026-08-09",
         ingress: Ingress::Machine,
         ingress_why: "team fan-out: one human message spawns N of these, and they land whenever the fan-out reaches them — the keystroke they descend from already stamped",
-        authority: Authority::LiveCaller { seam: "CarriedAttribution::capture" },
+        authority: Authority::LiveCaller {
+            seam: "CarriedAttribution::capture",
+        },
         authority_why: "teams.chat.send fan-out captured from the live gateway dispatch and re-established per member",
     },
     RunProducer {
@@ -344,7 +354,9 @@ const RUN_REQUEST_PRODUCERS: &[RunProducer] = &[
         attribution_why: "agent-to-agent dispatch; carries the initiating run's pair",
         ingress: Ingress::Machine,
         ingress_why: "model-driven delegation. The model is not the user, and a self-delegating loop stamping here would starve dreaming for as long as it ran",
-        authority: Authority::InheritsRun { seam: "build_sub_metadata(" },
+        authority: Authority::InheritsRun {
+            seam: "build_sub_metadata(",
+        },
         authority_why: "no person is live here: the model inside the ENCLOSING run (the one whose tool loop called sessions_send) dispatched it, and build_sub_metadata carries that run's already-resolved scope pair, author and role — for a cron-started run, the cron resolver's answer",
     },
     RunProducer {
@@ -391,7 +403,9 @@ const RUN_REQUEST_PRODUCERS: &[RunProducer] = &[
         attribution_why: "from the ambient scope/turn-context: team_delegate reaches task_run_metadata with the leader run's task-locals live; the autonomous dispatcher re-establishes the task's resolved authority around the spawn (schedule/mod.rs, round 11 N1) — only a Legacy task stamps nothing",
         ingress: Ingress::Machine,
         ingress_why: "dispatched work, autonomous in the case that matters; the delegating turn stamped if a human drove it",
-        authority: Authority::ResolvedUpstream { resolver: "src/teams/dispatcher/schedule/mod.rs" },
+        authority: Authority::ResolvedUpstream {
+            resolver: "src/teams/dispatcher/schedule/mod.rs",
+        },
         authority_why: "the autonomous dispatcher resolves before the claim and re-establishes (round 11, N1); team_delegate reaches it with live task-locals",
     },
     RunProducer {
@@ -400,7 +414,9 @@ const RUN_REQUEST_PRODUCERS: &[RunProducer] = &[
         attribution_why: "heartbeat_run_metadata stamps the grant the timer resolved for the task owner (Granted::stamp, round 11 T06); a legacy task's grant is empty and stamps nothing",
         ingress: Ingress::Machine,
         ingress_why: "a periodic engine — same starvation shape as cron, and on a shorter period",
-        authority: Authority::ResolvedUpstream { resolver: "src/tasks/heartbeat/service/timer.rs" },
+        authority: Authority::ResolvedUpstream {
+            resolver: "src/tasks/heartbeat/service/timer.rs",
+        },
         authority_why: "the timer resolves the task owner before the L1 probe (round 11, T06, N3)",
     },
     RunProducer {
@@ -419,7 +435,12 @@ const RUN_REQUEST_PRODUCERS: &[RunProducer] = &[
         ingress: Ingress::Machine,
         ingress_why: "a bearer-token API client is as likely to be an unattended script as a person, and the two are indistinguishable on this wire. Classified by the asymmetry, not by a guess: reading it as human costs permanent silent starvation whenever something polls it, reading it as machine costs at most one dream cycle that fails to yield to somebody typing into a third-party client",
         authority: Authority::NoPrincipal {
-            gate_in: "src/gateway/openai_api/completions/mod.rs",
+            // The bearer comparison used to live in the route module; it now
+            // lives in the auth module (`authorize()` at
+            // src/gateway/openai_api/auth.rs), which the route calls. The pin
+            // must name the file that actually performs the comparison —
+            // otherwise the census cannot see the gate at all.
+            gate_in: "src/gateway/openai_api/auth.rs",
             seam: "secret_equal(",
         },
         authority_why: "a live HTTP call that the /v1 route admits only after comparing its bearer to the configured API token; that bearer is an operator credential, not an Aleph principal, so there is no person whose status could be asked",

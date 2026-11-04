@@ -965,6 +965,23 @@ Chrome Headless Shell 147.0.7727.49 (playwright chromium-headless-shell v1219)
         assert_eq!(resolved.source, ChromiumSource::System);
     }
 
+    /// Write the fake browser binary the way a real install leaves it:
+    /// **executable**.
+    ///
+    /// `is_executable` (chromium_resolve.rs:340-350) requires an exec bit on
+    /// unix, and `std::fs::write` leaves 0644 — so a fixture written that way
+    /// is filtered out and the scan answers "nothing installed" instead of the
+    /// ranking these tests are about. The same fixture repair commit
+    /// c6c008ae3 made for the pinned-binary route.
+    fn write_fake_exe(path: &Path) {
+        std::fs::write(path, b"fake").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+    }
+
     /// Build a fake `chromium-<revision>` install directory under `parent`,
     /// laid out exactly like the real macOS cache (five levels deep,
     /// matching `EXECUTABLE_LEAVES[0]` — see [`WALK_MAX_DEPTH`]'s doc),
@@ -978,7 +995,7 @@ Chrome Headless Shell 147.0.7727.49 (playwright chromium-headless-shell v1219)
             .join("Contents")
             .join("MacOS");
         std::fs::create_dir_all(&exe_dir).unwrap();
-        std::fs::write(exe_dir.join("Google Chrome for Testing"), b"fake").unwrap();
+        write_fake_exe(&exe_dir.join("Google Chrome for Testing"));
         if marker {
             std::fs::write(root.join(INSTALLATION_COMPLETE_MARKER), b"").unwrap();
         }
@@ -997,7 +1014,7 @@ Chrome Headless Shell 147.0.7727.49 (playwright chromium-headless-shell v1219)
             .join("Contents")
             .join("MacOS");
         std::fs::create_dir_all(&exe_dir).unwrap();
-        std::fs::write(exe_dir.join("Google Chrome for Testing"), b"fake").unwrap();
+        write_fake_exe(&exe_dir.join("Google Chrome for Testing"));
         root
     }
 

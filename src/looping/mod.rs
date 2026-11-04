@@ -626,7 +626,8 @@ impl LoopRegistry {
                 let wake = now_ms.saturating_add(delay_ms);
                 let out_of_bounds = pursuit::fires_out_of_bounds(s, wake, now_ms);
                 let deadline_expired = s.deadline_ms.is_some_and(|d| now_ms != 0 && now_ms > d);
-                let iteration_overflow = s.max_iterations.is_some_and(|max| s.iterations_used > max);
+                let iteration_overflow =
+                    s.max_iterations.is_some_and(|max| s.iterations_used > max);
                 if deadline_expired || out_of_bounds || iteration_overflow {
                     let bound_at = if out_of_bounds { wake } else { now_ms };
                     let note = pursuit::stop_reason_note(s, 0, bound_at);
@@ -1178,7 +1179,12 @@ mod tests {
         // the stale 100 and stall the loop; commit must keep the live 200.
         let reg = LoopRegistry::default();
         reg.put(st("a").with_pending_tick(Some(100)));
-        let stale_next = st("a")
+        // The tool's snapshot has to carry the LIVE row's incarnation: the
+        // commit refuses a snapshot of a replaced loop. Take the snapshot
+        // from the live row (same instance), not from a fresh `st()`.
+        let stale_next = reg
+            .get("a")
+            .unwrap()
             .with_max_iterations(Some(9))
             .with_pending_tick(Some(100));
         // Simulate the concurrent tick pipeline moving pending to 200.
@@ -1202,7 +1208,7 @@ mod tests {
         // regardless of what the live marker was, so confirm_fire mismatches.
         let reg = LoopRegistry::default();
         reg.put(st("a").with_pending_tick(Some(200)));
-        let next = st("a").with_cadence(Cadence::Fixed {
+        let next = reg.get("a").unwrap().with_cadence(Cadence::Fixed {
             interval_ms: 120_000,
         });
         assert!(reg.commit_field_update(next, true));
@@ -1230,7 +1236,14 @@ mod tests {
         let reg = LoopRegistry::default();
         let attr = crate::scope::ScopeAttribution::personal("u-alice");
         reg.put(st("a").with_owner_scope(Some(&attr)));
-        let next = st("a").with_max_iterations(Some(9)); // no owner_scope re-stamped
+        // The snapshot carries the live row's incarnation but NO owner scope
+        // (the tool never re-stamps one) — the commit must not roll the
+        // creation-time owner back.
+        let next = reg
+            .get("a")
+            .unwrap()
+            .with_owner_scope(None)
+            .with_max_iterations(Some(9));
         assert!(reg.commit_field_update(next, false));
         let s = reg.get("a").unwrap();
         assert_eq!(s.max_iterations, Some(9), "cap change applied");
@@ -1246,14 +1259,22 @@ mod tests {
         let ctx = crate::gateway::telecom::run_origin::sample_public_context("b-1");
         let reg = LoopRegistry::default();
         reg.put(st("a").with_telecom_origin(Some(ctx.clone())));
-        let next = st("a").with_max_iterations(Some(9));
+        // The snapshot carries the live incarnation but no origin — the
+        // creator's origin is creation-owned.
+        let next = reg
+            .get("a")
+            .unwrap()
+            .with_telecom_origin(None)
+            .with_max_iterations(Some(9));
         assert!(reg.commit_field_update(next, true));
         assert_eq!(reg.get("a").unwrap().telecom_origin, Some(ctx.clone()));
 
         // And an ordinary loop is not promoted by an update built from a
         // snapshot that claims one.
         reg.put(st("b"));
-        let forged = st("b")
+        let forged = reg
+            .get("b")
+            .unwrap()
             .with_max_iterations(Some(3))
             .with_telecom_origin(Some(ctx));
         assert!(reg.commit_field_update(forged, false));

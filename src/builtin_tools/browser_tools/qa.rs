@@ -64,8 +64,7 @@ const EVIDENCE_TAIL_MAX: usize = 4_000;
 /// harness clock preempts the tool's and the verdict it had already
 /// computed is thrown away for an opaque overrun. Declared here, next to the
 /// constants it is derived from, so the two cannot drift apart.
-pub(crate) const MAX_QA_WAIT_MS: u64 =
-    (MAX_EXPECTED_TEXTS as u64 + 2) * MAX_TIMEOUT_MS + SETTLE_MS;
+pub(crate) const MAX_QA_WAIT_MS: u64 = (MAX_EXPECTED_TEXTS as u64 + 2) * MAX_TIMEOUT_MS + SETTLE_MS;
 
 /// Clamp the per-expectation wait budget into the safe window. Hand-rolled
 /// rather than `Ord::clamp` so it stays `const` (same shape as
@@ -922,6 +921,11 @@ mod tests {
     use crate::browser::profile::BrowserSystemConfig;
     use crate::browser::testkit::FakeBackend;
 
+    // A literal public IP exercises the SSRF gate without an OS DNS dependency.
+    fn backend() -> FakeBackend {
+        FakeBackend::new(None).with_tabs_text("1: https://8.8.8.8/")
+    }
+
     fn manager() -> Arc<ProfileManager> {
         Arc::new(ProfileManager::new(BrowserSystemConfig::default()))
     }
@@ -955,7 +959,7 @@ mod tests {
     #[tokio::test]
     async fn failed_expectations_return_a_successful_tool_result_with_passed_false() {
         let tool = BrowserQaTool::new(manager());
-        let backend = FakeBackend::new(None).with_wait_found(false);
+        let backend = backend().with_wait_found(false);
         let mut args = bare_args();
         args.expected_text = Some(TextExpectation::One("Order confirmed".into()));
         let out = tool
@@ -991,7 +995,7 @@ mod tests {
     #[tokio::test]
     async fn a_dimension_the_driver_cannot_serve_lands_in_unverified_not_pass() {
         let tool = BrowserQaTool::new(manager());
-        let backend = FakeBackend::new(None);
+        let backend = backend();
         let mut args = bare_args();
         args.expected_text = Some(TextExpectation::One("hello".into()));
         args.check_console = true;
@@ -1160,7 +1164,7 @@ mod tests {
     #[tokio::test]
     async fn a_met_expectation_with_all_checks_off_passes_cleanly() {
         let tool = BrowserQaTool::new(manager());
-        let backend = FakeBackend::new(None);
+        let backend = backend();
         let mut args = bare_args();
         args.expected_text = Some(TextExpectation::Many(vec![
             "Order confirmed".into(),
@@ -1191,7 +1195,7 @@ mod tests {
     #[tokio::test]
     async fn a_selector_that_stays_fails_gone_selector() {
         let tool = BrowserQaTool::new(manager());
-        let backend = FakeBackend::new(None).with_wait_found(false);
+        let backend = backend().with_wait_found(false);
         let mut args = bare_args();
         args.gone_selector = Some(".spinner".into());
         let out = tool
@@ -1218,7 +1222,7 @@ mod tests {
     #[tokio::test]
     async fn evidence_tails_carry_only_the_new_lines() {
         let tool = BrowserQaTool::new(manager());
-        let backend = FakeBackend::new(None)
+        let backend = backend()
             .with_console_text("[log] page booted\n[warn] old warning")
             .with_network_text("<- 200 https://example.com/");
         let mut args = bare_args();
@@ -1249,7 +1253,7 @@ mod tests {
     async fn a_failing_run_with_screenshot_requested_attaches_the_evidence() {
         let _home = crate::utils::paths::IsolatedAlephHome::new();
         let tool = BrowserQaTool::new(manager());
-        let backend = FakeBackend::new(None)
+        let backend = backend()
             .with_wait_found(false)
             .with_screenshot_png(b"\x89PNG-fake");
         let mut args = bare_args();
@@ -1271,7 +1275,7 @@ mod tests {
     #[tokio::test]
     async fn a_passing_run_takes_no_evidence_screenshot() {
         let tool = BrowserQaTool::new(manager());
-        let backend = FakeBackend::new(None);
+        let backend = backend();
         let mut args = bare_args();
         args.expected_text = Some(TextExpectation::One("hello".into()));
         args.screenshot = true;
@@ -1516,7 +1520,7 @@ mod tests {
     #[tokio::test]
     async fn the_wire_shape_matches_the_spec() {
         let tool = BrowserQaTool::new(manager());
-        let backend = FakeBackend::new(None).with_wait_found(false);
+        let backend = backend().with_wait_found(false);
         let mut args = bare_args();
         args.expected_text = Some(TextExpectation::One("nope".into()));
         let out = tool

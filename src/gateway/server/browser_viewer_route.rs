@@ -498,7 +498,7 @@ async fn read_auth_hello(
             return Err(AuthError {
                 code: AuthErrorCode::Timeout,
                 close: true,
-            })
+            });
         }
     };
     let Message::Text(text) = message else {
@@ -808,12 +808,34 @@ mod tests {
     const CONSUME_PATH: &str = "/viewer/browser/consume";
     const EXCHANGE_PATH: &str = "/viewer/browser/exchange";
 
+    /// The grant is bound to the viewer's own origin.
     fn grant_origin() -> ViewerOrigin {
+        grant_origin_at("127.0.0.1", 8787)
+    }
+
+    fn grant_origin_at(host: &str, port: u16) -> ViewerOrigin {
         ViewerOrigin {
             scheme: "http".into(),
-            host: "127.0.0.1".into(),
-            port: 8787,
+            host: host.into(),
+            port,
         }
+    }
+
+    /// The `Origin` header value a browser sends for a page served from
+    /// `origin`.
+    fn origin_header(origin: &ViewerOrigin) -> String {
+        format!("{}://{}:{}", origin.scheme, origin.host, origin.port)
+    }
+
+    /// The authority of an `Origin` header value — exactly the authority a
+    /// browser sends as the request's `Host`. `OriginPolicy` only
+    /// auto-allows a same-origin request whose `Host` equals the `Origin`
+    /// authority, so every fixture has to send it.
+    fn authority_of(origin: &str) -> &str {
+        origin
+            .split_once("://")
+            .map(|(_, authority)| authority)
+            .unwrap_or(origin)
     }
 
     fn test_binding(target_id: &str) -> ViewerBinding {
@@ -969,7 +991,7 @@ mod tests {
     }
 
     /// Mint a grant the honest way; returns (grant_id, plaintext nonce).
-    fn issue(store: &ViewerGrantStore) -> (String, String) {
+    fn issue(store: &ViewerGrantStore, origin: &ViewerOrigin) -> (String, String) {
         let issued = store
             .issue(
                 IssuerIdentity::User {
@@ -978,20 +1000,26 @@ mod tests {
                 test_binding("target-1"),
                 "res-1",
                 &PERMS,
-                grant_origin(),
+                origin.clone(),
                 Duration::from_secs(600),
             )
             .expect("issue");
         (issued.grant_id, issued.nonce.0)
     }
 
+    /// A browser sends the request's `Host` as the authority of the page's
+    /// own `Origin`; `OriginPolicy` only auto-allows a same-origin request
+    /// whose `Host` equals the `Origin` authority. The fixture mirrors the
+    /// browser and derives `Host` from `Origin`.
     fn post(uri: &str, origin: Option<&str>, body: String) -> Request<Body> {
         let mut builder = Request::builder()
             .method("POST")
             .uri(uri)
             .header(header::CONTENT_TYPE, "application/json");
         if let Some(origin) = origin {
-            builder = builder.header(header::ORIGIN, origin);
+            builder = builder
+                .header(header::ORIGIN, origin)
+                .header(header::HOST, authority_of(origin));
         }
         let mut request = builder.body(Body::from(body)).expect("request");
         request
@@ -1011,8 +1039,8 @@ mod tests {
     async fn viewer_credential_cannot_cross_scope() {
         let (state, store, _backend) = test_state(Duration::from_secs(2));
         let app = browser_viewer_routes(state);
-        let (grant_a, nonce_a) = issue(&store);
-        let (grant_b, _nonce_b) = issue(&store);
+        let (grant_a, nonce_a) = issue(&store, &grant_origin());
+        let (grant_b, _nonce_b) = issue(&store, &grant_origin());
         let consume = |grant: &str, nonce: &str| {
             serde_json::json!({"grant_id": grant, "nonce": nonce}).to_string()
         };
@@ -1138,7 +1166,17 @@ mod tests {
         tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
     >;
 
-    async fn spawn_ws(state: Arc<BrowserViewerRouteState>) -> String {
+    /// The bound viewer WS server and the origin a browser would use for it.
+    /// The gateway serves the viewer page and the viewer socket from ONE
+    /// address, so the `Origin`, the `Host` and the grant's bound origin all
+    /// share that authority — and the ephemeral port decides it, so it is
+    /// derived from the address actually bound.
+    struct WsServer {
+        url: String,
+        origin: ViewerOrigin,
+    }
+
+    async fn spawn_ws(state: Arc<BrowserViewerRouteState>) -> WsServer {
         let app = browser_viewer_routes(state);
         let listener = tokio::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))
             .await
@@ -1152,15 +1190,26 @@ mod tests {
             .await
             .expect("serve");
         });
-        format!("ws://{addr}{VIEWER_WS_PATH}")
+        WsServer {
+            url: format!("ws://{addr}{VIEWER_WS_PATH}"),
+            origin: grant_origin_at("127.0.0.1", addr.port()),
+        }
     }
 
-    async fn connect(url: &str, origin: &str) -> Ws {
+    /// The viewer socket is opened from the page the gateway served, so its
+    /// `Origin` and its `Host` share ONE authority. The fixture sends both,
+    /// because `OriginPolicy` refuses a handshake whose `Host` differs from
+    /// the `Origin` authority.
+    async fn connect(url: &str, origin: &ViewerOrigin) -> Ws {
         use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+        let origin = origin_header(origin);
         let mut request = url.into_client_request().expect("request");
         request
             .headers_mut()
             .insert("origin", origin.parse().expect("origin header"));
+        request
+            .headers_mut()
+            .insert("host", authority_of(&origin).parse().expect("host header"));
         let (socket, _response) = tokio_tungstenite::connect_async(request)
             .await
             .expect("ws connect");
@@ -1190,8 +1239,8 @@ mod tests {
     #[tokio::test]
     async fn ws_without_hello_times_out() {
         let (state, _store, _backend) = test_state(Duration::from_millis(150));
-        let url = spawn_ws(state).await;
-        let mut socket = connect(&url, ORIGIN).await;
+        let server = spawn_ws(state).await;
+        let mut socket = connect(&server.url, &server.origin).await;
         expect_auth_error(&mut socket, AuthErrorCode::Timeout).await;
     }
 
@@ -1199,8 +1248,8 @@ mod tests {
     async fn ws_rejects_malformed_binary_and_oversize_hello() {
         // Malformed JSON.
         let (state, _store, _backend) = test_state(Duration::from_secs(2));
-        let url = spawn_ws(state).await;
-        let mut socket = connect(&url, ORIGIN).await;
+        let server = spawn_ws(state).await;
+        let mut socket = connect(&server.url, &server.origin).await;
         socket
             .send(TungsteniteMessage::Text("not json".into()))
             .await
@@ -1209,8 +1258,8 @@ mod tests {
 
         // Binary first frame.
         let (state, _store, _backend) = test_state(Duration::from_secs(2));
-        let url = spawn_ws(state).await;
-        let mut socket = connect(&url, ORIGIN).await;
+        let server = spawn_ws(state).await;
+        let mut socket = connect(&server.url, &server.origin).await;
         socket
             .send(TungsteniteMessage::Binary(vec![1, 2, 3].into()))
             .await
@@ -1219,8 +1268,8 @@ mod tests {
 
         // Over the 256-byte first-frame cap.
         let (state, _store, _backend) = test_state(Duration::from_secs(2));
-        let url = spawn_ws(state).await;
-        let mut socket = connect(&url, ORIGIN).await;
+        let server = spawn_ws(state).await;
+        let mut socket = connect(&server.url, &server.origin).await;
         socket
             .send(TungsteniteMessage::Text("x".repeat(300).into()))
             .await
@@ -1231,8 +1280,8 @@ mod tests {
     #[tokio::test]
     async fn ws_unknown_grant_is_unauthorized() {
         let (state, _store, _backend) = test_state(Duration::from_secs(2));
-        let url = spawn_ws(state).await;
-        let mut socket = connect(&url, ORIGIN).await;
+        let server = spawn_ws(state).await;
+        let mut socket = connect(&server.url, &server.origin).await;
         let hello = ViewerAuthClientMessage::AuthHello {
             hello: AuthHello {
                 protocol_version: VIEWER_PROTOCOL_VERSION,
@@ -1251,13 +1300,20 @@ mod tests {
     }
 
     /// Consume + exchange over HTTP; returns (grant_id, plaintext S0).
-    async fn handshake_http(app: &Router, store: &ViewerGrantStore) -> (String, String) {
-        let (grant_id, nonce) = issue(store);
+    /// The grant is bound to `origin` — the viewer's own origin — so the
+    /// consume and the exchange must present that same origin.
+    async fn handshake_http(
+        app: &Router,
+        store: &ViewerGrantStore,
+        origin: &ViewerOrigin,
+    ) -> (String, String) {
+        let (grant_id, nonce) = issue(store, origin);
+        let origin = origin_header(origin);
         let resp = app
             .clone()
             .oneshot(post(
                 CONSUME_PATH,
-                Some(ORIGIN),
+                Some(origin.as_str()),
                 serde_json::json!({"grant_id": grant_id, "nonce": nonce}).to_string(),
             ))
             .await
@@ -1271,7 +1327,7 @@ mod tests {
             .clone()
             .oneshot(post(
                 EXCHANGE_PATH,
-                Some(ORIGIN),
+                Some(origin.as_str()),
                 serde_json::json!({"ticket": ticket}).to_string(),
             ))
             .await
@@ -1305,14 +1361,23 @@ mod tests {
     async fn ws_origin_mismatch_is_unauthorized() {
         let (state, store, _backend) = test_state(Duration::from_secs(2));
         let app = browser_viewer_routes(state.clone());
-        let (grant_id, s0) = handshake_http(&app, &store).await;
-        let url = spawn_ws(state).await;
-        // The socket arrives from a loopback-but-foreign origin.
-        let mut socket = connect(&url, ALT_ORIGIN).await;
+        let server = spawn_ws(state).await;
+        let (grant_id, s0) = handshake_http(&app, &store, &server.origin).await;
+        // The socket arrives from a loopback-but-foreign origin: another
+        // loopback host on the same port. Its `Host` matches its OWN
+        // authority, so the coarse OriginPolicy accepts the handshake and
+        // the refusal that follows is the grant's own origin binding — not
+        // the generic origin refusal.
+        let foreign = ViewerOrigin {
+            scheme: server.origin.scheme.clone(),
+            host: "localhost".into(),
+            port: server.origin.port,
+        };
+        let mut socket = connect(&server.url, &foreign).await;
         send_hello(&mut socket, &grant_id, 0, &s0).await;
         expect_auth_error(&mut socket, AuthErrorCode::Unauthorized).await;
         // The secret was not consumed: the honest origin can still auth.
-        let mut socket = connect(&url, ORIGIN).await;
+        let mut socket = connect(&server.url, &server.origin).await;
         send_hello(&mut socket, &grant_id, 0, &s0).await;
         let text = recv_text(&mut socket).await;
         let message: ViewerAuthServerMessage = serde_json::from_str(&text).unwrap();
@@ -1323,9 +1388,9 @@ mod tests {
     async fn ws_full_session_frames_input_and_revoke() {
         let (state, store, backend) = test_state(Duration::from_secs(2));
         let app = browser_viewer_routes(state.clone());
-        let (grant_id, s0) = handshake_http(&app, &store).await;
-        let url = spawn_ws(state).await;
-        let mut socket = connect(&url, ORIGIN).await;
+        let server = spawn_ws(state).await;
+        let (grant_id, s0) = handshake_http(&app, &store, &server.origin).await;
+        let mut socket = connect(&server.url, &server.origin).await;
         send_hello(&mut socket, &grant_id, 0, &s0).await;
 
         // AuthOk: generation 1, fresh next_secret.

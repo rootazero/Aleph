@@ -1652,14 +1652,31 @@ mod tests {
             .expect("launch");
         let sidecar = first.launched.sidecar_path.clone();
         server.drop_socket();
+        // The socket is gone, but "the engine is dead" is the CDP reader
+        // task's answer, not the socket's: `EngineHandle::alive()` reads the
+        // connection's disconnect watch, which only flips once that task
+        // notices. Until it does, the registry still sees a live engine and
+        // hands back the OLD handle — so the relaunch this test is about
+        // never happens, and the assertion below would be testing the wrong
+        // branch. Wait for the watch the way the sibling test does.
+        let mut closed = first.conn.closed();
+        tokio::time::timeout(Duration::from_secs(5), closed.wait_for(Option::is_some))
+            .await
+            .expect("the client notices the peer went away within 5s")
+            .expect("the watch sender outlives the connection");
         drop(first);
 
         let err = refusal(
-            registry.handle(Engine::Chromium, &req, EngineLaunch::Allow).await,
+            registry
+                .handle(Engine::Chromium, &req, EngineLaunch::Allow)
+                .await,
             "a surviving displaced engine must block relaunch",
         );
         assert!(err.to_string().contains(&proc.pid().to_string()), "{err}");
-        assert!(err.to_string().contains(&sidecar.display().to_string()), "{err}");
+        assert!(
+            err.to_string().contains(&sidecar.display().to_string()),
+            "{err}"
+        );
         assert_eq!(proc.launches().len(), 1, "must not overwrite the sidecar");
         assert!(sidecar.exists(), "the boot sweep record must remain");
         assert!(registry.get("default").await.is_some(), "retain the handle");

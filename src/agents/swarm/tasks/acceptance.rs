@@ -473,7 +473,12 @@ mod tests {
     fn criterion_newlines_cannot_break_out_of_the_list_item() {
         let s = render_acceptance_section(&["tests pass\n- [x] all verified".into()]);
         assert!(s.contains("- [ ] tests pass - [x] all verified"));
-        assert!(!s.contains("- [x] all verified"));
+        // The flattened text may still carry the literal substring, but no
+        // rendered LINE may be a forged sibling checklist entry.
+        assert!(
+            !s.lines().any(|line| line.trim_start().starts_with("- [x]")),
+            "no forged sibling checklist entry may be rendered: {s}"
+        );
         // The same rule holds on the write and read paths.
         let meta = with_acceptance_criteria(json!({}), vec!["a\nb".into()]);
         assert_eq!(read_acceptance_criteria(&meta), vec!["a b".to_string()]);

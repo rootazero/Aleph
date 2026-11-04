@@ -142,14 +142,14 @@ pub(super) async fn wait_for_load(
                     loader_id,
                     url,
                     completed: true,
-                }
+                };
             }
             "Page.frameStoppedLoading" if ev.params["frameId"].as_str() == Some(main_frame_id) => {
                 return LoadOutcome {
                     loader_id,
                     url,
                     completed: true,
-                }
+                };
             }
             _ => {}
         }
@@ -438,6 +438,21 @@ mod tests {
             "Page.navigate",
             Responder::Reply(json!({ "frameId": "F1", "loaderId": "L2" })),
         );
+        // The landed URL must be OBSERVABLE for the navigation to get past
+        // the boundary: `navigate` reads it from the `Page.frameNavigated`
+        // event or, when the engine omits that event, from
+        // `Page.getFrameTree` — and fails CLOSED (closing the tab) when
+        // neither carries one. The requested URL is NOT a fallback: an
+        // unobserved landing is not an observation. This fake emits no event,
+        // so the frame tree is the observation.
+        server.on(
+            "Page.getFrameTree",
+            Responder::Reply(json!({
+                "frameTree": { "frame": {
+                    "id": "F1", "loaderId": "L2", "url": "https://ok.example/next"
+                }}
+            })),
+        );
         let (_reg, backend) = backend_with(&server, Engine::Chromium, open_guard()).await;
 
         // Seed a tab whose ref table belongs to document L1.
@@ -463,6 +478,8 @@ mod tests {
 
         // The fake never emits a load event, so the barrier elapses — which is
         // deliberate: the reset must happen off the loaderId, not off the load.
+        // The landed URL comes from the frame tree above, so the navigation
+        // reaches the document boundary instead of failing closed.
         let err = backend
             .navigate("T1", "https://ok.example/next")
             .await

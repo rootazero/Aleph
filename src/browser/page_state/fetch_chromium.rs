@@ -1173,7 +1173,7 @@ fn frames_of(
                      Page.getFrameTree, so a navigation could not be detected \
                      and element refs would go stale silently. Re-run \
                      browser_snapshot."
-                )))
+                )));
             }
             None => String::new(),
         };
@@ -6882,12 +6882,21 @@ mod tests {
              page: the parent and the middle frame were both captured",
         );
 
-        // The grandchild is named, once, as the id it has in the capture that
-        // holds it.
+        // The grandchild is confessed, once, as the frame the child capture
+        // holds — NOT as a backendNodeId. The production change is
+        // intentional: a child's ids live in the CHILD renderer's space, so
+        // naming one of them here would be a number the caller cannot resolve
+        // in the page it is reading. The frame is therefore reported as
+        // `Unplaceable`, naming the child frame instead of an id that would
+        // collide with the parent's (see the collision test below).
         assert_eq!(
             dom.unreached_frames,
-            vec![UnreachedFrame::NotCaptured(65 + SHIFT)],
-            "the grandchild must be confessed by the id its own capture uses"
+            vec![UnreachedFrame::Unplaceable(
+                "F-MIDDLE: 1 nested frame(s) not captured; backend node ids \
+                 belong to the child renderer"
+                    .to_string()
+            )],
+            "the grandchild must be confessed as the child frame the capture holds"
         );
         // …and both renderers' content survived.
         assert_eq!(dom.frames.len(), 2, "parent and middle: {:?}", dom.frames);
@@ -6984,10 +6993,22 @@ mod tests {
         )
         .expect("a colliding id must not refuse the page either");
 
+        // The colliding id is still confessed. What changed is the LABEL, not
+        // the reporting: a child's backendNodeIds belong to the child
+        // renderer's space, so the grandchild is named by the frame the child
+        // capture holds rather than by an id that is ambiguous across spaces.
+        // A grandchild filtered away here would leave `unreached_frames` empty
+        // on a page with a hole in it.
         assert_eq!(
             dom.unreached_frames,
-            vec![UnreachedFrame::NotCaptured(65)],
-            "the grandchild collides with the parent's owner id and must STILL              be confessed — an id filtered across node spaces is a frame the              model is never told about"
+            vec![UnreachedFrame::Unplaceable(
+                "F-MIDDLE: 1 nested frame(s) not captured; backend node ids \
+                 belong to the child renderer"
+                    .to_string()
+            )],
+            "the grandchild collides with the parent's owner id and must STILL \
+             be confessed — an id filtered across node spaces is a frame the \
+             model is never told about"
         );
     }
 
