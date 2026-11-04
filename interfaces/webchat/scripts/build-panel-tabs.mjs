@@ -157,9 +157,10 @@ await run([
   ...tailwindCommand, '-i', 'styles/tailwind.css', '-o', join(output, 'tailwind.css'), '--minify',
 ], panel, env);
 const html = (await readFile(join(panel, 'index.html'), 'utf8'))
-  .replace('<base data-trunk-public-url href="/" />', '<base href="./" />')
-  .replace(/<link data-trunk rel="rust"[^>]+\/>/, '<script type="module">import init from "./aleph_panel.js"; await init();</script>')
-  .replace('<link data-trunk rel="css" href="styles/tailwind.css" />', '<link rel="stylesheet" href="tailwind.css" />')
+  .replace('<base data-trunk-public-url href="/" />', '')
+  .replace("const panelLoaderUrl = new URL('panel_loader.js', document.querySelector('base').href).href;", "const panelLoaderUrl = new URL('/panel_loader.js', globalThis.location.origin).href;")
+  .replace(/<link data-trunk rel="rust"[^>]+\/>/, '<script type="module">import init from "/aleph_panel.js"; await init();</script>')
+  .replace('<link data-trunk rel="css" href="styles/tailwind.css" />', '<link rel="stylesheet" href="/tailwind.css" />')
   .replace('<link data-trunk rel="copy-file" href="panel_loader.js" />', '');
 if (/<(?:link|base)\s+data-trunk/.test(html)) throw Error('Unprocessed Trunk asset in modular candidate HTML');
 await writeFile(join(output, 'index.html'), html);
