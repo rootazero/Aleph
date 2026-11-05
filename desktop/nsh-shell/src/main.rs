@@ -1,6 +1,4 @@
-#[allow(dead_code)]
 mod connection;
-#[allow(dead_code)]
 mod runtime;
 mod supervisor;
 
@@ -11,20 +9,35 @@ fn main() -> std::process::ExitCode {
 
     #[component]
     fn App() -> impl IntoElement {
-        let status = signal("Connecting...".to_string());
+        use connection::{spawn_connection_loop, ShellStatus};
 
+        let status = signal(ShellStatus::Connecting);
+
+        // Spawn connection loop on background thread
+        let (tx, mut rx) = tokio::sync::mpsc::channel::<ShellStatus>(8);
+        let _handle = spawn_connection_loop(tx);
+
+        // Update status signal from connection events
         spawn(async move {
-            match supervisor::ensure_ready().await {
-                Ok(_) => {
-                    status.set("Connected to server".to_string());
-                }
-                Err(e) => {
-                    status.set(format!("Error: {e}"));
-                }
+            while let Some(new_status) = rx.recv().await {
+                status.set(new_status);
             }
         });
 
-        text(move || status.get())
+        // Render status
+        text(move || match status.get() {
+            ShellStatus::Connecting => "Connecting to Aleph server...".to_string(),
+            ShellStatus::Connected {
+                server_version,
+                session_count,
+            } => {
+                format!(
+                    "Connected: server v{}, {} sessions",
+                    server_version, session_count
+                )
+            }
+            ShellStatus::Error(e) => format!("Error: {}", e),
+        })
     }
 
     let root = Root::of::<App>();
