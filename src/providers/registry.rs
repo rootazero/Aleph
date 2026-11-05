@@ -193,6 +193,41 @@ impl ProviderRegistry {
         self.providers.contains_key(name)
     }
 
+    /// Unregister a provider by name
+    ///
+    /// # Arguments
+    ///
+    /// * `name` - Provider name to remove
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(Some(Arc<dyn AiProvider>))` - Provider removed successfully
+    /// * `Ok(None)` - Provider not found (no-op)
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use alephcore::providers::{ProviderRegistry, MockProvider};
+    /// use std::sync::Arc;
+    ///
+    /// let registry = ProviderRegistry::new();
+    /// let provider = Arc::new(MockProvider::new("test"));
+    ///
+    /// registry.register("openai".to_string(), provider).unwrap();
+    /// assert!(registry.contains("openai"));
+    ///
+    /// let removed = registry.unregister("openai").unwrap();
+    /// assert!(removed.is_some());
+    /// assert!(!registry.contains("openai"));
+    ///
+    /// // Removing non-existent provider returns None
+    /// let result = registry.unregister("nonexistent").unwrap();
+    /// assert!(result.is_none());
+    /// ```
+    pub fn unregister(&self, name: &str) -> Result<Option<Arc<dyn AiProvider>>> {
+        Ok(self.providers.remove(name).map(|(_, provider)| provider))
+    }
+
     /// Get the number of registered providers
     ///
     /// # Example
@@ -388,5 +423,83 @@ mod tests {
 
         let openai_provider = registry.get("openai").unwrap();
         assert_eq!(openai_provider.name(), "openai");
+    }
+
+    #[test]
+    fn test_registry_unregister() {
+        let registry = ProviderRegistry::new();
+        let provider = Arc::new(MockProvider::new("test"));
+
+        registry.register("openai".to_string(), provider).unwrap();
+        assert!(registry.contains("openai"));
+        assert_eq!(registry.len(), 1);
+
+        let removed = registry.unregister("openai").unwrap();
+        assert!(removed.is_some());
+        assert!(!registry.contains("openai"));
+        assert_eq!(registry.len(), 0);
+    }
+
+    #[test]
+    fn test_registry_unregister_nonexistent() {
+        let registry = ProviderRegistry::new();
+
+        let result = registry.unregister("nonexistent").unwrap();
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_registry_unregister_returns_provider() {
+        let registry = ProviderRegistry::new();
+        let provider = Arc::new(MockProvider::new("test response").with_name("testprov"));
+
+        registry
+            .register("testprov".to_string(), provider)
+            .unwrap();
+
+        let removed = registry.unregister("testprov").unwrap();
+        assert!(removed.is_some());
+
+        let removed_provider = removed.unwrap();
+        assert_eq!(removed_provider.name(), "testprov");
+    }
+
+    #[test]
+    fn test_registry_unregister_leaves_others() {
+        let registry = ProviderRegistry::new();
+
+        registry
+            .register("a".to_string(), Arc::new(MockProvider::new("a")))
+            .unwrap();
+        registry
+            .register("b".to_string(), Arc::new(MockProvider::new("b")))
+            .unwrap();
+        registry
+            .register("c".to_string(), Arc::new(MockProvider::new("c")))
+            .unwrap();
+
+        assert_eq!(registry.len(), 3);
+
+        let removed = registry.unregister("b").unwrap();
+        assert!(removed.is_some());
+
+        assert_eq!(registry.len(), 2);
+        assert!(registry.contains("a"));
+        assert!(!registry.contains("b"));
+        assert!(registry.contains("c"));
+    }
+
+    #[test]
+    fn test_registry_unregister_idempotent() {
+        let registry = ProviderRegistry::new();
+        let provider = Arc::new(MockProvider::new("test"));
+
+        registry.register("openai".to_string(), provider).unwrap();
+
+        let first = registry.unregister("openai").unwrap();
+        assert!(first.is_some());
+
+        let second = registry.unregister("openai").unwrap();
+        assert!(second.is_none());
     }
 }
