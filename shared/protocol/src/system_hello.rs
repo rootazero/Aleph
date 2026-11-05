@@ -75,6 +75,16 @@ impl<'de> Deserialize<'de> for Feature {
     }
 }
 
+impl Feature {
+    /// Returns true if this is a known (non-unknown) feature variant.
+    pub fn is_known(&self) -> bool {
+        matches!(
+            self,
+            Feature::EventReplay | Feature::Snapshot | Feature::BinaryChannel
+        )
+    }
+}
+
 /// Parameters sent by the client in a system.hello request.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HelloParams {

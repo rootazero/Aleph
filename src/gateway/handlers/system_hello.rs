@@ -6,6 +6,7 @@
 //! coexists with the existing `connect` WebSocket device-auth handshake.
 
 use aleph_protocol::system_hello::{HelloParams, HelloResult};
+use uuid::Uuid;
 
 use super::super::protocol::{JsonRpcRequest, JsonRpcResponse, INVALID_PARAMS};
 
@@ -46,12 +47,7 @@ pub async fn handle(request: JsonRpcRequest) -> JsonRpcResponse {
     let features: Vec<aleph_protocol::system_hello::Feature> = params
         .features
         .iter()
-        .filter(|f| match f {
-            aleph_protocol::system_hello::Feature::EventReplay
-            | aleph_protocol::system_hello::Feature::Snapshot
-            | aleph_protocol::system_hello::Feature::BinaryChannel => true,
-            aleph_protocol::system_hello::Feature::Unknown(_) => false,
-        })
+        .filter(|f| f.is_known())
         .cloned()
         .collect();
 
@@ -61,7 +57,7 @@ pub async fn handle(request: JsonRpcRequest) -> JsonRpcResponse {
             name: "aleph-server".to_string(),
             version: env!("ALEPH_VERSION").to_string(),
         },
-        connection_id: format!("conn-{}", uuid::Uuid::new_v4()),
+        connection_id: format!("conn-{}", Uuid::new_v4()),
         features,
         limits: aleph_protocol::system_hello::HelloLimits {
             max_message_bytes: 8_388_608,
