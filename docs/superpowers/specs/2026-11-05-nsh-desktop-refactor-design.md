@@ -114,20 +114,22 @@
 | `desktop/shared` | 截图/感知等原生能力，迁移后继续复用 |
 | `aleph-server` 及所有 `src/` | 完全不动 |
 
-### 4.3 NSH v0.4.0 关键 API（已核实）
+### 4.3 NSH v0.4.0 关键 API（Phase 0 Spike 已验证）
 
-核实来源：本地 clone `/Volumes/TBU4/Github/nsh`，workspace version `0.4.0`。
+核实来源：本地 clone `/Volumes/TBU4/Github/nsh`，commit `2ab3b6bc`（v0.4.0+24）。
 
-| API | 源码位置 | 状态 |
-|-----|---------|------|
-| `pub enum AppSource { Rust(Root), Bundle(Bundle), DevServer(String) }` | `crates/nsh-platform-macos/src/app.rs:105` | ✅ 存在 |
-| `pub fn run_app(source: AppSource, options: AppOptions)` | `crates/nsh-platform-macos/src/app.rs:668` | ✅ 存在 |
-| `AppView::register_component(name, factory)` | `crates/nsh-platform-macos/src/app.rs:379` | ✅ 存在 |
-| `pub struct AppOptions { components: Components, .. }` | `crates/nsh-platform-macos/src/app.rs:118` | ✅ 存在 |
-| `global::<T>()` | `examples/gallery-rs/native/src/shell.rs` 使用 | ✅ 存在 |
-| `#[component]` 宏 | `nsh-macros` crate，gallery-rs 示例使用 | ✅ 存在 |
+| API | 源码位置 | 验证结果 |
+|-----|---------|---------|
+| `pub enum AppSource { Rust(Root), Bundle(Bundle), DevServer(String) }` | `crates/nsh-platform-macos/src/app.rs:105` | ✅ 编译+运行通过 |
+| `pub fn run_app(source: AppSource, options: AppOptions)` | `crates/nsh-platform-macos/src/app.rs:668` | ✅ 窗口正常打开 |
+| `AppView::register_component(name, factory)` | `crates/nsh-platform-macos/src/app.rs:379` | ⏳ 未在 Spike 中验证（Phase 2/5） |
+| `pub struct AppOptions { components, title, size, app_id, .. }` | `crates/nsh-platform-macos/src/app.rs:118` | ✅ `AppOptions::default()` 可用，`title/size/app_id` 字段可显式设置 |
+| `Root` 类型 | `nsh_core/src/element/component.rs:535` | ✅ 是 struct，用 `Root::of::<C>()` 构建（**非** `Box<dyn Fn()>`） |
+| `#[component]` 宏 | `nsh-macros` crate | ✅ 在 edition 2021 的 crate 中展开正常，生成类型（非函数） |
+| `global::<T>()` | gallery-rs 示例使用 | ⏳ 未在 Spike 中使用（Phase 3） |
+| NSH `spawn` + `signal` | `nsh_core::prelude::*` | ✅ 用于响应式更新 gateway 结果 |
 
-Phase 0 时以 path 依赖锁定该本地 clone 的固定 commit，记入 CLAUDE.md。
+Phase 0 Spike 完整证据：`desktop/nsh-spike/FINDINGS.md`
 
 ---
 
@@ -340,8 +342,8 @@ global::<AppearanceState>()  // 主题 / 布局
 
 | 风险 | 可能性 | 缓解措施 |
 |------|--------|---------|
-| NSH objc2 版本与 `desktop/macos` Swift bridge 的 objc2 冲突 | 高 | Phase 0 Spike 第一天验证；锁定版本 |
-| NSH tokio runtime 与 Aleph workspace 版本不兼容 | 中 | Phase 0 Spike 验证；NSH 用 path 依赖 |
+| NSH objc2 版本与 `desktop/macos` Swift bridge 的 objc2 冲突 | **低**（Phase 0 已验证） | 三者都用 objc2 0.6.5，无冲突 |
+| NSH tokio runtime 与 Aleph workspace 版本不兼容 | **低**（Phase 0 已验证） | tokio 1.53.3 单一版本，spike 实测通过 |
 | `interfaces/webchat/src/context.rs`（3413 行）迁移工作量超估 | 高 | Phase 3 先做 state 层 + 测试，不绑定渲染；Phase 4 分批 |
 | NSH tray/hotkey/deeplink 无内置支持，objc2 直接调用维护成本高 | 中 | 完全替换路径已定（owner 确认），无 Tauri 兜底；Phase 2 直接用 `objc2-app-kit` 实现 |
 | NSH API 变动（v0.4.0 仍在活跃开发） | 中 | 锁定 path 依赖到本地 clone 的固定 commit；不跟随 head |
