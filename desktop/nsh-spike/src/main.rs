@@ -10,7 +10,15 @@ fn main() -> std::process::ExitCode {
         }
 
         let root = Root::of::<App>();
-        run_app(AppSource::Rust(root), AppOptions::default())
+        run_app(
+            AppSource::Rust(root),
+            AppOptions {
+                title: "Aleph NSH Spike".to_string(),
+                size: (800, 600),
+                app_id: "com.aleph.nsh-spike".to_string(),
+                ..AppOptions::default()
+            },
+        )
     }
     #[cfg(not(target_os = "macos"))]
     std::process::ExitCode::SUCCESS

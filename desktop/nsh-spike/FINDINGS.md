@@ -39,6 +39,39 @@
 - Aleph 用 `tokio = "1.53"`
 - 理论上兼容，Task 3 实测确认。
 
-## Task 2: 待填写
+## Task 2: 最小 NSH 窗口运行验证
+
+- **状态**: ✅ 窗口成功打开
+- `cargo build`: exit 0 (9.95s)
+- `cargo fmt --check`: exit 0
+- `cargo clippy -- -D warnings`: exit 0
+
+### AppOptions 字段验证
+
+| 字段 | 值 | 编译 | 运行时 |
+|---|---|---|---|
+| `title: String` | `"Aleph NSH Spike".to_string()` | ✅ | ✅ 窗口标题正确 |
+| `size: (i32, i32)` | `(800, 600)` | ✅ | ✅ 外框 800×632（标题栏约 32px）|
+| `app_id: String` | `"com.aleph.nsh-spike".to_string()` | ✅ | ✅ |
+| `..AppOptions::default()` | 其余字段全部有默认值 | ✅ | ✅ |
+
+### 运行时观察
+
+- 进程 PID 74848，CoreGraphics 读到 1 个屏幕窗口（name=Aleph NSH Spike）
+- 窗口外框：`{Width:800, Height:632, X:356, Y:87}`（height=632 含标题栏，内容区未单独量）
+- 无 objc2 runtime crash
+- 结束方式：SIGTERM（非自然退出），非验收失败
+
+### 二进制归因
+
+- 继承根 target，实际路径：`/Volumes/TBU4/Workspace/Aleph/target/debug/aleph-nsh-spike`
+- SHA256: `f00af8e75f4daa7f6fa8982e08081f797ad0d69782f4bc46b2e389d2a88eed5d`
+- 二进制含三条独有字符串：`NSH Spike: compiles OK`、`Aleph NSH Spike`、`com.aleph.nsh-spike` ✅
+
+### #[component] 宏在 edition 2021 下的行为
+
+- 生成类型（struct），不是函数——`App()` 调用报 E0618
+- 正确用法：`Root::of::<App>()`
+- 在 Aleph 的 `edition = "2021"` 下展开正常 ✅
 
 ## Task 3: 待填写
