@@ -97,8 +97,7 @@ async fn http_get_status_inner(path: &str) -> Option<u16> {
 }
 
 fn launch_detached() -> Result<(), String> {
-    let bin = resolve_daemon_binary()
-        .ok_or_else(|| "aleph-server binary not found".to_string())?;
+    let bin = resolve_daemon_binary().ok_or_else(|| "aleph-server binary not found".to_string())?;
     spawn_detached(&bin)
 }
 
@@ -175,7 +174,10 @@ mod tests {
 
     #[test]
     fn classify_ready_status_booting() {
-        assert_eq!(classify_ready_status(Some(503)), PortOccupant::DaemonBooting);
+        assert_eq!(
+            classify_ready_status(Some(503)),
+            PortOccupant::DaemonBooting
+        );
     }
 
     #[test]
