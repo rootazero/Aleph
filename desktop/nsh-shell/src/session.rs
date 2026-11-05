@@ -17,7 +17,7 @@ pub enum Role {
 }
 
 /// A single message in the conversation
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Message {
     pub message_id: String,
     pub role: Role,
@@ -28,7 +28,7 @@ pub struct Message {
 }
 
 /// Tool call within a message
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ToolCall {
     pub tool_name: String,
     pub arguments: String,
@@ -142,9 +142,7 @@ impl SessionManager {
             for word in response_text.split_whitespace() {
                 if let Some(tx) = &event_tx {
                     let delta = format!("{} ", word);
-                    let _ = tx
-                        .send(SessionEvent::MessageDelta { delta })
-                        .await;
+                    let _ = tx.send(SessionEvent::MessageDelta { delta }).await;
                 }
                 tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
             }
@@ -227,10 +225,10 @@ mod tests {
         manager.send_message("Hello".to_string()).await.unwrap();
 
         // Wait for user message event
-        let event = tokio::time::timeout(
-            tokio::time::Duration::from_secs(1),
-            rx.recv()
-        ).await.unwrap().unwrap();
+        let event = tokio::time::timeout(tokio::time::Duration::from_secs(1), rx.recv())
+            .await
+            .unwrap()
+            .unwrap();
 
         match event {
             SessionEvent::MessageAdded(msg) => {
