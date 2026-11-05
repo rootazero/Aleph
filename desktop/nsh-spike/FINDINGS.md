@@ -51,8 +51,8 @@
 | 字段 | 值 | 编译 | 运行时 |
 |---|---|---|---|
 | `title: String` | `"Aleph NSH Spike".to_string()` | ✅ | ✅ 窗口标题正确 |
-| `size: (i32, i32)` | `(800, 600)` | ✅ | ✅ 外框 800×632（标题栏约 32px）|
-| `app_id: String` | `"com.aleph.nsh-spike".to_string()` | ✅ | ✅ |
+| `size` (整数元组字面量) | `(800, 600)` | ✅ | ✅ 外框 800×632（内容区未单独量）|
+| `app_id: String` | `"com.aleph.nsh-spike".to_string()` | ✅ | 配置可启动；应用标识行为未单独探测 |
 | `..AppOptions::default()` | 其余字段全部有默认值 | ✅ | ✅ |
 
 ### 运行时观察
@@ -66,7 +66,7 @@
 
 - 继承根 target，实际路径：`/Volumes/TBU4/Workspace/Aleph/target/debug/aleph-nsh-spike`
 - SHA256: `f00af8e75f4daa7f6fa8982e08081f797ad0d69782f4bc46b2e389d2a88eed5d`
-- 二进制含三条独有字符串：`NSH Spike: compiles OK`、`Aleph NSH Spike`、`com.aleph.nsh-spike` ✅
+- 二进制含独有字符串：`NSH Spike: compiles OK`（Task 1 继承）、`Aleph NSH Spike`、`com.aleph.nsh-spike`（Task 2 新增）✅
 
 ### #[component] 宏在 edition 2021 下的行为
 
