@@ -3,16 +3,21 @@ fn main() -> std::process::ExitCode {
     use nsh_core::prelude::*;
     use nsh_platform_macos::{run_app, AppOptions, AppSource, Root};
 
+    mod supervisor;
+
     #[component]
     fn App() -> impl IntoElement {
         let status = signal("Connecting...".to_string());
 
         spawn(async move {
-            // Placeholder for Phase 1: show connection status
-            status.set("Connecting to server...".to_string());
-            // Tasks 3-5 will wire in: supervisor → connection → status updates
-            tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
-            status.set("Status: Connected (Phase 1 skeleton)".to_string());
+            match supervisor::ensure_ready().await {
+                Ok(_) => {
+                    status.set("Connected to server".to_string());
+                }
+                Err(e) => {
+                    status.set(format!("Error: {e}"));
+                }
+            }
         });
 
         text(move || status.get())
