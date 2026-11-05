@@ -5,7 +5,19 @@
 
 ---
 
-## ✅ Verified Public API
+## ⚠️ CORRECTIONS (Task D findings)
+
+**This document contained errors.** Use actual NSH rev 2ab3b6bc27 source as authority:
+- ❌ `text_input`, `vertical_stack`, `KeyEvent`, `.on_key_down` do NOT exist
+- ❌ Claimed "no auto-scroll API" but `ElementRef::scroll_to_end(animated)` actually exists
+- ❌ Missing generic marker in `IntoListener<E, M>`
+- ❌ `components/input.rs` not compiled (no `mod components` in main.rs)
+
+**DEPRECATED:** See actual NSH source for correct API surface.
+
+---
+
+## ✅ Verified Public API (Incomplete - see NSH source)
 
 ### Core Functions (element/host.rs)
 
