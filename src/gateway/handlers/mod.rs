@@ -124,6 +124,7 @@ pub mod security_audit;
 pub mod skills;
 pub mod spend;
 pub mod subagent;
+pub mod system_hello;
 pub mod system_info;
 pub mod task_error;
 pub mod teams;
@@ -321,6 +322,7 @@ impl HandlerRegistry {
         registry.register("echo", echo::handle);
         registry.register("version", version::handle);
         registry.register("system.info", system_info::handle);
+        registry.register("system.hello", system_hello::handle);
         registry.register("request.state", request_state::handle);
 
         // Config handlers (schema is stateless)

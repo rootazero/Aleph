@@ -10,6 +10,7 @@ members = [
     "desktop/windows",
     "desktop/nsh-shell",
     "desktop/shell",
+    "desktop/nsh-shell",
     "shared/logging",
     "shared/protocol",
     "shared/ui_logic",

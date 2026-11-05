@@ -55,6 +55,7 @@ pub mod sessions;
 pub mod spend;
 pub mod subagent_tree;
 pub mod subscription;
+pub mod system_hello;
 pub mod team_topic;
 pub mod telecom_relay;
 pub mod terminate;
