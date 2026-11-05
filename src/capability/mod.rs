@@ -38,17 +38,24 @@ pub mod descriptor;
 pub mod diagnostic_control;
 pub mod effect_claim;
 pub mod facade;
+pub mod grant;
+pub mod lifecycle;
 pub mod ownership;
+pub mod policy;
 pub mod projection_host;
 pub mod provider;
 pub mod provider_backend;
 pub mod provider_registry;
+pub mod resolver;
 pub(crate) mod versioned_registry;
 pub mod zahir_facade;
 
 /// The membership rule that decides what belongs in this module's roster.
 #[cfg(test)]
 pub(crate) mod census;
+
+#[cfg(test)]
+mod grant_integration_tests;
 
 /// What a read observes when this capability was NEVER installed.
 ///
