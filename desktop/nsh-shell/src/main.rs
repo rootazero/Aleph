@@ -1,9 +1,13 @@
+#[allow(dead_code)]
+mod connection;
+#[allow(dead_code)]
+mod runtime;
+mod supervisor;
+
 #[cfg(target_os = "macos")]
 fn main() -> std::process::ExitCode {
     use nsh_core::prelude::*;
     use nsh_platform_macos::{run_app, AppOptions, AppSource, Root};
-
-    mod supervisor;
 
     #[component]
     fn App() -> impl IntoElement {
