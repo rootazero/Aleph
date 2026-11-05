@@ -6,6 +6,11 @@ use tokio::task::JoinHandle;
 /// The returned task is a Tokio-side join handle for the worker thread's
 /// result. The worker owns its runtime so NSH's UI runtime is not required to
 /// be Tokio and remains free to drive the window.
+///
+/// **Lifetime Note:** The spawned thread runs until the future completes.
+/// Dropping the returned `JoinHandle` abandons waiting but does not stop the
+/// thread. Phase 2's connection loop has bounded retry logic (max 10 failures)
+/// to prevent infinite resource consumption.
 pub fn spawn_tokio_worker<F>(future: F) -> JoinHandle<F::Output>
 where
     F: std::future::Future + Send + 'static,

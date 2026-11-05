@@ -9,6 +9,9 @@ use tokio::sync::mpsc;
 
 const DAEMON_URL: &str = "ws://127.0.0.1:18790";
 const RECONNECT_DELAY: Duration = Duration::from_secs(2);
+const MAX_RECONNECT_DELAY: Duration = Duration::from_secs(30);
+const MAX_CONSECUTIVE_FAILURES: usize = 10;
+const CONNECTION_TIMEOUT: Duration = Duration::from_secs(40);
 const CONNECTION_POLL_INTERVAL: Duration = Duration::from_millis(100);
 
 /// Connection state reported to the NSH UI runtime.
@@ -42,11 +45,22 @@ pub fn build_hello_params() -> HelloParams {
 
 /// Perform the application-level system.hello exchange after the transport
 /// client's own `connect` authentication handshake has completed.
+///
+/// Protocol V1 §18 requires clients to reject `major != 1`.
 pub async fn perform_handshake(client: &AlephClient) -> Result<HelloResult, String> {
-    client
+    let result = client
         .call::<HelloParams, HelloResult>("system.hello", Some(build_hello_params()))
         .await
-        .map_err(|error| format!("handshake failed: {error}"))
+        .map_err(|error| format!("handshake failed: {error}"))?;
+
+    if result.protocol.major != 1 {
+        return Err(format!(
+            "incompatible protocol version: expected major=1, got major={}",
+            result.protocol.major
+        ));
+    }
+
+    Ok(result)
 }
 
 /// Start the connection lifecycle on the dedicated Tokio worker.
@@ -57,10 +71,33 @@ pub async fn perform_handshake(client: &AlephClient) -> Result<HelloResult, Stri
 /// the transport handshake, system.hello, event subscription, and session list.
 pub fn spawn_connection_loop(status_tx: mpsc::Sender<ShellStatus>) -> tokio::task::JoinHandle<()> {
     crate::runtime::spawn_tokio_worker(async move {
+        let mut consecutive_failures = 0;
+        let mut backoff = RECONNECT_DELAY;
+
         loop {
-            if let Err(error) = run_connection_cycle(&status_tx).await {
-                let _ = status_tx.send(ShellStatus::Error(error)).await;
-                tokio::time::sleep(RECONNECT_DELAY).await;
+            match run_connection_cycle(&status_tx).await {
+                Ok(()) => {
+                    // Successful cycle; reset failure tracking
+                    consecutive_failures = 0;
+                    backoff = RECONNECT_DELAY;
+                }
+                Err(error) => {
+                    consecutive_failures += 1;
+                    let _ = status_tx.send(ShellStatus::Error(error.clone())).await;
+
+                    if consecutive_failures >= MAX_CONSECUTIVE_FAILURES {
+                        let _ = status_tx
+                            .send(ShellStatus::Error(format!(
+                                "giving up after {MAX_CONSECUTIVE_FAILURES} consecutive failures: {error}"
+                            )))
+                            .await;
+                        break;
+                    }
+
+                    tokio::time::sleep(backoff).await;
+                    // Exponential backoff with ceiling
+                    backoff = std::cmp::min(backoff.saturating_mul(2), MAX_RECONNECT_DELAY);
+                }
             }
         }
     })
@@ -76,9 +113,13 @@ async fn run_authenticated_cycle(
     status_tx: &mpsc::Sender<ShellStatus>,
     url: &str,
 ) -> Result<(), String> {
-    let (client, mut events_rx) = AlephClient::connect(url, &CliConfig::default())
-        .await
-        .map_err(|error| format!("connect failed: {error}"))?;
+    let (client, mut events_rx) = tokio::time::timeout(
+        CONNECTION_TIMEOUT,
+        AlephClient::connect(url, &CliConfig::default()),
+    )
+    .await
+    .map_err(|_| format!("connect timeout after {}s", CONNECTION_TIMEOUT.as_secs()))?
+    .map_err(|error| format!("connect failed: {error}"))?;
 
     let hello = perform_handshake(&client).await?;
 
@@ -119,6 +160,9 @@ async fn run_authenticated_cycle(
             }
         }
     }
+
+    // Explicit cleanup before reconnect to avoid racing with async shutdown
+    client.close().await;
 
     Err("connection closed".into())
 }
@@ -222,7 +266,8 @@ mod tests {
                 "system.hello",
                 "events.subscribe",
                 "sessions.list",
-            ]
+            ],
+            "reconnect must replay the full handshake sequence"
         );
     }
 
@@ -268,5 +313,228 @@ mod tests {
                 .await
                 .unwrap();
         }
+    }
+
+    #[tokio::test]
+    async fn handshake_failure_propagates_error() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("ws://{}", listener.local_addr().unwrap());
+
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut socket = accept_async(stream).await.unwrap();
+
+            // Serve connect successfully
+            let msg = socket.next().await.unwrap().unwrap();
+            let req: Value = serde_json::from_str(msg.to_text().unwrap()).unwrap();
+            let response = json!({"jsonrpc": "2.0", "id": req["id"], "result": {"role": "operator"}});
+            socket.send(Message::Text(response.to_string().into())).await.unwrap();
+
+            // Inject handshake error
+            let msg = socket.next().await.unwrap().unwrap();
+            let req: Value = serde_json::from_str(msg.to_text().unwrap()).unwrap();
+            let error_response = json!({
+                "jsonrpc": "2.0",
+                "id": req["id"],
+                "error": {"code": -32000, "message": "authentication required"}
+            });
+            socket.send(Message::Text(error_response.to_string().into())).await.unwrap();
+        });
+
+        let (status_tx, _status_rx) = mpsc::channel(8);
+        let result = run_authenticated_cycle(&status_tx, &url).await;
+
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("handshake failed"));
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn subscribe_failure_propagates_error() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("ws://{}", listener.local_addr().unwrap());
+
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut socket = accept_async(stream).await.unwrap();
+
+            // Serve connect and handshake successfully
+            for _ in 0..2 {
+                let msg = socket.next().await.unwrap().unwrap();
+                let req: Value = serde_json::from_str(msg.to_text().unwrap()).unwrap();
+                let result = if req["method"] == "connect" {
+                    json!({"role": "operator"})
+                } else {
+                    json!({
+                        "protocol": {"major": 1, "minor": 0},
+                        "server": {"name": "test", "version": "1.0"},
+                        "connection_id": "test",
+                        "features": [],
+                        "limits": {"max_message_bytes": 8388608, "max_inflight_requests": 128}
+                    })
+                };
+                let response = json!({"jsonrpc": "2.0", "id": req["id"], "result": result});
+                socket.send(Message::Text(response.to_string().into())).await.unwrap();
+            }
+
+            // Inject subscribe error
+            let msg = socket.next().await.unwrap().unwrap();
+            let req: Value = serde_json::from_str(msg.to_text().unwrap()).unwrap();
+            let error_response = json!({
+                "jsonrpc": "2.0",
+                "id": req["id"],
+                "error": {"code": -32603, "message": "subscription limit exceeded"}
+            });
+            socket.send(Message::Text(error_response.to_string().into())).await.unwrap();
+        });
+
+        let (status_tx, _status_rx) = mpsc::channel(8);
+        let result = run_authenticated_cycle(&status_tx, &url).await;
+
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("subscribe failed"));
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn connection_timeout_returns_error() {
+        // Bind a port but never accept connections
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("ws://{}", listener.local_addr().unwrap());
+
+        let (status_tx, _status_rx) = mpsc::channel(8);
+        let result = run_authenticated_cycle(&status_tx, &url).await;
+
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("timeout"));
+    }
+
+    #[tokio::test]
+    async fn incompatible_protocol_version_rejected() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("ws://{}", listener.local_addr().unwrap());
+
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut socket = accept_async(stream).await.unwrap();
+
+            // Serve connect successfully
+            let msg = socket.next().await.unwrap().unwrap();
+            let req: Value = serde_json::from_str(msg.to_text().unwrap()).unwrap();
+            let response = json!({"jsonrpc": "2.0", "id": req["id"], "result": {"role": "operator"}});
+            socket.send(Message::Text(response.to_string().into())).await.unwrap();
+
+            // Return incompatible protocol version
+            let msg = socket.next().await.unwrap().unwrap();
+            let req: Value = serde_json::from_str(msg.to_text().unwrap()).unwrap();
+            let result = json!({
+                "protocol": {"major": 2, "minor": 0},
+                "server": {"name": "aleph-server", "version": "2.0"},
+                "connection_id": "conn-test",
+                "features": [],
+                "limits": {"max_message_bytes": 8388608, "max_inflight_requests": 128}
+            });
+            let response = json!({"jsonrpc": "2.0", "id": req["id"], "result": result});
+            socket.send(Message::Text(response.to_string().into())).await.unwrap();
+        });
+
+        let (status_tx, _status_rx) = mpsc::channel(8);
+        let result = run_authenticated_cycle(&status_tx, &url).await;
+
+        assert!(result.is_err());
+        let error_msg = result.unwrap_err();
+        assert!(error_msg.contains("incompatible protocol version"));
+        assert!(error_msg.contains("major=2"));
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn sessions_list_failure_propagates_error() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("ws://{}", listener.local_addr().unwrap());
+
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut socket = accept_async(stream).await.unwrap();
+
+            // Serve connect, handshake, and subscribe successfully
+            for call_num in 0..3 {
+                let msg = socket.next().await.unwrap().unwrap();
+                let req: Value = serde_json::from_str(msg.to_text().unwrap()).unwrap();
+                let result = match call_num {
+                    0 => json!({"role": "operator"}),
+                    1 => json!({
+                        "protocol": {"major": 1, "minor": 0},
+                        "server": {"name": "test", "version": "1.0"},
+                        "connection_id": "test",
+                        "features": [],
+                        "limits": {"max_message_bytes": 8388608, "max_inflight_requests": 128}
+                    }),
+                    2 => json!({"subscribed": ["**"], "changed": 1}),
+                    _ => unreachable!(),
+                };
+                let response = json!({"jsonrpc": "2.0", "id": req["id"], "result": result});
+                socket.send(Message::Text(response.to_string().into())).await.unwrap();
+            }
+
+            // Inject sessions.list error
+            let msg = socket.next().await.unwrap().unwrap();
+            let req: Value = serde_json::from_str(msg.to_text().unwrap()).unwrap();
+            let error_response = json!({
+                "jsonrpc": "2.0",
+                "id": req["id"],
+                "error": {"code": -32603, "message": "internal database error"}
+            });
+            socket.send(Message::Text(error_response.to_string().into())).await.unwrap();
+        });
+
+        let (status_tx, _status_rx) = mpsc::channel(8);
+        let result = run_authenticated_cycle(&status_tx, &url).await;
+
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("sessions.list failed"));
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn event_stream_closed_triggers_reconnect() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("ws://{}", listener.local_addr().unwrap());
+
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut socket = accept_async(stream).await.unwrap();
+
+            // Serve full handshake
+            for call_num in 0..4 {
+                let msg = socket.next().await.unwrap().unwrap();
+                let req: Value = serde_json::from_str(msg.to_text().unwrap()).unwrap();
+                let result = match call_num {
+                    0 => json!({"role": "operator"}),
+                    1 => json!({
+                        "protocol": {"major": 1, "minor": 0},
+                        "server": {"name": "test", "version": "1.0"},
+                        "connection_id": "test",
+                        "features": [],
+                        "limits": {"max_message_bytes": 8388608, "max_inflight_requests": 128}
+                    }),
+                    2 => json!({"subscribed": ["**"], "changed": 1}),
+                    3 => json!({"sessions": [], "count": 0}),
+                    _ => unreachable!(),
+                };
+                let response = json!({"jsonrpc": "2.0", "id": req["id"], "result": result});
+                socket.send(Message::Text(response.to_string().into())).await.unwrap();
+            }
+
+            // Close the socket to simulate event stream closure
+            socket.close(None).await.unwrap();
+        });
+
+        let (status_tx, _status_rx) = mpsc::channel(8);
+        let result = run_authenticated_cycle(&status_tx, &url).await;
+
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err(), "connection closed");
+        server.await.unwrap();
     }
 }
