@@ -7,9 +7,8 @@
 use crate::capability::descriptor::{CapabilityDescriptor, CapabilityId};
 use crate::capability::ownership::{OwnerRef, VisibilityScope};
 use crate::capability::provider::{ProviderHandle, ProviderId};
-use crate::sync_primitives::Arc;
+use crate::sync_primitives::{Arc, PoisonError, RwLock};
 use std::collections::HashMap;
-use std::sync::RwLock;
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum ActivationError {
@@ -95,10 +94,7 @@ impl ProviderRegistry {
         &self,
         registration: ProviderRegistration,
     ) -> Result<(), ProviderRegistryError> {
-        let mut state = self
-            .state
-            .write()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut state = self.state.write().unwrap_or_else(PoisonError::into_inner);
         if state.entries.contains_key(&registration.descriptor.id) {
             return Err(ProviderRegistryError::Duplicate(registration.descriptor.id));
         }
@@ -121,7 +117,7 @@ impl ProviderRegistry {
     pub(crate) fn entry(&self, id: &CapabilityId) -> Option<ProviderEntry> {
         self.state
             .read()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .unwrap_or_else(PoisonError::into_inner)
             .entries
             .get(id)
             .cloned()
@@ -130,7 +126,7 @@ impl ProviderRegistry {
     pub(crate) fn entries(&self) -> Vec<ProviderEntry> {
         self.state
             .read()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .unwrap_or_else(PoisonError::into_inner)
             .entries
             .values()
             .cloned()
@@ -141,7 +137,7 @@ impl ProviderRegistry {
     pub fn revision(&self) -> u64 {
         self.state
             .read()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .unwrap_or_else(PoisonError::into_inner)
             .revision
     }
 }

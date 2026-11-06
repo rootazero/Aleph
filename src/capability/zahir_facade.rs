@@ -29,12 +29,11 @@ use crate::capability::provider_backend::ProviderBackendAdapter;
 use crate::capability::provider_registry::ActivationError;
 use crate::capability::provider_registry::ProviderRegistry;
 use crate::memory::runtime::{MemoryHandle, MemoryOperation, MemoryRuntime};
-use crate::sync_primitives::Arc;
+use crate::sync_primitives::{Arc, Mutex, Weak};
 use crate::tools::registry::{
     CanonicalEntryLease, RegistryChange, RegistryEntry, RegistryPublication, RegistrySnapshot,
     ToolHandlerRegistry,
 };
-use std::sync::Weak;
 #[cfg(test)]
 #[path = "zahir_facade_memory_tests.rs"]
 mod memory_tests;
@@ -1192,7 +1191,7 @@ mod tests {
         let provider = host.provider();
         let id = tool_id("a");
         let lease = host.resolve(ref_for(&id)).expect("resolve succeeds");
-        let receipt = std::sync::Mutex::new(None);
+        let receipt = Mutex::new(None);
 
         provider.transition(ProviderState::Stopping).unwrap();
         provider.transition(ProviderState::Stopped).unwrap();

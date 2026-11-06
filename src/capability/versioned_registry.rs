@@ -2,7 +2,7 @@
 
 use std::cell::RefCell;
 
-use crate::sync_primitives::Arc;
+use crate::sync_primitives::{Arc, Mutex, PoisonError};
 use arc_swap::ArcSwap;
 use tokio::sync::{broadcast, Notify};
 
@@ -85,7 +85,7 @@ where
     events: broadcast::Sender<E>,
     projected_events: broadcast::Sender<L>,
     project: fn(&E) -> Vec<L>,
-    mutation_lock: std::sync::Mutex<()>,
+    mutation_lock: Mutex<()>,
     close_signal: Arc<Notify>,
 }
 
@@ -135,7 +135,7 @@ where
             events,
             projected_events,
             project,
-            mutation_lock: std::sync::Mutex::new(()),
+            mutation_lock: Mutex::new(()),
             close_signal: Arc::new(Notify::new()),
         }
     }
@@ -151,7 +151,7 @@ where
         let _guard = self
             .mutation_lock
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+            .unwrap_or_else(PoisonError::into_inner);
         read(&self.snapshot.load_full())
     }
 
@@ -207,7 +207,7 @@ where
         let _guard = self
             .mutation_lock
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+            .unwrap_or_else(PoisonError::into_inner);
         let current = self.snapshot.load_full();
         let Some(next_revision) = current.revision.checked_add(1) else {
             panic!(
@@ -256,7 +256,7 @@ where
         let _guard = self
             .mutation_lock
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+            .unwrap_or_else(PoisonError::into_inner);
         let current = self.snapshot.load_full();
         if !current.closed {
             self.snapshot.store(Arc::new(VersionedSnapshot {
@@ -272,7 +272,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    use crate::sync_primitives::{AtomicBool, AtomicUsize, Barrier, Ordering};
     use std::thread;
 
     #[test]
@@ -481,7 +481,7 @@ mod tests {
         );
         let mut primary = registry.subscribe();
         let mut projected = registry.subscribe_projected();
-        let barrier = Arc::new(std::sync::Barrier::new(16));
+        let barrier = Arc::new(Barrier::new(16));
         let threads: Vec<_> = (0..16)
             .map(|_| {
                 let registry = Arc::clone(&registry);
@@ -638,7 +638,7 @@ mod tests {
     fn concurrent_transactions_keep_all_values_and_order_events() {
         let registry = Arc::new(VersionedRegistry::<Vec<u64>, u64>::new(Vec::new()));
         let mut events = registry.subscribe();
-        let barrier = Arc::new(std::sync::Barrier::new(16));
+        let barrier = Arc::new(Barrier::new(16));
         let calls = Arc::new(AtomicUsize::new(0));
         let threads: Vec<_> = (0..16)
             .map(|_| {
