@@ -415,6 +415,64 @@ enum CascadeOriginScope {
     Originator(Option<String>),
 }
 
+/// Outcome of the by-id locked resolution — the ONE place that says what a
+/// resolution attempt did.
+///
+/// The channel-callback path needs the REASON (a refusal the user can read),
+/// so the locked path reports it instead of a bare `false`; the RPC paths
+/// only need "did it apply".
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum ApprovalResolveOutcome {
+    /// Applied to the addressed entry. Carries the EFFECTIVE decision (post
+    /// clamp — a legacy `AllowAlways` narrows to `AllowSession`), so the
+    /// caller confirms WHAT was approved instead of echoing the request.
+    Resolved {
+        decision: ApprovalDecisionType,
+    },
+    /// Nothing is pending under this id.
+    NotFound,
+    /// The card is an operator approval: a channel button never answers one.
+    OperatorOnly,
+    /// The card recorded NO originator: only the operator path may answer it.
+    NoOriginator,
+    /// The card was raised by ANOTHER user: a channel button answers only the
+    /// card its own author raised.
+    WrongOriginator,
+    /// The card is no longer live (already resolved, expired, or abandoned).
+    NotLive,
+    /// The decision is not one the card was offered.
+    NotOffered,
+}
+
+/// WHO may answer a card on a resolution path.
+///
+/// The paths differ in exactly two things: whether the operator-only
+/// exclusion applies, and whether the answering user must be the card's
+/// ORIGINATOR. Naming both in one enum keeps the whole decision at ONE
+/// place — under the lock that performs the resolution — so a card cannot be
+/// replaced between the check and the write.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ResolutionAuthority<'a> {
+    /// The operator path: whoever reaches the operator RPC may answer any
+    /// live card.
+    Operator,
+    /// The member RPC path: the operator-only exclusion applies (a card the
+    /// operator reserved for themselves is not a member's to answer), but the
+    /// originator is NOT checked here — that path resolves ownership through
+    /// the session the card belongs to, not through the record.
+    Member,
+    /// The channel-callback path: only the named user may answer, and only a
+    /// card that recorded them as its originator.
+    ChannelUser(&'a str),
+}
+
+impl ResolutionAuthority<'_> {
+    /// Whether the operator-only exclusion applies on this path.
+    fn excludes_operator_only(self) -> bool {
+        !matches!(self, Self::Operator)
+    }
+}
+
 pub struct ExecApprovalManager {
     pending: Arc<RwLock<HashMap<String, PendingEntry>>>,
     /// Per-session snapshot of the last [`SessionResolveOutcome::Ambiguous`]
@@ -686,18 +744,16 @@ impl ExecApprovalManager {
         resolved_by: Option<String>,
         deny_reason: Option<String>,
     ) -> bool {
-        self.resolve_by_id(id, decision, resolved_by, deny_reason, false)
-    }
-
-    /// Channel callbacks cannot resolve an operator entry even if the id is
-    /// replaced between the callback's early check and this lock acquisition.
-    pub(crate) fn resolve_for_channel(
-        &self,
-        id: &str,
-        decision: ApprovalDecisionType,
-        resolved_by: Option<String>,
-    ) -> bool {
-        self.resolve_for_channel_with_reason(id, decision, resolved_by, None)
+        matches!(
+            self.resolve_by_id(
+                id,
+                decision,
+                resolved_by,
+                deny_reason,
+                ResolutionAuthority::Operator,
+            ),
+            ApprovalResolveOutcome::Resolved { .. }
+        )
     }
 
     /// Owner-addressed RPC decisions use the same final operator exclusion,
@@ -709,7 +765,42 @@ impl ExecApprovalManager {
         resolved_by: Option<String>,
         deny_reason: Option<String>,
     ) -> bool {
-        self.resolve_by_id(id, decision, resolved_by, deny_reason, true)
+        matches!(
+            self.resolve_by_id(
+                id,
+                decision,
+                resolved_by,
+                deny_reason,
+                ResolutionAuthority::Member,
+            ),
+            ApprovalResolveOutcome::Resolved { .. }
+        )
+    }
+
+    /// Resolve an approval from a CHANNEL CALLBACK.
+    ///
+    /// The answering user must be the one who raised the card, and the check
+    /// happens under the SAME lock as the resolution: the callback then
+    /// answers the card it was checked against, never a card that replaced it
+    /// while the callback was in flight (an approval id is reusable once the
+    /// old card is resolved).
+    ///
+    /// The outcome replaces a bare `true`/`false` so the caller can tell the
+    /// user WHY the card was refused, and so a resolution reports the
+    /// EFFECTIVE (post-clamp) decision the manager actually applied.
+    pub(crate) fn resolve_for_channel(
+        &self,
+        id: &str,
+        decision: ApprovalDecisionType,
+        channel_user: &str,
+    ) -> ApprovalResolveOutcome {
+        self.resolve_by_id(
+            id,
+            decision,
+            Some(channel_user.to_string()),
+            None,
+            ResolutionAuthority::ChannelUser(channel_user),
+        )
     }
 
     fn resolve_by_id(
@@ -718,16 +809,16 @@ impl ExecApprovalManager {
         decision: ApprovalDecisionType,
         resolved_by: Option<String>,
         deny_reason: Option<String>,
-        owner_only: bool,
-    ) -> bool {
+        authority: ResolutionAuthority<'_>,
+    ) -> ApprovalResolveOutcome {
         let mut pending = self.pending.write().unwrap_or_else(|e| e.into_inner());
 
         let Some(entry) = pending.get_mut(id) else {
             warn!(id = %id, "Approval not found or already resolved");
-            return false;
+            return ApprovalResolveOutcome::NotFound;
         };
-        if owner_only && entry.is_operator_only() {
-            return false;
+        if authority.excludes_operator_only() && entry.is_operator_only() {
+            return ApprovalResolveOutcome::OperatorOnly;
         }
         // Liveness is the honest signal, exactly as the clarification twin
         // enforces it ([`crate::clarification::session::ClarificationManager::resolve`]):
@@ -740,13 +831,30 @@ impl ExecApprovalManager {
         // by-id path must too, or the two disagree on the same registry.
         if !entry.is_live() {
             warn!(id = %id, "Approval already resolved, expired, or abandoned");
-            return false;
+            return ApprovalResolveOutcome::NotLive;
+        }
+
+        // The ORIGINATOR gate, under this same lock: a channel button may
+        // answer only the card its own author raised, and the card that is
+        // CHECKED must be the card that is RESOLVED. Checking it outside the
+        // lock — as the callback sink used to, against its own snapshot —
+        // leaves a window in which the id is reused for another user's card:
+        // the callback then answers a card its author never saw. A card with
+        // NO originator is refused as well; only the operator path answers
+        // one (see `ApprovalResolveOutcome::NoOriginator`).
+        if let ResolutionAuthority::ChannelUser(user) = authority {
+            let Some(originator) = entry.record.originator_user_id.as_deref() else {
+                return ApprovalResolveOutcome::NoOriginator;
+            };
+            if originator != user {
+                return ApprovalResolveOutcome::WrongOriginator;
+            }
         }
 
         // An independent operator decision must be the actual offered value,
         // not a wider wire decision that ordinary cards narrow to AllowOnce.
         if !entry.accepts_decision(decision) {
-            return false;
+            return ApprovalResolveOutcome::NotOffered;
         }
 
         // Enforced against the set THIS card was raised with, not a global
@@ -788,10 +896,11 @@ impl ExecApprovalManager {
         // the two reads stay independent.
         let resolved_by_for_audit = resolved_by.clone();
         if let Some((session_key, grant_key, originator)) = cascade {
-            // A member's answer (the channel/member paths, `owner_only`)
-            // releases only the cards the SAME originator raised; an
-            // operator's answer stands for the whole session.
-            let scope = if owner_only {
+            // A member's answer (the channel/member paths,
+            // `excludes_operator_only`) releases only the cards the SAME
+            // originator raised; an operator's answer stands for the whole
+            // session.
+            let scope = if authority.excludes_operator_only() {
                 CascadeOriginScope::Originator(originator)
             } else {
                 CascadeOriginScope::Any
@@ -851,7 +960,7 @@ impl ExecApprovalManager {
                 });
             }
         }
-        true
+        ApprovalResolveOutcome::Resolved { decision }
     }
 
     /// Stamp a resolution onto a LIVE entry and wake its waiter. The one
@@ -1426,11 +1535,14 @@ mod tests {
                 (id, rx, timeout, None)
             };
             assert!(manager.is_operator_approval("private"));
-            assert!(!manager.resolve_for_channel(
-                "private",
-                ApprovalDecisionType::AllowOnce,
-                Some("alice".to_string())
-            ));
+            assert_eq!(
+                manager.resolve_for_channel(
+                    "private",
+                    ApprovalDecisionType::AllowOnce,
+                    "alice",
+                ),
+                ApprovalResolveOutcome::OperatorOnly,
+            );
             for actor in [Some("alice".to_string()), None] {
                 for index in [None, Some(1)] {
                     assert_eq!(
@@ -2460,11 +2572,12 @@ mod tests {
         let (theirs_id, _theirs_rx, _theirs_timeout) = manager.register_pending(rec);
 
         // Alice answers HER card in the group chat.
-        assert!(manager.resolve_for_channel(
-            &mine_id,
-            ApprovalDecisionType::AllowSession,
-            Some("alice".to_string())
-        ));
+        assert_eq!(
+            manager.resolve_for_channel(&mine_id, ApprovalDecisionType::AllowSession, "alice"),
+            ApprovalResolveOutcome::Resolved {
+                decision: ApprovalDecisionType::AllowSession,
+            }
+        );
 
         assert_eq!(
             manager
@@ -2485,6 +2598,98 @@ mod tests {
         assert!(
             manager.get_pending(&theirs_id).is_some(),
             "another originator's card must not be released by Alice's answer"
+        );
+    }
+
+    /// The ORIGINATOR gate belongs to the LOCKED resolution, not to a
+    /// snapshot the caller took before it: a channel button answers the card
+    /// it was checked against, so a card raised by somebody else stays
+    /// pending for its author.
+    #[tokio::test]
+    async fn a_channel_callback_cannot_answer_another_users_card() {
+        let manager = ExecApprovalManager::new();
+
+        let mut alice = persistent_capable_request();
+        alice.id = "card-alice".to_string();
+        alice.originator_user_id = Some("alice".to_string());
+        let rec = manager.create(&alice, 60_000);
+        let (id, rx, timeout) = manager.register_pending(rec);
+
+        assert_eq!(
+            manager.resolve_for_channel(&id, ApprovalDecisionType::AllowSession, "bob"),
+            ApprovalResolveOutcome::WrongOriginator,
+            "a channel button may only answer the card its own author raised"
+        );
+        assert!(
+            manager.get_pending(&id).is_some(),
+            "the refused card stays pending for its author"
+        );
+
+        assert_eq!(
+            manager.resolve_for_channel(&id, ApprovalDecisionType::AllowSession, "alice"),
+            ApprovalResolveOutcome::Resolved {
+                decision: ApprovalDecisionType::AllowSession,
+            }
+        );
+        assert_eq!(
+            manager.await_registered(id, rx, timeout).await.decision,
+            Some(ApprovalDecisionType::AllowSession)
+        );
+    }
+
+    /// An approval id is reusable once its card is resolved — so a DELAYED
+    /// callback must not answer the NEXT card registered under that id. The
+    /// check and the resolution share one lock, so the callback is always
+    /// judged against the card that is actually resolved.
+    #[tokio::test]
+    async fn a_reused_approval_id_is_answered_by_the_card_of_the_current_author() {
+        let manager = ExecApprovalManager::new();
+
+        let mut alice = persistent_capable_request();
+        alice.id = "shared-id".to_string();
+        alice.originator_user_id = Some("alice".to_string());
+        let rec = manager.create(&alice, 60_000);
+        let (id, rx, timeout) = manager.register_pending(rec);
+
+        // Alice's card is answered and leaves the live set.
+        assert_eq!(
+            manager.resolve_for_channel(&id, ApprovalDecisionType::AllowOnce, "alice"),
+            ApprovalResolveOutcome::Resolved {
+                decision: ApprovalDecisionType::AllowOnce,
+            }
+        );
+        assert_eq!(
+            manager.await_registered(id.clone(), rx, timeout).await.decision,
+            Some(ApprovalDecisionType::AllowOnce)
+        );
+
+        // The id is free again: Bob's card is raised under it.
+        let mut bob = persistent_capable_request();
+        bob.id = id.clone();
+        bob.originator_user_id = Some("bob".to_string());
+        let rec = manager.create(&bob, 60_000);
+        let (bob_id, bob_rx, bob_timeout) = manager.register_pending(rec);
+        assert_eq!(bob_id, id);
+
+        // Alice's delayed callback must not answer BOB's card.
+        assert_eq!(
+            manager.resolve_for_channel(&id, ApprovalDecisionType::AllowSession, "alice"),
+            ApprovalResolveOutcome::WrongOriginator
+        );
+        assert!(
+            manager.get_pending(&id).is_some(),
+            "Bob's card stays pending for Bob"
+        );
+
+        assert_eq!(
+            manager.resolve_for_channel(&id, ApprovalDecisionType::AllowSession, "bob"),
+            ApprovalResolveOutcome::Resolved {
+                decision: ApprovalDecisionType::AllowSession,
+            }
+        );
+        assert_eq!(
+            manager.await_registered(bob_id, bob_rx, bob_timeout).await.decision,
+            Some(ApprovalDecisionType::AllowSession)
         );
     }
 
