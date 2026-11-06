@@ -3,7 +3,6 @@
 //! This module contains helper functions for server initialization,
 //! including `WebChat` serving and agent run handling.
 
-use std::net::SocketAddr;
 use std::path::PathBuf;
 
 use alephcore::sync_primitives::Arc;
@@ -12,15 +11,6 @@ use alephcore::gateway::busy_queue::spawn_queued_run;
 use alephcore::gateway::event_bus::GatewayEventBus;
 use alephcore::gateway::router::AgentRouter;
 use alephcore::gateway::{AgentRegistry, ExecutionEngine, GatewayEventEmitter};
-
-/// Serve `WebChat` static files
-pub async fn serve_webchat(
-    addr: SocketAddr,
-    static_dir: PathBuf,
-) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let listener = tokio::net::TcpListener::bind(addr).await?;
-    serve_webchat_on_listener(listener, static_dir).await
-}
 
 /// Serve `WebChat` static files on a listener owned by the caller.
 ///
