@@ -18,9 +18,18 @@ pub fn run_index(sessions_dir: PathBuf, output_db: PathBuf, rebuild_fts: bool) -
     let session_paths = scan_sessions(&sessions_dir)?;
     log::info!("  Found {} sessions", session_paths.len());
 
-    // Create database
+    // Build a complete replacement beside the target so failures preserve the old index.
     log::info!("[2/4] Creating database schema...");
-    let conn = Connection::open(&output_db).context("Failed to create database")?;
+    let output_parent = output_db
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    let temp = tempfile::Builder::new()
+        .prefix(".aleph-migrate-index-")
+        .tempfile_in(output_parent)
+        .context("Failed to create temporary database")?;
+    let temp_path = temp.into_temp_path();
+    let conn = Connection::open(&temp_path).context("Failed to create temporary database")?;
     init_schema(&conn)?;
     log::info!("  OK");
 
@@ -34,8 +43,11 @@ pub fn run_index(sessions_dir: PathBuf, output_db: PathBuf, rebuild_fts: bool) -
     build_fts5_index(&conn, &sessions_dir, rebuild_fts)?;
     log::info!("  OK");
 
-    // Print summary
     let stats = collect_stats(&conn)?;
+    drop(conn);
+    fs::rename(&temp_path, &output_db).context("Failed to replace database")?;
+
+    // Print summary
     log::info!("");
     log::info!("✓ Indexed {} sessions", stats.session_count);
     log::info!("✓ Registered {} agents", stats.agent_count);
@@ -325,19 +337,19 @@ fn build_fts5_index(conn: &Connection, sessions_dir: &Path, rebuild: bool) -> Re
         let transcript_path = sessions_dir
             .join(session_dir_name(session_id)?)
             .join("transcript.md");
+
+        // FTS5 tables have no UNIQUE constraint, so `INSERT OR REPLACE` is a
+        // plain insert and every re-index would append a second copy of the
+        // transcript. Remove previous rows even when the transcript was deleted.
+        conn.execute(
+            "DELETE FROM session_transcripts_fts WHERE session_id = ?1",
+            rusqlite::params![session_id],
+        )?;
         if !transcript_path.exists() {
             continue;
         }
 
         let content = fs::read_to_string(&transcript_path)?;
-
-        // FTS5 tables have no UNIQUE constraint, so `INSERT OR REPLACE` is a
-        // plain insert and every re-index would append a second copy of the
-        // transcript. Remove the previous rows for this session first.
-        conn.execute(
-            "DELETE FROM session_transcripts_fts WHERE session_id = ?1",
-            rusqlite::params![session_id],
-        )?;
         conn.execute(
             "INSERT INTO session_transcripts_fts (session_id, content) VALUES (?1, ?2)",
             rusqlite::params![session_id, content],

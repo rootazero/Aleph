@@ -4,6 +4,7 @@ use anyhow::{Context, Result};
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashSet};
+use std::io::Write;
 use std::path::{Path, PathBuf};
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -207,8 +208,23 @@ pub fn run_export(
         sessions: export_sessions,
     };
 
-    let file = std::fs::File::create(&output_path).context("Failed to create output file")?;
-    serde_json::to_writer_pretty(file, &export_data).context("Failed to write JSON")?;
+    let output_parent = output_path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    let mut temp = tempfile::Builder::new()
+        .prefix(".aleph-migrate-export-")
+        .tempfile_in(output_parent)
+        .context("Failed to create temporary output file")?;
+    serde_json::to_writer_pretty(&mut temp, &export_data).context("Failed to write JSON")?;
+    temp.as_file_mut()
+        .flush()
+        .context("Failed to flush output file")?;
+    temp.as_file_mut()
+        .sync_all()
+        .context("Failed to sync output file")?;
+    let temp_path = temp.into_temp_path();
+    std::fs::rename(&temp_path, &output_path).context("Failed to replace output file")?;
     log::info!("✓ Export completed successfully");
     Ok(())
 }
@@ -242,6 +258,14 @@ pub fn session_dir_name(session_id: &str) -> Result<String> {
         encoded.insert_str(0, "%00");
     }
     Ok(encoded)
+}
+
+fn table_exists(conn: &rusqlite::Connection, table: &str) -> Result<bool> {
+    Ok(conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type IN ('table', 'view') AND name = ?1)",
+        [table],
+        |row| row.get(0),
+    )?)
 }
 
 fn table_columns(conn: &rusqlite::Connection, table: &str) -> Result<HashSet<String>> {
@@ -317,10 +341,11 @@ fn load_attachments(
     db_path: &Path,
     session_id: &str,
 ) -> Result<Vec<ExportAttachment>> {
-    let columns = match table_columns(conn, "attachments") {
-        Ok(columns) => columns,
-        Err(_) => return Ok(vec![]),
-    };
+    if !table_exists(conn, "attachments").context("Failed to check for attachments table")? {
+        return Ok(vec![]);
+    }
+    let columns =
+        table_columns(conn, "attachments").context("Failed to inspect attachments table")?;
     for required in ["attachment_id", "mime_type", "size_bytes"] {
         if !columns.contains(required) {
             anyhow::bail!("attachments is missing required column: {required}");
