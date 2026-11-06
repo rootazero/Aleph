@@ -143,8 +143,15 @@ Four fix waves, each in its own git worktree branched from `main`, each merged b
 | 3 | concerns from the diff review of waves 1–2 | 4 workers (w3a–w3d), 8 commits |
 | 4 | gaps the first waves did not cover (B13-10..17 in `aleph-migrate/verify.rs`, B5-001, B3-003/004, B10-003) | 3 workers (w4a–w4c), 3 commits |
 
-`main` now carries 62 commits over the attribution baseline `148ba09f5`, touching **37 files**
-(+3664 / -950).
+`main` now carries the review's own changes over the attribution baseline `148ba09f5`, touching **36 files**
+(+3654 / -953) inside the reviewed scope plus the four files that had to be touched to land a fix
+(`src/exec/manager.rs`, `src/cli/endpoint.rs`, `src/gateway/voice/streaming/relay.rs`).
+
+The branch additionally carries three `refactor(...): apply Occam's razor simplifications` commits
+(`cb35d573f`, `3bea46ce7`, `f698c545c`) that were produced by a **concurrent session** working in the same
+checkout while this review was running. They touch `src/agents/`, `src/acp/` and `src/a2a/` only — there is
+**no file overlap** with the review's scope — and they are not part of this review. The final
+`cargo check` below was run against a `main` that includes them.
 
 The main worktree also received four hand-written corrections that the workers could not finish:
 the qa-gateway join-result nesting (`Ok(Ok(Ok(())))` instead of `Ok(Ok(()))`), the bounded stdin read
