@@ -173,6 +173,11 @@ pub(in crate::commands::start) async fn register_agent_handlers(
     // below; deferred init keeps the dead initial value out (and lets the
     // compiler prove both modes set it before the `.expect(...)` read).
     let run_manager: Option<Arc<AgentRunManager>>;
+    // Background tasks this function spawns. On the success path the handles
+    // are dropped, which leaves the tasks running (what a long-lived
+    // background task wants); on an error return the tasks are aborted, so a
+    // failed boot leaves none of them running.
+    let mut spawned_tasks: Vec<tokio::task::JoinHandle<()>> = Vec::new();
     let mut exec_adapter: Option<Arc<dyn alephcore::gateway::ExecutionAdapter>> = None;
     let mut agent_reg: Option<Arc<AgentRegistry>> = None;
     let mut default_prov: Option<Arc<dyn alephcore::providers::AiProvider>> = None;
@@ -319,10 +324,12 @@ pub(in crate::commands::start) async fn register_agent_handlers(
             EnvelopeRelevanceFloorExtension, MemoryExtensionRegistry,
         };
         let reg = MemoryExtensionRegistry::new();
+        // A registration failure means this extension's name is already taken —
+        // a configuration error the operator must see by name, not a panic
+        // that takes the daemon down with it.
         reg.register(std::sync::Arc::new(EnvelopeRelevanceFloorExtension::new(
             0.0,
-        )))
-        .expect("first registration into a fresh registry cannot collide");
+        )))?;
         std::sync::Arc::new(reg)
     };
 
@@ -598,7 +605,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
                 // `extension/plugins-activated` doctor check; QA profiles set
                 // ALEPH_ACTIVATION_GATE=fatal.
                 let gate_manager = std::sync::Arc::clone(ext_manager);
-                tokio::spawn(async move {
+                spawned_tasks.push(tokio::spawn(async move {
                     use alephcore::extension::activation_gate::{
                         assess, classify_env_value, GatePosture,
                     };
@@ -642,7 +649,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
                         );
                         std::process::exit(78);
                     }
-                });
+                }));
                 let registry = ext_manager.get_plugin_registry().await;
                 for plugin in registry.list_plugins() {
                     if !plugin.status.is_active() {
@@ -1200,7 +1207,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
             // which emits no event). 60s bounded latency.
             goal_wake.spawn_periodic_recheck(60);
             let goal_wake_boot = goal_wake.clone();
-            tokio::spawn(async move {
+            spawned_tasks.push(tokio::spawn(async move {
                 // Spawned before `initialize_inbound_router` publishes the
                 // channel-config snapshot; park until it is ready so `wake_identity`
                 // honors the per-channel deny layer rather than the fail-open miss
@@ -1210,7 +1217,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
                 )
                 .await;
                 goal_wake_boot.rearm_parked_goals().await;
-            });
+            }));
         }
 
         // Create run_manager with real execution dependencies.
@@ -1357,7 +1364,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
                 // materialize / clarify resolve) stay as the primary,
                 // bus-independent path.
                 let wake = dispatch_signal.clone();
-                tokio::spawn(async move {
+                spawned_tasks.push(tokio::spawn(async move {
                     use alephcore::event::{EventFilter, EventType, GlobalBus};
                     let _sub_id = GlobalBus::global()
                         .subscribe_async(
@@ -1373,7 +1380,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
                         )
                         .await;
                     tracing::info!("Team dispatcher wake-on-task-event subscription registered");
-                });
+                }));
 
                 if !daemon {
                     println!("  Team dispatcher started");
@@ -1388,7 +1395,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
             // notifies participants to conclude or cancel (see
             // SessionCoordinator::sweep_deadlocked).
             if let Some(sweep_coord) = session_coordinator.clone() {
-                tokio::spawn(async move {
+                spawned_tasks.push(tokio::spawn(async move {
                     let mut tick = tokio::time::interval(std::time::Duration::from_mins(5));
                     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
                     loop {
@@ -1406,7 +1413,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
                             }
                         }
                     }
-                });
+                }));
             }
 
             // teams.chat.send runs the team LEADER agent (orchestration), so unlike the
@@ -1571,7 +1578,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
         fallback_agent_registry
             .set_raw_memory_writer(raw_store.clone())
             .await;
-        let tool_registry = Arc::new(
+        let tool_registry = match Arc::new(
             BuiltinToolRegistry::with_config(alephcore::executor::BuiltinToolConfig {
                 memory_runtime: Some(memory_runtime.clone()),
                 raw_memory_store: Some(raw_store.clone()),
@@ -1590,8 +1597,14 @@ pub(in crate::commands::start) async fn register_agent_handlers(
                 memory_project_scoped: app_config.memory.project_scoped,
                 ..Default::default()
             })
-            .await?,
-        );
+            .await,
+        ) {
+            Ok(registry) => registry,
+            Err(e) => {
+                abort_spawned_tasks(&spawned_tasks);
+                return Err(e.into());
+            }
+        };
         let gateway_ctx = Arc::new(alephcore::gateway::context::GatewayContext::new(
             session_store.clone(),
             fallback_agent_registry.clone(),
@@ -1698,17 +1711,40 @@ pub(in crate::commands::start) async fn register_agent_handlers(
         daemon,
     );
 
-    memory_runtime.configure_services(alephcore::memory::runtime::MemoryServicesConfig {
-        app_config: app_config_arc.clone(),
-        raw_store: raw_store.clone(),
-        session_store: Some(session_store),
-        provider: default_prov.clone(),
-        extensions: memory_ext_registry.clone(),
-        state_db: state_db_out.clone(),
-        default_agent_id: memory_default_agent,
-        curated_root: alephcore::utils::paths::get_config_dir()?.join("agents"),
-        snapshot_dir: alephcore::utils::paths::get_data_dir()?.join("sessions"),
-    })?;
+    // The memory service roots are resolved before the config literal: a
+    // failure here returns early, and any background task spawned above must
+    // not outlive the boot that failed. (The simulated branch spawns none, so
+    // the abort below is a no-op there.)
+    let curated_root = match alephcore::utils::paths::get_config_dir() {
+        Ok(dir) => dir.join("agents"),
+        Err(e) => {
+            abort_spawned_tasks(&spawned_tasks);
+            return Err(e);
+        }
+    };
+    let snapshot_dir = match alephcore::utils::paths::get_data_dir() {
+        Ok(dir) => dir.join("sessions"),
+        Err(e) => {
+            abort_spawned_tasks(&spawned_tasks);
+            return Err(e);
+        }
+    };
+    if let Err(e) =
+        memory_runtime.configure_services(alephcore::memory::runtime::MemoryServicesConfig {
+            app_config: app_config_arc.clone(),
+            raw_store: raw_store.clone(),
+            session_store: Some(session_store),
+            provider: default_prov.clone(),
+            extensions: memory_ext_registry.clone(),
+            state_db: state_db_out.clone(),
+            default_agent_id: memory_default_agent,
+            curated_root,
+            snapshot_dir,
+        })
+    {
+        abort_spawned_tasks(&spawned_tasks);
+        return Err(e);
+    }
 
     Ok(AgentHandlersResult {
         // Both branches (real-execution at line ~1443 and simulated-fallback at
@@ -1749,6 +1785,19 @@ pub(in crate::commands::start) async fn register_agent_handlers(
         memory_context_provider: mcp_for_orchestrator,
         memory_ext_registry: memory_ext_registry.clone(),
     })
+}
+
+/// Abort the background tasks a failed boot spawned.
+///
+/// A dropped `JoinHandle` leaves its task running, which is what the
+/// long-lived background tasks (activation gate, goal wake, dispatcher
+/// subscription, deadlock sweeper) want on the success path. On an error
+/// return the same tasks would outlive the boot that failed and keep their
+/// `Arc`ed subsystems alive, so they are aborted explicitly.
+fn abort_spawned_tasks(tasks: &[tokio::task::JoinHandle<()>]) {
+    for task in tasks {
+        task.abort();
+    }
 }
 
 #[cfg(test)]
