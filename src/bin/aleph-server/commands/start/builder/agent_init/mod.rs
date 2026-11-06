@@ -1578,8 +1578,8 @@ pub(in crate::commands::start) async fn register_agent_handlers(
         fallback_agent_registry
             .set_raw_memory_writer(raw_store.clone())
             .await;
-        let tool_registry = match Arc::new(
-            BuiltinToolRegistry::with_config(alephcore::executor::BuiltinToolConfig {
+        let tool_registry = match BuiltinToolRegistry::with_config(
+            alephcore::executor::BuiltinToolConfig {
                 memory_runtime: Some(memory_runtime.clone()),
                 raw_memory_store: Some(raw_store.clone()),
                 session_manager: Some(session_store.clone()),
@@ -1597,9 +1597,9 @@ pub(in crate::commands::start) async fn register_agent_handlers(
                 memory_project_scoped: app_config.memory.project_scoped,
                 ..Default::default()
             })
-            .await,
-        ) {
-            Ok(registry) => registry,
+            .await
+        {
+            Ok(registry) => Arc::new(registry),
             Err(e) => {
                 abort_spawned_tasks(&spawned_tasks);
                 return Err(e.into());
