@@ -841,7 +841,7 @@ async fn control_loop(
                 let _ = shutdown.send(());
             }
             {
-                let mut state = gateway_state.lock().await;
+                let state = gateway_state.lock().await;
                 state.asset_a_notify.notify_one();
             }
             if let Some(server) = server.take() {
