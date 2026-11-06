@@ -6,8 +6,7 @@
 //! transitions, carries a lease with optional TTL, and can be revoked via
 //! epoch advancement.
 
-use crate::capability::descriptor::CapabilityId;
-use crate::capability::ownership::{OwnerGeneration, OwnerRef};
+use crate::capability::ownership::OwnerGeneration;
 use std::time::{Duration, Instant};
 
 /// Lifecycle state of a capability binding.

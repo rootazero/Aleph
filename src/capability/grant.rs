@@ -559,11 +559,14 @@ mod tests {
     use super::*;
 
     fn test_session(id: u64) -> SessionKey {
-        SessionKey::new(format!("session-{id}"))
+        SessionKey::new("test-harness", &format!("/test/session-{id}"))
     }
 
     fn test_capability(name: &str) -> CapabilityId {
-        CapabilityId::new(name.to_string())
+        CapabilityId {
+            namespace: "test".to_string(),
+            name: name.to_string(),
+        }
     }
 
     fn test_grant(

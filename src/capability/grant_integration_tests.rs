@@ -19,11 +19,14 @@ mod tests {
     };
 
     fn test_session(id: u64) -> SessionKey {
-        SessionKey::new(format!("session-{id}"))
+        SessionKey::new("test-harness", &format!("/test/session-{id}"))
     }
 
     fn test_capability(name: &str) -> CapabilityId {
-        CapabilityId::new(name.to_string())
+        CapabilityId {
+            namespace: "test".to_string(),
+            name: name.to_string(),
+        }
     }
 
     fn test_grant(
@@ -61,10 +64,10 @@ mod tests {
 
         // Session 1 registers a capability
         let result = ownership.register(
-            &cap_id,
-            &VisibilityScope::default(),
+            cap_id.clone(),
             OwnerRef::Session(session1.clone()),
             LifetimeScope::Session,
+            VisibilityScope::default(),
         );
         assert!(result.is_ok());
 
@@ -91,7 +94,7 @@ mod tests {
 
         // Session 1 bumps its ownership (invalidates grant)
         assert!(ownership
-            .bump(LifetimeScope::Session, OwnerRef::Session(session1.clone()))
+            .bump(LifetimeScope::Session)
             .is_ok());
 
         let new_generation = ownership
