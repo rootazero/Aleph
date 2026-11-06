@@ -1325,7 +1325,17 @@ async fn runtime_channel_id(
     }
     match registered.as_slice() {
         [only] => only.clone(),
-        _ => instance_id.to_string(),
+        _ => {
+            if registered.len() > 1 {
+                tracing::warn!(
+                    channel_type = %channel_type,
+                    instance_id = %instance_id,
+                    live_count = registered.len(),
+                    "multiple live channels of same type — policies cannot be separated by instance"
+                );
+            }
+            instance_id.to_string()
+        }
     }
 }
 
