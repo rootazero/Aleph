@@ -16,11 +16,29 @@ use std::sync::Arc;
 /// required for token retrieval, but `SharedTokenManager::new` opens it).
 ///
 /// Returns `None` when the DB has no plaintext token (first-run state).
-fn read_token_from_db(db_path: &Path, data_dir: &Path) -> Option<String> {
-    let store = Arc::new(SecurityStore::open(db_path).ok()?);
+fn read_token_from_db(
+    db_path: &Path,
+    data_dir: &Path,
+) -> Result<Option<String>, Box<dyn Error>> {
+    let store = Arc::new(
+        SecurityStore::open(db_path)
+            .map_err(|e| format!("Failed to open security store: {e}"))?,
+    );
+    let token = store
+        .get_shared_token_plaintext()
+        .map_err(|e| format!("Failed to read shared token from security store: {e}"))?;
     let vault_path = data_dir.join("secrets.vault");
     let mgr = SharedTokenManager::new(store, vault_path);
-    mgr.try_load_token_from_db()
+    let Some(token) = token else {
+        return Ok(None);
+    };
+    if mgr
+        .validate(&token)
+        .map_err(|e| format!("Failed to validate shared token: {e}"))?
+    {
+        return Ok(Some(token));
+    }
+    Err("Shared token failed HMAC validation; the security store is inconsistent.".into())
 }
 
 /// Handle the `aleph-server bootstrap-token` subcommand.
@@ -39,7 +57,7 @@ pub fn handle_bootstrap_token() -> Result<(), Box<dyn Error>> {
         .ok_or("security DB has no parent directory")?
         .to_path_buf();
 
-    if let Some(token) = read_token_from_db(&db_path, &data_dir) {
+    if let Some(token) = read_token_from_db(&db_path, &data_dir)? {
         // Warn on stderr (NOT stdout — stdout is reserved for the shell to
         // parse the token line, with no banner by design). The token never
         // expires, doubles as the vault master key, and any device that
@@ -82,7 +100,9 @@ mod tests {
         let mgr = SharedTokenManager::new(store, vault_path);
         let expected = mgr.generate_token().expect("generate");
 
-        let out = read_token_from_db(&db_path, dir.path()).expect("read");
+        let out = read_token_from_db(&db_path, dir.path())
+            .expect("read")
+            .expect("token");
         assert_eq!(out, expected);
         assert!(out.starts_with("aleph-"), "expected aleph-<uuid> format");
     }
@@ -93,6 +113,8 @@ mod tests {
         let db_path = dir.path().join("security.db");
         let data_dir = dir.path();
         // No token generated yet — first-run state.
-        assert!(read_token_from_db(&db_path, data_dir).is_none());
+        assert!(read_token_from_db(&db_path, data_dir)
+            .expect("read")
+            .is_none());
     }
 }

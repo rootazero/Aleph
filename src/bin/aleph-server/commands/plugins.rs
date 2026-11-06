@@ -100,21 +100,20 @@ pub async fn handle_plugins_install(url: &str) -> Result<(), Box<dyn std::error:
         || repo_name.contains('/')
         || repo_name.contains('\\')
     {
-        eprintln!("Error: cannot derive a safe plugin directory name from URL: {url}");
-        std::process::exit(1);
+        return Err(
+            format!("cannot derive a safe plugin directory name from URL: {url}").into(),
+        );
     }
     let dest_path = plugins_dir.join(repo_name);
 
     if let Err(reason) =
         alephcore::extension::ensure_plugin_destination_is_safe(&plugins_dir, &dest_path)
     {
-        eprintln!("Error: {reason}");
-        std::process::exit(1);
+        return Err(format!("{reason}").into());
     }
 
     if tokio::fs::try_exists(&dest_path).await.unwrap_or(false) {
-        eprintln!("Error: Plugin already exists at: {}", dest_path.display());
-        std::process::exit(1);
+        return Err(format!("Plugin already exists at: {}", dest_path.display()).into());
     }
 
     // Clone the repository off the async executor; git2 is synchronous.
@@ -130,9 +129,8 @@ pub async fn handle_plugins_install(url: &str) -> Result<(), Box<dyn std::error:
                 &plugins_dir,
                 &dest_path,
             ) {
-                eprintln!("Error: {reason}");
                 let _ = std::fs::remove_dir_all(&dest_path);
-                std::process::exit(1);
+                return Err(format!("{reason}").into());
             }
             println!("Repository cloned successfully.");
 
@@ -164,8 +162,7 @@ pub async fn handle_plugins_install(url: &str) -> Result<(), Box<dyn std::error:
             }
         }
         Err(e) => {
-            eprintln!("Error: Failed to clone repository: {e}");
-            std::process::exit(1);
+            return Err(format!("Failed to clone repository: {e}").into());
         }
     }
 
@@ -197,37 +194,41 @@ pub async fn handle_plugins_uninstall(name: &str) -> Result<(), Box<dyn std::err
     // removed recursively — refuse anything that is not a plain directory
     // name before the join, so no `..`/separator can escape the root.
     if !is_safe_plugin_dir_name(name) {
-        eprintln!("Error: invalid plugin name: {name}");
-        eprintln!("A plugin name must be a single directory name without path separators.");
-        std::process::exit(1);
+        return Err(format!(
+            "invalid plugin name: {name}\n\
+             A plugin name must be a single directory name without path separators."
+        )
+        .into());
     }
 
     let plugins_dir = default_plugins_dir();
     let plugin_path = plugins_dir.join(name);
 
     if !tokio::fs::try_exists(&plugin_path).await.unwrap_or(false) {
-        eprintln!("Error: Plugin not found: {name}");
-        eprintln!("Plugin directory: {}", plugin_path.display());
-        std::process::exit(1);
+        return Err(format!(
+            "Plugin not found: {name}\nPlugin directory: {}",
+            plugin_path.display()
+        )
+        .into());
     }
 
     // Refuse to remove through a symlink: the recursive delete would follow
     // the link out of the plugins root.
     match std::fs::symlink_metadata(&plugin_path) {
         Ok(meta) if meta.file_type().is_symlink() => {
-            eprintln!(
-                "Error: refusing to uninstall through a symlink: {}",
+            return Err(format!(
+                "refusing to uninstall through a symlink: {}",
                 plugin_path.display()
-            );
-            std::process::exit(1);
+            )
+            .into());
         }
         Ok(_) => {}
         Err(e) => {
-            eprintln!(
-                "Error: Failed to inspect plugin directory {}: {e}",
+            return Err(format!(
+                "Failed to inspect plugin directory {}: {e}",
                 plugin_path.display()
-            );
-            std::process::exit(1);
+            )
+            .into());
         }
     }
 
@@ -241,8 +242,7 @@ pub async fn handle_plugins_uninstall(name: &str) -> Result<(), Box<dyn std::err
             println!("Plugin uninstalled successfully.");
         }
         Err(e) => {
-            eprintln!("Error: Failed to remove plugin: {e}");
-            std::process::exit(1);
+            return Err(format!("Failed to remove plugin: {e}").into());
         }
     }
 
@@ -287,8 +287,7 @@ async fn set_enabled_locally(name: &str, enabled: bool) -> Result<(), Box<dyn st
     let manager = ExtensionManager::with_defaults().await?;
     let discovered = manager.discovered_plugin_ids()?;
     if !discovered.iter().any(|(id, _)| id == name) {
-        eprintln!("Error: Plugin not found: {name}");
-        std::process::exit(1);
+        return Err(format!("Plugin not found: {name}").into());
     }
     let plugin_path = default_plugins_dir().join(name);
 
@@ -346,8 +345,7 @@ pub async fn handle_plugin_install(
                 println!("Plugin '{source}' installed to {path:?}");
             }
             Err(e) => {
-                eprintln!("Error: {e}");
-                std::process::exit(1);
+                return Err(format!("{e}").into());
             }
         }
     } else {
@@ -434,7 +432,7 @@ pub async fn handle_plugin_update(
 
     println!("\nDone: {updated} updated, {unchanged} unchanged, {failed} failed.");
     if failed > 0 {
-        std::process::exit(1);
+        return Err(format!("{failed} plugin update(s) failed.").into());
     }
     Ok(())
 }

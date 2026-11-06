@@ -187,18 +187,25 @@ pub async fn handle_node(
         // row this whole flow exists to prevent.
         let persisted = std::sync::Mutex::new(node_id.clone());
         let on_identity = |id: &str, persist: bool| {
-            let mut cur = persisted.lock().unwrap_or_else(|e| e.into_inner());
-            if persist && cur.as_deref() != Some(id) {
-                persist_identity(
-                    Some(&id_path),
-                    &NodeIdentity {
-                        node_id: id.to_string(),
-                        center: center.clone(),
-                    },
-                );
-                tracing::info!("node '{name}' enrolled as {id}");
+            let id = id.to_string();
+            let identity = NodeIdentity {
+                node_id: id.clone(),
+                center: center.clone(),
+            };
+            let should_persist = {
+                let mut cur = persisted.lock().unwrap_or_else(|e| e.into_inner());
+                let should_persist = persist && cur.as_deref() != Some(id.as_str());
+                *cur = Some(id.clone());
+                should_persist
+            };
+            let id_path = &id_path;
+            let name = &name;
+            async move {
+                if should_persist {
+                    persist_identity(Some(id_path), &identity).await;
+                    tracing::info!("node '{name}' enrolled as {id}");
+                }
             }
-            *cur = Some(id.to_string());
         };
 
         let outcome = run_session(
@@ -267,11 +274,16 @@ fn with_jitter(backoff_ms: u64) -> u64 {
 
 /// Best-effort persist; a write failure warns but does not abort the node
 /// (it will re-enroll on next restart).
-fn persist_identity(path: Option<&Path>, id: &NodeIdentity) {
-    if let Some(p) = path {
-        if let Err(e) = write_identity(p, id) {
-            tracing::warn!("failed to persist node identity: {e}");
-        }
+async fn persist_identity(path: Option<&Path>, id: &NodeIdentity) {
+    let Some(path) = path else {
+        return;
+    };
+    let path = path.to_path_buf();
+    let id = id.clone();
+    match tokio::task::spawn_blocking(move || write_identity(&path, &id)).await {
+        Ok(Ok(())) => {}
+        Ok(Err(e)) => tracing::warn!("failed to persist node identity: {e}"),
+        Err(e) => tracing::warn!("node identity persistence task failed: {e}"),
     }
 }
 
@@ -346,7 +358,7 @@ async fn setup_file_commands(
 ///
 /// Errors carry [`Deregistered`] when the center refused this node outright;
 /// the caller treats that as terminal rather than backing off forever.
-async fn run_session(
+async fn run_session<F, Fut>(
     url: &str,
     node_id: Option<&str>,
     name: &str,
@@ -354,8 +366,12 @@ async fn run_session(
     tags: &[String],
     table: &Arc<CommandTable>,
     approval_slot: &ApprovalSlot,
-    on_identity: &(dyn Fn(&str, bool) + Send + Sync),
-) -> Result<(), Box<dyn std::error::Error>> {
+    on_identity: &F,
+) -> Result<(), Box<dyn std::error::Error>>
+where
+    F: Fn(&str, bool) -> Fut + Send + Sync,
+    Fut: std::future::Future<Output = ()> + Send,
+{
     let (ws, _resp) = tokio_tungstenite::connect_async(url).await?;
     let (mut write, mut read) = ws.split();
 
@@ -398,7 +414,9 @@ async fn run_session(
     }
     match parse_connect_verdict(&reply) {
         Some(ConnectVerdict::Deregistered) => return Err(Box::new(Deregistered)),
-        Some(ConnectVerdict::Registered { node_id, persist }) => on_identity(&node_id, persist),
+        Some(ConnectVerdict::Registered { node_id, persist }) => {
+            on_identity(&node_id, persist).await;
+        }
         // A center that says nothing about nodes accepted the socket but did not
         // register us — surface it instead of silently idling as a zombie.
         None => {
