@@ -78,6 +78,9 @@ impl StreamHub {
         }
         // Slow path: write lock to create
         let mut channels = self.channels.write().await;
+        if let Some(sender) = channels.get(task_id) {
+            return sender.clone();
+        }
         channels
             .entry(task_id.to_string())
             .or_insert_with(|| broadcast::channel(self.capacity).0)

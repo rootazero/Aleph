@@ -61,7 +61,7 @@ pub struct A2ASecurityConfig {
     /// so leaving the bypass on by default would hand admin rights to every
     /// unauthenticated peer that can reach the listener as loopback (which
     /// includes anything routed through a same-host reverse proxy).
-    #[serde(default = "default_false")]
+    #[serde(default)]
     pub local_bypass: bool,
 
     /// API tokens for trusted-level authentication
@@ -76,10 +76,6 @@ impl Default for A2ASecurityConfig {
             tokens: Vec::new(),
         }
     }
-}
-
-const fn default_false() -> bool {
-    false
 }
 
 /// A pre-registered remote A2A agent entry

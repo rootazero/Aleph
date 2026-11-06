@@ -87,6 +87,25 @@ impl A2ASubAgent {
         self
     }
 
+    async fn record_delegation_memory(
+        &self,
+        request: &SubAgentRequest,
+        result: &SubAgentResult,
+        child_agent_id: &str,
+    ) {
+        if let Some(w) = self.raw_memory_writer.clone() {
+            emit_delegation_raw_with_registry(
+                w,
+                request,
+                result,
+                child_agent_id,
+                self.capture_registry.clone(),
+                self.memory_runtime.clone(),
+            )
+            .await;
+        }
+    }
+
     /// Send a delegation request to an already-resolved remote agent.
     ///
     /// Streaming-first: consumes the remote agent's SSE stream (idle-timeout
@@ -126,17 +145,8 @@ impl A2ASubAgent {
                 // Spec 1 G2: record delegation outcome for parent-agent memory.
                 // Record unconditionally (matching sync path behaviour) so the
                 // parent sees failed attempts and can learn / retry.
-                if let Some(w) = self.raw_memory_writer.clone() {
-                    emit_delegation_raw_with_registry(
-                        w,
-                        request,
-                        &result,
-                        &agent.card.id,
-                        self.capture_registry.clone(),
-                        self.memory_runtime.clone(),
-                    )
+                self.record_delegation_memory(request, &result, &agent.card.id)
                     .await;
-                }
                 Ok(result)
             }
             Err(e) => {
@@ -200,17 +210,8 @@ impl A2ASubAgent {
                 };
 
                 // Spec 1 G2: record delegation outcome for parent-agent memory.
-                if let Some(w) = self.raw_memory_writer.clone() {
-                    emit_delegation_raw_with_registry(
-                        w,
-                        request,
-                        &result,
-                        &agent.card.id,
-                        self.capture_registry.clone(),
-                        self.memory_runtime.clone(),
-                    )
+                self.record_delegation_memory(request, &result, &agent.card.id)
                     .await;
-                }
 
                 Ok(result)
             }
