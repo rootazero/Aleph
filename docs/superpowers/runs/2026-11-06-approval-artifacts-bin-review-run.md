@@ -165,7 +165,15 @@ CARGO_BUILD_JOBS=1 cargo check -p alephcore --features native-qa
 
 Result: **compiles clean — 0 errors.** (`aleph-server`, `aleph-migrate` and
 `aleph-panel-native-qa-gateway` are three binaries of the `alephcore` package, so one check covers all
-three.) The remaining output is pre-existing `dead_code` / `unused_mut` warnings.
+three.)
+
+The warning set was audited line by line: 4 in the library (`src/extension/projection.rs`,
+`src/memory/runtime/mod.rs`, `src/tools/registry.rs` — all pre-existing and outside the reviewed scope)
+and 12 in the `aleph-server` binary (4 `value assigned is never read` in the agent-init builder — that is
+finding `B12-P3-03`, deferred — 2 unused memory-context initializers — pre-existing — and 6 dead
+note-maintenance wrappers, which is finding `B10-S2-03`, deferred). The one warning this review *did*
+introduce — the address-based `serve_webchat` wrapper left unused after the wave-4c listener change —
+was removed rather than silenced.
 
 Memory control, as required:
 
