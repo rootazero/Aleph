@@ -83,20 +83,30 @@ fn collapse_whitespace(s: &str) -> String {
 /// Whitespace inside `label` and `description` is collapsed and both fields
 /// are length-limited, so model output cannot break numbering or grow the body
 /// without bound.
+///
+/// The label and the description are then escaped: they are the model's own
+/// words, and a channel that renders this body as Markdown would otherwise
+/// turn a label like `[Approve](https://evil.example)` into a live link. The
+/// escaping happens AFTER the collapse and the truncation, so the length caps
+/// still measure the raw model text.
 fn menu(options: &[ClarificationOption]) -> String {
     let mut out = String::new();
     for (i, opt) in options.iter().take(MAX_MENU_OPTIONS).enumerate() {
-        let label: String = collapse_whitespace(&opt.label)
-            .chars()
-            .take(MAX_MENU_FIELD_CHARS)
-            .collect();
-        match opt
+        let label = escape_markdown(
+            &collapse_whitespace(&opt.label)
+                .chars()
+                .take(MAX_MENU_FIELD_CHARS)
+                .collect::<String>(),
+        );
+        let description = opt
             .description
             .as_deref()
             .map(collapse_whitespace)
             .filter(|d| !d.is_empty())
-            .map(|desc| desc.chars().take(MAX_MENU_FIELD_CHARS).collect::<String>())
-        {
+            .map(|desc| {
+                escape_markdown(&desc.chars().take(MAX_MENU_FIELD_CHARS).collect::<String>())
+            });
+        match description {
             Some(desc) => out.push_str(&format!("{}. {} — {desc}\n", i + 1, label)),
             None => out.push_str(&format!("{}. {}\n", i + 1, label)),
         }
@@ -191,8 +201,11 @@ pub fn render(question: &ClarificationQuestion, index: usize, total: usize) -> R
 }
 
 /// Escape Telegram-flavoured Markdown special characters in LLM-supplied text.
-/// Applied to question headers and prompts so formatting control characters
-/// cannot alter the downstream message. Option labels remain plain menu text.
+/// Applied to question headers, to prompts, and to the option labels and
+/// descriptions of the menu body, so formatting control characters cannot
+/// alter the downstream message. The menu's numbering prefix is generated, not
+/// model-supplied, and the inline-keyboard button text is plain text on every
+/// surface that carries a keyboard — neither is escaped.
 fn escape_markdown(s: &str) -> String {
     s.replace('\\', r"\\")
         .replace('*', r"\*")
