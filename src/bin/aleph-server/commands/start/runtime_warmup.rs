@@ -4,6 +4,8 @@
 //! to `~/.aleph/runtimes/ledger.json`. Failure is best-effort: a missing or
 //! unwritable runtimes dir simply emits a warning and the call returns.
 
+const RUNTIME_PROBE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
 pub(super) async fn runtime_startup_warmup() {
     use alephcore::runtimes::{
         self,
@@ -25,13 +27,24 @@ pub(super) async fn runtime_startup_warmup() {
         return;
     }
     let ledger_path = runtimes_dir.join("ledger.json");
-    let ledger: Arc<RwLock<CapabilityLedger>> = match migrate_from_legacy(&runtimes_dir) {
+    let migration_dir = runtimes_dir.clone();
+    let ledger = match tokio::task::spawn_blocking(move || {
+        match migrate_from_legacy(&migration_dir) {
+            Ok(ledger) => ledger,
+            Err(e) => {
+                tracing::warn!(
+                    "Legacy manifest migration failed: {e}, falling back to ledger load_or_create"
+                );
+                CapabilityLedger::load_or_create(&ledger_path)
+            }
+        }
+    })
+    .await
+    {
         Ok(ledger) => Arc::new(RwLock::new(ledger)),
         Err(e) => {
-            tracing::warn!(
-                "Legacy manifest migration failed: {e}, falling back to ledger load_or_create"
-            );
-            Arc::new(RwLock::new(CapabilityLedger::load_or_create(&ledger_path)))
+            tracing::warn!("runtime warmup skipped: ledger migration task failed: {e}");
+            return;
         }
     };
 
@@ -42,7 +55,29 @@ pub(super) async fn runtime_startup_warmup() {
 
     let mut missing = Vec::new();
     for spec in SPECS {
-        let result = runtimes::probe::probe(spec.name);
+        let probe_name = spec.name;
+        let result = match tokio::time::timeout(
+            RUNTIME_PROBE_TIMEOUT,
+            tokio::task::spawn_blocking(move || runtimes::probe::probe(probe_name)),
+        )
+        .await
+        {
+            Ok(Ok(result)) => result,
+            Ok(Err(e)) => {
+                tracing::warn!("runtime warmup: probe task for {probe_name} failed: {e}");
+                continue;
+            }
+            Err(_) => {
+                // The probe API owns its child handle, so timing out detaches
+                // this best-effort blocking task instead of killing the child.
+                // Warmup and the async worker are no longer blocked by it.
+                tracing::warn!(
+                    "runtime warmup: probe for {probe_name} exceeded {}s; continuing",
+                    RUNTIME_PROBE_TIMEOUT.as_secs()
+                );
+                continue;
+            }
+        };
         let mut g = ledger.write().await;
         if result.found {
             g.update(CapabilityEntry {
@@ -60,8 +95,11 @@ pub(super) async fn runtime_startup_warmup() {
             missing.push(spec.name);
         }
     }
-    if let Err(e) = ledger.write().await.persist() {
-        tracing::warn!("Failed to persist runtime ledger: {}", e);
+    let snapshot = ledger.read().await.clone();
+    match tokio::task::spawn_blocking(move || snapshot.persist()).await {
+        Ok(Ok(())) => {}
+        Ok(Err(e)) => tracing::warn!("Failed to persist runtime ledger: {e}"),
+        Err(e) => tracing::warn!("runtime ledger persistence task failed: {e}"),
     }
     if missing.is_empty() {
         tracing::info!("runtime warmup: all capabilities ready");
