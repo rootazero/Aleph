@@ -174,20 +174,15 @@ pub(in crate::commands::start) struct VaultBundle {
 pub(in crate::commands::start) fn initialize_vault(
     port: u16,
     node_registry: Arc<alephcore::cluster::NodeRegistry>,
-) -> VaultBundle {
+) -> Result<VaultBundle, Box<dyn std::error::Error>> {
     use alephcore::utils::paths;
     use tracing::{info, warn};
 
-    let security_store_path =
-        paths::get_security_db_path().unwrap_or_else(|_| PathBuf::from("/tmp/aleph_security.db"));
-    // Three-layer fallback: on-disk store → in-memory store → bail.
-    // `SecurityStore::in_memory` allocates a fresh SQLite `:memory:` connection,
-    // which only fails when the process is out of file descriptors or memory —
-    // a condition no Aleph code path is expected to recover from, so we treat
-    // it as a design-by-contract invariant and surface the message rather than
-    // a generic panic. `expect` keeps the diagnostic exact (which fallback
-    // failed and why); a wrapped panic would still propagate to the same
-    // `start_server` error path.
+    let security_store_path = paths::get_security_db_path()
+        .map_err(|e| format!("Cannot resolve security database path (set HOME/ALEPH_HOME): {e}"))?;
+    // Two-layer fallback: on-disk store → in-memory store → bail.
+    // On-disk path resolution failure is non-recoverable (HOME/ALEPH_HOME unset).
+    // In-memory fallback only occurs on open failure (permissions, corruption, etc.).
     let mut security_store_fallback: Option<String> = None;
     let security_store = Arc::new(
         alephcore::gateway::security::SecurityStore::open(&security_store_path)
@@ -219,70 +214,59 @@ pub(in crate::commands::start) fn initialize_vault(
         }
     };
 
-    // Vault file path — resolve through the authoritative resolver (honours
-    // ALEPH_HOME / $HOME) so the vault shares the SAME ~/.aleph/data as config
-    // and the singleton lock. dirs::home_dir() ignored $HOME on macOS, which is
-    // how an isolated test server ended up writing the real secrets vault.
-    let data_dir = alephcore::utils::paths::get_data_dir()
-        .unwrap_or_else(|_| std::path::PathBuf::from("/tmp/.aleph/data"));
-    let vault_path = data_dir.join("secrets.vault");
-    let shared_token_mgr = Arc::new(alephcore::gateway::security::SharedTokenManager::new(
-        security_store.clone(),
-        vault_path,
-    ));
+    let vault_bundle = {
+        let data_dir = paths::get_data_dir()
+            .map_err(|e| format!("Cannot resolve data directory (set HOME/ALEPH_HOME): {e}"))?;
+        let vault_path = data_dir.join("secrets.vault");
+        let shared_token_mgr = Arc::new(alephcore::gateway::security::SharedTokenManager::new(
+            security_store.clone(),
+            vault_path,
+        ));
 
-    // Clean up legacy token file (token is now stored in SQLite)
-    let legacy_token_file = data_dir.join(".shared_token");
-    if legacy_token_file.exists() {
-        if let Err(e) = std::fs::remove_file(&legacy_token_file) {
-            warn!("Failed to remove legacy token file: {}", e);
-        } else {
-            info!("Removed legacy token file (token is now in DB)");
-        }
-    }
-
-    // Load (or first-start provision) the shared token. Device auth is gone,
-    // but the token is still the vault master key — without it in memory every
-    // `get_secret`/`store_secret` fails — and the `/v1/admin` IPC bearer the
-    // CLI reads via `read_current_token_readonly`.
-    match shared_token_mgr.try_load_token_from_db() {
-        Some(_) => {
-            info!("vault master token ready (loaded from DB)");
-        }
-        None => match shared_token_mgr.generate_token() {
-            Ok(_) => {
-                info!("vault master token provisioned (first start)");
+        // Clean up legacy token file (token is now stored in SQLite)
+        let legacy_token_file = data_dir.join(".shared_token");
+        if legacy_token_file.exists() {
+            if let Err(e) = std::fs::remove_file(&legacy_token_file) {
+                warn!("Failed to remove legacy token file: {}", e);
+            } else {
+                info!("Removed legacy token file (token is now in DB)");
             }
-            Err(e) => {
-                warn!(
-                    "Failed to generate shared token: {} — token-gated surfaces (/v1, /v1/admin) will reject every request",
-                    e
-                );
+        }
+
+        // Load (or first-start provision) the shared token. Device auth is gone,
+        // but the token is still the vault master key — without it in memory every
+        // `get_secret`/`store_secret` fails — and the `/v1/admin` IPC bearer the
+        // CLI reads via `read_current_token_readonly`.
+        match shared_token_mgr.try_load_token_from_db() {
+            Some(_) => {
+                info!("vault master token ready (loaded from DB)");
             }
-        },
-    }
+            None => match shared_token_mgr.generate_token() {
+                Ok(_) => {
+                    info!("vault master token provisioned (first start)");
+                }
+                Err(e) => {
+                    warn!(
+                        "Failed to generate shared token: {} — token-gated surfaces (/v1, /v1/admin) will reject every request",
+                        e
+                    );
+                }
+            },
+        }
 
-    let auth_ctx = Arc::new(auth_handlers::AuthContext {
-        shared_token_mgr,
-        security_store: security_store.clone(),
-        node_registry,
-        // The cluster RPC handlers (e.g. `cluster.deregister`) emit
-        // `node.disconnected` into this bus so operator-initiated takedowns
-        // are observable in the same event stream the WebSocket drop arm uses.
-        // `initialize_vault` does not own an event bus (its only callers do
-        // not thread one in today); wired through this seam by adding the
-        // parameter here once the boot path passes it in. The publish is
-        // best-effort and gated by `Some(bus)` in `cluster::deregister_node`,
-        // so leaving this None is a silent no-op rather than a wrong emit.
-        event_bus: None,
-    });
-
-    VaultBundle {
-        security_store,
-        security_store_fallback,
-        auth_ctx,
-        mdns_broadcaster,
-    }
+        VaultBundle {
+            security_store,
+            security_store_fallback,
+            auth_ctx: Arc::new(auth_handlers::AuthContext {
+                shared_token_mgr,
+                security_store: security_store.clone(),
+                node_registry,
+                event_bus: None,
+            }),
+            mdns_broadcaster,
+        }
+    };
+    Ok(vault_bundle)
 }
 
 // ── load_app_config ──────────────────────────────────────────────────────────
@@ -679,14 +663,10 @@ pub(in crate::commands::start) async fn initialize_channels(
             // token requests, listener/WS/emitter runtime, webhook mounts, and
             // API-handle publication therefore remain absent until explicit
             // lifecycle activation.
-            let boot_enabled = if inst.channel_type == "feishu" {
-                config_with_secrets
-                    .get("enabled")
-                    .and_then(serde_json::Value::as_bool)
-                    .unwrap_or(true)
-            } else {
-                true
-            };
+            let boot_enabled = config_with_secrets
+                .get("enabled")
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or(true);
             let channel_id = channel_registry
                 .register_for_boot(channel, boot_enabled)
                 .await;
