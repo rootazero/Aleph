@@ -37,6 +37,7 @@ pub use store::{ArtifactStore, MAX_ARTIFACTS_PER_SESSION, MAX_ARTIFACT_BYTES};
 use percent_encoding::{utf8_percent_encode, AsciiSet, NON_ALPHANUMERIC};
 use serde::{Deserialize, Serialize};
 
+#[cfg(windows)]
 use crate::utils::paths::is_windows_reserved_name;
 
 /// Percent-encode set for turning a session key into one path component.
@@ -74,18 +75,19 @@ const EMPTY_SESSION_DIR: &str = "%empty";
 /// Shared with the media cache so both agree on where a session's files live —
 /// see `SESSION_KEY_ENCODE_SET` for the guarantees this provides.
 ///
-/// A key that encodes to a Windows device name (`CON`, `NUL`, `COM1`, …) gets a
-/// leading `%`: Win32 resolves such a component to the device rather than a
-/// directory, so it could not hold a session's artifacts at all. `%` is a
-/// spelling the encoder never emits (it escapes `%` itself), so the mapping is
-/// injective and no other key can land in the same directory. Every name the
-/// device rule does not match keeps its encoding.
+/// On Windows, a key that encodes to a device name (`CON`, `NUL`, `COM1`, …)
+/// gets a leading `%`: Win32 resolves such a component to the device rather
+/// than a directory, so it could not hold a session's artifacts at all. `%` is
+/// a spelling the encoder never emits (it escapes `%` itself), so the mapping
+/// stays injective. Other platforms keep the original encoding, preserving
+/// access to existing directories whose names are valid there.
 #[must_use]
 pub fn encode_session_key(session_key: &str) -> String {
     let encoded = utf8_percent_encode(session_key, SESSION_KEY_ENCODE_SET).to_string();
     if encoded.is_empty() {
         return EMPTY_SESSION_DIR.to_string();
     }
+    #[cfg(windows)]
     if is_windows_reserved_name(&encoded) {
         return format!("%{encoded}");
     }
@@ -210,6 +212,7 @@ mod tests {
     /// Win32 resolves a bare device name (case-insensitively) to the device
     /// even as a directory component, so the encoder must never hand one back
     /// verbatim: `create_dir_all` would fail or address the device.
+    #[cfg(windows)]
     #[test]
     fn encode_session_key_avoids_windows_device_names() {
         for key in ["CON", "con", "NUL", "PRN", "COM1", "LPT9"] {
@@ -226,6 +229,15 @@ mod tests {
             encode_session_key("agent:main:main"),
             "agent%3Amain%3Amain"
         );
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn encode_session_key_preserves_non_windows_device_names() {
+        for key in ["CON", "con", "NUL", "PRN", "COM1", "LPT9"] {
+            assert_eq!(encode_session_key(key), key);
+        }
+        assert_eq!(encode_session_key("%CON"), "%25CON");
     }
 
     /// Drift guard against the shared wire vocabulary.
