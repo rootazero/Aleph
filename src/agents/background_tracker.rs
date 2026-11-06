@@ -130,8 +130,9 @@ pub(crate) fn preview_from_outcome(outcome: &CompletedOutcome) -> Option<String>
     if raw.is_empty() {
         return None;
     }
-    let head: String = raw.chars().take(RESULT_PREVIEW_CHARS).collect();
-    if head.chars().count() < raw.chars().count() {
+    let mut chars = raw.chars();
+    let head: String = chars.by_ref().take(RESULT_PREVIEW_CHARS).collect();
+    if chars.next().is_some() {
         Some(format!("{head}\u{2026}"))
     } else {
         Some(head)

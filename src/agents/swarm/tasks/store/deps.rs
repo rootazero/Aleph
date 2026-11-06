@@ -27,11 +27,7 @@ pub(super) async fn get_dependents(
     let rows = stmt
         .query_map(params![id], |row| row.get(0))
         .map_err(db_err)?;
-    let mut ids = Vec::new();
-    for r in rows {
-        ids.push(r.map_err(db_err)?);
-    }
-    Ok(ids)
+    rows.collect::<rusqlite::Result<Vec<_>>>().map_err(db_err)
 }
 
 /// Dependents of `settled_id` that became runnable because of that transition.

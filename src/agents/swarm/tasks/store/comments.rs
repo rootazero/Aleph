@@ -75,9 +75,5 @@ pub(super) async fn list_task_comments(
             })
         })
         .map_err(db_err)?;
-    let mut comments = Vec::new();
-    for r in rows {
-        comments.push(r.map_err(db_err)?);
-    }
-    Ok(comments)
+    rows.collect::<rusqlite::Result<Vec<_>>>().map_err(db_err)
 }

@@ -82,48 +82,39 @@ pub(super) async fn create_task(
     // `Transaction` borrows the `Connection` via `RefCell` (rusqlite's
     // own safety net) and so is `!Send`, but `CoordTaskStore` requires
     // `dyn Future + Send`. `Transaction::commit` consumes `self`, so
-    // either path through the block drops the guard before we return.
-    let inserted: Result<(), crate::error::AlephError> =
-        (|| -> Result<(), crate::error::AlephError> {
-            let tx = conn.unchecked_transaction().map_err(db_err)?;
+    // Scoped block ensures `tx` is committed and dropped before subsequent operations.
+    {
+        let tx = conn.unchecked_transaction().map_err(db_err)?;
 
-            let result: std::result::Result<(), rusqlite::Error> = (|| {
-                // Always store as 'pending' — Blocked is derived
-                tx.execute(
-                r#"
+        // Always store as 'pending' — Blocked is derived
+        tx.execute(
+            r#"
             INSERT INTO coord_tasks (id, team_id, subject, description, status, owner, priority, metadata, created_at)
             VALUES (?1, ?2, ?3, ?4, 'pending', ?5, ?6, ?7, ?8)
             "#,
-                params![
-                    id,
-                    input.team_id,
-                    input.subject,
-                    input.description,
-                    input.owner,
-                    input.priority.as_str(),
-                    metadata_json,
-                    now,
-                ],
-            )?;
+            params![
+                id,
+                input.team_id,
+                input.subject,
+                input.description,
+                input.owner,
+                input.priority.as_str(),
+                metadata_json,
+                now,
+            ],
+        )
+        .map_err(db_err)?;
 
-                // Insert dependency edges
-                for dep_id in &input.blocked_by {
-                    tx.execute(
-                        "INSERT INTO coord_task_dependencies (task_id, depends_on) VALUES (?1, ?2)",
-                        params![id, dep_id],
-                    )?;
-                }
-                Ok(())
-            })();
-
-            match result {
-                Ok(()) => tx.commit().map_err(db_err),
-                Err(e) => Err(db_err(e)),
-            }
-        })();
-    // `tx` is gone here; the block's return is the commit outcome (or the
-    // original error, which left the transaction rolled back via Drop).
-    inserted?;
+        // Insert dependency edges
+        for dep_id in &input.blocked_by {
+            tx.execute(
+                "INSERT INTO coord_task_dependencies (task_id, depends_on) VALUES (?1, ?2)",
+                params![id, dep_id],
+            )
+            .map_err(db_err)?;
+        }
+        tx.commit().map_err(db_err)?;
+    }
 
     // Return the fully loaded task (with derived status)
     let task = load_task(&conn, &id)

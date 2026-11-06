@@ -395,28 +395,19 @@ impl AgentRegistry {
 /// Only built-in ids are aliased; project/user-defined agents are matched
 /// exactly in the first resolution pass and never routed through this table.
 fn normalize_agent_alias(raw: &str) -> Option<&'static str> {
-    // Lowercase once so both passes are case-insensitive — a model emitting the
+    // Lowercase once so resolution is case-insensitive — a model emitting the
     // Claude Code convention (`Explore`, `PLAN`, `Verify`) must still resolve to
     // the canonical built-in id. Arms return the `'static` spelling, never the
     // borrowed input (which is tied to the caller's `raw`).
     let lowered = raw.trim().to_ascii_lowercase();
     match lowered.as_str() {
-        "default" => return Some("default"),
-        "explore" => return Some("explore"),
-        "plan" => return Some("plan"),
-        "verify" => return Some("verify"),
-        "researcher" => return Some("researcher"),
-        "coder" => return Some("coder"),
-        "main" => return Some("main"),
-        _ => {}
-    }
-    match lowered.as_str() {
-        "general" | "general-purpose" | "general_purpose" | "gp" => Some("default"),
-        "explorer" | "exploration" => Some("explore"),
-        "planner" | "planning" => Some("plan"),
-        "verifier" | "verification" => Some("verify"),
-        "research" => Some("researcher"),
-        "code" | "coding" => Some("coder"),
+        "default" | "general" | "general-purpose" | "general_purpose" | "gp" => Some("default"),
+        "explore" | "explorer" | "exploration" => Some("explore"),
+        "plan" | "planner" | "planning" => Some("plan"),
+        "verify" | "verifier" | "verification" => Some("verify"),
+        "researcher" | "research" => Some("researcher"),
+        "coder" | "code" | "coding" => Some("coder"),
+        "main" => Some("main"),
         _ => None,
     }
 }
