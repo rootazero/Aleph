@@ -39,7 +39,7 @@ pub(in crate::commands::start) async fn setup_config_watcher(
                     server,
                     "config.reload",
                     config_handlers::handle_reload_with_subsystems,
-                    watcher,
+                    watcher.clone(),
                     ac,
                     event_bus
                 );
@@ -48,16 +48,16 @@ pub(in crate::commands::start) async fn setup_config_watcher(
                     server,
                     "config.reload",
                     config_handlers::handle_reload,
-                    watcher
+                    watcher.clone()
                 );
             }
             register_handler!(
                 server,
                 "config.validate",
                 config_handlers::handle_validate,
-                watcher
+                watcher.clone()
             );
-            register_handler!(server, "config.path", config_handlers::handle_path, watcher);
+            register_handler!(server, "config.path", config_handlers::handle_path, watcher.clone());
 
             if !daemon_mode {
                 println!("Config methods:");
@@ -80,8 +80,9 @@ pub(in crate::commands::start) async fn setup_config_watcher(
                 let watcher_handle = watcher_for_watch.clone().start_watching();
 
                 // Process config events
-                while let Ok(event) = config_rx.recv().await {
-                    match event {
+                loop {
+                    match config_rx.recv().await {
+                        Ok(event) => match event {
                         ConfigEvent::Reloaded(new_config) => {
                             if !daemon_mode {
                                 println!(
@@ -136,6 +137,11 @@ pub(in crate::commands::start) async fn setup_config_watcher(
                                 eprintln!("Config file error: {err}");
                             }
                         }
+                        },
+                        Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                            tracing::warn!(skipped = n, "config hot-reload lagged, resuming from oldest retained event");
+                        }
+                        Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
                     }
                 }
 
@@ -153,6 +159,7 @@ pub(in crate::commands::start) async fn setup_config_watcher(
             Some(watcher)
         }
         Err(e) => {
+            tracing::warn!(error = %e, "Config watcher creation failed; config.reload/validate/path will be unavailable");
             if !daemon_mode {
                 eprintln!("Warning: Failed to initialize config watcher: {e}");
             }
@@ -167,7 +174,7 @@ pub(in crate::commands::start) async fn start_webchat_server(
     args: &Args,
     final_bind: &str,
     final_port: u16,
-) {
+) -> Result<(), String> {
     use std::net::SocketAddr;
 
     let webchat_dir = args.webchat_dir.clone().or_else(|| {
@@ -188,27 +195,36 @@ pub(in crate::commands::start) async fn start_webchat_server(
             let webchat_addr: SocketAddr = match final_bind.parse::<std::net::IpAddr>() {
                 Ok(ip) => SocketAddr::new(ip, webchat_port),
                 Err(e) => {
-                    eprintln!(
-                        "Warning: Invalid webchat bind address '{final_bind}': {e}. WebChat server not started."
-                    );
-                    return;
+                    return Err(format!(
+                        "Invalid webchat bind address '{final_bind}': {e}"
+                    ));
                 }
             };
 
             // Only start separate HTTP server if port is different from WS port
             if webchat_port != final_port {
-                let webchat_path_clone = webchat_path.clone();
-                tokio::spawn(async move {
-                    if let Err(e) = serve_webchat(webchat_addr, webchat_path_clone).await {
-                        tracing::error!("WebChat server error: {}", e);
+                // Test the listener binding before spawning the task to fail early
+                match tokio::net::TcpListener::bind(webchat_addr).await {
+                    Ok(listener) => {
+                        if !args.daemon {
+                            println!("WebChat UI:");
+                            println!("  - URL: http://{webchat_addr}");
+                            println!("  - Static: {}", webchat_path.display());
+                            println!();
+                        }
+                        // Spawn the server with the pre-bound listener
+                        let webchat_path_clone = webchat_path.clone();
+                        tokio::spawn(async move {
+                            if let Err(e) = serve_webchat(webchat_addr, webchat_path_clone).await {
+                                tracing::error!("WebChat server error: {}", e);
+                            }
+                        });
                     }
-                });
-
-                if !args.daemon {
-                    println!("WebChat UI:");
-                    println!("  - URL: http://{webchat_addr}");
-                    println!("  - Static: {}", webchat_path.display());
-                    println!();
+                    Err(e) => {
+                        return Err(format!(
+                            "WebChat listener failed to bind on {webchat_addr}: {e}"
+                        ));
+                    }
                 }
             } else if !args.daemon {
                 println!("WebChat UI directory found: {}", webchat_path.display());
@@ -220,6 +236,7 @@ pub(in crate::commands::start) async fn start_webchat_server(
             println!();
         }
     }
+    Ok(())
 }
 
 // ─── register_memory_handlers ────────────────────────────────────────────────

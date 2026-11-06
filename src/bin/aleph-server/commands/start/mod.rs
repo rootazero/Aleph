@@ -599,10 +599,7 @@ async fn start_server_body(
 
     // Security store + vault construction (early — vault needed for API key
     // resolution).
-    let auth_bundle = initialize_vault(final_port, server.node_registry.clone());
-    if let Some(reason) = auth_bundle.security_store_fallback.as_deref() {
-        return Err(format!("Cannot start with non-durable security store: {reason}").into());
-    }
+    let auth_bundle = initialize_vault(final_port, server.node_registry.clone())?;
 
     // Install the durable per-principal spend ledger on the same
     // `SecurityStore` every other durable consumer shares — see
@@ -3898,7 +3895,7 @@ async fn start_server_body(
     )
     .await;
 
-    start_webchat_server(args, &final_bind, final_port).await;
+    start_webchat_server(args, &final_bind, final_port).await?;
 
     let endpoint_url =
         alephcore::cli::endpoint::build_endpoint_url(addr, full_config.gateway.tls.enabled);
