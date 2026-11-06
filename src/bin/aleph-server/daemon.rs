@@ -19,6 +19,21 @@ use alephcore::cli::endpoint::{read_endpoint, remove_endpoint, IpcEndpoint};
 #[cfg(unix)]
 const MAX_GATEWAY_LOG_BYTES: u64 = 5 * 1024 * 1024;
 
+/// Readiness token the daemon writes once its post-fork setup completed.
+#[cfg(unix)]
+const READY_OK: &str = "ok";
+
+/// Prefix the daemon uses to report a post-fork setup failure.
+#[cfg(unix)]
+const READY_ERROR: &str = "error: ";
+
+/// Upper bound on how long the invoking process waits for the daemon's
+/// readiness report. The daemon's setup is local work (a few file
+/// operations), so a missing report after this window means the daemon is
+/// wedged — the invoking shell must not hang forever.
+#[cfg(unix)]
+const DAEMON_READY_TIMEOUT_MS: libc::c_int = 30_000;
+
 /// Decide whether the daemon's redirect log should be rotated out before the
 /// next append, and under which `YYYY-MM-DD` archive suffix.
 ///
@@ -418,8 +433,6 @@ pub fn daemonize(
     pid_file: &str,
     log_file: Option<&PathBuf>,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    use std::fs::OpenOptions;
-
     // The PID file alone cannot establish process identity: after a crash or
     // reboot, its PID may have been recycled by an unrelated process. Only a
     // matching live IPC endpoint is authoritative for the running instance.
@@ -434,36 +447,117 @@ pub fn daemonize(
         }
     }
 
+    // Readiness handshake between the invoking process and the daemon.
+    //
+    // The invoking parent must not report success before the daemon has
+    // finished its post-fork setup (setsid, second fork, chdir, log
+    // redirect, PID file): a failure in any of those used to leave the
+    // shell recording a successful start while no server existed. The
+    // daemon writes a readiness line into this pipe once setup is done; the
+    // parent blocks until the write end is closed and fails the start when
+    // the daemon reports an error (or dies without reporting).
+    let (ready_read, ready_write) = create_readiness_pipe()?;
+
     // SAFETY: fork() is the standard Unix primitive for process creation.
     // We are single-threaded here (called before tokio runtime starts).
     match unsafe { libc::fork() } {
-        -1 => return Err("Fork failed".into()),
+        -1 => {
+            close_fd(ready_read);
+            close_fd(ready_write);
+            return Err("Fork failed".into());
+        }
         0 => {
             // Child process - continue
         }
         _ => {
-            // Parent process - exit
-            std::process::exit(0);
+            // Parent process - the invoking process. It waits for the
+            // daemon's readiness report and only then reports success;
+            // `exit(0)` keeps the pre-handshake contract that the invoking
+            // process never continues into server startup.
+            close_fd(ready_write);
+            let report = wait_for_daemon_readiness(ready_read)?;
+            let report = report.trim();
+            if let Some(error) = report.strip_prefix(READY_ERROR) {
+                return Err(format!("daemon failed to start: {error}").into());
+            }
+            if report == READY_OK {
+                std::process::exit(0);
+            }
+            if report.is_empty() {
+                return Err(
+                    "daemon failed to start: the daemon exited before reporting readiness".into(),
+                );
+            }
+            return Err(format!("daemon failed to start: {report}").into());
         }
     }
+
+    // Child of the first fork (the intermediate daemon parent). Only the
+    // write end of the readiness pipe matters from here on: it is handed to
+    // the final daemon, which reports through it.
+    close_fd(ready_read);
 
     // SAFETY: setsid() creates a new session and detaches from the controlling
     // terminal. This is standard Unix daemonization practice.
     if unsafe { libc::setsid() } == -1 {
-        return Err("setsid failed".into());
+        report_daemon_setup_failure(ready_write, "setsid failed");
     }
 
     // SAFETY: Second fork ensures the daemon cannot reacquire a controlling terminal.
     // Standard double-fork daemonization pattern.
     match unsafe { libc::fork() } {
-        -1 => return Err("Second fork failed".into()),
+        -1 => report_daemon_setup_failure(ready_write, "Second fork failed"),
         0 => {
             // Child continues
         }
         _ => {
+            // Intermediate parent: the final daemon holds the readiness pipe
+            // now, so this process must not write to it any more.
+            close_fd(ready_write);
             std::process::exit(0);
         }
     }
+
+    // Final daemon: finish the setup, then report readiness to the invoking
+    // parent (which is still blocked on the pipe).
+    match setup_daemon_after_fork(pid_file, log_file) {
+        Ok(()) => {
+            use std::io::Write;
+            use std::os::fd::FromRawFd;
+            // SAFETY: `ready_write` is the open write end of the readiness
+            // pipe owned by this process; taking ownership of it closes it
+            // when the File is dropped, which is what tells the parent that
+            // the report is complete.
+            let mut pipe = unsafe { std::fs::File::from_raw_fd(ready_write) };
+            if let Err(e) = pipe.write_all(format!("{}\n", READY_OK).as_bytes()) {
+                tracing::warn!(error = %e, "daemon: failed to report readiness to the parent");
+            }
+        }
+        Err(e) => report_daemon_setup_failure(ready_write, &e.to_string()),
+    }
+
+    Ok(())
+}
+
+#[cfg(not(unix))]
+pub fn daemonize(
+    _pid_file: &str,
+    _log_file: Option<&PathBuf>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    Err("Daemon mode is only supported on Unix systems".into())
+}
+
+/// Complete the daemon-side setup after the double fork.
+///
+/// Split out of `daemonize` so the readiness handshake can turn a failure
+/// here into a report to the invoking parent (and a non-zero exit) instead
+/// of a `return Err` that the already-forked parent would never see.
+#[cfg(unix)]
+fn setup_daemon_after_fork(
+    pid_file: &str,
+    log_file: Option<&PathBuf>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    use std::fs::OpenOptions;
 
     // SAFETY: umask() sets file mode creation mask. 0o022 yields 0o644 files / 0o755 dirs.
     unsafe { libc::umask(0o022) };
@@ -568,12 +662,95 @@ pub fn daemonize(
     Ok(())
 }
 
-#[cfg(not(unix))]
-pub fn daemonize(
-    _pid_file: &str,
-    _log_file: Option<&PathBuf>,
-) -> Result<(), Box<dyn std::error::Error>> {
-    Err("Daemon mode is only supported on Unix systems".into())
+/// Create the readiness pipe used by the daemon handshake.
+///
+/// Returns the `(read, write)` file descriptors. `FD_CLOEXEC` is set on both
+/// so the descriptors cannot leak into an unrelated subprocess later.
+#[cfg(unix)]
+fn create_readiness_pipe() -> Result<(libc::c_int, libc::c_int), Box<dyn std::error::Error>> {
+    let mut fds = [0 as libc::c_int; 2];
+    // SAFETY: `pipe` writes exactly two file descriptors into the array we
+    // own, which is valid for two ints.
+    if unsafe { libc::pipe(fds.as_mut_ptr()) } == -1 {
+        return Err(format!(
+            "failed to create the daemon readiness pipe: {}",
+            std::io::Error::last_os_error()
+        )
+        .into());
+    }
+    for fd in fds {
+        // SAFETY: both descriptors are open and owned by this process.
+        let _ = unsafe { libc::fcntl(fd, libc::F_SETFD, libc::FD_CLOEXEC) };
+    }
+    Ok((fds[0], fds[1]))
+}
+
+/// Close a raw file descriptor, ignoring the result.
+#[cfg(unix)]
+fn close_fd(fd: libc::c_int) {
+    // SAFETY: `fd` is an open descriptor owned by this process; every
+    // descriptor is closed exactly once by its owner.
+    let _ = unsafe { libc::close(fd) };
+}
+
+/// Report a post-fork setup failure to the invoking parent and terminate.
+///
+/// The parent is blocked on the readiness pipe: without this report it would
+/// only see the pipe close and could not tell a failed setup from a crashed
+/// daemon. Exits non-zero so the daemon never continues into server startup.
+#[cfg(unix)]
+fn report_daemon_setup_failure(fd: libc::c_int, message: &str) -> ! {
+    use std::io::Write;
+    use std::os::fd::FromRawFd;
+    // SAFETY: `fd` is the open write end of the readiness pipe owned by this
+    // process; taking ownership of it closes it when the File is dropped.
+    let mut pipe = unsafe { std::fs::File::from_raw_fd(fd) };
+    let _ = pipe.write_all(format!("{}{}\n", READY_ERROR, message).as_bytes());
+    let _ = pipe.flush();
+    std::process::exit(1)
+}
+
+/// Wait for the daemon's readiness report.
+///
+/// The daemon writes one line and closes the pipe, so the read ends at EOF.
+/// A closed pipe without a message means the daemon died during setup —
+/// that is a failed start, not a success.
+#[cfg(unix)]
+fn wait_for_daemon_readiness(fd: libc::c_int) -> Result<String, Box<dyn std::error::Error>> {
+    use std::io::Read;
+    use std::os::fd::FromRawFd;
+
+    let mut poll_fd = libc::pollfd {
+        fd,
+        events: libc::POLLIN,
+        revents: 0,
+    };
+    loop {
+        // SAFETY: `poll_fd` is a valid single-element pollfd array.
+        let ready = unsafe { libc::poll(&mut poll_fd, 1, DAEMON_READY_TIMEOUT_MS) };
+        if ready < 0 {
+            let error = std::io::Error::last_os_error();
+            if error.kind() == std::io::ErrorKind::Interrupted {
+                continue;
+            }
+            return Err(format!("failed to wait for the daemon readiness report: {error}").into());
+        }
+        if ready == 0 {
+            return Err(format!(
+                "the daemon did not report readiness within {}ms",
+                DAEMON_READY_TIMEOUT_MS
+            )
+            .into());
+        }
+        break;
+    }
+
+    // SAFETY: `fd` is an open read descriptor owned by this process; taking
+    // ownership of it closes it when the File is dropped.
+    let mut pipe = unsafe { std::fs::File::from_raw_fd(fd) };
+    let mut report = String::new();
+    pipe.read_to_string(&mut report)?;
+    Ok(report)
 }
 
 #[cfg(all(test, unix))]
