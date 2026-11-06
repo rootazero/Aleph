@@ -31,7 +31,19 @@ fn hydrate_key_and_gate(
         .is_none_or(std::string::String::is_empty)
     {
         if let Ok(Some(secret)) = vault.get_secret(&format!("gen:{name}")) {
-            provider_cfg.api_key = Some(secret.expose().to_string());
+            let exposed = secret.expose();
+            // A blank vault entry is "no key", not a key. Installing it would
+            // leave the provider looking configured while every request to it
+            // fails authentication, so it is dropped and the gate below
+            // decides what happens to the provider.
+            if exposed.trim().is_empty() {
+                tracing::warn!(
+                    provider = %name,
+                    "Vault entry for the generation provider is empty; left without an API key"
+                );
+            } else {
+                provider_cfg.api_key = Some(exposed.to_string());
+            }
         }
     }
     provider_cfg.api_key.as_ref().is_some_and(|k| !k.is_empty())
@@ -54,6 +66,10 @@ pub(super) fn init_generation_registry(
                 continue;
             }
             if !hydrate_key_and_gate(&name, &mut provider_cfg, &shared_token_mgr) {
+                tracing::warn!(
+                    provider = %name,
+                    "Skip generation provider: no usable API key (config or vault)"
+                );
                 continue;
             }
             match gen_providers::create_provider(&name, &provider_cfg, gen_type) {
@@ -106,6 +122,10 @@ pub(super) fn init_generation_registry(
                         continue;
                     }
                     if !hydrate_key_and_gate(&name, &mut provider_cfg, &vault) {
+                        tracing::warn!(
+                            provider = %name,
+                            "Skip generation provider on reload: no usable API key (config or vault)"
+                        );
                         continue;
                     }
                     match gen_providers::create_provider(&name, &provider_cfg, gen_type) {
