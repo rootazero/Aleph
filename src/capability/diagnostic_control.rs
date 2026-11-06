@@ -22,13 +22,13 @@
 //! presents the publisher's initial snapshot as delivered.
 
 use std::collections::HashMap;
-use std::sync::Arc;
 use std::time::Duration;
 
 use crate::capability::descriptor::CapabilityId;
 use crate::capability::facade::Cursor;
 use crate::capability::ownership::{BoundRevoke, OwnerGeneration, OwnershipError, OwnershipTree};
 use crate::capability::projection_host::{ProjectionHost, ProjectionShutdownOutcome};
+use crate::sync_primitives::Arc;
 
 /// Which production-path block to hold. Re-exported from [`ProjectionHost`]
 /// so the type lives at the host it gates and downstream callers can refer to

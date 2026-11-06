@@ -5,7 +5,7 @@
 //! owners such as `ExtensionManager` and a future Bridge supervisor perform
 //! those effects and drive this state machine around them.
 
-use crate::sync_primitives::{Arc, Mutex};
+use crate::sync_primitives::{Arc, Mutex, PoisonError};
 use serde::{Deserialize, Serialize};
 use tokio::sync::broadcast;
 
@@ -269,7 +269,7 @@ impl ProviderHandle {
         let lifecycle = self
             .lifecycle
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+            .unwrap_or_else(PoisonError::into_inner);
         read(&lifecycle)
     }
 
@@ -286,7 +286,7 @@ impl ProviderHandle {
         let mut lifecycle = self
             .lifecycle
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+            .unwrap_or_else(PoisonError::into_inner);
         if lifecycle.state() != ProviderState::Starting
             || lifecycle.generation() != expected_generation
         {
@@ -335,7 +335,7 @@ impl ProviderHandle {
     pub fn acquire_call(&self, expected_generation: u64) -> Result<(), ProviderCallError> {
         self.lifecycle
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .unwrap_or_else(PoisonError::into_inner)
             .acquire_call(expected_generation)
     }
 
@@ -352,7 +352,7 @@ impl ProviderHandle {
         let lifecycle = self
             .lifecycle
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+            .unwrap_or_else(PoisonError::into_inner);
         lifecycle.acquire_call(expected_generation)?;
         Ok(commit())
     }
@@ -372,7 +372,7 @@ impl ProviderHandle {
         let lifecycle = self
             .lifecycle
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+            .unwrap_or_else(PoisonError::into_inner);
         if !matches!(
             lifecycle.state(),
             ProviderState::Ready | ProviderState::Stopping
@@ -397,7 +397,7 @@ impl ProviderHandle {
         let mut lifecycle = self
             .lifecycle
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+            .unwrap_or_else(PoisonError::into_inner);
         let transition = lifecycle.transition(next)?;
         drop(lifecycle);
         let _ = self.changes.send(transition.clone());
@@ -413,6 +413,7 @@ impl ProviderHandle {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::sync_primitives::{mpsc, AtomicBool, AtomicUsize, Barrier, Ordering};
 
     fn provider() -> ProviderLifecycle {
         ProviderLifecycle::new(
@@ -425,22 +426,22 @@ mod tests {
     fn explicit_start_is_the_only_transition_that_allocates_fixture_resources() {
         let provider = ProviderHandle::new(provider());
         provider.transition(ProviderState::Cold).unwrap();
-        let resources = std::sync::atomic::AtomicUsize::new(0);
+        let resources = AtomicUsize::new(0);
 
         assert_eq!(provider.snapshot(), (ProviderState::Cold, 0));
-        assert_eq!(resources.load(std::sync::atomic::Ordering::SeqCst), 0);
+        assert_eq!(resources.load(Ordering::SeqCst), 0);
 
         provider.transition(ProviderState::Starting).unwrap();
-        resources.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        resources.fetch_add(1, Ordering::SeqCst);
         provider.transition(ProviderState::Ready).unwrap();
-        assert_eq!(resources.load(std::sync::atomic::Ordering::SeqCst), 1);
+        assert_eq!(resources.load(Ordering::SeqCst), 1);
 
         provider.transition(ProviderState::Stopping).unwrap();
         provider.transition(ProviderState::Stopped).unwrap();
         provider.transition(ProviderState::Starting).unwrap();
-        resources.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        resources.fetch_add(1, Ordering::SeqCst);
         provider.transition(ProviderState::Ready).unwrap();
-        assert_eq!(resources.load(std::sync::atomic::Ordering::SeqCst), 2);
+        assert_eq!(resources.load(Ordering::SeqCst), 2);
     }
 
     #[test]
@@ -627,18 +628,18 @@ mod tests {
             handle.transition(ProviderState::Starting).unwrap();
             handle.transition(ProviderState::Ready).unwrap();
             let generation = handle.generation();
-            let entered = std::sync::Barrier::new(2);
-            let release = std::sync::Barrier::new(2);
-            let committed = std::sync::atomic::AtomicBool::new(false);
-            let (attempt_tx, attempt_rx) = std::sync::mpsc::channel();
-            let (stopped_tx, stopped_rx) = std::sync::mpsc::channel();
+            let entered = Barrier::new(2);
+            let release = Barrier::new(2);
+            let committed = AtomicBool::new(false);
+            let (attempt_tx, attempt_rx) = mpsc::channel();
+            let (stopped_tx, stopped_rx) = mpsc::channel();
 
             std::thread::scope(|scope| {
                 let admission = scope.spawn(|| {
                     let commit = || {
                         entered.wait();
                         release.wait();
-                        committed.store(true, std::sync::atomic::Ordering::SeqCst);
+                        committed.store(true, Ordering::SeqCst);
                         7
                     };
                     if completion {
@@ -654,9 +655,7 @@ mod tests {
                         .send(handle.lifecycle.try_lock().is_err())
                         .unwrap();
                     let result = handle.transition(ProviderState::Stopping);
-                    stopped_tx
-                        .send(committed.load(std::sync::atomic::Ordering::SeqCst))
-                        .unwrap();
+                    stopped_tx.send(committed.load(Ordering::SeqCst)).unwrap();
                     result
                 });
                 let locked = attempt_rx.recv_timeout(std::time::Duration::from_secs(5));
@@ -666,7 +665,7 @@ mod tests {
                 assert_eq!(admission.join().unwrap(), Ok(7));
                 assert_eq!(stop.join().unwrap().unwrap().to, ProviderState::Stopping);
                 assert!(locked.unwrap());
-                assert_eq!(pending, Err(std::sync::mpsc::TryRecvError::Empty));
+                assert_eq!(pending, Err(mpsc::TryRecvError::Empty));
                 assert!(stopped_rx.recv().unwrap());
             });
             assert_eq!(handle.snapshot(), (ProviderState::Stopping, generation));

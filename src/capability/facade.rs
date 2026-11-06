@@ -2,7 +2,9 @@
 //!
 //! [`Zahir`] is the read/query face every consumer (UI, MCP projection, ACP
 //! JSON projection) goes through. It never invokes a capability directly; it
-//! describes, resolves (into a lease), subscribes to change, and projects.
+//! describes, resolves (into a lease), subscribes to change, and projects —
+//! plus [`Zahir::activate`], the one entry point that runs a provider's
+//! activation hook instead of reading state.
 //!
 //! Task 1 establishes the trait and the pure transport types. The immutable
 //! snapshot / lease-invalidation semantics are documented here and implemented
@@ -16,7 +18,7 @@ use crate::capability::ownership::{OwnerGeneration, OwnerRef, VisibilityScope};
 use crate::capability::provider::ProviderId;
 use crate::capability::provider_registry::ActivationError;
 use crate::memory::runtime::MemoryRuntime;
-use std::sync::Weak;
+use crate::sync_primitives::Weak;
 
 /// Source identity is kind-specific; Resources never manufacture Tool entries.
 #[derive(Debug, Clone)]
@@ -319,7 +321,8 @@ pub struct Projection {
     pub capabilities: Vec<CapabilityId>,
 }
 
-/// The read/query face of the capability layer.
+/// The read/query face of the capability layer, plus the one activation entry
+/// point.
 ///
 /// [`Zahir::resolve`] returns `Result<`[`BackendLease`]`, `[`ResolveError`]`>`,
 /// never a live handler: the lease names its owner generation so a consumer can
@@ -331,6 +334,10 @@ pub trait Zahir {
     fn describe(&self, scope: Scope) -> CapabilitySnapshot;
     fn resolve(&self, reference: Reference) -> Result<BackendLease, ResolveError>;
     fn validate_lease(&self, lease: &BackendLease) -> Result<(), ResolveError>;
+    /// Activate the provider behind `reference` and mint a lease for it.
+    ///
+    /// The one non-read operation on this trait: it runs the provider's
+    /// activation hook before returning the lease.
     fn activate(&self, reference: Reference) -> Result<BackendLease, ActivationError>;
     fn subscribe(&self, scope: Scope, cursor: Cursor) -> CapabilityChangeStream;
     fn project(&self, target: TransportTarget, scope: Scope) -> Projection;
