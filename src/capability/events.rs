@@ -25,6 +25,7 @@ pub enum CapabilityEventType {
     Revoked,
     ConstraintViolation,
     PolicyViolation,
+    ExecutionFailed,
 }
 
 /// Deliberately excludes handler payloads and free-form errors (which may contain secrets).
@@ -75,6 +76,11 @@ pub enum CapabilityEvent {
         id: CapabilityId,
         reason: String,
     },
+    ExecutionFailed {
+        id: CapabilityId,
+        operation: String,
+        reason: String,
+    },
 }
 
 impl CapabilityEvent {
@@ -87,7 +93,8 @@ impl CapabilityEvent {
             | Self::CapabilityInvoked { id, .. }
             | Self::CapabilityRevoked { id, .. }
             | Self::ConstraintViolation { id, .. }
-            | Self::PolicyViolation { id, .. } => id,
+            | Self::PolicyViolation { id, .. }
+            | Self::ExecutionFailed { id, .. } => id,
         }
     }
 
@@ -101,6 +108,7 @@ impl CapabilityEvent {
             Self::CapabilityRevoked { .. } => CapabilityEventType::Revoked,
             Self::ConstraintViolation { .. } => CapabilityEventType::ConstraintViolation,
             Self::PolicyViolation { .. } => CapabilityEventType::PolicyViolation,
+            Self::ExecutionFailed { .. } => CapabilityEventType::ExecutionFailed,
         }
     }
 }
@@ -455,10 +463,25 @@ impl crate::capability::facade::Zahir for AuditedZahir {
         crate::capability::facade::BackendLease,
         crate::capability::provider_registry::ActivationError,
     > {
+        use crate::capability::provider_registry::ActivationError;
         let id = reference.id.clone();
         self.inner
             .activate(reference)
-            .inspect_err(|reason| self.denied(&id, reason.to_string()))
+            .inspect_err(|reason| match reason {
+                ActivationError::Failed => self.events.emit(
+                    self.actor.clone(),
+                    CapabilityEvent::ExecutionFailed {
+                        id: id.clone(),
+                        operation: "activate".into(),
+                        reason: reason.to_string(),
+                    },
+                ),
+                ActivationError::Rejected
+                | ActivationError::NotVisible
+                | ActivationError::Unknown => {
+                    self.denied(&id, reason.to_string());
+                }
+            })
     }
 
     fn subscribe(

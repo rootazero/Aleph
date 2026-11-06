@@ -549,3 +549,77 @@ fn failing_sink_preserves_the_original_policy_denial() {
     );
     assert_eq!(stream.snapshot().unwrap().records().len(), 1);
 }
+
+#[test]
+fn provider_activation_fault_is_failed_not_denied_in_compliance_report() {
+    use crate::capability::audit::{AuditCollector, AuditQuery};
+    use crate::capability::facade::{Reference, Zahir};
+    use crate::capability::provider::{
+        ProviderHandle, ProviderId, ProviderLifecycle, ProviderTransport,
+    };
+    use crate::capability::provider_registry::{
+        ActivationError, ProviderActivator, ProviderRegistration, ProviderRegistry,
+    };
+    use crate::capability::zahir_facade::ZahirFacade;
+    use crate::tools::registry::ToolHandlerRegistry;
+
+    struct FailingActivator(ActivationError);
+    impl ProviderActivator for FailingActivator {
+        fn activate(&self) -> Result<(), ActivationError> {
+            Err(self.0.clone())
+        }
+    }
+
+    for (error, expected) in [
+        (ActivationError::Failed, "failed"),
+        (ActivationError::Rejected, "denied"),
+        (ActivationError::NotVisible, "denied"),
+        (ActivationError::Unknown, "denied"),
+    ] {
+        let stream = Arc::new(InMemoryEventStream::new(4).unwrap());
+        let providers = ProviderRegistry::new();
+        let desc = descriptor();
+        let provider = ProviderHandle::new(ProviderLifecycle::new(
+            ProviderId::new("test/audit-activation").unwrap(),
+            ProviderTransport::InProcess,
+        ));
+        providers
+            .register(
+                ProviderRegistration::new(desc.clone(), provider)
+                    .with_activator(Arc::new(FailingActivator(error.clone()))),
+            )
+            .unwrap();
+        let inner = ZahirFacade::new_with_providers(
+            ToolHandlerRegistry::new(),
+            Arc::new(OwnershipTree::new()),
+            providers,
+        );
+        let facade = AuditedZahir::new(inner, OwnerRef::Runtime, emitter(&stream));
+        assert_eq!(
+            facade.activate(Reference {
+                id: desc.id.clone(),
+                visibility: desc.visibility.clone()
+            }),
+            Err(error.clone())
+        );
+        let audit = AuditCollector::new(stream);
+        let report = audit.report(&AuditQuery::default()).unwrap();
+        assert_eq!(report.entries().len(), 1);
+        assert_eq!(report.entries()[0].result(), expected);
+        let json: Value = serde_json::from_str(&report.to_json().unwrap()).unwrap();
+        assert_eq!(json["entries"][0]["result"], expected);
+        if error == ActivationError::Failed {
+            assert!(!matches!(
+                report.entries()[0].event(),
+                CapabilityEvent::PolicyViolation { .. }
+            ));
+            assert_eq!(json["entries"][0]["event_type"], "execution_failed");
+            assert_eq!(json["entries"][0]["action"], "activate");
+        } else {
+            assert!(matches!(
+                report.entries()[0].event(),
+                CapabilityEvent::PolicyViolation { .. }
+            ));
+        }
+    }
+}

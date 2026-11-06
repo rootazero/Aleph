@@ -69,6 +69,7 @@ impl AuditLog {
             CapabilityEvent::CapabilityRevoked { .. } => "revoked",
             CapabilityEvent::ConstraintViolation { .. } => "constraint_check",
             CapabilityEvent::PolicyViolation { .. } => "policy_check",
+            CapabilityEvent::ExecutionFailed { operation, .. } => operation,
         }
     }
 
@@ -82,6 +83,7 @@ impl AuditLog {
             },
             CapabilityEvent::ConstraintViolation { .. }
             | CapabilityEvent::PolicyViolation { .. } => "denied",
+            CapabilityEvent::ExecutionFailed { .. } => "failed",
             CapabilityEvent::CapabilityCreated { .. }
             | CapabilityEvent::CapabilityAttached { .. }
             | CapabilityEvent::CapabilityActivated { .. }
