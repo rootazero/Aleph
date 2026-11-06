@@ -30,6 +30,7 @@ struct Observed {
     descriptions: Cell<usize>,
     resolutions: Cell<usize>,
     before_load: RefCell<Option<Box<dyn FnOnce()>>>,
+    after_load: RefCell<Option<Box<dyn FnOnce()>>>,
 }
 
 impl Zahir for Observed {
@@ -38,12 +39,24 @@ impl Zahir for Observed {
         self.inner.describe(scope)
     }
     fn lookup_descriptor(&self, reference: &Reference) -> Option<CapabilityDescriptor> {
+        self.lookup_descriptor_for_cache(reference)
+            .map(|(descriptor, _)| descriptor)
+    }
+    fn lookup_descriptor_for_cache(
+        &self,
+        reference: &Reference,
+    ) -> Option<(CapabilityDescriptor, bool)> {
         self.loads.set(self.loads.get() + 1);
         let callback = self.before_load.borrow_mut().take();
         if let Some(callback) = callback {
             callback();
         }
-        self.inner.lookup_descriptor(reference)
+        let descriptor = self.inner.lookup_descriptor_for_cache(reference);
+        let callback = self.after_load.borrow_mut().take();
+        if let Some(callback) = callback {
+            callback();
+        }
+        descriptor
     }
     fn descriptor_revision(&self, reference: &Reference) -> Option<CapabilityRevision> {
         self.inner.descriptor_revision(reference)
@@ -87,6 +100,7 @@ fn setup(
         descriptions: Cell::new(0),
         resolutions: Cell::new(0),
         before_load: RefCell::new(None),
+        after_load: RefCell::new(None),
     });
     (
         Arc::new(CapabilityResolver::with_config(observed.clone(), config)),
@@ -409,9 +423,11 @@ fn stopped_tool_provider_hides_warm_metadata_without_notifications() {
     assert!(resolver.validate_lease(&fresh).is_ok());
 }
 
-fn register_cold_resource(
+fn register_cold_descriptor(
     providers: &ProviderRegistry,
     capability: CapabilityId,
+    kind: CapabilityKind,
+    revision: CapabilityRevision,
 ) -> (ProviderHandle, CapabilityDescriptor) {
     let provider = ProviderHandle::new(ProviderLifecycle::new(
         ProviderId::new("test/lazy").unwrap(),
@@ -420,12 +436,12 @@ fn register_cold_resource(
     provider.transition(ProviderState::Cold).unwrap();
     let descriptor = CapabilityDescriptor {
         id: capability,
-        kind: CapabilityKind::Resource,
+        kind,
         schema: SchemaRef {
             version: 1,
             fingerprint: [7; 32],
         },
-        revision: CapabilityRevision(1),
+        revision,
         lifetime: LifetimeScope::Runtime,
         visibility: VisibilityScope::default(),
         owner: OwnerRef::Runtime,
@@ -447,7 +463,12 @@ fn tool_namespace_generic_metadata_matches_discovery_without_a_tool_entry() {
     let registry = ToolHandlerRegistry::new();
     let providers = ProviderRegistry::new();
     let capability = id("provider_only");
-    let (provider, descriptor) = register_cold_resource(&providers, capability.clone());
+    let (provider, descriptor) = register_cold_descriptor(
+        &providers,
+        capability.clone(),
+        CapabilityKind::Resource,
+        CapabilityRevision(1),
+    );
     let tree = Arc::new(OwnershipTree::new());
     let facade = ZahirFacade::new_with_providers(registry.clone(), tree.clone(), providers);
     let resolver = CapabilityResolver::new(facade.clone());
@@ -499,13 +520,21 @@ fn tool_namespace_generic_metadata_matches_discovery_without_a_tool_entry() {
     assert_eq!(provider.snapshot(), (ProviderState::Cold, 0));
 }
 
+#[path = "resolver_source_tests.rs"]
+mod source_tests;
+
 #[test]
 fn canonical_tool_metadata_precedes_generic_only_when_discoverable() {
     let registry = ToolHandlerRegistry::new();
     register(&registry, "shared", r#"{"type":"object"}"#);
     let capability = id("shared");
     let providers = ProviderRegistry::new();
-    let (provider, generic) = register_cold_resource(&providers, capability.clone());
+    let (provider, generic) = register_cold_descriptor(
+        &providers,
+        capability.clone(),
+        CapabilityKind::Resource,
+        CapabilityRevision(1),
+    );
     let tree = Arc::new(OwnershipTree::new());
     let facade = ZahirFacade::new_with_providers(registry.clone(), tree.clone(), providers);
     let resolver = CapabilityResolver::new(facade.clone());
@@ -584,7 +613,12 @@ fn cold_generic_provider_metadata_does_not_activate_or_mint_a_lease() {
         name: "cold".into(),
     };
     let providers = ProviderRegistry::new();
-    let (provider, descriptor) = register_cold_resource(&providers, capability.clone());
+    let (provider, descriptor) = register_cold_descriptor(
+        &providers,
+        capability.clone(),
+        CapabilityKind::Resource,
+        CapabilityRevision(1),
+    );
     let tree = Arc::new(OwnershipTree::new());
     let facade =
         ZahirFacade::new_with_providers(ToolHandlerRegistry::new(), tree.clone(), providers);

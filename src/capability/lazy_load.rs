@@ -33,9 +33,9 @@ pub(super) fn lookup(
             cache.remove(&key);
         }
     }
-    let descriptor = zahir.lookup_descriptor(reference)?;
-    // Only sources with a stable revision contract benefit from retention.
-    if revision.is_some() {
+    let (descriptor, cacheable) = zahir.lookup_descriptor_for_cache(reference)?;
+    // The load's actual producing source, not the earlier probe, owns this proof.
+    if cacheable {
         cache
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)

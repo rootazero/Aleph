@@ -742,6 +742,14 @@ impl Zahir for ZahirFacade {
     }
 
     fn lookup_descriptor(&self, reference: &Reference) -> Option<CapabilityDescriptor> {
+        self.lookup_descriptor_for_cache(reference)
+            .map(|(descriptor, _)| descriptor)
+    }
+
+    fn lookup_descriptor_for_cache(
+        &self,
+        reference: &Reference,
+    ) -> Option<(CapabilityDescriptor, bool)> {
         if self.adapter.registry.is_closed() {
             return None;
         }
@@ -760,6 +768,9 @@ impl Zahir for ZahirFacade {
         } else {
             None
         };
+        // Only this selected canonical capture owns the strong revision domain.
+        // A generic fallback cannot inherit an earlier Tool probe's evidence.
+        let cacheable = tool_entry.is_some();
         let mut descriptor = if let Some(entry) = tool_entry {
             crate::capability::backend::to_descriptor(&entry.entry().descriptor)
         } else if let Some(entry) = self.provider_adapter.entry(&reference.id) {
@@ -775,7 +786,7 @@ impl Zahir for ZahirFacade {
             return None;
         };
         descriptor.visibility = reference.visibility.clone();
-        Some(descriptor)
+        Some((descriptor, cacheable))
     }
 
     fn describe(&self, scope: Scope) -> CapabilitySnapshot {

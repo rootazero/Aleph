@@ -52,8 +52,15 @@ impl Zahir for Measured {
         self.facade.describe(scope)
     }
     fn lookup_descriptor(&self, reference: &Reference) -> Option<CapabilityDescriptor> {
+        self.lookup_descriptor_for_cache(reference)
+            .map(|(descriptor, _)| descriptor)
+    }
+    fn lookup_descriptor_for_cache(
+        &self,
+        reference: &Reference,
+    ) -> Option<(CapabilityDescriptor, bool)> {
         self.loads.fetch_add(1, Relaxed);
-        self.facade.lookup_descriptor(reference)
+        self.facade.lookup_descriptor_for_cache(reference)
     }
     fn descriptor_revision(&self, reference: &Reference) -> Option<CapabilityRevision> {
         self.facade.descriptor_revision(reference)

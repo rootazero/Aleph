@@ -343,12 +343,27 @@ pub trait Zahir {
         .find(|descriptor| descriptor.id == reference.id)
     }
 
+    /// Load metadata and its cache eligibility from the same producing source.
+    ///
+    /// `cacheable=true` guarantees this descriptor's revision belongs to the
+    /// same canonical source/domain as descriptor_revision and cannot be reused
+    /// for different metadata. Derive the flag from the actual selected source,
+    /// never an earlier probe or public kind/revision equality. Unsupported
+    /// sources conservatively preserve the existing lookup contract uncached.
+    fn lookup_descriptor_for_cache(
+        &self,
+        reference: &Reference,
+    ) -> Option<(CapabilityDescriptor, bool)> {
+        self.lookup_descriptor(reference)
+            .map(|descriptor| (descriptor, false))
+    }
+
     /// A live metadata freshness hint, never an authorization decision.
     ///
     /// Return Some only when the exact visibility is currently valid and this
     /// source's descriptor revision cannot be reused for different metadata.
     /// Provider closure/revocation must suppress the hint. None conservatively
-    /// reloads via lookup_descriptor; notifications cannot supply this proof.
+    /// reloads via lookup_descriptor_for_cache; notifications cannot supply this proof.
     fn descriptor_revision(&self, _reference: &Reference) -> Option<CapabilityRevision> {
         None
     }
