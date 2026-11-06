@@ -129,7 +129,13 @@ impl CapabilityHandlerRegistry {
     }
 
     /// Invoke a registered handler without holding the registry lock.
-    pub fn dispatch(
+    ///
+    /// This is an internal, pre-gated seam. Callers must validate the Phase 6
+    /// lease, policy, visibility, and Task 1 activation contract before entry;
+    /// the registry only performs lookup and handler execution here. Keeping it
+    /// crate-private prevents external callers from treating an ID plus JSON as
+    /// an authorization decision.
+    pub(crate) fn dispatch(
         &self,
         id: &CapabilityId,
         input: Value,
@@ -146,15 +152,6 @@ impl CapabilityHandlerRegistry {
         }
         .ok_or_else(|| CapabilityDispatchError::NotFound(id.clone()))?;
         handler.invoke(input)
-    }
-
-    /// Alias used by dispatching callers that prefer the verb `invoke`.
-    pub fn invoke(
-        &self,
-        id: &CapabilityId,
-        input: Value,
-    ) -> Result<Value, CapabilityDispatchError> {
-        self.dispatch(id, input)
     }
 
     #[must_use]
@@ -400,6 +397,185 @@ mod tests {
         FakeHandler {
             name: name.to_string(),
         }
+    }
+
+    struct JsonCapabilityHandler;
+
+    impl CapabilityHandler for JsonCapabilityHandler {
+        fn invoke(
+            &self,
+            input: serde_json::Value,
+        ) -> Result<serde_json::Value, CapabilityDispatchError> {
+            Ok(input)
+        }
+    }
+
+    fn special_descriptor(namespace: &str, name: &str) -> CapabilityDescriptor {
+        CapabilityDescriptor {
+            id: CapabilityId {
+                namespace: namespace.into(),
+                name: name.into(),
+            },
+            kind: CapabilityKind::Ambient,
+            schema: SchemaRef {
+                version: 1,
+                fingerprint: [0; 32],
+            },
+            revision: CapabilityRevision(0),
+            lifetime: LifetimeScope::Runtime,
+            visibility: VisibilityScope::default(),
+            owner: OwnerRef::Runtime,
+            services: Vec::new(),
+            metadata: ProjectionMetadata::default(),
+            facets: CapabilityFacets::new().with(CapabilityFacet::Callable),
+        }
+    }
+
+    #[test]
+    fn handler_registry_rejects_duplicate_ids() {
+        let registry = CapabilityHandlerRegistry::new();
+        let descriptor = special_descriptor("test/ambient", "duplicate");
+        let id = descriptor.id.clone();
+        registry
+            .register(descriptor.clone(), Arc::new(JsonCapabilityHandler))
+            .unwrap();
+
+        assert_eq!(
+            registry.register(descriptor, Arc::new(JsonCapabilityHandler)),
+            Err(CapabilityRegistryError::Duplicate(id))
+        );
+    }
+
+    #[test]
+    fn handler_registry_lookup_of_an_invalid_id_is_none() {
+        let registry = CapabilityHandlerRegistry::new();
+        let invalid = CapabilityId {
+            namespace: String::new(),
+            name: String::new(),
+        };
+
+        assert!(registry.lookup(&invalid).is_none());
+    }
+
+    #[test]
+    fn handler_registry_rejects_registration_with_an_invalid_id() {
+        let registry = CapabilityHandlerRegistry::new();
+        let descriptor = special_descriptor("", "invalid");
+
+        assert_eq!(
+            registry.register(descriptor, Arc::new(JsonCapabilityHandler)),
+            Err(CapabilityRegistryError::InvalidId)
+        );
+    }
+
+    #[test]
+    fn handler_registry_enumerates_only_the_requested_namespace() {
+        let registry = CapabilityHandlerRegistry::new();
+        registry
+            .register(
+                special_descriptor("test/one", "a"),
+                Arc::new(JsonCapabilityHandler),
+            )
+            .unwrap();
+        registry
+            .register(
+                special_descriptor("test/two", "b"),
+                Arc::new(JsonCapabilityHandler),
+            )
+            .unwrap();
+        let scope = Scope {
+            namespace: Some("test/one".into()),
+            ..Scope::default()
+        };
+
+        let descriptors = registry.enumerate(&scope);
+        assert_eq!(descriptors.len(), 1);
+        assert_eq!(descriptors[0].id.namespace, "test/one");
+    }
+
+    #[test]
+    fn handler_registry_snapshot_cursor_tracks_registration_revision() {
+        let registry = CapabilityHandlerRegistry::new();
+        assert_eq!(
+            registry.snapshot(&Scope::default()).committed_cursor,
+            Cursor(0)
+        );
+
+        registry
+            .register(
+                special_descriptor("test/revision", "a"),
+                Arc::new(JsonCapabilityHandler),
+            )
+            .unwrap();
+        assert_eq!(
+            registry.snapshot(&Scope::default()).committed_cursor,
+            Cursor(1)
+        );
+
+        registry
+            .register(
+                special_descriptor("test/revision", "b"),
+                Arc::new(JsonCapabilityHandler),
+            )
+            .unwrap();
+        assert_eq!(
+            registry.snapshot(&Scope::default()).committed_cursor,
+            Cursor(2)
+        );
+    }
+
+    #[test]
+    fn handler_registry_rejects_revision_exhaustion() {
+        let registry = CapabilityHandlerRegistry::new();
+        registry
+            .state
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .revision = u64::MAX;
+
+        assert_eq!(
+            registry.register(
+                special_descriptor("test/exhausted", "a"),
+                Arc::new(JsonCapabilityHandler)
+            ),
+            Err(CapabilityRegistryError::RevisionExhausted)
+        );
+    }
+
+    #[test]
+    fn handler_registry_supports_concurrent_registration_and_enumeration() {
+        let registry = CapabilityHandlerRegistry::new();
+        std::thread::scope(|scope| {
+            for index in 0..8 {
+                let registry = registry.clone();
+                scope.spawn(move || {
+                    registry
+                        .register(
+                            special_descriptor("test/concurrent", &format!("cap-{index}")),
+                            Arc::new(JsonCapabilityHandler),
+                        )
+                        .unwrap();
+                });
+            }
+            for _ in 0..8 {
+                let registry = registry.clone();
+                scope.spawn(move || {
+                    for _ in 0..32 {
+                        let scope = Scope {
+                            namespace: Some("test/concurrent".into()),
+                            ..Scope::default()
+                        };
+                        assert!(registry.enumerate(&scope).len() <= 8);
+                    }
+                });
+            }
+        });
+
+        let scope = Scope {
+            namespace: Some("test/concurrent".into()),
+            ..Scope::default()
+        };
+        assert_eq!(registry.enumerate(&scope).len(), 8);
     }
 
     #[test]

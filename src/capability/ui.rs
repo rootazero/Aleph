@@ -70,16 +70,11 @@ impl UiCapability {
         }
     }
 
-    fn ensure_open(&self) -> Result<(), UiError> {
+    pub fn display_text(&self, text: impl Into<String>) -> Result<(), UiError> {
         let closed = self.closed.lock().map_err(|_| UiError::Poisoned)?;
         if *closed {
             return Err(UiError::Closed);
         }
-        Ok(())
-    }
-
-    pub fn display_text(&self, text: impl Into<String>) -> Result<(), UiError> {
-        self.ensure_open()?;
         self.display
             .lock()
             .map_err(|_| UiError::Poisoned)?
@@ -88,12 +83,18 @@ impl UiCapability {
     }
 
     pub fn display_snapshot(&self) -> Result<Vec<UiElement>, UiError> {
-        self.ensure_open()?;
+        let closed = self.closed.lock().map_err(|_| UiError::Poisoned)?;
+        if *closed {
+            return Err(UiError::Closed);
+        }
         Ok(self.display.lock().map_err(|_| UiError::Poisoned)?.clone())
     }
 
     pub fn push_input(&self, event: UiInputEvent) -> Result<(), UiError> {
-        self.ensure_open()?;
+        let closed = self.closed.lock().map_err(|_| UiError::Poisoned)?;
+        if *closed {
+            return Err(UiError::Closed);
+        }
         self.input
             .lock()
             .map_err(|_| UiError::Poisoned)?
@@ -102,7 +103,10 @@ impl UiCapability {
     }
 
     pub fn capture_input(&self) -> Result<Option<UiInputEvent>, UiError> {
-        self.ensure_open()?;
+        let closed = self.closed.lock().map_err(|_| UiError::Poisoned)?;
+        if *closed {
+            return Err(UiError::Closed);
+        }
         Ok(self
             .input
             .lock()
@@ -162,9 +166,25 @@ impl CapabilityHandler for UiHandler {
 
 fn descriptor() -> CapabilityDescriptor {
     let schema = json!({
-        "type":"object",
-        "required":["operation"],
-        "additionalProperties":true
+        "oneOf":[
+            {
+                "type":"object",
+                "properties":{
+                    "operation":{"const":"display"},
+                    "text":{"type":"string"}
+                },
+                "required":["operation","text"],
+                "additionalProperties":false
+            },
+            {
+                "type":"object",
+                "properties":{
+                    "operation":{"const":"input"}
+                },
+                "required":["operation"],
+                "additionalProperties":false
+            }
+        ]
     });
     let mut bytes = Vec::new();
     crate::tools::descriptor::canonicalize_json(&schema, &mut bytes);
@@ -201,6 +221,8 @@ mod tests {
     use crate::capability::backend::{CapabilityBackend, CapabilityHandlerRegistry};
     use crate::sync_primitives::Arc;
     use serde_json::json;
+    use std::sync::Barrier;
+    use std::thread;
 
     #[test]
     fn ui_displays_text_in_an_immutable_snapshot() {
@@ -251,6 +273,34 @@ mod tests {
             ui.push_input(UiInputEvent::KeyDown { key: "x".into() }),
             Err(UiError::Closed)
         ));
+    }
+
+    #[test]
+    fn ui_close_serializes_with_concurrent_display_and_rejects_post_close_operations() {
+        let ui = Arc::new(UiCapability::in_memory());
+        let start = Arc::new(Barrier::new(2));
+        let finish_close = Arc::new(Barrier::new(2));
+        let worker_ui = ui.clone();
+        let worker_start = start.clone();
+        let worker_finish = finish_close.clone();
+        let worker = thread::spawn(move || {
+            worker_start.wait();
+            let concurrent = worker_ui.display_text("concurrent");
+            worker_finish.wait();
+            let post_close = worker_ui.push_input(UiInputEvent::KeyDown {
+                key: "after-close".into(),
+            });
+            (concurrent, post_close)
+        });
+
+        start.wait();
+        ui.close().unwrap();
+        finish_close.wait();
+        let (_concurrent, post_close) = worker.join().unwrap();
+
+        assert!(post_close.is_err());
+        assert!(ui.display_text("after-close").is_err());
+        assert!(ui.capture_input().is_err());
     }
 
     #[test]

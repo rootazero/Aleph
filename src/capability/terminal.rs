@@ -75,17 +75,17 @@ impl TerminalCapability {
     pub fn write_stdout(&self, data: &[u8]) -> Result<usize, TerminalError> {
         let mut handle = self.stdout.lock().map_err(|_| TerminalError::Poisoned)?;
         let stdout = handle.as_mut().ok_or(TerminalError::Closed("stdout"))?;
-        let written = stdout.write(data)?;
+        stdout.write_all(data)?;
         stdout.flush()?;
-        Ok(written)
+        Ok(data.len())
     }
 
     pub fn write_stderr(&self, data: &[u8]) -> Result<usize, TerminalError> {
         let mut handle = self.stderr.lock().map_err(|_| TerminalError::Poisoned)?;
         let stderr = handle.as_mut().ok_or(TerminalError::Closed("stderr"))?;
-        let written = stderr.write(data)?;
+        stderr.write_all(data)?;
         stderr.flush()?;
-        Ok(written)
+        Ok(data.len())
     }
 
     pub fn close_stdin(&self) -> Result<(), TerminalError> {
@@ -155,7 +155,8 @@ impl CapabilityHandler for TerminalHandler {
                     .capability
                     .read_stdin(max_bytes)
                     .map_err(|error| CapabilityDispatchError::Execution(error.to_string()))?;
-                json!({"data": String::from_utf8_lossy(&data), "bytes_read": data.len()})
+                let bytes_read = data.len();
+                json!({"data": data, "bytes_read": bytes_read})
             }
             "write_stdout" | "write_stderr" => {
                 let data = input.get("data").and_then(Value::as_str).ok_or_else(|| {
@@ -184,9 +185,26 @@ impl CapabilityHandler for TerminalHandler {
 
 fn descriptor() -> CapabilityDescriptor {
     let schema = json!({
-        "type":"object",
-        "required":["operation"],
-        "additionalProperties":true
+        "oneOf":[
+            {
+                "type":"object",
+                "properties":{
+                    "operation":{"const":"read_stdin"},
+                    "max_bytes":{"type":"integer","minimum":1,"maximum":1048576}
+                },
+                "required":["operation","max_bytes"],
+                "additionalProperties":false
+            },
+            {
+                "type":"object",
+                "properties":{
+                    "operation":{"enum":["write_stdout","write_stderr"]},
+                    "data":{"type":"string"}
+                },
+                "required":["operation","data"],
+                "additionalProperties":false
+            }
+        ]
     });
     let mut bytes = Vec::new();
     crate::tools::descriptor::canonicalize_json(&schema, &mut bytes);
@@ -236,6 +254,24 @@ mod tests {
                 .map_err(|_| std::io::Error::other("writer lock poisoned"))?
                 .extend_from_slice(bytes);
             Ok(bytes.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[derive(Clone, Default)]
+    struct PartialWriter(Arc<Mutex<Vec<u8>>>);
+
+    impl Write for PartialWriter {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            let count = bytes.len().min(2);
+            self.0
+                .lock()
+                .map_err(|_| std::io::Error::other("writer lock poisoned"))?
+                .extend_from_slice(&bytes[..count]);
+            Ok(count)
         }
 
         fn flush(&mut self) -> std::io::Result<()> {
@@ -314,7 +350,7 @@ mod tests {
             registry
                 .dispatch(&id, json!({"operation":"read_stdin","max_bytes":5}))
                 .unwrap(),
-            json!({"data":"input","bytes_read":5})
+            json!({"data":[105,110,112,117,116],"bytes_read":5})
         );
         assert_eq!(
             registry
@@ -323,6 +359,38 @@ mod tests {
             json!({"bytes_written":3})
         );
         assert_eq!(&*stdout.0.lock().unwrap(), b"out");
+    }
+
+    #[test]
+    fn terminal_handler_preserves_non_utf8_stdin_bytes() {
+        let terminal = Arc::new(TerminalCapability::from_handles(
+            Cursor::new(vec![0xff, 0xfe]),
+            SharedWriter::default(),
+            SharedWriter::default(),
+        ));
+        let registry = CapabilityHandlerRegistry::new();
+        let id = register_handler(&registry, terminal).unwrap();
+
+        assert_eq!(
+            registry
+                .dispatch(&id, json!({"operation":"read_stdin","max_bytes":2}))
+                .unwrap(),
+            json!({"data":[255,254],"bytes_read":2})
+        );
+    }
+
+    #[test]
+    fn terminal_write_completes_when_writer_accepts_partial_chunks() {
+        let writer = PartialWriter::default();
+        let terminal = TerminalCapability::from_handles(
+            Cursor::new(Vec::new()),
+            writer.clone(),
+            SharedWriter::default(),
+        );
+        let data = vec![b'x'; 1024];
+
+        assert_eq!(terminal.write_stdout(&data).unwrap(), data.len());
+        assert_eq!(&*writer.0.lock().unwrap(), &data);
     }
 
     #[test]
