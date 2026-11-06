@@ -3886,14 +3886,15 @@ async fn start_server_body(
     // watcher must not reload from a different one than the rest of the
     // process reads (`config.path` RPC reports the watcher's answer).
     let config_path = Some(alephcore::Config::effective_path());
-    let _config_watcher = setup_config_watcher(
+    let config_watcher_handle = setup_config_watcher(
         &mut server,
         config_path,
         &event_bus,
         args.daemon,
         Some(app_config_for_reload),
     )
-    .await;
+    .await
+    .map(|(_, handle)| handle);
 
     start_webchat_server(args, &final_bind, final_port).await?;
 
@@ -3965,6 +3966,15 @@ async fn start_server_body(
     let run_result = server.run_until_shutdown(shutdown_rx).await;
     if let Err(error) = startup_resources.cleanup().await {
         tracing::warn!(%error, "Memory and projection cleanup failed; continuing sibling teardown");
+    }
+    // Cancel config watcher background task if it was spawned
+    if let Some(handle) = config_watcher_handle {
+        handle.abort();
+        if let Err(e) = handle.await {
+            if !e.is_cancelled() {
+                tracing::warn!("Config watcher task ended with error: {}", e);
+            }
+        }
     }
     // Dispose the builtin router scope first so it runs before the bash reaper
     // and any other registry-touching teardown. Taking rather than borrowing

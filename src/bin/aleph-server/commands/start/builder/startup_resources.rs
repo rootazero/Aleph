@@ -2,11 +2,13 @@ use alephcore::capability::projection_host::ProjectionHost;
 use alephcore::error::AlephError;
 use alephcore::memory::runtime::MemoryRuntime;
 use alephcore::sync_primitives::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 /// Keeps acquired startup resources reachable until common cleanup completes.
 pub(in crate::commands::start) struct StartupResources {
     memory: Option<Arc<MemoryRuntime>>,
     projection_host: Option<Arc<ProjectionHost>>,
+    cleanup_called: AtomicBool,
 }
 
 impl StartupResources {
@@ -14,6 +16,7 @@ impl StartupResources {
         Self {
             memory: None,
             projection_host: None,
+            cleanup_called: AtomicBool::new(false),
         }
     }
 
@@ -29,6 +32,9 @@ impl StartupResources {
     }
 
     pub(in crate::commands::start) async fn cleanup(&mut self) -> Result<(), AlephError> {
+        if self.cleanup_called.swap(true, Ordering::SeqCst) {
+            return Ok(()); // Already cleaned up
+        }
         let failure = match &self.memory {
             Some(memory) => memory.stop().await.err(),
             None => None,

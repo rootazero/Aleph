@@ -985,20 +985,16 @@ pub(in crate::commands::start) fn register_config_handlers(
                     "acp_unavailable".to_owned(),
                 )
             };
-            for method in [
-                "acp.list",
-                "acp.get",
-                "acp.create",
-                "acp.update",
-                "acp.delete",
-                "acp.test",
-                "acp.set_enabled",
-                "acp.sessions.list",
-                "acp.sessions.cancel",
-                "acp.sessions.shutdown",
-            ] {
-                server.handlers_mut().register(method, unavailable);
-            }
+            server.handlers_mut().register("acp.list", unavailable);
+            server.handlers_mut().register("acp.get", unavailable);
+            server.handlers_mut().register("acp.create", unavailable);
+            server.handlers_mut().register("acp.update", unavailable);
+            server.handlers_mut().register("acp.delete", unavailable);
+            server.handlers_mut().register("acp.test", unavailable);
+            server.handlers_mut().register("acp.set_enabled", unavailable);
+            server.handlers_mut().register("acp.sessions.list", unavailable);
+            server.handlers_mut().register("acp.sessions.cancel", unavailable);
+            server.handlers_mut().register("acp.sessions.shutdown", unavailable);
         }
     }
 

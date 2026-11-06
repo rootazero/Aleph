@@ -9,7 +9,7 @@ pub(in crate::commands::start) async fn setup_config_watcher(
     event_bus: &Arc<alephcore::gateway::event_bus::GatewayEventBus>,
     daemon_mode: bool,
     app_config: Option<Arc<tokio::sync::RwLock<alephcore::Config>>>,
-) -> Option<Arc<ConfigWatcher>> {
+) -> Option<(Arc<ConfigWatcher>, tokio::task::JoinHandle<()>)> {
     let path = config_path?;
 
     if !path.exists() {
@@ -72,7 +72,7 @@ pub(in crate::commands::start) async fn setup_config_watcher(
             let watcher_for_watch = watcher.clone();
             let event_bus_for_config = event_bus.clone();
             let initial_privacy_config = watcher_for_watch.current_config().await.privacy.clone();
-            tokio::spawn(async move {
+            let handle = tokio::spawn(async move {
                 let mut config_rx = watcher_for_watch.subscribe();
                 let mut last_privacy = initial_privacy_config;
 
@@ -156,7 +156,7 @@ pub(in crate::commands::start) async fn setup_config_watcher(
                 println!();
             }
 
-            Some(watcher)
+            Some((watcher, handle))
         }
         Err(e) => {
             tracing::warn!(error = %e, "Config watcher creation failed; config.reload/validate/path will be unavailable");
