@@ -27,7 +27,7 @@ use alephcore::group_chat::GroupChatExecutor;
 use alephcore::memory::store::MemoryBackend;
 
 use crate::cli::Args;
-use crate::server_init::serve_webchat;
+use crate::server_init::serve_webchat_on_listener;
 
 /// Register a JSON-RPC handler with shared context via Arc.
 ///

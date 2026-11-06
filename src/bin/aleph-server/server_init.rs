@@ -18,10 +18,22 @@ pub async fn serve_webchat(
     addr: SocketAddr,
     static_dir: PathBuf,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let listener = tokio::net::TcpListener::bind(addr).await?;
+    serve_webchat_on_listener(listener, static_dir).await
+}
+
+/// Serve `WebChat` static files on a listener owned by the caller.
+///
+/// Keeping the listener with the startup task lets the gateway preflight the
+/// bind and later stop the same task as part of gateway shutdown.
+pub(crate) async fn serve_webchat_on_listener(
+    listener: tokio::net::TcpListener,
+    static_dir: PathBuf,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     use axum::Router;
     use tower_http::services::{ServeDir, ServeFile};
 
-    tracing::info!("Starting WebChat server on http://{}", addr);
+    tracing::info!("Starting WebChat server on {}", listener.local_addr()?);
 
     // Create fallback for SPA routing
     let index_path = static_dir.join("index.html");
@@ -30,9 +42,9 @@ pub async fn serve_webchat(
         .fallback(ServeFile::new(&index_path));
 
     // Loopback-only origin rule, shared with the `/ws` upgrade guard so the
-    // same-machine parsing lives in one place (`OriginPolicy`) instead of being
-    // duplicated inline. The static-asset server has no same-origin notion, so
-    // `host` is `None`: only loopback / `tauri:` origins pass.
+    // same-machine parsing lives in one place (`OriginPolicy`) instead of
+    // being duplicated inline. The static-asset server has no same-origin
+    // notion, so `host` is `None`: only loopback / `tauri:` origins pass.
     let policy = alephcore::gateway::origin_policy::OriginPolicy::loopback_only();
     let allowed_origins = tower_http::cors::AllowOrigin::predicate(move |origin, _| {
         policy.is_allowed(origin.to_str().ok(), None)
@@ -52,12 +64,7 @@ pub async fn serve_webchat(
             ]),
     );
 
-    // Create listener
-    let listener = tokio::net::TcpListener::bind(addr).await?;
-
-    // Serve
     axum::serve(listener, app).await?;
-
     Ok(())
 }
 

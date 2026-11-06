@@ -242,6 +242,25 @@ pub struct ResolvedDecision {
 pub struct RegisteredApprovalReceiver {
     receiver: oneshot::Receiver<Option<ApprovalDecisionType>>,
     generation: Option<Arc<()>>,
+    cleanup: Option<PendingRegistration>,
+}
+
+struct PendingRegistration {
+    pending: Arc<RwLock<HashMap<String, PendingEntry>>>,
+    id: String,
+    generation: Arc<()>,
+}
+
+impl Drop for PendingRegistration {
+    fn drop(&mut self) {
+        let mut pending = self.pending.write().unwrap_or_else(|e| e.into_inner());
+        if pending
+            .get(&self.id)
+            .is_some_and(|entry| Arc::ptr_eq(&entry.generation, &self.generation))
+        {
+            pending.remove(&self.id);
+        }
+    }
 }
 
 impl RegisteredApprovalReceiver {
@@ -256,7 +275,17 @@ impl Future for RegisteredApprovalReceiver {
     type Output = Result<Option<ApprovalDecisionType>, oneshot::error::RecvError>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        Pin::new(&mut self.get_mut().receiver).poll(cx)
+        let this = self.get_mut();
+        match Pin::new(&mut this.receiver).poll(cx) {
+            Poll::Ready(result) => {
+                // Normal completion is removed by `await_registered`, which
+                // must harvest the resolver's denial reason first. Cancellation
+                // remains armed so dropping the wait retires this registration.
+                this.cleanup = None;
+                Poll::Ready(result)
+            }
+            Poll::Pending => Poll::Pending,
+        }
     }
 }
 
@@ -622,6 +651,7 @@ impl ExecApprovalManager {
                     RegisteredApprovalReceiver {
                         receiver: rx,
                         generation: None,
+                        cleanup: None,
                     },
                     timeout,
                     None,
@@ -646,6 +676,11 @@ impl ExecApprovalManager {
             RegisteredApprovalReceiver {
                 receiver: rx,
                 generation: Some(generation.clone()),
+                cleanup: Some(PendingRegistration {
+                    pending: self.pending.clone(),
+                    id: id.clone(),
+                    generation: generation.clone(),
+                }),
             },
             timeout,
             Some(generation),
