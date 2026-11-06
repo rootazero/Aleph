@@ -254,12 +254,13 @@ pub(in crate::commands::start) fn initialize_vault(
             },
         }
 
+        let auth_security_store = security_store.clone();
         VaultBundle {
             security_store,
             security_store_fallback,
             auth_ctx: Arc::new(auth_handlers::AuthContext {
                 shared_token_mgr,
-                security_store: security_store.clone(),
+                security_store: auth_security_store,
                 node_registry,
                 event_bus: None,
             }),
