@@ -1,138 +1,73 @@
 //! Capability discovery and resolution with visibility-scoped filtering.
 //!
-//! The resolver provides efficient lookup of capabilities by ID with visibility
-//! scope filtering, lazy loading from providers, and cache management with
-//! event-driven invalidation.
+//! Metadata is demand-loaded and retained in one bounded cache. Live canonical
+//! revisions establish freshness; optional invalidation events are only hints.
 
+use crate::capability::cache_policy::{ResolverCache, ResolverConfig};
 use crate::capability::descriptor::{CapabilityDescriptor, CapabilityId};
 use crate::capability::facade::{BackendLease, Reference, ResolveError, Scope, Zahir};
 use crate::capability::ownership::VisibilityScope;
 use crate::sync_primitives::Arc;
-use std::collections::HashMap;
-use std::sync::RwLock;
-
-/// A cached capability descriptor with its visibility scope.
-#[derive(Clone, Debug)]
-struct CachedDescriptor {
-    descriptor: CapabilityDescriptor,
-    /// The visibility scope this descriptor was resolved under.
-    visibility: VisibilityScope,
-}
-
-/// Cached resolution results to avoid repeated lookups.
-#[derive(Debug, Default)]
-struct ResolverCache {
-    /// Descriptors by (namespace, name) -> Vec<CachedDescriptor>.
-    /// Multiple entries per ID support different visibility scopes.
-    descriptors: HashMap<CapabilityId, Vec<CachedDescriptor>>,
-}
-
-impl ResolverCache {
-    fn new() -> Self {
-        Self {
-            descriptors: HashMap::new(),
-        }
-    }
-
-    /// Look up a cached descriptor matching both ID and visibility.
-    fn get(
-        &self,
-        id: &CapabilityId,
-        visibility: &VisibilityScope,
-    ) -> Option<CapabilityDescriptor> {
-        self.descriptors.get(id)?.iter().find_map(|cached| {
-            if &cached.visibility == visibility {
-                Some(cached.descriptor.clone())
-            } else {
-                None
-            }
-        })
-    }
-
-    /// Insert a descriptor into the cache for a specific visibility scope.
-    fn insert(&mut self, descriptor: CapabilityDescriptor) {
-        let id = descriptor.id.clone();
-        let cached = CachedDescriptor {
-            visibility: descriptor.visibility.clone(),
-            descriptor,
-        };
-
-        self.descriptors
-            .entry(id)
-            .or_insert_with(Vec::new)
-            .push(cached);
-    }
-
-    /// Remove all cached entries for a specific capability ID.
-    fn invalidate_id(&mut self, id: &CapabilityId) {
-        self.descriptors.remove(id);
-    }
-
-    /// Clear the entire cache.
-    fn clear(&mut self) {
-        self.descriptors.clear();
-    }
-}
+use std::sync::Mutex;
+use tokio::sync::Semaphore;
 
 /// Capability resolver providing discovery and resolution with caching.
 pub struct CapabilityResolver {
     zahir: Arc<dyn Zahir>,
-    cache: RwLock<ResolverCache>,
+    cache: Mutex<ResolverCache>,
+    loads: Semaphore,
 }
 
 impl CapabilityResolver {
     /// Create a new resolver backed by the given Zahir facade.
     #[must_use]
     pub fn new(zahir: Arc<dyn Zahir>) -> Self {
+        Self::with_config(zahir, ResolverConfig::default())
+    }
+
+    /// Configure entry retention and overlapping source work. Bounds belong
+    /// to this resolver, not its provider. No waiting queue is allocated.
+    #[must_use]
+    pub fn with_config(zahir: Arc<dyn Zahir>, config: ResolverConfig) -> Self {
         Self {
             zahir,
-            cache: RwLock::new(ResolverCache::new()),
+            cache: Mutex::new(ResolverCache::new(config)),
+            loads: Semaphore::new(usize::from(config.max_concurrent_loads)),
         }
     }
 
     /// Discover capabilities matching the given scope.
     ///
     /// Returns all capabilities visible under the scope's visibility envelope,
-    /// filtered by kind, namespace, and facet if specified.
+    /// filtered by kind, namespace, and facet if specified. Saturation returns
+    /// an empty result without starting source work. Full snapshots are not cached.
     pub fn discover(&self, scope: Scope) -> Vec<CapabilityDescriptor> {
-        // Discovery always goes through Zahir; we don't cache full scope results
-        // because scope filtering is cheap and snapshots are already internally
-        // consistent.
+        let Ok(_permit) = self.loads.try_acquire() else {
+            return Vec::new();
+        };
         self.zahir.describe(scope).capabilities
     }
 
-    /// Resolve a capability reference into a lease, using cache when possible.
+    /// Mint a fresh lease through Zahir, never through cached metadata.
     ///
-    /// First checks the cache for a matching descriptor. On cache miss, resolves
-    /// through Zahir and caches the result. The returned lease includes the
-    /// current owner generation and must be validated before use.
+    /// Saturation returns Unknown under the existing closed error contract.
+    /// A successful lease may prime metadata retention, but callers must still
+    /// validate the lease before use; generation/authorization are never cached.
     pub fn resolve(&self, reference: Reference) -> Result<BackendLease, ResolveError> {
-        // Check cache first (read lock).
-        {
-            let cache = self
-                .cache
-                .read()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            if let Some(descriptor) = cache.get(&reference.id, &reference.visibility) {
-                // Cache hit: descriptor exists, but we still need to resolve through
-                // Zahir to get a fresh lease with current generation.
-                drop(cache);
-                return self.zahir.resolve(reference);
-            }
-        }
-
-        // Cache miss: resolve through Zahir and cache the descriptor.
-        let lease = self.zahir.resolve(reference.clone())?;
-
-        // Cache the descriptor for future lookups.
-        {
-            let mut cache = self
-                .cache
-                .write()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            cache.insert(lease.descriptor.clone());
-        }
-
+        let _permit = self
+            .loads
+            .try_acquire()
+            .map_err(|_| ResolveError::Unknown)?;
+        let epoch = self
+            .cache
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .epoch();
+        let lease = self.zahir.resolve(reference)?;
+        self.cache
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .insert(lease.descriptor.clone(), &epoch);
         Ok(lease)
     }
 
@@ -152,7 +87,7 @@ impl CapabilityResolver {
     pub fn invalidate(&self, id: &CapabilityId) {
         let mut cache = self
             .cache
-            .write()
+            .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         cache.invalidate_id(id);
     }
@@ -164,71 +99,45 @@ impl CapabilityResolver {
     pub fn invalidate_all(&self) {
         let mut cache = self
             .cache
-            .write()
+            .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         cache.clear();
     }
 
     /// Look up a capability by ID without resolving a full lease.
     ///
-    /// Returns the cached descriptor if available, otherwise fetches through
-    /// discovery. This is cheaper than `resolve` when you only need the
-    /// descriptor, not a validated lease.
+    /// Reuses metadata only after a live source revision/visibility check.
+    /// Otherwise loads the requested descriptor on demand, without activation.
+    /// Saturation returns None. This method never grants invocation authority.
     pub fn lookup(
         &self,
         id: &CapabilityId,
         visibility: &VisibilityScope,
     ) -> Option<CapabilityDescriptor> {
-        // Check cache first.
-        {
-            let cache = self
-                .cache
-                .read()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            if let Some(descriptor) = cache.get(id, visibility) {
-                return Some(descriptor);
-            }
-        }
-
-        // Cache miss: discover and cache.
-        let scope = Scope {
-            kind: None,
-            namespace: Some(id.namespace.clone()),
-            facet: None,
-            visibility: visibility.clone(),
-        };
-
-        let capabilities = self.zahir.describe(scope).capabilities;
-        let descriptor = capabilities.into_iter().find(|d| &d.id == id)?;
-
-        // Cache the discovered descriptor.
-        {
-            let mut cache = self
-                .cache
-                .write()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            cache.insert(descriptor.clone());
-        }
-
-        Some(descriptor)
+        let _permit = self.loads.try_acquire().ok()?;
+        crate::capability::lazy_load::lookup(
+            self.zahir.as_ref(),
+            &self.cache,
+            &Reference {
+                id: id.clone(),
+                visibility: visibility.clone(),
+            },
+        )
     }
 }
 
 #[cfg(test)]
+#[path = "resolver_tests.rs"]
+mod optimization_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
-    use crate::capability::backend::{CapabilityBackend, ToolBackendAdapter, TOOL_NAMESPACE};
-    use crate::capability::descriptor::{
-        CapabilityFacet, CapabilityKind, CapabilityRevision, ProjectionMetadata, SchemaRef,
-    };
-    use crate::capability::facade::{
-        BackendSourceEvidence, CapabilityChange, CapabilitySnapshot, Cursor, Projection,
-        TransportTarget,
-    };
+    use crate::capability::backend::TOOL_NAMESPACE;
+    use crate::capability::descriptor::{CapabilityFacet, CapabilityKind};
     use crate::capability::ownership::{
         LifetimeScope, OwnerGeneration, OwnerRef, OwnershipTree, VisibilityScope,
     };
-    use crate::capability::provider_registry::{ActivationError, ProviderRegistry};
     use crate::capability::zahir_facade::ZahirFacade;
     use crate::session::events::ToolOutput;
     use crate::tools::descriptor::ToolCapabilityDescriptor;
@@ -248,8 +157,8 @@ mod tests {
         }
     }
 
-    struct FakeHandler {
-        definition: ToolDefinition,
+    pub(super) struct FakeHandler {
+        pub(super) definition: ToolDefinition,
     }
 
     #[async_trait]
@@ -434,15 +343,12 @@ mod tests {
                 ..VisibilityScope::default()
             },
         };
-        assert_eq!(
-            resolver.resolve(custom_ref),
-            Err(ResolveError::NotVisible)
-        );
+        assert_eq!(resolver.resolve(custom_ref), Err(ResolveError::NotVisible));
     }
 
     #[test]
     fn validate_lease_detects_stale_generation() {
-        let (facade, _reg) = host_with_tools(&["stale"]);
+        let (_facade, _reg) = host_with_tools(&["stale"]);
         let tree = Arc::new(OwnershipTree::new());
         let facade = ZahirFacade::new(_reg, tree.clone());
         let resolver = CapabilityResolver::new(facade);
@@ -497,6 +403,26 @@ mod tests {
     }
 
     #[test]
+    fn lookup_refreshes_replaced_descriptor_without_notifications() {
+        let (facade, registry) = host_with_tools(&["unobserved_replace"]);
+        let resolver = CapabilityResolver::new(facade);
+        let id = tool_id("unobserved_replace");
+        let before = resolver.lookup(&id, &VisibilityScope::default()).unwrap();
+        let mut definition = fake_def("unobserved_replace");
+        definition.input_schema = json!({"type": "object", "required": ["changed"]});
+        registry
+            .replace(
+                ToolCapabilityDescriptor::from_definition(&definition, 0),
+                Arc::new(FakeHandler { definition }),
+            )
+            .unwrap();
+
+        let after = resolver.lookup(&id, &VisibilityScope::default()).unwrap();
+        assert_ne!(before.revision, after.revision);
+        assert_ne!(before.schema.fingerprint, after.schema.fingerprint);
+    }
+
+    #[test]
     fn invalidate_all_clears_entire_cache() {
         let (facade, _reg) = host_with_tools(&["clear_a", "clear_b"]);
         let resolver = CapabilityResolver::new(facade);
@@ -519,8 +445,8 @@ mod tests {
         resolver.invalidate_all();
 
         // Both entries should be gone (lookup will re-fetch from Zahir).
-        let cache = resolver.cache.read().unwrap();
-        assert!(cache.descriptors.is_empty());
+        let cache = resolver.cache.lock().unwrap();
+        assert!(cache.descriptors.as_ref().unwrap().is_empty());
     }
 
     #[test]
@@ -569,7 +495,7 @@ mod tests {
 
     #[test]
     fn cache_stores_multiple_visibility_scopes_per_id() {
-        let (facade, _reg) = host_with_tools(&["multi_vis"]);
+        let (_facade, _reg) = host_with_tools(&["multi_vis"]);
         let tree = Arc::new(OwnershipTree::new());
         let facade = ZahirFacade::new(_reg, tree.clone());
         let resolver = CapabilityResolver::new(facade);
@@ -585,10 +511,20 @@ mod tests {
         };
 
         // Register under both visibility scopes.
-        tree.register(id.clone(), OwnerRef::Runtime, LifetimeScope::Runtime, vis_a.clone())
-            .expect("register vis_a");
-        tree.register(id.clone(), OwnerRef::Runtime, LifetimeScope::Runtime, vis_b.clone())
-            .expect("register vis_b");
+        tree.register(
+            id.clone(),
+            OwnerRef::Runtime,
+            LifetimeScope::Runtime,
+            vis_a.clone(),
+        )
+        .expect("register vis_a");
+        tree.register(
+            id.clone(),
+            OwnerRef::Runtime,
+            LifetimeScope::Runtime,
+            vis_b.clone(),
+        )
+        .expect("register vis_b");
 
         // Lookup under vis_a.
         let desc_a = resolver.lookup(&id, &vis_a).expect("lookup vis_a");
@@ -599,14 +535,14 @@ mod tests {
         assert_eq!(desc_b.visibility, vis_b);
 
         // Both are cached independently.
-        let cache = resolver.cache.read().unwrap();
-        let cached = cache.descriptors.get(&id).expect("id cached");
-        assert_eq!(cached.len(), 2);
+        let cache = resolver.cache.lock().unwrap();
+        let cached = cache.descriptors.as_ref().unwrap();
+        assert_eq!(cached.iter().filter(|(key, _)| key.0 == id).count(), 2);
     }
 
     #[test]
     fn invalidate_removes_all_visibility_scopes_for_id() {
-        let (facade, _reg) = host_with_tools(&["inval_multi"]);
+        let (_facade, _reg) = host_with_tools(&["inval_multi"]);
         let tree = Arc::new(OwnershipTree::new());
         let facade = ZahirFacade::new(_reg, tree.clone());
         let resolver = CapabilityResolver::new(facade);
@@ -621,10 +557,20 @@ mod tests {
             ..VisibilityScope::default()
         };
 
-        tree.register(id.clone(), OwnerRef::Runtime, LifetimeScope::Runtime, vis_a.clone())
-            .unwrap();
-        tree.register(id.clone(), OwnerRef::Runtime, LifetimeScope::Runtime, vis_b.clone())
-            .unwrap();
+        tree.register(
+            id.clone(),
+            OwnerRef::Runtime,
+            LifetimeScope::Runtime,
+            vis_a.clone(),
+        )
+        .unwrap();
+        tree.register(
+            id.clone(),
+            OwnerRef::Runtime,
+            LifetimeScope::Runtime,
+            vis_b.clone(),
+        )
+        .unwrap();
 
         // Prime cache with both scopes.
         let _desc_a = resolver.lookup(&id, &vis_a);
@@ -634,7 +580,12 @@ mod tests {
         resolver.invalidate(&id);
 
         // Both visibility entries should be gone.
-        let cache = resolver.cache.read().unwrap();
-        assert!(cache.descriptors.get(&id).is_none());
+        let cache = resolver.cache.lock().unwrap();
+        assert!(!cache
+            .descriptors
+            .as_ref()
+            .unwrap()
+            .iter()
+            .any(|(key, _)| key.0 == id));
     }
 }

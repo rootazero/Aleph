@@ -329,6 +329,30 @@ pub struct Projection {
 /// subscription state machine.
 pub trait Zahir {
     fn describe(&self, scope: Scope) -> CapabilitySnapshot;
+
+    /// Load only the requested descriptor without activating its provider.
+    /// Existing facades retain scoped discovery semantics by default.
+    fn lookup_descriptor(&self, reference: &Reference) -> Option<CapabilityDescriptor> {
+        self.describe(Scope {
+            namespace: Some(reference.id.namespace.clone()),
+            visibility: reference.visibility.clone(),
+            ..Scope::default()
+        })
+        .capabilities
+        .into_iter()
+        .find(|descriptor| descriptor.id == reference.id)
+    }
+
+    /// A live metadata freshness hint, never an authorization decision.
+    ///
+    /// Return Some only when the exact visibility is currently valid and this
+    /// source's descriptor revision cannot be reused for different metadata.
+    /// Provider closure/revocation must suppress the hint. None conservatively
+    /// reloads via lookup_descriptor; notifications cannot supply this proof.
+    fn descriptor_revision(&self, _reference: &Reference) -> Option<CapabilityRevision> {
+        None
+    }
+
     fn resolve(&self, reference: Reference) -> Result<BackendLease, ResolveError>;
     fn validate_lease(&self, lease: &BackendLease) -> Result<(), ResolveError>;
     fn activate(&self, reference: Reference) -> Result<BackendLease, ActivationError>;

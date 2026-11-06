@@ -729,6 +729,43 @@ impl ZahirFacade {
 }
 
 impl Zahir for ZahirFacade {
+    fn descriptor_revision(&self, reference: &Reference) -> Option<CapabilityRevision> {
+        // Only the Tool source currently guarantees non-reused per-descriptor
+        // revisions. Provider/Memory metadata remains conservatively uncached.
+        if reference.id.namespace != TOOL_NAMESPACE || self.adapter.registry.is_closed() {
+            return None;
+        }
+        let entry = self.adapter.registry.capture_entry(&reference.id.name)?;
+        self.reconcile_entry_binding(&reference.id.name);
+        self.tree.generation(&reference.id, &reference.visibility)?;
+        Some(CapabilityRevision(entry.entry().descriptor.revision))
+    }
+
+    fn lookup_descriptor(&self, reference: &Reference) -> Option<CapabilityDescriptor> {
+        if self.adapter.registry.is_closed() {
+            return None;
+        }
+        let mut descriptor = if reference.id.namespace == TOOL_NAMESPACE {
+            let entry = self.adapter.registry.capture_entry(&reference.id.name)?;
+            self.reconcile_entry_binding(&reference.id.name);
+            self.tree.generation(&reference.id, &reference.visibility)?;
+            crate::capability::backend::to_descriptor(&entry.entry().descriptor)
+        } else if let Some(entry) = self.provider_adapter.entry(&reference.id) {
+            // Preserve describe's metadata-only provider view. This does not
+            // mint a lease or bypass resolve_provider's live binding checks.
+            entry.descriptor
+        } else if reference.id == crate::memory::runtime::resource_id() {
+            self.memory_source()
+                .ok()?
+                .descriptor(&reference.visibility)
+                .ok()?
+        } else {
+            return None;
+        };
+        descriptor.visibility = reference.visibility.clone();
+        Some(descriptor)
+    }
+
     fn describe(&self, scope: Scope) -> CapabilitySnapshot {
         let source_snapshot = self.adapter.registry.snapshot_state();
         if source_snapshot.is_closed() {
