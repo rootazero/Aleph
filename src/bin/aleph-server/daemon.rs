@@ -185,6 +185,13 @@ pub fn remove_pid_file(pid_file: &str) {
 /// This makes `stop` work on Windows and for foreground servers, where no PID
 /// file is ever written — previously `stop` was a silent no-op there, so the
 /// daemon kept running after "Quit & Stop Aleph".
+///
+/// A PID is not an identity. Once the server exits (crash, reboot) the OS may
+/// hand the recorded PID to an unrelated process, and signalling that process
+/// would kill an innocent bystander. The endpoint record therefore binds the
+/// PID to the start time of the process that wrote it, and that binding is
+/// verified before any signal is sent. When it cannot be verified, `stop`
+/// fails closed: no signal, explicit message, non-zero exit.
 pub fn handle_stop(pid_file: &str) -> Result<(), Box<dyn std::error::Error>> {
     let endpoint = read_endpoint_best_effort();
     let endpoint_pid = endpoint.as_ref().and_then(|ep| i32::try_from(ep.pid).ok());
@@ -194,27 +201,85 @@ pub fn handle_stop(pid_file: &str) -> Result<(), Box<dyn std::error::Error>> {
         return Ok(());
     };
 
-    if endpoint_pid != Some(pid) && is_process_running(pid) {
-        return Err(format!(
-            "Refusing to stop PID {pid}: no matching IPC endpoint proves it is an Aleph server"
-        )
-        .into());
-    }
+    // The PID file alone cannot establish identity: after a crash or a reboot
+    // its PID may have been recycled by an unrelated process. Only a live IPC
+    // endpoint is authoritative for the running instance.
+    let Some(endpoint) = endpoint.filter(|_| endpoint_pid == Some(pid)) else {
+        if is_process_running(pid) {
+            return Err(format!(
+                "Refusing to stop PID {pid}: no matching IPC endpoint proves it is an Aleph server"
+            )
+            .into());
+        }
+        println!("Gateway is not running (stale record for PID {pid})");
+        remove_pid_file(pid_file);
+        return Ok(());
+    };
 
     if !is_process_running(pid) {
         println!("Gateway is not running (stale record for PID {pid})");
         remove_pid_file(pid_file);
-        if endpoint_pid == Some(pid) {
-            cleanup_endpoint_file();
-        }
+        cleanup_endpoint_file();
         return Ok(());
     }
+
+    // The process behind the recorded PID is alive. Prove it is still the
+    // server that wrote the endpoint record before signalling it.
+    verify_endpoint_identity(
+        &endpoint,
+        pid,
+        alephcore::utils::process_alive::process_start_time(pid),
+    )?;
 
     stop_running_process(pid)?;
     println!("Gateway stopped successfully");
     remove_pid_file(pid_file);
-    if endpoint_pid == Some(pid) {
-        cleanup_endpoint_file();
+    cleanup_endpoint_file();
+    Ok(())
+}
+
+/// Prove that the live process behind `pid` is the server that wrote
+/// `endpoint`.
+///
+/// The endpoint record binds the server's PID to the start time of the process
+/// that wrote it. A recycled PID points at a *different* process with a
+/// *different* start time, so an exact match is proof of identity — and
+/// anything else (a mismatch, a record without a start time, a process the
+/// platform will not describe) must not be signalled.
+///
+/// `live_start_time` is the start time observed for `pid` right now (`None`
+/// when the process is gone or the platform will not report it). It is
+/// injected so the decision is testable without spawning processes.
+fn verify_endpoint_identity(
+    endpoint: &IpcEndpoint,
+    pid: i32,
+    live_start_time: Option<u64>,
+) -> Result<(), String> {
+    let Some(recorded_start) = endpoint.start_time else {
+        return Err(format!(
+            "Refusing to stop PID {pid}: the IPC endpoint record carries no process start time, \
+             so it cannot be verified as an Aleph server. Stop it manually or restart the \
+             server with this build."
+        ));
+    };
+    if recorded_start == 0 {
+        return Err(format!(
+            "Refusing to stop PID {pid}: the IPC endpoint record carries an unusable process \
+             start time, so it cannot be verified as an Aleph server"
+        ));
+    }
+    let Some(actual_start) = live_start_time else {
+        return Err(format!(
+            "Refusing to stop PID {pid}: its process start time cannot be read, so the IPC \
+             endpoint record cannot be verified as an Aleph server"
+        ));
+    };
+    if actual_start != recorded_start {
+        return Err(format!(
+            "Refusing to stop PID {pid}: it is not the Aleph server that wrote the IPC endpoint \
+             (process start time {actual_start} != recorded {recorded_start}); the PID was most \
+             likely recycled by an unrelated process"
+        ));
     }
     Ok(())
 }
@@ -877,6 +942,7 @@ mod status_tests {
             url: "http://127.0.0.1:18790".to_string(),
             pid,
             started_at: started_at.to_string(),
+            start_time: Some(1_700_000_000),
         }
     }
 
@@ -948,5 +1014,52 @@ mod status_tests {
         assert!(json.get("url").is_none());
         assert!(json.get("uptime_seconds").is_none());
         assert!(json.get("version").is_some());
+    }
+}
+
+/// The stop path must never signal a PID it cannot prove is the Aleph server.
+/// A recycled PID names a *different* process, and its start time differs
+/// from the one the endpoint record was written with.
+#[cfg(test)]
+mod stop_identity_tests {
+    use super::*;
+
+    const RECORDED_START: u64 = 1_700_000_000;
+
+    fn endpoint_with_start(start_time: Option<u64>) -> IpcEndpoint {
+        IpcEndpoint {
+            version: 1,
+            url: "http://127.0.0.1:18790".to_string(),
+            pid: 4321,
+            started_at: "2026-06-17T00:00:00Z".to_string(),
+            start_time,
+        }
+    }
+
+    #[test]
+    fn a_matching_start_time_proves_the_identity() {
+        let ep = endpoint_with_start(Some(RECORDED_START));
+        assert!(verify_endpoint_identity(&ep, 4321, Some(RECORDED_START)).is_ok());
+    }
+
+    #[test]
+    fn a_recycled_pid_is_refused() {
+        let ep = endpoint_with_start(Some(RECORDED_START));
+        let err = verify_endpoint_identity(&ep, 4321, Some(RECORDED_START + 1)).unwrap_err();
+        assert!(err.contains("Refusing to stop PID 4321"), "{err}");
+    }
+
+    #[test]
+    fn a_record_without_a_start_time_is_refused() {
+        let ep = endpoint_with_start(None);
+        let err = verify_endpoint_identity(&ep, 4321, Some(RECORDED_START)).unwrap_err();
+        assert!(err.contains("Refusing to stop PID 4321"), "{err}");
+    }
+
+    #[test]
+    fn an_unreadable_live_start_time_is_refused() {
+        let ep = endpoint_with_start(Some(RECORDED_START));
+        let err = verify_endpoint_identity(&ep, 4321, None).unwrap_err();
+        assert!(err.contains("Refusing to stop PID 4321"), "{err}");
     }
 }

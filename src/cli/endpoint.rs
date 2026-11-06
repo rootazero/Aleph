@@ -41,15 +41,37 @@ pub struct IpcEndpoint {
     pub url: String,
     pub pid: u32,
     pub started_at: String,
+    /// Wall-clock start time of the process that wrote this record, in seconds
+    /// since the Unix epoch. `None` when the platform cannot report it.
+    ///
+    /// A PID alone is not an identity: once the server exits (crash, reboot)
+    /// the OS may hand the recorded PID to an unrelated process, and a reader
+    /// that trusts the PID would act on that unrelated process. Pairing the
+    /// PID with the writer's start time lets a reader prove that the live
+    /// process behind the PID is still the server that wrote the record —
+    /// the same anti-PID-reuse signal the singleton lock uses.
+    ///
+    /// Optional on purpose: a record written by an older build simply has no
+    /// start time, and readers must treat that as "identity unproven" rather
+    /// than as "trusted".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub start_time: Option<u64>,
 }
 
 impl IpcEndpoint {
     pub fn current(url: impl Into<String>) -> Self {
+        let pid = std::process::id();
         Self {
             version: CURRENT_ENDPOINT_VERSION,
             url: url.into(),
-            pid: std::process::id(),
+            pid,
             started_at: chrono::Utc::now().to_rfc3339(),
+            // The writer binds its own PID to its own start time, so the record
+            // identifies the process that owns the endpoint rather than merely
+            // naming a number that may later be recycled.
+            start_time: i32::try_from(pid)
+                .ok()
+                .and_then(crate::utils::process_alive::process_start_time),
         }
     }
 }
