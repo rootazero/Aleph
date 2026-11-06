@@ -1,6 +1,6 @@
 use super::{
-    config_handlers, serve_webchat, Arc, Args, ConfigEvent, ConfigWatcher, ConfigWatcherConfig,
-    GatewayServer, PathBuf,
+    config_handlers, serve_webchat_on_listener, Arc, Args, ConfigEvent, ConfigWatcher,
+    ConfigWatcherConfig, GatewayServer, PathBuf,
 };
 
 pub(in crate::commands::start) async fn setup_config_watcher(
@@ -174,7 +174,7 @@ pub(in crate::commands::start) async fn start_webchat_server(
     args: &Args,
     final_bind: &str,
     final_port: u16,
-) -> Result<(), String> {
+) -> Result<Option<tokio::task::JoinHandle<()>>, String> {
     use std::net::SocketAddr;
 
     let webchat_dir = args.webchat_dir.clone().or_else(|| {
@@ -189,54 +189,52 @@ pub(in crate::commands::start) async fn start_webchat_server(
         candidates.into_iter().find(|p| p.exists())
     });
 
-    if let Some(webchat_path) = webchat_dir {
-        if webchat_path.exists() {
-            let webchat_port = args.webchat_port.unwrap_or(final_port);
-            let webchat_addr: SocketAddr = match final_bind.parse::<std::net::IpAddr>() {
-                Ok(ip) => SocketAddr::new(ip, webchat_port),
-                Err(e) => {
-                    return Err(format!(
-                        "Invalid webchat bind address '{final_bind}': {e}"
-                    ));
-                }
-            };
+    let Some(webchat_path) = webchat_dir else {
+        return Ok(None);
+    };
 
-            // Only start separate HTTP server if port is different from WS port
-            if webchat_port != final_port {
-                // Test the listener binding before spawning the task to fail early
-                match tokio::net::TcpListener::bind(webchat_addr).await {
-                    Ok(listener) => {
-                        if !args.daemon {
-                            println!("WebChat UI:");
-                            println!("  - URL: http://{webchat_addr}");
-                            println!("  - Static: {}", webchat_path.display());
-                            println!();
-                        }
-                        // Spawn the server with the pre-bound listener
-                        let webchat_path_clone = webchat_path.clone();
-                        tokio::spawn(async move {
-                            if let Err(e) = serve_webchat(webchat_addr, webchat_path_clone).await {
-                                tracing::error!("WebChat server error: {}", e);
-                            }
-                        });
-                    }
-                    Err(e) => {
-                        return Err(format!(
-                            "WebChat listener failed to bind on {webchat_addr}: {e}"
-                        ));
-                    }
-                }
-            } else if !args.daemon {
-                println!("WebChat UI directory found: {}", webchat_path.display());
-                println!("  Note: WebChat requires a separate HTTP port (use --webchat-port)");
-                println!();
-            }
-        } else if !args.daemon {
+    if !webchat_path.exists() {
+        if !args.daemon {
             println!("WebChat directory not found: {}", webchat_path.display());
             println!();
         }
+        return Ok(None);
     }
-    Ok(())
+
+    let webchat_port = args.webchat_port.unwrap_or(final_port);
+    let webchat_addr: SocketAddr = match final_bind.parse::<std::net::IpAddr>() {
+        Ok(ip) => SocketAddr::new(ip, webchat_port),
+        Err(e) => return Err(format!("Invalid webchat bind address '{final_bind}': {e}")),
+    };
+
+    // Only start separate HTTP server if port is different from WS port
+    if webchat_port == final_port {
+        if !args.daemon {
+            println!("WebChat UI directory found: {}", webchat_path.display());
+            println!("  Note: WebChat requires a separate HTTP port (use --webchat-port)");
+            println!();
+        }
+        return Ok(None);
+    }
+
+    // Test and retain the listener before spawning so the startup check and the
+    // long-lived server own the same socket. The task handle is joined by the
+    // gateway shutdown path below.
+    let listener = tokio::net::TcpListener::bind(webchat_addr)
+        .await
+        .map_err(|e| format!("WebChat listener failed to bind on {webchat_addr}: {e}"))?;
+    if !args.daemon {
+        println!("WebChat UI:");
+        println!("  - URL: http://{webchat_addr}");
+        println!("  - Static: {}", webchat_path.display());
+        println!();
+    }
+    let handle = tokio::spawn(async move {
+        if let Err(e) = serve_webchat_on_listener(listener, webchat_path).await {
+            tracing::error!("WebChat server error: {}", e);
+        }
+    });
+    Ok(Some(handle))
 }
 
 // ─── register_memory_handlers ────────────────────────────────────────────────

@@ -3896,7 +3896,7 @@ async fn start_server_body(
     .await
     .map(|(_, handle)| handle);
 
-    start_webchat_server(args, &final_bind, final_port).await?;
+    let webchat_handle = start_webchat_server(args, &final_bind, final_port).await?;
 
     let endpoint_url =
         alephcore::cli::endpoint::build_endpoint_url(addr, full_config.gateway.tls.enabled);
@@ -3964,6 +3964,14 @@ async fn start_server_body(
 
     let shutdown_rx = setup_graceful_shutdown(args);
     let run_result = server.run_until_shutdown(shutdown_rx).await;
+    if let Some(handle) = webchat_handle {
+        handle.abort();
+        if let Err(e) = handle.await {
+            if !e.is_cancelled() {
+                tracing::warn!("WebChat server task ended with error: {}", e);
+            }
+        }
+    }
     if let Err(error) = startup_resources.cleanup().await {
         tracing::warn!(%error, "Memory and projection cleanup failed; continuing sibling teardown");
     }
