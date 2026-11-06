@@ -39,6 +39,15 @@ pub enum PermissionPolicy {
     DenyAll,
 }
 
+impl From<crate::config::types::acp::TrustLevel> for PermissionPolicy {
+    fn from(level: crate::config::types::acp::TrustLevel) -> Self {
+        match level {
+            crate::config::types::acp::TrustLevel::Full => Self::ApproveAll,
+            crate::config::types::acp::TrustLevel::Disabled => Self::DenyAll,
+        }
+    }
+}
+
 /// Outcome of handling an agent→client request: either a JSON-RPC `result`
 /// payload or a JSON-RPC `error`.
 #[derive(Debug)]
@@ -256,11 +265,11 @@ impl IncomingHandler {
     // --- session/request_permission ---------------------------------------
 
     fn request_permission(&self, params: &Value) -> HandlerOutcome {
+        let empty_options = [];
         let options = params
             .get("options")
             .and_then(Value::as_array)
-            .cloned()
-            .unwrap_or_default();
+            .map_or(&empty_options[..], Vec::as_slice);
 
         let allow = self.permission_allows(params);
         let chosen = if allow {
@@ -394,8 +403,7 @@ impl IncomingHandler {
         let root = self.root.clone();
         let req = requested.to_string();
         match tokio::task::spawn_blocking(move || Self::confine_blocking(&root, &req)).await {
-            Ok(Ok(p)) => Ok(p),
-            Ok(Err(e)) => Err(e),
+            Ok(res) => res,
             Err(join_err) => {
                 warn!(
                     requested,
@@ -558,28 +566,16 @@ fn apply_line_window(content: &str, line: Option<u64>, limit: Option<u64>) -> St
     if line.is_none() && limit.is_none() {
         return content.to_string();
     }
-    // Subtract in u64 space (line is clamped to >=1, so this never underflows),
-    // then convert. Width is bounded by the file's line count below.
     let start = usize::try_from(line.unwrap_or(1).max(1) - 1).unwrap_or(usize::MAX);
-    let lines: Vec<&str> = content.lines().collect();
-    if start >= lines.len() {
-        return String::new();
-    }
-    // `saturating_add` so an attacker-supplied huge `limit` can't overflow
-    // `usize` (a debug-build panic in this "never panics" handler).
-    let end = match limit {
-        Some(n) => start
-            .saturating_add(usize::try_from(n).unwrap_or(usize::MAX))
-            .min(lines.len()),
-        None => lines.len(),
+    let mut iter = content.lines().skip(start);
+    let windowed: Vec<&str> = match limit {
+        Some(n) => {
+            let count = usize::try_from(n).unwrap_or(usize::MAX);
+            iter.take(count).collect()
+        }
+        None => iter.collect(),
     };
-    // `get` returns `None` only if the bounds are inverted — impossible by
-    // construction (`start < lines.len()` from the early return above, and
-    // `end` is clamped to `lines.len()`). Use `unwrap_or_default` so an
-    // unexpected out-of-bounds path never panics this agent-facing handler
-    // (the function is documented as "never panics"); the empty-string result
-    // is the same observable behaviour the caller would get on a 0-line file.
-    lines.get(start..end).unwrap_or_default().join("\n")
+    windowed.join("\n")
 }
 
 /// Pick the first option whose `kind` (or `name`) matches one of `wanted`,
