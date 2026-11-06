@@ -689,7 +689,7 @@ mod tests {
         assert_eq!(envs[0].id, "node-7");
         assert_eq!(envs[0].commands[0].name, "bash");
         // The existing disconnect path deregisters by conn_id.
-        assert!(registry.deregister("conn-1"));
+        assert!(registry.deregister("conn-1").is_some());
         assert!(registry.node_identity_by_conn("conn-1").is_none());
         assert!(registry.list_environments().is_empty());
     }
