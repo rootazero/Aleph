@@ -1027,8 +1027,8 @@ pub(in crate::commands::start) async fn initialize_inbound_router(
     // and the router decided with `ChannelConfig::default()` instead. See the
     // `From<&FeishuConfig>` impl for why every arm of that mapping narrows.
     if let Some(ref cfg_arc) = app_config {
-        let cfg = cfg_arc.read().await;
-        for inst in cfg.resolved_channels() {
+        let instances = cfg_arc.read().await.resolved_channels();
+        for inst in instances {
             if inst.channel_type != "feishu" {
                 continue;
             }
@@ -1051,11 +1051,17 @@ pub(in crate::commands::start) async fn initialize_inbound_router(
                     channel_config.default_workspace = policy.default_workspace;
                     channel_config.busy_input_mode = policy.busy_input_mode;
                     channel_config.tool_permissions = policy.tool_permissions;
-                    inbound_router.register_channel_config(&inst.id, channel_config);
+                    // Registered under the id the live channel reports, not the
+                    // config instance id — the feishu factory hardcodes its
+                    // runtime id to the channel type, so an instance id that
+                    // differs from it would key a policy nothing reads.
+                    let runtime_id =
+                        runtime_channel_id(&channel_registry, &inst.id, &inst.channel_type).await;
+                    inbound_router.register_channel_config(&runtime_id, channel_config);
                     if !daemon {
                         println!(
                             "  Inbound router: Feishu gating config registered for '{}'",
-                            inst.id
+                            runtime_id
                         );
                     }
                 }
@@ -1078,30 +1084,32 @@ pub(in crate::commands::start) async fn initialize_inbound_router(
     // `channel_configs.get(channel_id) == None` → gating skipped → any group
     // member could invoke any slash command. This reads the same flat
     // `allow_admin_from` / `user_allowed_commands` / group-scoped keys from each
-    // channel instance config and registers them under the channel's *instance*
+    // channel instance config and registers them under the channel's *runtime*
     // id.
     //
-    // ⚠️ That is NOT always the channel's runtime id, though this comment
-    // claimed it was until 2026-08-11. `register_plain_channel!`'s generated
-    // creator takes `_config: ChannelConfig` and discards it, and each factory
-    // then hardcodes its runtime id to the channel TYPE
+    // ⚠️ The runtime id is NOT always the config instance id, though this
+    // comment claimed it was until 2026-08-11. `register_plain_channel!`'s
+    // generated creator takes `_config: ChannelConfig` and discards it, and
+    // each factory then hardcodes its runtime id to the channel TYPE
     // (`WebhookChannel::new("webhook", ..)`, `DiscordChannel::new("discord", ..)`,
     // ...). The executor looks the config up by the runtime id
     // (`channel_run_identity(.., ctx.message.channel_id)`), so an instance named
     // anything other than its type registers a policy nothing will ever read:
     // tier, workspace, busy-input mode and tool-permission overrides all
     // silently revert to defaults. Verified end to end 2026-08-11 (qa/README.md).
-    // Fixing it means threading the instance id through `ChannelFactory::create`,
-    // which changes a trait every channel implements — deliberately left as a
-    // decision rather than done in passing.
+    // The registration below therefore asks the registry which id the live
+    // channel reports (`runtime_channel_id`) instead of assuming the config
+    // instance id — the alternative, threading the instance id through
+    // `ChannelFactory::create`, changes a trait every channel implements and
+    // was deliberately left as a decision rather than done in passing.
     //
     // Backward-compat: a channel that configures no admins yields an empty
     // `SlashAccessConfig`; we skip registration entirely so `channel_configs`
     // stays empty for it and `permission.rs` keeps its allow-all default —
     // byte-identical to pre-tiering behavior. Gating only activates on opt-in.
     if let Some(ref cfg_arc) = app_config {
-        let cfg = cfg_arc.read().await;
-        for inst in cfg.resolved_channels() {
+        let instances = cfg_arc.read().await.resolved_channels();
+        for inst in instances {
             if matches!(
                 inst.channel_type.as_str(),
                 "imessage" | "telegram" | "feishu"
@@ -1144,11 +1152,17 @@ pub(in crate::commands::start) async fn initialize_inbound_router(
                 ..Default::default()
             };
             let tier_label = channel_config.caller_role_str();
-            inbound_router.register_channel_config(&inst.id, channel_config);
+            // Registered under the id the live channel reports (see
+            // `runtime_channel_id`): the executor looks the policy up by the
+            // message's channel id, which is the channel *type* for every
+            // factory that hardcodes it.
+            let runtime_id =
+                runtime_channel_id(&channel_registry, &inst.id, &inst.channel_type).await;
+            inbound_router.register_channel_config(&runtime_id, channel_config);
             if !daemon {
                 println!(
                     "  Inbound router: access tiering registered for '{}' ({}) [tier={}]",
-                    inst.id, inst.channel_type, tier_label,
+                    runtime_id, inst.channel_type, tier_label,
                 );
             }
         }
@@ -1295,6 +1309,43 @@ pub(in crate::commands::start) async fn initialize_inbound_router(
     if !daemon {
         println!("Inbound message router started");
         println!();
+    }
+}
+
+/// Resolve the runtime channel id an inbound message carries for a configured
+/// channel instance.
+///
+/// The executor looks a channel policy up by the id the *channel* reports
+/// (`ctx.message.channel_id`), not by the config instance id. Factories that
+/// hardcode their runtime id (`discord`, `slack`, `feishu`, …) report the
+/// channel *type*, so a policy registered under the config instance id is
+/// never read — tier, workspace, busy-input mode and tool-permission
+/// overrides all silently revert to the defaults. Factories whose channel is
+/// rebuilt with the instance id (`telegram`, `qq`, `whatsapp`, `webhook`)
+/// report the instance id, and those policies must stay on that key.
+///
+/// The registry is the authority on which id a live channel reports, so ask it
+/// instead of re-deriving the rule here: an instance whose own id is a
+/// registered channel id keeps it, otherwise the single registered channel of
+/// that type owns the instance's policy. An unregistered channel (creation
+/// failed) keeps the instance id — the same key the policy used before.
+async fn runtime_channel_id(
+    channel_registry: &ChannelRegistry,
+    instance_id: &str,
+    channel_type: &str,
+) -> String {
+    let registered = channel_registry
+        .list_by_type(channel_type)
+        .await
+        .into_iter()
+        .map(|info| info.id.0)
+        .collect::<Vec<_>>();
+    if registered.iter().any(|id| id.as_str() == instance_id) {
+        return instance_id.to_string();
+    }
+    match registered.as_slice() {
+        [only] => only.clone(),
+        _ => instance_id.to_string(),
     }
 }
 
