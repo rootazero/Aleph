@@ -248,9 +248,18 @@ fn compile_rules_grouped(
         // The RULE is folded the same way the TARGET is folded at match time
         // (see `canonicalize_url_case`), so a rule written in lower case
         // still matches a URL that spells its scheme or host in upper case.
+        // Only a URL action is folded: for every other action the target is
+        // case-sensitive text (a script, a selector, a cookie value), and
+        // folding one side only would make the rule match a target the
+        // operator never wrote.
         // `CompiledRule::pattern` keeps the operator's original text: it is
         // what the deny reason quotes.
-        let regex_str = glob_to_regex_str(&canonicalize_url_case(&rule.pattern));
+        let pattern = if target_is_url(&rule.action_type) {
+            canonicalize_url_case(&rule.pattern)
+        } else {
+            rule.pattern.clone()
+        };
+        let regex_str = glob_to_regex_str(&pattern);
         match crate::security::safe_regex::bounded_builder(&regex_str).build() {
             Ok(regex) => {
                 grouped
@@ -556,7 +565,14 @@ impl ConfigApprovalPolicy {
         // The scheme and the host of a URL are case-insensitive, but a glob
         // rule is matched literally — so the target is folded the same way the
         // rule was folded when it was compiled (see `canonicalize_url_case`).
-        let target = canonicalize_url_case(&request.target);
+        // Only a URL action is folded: for every other action the target is
+        // case-sensitive text, and folding it would make a rule match a
+        // target the operator never wrote.
+        let target = if target_is_url(action) {
+            canonicalize_url_case(&request.target)
+        } else {
+            request.target.clone()
+        };
 
         // 1. Blocklist takes priority (pre-compiled regexes, grouped by ActionType)
         if let Some(rule) = applicable_rules(&self.blocklist_by_type, action)
@@ -741,7 +757,28 @@ fn capped_audit_field(value: &str) -> String {
     capped
 }
 
-/// Fold the case of the scheme and the host of every URL-ish span in `value`.
+/// Whether the target of `action` is a URL — the only target whose scheme and
+/// host may be case-folded.
+///
+/// A URL's scheme and host are case-insensitive; every other target (a
+/// script, a selector, a cookie value, a file path) is case-SENSITIVE text.
+/// Folding it would let a rule written in one case match a target written in
+/// another — a rule the operator never wrote, applied to a target they never
+/// saw.
+///
+/// An action that INHERITS a URL action's rules inherits its folding too, so
+/// the rule and the target stay folded alike (see `applicable_rules`).
+#[must_use]
+fn target_is_url(action: &ActionType) -> bool {
+    if matches!(action, ActionType::BrowserNavigate | ActionType::BrowserOpen) {
+        return true;
+    }
+    action
+        .inherited_from()
+        .is_some_and(|parent| matches!(parent, ActionType::BrowserOpen))
+}
+
+/// Fold the case of the scheme and the host of the URL in `value`.
 ///
 /// A URL's scheme and host are case-insensitive, but a glob rule is matched
 /// literally — so `HTTPS://MALICIOUS.COM/payload` slips past a rule written
@@ -749,44 +786,50 @@ fn capped_audit_field(value: &str) -> String {
 /// (at compile time and at match time), so the rule still means what the
 /// operator wrote.
 ///
+/// Only the FIRST scheme/authority span is folded. Everything after it — the
+/// path, the query, the fragment, and any text that merely CONTAINS `://` —
+/// is copied unchanged, because those parts are case-sensitive: folding them
+/// would let a rule about one spelling match another.
+///
 /// Only the scheme token and the host are folded: the path and the query ARE
 /// case-sensitive parts of a URL, and a target that holds no URL is returned
 /// unchanged. The userinfo (`user:secret@host`) keeps its case as well — it
 /// is a credential, not a name.
 fn canonicalize_url_case(value: &str) -> String {
+    let Some(idx) = value.find("://") else {
+        return value.to_string();
+    };
+    // The scheme token runs back to the nearest delimiter. It is not
+    // required to be a real scheme name: a rule may put a glob `*` there.
+    let head = &value[..idx];
+    // The scan walks CHARACTERS, so the cut lands on a codepoint
+    // boundary: a multi-byte delimiter (a CJK character in a target
+    // string) must not be cut in half.
+    let scheme_start = head
+        .char_indices()
+        .rev()
+        .find(|(_, c)| !is_url_token_char(*c))
+        .map_or(0, |(i, c)| i + c.len_utf8());
+    let authority_start = idx + "://".len();
+    let authority_end = value[authority_start..]
+        .find(|c| c == '/' || c == '?' || c == '#')
+        .map_or(value.len(), |i| authority_start + i);
+    let authority = &value[authority_start..authority_end];
+    // Only the host (after the last `@`) is a name; the userinfo before it
+    // is a credential and keeps its case.
+    let (userinfo, host) = match authority.rfind('@') {
+        Some(at) => (&authority[..=at], &authority[at + 1..]),
+        None => ("", authority),
+    };
     let mut out = String::with_capacity(value.len());
-    let mut rest = value;
-    while let Some(idx) = rest.find("://") {
-        // The scheme token runs back to the nearest delimiter. It is not
-        // required to be a real scheme name: a rule may put a glob `*` there.
-        let head = &rest[..idx];
-        // The scan walks CHARACTERS, so the cut lands on a codepoint
-        // boundary: a multi-byte delimiter (a CJK character in a target
-        // string) must not be cut in half.
-        let scheme_start = head
-            .char_indices()
-            .rev()
-            .find(|(_, c)| !is_url_token_char(*c))
-            .map_or(0, |(i, c)| i + c.len_utf8());
-        let authority_start = idx + "://".len();
-        let authority_end = rest[authority_start..]
-            .find(|c| c == '/' || c == '?' || c == '#')
-            .map_or(rest.len(), |i| authority_start + i);
-        let authority = &rest[authority_start..authority_end];
-        // Only the host (after the last `@`) is a name; the userinfo before it
-        // is a credential and keeps its case.
-        let (userinfo, host) = match authority.rfind('@') {
-            Some(at) => (&authority[..=at], &authority[at + 1..]),
-            None => ("", authority),
-        };
-        out.push_str(&rest[..scheme_start]);
-        out.push_str(&head[scheme_start..].to_ascii_lowercase());
-        out.push_str("://");
-        out.push_str(userinfo);
-        out.push_str(&host.to_ascii_lowercase());
-        rest = &rest[authority_end..];
-    }
-    out.push_str(rest);
+    out.push_str(&value[..scheme_start]);
+    out.push_str(&head[scheme_start..].to_ascii_lowercase());
+    out.push_str("://");
+    out.push_str(userinfo);
+    out.push_str(&host.to_ascii_lowercase());
+    // The remainder — path, query, fragment and any embedded `://` text — is
+    // copied unchanged.
+    out.push_str(&value[authority_end..]);
     out
 }
 
@@ -1484,6 +1527,54 @@ mod tests {
         assert!(
             !matches!(policy.check(&req).await, ApprovalDecision::Deny { .. }),
             "the path is a case-sensitive part of a URL and must not be folded"
+        );
+    }
+
+    /// A `://` AFTER the authority is TEXT, not a second URL: only the scheme
+    /// and the host are folded, so a rule written about one spelling of the
+    /// text must not match another spelling.
+    #[tokio::test]
+    async fn only_the_scheme_and_the_host_of_a_url_are_folded() {
+        let policy = ConfigApprovalPolicy::new(PolicyConfig {
+            defaults: HashMap::new(),
+            allowlist: vec![],
+            blocklist: vec![PolicyRule {
+                action_type: ActionType::BrowserNavigate,
+                pattern: "https://example.com/a://BLAH*".to_string(),
+            }],
+        });
+
+        let req = make_request_with_target(
+            ActionType::BrowserNavigate,
+            "https://example.com/a://blah-payload",
+        );
+        assert!(
+            !matches!(policy.check(&req).await, ApprovalDecision::Deny { .. }),
+            "text after the authority is case-sensitive and must not be folded"
+        );
+    }
+
+    /// A non-URL target (a script, a selector, a cookie value) is
+    /// case-SENSITIVE text: folding it would make a rule written in one case
+    /// match a target written in another.
+    #[tokio::test]
+    async fn a_non_url_target_is_compared_literally() {
+        let policy = ConfigApprovalPolicy::new(PolicyConfig {
+            defaults: HashMap::new(),
+            allowlist: vec![],
+            blocklist: vec![PolicyRule {
+                action_type: ActionType::BrowserEvaluate,
+                pattern: "*://EXAMPLE.COM/*".to_string(),
+            }],
+        });
+
+        let req = make_request_with_target(
+            ActionType::BrowserEvaluate,
+            "fetch('https://example.com/x')",
+        );
+        assert!(
+            !matches!(policy.check(&req).await, ApprovalDecision::Deny { .. }),
+            "a script target is case-sensitive text and must not be folded"
         );
     }
 
