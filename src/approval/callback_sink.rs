@@ -51,17 +51,32 @@ impl ApprovalCallbackSink for ManagerCallbackSink {
         // person whose message triggered the approval. In a group chat several
         // paired members see the same inline buttons; without this any of them
         // could approve (or deny) another member's action — the group-chat
-        // approval bypass. `record_originator` returns `Some` only for a live
-        // record that recorded an originator, so non-channel / legacy records
-        // (`None`) fall through unchanged. Operators resolve via the
-        // `exec.approval.resolve` RPC — a different path — so this channel-only
-        // gate never blocks them.
-        if let Some(originator) = self.manager.record_originator(&id) {
-            if originator != user_id {
-                return Some(ApprovalCallbackResult {
-                    resolved: false,
-                    response_text: "只有发起该操作的用户可以在此审批。".to_string(),
-                });
+        // approval bypass.
+        //
+        // A live card that recorded NO originator is refused as well. The
+        // originator is what binds a card to the person allowed to answer it;
+        // without one the card would be answerable by ANY paired member — an
+        // unattended run's approval answered by whoever happens to be in the
+        // chat. Such a card is the operator's to answer, through the operator
+        // RPC (`exec.approval.resolve`), which is a different path and stays
+        // open. A card that is already resolved or expired has no live record
+        // and falls through to the resolver, which reports it as expired.
+        if let Some(pending) = self.manager.get_pending(&id) {
+            match pending.record.originator_user_id.as_deref() {
+                Some(originator) if originator != user_id => {
+                    return Some(ApprovalCallbackResult {
+                        resolved: false,
+                        response_text: "只有发起该操作的用户可以在此审批。".to_string(),
+                    });
+                }
+                None => {
+                    return Some(ApprovalCallbackResult {
+                        resolved: false,
+                        response_text: "此审批没有关联的发起人，只能由操作员通过 operator RPC 处理。"
+                            .to_string(),
+                    });
+                }
+                Some(_) => {}
             }
         }
 
@@ -191,7 +206,9 @@ mod tests {
     #[tokio::test]
     async fn pending_approval_gets_resolved() {
         let manager = Arc::new(ExecApprovalManager::new());
-        let record = manager.create(&mock_request("rec-1"), 5_000);
+        let mut req = mock_request("rec-1");
+        req.originator_user_id = Some("u1".to_string());
+        let record = manager.create(&req, 5_000);
 
         // register_pending is synchronous: the entry is resolvable the instant
         // it returns, so the callback below cannot race ahead of registration.
@@ -252,10 +269,16 @@ mod tests {
         assert_eq!(resolved.decision, Some(ApprovalDecisionType::AllowOnce));
     }
 
-    /// A record with no originator (non-channel / legacy) keeps the prior
-    /// behaviour: any paired user may resolve — the gate is a no-op.
+    /// A record with NO originator is refused for a channel button.
+    ///
+    /// The originator is what binds a card to the person allowed to answer
+    /// it. Without one the card was answerable by ANY paired member — an
+    /// unattended run's approval answered by whoever happened to be in the
+    /// chat. Such a card is the operator's to answer, through the operator
+    /// RPC (`exec.approval.resolve`), which is a different path and stays
+    /// open.
     #[tokio::test]
-    async fn no_originator_record_is_resolvable_by_anyone() {
+    async fn a_no_originator_record_is_refused_for_channel_callbacks() {
         let manager = Arc::new(ExecApprovalManager::new());
         // `mock_request` leaves `originator_user_id = None`.
         let record = manager.create(&mock_request("rec-legacy"), 5_000);
@@ -273,10 +296,21 @@ mod tests {
             .await
             .expect("is an approval callback");
         assert!(
-            out.resolved,
-            "a no-originator record stays resolvable by anyone"
+            !out.resolved,
+            "a card nobody owns must not be answerable by a paired member"
+        );
+        assert!(
+            manager.get_pending(&id).is_some(),
+            "the refused card stays pending for the operator"
         );
 
-        let _ = waiter.await.unwrap();
+        // The operator path is a different one, and still resolves it.
+        assert!(manager.resolve(
+            &id,
+            ApprovalDecisionType::AllowOnce,
+            Some("operator".to_string())
+        ));
+        let resolved = waiter.await.unwrap();
+        assert_eq!(resolved.decision, Some(ApprovalDecisionType::AllowOnce));
     }
 }

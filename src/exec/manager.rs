@@ -401,6 +401,20 @@ pub enum SessionResolveOutcome {
     Ambiguous(Vec<(usize, String)>),
 }
 
+/// Which cards a cascade decision may release.
+///
+/// `Any` is the operator path: an operator's answer stands for the session,
+/// so every identical card is released with it. `Originator` is the member
+/// path: a member's answer covers only the cards the SAME originator raised,
+/// so answering your own card in a group chat never releases a card another
+/// member raised — the group-chat approval bypass (a member's click on their
+/// own card used to resolve every identical card in the session, including
+/// the ones other members raised).
+enum CascadeOriginScope {
+    Any,
+    Originator(Option<String>),
+}
+
 pub struct ExecApprovalManager {
     pending: Arc<RwLock<HashMap<String, PendingEntry>>>,
     /// Per-session snapshot of the last [`SessionResolveOutcome::Ambiguous`]
@@ -743,9 +757,13 @@ impl ExecApprovalManager {
         Self::resolve_entry(entry, decision, resolved_by.clone(), deny_reason.clone());
         debug!(id = %id, ?decision, "Resolved approval");
 
-        let cascade = pending
-            .get(id)
-            .map(|e| (e.record.session_key.clone(), e.record.grant_key.clone()));
+        let cascade = pending.get(id).map(|e| {
+            (
+                e.record.session_key.clone(),
+                e.record.grant_key.clone(),
+                e.record.originator_user_id.clone(),
+            )
+        });
         // R1 audit hook (T1.1): every successful resolution leaves an
         // `AuthorityChange` row in the global audit log so the post-incident
         // question "who allowed what, when" no longer requires a
@@ -769,12 +787,21 @@ impl ExecApprovalManager {
         // stamp each cascaded card; the audit path takes a fresh clone so
         // the two reads stay independent.
         let resolved_by_for_audit = resolved_by.clone();
-        if let Some((session_key, grant_key)) = cascade {
+        if let Some((session_key, grant_key, originator)) = cascade {
+            // A member's answer (the channel/member paths, `owner_only`)
+            // releases only the cards the SAME originator raised; an
+            // operator's answer stands for the whole session.
+            let scope = if owner_only {
+                CascadeOriginScope::Originator(originator)
+            } else {
+                CascadeOriginScope::Any
+            };
             Self::cascade_to_identical_cards(
                 &mut pending,
                 id,
                 &session_key,
                 grant_key.as_deref(),
+                &scope,
                 decision,
                 resolved_by,
                 deny_reason,
@@ -891,12 +918,24 @@ impl ExecApprovalManager {
     /// `None` key (no action identity: bare route escalations, cluster node
     /// approvals) never cascades.
     ///
+    /// # Which cards the cascade may release
+    ///
+    /// `scope` is the answer's authority, not the card's shape:
+    /// [`CascadeOriginScope::Any`] releases every identical card (an operator
+    /// answers for the session), while
+    /// [`CascadeOriginScope::Originator`] releases only the cards raised by
+    /// the SAME originator as the addressed one. Two cards raised by different
+    /// people in one group chat share a session key and an action identity, so
+    /// without the originator scope the first member's click released the
+    /// second member's parked call — a decision nobody asked for.
+    ///
     /// [`DenialLedger`]: crate::sandbox::exec_approval::denial_ledger::DenialLedger
     fn cascade_to_identical_cards(
         pending: &mut HashMap<String, PendingEntry>,
         resolved_id: &str,
         session_key: &str,
         grant_key: Option<&str>,
+        scope: &CascadeOriginScope,
         decision: ApprovalDecisionType,
         resolved_by: Option<String>,
         deny_reason: Option<String>,
@@ -919,6 +958,12 @@ impl ExecApprovalManager {
                     && e.is_live()
                     && e.record.session_key == session_key
                     && e.record.grant_key.as_deref() == Some(key)
+                    && (match scope {
+                        CascadeOriginScope::Any => true,
+                        CascadeOriginScope::Originator(expected) => {
+                            e.record.originator_user_id.as_deref() == expected.as_deref()
+                        }
+                    })
             })
             .map(|(id, _)| id.clone())
             .collect();
@@ -964,12 +1009,14 @@ impl ExecApprovalManager {
     /// `None` is NOT operator authorization: channel callers must check
     /// `Self::is_operator_approval` and use `Self::resolve_for_channel`.
     ///
+    /// `None` also does NOT mean "anyone may answer": it is the ambiguous
+    /// union of "no originator was recorded" with "there is no live record",
+    /// and only [`Self::get_pending`] separates the two. A gate that treats
+    /// `None` as "no gate" lets any paired member answer a card nobody owns.
     /// The channel button-callback gate
     /// ([`ManagerCallbackSink::handle_callback`](crate::approval::callback_sink))
-    /// uses this to let only the originator resolve via a button: a `Some` that
-    /// mismatches the clicker is refused; a `None` skips the gate (best-effort,
-    /// preserving the pre-originator behaviour, and letting dead records fall
-    /// through to the normal "expired" reply from [`Self::resolve`]).
+    /// therefore reads the record itself and refuses a live card that recorded
+    /// no originator.
     #[must_use]
     pub fn record_originator(&self, id: &str) -> Option<String> {
         let pending = self.pending.read().unwrap_or_else(|e| e.into_inner());
@@ -1119,12 +1166,16 @@ impl ExecApprovalManager {
             let summary = Self::display_line(&entry.record);
             Self::resolve_entry(entry, decision, resolved_by.clone(), deny_reason.clone());
             debug!(id = %id, ?decision, "Resolved approval by session");
-            let grant_key = pending.get(&id).and_then(|e| e.record.grant_key.clone());
+            let (grant_key, originator) = pending
+                .get(&id)
+                .map(|e| (e.record.grant_key.clone(), e.record.originator_user_id.clone()))
+                .unwrap_or((None, None));
             Self::cascade_to_identical_cards(
                 &mut pending,
                 &id,
                 session_key,
                 grant_key.as_deref(),
+                &CascadeOriginScope::Originator(originator),
                 decision,
                 resolved_by,
                 deny_reason,
@@ -2370,6 +2421,70 @@ mod tests {
             manager.await_registered(id2, rx2, t2).await.decision,
             Some(ApprovalDecisionType::AllowAlways),
             "the identical card parked beside it must not still be waiting"
+        );
+    }
+
+    /// A member's answer must not release a card ANOTHER member raised.
+    ///
+    /// Two cards raised by different people in one group chat share a
+    /// session key and an action identity, so the cascade used to resolve
+    /// BOTH — a decision nobody asked for, taken by whoever clicked first.
+    /// The cascade is scoped to the ORIGINATOR: the cards the same person
+    /// raised still go together.
+    #[tokio::test]
+    async fn a_member_answer_does_not_release_another_origins_card() {
+        let manager = ExecApprovalManager::new();
+
+        let mut mine = persistent_capable_request();
+        mine.id = "card-mine".to_string();
+        mine.session_key = "telegram:group".to_string();
+        mine.grant_key = Some("fp-shared".to_string());
+        mine.originator_user_id = Some("alice".to_string());
+        let rec = manager.create(&mine, 60_000);
+        let (mine_id, mine_rx, mine_timeout) = manager.register_pending(rec);
+
+        let mut also_mine = persistent_capable_request();
+        also_mine.id = "card-also-mine".to_string();
+        also_mine.session_key = "telegram:group".to_string();
+        also_mine.grant_key = Some("fp-shared".to_string());
+        also_mine.originator_user_id = Some("alice".to_string());
+        let rec = manager.create(&also_mine, 60_000);
+        let (also_mine_id, also_mine_rx, also_mine_timeout) = manager.register_pending(rec);
+
+        let mut theirs = persistent_capable_request();
+        theirs.id = "card-theirs".to_string();
+        theirs.session_key = "telegram:group".to_string();
+        theirs.grant_key = Some("fp-shared".to_string());
+        theirs.originator_user_id = Some("bob".to_string());
+        let rec = manager.create(&theirs, 60_000);
+        let (theirs_id, _theirs_rx, _theirs_timeout) = manager.register_pending(rec);
+
+        // Alice answers HER card in the group chat.
+        assert!(manager.resolve_for_channel(
+            &mine_id,
+            ApprovalDecisionType::AllowSession,
+            Some("alice".to_string())
+        ));
+
+        assert_eq!(
+            manager
+                .await_registered(mine_id, mine_rx, mine_timeout)
+                .await
+                .decision,
+            Some(ApprovalDecisionType::AllowSession)
+        );
+        assert_eq!(
+            manager
+                .await_registered(also_mine_id, also_mine_rx, also_mine_timeout)
+                .await
+                .decision,
+            Some(ApprovalDecisionType::AllowSession),
+            "the cards the SAME originator raised still go together"
+        );
+
+        assert!(
+            manager.get_pending(&theirs_id).is_some(),
+            "another originator's card must not be released by Alice's answer"
         );
     }
 
