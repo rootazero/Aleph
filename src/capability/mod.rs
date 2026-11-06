@@ -33,7 +33,9 @@
 use crate::sync_primitives::Arc;
 use std::sync::OnceLock;
 
+pub mod activation;
 pub mod backend;
+pub mod constraints;
 pub mod descriptor;
 pub mod diagnostic_control;
 pub mod effect_claim;

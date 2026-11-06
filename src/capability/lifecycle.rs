@@ -172,6 +172,31 @@ impl CapabilityLifecycle {
         Ok(())
     }
 
+    /// Validate the lease before activating an attached capability.
+    ///
+    /// Activation is the one transition that needs lease validation while the
+    /// lifecycle is not yet invocable. Keeping this check here prevents the
+    /// activation layer from reaching into lease internals and makes the
+    /// `Attached -> Active` boundary explicit.
+    pub fn validate_activation(
+        &self,
+        current_generation: OwnerGeneration,
+    ) -> Result<(), LifecycleError> {
+        if self.state != LifecycleState::Attached {
+            return Err(LifecycleError::NotInvocable(self.state));
+        }
+        if self.lease.is_expired() {
+            return Err(LifecycleError::LeaseExpired);
+        }
+        if self.lease.owner_generation() != current_generation {
+            return Err(LifecycleError::GenerationMismatch {
+                lease: self.lease.owner_generation(),
+                current: current_generation,
+            });
+        }
+        Ok(())
+    }
+
     /// Validate that this lifecycle's lease is still valid.
     ///
     /// Checks:
