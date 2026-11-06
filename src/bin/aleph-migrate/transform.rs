@@ -124,7 +124,7 @@ fn transform_session(
         .prefix(".session-staging-")
         .tempdir_in(output_dir)
         .context("Failed to create temporary session directory")?;
-    let result = (|| {
+    let result: Result<()> = (|| {
         write_transcript(staging.path(), session)?;
         write_tool_outputs(staging.path(), session)?;
         write_metadata(staging.path(), session)?;
