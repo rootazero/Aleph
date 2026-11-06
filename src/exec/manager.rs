@@ -671,16 +671,17 @@ impl ExecApprovalManager {
             generation
         };
 
+        let cleanup = PendingRegistration {
+            pending: self.pending.clone(),
+            id: id.clone(),
+            generation: generation.clone(),
+        };
         (
             id,
             RegisteredApprovalReceiver {
                 receiver: rx,
                 generation: Some(generation.clone()),
-                cleanup: Some(PendingRegistration {
-                    pending: self.pending.clone(),
-                    id: id.clone(),
-                    generation: generation.clone(),
-                }),
+                cleanup: Some(cleanup),
             },
             timeout,
             Some(generation),
