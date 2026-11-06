@@ -170,9 +170,10 @@ to run `cargo`, `clippy`, `rustfmt` or the test suite — the orchestrator owned
 CARGO_BUILD_JOBS=1 cargo check -p alephcore --features native-qa
 ```
 
-Result: **compiles clean — 0 errors.** (`aleph-server`, `aleph-migrate` and
+Final run: **0 errors**, 18 warning lines, 6m23s (`aleph-server`, `aleph-migrate` and
 `aleph-panel-native-qa-gateway` are three binaries of the `alephcore` package, so one check covers all
-three.)
+three). The run was executed against a `main` that also contains the concurrent session's refactor
+commits described in §3.
 
 The warning set was audited line by line: 4 in the library (`src/extension/projection.rs`,
 `src/memory/runtime/mod.rs`, `src/tools/registry.rs` — all pre-existing and outside the reviewed scope)
@@ -181,6 +182,11 @@ finding `B12-P3-03`, deferred — 2 unused memory-context initializers — pre-e
 note-maintenance wrappers, which is finding `B10-S2-03`, deferred). The one warning this review *did*
 introduce — the address-based `serve_webchat` wrapper left unused after the wave-4c listener change —
 was removed rather than silenced.
+
+One build break appeared on `main` during the run that was **not** caused by this review: the concurrent
+session's `refactor(acp)` commit moved a non-`Copy` `TrustLevel` out of a shared reference in
+`src/acp/adapters/custom.rs` and `src/acp/adapters/generic.rs` (`E0507`). That session fixed it in its
+next commit (`4099cd3c6`); this review did not touch those files.
 
 Memory control, as required:
 
