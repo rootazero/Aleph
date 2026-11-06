@@ -34,6 +34,7 @@ use crate::sync_primitives::Arc;
 use std::sync::OnceLock;
 
 pub mod activation;
+pub mod ambient;
 pub mod backend;
 pub mod constraints;
 pub mod descriptor;
@@ -49,6 +50,8 @@ pub mod provider;
 pub mod provider_backend;
 pub mod provider_registry;
 pub mod resolver;
+pub mod terminal;
+pub mod ui;
 pub(crate) mod versioned_registry;
 pub mod zahir_facade;
 

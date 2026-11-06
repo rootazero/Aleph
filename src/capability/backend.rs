@@ -1,9 +1,10 @@
 //! Capability backend — the storage/query half of the capability contract.
 //!
-//! `CapabilityBackend` is the trait every concrete registry (tools today,
-//! skills/plugins/agents later) implements; `ToolBackendAdapter` is the one
-//! live adapter, wrapping the existing [`crate::tools::registry::ToolHandlerRegistry`]
-//! as a capability source of truth without duplicating it.
+//! `CapabilityBackend` is the trait every concrete registry implements.
+//! `ToolBackendAdapter` wraps the existing
+//! [`crate::tools::registry::ToolHandlerRegistry`], while
+//! [`CapabilityHandlerRegistry`] owns the lightweight special-capability
+//! handler entries without duplicating their descriptor source.
 
 use crate::capability::descriptor::{
     CapabilityDescriptor, CapabilityFacet, CapabilityFacets, CapabilityId, CapabilityKind,
@@ -11,24 +12,215 @@ use crate::capability::descriptor::{
 };
 use crate::capability::facade::{CapabilitySnapshot, Cursor, Scope};
 use crate::capability::ownership::{LifetimeScope, OwnerRef, VisibilityScope};
+use crate::sync_primitives::Arc;
 use crate::tools::descriptor::{
     canonicalize_json, canonicalize_services, ReplayPolicy, ToolCapabilityDescriptor, ToolSource,
 };
+use serde_json::Value;
 use sha2::{Digest, Sha256};
+use std::collections::HashMap;
+use std::sync::RwLock;
 
 /// Namespace under which the tool backend registers its capabilities.
 pub const TOOL_NAMESPACE: &str = "aleph/tools";
 
 /// The storage/query contract every capability registry implements.
 ///
-/// `lookup` resolves one capability by id; `enumerate` lists a scope. Only the
-/// Tool backend is implemented this phase ([`ToolBackendAdapter`]); the other
-/// eight kinds are deferred and non-invocable — no backend implements them and
-/// none is mounted.
+/// `lookup` resolves one capability by id; `enumerate` lists a scope. The Tool
+/// backend and the lightweight special-capability handler backend are live;
+/// other descriptor kinds remain descriptive until their owning backend is
+/// mounted.
 pub trait CapabilityBackend: Send + Sync {
     fn lookup(&self, id: &CapabilityId) -> Option<CapabilityDescriptor>;
     fn enumerate(&self, scope: &Scope) -> Vec<CapabilityDescriptor>;
     fn snapshot(&self, scope: &Scope) -> CapabilitySnapshot;
+}
+
+/// Errors produced by a capability handler during invocation.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum CapabilityDispatchError {
+    #[error("capability handler received invalid input: {0}")]
+    InvalidInput(String),
+    #[error("capability handler execution failed: {0}")]
+    Execution(String),
+    #[error("capability is not registered: {0:?}")]
+    NotFound(CapabilityId),
+}
+
+/// The callable boundary for non-Tool capabilities.
+///
+/// Handlers receive owned JSON so the registry never exposes mutable internal
+/// state. A handler may perform an effect at this boundary, but its descriptor
+/// remains an immutable value owned by the registry entry.
+pub trait CapabilityHandler: Send + Sync {
+    fn invoke(&self, input: Value) -> Result<Value, CapabilityDispatchError>;
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum CapabilityRegistryError {
+    #[error("capability is already registered: {0:?}")]
+    Duplicate(CapabilityId),
+    #[error("capability id must have a non-empty namespace and name")]
+    InvalidId,
+    #[error("capability revision is exhausted")]
+    RevisionExhausted,
+}
+
+#[derive(Clone)]
+struct HandlerEntry {
+    descriptor: CapabilityDescriptor,
+    handler: Arc<dyn CapabilityHandler>,
+}
+
+#[derive(Default)]
+struct HandlerRegistryState {
+    entries: HashMap<CapabilityId, HandlerEntry>,
+    revision: u64,
+}
+
+/// A descriptor-backed registry for callable special capabilities.
+///
+/// The map stores descriptor and handler together as one entry, so discovery
+/// and dispatch cannot pair values from independent registries. This backend is
+/// intentionally separate from [`ToolBackendAdapter`]: Tool dispatch keeps its
+/// existing approval and provider gates, while special handlers use this small
+/// typed boundary until their concrete platform bridges are mounted.
+#[derive(Clone, Default)]
+pub struct CapabilityHandlerRegistry {
+    state: Arc<RwLock<HandlerRegistryState>>,
+}
+
+impl CapabilityHandlerRegistry {
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn register(
+        &self,
+        mut descriptor: CapabilityDescriptor,
+        handler: Arc<dyn CapabilityHandler>,
+    ) -> Result<CapabilityId, CapabilityRegistryError> {
+        if descriptor.id.namespace.trim().is_empty() || descriptor.id.name.trim().is_empty() {
+            return Err(CapabilityRegistryError::InvalidId);
+        }
+        let mut state = self
+            .state
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if state.entries.contains_key(&descriptor.id) {
+            return Err(CapabilityRegistryError::Duplicate(descriptor.id));
+        }
+        let revision = state
+            .revision
+            .checked_add(1)
+            .ok_or(CapabilityRegistryError::RevisionExhausted)?;
+        descriptor.revision = CapabilityRevision(revision);
+        let id = descriptor.id.clone();
+        state.entries.insert(
+            id.clone(),
+            HandlerEntry {
+                descriptor,
+                handler,
+            },
+        );
+        state.revision = revision;
+        Ok(id)
+    }
+
+    /// Invoke a registered handler without holding the registry lock.
+    pub fn dispatch(
+        &self,
+        id: &CapabilityId,
+        input: Value,
+    ) -> Result<Value, CapabilityDispatchError> {
+        let handler = {
+            let state = self
+                .state
+                .read()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            state
+                .entries
+                .get(id)
+                .map(|entry| Arc::clone(&entry.handler))
+        }
+        .ok_or_else(|| CapabilityDispatchError::NotFound(id.clone()))?;
+        handler.invoke(input)
+    }
+
+    /// Alias used by dispatching callers that prefer the verb `invoke`.
+    pub fn invoke(
+        &self,
+        id: &CapabilityId,
+        input: Value,
+    ) -> Result<Value, CapabilityDispatchError> {
+        self.dispatch(id, input)
+    }
+
+    #[must_use]
+    pub fn revision(&self) -> u64 {
+        self.state
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .revision
+    }
+
+    fn descriptors(&self, scope: &Scope) -> Vec<CapabilityDescriptor> {
+        let state = self
+            .state
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        Self::descriptors_from_state(&state, scope)
+    }
+
+    fn descriptors_from_state(
+        state: &HandlerRegistryState,
+        scope: &Scope,
+    ) -> Vec<CapabilityDescriptor> {
+        state
+            .entries
+            .values()
+            .map(|entry| {
+                let mut descriptor = entry.descriptor.clone();
+                descriptor.visibility = scope.visibility.clone();
+                descriptor
+            })
+            .filter(|descriptor| {
+                scope.kind.is_none_or(|kind| descriptor.kind == kind)
+                    && scope
+                        .namespace
+                        .as_ref()
+                        .is_none_or(|namespace| descriptor.id.namespace == *namespace)
+                    && scope.facet.is_none_or(|facet| descriptor.supports(facet))
+            })
+            .collect()
+    }
+}
+
+impl CapabilityBackend for CapabilityHandlerRegistry {
+    fn lookup(&self, id: &CapabilityId) -> Option<CapabilityDescriptor> {
+        self.state
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .entries
+            .get(id)
+            .map(|entry| entry.descriptor.clone())
+    }
+
+    fn enumerate(&self, scope: &Scope) -> Vec<CapabilityDescriptor> {
+        self.descriptors(scope)
+    }
+
+    fn snapshot(&self, scope: &Scope) -> CapabilitySnapshot {
+        let state = self
+            .state
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        CapabilitySnapshot {
+            capabilities: Self::descriptors_from_state(&state, scope),
+            committed_cursor: Cursor(state.revision),
+        }
+    }
 }
 
 /// The one live backend: adapts [`crate::tools::registry::ToolHandlerRegistry`]

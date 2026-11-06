@@ -176,6 +176,9 @@ pub(crate) fn canonical_schema_fingerprint(schema: &Value) -> [u8; 32] {
 pub(crate) fn canonical_descriptor_fingerprint(descriptor: &CapabilityDescriptor) -> [u8; 32] {
     let kind = match descriptor.kind {
         CapabilityKind::Tool => "tool",
+        CapabilityKind::Ambient => "ambient",
+        CapabilityKind::Terminal => "terminal",
+        CapabilityKind::Ui => "ui",
         CapabilityKind::Skill => "skill",
         CapabilityKind::Agent => "agent",
         CapabilityKind::Task => "task",

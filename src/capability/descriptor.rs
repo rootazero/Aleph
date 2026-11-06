@@ -1,13 +1,10 @@
 //! Capability descriptor — the unified, kind-agnostic capability contract.
 //!
 //! [`CapabilityDescriptor`] is the shape every backend exposes through the
-//! [`crate::capability::facade::Zahir`] facade. Task 1 establishes the pure
-//! types only: [`CapabilityKind`] names all nine capability kinds, but only
-//! `Tool` has a live backend today
-//! ([`crate::capability::backend::ToolBackendAdapter`]). The other eight kinds
-//! are deferred — they are *named* here (so the contract is closed) but not
-//! *executable*: no backend implements them, none is mounted, and none can be
-//! invoked this phase.
+//! [`crate::capability::facade::Zahir`] facade. The descriptor keeps the kind
+//! axis closed while the Tool and special-capability handler backends provide
+//! executable adapters. Other kinds remain descriptive until their owning
+//! backend is mounted.
 //!
 //! [`Service`] is a pure relation edge (`requires` / `provides` / `conflicts`):
 //! it carries no data and is never invocable.
@@ -16,15 +13,17 @@ pub use aleph_slot_api::capability::{CapabilityId, Service, ServiceRelation};
 
 use crate::capability::ownership::{LifetimeScope, OwnerRef, VisibilityScope};
 
-/// The nine capability kinds this contract names.
+/// The capability kinds named by the contract.
 ///
-/// Only `Tool` is executable this phase. The other eight exist so the type
-/// system can *say* "this is a Skill" without a backend that can run one — a
-/// deferred kind is non-invocable by construction, because no adapter
-/// implements [`crate::capability::backend::CapabilityBackend`] for it.
+/// Tool, Ambient, Terminal, and UI-backed capabilities have executable
+/// capability-layer adapters. The remaining kinds stay descriptive until their
+/// owning backend is mounted.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum CapabilityKind {
     Tool,
+    Ambient,
+    Terminal,
+    Ui,
     Skill,
     Agent,
     Task,
@@ -33,6 +32,11 @@ pub enum CapabilityKind {
     Subscription,
     Plugin,
     Hook,
+}
+
+impl CapabilityKind {
+    /// Compatibility spelling for callers that use the acronym from the wire contract.
+    pub const UI: Self = Self::Ui;
 }
 
 /// A behavior axis orthogonal to [`CapabilityKind`].
