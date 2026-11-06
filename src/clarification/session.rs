@@ -514,7 +514,14 @@ impl ClarificationManager {
                 } else {
                     // The waiter vanished between the liveness check and the
                     // send. The answer reached nobody, so the message was not
-                    // consumed.
+                    // consumed and the reply is not ours to keep.
+                    //
+                    // The question is over either way, so the terminal frame
+                    // goes out: without it the card of the face that asked
+                    // survives until the request deadline, waiting for a reply
+                    // that can no longer arrive. `Cancelled`, not `Resolved`:
+                    // nobody received the answer.
+                    publish_ended(session_key, &request_id, ClarificationOutcome::Cancelled);
                     ResolveOutcome::Stale
                 }
             }
@@ -1405,5 +1412,120 @@ mod tests {
             );
         }
         assert!(mgr.has_pending("sess-fresh").await);
+    }
+
+    /// A vanished waiter still ends the request.
+    ///
+    /// The waiter disappears when its parked run is cancelled: the receiver is
+    /// dropped. When that lands between the liveness check and the send, the
+    /// answer reaches nobody — the reply is not consumed — but the question is
+    /// over, so the face that asked must be told. Without the terminal frame
+    /// its card survives until the request deadline, waiting for a reply that
+    /// can no longer arrive.
+    ///
+    /// That window is a genuine race, and the test drives it: the reply batch
+    /// keeps the registry lock held across every question, and the waiter is
+    /// dropped while the batch runs. The handshake orders the two — the
+    /// resolving task signals that it is about to resolve, the liveness check
+    /// happens synchronously right after that signal, so the drop can only
+    /// land later, on another worker.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[serial_test::serial(gateway_event_bus)]
+    async fn a_vanished_waiter_still_ends_the_request_with_a_cancelled_frame() {
+        use crate::gateway::event_bus::GatewayEventBus;
+        use crate::gateway::event_emitter::team_fanout::set_team_event_bus;
+
+        let bus = Arc::new(GatewayEventBus::new());
+        set_team_event_bus(bus.clone());
+        let mut frames = bus.subscribe_typed();
+
+        // Enough questions that the reply batch holds the registry lock well
+        // past the moment the waiter is dropped.
+        const QUESTIONS: usize = 4096;
+        const OPTIONS: usize = 20;
+        let questions: Vec<ClarificationQuestion> = (0..QUESTIONS)
+            .map(|i| {
+                ClarificationQuestion::select(
+                    &format!("q{i}"),
+                    "Where?",
+                    (0..OPTIONS)
+                        .map(|o| ClarificationOption::new(&format!("v{o}"), &format!("option {o}")))
+                        .collect(),
+                )
+            })
+            .collect();
+        let request = ClarificationRequest::new(questions).expect("non-empty request");
+
+        let mgr = ClarificationManager::new();
+
+        for attempt in 0..5 {
+            let session_key = format!("sess-vanished-{attempt}");
+            let rx = mgr
+                .register(
+                    session_key.clone(),
+                    request.clone(),
+                    DEFAULT_CLARIFY_TIMEOUT,
+                    "",
+                )
+                .await;
+
+            // The waiter vanishes while the registry lock is held: the answer
+            // that follows has nobody left to deliver to.
+            let (started_tx, started_rx) = oneshot::channel();
+            let dropper = tokio::spawn(async move {
+                let _ = started_rx.await;
+                // The resolving task is working through the batch by now: drop
+                // the waiter, so it lands after the liveness check and before
+                // the send.
+                tokio::time::sleep(Duration::from_micros(200)).await;
+                drop(rx);
+            });
+            let resolve_mgr = mgr.clone();
+            let resolve_key = session_key.clone();
+            let resolve = tokio::spawn(async move {
+                let _ = started_tx.send(());
+                let replies: Vec<&str> = vec!["1"; QUESTIONS];
+                resolve_mgr.resolve_many(&resolve_key, &replies).await
+            });
+
+            let outcome = resolve.await.expect("resolve task");
+            dropper.await.expect("dropper task");
+
+            if outcome == ResolveOutcome::Done {
+                // The waiter was still parked when the send happened: the drop
+                // landed too late. Try again.
+                continue;
+            }
+            assert_eq!(outcome, ResolveOutcome::Stale);
+            assert!(
+                !outcome.consumed(),
+                "a vanished waiter must not consume the reply"
+            );
+
+            // The terminal frame for this request: `Cancelled`, because nobody
+            // received the answer.
+            let mut ended: Option<ClarificationOutcome> = None;
+            loop {
+                match frames.try_recv() {
+                    Ok(GatewayEventFrame::ClarificationEnded {
+                        session_key: key,
+                        outcome: frame_outcome,
+                        ..
+                    }) if key == session_key => ended = Some(frame_outcome),
+                    Ok(_) => {}
+                    // The ring overflowed: the receiver resyncs to the newest
+                    // frame, so keep draining.
+                    Err(tokio::sync::broadcast::error::TryRecvError::Lagged(_)) => continue,
+                    Err(_) => break,
+                }
+            }
+            assert_eq!(
+                ended,
+                Some(ClarificationOutcome::Cancelled),
+                "a vanished waiter must end the request with a Cancelled frame"
+            );
+            return;
+        }
+        panic!("the waiter never vanished in time");
     }
 }
