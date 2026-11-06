@@ -419,6 +419,8 @@ jobs:
       - name: Check test code compiles
         if: runner.os == 'Linux'
         run: cargo check -p alephcore --all-targets -j1
+      - name: Check native QA gateway compiles
+        run: cargo check -p alephcore --bin aleph-panel-native-qa-gateway --features native-qa -j1
 
   # The Swift half of the desktop bridge had no CI at all: `just bridge-test`
   # exercises the wire format (golden fixtures against the committed schema.json),
