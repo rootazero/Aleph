@@ -10,7 +10,7 @@ use tracing::debug;
 /// sessions in the same repo (mirrors acpx's `-s backend` / `-s frontend`).
 /// The empty string is the canonical "default" name and is the legacy
 /// shape — old callers via `SessionKey::new` see no behavioral change.
-#[derive(Clone, Debug, Hash, Eq, PartialEq)]
+#[derive(Clone, Debug, Hash, Eq, PartialEq, serde::Serialize)]
 pub struct SessionKey {
     pub(super) harness_id: String,
     pub(super) cwd: PathBuf,

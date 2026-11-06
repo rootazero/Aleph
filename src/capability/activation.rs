@@ -6,6 +6,8 @@
 //! constraints before an active capability is used.
 
 use crate::capability::constraints::{ConstraintContext, ConstraintSet, ConstraintViolation};
+use crate::capability::descriptor::CapabilityDescriptor;
+use crate::capability::events::{ActivationEventHook, CapabilityEvent, CapabilityEventEmitter};
 use crate::capability::lifecycle::{CapabilityLifecycle, LifecycleError, LifecycleState};
 use crate::capability::ownership::OwnerGeneration;
 use crate::sync_primitives::Arc;
@@ -79,6 +81,7 @@ pub trait CapabilityActivation: Send + Sync {
 pub struct CapabilityActivationController {
     lifecycle: Arc<Mutex<CapabilityLifecycle>>,
     constraints: ConstraintSet,
+    events: Option<ActivationEventHook>,
 }
 
 impl CapabilityActivationController {
@@ -90,6 +93,24 @@ impl CapabilityActivationController {
         Self {
             lifecycle: Arc::new(Mutex::new(CapabilityLifecycle::new(ttl, owner_generation))),
             constraints: constraints.into(),
+            events: None,
+        }
+    }
+
+    /// Create a new, observed lifecycle. Existing constructors remain unobserved.
+    /// The descriptor supplies audit labels, never authorization or generation authority.
+    pub fn new_observed<C: Into<ConstraintSet>>(
+        ttl: Option<Duration>,
+        owner_generation: OwnerGeneration,
+        constraints: C,
+        descriptor: &CapabilityDescriptor,
+        emitter: CapabilityEventEmitter,
+    ) -> Self {
+        let controller = Self::new(ttl, owner_generation, constraints);
+        let events = ActivationEventHook::new(descriptor, controller.constraints.len(), emitter);
+        Self {
+            events: Some(events),
+            ..controller
         }
     }
 
@@ -102,6 +123,7 @@ impl CapabilityActivationController {
         Self {
             lifecycle: Arc::new(Mutex::new(lifecycle)),
             constraints: constraints.into(),
+            events: None,
         }
     }
 
@@ -128,9 +150,17 @@ impl CapabilityActivationController {
 
     /// Attach the capability without evaluating activation constraints.
     pub fn attach(&mut self) -> Result<(), ActivationError> {
-        self.lifecycle_guard()
-            .transition_to(LifecycleState::Attached)
-            .map_err(ActivationError::from)
+        let mut lifecycle = self.lifecycle_guard();
+        lifecycle.transition_to(LifecycleState::Attached)?;
+        if let Some(events) = &self.events {
+            events.emitter.emit(
+                events.actor.clone(),
+                CapabilityEvent::CapabilityAttached {
+                    id: events.id.clone(),
+                },
+            );
+        }
+        Ok(())
     }
 
     /// Activate after validating the attached lifecycle, lease, and constraints.
@@ -154,6 +184,7 @@ impl CapabilityActivationController {
         hook: &H,
     ) -> Result<(), ActivationError> {
         self.activate_with_hook_and_generation(context, current_generation, hook)
+            .inspect_err(|error| self.observe_failure(error))
     }
 
     fn activate_with_hook_and_generation<H: ActivationHook>(
@@ -183,6 +214,9 @@ impl CapabilityActivationController {
         lifecycle
             .transition_to(LifecycleState::Active)
             .map_err(ActivationError::from)?;
+        if let Some(events) = &self.events {
+            events.after_activation(context);
+        }
         hook.after_activation(context);
         Ok(())
     }
@@ -195,10 +229,39 @@ impl CapabilityActivationController {
     ) -> Result<(), ActivationError> {
         self.lifecycle_guard()
             .validate_lease(current_generation)
-            .map_err(ActivationError::from)?;
-        self.constraints
-            .evaluate(context)
             .map_err(ActivationError::from)
+            .and_then(|()| {
+                self.constraints
+                    .evaluate(context)
+                    .map_err(ActivationError::from)
+            })
+            .inspect_err(|error| self.observe_failure(error))
+    }
+
+    fn observe_failure(&self, error: &ActivationError) {
+        let Some(events) = &self.events else {
+            return;
+        };
+        let reason = match error {
+            ActivationError::Constraint(violation) => {
+                events.violation(violation);
+                return;
+            }
+            ActivationError::Hook(_) => "activation_hook_rejected",
+            ActivationError::Lifecycle(error) => match error {
+                LifecycleError::LeaseExpired => "lease_expired",
+                LifecycleError::GenerationMismatch { .. } => "generation_mismatch",
+                LifecycleError::NotInvocable(_) => "not_invocable",
+                LifecycleError::InvalidTransition { .. } => "invalid_transition",
+            },
+        };
+        events.emitter.emit(
+            events.actor.clone(),
+            CapabilityEvent::PolicyViolation {
+                id: events.id.clone(),
+                reason: reason.into(),
+            },
+        );
     }
 
     /// Alias for [`Self::validate_runtime`].
@@ -212,16 +275,27 @@ impl CapabilityActivationController {
 
     /// Begin detaching an active capability without evaluating constraints.
     pub fn detach(&mut self) -> Result<(), ActivationError> {
-        self.lifecycle_guard()
-            .transition_to(LifecycleState::Detaching)
-            .map_err(ActivationError::from)
+        let mut lifecycle = self.lifecycle_guard();
+        lifecycle.transition_to(LifecycleState::Detaching)?;
+        if let Some(events) = &self.events {
+            events.emitter.emit(
+                events.actor.clone(),
+                CapabilityEvent::CapabilityDetaching {
+                    id: events.id.clone(),
+                },
+            );
+        }
+        Ok(())
     }
 
     /// Revoke from any non-revoked lifecycle state.
     pub fn revoke(&mut self) -> Result<(), ActivationError> {
-        self.lifecycle_guard()
-            .revoke()
-            .map_err(ActivationError::from)
+        let mut lifecycle = self.lifecycle_guard();
+        lifecycle.revoke()?;
+        if let Some(events) = &self.events {
+            events.after_revocation();
+        }
+        Ok(())
     }
 
     /// Revoke and notify a lifecycle hook. Constraints never block revocation.

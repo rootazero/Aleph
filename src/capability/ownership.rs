@@ -45,7 +45,7 @@ pub enum LifetimeScope {
 /// canonical run-id type yet (the only `RunId` in-tree is a deserialization
 /// params struct in `gateway::handlers::agent`). Align this to an existing
 /// type the moment one is introduced — see the module-level note.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize)]
 pub struct RunId(pub String);
 
 /// A task identifier.
@@ -53,11 +53,11 @@ pub struct RunId(pub String);
 /// Same reasoning as [`RunId`]: no canonical task-id type exists yet (the
 /// domain-layer `TaskId` lives behind `#[cfg(test)]`), so this is a plain
 /// newtype until one is introduced.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize)]
 pub struct TaskId(pub String);
 
 /// Who owns a capability binding.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub enum OwnerRef {
     /// Owned by the runtime itself (process-global, unowned-by-any-scope).
     Runtime,
@@ -77,7 +77,7 @@ pub enum OwnerRef {
 /// module must not depend on [`crate::capability::descriptor::CapabilityKind`]
 /// (that would make `descriptor` ↔ `ownership` a cycle), and the strings are
 /// compared against the kind/name spellings at describe time, not here.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Hash, serde::Serialize)]
 pub struct VisibilityScope {
     /// The principal / agent allowed. `None` = unrestricted.
     pub principal: Option<String>,

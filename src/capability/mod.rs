@@ -35,11 +35,13 @@ use std::sync::OnceLock;
 
 pub mod activation;
 pub mod ambient;
+pub mod audit;
 pub mod backend;
 pub mod constraints;
 pub mod descriptor;
 pub mod diagnostic_control;
 pub mod effect_claim;
+pub mod events;
 pub mod facade;
 pub mod grant;
 pub mod lifecycle;

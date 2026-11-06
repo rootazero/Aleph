@@ -19,6 +19,7 @@
 
 use crate::acp::manager::SessionKey;
 use crate::capability::descriptor::{CapabilityDescriptor, CapabilityId};
+use crate::capability::events::{AuditedPolicyEngine, CapabilityEventEmitter};
 use crate::capability::ownership::{
     LifetimeScope, OwnerGeneration, OwnerRef, OwnershipTree, VisibilityScope,
 };
@@ -105,6 +106,12 @@ impl PolicyEngine {
     #[must_use]
     pub fn new(tree: OwnershipTree) -> Self {
         Self { tree }
+    }
+
+    /// Observe capability-specific policy gates without changing their decisions.
+    #[must_use]
+    pub fn with_events(self, events: CapabilityEventEmitter) -> AuditedPolicyEngine {
+        AuditedPolicyEngine::new(self, events)
     }
 
     /// Resolve a capability for the given principal and visibility scope.
@@ -472,7 +479,10 @@ mod tests {
         let descriptor = fake_descriptor(cap.clone(), vis.clone(), LifetimeScope::Runtime);
         let result = policy.resolve(&cap, &wrong_principal, &vis, &descriptor);
 
-        assert!(matches!(result, Err(PolicyDenial::PrincipalMismatch { .. })));
+        assert!(matches!(
+            result,
+            Err(PolicyDenial::PrincipalMismatch { .. })
+        ));
     }
 
     #[test]
@@ -630,7 +640,10 @@ mod tests {
         policy.tree.bump(LifetimeScope::Runtime).unwrap();
 
         let result = policy.validate_lease(&lease);
-        assert!(matches!(result, Err(PolicyDenial::GenerationMismatch { .. })));
+        assert!(matches!(
+            result,
+            Err(PolicyDenial::GenerationMismatch { .. })
+        ));
     }
 
     #[test]

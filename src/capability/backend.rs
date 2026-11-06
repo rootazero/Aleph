@@ -10,6 +10,7 @@ use crate::capability::descriptor::{
     CapabilityDescriptor, CapabilityFacet, CapabilityFacets, CapabilityId, CapabilityKind,
     CapabilityRevision, ProjectionMetadata, SchemaRef,
 };
+use crate::capability::events::{CapabilityEvent, CapabilityEventEmitter, HandlerResult};
 use crate::capability::facade::{CapabilitySnapshot, Cursor, Scope};
 use crate::capability::ownership::{LifetimeScope, OwnerRef, VisibilityScope};
 use crate::sync_primitives::Arc;
@@ -88,12 +89,22 @@ struct HandlerRegistryState {
 #[derive(Clone, Default)]
 pub struct CapabilityHandlerRegistry {
     state: Arc<RwLock<HandlerRegistryState>>,
+    events: Option<CapabilityEventEmitter>,
 }
 
 impl CapabilityHandlerRegistry {
     #[must_use]
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Observe this registry's invocations; internal dispatch uses Runtime as actor.
+    #[must_use]
+    pub fn with_events(self, events: CapabilityEventEmitter) -> Self {
+        Self {
+            events: Some(events),
+            ..self
+        }
     }
 
     pub fn register(
@@ -140,6 +151,11 @@ impl CapabilityHandlerRegistry {
         id: &CapabilityId,
         input: Value,
     ) -> Result<Value, CapabilityDispatchError> {
+        let operation = input
+            .get("operation")
+            .and_then(Value::as_str)
+            .unwrap_or("invoke")
+            .to_owned();
         let handler = {
             let state = self
                 .state
@@ -149,9 +165,27 @@ impl CapabilityHandlerRegistry {
                 .entries
                 .get(id)
                 .map(|entry| Arc::clone(&entry.handler))
+        };
+        let result = handler
+            .ok_or_else(|| CapabilityDispatchError::NotFound(id.clone()))
+            .and_then(|handler| handler.invoke(input));
+        if let Some(events) = &self.events {
+            let handler_result = match &result {
+                Ok(_) => HandlerResult::Success,
+                Err(CapabilityDispatchError::InvalidInput(_)) => HandlerResult::InvalidInput,
+                Err(CapabilityDispatchError::Execution(_)) => HandlerResult::ExecutionFailed,
+                Err(CapabilityDispatchError::NotFound(_)) => HandlerResult::NotFound,
+            };
+            events.emit(
+                OwnerRef::Runtime,
+                CapabilityEvent::CapabilityInvoked {
+                    id: id.clone(),
+                    operation,
+                    handler_result,
+                },
+            );
         }
-        .ok_or_else(|| CapabilityDispatchError::NotFound(id.clone()))?;
-        handler.invoke(input)
+        result
     }
 
     #[must_use]
