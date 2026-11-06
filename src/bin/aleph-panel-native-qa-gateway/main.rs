@@ -21,7 +21,7 @@ use axum::{
 use base64::Engine;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::sync::{oneshot, Mutex, Notify};
 use tower_http::services::{ServeDir, ServeFile};
 
@@ -429,8 +429,9 @@ async fn control_loop(
     mut server: Option<tokio::task::JoinHandle<Result<(), std::io::Error>>>,
     mut shutdown: Option<oneshot::Sender<()>>,
 ) -> anyhow::Result<()> {
-    let mut input = BufReader::new(tokio::io::stdin()).lines();
+    let mut input = BufReader::new(tokio::io::stdin());
     let mut output = tokio::io::BufWriter::new(tokio::io::stdout());
+    let mut line = Vec::new();
     write_json(
         &mut output,
         &Ready {
@@ -441,8 +442,25 @@ async fn control_loop(
         },
     )
     .await?;
-    while let Some(line) = input.next_line().await? {
+    loop {
+        line.clear();
+        if input
+            .by_ref()
+            .take(16385)
+            .read_until(b'\n', &mut line)
+            .await?
+            == 0
+        {
+            break;
+        }
         if line.len() > 16384 {
+            let mut discarded = [0; 4096];
+            while !line.ends_with(b"\n") {
+                let count = input.read(&mut discarded).await?;
+                if count == 0 || discarded[..count].contains(&b'\n') {
+                    break;
+                }
+            }
             write_json(
                 &mut output,
                 &ErrorMessage {
@@ -455,7 +473,23 @@ async fn control_loop(
             .await?;
             continue;
         }
-        let command: Command = match serde_json::from_str(&line) {
+        let line = match std::str::from_utf8(&line) {
+            Ok(line) => line.trim_end_matches('\n').trim_end_matches('\r'),
+            Err(_) => {
+                write_json(
+                    &mut output,
+                    &ErrorMessage {
+                        v: 1,
+                        r#type: "error",
+                        run: &run,
+                        code: "bad_command",
+                    },
+                )
+                .await?;
+                continue;
+            }
+        };
+        let command: Command = match serde_json::from_str(line) {
             Ok(command) => command,
             Err(_) => {
                 write_json(
@@ -679,14 +713,14 @@ async fn control_loop(
                 match state.asset_a_gate {
                     AssetAGate::Held => {
                         state.asset_a_gate = AssetAGate::Released;
-                        "released_before_park"
+                        "ok"
                     }
                     AssetAGate::Parked => {
                         state.asset_a_gate = AssetAGate::Released;
                         state.asset_a_notify.notify_one();
                         "ok"
                     }
-                    AssetAGate::Idle | AssetAGate::Released => "released_before_park",
+                    AssetAGate::Idle | AssetAGate::Released => "ok",
                 }
             };
             let ack = Ack {
@@ -726,8 +760,14 @@ async fn control_loop(
                             Err("already_revoked")
                         }
                     }
-                    Err(error) if error.to_string() == "ambiguous_device" => Err("bad_state"),
-                    Err(_) => Err("already_revoked"),
+                    Err(error) => {
+                        let code = error.to_string();
+                        match code.as_str() {
+                            "unknown_device" | "device_not_found" => Err("not_found"),
+                            "ambiguous_device" => Err("bad_state"),
+                            _ => Err("internal"),
+                        }
+                    }
                 }
             };
             match result {
@@ -806,24 +846,34 @@ async fn control_loop(
                 state.asset_a_notify.notify_one();
             }
             if let Some(server) = server.take() {
-                if tokio::time::timeout(std::time::Duration::from_secs(5), server)
-                    .await
-                    .is_err()
-                {
-                    // Timeout on graceful shutdown; proceed anyway
-                }
+                let listener_closed = matches!(
+                    tokio::time::timeout(std::time::Duration::from_secs(5), server).await,
+                    Ok(Ok(()))
+                );
+                write_json(
+                    &mut output,
+                    &Stopped {
+                        v: 1,
+                        r#type: "stopped",
+                        run: &run,
+                        listener_closed,
+                        fixture_closed: true,
+                    },
+                )
+                .await?;
+            } else {
+                write_json(
+                    &mut output,
+                    &Stopped {
+                        v: 1,
+                        r#type: "stopped",
+                        run: &run,
+                        listener_closed: true,
+                        fixture_closed: true,
+                    },
+                )
+                .await?;
             }
-            write_json(
-                &mut output,
-                &Stopped {
-                    v: 1,
-                    r#type: "stopped",
-                    run: &run,
-                    listener_closed: true,
-                    fixture_closed: false,
-                },
-            )
-            .await?;
             continue;
         }
         write_json(
@@ -841,7 +891,11 @@ async fn control_loop(
         let _ = shutdown.send(());
     }
     if let Some(server) = server.take() {
-        let _ = tokio::time::timeout(std::time::Duration::from_secs(5), server).await;
+        match tokio::time::timeout(std::time::Duration::from_secs(5), server).await {
+            Ok(Ok(())) => {}
+            Ok(Err(error)) => return Err(error.into()),
+            Err(error) => return Err(error.into()),
+        }
     }
     Ok(())
 }
