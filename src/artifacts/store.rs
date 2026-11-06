@@ -3,10 +3,14 @@
 //! See the [module docs](super) for the on-disk layout and the isolation
 //! guarantees the session-key encoding provides.
 
+use std::collections::{HashMap, HashSet};
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, OnceLock, Weak};
+use std::time::{Duration, SystemTime};
 
 use tokio::fs;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tracing::warn;
 use uuid::Uuid;
 
@@ -28,6 +32,24 @@ const FALLBACK_MIME: &str = "application/octet-stream";
 
 /// Longest MIME type kept, in bytes.
 const MAX_MIME_BYTES: usize = 255;
+
+/// Largest sidecar the store will read.
+///
+/// A record is a handful of short strings, so 64 KiB is already far past a
+/// legitimate sidecar while still refusing a file that was swapped in behind
+/// the store's back before it is allocated.
+const MAX_SIDECAR_BYTES: u64 = 64 * 1024;
+
+/// Age past which an unreferenced blob or leftover temp file is certainly not
+/// part of an in-flight write.
+///
+/// A blob is published moments before its sidecar, so this only has to cover a
+/// slow disk plus process scheduling. An hour is comfortably beyond that and
+/// still reclaims crash debris on the next `put`.
+const ORPHAN_GRACE: Duration = Duration::from_secs(60 * 60);
+
+/// Table size at which dead publication-lock slots are pruned.
+const PUBLICATION_LOCK_PRUNE_AT: usize = 128;
 
 /// Durable, id-addressed blob storage rooted at one directory.
 pub struct ArtifactStore {
@@ -112,6 +134,12 @@ impl ArtifactStore {
         let dir = self.session_dir(session_key);
         fs::create_dir_all(&dir).await?;
 
+        // Publication plus eviction is one critical section per session:
+        // without it two concurrent puts each take a directory snapshot that
+        // contains the other's record and can evict it, so a `put` that
+        // returned `Ok` would name an artifact another `put` had deleted.
+        let _publishing = publication_lock(&dir).lock_owned().await;
+
         let record = ArtifactRecord {
             id: Uuid::new_v4().hyphenated().to_string(),
             session_key: session_key.to_string(),
@@ -123,17 +151,22 @@ impl ArtifactStore {
             created_at: chrono::Utc::now().timestamp_millis(),
         };
 
-        // Bytes first, sidecar second. A crash between the two leaves an orphan
-        // `.bin` that `list` never sees (it reads only `.json`), rather than a
-        // published record pointing at bytes that are not there.
-        write_atomic(&dir.join(format!("{}.bin", record.id)), bytes).await?;
-        let sidecar = serde_json::to_vec(&record)?;
-        write_atomic(&dir.join(format!("{}.json", record.id)), &sidecar).await?;
+        let blob = dir.join(format!("{}.bin", record.id));
+        let sidecar = dir.join(format!("{}.json", record.id));
+        // A failed publication undoes whatever this call already wrote: a blob
+        // without its sidecar is invisible to `list`, so it would sit outside
+        // the session cap forever and no eviction would ever revisit it.
+        if let Err(e) = publish(&blob, &sidecar, &record, bytes).await {
+            remove_quietly(&blob).await;
+            remove_quietly(&sidecar).await;
+            return Err(e);
+        }
 
         // The record this call just published is never a victim of this
         // call's eviction: `put` reports success, so the artifact it names
         // has to stay readable.
         evict_overflow(&dir, Some(record.id.as_str())).await;
+        reconcile_orphans(&dir).await;
 
         Ok(record)
     }
@@ -165,8 +198,9 @@ impl ArtifactStore {
     /// # Errors
     /// [`ArtifactError::InvalidId`] for a malformed id,
     /// [`ArtifactError::NotFound`] when the session has no such artifact,
-    /// [`ArtifactError::Io`] when the blob does not match the size its
-    /// sidecar declares.
+    /// [`ArtifactError::TooLarge`] when the sidecar or blob on disk exceeds
+    /// what the store is willing to read, [`ArtifactError::Io`] when the blob
+    /// does not match the size its sidecar declares.
     pub async fn read(
         &self,
         session_key: &str,
@@ -175,9 +209,14 @@ impl ArtifactStore {
         validate_id(id)?;
         let dir = self.session_dir(session_key);
 
-        let sidecar = read_or_not_found(&dir.join(format!("{id}.json")), id).await?;
+        let sidecar = read_bounded(&dir.join(format!("{id}.json")), id, MAX_SIDECAR_BYTES).await?;
         let record: ArtifactRecord = serde_json::from_slice(&sidecar)?;
-        let bytes = read_or_not_found(&dir.join(format!("{id}.bin")), id).await?;
+        // Read at most one byte past the size the sidecar claims, so a blob
+        // replaced by a much larger file is rejected instead of allocated in
+        // full. The claim is clamped to the store's own limit: a corrupt
+        // sidecar must not be able to raise the ceiling.
+        let limit = record.size.min(MAX_ARTIFACT_BYTES);
+        let bytes = read_bounded(&dir.join(format!("{id}.bin")), id, limit).await?;
 
         // The sidecar advertises the blob's size. Bytes that disagree with it
         // are a half-written remnant, and serving them would make every
@@ -214,13 +253,92 @@ impl ArtifactStore {
     }
 }
 
-/// Read a file, mapping "missing" onto [`ArtifactError::NotFound`].
-async fn read_or_not_found(path: &Path, id: &str) -> Result<Vec<u8>, ArtifactError> {
-    match fs::read(path).await {
-        Ok(bytes) => Ok(bytes),
-        Err(e) if e.kind() == ErrorKind::NotFound => Err(ArtifactError::NotFound(id.to_string())),
-        Err(e) => Err(e.into()),
+/// Per-directory publication locks.
+///
+/// Store instances share nothing but their root path, so the table is
+/// process-global. The daemon is a singleton, which makes a process-local lock
+/// a complete answer rather than a partial one.
+#[derive(Default)]
+struct PublicationLocks {
+    slots: std::sync::Mutex<HashMap<PathBuf, Weak<tokio::sync::Mutex<()>>>>,
+}
+
+impl PublicationLocks {
+    /// Resolve the lock for `dir`, creating it when no live holder exists.
+    ///
+    /// Upgrade-or-insert happens under the table's own mutex, so two tasks
+    /// racing on one directory always end up with the same `Arc`.
+    fn slot(&self, dir: &Path) -> Arc<tokio::sync::Mutex<()>> {
+        let mut slots = self.slots.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(live) = slots.get(dir).and_then(Weak::upgrade) {
+            return live;
+        }
+        if slots.len() >= PUBLICATION_LOCK_PRUNE_AT {
+            slots.retain(|_, weak| weak.strong_count() > 0);
+        }
+        let fresh = Arc::new(tokio::sync::Mutex::new(()));
+        slots.insert(dir.to_path_buf(), Arc::downgrade(&fresh));
+        fresh
     }
+}
+
+/// The lock serializing publication and eviction of one session directory.
+fn publication_lock(dir: &Path) -> Arc<tokio::sync::Mutex<()>> {
+    static LOCKS: OnceLock<PublicationLocks> = OnceLock::new();
+    LOCKS.get_or_init(PublicationLocks::default).slot(dir)
+}
+
+/// Write the blob, then its sidecar.
+///
+/// Bytes first, sidecar second: a crash between the two leaves an orphan `.bin`
+/// that `list` never sees (it reads only `.json`), rather than a published
+/// record pointing at bytes that are not there.
+async fn publish(
+    blob: &Path,
+    sidecar_path: &Path,
+    record: &ArtifactRecord,
+    bytes: &[u8],
+) -> Result<(), ArtifactError> {
+    write_atomic(blob, bytes).await?;
+    let sidecar = serde_json::to_vec(record)?;
+    write_atomic(sidecar_path, &sidecar).await
+}
+
+/// Read at most `limit` bytes, mapping "missing" onto [`ArtifactError::NotFound`]
+/// and a longer file onto [`ArtifactError::TooLarge`].
+///
+async fn read_bounded(path: &Path, id: &str, limit: u64) -> Result<Vec<u8>, ArtifactError> {
+    let file = match fs::File::open(path).await {
+        Ok(file) => file,
+        Err(e) if e.kind() == ErrorKind::NotFound => {
+            return Err(ArtifactError::NotFound(id.to_string()))
+        }
+        Err(e) => return Err(e.into()),
+    };
+
+    // Fail before allocating anything in the ordinary oversized case; the
+    // bounded read below is what holds if the file grows after this check.
+    match file.metadata().await {
+        Ok(metadata) if metadata.len() > limit => {
+            return Err(ArtifactError::TooLarge {
+                size: metadata.len(),
+                max: limit,
+            });
+        }
+        Ok(_) => {}
+        Err(e) => return Err(e.into()),
+    }
+
+    let mut bytes = Vec::new();
+    let mut limited = file.take(limit.saturating_add(1));
+    limited.read_to_end(&mut bytes).await?;
+    if bytes.len() as u64 > limit {
+        return Err(ArtifactError::TooLarge {
+            size: bytes.len() as u64,
+            max: limit,
+        });
+    }
+    Ok(bytes)
 }
 
 /// Parse every sidecar in `dir`, in whatever order the filesystem hands them
@@ -238,7 +356,8 @@ async fn read_records(dir: &Path) -> Result<Vec<ArtifactRecord>, ArtifactError> 
         if path.extension().and_then(|ext| ext.to_str()) != Some("json") {
             continue;
         }
-        let raw = match fs::read(&path).await {
+        let name = path.file_name().and_then(|name| name.to_str()).unwrap_or_default();
+        let raw = match read_bounded(&path, name, MAX_SIDECAR_BYTES).await {
             Ok(raw) => raw,
             Err(e) => {
                 warn!(path = %path.display(), error = %e, "skipping unreadable artifact sidecar");
@@ -332,21 +451,146 @@ async fn evict_overflow(dir: &Path, keep: Option<&str>) {
     }
 }
 
+/// Delete blobs and temp files that no published record references.
+///
+/// A crash between the blob write and the sidecar write, or an eviction whose
+/// blob deletion failed, leaves files under the session directory that
+/// `read_records` never sees. They do not count towards
+/// [`MAX_ARTIFACTS_PER_SESSION`], so no later eviction would ever revisit them
+/// and repeated damage could fill the disk the cap exists to protect.
+///
+/// Only files older than [`ORPHAN_GRACE`] are removed: the publication lock is
+/// process-local, so a second process's in-flight `.bin` — written moments
+/// before its sidecar — must not be mistaken for debris.
+async fn reconcile_orphans(dir: &Path) {
+    let mut entries = match fs::read_dir(dir).await {
+        Ok(entries) => entries,
+        Err(e) if e.kind() == ErrorKind::NotFound => return,
+        Err(e) => {
+            warn!(path = %dir.display(), error = %e, "artifact reconciliation skipped: cannot read session");
+            return;
+        }
+    };
+
+    let mut referenced = HashSet::new();
+    let mut candidates = Vec::new();
+    loop {
+        let entry = match entries.next_entry().await {
+            Ok(Some(entry)) => entry,
+            Ok(None) => break,
+            Err(e) => {
+                warn!(path = %dir.display(), error = %e, "artifact reconciliation stopped early");
+                break;
+            }
+        };
+        let path = entry.path();
+        match path.extension().and_then(|ext| ext.to_str()) {
+            Some("json") => {
+                if let Some(stem) = path.file_stem().and_then(|stem| stem.to_str()) {
+                    referenced.insert(stem.to_string());
+                }
+            }
+            Some("bin" | "tmp") => candidates.push(path),
+            _ => {}
+        }
+    }
+
+    for path in candidates {
+        if path.extension().and_then(|ext| ext.to_str()) == Some("bin")
+            && path
+                .file_stem()
+                .and_then(|stem| stem.to_str())
+                .is_some_and(|stem| referenced.contains(stem))
+        {
+            continue;
+        }
+        if !is_stale(&path).await {
+            continue;
+        }
+        remove_quietly(&path).await;
+    }
+}
+
+/// True when `path` has not been modified for longer than [`ORPHAN_GRACE`].
+/// An unreadable or uninterpretable mtime keeps the file.
+async fn is_stale(path: &Path) -> bool {
+    let Ok(metadata) = fs::metadata(path).await else {
+        return false;
+    };
+    let Ok(modified) = metadata.modified() else {
+        return false;
+    };
+    SystemTime::now()
+        .duration_since(modified)
+        .is_ok_and(|age| age > ORPHAN_GRACE)
+}
+
 /// Write via a sibling temp file plus rename, so readers only ever observe a
-/// complete file.
+/// complete file, and fsync both the bytes and the directory entry before the
+/// write is acknowledged: a `put` that returned `Ok` has to survive a crash.
 async fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), std::io::Error> {
     let mut tmp = path.as_os_str().to_os_string();
     tmp.push(".tmp");
     let tmp = PathBuf::from(tmp);
 
-    fs::write(&tmp, bytes).await?;
-    if let Err(e) = fs::rename(&tmp, path).await {
-        if let Err(cleanup) = fs::remove_file(&tmp).await {
-            warn!(path = %tmp.display(), error = %cleanup, "artifact write: could not remove temp file");
-        }
+    if let Err(e) = write_synced(&tmp, bytes).await {
+        remove_quietly(&tmp).await;
         return Err(e);
     }
+    if let Err(e) = fs::rename(&tmp, path).await {
+        remove_quietly(&tmp).await;
+        return Err(e);
+    }
+    sync_parent_dir(path).await;
     Ok(())
+}
+
+/// Write `bytes` to `path` and fsync them before returning.
+async fn write_synced(path: &Path, bytes: &[u8]) -> Result<(), std::io::Error> {
+    let mut file = fs::File::create(path).await?;
+    file.write_all(bytes).await?;
+    file.sync_all().await
+}
+
+/// Sync the directory whose entry the rename just changed, so the new name
+/// survives a crash.
+///
+/// Best-effort, and deliberately not an error path: the entry is already
+/// renamed into place, so there is nothing to roll back, and not every
+/// platform lets a directory be opened and synced this way (Windows needs
+/// `FILE_FLAG_BACKUP_SEMANTICS`, some filesystems reject `fsync` on a
+/// directory). The bytes themselves are already synced before the rename.
+#[cfg(unix)]
+async fn sync_parent_dir(path: &Path) {
+    let Some(dir) = path.parent() else {
+        return;
+    };
+    match fs::File::open(dir).await {
+        Ok(handle) => {
+            if let Err(e) = handle.sync_all().await {
+                warn!(path = %dir.display(), error = %e, "artifact write: could not sync directory");
+            }
+        }
+        Err(e) => {
+            warn!(path = %dir.display(), error = %e, "artifact write: could not open directory to sync");
+        }
+    }
+}
+
+/// Windows cannot open a directory as a file without
+/// `FILE_FLAG_BACKUP_SEMANTICS`, and its filesystem journals the rename.
+#[cfg(not(unix))]
+async fn sync_parent_dir(_path: &Path) {}
+
+/// Remove a file, treating "already gone" as success. Failures are logged and
+/// never surfaced: every caller is cleaning up after an attempt that already
+/// has a disposition.
+async fn remove_quietly(path: &Path) {
+    if let Err(e) = fs::remove_file(path).await {
+        if e.kind() != ErrorKind::NotFound {
+            warn!(path = %path.display(), error = %e, "artifact cleanup: could not remove file");
+        }
+    }
 }
 
 /// Reject anything that is not a bare lowercase hyphenated UUID.
