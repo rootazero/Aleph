@@ -18,13 +18,15 @@ pub struct ConstraintContext {
 
 impl ConstraintContext {
     /// Build a deterministic context for a UTC hour.
-    #[must_use]
-    pub fn at_hour(current_hour: u8) -> Self {
-        Self {
+    pub fn at_hour(current_hour: u8) -> Result<Self, ConstraintViolation> {
+        if current_hour > 23 {
+            return Err(ConstraintViolation::InvalidContext { current_hour });
+        }
+        Ok(Self {
             current_hour,
             active_resources: 0,
             conditions: BTreeMap::new(),
-        }
+        })
     }
 
     /// Build a context from the current UTC hour and resource count.
@@ -33,7 +35,7 @@ impl ConstraintContext {
             .duration_since(UNIX_EPOCH)
             .map_err(|_| ConstraintViolation::ClockUnavailable)?;
         let current_hour = ((elapsed.as_secs() / 3_600) % 24) as u8;
-        Ok(Self::at_hour(current_hour).with_active_resources(active_resources))
+        Ok(Self::at_hour(current_hour)?.with_active_resources(active_resources))
     }
 
     /// Set the number of resources already in use.
@@ -315,16 +317,24 @@ mod tests {
     use super::*;
 
     #[test]
+    fn context_rejects_hours_outside_a_day() {
+        assert!(matches!(
+            ConstraintContext::at_hour(24),
+            Err(ConstraintViolation::InvalidContext { current_hour: 24 })
+        ));
+    }
+
+    #[test]
     fn time_constraint_allows_hour_inside_window() {
         let constraint = TimeConstraint::new(9, 17).unwrap();
-        let context = ConstraintContext::at_hour(12);
+        let context = ConstraintContext::at_hour(12).unwrap();
         assert!(constraint.evaluate(&context).is_ok());
     }
 
     #[test]
     fn time_constraint_rejects_hour_outside_window() {
         let constraint = TimeConstraint::new(9, 17).unwrap();
-        let context = ConstraintContext::at_hour(18);
+        let context = ConstraintContext::at_hour(18).unwrap();
         assert!(matches!(
             constraint.evaluate(&context),
             Err(ConstraintViolation::TimeWindowClosed { .. })
@@ -335,17 +345,21 @@ mod tests {
     fn time_constraint_end_hour_is_exclusive() {
         let constraint = TimeConstraint::new(9, 17).unwrap();
         assert!(constraint
-            .evaluate(&ConstraintContext::at_hour(17))
+            .evaluate(&ConstraintContext::at_hour(17).unwrap())
             .is_err());
     }
 
     #[test]
     fn time_constraint_supports_overnight_windows() {
         let constraint = TimeConstraint::new(22, 6).unwrap();
-        assert!(constraint.evaluate(&ConstraintContext::at_hour(23)).is_ok());
-        assert!(constraint.evaluate(&ConstraintContext::at_hour(5)).is_ok());
         assert!(constraint
-            .evaluate(&ConstraintContext::at_hour(12))
+            .evaluate(&ConstraintContext::at_hour(23).unwrap())
+            .is_ok());
+        assert!(constraint
+            .evaluate(&ConstraintContext::at_hour(5).unwrap())
+            .is_ok());
+        assert!(constraint
+            .evaluate(&ConstraintContext::at_hour(12).unwrap())
             .is_err());
     }
 
@@ -360,14 +374,18 @@ mod tests {
     #[test]
     fn resource_constraint_allows_capacity_below_limit() {
         let constraint = ResourceConstraint::max_concurrent(3);
-        let context = ConstraintContext::at_hour(12).with_active_resources(2);
+        let context = ConstraintContext::at_hour(12)
+            .unwrap()
+            .with_active_resources(2);
         assert!(constraint.evaluate(&context).is_ok());
     }
 
     #[test]
     fn resource_constraint_rejects_capacity_at_limit() {
         let constraint = ResourceConstraint::max_concurrent(3);
-        let context = ConstraintContext::at_hour(12).with_active_resources(3);
+        let context = ConstraintContext::at_hour(12)
+            .unwrap()
+            .with_active_resources(3);
         assert!(matches!(
             constraint.evaluate(&context),
             Err(ConstraintViolation::ResourceLimitExceeded { .. })
@@ -377,21 +395,25 @@ mod tests {
     #[test]
     fn resource_constraint_rejects_capacity_above_limit() {
         let constraint = ResourceConstraint::max_concurrent(3);
-        let context = ConstraintContext::at_hour(12).with_active_resources(4);
+        let context = ConstraintContext::at_hour(12)
+            .unwrap()
+            .with_active_resources(4);
         assert!(constraint.evaluate(&context).is_err());
     }
 
     #[test]
     fn conditional_constraint_allows_matching_condition() {
         let constraint = ConditionalConstraint::required("network");
-        let context = ConstraintContext::at_hour(12).with_condition("network", true);
+        let context = ConstraintContext::at_hour(12)
+            .unwrap()
+            .with_condition("network", true);
         assert!(constraint.evaluate(&context).is_ok());
     }
 
     #[test]
     fn conditional_constraint_rejects_missing_condition() {
         let constraint = ConditionalConstraint::required("network");
-        let context = ConstraintContext::at_hour(12);
+        let context = ConstraintContext::at_hour(12).unwrap();
         assert!(matches!(
             constraint.evaluate(&context),
             Err(ConstraintViolation::ConditionNotMet { .. })
@@ -401,8 +423,19 @@ mod tests {
     #[test]
     fn conditional_constraint_rejects_false_condition() {
         let constraint = ConditionalConstraint::required("network");
-        let context = ConstraintContext::at_hour(12).with_condition("network", false);
+        let context = ConstraintContext::at_hour(12)
+            .unwrap()
+            .with_condition("network", false);
         assert!(constraint.evaluate(&context).is_err());
+    }
+
+    #[test]
+    fn conditional_constraint_can_require_false() {
+        let constraint = ConditionalConstraint::new("maintenance", false);
+        let context = ConstraintContext::at_hour(12)
+            .unwrap()
+            .with_condition("maintenance", false);
+        assert!(constraint.evaluate(&context).is_ok());
     }
 
     #[test]
@@ -413,6 +446,7 @@ mod tests {
             Constraint::condition("network"),
         ]);
         let context = ConstraintContext::at_hour(12)
+            .unwrap()
             .with_active_resources(1)
             .with_condition("network", true);
         assert!(constraints.evaluate(&context).is_ok());
@@ -424,7 +458,9 @@ mod tests {
             Constraint::time_window(9, 17).unwrap(),
             Constraint::resource_limit(2),
         ]);
-        let context = ConstraintContext::at_hour(18).with_active_resources(1);
+        let context = ConstraintContext::at_hour(18)
+            .unwrap()
+            .with_active_resources(1);
         assert!(matches!(
             constraints.evaluate(&context),
             Err(ConstraintViolation::TimeWindowClosed { .. })
@@ -434,7 +470,7 @@ mod tests {
     #[test]
     fn empty_constraint_set_allows_activation() {
         assert!(ConstraintSet::default()
-            .evaluate(&ConstraintContext::at_hour(0))
+            .evaluate(&ConstraintContext::at_hour(0).unwrap())
             .is_ok());
     }
 }

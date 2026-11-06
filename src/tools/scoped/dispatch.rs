@@ -1276,6 +1276,33 @@ impl ScopedToolService {
         Self::validate_plugin_capture(self.canonical_registry.as_deref(), lease)
     }
 
+    /// Enforce capability-layer runtime restrictions at the last dispatch seam.
+    /// The backend lease has just passed the facade's generation check, so its
+    /// captured generation is the explicit current-generation proof supplied to
+    /// the activation contract rather than inferred by the controller.
+    fn validate_activation_runtime(
+        &self,
+        name: &str,
+        current_generation: crate::capability::ownership::OwnerGeneration,
+    ) -> Result<(), ToolError> {
+        let Some(activation) = self.capability_activations.get(name) else {
+            return Ok(());
+        };
+        let context =
+            crate::capability::constraints::ConstraintContext::now(0).map_err(|error| {
+                ToolError::PermissionDenied {
+                    name: name.to_string(),
+                    reason: format!("capability runtime context unavailable: {error}"),
+                }
+            })?;
+        activation
+            .validate_runtime(current_generation, &context)
+            .map_err(|error| ToolError::PermissionDenied {
+                name: name.to_string(),
+                reason: format!("capability runtime restriction denied invocation: {error}"),
+            })
+    }
+
     fn validate_plugin_capture(
         registry: Option<&ToolHandlerRegistry>,
         lease: &CanonicalEntryLease,
@@ -1315,6 +1342,10 @@ impl ScopedToolService {
                         reason: format!("canonical capability lease is stale: {error:?}"),
                     }
                 })?;
+                self.validate_activation_runtime(
+                    &entry.descriptor.name,
+                    backend_lease.owner_generation,
+                )?;
                 let result = crate::tools::result_processing::with_recovery_tools(
                     self.recovery_tools(),
                     crate::tools::adapters::mcp_adapter::invoke_handler(
@@ -2962,5 +2993,80 @@ mod tests {
         assert!(out.value.get("_presentation").is_none(), "{:?}", out.value);
         assert!(out.metadata.presentation.is_some());
         assert_eq!(out.value["ok"], true);
+    }
+}
+
+#[cfg(test)]
+mod activation_dispatch_tests {
+    use super::*;
+    use crate::capability::activation::{ActivationError, CapabilityActivation};
+    use crate::capability::constraints::{ConstraintContext, ConstraintViolation};
+    use crate::capability::ownership::OwnerGeneration;
+    use crate::sync_primitives::Arc;
+    use std::collections::BTreeSet;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    struct RecordingActivation {
+        calls: AtomicUsize,
+    }
+
+    impl CapabilityActivation for RecordingActivation {
+        fn state(&self) -> crate::capability::lifecycle::LifecycleState {
+            crate::capability::lifecycle::LifecycleState::Active
+        }
+
+        fn attach(&mut self) -> Result<(), ActivationError> {
+            Ok(())
+        }
+
+        fn activate(
+            &mut self,
+            _context: &ConstraintContext,
+            _current_generation: OwnerGeneration,
+        ) -> Result<(), ActivationError> {
+            Ok(())
+        }
+
+        fn validate_runtime(
+            &self,
+            _current_generation: OwnerGeneration,
+            _context: &ConstraintContext,
+        ) -> Result<(), ActivationError> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            Err(ActivationError::Constraint(
+                ConstraintViolation::ConditionNotMet {
+                    name: "dispatch-test".into(),
+                    expected: true,
+                    actual: None,
+                },
+            ))
+        }
+
+        fn detach(&mut self) -> Result<(), ActivationError> {
+            Ok(())
+        }
+
+        fn revoke(&mut self) -> Result<(), ActivationError> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn dispatch_runtime_validation_calls_activation_contract() {
+        let activation = Arc::new(RecordingActivation {
+            calls: AtomicUsize::new(0),
+        });
+        let service = ScopedToolService::new(
+            Arc::new(crate::tools::runtime::LoopToolRegistry::new()),
+            BTreeSet::new(),
+        )
+        .with_capability_activation(
+            "tool",
+            Arc::clone(&activation) as Arc<dyn CapabilityActivation>,
+        );
+
+        let result = service.validate_activation_runtime("tool", OwnerGeneration(1));
+        assert!(matches!(result, Err(ToolError::PermissionDenied { .. })));
+        assert_eq!(activation.calls.load(Ordering::SeqCst), 1);
     }
 }

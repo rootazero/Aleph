@@ -8,6 +8,8 @@
 use crate::capability::constraints::{ConstraintContext, ConstraintSet, ConstraintViolation};
 use crate::capability::lifecycle::{CapabilityLifecycle, LifecycleError, LifecycleState};
 use crate::capability::ownership::OwnerGeneration;
+use crate::sync_primitives::Arc;
+use std::sync::Mutex;
 use std::time::Duration;
 
 /// Errors returned while attaching, activating, validating, or revoking a capability.
@@ -43,21 +45,50 @@ struct NoopActivationHook;
 
 impl ActivationHook for NoopActivationHook {}
 
+/// Runtime activation contract used by dispatchers and capability owners.
+pub trait CapabilityActivation: Send + Sync {
+    /// Current lifecycle state.
+    fn state(&self) -> LifecycleState;
+
+    /// Attach without evaluating runtime restrictions.
+    fn attach(&mut self) -> Result<(), ActivationError>;
+
+    /// Activate with an explicit current owner generation.
+    fn activate(
+        &mut self,
+        context: &ConstraintContext,
+        current_generation: OwnerGeneration,
+    ) -> Result<(), ActivationError>;
+
+    /// Validate the lease and current runtime restrictions immediately before use.
+    fn validate_runtime(
+        &self,
+        current_generation: OwnerGeneration,
+        context: &ConstraintContext,
+    ) -> Result<(), ActivationError>;
+
+    /// Detach without evaluating runtime restrictions.
+    fn detach(&mut self) -> Result<(), ActivationError>;
+
+    /// Revoke without evaluating runtime restrictions.
+    fn revoke(&mut self) -> Result<(), ActivationError>;
+}
+
 /// Lifecycle owner for a capability's activation constraints.
 #[derive(Debug, Clone)]
-pub struct CapabilityActivation {
-    lifecycle: CapabilityLifecycle,
+pub struct CapabilityActivationController {
+    lifecycle: Arc<Mutex<CapabilityLifecycle>>,
     constraints: ConstraintSet,
 }
 
-impl CapabilityActivation {
+impl CapabilityActivationController {
     /// Create an activation controller in the lifecycle's `Created` state.
     pub fn new<C>(ttl: Option<Duration>, owner_generation: OwnerGeneration, constraints: C) -> Self
     where
         C: Into<ConstraintSet>,
     {
         Self {
-            lifecycle: CapabilityLifecycle::new(ttl, owner_generation),
+            lifecycle: Arc::new(Mutex::new(CapabilityLifecycle::new(ttl, owner_generation))),
             constraints: constraints.into(),
         }
     }
@@ -69,19 +100,25 @@ impl CapabilityActivation {
         C: Into<ConstraintSet>,
     {
         Self {
-            lifecycle,
+            lifecycle: Arc::new(Mutex::new(lifecycle)),
             constraints: constraints.into(),
         }
     }
 
-    #[must_use]
-    pub const fn state(&self) -> LifecycleState {
-        self.lifecycle.state()
+    fn lifecycle_guard(&self) -> std::sync::MutexGuard<'_, CapabilityLifecycle> {
+        self.lifecycle
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
     #[must_use]
-    pub const fn lifecycle(&self) -> &CapabilityLifecycle {
-        &self.lifecycle
+    pub fn state(&self) -> LifecycleState {
+        self.lifecycle_guard().state()
+    }
+
+    #[must_use]
+    pub fn lifecycle(&self) -> CapabilityLifecycle {
+        self.lifecycle_guard().clone()
     }
 
     #[must_use]
@@ -91,35 +128,32 @@ impl CapabilityActivation {
 
     /// Attach the capability without evaluating activation constraints.
     pub fn attach(&mut self) -> Result<(), ActivationError> {
-        self.lifecycle
+        self.lifecycle_guard()
             .transition_to(LifecycleState::Attached)
             .map_err(ActivationError::from)
     }
 
-    /// Activate using the generation carried by this activation's lease.
-    ///
-    /// Call [`Self::activate_with_generation`] when the current owner
-    /// generation comes from an external ownership registry.
-    pub fn activate(&mut self, context: &ConstraintContext) -> Result<(), ActivationError> {
-        self.activate_with_generation(context, self.lifecycle.owner_generation())
-    }
-
     /// Activate after validating the attached lifecycle, lease, and constraints.
-    pub fn activate_with_generation(
+    ///
+    /// The current generation is supplied by the ownership authority. It must
+    /// not be derived from this activation's captured lease, otherwise an
+    /// owner rotation could be mistaken for a still-valid activation.
+    pub fn activate(
         &mut self,
         context: &ConstraintContext,
         current_generation: OwnerGeneration,
     ) -> Result<(), ActivationError> {
-        self.activate_with_hook_and_generation(context, current_generation, &NoopActivationHook)
+        self.activate_with_hook(context, current_generation, &NoopActivationHook)
     }
 
     /// Activate with a lifecycle hook and an explicit current owner generation.
     pub fn activate_with_hook<H: ActivationHook>(
         &mut self,
         context: &ConstraintContext,
+        current_generation: OwnerGeneration,
         hook: &H,
     ) -> Result<(), ActivationError> {
-        self.activate_with_hook_and_generation(context, self.lifecycle.owner_generation(), hook)
+        self.activate_with_hook_and_generation(context, current_generation, hook)
     }
 
     fn activate_with_hook_and_generation<H: ActivationHook>(
@@ -131,13 +165,14 @@ impl CapabilityActivation {
         // Do not evaluate constraints for any state other than Attached. This
         // preserves the lifecycle's invalid-transition error and keeps Created
         // -> Attached and revocation independent from runtime restrictions.
-        if self.lifecycle.state() != LifecycleState::Attached {
-            self.lifecycle
+        let mut lifecycle = self.lifecycle_guard();
+        if lifecycle.state() != LifecycleState::Attached {
+            lifecycle
                 .transition_to(LifecycleState::Active)
                 .map_err(ActivationError::from)?;
         }
 
-        self.lifecycle
+        lifecycle
             .validate_activation(current_generation)
             .map_err(ActivationError::from)?;
         self.constraints
@@ -145,7 +180,7 @@ impl CapabilityActivation {
             .map_err(ActivationError::from)?;
         hook.before_activation(context)
             .map_err(ActivationError::Hook)?;
-        self.lifecycle
+        lifecycle
             .transition_to(LifecycleState::Active)
             .map_err(ActivationError::from)?;
         hook.after_activation(context);
@@ -158,7 +193,7 @@ impl CapabilityActivation {
         current_generation: OwnerGeneration,
         context: &ConstraintContext,
     ) -> Result<(), ActivationError> {
-        self.lifecycle
+        self.lifecycle_guard()
             .validate_lease(current_generation)
             .map_err(ActivationError::from)?;
         self.constraints
@@ -177,14 +212,16 @@ impl CapabilityActivation {
 
     /// Begin detaching an active capability without evaluating constraints.
     pub fn detach(&mut self) -> Result<(), ActivationError> {
-        self.lifecycle
+        self.lifecycle_guard()
             .transition_to(LifecycleState::Detaching)
             .map_err(ActivationError::from)
     }
 
     /// Revoke from any non-revoked lifecycle state.
     pub fn revoke(&mut self) -> Result<(), ActivationError> {
-        self.lifecycle.revoke().map_err(ActivationError::from)
+        self.lifecycle_guard()
+            .revoke()
+            .map_err(ActivationError::from)
     }
 
     /// Revoke and notify a lifecycle hook. Constraints never block revocation.
@@ -192,6 +229,40 @@ impl CapabilityActivation {
         self.revoke()?;
         hook.after_revocation();
         Ok(())
+    }
+}
+
+impl CapabilityActivation for CapabilityActivationController {
+    fn state(&self) -> LifecycleState {
+        CapabilityActivationController::state(self)
+    }
+
+    fn attach(&mut self) -> Result<(), ActivationError> {
+        CapabilityActivationController::attach(self)
+    }
+
+    fn activate(
+        &mut self,
+        context: &ConstraintContext,
+        current_generation: OwnerGeneration,
+    ) -> Result<(), ActivationError> {
+        CapabilityActivationController::activate(self, context, current_generation)
+    }
+
+    fn validate_runtime(
+        &self,
+        current_generation: OwnerGeneration,
+        context: &ConstraintContext,
+    ) -> Result<(), ActivationError> {
+        CapabilityActivationController::validate_runtime(self, current_generation, context)
+    }
+
+    fn detach(&mut self) -> Result<(), ActivationError> {
+        CapabilityActivationController::detach(self)
+    }
+
+    fn revoke(&mut self) -> Result<(), ActivationError> {
+        CapabilityActivationController::revoke(self)
     }
 }
 
@@ -203,12 +274,21 @@ mod tests {
     use crate::capability::ownership::OwnerGeneration;
     use std::sync::Mutex;
 
-    fn activation(constraints: Vec<Constraint>) -> CapabilityActivation {
-        CapabilityActivation::new(None, OwnerGeneration(1), constraints)
+    fn activation(constraints: Vec<Constraint>) -> CapabilityActivationController {
+        CapabilityActivationController::new(None, OwnerGeneration(1), constraints)
     }
 
-    fn attach(activation: &mut CapabilityActivation) {
+    fn attach(activation: &mut CapabilityActivationController) {
         activation.attach().unwrap();
+    }
+
+    #[test]
+    fn cloned_controller_shares_lifecycle_revocation() {
+        let mut original = activation(vec![]);
+        original.attach().unwrap();
+        let clone = original.clone();
+        original.revoke().unwrap();
+        assert_eq!(clone.state(), LifecycleState::Revoked);
     }
 
     #[test]
@@ -216,7 +296,7 @@ mod tests {
         let mut activation = activation(vec![Constraint::time_window(9, 17).unwrap()]);
         attach(&mut activation);
         activation
-            .activate(&ConstraintContext::at_hour(12))
+            .activate(&ConstraintContext::at_hour(12).unwrap(), OwnerGeneration(1))
             .unwrap();
         assert_eq!(activation.state(), LifecycleState::Active);
     }
@@ -225,7 +305,8 @@ mod tests {
     fn activation_with_violated_time_constraint_fails_without_transition() {
         let mut activation = activation(vec![Constraint::time_window(9, 17).unwrap()]);
         attach(&mut activation);
-        let result = activation.activate(&ConstraintContext::at_hour(18));
+        let result =
+            activation.activate(&ConstraintContext::at_hour(18).unwrap(), OwnerGeneration(1));
         assert!(matches!(
             result,
             Err(ActivationError::Constraint(
@@ -239,9 +320,11 @@ mod tests {
     fn activation_with_violated_resource_constraint_fails() {
         let mut activation = activation(vec![Constraint::resource_limit(2)]);
         attach(&mut activation);
-        let context = ConstraintContext::at_hour(12).with_active_resources(2);
+        let context = ConstraintContext::at_hour(12)
+            .unwrap()
+            .with_active_resources(2);
         assert!(matches!(
-            activation.activate(&context),
+            activation.activate(&context, OwnerGeneration(1)),
             Err(ActivationError::Constraint(
                 ConstraintViolation::ResourceLimitExceeded { .. }
             ))
@@ -253,9 +336,9 @@ mod tests {
     fn activation_with_violated_conditional_constraint_fails() {
         let mut activation = activation(vec![Constraint::condition("network")]);
         attach(&mut activation);
-        let context = ConstraintContext::at_hour(12);
+        let context = ConstraintContext::at_hour(12).unwrap();
         assert!(matches!(
-            activation.activate(&context),
+            activation.activate(&context, OwnerGeneration(1)),
             Err(ActivationError::Constraint(
                 ConstraintViolation::ConditionNotMet { .. }
             ))
@@ -266,15 +349,20 @@ mod tests {
     fn constraints_are_evaluated_at_activation_time() {
         let mut activation = activation(vec![Constraint::time_window(9, 17).unwrap()]);
         attach(&mut activation);
-        assert!(activation.activate(&ConstraintContext::at_hour(8)).is_err());
-        activation.activate(&ConstraintContext::at_hour(9)).unwrap();
+        assert!(activation
+            .activate(&ConstraintContext::at_hour(8).unwrap(), OwnerGeneration(1))
+            .is_err());
+        activation
+            .activate(&ConstraintContext::at_hour(9).unwrap(), OwnerGeneration(1))
+            .unwrap();
         assert_eq!(activation.state(), LifecycleState::Active);
     }
 
     #[test]
     fn activation_cannot_skip_created_to_attached() {
         let mut activation = activation(vec![Constraint::condition("ready")]);
-        let result = activation.activate(&ConstraintContext::at_hour(12));
+        let result =
+            activation.activate(&ConstraintContext::at_hour(12).unwrap(), OwnerGeneration(1));
         assert!(matches!(
             result,
             Err(ActivationError::Lifecycle(
@@ -306,7 +394,8 @@ mod tests {
     fn revoked_activation_cannot_be_activated_even_with_valid_constraints() {
         let mut activation = activation(vec![]);
         activation.revoke().unwrap();
-        let result = activation.activate(&ConstraintContext::at_hour(12));
+        let result =
+            activation.activate(&ConstraintContext::at_hour(12).unwrap(), OwnerGeneration(1));
         assert!(matches!(
             result,
             Err(ActivationError::Lifecycle(
@@ -320,7 +409,7 @@ mod tests {
 
     #[test]
     fn expired_lease_blocks_activation_before_constraints() {
-        let mut activation = CapabilityActivation::new(
+        let mut activation = CapabilityActivationController::new(
             Some(Duration::from_millis(1)),
             OwnerGeneration(1),
             vec![Constraint::condition("missing")],
@@ -328,10 +417,44 @@ mod tests {
         attach(&mut activation);
         std::thread::sleep(Duration::from_millis(5));
         assert!(matches!(
-            activation.activate(&ConstraintContext::at_hour(12)),
+            activation.activate(&ConstraintContext::at_hour(12).unwrap(), OwnerGeneration(1)),
             Err(ActivationError::Lifecycle(LifecycleError::LeaseExpired))
         ));
         assert_eq!(activation.state(), LifecycleState::Attached);
+    }
+
+    #[test]
+    fn activation_rejects_stale_current_generation() {
+        let mut activation = activation(vec![]);
+        attach(&mut activation);
+        assert!(matches!(
+            activation.activate(&ConstraintContext::at_hour(12).unwrap(), OwnerGeneration(2)),
+            Err(ActivationError::Lifecycle(
+                LifecycleError::GenerationMismatch { .. }
+            ))
+        ));
+        assert_eq!(activation.state(), LifecycleState::Attached);
+    }
+
+    #[test]
+    fn detach_moves_active_capability_to_detaching() {
+        let mut activation = activation(vec![]);
+        attach(&mut activation);
+        activation
+            .activate(&ConstraintContext::at_hour(12).unwrap(), OwnerGeneration(1))
+            .unwrap();
+        activation.detach().unwrap();
+        assert_eq!(activation.state(), LifecycleState::Detaching);
+    }
+
+    #[test]
+    fn revoke_with_hook_notifies_without_constraint_evaluation() {
+        let mut activation = activation(vec![Constraint::condition("never")]);
+        attach(&mut activation);
+        let hook = RecordingHook::default();
+        activation.revoke_with_hook(&hook).unwrap();
+        assert_eq!(activation.state(), LifecycleState::Revoked);
+        assert_eq!(hook.events(), vec!["revoked"]);
     }
 
     #[test]
@@ -339,9 +462,11 @@ mod tests {
         let mut activation = activation(vec![Constraint::resource_limit(2)]);
         attach(&mut activation);
         activation
-            .activate(&ConstraintContext::at_hour(12))
+            .activate(&ConstraintContext::at_hour(12).unwrap(), OwnerGeneration(1))
             .unwrap();
-        let context = ConstraintContext::at_hour(12).with_active_resources(2);
+        let context = ConstraintContext::at_hour(12)
+            .unwrap()
+            .with_active_resources(2);
         assert!(matches!(
             activation.validate_runtime(OwnerGeneration(1), &context),
             Err(ActivationError::Constraint(
@@ -355,10 +480,16 @@ mod tests {
         let mut activation = activation(vec![Constraint::condition("missing")]);
         attach(&mut activation);
         activation
-            .activate(&ConstraintContext::at_hour(12).with_condition("missing", true))
+            .activate(
+                &ConstraintContext::at_hour(12)
+                    .unwrap()
+                    .with_condition("missing", true),
+                OwnerGeneration(1),
+            )
             .unwrap();
         assert!(matches!(
-            activation.validate_runtime(OwnerGeneration(2), &ConstraintContext::at_hour(12)),
+            activation
+                .validate_runtime(OwnerGeneration(2), &ConstraintContext::at_hour(12).unwrap()),
             Err(ActivationError::Lifecycle(
                 LifecycleError::GenerationMismatch { .. }
             ))
@@ -371,7 +502,11 @@ mod tests {
         attach(&mut activation);
         let hook = RecordingHook::default();
         activation
-            .activate_with_hook(&ConstraintContext::at_hour(12), &hook)
+            .activate_with_hook(
+                &ConstraintContext::at_hour(12).unwrap(),
+                OwnerGeneration(1),
+                &hook,
+            )
             .unwrap();
         assert_eq!(hook.events(), vec!["before", "after"]);
     }
@@ -382,7 +517,11 @@ mod tests {
         attach(&mut activation);
         let hook = RejectingHook;
         assert!(matches!(
-            activation.activate_with_hook(&ConstraintContext::at_hour(12), &hook),
+            activation.activate_with_hook(
+                &ConstraintContext::at_hour(12).unwrap(),
+                OwnerGeneration(1),
+                &hook
+            ),
             Err(ActivationError::Hook(_))
         ));
         assert_eq!(activation.state(), LifecycleState::Attached);
@@ -399,6 +538,10 @@ mod tests {
 
         fn after_activation(&self, _context: &ConstraintContext) {
             self.0.lock().unwrap().push("after");
+        }
+
+        fn after_revocation(&self) {
+            self.0.lock().unwrap().push("revoked");
         }
     }
 

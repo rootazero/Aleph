@@ -49,7 +49,7 @@ pub use deferred::DeferredTools;
 pub use progressive_disclosure::ProgressiveDisclosureRewriter;
 pub use traits::ToolDefinitionRewriter;
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use arc_swap::ArcSwap;
 use async_trait::async_trait;
@@ -111,6 +111,11 @@ pub struct ScopedToolService {
     /// Handle to the mounted Zahir facade for canonical lease validation.
     /// This is a reference to the existing authority, never a second source.
     pub(super) canonical_facade: Option<Arc<crate::capability::zahir_facade::ZahirFacade>>,
+    /// Optional activation controllers keyed by canonical tool name. The
+    /// controller is the capability-layer authority for runtime restrictions;
+    /// this service only invokes its validation at the handler seam.
+    pub(super) capability_activations:
+        BTreeMap<String, Arc<dyn crate::capability::activation::CapabilityActivation>>,
     visible_mcp_servers: Option<crate::tools::handlers::McpServerFilter>,
     pub(super) allowed: BTreeSet<String>,
     pub(super) subagent_tool: Option<Arc<SubagentTool>>,

@@ -4,7 +4,7 @@
 //! Lives alongside [`super`] so the trait impl in `mod.rs` and the dispatch
 //! body in [`super::dispatch`] can share these inherent helpers.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use serde_json::Value;
 
@@ -29,6 +29,7 @@ impl ScopedToolService {
         Self {
             canonical_registry: inner.canonical_registry(),
             canonical_facade: inner.canonical_facade(),
+            capability_activations: BTreeMap::new(),
             visible_mcp_servers: inner.visible_mcp_servers(),
             inner,
             allowed,
@@ -63,6 +64,20 @@ impl ScopedToolService {
                         // herdr removal (5dd337df1); the transport itself is still covered
     pub(crate) fn with_structured_rpc_transport(mut self) -> Self {
         self.result_transport = super::ResultTransport::StructuredRpc;
+        self
+    }
+
+    /// Attach a capability-layer activation controller for one canonical tool.
+    ///
+    /// Dispatch invokes this controller immediately before the handler and
+    /// supplies the generation captured by the canonical backend lease. The
+    /// canonical facade has already validated that lease at the same seam.
+    pub fn with_capability_activation(
+        mut self,
+        name: impl Into<String>,
+        activation: Arc<dyn crate::capability::activation::CapabilityActivation>,
+    ) -> Self {
+        self.capability_activations.insert(name.into(), activation);
         self
     }
 
