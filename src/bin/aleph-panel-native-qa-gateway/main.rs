@@ -105,10 +105,18 @@ struct Ack<'a> {
     status: &'a str,
 }
 
+#[derive(Clone, Copy)]
+enum AssetAGate {
+    Idle,
+    Held,
+    Parked,
+    Released,
+}
+
 #[derive(Clone)]
 struct GatewayState {
     run: String,
-    asset_a_held: bool,
+    asset_a_gate: AssetAGate,
     asset_a_notify: Arc<Notify>,
     fixture: Arc<Mutex<Fixture>>,
     manager: Arc<ExtensionManager>,
@@ -249,8 +257,9 @@ impl alephcore::gateway::native_qa::NativeQaRpcObserver for NativeQaObserver {
 async fn main() -> std::process::ExitCode {
     match run().await {
         Ok(()) => std::process::ExitCode::SUCCESS,
-        Err(_error) => {
+        Err(error) => {
             eprintln!("{}", r#"{"ok":false,"code":"internal"}"#);
+            eprintln!("helper failed: {error:#}");
             std::process::ExitCode::from(1)
         }
     }
@@ -372,7 +381,7 @@ async fn run() -> anyhow::Result<()> {
     }));
     let gateway_state = Arc::new(Mutex::new(GatewayState {
         run: args.nonce.clone(),
-        asset_a_held: false,
+        asset_a_gate: AssetAGate::Idle,
         asset_a_notify: Arc::new(Notify::new()),
         fixture: fixture.clone(),
         manager,
@@ -433,6 +442,19 @@ async fn control_loop(
     )
     .await?;
     while let Some(line) = input.next_line().await? {
+        if line.len() > 16384 {
+            write_json(
+                &mut output,
+                &ErrorMessage {
+                    v: 1,
+                    r#type: "error",
+                    run: &run,
+                    code: "bad_command",
+                },
+            )
+            .await?;
+            continue;
+        }
         let command: Command = match serde_json::from_str(&line) {
             Ok(command) => command,
             Err(_) => {
@@ -478,13 +500,35 @@ async fn control_loop(
                 .await?;
                 continue;
             }
-            let mut fixture = fixture.lock().await;
-            if fixture.bindings.contains_key(device)
-                || fixture
-                    .bindings
-                    .values()
-                    .any(|binding| binding.user == user && binding.actual.is_none())
-            {
+            let pairing = {
+                let mut fixture = fixture.lock().await;
+                if fixture.bindings.contains_key(device)
+                    || fixture
+                        .bindings
+                        .values()
+                        .any(|binding| binding.user == user && binding.actual.is_none())
+                {
+                    None
+                } else {
+                    let baseline = fixture
+                        .tokens
+                        .list_panel_devices()?
+                        .into_iter()
+                        .map(|row| row.device_id)
+                        .collect::<HashSet<_>>();
+                    let ticket = fixture.tokens.create_bootstrap_ticket(None, Some(user))?;
+                    fixture.bindings.insert(
+                        device.to_owned(),
+                        PairingBinding {
+                            user: user.to_owned(),
+                            baseline,
+                            actual: None,
+                        },
+                    );
+                    Some(ticket)
+                }
+            };
+            let Some(ticket) = pairing else {
                 write_json(
                     &mut output,
                     &ErrorMessage {
@@ -496,22 +540,7 @@ async fn control_loop(
                 )
                 .await?;
                 continue;
-            }
-            let baseline = fixture
-                .tokens
-                .list_panel_devices()?
-                .into_iter()
-                .map(|row| row.device_id)
-                .collect();
-            let ticket = fixture.tokens.create_bootstrap_ticket(None, Some(user))?;
-            fixture.bindings.insert(
-                device.to_owned(),
-                PairingBinding {
-                    user: user.to_owned(),
-                    baseline,
-                    actual: None,
-                },
-            );
+            };
             write_json(
                 &mut output,
                 &Pairing {
@@ -615,8 +644,7 @@ async fn control_loop(
             }
             {
                 let mut state = gateway_state.lock().await;
-                state.asset_a_held = true;
-                state.asset_a_notify = Arc::new(Notify::new());
+                state.asset_a_gate = AssetAGate::Held;
             }
             write_json(
                 &mut output,
@@ -646,23 +674,30 @@ async fn control_loop(
                 .await?;
                 continue;
             }
-            let notify = {
+            let status = {
                 let mut state = gateway_state.lock().await;
-                state.asset_a_held = false;
-                state.asset_a_notify.clone()
+                match state.asset_a_gate {
+                    AssetAGate::Held => {
+                        state.asset_a_gate = AssetAGate::Released;
+                        "released_before_park"
+                    }
+                    AssetAGate::Parked => {
+                        state.asset_a_gate = AssetAGate::Released;
+                        state.asset_a_notify.notify_one();
+                        "ok"
+                    }
+                    AssetAGate::Idle | AssetAGate::Released => "released_before_park",
+                }
             };
-            notify.notify_one();
-            write_json(
-                &mut output,
-                &Ack {
-                    v: 1,
-                    r#type: "ack",
-                    run: &run,
-                    id: command.id,
-                    command: "release_response",
-                    status: "ok",
-                },
-            )
+            let ack = Ack {
+                v: 1,
+                r#type: "ack",
+                run: &run,
+                id: command.id,
+                command: "release_response",
+                status,
+            };
+            write_json(&mut output, &ack)
             .await?;
             continue;
         }
@@ -681,49 +716,45 @@ async fn control_loop(
                 .await?;
                 continue;
             }
-            let mut fixture = fixture.lock().await;
-            let actual = match resolve_device(&mut fixture, device) {
-                Ok(actual) => actual,
-                Err(error) if error.to_string() == "device_not_found" => {
+            let result = {
+                let mut fixture = fixture.lock().await;
+                match resolve_device(&mut fixture, device) {
+                    Ok(actual) => {
+                        if fixture.tokens.revoke_panel_device(&actual)? {
+                            Ok(())
+                        } else {
+                            Err("already_revoked")
+                        }
+                    }
+                    Err(error) if error.to_string() == "ambiguous_device" => Err("bad_state"),
+                    Err(_) => Err("already_revoked"),
+                }
+            };
+            match result {
+                Ok(()) => {}
+                Err(code) => {
                     write_json(
                         &mut output,
                         &ErrorMessage {
                             v: 1,
                             r#type: "error",
                             run: &run,
-                            code: "already_revoked",
+                            code,
                         },
                     )
                     .await?;
                     continue;
                 }
-                Err(error) => return Err(error),
-            };
-            let revoked = fixture.tokens.revoke_panel_device(&actual)?;
-            if !revoked {
-                write_json(
-                    &mut output,
-                    &ErrorMessage {
-                        v: 1,
-                        r#type: "error",
-                        run: &run,
-                        code: "already_revoked",
-                    },
-                )
-                .await?;
-                continue;
             }
-            write_json(
-                &mut output,
-                &Ack {
-                    v: 1,
-                    r#type: "ack",
-                    run: &run,
-                    id: command.id,
-                    command: "revoke_exact",
-                    status: "ok",
-                },
-            )
+            let ack = Ack {
+                v: 1,
+                r#type: "ack",
+                run: &run,
+                id: command.id,
+                command: "revoke_exact",
+                status: "ok",
+            };
+            write_json(&mut output, &ack)
             .await?;
             continue;
         }
@@ -770,8 +801,17 @@ async fn control_loop(
             if let Some(shutdown) = shutdown.take() {
                 let _ = shutdown.send(());
             }
+            {
+                let mut state = gateway_state.lock().await;
+                state.asset_a_notify.notify_one();
+            }
             if let Some(server) = server.take() {
-                server.await??;
+                if tokio::time::timeout(std::time::Duration::from_secs(5), server)
+                    .await
+                    .is_err()
+                {
+                    // Timeout on graceful shutdown; proceed anyway
+                }
             }
             write_json(
                 &mut output,
@@ -780,7 +820,7 @@ async fn control_loop(
                     r#type: "stopped",
                     run: &run,
                     listener_closed: true,
-                    fixture_closed: true,
+                    fixture_closed: false,
                 },
             )
             .await?;
@@ -792,7 +832,7 @@ async fn control_loop(
                 v: 1,
                 r#type: "error",
                 run: &run,
-                code: "bad_state",
+                code: "bad_command",
             },
         )
         .await?;
@@ -801,7 +841,7 @@ async fn control_loop(
         let _ = shutdown.send(());
     }
     if let Some(server) = server.take() {
-        server.await??;
+        let _ = tokio::time::timeout(std::time::Duration::from_secs(5), server).await;
     }
     Ok(())
 }
@@ -875,8 +915,8 @@ async fn delay_asset_response(
     // A held request would instead be re-authorized under B, missing the late-body case.
     let wait = if path.starts_with("/tabs/project-a/") {
         let mut state = gateway_state.lock().await;
-        if state.asset_a_held {
-            state.asset_a_held = false;
+        if matches!(state.asset_a_gate, AssetAGate::Held) {
+            state.asset_a_gate = AssetAGate::Parked;
             Some(state.asset_a_notify.clone().notified_owned())
         } else {
             None
