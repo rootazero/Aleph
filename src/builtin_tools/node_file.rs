@@ -73,15 +73,27 @@ Example: {"node":"worker-1","direction":"push","local_path":"/tmp/build.sh","rem
     type Output = Value;
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
-        let (channel, declared) = match self.node_registry.resolve(&args.node) {
-            Ok(v) => v,
-            Err(ResolveError::NotFound) => {
-                return Err(AlephError::tool(format!("node '{}' not online", args.node)))
-            }
-            Err(e @ (ResolveError::Ambiguous(_) | ResolveError::NodeNotFound { .. })) => {
-                return Err(AlephError::tool(format!("node '{}' {e}", args.node)))
-            }
-        };
+        let (channel, declared, catalog_malformed) =
+            match self.node_registry.resolve_with_catalog(&args.node) {
+                Ok(v) => v,
+                Err(ResolveError::NotFound) => {
+                    return Err(AlephError::tool(format!("node '{}' not online", args.node)))
+                }
+                Err(e @ (ResolveError::Ambiguous(_) | ResolveError::NodeNotFound { .. })) => {
+                    return Err(AlephError::tool(format!("node '{}' {e}", args.node)))
+                }
+            };
+        // A peer whose declared catalog could not be parsed must NOT be read as
+        // "this node declares no commands": that reading silently switches the
+        // center-side fail-fast layer off for this node (the empty-catalog fast
+        // path below defers to node authority). Fail closed instead — the same
+        // rule `node_invoke` applies.
+        if catalog_malformed {
+            return Err(AlephError::tool(format!(
+                "node '{}' declared a malformed command catalog; refusing to invoke",
+                args.node
+            )));
+        }
         let timeout = args.timeout_ms.unwrap_or(DEFAULT_TIMEOUT_MS);
 
         let needed = match args.direction.as_str() {

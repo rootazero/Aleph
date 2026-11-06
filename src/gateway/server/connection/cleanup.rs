@@ -63,33 +63,38 @@ pub(super) async fn run_cleanup(
         );
     }
 
-    // 3. Cluster Phase 0b: drop this connection's node session if it was a
-    // node, and emit a `node.disconnected` lifecycle event.
-    let node_ident = ctx.node_registry.node_identity_by_conn(conn_id);
-    if ctx.node_registry.deregister(conn_id) {
-        if let Some((node_id, name)) = node_ident {
-            if let Some(store) = ctx.security_store.as_ref() {
-                if let Err(e) = store.touch_device(&node_id) {
-                    debug!(
-                        "failed to stamp node last_seen on disconnect for {}: {}",
-                        node_id, e
-                    );
-                }
-            }
-            if let Err(e) = ctx
-                .event_bus
-                .publish_json(&crate::gateway::event_bus::TopicEvent::new(
-                    "node.disconnected",
-                    serde_json::json!({"node_id": node_id, "name": name, "conn_id": conn_id}),
-                ))
-            {
-                warn!(
-                    error = %e,
-                    node_id = %node_id,
-                    conn_id = %conn_id,
-                    "failed to publish node.disconnected event"
+    // 3. Cluster node registry: drop this connection's node session if it was a
+    //    node, and emit a `node.disconnected` lifecycle event.
+    //
+    //    The registry hands back the session it actually removed, so the
+    //    identity published below comes from the SAME critical section that
+    //    removed it. Reading the identity separately first could name a
+    //    different session than the one removed (a re-announce on this same
+    //    connection between the two reads).
+    if let Some(session) = ctx.node_registry.deregister(conn_id) {
+        let node_id = session.node_id;
+        let name = session.device_name;
+        if let Some(store) = ctx.security_store.as_ref() {
+            if let Err(e) = store.touch_device(&node_id) {
+                debug!(
+                    "failed to stamp node last_seen on disconnect for {}: {}",
+                    node_id, e
                 );
             }
+        }
+        if let Err(e) = ctx
+            .event_bus
+            .publish_json(&crate::gateway::event_bus::TopicEvent::new(
+                "node.disconnected",
+                serde_json::json!({"node_id": node_id, "name": name, "conn_id": conn_id}),
+            ))
+        {
+            warn!(
+                error = %e,
+                node_id = %node_id,
+                conn_id = %conn_id,
+                "failed to publish node.disconnected event"
+            );
         }
     }
 

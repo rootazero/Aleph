@@ -36,7 +36,7 @@ pub use node_file_cmd::{FileReadCommand, FileWriteCommand, MAX_FILE_BYTES};
 pub use node_runtime::{CommandTable, NodeCommand};
 pub(crate) use registry::normalize_node_key;
 pub use registry::{
-    maybe_register_node, CommandDescriptor, Environment, NodeMatch, NodeRegistry, NodeSession,
-    ResolveError,
+    maybe_register_node, CommandDescriptor, Environment, EnvironmentStatus, NodeMatch,
+    NodeRegistry, NodeSession, NodeSummary, ResolveError,
 };
 pub use reverse_rpc::{PendingInvokes, ReverseRpcChannel, ReverseRpcError};
