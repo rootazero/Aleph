@@ -444,8 +444,7 @@ async fn control_loop(
     .await?;
     loop {
         line.clear();
-        if input
-            .by_ref()
+        if (&mut input)
             .take(16385)
             .read_until(b'\n', &mut line)
             .await?
@@ -848,7 +847,7 @@ async fn control_loop(
             if let Some(server) = server.take() {
                 let listener_closed = matches!(
                     tokio::time::timeout(std::time::Duration::from_secs(5), server).await,
-                    Ok(Ok(()))
+                    Ok(Ok(Ok(())))
                 );
                 write_json(
                     &mut output,
@@ -892,7 +891,8 @@ async fn control_loop(
     }
     if let Some(server) = server.take() {
         match tokio::time::timeout(std::time::Duration::from_secs(5), server).await {
-            Ok(Ok(())) => {}
+            Ok(Ok(Ok(()))) => {}
+            Ok(Ok(Err(error))) => return Err(error.into()),
             Ok(Err(error)) => return Err(error.into()),
             Err(error) => return Err(error.into()),
         }
