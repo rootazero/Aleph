@@ -30,6 +30,7 @@ impl ScopedToolService {
             canonical_registry: inner.canonical_registry(),
             canonical_facade: inner.canonical_facade(),
             capability_activations: BTreeMap::new(),
+            capability_constraint_context: None,
             visible_mcp_servers: inner.visible_mcp_servers(),
             inner,
             allowed,
@@ -72,12 +73,29 @@ impl ScopedToolService {
     /// Dispatch invokes this controller immediately before the handler and
     /// supplies the generation captured by the canonical backend lease. The
     /// canonical facade has already validated that lease at the same seam.
+    /// Also install [`Self::with_capability_constraint_context`]; without a
+    /// trusted current context this controller's invocations fail closed.
     pub fn with_capability_activation(
         mut self,
         name: impl Into<String>,
         activation: Arc<dyn crate::capability::activation::CapabilityActivation>,
     ) -> Self {
         self.capability_activations.insert(name.into(), activation);
+        self
+    }
+
+    /// Supply current runtime facts from the trusted invocation owner.
+    ///
+    /// The source receives only the canonical tool name, never model/RPC input.
+    /// It must account for other occupied slots (excluding this invocation)
+    /// and provide current conditions on each call. No source is fabricated
+    /// when absent. Services without activation controllers are unchanged.
+    #[must_use]
+    pub fn with_capability_constraint_context(
+        mut self,
+        source: Arc<super::CapabilityConstraintContextSource>,
+    ) -> Self {
+        self.capability_constraint_context = Some(source);
         self
     }
 

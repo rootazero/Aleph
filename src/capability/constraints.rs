@@ -38,7 +38,9 @@ impl ConstraintContext {
         Ok(Self::at_hour(current_hour)?.with_active_resources(active_resources))
     }
 
-    /// Set the number of resources already in use.
+    /// Set occupied slots excluding the activation/invocation being admitted.
+    /// Runtime dispatch consumes a new invocation slot even when its controller
+    /// is already Active; that lifecycle state is not itself an invocation slot.
     #[must_use]
     pub fn with_active_resources(mut self, active_resources: usize) -> Self {
         self.active_resources = active_resources;
@@ -144,8 +146,10 @@ impl ResourceConstraint {
         self.max_concurrent
     }
 
-    /// Activation consumes one capacity slot, so the current count must be
-    /// strictly below the configured maximum.
+    /// Each candidate activation/invocation consumes one new capacity slot.
+    /// The supplied count excludes that candidate, so it must be strictly
+    /// below the configured maximum. Accounting/reservations belong to the
+    /// invocation owner, not this evaluator.
     pub fn evaluate(&self, context: &ConstraintContext) -> Result<(), ConstraintViolation> {
         if context.active_resources < self.max_concurrent {
             Ok(())

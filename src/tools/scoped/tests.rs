@@ -5234,6 +5234,169 @@ mod a3 {
         assert_eq!(invoked.lock().unwrap().len(), 1);
     }
 
+    fn activation_gate_service(
+        constraints: Vec<crate::capability::constraints::Constraint>,
+        context: StdArc<StdMutex<crate::capability::constraints::ConstraintContext>>,
+    ) -> (ScopedToolService, StdArc<StdMutex<Vec<Invocation>>>) {
+        let registry = StdArc::new(ToolHandlerRegistry::new());
+        let invoked = StdArc::new(StdMutex::new(Vec::new()));
+        register(
+            &registry,
+            RecordingHandler {
+                definition: definition("terminal", false),
+                tag: "runtime-facts",
+                invoked: invoked.clone(),
+                partial_write: None,
+                own_identity: unsafe_identity(1),
+                overlap: None,
+            },
+        );
+        let generation = crate::capability::ownership::OwnerGeneration(0);
+        let mut controller = crate::capability::activation::CapabilityActivationController::new(
+            None,
+            generation,
+            constraints,
+        );
+        controller.attach().unwrap();
+        controller
+            .activate(&context.lock().unwrap(), generation)
+            .unwrap();
+        (
+            service(&registry)
+                .with_confirmation(StdArc::new(SequenceRequester::new([
+                    ApprovalOutcome::Approved,
+                    ApprovalOutcome::Approved,
+                ])))
+                .with_capability_activation("terminal", StdArc::new(controller))
+                .with_capability_constraint_context(StdArc::new(move |name| {
+                    assert_eq!(name, "terminal");
+                    Ok(context.lock().unwrap().clone())
+                })),
+            invoked,
+        )
+    }
+
+    #[tokio::test]
+    async fn activation_gate_current_conditions_reach_real_execute() {
+        let context = StdArc::new(StdMutex::new(
+            crate::capability::constraints::ConstraintContext::now(1)
+                .unwrap()
+                .with_condition("permitted", true),
+        ));
+        let (svc, invoked) = activation_gate_service(
+            vec![crate::capability::constraints::Constraint::condition(
+                "permitted",
+            )],
+            context.clone(),
+        );
+        let allowed = with_call_identity(
+            Some(identity("condition-allowed")),
+            svc.execute("terminal", json!({"action": "write"})),
+        )
+        .await;
+        assert!(
+            allowed.is_ok(),
+            "satisfied owner condition was lost: {allowed:?}"
+        );
+        assert_eq!(invoked.lock().unwrap().len(), 1);
+        *context.lock().unwrap() = crate::capability::constraints::ConstraintContext::now(1)
+            .unwrap()
+            .with_condition("permitted", false);
+        let denied = with_call_identity(
+            Some(identity("condition-denied")),
+            svc.execute("terminal", json!({"action": "write"})),
+        )
+        .await;
+        assert!(
+            matches!(denied, Err(ToolError::PermissionDenied { reason, .. }) if reason.contains("permitted"))
+        );
+        assert_eq!(
+            invoked.lock().unwrap().len(),
+            1,
+            "denied call had an effect"
+        );
+    }
+
+    #[tokio::test]
+    async fn activation_gate_nonzero_usage_and_exact_boundary_reach_real_execute() {
+        let context = StdArc::new(StdMutex::new(
+            crate::capability::constraints::ConstraintContext::now(1).unwrap(),
+        ));
+        let (svc, invoked) = activation_gate_service(
+            vec![crate::capability::constraints::Constraint::resource_limit(
+                2,
+            )],
+            context.clone(),
+        );
+        let allowed = with_call_identity(
+            Some(identity("usage-below-limit")),
+            svc.execute("terminal", json!({"action": "write"})),
+        )
+        .await;
+        assert!(
+            allowed.is_ok(),
+            "one other slot leaves room for this invocation: {allowed:?}"
+        );
+        assert_eq!(invoked.lock().unwrap().len(), 1);
+        *context.lock().unwrap() =
+            crate::capability::constraints::ConstraintContext::now(2).unwrap();
+        let denied = with_call_identity(
+            Some(identity("usage-at-limit")),
+            svc.execute("terminal", json!({"action": "write"})),
+        )
+        .await;
+        assert!(
+            matches!(denied, Err(ToolError::PermissionDenied { reason, .. }) if reason.contains("resource limit"))
+        );
+        assert_eq!(
+            invoked.lock().unwrap().len(),
+            1,
+            "full budget must not reach the handler"
+        );
+    }
+
+    #[tokio::test]
+    async fn activation_gate_missing_owner_context_fails_closed() {
+        let context = StdArc::new(StdMutex::new(
+            crate::capability::constraints::ConstraintContext::now(0).unwrap(),
+        ));
+        let (mut svc, invoked) = activation_gate_service(vec![], context);
+        svc.capability_constraint_context = None;
+        let denied = with_call_identity(
+            Some(identity("context-missing")),
+            svc.execute("terminal", json!({"action": "write"})),
+        )
+        .await;
+        assert!(
+            matches!(denied, Err(ToolError::PermissionDenied { reason, .. }) if reason.contains("context source"))
+        );
+        assert!(invoked.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn activation_gate_unavailable_owner_context_fails_closed() {
+        let context = StdArc::new(StdMutex::new(
+            crate::capability::constraints::ConstraintContext::now(0).unwrap(),
+        ));
+        let (svc, invoked) = activation_gate_service(vec![], context);
+        let reads = StdArc::new(std::sync::atomic::AtomicUsize::new(0));
+        let capture = reads.clone();
+        let svc = svc.with_capability_constraint_context(StdArc::new(move |_| {
+            capture.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Err(crate::capability::constraints::ConstraintViolation::ClockUnavailable)
+        }));
+        let denied = with_call_identity(
+            Some(identity("context-unavailable")),
+            svc.execute("terminal", json!({"action": "write"})),
+        )
+        .await;
+        assert!(
+            matches!(denied, Err(ToolError::PermissionDenied { reason, .. }) if reason.contains("context unavailable"))
+        );
+        assert_eq!(reads.load(std::sync::atomic::Ordering::SeqCst), 1);
+        assert!(invoked.lock().unwrap().is_empty());
+    }
+
     #[tokio::test]
     async fn canonical_dispatch_denies_runtime_constraint_before_handler_effect() {
         let registry = StdArc::new(ToolHandlerRegistry::new());
@@ -5271,6 +5434,7 @@ mod a3 {
 
         let svc = service(&registry)
             .with_capability_activation("terminal", StdArc::new(activation))
+            .with_capability_constraint_context(StdArc::new(move |_| Ok(runtime_context.clone())))
             .with_confirmation(StdArc::new(SequenceRequester::new([
                 ApprovalOutcome::Approved,
             ])));

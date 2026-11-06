@@ -103,6 +103,10 @@ impl Fixture {
             tree.clone(),
         );
         runtime.start().await.unwrap();
+        rusqlite::Connection::open(root.path().join("metadata.db"))
+            .unwrap()
+            .execute_batch("CREATE TABLE memory_dispatch_effect(value INTEGER)")
+            .unwrap();
         let registry = Arc::new(ToolHandlerRegistry::new());
         let calls = Arc::new(AtomicUsize::new(0));
         let entered = Arc::new(Notify::new());
@@ -150,9 +154,11 @@ impl Fixture {
     fn persisted(&self) -> i64 {
         rusqlite::Connection::open(self.root.path().join("metadata.db"))
             .unwrap()
-            .query_row("SELECT SUM(value) FROM memory_dispatch_effect", [], |row| {
-                row.get(0)
-            })
+            .query_row(
+                "SELECT COALESCE(SUM(value), 0) FROM memory_dispatch_effect",
+                [],
+                |row| row.get(0),
+            )
             .unwrap()
     }
 }
@@ -169,6 +175,96 @@ async fn call(service: &ScopedToolService, id: &str) -> Result<ToolOutput, ToolE
         ),
     )
     .await
+}
+
+fn activation_controller(
+    constraints: Vec<crate::capability::constraints::Constraint>,
+    context: &crate::capability::constraints::ConstraintContext,
+) -> crate::capability::activation::CapabilityActivationController {
+    let generation = crate::capability::ownership::OwnerGeneration(0);
+    let mut controller = crate::capability::activation::CapabilityActivationController::new(
+        None,
+        generation,
+        constraints,
+    );
+    controller.attach().unwrap();
+    controller.activate(context, generation).unwrap();
+    controller
+}
+
+#[tokio::test]
+async fn activation_gate_memory_allow_writes_once() {
+    let mut fixture = Fixture::new(false, "activation-memory-allow").await;
+    let context = crate::capability::constraints::ConstraintContext::now(0).unwrap();
+    let controller = activation_controller(vec![], &context);
+    fixture.service = fixture
+        .service
+        .with_capability_activation("memory_fixture", Arc::new(controller))
+        .with_capability_constraint_context(Arc::new(move |name| {
+            assert_eq!(name, "memory_fixture");
+            Ok(context.clone())
+        }));
+    fixture.release.notify_one();
+    let result = call(&fixture.service, "activation-memory-allow").await;
+    fixture.runtime.stop().await.unwrap();
+    assert!(result.is_ok(), "{result:?}");
+    assert_eq!(fixture.calls.load(Ordering::SeqCst), 1);
+    assert_eq!(fixture.persisted(), 1);
+}
+
+#[tokio::test]
+async fn activation_gate_memory_denied_writes_nothing() {
+    let mut fixture = Fixture::new(false, "activation-memory-denied").await;
+    let context = crate::capability::constraints::ConstraintContext::now(0)
+        .unwrap()
+        .with_condition("permitted", true);
+    let controller = activation_controller(
+        vec![crate::capability::constraints::Constraint::condition(
+            "permitted",
+        )],
+        &context,
+    );
+    let runtime_context = context.with_condition("permitted", false);
+    fixture.service = fixture
+        .service
+        .with_capability_activation("memory_fixture", Arc::new(controller))
+        .with_capability_constraint_context(Arc::new(move |_| Ok(runtime_context.clone())));
+    fixture.release.notify_one();
+    let result = call(&fixture.service, "activation-memory-denied").await;
+    fixture.runtime.stop().await.unwrap();
+    assert_eq!(
+        fixture.persisted(),
+        0,
+        "denied invocation wrote to SQLite: {result:?}"
+    );
+    assert_eq!(fixture.calls.load(Ordering::SeqCst), 0);
+    assert!(
+        matches!(result, Err(ToolError::PermissionDenied { reason, .. }) if reason.contains("runtime restriction"))
+    );
+}
+
+#[tokio::test]
+async fn activation_gate_memory_revoked_writes_nothing() {
+    let mut fixture = Fixture::new(false, "activation-memory-revoked").await;
+    let context = crate::capability::constraints::ConstraintContext::now(0).unwrap();
+    let mut controller = activation_controller(vec![], &context);
+    fixture.service = fixture
+        .service
+        .with_capability_activation("memory_fixture", Arc::new(controller.clone()))
+        .with_capability_constraint_context(Arc::new(move |_| Ok(context.clone())));
+    controller.revoke().unwrap();
+    fixture.release.notify_one();
+    let result = call(&fixture.service, "activation-memory-revoked").await;
+    fixture.runtime.stop().await.unwrap();
+    assert_eq!(
+        fixture.persisted(),
+        0,
+        "revoked invocation wrote to SQLite: {result:?}"
+    );
+    assert_eq!(fixture.calls.load(Ordering::SeqCst), 0);
+    assert!(
+        matches!(result, Err(ToolError::PermissionDenied { reason, .. }) if reason.contains("runtime restriction"))
+    );
 }
 
 #[tokio::test]

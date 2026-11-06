@@ -161,6 +161,57 @@ fn cold_lookup_materializes_only_requested_descriptor_and_warm_reuses_it() {
 }
 
 #[test]
+#[allow(clippy::arc_with_non_send_sync)]
+fn audited_resolver_keeps_requested_only_loading_warm_reuse_and_live_denials() {
+    use crate::capability::events::{
+        AuditedZahir, CapabilityEvent, CapabilityEventEmitter, InMemoryEventStream,
+    };
+    let (_, observed, _, tree) = setup(ResolverConfig::default());
+    let stream = Arc::new(InMemoryEventStream::new(8).unwrap());
+    let audited = Arc::new(AuditedZahir::new(
+        observed.clone(),
+        OwnerRef::Runtime,
+        CapabilityEventEmitter::new(stream.clone()),
+    ));
+    let resolver = CapabilityResolver::new(audited);
+    assert_eq!(lookup(&resolver, "a").unwrap().id, id("a"));
+    assert!(
+        tree.generation(&id("b"), &VisibilityScope::default())
+            .is_none(),
+        "auditing must not turn a requested lookup into sibling materialization"
+    );
+    assert_eq!(lookup(&resolver, "a").unwrap().id, id("a"));
+    assert_eq!(observed.loads.get(), 1);
+    assert_eq!(observed.descriptions.get(), 0);
+    assert_eq!(
+        observed.resolutions.get(),
+        0,
+        "metadata cannot authorize an invocation"
+    );
+    let lease = resolver
+        .resolve(Reference {
+            id: id("a"),
+            visibility: VisibilityScope::default(),
+        })
+        .unwrap();
+    assert_eq!(resolver.validate_lease(&lease), Ok(()));
+    assert!(tree.revoke(&id("a")));
+    assert_eq!(resolver.validate_lease(&lease), Err(ResolveError::Revoked));
+    assert!(
+        lookup(&resolver, "a").is_none(),
+        "warm metadata cannot outlive revocation"
+    );
+    let snapshot = stream.snapshot().unwrap();
+    assert_eq!(snapshot.records().len(), 1);
+    assert!(
+        matches!(snapshot.records()[0].event(), CapabilityEvent::PolicyViolation { id: denied, .. } if denied == &id("a"))
+    );
+}
+
+#[path = "resolver_audited_tests.rs"]
+mod audited_tests;
+
+#[test]
 fn lru_and_fifo_evict_their_real_victim_and_reload_it() {
     for (eviction, victim) in [(EvictionPolicy::Lru, "b"), (EvictionPolicy::Fifo, "a")] {
         let (resolver, observed, _, _) = setup(ResolverConfig {

@@ -47,7 +47,7 @@ mod skill_inline_tests;
 pub(crate) use crate::tools::dispatch_verdict::current_dispatch_verdict;
 pub use deferred::DeferredTools;
 pub use progressive_disclosure::ProgressiveDisclosureRewriter;
-pub use traits::ToolDefinitionRewriter;
+pub use traits::{CapabilityConstraintContextSource, ToolDefinitionRewriter};
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -116,6 +116,9 @@ pub struct ScopedToolService {
     /// this service only invokes its validation at the handler seam.
     pub(super) capability_activations:
         BTreeMap<String, Arc<dyn crate::capability::activation::CapabilityActivation>>,
+    /// Trusted owner-supplied current facts. Missing context fails closed only
+    /// for tools with an installed activation controller.
+    pub(super) capability_constraint_context: Option<Arc<CapabilityConstraintContextSource>>,
     visible_mcp_servers: Option<crate::tools::handlers::McpServerFilter>,
     pub(super) allowed: BTreeSet<String>,
     pub(super) subagent_tool: Option<Arc<SubagentTool>>,

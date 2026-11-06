@@ -436,6 +436,27 @@ impl crate::capability::facade::Zahir for AuditedZahir {
         self.inner.describe(scope)
     }
 
+    fn descriptor_revision(
+        &self,
+        reference: &crate::capability::facade::Reference,
+    ) -> Option<crate::capability::descriptor::CapabilityRevision> {
+        self.inner.descriptor_revision(reference)
+    }
+
+    fn lookup_descriptor(
+        &self,
+        reference: &crate::capability::facade::Reference,
+    ) -> Option<crate::capability::descriptor::CapabilityDescriptor> {
+        self.inner.lookup_descriptor(reference)
+    }
+
+    fn lookup_descriptor_for_cache(
+        &self,
+        reference: &crate::capability::facade::Reference,
+    ) -> Option<(crate::capability::descriptor::CapabilityDescriptor, bool)> {
+        self.inner.lookup_descriptor_for_cache(reference)
+    }
+
     fn resolve(
         &self,
         reference: crate::capability::facade::Reference,

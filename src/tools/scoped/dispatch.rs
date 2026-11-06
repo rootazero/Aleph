@@ -1170,6 +1170,16 @@ impl ScopedToolService {
                         name: name.clone(),
                         reason: "canonical capability facade is not mounted".into(),
                     })?;
+            // Both ordinary and Memory-owned canonical invocations cross this
+            // seam before admission/spawn. Do not gate only invoke_target:
+            // admitted Memory work deliberately owns a separate handler task.
+            facade
+                .validate_lease(backend_lease)
+                .map_err(|error| ToolError::PermissionDenied {
+                    name: name.clone(),
+                    reason: format!("canonical capability lease is stale: {error:?}"),
+                })?;
+            self.validate_activation_runtime(&name, backend_lease.owner_generation)?;
             let operation = facade.admit_memory(backend_lease).map_err(|error| {
                 ToolError::PermissionDenied {
                     name: name.clone(),
@@ -1288,13 +1298,18 @@ impl ScopedToolService {
         let Some(activation) = self.capability_activations.get(name) else {
             return Ok(());
         };
-        let context =
-            crate::capability::constraints::ConstraintContext::now(0).map_err(|error| {
-                ToolError::PermissionDenied {
-                    name: name.to_string(),
-                    reason: format!("capability runtime context unavailable: {error}"),
-                }
-            })?;
+        let source = self.capability_constraint_context.as_ref().ok_or_else(|| {
+            ToolError::PermissionDenied {
+                name: name.to_string(),
+                reason:
+                    "capability runtime restriction requires an invocation-owner context source"
+                        .into(),
+            }
+        })?;
+        let context = source(name).map_err(|error| ToolError::PermissionDenied {
+            name: name.to_string(),
+            reason: format!("capability runtime context unavailable: {error}"),
+        })?;
         activation
             .validate_runtime(current_generation, &context)
             .map_err(|error| ToolError::PermissionDenied {
@@ -1336,16 +1351,6 @@ impl ScopedToolService {
                             name: entry.descriptor.name.clone(),
                             reason: "canonical capability facade is not mounted".into(),
                         })?;
-                facade.validate_lease(&backend_lease).map_err(|error| {
-                    ToolError::PermissionDenied {
-                        name: entry.descriptor.name.clone(),
-                        reason: format!("canonical capability lease is stale: {error:?}"),
-                    }
-                })?;
-                self.validate_activation_runtime(
-                    &entry.descriptor.name,
-                    backend_lease.owner_generation,
-                )?;
                 let result = crate::tools::result_processing::with_recovery_tools(
                     self.recovery_tools(),
                     crate::tools::adapters::mcp_adapter::invoke_handler(

@@ -27,9 +27,14 @@ pub enum ActivationError {
 
 /// Hooks around the activation lifecycle boundary.
 ///
-/// A hook can reject activation before the lifecycle transition. The post-hook
-/// is intentionally infallible because the capability is already active at
-/// that point; callers should use runtime validation for subsequent failures.
+/// A hook can reject activation before the lifecycle transition. External hooks
+/// run without the lifecycle lock and may inspect or transition a shared clone.
+/// Preconditions are checked again after the pre-hook: a competing transition
+/// wins rather than being overwritten. Pre-hooks are not serialized with one
+/// another; only the successful commit and its internal event are serialized.
+/// The post-hook observes that commit, but a later transition (including
+/// revocation) may already have occurred. It is intentionally infallible and
+/// cannot roll the commit back; use runtime validation for subsequent use.
 pub trait ActivationHook {
     /// Run after lifecycle and constraint preconditions pass, before activation.
     fn before_activation(&self, _context: &ConstraintContext) -> Result<(), String> {
@@ -196,26 +201,31 @@ impl CapabilityActivationController {
         // Do not evaluate constraints for any state other than Attached. This
         // preserves the lifecycle's invalid-transition error and keeps Created
         // -> Attached and revocation independent from runtime restrictions.
-        let mut lifecycle = self.lifecycle_guard();
-        if lifecycle.state() != LifecycleState::Attached {
-            lifecycle
-                .transition_to(LifecycleState::Active)
-                .map_err(ActivationError::from)?;
+        {
+            let lifecycle = self.lifecycle_guard();
+            if lifecycle.state() != LifecycleState::Attached {
+                return Err(LifecycleError::InvalidTransition {
+                    from: lifecycle.state(),
+                    to: LifecycleState::Active,
+                }
+                .into());
+            }
+            lifecycle.validate_activation(current_generation)?;
+            self.constraints.evaluate(context)?;
         }
-
-        lifecycle
-            .validate_activation(current_generation)
-            .map_err(ActivationError::from)?;
-        self.constraints
-            .evaluate(context)
-            .map_err(ActivationError::from)?;
         hook.before_activation(context)
             .map_err(ActivationError::Hook)?;
-        lifecycle
-            .transition_to(LifecycleState::Active)
-            .map_err(ActivationError::from)?;
-        if let Some(events) = &self.events {
-            events.after_activation(context);
+        {
+            let mut lifecycle = self.lifecycle_guard();
+            // A pre-hook may reenter through a clone or race a revocation.
+            // Revalidate before committing; never overwrite the winning state.
+            lifecycle.validate_activation(current_generation)?;
+            lifecycle.transition_to(LifecycleState::Active)?;
+            if let Some(events) = &self.events {
+                // Keep internal commit events ordered with revocation events.
+                // Persistence sinks retain their documented no-reentry contract.
+                events.after_activation(context);
+            }
         }
         hook.after_activation(context);
         Ok(())
@@ -339,6 +349,10 @@ impl CapabilityActivation for CapabilityActivationController {
         CapabilityActivationController::revoke(self)
     }
 }
+
+#[cfg(test)]
+#[path = "activation_reentry_tests.rs"]
+mod reentry_tests;
 
 #[cfg(test)]
 mod tests {
