@@ -82,3 +82,10 @@ Fix-round scope notes:
 - `CapabilityLifecycle::transition_to` remains public because it predates Task 1 and changing it requires a Phase 8 call-site audit; the activation controller is the constrained public boundary for Task 1.
 - Resource accounting remains non-atomic and deferred as requested.
 - The dispatch activation map is intentionally opt-in. The production canonical dispatch seam is wired; later capability registration work must populate named controllers from its capability configuration.
+
+## Fix Round 2
+
+- Replaced the helper-only dispatch test with `tools::scoped::tests::a3::canonical_dispatch_denies_runtime_constraint_before_handler_effect`.
+- The test invokes the public `ScopedToolService::execute` API against a real canonical registry/facade and real `CapabilityActivationController` with a time-window constraint selected to exclude the current hour.
+- It asserts the returned `ToolError::PermissionDenied` names the runtime restriction and the recording handler's invocation list remains empty.
+- Evidence: `cargo test --lib canonical_dispatch_denies_runtime_constraint_before_handler_effect` passed **1/1**.

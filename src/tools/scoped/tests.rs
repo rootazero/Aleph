@@ -5235,6 +5235,58 @@ mod a3 {
     }
 
     #[tokio::test]
+    async fn canonical_dispatch_denies_runtime_constraint_before_handler_effect() {
+        let registry = StdArc::new(ToolHandlerRegistry::new());
+        let invoked = StdArc::new(StdMutex::new(Vec::new()));
+        register(
+            &registry,
+            RecordingHandler {
+                definition: definition("terminal", false),
+                tag: "handler1",
+                invoked: invoked.clone(),
+                partial_write: None,
+                own_identity: unsafe_identity(1),
+                overlap: None,
+            },
+        );
+
+        let runtime_context = crate::capability::constraints::ConstraintContext::now(0)
+            .expect("system clock must be available");
+        let start_hour = (runtime_context.current_hour() + 1) % 24;
+        let end_hour = (start_hour + 1) % 24;
+        let constraint =
+            crate::capability::constraints::Constraint::time_window(start_hour, end_hour).unwrap();
+        let mut activation = crate::capability::activation::CapabilityActivationController::new(
+            None,
+            crate::capability::ownership::OwnerGeneration(0),
+            vec![constraint],
+        );
+        activation.attach().unwrap();
+        activation
+            .activate(
+                &crate::capability::constraints::ConstraintContext::at_hour(start_hour).unwrap(),
+                crate::capability::ownership::OwnerGeneration(0),
+            )
+            .unwrap();
+
+        let svc = service(&registry)
+            .with_capability_activation("terminal", StdArc::new(activation))
+            .with_confirmation(StdArc::new(SequenceRequester::new([
+                ApprovalOutcome::Approved,
+            ])));
+        let result = with_call_identity(
+            Some(identity("runtime-constraint-denied")),
+            svc.execute("terminal", json!({"action": "write"})),
+        )
+        .await;
+
+        assert!(
+            matches!(result, Err(ToolError::PermissionDenied { reason, .. }) if reason.contains("runtime restriction"))
+        );
+        assert!(invoked.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
     async fn missing_canonical_facade_fails_closed_before_handler_effect() {
         let registry = StdArc::new(ToolHandlerRegistry::new());
         let invoked = StdArc::new(StdMutex::new(Vec::new()));
