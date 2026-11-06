@@ -301,7 +301,7 @@ async fn publish(
 ) -> Result<(), ArtifactError> {
     write_atomic(blob, bytes).await?;
     let sidecar = serde_json::to_vec(record)?;
-    write_atomic(sidecar_path, &sidecar).await
+    write_atomic(sidecar_path, &sidecar).await.map_err(ArtifactError::from)
 }
 
 /// Read at most `limit` bytes, mapping "missing" onto [`ArtifactError::NotFound`]
