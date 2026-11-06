@@ -600,6 +600,9 @@ async fn start_server_body(
     // Security store + vault construction (early — vault needed for API key
     // resolution).
     let auth_bundle = initialize_vault(final_port, server.node_registry.clone());
+    if let Some(reason) = auth_bundle.security_store_fallback.as_deref() {
+        return Err(format!("Cannot start with non-durable security store: {reason}").into());
+    }
 
     // Install the durable per-principal spend ledger on the same
     // `SecurityStore` every other durable consumer shares — see
@@ -859,13 +862,13 @@ async fn start_server_body(
     // withdraw it from a database nobody reads.
     let channel_pairing_store: Arc<dyn alephcore::gateway::pairing_store::PairingStore> = {
         let pairing_store_path = alephcore::utils::paths::get_pairing_db_path()
-            .unwrap_or_else(|_| PathBuf::from("/tmp/aleph_pairing.db"));
-        let store = SqlitePairingStore::new(&pairing_store_path)
-            .or_else(|e| {
-                eprintln!("Warning: Failed to create pairing store: {e}. Using in-memory.");
-                SqlitePairingStore::in_memory()
-            })
-            .map_err(|e| format!("Failed to create pairing store: {e}"))?;
+            .map_err(|e| format!("Failed to resolve pairing store path: {e}"))?;
+        let store = SqlitePairingStore::new(&pairing_store_path).map_err(|e| {
+            format!(
+                "Failed to create pairing store at {}: {e}",
+                pairing_store_path.display()
+            )
+        })?;
         Arc::new(store)
     };
 
@@ -1795,15 +1798,35 @@ async fn start_server_body(
         let app_cfg = app_config.read().await;
         // Build model → HttpProvider map from configured providers
         let mut provider_map = std::collections::HashMap::new();
+        let mut provider_owners = std::collections::HashMap::new();
         let mut provider_configs = Vec::new();
-        for (name, config) in &app_cfg.providers {
+        let mut providers = app_cfg.providers.iter().collect::<Vec<_>>();
+        providers.sort_by(|(left, _), (right, _)| left.cmp(right));
+        for (name, config) in providers {
             provider_configs.push((name.clone(), config.clone()));
-            if let Ok(http_provider) = build_http_provider(name, config) {
-                let provider = Arc::new(http_provider);
-                for model in &config.models {
-                    provider_map
-                        .entry(model.clone())
-                        .or_insert_with(|| provider.clone());
+            match build_http_provider(name, config) {
+                Ok(http_provider) => {
+                    let provider = Arc::new(http_provider);
+                    for model in &config.models {
+                        if let Some(existing) = provider_owners.get(model) {
+                            tracing::warn!(
+                                model = %model,
+                                first_provider = %existing,
+                                duplicate_provider = %name,
+                                "multiple providers claim the same model; using the first provider"
+                            );
+                            continue;
+                        }
+                        provider_owners.insert(model.clone(), name.clone());
+                        provider_map.insert(model.clone(), provider.clone());
+                    }
+                }
+                Err(error) => {
+                    tracing::warn!(
+                        provider = %name,
+                        error = %error,
+                        "provider failed to build; its models are unavailable"
+                    );
                 }
             }
         }
@@ -2646,9 +2669,24 @@ async fn start_server_body(
                     println!("  - RPC:        /a2a (sync), /a2a/stream (SSE)");
                     println!();
                 }
-            } else if !args.daemon {
-                println!("A2A: skipping server (no execution adapter available)");
-                println!();
+            } else {
+                let reason = match (
+                    agent_result.execution_adapter.is_some(),
+                    agent_result.agent_registry.is_some(),
+                ) {
+                    (false, false) => "no execution adapter or agent registry is available",
+                    (false, true) => "no execution adapter is available",
+                    (true, false) => "no agent registry is available",
+                    (true, true) => "the A2A dependencies are unavailable",
+                };
+                tracing::warn!(
+                    reason = %reason,
+                    "A2A is enabled but unavailable; the A2A server cannot start and outbound tools cannot be wired"
+                );
+                if !args.daemon {
+                    println!("A2A: unavailable ({reason})");
+                    println!();
+                }
             }
         } else if !args.daemon {
             println!("A2A protocol: disabled (set [a2a] enabled = true in config)");
