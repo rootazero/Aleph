@@ -4,7 +4,7 @@ use anyhow::{Context, Result};
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::fs;
-use std::io::Write;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
 use crate::export::{session_dir_name, ExportData, ExportSession};
@@ -461,18 +461,31 @@ fn verify_attachment_contents(
     expected_size: usize,
     expected_hash: &str,
 ) -> Result<()> {
-    let bytes = fs::read(path).context("Failed to read attachment for verification")?;
-    if bytes.len() != expected_size {
+    let mut file = fs::File::open(path).context("Failed to open attachment for verification")?;
+    let actual_size = file
+        .metadata()
+        .context("Failed to inspect attachment for verification")?
+        .len();
+    if actual_size != expected_size as u64 {
         anyhow::bail!(
             "Attachment {} size mismatch: expected {}, found {}",
             path.display(),
             expected_size,
-            bytes.len()
+            actual_size
         );
     }
     use sha2::{Digest, Sha256};
     let mut hasher = Sha256::new();
-    hasher.update(&bytes);
+    let mut buffer = [0; 64 * 1024];
+    loop {
+        let bytes_read = file
+            .read(&mut buffer)
+            .context("Failed to read attachment for verification")?;
+        if bytes_read == 0 {
+            break;
+        }
+        hasher.update(&buffer[..bytes_read]);
+    }
     let actual_hash = hex::encode(hasher.finalize());
     if actual_hash != expected_hash {
         anyhow::bail!("Attachment {} hash mismatch", path.display());
