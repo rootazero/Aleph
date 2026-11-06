@@ -1,0 +1,2 @@
+npm notice run npx
+npm notice run 'rust-doctor' . --rule rust_doctor::repo::hardcoded_credential=off --json
