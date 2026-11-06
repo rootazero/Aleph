@@ -285,7 +285,18 @@ impl PublicationLocks {
 /// The lock serializing publication and eviction of one session directory.
 fn publication_lock(dir: &Path) -> Arc<tokio::sync::Mutex<()>> {
     static LOCKS: OnceLock<PublicationLocks> = OnceLock::new();
-    LOCKS.get_or_init(PublicationLocks::default).slot(dir)
+    // `put` creates the directory first, so this normally collapses relative,
+    // absolute, and symlinked spellings onto one key. Keep lookup infallible if
+    // the directory disappears before canonicalization.
+    let key = std::fs::canonicalize(dir).unwrap_or_else(|_| {
+        if dir.is_absolute() {
+            return dir.to_path_buf();
+        }
+        std::env::current_dir()
+            .map(|cwd| cwd.join(dir))
+            .unwrap_or_else(|_| dir.to_path_buf())
+    });
+    LOCKS.get_or_init(PublicationLocks::default).slot(&key)
 }
 
 /// Write the blob, then its sidecar.
@@ -541,7 +552,7 @@ async fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), std::io::Error> {
         remove_quietly(&tmp).await;
         return Err(e);
     }
-    sync_parent_dir(path).await;
+    sync_parent_dir(path).await?;
     Ok(())
 }
 
@@ -555,32 +566,25 @@ async fn write_synced(path: &Path, bytes: &[u8]) -> Result<(), std::io::Error> {
 /// Sync the directory whose entry the rename just changed, so the new name
 /// survives a crash.
 ///
-/// Best-effort, and deliberately not an error path: the entry is already
-/// renamed into place, so there is nothing to roll back, and not every
-/// platform lets a directory be opened and synced this way (Windows needs
-/// `FILE_FLAG_BACKUP_SEMANTICS`, some filesystems reject `fsync` on a
-/// directory). The bytes themselves are already synced before the rename.
+/// On Unix, failures propagate so the write is not acknowledged without the
+/// directory-entry durability promised by [`write_atomic`]. The bytes
+/// themselves are already synced before the rename.
 #[cfg(unix)]
-async fn sync_parent_dir(path: &Path) {
+async fn sync_parent_dir(path: &Path) -> Result<(), std::io::Error> {
     let Some(dir) = path.parent() else {
-        return;
+        return Ok(());
     };
-    match fs::File::open(dir).await {
-        Ok(handle) => {
-            if let Err(e) = handle.sync_all().await {
-                warn!(path = %dir.display(), error = %e, "artifact write: could not sync directory");
-            }
-        }
-        Err(e) => {
-            warn!(path = %dir.display(), error = %e, "artifact write: could not open directory to sync");
-        }
-    }
+    let handle = fs::File::open(dir).await?;
+    handle.sync_all().await
 }
 
-/// Windows cannot open a directory as a file without
-/// `FILE_FLAG_BACKUP_SEMANTICS`, and its filesystem journals the rename.
+/// Non-Unix platforms retain best-effort behaviour: Windows cannot open a
+/// directory as a file without `FILE_FLAG_BACKUP_SEMANTICS`, and its
+/// filesystem journals the rename.
 #[cfg(not(unix))]
-async fn sync_parent_dir(_path: &Path) {}
+async fn sync_parent_dir(_path: &Path) -> Result<(), std::io::Error> {
+    Ok(())
+}
 
 /// Remove a file, treating "already gone" as success. Failures are logged and
 /// never surfaced: every caller is cleaning up after an attempt that already
