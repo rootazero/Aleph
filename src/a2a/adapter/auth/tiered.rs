@@ -1,13 +1,9 @@
-use crate::sync_primitives::Arc;
-
 use crate::a2a::domain::security::{Credentials, SecurityScheme, TrustLevel};
 use crate::a2a::domain::A2AError;
 use crate::a2a::port::authenticator::{
     A2AAction, A2AAuthContext, A2AAuthPrincipal, A2AAuthenticator,
 };
 use crate::a2a::port::A2AResult;
-
-use crate::sync_primitives::AsyncRwLock;
 
 use super::token_store::TokenStore;
 

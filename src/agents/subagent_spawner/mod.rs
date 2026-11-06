@@ -30,9 +30,7 @@ use crate::memory::extensions::MemoryExtensionRegistry;
 use crate::memory::store::raw_memory::RawMemoryStore;
 use crate::providers::AiProvider;
 use crate::routing::session_key::SessionKey;
-use crate::session::events::{
-    now_ms, MessageContent, SessionEvent, SessionEventRecord, TurnTrigger,
-};
+use crate::session::events::{now_ms, MessageContent, SessionEvent, TurnTrigger};
 use crate::session::service::{SessionId, SessionService};
 use crate::thinker::prompt_builder::{PromptBuilder, PromptConfig};
 use crate::tools::service::ToolService;

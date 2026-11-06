@@ -109,7 +109,7 @@ impl GenericAcpAdapter {
     /// `trust_level` → `PermissionPolicy`. Shared by `build_config` and
     /// `spawn_session`.
     fn permission_policy(&self) -> crate::acp::incoming::PermissionPolicy {
-        crate::acp::incoming::PermissionPolicy::from(self.trust_level)
+        crate::acp::incoming::PermissionPolicy::from(&self.trust_level)
     }
 }
 

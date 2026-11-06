@@ -39,12 +39,18 @@ pub enum PermissionPolicy {
     DenyAll,
 }
 
-impl From<crate::config::types::acp::TrustLevel> for PermissionPolicy {
-    fn from(level: crate::config::types::acp::TrustLevel) -> Self {
+impl From<&crate::config::types::acp::TrustLevel> for PermissionPolicy {
+    fn from(level: &crate::config::types::acp::TrustLevel) -> Self {
         match level {
             crate::config::types::acp::TrustLevel::Full => Self::ApproveAll,
             crate::config::types::acp::TrustLevel::Disabled => Self::DenyAll,
         }
+    }
+}
+
+impl From<crate::config::types::acp::TrustLevel> for PermissionPolicy {
+    fn from(level: crate::config::types::acp::TrustLevel) -> Self {
+        Self::from(&level)
     }
 }
 
@@ -567,7 +573,7 @@ fn apply_line_window(content: &str, line: Option<u64>, limit: Option<u64>) -> St
         return content.to_string();
     }
     let start = usize::try_from(line.unwrap_or(1).max(1) - 1).unwrap_or(usize::MAX);
-    let mut iter = content.lines().skip(start);
+    let iter = content.lines().skip(start);
     let windowed: Vec<&str> = match limit {
         Some(n) => {
             let count = usize::try_from(n).unwrap_or(usize::MAX);
