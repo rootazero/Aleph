@@ -745,10 +745,22 @@ impl Zahir for ZahirFacade {
         if self.adapter.registry.is_closed() {
             return None;
         }
-        let mut descriptor = if reference.id.namespace == TOOL_NAMESPACE {
-            let entry = self.adapter.registry.capture_entry(&reference.id.name)?;
-            self.reconcile_entry_binding(&reference.id.name);
-            self.tree.generation(&reference.id, &reference.visibility)?;
+        // Match describe's first-match order: eligible canonical Tool metadata,
+        // then generic metadata, even when its ID uses the Tool namespace.
+        let tool_entry = if reference.id.namespace == TOOL_NAMESPACE {
+            self.adapter
+                .registry
+                .capture_entry(&reference.id.name)
+                .filter(|_| {
+                    self.reconcile_entry_binding(&reference.id.name);
+                    self.tree
+                        .generation(&reference.id, &reference.visibility)
+                        .is_some()
+                })
+        } else {
+            None
+        };
+        let mut descriptor = if let Some(entry) = tool_entry {
             crate::capability::backend::to_descriptor(&entry.entry().descriptor)
         } else if let Some(entry) = self.provider_adapter.entry(&reference.id) {
             // Preserve describe's metadata-only provider view. This does not

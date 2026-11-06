@@ -2,12 +2,20 @@
 
 use super::*;
 use crate::capability::cache_policy::{EvictionPolicy, ResolverConfig};
-use crate::capability::descriptor::CapabilityRevision;
+use crate::capability::descriptor::{
+    CapabilityFacet, CapabilityFacets, CapabilityKind, CapabilityRevision, ProjectionMetadata,
+    SchemaRef,
+};
 use crate::capability::facade::{
     CapabilityChangeStream, CapabilitySnapshot, Cursor, Projection, TransportTarget,
 };
 use crate::capability::ownership::{LifetimeScope, OwnerRef, OwnershipTree};
-use crate::capability::provider_registry::ActivationError;
+use crate::capability::provider::{
+    ProviderHandle, ProviderId, ProviderLifecycle, ProviderState, ProviderTransport,
+};
+use crate::capability::provider_registry::{
+    ActivationError, ProviderRegistration, ProviderRegistry,
+};
 use crate::capability::zahir_facade::ZahirFacade;
 use crate::tools::descriptor::ToolCapabilityDescriptor;
 use crate::tools::registry::ToolHandlerRegistry;
@@ -304,6 +312,24 @@ fn reentrant_loading_is_bounded_and_errors_release_capacity() {
     assert!(lookup(&resolver, "b").is_some());
     assert!(lookup(&resolver, "missing").is_none());
     assert!(lookup(&resolver, "c").is_some(), "error released permit");
+
+    let discovered = resolver.discover(Scope::default());
+    assert_eq!(
+        discovered.len(),
+        3,
+        "one permit admits a complete discovery"
+    );
+    assert!(discovered.iter().any(|descriptor| descriptor.id == id("a")));
+    let lease = resolver
+        .resolve(Reference {
+            id: id("a"),
+            visibility: VisibilityScope::default(),
+        })
+        .expect("one permit admits a complete live resolve");
+    assert_eq!(lease.descriptor.id, id("a"));
+    assert_eq!(resolver.validate_lease(&lease), Ok(()));
+    assert_eq!(observed.descriptions.get(), 1);
+    assert_eq!(observed.resolutions.get(), 1);
 }
 
 #[test]
@@ -383,60 +409,232 @@ fn stopped_tool_provider_hides_warm_metadata_without_notifications() {
     assert!(resolver.validate_lease(&fresh).is_ok());
 }
 
-#[test]
-fn cold_generic_provider_metadata_does_not_activate_or_mint_a_lease() {
-    use crate::capability::descriptor::{
-        CapabilityFacets, CapabilityKind, ProjectionMetadata, SchemaRef,
-    };
-    use crate::capability::provider::{
-        ProviderHandle, ProviderId, ProviderLifecycle, ProviderState, ProviderTransport,
-    };
-    use crate::capability::provider_registry::{ProviderRegistration, ProviderRegistry};
+fn register_cold_resource(
+    providers: &ProviderRegistry,
+    capability: CapabilityId,
+) -> (ProviderHandle, CapabilityDescriptor) {
     let provider = ProviderHandle::new(ProviderLifecycle::new(
         ProviderId::new("test/lazy").unwrap(),
         ProviderTransport::InProcess,
     ));
     provider.transition(ProviderState::Cold).unwrap();
+    let descriptor = CapabilityDescriptor {
+        id: capability,
+        kind: CapabilityKind::Resource,
+        schema: SchemaRef {
+            version: 1,
+            fingerprint: [7; 32],
+        },
+        revision: CapabilityRevision(1),
+        lifetime: LifetimeScope::Runtime,
+        visibility: VisibilityScope::default(),
+        owner: OwnerRef::Runtime,
+        services: Vec::new(),
+        metadata: ProjectionMetadata::default(),
+        facets: CapabilityFacets::new(),
+    };
+    providers
+        .register(ProviderRegistration::new(
+            descriptor.clone(),
+            provider.clone(),
+        ))
+        .unwrap();
+    (provider, descriptor)
+}
+
+#[test]
+fn tool_namespace_generic_metadata_matches_discovery_without_a_tool_entry() {
+    let registry = ToolHandlerRegistry::new();
+    let providers = ProviderRegistry::new();
+    let capability = id("provider_only");
+    let (provider, descriptor) = register_cold_resource(&providers, capability.clone());
+    let tree = Arc::new(OwnershipTree::new());
+    let facade = ZahirFacade::new_with_providers(registry.clone(), tree.clone(), providers);
+    let resolver = CapabilityResolver::new(facade.clone());
+    let scope = Scope {
+        namespace: Some("aleph/tools".into()),
+        ..Default::default()
+    };
+    assert_eq!(
+        facade.describe(scope.clone()).capabilities,
+        vec![descriptor.clone()]
+    );
+    assert_eq!(resolver.discover(scope), vec![descriptor.clone()]);
+    for _ in 0..2 {
+        assert_eq!(
+            resolver.lookup(&capability, &VisibilityScope::default()),
+            Some(descriptor.clone()),
+            "accepted generic metadata must not disappear on the Tool namespace route"
+        );
+    }
+    assert!(tree
+        .generation(&capability, &VisibilityScope::default())
+        .is_none());
+    assert_eq!(provider.snapshot(), (ProviderState::Cold, 0));
+    assert_eq!(
+        facade.descriptor_revision(&Reference {
+            id: capability.clone(),
+            visibility: VisibilityScope::default(),
+        }),
+        None,
+        "generic fallback has no canonical Tool freshness authority"
+    );
+    assert!(lookup(&resolver, "unknown_provider").is_none());
+    assert_eq!(
+        resolver.resolve(Reference {
+            id: capability.clone(),
+            visibility: VisibilityScope::default(),
+        }),
+        Err(ResolveError::Unknown),
+        "the existing Tool invocation route must not mint a generic lease"
+    );
+    registry.close();
+    assert!(resolver
+        .lookup(&capability, &VisibilityScope::default())
+        .is_none());
+    assert!(resolver.discover(Scope::default()).is_empty());
+    assert!(tree
+        .generation(&capability, &VisibilityScope::default())
+        .is_none());
+    assert_eq!(provider.snapshot(), (ProviderState::Cold, 0));
+}
+
+#[test]
+fn canonical_tool_metadata_precedes_generic_only_when_discoverable() {
+    let registry = ToolHandlerRegistry::new();
+    register(&registry, "shared", r#"{"type":"object"}"#);
+    let capability = id("shared");
+    let providers = ProviderRegistry::new();
+    let (provider, generic) = register_cold_resource(&providers, capability.clone());
+    let tree = Arc::new(OwnershipTree::new());
+    let facade = ZahirFacade::new_with_providers(registry.clone(), tree.clone(), providers);
+    let resolver = CapabilityResolver::new(facade.clone());
+    let scope = Scope {
+        namespace: Some("aleph/tools".into()),
+        ..Default::default()
+    };
+    let discovered = resolver.discover(scope.clone());
+    assert_eq!(discovered.len(), 2);
+    assert_eq!(discovered[0].kind, CapabilityKind::Tool);
+    assert_eq!(discovered[1], generic);
+    assert_eq!(
+        resolver.lookup(&capability, &scope.visibility),
+        Some(discovered[0].clone()),
+        "eligible canonical Tool metadata has discovery's first-match precedence"
+    );
+
+    let private = VisibilityScope {
+        workspace: Some("private".into()),
+        ..Default::default()
+    };
+    let private_scope = Scope {
+        visibility: private.clone(),
+        ..scope.clone()
+    };
+    let mut private_generic = generic.clone();
+    private_generic.visibility = private.clone();
+    assert_eq!(
+        resolver.discover(private_scope.clone()),
+        vec![private_generic.clone()]
+    );
+    assert_eq!(
+        resolver.lookup(&capability, &private),
+        Some(private_generic)
+    );
+    assert!(tree.generation(&capability, &private).is_none());
+    assert_eq!(
+        facade.descriptor_revision(&Reference {
+            id: capability.clone(),
+            visibility: private.clone(),
+        }),
+        None,
+        "a hidden Tool cannot lend freshness to generic fallback metadata"
+    );
+
+    tree.register(
+        capability.clone(),
+        OwnerRef::Runtime,
+        LifetimeScope::Runtime,
+        private.clone(),
+    )
+    .unwrap();
+    let private_tool = resolver.discover(private_scope).into_iter().next().unwrap();
+    assert_eq!(private_tool.kind, CapabilityKind::Tool);
+    assert_eq!(resolver.lookup(&capability, &private), Some(private_tool));
+    assert!(tree.revoke(&capability));
+    assert_eq!(resolver.discover(scope), vec![generic.clone()]);
+    assert_eq!(
+        resolver.lookup(&capability, &VisibilityScope::default()),
+        Some(generic)
+    );
+    assert_eq!(
+        resolver.resolve(Reference {
+            id: capability,
+            visibility: VisibilityScope::default(),
+        }),
+        Err(ResolveError::Revoked)
+    );
+    assert_eq!(provider.snapshot(), (ProviderState::Cold, 0));
+}
+
+#[test]
+fn cold_generic_provider_metadata_does_not_activate_or_mint_a_lease() {
     let capability = CapabilityId {
         namespace: "test/resources".into(),
         name: "cold".into(),
     };
     let providers = ProviderRegistry::new();
-    providers
-        .register(ProviderRegistration::new(
-            CapabilityDescriptor {
-                id: capability.clone(),
-                kind: CapabilityKind::Resource,
-                schema: SchemaRef {
-                    version: 1,
-                    fingerprint: [7; 32],
-                },
-                revision: CapabilityRevision(1),
-                lifetime: LifetimeScope::Runtime,
-                visibility: VisibilityScope::default(),
-                owner: OwnerRef::Runtime,
-                services: Vec::new(),
-                metadata: ProjectionMetadata::default(),
-                facets: CapabilityFacets::new(),
-            },
-            provider.clone(),
-        ))
-        .unwrap();
+    let (provider, descriptor) = register_cold_resource(&providers, capability.clone());
     let tree = Arc::new(OwnershipTree::new());
-    let resolver = CapabilityResolver::new(ZahirFacade::new_with_providers(
-        ToolHandlerRegistry::new(),
-        tree.clone(),
-        providers,
-    ));
+    let facade =
+        ZahirFacade::new_with_providers(ToolHandlerRegistry::new(), tree.clone(), providers);
+    let resolver = CapabilityResolver::new(facade.clone());
+    let scope = Scope {
+        kind: Some(CapabilityKind::Resource),
+        namespace: Some("test/resources".into()),
+        ..Default::default()
+    };
+    assert_eq!(
+        facade.describe(scope.clone()).capabilities,
+        vec![descriptor.clone()]
+    );
+    assert_eq!(resolver.discover(scope.clone()), vec![descriptor.clone()]);
     for _ in 0..2 {
         assert_eq!(
-            resolver
-                .lookup(&capability, &VisibilityScope::default())
-                .unwrap()
-                .id,
-            capability
+            resolver.lookup(&capability, &scope.visibility),
+            Some(descriptor.clone())
         );
     }
+    for rejected_scope in [
+        Scope {
+            kind: Some(CapabilityKind::Tool),
+            ..scope.clone()
+        },
+        Scope {
+            namespace: Some("other/resources".into()),
+            ..scope.clone()
+        },
+        Scope {
+            facet: Some(CapabilityFacet::Callable),
+            ..scope.clone()
+        },
+    ] {
+        assert!(facade
+            .describe(rejected_scope.clone())
+            .capabilities
+            .is_empty());
+        assert!(resolver.discover(rejected_scope).is_empty());
+    }
+    assert!(resolver
+        .lookup(
+            &CapabilityId {
+                namespace: capability.namespace.clone(),
+                name: "unknown".into(),
+            },
+            &scope.visibility
+        )
+        .is_none());
+    assert!(tree.generation(&capability, &scope.visibility).is_none());
     assert_eq!(provider.snapshot(), (ProviderState::Cold, 0));
     assert_eq!(
         resolver.resolve(Reference {
