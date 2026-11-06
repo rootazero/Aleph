@@ -3,7 +3,7 @@
 use crate::export::session_dir_name;
 use anyhow::{Context, Result};
 use rusqlite::{Connection, OptionalExtension};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
@@ -49,7 +49,7 @@ pub fn run_verify(
 
     // Check 6: FTS5 index
     log::info!("[6/6] Checking FTS5 index...");
-    check_fts5_index(&conn, &mut report)?;
+    check_fts5_index(&conn, &sessions_dir, &mut report)?;
 
     // Print report
     print_report(&report);
@@ -67,6 +67,7 @@ struct VerificationReport {
     session_count_fs: usize,
     session_count_original: Option<i64>,
     missing_files: Vec<String>,
+    session_mismatches: Vec<String>,
     invalid_metadata: Vec<String>,
     invalid_hashes: Vec<String>,
     missing_attachments: Vec<String>,
@@ -93,19 +94,30 @@ fn check_session_count(
     original_db: &Option<PathBuf>,
     report: &mut VerificationReport,
 ) -> Result<()> {
-    // Count in metadata.db
     report.session_count_db =
         conn.query_row("SELECT COUNT(*) FROM sessions", [], |row| row.get(0))?;
 
-    // Count on filesystem
-    report.session_count_fs = WalkDir::new(sessions_dir)
+    let mut stmt = conn.prepare("SELECT session_id FROM sessions")?;
+    let session_ids: Vec<String> = stmt
+        .query_map([], |row| row.get(0))?
+        .collect::<Result<Vec<_>, _>>()?;
+    let expected_sessions = session_ids
+        .iter()
+        .map(|session_id| Ok((session_dir_name(session_id)?, session_id.clone())))
+        .collect::<Result<HashMap<_, _>>>()?;
+    let expected_dirs: HashSet<String> = expected_sessions.keys().cloned().collect();
+
+    let mut actual_dirs = HashSet::new();
+    for entry in WalkDir::new(sessions_dir)
         .min_depth(1)
         .max_depth(1)
         .into_iter()
-        .filter_entry(|e| e.file_type().is_dir())
-        .count();
+        .filter_entry(|entry| entry.file_type().is_dir())
+    {
+        actual_dirs.insert(entry?.file_name().to_string_lossy().into_owned());
+    }
+    report.session_count_fs = actual_dirs.len();
 
-    // Count in original database if provided
     if let Some(orig_path) = original_db {
         let orig_conn = Connection::open(orig_path)?;
         report.session_count_original = Some(orig_conn.query_row(
@@ -113,13 +125,30 @@ fn check_session_count(
             [],
             |row| row.get(0),
         )?);
+        check_original_timestamps(&orig_conn, report)?;
     }
 
-    // Check consistency
     if report.session_count_db != report.session_count_fs as i64 {
         report.warnings.push(format!(
             "Session count mismatch: metadata.db has {}, filesystem has {}",
             report.session_count_db, report.session_count_fs
+        ));
+    }
+
+    for (directory, session_id) in &expected_sessions {
+        if !actual_dirs.contains(directory) {
+            report.errors += 1;
+            report.session_mismatches.push(format!(
+                "{}: session directory {} is missing from the filesystem",
+                session_id, directory
+            ));
+        }
+    }
+    for directory in actual_dirs.difference(&expected_dirs) {
+        report.errors += 1;
+        report.session_mismatches.push(format!(
+            "filesystem-only session directory {} is absent from metadata.db",
+            directory
         ));
     }
 
@@ -133,6 +162,38 @@ fn check_session_count(
         }
     }
 
+    Ok(())
+}
+
+fn check_original_timestamps(conn: &Connection, report: &mut VerificationReport) -> Result<()> {
+    let mut stmt = conn.prepare("PRAGMA table_info(raw_memories)")?;
+    let columns: Vec<String> = stmt
+        .query_map([], |row| row.get(1))?
+        .collect::<Result<Vec<_>, _>>()?;
+    let timestamp_column = if columns.iter().any(|column| column == "created_at") {
+        "created_at"
+    } else if columns.iter().any(|column| column == "started_at") {
+        "started_at"
+    } else {
+        return Ok(());
+    };
+
+    let query = format!(
+        "SELECT session_id, rowid FROM raw_memories \
+         WHERE session_id IS NOT NULL AND {timestamp_column} IS NULL"
+    );
+    let mut stmt = conn.prepare(&query)?;
+    let rows = stmt.query_map([], |row| {
+        Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+    })?;
+    for row in rows {
+        let (session_id, row_id) = row?;
+        report.errors += 1;
+        report.warnings.push(format!(
+            "Original database row {} (session {}) has null {}; export would drop this row",
+            row_id, session_id, timestamp_column
+        ));
+    }
     Ok(())
 }
 
@@ -194,14 +255,32 @@ fn check_metadata_consistency(
     fix: bool,
     report: &mut VerificationReport,
 ) -> Result<()> {
-    let mut stmt = conn.prepare("SELECT session_id FROM sessions")?;
-    let session_ids: Vec<String> = stmt
-        .query_map([], |row| row.get(0))?
+    let mut stmt = conn.prepare(
+        "SELECT session_id, agent_id, workspace_id, started_at, ended_at, \
+         message_count, tool_call_count, attachment_count, compression_status, tags \
+         FROM sessions",
+    )?;
+    let sessions: Vec<SessionMetadataRow> = stmt
+        .query_map([], |row| {
+            Ok(SessionMetadataRow {
+                session_id: row.get(0)?,
+                agent_id: row.get(1)?,
+                workspace_id: row.get(2)?,
+                started_at: row.get(3)?,
+                ended_at: row.get(4)?,
+                message_count: row.get(5)?,
+                tool_call_count: row.get(6)?,
+                attachment_count: row.get(7)?,
+                compression_status: row.get(8)?,
+                tags: row.get(9)?,
+            })
+        })?
         .collect::<Result<Vec<_>, _>>()?;
 
-    for session_id in session_ids {
+    for session in sessions {
+        let session_id = &session.session_id;
         let metadata_path = sessions_dir
-            .join(session_dir_name(&session_id)?)
+            .join(session_dir_name(session_id)?)
             .join("metadata.json");
 
         if !metadata_path.exists() {
@@ -227,19 +306,22 @@ fn check_metadata_consistency(
                     .invalid_metadata
                     .push(format!("{}: invalid JSON - {}", session_id, error));
                 if fix {
-                    regenerate_metadata(conn, &session_id, metadata_path.parent().unwrap())?;
+                    regenerate_metadata(conn, session_id, metadata_path.parent().unwrap())?;
                     report.record_fix();
                 }
                 continue;
             }
         };
-        if let Err(message) = validate_metadata(&metadata, &session_id) {
+        let mismatches = validate_metadata(&metadata, &session);
+        if !mismatches.is_empty() {
             report.errors += 1;
-            report
-                .invalid_metadata
-                .push(format!("{}: {}", session_id, message));
+            for message in mismatches {
+                report
+                    .invalid_metadata
+                    .push(format!("{}: {}", session_id, message));
+            }
             if fix {
-                regenerate_metadata(conn, &session_id, metadata_path.parent().unwrap())?;
+                regenerate_metadata(conn, session_id, metadata_path.parent().unwrap())?;
                 report.record_fix();
             }
         }
@@ -248,41 +330,89 @@ fn check_metadata_consistency(
     Ok(())
 }
 
-fn validate_metadata(metadata: &serde_json::Value, session_id: &str) -> Result<()> {
-    let object = metadata
-        .as_object()
-        .context("metadata must be a JSON object")?;
+struct SessionMetadataRow {
+    session_id: String,
+    agent_id: String,
+    workspace_id: Option<String>,
+    started_at: i64,
+    ended_at: Option<i64>,
+    message_count: i64,
+    tool_call_count: i64,
+    attachment_count: i64,
+    compression_status: String,
+    tags: Option<String>,
+}
+
+fn validate_metadata(
+    metadata: &serde_json::Value,
+    session: &SessionMetadataRow,
+) -> Vec<String> {
+    let Some(object) = metadata.as_object() else {
+        return vec!["metadata must be a JSON object".to_string()];
+    };
+    let expected = serde_json::json!({
+        "session_id": session.session_id.as_str(),
+        "agent_id": session.agent_id.as_str(),
+        "workspace_id": session.workspace_id.as_deref(),
+        "started_at": session.started_at,
+        "ended_at": session.ended_at,
+        "message_count": session.message_count,
+        "tool_call_count": session.tool_call_count,
+        "attachment_count": session.attachment_count,
+        "compression_status": session.compression_status.as_str(),
+    });
+    let mut errors = Vec::new();
     for field in [
         "session_id",
         "agent_id",
+        "workspace_id",
         "started_at",
+        "ended_at",
         "message_count",
         "tool_call_count",
         "attachment_count",
+        "compression_status",
     ] {
-        if !object.contains_key(field) {
-            anyhow::bail!("metadata is missing required field {field}");
+        match object.get(field) {
+            None => errors.push(format!("metadata is missing required field {field}")),
+            Some(actual) if actual != &expected[field] => errors.push(format!(
+                "metadata field {field} does not match database (expected {}, got {})",
+                expected[field], actual
+            )),
+            Some(_) => {}
         }
     }
-    if object.get("session_id").and_then(|v| v.as_str()) != Some(session_id) {
-        anyhow::bail!("metadata session_id does not match directory");
-    }
-    for field in ["session_id", "agent_id"] {
-        if object.get(field).and_then(|v| v.as_str()).is_none() {
-            anyhow::bail!("metadata field {field} must be a string");
+    for field in ["message_count", "tool_call_count", "attachment_count"] {
+        if object
+            .get(field)
+            .and_then(serde_json::Value::as_i64)
+            .is_some_and(|count| count < 0)
+        {
+            errors.push(format!("metadata field {field} must be nonnegative"));
         }
     }
-    for field in [
-        "started_at",
-        "message_count",
-        "tool_call_count",
-        "attachment_count",
-    ] {
-        if object.get(field).and_then(|v| v.as_i64()).is_none() {
-            anyhow::bail!("metadata field {field} must be an integer");
+
+    match object.get("tags") {
+        None => errors.push("metadata is missing required field tags".to_string()),
+        Some(serde_json::Value::Array(values))
+            if values.iter().all(serde_json::Value::is_string) =>
+        {
+            let actual = values
+                .iter()
+                .filter_map(serde_json::Value::as_str)
+                .collect::<Vec<_>>()
+                .join(",");
+            let expected = session.tags.as_deref().unwrap_or("");
+            if actual != expected {
+                errors.push(format!(
+                    "metadata field tags does not match database (expected {:?}, got {:?})",
+                    expected, actual
+                ));
+            }
         }
+        Some(_) => errors.push("metadata field tags must be an array of strings".to_string()),
     }
-    Ok(())
+    errors
 }
 fn check_content_hashes(
     conn: &Connection,
@@ -350,11 +480,39 @@ fn check_attachments(
     let migration_root = migration_root_for(sessions_dir)
         .context("sessions directory must have a migration root")?;
     let mut referenced_hashes = HashSet::new();
+    let mut referenced_paths = HashSet::new();
+    let mut attachment_identities: HashMap<String, (String, String)> = HashMap::new();
     // A session whose metadata or attachment manifest cannot be read may
     // still own attachment files on disk. While any session is in that
     // state the set of referenced hashes is incomplete, and sweeping files
     // that are not in the set would delete live attachments.
     let mut manifests_complete = true;
+
+    // Database references are authoritative ownership evidence even when the
+    // corresponding session directory or manifest has disappeared.
+    let mut stmt = conn.prepare("SELECT content_hash, file_path FROM attachments")?;
+    let database_references: Vec<(String, String)> = stmt
+        .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
+        .collect::<Result<Vec<_>, _>>()?;
+    for (content_hash, file_path) in database_references {
+        referenced_hashes.insert(content_hash.clone());
+        match resolve_manifest_path(migration_root, &file_path) {
+            Ok(path) => {
+                if let Ok(canonical_path) = fs::canonicalize(&path) {
+                    referenced_paths.insert(canonical_path);
+                }
+                referenced_paths.insert(path);
+            }
+            Err(error) => {
+                report.errors += 1;
+                report.missing_attachments.push(format!(
+                    "database attachment {} has invalid path {}: {}",
+                    content_hash, file_path, error
+                ));
+                manifests_complete = false;
+            }
+        }
+    }
 
     for entry in WalkDir::new(sessions_dir)
         .min_depth(1)
@@ -454,6 +612,27 @@ fn check_attachments(
         }
 
         for attachment in manifest {
+            if let Some((first_path, first_mime)) =
+                attachment_identities.get(&attachment.content_hash)
+            {
+                if first_path != &attachment.file_path || first_mime != &attachment.mime_type {
+                    report.errors += 1;
+                    report.missing_attachments.push(format!(
+                        "{}: attachment hash {} has conflicting identities ({}, {}) and ({}, {})",
+                        metadata["session_id"].as_str().unwrap_or("unknown"),
+                        attachment.content_hash,
+                        first_path,
+                        first_mime,
+                        attachment.file_path,
+                        attachment.mime_type
+                    ));
+                }
+            } else {
+                attachment_identities.insert(
+                    attachment.content_hash.clone(),
+                    (attachment.file_path.clone(), attachment.mime_type.clone()),
+                );
+            }
             referenced_hashes.insert(attachment.content_hash.clone());
             let path = match resolve_manifest_path(migration_root, &attachment.file_path) {
                 Ok(path) => path,
@@ -526,11 +705,12 @@ fn check_attachments(
                     hash
                 ));
             }
-            let indexed: Option<(String, i64)> = match conn
+            let indexed: Option<(String, String, i64)> = match conn
                 .query_row(
-                    "SELECT file_path, size_bytes FROM attachments WHERE content_hash = ?1",
+                    "SELECT file_path, mime_type, size_bytes FROM attachments \
+                     WHERE content_hash = ?1",
                     [&attachment.content_hash],
-                    |row| Ok((row.get(0)?, row.get(1)?)),
+                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
                 )
                 .optional()
             {
@@ -546,15 +726,17 @@ fn check_attachments(
                 }
             };
             match indexed {
-                Some((indexed_path, indexed_size))
+                Some((indexed_path, indexed_mime, indexed_size))
                     if indexed_path == attachment.file_path
+                        && indexed_mime == attachment.mime_type
                         && indexed_size == bytes.len() as i64 => {}
-                Some((indexed_path, indexed_size)) => {
+                Some((indexed_path, indexed_mime, indexed_size)) => {
                     report.errors += 1;
                     report.missing_attachments.push(format!(
-                        "{}: indexed attachment metadata mismatch (path={}, size={})",
+                        "{}: indexed attachment metadata mismatch (path={}, MIME={}, size={})",
                         metadata["session_id"].as_str().unwrap_or("unknown"),
                         indexed_path,
+                        indexed_mime,
                         indexed_size
                     ));
                 }
@@ -584,13 +766,13 @@ fn check_attachments(
         migration_root.join("attachments")
     };
     if attachments_dir.exists() {
-        if !manifests_complete {
-            // Some session's references are unknown, so "not referenced" does
-            // not mean "orphaned". Sweeping now could delete live attachment
-            // files.
+        let can_sweep = manifests_complete && report.errors == 0;
+        if remove_orphans && !can_sweep {
+            // Unknown references or any verification mismatch make "not
+            // referenced" indistinguishable from "owned by damaged state".
             report.warnings.push(format!(
-                "Orphan sweep skipped: attachment references are incomplete ({}). \
-                 Fix the session manifests first.",
+                "Orphan sweep skipped: attachment references are incomplete or verification \
+                 has errors ({}). Fix the verification errors first.",
                 attachments_dir.display()
             ));
         }
@@ -601,7 +783,11 @@ fn check_attachments(
             let path = entry?.into_path();
             let bytes = fs::read(&path)?;
             let hash = compute_sha256_bytes(&bytes);
-            if !referenced_hashes.contains(&hash) && remove_orphans && manifests_complete {
+            let canonical_path = fs::canonicalize(&path).unwrap_or_else(|_| path.clone());
+            let is_referenced = referenced_hashes.contains(&hash)
+                || referenced_paths.contains(&path)
+                || referenced_paths.contains(&canonical_path);
+            if !is_referenced && remove_orphans && can_sweep {
                 fs::remove_file(&path)?;
                 report.fixes_applied += 1;
             }
@@ -613,6 +799,7 @@ fn check_attachments(
 #[derive(Debug, serde::Deserialize)]
 struct AttachmentManifestEntry {
     content_hash: String,
+    mime_type: String,
     file_path: String,
 }
 
@@ -641,39 +828,88 @@ fn resolve_manifest_path(migration_root: &Path, file_path: &str) -> Result<PathB
     Ok(path)
 }
 
-fn check_fts5_index(conn: &Connection, report: &mut VerificationReport) -> Result<()> {
-    // Check if FTS5 table exists and has data
-    let count: Result<i64, _> =
-        conn.query_row("SELECT COUNT(*) FROM session_transcripts_fts", [], |row| {
-            row.get(0)
-        });
+fn check_fts5_index(
+    conn: &Connection,
+    sessions_dir: &Path,
+    report: &mut VerificationReport,
+) -> Result<()> {
+    let mut stmt = conn.prepare("SELECT session_id FROM sessions")?;
+    let session_ids: Vec<String> = stmt
+        .query_map([], |row| row.get(0))?
+        .collect::<Result<Vec<_>, _>>()?;
+    let mut expected_transcripts = HashMap::new();
+    for session_id in session_ids {
+        let transcript_path = sessions_dir
+            .join(session_dir_name(&session_id)?)
+            .join("transcript.md");
+        if transcript_path.exists() {
+            expected_transcripts.insert(session_id, fs::read_to_string(transcript_path)?);
+        }
+    }
 
-    match count {
-        Ok(n) if n > 0 => {
-            // Try a simple search to verify index works
-            let search_result: Result<i64, _> = conn.query_row(
-                "SELECT COUNT(*) FROM session_transcripts_fts WHERE content MATCH 'session'",
-                [],
-                |row| row.get(0),
-            );
-
-            if search_result.is_err() {
+    let mut stmt = match conn.prepare("SELECT session_id, content FROM session_transcripts_fts") {
+        Ok(stmt) => stmt,
+        Err(error) => {
+            report.errors += 1;
+            report.warnings.push(format!("FTS5 index error: {}", error));
+            return Ok(());
+        }
+    };
+    let rows = match stmt.query_map([], |row| {
+        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+    }) {
+        Ok(rows) => rows,
+        Err(error) => {
+            report.errors += 1;
+            report.warnings.push(format!("FTS5 index error: {}", error));
+            return Ok(());
+        }
+    };
+    let mut indexed_transcripts: HashMap<String, Vec<String>> = HashMap::new();
+    for row in rows {
+        match row {
+            Ok((session_id, content)) => indexed_transcripts
+                .entry(session_id)
+                .or_default()
+                .push(content),
+            Err(error) => {
                 report.errors += 1;
-                report.warnings.push("FTS5 index is corrupted".to_string());
+                report.warnings.push(format!("FTS5 index error: {}", error));
             }
         }
-        Ok(0) => {
-            report.warnings.push("FTS5 index is empty".to_string());
-        }
-        Ok(_) => {
-            // Negative counts shouldn't happen, but handle them gracefully
-            report
-                .warnings
-                .push("FTS5 index has invalid count".to_string());
-        }
-        Err(e) => {
+    }
+
+    for (session_id, contents) in &indexed_transcripts {
+        let Some(expected) = expected_transcripts.get(session_id) else {
             report.errors += 1;
-            report.warnings.push(format!("FTS5 index error: {}", e));
+            report.warnings.push(format!(
+                "FTS5 index contains unexpected session ID {}",
+                session_id
+            ));
+            continue;
+        };
+        if contents.len() != 1 {
+            report.errors += 1;
+            report.warnings.push(format!(
+                "FTS5 index contains {} rows for session {}; expected exactly one",
+                contents.len(), session_id
+            ));
+        }
+        if contents.first() != Some(expected) {
+            report.errors += 1;
+            report.warnings.push(format!(
+                "FTS5 content mismatch for session {}",
+                session_id
+            ));
+        }
+    }
+    for session_id in expected_transcripts.keys() {
+        if !indexed_transcripts.contains_key(session_id) {
+            report.errors += 1;
+            report.warnings.push(format!(
+                "FTS5 index is missing transcript for session {}",
+                session_id
+            ));
         }
     }
 
@@ -683,30 +919,46 @@ fn check_fts5_index(conn: &Connection, report: &mut VerificationReport) -> Resul
 fn regenerate_metadata(conn: &Connection, session_id: &str, session_dir: &Path) -> Result<()> {
     use serde_json::json;
 
-    // Get session data from database
     let mut stmt = conn.prepare(
         "SELECT agent_id, workspace_id, started_at, ended_at, \
          message_count, tool_call_count, attachment_count, \
          compression_status, tags \
          FROM sessions WHERE session_id = ?",
     )?;
-
-    let metadata = stmt.query_row([session_id], |row| {
-        Ok(json!({
-            "session_id": session_id,
-            "agent_id": row.get::<_, String>(0)?,
-            "workspace_id": row.get::<_, Option<String>>(1)?,
-            "started_at": row.get::<_, i64>(2)?,
-            "ended_at": row.get::<_, Option<i64>>(3)?,
-            "message_count": row.get::<_, i64>(4)?,
-            "tool_call_count": row.get::<_, i64>(5)?,
-            "attachment_count": row.get::<_, i64>(6)?,
-            "compression_status": row.get::<_, String>(7)?,
-            "tags": row.get::<_, Option<String>>(8)?
-                .map(|s| s.split(',').map(|t| t.trim().to_string()).collect::<Vec<_>>())
-                .unwrap_or_default(),
-        }))
+    let values = stmt.query_row([session_id], |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, Option<String>>(1)?,
+            row.get::<_, i64>(2)?,
+            row.get::<_, Option<i64>>(3)?,
+            row.get::<_, i64>(4)?,
+            row.get::<_, i64>(5)?,
+            row.get::<_, i64>(6)?,
+            row.get::<_, String>(7)?,
+            row.get::<_, Option<String>>(8)?,
+        ))
     })?;
+    let tags = match values.8 {
+        Some(tags) if tags.contains(',') => anyhow::bail!(
+            "Cannot regenerate metadata for session {session_id}: \
+             comma-separated tags are ambiguous"
+        ),
+        Some(tags) if tags.is_empty() => Vec::new(),
+        Some(tag) => vec![tag],
+        None => Vec::new(),
+    };
+    let metadata = json!({
+        "session_id": session_id,
+        "agent_id": values.0,
+        "workspace_id": values.1,
+        "started_at": values.2,
+        "ended_at": values.3,
+        "message_count": values.4,
+        "tool_call_count": values.5,
+        "attachment_count": values.6,
+        "compression_status": values.7,
+        "tags": tags,
+    });
 
     let metadata_path = session_dir.join("metadata.json");
     let file = fs::File::create(&metadata_path)?;
@@ -745,6 +997,15 @@ fn print_report(report: &VerificationReport) {
                 "✗ Session count mismatch: expected {}, got {}",
                 orig, report.session_count_db
             );
+        }
+    }
+    if !report.session_mismatches.is_empty() {
+        println!(
+            "✗ Session directory mismatches: {}",
+            report.session_mismatches.len()
+        );
+        for message in &report.session_mismatches {
+            println!("    {}", message);
         }
     }
 
