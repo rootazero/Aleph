@@ -64,7 +64,7 @@ impl AlephTool for NodeManageTool {
     const DESCRIPTION: &'static str = r#"Change which machines belong to the cluster: enroll a node slot, or deregister a node. (`node_list` shows the current fleet; `node_invoke` runs commands on it.)
 
 - {"action": "enroll", "node": "worker-3"} reserves the name and returns its node_id. The machine joins once someone runs `aleph-server node --center ws://<this-host>:18790 --name worker-3` there — enrolling does NOT install or start anything remotely, and no token is issued (nodes are trusted by network boundary). Enrolling a name that already exists returns the same node_id, unchanged.
-- {"action": "deregister", "node": "worker-3"} removes it: the live session is evicted immediately, and the removal STICKS — the node is refused if it reconnects, and exits on its own. Works on offline nodes too. Reversible only by enrolling again.
+- {"action": "deregister", "node": "worker-3"} removes it: the live session is evicted immediately, and the removal STICKS — the node is refused if it reconnects, and exits on its own. Works on offline nodes too. Reversible only by enrolling the name again AND having the node delete its identity file, so it comes back as a new node.
 
 Returns {action, node_id, ...}. Deregistering is destructive to fleet membership — say which node you are removing before you do it."#;
 
@@ -78,8 +78,21 @@ Returns {action, node_id, ...}. Deregistering is destructive to fleet membership
                 if name.is_empty() {
                     return Err(AlephError::tool("enroll: `node` must be a non-empty name"));
                 }
-                let (node_id, minted) = enroll_node_device(&self.security_store, name)
-                    .map_err(|e| AlephError::tool(format!("enroll '{name}': {e}")))?;
+                // The enroll path takes the process-wide node-name lock and
+                // performs synchronous SQLite I/O — run it on a blocking thread
+                // so a Tokio worker is never parked behind it.
+                let store = self.security_store.clone();
+                let node_name = name.to_string();
+                let enrolled =
+                    tokio::task::spawn_blocking(move || enroll_node_device(&store, &node_name))
+                        .await
+                        .map_err(|e| {
+                            AlephError::tool(format!(
+                                "enroll '{name}': the enrollment task did not complete ({e})"
+                            ))
+                        })?;
+                let (node_id, minted) =
+                    enrolled.map_err(|e| AlephError::tool(format!("enroll '{name}': {e}")))?;
                 Ok(json!({
                     "action": "enroll",
                     "node": name,
@@ -90,29 +103,44 @@ Returns {action, node_id, ...}. Deregistering is destructive to fleet membership
                 }))
             }
             "deregister" => {
-                match deregister_node(
-                    &self.node_registry,
-                    &self.security_store,
-                    &args.node,
-                    self.events.as_deref(),
-                ) {
-                    Ok(o) => Ok(json!({
-                        "action": "deregister",
-                        "node": args.node,
-                        "node_id": o.node_id,
-                        // true = a live session was evicted; false = it was
-                        // already offline (the removal still sticks).
-                        "evicted": o.evicted,
-                        "device_removed": o.device_removed,
-                    })),
-                    Err(DeregisterError::NotFound) => Err(AlephError::tool(format!(
+                // Same as enroll: the revoke write is synchronous SQLite I/O.
+                let registry = self.node_registry.clone();
+                let store = self.security_store.clone();
+                let events = self.events.clone();
+                let target = args.node.clone();
+                let outcome = tokio::task::spawn_blocking(move || {
+                    deregister_node(&registry, &store, &target, events.as_deref())
+                })
+                .await
+                .map_err(|e| {
+                    AlephError::tool(format!(
+                        "deregister '{}': the deregistration task did not complete ({e})",
+                        args.node
+                    ))
+                })?
+                .map_err(|e| match e {
+                    DeregisterError::NotFound => AlephError::tool(format!(
                         "no online or enrolled node matches '{}'",
                         args.node
-                    ))),
-                    Err(DeregisterError::Ambiguous(detail)) => {
-                        Err(AlephError::tool(format!("node '{}' {detail}", args.node)))
+                    )),
+                    DeregisterError::Ambiguous(detail) => {
+                        AlephError::tool(format!("node '{}' {detail}", args.node))
                     }
-                }
+                    // A store outage is not the caller's fault and the node was
+                    // NOT evicted — say so instead of blaming the target.
+                    DeregisterError::StoreUnavailable(detail) => {
+                        AlephError::tool(format!("deregister '{}': {detail}", args.node))
+                    }
+                })?;
+                Ok(json!({
+                    "action": "deregister",
+                    "node": args.node,
+                    "node_id": outcome.node_id,
+                    // true = a live session was evicted; false = it was
+                    // already offline (the removal still sticks).
+                    "evicted": outcome.evicted,
+                    "device_removed": outcome.device_removed,
+                }))
             }
             other => Err(AlephError::tool(format!(
                 "action must be 'enroll' or 'deregister', got '{other}'"

@@ -28,7 +28,7 @@ mod reverse_rpc;
 
 pub use enrollment::{
     admit_node, deregister_node, enroll_node_device, DeregisterError, DeregisterOutcome,
-    NodeAdmission,
+    EnrollError, NodeAdmission,
 };
 pub use node_approval::{ApprovalSlot, CenterApprovalRequester};
 pub(crate) use node_file_cmd::sha256_hex;

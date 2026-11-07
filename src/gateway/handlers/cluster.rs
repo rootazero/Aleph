@@ -15,7 +15,9 @@ use crate::sync_primitives::Arc;
 use serde::Deserialize;
 use tracing::warn;
 
-use crate::cluster::{deregister_node, enroll_node_device, DeregisterError, EnvironmentStatus};
+use crate::cluster::{
+    deregister_node, enroll_node_device, DeregisterError, EnrollError, EnvironmentStatus,
+};
 use crate::gateway::handlers::auth::AuthContext;
 use crate::gateway::handlers::{parse_params, INTERNAL_ERROR, INVALID_PARAMS};
 use crate::gateway::protocol::{JsonRpcRequest, JsonRpcResponse};
@@ -42,10 +44,10 @@ struct EnrollParams {
 /// **Idempotent**: re-enrolling an existing name returns that node's id
 /// unchanged (`reused: true`) rather than minting a second row. It previously
 /// minted unconditionally, so a double-clicked "+ Enroll" left two same-name
-/// rows — which then made the node's own first boot mint a *third* (the
-/// by-name merge refuses to guess) and made `cluster.deregister`'s offline
-/// fallback, which needs a unique name, unable to remove any of them. See
-/// [`enroll_node_device`].
+/// rows — which then made the node's own first boot mint a *third* and made
+/// `cluster.deregister`'s offline fallback, which needs a unique name, unable
+/// to remove any of them. Both the operator path ([`enroll_node_device`]) and
+/// the node path now refuse to mint past an ambiguity. See [`enroll_node_device`].
 pub async fn handle_cluster_enroll(
     request: JsonRpcRequest,
     ctx: Arc<AuthContext>,
@@ -55,8 +57,16 @@ pub async fn handle_cluster_enroll(
         Err(resp) => return resp,
     };
 
-    match enroll_node_device(&ctx.security_store, &params.node_name) {
-        Ok((node_id, minted)) => {
+    let store = ctx.security_store.clone();
+    let node_name = params.node_name.clone();
+    // The enroll path takes the process-wide node-name lock and performs
+    // synchronous SQLite I/O — run the whole read-then-write sequence on a
+    // blocking thread so a Tokio worker is never parked behind it (D9).
+    let enrolled =
+        tokio::task::spawn_blocking(move || enroll_node_device(&store, &node_name)).await;
+
+    match enrolled {
+        Ok(Ok((node_id, minted))) => {
             if let Some(log) = crate::security::audit::global() {
                 log.log(crate::security::audit::AuditEntry::authority_change(
                     crate::gateway::caller_identity::current_caller_user(),
@@ -82,7 +92,25 @@ pub async fn handle_cluster_enroll(
                 }),
             )
         }
-        Err(e) => JsonRpcResponse::error(request.id, INTERNAL_ERROR, e),
+        // Operator mistakes (a name that can never be addressed, a name shared by
+        // several enrolled nodes) are INVALID_PARAMS — not a server fault.
+        Ok(Err(EnrollError::Unaddressable(detail))) => {
+            JsonRpcResponse::error(request.id, INVALID_PARAMS, detail)
+        }
+        Ok(Err(EnrollError::Ambiguous(detail))) => {
+            JsonRpcResponse::error(request.id, INVALID_PARAMS, detail)
+        }
+        // The store could not be read or written: a server fault, and retryable.
+        Ok(Err(EnrollError::StoreUnavailable(detail))) => {
+            JsonRpcResponse::error(request.id, INTERNAL_ERROR, detail)
+        }
+        // The blocking pool could not run the task to completion — same class as
+        // a store outage (never a silent drop, never a success).
+        Err(join_error) => JsonRpcResponse::error(
+            request.id,
+            INTERNAL_ERROR,
+            format!("cluster.enroll: the enrollment task did not complete ({join_error})"),
+        ),
     }
 }
 
@@ -93,7 +121,7 @@ struct DeregisterParams {
 }
 
 /// operator-gated: deregister a node. Pure I/O over
-/// [`crate::cluster::deregister_node`] (R4) — the two-phase takedown, the
+/// [`crate::cluster::deregister_node`] (R4) — the revoke-first takedown, the
 /// online-then-offline addressing, and the stickiness guarantee all live in the
 /// cluster module, shared verbatim with the `node_manage` tool so the Panel and
 /// the model cannot drift apart on what "deregister" means.
@@ -106,24 +134,29 @@ pub async fn handle_cluster_deregister(
         Err(resp) => return resp,
     };
 
-    match deregister_node(
-        &ctx.node_registry,
-        &ctx.security_store,
-        &params.node,
-        ctx.event_bus.as_deref(),
-    ) {
-        Ok(outcome) => {
-            // Partial-state signal: the online session was evicted but the
-            // long-lived device record was not. The node can re-enroll on its
-            // next backoff because the security store still believes it is
-            // enrolled. Surface this at WARN, not INFO, so operators see it in
-            // the same place they'd notice any other authority-change anomaly.
-            if outcome.evicted && !outcome.device_removed {
-                tracing::warn!(
+    let registry = ctx.node_registry.clone();
+    let store = ctx.security_store.clone();
+    let event_bus = ctx.event_bus.clone();
+    let target = params.node.clone();
+    // The deregister path performs synchronous SQLite I/O (the revoke write) and
+    // takes the process-wide node-name lock — run it on a blocking thread (D9).
+    let deregistered = tokio::task::spawn_blocking(move || {
+        deregister_node(&registry, &store, &target, event_bus.as_deref())
+    })
+    .await;
+
+    match deregistered {
+        Ok(Ok(outcome)) => {
+            // `device_removed == false` now means exactly one thing: the row was
+            // ALREADY revoked, i.e. this call was an idempotent repeat. A failed
+            // revoke write is an error now (D5) and never reaches this arm, so
+            // the old "partial state — the node may self-revive" warning no
+            // longer describes anything that can happen.
+            if !outcome.device_removed {
+                tracing::info!(
                     node = %params.node,
                     node_id = %outcome.node_id,
-                    "cluster.deregister: partial state — online session evicted but \
-                     device record NOT revoked; node may self-revive on next backoff",
+                    "cluster.deregister: the device record was already revoked (idempotent repeat)",
                 );
             }
             if let Some(log) = crate::security::audit::global() {
@@ -145,15 +178,27 @@ pub async fn handle_cluster_deregister(
                 }),
             )
         }
-        Err(DeregisterError::NotFound) => JsonRpcResponse::error(
+        Ok(Err(DeregisterError::NotFound)) => JsonRpcResponse::error(
             request.id,
             NODE_NOT_FOUND,
             format!("no online or enrolled node matches '{}'", params.node),
         ),
-        Err(DeregisterError::Ambiguous(detail)) => JsonRpcResponse::error(
+        Ok(Err(DeregisterError::Ambiguous(detail))) => JsonRpcResponse::error(
             request.id,
             INVALID_PARAMS,
             format!("node '{}' {detail}", params.node),
+        ),
+        // The store could not be read or written: a server fault, not an operator
+        // mistake (D10) — and the node was NOT evicted (D5 revoke-first).
+        Ok(Err(DeregisterError::StoreUnavailable(detail))) => {
+            JsonRpcResponse::error(request.id, INTERNAL_ERROR, detail)
+        }
+        // The blocking pool could not run the task to completion — same class as
+        // a store outage (never a silent drop, never a success).
+        Err(join_error) => JsonRpcResponse::error(
+            request.id,
+            INTERNAL_ERROR,
+            format!("cluster.deregister: the deregistration task did not complete ({join_error})"),
         ),
     }
 }

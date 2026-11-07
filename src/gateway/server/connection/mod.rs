@@ -1046,15 +1046,51 @@ pub async fn handle_connection(
                                                     // name, and REFUSES a node whose device record was
                                                     // revoked by `cluster.deregister` (otherwise the
                                                     // node just resurrects itself on its next backoff).
-                                                    let node_result = node_connect_claim(
+                                                    let node_result = match node_connect_claim(
                                                         req.params.as_ref(),
-                                                    )
-                                                    .map(|claim| {
-                                                        let admission = ctx
-                                                            .security_store
-                                                            .as_ref()
-                                                            .map_or_else(
-                                                                || {
+                                                    ) {
+                                                        Some(claim) => {
+                                                            // The admission path touches SQLite (a
+                                                            // read, maybe a write) and takes the
+                                                            // process-wide name lock — a `std` mutex held
+                                                            // across that I/O. Running it on a Tokio
+                                                            // worker would block the whole runtime behind
+                                                            // it, so the WHOLE read-then-write sequence
+                                                            // (lock included) runs on a blocking thread.
+                                                            // Nothing is held across the await: the
+                                                            // connection guard was released above.
+                                                            let admission = match ctx.security_store.clone() {
+                                                                Some(store) => {
+                                                                    let presented_id = claim.presented_id.clone();
+                                                                    let device_name = claim.device_name.clone();
+                                                                    match tokio::task::spawn_blocking(move || {
+                                                                        crate::cluster::admit_node(
+                                                                            &store,
+                                                                            presented_id.as_deref(),
+                                                                            &device_name,
+                                                                        )
+                                                                    })
+                                                                    .await
+                                                                    {
+                                                                        Ok(admission) => admission,
+                                                                        Err(e) => {
+                                                                            // The blocking task could not be run to
+                                                                            // completion. Treat it exactly like a
+                                                                            // store outage: retryable, never an
+                                                                            // admission.
+                                                                            warn!(
+                                                                                error = %e,
+                                                                                "node admission task failed; the node will retry"
+                                                                            );
+                                                                            crate::cluster::NodeAdmission::StoreUnavailable {
+                                                                                detail: format!(
+                                                                                    "the node admission task did not complete ({e})"
+                                                                                ),
+                                                                            }
+                                                                        }
+                                                                    }
+                                                                }
+                                                                None => {
                                                                     // No store wired (probe/test server):
                                                                     // LAN-trust degrade — keep the node usable.
                                                                     crate::cluster::NodeAdmission::Admitted {
@@ -1064,17 +1100,12 @@ pub async fn handle_connection(
                                                                             .unwrap_or_else(|| conn_id.clone()),
                                                                         minted: false,
                                                                     }
-                                                                },
-                                                                |store| {
-                                                                    crate::cluster::admit_node(
-                                                                        store,
-                                                                        claim.presented_id.as_deref(),
-                                                                        &claim.device_name,
-                                                                    )
-                                                                },
-                                                            );
-                                                        (claim, admission)
-                                                    });
+                                                                }
+                                                            };
+                                                            Some((claim, admission))
+                                                        }
+                                                        None => None,
+                                                    };
 
                                                     let node_payload = match &node_result {
                                                         Some((
@@ -1141,7 +1172,9 @@ pub async fn handle_connection(
                                                             },
                                                         )) => {
                                                             warn!(
-                                                                "Refusing node {}: that id already belongs to a paired Panel device",
+                                                                "Refusing node {}: that id already belongs to a \
+                                                                 non-node device row (a paired Panel or an \
+                                                                 operator device), not an enrolled node",
                                                                 node_id
                                                             );
                                                             // Same terminal wire status as a deregistration:
@@ -1154,6 +1187,47 @@ pub async fn handle_connection(
                                                                 "node_id": node_id,
                                                                 "status": "deregistered",
                                                             }))
+                                                        }
+                                                        Some((
+                                                            _,
+                                                            crate::cluster::NodeAdmission::Ambiguous {
+                                                                name,
+                                                                count,
+                                                            },
+                                                        )) => {
+                                                            warn!(
+                                                                "Refusing node '{}': {count} enrolled nodes share this name",
+                                                                name
+                                                            );
+                                                            // Same terminal wire status as a
+                                                            // deregistration: only an operator can repair the
+                                                            // duplicates, so the node must stop retrying.
+                                                            // The `reason` field carries the specificity —
+                                                            // no new status vocabulary, and an older node
+                                                            // client ignores the extra field.
+                                                            Some(serde_json::json!({
+                                                                "status": "deregistered",
+                                                                "reason": format!(
+                                                                    "{count} enrolled nodes share the name '{name}'; an operator must deregister the duplicates by id"
+                                                                ),
+                                                            }))
+                                                        }
+                                                        Some((
+                                                            _,
+                                                            crate::cluster::NodeAdmission::StoreUnavailable {
+                                                                detail,
+                                                            },
+                                                        )) => {
+                                                            warn!(
+                                                                "Cannot admit node: {detail}; the node will retry"
+                                                            );
+                                                            // NO node payload at all: the node client treats
+                                                            // a reply without `result.node` as "the center did
+                                                            // not register this node" and retries with backoff.
+                                                            // A payload here would either register a node the
+                                                            // center cannot see or make the refusal terminal —
+                                                            // both wrong for a transient store outage.
+                                                            None
                                                         }
                                                         None => None,
                                                     };
