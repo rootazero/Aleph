@@ -1038,10 +1038,10 @@ impl InboundMessageRouter {
                     if parsed.command_name == "session_new" || parsed.command_name == "new" {
                         return self.handle_new_session(&msg, &ctx).await;
                     }
-                    // Use the rich serializer so Skill / Custom / MCP fields
-                    // (allowed_tools, system_prompt, server_name)
-                    // are preserved in the mode JSON instead of being lossily
-                    // collapsed to `direct_tool`.
+                    // Use the rich serializer so Skill / MCP fields
+                    // (allowed_tools, server_name) are preserved in the mode
+                    // JSON instead of being lossily collapsed to
+                    // `direct_tool`.
                     if let Some(mode_json) =
                         crate::gateway::inbound_router::command_handler::serialize_parsed_command(
                             &parsed,

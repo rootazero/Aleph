@@ -780,19 +780,27 @@ pub struct UnifiedTool {
     // requests matching this command are routed and processed.
     /// Regex pattern for L1 routing match
     /// e.g., "^/search\\s+" for /search command
+    ///
+    /// Written by the registration paths that name a command; no
+    /// `alephcore` reader consumes it — the catalog resolves a slash input
+    /// by **name and alias**, never by regex. The slash envelope used to
+    /// carry a copy of it as `pattern`, and read that copy no more than it
+    /// read this one.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub routing_regex: Option<String>,
 
     /// System prompt declared by a custom `[[rules]]` entry.
     ///
     /// Written only by `register_custom_commands`; skills deliberately leave
-    /// it unset. Its single reader is `CommandContext::Custom.system_prompt`,
-    /// which reaches the slash-command envelope's `system_prompt` key — and
-    /// the envelope's `"custom"` arm falls through to the agent loop without
-    /// reading it, so nothing injects this string into a prompt today. The
-    /// same text does reach the model as the tool's `description`
-    /// (`registration.rs` truncates it to 100 chars). Do not describe this as
-    /// an injected prompt until a consumer actually injects it.
+    /// it unset. It carries the rule's prompt **whole** — the tool's
+    /// `description` is a 100-char truncation of the same text, and that
+    /// truncated copy is what the model reads.
+    ///
+    /// No `alephcore` reader consumes this field: the slash envelope used to
+    /// carry a copy of it in its `"system_prompt"` key, and the envelope's
+    /// `"custom"` arm fell through to the agent loop without reading it. Do
+    /// not describe this as an injected prompt until a consumer actually
+    /// injects it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub routing_system_prompt: Option<String>,
 
