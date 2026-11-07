@@ -137,7 +137,7 @@ pub(super) fn truncate_for_topic(s: &str, max_chars: usize) -> &str {
 /// by `ExecutionEngine` fast path. Preserves source-specific fields per
 /// command kind:
 /// * `Skill` — `skill_id`, `allowed_tools`, `display_name`
-/// * `Custom` — `system_prompt`, `pattern`, `tool_id`
+/// * `Custom` — `tool_id`
 /// * `Mcp`   — `server_name`, `tool_name`
 ///
 /// Without this, the fast-path's `match mode_type { "skill" => ... }` branch
@@ -150,7 +150,9 @@ pub(super) fn truncate_for_topic(s: &str, max_chars: usize) -> &str {
 /// this mode — the two are read back apart in
 /// `execution_engine::slash_skill_scope`, so this must stay a JSON value
 /// rather than being flattened to a list on the way out. (A skill's list
-/// pre-grants instead, and is read from the skill file, not from here.)
+/// pre-grants instead; which of the two a row carries is decided at run time
+/// by `execution_engine::slash_skill_pregrant::registered_skill`, which
+/// reads this same `allowed_tools` value back out of the mode.)
 ///
 /// `owning_plugin` (any kind) is written only when the resolved entry is
 /// plugin-owned; the key is absent otherwise. The fast path's visibility
@@ -188,14 +190,9 @@ pub fn serialize_parsed_command(parsed: &crate::command::ParsedCommand) -> Optio
             "args": args,
             "source": "skill",
         }),
-        CommandContext::Custom {
-            system_prompt,
-            pattern,
-        } => serde_json::json!({
+        CommandContext::Custom => serde_json::json!({
             "type": "custom",
             "tool_id": parsed.tool_id,
-            "system_prompt": system_prompt,
-            "pattern": pattern,
             "args": args,
             "source": "custom",
         }),
