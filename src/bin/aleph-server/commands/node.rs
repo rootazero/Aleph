@@ -110,9 +110,13 @@ enum ConnectVerdict {
     /// Registered. `node_id` is authoritative; persist it when `persist` is set
     /// (first boot, or the center adopted an operator's pre-enrolled row).
     Registered { node_id: String, persist: bool },
-    /// The center revoked this node's device record (`cluster.deregister`).
+    /// The center refused this node outright: its device record was revoked
+    /// (`cluster.deregister`), or the name is shared by several enrolled nodes
+    /// and only an operator can repair it.
     /// Terminal: retrying cannot help until an operator re-enrolls it.
-    Deregistered,
+    /// `reason` is the center's human-readable explanation — absent when the
+    /// center is older and does not send one.
+    Deregistered { reason: Option<String> },
 }
 
 /// Parse the center's `connect` reply. `None` = the center answered but said
@@ -120,7 +124,12 @@ enum ConnectVerdict {
 fn parse_connect_verdict(resp: &Value) -> Option<ConnectVerdict> {
     let node = resp.pointer("/result/node")?;
     if node.get("status").and_then(|v| v.as_str()) == Some("deregistered") {
-        return Some(ConnectVerdict::Deregistered);
+        // The reason is optional: an older center sends the status alone.
+        let reason = node
+            .get("reason")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+        return Some(ConnectVerdict::Deregistered { reason });
     }
     let node_id = node.get("node_id").and_then(|v| v.as_str())?.to_string();
     let persist = node
@@ -139,11 +148,18 @@ const HEALTHY_SESSION_MS: u128 = 30_000;
 /// Deregistration is terminal, so it needs its own error identity to break the
 /// reconnect loop.
 #[derive(Debug)]
-struct Deregistered;
+struct Deregistered {
+    /// The center's explanation, when it sent one. `None` = an older center
+    /// (or a plain revocation) — the generic message is then correct.
+    reason: Option<String>,
+}
 
 impl std::fmt::Display for Deregistered {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str("node was deregistered by the center")
+        match &self.reason {
+            Some(reason) => write!(f, "node was refused by the center: {reason}"),
+            None => f.write_str("node was deregistered by the center"),
+        }
     }
 }
 
@@ -228,12 +244,28 @@ pub async fn handle_node(
         match outcome {
             Ok(()) => tracing::warn!("node session ended cleanly; reconnecting"),
             Err(e) if e.is::<Deregistered>() => {
-                tracing::error!(
-                    "node '{name}' was deregistered by the center. Its identity file \
-                     ({}) is now dead — an operator must re-enroll this node (delete the \
-                     file to join as a new node). Exiting.",
-                    id_path.display()
-                );
+                // An older center sends no reason: keep the generic message then.
+                // A center that does send one gets an accurate one — the two
+                // refusals (revoked identity vs. an ambiguous name) need
+                // different operator actions.
+                let reason = e
+                    .downcast_ref::<Deregistered>()
+                    .and_then(|d| d.reason.clone());
+                match reason {
+                    Some(reason) => tracing::error!(
+                        "node '{name}' was refused by the center: {}. Its identity file \
+                         ({}) is now dead — an operator must re-enroll this node (delete the \
+                         file to join as a new node). Exiting.",
+                        reason,
+                        id_path.display()
+                    ),
+                    None => tracing::error!(
+                        "node '{name}' was deregistered by the center. Its identity file \
+                         ({}) is now dead — an operator must re-enroll this node (delete the \
+                         file to join as a new node). Exiting.",
+                        id_path.display()
+                    ),
+                }
                 return Err(e);
             }
             Err(e) => tracing::error!("node session error: {e}; retrying in {backoff}ms"),
@@ -413,7 +445,9 @@ where
         return Err(format!("center refused connect: {err}").into());
     }
     match parse_connect_verdict(&reply) {
-        Some(ConnectVerdict::Deregistered) => return Err(Box::new(Deregistered)),
+        Some(ConnectVerdict::Deregistered { reason }) => {
+            return Err(Box::new(Deregistered { reason }));
+        }
         Some(ConnectVerdict::Registered { node_id, persist }) => {
             on_identity(&node_id, persist).await;
         }
@@ -687,7 +721,7 @@ mod tests {
                 assert_eq!(node_id, "uuid-123");
                 assert!(persist);
             }
-            ConnectVerdict::Deregistered => panic!("must be registered"),
+            ConnectVerdict::Deregistered { .. } => panic!("must be registered"),
         }
 
         // Reconnect: same id echoed back, nothing new to write to disk.
@@ -700,17 +734,35 @@ mod tests {
                     "an unchanged id must not rewrite the identity file"
                 );
             }
-            ConnectVerdict::Deregistered => panic!("must be registered"),
+            ConnectVerdict::Deregistered { .. } => panic!("must be registered"),
         }
     }
 
     #[test]
     fn connect_verdict_detects_deregistration() {
         let kicked = json!({"result": {"node": {"node_id": "uuid-123", "status": "deregistered"}}});
+        // An old center sends the status alone — no reason, so the node keeps
+        // its generic "deregistered by the center" message.
         assert!(matches!(
             parse_connect_verdict(&kicked),
-            Some(ConnectVerdict::Deregistered)
+            Some(ConnectVerdict::Deregistered { reason: None })
         ));
+    }
+
+    #[test]
+    fn connect_verdict_carries_the_centers_refusal_reason() {
+        // A new center explains WHY the node was refused (e.g. the name is
+        // shared by several enrolled nodes). The reason must survive the parse
+        // so the node can print an accurate, actionable message.
+        let refused = json!({"result": {"node": {"status": "deregistered",
+            "reason": "3 enrolled nodes share the name 'worker-3'; an operator must deregister the duplicates by id"}}});
+        match parse_connect_verdict(&refused).expect("a verdict") {
+            ConnectVerdict::Deregistered { reason } => {
+                let reason = reason.expect("the reason must be carried");
+                assert!(reason.contains("share the name"), "{reason}");
+            }
+            ConnectVerdict::Registered { .. } => panic!("must be refused"),
+        }
     }
 
     #[test]

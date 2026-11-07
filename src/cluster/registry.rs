@@ -839,7 +839,7 @@ where
 /// lever for anyone who can reach the gateway. The limits are generous for a
 /// real node (one name, a handful of tags, a handful of commands) and are
 /// counted in **bytes** — the unit [`truncate_on_char_boundary`] works in.
-const MAX_DEVICE_NAME_BYTES: usize = 128;
+pub(crate) const MAX_DEVICE_NAME_BYTES: usize = 128;
 const MAX_TAG_COUNT: usize = 32;
 const MAX_TAG_BYTES: usize = 64;
 const MAX_COMMAND_COUNT: usize = 64;
@@ -848,7 +848,13 @@ const MAX_COMMAND_SCHEMA_BYTES: usize = 8 * 1024;
 
 /// Bound the declared device name. It is a display affordance, so truncating
 /// is always safe (and never splits a UTF-8 scalar).
-fn bound_device_name(raw: String, device_id: &str) -> String {
+///
+/// `pub(crate)` because the **offline** half of the fleet (the enrolled-device
+/// store in `cluster::enrollment`) has to bound the same peer-declared name
+/// the same way — otherwise a long name is stored under one spelling and
+/// matched under another, and online addressing and offline addressing
+/// disagree about the same machine.
+pub(crate) fn bound_device_name(raw: String, device_id: &str) -> String {
     if raw.len() <= MAX_DEVICE_NAME_BYTES {
         return raw;
     }
