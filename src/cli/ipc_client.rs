@@ -131,8 +131,7 @@ where
     {
         anyhow::bail!(
             "refusing to send the admin bearer token to {joined}: it leaves the validated \
-             loopback endpoint {host}:{}; the admin IPC channel is local-only.",
-            base.port_or_known_default()
+             loopback endpoint {base}; the admin IPC channel is local-only."
         );
     }
     // Strip any query string the base may carry; the admin routes do not
