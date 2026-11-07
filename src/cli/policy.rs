@@ -27,9 +27,10 @@ pub struct LockHeldError {
 pub enum LockHolder {
     /// The sidecar names a running process.
     Live { pid: u32 },
-    /// The sidecar names a PID that is not running — the record is stale
-    /// (a daemon whose PID was not rewritten after forking, typically), but
-    /// the lock itself is held.
+    /// The sidecar names a PID that is not running, or one that no longer
+    /// matches the recorded process identity (the PID was recycled) — the
+    /// record is stale (a daemon whose PID was not rewritten after forking,
+    /// typically), but the lock itself is held.
     StaleRecord { pid: u32 },
     /// The sidecar is missing or unreadable; the holder cannot be named.
     Unknown,
@@ -38,14 +39,20 @@ pub enum LockHolder {
 impl fmt::Display for LockHeldError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         // Every arm says the lock is held. Only the first can name the
-        // process; the other two must not print a PID the reader could
-        // `kill` (0 is not a process, and a stale PID is somebody else's).
+        // process to stop; the other two must not print a PID the reader
+        // could `kill` (0 is not a process, and a stale PID is somebody
+        // else's). The stale arm still prints the recorded PID, because it
+        // is the forensic handle on the record — but it says explicitly
+        // that the PID is NOT the process that wrote it, because
+        // `instance_lock` folds "the PID is gone" and "the PID was
+        // recycled by an unrelated live process" into one outcome.
         match self.holder {
             LockHolder::Live { pid } => write!(f, "server is running (PID {pid})")?,
             LockHolder::StaleRecord { pid } => write!(
                 f,
                 "server is running but its holder record is stale (names PID {pid}, \
-                 which is not running)"
+                 which is not the process that wrote the record — it may have exited, \
+                 or its start time no longer matches; do not signal it)"
             )?,
             LockHolder::Unknown => write!(f, "server is running (holder unknown)")?,
         }
@@ -288,10 +295,14 @@ mod tests {
     }
 
     /// Stale-record case: the lock is held (contention), but the sidecar
-    /// names a PID that is not running. The message must say the server is
-    /// running, call the record stale, keep the dead PID for forensics, and
-    /// never call the lock orphaned — nobody is going to `rm` a held lock
-    /// on this message's advice.
+    /// names a PID that is either gone or recycled by an unrelated live
+    /// process. The message must say the server is running, call the record
+    /// stale, keep the recorded PID for forensics, and never call the lock
+    /// orphaned — nobody is going to `rm` a held lock on this message's
+    /// advice. It must also NOT claim the PID "is not running": that is
+    /// only one of the two states `instance_lock` folds into this arm, and
+    /// telling an operator that a live process is dead is how the wrong PID
+    /// gets signalled.
     #[test]
     fn lock_held_error_display_for_stale_record() {
         let msg = held(LockHolder::StaleRecord { pid: 5678 });
@@ -299,6 +310,7 @@ mod tests {
         assert!(msg.contains("stale"), "{msg}");
         assert!(msg.contains("PID 5678"), "{msg}");
         assert!(!msg.contains("orphaned"), "{msg}");
+        assert!(!msg.contains("which is not running"), "{msg}");
         assert!(msg.contains("Do not remove the lock file"), "{msg}");
     }
 
@@ -396,12 +408,12 @@ mod tests {
         let conn = crate::utils::sqlite_open::open_sqlite_safe(&security_db).unwrap();
         conn.execute_batch(
             "CREATE TABLE shared_token (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                token_hash TEXT PRIMARY KEY,
                 plaintext_token TEXT,
                 created_at INTEGER
              );
-             INSERT INTO shared_token (plaintext_token, created_at)
-             VALUES ('tok', 1);",
+             INSERT INTO shared_token (token_hash, plaintext_token, created_at)
+             VALUES ('hash-1', 'tok', 1);",
         )
         .unwrap();
         drop(conn);

@@ -42,6 +42,22 @@ where
             data_dir.display()
         )
     })?;
+    // The endpoint record is the ADDRESS of the credential. Before the admin
+    // bearer token is read out of `security.db`, prove that the process that
+    // wrote the record is still the same process: once the server exits, the
+    // OS may hand its PID to an unrelated process, and that process may now
+    // own the port the endpoint still names — the bearer token would then be
+    // handed to it. A record whose identity cannot be proven (no usable
+    // start time) is treated as "not live".
+    if !endpoint.writer_is_live() {
+        anyhow::bail!(
+            "refusing to send the admin bearer token to {}: the IPC endpoint record (PID {}) \
+             does not belong to a live Aleph server (no usable process start time, or the PID \
+             was recycled). Restart the server and retry.",
+            endpoint.url,
+            endpoint.pid
+        );
+    }
     let base = url::Url::parse(&endpoint.url).context("endpoint URL is not a parseable URL")?;
     // The admin channel is local-only: the endpoint file is written by the
     // daemon on this host, and the bearer token is read from this host's
@@ -74,12 +90,51 @@ where
             base.path()
         );
     }
+    // The route must be an ABSOLUTE-PATH reference. `Url::join` is RFC 3986
+    // reference resolution, and a reference that starts with `//` is an
+    // *authority* reference: `base.join("//attacker.example/x")` REPLACES
+    // the base's host, so the request (admin bearer token + JSON body)
+    // would be sent to a host the loopback check above never saw. `\` is
+    // the same separator for special schemes (`http`/`https`), so `/\host`
+    // is an authority reference as well.
+    if !route.starts_with('/') || route.starts_with("//") || route.starts_with("/\\") {
+        anyhow::bail!(
+            "refusing to forward to route {route:?}: the admin route must be an absolute \
+             path (for example \"/v1/admin/secrets\") that names no host of its own; a \
+             route starting with \"//\" would replace the endpoint host."
+        );
+    }
     // The route is absolute (`/v1/admin/...`), so the join below replaces the
     // (empty or "/") base path — with the prefix case refused above there is
     // no prefix left to lose.
     let joined = base
         .join(route)
         .with_context(|| format!("cannot join route {route:?} to base {base}"))?;
+    // Validate the JOINED url, not the base: the authority that will
+    // actually be called is only known after the join. The scheme must stay
+    // the endpoint's own (http/https) and the authority must be exactly the
+    // loopback endpoint that was validated above — anything else is refused
+    // BEFORE the token is read out of `security.db`.
+    let joined_host = joined
+        .host_str()
+        .ok_or_else(|| anyhow::anyhow!("joined admin URL {joined} carries no host"))?;
+    if !matches!(joined.scheme(), "http" | "https") || joined.scheme() != base.scheme() {
+        anyhow::bail!(
+            "refusing to forward to {joined}: the joined admin URL must keep the endpoint \
+             scheme ({}) and stay on http/https.",
+            base.scheme()
+        );
+    }
+    if joined_host != host
+        || joined.port_or_known_default() != base.port_or_known_default()
+        || !is_loopback_host(joined_host)
+    {
+        anyhow::bail!(
+            "refusing to send the admin bearer token to {joined}: it leaves the validated \
+             loopback endpoint {host}:{}; the admin IPC channel is local-only.",
+            base.port_or_known_default()
+        );
+    }
     // Strip any query string the base may carry; the admin routes do not
     // honour one, and a query from a tampered endpoint file would otherwise
     // be forwarded verbatim.
@@ -111,10 +166,11 @@ where
 /// Cap the size of server-supplied text we splice into an error message.
 /// A misbehaving server that returns a stack trace or large payload in
 /// its error body should not leak those bytes verbatim into CLI output
-/// (operator privacy, log noise) — 256 chars is enough to identify the
+/// (operator privacy, log noise) — 256 bytes is enough to identify the
 /// error class and matches the size budget used elsewhere in the admin
-/// layer.
-const MAX_ERROR_BODY_CHARS: usize = 256;
+/// layer. The cap is on BYTES (`str::len`), not characters: the cut is
+/// floored to a char boundary, so a multibyte character is never split.
+const MAX_ERROR_BODY_BYTES: usize = 256;
 
 /// Read at most `MAX_RESPONSE_BYTES` from the response body.
 ///
@@ -188,14 +244,14 @@ impl std::io::Write for CappedBuffer {
 }
 
 fn truncate_error_body(s: String) -> String {
-    if s.len() <= MAX_ERROR_BODY_CHARS {
+    if s.len() <= MAX_ERROR_BODY_BYTES {
         s
     } else {
         // Floor to a char boundary to keep the message valid UTF-8 even
         // when the cut would land inside a multi-byte sequence. `str` on
         // the project's MSRV ships `floor_char_boundary` as stable, so the
         // hand-rolled `while !is_char_boundary` walk is no longer needed.
-        let cut = s.floor_char_boundary(MAX_ERROR_BODY_CHARS);
+        let cut = s.floor_char_boundary(MAX_ERROR_BODY_BYTES);
         let mut truncated = s[..cut].to_string();
         truncated.push_str("…[truncated]");
         truncated
@@ -263,6 +319,23 @@ fn build_client(url: &str) -> anyhow::Result<reqwest::blocking::Client> {
         // Self-signed cert on loopback is the supported local TLS setup.
         builder = builder.danger_accept_invalid_certs(true);
     }
+    // `reqwest` is built with the `system-proxy` feature, so `HTTP_PROXY` /
+    // `ALL_PROXY` in the operator's environment would otherwise capture this
+    // request: the admin bearer token and the request body would be handed
+    // to a proxy in cleartext. The admin IPC channel is loopback-only, so a
+    // proxy is never legitimate here.
+    builder = builder.no_proxy();
+    // One hop only. The endpoint URL is validated by `forward_to_server`
+    // BEFORE the request is built, and a redirect would send the request to a
+    // URL that was never validated. `reqwest` drops `Authorization` when the
+    // redirect target leaves the previous hop's host/port/scheme, but it
+    // re-clones the ORIGINAL headers on every hop and compares only against
+    // the immediately previous hop — a second hop that stays on a foreign
+    // host keeps the bearer token — and `tower-http` re-sends the request
+    // body on 307/308 to a target that is not checked at all (the admin
+    // POST bodies carry secret values). The local admin server never
+    // redirects, so refuse to follow one.
+    builder = builder.redirect(reqwest::redirect::Policy::none());
     builder
         .build()
         .context("failed to build HTTP client for admin IPC")
@@ -397,18 +470,18 @@ mod tests {
     #[test]
     fn truncate_error_body_passes_through_short_strings() {
         assert_eq!(truncate_error_body("ok".into()), "ok");
-        let short = "x".repeat(MAX_ERROR_BODY_CHARS);
+        let short = "x".repeat(MAX_ERROR_BODY_BYTES);
         assert_eq!(truncate_error_body(short.clone()), short);
     }
 
     #[test]
     fn truncate_error_body_caps_long_strings() {
-        let long = "y".repeat(MAX_ERROR_BODY_CHARS + 100);
+        let long = "y".repeat(MAX_ERROR_BODY_BYTES + 100);
         let out = truncate_error_body(long);
         assert!(out.ends_with("…[truncated]"));
         // The leading prefix is exactly the cap; the trailing marker is
         // the suffix.
-        let prefix_len = MAX_ERROR_BODY_CHARS;
+        let prefix_len = MAX_ERROR_BODY_BYTES;
         assert!(out.is_char_boundary(prefix_len));
         assert!(out.starts_with(&"y".repeat(prefix_len)));
     }
@@ -483,6 +556,68 @@ mod tests {
         assert!(msg.contains("refusing"), "{msg}");
     }
 
+    /// A route that carries its own authority (`//host/path`) is an RFC 3986
+    /// *authority* reference: `Url::join` replaces the endpoint host, so the
+    /// admin bearer token and the request body would go to that host instead
+    /// of the validated loopback endpoint. The route must be refused before
+    /// the token is read (`security.db` does not even exist in this test, so
+    /// a request attempt would fail with a different error).
+    #[test]
+    fn forward_to_server_refuses_a_route_that_carries_an_authority() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        crate::cli::endpoint::write_endpoint(
+            dir.path(),
+            &crate::cli::endpoint::IpcEndpoint::current("http://127.0.0.1:18790"),
+        )
+        .expect("write endpoint");
+        for route in [
+            "//attacker.example/v1/admin/secrets",
+            // `\` is the same separator as `/` for special schemes.
+            "/\\attacker.example/v1/admin/secrets",
+            // A relative reference is not an absolute admin route either.
+            "v1/admin/secrets",
+        ] {
+            let err = forward_to_server::<serde_json::Value>(
+                dir.path(),
+                HttpMethod::Get,
+                route,
+                serde_json::Value::Null,
+            )
+            .expect_err("a route that is not a bare absolute path must be refused");
+            let msg = format!("{err:#}");
+            assert!(msg.contains("absolute path"), "{route}: {msg}");
+            assert!(msg.contains("refusing"), "{route}: {msg}");
+        }
+    }
+
+    /// A stale endpoint record — the writer is gone and its PID was recycled
+    /// — must be refused BEFORE the bearer token is read: the port the
+    /// endpoint names may now belong to an unrelated local process, and the
+    /// token would be handed to it. "Identity unproven" (a record with no
+    /// usable start time) is refused the same way.
+    #[test]
+    fn forward_to_server_refuses_an_endpoint_whose_writer_is_gone() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let mut endpoint = crate::cli::endpoint::IpcEndpoint::current("http://127.0.0.1:18790");
+        // A PID that is overwhelmingly unlikely to be live, with a start time
+        // that cannot belong to it.
+        endpoint.pid = u32::try_from(i32::MAX - 1).expect("pid fits u32");
+        endpoint.start_time = Some(1);
+        crate::cli::endpoint::write_endpoint(dir.path(), &endpoint).expect("write endpoint");
+        let err = forward_to_server::<serde_json::Value>(
+            dir.path(),
+            HttpMethod::Get,
+            "/v1/admin/secrets",
+            serde_json::Value::Null,
+        )
+        .expect_err("an endpoint whose writer is gone must be refused");
+        let msg = format!("{err:#}");
+        assert!(
+            msg.contains("does not belong to a live Aleph server"),
+            "{msg}"
+        );
+    }
+
     /// `read_endpoint` reports a missing file, an empty file and an
     /// unsupported version the same way (`Ok(None)`); the caller's message
     /// must therefore cover all three instead of claiming the file is
@@ -512,7 +647,7 @@ mod tests {
         // Build a string where the byte-boundary cut would land inside a
         // multi-byte char. The helper must walk back to a valid char
         // boundary so the result is still valid UTF-8.
-        let mut s = "a".repeat(MAX_ERROR_BODY_CHARS - 1);
+        let mut s = "a".repeat(MAX_ERROR_BODY_BYTES - 1);
         s.push('ß'); // 2 bytes
         s.push_str(&"c".repeat(50));
         let out = truncate_error_body(s);
