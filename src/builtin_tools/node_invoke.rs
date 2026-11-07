@@ -70,7 +70,7 @@ node is offline or the command isn't permitted, you get a clear error."#;
                 Err(ResolveError::NotFound) => {
                     return Err(AlephError::tool(format!("node '{}' not online", args.node)))
                 }
-                Err(e @ (ResolveError::Ambiguous(_) | ResolveError::NodeNotFound { .. })) => {
+                Err(e @ ResolveError::Ambiguous(_)) => {
                     return Err(AlephError::tool(format!("node '{}' {e}", args.node)))
                 }
             };

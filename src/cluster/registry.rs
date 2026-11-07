@@ -69,9 +69,6 @@ pub enum ResolveError {
     /// (`name (short-id)`) for LLM disambiguation.
     #[error("ambiguous — matches: {}", .0.join(", "))]
     Ambiguous(Vec<String>),
-    /// Internal state inconsistency: the id returned by match_id is missing from nodes_by_id.
-    #[error("internal node lookup failed for '{name_or_id}'")]
-    NodeNotFound { name_or_id: String },
 }
 
 /// A node's presence in the fleet view. One type, one spelling: the JSON wire
@@ -497,12 +494,15 @@ impl NodeRegistry {
     ) -> std::result::Result<(ReverseRpcChannel, Vec<CommandDescriptor>, bool), ResolveError> {
         let inner = self.inner.read().unwrap_or_else(|e| e.into_inner());
         let id = Self::match_id(&inner, name_or_id)?;
+        // `match_id` returns either the queried key or `n.session.node_id` for
+        // an entry taken from `nodes_by_id`, and `nodes_by_id` is keyed by
+        // `session.node_id` — under the SAME read guard, so the lookup cannot
+        // miss. It is mapped to `NotFound` (not a panic) so the type stays
+        // total.
         let n = inner
             .nodes_by_id
             .get(&id)
-            .ok_or_else(|| ResolveError::NodeNotFound {
-                name_or_id: name_or_id.to_string(),
-            })?;
+            .ok_or(ResolveError::NotFound)?;
         Ok((
             n.session.channel.clone(),
             n.session.declared_commands.clone(),
@@ -1581,13 +1581,6 @@ mod tests {
         assert_eq!(
             ResolveError::Ambiguous(vec!["a (aaa)".into(), "b (bbb)".into()]).to_string(),
             "ambiguous — matches: a (aaa), b (bbb)"
-        );
-        assert_eq!(
-            ResolveError::NodeNotFound {
-                name_or_id: "x".into()
-            }
-            .to_string(),
-            "internal node lookup failed for 'x'"
         );
     }
 

@@ -79,7 +79,7 @@ Example: {"node":"worker-1","direction":"push","local_path":"/tmp/build.sh","rem
                 Err(ResolveError::NotFound) => {
                     return Err(AlephError::tool(format!("node '{}' not online", args.node)))
                 }
-                Err(e @ (ResolveError::Ambiguous(_) | ResolveError::NodeNotFound { .. })) => {
+                Err(e @ ResolveError::Ambiguous(_)) => {
                     return Err(AlephError::tool(format!("node '{}' {e}", args.node)))
                 }
             };

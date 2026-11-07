@@ -858,9 +858,7 @@ fn resolve_deregister_target(
         Ok(NameMatch::None) => match registry.resolve_id(query) {
             Ok(id) => Ok(id),
             Err(ResolveError::NotFound) => Err(DeregisterError::NotFound),
-            Err(e @ (ResolveError::Ambiguous(_) | ResolveError::NodeNotFound { .. })) => {
-                Err(DeregisterError::Ambiguous(e.to_string()))
-            }
+            Err(e @ ResolveError::Ambiguous(_)) => Err(DeregisterError::Ambiguous(e.to_string())),
         },
         // The store read failed: whether an enrolled row matches is UNKNOWN,
         // and the registry's fuzzy tier could then evict the wrong node.
