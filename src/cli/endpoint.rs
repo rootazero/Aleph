@@ -74,6 +74,34 @@ impl IpcEndpoint {
                 .and_then(crate::utils::process_alive::process_start_time),
         }
     }
+
+    /// The start time of the process that wrote this record, if it can serve
+    /// as an identity proof.
+    ///
+    /// `None` means "identity unproven": the record was written by a build
+    /// that did not record a start time, or the platform reported an
+    /// unusable value. A reader must treat that as unproven — never as
+    /// trusted.
+    pub fn recorded_start_time(&self) -> Option<u64> {
+        self.start_time.filter(|start| *start != 0)
+    }
+
+    /// True when the process that wrote this record is still the SAME
+    /// process: the recorded PID is alive AND its start time still matches
+    /// the recorded one, so a recycled PID cannot pass.
+    ///
+    /// Fails closed. A record with no usable start time is not "live",
+    /// because "unproven" is not "confirmed" — the same stance the daemon's
+    /// stop path takes before it signals a PID.
+    pub fn writer_is_live(&self) -> bool {
+        let Some(start) = self.recorded_start_time() else {
+            return false;
+        };
+        let Ok(pid) = i32::try_from(self.pid) else {
+            return false;
+        };
+        crate::utils::process_alive::process_matches(pid, Some(start))
+    }
 }
 
 /// Path to the `.ipc-endpoint.json` file inside `data_dir`.

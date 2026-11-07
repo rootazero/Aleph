@@ -42,6 +42,22 @@ where
             data_dir.display()
         )
     })?;
+    // The endpoint record is the ADDRESS of the credential. Before the admin
+    // bearer token is read out of `security.db`, prove that the process that
+    // wrote the record is still the same process: once the server exits, the
+    // OS may hand its PID to an unrelated process, and that process may now
+    // own the port the endpoint still names — the bearer token would then be
+    // handed to it. A record whose identity cannot be proven (no usable
+    // start time) is treated as "not live".
+    if !endpoint.writer_is_live() {
+        anyhow::bail!(
+            "refusing to send the admin bearer token to {}: the IPC endpoint record (PID {}) \
+             does not belong to a live Aleph server (no usable process start time, or the PID \
+             was recycled). Restart the server and retry.",
+            endpoint.url,
+            endpoint.pid
+        );
+    }
     let base = url::Url::parse(&endpoint.url).context("endpoint URL is not a parseable URL")?;
     // The admin channel is local-only: the endpoint file is written by the
     // daemon on this host, and the bearer token is read from this host's
@@ -572,6 +588,34 @@ mod tests {
             assert!(msg.contains("absolute path"), "{route}: {msg}");
             assert!(msg.contains("refusing"), "{route}: {msg}");
         }
+    }
+
+    /// A stale endpoint record — the writer is gone and its PID was recycled
+    /// — must be refused BEFORE the bearer token is read: the port the
+    /// endpoint names may now belong to an unrelated local process, and the
+    /// token would be handed to it. "Identity unproven" (a record with no
+    /// usable start time) is refused the same way.
+    #[test]
+    fn forward_to_server_refuses_an_endpoint_whose_writer_is_gone() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let mut endpoint = crate::cli::endpoint::IpcEndpoint::current("http://127.0.0.1:18790");
+        // A PID that is overwhelmingly unlikely to be live, with a start time
+        // that cannot belong to it.
+        endpoint.pid = u32::try_from(i32::MAX - 1).expect("pid fits u32");
+        endpoint.start_time = Some(1);
+        crate::cli::endpoint::write_endpoint(dir.path(), &endpoint).expect("write endpoint");
+        let err = forward_to_server::<serde_json::Value>(
+            dir.path(),
+            HttpMethod::Get,
+            "/v1/admin/secrets",
+            serde_json::Value::Null,
+        )
+        .expect_err("an endpoint whose writer is gone must be refused");
+        let msg = format!("{err:#}");
+        assert!(
+            msg.contains("does not belong to a live Aleph server"),
+            "{msg}"
+        );
     }
 
     /// `read_endpoint` reports a missing file, an empty file and an
