@@ -77,8 +77,9 @@ async fn resolve_in_jail(path: &str, workspace_dir: &Path) -> Result<PathBuf, St
     // win that race can still swap the root to a symlink and have it
     // resolved through. Closing the window entirely requires pinning a root
     // directory fd and using `openat` / `O_NOFOLLOW` on every descendant
-    // operation (see `FileWriteCommand::run` for the leaf-level
-    // `O_NOFOLLOW` work item — same class of fix).
+    // operation. The leaf-level half of that work is done: both the read and
+    // the write side open with `O_NOFOLLOW`, so a leaf swapped after the
+    // canonicalize is refused by the open itself.
     //
     // `symlink_metadata` itself returns NotFound when the path does not
     // exist, so the explicit `create_dir_all` round-trip before it is
@@ -195,7 +196,11 @@ impl NodeCommand for FileWriteCommand {
             // method on `std::fs::OpenOptions` does not apply here). O_NOFOLLOW
             // refuses to follow a symlink at the leaf, closing the TOCTOU
             // window between `resolve_in_jail`'s canonicalize and this open.
-            opts.custom_flags(libc::O_NOFOLLOW);
+            // O_NONBLOCK closes the other half of the same window: a FIFO
+            // planted at the leaf between the type check and this open would
+            // otherwise block in `open(2)` until a reader showed up, parking a
+            // worker thread instead of failing.
+            opts.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
         }
         let open_result = opts.open(&dest).await;
         let mut file = match open_result {
@@ -248,9 +253,7 @@ impl NodeCommand for FileReadCommand {
         // reverse-RPC call would sit until its timeout.
         //
         // `symlink_metadata` does not follow a symlink, so a symlink planted
-        // at the leaf after `resolve_in_jail` canonicalized the path is
-        // refused as well — the read-side counterpart of the write side's
-        // `O_NOFOLLOW` guard.
+        // at the leaf is refused here too.
         let meta = tokio::fs::symlink_metadata(&src)
             .await
             .map_err(|e| format!("file.read: {e}"))?;
@@ -268,7 +271,21 @@ impl NodeCommand for FileReadCommand {
         // stale by the time the take-cap landed, so the with_capacity hint
         // was a lie — let `Vec` grow instead.
         use tokio::io::AsyncReadExt;
-        let file = tokio::fs::File::open(&src)
+        // The type check above and the open below are two syscalls: a writer
+        // with workspace-internal access can swap the leaf in between, and the
+        // open would follow the symlink out of the jail. `O_NOFOLLOW` makes
+        // the open itself refuse a symlink at the leaf — the read-side
+        // counterpart of the write side's guard. `O_NONBLOCK` turns the other
+        // half of the same race (a FIFO planted in between) into an error
+        // instead of a blocking `open(2)` that would park a worker thread.
+        let mut opts = tokio::fs::OpenOptions::new();
+        opts.read(true);
+        #[cfg(unix)]
+        {
+            opts.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
+        }
+        let file = opts
+            .open(&src)
             .await
             .map_err(|e| format!("file.read: {e}"))?;
         let mut buf = Vec::new();
@@ -335,6 +352,45 @@ mod tests {
             .decode(got["content_b64"].as_str().unwrap())
             .unwrap();
         assert_eq!(decoded, content);
+    }
+
+    // The read side opens with `O_NOFOLLOW` so a leaf that is swapped for a
+    // symlink AFTER the canonicalize cannot pull the read out of the jail. A
+    // symlink that stays INSIDE the jail must still read: `resolve_in_jail`
+    // canonicalizes the path, so the open sees the resolved target, not the
+    // link — the guard must not turn a legitimate read into a refusal.
+    #[tokio::test]
+    #[cfg(unix)]
+    async fn file_read_follows_a_symlink_that_stays_inside_the_jail() {
+        let dir = tempfile::tempdir().unwrap();
+        let ws = dir.path().to_path_buf();
+        std::fs::write(ws.join("real.bin"), b"inside").unwrap();
+        std::os::unix::fs::symlink(ws.join("real.bin"), ws.join("link.bin")).unwrap();
+
+        let reader = FileReadCommand::new(ws);
+        let got = reader
+            .run(json!({ "path": "link.bin" }))
+            .await
+            .expect("a symlink that stays inside the jail reads through");
+        assert_eq!(got["size"], 6);
+    }
+
+    #[tokio::test]
+    #[cfg(unix)]
+    async fn file_read_refuses_a_symlink_that_leaves_the_jail() {
+        let dir = tempfile::tempdir().unwrap();
+        let ws = dir.path().to_path_buf();
+        let outside = tempfile::tempdir().unwrap();
+        std::fs::write(outside.path().join("secret.txt"), b"secret").unwrap();
+        std::os::unix::fs::symlink(outside.path().join("secret.txt"), ws.join("escape.txt"))
+            .unwrap();
+
+        let reader = FileReadCommand::new(ws);
+        let err = reader
+            .run(json!({ "path": "escape.txt" }))
+            .await
+            .expect_err("a symlink that leaves the jail is refused");
+        assert!(err.contains("escapes") || err.contains("rejected"), "{err}");
     }
 
     #[tokio::test]
