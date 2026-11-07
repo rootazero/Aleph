@@ -54,9 +54,13 @@ currently offline does NOT appear here — it cannot be invoked until it reconne
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
         let filter = args.tags.unwrap_or_default();
+        // The name-only projection: the model-facing path needs the declared
+        // command NAMES, never the schemas — so it does not clone the whole
+        // catalog (up to 64 commands × 8 KiB of schema per node) just to drop
+        // the schema again.
         let nodes: Vec<Value> = self
             .node_registry
-            .list_environments()
+            .list_node_summaries()
             .into_iter()
             .filter(|e| filter.iter().all(|t| e.tags.contains(t)))
             .map(|e| {
@@ -64,7 +68,7 @@ currently offline does NOT appear here — it cannot be invoked until it reconne
                     "id": e.id,
                     "name": e.name,
                     "status": e.status,
-                    "commands": e.commands.iter().map(|c| c.name.clone()).collect::<Vec<_>>(),
+                    "commands": e.command_names,
                     "tags": e.tags,
                     "connected_at": e.connected_at,
                     // The node's aleph-server build; null on nodes older than

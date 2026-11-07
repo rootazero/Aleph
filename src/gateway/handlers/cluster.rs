@@ -15,7 +15,7 @@ use crate::sync_primitives::Arc;
 use serde::Deserialize;
 use tracing::warn;
 
-use crate::cluster::{deregister_node, enroll_node_device, DeregisterError};
+use crate::cluster::{deregister_node, enroll_node_device, DeregisterError, EnvironmentStatus};
 use crate::gateway::handlers::auth::AuthContext;
 use crate::gateway::handlers::{parse_params, INTERNAL_ERROR, INVALID_PARAMS};
 use crate::gateway::protocol::{JsonRpcRequest, JsonRpcResponse};
@@ -190,7 +190,7 @@ pub async fn handle_environments_list(
                     .map(|d| crate::cluster::Environment {
                         id: d.device_id,
                         name: d.device_name,
-                        status: "offline",
+                        status: EnvironmentStatus::Offline,
                         commands: Vec::new(),
                         tags: Vec::new(),
                         connected_at: 0,
@@ -214,7 +214,7 @@ pub async fn handle_environments_list(
     // nodes come from a HashMap and offline from the store (created_at DESC); a
     // stable order keeps the Panel fleet list from jittering on every refresh.
     envs.sort_by(|a, b| {
-        let rank = |status: &str| u8::from(status != "online");
+        let rank = |status: EnvironmentStatus| u8::from(status != EnvironmentStatus::Online);
         rank(a.status)
             .cmp(&rank(b.status))
             .then_with(|| a.name.cmp(&b.name))

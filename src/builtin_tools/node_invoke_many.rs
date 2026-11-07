@@ -55,6 +55,16 @@ impl NodeInvokeManyTool {
 /// Invoke `command` on one matched node; never returns Err — every outcome is
 /// encoded as a per-node result object so a failure does not abort the fan-out.
 async fn invoke_one(m: NodeMatch, command: String, args: Value, timeout_ms: u64) -> Value {
+    // A node whose declared catalog could not be parsed must NOT be read as
+    // "this node declares no commands": that reading would silently switch the
+    // center-side fail-fast layer off for this node. Fail closed instead — the
+    // same rule `node_invoke` applies, in the same per-node error shape.
+    if m.catalog_malformed {
+        return json!({
+            "node": m.name, "node_id": m.node_id, "ok": false,
+            "error": format!("node '{}' declared a malformed command catalog; refusing to invoke", m.name)
+        });
+    }
     // Per-node fail-fast, mirroring node_invoke: reject only when the node
     // declared a non-empty catalog that excludes this command.
     if !m.declared_commands.is_empty() && !m.declared_commands.iter().any(|c| c.name == command) {
