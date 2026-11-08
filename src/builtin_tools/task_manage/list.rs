@@ -137,6 +137,7 @@ impl AlephTool for TaskListTool {
                     return Ok(TaskListOutput {
                         total: 0,
                         tasks: Vec::new(),
+                        summary: "No tasks found.".to_string(),
                     });
                 }
             },
