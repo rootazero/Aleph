@@ -226,9 +226,11 @@ fn merge_sections(
         if navigated {
             if let toml::Value::Table(ref mut t) = target {
                 if section == "security" {
-                    if let Some(ssrf) = t.get("ssrf").cloned() {
-                        if let toml::Value::Table(ref mut value_table) = value {
-                            value_table.entry("ssrf".to_string()).or_insert(ssrf);
+                    if let Some(existing_sec) = t.get("security").and_then(|s| s.as_table()) {
+                        if let Some(ssrf) = existing_sec.get("ssrf").cloned() {
+                            if let toml::Value::Table(ref mut value_table) = value {
+                                value_table.entry("ssrf".to_string()).or_insert(ssrf);
+                            }
                         }
                     }
                 }
