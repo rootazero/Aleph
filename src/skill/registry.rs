@@ -3,7 +3,6 @@
 use std::collections::HashMap;
 
 use crate::domain::skill::{SkillId, SkillManifest};
-use crate::domain::Entity;
 
 /// In-memory skill registry that stores `SkillManifest` values keyed by `SkillId`.
 ///

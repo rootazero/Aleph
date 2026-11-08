@@ -7,7 +7,6 @@
 
 use crate::bundled::{BUNDLED_SKILLS, OFFICIAL_SKILLS_REPO};
 use crate::domain::skill::{SkillManifest, SkillSource};
-use crate::domain::Entity; // brings `manifest.id()` into scope (status.rs does the same)
 use crate::hub::types::{ExtensionEntry, ExtensionKind, InstallSpec};
 use crate::skill::manifest::parse_skill_content;
 

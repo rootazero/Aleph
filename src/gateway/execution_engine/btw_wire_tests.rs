@@ -2250,7 +2250,6 @@ fn bundled_skill_command_words() -> BundledWalk {
                 text,
                 crate::domain::skill::SkillSource::Bundled,
             ) {
-                use crate::domain::Entity as _;
                 out.units += 1;
                 out.words.push(manifest.id().to_string());
             }

@@ -5,7 +5,7 @@
 use super::paths::{
     agents_home_dir, aleph_home_dir, claude_home_dir, find_dir_upward, find_git_root,
     AGENTS_HOME_DIR, AGENT_FILE, ALEPH_HOME_DIR, CLAUDE_HOME_DIR, MCP_CONFIG_FILE, PLUGINS_DIR,
-    PLUGIN_MANIFEST_DIR, PLUGIN_MANIFEST_FILE, SKILL_FILE,
+    SKILL_FILE,
 };
 use super::types::{
     DiscoveredPath, DiscoveryScope, GlobalRoot, PluginDiscovery, ProjectPluginParent, ScanDirectory,
