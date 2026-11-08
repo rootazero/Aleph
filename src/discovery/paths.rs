@@ -88,22 +88,18 @@ where
     F: Fn(&Path) -> bool,
 {
     let mut results = Vec::new();
-    let mut current = start.to_path_buf();
+    let current_canonical = start.canonicalize().ok();
+    let mut current = current_canonical
+        .as_ref()
+        .cloned()
+        .unwrap_or_else(|| start.to_path_buf());
     let mut depth = 0;
 
-    let current_canonicalized = current.canonicalize().ok();
-    if let Some(ref canonical) = current_canonicalized {
-        current = canonical.clone();
-    }
-
-    let stop_raw = stop.map(|p| p.to_path_buf());
-    let stop = stop.map(|p| {
-        if current_canonicalized.is_some() {
-            p.canonicalize().unwrap_or_else(|_| p.to_path_buf())
-        } else {
-            p.to_path_buf()
-        }
-    });
+    let stop_canonical = if current_canonical.is_some() {
+        stop.map(|p| p.canonicalize().unwrap_or_else(|_| p.to_path_buf()))
+    } else {
+        stop.map(|p| p.to_path_buf())
+    };
 
     loop {
         if depth >= max_depth {
@@ -114,8 +110,8 @@ where
             results.push(current.clone());
         }
 
-        if stop.as_ref().is_some_and(|sp| &current == sp)
-            || stop_raw.as_ref().is_some_and(|sr| &current == sr)
+        if stop_canonical.as_ref().is_some_and(|sp| &current == sp)
+            || stop.is_some_and(|sr| &current == sr)
         {
             break;
         }
@@ -123,11 +119,6 @@ where
         match current.parent() {
             Some(parent) => {
                 current = parent.to_path_buf();
-                if current_canonicalized.is_some() {
-                    if let Ok(canonical) = current.canonicalize() {
-                        current = canonical;
-                    }
-                }
                 depth += 1;
             }
             None => break,
@@ -135,6 +126,25 @@ where
     }
 
     results
+}
+
+/// Validate whether a path component is non-empty, contains no nulls/separators,
+/// and is not a directory or traversal reference.
+#[must_use]
+pub(crate) fn is_valid_path_component(name: &str) -> bool {
+    if name.is_empty()
+        || name.contains('\0')
+        || name.contains('/')
+        || name.contains('\\')
+        || name == ".."
+        || name == "."
+    {
+        return false;
+    }
+    if cfg!(windows) && name.contains(':') {
+        return false;
+    }
+    true
 }
 
 /// Validate that a path component does not contain traversal or separators.

@@ -26,7 +26,7 @@ use thiserror::Error;
 use tracing::{debug, warn};
 
 use super::paths::{
-    validate_path_component, PLUGINS_DIR, PLUGIN_MANIFEST_DIR, PLUGIN_MANIFEST_FILE,
+    is_valid_path_component, PLUGINS_DIR, PLUGIN_MANIFEST_DIR, PLUGIN_MANIFEST_FILE,
 };
 use super::scanner::is_existing_dir_no_follow;
 use super::types::{DiscoveredPath, GlobalRoot};
@@ -114,22 +114,23 @@ pub(crate) fn parse_installed_plugins(
             );
             continue;
         };
-        let users: Vec<&Value> = entries.iter().filter(|e| is_user_install(key, e)).collect();
-        let [entry] = users.as_slice() else {
-            if !users.is_empty() {
-                // Nothing says which of them Claude Code runs.
-                warn!(
-                    key,
-                    installs = users.len(),
-                    "Claude Code lists more than one user install; skipped"
-                );
-            }
+        let mut user_installs = entries.iter().filter(|e| is_user_install(key, e));
+        let Some(entry) = user_installs.next() else {
             continue;
         };
+        if user_installs.next().is_some() {
+            let total_users = 2 + user_installs.count();
+            warn!(
+                key,
+                installs = total_users,
+                "Claude Code lists more than one user install; skipped"
+            );
+            continue;
+        }
         let Some(version) = entry
             .get("version")
             .and_then(Value::as_str)
-            .filter(|v| validate_path_component(v).is_ok())
+            .filter(|v| is_valid_path_component(v))
         else {
             warn!(key, "Claude Code install has no usable version; skipped");
             continue;
@@ -148,7 +149,7 @@ pub(crate) fn parse_installed_plugins(
 /// `@` makes the split a guess, so it is refused.
 fn split_key(key: &str) -> Option<(&str, &str)> {
     let (name, marketplace) = key.split_once('@')?;
-    let one_component = |s: &str| validate_path_component(s).is_ok();
+    let one_component = |s: &str| is_valid_path_component(s);
     (!marketplace.contains('@') && one_component(name) && one_component(marketplace))
         .then_some((name, marketplace))
 }
@@ -208,9 +209,26 @@ fn is_user_install(key: &str, entry: &Value) -> bool {
 /// fallback names a plugin after its directory — here the VERSION, which
 /// many plugins share.
 pub(crate) fn discover_claude_cache(claude_home: &Path) -> Result<Vec<DiscoveredPath>, PathBuf> {
+    const MAX_INDEX_BYTES: u64 = 10 * 1024 * 1024; // 10MB upper bound
     let file = claude_home.join(PLUGINS_DIR).join(INSTALLED_PLUGINS_FILE);
     #[cfg(test)]
     crate::utils::paths::assert_not_real_claude_home(&file, "discover_claude_cache");
+    match std::fs::metadata(&file) {
+        Ok(meta) if meta.len() > MAX_INDEX_BYTES => {
+            warn!(
+                path = %file.display(),
+                size = meta.len(),
+                "Claude Code's installed_plugins.json exceeds 10MB limit; source unknown this load"
+            );
+            return Err(file);
+        }
+        Ok(_) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(e) => {
+            warn!(path = %file.display(), error = %e, "cannot read Claude Code's installed_plugins.json; source unknown this load");
+            return Err(file);
+        }
+    }
     let text = match std::fs::read_to_string(&file) {
         Ok(t) => t,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
