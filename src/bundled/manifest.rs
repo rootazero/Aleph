@@ -107,6 +107,7 @@ impl InstallRegistry {
         if let Err(e) = f.write_all(content.as_bytes()) {
             return cleanup_tmp(e);
         }
+        drop(f);
         match std::fs::rename(&tmp_path, &path) {
             Ok(()) => {}
             // BUNDLED-R4-07: Windows' rename refuses on an existing target.
@@ -197,6 +198,7 @@ impl InstallRegistry {
                 }
             })
             .map(|e| e.file_name().to_string_lossy().to_string())
+            .filter(|name| !name.starts_with('.'))
             .collect();
         let skipped = skip_count.get();
         if skipped > 0 {
