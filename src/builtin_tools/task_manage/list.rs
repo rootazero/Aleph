@@ -130,12 +130,21 @@ impl AlephTool for TaskListTool {
     type Output = TaskListOutput;
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
+        let parsed_status = match args.status.as_deref() {
+            Some(s) => match CoordTaskStatus::from_stored(s) {
+                Some(st) => Some(st),
+                None => {
+                    return Ok(TaskListOutput {
+                        total: 0,
+                        tasks: Vec::new(),
+                    });
+                }
+            },
+            None => None,
+        };
         let filter = CoordTaskFilter {
             team_id: args.team_id,
-            status: args
-                .status
-                .as_deref()
-                .and_then(CoordTaskStatus::from_stored),
+            status: parsed_status,
         };
 
         let listed = self.store.list_tasks(filter).await?;

@@ -134,14 +134,11 @@ impl AlephTool for AgentSwitchTool {
 fn map_bind_error(err: BindError) -> crate::error::AlephError {
     match err {
         BindError::EmptyChannel => AgentManageError::NoActiveChannel.into(),
-        BindError::UnknownAgent { available, .. } => AgentManageError::AgentNotFound {
-            // Note: `agent_id` is not carried by `BindError::UnknownAgent` in
-            // the seam — the seam puts it in `agent_id: String` but the
-            // variant doesn't store it (a deliberate seam-level simplification).
-            // To still produce a useful `Available agents:` line, we use the
-            // available list directly. The Display impl in `BindError`
-            // already covers the full text path.
-            agent_id: String::new(),
+        BindError::UnknownAgent {
+            agent_id,
+            available,
+        } => AgentManageError::AgentNotFound {
+            agent_id,
             available,
         }
         .into(),
