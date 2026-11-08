@@ -29,7 +29,7 @@ use std::collections::HashSet;
 /// (returns `1.0`) so misconfiguration can never zero out results.
 #[must_use]
 pub fn recency_multiplier(updated_at: i64, now: i64, half_life_days: f32) -> f32 {
-    if half_life_days <= 0.0 {
+    if !half_life_days.is_finite() || half_life_days <= 0.0 {
         return 1.0;
     }
     let age_days = ((now - updated_at).max(0) as f32) / 86_400.0;

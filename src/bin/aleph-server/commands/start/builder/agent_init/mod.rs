@@ -1297,17 +1297,27 @@ pub(in crate::commands::start) async fn register_agent_handlers(
                     match &app_config.team_dispatcher {
                         None => d,
                         Some(t) => {
-                            let task_timeout_secs =
-                                t.task_timeout_secs.unwrap_or(d.task_timeout_secs);
+                            let task_timeout_secs = t
+                                .task_timeout_secs
+                                .filter(|&v| v > 0)
+                                .unwrap_or(d.task_timeout_secs);
                             DispatcherConfig {
-                                max_concurrent: t.max_concurrent.unwrap_or(d.max_concurrent),
-                                lock_ttl_secs: t.lock_ttl_secs.unwrap_or(d.lock_ttl_secs),
+                                max_concurrent: t
+                                    .max_concurrent
+                                    .filter(|&v| v > 0)
+                                    .unwrap_or(d.max_concurrent),
+                                lock_ttl_secs: t
+                                    .lock_ttl_secs
+                                    .filter(|&v| v > 0)
+                                    .unwrap_or(d.lock_ttl_secs),
                                 task_timeout_secs,
                                 fallback_tick_secs: t
                                     .fallback_tick_secs
+                                    .filter(|&v| v > 0)
                                     .unwrap_or(d.fallback_tick_secs),
                                 zombie_ttl_secs: t
                                     .zombie_ttl_secs
+                                    .filter(|&v| v > 0)
                                     .unwrap_or(d.zombie_ttl_secs)
                                     .max(task_timeout_secs),
                                 max_per_owner: t.max_per_owner.unwrap_or(d.max_per_owner),
