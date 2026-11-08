@@ -251,7 +251,7 @@ async fn probe(path: &std::path::Path) -> DiscordVerdict {
     let bytes = match tokio::fs::read(path).await {
         Ok(b) => b,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            return DiscordVerdict::NotConfigured;
+            return DiscordVerdict::Ok;
         }
         Err(e) => return DiscordVerdict::Unknown(format!("read failed: {e}")),
     };

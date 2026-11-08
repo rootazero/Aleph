@@ -508,7 +508,7 @@ fn drop_pre_scope_tables(conn: &Connection) -> Result<(), IndexError> {
                 );
                 conn.execute_batch(&format!("DROP TABLE {table};"))?;
             }
-            Err(e) => return Err(IndexError::Database(e)),
+            Err(e) => return Err(IndexError::Sqlite(e)),
         }
     }
     Ok(())

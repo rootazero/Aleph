@@ -283,7 +283,7 @@ impl AgentDefinitionResolver {
         // migration must be skipped so we do not delete live session files!
         let old_sessions = workspace_path.join("sessions");
         let new_sessions = agent_dir.join("sessions");
-        if workspace_path == &agent_dir || old_sessions == new_sessions {
+        if workspace_path == agent_dir || old_sessions == new_sessions {
             // Already in agent directory; mark migrated if not already marked
             if old_sessions.is_dir() && !new_sessions.join(".migrated").exists() {
                 let _ = fs::write(new_sessions.join(".migrated"), "");
