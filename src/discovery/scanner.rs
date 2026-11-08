@@ -202,15 +202,14 @@ impl DirectoryScanner {
         // root reached both as global and via the upward walk) must scan
         // once. Canonical spelling is the identity; a root that fails to
         // canonicalize (does not exist yet) keeps its literal spelling.
-        let mut seen: Vec<PathBuf> = Vec::with_capacity(dirs.len());
+        let mut seen = std::collections::HashSet::with_capacity(dirs.len());
         dirs.retain(|d| {
             let key = std::fs::canonicalize(&d.path).unwrap_or_else(|_| d.path.clone());
-            if seen.contains(&key) {
+            if seen.insert(key) {
+                true
+            } else {
                 debug!("scan root {:?} deduped against an earlier spelling", d.path);
                 false
-            } else {
-                seen.push(key);
-                true
             }
         });
 
@@ -511,7 +510,7 @@ fn scan_component_dir(
                 continue;
             }
         };
-        classify_entry(&entry.path(), scan_dir, component_name, out);
+        classify_entry(entry.path(), scan_dir, component_name, out);
     }
 }
 
@@ -519,7 +518,7 @@ fn scan_component_dir(
 /// subdirectory or direct `.md` file) and push it into `out` when it
 /// qualifies.
 fn classify_entry(
-    path: &Path,
+    path: PathBuf,
     scan_dir: &ScanDirectory,
     component_name: &str,
     out: &mut Vec<DiscoveredPath>,
@@ -527,14 +526,14 @@ fn classify_entry(
     // `symlink_metadata` reports the link's own type, so a symlinked
     // skill/command/agent pointing outside the expected tree is rejected
     // instead of being enumerated as a discovered component.
-    let meta = match std::fs::symlink_metadata(path) {
+    let meta = match std::fs::symlink_metadata(&path) {
         Ok(m) => m,
         Err(e) => {
             trace!("stat {:?} failed, skipping entry: {}", path, e);
             return;
         }
     };
-    if is_hidden(path) {
+    if is_hidden(&path) {
         return;
     }
     // Layer-1 dedup observability: a symlinked component is skipped by
@@ -556,7 +555,7 @@ fn classify_entry(
         // system, not an extension agent.
         match component_marker_file(component_name) {
             Some(marker) => {
-                let present = has_marker_file(path, marker);
+                let present = has_marker_file(&path, marker);
                 if !present {
                     trace!("Skipping {:?}: missing marker file '{}'", path, marker);
                 }
@@ -575,7 +574,7 @@ fn classify_entry(
     };
     if is_component {
         out.push(DiscoveredPath {
-            path: path.to_path_buf(),
+            path,
             priority: scan_dir.priority,
             scope: scan_dir.scope.clone(),
         });
@@ -594,7 +593,7 @@ fn classify_entry(
 ///   name, so a directory holding `AGENT.md` is not an agent and must not
 ///   be discovered as one.
 fn has_marker_file(dir: &Path, marker: &str) -> bool {
-    if dir.join(marker).exists() {
+    if dir.join(marker).is_file() {
         return true;
     }
     if marker != SKILL_FILE {
@@ -616,10 +615,11 @@ fn has_marker_file(dir: &Path, marker: &str) -> bool {
             }
         })
         .any(|entry| {
-            entry
-                .file_name()
-                .to_str()
-                .is_some_and(|name| name.eq_ignore_ascii_case(marker))
+            entry.file_type().map_or(false, |ft| ft.is_file())
+                && entry
+                    .file_name()
+                    .to_str()
+                    .is_some_and(|name| name.eq_ignore_ascii_case(marker))
         })
 }
 
@@ -674,19 +674,17 @@ fn component_marker_file(component_name: &str) -> Option<&'static str> {
 /// Screening it as well would silently drop such a plugin, which is a
 /// behaviour change this module has no reason to make.
 fn has_plugin_manifest(path: &Path) -> bool {
-    let cc_dir = path.join(PLUGIN_MANIFEST_DIR);
-    [
-        cc_dir.join("plugin.toml"),
-        cc_dir.join(PLUGIN_MANIFEST_FILE),
-        path.join(".codex-plugin/plugin.json"),
-        path.join(".cursor-plugin/plugin.json"),
-        path.join(".cursorrules"),
-        path.join("aleph.plugin.toml"),
-        path.join("aleph.plugin.json"),
-        path.join(MCP_CONFIG_FILE),
-    ]
-    .iter()
-    .any(|p| p.exists())
+    const MANIFEST_REL_PATHS: &[&str] = &[
+        ".claude-plugin/plugin.toml",
+        ".claude-plugin/plugin.json",
+        ".codex-plugin/plugin.json",
+        ".cursor-plugin/plugin.json",
+        ".cursorrules",
+        "aleph.plugin.toml",
+        "aleph.plugin.json",
+        MCP_CONFIG_FILE,
+    ];
+    MANIFEST_REL_PATHS.iter().any(|rel| path.join(rel).is_file())
         || is_existing_dir_no_follow(&path.join(".cursor/rules"))
         || is_existing_dir_no_follow(&path.join("skills"))
         || is_existing_dir_no_follow(&path.join("commands"))

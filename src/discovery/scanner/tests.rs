@@ -684,3 +684,54 @@ fn an_unreadable_claude_cache_index_is_named_not_emptied() {
     );
     assert_eq!(discovery.unreadable, vec![index]);
 }
+
+#[test]
+fn marker_file_must_be_regular_file_not_dir() {
+    let temp = TempDir::new().unwrap();
+    let root = temp.path();
+    std::fs::create_dir(root.join(".git")).unwrap();
+
+    // Create a directory named SKILL.md inside a skill folder — should not qualify
+    let fake_skill = root.join("project/.aleph/skills/fake-skill");
+    std::fs::create_dir_all(fake_skill.join("SKILL.md")).unwrap();
+
+    let empty_home = TempDir::new().unwrap();
+    let scanner = DirectoryScanner {
+        aleph_home: empty_home.path().to_path_buf(),
+        claude_home: None,
+        agents_home: None,
+        git_root: Some(root.to_path_buf()),
+        working_dir: root.join("project"),
+        config: DiscoveryConfig {
+            working_dir: root.join("project"),
+            scan_claude_dirs: false,
+            scan_project_dirs: true,
+            max_upward_depth: 10,
+            claude_home_override: None,
+        },
+    };
+
+    let skills = scanner.discover_component("skills").unwrap();
+    assert!(
+        skills.is_empty(),
+        "directory named SKILL.md must not qualify as a valid skill marker: {skills:?}"
+    );
+}
+
+#[test]
+fn discover_component_rejects_invalid_path_component() {
+    let empty_home = TempDir::new().unwrap();
+    let scanner = DirectoryScanner {
+        aleph_home: empty_home.path().to_path_buf(),
+        claude_home: None,
+        agents_home: None,
+        git_root: None,
+        working_dir: empty_home.path().to_path_buf(),
+        config: DiscoveryConfig::default(),
+    };
+
+    assert!(scanner.discover_component("").is_err());
+    assert!(scanner.discover_component("..").is_err());
+    assert!(scanner.discover_component("foo/bar").is_err());
+    assert!(scanner.discover_component("foo\0bar").is_err());
+}
