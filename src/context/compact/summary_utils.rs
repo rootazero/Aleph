@@ -113,20 +113,19 @@ fn strip_tagged_block(text: &str, tag: &str) -> String {
     let open = format!("<{tag}>");
     let close = format!("</{tag}>");
     if let Some(start) = text.find(open.as_str()) {
-        if let Some(end) = text.find(close.as_str()) {
-            // Only strip when the closing tag appears after the opening tag.
-            if end > start {
-                let after_end = end + close.len();
-                let mut result = String::new();
-                result.push_str(text[..start].trim());
-                if after_end < text.len() {
-                    if !result.is_empty() {
-                        result.push('\n');
-                    }
-                    result.push_str(text[after_end..].trim());
+        let after_open = start + open.len();
+        if let Some(relative_end) = text[after_open..].find(close.as_str()) {
+            let end = after_open + relative_end;
+            let after_end = end + close.len();
+            let mut result = String::new();
+            result.push_str(text[..start].trim());
+            if after_end < text.len() {
+                if !result.is_empty() {
+                    result.push('\n');
                 }
-                return result;
+                result.push_str(text[after_end..].trim());
             }
+            return result;
         }
     }
     text.to_string()
@@ -141,10 +140,8 @@ fn unwrap_tagged_block(text: &str, tag: &str) -> Option<String> {
     let close = format!("</{tag}>");
     let start = text.find(open.as_str())?;
     let inner_start = start + open.len();
-    let end = text.find(close.as_str())?;
-    if end < inner_start {
-        return None;
-    }
+    let relative_end = text[inner_start..].find(close.as_str())?;
+    let end = inner_start + relative_end;
     Some(text[inner_start..end].trim().to_string())
 }
 

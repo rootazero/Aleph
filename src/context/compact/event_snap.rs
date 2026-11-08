@@ -81,6 +81,15 @@ pub(crate) fn snap_out_of_open_run(events: &[SessionEventRecord], cut: usize) ->
             _ => {}
         }
     }
+    // Any opener still unclosed (e.g. open run currently executing) whose
+    // opener is before the cut must also pull the cut back to keep RunStarted in the tail
+    for stack in openers.values() {
+        for &opener in stack {
+            if opener < cut {
+                crossing = Some(crossing.map_or(opener, |c| c.min(opener)));
+            }
+        }
+    }
     crossing.unwrap_or(cut)
 }
 

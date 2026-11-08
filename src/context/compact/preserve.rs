@@ -58,10 +58,18 @@ pub(crate) fn is_summary_text(text: &str) -> bool {
         Some(rest) => rest,
         None => return false,
     };
-    // Acceptable continuations: `]` (canonical close), ` (` (the
-    // "(from session memory)" / "(from <agent>)" family). Anything else
-    // — comma, colon, text — is user content, not a summary marker.
-    after_head.starts_with(']') || after_head.starts_with(" (")
+    if after_head == "]" || after_head.starts_with("]\n") || after_head.starts_with("]\r\n") {
+        return true;
+    }
+    if let Some(rest) = after_head.strip_prefix(" (") {
+        if let Some(bracket_idx) = rest.find(']') {
+            let after_bracket = &rest[bracket_idx + 1..];
+            return after_bracket.is_empty()
+                || after_bracket.starts_with('\n')
+                || after_bracket.starts_with("\r\n");
+        }
+    }
+    false
 }
 
 /// Whether `text` is harness scaffolding wearing the `User` role rather than
