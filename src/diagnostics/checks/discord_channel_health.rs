@@ -225,7 +225,7 @@ fn findings_for(verdict: &DiscordVerdict) -> Vec<Finding> {
         }
         DiscordVerdict::Unknown(reason) => vec![Finding::problem(
             CHECK_ID,
-            Severity::Info,
+            Severity::Warning,
             "Discord channel config status unknown",
             format!(
                 "Could not load the discord config to audit it: {reason}. \
@@ -250,6 +250,9 @@ fn findings_for(verdict: &DiscordVerdict) -> Vec<Finding> {
 async fn probe(path: &std::path::Path) -> DiscordVerdict {
     let bytes = match tokio::fs::read(path).await {
         Ok(b) => b,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return DiscordVerdict::NotConfigured;
+        }
         Err(e) => return DiscordVerdict::Unknown(format!("read failed: {e}")),
     };
     let contents = match std::str::from_utf8(&bytes) {

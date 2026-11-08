@@ -30,10 +30,6 @@ fn classify_other_instances(other_instances: usize) -> Option<Severity> {
 
 /// Count live `aleph-server` processes other than this one.
 fn count_other_instances() -> usize {
-    if std::env::args().any(|arg| arg == "doctor") {
-        return 0;
-    }
-
     use sysinfo::{ProcessesToUpdate, System};
 
     let mut sys = System::new();
@@ -44,6 +40,8 @@ fn count_other_instances() -> usize {
         .values()
         .filter(|p| {
             p.pid().as_u32() != own
+                // Exclude other diagnostic/doctor command processes
+                && !p.cmd().iter().any(|arg| arg.to_string_lossy() == "doctor")
                 // Zombies/the dead still hold a table entry but are not
                 // "running" — and typically have no exe path anyway.
                 && !matches!(

@@ -133,7 +133,7 @@ pub(crate) async fn admit_scoped_tool_output(
         return Ok(None);
     };
     let Some(key) = frame.fabric.admission_key(&frame.caller).await? else {
-        return Err(ContextFabricError::BuiltinUnavailable("scoped admission"));
+        return Ok(None);
     };
     let original = crate::providers::message::value_as_model_text(value).into_owned();
     frame
