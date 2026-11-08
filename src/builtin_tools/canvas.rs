@@ -643,13 +643,14 @@ fn decode_data_url(url: &str) -> Result<(String, Vec<u8>)> {
             "insert_image: malformed data: URL (no comma)".to_string(),
         ));
     };
-    let Some(mime) = header.strip_suffix(";base64") else {
+    let header_lower = header.trim().to_ascii_lowercase();
+    let Some(mime) = header_lower.strip_suffix(";base64") else {
         return Err(AlephError::tool(
             "insert_image: only base64 data: URLs are supported (`data:<mime>;base64,…`)"
                 .to_string(),
         ));
     };
-    let mime = mime.trim().to_ascii_lowercase();
+    let mime = mime.trim();
     if !mime.starts_with("image/") {
         return Err(AlephError::tool(format!(
             "insert_image: data: URL declares {mime:?}, expected an image/* type"
@@ -660,7 +661,7 @@ fn decode_data_url(url: &str) -> Result<(String, Vec<u8>)> {
         .map_err(|e| {
             AlephError::tool(format!("insert_image: data: URL is not valid base64: {e}"))
         })?;
-    Ok((mime, bytes))
+    Ok((mime.to_string(), bytes))
 }
 
 /// The image mime for a local file's extension — the same vocabulary as the
