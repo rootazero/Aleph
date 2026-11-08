@@ -333,9 +333,9 @@ impl GrepTool {
                     ". context was clamped from {requested_context} to {MAX_CONTEXT} lines"
                 ));
             }
-            msg.push_str(&notes::walk_capped(&report, respected_ignore).unwrap_or_default());
             msg
         };
+        message.push_str(&notes::walk_capped(&report, respected_ignore).unwrap_or_default());
         if skipped_files > 0 {
             message.push_str(&format!(
                 ". {skipped_files} binary or oversized file(s) not searched"

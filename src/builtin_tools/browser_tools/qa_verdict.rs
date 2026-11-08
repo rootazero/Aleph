@@ -132,10 +132,11 @@ pub enum Impact {
 pub fn classify_network_failure(url: &str, resource_hint: &str) -> Impact {
     let haystack = url.to_lowercase();
     let hint = resource_hint.to_lowercase();
+    let path_part = haystack.split(['?', '#']).next().unwrap_or(&haystack);
     for rule in BENIGN_RULES {
         let hit = match rule.kind {
             MatchKind::Contains => haystack.contains(rule.pattern) || hint.contains(rule.pattern),
-            MatchKind::Suffix => haystack.ends_with(rule.pattern),
+            MatchKind::Suffix => path_part.ends_with(rule.pattern),
         };
         if hit {
             return Impact::Benign;

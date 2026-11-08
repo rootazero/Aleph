@@ -138,16 +138,15 @@ pub async fn execute_stats(
         // failure mode — `stats` exists to answer "how many lines are in here",
         // and that answer must survive whatever the row budget does.
         total_files += 1;
-        if files.len() < cap {
-            let mut info = FileInfo::with_path(&path);
-            info.size = size;
-            info.lines = lines;
-            info.mtime = mtime;
-            files.push(info);
-        }
+        let mut info = FileInfo::with_path(&path);
+        info.size = size;
+        info.lines = lines;
+        info.mtime = mtime;
+        files.push(info);
     }
 
     sort_files(&mut files, sort_by.unwrap_or(StatsSort::Name));
+    files.truncate(cap);
 
     let summary = StatsSummary {
         total_files,

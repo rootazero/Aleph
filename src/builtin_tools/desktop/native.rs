@@ -1091,7 +1091,8 @@ impl super::DesktopTool {
                             // routinely contain small UI text and 0.75 caused
                             // legibility complaints from the LLM consumer. PNG
                             // is unaffected (lossless regardless of quality).
-                            let quality_u8 = (quality.unwrap_or(0.9).clamp(0.0, 1.0) * 100.0) as u8;
+                            let q = quality.filter(|v| !v.is_nan()).unwrap_or(0.9).clamp(0.0, 1.0);
+                            let quality_u8 = (q * 100.0) as u8;
                             // The re-encode must not drop what `take_screenshot`
                             // reported: the points-to-pixels ratio survives via
                             // the `_with_scale` entry point.
