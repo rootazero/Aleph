@@ -99,8 +99,10 @@ pub(super) fn apply_event(tabs: &mut TabTable, ev: &CdpEvent) -> bool {
     match ev.method.as_str() {
         "Runtime.consoleAPICalled" => {
             let level = ev.params["type"].as_str().unwrap_or("log");
-            let args = ev.params["args"].as_array().cloned().unwrap_or_default();
-            let text = args.iter().map(render_arg).collect::<Vec<_>>().join(" ");
+            let text = ev.params["args"]
+                .as_array()
+                .map(|args| args.iter().map(render_arg).collect::<Vec<_>>().join(" "))
+                .unwrap_or_default();
             push_bounded(&mut entry.console, format!("[{level}] {text}"));
             true
         }
