@@ -114,12 +114,21 @@ fn test_ollama_without_api_key_passes() {
 
 #[test]
 fn test_valid_regex_patterns_pass() {
-    for pattern in [".*", "^/code", r"\d+", "[a-zA-Z]+", "^test$", "hello|world"] {
+    for pattern in ["^/code", "^/help", r"^/test_\d+", "^/cmd-[a-zA-Z]+", "^/status$"] {
         assert!(
             config_with_rule(pattern).validate().is_ok(),
-            "pattern {pattern:?} should be accepted"
+            "command pattern {pattern:?} should be accepted"
         );
     }
+}
+
+#[test]
+fn test_invalid_command_regex_fails() {
+    let mut config = config_with_openai();
+    config
+        .rules
+        .push(RoutingRuleConfig::command("^/(unclosed", "openai", None));
+    expect_invalid(&config, "regex");
 }
 
 /// Keyword rules are retired. Two halves, and either alone is a false green:
