@@ -319,7 +319,7 @@ impl<'de> Deserialize<'de> for Os {
     where
         D: serde::Deserializer<'de>,
     {
-        let s = std::borrow::Cow<'de, str>::deserialize(deserializer)?;
+        let s = std::borrow::Cow::<'de, str>::deserialize(deserializer)?;
         // Reuse the FromStr impl so serde and FromStr can never drift. The
         // serde `#[serde(alias)]` attribute is case-sensitive (e.g. it would
         // accept `macos` but reject `MACOS`); FromStr is case-insensitive.
