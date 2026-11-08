@@ -218,7 +218,7 @@ impl AlephTool for TaskReviewTool {
                 Ok(None) => None,
                 Err(e) => {
                     warn!(error = %e, team_id = %team_id, "failed to get team for authorization");
-                    return Err(ToolError::Runtime(format!("team store error: {e}")));
+                    return Err(AlephError::tool(format!("team store error: {e}")));
                 }
             },
             None => None,
