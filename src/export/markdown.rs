@@ -61,9 +61,18 @@ pub(super) fn escape_text(s: &str) -> String {
 /// The text rule leaves quotes alone, so an attribute that skipped this one
 /// would be a breakout waiting to happen.
 pub(super) fn escape_attr(s: &str) -> String {
-    escape_markup(s)
-        .replace('"', "&quot;")
-        .replace('\'', "&#39;")
+    let mut out = String::with_capacity(s.len() + 16);
+    for c in s.chars() {
+        match c {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            '"' => out.push_str("&quot;"),
+            '\'' => out.push_str("&#39;"),
+            _ => out.push(c),
+        }
+    }
+    out
 }
 
 /// Allowlist link/image destinations; neutralise everything else.

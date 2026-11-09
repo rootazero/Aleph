@@ -106,6 +106,9 @@ pub(super) fn render_artifacts(heading: &str, artifacts: &[ExportArtifact]) -> S
                 if is_image(&art.mime_type) {
                     // `<img>` cannot execute its payload, so the real MIME is
                     // safe to keep — the browser needs it to decode.
+                    // Standard Base64 uses exclusively [A-Za-z0-9+/=], which is provably
+                    // free of HTML quotes or markup, so `encoded` is safe to interpolate
+                    // directly into `data:` attribute without multi-megabyte re-escaping.
                     let _ = writeln!(
                         out,
                         "<figure class=\"art art--image\">\
@@ -113,7 +116,7 @@ pub(super) fn render_artifacts(heading: &str, artifacts: &[ExportArtifact]) -> S
                          <figcaption>{label} <span class=\"size\">{size}</span></figcaption>\
                          </figure>",
                         mime = escape_attr(&art.mime_type),
-                        data = escape_attr(&encoded),
+                        data = encoded,
                         name = name,
                         label = escape_text(&art.filename),
                         size = size,
@@ -133,7 +136,7 @@ pub(super) fn render_artifacts(heading: &str, artifacts: &[ExportArtifact]) -> S
                          <span class=\"size\">{size}</span>\
                          </a>",
                         name = name,
-                        data = escape_attr(&encoded),
+                        data = encoded,
                         label = escape_text(&art.filename),
                         size = size,
                     );
@@ -161,7 +164,8 @@ pub(super) fn render_artifacts(heading: &str, artifacts: &[ExportArtifact]) -> S
 }
 
 fn is_image(mime: &str) -> bool {
-    mime.to_ascii_lowercase().starts_with("image/")
+    mime.get(..6)
+        .is_some_and(|p| p.eq_ignore_ascii_case("image/"))
 }
 
 /// Byte count as the rest of the product spells it (KB/MB, one decimal).

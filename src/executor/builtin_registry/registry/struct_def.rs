@@ -393,10 +393,6 @@ pub struct BuiltinToolRegistry {
     /// the same (optionally project-scoped) agent id the compaction pipeline
     /// writes session raw chunks under.
     pub(crate) memory_project_scoped: bool,
-    /// Memory backend for the `recall_context` tool (pre-compression recovery).
-    /// Built per-call with the active session id from `session_context_handle`.
-    #[allow(dead_code)]
-    pub(crate) recall_context_db: Option<crate::memory::store::MemoryBackend>,
     /// Memory backend for the `memory_trace` tool (evidence-chain walk).
     /// Capability-runtime diagnostic control surface for
     /// `capability_projection_diagnostics` (enablement gate). Mirrors the
