@@ -231,7 +231,7 @@ impl Goal {
     pub fn new(session_id: &str, objective: &str, now_total_tokens: u64, now_ms: u64) -> Self {
         let id = format!(
             "goal-{:x}",
-            fxhash_str(&format!("{session_id}:{objective}"))
+            fxhash_bytes_iter([session_id.as_bytes(), b":", objective.as_bytes()])
         );
         Self {
             id,
@@ -474,13 +474,22 @@ impl Goal {
     }
 }
 
-fn fxhash_str(s: &str) -> u64 {
+fn fxhash_bytes_iter<'a, I>(slices: I) -> u64
+where
+    I: IntoIterator<Item = &'a [u8]>,
+{
     let mut h: u64 = 0xcbf29ce484222325;
-    for b in s.as_bytes() {
-        h ^= u64::from(*b);
-        h = h.wrapping_mul(0x100000001b3);
+    for slice in slices {
+        for b in slice {
+            h ^= u64::from(*b);
+            h = h.wrapping_mul(0x100000001b3);
+        }
     }
     h
+}
+
+fn fxhash_str(s: &str) -> u64 {
+    fxhash_bytes_iter([s.as_bytes()])
 }
 
 #[cfg(test)]

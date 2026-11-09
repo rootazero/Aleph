@@ -372,25 +372,28 @@ impl GoalStore {
     /// helpers below read → decide → write inside ONE guard).
     fn get_locked(conn: &rusqlite::Connection, session_id: &str) -> Result<Option<Goal>> {
         use rusqlite::OptionalExtension;
-        let row: Option<String> = conn
+        let row: Option<Option<Goal>> = conn
             .query_row(
                 "SELECT json FROM goals WHERE session_id = ?1",
                 rusqlite::params![session_id],
-                |r| r.get(0),
+                |r| {
+                    let s = r.get_ref(0)?.as_str()?;
+                    Ok(match serde_json::from_str::<Goal>(s) {
+                        Ok(goal) => Some(goal),
+                        Err(e) => {
+                            tracing::error!(
+                                session_id = %session_id,
+                                error = %e,
+                                "failed to deserialize stored goal JSON"
+                            );
+                            None
+                        }
+                    })
+                },
             )
             .optional()
             .map_err(|e| AlephError::other(format!("goal get: {e}")))?;
-        Ok(row.and_then(|j| match serde_json::from_str::<Goal>(&j) {
-            Ok(goal) => Some(goal),
-            Err(e) => {
-                tracing::error!(
-                    session_id = %session_id,
-                    error = %e,
-                    "failed to deserialize stored goal JSON"
-                );
-                None
-            }
-        }))
+        Ok(row.flatten())
     }
 
     /// Write a goal under an already-held connection lock (see [`Self::get_locked`]).
@@ -488,9 +491,9 @@ impl GoalStore {
             Ok(origin) => origin,
             Err(reason) => return Ok(BoundClaim::Refused(reason)),
         };
-        let decision = Self::claim_locked(
+        let decision = Self::claim_goal_locked(
             &conn,
-            &expected.session_id,
+            live,
             tokens_total,
             now_ms,
             gate_configured,
@@ -539,7 +542,17 @@ impl GoalStore {
         let Some(current) = Self::get_locked(conn, session_id)? else {
             return Ok(ContinuationDecision::Idle);
         };
+        Self::claim_goal_locked(conn, current, tokens_total, now_ms, gate_configured, workspace)
+    }
 
+    fn claim_goal_locked(
+        conn: &rusqlite::Connection,
+        current: Goal,
+        tokens_total: Option<u64>,
+        now_ms: u64,
+        gate_configured: bool,
+        workspace: Option<&str>,
+    ) -> Result<ContinuationDecision> {
         // The model claimed completion and a gate must arbitrate it. Gate
         // arbitration is an async shell command the caller runs with the session
         // run-slot FREE, so a user turn completing inside that window re-enters
@@ -579,35 +592,32 @@ impl GoalStore {
         // (codex `tokenStartFresh`): just captured → 0 spent, never a false
         // over-budget. Only meaningful for an Active pursuit — the budget is
         // consumed by the continuation path alone.
-        let goal = match (
-            current.token_budget,
-            current.baseline_captured,
-            current.is_active(),
+        let mut baseline_changed = false;
+        let mut goal = current;
+        if let (Some(_), false, true, Some(total)) = (
+            goal.token_budget,
+            goal.baseline_captured,
+            goal.is_active(),
             tokens_total,
         ) {
-            (Some(_), false, true, Some(total)) => current.clone().with_baseline(total, now_ms),
-            _ => current.clone(),
-        };
+            goal = goal.with_baseline(total, now_ms);
+            baseline_changed = true;
+        }
         // Record the claiming run's project root so a hook-less wake (task
         // settle / boot re-arm / periodic recheck) can rebuild the
         // continuation in the same workspace. `None` = the claim carries no
         // workspace info (wake-service claims) → keep the stored value.
-        let goal = match workspace {
-            Some(ws) if goal.workspace.as_deref() != Some(ws) => {
-                goal.with_workspace(Some(ws.to_string()))
+        let mut workspace_changed = false;
+        if let Some(ws) = workspace {
+            if goal.workspace.as_deref() != Some(ws) {
+                goal = goal.with_workspace(Some(ws.to_string()));
+                workspace_changed = true;
             }
-            _ => goal,
-        };
+        }
         // `dirty` covers every field the lazy self-clear / baseline seed /
-        // workspace stamp above may have changed. Without the `waiting_until_ms`
-        // arm, an elapsed barrier whose clear is the ONLY change in this claim
-        // would be lost when neither baseline nor workspace mutated — the row
-        // would carry a still-pending wait into the next render and prompt
-        // assembly would re-show "parked (waiting)" until FIFO eviction
-        // re-read the stored value. Including the barrier change here means
-        // the Idle-return path persists the clear as the comment claims.
-        let dirty = goal.baseline_captured != current.baseline_captured
-            || goal.workspace != current.workspace
+        // workspace stamp above may have changed.
+        let dirty = baseline_changed
+            || workspace_changed
             || goal.waiting_until_ms != original_waiting_until_ms;
         // Budget enforcement needs the live total; without one (or without a
         // budget at all) pass 0 so only the iteration/deadline caps apply.
@@ -1056,6 +1066,7 @@ impl GoalStore {
         let tx = conn
             .transaction()
             .map_err(|e| AlephError::other(format!("goal pause_all tx: {e}")))?;
+        let note_opt = Some(note.to_string());
         let mut paused = Vec::with_capacity(active.len());
         for goal in active {
             let session = goal.session_id.clone();
@@ -1063,7 +1074,7 @@ impl GoalStore {
                 &tx,
                 &goal
                     .with_status(GoalStatus::Paused, now_ms)
-                    .with_note(Some(note.to_string()), now_ms)
+                    .with_note(note_opt.clone(), now_ms)
                     .without_wait(now_ms)
                     .with_pending_continuation(None),
             )?;
@@ -1477,37 +1488,26 @@ impl GoalStore {
                 merged.budget_members = live.budget_members;
                 // The claiming run's project root is likewise pipeline-owned:
                 // a tool update must never roll it back to the snapshot's.
-                merged.workspace = live.workspace.clone();
+                merged.workspace = live.workspace;
                 // Owner/scope/author attribution (P1 data isolation; the
                 // author is round 11's R-b) is stamped once at creation and
                 // never re-derived from a tool snapshot — same ownership rule
                 // as `workspace`.
-                merged.owner_user_id = live.owner_user_id.clone();
-                merged.scope_id = live.scope_id.clone();
-                merged.author_user_id = live.author_user_id.clone();
+                merged.owner_user_id = live.owner_user_id;
+                merged.scope_id = live.scope_id;
+                merged.author_user_id = live.author_user_id;
                 let outcome = if live.status == expected_status {
-                    // If live cleared its wait barrier concurrently (e.g. via
-                    // GoalWakeService on task settlement or claim_locked elapsed clear),
-                    // do not resurrect the stale barrier from next unless next explicitly
-                    // set a new or different barrier.
-                    if live.waiting_on_task.is_none() && next.waiting_on_task.is_some() {
-                        merged.waiting_on_task = None;
-                        merged.waiting_reason = live.waiting_reason.clone();
-                    }
-                    if live.waiting_until_ms.is_none() && next.waiting_until_ms.is_some() {
-                        merged.waiting_until_ms = None;
-                    }
                     FieldUpdate::Committed
                 } else {
                     // A concurrent lifecycle transition won the gap — keep its
                     // verdict (and the note explaining it) over the snapshot's.
                     merged.status = live.status;
-                    merged.note = live.note.clone();
+                    merged.note = live.note;
                     merged.gate_outcome = live.gate_outcome;
                     merged.completed_at_ms = live.completed_at_ms;
                     merged.waiting_until_ms = live.waiting_until_ms;
-                    merged.waiting_on_task = live.waiting_on_task.clone();
-                    merged.waiting_reason = live.waiting_reason.clone();
+                    merged.waiting_on_task = live.waiting_on_task;
+                    merged.waiting_reason = live.waiting_reason;
                     FieldUpdate::StatusSuperseded(live.status)
                 };
                 Self::put_locked(&conn, &merged)?;
