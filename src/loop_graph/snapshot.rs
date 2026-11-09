@@ -439,7 +439,7 @@ fn diff_inner(a: &Snapshot, b: &Snapshot) -> Vec<TopologyDiff> {
 
     // Stable order: nodes first (by id), then edges (by from_id+to_id+kind).
     // Determinism is what makes a diff reproducible for the audit log.
-    out.sort_by_key(diff_sort_key);
+    out.sort_by(|a, b| diff_sort_key(a).cmp(&diff_sort_key(b)));
     out
 }
 
