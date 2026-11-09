@@ -1,0 +1,142 @@
+[
+  {
+    "id": "G1",
+    "title": "src/goal \u2014 Goal engine, lifecycle, pursuit state machine, goal store",
+    "files": [
+      "src/goal/mod.rs",
+      "src/goal/pursuit.rs",
+      "src/goal/store.rs",
+      "src/goal/types.rs"
+    ],
+    "loc": 5195
+  },
+  {
+    "id": "GC1",
+    "title": "src/group_chat \u2014 Multi-agent group chat, coordinator, channel dispatch, executor, protocol",
+    "files": [
+      "src/group_chat/channel.rs",
+      "src/group_chat/coordinator.rs",
+      "src/group_chat/executor.rs",
+      "src/group_chat/mod.rs",
+      "src/group_chat/orchestrator.rs",
+      "src/group_chat/persona.rs",
+      "src/group_chat/protocol.rs",
+      "src/group_chat/session.rs"
+    ],
+    "loc": 3796
+  },
+  {
+    "id": "GEN1",
+    "title": "src/generation (core) \u2014 types, error, registry, probe, voice_catalog",
+    "files": [
+      "src/generation/error.rs",
+      "src/generation/mod.rs",
+      "src/generation/probe.rs",
+      "src/generation/registry.rs",
+      "src/generation/types/generation_type.rs",
+      "src/generation/types/mod.rs",
+      "src/generation/types/output.rs",
+      "src/generation/types/params.rs",
+      "src/generation/types/progress.rs",
+      "src/generation/types/request.rs",
+      "src/generation/voice_catalog.rs"
+    ],
+    "loc": 4414
+  },
+  {
+    "id": "GEN2",
+    "title": "src/generation/providers \u2014 image/video providers (fal, bfl, stability, google_imagen, openai_image, factory, http, url_normalize)",
+    "files": [
+      "src/generation/providers/bfl/mod.rs",
+      "src/generation/providers/bfl/tests.rs",
+      "src/generation/providers/bfl/types.rs",
+      "src/generation/providers/factory.rs",
+      "src/generation/providers/fal/mod.rs",
+      "src/generation/providers/google_imagen.rs",
+      "src/generation/providers/http.rs",
+      "src/generation/providers/mod.rs",
+      "src/generation/providers/openai_image.rs",
+      "src/generation/providers/stability.rs",
+      "src/generation/providers/url_normalize.rs"
+    ],
+    "loc": 5298
+  },
+  {
+    "id": "GEN3",
+    "title": "src/generation/providers \u2014 video & async polling providers (google_veo, midjourney, replicate, suno)",
+    "files": [
+      "src/generation/providers/google_veo/constants.rs",
+      "src/generation/providers/google_veo/helpers.rs",
+      "src/generation/providers/google_veo/mod.rs",
+      "src/generation/providers/google_veo/provider.rs",
+      "src/generation/providers/google_veo/types.rs",
+      "src/generation/providers/midjourney/builder.rs",
+      "src/generation/providers/midjourney/mod.rs",
+      "src/generation/providers/midjourney/provider.rs",
+      "src/generation/providers/midjourney/submit_polling.rs",
+      "src/generation/providers/midjourney/types.rs",
+      "src/generation/providers/replicate/builder.rs",
+      "src/generation/providers/replicate/constants.rs",
+      "src/generation/providers/replicate/error.rs",
+      "src/generation/providers/replicate/input.rs",
+      "src/generation/providers/replicate/mod.rs",
+      "src/generation/providers/replicate/prediction.rs",
+      "src/generation/providers/replicate/provider.rs",
+      "src/generation/providers/replicate/types.rs",
+      "src/generation/providers/suno/mod.rs",
+      "src/generation/providers/suno/tests.rs",
+      "src/generation/providers/suno/types.rs"
+    ],
+    "loc": 4555
+  },
+  {
+    "id": "GEN4",
+    "title": "src/generation/providers \u2014 speech / audio / tts / stt providers & tests",
+    "files": [
+      "src/generation/providers/azure_speech/mod.rs",
+      "src/generation/providers/azure_speech/tests.rs",
+      "src/generation/providers/azure_speech/types.rs",
+      "src/generation/providers/cartesia/mod.rs",
+      "src/generation/providers/cartesia/tests.rs",
+      "src/generation/providers/cartesia/types.rs",
+      "src/generation/providers/deepgram_stt/mod.rs",
+      "src/generation/providers/deepgram_stt/tests.rs",
+      "src/generation/providers/deepgram_stt/types.rs",
+      "src/generation/providers/deepgram_tts/mod.rs",
+      "src/generation/providers/deepgram_tts/tests.rs",
+      "src/generation/providers/deepgram_tts/types.rs",
+      "src/generation/providers/elevenlabs/constants.rs",
+      "src/generation/providers/elevenlabs/mod.rs",
+      "src/generation/providers/elevenlabs/tests.rs",
+      "src/generation/providers/elevenlabs/types.rs",
+      "src/generation/providers/minimax_tts/mod.rs",
+      "src/generation/providers/minimax_tts/tests.rs",
+      "src/generation/providers/minimax_tts/types.rs",
+      "src/generation/providers/openai_tts/mod.rs",
+      "src/generation/providers/openai_tts/tests.rs",
+      "src/generation/providers/openai_tts/types.rs",
+      "src/generation/providers/openai_whisper/mod.rs",
+      "src/generation/providers/openai_whisper/tests.rs",
+      "src/generation/providers/openai_whisper/types.rs",
+      "src/generation/providers/tests.rs",
+      "src/generation/providers/volcengine_tts/mod.rs",
+      "src/generation/providers/volcengine_tts/tests.rs",
+      "src/generation/providers/volcengine_tts/types.rs"
+    ],
+    "loc": 7535
+  },
+  {
+    "id": "GEN5",
+    "title": "src/generation/providers/openai_compat \u2014 OpenAI compatible image/generation provider",
+    "files": [
+      "src/generation/providers/openai_compat/builder.rs",
+      "src/generation/providers/openai_compat/edit.rs",
+      "src/generation/providers/openai_compat/generate.rs",
+      "src/generation/providers/openai_compat/helpers.rs",
+      "src/generation/providers/openai_compat/mod.rs",
+      "src/generation/providers/openai_compat/provider.rs",
+      "src/generation/providers/openai_compat/types.rs"
+    ],
+    "loc": 2613
+  }
+]
