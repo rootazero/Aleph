@@ -10,7 +10,7 @@
 use crate::sync_primitives::Arc;
 use std::collections::HashMap;
 
-use tracing::{info, warn};
+use tracing::info;
 
 use super::{BuiltinToolConfig, BuiltinToolRegistry};
 use crate::tool_metadata::{ToolSource, UnifiedTool};

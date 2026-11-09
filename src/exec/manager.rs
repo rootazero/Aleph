@@ -1493,7 +1493,7 @@ impl ExecApprovalManager {
         listings.retain(|session_key, _| {
             pending
                 .values()
-                .any(|e| e.record.session_key.as_deref() == Some(session_key.as_str()))
+                .any(|e| e.record.session_key == *session_key)
         });
     }
 
