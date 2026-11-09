@@ -99,7 +99,7 @@ impl GraceReason {
 /// (degraded endpoint, context degradation), not a legitimate terminal
 /// turn, and must not be reported to the user as a clean completion.
 fn is_empty_response(response: &ProviderResponse) -> bool {
-    response.text_content().trim().is_empty()
+    response.text.as_deref().unwrap_or("").trim().is_empty()
         && response.tool_calls.is_empty()
         && response.thinking.as_deref().unwrap_or("").trim().is_empty()
 }
@@ -122,24 +122,6 @@ fn last_assistant_has_text(events: &[SessionEventRecord]) -> bool {
         .unwrap_or(false)
 }
 
-/// `to_seq` of the most recent fold — a `FoldRecorded`, or a legacy
-/// `CompactionPerformed` the fold registry (`context::compact::folds`) would
-/// recover — or 0 when the session has never folded. Used by
-/// [`GrowthNudgeTracker`] to detect folds that landed between turns without
-/// cloning the full log for `list_folds`: the newest fold's `to_seq` is a
-/// stable marker, and any fold event changes it.
-fn last_fold_to_seq(events: &[SessionEventRecord]) -> EventSeq {
-    events
-        .iter()
-        .rev()
-        .find_map(|r| match &r.event {
-            SessionEvent::FoldRecorded { to_seq, .. }
-            | SessionEvent::CompactionPerformed { to_seq, .. } => Some(*to_seq),
-            _ => None,
-        })
-        .unwrap_or(0)
-}
-
 /// The most recent fold record's **own seq** and its `to_seq` marker, or
 /// `None` when the session has never folded. The record's own seq — not
 /// `to_seq` — is the cutoff for cross-run growth estimation: the fold batch
@@ -153,6 +135,16 @@ fn last_fold_event(events: &[SessionEventRecord]) -> Option<(EventSeq, EventSeq)
         | SessionEvent::CompactionPerformed { to_seq, .. } => Some((r.seq, *to_seq)),
         _ => None,
     })
+}
+
+/// `to_seq` of the most recent fold — a `FoldRecorded`, or a legacy
+/// `CompactionPerformed` the fold registry (`context::compact::folds`) would
+/// recover — or 0 when the session has never folded. Used by
+/// [`GrowthNudgeTracker`] to detect folds that landed between turns without
+/// cloning the full log for `list_folds`: the newest fold's `to_seq` is a
+/// stable marker, and any fold event changes it. Delegated to [`last_fold_event`].
+fn last_fold_to_seq(events: &[SessionEventRecord]) -> EventSeq {
+    last_fold_event(events).map_or(0, |(_, to_seq)| to_seq)
 }
 
 /// Estimated prompt tokens of the conversation logged after `after_seq` —
@@ -181,9 +173,10 @@ fn estimate_prompt_tokens_after_seq(
                 }
             }
             SessionEvent::SystemMessage { content, .. } => text.push_str(content),
-            SessionEvent::ToolResult { output, .. } => {
-                text.push_str(&output.value.to_string());
-            }
+            SessionEvent::ToolResult { output, .. } => match &output.value {
+                serde_json::Value::String(s) => text.push_str(s),
+                other => text.push_str(&other.to_string()),
+            },
             SessionEvent::ToolError { error, .. } => text.push_str(error),
             _ => {}
         }
@@ -369,14 +362,11 @@ fn build_request_payload<'a>(
     // `prompt_cache_key` (openai_common::prompt_cache content-addresses).
     let mut metadata = std::collections::HashMap::with_capacity(1);
     metadata.insert("session_id".to_string(), session_id.to_string());
-    let base = RequestPayload::new(messages)
+    RequestPayload::new(messages)
+        .with_system(system_prompt)
+        .with_system_blocks(system_blocks)
         .with_tools(tools_ref)
-        .with_metadata(Some(metadata));
-    let base = match system_prompt {
-        Some(sp) => base.with_system(Some(sp)),
-        None => base,
-    };
-    base.with_system_blocks(system_blocks)
+        .with_metadata(Some(metadata))
 }
 
 /// Plain-text tool-call promotion (openclaw `tool-call-repair` parity).
@@ -404,13 +394,12 @@ fn promote_text_tool_calls(
     if !response.tool_calls.is_empty() || tools.is_empty() {
         return 0;
     }
-    let text = response.text_content();
-    if text.is_empty() {
+    let Some(text) = response.text.as_deref().filter(|t| !t.is_empty()) else {
         return 0;
-    }
+    };
     let allowed: std::collections::HashSet<&str> = tools.iter().map(|t| t.name.as_str()).collect();
     let Some(promotion) =
-        crate::tools::text_tool_call::promote_plain_text_tool_calls(&text, &allowed)
+        crate::tools::text_tool_call::promote_plain_text_tool_calls(text, &allowed)
     else {
         return 0;
     };
@@ -716,11 +705,7 @@ impl AgentHarness {
         // from the metadata tools fetched above (Stage 2). Cache invalidation
         // is owned by `ToolService` impls; see `to_metadata_form`.
         let tools_ref: Option<&[crate::tool_metadata::ToolDefinition]> =
-            if metadata_tools.is_empty() {
-                None
-            } else {
-                Some(metadata_tools.as_ref())
-            };
+            (!metadata_tools.is_empty()).then(|| metadata_tools.as_ref());
 
         // The request payload is rebuilt fresh on each call — H3's
         // empty-response retry re-issues it, and the rescue helper may
@@ -885,10 +870,8 @@ impl AgentHarness {
         let mut carried = String::new();
         let mut streamed_prefix_len = 0usize;
         let mut max_tokens_retries = 0u32;
-        while matches!(
-            response.stop_reason,
-            crate::providers::adapter::StopReason::MaxTokens
-        ) && max_tokens_retries < MAX_OUTPUT_TOKENS_RECOVERY_LIMIT
+        while response.stop_reason == StopReason::MaxTokens
+            && max_tokens_retries < MAX_OUTPUT_TOKENS_RECOVERY_LIMIT
         {
             max_tokens_retries += 1;
             // Count the partial (max_output_tokens-cut) call before discarding
@@ -982,10 +965,7 @@ impl AgentHarness {
         // cleanly, and a stale `EmptyResponseExhausted` whenever a rescue
         // replaced an empty response or a verifier veto forced a continue.
         let empty_after_retries = is_empty_response(&response);
-        let max_tokens_after_recovery = matches!(
-            response.stop_reason,
-            crate::providers::adapter::StopReason::MaxTokens
-        );
+        let max_tokens_after_recovery = response.stop_reason == StopReason::MaxTokens;
 
         // 3c. Plain-text tool-call promotion (openclaw tool-call-repair
         // parity). When the provider returned text that *encodes* a tool call
@@ -1056,7 +1036,15 @@ impl AgentHarness {
 
         // 4. Emit AssistantMessage preserving any tool_use intent in `blocks`.
         let turn_id = super::current_turn_id(&events);
-        let text = format!("{carried}{}", response.text_content());
+        let text = if carried.is_empty() {
+            response.text.clone().unwrap_or_default()
+        } else {
+            let mut s = carried;
+            if let Some(t) = response.text.as_deref() {
+                s.push_str(t);
+            }
+            s
+        };
 
         // 4a. Stage 5a (#9): Output guardrail. `Block` aborts the turn with a
         // terminal `HarnessError::Llm`. The decision's `class` is preserved
@@ -1511,10 +1499,10 @@ impl AgentHarness {
         // end-of-function accounting entirely, silently dropping a real billed
         // round-trip from `total_tokens` and the per-component breakdown.
         self.account_intermediate_tokens(&resp);
-        let text = resp.text_content();
-        if text.trim().is_empty() {
+        if resp.text.as_deref().unwrap_or("").trim().is_empty() {
             return;
         }
+        let text = resp.text.clone().unwrap_or_default();
         // Stage 5a parity: the grace turn's text reaches the user through the
         // same callback + session-log channel as a primary turn, so it must
         // pass the same output guardrail. Without this the salvage path was a
@@ -1620,11 +1608,7 @@ impl AgentHarness {
         let ctx = TurnVerifyContext {
             iterations,
             tool_calls_made,
-            final_text: if final_text.is_empty() {
-                None
-            } else {
-                Some(final_text)
-            },
+            final_text: (!final_text.is_empty()).then_some(final_text),
             recent_tool_calls: &snapshot,
             stop_reason,
             session_id: Some(session_key),
