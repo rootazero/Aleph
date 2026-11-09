@@ -632,15 +632,13 @@ impl ExecApprovalManager {
         let (tx, rx) = oneshot::channel();
         let id = record.id.clone();
 
-        // Opportunistic sweep: a waiter whose future was dropped (aborted
-        // agent run) never reaches `await_registered`'s removal, so its entry
-        // would otherwise linger forever. Each new registration evicts
-        // anything already past its deadline — bounded work, no background
-        // task needed.
-        self.cleanup_expired();
-
+        // Opportunistic sweep performed under the same write lock as insertion:
+        // a waiter whose future was dropped (aborted agent run) never reaches
+        // `await_registered`'s removal, so its entry would otherwise linger forever.
+        // Each new registration evicts anything already past its deadline in a single lock cycle.
         let generation = {
             let mut pending = self.pending.write().unwrap_or_else(|e| e.into_inner());
+            Self::cleanup_expired_locked(&mut pending, &self.session_listings);
             if pending.contains_key(&id) {
                 // Preserve the original waiter. A closed receiver is the
                 // existing API's non-decision failure signal, not a panic or
@@ -1455,9 +1453,10 @@ impl ExecApprovalManager {
         true
     }
 
-    /// Clean up expired pending requests
-    pub(crate) fn cleanup_expired(&self) {
-        let mut pending = self.pending.write().unwrap_or_else(|e| e.into_inner());
+    fn cleanup_expired_locked(
+        pending: &mut HashMap<String, PendingEntry>,
+        session_listings: &RwLock<HashMap<String, Vec<String>>>,
+    ) {
         let now = Instant::now();
 
         pending.retain(|id, entry| {
@@ -1474,7 +1473,10 @@ impl ExecApprovalManager {
                 .expires_at_ms
                 .saturating_sub(entry.record.created_at_ms);
 
-            if elapsed > Duration::from_millis(timeout_ms) {
+            let expired = elapsed > Duration::from_millis(timeout_ms) || entry.record.is_expired();
+            let dead_waiter = entry.sender.as_ref().is_some_and(|s| s.is_closed());
+
+            if expired || dead_waiter {
                 // Send None to waiter
                 if let Some(sender) = entry.sender.take() {
                     let _ = sender.send(None);
@@ -1485,6 +1487,20 @@ impl ExecApprovalManager {
                 true
             }
         });
+
+        // Lock order: pending (held) -> session_listings
+        let mut listings = session_listings.write().unwrap_or_else(|e| e.into_inner());
+        listings.retain(|session_key, _| {
+            pending
+                .values()
+                .any(|e| e.record.session_key.as_deref() == Some(session_key.as_str()))
+        });
+    }
+
+    /// Clean up expired pending requests
+    pub(crate) fn cleanup_expired(&self) {
+        let mut pending = self.pending.write().unwrap_or_else(|e| e.into_inner());
+        Self::cleanup_expired_locked(&mut pending, &self.session_listings);
     }
 }
 
