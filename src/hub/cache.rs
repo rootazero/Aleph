@@ -23,12 +23,6 @@ pub struct CatalogFilter {
 /// what it does — and matching the stored JSON blob with `LIKE` would hit the
 /// key names too (`"kind":"mcp"` matching a search for `mcp`).
 #[must_use]
-fn matches_query(e: &ExtensionEntry, query: &str) -> bool {
-    let q = query.trim().to_lowercase();
-    matches_query_lowercased(e, &q)
-}
-
-#[must_use]
 fn matches_query_lowercased(e: &ExtensionEntry, q: &str) -> bool {
     if q.is_empty() {
         return true;
