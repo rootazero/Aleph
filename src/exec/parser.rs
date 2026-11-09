@@ -79,19 +79,16 @@ fn contains_unquoted_redirect(command: &str) -> bool {
     let mut in_single = false;
     let mut in_double = false;
     let mut escaped = false;
-    let mut prev = '\0';
 
     for ch in command.chars() {
         if escaped {
             escaped = false;
-            prev = ch;
             continue;
         }
 
         match ch {
             '\\' if !in_single => {
                 escaped = true;
-                prev = ch;
                 continue;
             }
             '\'' if !in_double => {
@@ -103,23 +100,8 @@ fn contains_unquoted_redirect(command: &str) -> bool {
             '>' | '<' if !in_single && !in_double => {
                 return true;
             }
-            '&' if !in_single && !in_double
-                // Only flag & when it directly follows a redirection char.
-                //
-                // An unquoted `>` or `<` already returned `true` at the arm
-                // above, so a plain `2>&1` never reaches this arm — it is
-                // caught as a redirect. The only way `prev` is `>` or `<`
-                // here is an *escaped* one (`\>`), which the escape branch
-                // folds into `prev` without being a redirect.
-                // Do NOT flag && (chain operator) or bare & (background
-                // operator)
-                && (prev == '>' || prev == '<') =>
-            {
-                return true;
-            }
             _ => {}
         }
-        prev = ch;
     }
     false
 }
@@ -137,15 +119,11 @@ pub fn analyze_shell_command(
     // user-typed commands are well under 64 KiB; anything longer is almost
     // certainly a DoS attempt or a tooling mistake.
     //
-    // Both bytes AND chars are bounded: a 64 KiB-of-4-byte-UTF-8 string is
-    // only 16k chars but allocates ~256 KiB in `split_command_chain` (which
-    // builds `current: String` chunk-by-chunk via `chars().next()` +
-    // `push(ch)`), so a byte cap alone does not bound the worst-case
-    // allocation when the input is mostly multi-byte. The chars cap closes
-    // the other end (pure ASCII at 64 KiB-of-chars is the same cost).
+    // Bound input size to protect against DoS. In UTF-8, characters are at least
+    // 1 byte, so bounding bytes to 64 KiB simultaneously bounds chars <= 64 KiB
+    // without requiring an O(N) UTF-8 character decode upfront.
     const MAX_COMMAND_BYTES: usize = 64 * 1024;
-    const MAX_COMMAND_CHARS: usize = 64 * 1024;
-    if command.len() > MAX_COMMAND_BYTES || command.chars().count() > MAX_COMMAND_CHARS {
+    if command.len() > MAX_COMMAND_BYTES {
         return CommandAnalysis::error("command exceeds maximum analyzable length");
     }
 

@@ -100,10 +100,9 @@ impl SecretMasker {
         Self
     }
 
-    pub fn mask(&self, text: &str) -> String {
-        // `replace_all` returns a borrow on no-match; only promote to an
-        // owned accumulator when a pattern actually fires, so clean text
-        // costs zero copies instead of one full allocation per pattern.
+    /// Mask text and return a borrowed `Cow` if no secrets matched, avoiding
+    /// heap allocation on clean text.
+    pub fn mask_cow<'a>(&self, text: &'a str) -> Cow<'a, str> {
         let mut result = mask_incomplete_private_key(text);
         for (regex, replacement) in SECRET_PATTERNS.iter() {
             if let Cow::Owned(masked) = regex.replace_all(&result, *replacement) {
@@ -111,20 +110,15 @@ impl SecretMasker {
             }
         }
         for (regex, replacement) in operator_patterns().iter() {
-            // The operator's replacement is what the operator WROTE — the
-            // config documents the field as "what the match is replaced with",
-            // with no `$` semantics. `&str` as a `Replacer` is a regex
-            // TEMPLATE though: `$` opens a capture reference and an unknown
-            // one expands to the empty string, so `***$REDACTED***` lost its
-            // `$` and the operator's own text. `NoExpand` emits it verbatim.
-            //
-            // The built-in patterns above keep their `$1` templates: those
-            // are the crate's own and they DO capture.
             if let Cow::Owned(masked) = regex.replace_all(&result, NoExpand(replacement.as_str())) {
                 result = Cow::Owned(masked);
             }
         }
-        result.into_owned()
+        result
+    }
+
+    pub fn mask(&self, text: &str) -> String {
+        self.mask_cow(text).into_owned()
     }
 }
 
@@ -138,15 +132,13 @@ impl SecretMasker {
 /// clear copy is not redaction.
 pub fn mask_json_strings(masker: &SecretMasker, value: &mut serde_json::Value) -> bool {
     match value {
-        serde_json::Value::String(s) => {
-            let masked = masker.mask(s);
-            if masked == *s {
-                false
-            } else {
+        serde_json::Value::String(s) => match masker.mask_cow(s) {
+            Cow::Borrowed(_) => false,
+            Cow::Owned(masked) => {
                 *s = masked;
                 true
             }
-        }
+        },
         // Plain loops on purpose: `.any(..)` (clippy's suggestion for the
         // former fold) short-circuits on the first masked item and would
         // leave every later secret unmasked. Masking must visit ALL items.

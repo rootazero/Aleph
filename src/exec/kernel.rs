@@ -101,13 +101,22 @@ impl SecurityKernel {
 /// A pattern that does not compile is dropped — and its text recorded in
 /// `dropped` — instead of aborting the whole kernel: one bad regex must not
 /// silently disable every other user-configured rule.
+const MAX_CUSTOM_PATTERNS: usize = 64;
+
 fn compile_patterns(
     patterns: &[CustomRiskPattern],
     into: &mut Vec<Regex>,
     kind: &str,
     dropped: &mut Vec<String>,
 ) {
-    for pattern in patterns {
+    if patterns.len() > MAX_CUSTOM_PATTERNS {
+        tracing::warn!(
+            kind = %kind,
+            excess = patterns.len() - MAX_CUSTOM_PATTERNS,
+            "security kernel: excess custom regex patterns dropped (max 64)",
+        );
+    }
+    for pattern in patterns.iter().take(MAX_CUSTOM_PATTERNS) {
         match crate::security::safe_regex::bounded_builder(&pattern.pattern).build() {
             Ok(re) => into.push(re),
             Err(err) => {
