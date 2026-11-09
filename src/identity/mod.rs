@@ -60,8 +60,8 @@ pub use export::{
 };
 pub use keystore::{AgentIdentityRow, AgentKeyRow, AgentKeystore, KeyError};
 pub use ledger::{
-    flush, global, install, record as record_action, revoke_identity, rotate_identity, AgentLedger,
-    LedgerCommandError, Rotation,
+    flush, global, install, is_installed, record as record_action, revoke_identity, rotate_identity,
+    AgentLedger, LedgerCommandError, Rotation,
 };
 pub use record::{LedgerAction, LedgerOutcome, LedgerRecord, NewRecord};
 pub use schema::{IDENTITY_SCHEMA, LEDGER_ADD_PRINCIPAL_SQL};
