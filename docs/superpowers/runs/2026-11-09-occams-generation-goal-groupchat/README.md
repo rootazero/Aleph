@@ -73,4 +73,9 @@ The deep reasoning tier handled:
 ---
 
 ## 5. Verification
-- Unified compilation check executed across entire codebase with concurrency bounded (`CARGO_BUILD_JOBS=2`) to respect the 20 GB host memory envelope.
+- Unified compilation check executed across entire codebase with concurrency bounded (`CARGO_BUILD_JOBS=2`) to respect the 20 GB host memory envelope:
+  ```bash
+  CARGO_BUILD_JOBS=2 cargo check --lib --all-targets
+  ```
+  Result: **Pass (exit code 0)** in 8m 40s with zero errors across all libraries, binaries, and integration tests.
+- Final commit on `main`: `78706aa3a`.
