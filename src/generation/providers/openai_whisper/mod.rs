@@ -472,11 +472,16 @@ fn decode_data_url(rest: &str) -> GenerationResult<(Vec<u8>, String, String)> {
     })?;
     let mut mime = "application/octet-stream".to_string();
     let mut is_base64 = false;
-    for piece in header.split(';') {
-        if piece == "base64" {
+    let mut pieces = header.split(';');
+    if let Some(first) = pieces.next() {
+        let trimmed = first.trim();
+        if !trimmed.is_empty() {
+            mime = trimmed.to_string();
+        }
+    }
+    for piece in pieces {
+        if piece.trim() == "base64" {
             is_base64 = true;
-        } else if !piece.is_empty() {
-            mime = piece.to_string();
         }
     }
     let bytes = if is_base64 {
