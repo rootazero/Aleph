@@ -1498,6 +1498,7 @@ impl ExecApprovalManager {
     }
 
     /// Clean up expired pending requests
+    #[allow(dead_code)]
     pub(crate) fn cleanup_expired(&self) {
         let mut pending = self.pending.write().unwrap_or_else(|e| e.into_inner());
         Self::cleanup_expired_locked(&mut pending, &self.session_listings);
