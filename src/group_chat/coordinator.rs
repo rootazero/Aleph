@@ -4,6 +4,8 @@
 //! No async, no LLM calls — these are used by the orchestrator to construct
 //! the inputs and interpret the outputs of Coordinator and Persona LLM invocations.
 
+use std::fmt::Write as _;
+
 use super::protocol::{CoordinatorPlan, GroupChatError, Persona, RespondentPlan};
 use crate::utils::text_format::truncate_chars;
 
@@ -37,7 +39,7 @@ pub fn build_coordinator_prompt(
 
     // Topic
     if let Some(t) = topic {
-        prompt.push_str(&format!("Discussion topic: {t}\n\n"));
+        let _ = writeln!(prompt, "Discussion topic: {t}\n");
     }
 
     // Persona id/name are operator-supplied (inline --role or preset config).
@@ -49,12 +51,13 @@ pub fn build_coordinator_prompt(
     prompt.push_str("Available personas:\n");
     for p in personas {
         let truncated = truncate_chars(&p.system_prompt, SYSTEM_PROMPT_TRUNCATE_LEN);
-        prompt.push_str(&format!(
-            "- id=\"{}\" name=\"{}\" prompt=\"{}\"\n",
+        let _ = writeln!(
+            prompt,
+            "- id=\"{}\" name=\"{}\" prompt=\"{}\"",
             json_safe_field(&p.id),
             json_safe_field(&p.name),
             json_safe_field(truncated),
-        ));
+        );
     }
     prompt.push('\n');
 
@@ -66,15 +69,16 @@ pub fn build_coordinator_prompt(
     }
 
     // User message
-    prompt.push_str(&format!("User message: {user_message}\n\n"));
+    let _ = writeln!(prompt, "User message: {user_message}\n");
 
     // Mention targets
     if !targets.is_empty() {
-        prompt.push_str(&format!(
+        let _ = write!(
+            prompt,
             "The user specifically mentioned these personas: {}\n\
              You MUST include all mentioned personas in the respondents list.\n\n",
             targets.join(", ")
-        ));
+        );
     }
 
     // Output instruction
@@ -152,11 +156,11 @@ pub fn build_persona_prompt(
     // defensive typography, not injection defense — the output is text for
     // the model, not executable content.
     let safe_name = json_safe_field(&persona.name);
-    prompt.push_str(&format!("You are \"{safe_name}\".\n\n"));
+    let _ = writeln!(prompt, "You are \"{safe_name}\".\n");
 
     // Coordinator guidance
     if !guidance.is_empty() {
-        prompt.push_str(&format!("Coordinator guidance: {guidance}\n\n"));
+        let _ = writeln!(prompt, "Coordinator guidance: {guidance}\n");
     }
 
     // Prior discussion from this round
@@ -167,13 +171,14 @@ pub fn build_persona_prompt(
     }
 
     // User message
-    prompt.push_str(&format!("User message: {user_message}\n\n"));
+    let _ = writeln!(prompt, "User message: {user_message}\n");
 
     // Response instruction
-    prompt.push_str(&format!(
+    let _ = write!(
+        prompt,
         "Please respond from \"{safe_name}\"'s perspective and area of expertise. \
-         Be concise and focused. Do not repeat what others have already said.",
-    ));
+         Be concise and focused. Do not repeat what others have already said."
+    );
 
     prompt
 }
@@ -187,10 +192,17 @@ pub fn build_persona_prompt(
 /// right-double-quote (U+201D) so a `"`-laden value cannot smuggle a second
 /// `key=value` pair past the parser.
 fn json_safe_field(s: &str) -> String {
-    s.chars()
-        .filter(|c| !c.is_control())
-        .collect::<String>()
-        .replace('"', "\u{201D}")
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        if !c.is_control() {
+            if c == '"' {
+                out.push('\u{201D}');
+            } else {
+                out.push(c);
+            }
+        }
+    }
+    out
 }
 
 /// Strip markdown code fences (` ```json ... ``` `) from LLM output.
@@ -200,10 +212,18 @@ fn strip_markdown_fences(s: &str) -> &str {
     // If there is an embedded code fence anywhere, extract inside it
     if let Some(start_idx) = s.find("```") {
         let after_fence = &s[start_idx + 3..];
-        let content_start = if let Some(rest) = after_fence.strip_prefix("json") {
-            rest
+        let content_start = if let Some(newline_idx) = after_fence.find('\n') {
+            &after_fence[newline_idx + 1..]
         } else {
-            after_fence
+            let trimmed = after_fence.trim_start();
+            if let Some(rest) = trimmed
+                .strip_prefix("json")
+                .or_else(|| trimmed.strip_prefix("JSON"))
+            {
+                rest
+            } else {
+                trimmed
+            }
         };
         let content_start = content_start.trim_start();
         if let Some(end_idx) = content_start.find("```") {

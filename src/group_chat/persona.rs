@@ -21,10 +21,11 @@ impl PersonaRegistry {
     /// Each config is converted to a [`Persona`] and indexed by its `id`.
     /// If duplicate IDs exist, the last one wins.
     pub fn from_configs(configs: &[PersonaConfig]) -> Self {
-        let mut presets = HashMap::new();
+        let mut presets = HashMap::with_capacity(configs.len());
         for cfg in configs {
             let persona = persona_from_config(cfg);
-            if presets.insert(cfg.id.clone(), persona).is_some() {
+            let id = persona.id.clone();
+            if presets.insert(id, persona).is_some() {
                 tracing::warn!(
                     subsystem = "group_chat",
                     persona_id = %cfg.id,
