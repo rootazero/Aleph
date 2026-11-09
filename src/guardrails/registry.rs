@@ -17,6 +17,8 @@
 //! `Warn` is returned" — for long enough that a reader could have taken it as
 //! the spec while the code did something else.
 
+use std::borrow::Cow;
+
 use crate::sync_primitives::{Arc, AtomicBool, Ordering};
 
 use serde_json::Value;
@@ -121,7 +123,7 @@ impl GuardrailRegistry {
         // there for why `rewritten` and not `warns.is_empty()` is what decides
         // whether the rewrite survives.
         let mut warns: Vec<String> = Vec::new();
-        let mut current = text.to_string();
+        let mut current = Cow::Borrowed(text);
         let mut rewritten = false;
         for g in &self.input {
             let d = g.evaluate_input(&current).await;
@@ -133,7 +135,7 @@ impl GuardrailRegistry {
                     }
                 }
                 GuardrailDecision::Sanitize(rep) => {
-                    current = rep.text;
+                    current = Cow::Owned(rep.text);
                     rewritten = true;
                 }
                 GuardrailDecision::Block { .. } => return d,
@@ -223,23 +225,26 @@ impl GuardrailRegistry {
             return (events, None);
         }
         let mut blocked = None;
-        for (idx, record) in events.iter_mut().enumerate() {
-            let Some(text) = screenable_text(&record.event).map(str::to_string) else {
-                continue;
+        for idx in 0..events.len() {
+            let decision = match screenable_text(&events[idx].event) {
+                Some(text) => self.evaluate_input(text).await,
+                None => continue,
             };
-            match self.evaluate_input(&text).await {
+            match decision {
                 GuardrailDecision::Allow => {}
                 GuardrailDecision::Warn { reason } => {
                     tracing::warn!(reason = %reason, "input guardrail warned");
                 }
-                GuardrailDecision::Sanitize(rep) => set_screened_text(&mut record.event, rep.text),
+                GuardrailDecision::Sanitize(rep) => {
+                    set_screened_text(&mut events[idx].event, rep.text);
+                }
                 GuardrailDecision::Block { reason, .. } if blocking == Some(idx) => {
                     blocked = Some(reason);
                     break;
                 }
                 GuardrailDecision::Block { reason, .. } => {
                     tracing::warn!(
-                        seq = record.seq,
+                        seq = events[idx].seq,
                         reason = %reason,
                         "input guardrail blocked a replayed user message; redacting it",
                     );
@@ -252,8 +257,8 @@ impl GuardrailRegistry {
                     // correlate a redaction with the session seq that held
                     // the original.
                     set_screened_text(
-                        &mut record.event,
-                        format!("{REDACTED_USER_MESSAGE} [redacted:seq={}]", record.seq),
+                        &mut events[idx].event,
+                        format!("{REDACTED_USER_MESSAGE} [redacted:seq={}]", events[idx].seq),
                     );
                 }
             }
@@ -270,7 +275,7 @@ impl GuardrailRegistry {
         // short-circuits. Warn reasons are deduplicated, and the terminal
         // decision is [`settle_chain`]'s.
         let mut warns: Vec<String> = Vec::new();
-        let mut current = text.to_string();
+        let mut current = Cow::Borrowed(text);
         let mut rewritten = false;
         for g in &self.output {
             let d = g.evaluate_output(&current).await;
@@ -282,7 +287,7 @@ impl GuardrailRegistry {
                     }
                 }
                 GuardrailDecision::Sanitize(rep) => {
-                    current = rep.text;
+                    current = Cow::Owned(rep.text);
                     rewritten = true;
                 }
                 GuardrailDecision::Block { .. } => return d,
@@ -300,10 +305,11 @@ impl GuardrailRegistry {
         // Warn reasons are deduplicated, and the terminal decision is
         // [`settle_chain`]'s.
         let mut warns: Vec<String> = Vec::new();
-        let mut current = args.clone();
+        let mut rewritten_value: Option<Value> = None;
         let mut rewritten = false;
         for g in &self.tool_call {
-            let d = g.evaluate_tool_call(tool_name, &current).await;
+            let current = rewritten_value.as_ref().unwrap_or(args);
+            let d = g.evaluate_tool_call(tool_name, current).await;
             match d {
                 GuardrailDecision::Allow => continue,
                 GuardrailDecision::Warn { reason } => {
@@ -314,7 +320,7 @@ impl GuardrailRegistry {
                 GuardrailDecision::Sanitize(rep) => {
                     match serde_json::from_str::<Value>(&rep.text) {
                         Ok(v) => {
-                            current = v;
+                            rewritten_value = Some(v);
                             rewritten = true;
                         }
                         // The rewrite is not representable as JSON, so the chain
@@ -348,7 +354,8 @@ impl GuardrailRegistry {
         // with a serializable payload. The caller
         // (`AgentHarness::apply_tool_call_guardrail`) already classifies a
         // serialization-induced block as terminal.
-        let text = match serde_json::to_string(&current) {
+        let current = rewritten_value.as_ref().unwrap_or(args);
+        let text = match serde_json::to_string(current) {
             Ok(s) => s,
             Err(e) => {
                 tracing::error!(
@@ -365,7 +372,7 @@ impl GuardrailRegistry {
                 };
             }
         };
-        settle_chain(rewritten, warns, text)
+        settle_chain(rewritten, warns, Cow::Owned(text))
     }
 }
 
@@ -383,7 +390,7 @@ impl GuardrailRegistry {
 /// the tool-call twin already compared payloads while its two siblings looked
 /// at warns, which is the divergence that let the leak sit in one file with the
 /// correct answer written twenty lines below it.
-fn settle_chain(rewritten: bool, warns: Vec<String>, text: String) -> GuardrailDecision {
+fn settle_chain(rewritten: bool, warns: Vec<String>, text: Cow<'_, str>) -> GuardrailDecision {
     if !rewritten && warns.is_empty() {
         return GuardrailDecision::Allow;
     }
@@ -395,7 +402,10 @@ fn settle_chain(rewritten: bool, warns: Vec<String>, text: String) -> GuardrailD
         (true, false) => format!("guardrails (sanitized; warn: {})", warns.join("; ")),
         (false, _) => format!("guardrails (warn: {})", warns.join("; ")),
     };
-    GuardrailDecision::Sanitize(Replacement { text, source })
+    GuardrailDecision::Sanitize(Replacement {
+        text: text.into_owned(),
+        source,
+    })
 }
 
 /// Text of a real user message. Synthetic entries are the harness's own copy
