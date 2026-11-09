@@ -299,23 +299,6 @@ impl From<LedgerRecord> for ExportedRecord {
 }
 
 impl ExportedRecord {
-    fn from_record(r: &LedgerRecord) -> Self {
-        Self {
-            seq: r.seq,
-            prev_hash: r.prev_hash.as_deref().map(hex::encode),
-            hash: hex::encode(&r.hash),
-            signature: hex::encode(&r.signature),
-            signer_fp: r.signer_fp.clone(),
-            action: r.action.as_str().to_string(),
-            target: r.target.clone(),
-            outcome: r.outcome.as_str().to_string(),
-            args_fp: r.args_fp.clone(),
-            detail: r.detail.clone(),
-            at_ms: r.at_ms,
-            principal: r.principal.clone(),
-        }
-    }
-
     /// Rebuild the row exactly as the signer saw it. An unparseable action or
     /// outcome is an error, never a lenient default: a row the verifier cannot
     /// reconstruct byte for byte must not be reconstructed as something else,
