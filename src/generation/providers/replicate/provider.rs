@@ -2,7 +2,7 @@
 //!
 //! This module contains the main provider struct and its `GenerationProvider` trait implementation.
 
-use super::builder::ReplicateProviderBuilder;
+use super::constants::{DEFAULT_ENDPOINT, DEFAULT_TIMEOUT_SECS};
 use super::input::build_input;
 use super::prediction::{create_prediction, fetch_output, poll_prediction};
 use crate::generation::{
@@ -13,7 +13,7 @@ use reqwest::Client;
 use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use tracing::{debug, info, warn};
 
 /// Replicate API Provider for media generation
@@ -161,22 +161,21 @@ impl GenerationProvider for ReplicateProvider {
             })?;
 
             // Handle different output formats
-            let output_url = match &output_value {
+            let output_url: &str = match &output_value {
                 // Array of URLs (common for image generation)
                 serde_json::Value::Array(arr) if !arr.is_empty() => arr[0]
                     .as_str()
                     .ok_or_else(|| {
                         GenerationError::serialization("Expected URL string in output array")
-                    })?
-                    .to_string(),
+                    })?,
                 // Single URL string
-                serde_json::Value::String(url) => url.clone(),
+                serde_json::Value::String(url) => url.as_str(),
                 // Object with URL field
                 serde_json::Value::Object(obj) => {
                     if let Some(url) = obj.get("url").and_then(|v| v.as_str()) {
-                        url.to_string()
+                        url
                     } else if let Some(url) = obj.get("audio").and_then(|v| v.as_str()) {
-                        url.to_string()
+                        url
                     } else {
                         return Err(GenerationError::serialization(
                             "Unexpected output format: no URL field found",
@@ -191,9 +190,10 @@ impl GenerationProvider for ReplicateProvider {
             };
 
             // Fetch the output data
-            let (bytes, content_type) = fetch_output(&self.client, &output_url).await?;
+            let (bytes, content_type) = fetch_output(&self.client, output_url).await?;
 
-            let data = GenerationData::bytes(bytes.clone());
+            let size_bytes = u64::try_from(bytes.len()).unwrap_or(u64::MAX);
+            let data = GenerationData::bytes(bytes);
 
             // Build metadata
             let duration = start_time.elapsed();
@@ -201,7 +201,7 @@ impl GenerationProvider for ReplicateProvider {
                 .with_provider("replicate")
                 .with_model(model)
                 .with_duration(duration)
-                .with_size_bytes(u64::try_from(bytes.len()).unwrap_or(u64::MAX));
+                .with_size_bytes(size_bytes);
 
             if let Some(ct) = content_type {
                 metadata = metadata.with_content_type(ct);
@@ -280,5 +280,101 @@ impl GenerationProvider for ReplicateProvider {
                     .and_then(|k| self.model_mappings.get(k))
             })
             .map(|s| s.as_str())
+    }
+}
+
+/// Builder for `ReplicateProvider`
+#[derive(Debug)]
+pub(crate) struct ReplicateProviderBuilder {
+    pub(crate) api_key: String,
+    pub(crate) endpoint: String,
+    pub(crate) model_mappings: HashMap<String, String>,
+    pub(crate) supported_types: Vec<GenerationType>,
+    pub(crate) timeout_secs: u64,
+}
+
+impl ReplicateProviderBuilder {
+    /// Create a new builder with the given API key
+    pub fn new<S: Into<String>>(api_key: S) -> Self {
+        Self {
+            api_key: api_key.into(),
+            endpoint: DEFAULT_ENDPOINT.to_string(),
+            model_mappings: HashMap::new(),
+            supported_types: vec![GenerationType::Image, GenerationType::Audio],
+            timeout_secs: DEFAULT_TIMEOUT_SECS,
+        }
+    }
+
+    /// Set the per-request HTTP timeout.
+    #[must_use]
+    pub const fn timeout_secs(mut self, secs: Option<u64>) -> Self {
+        if let Some(secs) = secs {
+            self.timeout_secs = secs;
+        }
+        self
+    }
+
+    /// Set a custom API endpoint (trims trailing slashes)
+    pub fn endpoint<S: Into<String>>(mut self, endpoint: S) -> Self {
+        self.endpoint = endpoint.into().trim_end_matches('/').to_string();
+        self
+    }
+
+    /// Add a model alias mapping
+    pub fn add_model<S: Into<String>>(mut self, alias: S, model_version: S) -> Self {
+        self.model_mappings
+            .insert(alias.into(), model_version.into());
+        self
+    }
+
+    /// Set the supported generation types
+    #[must_use]
+    pub fn supported_types(mut self, types: Vec<GenerationType>) -> Self {
+        self.supported_types = types;
+        self
+    }
+
+    /// Build the `ReplicateProvider`
+    #[cfg(test)]
+    #[must_use]
+    pub fn build(self) -> ReplicateProvider {
+        let client = Client::builder()
+            .timeout(Duration::from_secs(self.timeout_secs.max(1)))
+            .build()
+            .unwrap_or_else(|e| {
+                tracing::warn!(
+                    subsystem = "generation",
+                    provider = "replicate",
+                    error = %e,
+                    "reqwest::Client::builder() failed; substituting default client"
+                );
+                Client::new()
+            });
+
+        ReplicateProvider {
+            client,
+            api_key: self.api_key,
+            endpoint: self.endpoint,
+            model_mappings: self.model_mappings,
+            supported_types: self.supported_types,
+        }
+    }
+
+    /// Build the `ReplicateProvider`, propagating reqwest client-build errors
+    pub fn try_build(self) -> Result<ReplicateProvider, GenerationError> {
+        let client = Client::builder()
+            .timeout(Duration::from_secs(self.timeout_secs.max(1)))
+            .build()
+            .map_err(|e| {
+                GenerationError::network(format!("replicate: failed to build HTTP client: {e}"))
+            })?;
+
+        Ok(ReplicateProvider {
+            client,
+            api_key: self.api_key,
+            endpoint: self.endpoint,
+            model_mappings: self.model_mappings,
+            supported_types: self.supported_types,
+        })
     }
 }

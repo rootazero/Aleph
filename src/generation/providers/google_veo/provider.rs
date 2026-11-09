@@ -5,7 +5,7 @@ use super::constants::{
     DEFAULT_RESOLUTION, DEFAULT_TIMEOUT_SECS, MAX_POLL_ATTEMPTS, POLL_INTERVAL_SECS,
     VEO2_DURATION_RANGE, VEO3_DURATIONS,
 };
-use super::helpers::parse_error_response;
+use super::helpers::{is_valid_aspect_ratio, is_valid_veo3_duration, parse_error_response};
 use super::types::{
     VeoInstance, VeoOperationResponse, VeoParameters, VeoPredictResponse, VeoRequest,
 };
@@ -113,10 +113,15 @@ impl GoogleVeoProvider {
             .build()
             .map_err(|e| GenerationError::network(format!("Failed to build HTTP client: {e}")))?;
 
+        let endpoint = base_url
+            .unwrap_or_else(|| DEFAULT_ENDPOINT.to_string())
+            .trim_end_matches('/')
+            .to_string();
+
         Ok(Self {
             client,
             api_key: api_key.into(),
-            endpoint: base_url.unwrap_or_else(|| DEFAULT_ENDPOINT.to_string()),
+            endpoint,
             model: model.unwrap_or_else(|| DEFAULT_MODEL.to_string()),
         })
     }
@@ -232,9 +237,16 @@ impl GoogleVeoProvider {
 
     /// Determine aspect ratio from request parameters
     pub(crate) fn determine_aspect_ratio(&self, request: &GenerationRequest) -> String {
+        // If explicit aspect_ratio in params, prioritize it
+        if let Some(ar) = &request.params.aspect_ratio {
+            if is_valid_aspect_ratio(ar) {
+                return ar.clone();
+            }
+        }
+
         // If explicit aspect ratio in style, use it
         if let Some(style) = &request.params.style {
-            if ASPECT_RATIOS.contains(&style.as_str()) {
+            if is_valid_aspect_ratio(style) {
                 return style.clone();
             }
         }
@@ -267,7 +279,7 @@ impl GoogleVeoProvider {
             let dur = duration.round() as u32;
             if self.is_veo3() {
                 // Veo 3: must be 4, 6, or 8
-                if VEO3_DURATIONS.contains(&dur) {
+                if is_valid_veo3_duration(dur) {
                     return dur;
                 }
                 // Round to nearest valid duration
