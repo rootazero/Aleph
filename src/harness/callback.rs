@@ -14,8 +14,6 @@
 //! the final text before any emission — `on_delta` instead fires once per turn
 //! with the complete text. Consumers must therefore tolerate either cadence.
 
-use std::fmt;
-
 use crate::orchestrator::dispatch::FlowOutcome;
 
 pub trait HarnessCallback: Send {
@@ -73,16 +71,10 @@ pub trait HarnessCallback: Send {
 /// Drop-in `HarnessCallback` that ignores every event. Used by call sites
 /// that don't need streaming (e.g. unit tests that only assert session-event
 /// shape).
-#[derive(Default)]
+#[derive(Default, Debug)]
 pub struct NoopHarnessCallback;
 
 impl HarnessCallback for NoopHarnessCallback {}
-
-impl fmt::Debug for NoopHarnessCallback {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str("NoopHarnessCallback")
-    }
-}
 
 #[cfg(test)]
 mod tests {
