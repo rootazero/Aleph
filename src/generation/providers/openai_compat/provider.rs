@@ -108,9 +108,11 @@ impl OpenAiCompatProvider {
         S2: Into<String>,
         S3: Into<String>,
     {
-        OpenAiCompatProviderBuilder::new(name, api_key, base_url)
-            .model(model.unwrap_or_else(|| DEFAULT_MODEL.to_string()))
-            .build()
+        let mut builder = OpenAiCompatProviderBuilder::new(name, api_key, base_url);
+        if let Some(m) = model {
+            builder = builder.model(m);
+        }
+        builder.build()
     }
 
     /// Create a builder for `OpenAiCompatProvider`
