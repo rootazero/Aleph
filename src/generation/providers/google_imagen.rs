@@ -865,14 +865,11 @@ mod tests {
     #[test]
     fn test_determine_aspect_ratio_from_params() {
         let provider = GoogleImagenProvider::new("test-key", None, None).unwrap();
-        let request = GenerationRequest::builder()
-            .prompt("test")
-            .params(
-                crate::generation::GenerationParams::builder()
-                    .aspect_ratio("16:9")
-                    .build(),
-            )
-            .build();
+        let request = GenerationRequest::image("test").with_params(
+            crate::generation::GenerationParams::builder()
+                .aspect_ratio("16:9")
+                .build(),
+        );
         assert_eq!(provider.determine_aspect_ratio(&request), "16:9");
     }
 

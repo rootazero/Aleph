@@ -1,9 +1,9 @@
 //! Google Veo Provider implementation
 
 use super::constants::{
-    ASPECT_RATIOS, DEFAULT_ASPECT_RATIO, DEFAULT_DURATION_SECS, DEFAULT_ENDPOINT, DEFAULT_MODEL,
+    DEFAULT_ASPECT_RATIO, DEFAULT_DURATION_SECS, DEFAULT_ENDPOINT, DEFAULT_MODEL,
     DEFAULT_RESOLUTION, DEFAULT_TIMEOUT_SECS, MAX_POLL_ATTEMPTS, POLL_INTERVAL_SECS,
-    VEO2_DURATION_RANGE, VEO3_DURATIONS,
+    VEO2_DURATION_RANGE,
 };
 use super::helpers::{is_valid_aspect_ratio, is_valid_veo3_duration, parse_error_response};
 use super::types::{

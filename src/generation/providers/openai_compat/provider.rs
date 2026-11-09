@@ -6,7 +6,6 @@ use crate::generation::GenerationType;
 use reqwest::Client;
 
 use super::builder::OpenAiCompatProviderBuilder;
-use super::types::DEFAULT_MODEL;
 use crate::generation::GenerationResult;
 
 /// Generic OpenAI-Compatible Image Generation Provider

@@ -22,7 +22,7 @@ use crate::generation::{
     GenerationProvider, GenerationRequest, GenerationResult, GenerationType,
 };
 use reqwest::Client;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use serde_json::{Map, Value};
 use std::future::Future;
 use std::pin::Pin;
