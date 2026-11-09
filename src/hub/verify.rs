@@ -58,31 +58,23 @@ pub(crate) fn verdict_with_health(
             detail: "server not running".into(),
         };
     }
+    let health_note = match health {
+        HealthObservation::Degraded => " (degraded)",
+        HealthObservation::Healthy | HealthObservation::Unknown => "",
+    };
     match (tool_count, other_capability_count) {
         (0, 0) => VerifyReport {
             ok: false,
             detail: "running but exposes no tools, resources or prompts".into(),
         },
-        (0, other) => {
-            let health_note = match health {
-                HealthObservation::Degraded => " (degraded)",
-                HealthObservation::Healthy | HealthObservation::Unknown => "",
-            };
-            VerifyReport {
-                ok: true,
-                detail: format!("running; 0 tools, {other} resources/prompts{health_note}"),
-            }
-        }
-        (tools, _) => {
-            let health_note = match health {
-                HealthObservation::Degraded => " (degraded)",
-                HealthObservation::Healthy | HealthObservation::Unknown => "",
-            };
-            VerifyReport {
-                ok: true,
-                detail: format!("running; {tools} tools{health_note}"),
-            }
-        }
+        (0, other) => VerifyReport {
+            ok: true,
+            detail: format!("running; 0 tools, {other} resources/prompts{health_note}"),
+        },
+        (tools, _) => VerifyReport {
+            ok: true,
+            detail: format!("running; {tools} tools{health_note}"),
+        },
     }
 }
 
@@ -148,62 +140,57 @@ pub async fn verify_install(
                 };
             };
             // list_servers returns all registered servers; find by id.
-            match mcp.list_servers().await {
-                Ok(servers) => match servers.into_iter().find(|s| &s.id == id) {
-                    Some(info) => {
-                        // Healthy and Degraded are both "running" — the manager's
-                        // circuit breaker puts Degraded below Healthy but above
-                        // Unhealthy/Restarting/Dead/Stopped. Treating Degraded
-                        // as "not running" caused verify_install to mis-report a
-                        // recoverable post-install blip as a hard failure (see
-                        // review/hub-statics). Variants are enumerated
-                        // explicitly so a future addition to HealthStatus fails
-                        // to compile here instead of silently being classified
-                        // as "not running".
-                        let (running, observation) = match info.health {
-                            crate::mcp::manager::HealthStatus::Healthy => {
-                                (true, HealthObservation::Healthy)
-                            }
-                            crate::mcp::manager::HealthStatus::Degraded { .. } => {
-                                (true, HealthObservation::Degraded)
-                            }
-                            // Circuit breaker open: server won't reliably
-                            // answer MCP requests, even though the manager
-                            // still holds the entry. Fail closed so the
-                            // post-install probe reflects what the user sees.
-                            crate::mcp::manager::HealthStatus::Unhealthy => {
-                                (false, HealthObservation::Unknown)
-                            }
-                            // Mid-restart: transient. Fail closed; the next
-                            // reconcile sweep will re-verify once the new
-                            // process settles.
-                            crate::mcp::manager::HealthStatus::Restarting { .. } => {
-                                (false, HealthObservation::Unknown)
-                            }
-                            // Max restarts exceeded; manager has given up.
-                            crate::mcp::manager::HealthStatus::Dead => {
-                                (false, HealthObservation::Unknown)
-                            }
-                            // Operator explicitly halted. Not running, by
-                            // intent.
-                            crate::mcp::manager::HealthStatus::Stopped => {
-                                (false, HealthObservation::Unknown)
-                            }
-                        };
-                        let other =
-                            info.resource_count + info.resource_template_count + info.prompt_count;
-                        verdict_with_health(running, observation, info.tool_count, other)
-                    }
-                    None => VerifyReport {
+            let servers = match mcp.list_servers().await {
+                Ok(s) => s,
+                Err(e) => {
+                    return VerifyReport {
                         ok: false,
-                        detail: format!("server '{id}' not found"),
-                    },
-                },
-                Err(e) => VerifyReport {
+                        detail: format!("failed to query MCP manager: {e}"),
+                    };
+                }
+            };
+            let Some(info) = servers.into_iter().find(|s| &s.id == id) else {
+                return VerifyReport {
                     ok: false,
-                    detail: format!("failed to query MCP manager: {e}"),
-                },
-            }
+                    detail: format!("server '{id}' not found"),
+                };
+            };
+            // Healthy and Degraded are both "running" — the manager's
+            // circuit breaker puts Degraded below Healthy but above
+            // Unhealthy/Restarting/Dead/Stopped. Treating Degraded
+            // as "not running" caused verify_install to mis-report a
+            // recoverable post-install blip as a hard failure (see
+            // review/hub-statics). Variants are enumerated
+            // explicitly so a future addition to HealthStatus fails
+            // to compile here instead of silently being classified
+            // as "not running".
+            let (running, observation) = match info.health {
+                crate::mcp::manager::HealthStatus::Healthy => {
+                    (true, HealthObservation::Healthy)
+                }
+                crate::mcp::manager::HealthStatus::Degraded { .. } => {
+                    (true, HealthObservation::Degraded)
+                }
+                // Circuit breaker open: server won't reliably
+                // answer MCP requests, even though the manager
+                // still holds the entry. Fail closed so the
+                // post-install probe reflects what the user sees.
+                crate::mcp::manager::HealthStatus::Unhealthy
+                // Mid-restart: transient. Fail closed; the next
+                // reconcile sweep will re-verify once the new
+                // process settles.
+                | crate::mcp::manager::HealthStatus::Restarting { .. }
+                // Max restarts exceeded; manager has given up.
+                | crate::mcp::manager::HealthStatus::Dead
+                // Operator explicitly halted. Not running, by
+                // intent.
+                | crate::mcp::manager::HealthStatus::Stopped => {
+                    (false, HealthObservation::Unknown)
+                }
+            };
+            let other =
+                info.resource_count + info.resource_template_count + info.prompt_count;
+            verdict_with_health(running, observation, info.tool_count, other)
         }
         InstallOutcome::Plugin { path } => verify_on_disk_path(path, "plugin"),
         InstallOutcome::Skill { path } => verify_on_disk_path(path, "skill"),

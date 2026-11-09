@@ -53,6 +53,19 @@ impl ExtensionKind {
     }
 }
 
+impl std::str::FromStr for ExtensionKind {
+    type Err = &'static str;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "skill" => Ok(Self::Skill),
+            "plugin" => Ok(Self::Plugin),
+            "mcp" => Ok(Self::Mcp),
+            _ => Err("unknown extension kind"),
+        }
+    }
+}
+
 impl ExtensionCategory {
     pub fn as_str(self) -> &'static str {
         match self {
@@ -223,6 +236,8 @@ mod tests {
             "\"mcp\""
         );
         assert_eq!(ExtensionKind::Plugin.as_str(), "plugin");
+        assert_eq!("plugin".parse::<ExtensionKind>(), Ok(ExtensionKind::Plugin));
+        assert!("unknown".parse::<ExtensionKind>().is_err());
     }
 
     #[test]
