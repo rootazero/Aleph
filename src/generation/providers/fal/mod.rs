@@ -57,6 +57,7 @@ const POLL_INTERVAL_MAX_MS: u64 = 6000;
 pub struct FalProvider {
     client: Client,
     api_key: String,
+    auth_header: String,
     /// Queue base, e.g. `https://queue.fal.run` (no trailing slash).
     endpoint: String,
     /// Default model path when the request doesn't override it.
@@ -160,9 +161,12 @@ impl FalProviderBuilder {
             .trim_end_matches('/')
             .to_string();
 
+        let auth_header = format!("Key {}", self.api_key);
+
         Ok(FalProvider {
             client,
             api_key: self.api_key,
+            auth_header,
             endpoint,
             model: self.model.unwrap_or_else(|| DEFAULT_MODEL.to_string()),
             supported: self.supported,
@@ -264,8 +268,8 @@ impl FalProvider {
         )
     }
 
-    fn auth_header(&self) -> String {
-        format!("Key {}", self.api_key)
+    fn auth_header(&self) -> &str {
+        &self.auth_header
     }
 
     fn map_http_error(&self, status: reqwest::StatusCode, body: &str) -> GenerationError {
@@ -323,15 +327,10 @@ impl FalProvider {
         })
     }
 
-    async fn poll_status(
-        &self,
-        model_path: &str,
-        request_id: &str,
-    ) -> GenerationResult<FalStatusResponse> {
-        let url = self.status_url(model_path, request_id);
+    async fn poll_status_url(&self, url: &str) -> GenerationResult<FalStatusResponse> {
         let resp = self
             .client
-            .get(&url)
+            .get(url)
             .header("Authorization", self.auth_header())
             .send()
             .await
@@ -347,6 +346,15 @@ impl FalProvider {
         serde_json::from_str(&body).map_err(|e| {
             GenerationError::serialization(format!("Fal poll parse: {e} (body={body})"))
         })
+    }
+
+    async fn poll_status(
+        &self,
+        model_path: &str,
+        request_id: &str,
+    ) -> GenerationResult<FalStatusResponse> {
+        let url = self.status_url(model_path, request_id);
+        self.poll_status_url(&url).await
     }
 
     async fn fetch_result(&self, model_path: &str, request_id: &str) -> GenerationResult<Value> {
@@ -426,7 +434,7 @@ struct FalSubmitResponse {
     status: Option<String>,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Deserialize)]
 struct FalStatusResponse {
     status: String,
     #[serde(default)]
@@ -471,6 +479,7 @@ impl GenerationProvider for FalProvider {
             info!(name = %self.name, request_id = %submit.request_id, model = %model_path, "fal job submitted");
 
             // Poll until terminal status or wall-clock timeout.
+            let status_url = self.status_url(&model_path, &submit.request_id);
             let mut interval_ms = POLL_INTERVAL_INITIAL_MS;
             let deadline = started + Duration::from_secs(JOB_DEADLINE_SECS);
             loop {
@@ -480,7 +489,7 @@ impl GenerationProvider for FalProvider {
                     )));
                 }
                 tokio::time::sleep(Duration::from_millis(interval_ms)).await;
-                let st = self.poll_status(&model_path, &submit.request_id).await?;
+                let st = self.poll_status_url(&status_url).await?;
                 debug!(status = %st.status, qpos = ?st.queue_position, "fal poll");
                 if st.is_terminal() {
                     if !st.is_success() {

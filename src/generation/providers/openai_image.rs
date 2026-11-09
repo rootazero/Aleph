@@ -139,9 +139,7 @@ impl OpenAiImageProvider {
         model: Option<String>,
         resolved_url: Option<ResolvedUrl>,
     ) -> GenerationResult<Self> {
-        let client = Client::builder()
-            .timeout(Duration::from_secs(DEFAULT_TIMEOUT_SECS))
-            .build()
+        let client = super::http::generation_http_client(Duration::from_secs(DEFAULT_TIMEOUT_SECS))
             .map_err(|e| GenerationError::network(format!("Failed to build HTTP client: {e}")))?;
 
         // Use pre-resolved URL if available, otherwise resolve from base_url
@@ -161,8 +159,8 @@ impl OpenAiImageProvider {
     }
 
     /// Get the full URL for the images/generations endpoint
-    fn generations_url(&self) -> String {
-        self.endpoint.clone()
+    fn generations_url(&self) -> &str {
+        &self.endpoint
     }
 
     /// Get the image edits endpoint URL.
@@ -220,6 +218,16 @@ impl OpenAiImageProvider {
 
     /// Parse API error response and convert to `GenerationError`
     fn parse_error_response(&self, status: reqwest::StatusCode, body: &str) -> GenerationError {
+        self.parse_error_response_with_retry(status, body, None)
+    }
+
+    /// Parse API error response with optional `Retry-After` hint
+    fn parse_error_response_with_retry(
+        &self,
+        status: reqwest::StatusCode,
+        body: &str,
+        retry_after: Option<Duration>,
+    ) -> GenerationError {
         // Try to parse as OpenAI error format
         if let Ok(error_response) = serde_json::from_str::<OpenAiErrorResponse>(body) {
             let message = error_response.error.message;
@@ -244,8 +252,7 @@ impl OpenAiImageProvider {
                 GenerationError::authentication("Invalid API key or unauthorized", "openai-image")
             }
             429 => {
-                // Note: retry-after could be extracted from response headers if available
-                GenerationError::rate_limit("Rate limit exceeded", None)
+                GenerationError::rate_limit("Rate limit exceeded", retry_after)
             }
             400 => GenerationError::invalid_parameters(body.to_string(), None),
             403 => GenerationError::authentication(
@@ -389,6 +396,16 @@ impl GenerationProvider for OpenAiImageProvider {
                     })?;
 
                 let status = response.status();
+                let retry_after = if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
+                    response
+                        .headers()
+                        .get(reqwest::header::RETRY_AFTER)
+                        .and_then(|v| v.to_str().ok())
+                        .and_then(|v| v.parse::<u64>().ok())
+                        .map(Duration::from_secs)
+                } else {
+                    None
+                };
                 let response_text = response.text().await.map_err(|e| {
                     GenerationError::network(format!("Failed to read response body: {e}"))
                 })?;
@@ -400,7 +417,11 @@ impl GenerationProvider for OpenAiImageProvider {
                         body = %response_text,
                         "OpenAI API request failed"
                     );
-                    return Err(self.parse_error_response(status, &response_text));
+                    return Err(self.parse_error_response_with_retry(
+                        status,
+                        &response_text,
+                        retry_after,
+                    ));
                 }
 
                 // Parse successful response
@@ -417,18 +438,19 @@ impl GenerationProvider for OpenAiImageProvider {
             let api_response =
                 super::http::retry_transient("openai-image.generate", attempt).await?;
 
+            let mut data_iter = api_response.data.into_iter();
             // Extract first image (DALL-E 3 only supports n=1)
-            let first_image = api_response.data.first().ok_or_else(|| {
+            let first_image = data_iter.next().ok_or_else(|| {
                 GenerationError::provider("No images in response", None, "openai-image")
             })?;
 
             // Convert to GenerationData
-            let data = if let Some(url) = &first_image.url {
-                GenerationData::url(url.clone())
-            } else if let Some(b64) = &first_image.b64_json {
+            let data = if let Some(url) = first_image.url {
+                GenerationData::url(url)
+            } else if let Some(b64) = first_image.b64_json {
                 // Decode base64 to bytes
                 let bytes = base64::engine::general_purpose::STANDARD
-                    .decode(b64)
+                    .decode(&b64)
                     .map_err(|e| {
                         GenerationError::serialization(format!("Failed to decode base64: {e}"))
                     })?;
@@ -440,6 +462,25 @@ impl GenerationProvider for OpenAiImageProvider {
                     "openai-image",
                 ));
             };
+
+            // Collect any additional images without cloning
+            let additional: Vec<GenerationData> = data_iter
+                .filter_map(|img| {
+                    if let Some(url) = img.url {
+                        Some(GenerationData::url(url))
+                    } else if let Some(b64) = img.b64_json {
+                        match base64::engine::general_purpose::STANDARD.decode(&b64) {
+                            Ok(bytes) => Some(GenerationData::bytes(bytes)),
+                            Err(e) => {
+                                error!(error = %e, "Failed to decode base64 for additional image");
+                                None
+                            }
+                        }
+                    } else {
+                        None
+                    }
+                })
+                .collect();
 
             // Build metadata
             let duration = start_time.elapsed();
@@ -471,32 +512,9 @@ impl GenerationProvider for OpenAiImageProvider {
                 output = output.with_request_id(id);
             }
 
-            // Handle additional images (if n > 1 and provider supports it)
-            if api_response.data.len() > 1 {
-                let additional: Vec<GenerationData> = api_response
-                    .data
-                    .iter()
-                    .skip(1)
-                    .filter_map(|img| {
-                        if let Some(url) = &img.url {
-                            Some(GenerationData::url(url.clone()))
-                        } else if let Some(b64) = &img.b64_json {
-                            match base64::engine::general_purpose::STANDARD.decode(b64) {
-                                Ok(bytes) => Some(GenerationData::bytes(bytes)),
-                                Err(e) => {
-                                    error!(error = %e, "Failed to decode base64 for additional image");
-                                    None
-                                }
-                            }
-                        } else {
-                            None
-                        }
-                    })
-                    .collect();
-
-                if !additional.is_empty() {
-                    output = output.with_additional_outputs(additional);
-                }
+            // Attach additional images if any
+            if !additional.is_empty() {
+                output = output.with_additional_outputs(additional);
             }
 
             Ok(output)
