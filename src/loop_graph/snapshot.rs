@@ -192,14 +192,10 @@ impl SnapshotStore {
     /// `label` is truncated to `LABEL_MAX_CHARS`; pass a short, meaningful
     /// name (the audit log will reference it).
     pub fn capture(&self, graph: &LoopGraphStore, agent_id: &str, label: &str) -> Result<i64> {
-        let label = if label.chars().count() > LABEL_MAX_CHARS {
-            // Hard cap, not `truncate_text` (which appends "..." and exceeds
-            // the limit by the marker length): a label is a lookup key in the
-            // audit log, not prose, so the cap must be exact.
-            label.chars().take(LABEL_MAX_CHARS).collect()
-        } else {
-            label.to_string()
-        };
+        let label = label
+            .char_indices()
+            .nth(LABEL_MAX_CHARS)
+            .map_or(label, |(i, _)| &label[..i]);
         let nodes = graph.list_nodes(agent_id)?;
         let edges = graph.list_edges(agent_id)?;
         let nodes_json = serde_json::to_string(&nodes)
@@ -246,11 +242,8 @@ impl SnapshotStore {
         let rows = stmt
             .query_map([], row_to_summary)
             .map_err(|e| AlephError::other(format!("snapshot list query: {e}")))?;
-        let mut out = Vec::new();
-        for r in rows {
-            out.push(r.map_err(|e| AlephError::other(format!("snapshot list row: {e}")))?);
-        }
-        Ok(out)
+        rows.map(|r| r.map_err(|e| AlephError::other(format!("snapshot list row: {e}"))))
+            .collect()
     }
 
     /// Fetch one full snapshot by id. Returns `Ok(None)` for an unknown id so
@@ -327,18 +320,17 @@ impl SnapshotStore {
     /// broadcasts; append-only, one row per event, insert + rowid under the
     /// same single lock as `capture` (same race, same fix).
     pub fn append_event(&self, ev: &TopologyEvent) -> Result<i64> {
-        let payload = serde_json::to_value(ev)
-            .map_err(|e| AlephError::other(format!("event serialize: {e}")))?;
-        // The serde tag is the discriminator every reader filters on; deriving
-        // the column from the serialized payload (rather than a hand-maintained
-        // `match`) means a renamed variant can never split the two.
-        let kind = payload
-            .get("kind")
-            .and_then(serde_json::Value::as_str)
-            .unwrap_or("unknown")
-            .to_string();
-        let payload_json = serde_json::to_string(&payload)
+        let payload_json = serde_json::to_string(ev)
             .map_err(|e| AlephError::other(format!("event serialize json: {e}")))?;
+        #[derive(Deserialize)]
+        struct EventTag<'a> {
+            #[serde(borrow)]
+            kind: Option<&'a str>,
+        }
+        let kind = serde_json::from_str::<EventTag>(&payload_json)
+            .ok()
+            .and_then(|t| t.kind)
+            .unwrap_or("unknown");
         let conn = self.lock();
         conn.execute(
             "INSERT INTO events (ts_ms, kind, payload_json) VALUES (?1, ?2, ?3)",
@@ -363,20 +355,18 @@ impl SnapshotStore {
             .map_err(|e| AlephError::other(format!("event list prepare: {e}")))?;
         let rows = stmt
             .query_map(rusqlite::params![before_id, limit as i64], |r| {
+                let ts_ms: i64 = r.get(1)?;
                 Ok(EventRecord {
                     id: r.get(0)?,
-                    ts_ms: r.get(1)?,
-                    ts_iso: iso_from_ms(r.get(1)?),
+                    ts_ms,
+                    ts_iso: iso_from_ms(ts_ms),
                     kind: r.get(2)?,
                     payload_json: r.get(3)?,
                 })
             })
             .map_err(|e| AlephError::other(format!("event list query: {e}")))?;
-        let mut out = Vec::new();
-        for r in rows {
-            out.push(r.map_err(|e| AlephError::other(format!("event list row: {e}")))?);
-        }
-        Ok(out)
+        rows.map(|r| r.map_err(|e| AlephError::other(format!("event list row: {e}"))))
+            .collect()
     }
 }
 
@@ -417,46 +407,33 @@ fn diff_inner(a: &Snapshot, b: &Snapshot) -> Vec<TopologyDiff> {
 
     // Edges: same shape.
     for (key, eb) in &be {
-        match EdgeKind::parse(key.2) {
-            Some(kind) => match ae.get(key) {
-                None => out.push(TopologyDiff::EdgeAdded {
-                    from_id: key.0.to_string(),
-                    to_id: key.1.to_string(),
-                    edge_kind: kind,
-                }),
-                Some(ea) => {
-                    let changed = edge_diff_fields(ea, eb);
-                    if !changed.is_empty() {
-                        out.push(TopologyDiff::EdgeModified {
-                            from_id: key.0.to_string(),
-                            to_id: key.1.to_string(),
-                            edge_kind: kind,
-                            changed_fields: changed,
-                        });
-                    }
-                }
-            },
-            None => out.push(TopologyDiff::EdgeUnknown {
+        let kind = key.2;
+        match ae.get(key) {
+            None => out.push(TopologyDiff::EdgeAdded {
                 from_id: key.0.to_string(),
                 to_id: key.1.to_string(),
-                raw_kind: key.2.to_string(),
+                edge_kind: kind,
             }),
+            Some(ea) => {
+                let changed = edge_diff_fields(ea, eb);
+                if !changed.is_empty() {
+                    out.push(TopologyDiff::EdgeModified {
+                        from_id: key.0.to_string(),
+                        to_id: key.1.to_string(),
+                        edge_kind: kind,
+                        changed_fields: changed,
+                    });
+                }
+            }
         }
     }
     for key in ae.keys() {
         if !be.contains_key(key) {
-            match EdgeKind::parse(key.2) {
-                Some(kind) => out.push(TopologyDiff::EdgeRemoved {
-                    from_id: key.0.to_string(),
-                    to_id: key.1.to_string(),
-                    edge_kind: kind,
-                }),
-                None => out.push(TopologyDiff::EdgeUnknown {
-                    from_id: key.0.to_string(),
-                    to_id: key.1.to_string(),
-                    raw_kind: key.2.to_string(),
-                }),
-            }
+            out.push(TopologyDiff::EdgeRemoved {
+                from_id: key.0.to_string(),
+                to_id: key.1.to_string(),
+                edge_kind: key.2,
+            });
         }
     }
 
@@ -470,71 +447,39 @@ fn map_nodes(s: &Snapshot) -> std::collections::BTreeMap<&str, &GraphNode> {
     s.nodes.iter().map(|n| (n.id.as_str(), n)).collect()
 }
 
-fn map_edges(s: &Snapshot) -> std::collections::BTreeMap<(&str, &str, &str), &GraphEdge> {
+fn map_edges(s: &Snapshot) -> std::collections::BTreeMap<(&str, &str, EdgeKind), &GraphEdge> {
     s.edges
         .iter()
-        .map(|e| ((e.from_id.as_str(), e.to_id.as_str(), e.kind.as_str()), e))
+        .map(|e| ((e.from_id.as_str(), e.to_id.as_str(), e.kind), e))
         .collect()
 }
 
-fn diff_sort_key(d: &TopologyDiff) -> (u8, String, String, String, String) {
+fn diff_sort_key<'a>(d: &'a TopologyDiff) -> (u8, &'a str, &'a str, &'a str) {
     match d {
-        TopologyDiff::Added { id, .. } => {
-            (0, id.clone(), String::new(), String::new(), String::new())
-        }
-        TopologyDiff::Removed { id, .. } => {
-            (1, id.clone(), String::new(), String::new(), String::new())
-        }
-        TopologyDiff::Modified { id, .. } => {
-            (2, id.clone(), String::new(), String::new(), String::new())
-        }
+        TopologyDiff::Added { id, .. } => (0, id.as_str(), "", ""),
+        TopologyDiff::Removed { id, .. } => (1, id.as_str(), "", ""),
+        TopologyDiff::Modified { id, .. } => (2, id.as_str(), "", ""),
         TopologyDiff::EdgeAdded {
             from_id,
             to_id,
             edge_kind,
-            ..
-        } => (
-            3,
-            from_id.clone(),
-            to_id.clone(),
-            edge_kind.as_str().to_string(),
-            String::new(),
-        ),
+        } => (3, from_id.as_str(), to_id.as_str(), edge_kind.as_str()),
         TopologyDiff::EdgeRemoved {
             from_id,
             to_id,
             edge_kind,
-            ..
-        } => (
-            4,
-            from_id.clone(),
-            to_id.clone(),
-            edge_kind.as_str().to_string(),
-            String::new(),
-        ),
+        } => (4, from_id.as_str(), to_id.as_str(), edge_kind.as_str()),
         TopologyDiff::EdgeModified {
             from_id,
             to_id,
             edge_kind,
             ..
-        } => (
-            5,
-            from_id.clone(),
-            to_id.clone(),
-            edge_kind.as_str().to_string(),
-            String::new(),
-        ),
+        } => (5, from_id.as_str(), to_id.as_str(), edge_kind.as_str()),
         TopologyDiff::EdgeUnknown {
             from_id,
             to_id,
             raw_kind,
-        } => (
-            6,
-            from_id.clone(),
-            to_id.clone(),
-            raw_kind.clone(),
-            String::new(),
-        ),
+        } => (6, from_id.as_str(), to_id.as_str(), raw_kind.as_str()),
     }
 }
 
@@ -576,13 +521,14 @@ fn iso_from_ms(ms: i64) -> String {
 }
 
 fn row_to_summary(r: &rusqlite::Row<'_>) -> rusqlite::Result<SnapshotSummary> {
+    let taken_at_ms: i64 = r.get(2)?;
     Ok(SnapshotSummary {
         id: r.get(0)?,
         label: r.get(1)?,
-        taken_at_ms: r.get(2)?,
-        taken_at_iso: iso_from_ms(r.get(2)?),
-        node_count: r.get::<_, i64>(3)? as usize,
-        edge_count: r.get::<_, i64>(4)? as usize,
+        taken_at_ms,
+        taken_at_iso: iso_from_ms(taken_at_ms),
+        node_count: usize::try_from(r.get::<_, i64>(3)?).unwrap_or(0),
+        edge_count: usize::try_from(r.get::<_, i64>(4)?).unwrap_or(0),
     })
 }
 
