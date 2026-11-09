@@ -198,7 +198,8 @@ Panel 入口:设置 → **服务与集群 → Aleph 集群 → + Enroll**。Pane
    被 `node_invoke`/`node_file` 寻址)。
 
 **关键**:第 ① 步不再只是记账。节点下一次 `connect` 会经 `admit_node` 撞上这条
-`revoked_at`,被判 `Deregistered` 而拒绝登记,回包 `{"node":{"status":"deregistered"}}`;
+`revoked_at`,被判 `Deregistered` 而拒绝登记,回包
+`{"node":{"status":"deregistered","reason_code":"revoked","reason":"…"}}`;
 节点据此**打印可操作日志并退出**,不再无谓重连。此前 connect 从不查设备表,被注销的
 节点在下一轮退避重连里就自己复活了——注销形同虚设。
 
@@ -207,6 +208,12 @@ Panel 入口:设置 → **服务与集群 → Aleph 集群 → + Enroll**。Pane
 > **归一化名**复用 operator 重新登记的那一行,或铸一条新行。中心**不会**复活已吊销的
 > 行(`devices` 表只记吊销,没有「反吊销」,也没有「列出已吊销行」的接口):被吊销就是
 > 终局,想用同一个名字回来,先在中心重新登记、再删节点上的身份文件。
+>
+> 删文件这一步现在是**一条命令**(不用手敲路径、也不用 `rm`——Windows 上没有 `rm`):
+> 在**节点机器**上跑 `aleph-server node --reset-identity --name <name>`(它只需要
+> `--name`,不需要 `--center`),然后重启节点。节点的拒绝日志也会把这条命令原样打出来
+> ——被吊销的节点看到的是「身份文件已死 → 重置它」,同名多行看到的是「先按 id 注销
+> 重复行」,id 冲突看到的是「先腾出那个 id」:三种终局的 operator 动作不同,文案也不同。
 
 返回 `{ node_id, evicted, device_removed }`。寻址**先查已登记设备表**(`security_store`),
 再退回在线 `NodeRegistry` 的模糊匹配:① 精确 `device_id`(**含已吊销的行**,故按 id 重复
@@ -426,7 +433,7 @@ approve/deny → 决策作 JSON-RPC 响应下行。
 | 方向 | 帧 |
 |------|----|
 | node → center | `connect { device_id?, device_name, commands, tags, version }`(LAN-trust,无 token;首启省略 `device_id`;`version` 仅观测) |
-| center → node | connect 回包 `{ result:{ …, node:{ node_id, status:"registered"|"deregistered", persist, reason? } } }` |
+| center → node | connect 回包 `{ result:{ …, node:{ node_id, status:"registered"|"deregistered", persist, reason?, reason_code? } } }` |
 | center → node | 请求 `{ id, method:"tool.call", params:{ tool, args } }` |
 | node → center | 响应 `{ id, result }` / `{ id, error }` |
 | node → center | 请求 `{ id, method:"node.approval.request", params:{ tool, reason } }` |
@@ -436,6 +443,13 @@ approve/deny → 决策作 JSON-RPC 响应下行。
 > 于是既不放 `node` 载荷、也不铸行——**缺席 = 可重试**,节点据此退避重连。
 > `status:"deregistered"` 是**终局**,且可能带 `reason`(只有 operator 能修的拒绝,例如
 > 同名多行);`reason` 缺席时按旧中心的形状处理,节点打印通用文案(向后兼容)。
+>
+> `reason_code` 是**机器可读的「哪一种拒绝」**,`reason` 是**中心侧的人话细节**(两件事,
+> 不是同一事实的两份表述:计数、名字只在中心知道)。节点据此**选**恢复步骤,不从散文里
+> 猜:`revoked`(身份已吊销)/`ambiguous_name`(同名多行)/`identity_conflict`(该 id 属于
+> Panel 或 operator 设备)。三个动作各不相同——吊销要重置身份文件,同名多行要 operator
+> 按 id 注销重复行,id 冲突要 operator 腾出那个 id。旧中心不带 `reason_code`,节点退回
+> 通用文案(向后兼容)。
 
 ## RPC 权限与工具权限
 

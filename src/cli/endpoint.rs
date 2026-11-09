@@ -20,7 +20,11 @@ const CURRENT_ENDPOINT_VERSION: u32 = 1;
 /// - `0.0.0.0` is a wildcard for IPv4 — map to `127.0.0.1` so a client
 ///   that is also on the box can reach the loopback listener.
 /// - `::` is the IPv6 wildcard — map to `::1`.
-/// - Concrete addresses are preserved verbatim.
+/// - Concrete addresses are preserved verbatim — but the CLI's admin channel
+///   (`ipc_client::forward_to_server`) refuses a non-loopback host, so a server
+///   bound to a concrete LAN address has NO working local admin channel (the
+///   bearer token would cross the wire in cleartext). Bind a wildcard (or
+///   `127.0.0.1`) when the CLI's admin commands are needed.
 pub fn build_endpoint_url(addr: SocketAddr, tls: bool) -> String {
     let scheme = if tls { "https" } else { "http" };
     let host = match addr.ip() {

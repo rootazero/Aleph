@@ -35,6 +35,21 @@ aleph-server node \
   credential takes precedence over `--token`.
 - The node auto-reconnects with backoff if the center drops.
 
+### Recover a revoked node
+
+If the center refuses the node with `deregistered`, its credential was revoked
+(`cluster.deregister`) and is dead for good. Re-enrol the name on the center,
+then forget the dead credential on the node and restart it — it re-joins as a
+new node:
+
+```bash
+aleph-server node --reset-identity --name <node-name>
+```
+
+The node's refusal log names the step for each terminal refusal (revoked
+credential / duplicate name / id owned by another device); `cluster.deregister`
+removes the *credential*, not the name.
+
 ## Use a node (from the LLM)
 
 Once registered (visible via the `node_list` tool and the Panel cluster list):

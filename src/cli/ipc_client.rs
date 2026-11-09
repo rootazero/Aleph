@@ -73,8 +73,11 @@ where
         anyhow::bail!(
             "refusing to send the admin bearer token to the non-loopback endpoint host \
              {host} (from {base}); the admin IPC channel is local-only and a plain-HTTP \
-             forward would carry the token in cleartext. Bind the daemon to 127.0.0.1 or \
-             ::1 and update .ipc-endpoint.json."
+             forward would carry the token in cleartext. The daemon publishes a loopback \
+             URL when it binds a wildcard address, so this means it was bound to a \
+             concrete address: restart it bound to 127.0.0.1 (or 0.0.0.0, which is \
+             published as 127.0.0.1). Do not hand-edit .ipc-endpoint.json — the daemon \
+             owns that file and rewrites it on every start."
         );
     }
     // `url::Url::join` resolves per RFC 3986: an absolute-path reference such

@@ -1160,9 +1160,20 @@ pub async fn handle_connection(
                                                                 "Refusing node {}: device record was revoked by cluster.deregister",
                                                                 node_id
                                                             );
+                                                            // `reason_code` names the CASE: the node client
+                                                            // picks the operator's recovery step from it, so a
+                                                            // revoked credential and an ambiguous name cannot
+                                                            // read alike. `reason` carries the center-side
+                                                            // detail. Both are additive — an older node
+                                                            // client ignores them and keeps its generic
+                                                            // message.
                                                             Some(serde_json::json!({
                                                                 "node_id": node_id,
                                                                 "status": "deregistered",
+                                                                "reason_code": "revoked",
+                                                                "reason": "this node's device record was revoked \
+                                                                           by cluster.deregister; its identity is dead \
+                                                                           and the center will refuse it forever",
                                                             }))
                                                         }
                                                         Some((
@@ -1183,9 +1194,16 @@ pub async fn handle_connection(
                                                             // right for an id collision. Keeping one status
                                                             // avoids rippling a new verdict into the node
                                                             // client for a case only an operator can fix.
+                                                            // `reason_code` tells the client WHICH operator
+                                                            // step applies (an id collision is not a revoked
+                                                            // credential — the node's own file is fine).
                                                             Some(serde_json::json!({
                                                                 "node_id": node_id,
                                                                 "status": "deregistered",
+                                                                "reason_code": "identity_conflict",
+                                                                "reason": "that id already belongs to a non-node \
+                                                                           device (a paired Panel or an operator \
+                                                                           device), not to an enrolled node",
                                                             }))
                                                         }
                                                         Some((
@@ -1207,6 +1225,7 @@ pub async fn handle_connection(
                                                             // client ignores the extra field.
                                                             Some(serde_json::json!({
                                                                 "status": "deregistered",
+                                                                "reason_code": "ambiguous_name",
                                                                 "reason": format!(
                                                                     "{count} enrolled nodes share the name '{name}'; an operator must deregister the duplicates by id"
                                                                 ),
