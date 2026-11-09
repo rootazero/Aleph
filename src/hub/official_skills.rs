@@ -42,7 +42,7 @@ pub fn primer_entries() -> Vec<ExtensionEntry> {
         // The SKILL.md directly inside this skill dir (borrowed from the static embed).
         let Some(content) = dir
             .files()
-            .find(|f| f.path().file_name().and_then(|n| n.to_str()) == Some("SKILL.md"))
+            .find(|f| f.path().file_name().is_some_and(|n| n == "SKILL.md"))
             .and_then(|f| f.contents_utf8())
         else {
             continue;

@@ -164,19 +164,19 @@ fn validate_config_schema(schema: &serde_json::Value) -> Result<(), String> {
         }
         match v {
             serde_json::Value::Object(map) => {
-                *budget = budget.saturating_sub(map.len());
-                if *budget == 0 {
+                if map.len() > *budget {
                     return Err(format!("schema has >{MAX_PROPERTIES} properties"));
                 }
+                *budget -= map.len();
                 for value in map.values() {
                     walk(value, depth + 1, budget)?;
                 }
             }
             serde_json::Value::Array(items) => {
-                *budget = budget.saturating_sub(items.len());
-                if *budget == 0 {
+                if items.len() > *budget {
                     return Err(format!("schema has >{MAX_PROPERTIES} properties"));
                 }
+                *budget -= items.len();
                 for item in items {
                     walk(item, depth + 1, budget)?;
                 }
@@ -220,7 +220,7 @@ impl HubCatalogEntry {
             installed: false,
             enabled: false,
             update_available: false,
-            via: self.via.clone().or_else(|| Some(hub_id.to_string())),
+            via: Some(self.via.as_deref().unwrap_or(hub_id).to_string()),
             install_spec: Some(self.install_spec.clone()),
         }
     }
@@ -308,5 +308,21 @@ mod tests {
         assert_eq!(e.repo_url.as_deref(), Some("https://github.com/acme/foo"));
         // Per-user fields are stamped locally, never from the wire.
         assert!(!e.installed && !e.enabled && !e.update_available);
+    }
+
+    #[test]
+    fn validate_config_schema_budget() {
+        let mut map = serde_json::Map::new();
+        for i in 0..1024 {
+            map.insert(format!("prop_{i}"), serde_json::Value::Bool(true));
+        }
+        let exact_schema = serde_json::Value::Object(map.clone());
+        assert!(validate_config_schema(&exact_schema).is_ok());
+
+        map.insert("prop_1024".into(), serde_json::Value::Bool(true));
+        let over_schema = serde_json::Value::Object(map);
+        assert!(validate_config_schema(&over_schema)
+            .unwrap_err()
+            .contains(">1024 properties"));
     }
 }
