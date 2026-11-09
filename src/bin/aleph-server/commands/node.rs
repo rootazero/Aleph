@@ -1,3 +1,5 @@
+//! lock-policy: none
+//!
 //! `aleph-server node` — cluster node (execution arm) outbound runtime.
 //!
 //! Dials the hub WS, declares capabilities, serves `tool.call` in an inbound

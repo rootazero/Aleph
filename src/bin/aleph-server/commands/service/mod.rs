@@ -1,3 +1,5 @@
+//! lock-policy: none
+//!
 //! `aleph-server service …` — register the standalone server to start on boot.
 //!
 //! All autostart logic lives here (single source of truth). The per-platform

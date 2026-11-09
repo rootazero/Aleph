@@ -1,5 +1,6 @@
 //! Index module: Build metadata.db from Markdown sessions
 
+use alephcore::utils::sqlite_open::open_sqlite_safe;
 use crate::export::session_dir_name;
 use anyhow::{Context, Result};
 use rusqlite::Connection;
@@ -29,7 +30,7 @@ pub fn run_index(sessions_dir: PathBuf, output_db: PathBuf, rebuild_fts: bool) -
         .tempfile_in(output_parent)
         .context("Failed to create temporary database")?;
     let temp_path = temp.into_temp_path();
-    let conn = Connection::open(&temp_path).context("Failed to create temporary database")?;
+    let conn = open_sqlite_safe(&temp_path).context("Failed to create temporary database")?;
     init_schema(&conn)?;
     log::info!("  OK");
 
@@ -44,6 +45,12 @@ pub fn run_index(sessions_dir: PathBuf, output_db: PathBuf, rebuild_fts: bool) -
     log::info!("  OK");
 
     let stats = collect_stats(&conn)?;
+    // The shared helper opens in WAL mode, but only the main database file is
+    // renamed into place below — a `-wal` sidecar left behind would lose its
+    // content. Switching back to the rollback journal checkpoints the WAL into
+    // the main file first, so the rename carries every row.
+    conn.execute_batch("PRAGMA journal_mode=DELETE;")
+        .context("Failed to checkpoint the temporary database")?;
     drop(conn);
     fs::rename(&temp_path, &output_db).context("Failed to replace database")?;
 

@@ -1,3 +1,5 @@
+//! lock-policy: none
+//!
 //! `aleph-server hooks` — shell-hook consent management.
 //!
 //! Shell-command hooks shipped by plugins execute arbitrary code. The server

@@ -1,5 +1,6 @@
 //! Export module: SQLite → JSON
 
+use alephcore::utils::sqlite_open::open_sqlite_safe;
 use anyhow::{Context, Result};
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
 use serde::{Deserialize, Serialize};
@@ -84,7 +85,7 @@ pub fn run_export(
         );
     }
 
-    let conn = rusqlite::Connection::open(&db_path).context("Failed to open SQLite database")?;
+    let conn = open_sqlite_safe(&db_path).context("Failed to open SQLite database")?;
     let columns = table_columns(&conn, "raw_memories")?;
     if !columns.contains("session_id")
         || !columns.contains("agent_id")

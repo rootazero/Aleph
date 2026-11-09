@@ -1,3 +1,5 @@
+//! lock-policy: none
+//!
 //! `aleph-server identity` — offline reader for agent signing identities and
 //! the signed operation ledger.
 //!

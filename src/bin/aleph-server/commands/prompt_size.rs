@@ -1,3 +1,5 @@
+//! lock-policy: none
+//!
 //! `aleph-server prompt-size` — offline prompt-budget introspection.
 //!
 //! hermes `prompt_size.py` analogue. Builds the prompt pipeline offline (no

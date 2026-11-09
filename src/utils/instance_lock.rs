@@ -35,7 +35,7 @@ const LOCK_FILENAME: &str = "aleph.lock";
 /// from `aleph.lock` and never locked, so a second instance can read the holder
 /// back even while the first holds the exclusive lock (see module docs on the
 /// Windows `LockFileEx` read-blocking behavior).
-const HOLDER_FILENAME: &str = "aleph.lock.pid";
+pub(crate) const HOLDER_FILENAME: &str = "aleph.lock.pid";
 
 #[derive(Debug)]
 pub struct InstanceLock {

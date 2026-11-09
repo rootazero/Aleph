@@ -1,5 +1,6 @@
 //! Verify module: Check migration integrity
 
+use alephcore::utils::sqlite_open::open_sqlite_safe;
 use crate::export::session_dir_name;
 use anyhow::{Context, Result};
 use rusqlite::{Connection, OptionalExtension};
@@ -25,7 +26,7 @@ pub fn run_verify(
     let mut report = VerificationReport::default();
 
     // Open metadata database
-    let conn = Connection::open(&metadata_db).context("Failed to open metadata database")?;
+    let conn = open_sqlite_safe(&metadata_db).context("Failed to open metadata database")?;
 
     // Check 1: Session count
     log::info!("[1/6] Checking session count...");
@@ -119,7 +120,7 @@ fn check_session_count(
     report.session_count_fs = actual_dirs.len();
 
     if let Some(orig_path) = original_db {
-        let orig_conn = Connection::open(orig_path)?;
+        let orig_conn = open_sqlite_safe(orig_path)?;
         report.session_count_original = Some(orig_conn.query_row(
             "SELECT COUNT(DISTINCT session_id) FROM raw_memories WHERE session_id IS NOT NULL",
             [],

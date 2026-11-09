@@ -1,3 +1,5 @@
+//! lock-policy: none
+//!
 //! `update` subcommand for the standalone `aleph-server` binary.
 //!
 //! The desktop app self-updates through Tauri's bundled updater; the

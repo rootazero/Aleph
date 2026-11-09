@@ -1,4 +1,5 @@
 use crate::hub::types::{ExtensionCategory, ExtensionEntry, ExtensionKind};
+use crate::utils::sqlite_open::open_sqlite_safe;
 use rusqlite::{params, Connection};
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -144,7 +145,7 @@ pub struct CatalogCache {
 
 impl CatalogCache {
     pub fn open(path: &std::path::Path) -> rusqlite::Result<Self> {
-        let conn = Connection::open(path)?;
+        let conn = open_sqlite_safe(path)?;
         init_schema(&conn)?;
         Ok(Self {
             conn: Arc::new(Mutex::new(conn)),

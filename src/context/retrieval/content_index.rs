@@ -47,6 +47,7 @@
 //! loading required.
 
 use crate::sync_primitives::Mutex;
+use crate::utils::sqlite_open::open_sqlite_safe;
 use crate::utils::text_format::truncate_with_marker;
 use std::path::Path;
 
@@ -124,7 +125,7 @@ pub struct ContentIndex {
 impl ContentIndex {
     /// Open (creating if absent) an index at `db_path` and ensure the schema.
     pub fn open(db_path: &Path) -> Result<Self, IndexError> {
-        let conn = Connection::open(db_path)?;
+        let conn = open_sqlite_safe(db_path)?;
         Self::from_conn(conn)
     }
 

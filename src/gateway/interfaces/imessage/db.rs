@@ -20,6 +20,7 @@ use super::reaction;
 use crate::gateway::channel::{
     Attachment, ChannelId, ConversationId, InboundMessage, MessageId, MessageMeta, UserId,
 };
+use crate::utils::sqlite_open::open_sqlite_readonly;
 
 /// Apple epoch offset (2001-01-01 00:00:00 UTC in Unix timestamp)
 const APPLE_EPOCH_OFFSET: i64 = 978307200;
@@ -159,10 +160,7 @@ impl MessagesDb {
         debug!("Opening Messages database: {}", path.display());
 
         // Open in read-only mode
-        let conn = Connection::open_with_flags(
-            path,
-            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
-        )?;
+        let conn = open_sqlite_readonly(path)?;
 
         // Get the latest message ID to start from
         let last_rowid: i64 = conn

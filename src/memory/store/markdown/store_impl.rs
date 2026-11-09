@@ -10,6 +10,7 @@ use tokio::sync::Mutex;
 use crate::error::AlephError;
 use crate::memory::store::session::*;
 use crate::memory::store::sqlite::schema::session_ddl;
+use crate::utils::sqlite_open::open_sqlite_safe;
 
 use super::utils::{
     append_markdown, atomic_write_markdown, compute_sha256, format_timestamp,
@@ -59,7 +60,7 @@ impl MarkdownSessionStore {
             .map_err(|e| AlephError::other(format!("Failed to create archive directory: {}", e)))?;
 
         // Open database connection
-        let conn = Connection::open(&db_path).map_err(|e| {
+        let conn = open_sqlite_safe(&db_path).map_err(|e| {
             AlephError::other(format!("Failed to open database {:?}: {}", db_path, e))
         })?;
 

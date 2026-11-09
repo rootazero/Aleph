@@ -21,15 +21,13 @@ use crate::diagnostics::check::{settle_probe, unknown_finding, HealthCheck, Post
 use crate::diagnostics::finding::{Finding, RepairOutcome, Severity};
 use crate::utils::instance_lock::{
     diagnose_holder, is_lock_held, remove_holder_record_if_lock_free, StaleRecordRepair,
+    HOLDER_FILENAME,
 };
 
 const ID: &str = "core/instance-lock";
 /// Noun phrase the "unknown" finding is titled with — `"Instance lock
 /// unknown"`. See [`crate::diagnostics::check::unknown_finding`].
 const SUBJECT: &str = "Instance lock";
-/// Only for the arm where the sidecar could not be read at all (so there is
-/// no `HolderDiagnostic` to take the path from) and for the tests' fixtures.
-const HOLDER_FILENAME: &str = "aleph.lock.pid";
 
 pub struct StaleLockCheck {
     data_dir: PathBuf,

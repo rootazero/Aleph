@@ -4192,12 +4192,19 @@ Spec C closes that gap with four layered protections:
   forward to `/v1/admin/*` IPC endpoints (token rotation
   self-heals via a single 401 retry). When no server is running,
   the CLI takes the lock locally and operates directly.
+  Each subcommand module also carries a machine-readable
+  `//! lock-policy: none | with-policy | run-no-lock` line, which the
+  regression gate checks against the code in that module.
 
-Reverse-regression: `scripts/spec_c_regression.sh` enforces the four
-invariants (no direct rusqlite open, no direct fs ops on vault/acp
-files, every CLI subcommand annotated, no leftover
-`acquire_instance_lock` callers). Run before any commit that touches
-`src/utils/`, `src/cli/`, `src/gateway/admin_api/`, or
+Reverse-regression: `tests/spec_c_invariants.rs` enforces the four
+invariants against the parsed source — no direct rusqlite open, no
+direct fs write on vault/acp files, every CLI subcommand's
+`//! lock-policy:` declaration matching its code, and one owner for
+the singleton lock. `scripts/spec_c_regression.sh` is a thin wrapper
+around that test; CI runs the test itself. The gate reads the AST, so
+`#[cfg(test)]` code is not counted as a violation. It scans all of
+`src/`, so run it before any commit that touches `src/` — in
+particular `src/utils/`, `src/cli/`, `src/gateway/admin_api/`, or
 `src/bin/aleph-server/commands/`.
 
 ## See Also

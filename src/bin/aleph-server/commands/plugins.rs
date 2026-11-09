@@ -1,12 +1,14 @@
+//! lock-policy: run-no-lock
+//!
 //! Plugin management command handlers
 //!
-//! Spec C policy: **`NoLock`**. All plugin operations target
+//! All plugin operations target
 //! `~/.aleph/plugins/` (extension dir) or read `~/.aleph/config.toml`
 //! for marketplace metadata; `enable` / `disable` also READ Claude Code's
 //! `~/.claude/plugins` index (never writing there) and write only
 //! `plugins.toml`, atomically (see `set_enabled_locally`).
-//! Each handler enters via a marker `run_no_lock` call to satisfy
-//! the reverse-regression check (Task 25).
+//! Each handler enters via a `run_no_lock` marker call, which keeps the
+//! declared policy and the code in agreement.
 
 use crate::cli::MarketplaceAction;
 use alephcore::extension::marketplace::types::MarketplaceConfig;

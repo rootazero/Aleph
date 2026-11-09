@@ -1,9 +1,13 @@
+//! lock-policy: none
+//!
 //! `bootstrap-token` subcommand — prints the auto-provisioned shared Gateway
 //! token so the desktop shell (or an operator generating a QR / LAN URL) can
 //! authorize a remote Panel.
 //!
 //! Same threat model as `secret list`: reads `~/.aleph/data/security.db`
 //! directly (file mode 0600 enforced by `SQLite` + OS), no daemon required.
+//! Read-only on a WAL database ⇒ concurrent with a running daemon, so no
+//! singleton lock is taken.
 
 use alephcore::gateway::security::{store::SecurityStore, SharedTokenManager};
 use std::error::Error;
