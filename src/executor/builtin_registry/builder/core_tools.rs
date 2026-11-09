@@ -30,7 +30,7 @@ use super::BuiltinToolRegistry;
 ///
 /// One implementation, shared by the core and the optional registration
 /// paths, so the two cannot diverge on failure behaviour.
-pub(super) fn tool_schema<T: schemars::JsonSchema>(name: &str) -> serde_json::Value {
+pub(crate) fn tool_schema<T: schemars::JsonSchema>(name: &str) -> serde_json::Value {
     serde_json::to_value(schemars::schema_for!(T)).unwrap_or_else(|e| {
         tracing::error!("Failed to serialize schema for {}: {}", name, e);
         serde_json::json!({
@@ -78,7 +78,7 @@ impl BuiltinToolRegistry {
         reg(
             tools,
             "web_fetch",
-            "Fetch and read content from a URL",
+            <crate::builtin_tools::WebFetchTool as AlephTool>::DESCRIPTION,
             <crate::builtin_tools::WebFetchTool as AlephTool>::MAX_RESULT_TOKENS,
             tool_schema::<crate::builtin_tools::web_fetch::WebFetchArgs>("web_fetch"),
         );
