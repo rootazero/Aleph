@@ -24,7 +24,8 @@ mod tests {
         let _restore = crate::utils::paths::AlephHomeEnvGuard::acquire_and_set(&tmp);
 
         let log_dir = get_log_directory().unwrap();
-        assert!(log_dir.to_string_lossy().contains("aleph"));
-        assert!(log_dir.to_string_lossy().contains("logs"));
+        let s = log_dir.to_string_lossy();
+        assert!(s.contains("aleph"));
+        assert!(s.contains("logs"));
     }
 }
