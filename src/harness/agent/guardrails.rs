@@ -63,15 +63,10 @@ impl AgentHarness {
                             error = %e,
                             "sanitized tool-call args did not reparse as JSON; blocking call (fail-closed)"
                         );
+                        let reason = format!("guardrail sanitization produced invalid JSON: {e}");
                         return Ok(self
                             .settle_blocked_call(
-                                session_id,
-                                turn_id,
-                                call,
-                                started,
-                                iteration,
-                                callback,
-                                format!("guardrail sanitization produced invalid JSON: {e}"),
+                                session_id, turn_id, call, started, iteration, callback, reason,
                             )
                             .await);
                     }
@@ -136,13 +131,7 @@ impl AgentHarness {
         }
         let dur_ms: u64 = started.elapsed().as_millis().try_into().unwrap_or(u64::MAX);
         callback.on_tool_call_done(&call.id, None, Some(&block_msg), dur_ms);
-        self.push_tool_invocation(
-            call.id.clone(),
-            call.name.clone(),
-            dur_ms,
-            false,
-            Some(block_msg.clone()),
-        );
+        let block_msg_for_trace = self.deps.trace_sink.as_ref().map(|_| block_msg.clone());
         self.emit(
             || crate::harness::trace::LoopTraceEvent::ToolCallCompleted {
                 iteration,
@@ -153,10 +142,17 @@ impl AgentHarness {
                     duration_ms: dur_ms,
                 },
                 result: crate::tools::runtime::ToolResult::Error {
-                    error: block_msg,
+                    error: block_msg_for_trace.unwrap_or_default(),
                     retryable: false,
                 },
             },
+        );
+        self.push_tool_invocation(
+            call.id.clone(),
+            call.name.clone(),
+            dur_ms,
+            false,
+            Some(block_msg),
         );
         ToolCallGuardOutcome::Block
     }

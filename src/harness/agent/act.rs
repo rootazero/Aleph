@@ -157,8 +157,6 @@ impl AgentHarness {
         // conflict boundary. A within-batch duplicate collapses to a single
         // whole-batch group so the serial dedup memo retains ownership of that
         // semantics (mirrors `can_parallel_dispatch`, which rejects duplicates).
-        let mut seen = std::collections::HashSet::new();
-        let mut has_duplicate = false;
         // Canonical arg signatures and concurrency claims are computed once
         // per batch here and threaded down to `dispatch_group` /
         // `can_parallel_dispatch` / `act_parallel`, so the per-group paths do
@@ -166,11 +164,7 @@ impl AgentHarness {
         let mut canonical: Vec<String> = Vec::with_capacity(tool_calls.len());
         let mut claims = Vec::with_capacity(tool_calls.len());
         for call in &tool_calls {
-            let canon = super::canonical_json_string(&call.arguments);
-            if !seen.insert((call.name.clone(), canon.clone())) {
-                has_duplicate = true;
-            }
-            canonical.push(canon);
+            canonical.push(super::canonical_json_string(&call.arguments));
             claims.push(
                 self.deps
                     .tools
@@ -178,6 +172,11 @@ impl AgentHarness {
                     .await,
             );
         }
+        let mut seen = std::collections::HashSet::new();
+        let has_duplicate = tool_calls
+            .iter()
+            .zip(&canonical)
+            .any(|(call, canon)| !seen.insert((call.name.as_str(), canon.as_str())));
         let groups = if has_duplicate {
             vec![(0usize, tool_calls.len())]
         } else {
@@ -544,22 +543,12 @@ impl AgentHarness {
                 executed_count = executed_count.saturating_add(1);
                 let mut output = cached.clone();
                 output.metadata.latency_ms = 0;
-                let memo_output = output.clone();
-                let result_event = SessionEvent::ToolResult {
-                    turn_id,
-                    call_id: call.id.clone(),
-                    output,
-                    at: now_ms(),
-                };
-                self.deps
-                    .session
-                    .emit_event(session_id, result_event)
-                    .await?;
                 // Live "done" event for the memo-hit (no re-execution but the
                 // model observed a result). Keeps the broadcast stream's
                 // ToolStart↔ToolEnd symmetry intact for deduplicated calls.
                 // 0 ms — nothing was executed (mirrors the trace event below).
-                callback.on_tool_call_done(&call.id, Some(&memo_output), None, 0);
+                callback.on_tool_call_done(&call.id, Some(&output), None, 0);
+                let memo_value = self.deps.trace_sink.as_ref().map(|_| output.value.clone());
                 self.emit(
                     || crate::harness::trace::LoopTraceEvent::ToolCallCompleted {
                         iteration,
@@ -570,10 +559,20 @@ impl AgentHarness {
                             duration_ms: 0,
                         },
                         result: crate::tools::runtime::ToolResult::Success {
-                            output: memo_output.value,
+                            output: memo_value.unwrap_or_default(),
                         },
                     },
                 );
+                let result_event = SessionEvent::ToolResult {
+                    turn_id,
+                    call_id: call.id.clone(),
+                    output,
+                    at: now_ms(),
+                };
+                self.deps
+                    .session
+                    .emit_event(session_id, result_event)
+                    .await?;
                 // Memo-hit invocations cost 0 ms; record them anyway so the
                 // tool count on the timeline matches what the agent actually
                 // observed (the model saw a result come back).
@@ -898,7 +897,7 @@ impl AgentHarness {
             // Guardrail-sanitised args win over the model's original (the
             // `ToolCallRequested` event already logged the original).
             let args = sanitized[idx]
-                .clone()
+                .take()
                 .unwrap_or_else(|| call.arguments.clone());
             // Each parallel call owns a fresh child token forked from the
             // run-level cancel. If the run is cancelled mid-batch, every
@@ -952,7 +951,7 @@ impl AgentHarness {
                 Option<serde_json::Value>,
                 Result<ToolOutput, (String, bool)>,
             )>,
-        > = (0..tool_calls.len()).map(|_| None).collect();
+        > = vec![None; tool_calls.len()];
         {
             let mut completions = stream::iter(live_futs).buffer_unordered(parallelism);
             while let Some((idx, exec, effective_input, dur_ms)) = completions.next().await {
@@ -1096,7 +1095,7 @@ impl AgentHarness {
         iteration: usize,
     ) -> Result<(), HarnessError> {
         output.metadata.latency_ms = dur_ms;
-        let output_value = output.value.clone();
+        let output_value = self.deps.trace_sink.as_ref().map(|_| output.value.clone());
         let result_event = SessionEvent::ToolResult {
             turn_id,
             call_id: call.id.clone(),
@@ -1117,7 +1116,7 @@ impl AgentHarness {
                     duration_ms: dur_ms,
                 },
                 result: crate::tools::runtime::ToolResult::Success {
-                    output: output_value,
+                    output: output_value.unwrap_or_default(),
                 },
             },
         );
@@ -1252,7 +1251,7 @@ impl AgentHarness {
                 "failed to persist ToolError event",
             );
         }
-        let error_for_timeline = error_msg.clone();
+        let error_for_trace = self.deps.trace_sink.as_ref().map(|_| error_msg.clone());
         self.emit(
             || crate::harness::trace::LoopTraceEvent::ToolCallCompleted {
                 iteration,
@@ -1263,7 +1262,7 @@ impl AgentHarness {
                     duration_ms: dur_ms,
                 },
                 result: crate::tools::runtime::ToolResult::Error {
-                    error: error_msg,
+                    error: error_for_trace.unwrap_or_default(),
                     retryable,
                 },
             },
@@ -1273,7 +1272,7 @@ impl AgentHarness {
             call.name.clone(),
             dur_ms,
             false,
-            Some(error_for_timeline),
+            Some(error_msg),
         );
     }
 }
