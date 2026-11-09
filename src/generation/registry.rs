@@ -119,13 +119,13 @@ impl GenerationProviderRegistry {
         // registered (with a warn so the ambiguity is observable).
         let canonical = provider.name().to_string();
         if canonical != name {
-            match self.canonical_index.entry(canonical.clone()) {
+            match self.canonical_index.entry(canonical) {
                 std::collections::hash_map::Entry::Vacant(e) => {
                     e.insert(name.clone());
                 }
                 std::collections::hash_map::Entry::Occupied(existing) => {
                     tracing::warn!(
-                        canonical = %canonical,
+                        canonical = %existing.key(),
                         kept = %existing.get(),
                         ignored = %name,
                         "canonical name already claimed by another config section; \
@@ -304,9 +304,23 @@ impl GenerationProviderRegistry {
     pub fn providers_for_type(&self, gen_type: GenerationType) -> Vec<Arc<dyn GenerationProvider>> {
         self.providers
             .values()
-            .filter(|p| p.supported_types().contains(&gen_type))
+            .filter(|p| p.supports(gen_type))
             .cloned()
             .collect()
+    }
+
+    /// Check if any provider supports a specific generation type
+    ///
+    /// # Arguments
+    ///
+    /// * `gen_type` - The generation type to check
+    ///
+    /// # Returns
+    ///
+    /// `true` if at least one provider supports this type, `false` otherwise
+    #[must_use]
+    pub fn has_provider_for_type(&self, gen_type: GenerationType) -> bool {
+        self.providers.values().any(|p| p.supports(gen_type))
     }
 
     /// Get names of all providers that support a specific generation type
@@ -338,10 +352,10 @@ impl GenerationProviderRegistry {
         let mut names: Vec<_> = self
             .providers
             .iter()
-            .filter(|(_, p)| p.supported_types().contains(&gen_type))
+            .filter(|(_, p)| p.supports(gen_type))
             .map(|(name, _)| name.clone())
             .collect();
-        names.sort();
+        names.sort_unstable();
         names
     }
 
@@ -349,7 +363,7 @@ impl GenerationProviderRegistry {
     ///
     /// # Arguments
     ///
-    /// * `name` - Provider name to remove
+    /// * `name` - Provider name to remove (either config name or canonical name)
     ///
     /// # Returns
     ///
@@ -373,17 +387,25 @@ impl GenerationProviderRegistry {
     /// assert!(not_found.is_none());
     /// ```
     pub fn remove(&mut self, name: &str) -> Option<Arc<dyn GenerationProvider>> {
-        let removed = self.providers.remove(name)?;
+        let (removed, primary_key) = if let Some(p) = self.providers.remove(name) {
+            (p, name.to_string())
+        } else if let Some(primary) = self.canonical_index.get(name).cloned() {
+            let p = self.providers.remove(&primary)?;
+            (p, primary)
+        } else {
+            return None;
+        };
+
         // Keep the canonical index consistent: drop the mapping only when it
         // points at the removed entry (a multi-instance sibling's mapping —
         // if any — was never claimed by this name in the first place).
-        let canonical = removed.name().to_string();
+        let canonical = removed.name();
         if self
             .canonical_index
-            .get(&canonical)
-            .is_some_and(|v| v == name)
+            .get(canonical)
+            .is_some_and(|v| v == &primary_key)
         {
-            self.canonical_index.remove(&canonical);
+            self.canonical_index.remove(canonical);
         }
         Some(removed)
     }
@@ -460,7 +482,7 @@ impl GenerationProviderRegistry {
     ) -> Option<(String, Arc<dyn GenerationProvider>)> {
         self.providers
             .iter()
-            .filter(|(_, p)| p.supported_types().contains(&gen_type))
+            .filter(|(_, p)| p.supports(gen_type))
             .min_by(|(a, _), (b, _)| a.cmp(b))
             .map(|(name, p)| (name.clone(), p.clone()))
     }
@@ -686,6 +708,25 @@ mod tests {
         let removed = registry.remove("dalle");
         assert!(removed.is_some());
         assert!(registry.is_empty());
+        assert!(!registry.contains("dalle"));
+    }
+
+    #[test]
+    fn test_registry_remove_by_canonical_alias() {
+        let mut registry = GenerationProviderRegistry::new();
+        // Provider has canonical name "openai-image", registered under config key "dalle"
+        registry
+            .register("dalle".to_string(), create_test_provider("openai-image"))
+            .unwrap();
+
+        assert!(registry.contains("openai-image"));
+        assert!(registry.contains("dalle"));
+
+        let removed = registry.remove("openai-image");
+        assert!(removed.is_some());
+        assert_eq!(removed.unwrap().name(), "openai-image");
+        assert!(registry.is_empty());
+        assert!(!registry.contains("openai-image"));
         assert!(!registry.contains("dalle"));
     }
 

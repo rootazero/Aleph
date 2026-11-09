@@ -184,9 +184,7 @@ impl GenerationParams {
             self.reference_audio = other.reference_audio;
         }
         // Merge extra parameters
-        for (key, value) in other.extra {
-            self.extra.insert(key, value);
-        }
+        self.extra.extend(other.extra);
     }
 
     /// Create a merged copy without modifying the original
