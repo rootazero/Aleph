@@ -243,8 +243,9 @@ impl GuardrailRegistry {
                     break;
                 }
                 GuardrailDecision::Block { reason, .. } => {
+                    let seq = events[idx].seq;
                     tracing::warn!(
-                        seq = events[idx].seq,
+                        seq = seq,
                         reason = %reason,
                         "input guardrail blocked a replayed user message; redacting it",
                     );
@@ -258,7 +259,7 @@ impl GuardrailRegistry {
                     // the original.
                     set_screened_text(
                         &mut events[idx].event,
-                        format!("{REDACTED_USER_MESSAGE} [redacted:seq={}]", events[idx].seq),
+                        format!("{REDACTED_USER_MESSAGE} [redacted:seq={seq}]"),
                     );
                 }
             }
