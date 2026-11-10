@@ -91,10 +91,11 @@ pub async fn handle_chat_send(
     // inbox traffic (recipient-less messages would otherwise expire in 30 min).
     // A persistence failure must be visible — the fan-out below still runs,
     // but the triggering message would be a silent hole in the durable
+    // ── Persist the inbound user message into the team-scoped message
     // transcript (P7). The persisted row's id becomes `message_id` in the
-    // response and the `.message` event below; a failed persist still lets
-    // the turn proceed (existing warn-and-continue), just with no id to hand
-    // back.
+    // response and the `.message` event below; a failed persist is reported
+    // to the caller and nothing is published (H5-12) — a message that is not
+    // durable must not be announced as observed.
     let persisted_id: Option<String> = match msg_store
         .send_message_with_ttl(
             crate::teams::messages::NewMessage {
@@ -116,7 +117,15 @@ pub async fn handle_chat_send(
         Err(e) => {
             warn!(team_id = %params.team_id, error = %e,
                 "team chat: failed to persist user message into the team transcript");
-            None
+            // A message that never reached the transcript must not be
+            // reported as observed or delivered (H5-12): the sender would be
+            // told it was seen, and a reload would lose it for good. The
+            // failure is reported before anything is published.
+            return JsonRpcResponse::error(
+                request.id,
+                INTERNAL_ERROR,
+                format!("Failed to persist team chat message: {}", e),
+            );
         }
     };
 

@@ -203,6 +203,19 @@ pub trait RawSessionStore: Send + Sync {
         offset: usize,
     ) -> Result<Vec<SessionMetadata>, AlephError>;
 
+    /// Count the sessions matching the same filters as `list_sessions`.
+    ///
+    /// The two must agree on the predicate set: `list_sessions` returns a
+    /// page, `count_sessions` answers "how many are there".
+    async fn count_sessions(
+        &self,
+        agent_id: Option<&str>,
+        workspace_id: Option<&str>,
+        start_date: Option<i64>,
+        end_date: Option<i64>,
+        compression_status: Option<&str>,
+    ) -> Result<usize, AlephError>;
+
     /// Get metadata for a specific session.
     async fn get_session_metadata(&self, session_id: &str) -> Result<SessionMetadata, AlephError>;
 

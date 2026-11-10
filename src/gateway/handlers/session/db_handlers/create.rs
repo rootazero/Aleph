@@ -22,9 +22,10 @@ pub async fn handle_create_db(
         .and_then(|v| v.as_str())
         .map(|s| s.to_string());
 
-    // Generate a unique session key based on timestamp
+    // Generate a unique session key based on timestamp and random component
     let ts = chrono::Utc::now().timestamp_millis();
-    let session_key_str = format!("session_{ts}");
+    let random_component: u64 = rand::random();
+    let session_key_str = format!("session_{ts}_{random_component:016x}");
     let session_key = SessionKey::Main {
         agent_id: name.clone().unwrap_or_else(|| "main".to_string()),
         main_key: session_key_str.clone(),
