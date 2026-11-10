@@ -31,7 +31,7 @@ pub struct FetchBackendDto {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub timeout_seconds: Option<u64>,
     /// Inbound only (never echoed). Stored to vault on update.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing)]
     pub api_key: Option<String>,
     #[serde(default)]
     pub has_api_key: bool,
@@ -303,10 +303,23 @@ pub async fn handle_update(
         }
     }
 
-    // Broadcast config change event
+    // Broadcast config change event — strip api_key fields before serializing
+    // so that inbound secrets are never echoed into the event bus payload.
+    let mut event_value = serde_json::to_value(&dto).unwrap_or(Value::Null);
+    if let Some(backends) = event_value
+        .as_object_mut()
+        .and_then(|o| o.get_mut("backends"))
+        .and_then(|b| b.as_array_mut())
+    {
+        for backend in backends.iter_mut() {
+            if let Some(obj) = backend.as_object_mut() {
+                obj.remove("api_key");
+            }
+        }
+    }
     let event = GatewayEvent::ConfigChanged(ConfigChangedEvent {
         section: Some("fetch".to_string()),
-        value: serde_json::to_value(&dto).unwrap_or(Value::Null),
+        value: event_value,
         timestamp: chrono::Utc::now().timestamp_millis(),
     });
     let _ = event_bus.publish_gateway_event(&event);
@@ -516,6 +529,21 @@ pub async fn handle_test(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn firecrawl_connection_test_passes_configured_timeout() {
+        let source = include_str!("fetch_config.rs");
+        let handler = source
+            .split("pub async fn handle_test(")
+            .nth(1)
+            .unwrap()
+            .split("#[cfg(test)]")
+            .next()
+            .unwrap();
+        assert!(handler.contains("FirecrawlFetchProvider::new_with_timeout("));
+        assert!(handler.contains("base_url, api_key, params.timeout_seconds"));
+        assert!(!handler.contains("FirecrawlFetchProvider::new(base_url, api_key)"));
+    }
 
     #[test]
     fn backend_dto_never_serializes_token_and_round_trips() {
