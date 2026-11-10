@@ -973,7 +973,6 @@ impl Channel for DiscordChannel {
 
         // Create shutdown channel and status monitor for startup
         let (shutdown_tx, mut shutdown_rx) = oneshot::channel();
-        let status_handle = self.channel_state.status_handle();
         self.shutdown_tx = Some(shutdown_tx);
         // Startup result: the gateway task reports a failure that happens
         // BEFORE `ready`, so `start()` fails fast instead of waiting out
