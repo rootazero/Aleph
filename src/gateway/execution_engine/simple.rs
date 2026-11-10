@@ -473,7 +473,7 @@ mod cancellation_tests {
                 loop {
                     let runs = engine.active_runs.read().await;
                     if let Some(run) = runs.get("simple-cancel-run") {
-                        assert!(run.cancel_token.is_none());
+                        assert!(!run.cancel_token.is_cancelled());
                         break;
                     }
                     drop(runs);

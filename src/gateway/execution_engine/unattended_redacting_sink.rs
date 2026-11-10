@@ -421,11 +421,11 @@ mod tests {
 
         // A tool error containing a credential in the timeline
         let timeline = vec![crate::orchestrator::dispatch::ToolInvocation {
-            tool_name: "shell".into(),
-            input: serde_json::json!({"command": "echo start"}),
-            result: None,
+            id: "t1".into(),
+            name: "shell".into(),
+            duration_ms: 100,
+            success: false,
             error: Some(format!("AWS key AKIAIOSFODNN7EXAMPLE leaked in error")),
-            duration_ms: Some(100),
         }];
 
         sink.on_trace(&LoopTraceEvent::SessionCompleted {
@@ -522,11 +522,11 @@ mod tests {
                 duration_ms: None,
                 token_breakdown: None,
                 tool_timeline: vec![crate::orchestrator::dispatch::ToolInvocation {
-                    tool_name: format!("tool-{KEY}"),
-                    input: serde_json::json!({"key": format!("secret {KEY}")}),
-                    result: None,
+                    id: "t1".into(),
+                    name: format!("tool-{KEY}"),
+                    duration_ms: 5,
+                    success: false,
                     error: Some(format!("failed with {KEY}")),
-                    duration_ms: Some(5),
                 }],
             },
             LoopTraceEvent::WorktreeCreated {
