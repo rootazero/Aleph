@@ -50,8 +50,11 @@ pub enum DeviceTokenError {
 }
 
 impl From<BootstrapTicketError> for DeviceTokenError {
-    fn from(_: BootstrapTicketError) -> Self {
-        Self::InvalidBootstrapTicket
+    fn from(e: BootstrapTicketError) -> Self {
+        match e {
+            BootstrapTicketError::DeviceIdConflict(id) => Self::DeviceIdConflict(id),
+            _ => Self::InvalidBootstrapTicket,
+        }
     }
 }
 
@@ -129,6 +132,14 @@ impl DeviceTokenManager {
     /// ticket is consumed (a collision must not burn the operator's one-time
     /// ticket, and a ticket holder learns nothing it could not learn by pairing
     /// successfully and calling `gateway.devices.list`).
+    ///
+    /// TOCTOU note: the namespace check below and `consume_bootstrap_ticket`
+    /// are not atomic, so two concurrent exchanges racing on the same
+    /// `device_id` can both pass the check; the loser then gets
+    /// `Invalid` ("ticket already consumed") instead of `DeviceIdConflict`.
+    /// That is safe — the ticket is single-use, the device row is written
+    /// only once, and no second credential is minted — it is merely a
+    /// confusing error message in a rare race.
     pub fn exchange_bootstrap_ticket(
         &self,
         ticket: &str,
@@ -139,13 +150,17 @@ impl DeviceTokenManager {
         let device_id = device_id.unwrap_or_else(|| format!("device-{}", Uuid::new_v4()));
         let device_name = device_name.unwrap_or_else(|| "Remote Panel".to_string());
 
+        // Advisory pre-check: reject a device-id collision before burning the
+        // operator's one-time ticket. Not race-free (see TOCTOU note above),
+        // but preserves the conflict error for the sequential case.
         if let Some(existing) = self.store.get_device(&device_id)? {
             if existing.device_type.as_deref() != Some(PANEL_DEVICE_TYPE) {
                 return Err(DeviceTokenError::DeviceIdConflict(device_id));
             }
         }
 
-        // Atomically consume the ticket before issuing the device token.
+        // Consume the ticket (single-use; a concurrent loser fails here with
+        // `Invalid`, which is safe per the TOCTOU note above).
         let consumed: ConsumedBootstrapTicket = self
             .store
             .consume_bootstrap_ticket(ticket, Some(&device_id))?;
@@ -169,7 +184,6 @@ impl DeviceTokenManager {
             scopes: &["*".to_string()],
             user_id: consumed.user_id.as_deref(),
         })?;
-
         // Unbound ticket + still-unbound device after the upsert above (i.e.
         // a brand-new pairing, not a re-pair of an already-owned device):
         // default to the owner. Must run strictly after the upsert and be
@@ -513,6 +527,37 @@ mod tests {
             .exchange_bootstrap_ticket(&ticket, Some("panel-1".to_string()), None, None)
             .expect("ticket survives a rejected pairing");
         assert_eq!(ok.device_id, "panel-1");
+    }
+
+    #[test]
+    fn ticket_consumption_checks_device_conflict_before_ticket_validity() {
+        let (mgr, store) = manager_fixture();
+        let used = mgr.create_bootstrap_ticket(None, None).unwrap();
+        let fresh = mgr.create_bootstrap_ticket(None, None).unwrap();
+        store
+            .consume_bootstrap_ticket(&used, Some("shared-id"))
+            .unwrap();
+
+        // Force the losing caller's state: a node claimed the id before consumption.
+        seed_node(&mgr, "shared-id");
+        for ticket in [&used, &fresh] {
+            let err = store
+                .consume_bootstrap_ticket(ticket, Some("shared-id"))
+                .map_err(DeviceTokenError::from)
+                .expect_err("the store must reject a conflicting id before checking the ticket");
+            assert!(
+                matches!(err, DeviceTokenError::DeviceIdConflict(ref id) if id == "shared-id"),
+                "expected DeviceIdConflict, got {err:?}"
+            );
+        }
+
+        // A conflict must leave a fresh ticket redeemable under another id.
+        mgr.exchange_bootstrap_ticket(&fresh, Some("panel-1".into()), None, None)
+            .unwrap();
+        assert!(matches!(
+            mgr.exchange_bootstrap_ticket(&fresh, Some("panel-1".into()), None, None),
+            Err(DeviceTokenError::InvalidBootstrapTicket)
+        ));
     }
 
     /// A node adopted by `cluster::admit_node`'s unknown-id backfill has a NULL
