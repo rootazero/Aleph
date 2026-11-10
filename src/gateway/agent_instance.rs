@@ -711,14 +711,13 @@ impl AgentRegistry {
             Some(AgentEntry::Config { .. }) => {}
         }
 
-        // Take the Config entry out to consume it
-        let entry = agents.remove(agent_id)?;
-        let (config, session_store) = match entry {
-            AgentEntry::Config {
+        // Clone the config and session_store without removing the entry
+        let (config, session_store) = match agents.get(agent_id) {
+            Some(AgentEntry::Config {
                 config,
                 session_store,
-            } => (config, session_store),
-            AgentEntry::Instance(_) => unreachable!("checked above"),
+            }) => (config.clone(), session_store.clone()),
+            _ => unreachable!("checked above"),
         };
 
         let id = config.agent_id.clone();
@@ -742,7 +741,6 @@ impl AgentRegistry {
     pub async fn get_default(&self) -> Option<Arc<AgentInstance>> {
         self.get(&self.default_agent).await
     }
-
     /// List all registered agent IDs (both lazy and instantiated)
     pub async fn list(&self) -> Vec<String> {
         let agents = self.agents.read().await;
