@@ -467,7 +467,11 @@ pub async fn handle_test(
                 );
             };
 
-            match FirecrawlFetchProvider::new(base_url, api_key) {
+            match FirecrawlFetchProvider::new_with_timeout(
+                base_url,
+                api_key,
+                params.timeout_seconds,
+            ) {
                 Ok(provider) => match provider.fetch("https://example.com").await {
                     Ok(_) => FetchTestResult {
                         success: true,
