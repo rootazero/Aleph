@@ -60,7 +60,6 @@ pub(crate) fn map_scrape(resp: FirecrawlScrapeResponse) -> Result<Option<String>
 /// Fetch provider backed by Firecrawl's `/v2/scrape`. Config (base_url + token)
 /// is SHARED with the `[search]` Firecrawl backend (decision A).
 pub struct FirecrawlFetchProvider {
-    base_url: String,
     api_key: String,
     client: reqwest::Client,
     scrape_url: url::Url,
@@ -109,10 +108,18 @@ impl FirecrawlFetchProvider {
                 "Firecrawl api_key cannot be empty",
             ));
         }
+        // Prepare the scrape endpoint once. Re-parsing the base URL on every
+        // request was pure overhead, and the resolved endpoint is also the
+        // only place the `/v2/scrape` suffix is decided.
+        let mut scrape_url = parsed;
+        scrape_url
+            .path_segments_mut()
+            .map_err(|_| AlephError::invalid_config("firecrawl base_url cannot be a base"))?
+            .extend(&["v2", "scrape"]);
         Ok(Self {
-            base_url,
             api_key,
             client: build_client()?,
+            scrape_url,
             timeout: timeout_seconds.map(Duration::from_secs),
         })
     }
@@ -132,20 +139,14 @@ impl FetchProvider for FirecrawlFetchProvider {
         // Same funnel the search providers use: it is the only place a
         // `reqwest` failure becomes an `AlephError`, and the only place the
         // bearer token is scrubbed out of the message on the way.
-        let mut endpoint = url::Url::parse(&self.base_url)
-            .map_err(|e| AlephError::invalid_config(format!("invalid firecrawl base_url: {e}")))?;
-        endpoint
-            .path_segments_mut()
-            .map_err(|_| AlephError::invalid_config("firecrawl base_url cannot be a base"))?
-            .extend(&["v2", "scrape"]);
-        let mut request =
-            self.client
-                .post(endpoint)
-                .bearer_auth(&self.api_key)
-                .json(&ScrapeRequest {
-                    url,
-                    formats: ["markdown"],
-                });
+        let mut request = self
+            .client
+            .post(self.scrape_url.clone())
+            .bearer_auth(&self.api_key)
+            .json(&ScrapeRequest {
+                url,
+                formats: ["markdown"],
+            });
         if let Some(timeout) = self.timeout {
             request = request.timeout(timeout);
         }
