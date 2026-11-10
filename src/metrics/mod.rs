@@ -128,7 +128,6 @@ fn metrics_runtime() -> MetricsRuntime {
 }
 
 impl MetricsRuntime {
-    #[must_use]
     fn warning_threshold_ms(&self, target_ms: u64) -> u64 {
         let raw = target_ms as f64 * self.warning_multiplier;
         if raw >= u64::MAX as f64 {
@@ -255,10 +254,10 @@ impl Drop for StageTimer {
         let rt = metrics_runtime();
 
         // Check if we exceeded the target (if set) and warnings are enabled
-        if let Some(target_ms) = self.target_ms {
-            if target_ms > 0 {
+        if rt.enable_warnings {
+            if let Some(target_ms) = self.target_ms.filter(|&t| t > 0) {
                 let threshold_ms = rt.warning_threshold_ms(target_ms);
-                if elapsed_ms > threshold_ms && rt.enable_warnings {
+                if elapsed_ms > threshold_ms {
                     tracing::warn!(
                         stage = %self.name,
                         actual_ms = %elapsed_ms,
@@ -278,11 +277,10 @@ impl Drop for StageTimer {
             return;
         }
 
-        let meta = self.metadata.as_ref().filter(|m| !m.is_empty());
         tracing::debug!(
             stage = %self.name,
             duration_ms = %elapsed_ms,
-            metadata = ?meta,
+            metadata = ?self.metadata,
             "Stage completed"
         );
     }
@@ -309,12 +307,12 @@ mod tests {
             .with_meta("key2", "value2");
 
         assert_eq!(
-            timer.metadata.as_ref().and_then(|m| m.get("key1")),
-            Some(&"value1".to_string())
+            timer.metadata.as_ref().and_then(|m| m.get("key1")).map(String::as_str),
+            Some("value1")
         );
         assert_eq!(
-            timer.metadata.as_ref().and_then(|m| m.get("key2")),
-            Some(&"value2".to_string())
+            timer.metadata.as_ref().and_then(|m| m.get("key2")).map(String::as_str),
+            Some("value2")
         );
     }
 
@@ -368,16 +366,16 @@ mod tests {
 
         assert_eq!(timer.metadata.as_ref().map_or(0, |m| m.len()), 3);
         assert_eq!(
-            timer.metadata.as_ref().and_then(|m| m.get("provider")),
-            Some(&"OpenAI".to_string())
+            timer.metadata.as_ref().and_then(|m| m.get("provider")).map(String::as_str),
+            Some("OpenAI")
         );
         assert_eq!(
-            timer.metadata.as_ref().and_then(|m| m.get("model")),
-            Some(&"gpt-4".to_string())
+            timer.metadata.as_ref().and_then(|m| m.get("model")).map(String::as_str),
+            Some("gpt-4")
         );
         assert_eq!(
-            timer.metadata.as_ref().and_then(|m| m.get("app")),
-            Some(&"com.apple.Notes".to_string())
+            timer.metadata.as_ref().and_then(|m| m.get("app")).map(String::as_str),
+            Some("com.apple.Notes")
         );
     }
 
@@ -388,8 +386,8 @@ mod tests {
             .with_target(200);
 
         assert_eq!(
-            timer.metadata.as_ref().and_then(|m| m.get("key")),
-            Some(&"value".to_string())
+            timer.metadata.as_ref().and_then(|m| m.get("key")).map(String::as_str),
+            Some("value")
         );
         assert_eq!(timer.target_ms, Some(200));
     }
