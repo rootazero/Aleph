@@ -462,6 +462,11 @@ cargo check -p alephcore --all-targets -j1
 | 其他 target（bin / 集成测试） | ✅ 通过 |
 | 退出码 | `CARGO_EXIT=0`（耗时 14m 48s，日志 `evidence/cargo-check-final.log`） |
 
+合并进 `main` 之后在合并后的 `main` 尖上又跑了一次同一条命令：`CARGO_EXIT=0`（2.35 s——产物指纹
+全部命中缓存：合并后的源码与 worktree 中已验证的源码逐字节一致，`main` 上其它会话的改动也已在
+上一次统一检查中编译过）。**这一次没有重新编译任何东西**，所以它证明的是"合并没有引入新的源码状态"，
+而不是"合并后的树又被完整编译了一遍"。
+
 **新增测试只是被编译，从未被运行**（见 §7）。
 
 ### 5.2 rustfmt 闸门
