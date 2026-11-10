@@ -384,21 +384,27 @@ pub async fn handle_delete(
             );
         }
 
-        // Remove provider from the correct typed map
-        get_typed_provider_map_mut(&mut cfg.generation, &gen_type_str).remove(&params.name);
+        // Clone config for atomic update
+        let mut next_cfg = cfg.clone();
 
-        // Delete API key from vault
-        if let Err(e) = vault.delete_secret(&vault_key(&params.name)) {
-            warn!(provider = %params.name, error = %e, "Failed to delete generation API key from vault");
-        }
+        // Remove provider from the correct typed map in the cloned config
+        get_typed_provider_map_mut(&mut next_cfg.generation, &gen_type_str).remove(&params.name);
 
-        // Save to file
-        if let Err(e) = cfg.save_incremental(&["generation"]) {
+        // Save to file first
+        if let Err(e) = next_cfg.save_incremental(&["generation"]) {
             return JsonRpcResponse::error(
                 request.id,
                 INTERNAL_ERROR,
                 format!("Failed to save config: {e}"),
             );
+        }
+
+        // Apply the cloned config to shared state
+        *cfg = next_cfg;
+
+        // Delete API key from vault (after successful save)
+        if let Err(e) = vault.delete_secret(&vault_key(&params.name)) {
+            warn!(provider = %params.name, error = %e, "Failed to delete generation API key from vault");
         }
     }
 
@@ -524,6 +530,85 @@ pub async fn handle_set_default(
     JsonRpcResponse::success(request.id, serde_json::json!({ "success": true }))
 }
 
+#[cfg(test)]
+mod probe_verification_tests {
+    use super::*;
+    use crate::config::types::generation::GenerationProviderConfig;
+    use crate::gateway::security::SecurityStore;
+
+    #[test]
+    fn probe_snapshot_requires_saved_settings_and_credentials_to_remain_unchanged() {
+        let dir = tempfile::tempdir().unwrap();
+        let vault = SharedTokenManager::new(
+            Arc::new(SecurityStore::in_memory().unwrap()),
+            dir.path().join("test.vault"),
+        );
+        vault.generate_token().unwrap();
+        vault
+            .store_secret(&vault_key("target"), "saved-key")
+            .unwrap();
+        let mut cfg = Config::default();
+        cfg.generation.image_providers.insert(
+            "target".into(),
+            GenerationProviderConfig {
+                provider_type: "openai".into(),
+                base_url: Some("https://example.test/v1".into()),
+                ..Default::default()
+            },
+        );
+        let snapshot = |cfg: &Config, key: &str| {
+            saved_generation_probe(
+                cfg,
+                &vault,
+                "target",
+                "openai",
+                Some("https://example.test/v1"),
+                key,
+            )
+        };
+        let original = snapshot(&cfg, "saved-key");
+        assert!(
+            original.is_some(),
+            "provider type is not the image map's modality"
+        );
+        assert!(snapshot(&cfg, "inline-wrong-key").is_none());
+        assert!(saved_generation_probe(
+            &cfg,
+            &vault,
+            "target",
+            "stability",
+            Some("https://example.test/v1"),
+            "saved-key"
+        )
+        .is_none());
+        cfg.generation
+            .image_providers
+            .get_mut("target")
+            .unwrap()
+            .base_url = None;
+        assert!(snapshot(&cfg, "saved-key").is_none());
+        cfg.generation
+            .image_providers
+            .get_mut("target")
+            .unwrap()
+            .base_url = Some("https://example.test/v1".into());
+        cfg.generation
+            .image_providers
+            .get_mut("target")
+            .unwrap()
+            .models
+            .push("changed-during-probe".into());
+        assert_ne!(original, snapshot(&cfg, "saved-key"));
+        vault
+            .store_secret(&vault_key("target"), "rotated-key")
+            .unwrap();
+        assert!(snapshot(&cfg, "saved-key").is_none());
+        assert!(snapshot(&cfg, "rotated-key").is_some());
+        cfg.generation.image_providers.remove("target");
+        assert!(snapshot(&cfg, "rotated-key").is_none());
+    }
+}
+
 /// Test connection to a generation provider
 pub async fn handle_test_connection(
     request: JsonRpcRequest,
@@ -579,9 +664,14 @@ pub async fn handle_test_connection(
                     if let Some(p) =
                         get_typed_provider_map_mut(&mut cfg.generation, &type_str).get_mut(name)
                     {
-                        p.verified = outcome.success;
-                        if let Err(e) = save_config(&cfg) {
-                            tracing::error!(error = %e, "Failed to save config after generation test");
+                        // Only update verified if the probed settings match the current config
+                        let settings_match = type_str == params.provider_type
+                            && p.base_url.as_deref() == params.base_url.as_deref();
+                        if settings_match {
+                            p.verified = outcome.success;
+                            if let Err(e) = save_config(&cfg) {
+                                tracing::error!(error = %e, "Failed to save config after generation test");
+                            }
                         }
                     }
                 }

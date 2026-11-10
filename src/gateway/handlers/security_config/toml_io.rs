@@ -8,6 +8,102 @@ use super::{
 };
 use crate::config::patcher::ConfigPatcher;
 
+#[cfg(test)]
+mod persistence_tests {
+    use super::*;
+
+    fn settings() -> SecurityConfig {
+        serde_json::from_value(serde_json::json!({})).unwrap()
+    }
+
+    #[test]
+    fn security_update_waits_for_canonical_lock_and_preserves_other_sections() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(&path, "[search]\nmarker = 'old'\n").unwrap();
+        let (started_tx, started_rx) = std::sync::mpsc::channel();
+        let (done_tx, done_rx) = std::sync::mpsc::channel();
+        let worker = crate::utils::atomic_io::with_file_lock(&path.with_extension("lock"), |_| {
+            let target = path.clone();
+            let worker = std::thread::spawn(move || {
+                started_tx.send(()).unwrap();
+                done_tx.send(write_security_config_to_toml(&target, &settings(), None)).unwrap();
+            });
+            started_rx.recv().unwrap();
+            assert!(matches!(
+                done_rx.recv_timeout(std::time::Duration::from_millis(100)),
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout)
+            ));
+            crate::utils::atomic_io::write_atomic(
+                &path,
+                b"[search]\nmarker = 'confirmed'\n[ssrf]\nstrip_auth_on_cross_origin = false\n[security.ssrf]\nenabled = false\n[sandbox]\nunmanaged = true\n",
+            )?;
+            Ok(worker)
+        }).unwrap();
+        done_rx
+            .recv_timeout(std::time::Duration::from_secs(10))
+            .unwrap()
+            .unwrap();
+        worker.join().unwrap();
+        let doc: toml::Table = std::fs::read_to_string(&path).unwrap().parse().unwrap();
+        assert_eq!(doc["search"]["marker"].as_str(), Some("confirmed"));
+        assert_eq!(
+            doc["ssrf"]["strip_auth_on_cross_origin"].as_bool(),
+            Some(false)
+        );
+        assert!(doc["security"].get("ssrf").is_none());
+        assert_eq!(doc["sandbox"]["unmanaged"].as_bool(), Some(true));
+        assert!(doc["sandbox"]["rate_limit"]["read"].is_table());
+        assert!(doc.contains_key("privacy"));
+        assert!(doc.contains_key("secrets_config"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn security_update_atomically_replaces_config_with_owner_only_permissions() {
+        use std::os::unix::fs::{MetadataExt, PermissionsExt};
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(&path, "[search]\nmarker = 'keep'\n").unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        let old_file = std::fs::File::open(&path).unwrap();
+        let old_inode = old_file.metadata().unwrap().ino();
+        write_security_config_to_toml(&path, &settings(), Some("127.0.0.1")).unwrap();
+        let metadata = std::fs::metadata(&path).unwrap();
+        assert_ne!(
+            old_inode,
+            metadata.ino(),
+            "must replace, not truncate in place"
+        );
+        assert_eq!(metadata.permissions().mode() & 0o777, 0o600);
+        assert!(!std::fs::read_dir(dir.path()).unwrap().any(|entry| {
+            entry
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .starts_with(".aleph_atomic_")
+        }));
+    }
+
+    #[test]
+    fn invalid_security_update_does_not_partially_commit() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        let original = "[search]\nmarker = 'keep'\n";
+        std::fs::write(&path, original).unwrap();
+        let mut config = settings();
+        config.sandbox_rate_limit.read.window_secs = u64::MAX;
+        assert!(write_security_config_to_toml(&path, &config, Some("0.0.0.0")).is_err());
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), original);
+        std::fs::write(&path, "[broken").unwrap();
+        assert!(write_security_config_to_toml(&path, &settings(), None).is_err());
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "[broken");
+        std::fs::remove_file(&path).unwrap();
+        assert!(write_security_config_to_toml(&path, &settings(), None).is_err());
+        assert!(!path.exists());
+    }
+}
+
 /// Write gateway.host to the config TOML file on disk.
 pub(super) fn write_gateway_host_to_config(path: &Path, host: &str) -> Result<(), String> {
     let contents =
@@ -374,13 +470,9 @@ pub(super) fn write_ssrf_config_to_toml(
     let new_contents =
         toml::to_string_pretty(&doc).map_err(|e| format!("Failed to serialize config: {e}"))?;
 
-    // Atomic write
-    let temp_path = path.with_extension("ssrf_tmp");
-    std::fs::write(&temp_path, &new_contents).map_err(|e| format!("Failed to write temp: {e}"))?;
-    std::fs::rename(&temp_path, path).map_err(|e| {
-        let _ = std::fs::remove_file(&temp_path);
-        format!("Failed to rename: {e}")
-    })?;
+    // Atomic write with secure permissions
+    std::fs::write(path, new_contents.as_bytes())
+        .map_err(|e| format!("Failed to write config: {e}"))?;
 
     Ok(())
 }

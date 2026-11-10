@@ -49,12 +49,8 @@ pub(crate) fn find_provider_type(config: &GenerationConfig, name: &str) -> Optio
     if config.transcription_providers.contains_key(name) {
         return Some("transcription".to_string());
     }
-    // Legacy: derive from capabilities
-    if let Some(cfg) = config.providers.get(name) {
-        if let Some(gen_type) = cfg.capabilities.first() {
-            return Some(format!("{gen_type:?}").to_lowercase());
-        }
-        // Legacy provider with no capabilities — treat as legacy bucket
+    // Legacy: return legacy marker so helper routes to legacy map
+    if config.providers.contains_key(name) {
         return Some("legacy".to_string());
     }
     None

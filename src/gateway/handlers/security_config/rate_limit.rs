@@ -98,6 +98,13 @@ pub(super) fn write_sandbox_rate_limit_to_toml(
                 ("dangerous", &config.dangerous),
                 ("admin", &config.admin),
             ] {
+                let window_secs_i64 = i64::try_from(window.window_secs).map_err(|_| {
+                    format!(
+                        "window_secs {} exceeds TOML integer range",
+                        window.window_secs
+                    )
+                })?;
+
                 let mut w = toml::Table::new();
                 w.insert(
                     "max_requests".to_string(),
@@ -105,7 +112,7 @@ pub(super) fn write_sandbox_rate_limit_to_toml(
                 );
                 w.insert(
                     "window_secs".to_string(),
-                    toml::Value::Integer(window.window_secs as i64),
+                    toml::Value::Integer(window_secs_i64),
                 );
                 w.insert(
                     "burst_allow".to_string(),
