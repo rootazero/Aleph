@@ -63,6 +63,28 @@ pub fn clone_github_repo(owner_repo: &str, target: &Path) -> Result<(), String> 
     }
 }
 
+/// The `origin` remote URL of a local clone, if it has one.
+fn git_origin_url(repo_dir: &Path) -> Result<String, String> {
+    let output = Command::new("git")
+        .args([
+            "-C",
+            repo_dir.to_string_lossy().as_ref(),
+            "remote",
+            "get-url",
+            "origin",
+        ])
+        .no_window()
+        .output()
+        .map_err(|e| format!("Failed to run git: {e}"))?;
+    if !output.status.success() {
+        return Err(format!(
+            "Cached marketplace '{}' has no origin remote — remove the cache directory to re-clone",
+            repo_dir.display()
+        ));
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
+
 /// Pull the latest changes in an existing local git repository.
 pub fn pull_github_repo(repo_dir: &Path) -> Result<(), String> {
     let output = Command::new("git")
@@ -114,6 +136,18 @@ pub fn sync_github_marketplace(
     }
 
     if final_dir.join(".git").exists() {
+        // Legacy invalid slugs still use the cached clone; valid slugs must
+        // match its origin to avoid silently serving a different catalogue.
+        if is_valid_owner_repo(owner_repo) {
+            let expected = format!("https://github.com/{owner_repo}.git");
+            let actual = git_origin_url(&final_dir)?;
+            if actual != expected {
+                return Err(format!(
+                    "Cached marketplace '{}' has origin '{actual}', not '{expected}' — remove the cache directory to re-clone",
+                    final_dir.display()
+                ));
+            }
+        }
         pull_github_repo(&final_dir)?;
         return Ok(final_dir);
     }
@@ -149,4 +183,99 @@ pub fn sync_github_marketplace(
     })?;
 
     Ok(final_dir)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cached_marketplace_with_legacy_invalid_slug_still_pulls() {
+        let cache = tempfile::TempDir::new().unwrap();
+        let origin = cache.path().join("origin");
+        let repo = cache.path().join("catalog");
+        let git = |args: &[&str]| {
+            let output = Command::new("git").args(args).output().unwrap();
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        };
+        git(&["init", origin.to_str().unwrap()]);
+        git(&[
+            "-C",
+            origin.to_str().unwrap(),
+            "-c",
+            "user.name=Test",
+            "-c",
+            "user.email=test@example.com",
+            "-c",
+            "commit.gpgsign=false",
+            "commit",
+            "--allow-empty",
+            "-m",
+            "initial",
+        ]);
+        git(&["clone", origin.to_str().unwrap(), repo.to_str().unwrap()]);
+        std::fs::write(origin.join("updated.txt"), "new content").unwrap();
+        git(&["-C", origin.to_str().unwrap(), "add", "updated.txt"]);
+        git(&[
+            "-C",
+            origin.to_str().unwrap(),
+            "-c",
+            "user.name=Test",
+            "-c",
+            "user.email=test@example.com",
+            "-c",
+            "commit.gpgsign=false",
+            "commit",
+            "-m",
+            "update",
+        ]);
+
+        assert_eq!(
+            sync_github_marketplace("invalid", cache.path(), "catalog").unwrap(),
+            repo
+        );
+        assert_eq!(
+            std::fs::read_to_string(repo.join("updated.txt")).unwrap(),
+            "new content"
+        );
+        let invalid = sync_github_marketplace("invalid", cache.path(), "uncached").unwrap_err();
+        assert!(invalid.contains("Invalid GitHub repository"), "{invalid}");
+        assert!(!cache.path().join("uncached").exists());
+    }
+
+    #[test]
+    fn cached_marketplace_rejects_changed_source_without_pulling() {
+        let cache = tempfile::TempDir::new().unwrap();
+        let repo = cache.path().join("catalog");
+        std::fs::create_dir(&repo).unwrap();
+        let init = Command::new("git").arg("init").arg(&repo).output().unwrap();
+        assert!(init.status.success());
+        let remote = Command::new("git")
+            .arg("-C")
+            .arg(&repo)
+            .args([
+                "remote",
+                "add",
+                "origin",
+                "https://github.com/alice/old.git",
+            ])
+            .output()
+            .unwrap();
+        assert!(remote.status.success());
+        std::fs::write(repo.join("keep.txt"), "cached content").unwrap();
+
+        let changed = sync_github_marketplace("bob/new", cache.path(), "catalog").unwrap_err();
+        assert!(
+            changed.contains("origin") && changed.contains("remove"),
+            "{changed}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(repo.join("keep.txt")).unwrap(),
+            "cached content"
+        );
+    }
 }
