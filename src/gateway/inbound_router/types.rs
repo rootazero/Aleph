@@ -125,6 +125,8 @@ pub struct ChannelConfig {
     pub group_allow_from: Vec<String>,
     /// Whether to require mention in groups
     pub require_mention: bool,
+    /// Room-specific overrides; authorization remains owned by Core.
+    pub room_require_mention: std::collections::HashMap<String, bool>,
     /// Bot name for mention detection
     pub bot_name: Option<String>,
     /// Slash-command access tiering for this channel (admin / per-command
@@ -241,6 +243,7 @@ impl Default for ChannelConfig {
             allow_from: Vec::new(),
             group_allow_from: Vec::new(),
             require_mention: true,
+            room_require_mention: std::collections::HashMap::new(),
             bot_name: None,
             slash_access: SlashAccessConfig::default(),
             permission_level: ChannelPermissionLevel::default(),
@@ -385,6 +388,7 @@ impl From<&crate::gateway::interfaces::imessage::IMessageConfig> for ChannelConf
             allow_from: cfg.allow_from.clone(),
             group_allow_from: cfg.group_allow_from.clone(),
             require_mention: cfg.require_mention,
+            room_require_mention: std::collections::HashMap::new(),
             bot_name: cfg.bot_name.clone(),
             slash_access: SlashAccessConfig {
                 allow_admin_from: cfg.allow_admin_from.clone(),
@@ -403,36 +407,40 @@ impl From<&crate::gateway::interfaces::imessage::IMessageConfig> for ChannelConf
     }
 }
 
-// Bridge the Telegram channel's own multi-account config into the central
-// permission layer so the inbound router is the single source of truth for
-// Telegram access (R4). Gating is driven by the default (first) account —
-// matching the channel-local access controller's account-level resolution.
-// Without this bridge the router fell back to `ChannelConfig::default()`
-// (Pairing / Open), silently ignoring the operator's Telegram dm_policy /
-// group_policy / allowlists.
+// Boot defaults and live inbound authorization share the same policy reduction.
 impl From<&crate::gateway::interfaces::telegram::TelegramConfigV2> for ChannelConfig {
     fn from(cfg: &crate::gateway::interfaces::telegram::TelegramConfigV2) -> Self {
+        let Some(account) = cfg.accounts.first() else {
+            return Self {
+                require_mention: false,
+                ..Self::default()
+            };
+        };
+        let resolver = crate::gateway::interfaces::telegram::ConfigResolver::from_v2(cfg);
+        let mut policy = Self::from(
+            resolver
+                .resolve(&account.id, 0, None)
+                .expect("account default"),
+        );
+        policy.require_mention = account.require_mention.unwrap_or(false);
+        policy
+    }
+}
+
+impl From<&crate::gateway::interfaces::telegram::config_resolver::ResolvedConfig>
+    for ChannelConfig
+{
+    fn from(cfg: &crate::gateway::interfaces::telegram::config_resolver::ResolvedConfig) -> Self {
         use crate::gateway::interfaces::telegram::config_v2::{
             DmPolicy as TgDm, GroupPolicy as TgGroup,
         };
 
-        let account = cfg.accounts.first();
-        let dm_policy = account
-            .and_then(|a| a.dm_policy.clone())
-            .unwrap_or_default();
-        let group_policy = account
-            .and_then(|a| a.group_policy.clone())
-            .unwrap_or_default();
-        let allowed_users = account
-            .and_then(|a| a.allowed_users.clone())
-            .unwrap_or_default();
-        let allowed_groups = account
-            .and_then(|a| a.allowed_groups.clone())
-            .unwrap_or_default();
-        // Matches the interface default (mod.rs): groups respond to every message
-        // unless `require_mention` is explicitly enabled.
-        let require_mention = account.and_then(|a| a.require_mention).unwrap_or(false);
-        let bot_name = account.and_then(|a| a.bot_username.clone());
+        let dm_policy = &cfg.dm_policy;
+        let group_policy = &cfg.group_policy;
+        let allowed_users = &cfg.allowed_users;
+        let allowed_groups = &cfg.allowed_groups;
+        let require_mention = false;
+        let bot_name = cfg.bot_username.clone();
 
         Self {
             dm_policy: match dm_policy {
@@ -455,6 +463,7 @@ impl From<&crate::gateway::interfaces::telegram::TelegramConfigV2> for ChannelCo
             allow_from: allowed_users.iter().map(i64::to_string).collect(),
             group_allow_from: allowed_groups.iter().map(i64::to_string).collect(),
             require_mention,
+            room_require_mention: std::collections::HashMap::new(),
             bot_name,
             slash_access: SlashAccessConfig::default(),
             permission_level: ChannelPermissionLevel::default(),
@@ -513,6 +522,7 @@ impl From<&crate::gateway::interfaces::feishu::FeishuConfig> for ChannelConfig {
             allow_from: Vec::new(),
             group_allow_from: cfg.group_allowlist.clone(),
             require_mention: cfg.require_mention,
+            room_require_mention: std::collections::HashMap::new(),
             bot_name: cfg.bot_name.clone(),
             slash_access: SlashAccessConfig::default(),
             permission_level: ChannelPermissionLevel::default(),

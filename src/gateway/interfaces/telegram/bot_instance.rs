@@ -9,33 +9,29 @@ use tokio::sync::oneshot;
 
 fn create_bot_with_proxy(token: &str, proxy_url: Option<&str>) -> Bot {
     match proxy_url {
-        Some(url) if !url.is_empty() => match reqwest::Proxy::all(url) {
-            Ok(proxy) => {
-                match teloxide::net::default_reqwest_settings()
+        Some(url) if !url.is_empty() => {
+            let client = reqwest::Proxy::all(url).and_then(|proxy| {
+                teloxide::net::default_reqwest_settings()
                     .proxy(proxy)
                     .build()
-                {
-                    Ok(client) => Bot::with_client(token, client),
-                    Err(e) => {
-                        tracing::warn!(
-                            proxy_url = %url,
-                            error = %e,
-                            "Failed to build HTTP client with proxy; falling back to no proxy"
-                        );
-                        Bot::new(token)
-                    }
+            });
+            match client {
+                Ok(client) => Bot::with_client(token, client),
+                Err(error) => {
+                    tracing::warn!(%error, "Telegram proxy setup failed; falling back to direct connection");
+                    Bot::new(token)
                 }
             }
-            Err(e) => {
-                tracing::warn!(
-                    proxy_url = %url,
-                    error = %e,
-                    "Invalid proxy URL; falling back to no proxy"
-                );
-                Bot::new(token)
-            }
-        },
+        }
         _ => Bot::new(token),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn invalid_proxy_falls_back_without_panicking() {
+        let _bot = super::create_bot_with_proxy("123:test", Some(":// invalid proxy"));
     }
 }
 
@@ -48,6 +44,9 @@ pub struct BotInstance {
     pub access: Arc<AccessController>,
     pub offset_tracker: Option<Arc<OffsetTracker>>,
     pub shutdown_tx: Option<oneshot::Sender<()>>,
+    /// Stops the per-account health probe. The probe task owns the receiver,
+    /// so the sender has to be held here for `stop()` to reach it.
+    pub health_shutdown_tx: Option<oneshot::Sender<()>>,
     /// Connection health flag — updated by the polling watchdog's `get_me()` probe.
     pub is_healthy: Arc<AtomicBool>,
 }
@@ -67,6 +66,7 @@ impl BotInstance {
             access,
             offset_tracker: None,
             shutdown_tx: None,
+            health_shutdown_tx: None,
             is_healthy: Arc::new(AtomicBool::new(true)),
         }
     }

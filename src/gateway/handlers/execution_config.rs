@@ -115,9 +115,13 @@ pub async fn handle_update(
             );
         }
 
+        // Keep the previous section so a failed save can put it back: the
+        // running daemon must not serve a config that was never persisted.
+        let previous = cfg.execution.clone();
         cfg.execution = update;
 
         if let Err(e) = cfg.save_incremental(&["execution"]) {
+            cfg.execution = previous;
             return JsonRpcResponse::error(
                 request.id,
                 INTERNAL_ERROR,
@@ -161,6 +165,32 @@ mod tests {
 
     fn make_event_bus() -> Arc<GatewayEventBus> {
         Arc::new(GatewayEventBus::new())
+    }
+
+    #[tokio::test]
+    #[serial_test::serial(subagent_concurrency_cap)]
+    async fn save_failure_restores_execution_without_applying_live() {
+        let home = tempfile::tempdir().unwrap();
+        let _home_guard = AlephHomeEnvGuard::acquire_and_set(home.path());
+        std::fs::create_dir_all(Config::effective_path()).unwrap();
+        let config = Arc::new(RwLock::new(Config::default()));
+        let before = serde_json::to_value(&config.read().await.execution).unwrap();
+        let live_before = crate::agents::subagent_tool::max_concurrent_subagents();
+        let request = JsonRpcRequest::with_id(
+            "execution_config.update",
+            Some(json!({ "default_timeout_secs": 3600, "max_concurrent_subagents": 9 })),
+            json!(1),
+        );
+        let response = handle_update(request, config.clone(), make_event_bus()).await;
+        assert_eq!(response.error.unwrap().code, INTERNAL_ERROR);
+        assert_eq!(
+            serde_json::to_value(&config.read().await.execution).unwrap(),
+            before
+        );
+        assert_eq!(
+            crate::agents::subagent_tool::max_concurrent_subagents(),
+            live_before
+        );
     }
 
     /// A narrow body must leave every key it did not mention byte-identical.

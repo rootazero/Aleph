@@ -13,9 +13,23 @@ const GROUP_AT_INTENT: u64 = 1 << 26;
 
 pub struct GatewayContext {
     pub channel_id: ChannelId,
-    pub token: String,
+    pub api: crate::sync_primitives::Arc<super::api::QQApiClient>,
     pub event_tx: mpsc::Sender<QQEvent>,
     pub shutdown_rx: tokio::sync::watch::Receiver<bool>,
+}
+
+pub(super) async fn identify_payload(
+    api: &super::api::QQApiClient,
+) -> Result<serde_json::Value, super::error::QQError> {
+    let token = api.get_access_token().await?;
+    Ok(serde_json::json!({
+        "op": 2,
+        "d": {
+            "token": format!("QQBot {token}"),
+            "intents": C2C_INTENT | GROUP_AT_INTENT,
+            "shard": [0, 1],
+        }
+    }))
 }
 
 pub async fn run_gateway(mut ctx: GatewayContext) {
@@ -58,14 +72,26 @@ pub async fn run_gateway(mut ctx: GatewayContext) {
                     }
                 }
 
-                let identify = serde_json::json!({
-                    "op": 2,
-                    "d": {
-                        "token": format!("QQBot {}", ctx.token),
-                        "intents": C2C_INTENT | GROUP_AT_INTENT,
-                        "shard": [0, 1],
+                let identify = tokio::select! {
+                    result = identify_payload(&ctx.api) => match result {
+                        Ok(identify) => identify,
+                        Err(e) => {
+                            tracing::warn!("QQ Gateway token refresh failed: {e}");
+                            tokio::select! {
+                                _ = tokio::time::sleep(Duration::from_secs(backoff_secs)) => {}
+                                _ = ctx.shutdown_rx.changed() => {}
+                            }
+                            backoff_secs = (backoff_secs * 2).min(60);
+                            continue;
+                        }
+                    },
+                    _ = ctx.shutdown_rx.changed() => {
+                        if *ctx.shutdown_rx.borrow() {
+                            return;
+                        }
+                        continue;
                     }
-                });
+                };
                 if write
                     .send(WsMessage::Text(identify.to_string().into()))
                     .await

@@ -26,7 +26,7 @@ const fn default_true() -> bool {
 }
 
 /// Email channel configuration
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct EmailConfig {
     /// IMAP server host (e.g., "imap.gmail.com")
     pub imap_host: String,
@@ -141,9 +141,16 @@ impl EmailConfig {
         if self.allowed_senders.is_empty() {
             true
         } else {
-            self.allowed_senders
-                .iter()
-                .any(|allowed| sender.contains(allowed))
+            self.allowed_senders.iter().any(|allowed| {
+                if allowed.starts_with('@') {
+                    sender
+                        .split('@')
+                        .nth(1)
+                        .map_or(false, |domain| domain == &allowed[1..])
+                } else {
+                    sender == allowed
+                }
+            })
         }
     }
 }
@@ -167,7 +174,6 @@ mod tests {
         assert!(config.allowed_senders.is_empty());
         assert!(config.use_tls);
     }
-
     #[test]
     fn test_validate_empty_imap_host() {
         let config = EmailConfig::default();

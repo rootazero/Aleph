@@ -33,7 +33,11 @@ pub struct LineChannel {
 }
 
 impl LineChannel {
-    pub fn new(id: impl Into<String>, config: LineConfig) -> Self {
+    pub fn new(id: impl Into<String>, mut config: LineConfig) -> Self {
+        // Normalize legacy slashless paths once at the configuration boundary.
+        if !config.webhook_path.starts_with('/') {
+            config.webhook_path.insert(0, '/');
+        }
         let info = ChannelInfo {
             id: ChannelId::new(id),
             name: "LINE".to_string(),
@@ -65,10 +69,12 @@ impl LineChannel {
 
     const fn capabilities() -> ChannelCapabilities {
         ChannelCapabilities {
-            attachments: true,
-            images: true,
-            audio: true,
-            video: true,
+            // Generic outbound attachments are not supported; metadata-based
+            // LINE media extensions remain available to explicit callers.
+            attachments: false,
+            images: false,
+            audio: false,
+            video: false,
             reactions: true,
             replies: true,
             editing: false,
@@ -136,7 +142,6 @@ impl Channel for LineChannel {
                 sender: self.channel_state.sender(),
                 status_handle: self.channel_state.status_handle(),
             };
-
             self.webhook_handle = Some(tokio::spawn(webhook::run_webhook_server(webhook_ctx)));
 
             tracing::info!(
@@ -169,6 +174,12 @@ impl Channel for LineChannel {
     fn send(&self, message: OutboundMessage) -> SendOperation {
         let api = self.api.clone();
         Box::pin(async move {
+            if !message.attachments.is_empty() {
+                return Err(ChannelError::UnsupportedFeature(
+                    "LINE generic attachments are unsupported; use explicit LINE media metadata"
+                        .into(),
+                ));
+            }
             let api = api
                 .as_ref()
                 .ok_or_else(|| ChannelError::NotConnected("API not initialized".to_string()))?;
@@ -438,10 +449,10 @@ mod tests {
     #[test]
     fn test_channel_capabilities() {
         let caps = LineChannel::capabilities();
-        assert!(caps.attachments);
-        assert!(caps.images);
-        assert!(caps.audio);
-        assert!(caps.video);
+        assert!(!caps.attachments);
+        assert!(!caps.images);
+        assert!(!caps.audio);
+        assert!(!caps.video);
         assert!(caps.reactions);
         assert!(caps.replies);
         assert!(!caps.editing);
@@ -462,6 +473,32 @@ mod tests {
         let channel = LineChannel::new("line-test", config);
         assert_eq!(channel.info().id.as_str(), "line-test");
         assert_eq!(channel.info().channel_type, "line");
+    }
+
+    #[tokio::test]
+    async fn generic_attachment_is_rejected_before_connection_or_send() {
+        let channel = LineChannel::new("line", LineConfig::default());
+        let mut message = OutboundMessage::text("U1", "do not silently drop attachment");
+        message.attachments.push(
+            serde_json::from_value(serde_json::json!({"id":"a", "mime_type":"image/png"})).unwrap(),
+        );
+        assert!(matches!(
+            channel.send(message).await,
+            Err(ChannelError::UnsupportedFeature(_))
+        ));
+    }
+
+    #[test]
+    fn legacy_webhook_path_normalizes_once() {
+        let channel = LineChannel::new(
+            "line",
+            LineConfig {
+                webhook_path: "line/webhook".into(),
+                ..Default::default()
+            },
+        );
+        assert_eq!(channel.config.webhook_path, "/line/webhook");
+        assert_eq!(LineConfig::default().webhook_path, "/line/webhook");
     }
 
     #[test]

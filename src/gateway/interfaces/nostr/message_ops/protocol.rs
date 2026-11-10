@@ -59,9 +59,13 @@ pub fn build_text_note(content: &str, pubkey: &str) -> NostrEvent {
 /// Build a kind-4 DM event (unsigned, plaintext).
 ///
 /// Creates a direct message event targeting `recipient_pubkey`.
-/// Per NIP-04, the content should be encrypted with AES-256-CBC,
-/// but this implementation uses plaintext and notes encryption
-/// as a future enhancement.
+/// Per NIP-04, the content should be encrypted with AES-256-CBC; this
+/// implementation does NOT encrypt, so the event body is readable by every
+/// relay that indexes it.
+///
+/// The event must therefore never be published as-is: the channel refuses
+/// direct messages at the send site (see `NostrChannel::send`). This
+/// builder only exists for the local, non-publishing paths.
 ///
 /// Tags include `["p", <recipient_pubkey>]` to identify the recipient.
 #[must_use]

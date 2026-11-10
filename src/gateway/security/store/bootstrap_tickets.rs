@@ -19,6 +19,8 @@ pub enum BootstrapTicketError {
     Invalid,
     /// Ticket expired before consumption.
     Expired,
+    /// The requested device id belongs to a non-Panel device.
+    DeviceIdConflict(String),
     /// Database error.
     Store(String),
 }
@@ -35,6 +37,9 @@ impl std::fmt::Display for BootstrapTicketError {
             // strings — the sameness is the security property.
             Self::Invalid => write!(f, "invalid or already consumed bootstrap ticket"),
             Self::Expired => write!(f, "bootstrap ticket expired"),
+            Self::DeviceIdConflict(id) => {
+                write!(f, "Device id {id} already belongs to a non-Panel device")
+            }
             Self::Store(e) => write!(f, "bootstrap ticket store error: {e}"),
         }
     }
@@ -179,15 +184,39 @@ impl SecurityStore {
     /// idempotent from the caller's perspective: a previously consumed ticket
     /// is reported as `Invalid` — and so is a **revoked** one, the same answer
     /// an unknown code gets, deliberately (see [`BootstrapTicketError`]).
+    /// A non-Panel device id is rejected before inspecting the ticket, in the
+    /// same write transaction as consumption, without burning the ticket.
     pub fn consume_bootstrap_ticket(
         &self,
         code: &str,
         device_id: Option<&str>,
     ) -> Result<ConsumedBootstrapTicket, BootstrapTicketError> {
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let mut conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let tx = conn
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+            .map_err(|e| BootstrapTicketError::Store(e.to_string()))?;
 
-        // Fast path: reject unknown, consumed, revoked, or expired tickets
-        // without locking a row. The ticket's user_id is read here too — it
+        // Keep namespace validation and ticket consumption under one writer lock.
+        if let Some(device_id) = device_id {
+            let device_type: Option<Option<String>> = tx
+                .query_row(
+                    "SELECT device_type FROM devices WHERE device_id = ?1",
+                    params![device_id],
+                    |row| row.get(0),
+                )
+                .optional()
+                .map_err(|e| BootstrapTicketError::Store(e.to_string()))?;
+            if let Some(device_type) = device_type {
+                if device_type.as_deref() != Some(crate::gateway::security::PANEL_DEVICE_TYPE) {
+                    return Err(BootstrapTicketError::DeviceIdConflict(
+                        device_id.to_string(),
+                    ));
+                }
+            }
+        }
+
+        // Reject unknown, consumed, revoked, or expired tickets.
+        // The ticket's user_id is read here too — it
         // cannot change between this check and the UPDATE below (only set
         // once, at creation).
         //
@@ -195,7 +224,7 @@ impl SecurityStore {
         // consumed one gets: an unauthenticated exchanger must not learn from
         // the error which of the two it was holding.
         let now = current_timestamp_ms();
-        let row: Option<(i64, Option<i64>, Option<String>, Option<i64>)> = conn
+        let row: Option<(i64, Option<i64>, Option<String>, Option<i64>)> = tx
             .query_row(
                 "SELECT expires_at, consumed_at, user_id, revoked_at FROM bootstrap_tickets WHERE code = ?1",
                 params![code],
@@ -222,13 +251,10 @@ impl SecurityStore {
             Some((_, None, user_id, None)) => user_id,
         };
 
-        // Optimistic update; if another caller raced us, rows affected will be
-        // 0. `revoked_at IS NULL` is repeated here and not only in the fast
-        // path above, so this one statement stays the single chokepoint: a
-        // deactivation that lands between the SELECT and this UPDATE still
-        // wins.
+        // Repeat validity predicates at the write boundary, including expiry
+        // since time can advance after the SELECT.
         let consumed_at = current_timestamp_ms();
-        let updated = conn
+        let updated = tx
             .execute(
                 "UPDATE bootstrap_tickets
                  SET consumed_at = ?1, consumed_by_device_id = ?2
@@ -240,6 +266,9 @@ impl SecurityStore {
         if updated == 0 {
             return Err(BootstrapTicketError::Invalid);
         }
+
+        tx.commit()
+            .map_err(|e| BootstrapTicketError::Store(e.to_string()))?;
 
         Ok(ConsumedBootstrapTicket {
             code: code.to_string(),

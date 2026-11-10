@@ -1416,14 +1416,24 @@ impl ExtensionManager {
             .iter()
             .map(|(id, owner)| (id.clone(), owner.provider.state()))
             .collect::<std::collections::HashMap<_, _>>();
-        self.active_plugin_tools_snapshot()
-            .into_iter()
-            .filter(|tool| {
-                owner_states.get(&tool.plugin_id).is_none_or(|state| {
-                    matches!(state, crate::capability::provider::ProviderState::Ready)
-                })
+        let tools = self
+            .active_plugin_tools
+            .read()
+            .unwrap_or_else(|e| e.into_inner());
+        let mut snapshot: Vec<ToolRegistration> = tools.values().cloned().collect();
+        // The Ready filter runs BEFORE the short-name dedup: a Cold owner's
+        // tool must not win the name contest and hide a Ready namesake
+        // (E1-03). `active_plugin_tools_snapshot()` dedups first, so the
+        // snapshot is taken here and deduped after the filter.
+        snapshot.retain(|tool| {
+            owner_states.get(&tool.plugin_id).is_none_or(|state| {
+                matches!(state, crate::capability::provider::ProviderState::Ready)
             })
-            .collect()
+        });
+        snapshot.sort_by(|a, b| a.name.cmp(&b.name).then(a.plugin_id.cmp(&b.plugin_id)));
+        let mut seen = HashSet::new();
+        snapshot.retain(|tool| seen.insert(tool.name.clone()));
+        snapshot
     }
 
     /// [`Self::active_plugin_tools_snapshot`] narrowed to the plugins a

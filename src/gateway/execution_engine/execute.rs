@@ -492,7 +492,17 @@ where
         // a slot — and the busy lane folds a follow-up only into a run on the
         // same model (`slash_command_body::pin_model`).
         super::slash_command_body::pin_model(&mut request).await;
-        let _run_slot = match self.admit_run(&request, &run_id, &agent, cancel_tx).await? {
+        let _run_slot = match self
+            .admit_run(
+                &request,
+                &run_id,
+                &agent,
+                cancel_tx,
+                &mut cancel_rx,
+                cancel_token.clone(),
+            )
+            .await?
+        {
             GateOutcome::Admitted(slot) => slot,
             GateOutcome::HandledInline => return Ok(()),
         };
@@ -514,11 +524,11 @@ where
         // ambient scope, which no producer still has by here (they all spawn).
         // See `run_loop::ensure_session_under_request_scope`.
         super::run_loop::ensure_session_under_request_scope(&agent, &request).await;
-
         // Carry whatever has settled on the main conversation into the side
         // session, so a side question is asked *about* the thing the user is
         // looking at rather than into an empty room. After the scope step
         // above (the side row is opened under the run's attribution, which
+        // EE1-04: seed failure now routes through terminal cleanup
         // `ensure_seeded` re-establishes from the same metadata) and before
         // dispatch, because the harness reads history further down.
         if let Some(main) = btw_main_session.as_ref() {
@@ -544,6 +554,30 @@ where
                 // frame emitted before admission must carry its own scope.)
                 self.emit_pre_admission_run_error(emitter.as_ref(), &run_id, main, &request, &e)
                     .await;
+
+                // Settle the registered run and persisted task before returning.
+                // The slot drops (releasing claim + permit) on function exit.
+                {
+                    let mut runs = self.active_runs.write().await;
+                    if let Some(run) = runs.get_mut(&run_id) {
+                        run.state = RunState::Failed {
+                            error: e.to_string(),
+                        };
+                        run.completed_at = Some(chrono::Utc::now());
+                        run.cancel_tx = None;
+                    }
+                }
+                if trace_task_persisted {
+                    self.persist_run_task_status(&run_id, TaskStatus::Failed)
+                        .await;
+                }
+                // Schedule delayed removal like normal completion path
+                let runs_clone = self.active_runs.clone();
+                let run_id_clone = run_id.clone();
+                tokio::spawn(async move {
+                    tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
+                    runs_clone.write().await.remove(&run_id_clone);
+                });
                 return Err(e);
             }
         }

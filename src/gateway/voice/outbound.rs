@@ -135,7 +135,6 @@ fn tts_candidates(
     }
     out
 }
-
 /// Generate TTS audio for the given text, returning an `Attachment` on success.
 ///
 /// Provider resolution order:
@@ -147,18 +146,27 @@ fn tts_candidates(
 /// registered speech provider is attempted (`TTS_MAX_PROVIDERS`).
 ///
 /// Returns `None` if no provider is configured or every candidate fails.
+/// Also returns `None` if the input has no speakable content after sanitization,
+/// which is not counted as a synthesis failure.
 pub async fn generate_tts(
     text: &str,
     voice_state: &VoiceState,
     generation_registry: &GenerationProviderRegistry,
     generation_config: &GenerationConfig,
 ) -> Option<Attachment> {
-    let candidates = tts_candidates(voice_state, generation_registry, generation_config);
-    if candidates.is_empty() {
-        warn!("TTS: no speech provider available — no override, no default, no auto-detect");
-        return None;
+    match generate_tts_outcome(text, voice_state, generation_registry, generation_config).await {
+        TtsOutcome::Generated(attachment) => Some(attachment),
+        TtsOutcome::Skipped | TtsOutcome::Failed => None,
     }
+}
 
+/// Synthesis result, distinguishing unattempted speech from provider failures.
+pub(crate) async fn generate_tts_outcome(
+    text: &str,
+    voice_state: &VoiceState,
+    generation_registry: &GenerationProviderRegistry,
+    generation_config: &GenerationConfig,
+) -> TtsOutcome {
     // Defensively strip speech-hostile markdown/code/URLs and clamp to the
     // provider's character ceiling. The VoiceModeLayer *asks* the model to
     // avoid these, but R7/P7 forbid trusting compliance — a stray `**` or a
@@ -167,7 +175,12 @@ pub async fn generate_tts(
     let spoken = super::sanitize::sanitize_for_tts(text);
     if spoken.trim().is_empty() {
         debug!("TTS: reply has no speakable content after sanitization, skipping");
-        return None;
+        return TtsOutcome::Skipped;
+    }
+    let candidates = tts_candidates(voice_state, generation_registry, generation_config);
+    if candidates.is_empty() {
+        warn!("TTS: no speech provider available — no override, no default, no auto-detect");
+        return TtsOutcome::Failed;
     }
 
     // Execute TTS under a length-aware per-attempt deadline so a wedged provider
@@ -215,7 +228,9 @@ pub async fn generate_tts(
             break;
         }
     }
-    let output = generated?;
+    let Some(output) = generated else {
+        return TtsOutcome::Failed;
+    };
 
     // Convert GenerationData → Attachment
     let id = uuid::Uuid::new_v4().to_string();
@@ -264,7 +279,7 @@ pub async fn generate_tts(
         },
     };
 
-    Some(attachment)
+    TtsOutcome::Generated(attachment)
 }
 
 // ---------------------------------------------------------------------------
@@ -278,20 +293,8 @@ pub async fn generate_tts(
 /// at compile time instead of leaking into the crate API.
 pub(crate) enum TtsOutcome {
     Generated(Attachment),
+    Skipped,
     Failed,
-}
-
-/// Like [`generate_tts`] but with a typed outcome.
-pub(crate) async fn generate_tts_outcome(
-    text: &str,
-    voice_state: &VoiceState,
-    generation_registry: &GenerationProviderRegistry,
-    generation_config: &GenerationConfig,
-) -> TtsOutcome {
-    match generate_tts(text, voice_state, generation_registry, generation_config).await {
-        Some(attachment) => TtsOutcome::Generated(attachment),
-        None => TtsOutcome::Failed,
-    }
 }
 
 #[cfg(test)]
@@ -494,6 +497,22 @@ mod tests {
             voice: voice.map(str::to_string),
             consecutive_failures: 0,
         }
+    }
+
+    #[tokio::test]
+    async fn unspeakable_replies_skip_instead_of_counting_as_failures() {
+        let reg = speech_registry(vec![("tts", Arc::new(VoiceStrictProvider))]);
+        let state = state_with_provider(None, Some("invalid"));
+        for text in ["```rust\nlet x = 1;\n```", "https://example.com", ""] {
+            assert!(matches!(
+                generate_tts_outcome(text, &state, &reg, &GenerationConfig::default()).await,
+                TtsOutcome::Skipped
+            ));
+        }
+        assert!(matches!(
+            generate_tts_outcome("hello", &state, &reg, &GenerationConfig::default()).await,
+            TtsOutcome::Failed
+        ));
     }
 
     #[test]

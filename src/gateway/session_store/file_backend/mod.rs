@@ -1427,6 +1427,35 @@ impl SessionStore for FileSessionStore {
         Ok(max_epoch)
     }
 
+    async fn reserve_next_epoch(&self, base_key_pattern: &str) -> Result<u32, SessionStoreError> {
+        use crate::utils::atomic_io::{with_file_lock, write_atomic};
+        use sha2::{Digest, Sha256};
+
+        let persisted = self.get_current_epoch(base_key_pattern).await?;
+        let dir = self.config.base_dir.join(".epoch-reservations");
+        let path = dir.join(hex::encode(Sha256::digest(base_key_pattern.as_bytes())));
+        tokio::task::spawn_blocking(move || -> std::io::Result<u32> {
+            std::fs::create_dir_all(&dir)?;
+            with_file_lock(&path.with_extension("lock"), |_| {
+                let reserved: u32 = match std::fs::read_to_string(&path) {
+                    Ok(value) => value
+                        .parse()
+                        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?,
+                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => 0,
+                    Err(e) => return Err(e),
+                };
+                let next = persisted.max(reserved).checked_add(1).ok_or_else(|| {
+                    std::io::Error::new(std::io::ErrorKind::InvalidData, "Session epoch exhausted")
+                })?;
+                write_atomic(&path, next.to_string().as_bytes())?;
+                Ok(next)
+            })
+        })
+        .await
+        .map_err(|e| SessionStoreError::DatabaseError(e.to_string()))?
+        .map_err(SessionStoreError::from)
+    }
+
     async fn get_session_topic(
         &self,
         _key: &SessionKey,

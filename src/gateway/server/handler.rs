@@ -1282,11 +1282,12 @@ mod tests {
                 .is_none()
         );
 
-        // Non-viewer methods are untouched: start snapshot passes straight through.
+        // Ordinary methods must also fail closed after the connection is gone.
         let stale = snap(Some("member"), Some("u-alice"), None);
-        assert_eq!(
-            revalidate_for_dispatch(&conns, "c1", false, "config.get", &stale).await,
-            Some(stale)
+        assert!(
+            revalidate_for_dispatch(&conns, "c1", false, "config.get", &stale)
+                .await
+                .is_none()
         );
     }
 
@@ -1435,6 +1436,113 @@ mod tests {
             0,
             "stale snapshot must not carry the request through"
         );
+    }
+
+    #[tokio::test]
+    async fn ordinary_admin_rpc_demoted_while_waiting_for_a_lane_is_denied() {
+        use crate::gateway::handlers::HandlerRegistry;
+        use crate::gateway::lane::{ChannelClass, LaneConfig, LaneManager};
+        use crate::gateway::rate_limiter::RateLimitConfig;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let method = "gateway.token.current";
+        assert!(!crate::gateway::server::connection::off_loop::dispatches_off_loop(method));
+        let hits = Arc::new(AtomicUsize::new(0));
+        let mut registry = HandlerRegistry::new();
+        let seen = hits.clone();
+        registry.register(method, move |req| {
+            seen.fetch_add(1, Ordering::SeqCst);
+            async move { JsonRpcResponse::success(req.id, serde_json::json!("secret")) }
+        });
+        let mc = MiddlewareChain::new(
+            Arc::new(registry),
+            Arc::new(RateLimiter::new(RateLimitConfig::default())),
+        );
+        let conns = viewer_conns("operator", Some("u-op"), None);
+        let start = CallerSnapshot::read(&conns, "c1", false).await;
+        let lanes = Arc::new(LaneManager::new(LaneConfig {
+            query_concurrency: 1,
+            system_concurrency: 1,
+            desktop_execute_concurrency: 1,
+            shared_execute_concurrency: 1,
+            desktop_mutate_concurrency: 1,
+            shared_mutate_concurrency: 1,
+            acquire_timeout_secs: 30,
+        }));
+        let blocker = lanes.acquire(method, ChannelClass::Bot).await.unwrap();
+        let task = {
+            let (lanes, conns) = (lanes.clone(), conns.clone());
+            tokio::spawn(async move {
+                let _permit = lanes.acquire(method, ChannelClass::Bot).await.unwrap();
+                dispatch_for_connection(
+                    r#"{"jsonrpc":"2.0","id":10,"method":"gateway.token.current"}"#,
+                    &mc,
+                    &conns,
+                    "c1",
+                    false,
+                    method,
+                    Some(serde_json::json!(10)),
+                    &start,
+                )
+                .await
+            })
+        };
+        tokio::task::yield_now().await;
+        assert!(!task.is_finished());
+        demote(&conns, "member").await;
+        drop(blocker);
+        let response: JsonRpcResponse = serde_json::from_str(&task.await.unwrap()).unwrap();
+        let error = response.error.unwrap();
+        assert_eq!(error.code, crate::gateway::protocol::AUTH_REQUIRED);
+        assert_eq!(
+            error.message,
+            crate::gateway::protocol::ADMIN_REQUIRED_MESSAGE
+        );
+        assert_eq!(hits.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn cached_and_waiting_admin_results_require_live_authority() {
+        use crate::gateway::idempotency::{AcquireResult, IdempotencyGuard};
+        let method = "gateway.token.current";
+        let conns = viewer_conns("operator", Some("u-op"), None);
+        let start = CallerSnapshot::read(&conns, "c1", false).await;
+        let guard = IdempotencyGuard::new(std::time::Duration::from_secs(60));
+        let key = format!("{}:{method}:request", idempotency_principal(method, &start));
+        let AcquireResult::Proceed(slot) = guard.try_acquire(&key) else {
+            panic!("new slot")
+        };
+        let AcquireResult::Waiting(mut waiter) = guard.try_acquire(&key) else {
+            panic!("in flight")
+        };
+        demote(&conns, "member").await;
+        slot.complete(serde_json::json!("plaintext-token"));
+        waiter.changed().await.unwrap();
+        assert_eq!(
+            waiter.borrow().as_ref(),
+            Some(&serde_json::json!("plaintext-token"))
+        );
+        assert!(revalidate_for_dispatch(&conns, "c1", false, method, &start)
+            .await
+            .is_none());
+        let AcquireResult::Cached(value) = guard.try_acquire(&key) else {
+            panic!("cached")
+        };
+        assert_eq!(value, serde_json::json!("plaintext-token"));
+        for role in ["member", "guest"] {
+            demote(&conns, role).await;
+            assert!(revalidate_for_dispatch(&conns, "c1", false, method, &start)
+                .await
+                .is_none());
+        }
+        demote(&conns, "operator").await;
+        assert!(revalidate_for_dispatch(&conns, "c1", false, method, &start)
+            .await
+            .is_some());
+        conns.write().await.get_mut("c1").unwrap().caller_user = Some("other-user".to_string());
+        assert!(revalidate_for_dispatch(&conns, "c1", false, method, &start)
+            .await
+            .is_none());
     }
 
     // ── Off-loop admin RPCs re-read live authority at dispatch (Task #56 D3) ──
@@ -1937,15 +2045,13 @@ mod tests {
     /// first test module) and the needles are assembled at runtime, so neither
     /// the tests above nor this one can count as a match.
     ///
-    /// NOTE: After splitting `handler.rs` into the `connection/` submodule,
-    /// the production-half source lives in `connection/forward.rs` — the
-    /// parse needle and `project_for(` call site both moved there with the
-    /// forward loop. Reading `forward.rs` is equivalent to reading the old
-    /// production half because forward.rs deliberately contains no
-    /// `#[cfg(test)]` boundary.
+    /// NOTE: The actual delivery loop lives in `connection/mod.rs` — the
+    /// parse needle and `project_for(` call site are both in that file's
+    /// production code. Reading `connection/mod.rs` up to its test boundary
+    /// captures the real event loop.
     #[test]
     fn the_delivery_loop_parses_each_event_once_and_projects_it() {
-        let src = include_str!("connection/forward.rs");
+        let src = include_str!("connection/mod.rs");
         let production = src
             .split(&format!("#[cfg{}]", "(test)"))
             .next()

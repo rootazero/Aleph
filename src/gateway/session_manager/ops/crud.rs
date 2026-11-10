@@ -56,12 +56,9 @@ impl SessionManager {
         let agent_id = key.agent_id().to_string();
         let session_type = super::session_type_str(key);
         let now = chrono::Utc::now().timestamp();
+        let attribution = crate::scope::current_scope();
 
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| SessionManagerError::DatabaseError(format!("Lock error: {e}")))?;
-
+        self.query_blocking(move |conn| {
         // Try to get existing session
         let existing: Option<SessionMetadata> = conn
             .query_row(
@@ -108,7 +105,7 @@ impl SessionManager {
         }
 
         // Create new session
-        let mut meta = SessionMetadata {
+        let meta = SessionMetadata {
             key: key_str,
             agent_id,
             session_type,
@@ -128,12 +125,11 @@ impl SessionManager {
             model_provider: None,
             parent_session_key: None,
             compaction_count: 0,
+            // Task-local scope must be captured before entering the blocking pool.
+            scope_id: attribution.as_ref().map(|attr| attr.scope.render()),
+            owner_user_id: attribution.map(|attr| attr.owner_user_id),
             ..Default::default()
         };
-        // P1 data isolation: stamp owner/scope from the ambient dispatch
-        // scope before persisting. No-op (leaves both `None`) outside any
-        // `scope::with_scope` context — cron/internal/A2A creators.
-        meta.stamp_attribution();
 
         conn.execute(
             "INSERT INTO sessions (key, agent_id, session_type, created_at, last_active_at, state, owner_user_id, scope_id)
@@ -153,6 +149,8 @@ impl SessionManager {
         debug!("Created session: {}", meta.key);
 
         Ok(meta)
+        })
+        .await
     }
 
     /// Add a message to a session.
@@ -255,156 +253,160 @@ impl SessionManager {
         // list on one backend and stayed in its own past on the other.
         let now = at.timestamp();
 
-        // Use scope block to ensure lock is released before any await
-        let (message_id, needs_compaction) = {
-            // `mut` because the message insert + session counters run inside
-            // `conn.transaction()` (see below).
-            let mut conn = self
-                .conn
-                .lock()
-                .map_err(|e| SessionManagerError::DatabaseError(format!("Lock error: {e}")))?;
+        let role = role.to_owned();
+        let content = content.to_owned();
+        let metadata = metadata.map(str::to_owned);
+        let tool_call_id = tool_call_id.map(str::to_owned);
+        let tool_name = tool_name.map(str::to_owned);
+        let max_messages = self.config.max_messages;
+        let insert_key = key_str.clone();
+        let (message_id, needs_compaction) = self
+            .query_blocking(move |conn| {
+                let key_str = insert_key;
 
-            // **Audit fix**: the message INSERT, FTS sync and the
-            // `message_count = message_count + 1` UPDATE previously ran as
-            // separate statements with no transaction — a crash between them
-            // left `message_count` one behind reality (the value
-            // `sessions.list` returns to the Panel). The trio now commits or
-            // rolls back together. The FTS insert stays best-effort INSIDE
-            // the transaction: a failed FTS write is swallowed (`.ok()`) so
-            // search degrades without rolling back the message row — the
-            // same tolerance the pre-transaction code had.
-            let tx = conn
-                .transaction()
-                .map_err(|e| SessionManagerError::DatabaseError(format!("Begin tx failed: {e}")))?;
-
-            // Insert message
-            tx.execute(
-                "INSERT INTO messages (session_key, role, content, timestamp, metadata, \
-                 input_tokens, output_tokens, tool_call_id, tool_name, source_seq) \
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                params![
-                    &key_str,
-                    role,
-                    content,
-                    at_ms,
-                    metadata,
-                    input_tokens,
-                    output_tokens,
-                    tool_call_id,
-                    tool_name,
-                    source_seq
-                ],
-            )
-            .map_err(|e| {
-                SessionManagerError::DatabaseError(format!("Insert message failed: {e}"))
-            })?;
-
-            let message_id = tx.last_insert_rowid();
-
-            // Sync FTS5 index (non-fatal — search degrades gracefully)
-            tx.execute(
-                "INSERT INTO messages_fts(rowid, content) VALUES (?, ?)",
-                params![message_id, content],
-            )
-            .ok();
-
-            // Only transition to Running if current state allows it
-            let valid_transition: bool = tx
-                .query_row(
-                    "SELECT state FROM sessions WHERE key = ?",
-                    params![&key_str],
-                    |row| {
-                        let state_str: Option<String> = row.get(0)?;
-                        Ok(state_str.is_none_or(|s| s != "stopped" && s != "error"))
-                    },
-                )
-                .unwrap_or(true);
-
-            let derived_title: Option<String> = if role == "user" {
-                tx.query_row(
-                    "SELECT derived_title FROM sessions WHERE key = ?",
-                    params![&key_str],
-                    |row| row.get::<_, Option<String>>(0),
-                )
-                .ok()
-                .flatten()
-                .or_else(|| {
-                    let title = content.trim();
-                    let title = if title.chars().count() > 60 {
-                        title.chars().take(60).collect::<String>() + "..."
-                    } else {
-                        title.to_string()
-                    };
-                    if title.is_empty() {
-                        None
-                    } else {
-                        Some(title)
-                    }
-                })
-            } else {
-                None
-            };
-
-            // Deliberately NOT accumulating this row's tokens onto
-            // `sessions.input_tokens` / `output_tokens` / `total_tokens`. This
-            // used to, and it was invisible only because every row's tokens were
-            // 0 (the projector's feeder event was never emitted). Now that the
-            // rows carry real per-call tokens, adding them here as well as in
-            // the run's bill — landed once per run, when the run's
-            // `AssistantRunMeta` lands, by `stamp_and_bill_in_range`'s fold of
-            // that run's `AssistantMessage.usage` (`session::usage_fold`) —
-            // would bill the session twice for the same tokens. One writer,
-            // one fold.
-            // The same preview the FILE backend keeps in
-            // `FileSessionStore::append_message` — same 120-char cap, same
-            // char-boundary-safe truncation. This column had no writer at all
-            // on the SQLite side while two readers surfaced it, so the two
-            // backends answered differently about the same conversation.
-            let preview = {
-                let trimmed = content.trim();
-                if trimmed.chars().count() > 120 {
-                    trimmed.chars().take(120).collect::<String>() + "..."
-                } else {
-                    trimmed.to_string()
-                }
-            };
-
-            let mut session_update_sql = String::from(
-                "UPDATE sessions SET last_active_at = ?, message_count = message_count + 1, \
-                 last_message_preview = ?",
-            );
-            if valid_transition {
-                session_update_sql.push_str(", state = 'running'");
-            }
-            if derived_title.is_some() {
-                session_update_sql.push_str(", derived_title = ?");
-            }
-            session_update_sql.push_str(" WHERE key = ?");
-
-            let mut params: Vec<&dyn rusqlite::ToSql> = vec![&now, &preview];
-            if let Some(ref dt) = derived_title {
-                params.push(dt);
-            }
-            params.push(&key_str);
-            tx.execute(&session_update_sql, params.as_slice())
-                .map_err(|e| {
-                    SessionManagerError::DatabaseError(format!("Update session failed: {e}"))
+                // **Audit fix**: the message INSERT, FTS sync and the
+                // `message_count = message_count + 1` UPDATE previously ran as
+                // separate statements with no transaction — a crash between them
+                // left `message_count` one behind reality (the value
+                // `sessions.list` returns to the Panel). The trio now commits or
+                // rolls back together. The FTS insert stays best-effort INSIDE
+                // the transaction: a failed FTS write is swallowed (`.ok()`) so
+                // search degrades without rolling back the message row — the
+                // same tolerance the pre-transaction code had.
+                let tx = conn.transaction().map_err(|e| {
+                    SessionManagerError::DatabaseError(format!("Begin tx failed: {e}"))
                 })?;
 
-            tx.commit()
-                .map_err(|e| SessionManagerError::DatabaseError(format!("Commit failed: {e}")))?;
-
-            // Check if compaction needed
-            let count: i64 = conn
-                .query_row(
-                    "SELECT COUNT(*) FROM messages WHERE session_key = ?",
-                    params![&key_str],
-                    |row| row.get(0),
+                // Insert message
+                tx.execute(
+                    "INSERT INTO messages (session_key, role, content, timestamp, metadata, \
+                 input_tokens, output_tokens, tool_call_id, tool_name, source_seq) \
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    params![
+                        &key_str,
+                        role,
+                        content,
+                        at_ms,
+                        metadata,
+                        input_tokens,
+                        output_tokens,
+                        tool_call_id,
+                        tool_name,
+                        source_seq
+                    ],
                 )
-                .unwrap_or(0);
+                .map_err(|e| {
+                    SessionManagerError::DatabaseError(format!("Insert message failed: {e}"))
+                })?;
 
-            (message_id, count as usize > self.config.max_messages)
-        }; // Lock released here
+                let message_id = tx.last_insert_rowid();
+
+                // Sync FTS5 index (non-fatal — search degrades gracefully)
+                tx.execute(
+                    "INSERT INTO messages_fts(rowid, content) VALUES (?, ?)",
+                    params![message_id, content],
+                )
+                .ok();
+
+                // Only transition to Running if current state allows it
+                let valid_transition: bool = tx
+                    .query_row(
+                        "SELECT state FROM sessions WHERE key = ?",
+                        params![&key_str],
+                        |row| {
+                            let state_str: Option<String> = row.get(0)?;
+                            Ok(state_str.is_none_or(|s| s != "stopped" && s != "error"))
+                        },
+                    )
+                    .unwrap_or(true);
+
+                let derived_title: Option<String> = if role == "user" {
+                    tx.query_row(
+                        "SELECT derived_title FROM sessions WHERE key = ?",
+                        params![&key_str],
+                        |row| row.get::<_, Option<String>>(0),
+                    )
+                    .ok()
+                    .flatten()
+                    .or_else(|| {
+                        let title = content.trim();
+                        let title = if title.chars().count() > 60 {
+                            title.chars().take(60).collect::<String>() + "..."
+                        } else {
+                            title.to_string()
+                        };
+                        if title.is_empty() {
+                            None
+                        } else {
+                            Some(title)
+                        }
+                    })
+                } else {
+                    None
+                };
+
+                // Deliberately NOT accumulating this row's tokens onto
+                // `sessions.input_tokens` / `output_tokens` / `total_tokens`. This
+                // used to, and it was invisible only because every row's tokens were
+                // 0 (the projector's feeder event was never emitted). Now that the
+                // rows carry real per-call tokens, adding them here as well as in
+                // the run's bill — landed once per run, when the run's
+                // `AssistantRunMeta` lands, by `stamp_and_bill_in_range`'s fold of
+                // that run's `AssistantMessage.usage` (`session::usage_fold`) —
+                // would bill the session twice for the same tokens. One writer,
+                // one fold.
+                // The same preview the FILE backend keeps in
+                // `FileSessionStore::append_message` — same 120-char cap, same
+                // char-boundary-safe truncation. This column had no writer at all
+                // on the SQLite side while two readers surfaced it, so the two
+                // backends answered differently about the same conversation.
+                let preview = {
+                    let trimmed = content.trim();
+                    if trimmed.chars().count() > 120 {
+                        trimmed.chars().take(120).collect::<String>() + "..."
+                    } else {
+                        trimmed.to_string()
+                    }
+                };
+
+                let mut session_update_sql = String::from(
+                    "UPDATE sessions SET last_active_at = ?, message_count = message_count + 1, \
+                 last_message_preview = ?",
+                );
+                if valid_transition {
+                    session_update_sql.push_str(", state = 'running'");
+                }
+                if derived_title.is_some() {
+                    session_update_sql.push_str(", derived_title = ?");
+                }
+                session_update_sql.push_str(" WHERE key = ?");
+
+                let mut params: Vec<&dyn rusqlite::ToSql> = vec![&now, &preview];
+                if let Some(ref dt) = derived_title {
+                    params.push(dt);
+                }
+                params.push(&key_str);
+                tx.execute(&session_update_sql, params.as_slice())
+                    .map_err(|e| {
+                        SessionManagerError::DatabaseError(format!("Update session failed: {e}"))
+                    })?;
+
+                tx.commit().map_err(|e| {
+                    SessionManagerError::DatabaseError(format!("Commit failed: {e}"))
+                })?;
+
+                // Check if compaction needed
+                let count: i64 = conn
+                    .query_row(
+                        "SELECT COUNT(*) FROM messages WHERE session_key = ?",
+                        params![&key_str],
+                        |row| row.get(0),
+                    )
+                    .unwrap_or(0);
+
+                Ok((message_id, count as usize > max_messages))
+            })
+            .await?; // Lock released before compaction and notification.
 
         if needs_compaction {
             self.compact_session(key).await?;
@@ -649,11 +651,7 @@ impl SessionManager {
     /// Reset (clear) a session
     pub async fn reset_session(&self, key: &SessionKey) -> Result<bool, SessionManagerError> {
         let key_str = key.to_key_string();
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| SessionManagerError::DatabaseError(format!("Lock error: {e}")))?;
-
+        self.query_blocking(move |conn| {
         // Sync FTS5: remove entries before deleting messages
         conn.execute(
             "DELETE FROM messages_fts WHERE rowid IN (SELECT id FROM messages WHERE session_key = ?)",
@@ -677,19 +675,16 @@ impl SessionManager {
         debug!("Reset session {}: deleted {} messages", key_str, deleted);
 
         Ok(deleted > 0)
+        })
+        .await
     }
 
     /// Delete a session entirely
     pub async fn delete_session(&self, key: &SessionKey) -> Result<bool, SessionManagerError> {
         let key_str = key.to_key_string();
-        // Scoped so the connection guard is released before the `.await`
-        // below — holding a std `MutexGuard` across a suspension point makes
-        // the future `!Send`.
-        let deleted = {
-            let conn = self
-                .conn
-                .lock()
-                .map_err(|e| SessionManagerError::DatabaseError(format!("Lock error: {e}")))?;
+        let delete_key = key_str.clone();
+        let deleted = self.query_blocking(move |conn| {
+            let key_str = delete_key;
 
             // Sync FTS5: remove entries before deleting messages
             conn.execute(
@@ -707,8 +702,9 @@ impl SessionManager {
 
             // Delete session
             conn.execute("DELETE FROM sessions WHERE key = ?", params![&key_str])
-                .map_err(|e| SessionManagerError::DatabaseError(e.to_string()))?
-        };
+                .map_err(|e| SessionManagerError::DatabaseError(e.to_string()))
+        })
+        .await?;
 
         // The transcript is gone; the working memory it produced must go with
         // it. The scratchpad plan file sits beside the resume snapshot the

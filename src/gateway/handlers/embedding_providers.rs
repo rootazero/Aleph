@@ -264,6 +264,18 @@ pub async fn handle_update(
         Err(e) => return e,
     };
 
+    // Reject any attempt to change the provider's identity — update is not rename.
+    if params.config.id != params.id {
+        return JsonRpcResponse::error(
+            request.id,
+            INVALID_PARAMS,
+            format!(
+                "Config id '{}' does not match provider id '{}'; updating the id is not allowed",
+                params.config.id, params.id
+            ),
+        );
+    }
+
     {
         let mut cfg = config.write().await;
 
@@ -551,16 +563,18 @@ pub async fn handle_test(
 
     match provider.test_connection().await {
         Ok(()) => {
-            // Persist verified=true for the provider
+            // Persist verified=true only if the stored config still matches
+            // the config that was actually tested (same endpoint, model, and
+            // credentials).  An inline draft that differs from the persisted
+            // record must not mark the persisted record as verified.
             {
                 let mut cfg = config.write().await;
-                if let Some(p) = cfg
-                    .memory
-                    .embedding
-                    .providers
-                    .iter_mut()
-                    .find(|p| p.id == provider_config.id)
-                {
+                if let Some(p) = cfg.memory.embedding.providers.iter_mut().find(|p| {
+                    p.id == provider_config.id
+                        && p.api_base == provider_config.api_base
+                        && p.models == provider_config.models
+                        && p.api_key == provider_config.api_key
+                }) {
                     p.verified = true;
                     if let Err(e) = cfg.save_incremental(&["memory"]) {
                         tracing::error!(error = %e, "Failed to save config after embedding test");

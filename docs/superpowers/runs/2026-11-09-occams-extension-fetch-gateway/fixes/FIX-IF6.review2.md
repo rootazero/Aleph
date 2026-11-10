@@ -1,0 +1,23 @@
+# Fix review — IF6
+
+| ID | Verdict | Comment |
+|---|---|---|
+| IF6-06 | PARTIAL | The diff adds text escaping via `let mut html = Self::escape_html(markdown);` and protects inline code, but `convert_links` is still unchanged and operates on the already globally escaped source; because `escape_html` escapes `"` to `&quot;`, a link destination containing `&quot;` is no longer the original URL, while a destination containing a quote may not be safely parsed/encoded as an attribute value. The reviewer’s requirement for a correctly escaped link destination is therefore not proven. |
+| IF6-12 | NOT_FIXED | The diff only changes stdout handling in `cli.rs`; it does not add the missing owned/cancellable stdin reader or any replacement for the removed `std::thread::spawn` reader, so restart can still leave competing stdin readers or lose an input line. |
+| IF6-13 | NOT_FIXED | The diff changes admission-time validation only; it still does not provide cancellation-safe cleanup for `outcome: None` reservations or alter `prune_operations`, so cancelled public submissions can remain permanently pending. |
+| IF6-15 | PARTIAL | The diff replaces the unbounded fetch with bounded UID/body windows and `is_complete_imap_body`, but it still performs `session.uid_search(...)` over every sequence window and can collect up to 32 fetched bodies per batch; more importantly, the `SMALLER` search condition is not an authorization or cumulative-memory bound, and `mailbox.exists` is used as a sequence-number bound rather than a bounded UID set. The stated unbounded-mailbox fetch/collect failure is materially reduced but not fully eliminated/proven. |
+
+## New problems
+
+- `src/gateway/interfaces/email/message_ops.rs:329-371` — The new loop uses `mailbox.exists` and sequence ranges such as `1..=mailbox.exists`, which are message sequence numbers, while the subsequent query uses `uid_search`; a UID range is not equivalent to a sequence-number range and can miss UIDs or fetch the wrong messages. This changes which unseen mail is processed and can cause messages to remain unseen or be processed incorrectly.
+- `src/gateway/interfaces/email/message_ops.rs:353-358` — The FETCH request uses `BODY.PEEK[]<0.1048577>` and then rejects a body unless `fetch.size == body.len()`; the `RFC822.SIZE` value is the full RFC822 message size, while the fetched body can differ due to server-side representation/limits, so valid messages can be silently discarded.
+- `src/gateway/interfaces/email/message_ops.rs:416-421` — On `inbound_tx.send(inbound).is_err()`, the code drains `messages_stream` before issuing STORE, but it has already discarded the current message and continues to fetch the remainder; this does not provide the claimed “unpublished bodies remain UNSEEN” behavior for the failed current message and can unnecessarily fetch an entire bounded batch.
+- `src/gateway/interfaces/email/message_ops.rs:430-434` — `published_uids` is populated only after `inbound_tx.send` succeeds, but the code uses `fetch.uid` without proving that the fetch API exposes a `uid` field of this type; if the underlying fetch response does not provide it in this form, compilation fails rather than preserving behavior.
+- `src/gateway/interfaces/email/message_ops.rs:497-503` — Escaping the entire Markdown source before Markdown conversion changes link text and code content, and `escape_html` turns existing entities such as `&amp;` into `&amp;amp;`; the added test explicitly expects this altered representation, so normal Markdown text is not behavior-preserving.
+- `src/gateway/interfaces/email/message_ops.rs:497-503` — The helper escapes apostrophes and quotes in all text, but then the Markdown converter can insert those escaped characters into fixed HTML attributes and generated content without a separate attribute-context escaping path; this does not establish safe handling of arbitrary link destinations as required by IF6-06.
+- `src/gateway/interfaces/irc/message_ops.rs:443-446` — The reader task is spawned for each connection, but the diff still never awaits its `JoinHandle`; aborting it does not guarantee the task has terminated before reconnecting, matching the previously flagged resource-leak concern.
+- `src/gateway/interfaces/irc/message_ops.rs:614-617` — `reader_task.abort()` is called in the shutdown branch and again after the inner loop; the second abort is redundant, and neither call awaits the task, so the stated cleanup guarantee is not met.
+
+## Batch verdict
+
+Needs rework: IF6-12 and IF6-13 are not addressed, IF6-06 and IF6-15 remain only partial, and the email polling changes introduce sequence/UID semantics and body-size correctness risks.

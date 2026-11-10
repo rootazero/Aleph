@@ -294,7 +294,16 @@ pub fn auto_discover_manifest(dir: &Path) -> ExtensionResult<PluginManifest> {
             .and_then(|n| n.to_str())
             .unwrap_or("unknown");
         let id = sanitize_plugin_id(dir_name);
-        let mut manifest = PluginManifest::new(id.clone(), id, PluginKind::Static, ".".into());
+        // A plugin with no manifest but a `.mcp.json` sidecar IS an MCP
+        // plugin: the `mcp_server` effect keys on `kind == Mcp`, so a Static
+        // kind counted the servers and never started one. Same sidecar
+        // caliber as the CC parsers.
+        let (kind, entry) = if dir.join(cc_plugin_json::KIND_SIDECAR).is_file() {
+            (PluginKind::Mcp, cc_plugin_json::KIND_SIDECAR.to_string())
+        } else {
+            (PluginKind::Static, ".".to_string())
+        };
+        let mut manifest = PluginManifest::new(id.clone(), id, kind, entry.into());
         manifest.root_dir = dir.to_path_buf();
         Ok(manifest)
     } else {

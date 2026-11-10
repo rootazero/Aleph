@@ -168,6 +168,17 @@ impl InboundMessageRouter {
         if let Some(handle) = self.channel_registry.get(&ctx.reply_route.channel_id).await {
             let ch = handle.read().await;
             reply_config.apply_channel_capabilities(ch.capabilities());
+            if let Some(telegram) = ch.as_any().and_then(|channel| {
+                channel.downcast_ref::<crate::gateway::interfaces::telegram::TelegramChannel>()
+            }) {
+                let config = telegram
+                    .inbound_config(&ctx.message)
+                    .map_err(|error| RoutingError::PermissionDenied(error.to_string()))?;
+                // This floor also applies to the generic ReplyEmitter fallback.
+                reply_config.stream_enabled &= config.streaming.enabled
+                    && config.streaming.mode
+                        != crate::gateway::interfaces::telegram::config_v2::StreamingMode::Disabled;
+            }
         }
 
         let pending_media: crate::gateway::media::PendingMedia =
@@ -677,18 +688,25 @@ impl InboundMessageRouter {
         reply_config: ReplyEmitterConfig,
         pending_media: crate::gateway::media::PendingMedia,
     ) -> Option<crate::gateway::interfaces::telegram::streaming::TelegramEventEmitter> {
-        use crate::gateway::interfaces::telegram::parse_telegram_channel_config;
         use crate::gateway::interfaces::telegram::streaming::TelegramEventEmitter;
+        use crate::gateway::interfaces::telegram::{config_v2::StreamingMode, TelegramChannel};
 
-        let tg_cfg = {
-            let cfg = self.app_config.as_ref()?.read().await;
-            let channel_id = ctx.reply_route.channel_id.as_str();
-            let raw = cfg.channels.get(channel_id)?;
-            parse_telegram_channel_config(raw.clone()).ok()?
+        let delivery = {
+            let handle = self
+                .channel_registry
+                .get(&ctx.reply_route.channel_id)
+                .await?;
+            let channel = handle.read().await;
+            channel
+                .as_any()?
+                .downcast_ref::<TelegramChannel>()?
+                .inbound_delivery(&ctx.message)
+                .ok()?
         };
-
-        let account = tg_cfg.accounts.first()?;
-        let streaming = account.streaming.clone().unwrap_or_default();
+        let streaming = &delivery.config.streaming;
+        if !streaming.enabled || streaming.mode == StreamingMode::Disabled {
+            return None;
+        }
 
         // Only use orchestrated emitter when new streaming features are explicitly enabled
         // (P1-A: `draft_api_enabled` was CUT — `sendMessageDraft` is not a
@@ -701,9 +719,6 @@ impl InboundMessageRouter {
         {
             return None;
         }
-
-        let bot = teloxide::Bot::new(&account.bot_token);
-        let conversation_id = ctx.message.conversation_id.as_str().to_string();
 
         // The orchestrated emitter takes over the wire for text but has no
         // media leg of its own — hand it a `ReplyEmitter` bound to the same
@@ -718,9 +733,7 @@ impl InboundMessageRouter {
         );
 
         Some(TelegramEventEmitter::new(
-            bot,
-            streaming,
-            conversation_id,
+            delivery,
             ctx.reply_route.clone(),
             media,
         ))

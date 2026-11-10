@@ -26,7 +26,6 @@ impl Default for MediaConfig {
         }
     }
 }
-
 pub struct MediaProcessor {
     config: MediaConfig,
 }
@@ -61,23 +60,29 @@ impl MediaProcessor {
             return Err(anyhow::anyhow!("No path for image attachment"));
         };
 
-        let img = image::open(path)?;
+        let path = path.clone();
+        let max_dimension = self.config.max_dimension;
 
-        let img = if img.width() > self.config.max_dimension
-            || img.height() > self.config.max_dimension
-        {
-            img.resize(
-                self.config.max_dimension,
-                self.config.max_dimension,
-                image::imageops::FilterType::Lanczos3,
-            )
-        } else {
-            img
-        };
+        let buf = tokio::task::spawn_blocking(move || -> Result<Vec<u8>> {
+            let img = image::open(&path)?;
 
-        let mut buf = Vec::new();
-        let mut cursor = std::io::Cursor::new(&mut buf);
-        img.write_to(&mut cursor, image::ImageFormat::Jpeg)?;
+            let img = if img.width() > max_dimension || img.height() > max_dimension {
+                img.resize(
+                    max_dimension,
+                    max_dimension,
+                    image::imageops::FilterType::Lanczos3,
+                )
+            } else {
+                img
+            };
+
+            let mut buf = Vec::new();
+            let mut cursor = std::io::Cursor::new(&mut buf);
+            img.write_to(&mut cursor, image::ImageFormat::Jpeg)?;
+
+            Ok(buf)
+        })
+        .await??;
 
         Ok(OutboundMedia {
             data: buf,

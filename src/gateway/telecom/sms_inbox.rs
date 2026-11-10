@@ -66,6 +66,8 @@ pub enum SmsInboxError {
     MissingKey,
     #[error("only sms_inbound envelopes may enter the SMS inbox")]
     WrongKind,
+    #[error("provider identity validation failed: {0}")]
+    InvalidIdentity(String),
     #[error("inbound SMS has invalid or future timestamps: {0}")]
     InvalidTimestamp(String),
     #[error("SMS inbox capacity exceeded ({entries} entries, {bytes} bytes)")]
@@ -540,7 +542,7 @@ fn validate_inbound_shape(
         ));
     }
     if inbound.provider_account_id.is_empty() || inbound.provider_message_id.is_empty() {
-        return Err(SmsInboxError::InvalidTimestamp(
+        return Err(SmsInboxError::InvalidIdentity(
             "provider account and message ids must be non-empty".into(),
         ));
     }
@@ -897,6 +899,25 @@ mod tests {
             Err(SmsInboxError::InvalidTimestamp(_))
         ));
         assert_eq!(store.pending_count(now).unwrap(), 0);
+    }
+
+    #[test]
+    fn empty_provider_ids_return_invalid_identity_not_invalid_timestamp() {
+        let now = Utc.timestamp_opt(1_800_000_000, 0).unwrap();
+        let store = inbox(4, 4096);
+        let mut empty_account = envelope("", "message-1", "body", now);
+        assert!(matches!(
+            store.accept(&context(now), &empty_account),
+            Err(SmsInboxError::InvalidIdentity(_))
+        ));
+        let mut empty_message = envelope("account-a", "", "body", now);
+        if let TelecomKind::SmsInbound(ref mut inbound) = empty_message.kind {
+            inbound.provider_message_id = String::new();
+        }
+        assert!(matches!(
+            store.accept(&context(now), &empty_message),
+            Err(SmsInboxError::InvalidIdentity(_))
+        ));
     }
 
     #[test]

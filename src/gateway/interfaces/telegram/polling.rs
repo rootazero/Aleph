@@ -53,6 +53,115 @@ impl PollingState {
     }
 }
 
+/// Process in update order, and acknowledge only after the handler returns.
+/// Cancellation before completion leaves the update pending for the next poll.
+async fn poll_updates(
+    bot: &Bot,
+    handler: &UpdateHandler<std::convert::Infallible>,
+    tracker: Option<&OffsetTracker>,
+    last_processed: &mut i64,
+) -> Result<(), teloxide::RequestError> {
+    loop {
+        let offset = i32::try_from(last_processed.saturating_add(1)).unwrap_or(i32::MAX);
+        let updates = bot
+            .get_updates()
+            .offset(offset)
+            .timeout(30)
+            .allowed_updates([
+                teloxide::types::AllowedUpdate::Message,
+                teloxide::types::AllowedUpdate::CallbackQuery,
+                teloxide::types::AllowedUpdate::PollAnswer,
+                teloxide::types::AllowedUpdate::MessageReaction,
+            ])
+            .await?;
+        for update in updates {
+            let update_id = i64::from(update.id.0);
+            let _ = handler.dispatch(dptree::deps![bot.clone(), update]).await;
+            if let Some(tracker) = tracker {
+                tracker.advance(update_id, "polling").await;
+            }
+            *last_processed = update_id;
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use wiremock::{matchers::path, Mock, MockServer, ResponseTemplate};
+
+    #[tokio::test]
+    async fn polling_acknowledges_only_completed_handlers_in_update_order() {
+        let server = MockServer::start().await;
+        let updates: Vec<_> = [10, 11]
+            .into_iter()
+            .map(|id| {
+                serde_json::json!({
+                    "update_id": id, "message": {"message_id": id, "date": 1700000000,
+                        "chat": {"id": 123, "type": "private"}, "text": "hello"}
+                })
+            })
+            .collect();
+        Mock::given(path("/bot123:test/GetUpdates"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "ok": true, "result": updates
+            })))
+            .up_to_n_times(1)
+            .with_priority(1)
+            .mount(&server)
+            .await;
+        Mock::given(path("/bot123:test/GetUpdates"))
+            .respond_with(ResponseTemplate::new(500))
+            .with_priority(2)
+            .mount(&server)
+            .await;
+        let tracker = Arc::new(
+            OffsetTracker::new(
+                Arc::new(crate::resilience::StateDatabase::in_memory().unwrap()),
+                "ordered".into(),
+            )
+            .await,
+        );
+        let (entered, mut received) = tokio::sync::mpsc::channel(2);
+        let release = Arc::new(tokio::sync::Semaphore::new(0));
+        let gate = release.clone();
+        let handler: UpdateHandler<std::convert::Infallible> =
+            dptree::entry().endpoint(move |update: Update| {
+                let entered = entered.clone();
+                let gate = gate.clone();
+                async move {
+                    entered.send(update.id.0).await.unwrap();
+                    gate.acquire().await.unwrap().forget();
+                    Ok::<(), std::convert::Infallible>(())
+                }
+            });
+        let bot = Bot::new("123:test").set_api_url(server.uri().parse().unwrap());
+        let worker_tracker = tracker.clone();
+        let task = tokio::spawn(async move {
+            let mut processed = 0;
+            let result = poll_updates(&bot, &handler, Some(&worker_tracker), &mut processed).await;
+            (result, processed)
+        });
+        assert_eq!(received.recv().await, Some(10));
+        assert_eq!(tracker.load(), 0, "in-flight update is not acknowledged");
+        release.add_permits(1);
+        assert_eq!(received.recv().await, Some(11));
+        assert_eq!(
+            tracker.load(),
+            10,
+            "second update cannot overtake its handler"
+        );
+        release.add_permits(1);
+        let (result, processed) = task.await.unwrap();
+        assert!(result.is_err());
+        assert_eq!(processed, 11);
+        assert_eq!(tracker.load(), 11);
+        let requests = server.received_requests().await.unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&requests[1].body).unwrap();
+        assert_eq!(body["offset"], 12);
+    }
+}
+
 /// Run the Telegram long-polling loop with watchdog and auto-restart.
 ///
 /// The caller builds the dptree `handler` (message + callback branches)
@@ -72,36 +181,15 @@ pub(crate) async fn run_polling_loop(
     // Delete any existing webhook — polling and webhooks are mutually exclusive.
     // If a webhook is set, getUpdates silently returns empty results.
     //
-    // Offset-aware startup:
-    //   offset == 0 (first startup): drop pending updates to avoid replaying
-    //     a potentially huge backlog accumulated before the bot was connected.
-    //   offset >  0 (restart): do NOT drop — resume from the persisted offset
-    //     so no messages are lost between restarts.
+    // A durable initialization fact, not offset == 0, owns the one-time drop.
+    // Without persistence we retain the backlog rather than dropping on every restart.
+    let first_start = match &offset_tracker {
+        Some(tracker) => tracker.initialize("polling").await,
+        None => false,
+    };
     let persisted_offset = offset_tracker.as_ref().map_or(0, |t| t.load());
-
-    if persisted_offset > 0 {
-        // Restart path: clear webhook but keep pending updates
-        match bot.delete_webhook().await {
-            Ok(_) => tracing::info!(
-                offset = persisted_offset,
-                "Telegram webhook cleared (keeping pending updates, resuming from offset)"
-            ),
-            Err(e) => tracing::warn!(
-                "Failed to delete Telegram webhook: {} (polling may not work)",
-                e
-            ),
-        }
-    } else {
-        // First startup: clear webhook AND drop pending updates
-        match bot.delete_webhook().drop_pending_updates(true).await {
-            Ok(_) => {
-                tracing::info!("Telegram webhook cleared + pending updates dropped (first startup)")
-            }
-            Err(e) => tracing::warn!(
-                "Failed to delete Telegram webhook: {} (polling may not work)",
-                e
-            ),
-        }
+    if let Err(error) = bot.delete_webhook().drop_pending_updates(first_start).await {
+        tracing::warn!(%error, "Failed to clear Telegram webhook");
     }
 
     // Diagnostic: manually test getUpdates to verify polling works.
@@ -125,10 +213,7 @@ pub(crate) async fn run_polling_loop(
                 "Telegram getUpdates test: {} pending updates",
                 updates.len()
             );
-            // Persist the offset from the diagnostic fetch if we got updates
-            if let (Some(tracker), Some(last)) = (&offset_tracker, updates.last()) {
-                tracker.advance(i64::from(last.id.0), "boot").await;
-            }
+            // Observation is not processing. The normal loop handles this update.
         }
         Err(e) => tracing::error!(
             "Telegram getUpdates test FAILED: {} — polling will not work!",
@@ -139,6 +224,7 @@ pub(crate) async fn run_polling_loop(
     *status.write().await = ChannelStatus::Connected;
 
     let mut state = PollingState::new();
+    let mut last_processed = persisted_offset;
 
     loop {
         state.attempt += 1;
@@ -147,7 +233,12 @@ pub(crate) async fn run_polling_loop(
             "Telegram polling loop iteration starting"
         );
 
-        let mut dispatcher = Dispatcher::builder(bot.clone(), handler.clone()).build();
+        let polling = poll_updates(
+            &bot,
+            &handler,
+            offset_tracker.as_deref(),
+            &mut last_processed,
+        );
 
         // Watchdog: periodic health check via get_me() API call.
         // Previous approach tracked "last message received" which falsely
@@ -227,10 +318,10 @@ pub(crate) async fn run_polling_loop(
             }
         });
 
-        tracing::info!("Telegram dispatcher.dispatch() starting...");
+        tracing::info!("Telegram getUpdates loop starting...");
         let which = tokio::select! {
-            _ = dispatcher.dispatch() => {
-                tracing::warn!("Telegram dispatcher.dispatch() returned (stopped)");
+            result = polling => {
+                tracing::warn!(?result, "Telegram getUpdates loop stopped");
                 "stopped"
             },
             _ = &mut shutdown_rx => "shutdown",

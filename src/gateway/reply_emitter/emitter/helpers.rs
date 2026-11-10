@@ -149,6 +149,7 @@ impl ReplyEmitter {
                         }
                     }
                 }
+                TtsOutcome::Skipped => self.send_to_channel(text).await,
                 TtsOutcome::Failed => {
                     // TTS generation failed — record on the registry-tracked
                     // state (not the local per-emitter copy) so 3 consecutive

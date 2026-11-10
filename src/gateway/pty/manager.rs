@@ -138,7 +138,14 @@ impl Inner {
             self.owner_order.push_back(session_id.to_string());
         }
         while self.owner_order.len() > OWNER_RETENTION {
-            if let Some(old) = self.owner_order.pop_front() {
+            let Some(index) = self
+                .owner_order
+                .iter()
+                .position(|id| !self.sessions.contains_key(id))
+            else {
+                break; // Live stamps remain in both the map and the FIFO.
+            };
+            if let Some(old) = self.owner_order.remove(index) {
                 self.owners.remove(&old);
             }
         }
@@ -597,10 +604,30 @@ impl PtyManager {
     }
 
     pub fn spawn_at(&self, generation: u64, opts: &SpawnOptions) -> Result<SpawnResult, String> {
-        self.with_generation(generation, || self.spawn_admitted(generation, opts))
+        self.with_generation(generation, |admission| {
+            self.spawn_admitted(generation, opts, admission)
+        })
     }
 
-    fn spawn_admitted(&self, generation: u64, opts: &SpawnOptions) -> Result<SpawnResult, String> {
+    fn spawn_admitted(
+        &self,
+        generation: u64,
+        opts: &SpawnOptions,
+        admission: &crate::sync_primitives::MutexGuard<'_, ()>,
+    ) -> Result<SpawnResult, String> {
+        // Reclaim capacity before starting a child we would otherwise have to roll back.
+        let cap = self.max_sessions.load(Ordering::SeqCst);
+        loop {
+            let oldest = {
+                let inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+                if inner.sessions.len() < cap {
+                    break;
+                }
+                inner.order.front().cloned()
+            };
+            let Some(oldest) = oldest else { break };
+            self.close_admitted(&oldest, admission)?;
+        }
         let id = uuid::Uuid::new_v4().to_string();
         process_journal::record_pty_spawn(
             &id,
@@ -613,8 +640,14 @@ impl PtyManager {
         let inner = self.inner.clone();
         let admission = self.admission.clone();
         let sink = Arc::new(move |session: &PtySession, exit_code: Option<u32>| {
-            // The journal settles before this generation-fenced publication/removal.
+            // Serialize verdicts with close, but never hold the registry lock over I/O.
             let _admission = admission.lock().unwrap_or_else(|e| e.into_inner());
+            process_journal::record_pty_settled(
+                &session.id,
+                Verdict::Exited,
+                exit_code.map(|code| code as i32),
+                &session.with_screen(super::screen::Screen::visible_text),
+            );
             if lifecycle.acquire_call(generation).is_err() {
                 return;
             }
@@ -643,7 +676,7 @@ impl PtyManager {
         let session = match PtySession::spawn_with_sink(id.clone(), opts, sink) {
             Ok(session) => session,
             Err(e) => {
-                // Nothing ran. Settle the intent row now rather than leave
+                // No session was admitted. Settle the intent rather than leave
                 // it `Running` for the next boot to read as a shell the
                 // restart interrupted — with the error as the screen, so the
                 // row says what the spawn said.
@@ -659,40 +692,20 @@ impl PtyManager {
             shell: session.shell.clone(),
         };
 
-        // Evict-then-insert under the lock so the map never exceeds the cap.
-        let cap = self.max_sessions.load(Ordering::SeqCst);
-        let evicted = {
+        {
             let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
-            // Stamp the owner under the SAME lock acquisition that inserts the
-            // session, so no face can observe a live session with no ownership
-            // record and fall through to whatever its "unknown" arm does.
-            inner.remember_owner(&id, opts.created_by.clone());
-            let mut evicted: Option<Arc<PtySession>> = None;
-            if inner.sessions.len() >= cap {
-                if let Some(old_id) = inner.order.pop_front() {
-                    evicted = inner.sessions.remove(&old_id);
-                }
-            }
             inner.order.push_back(id.clone());
-            inner.sessions.insert(id, session);
-            evicted
-        };
-        if let Some(old) = evicted {
-            // The operator's capacity policy ending a shell, not orphan
-            // handling: recorded as `killed` before the kill, like `close`.
-            Self::record_killed(&old);
-            old.kill();
+            inner.sessions.insert(id.clone(), session);
+            // Insert first so retention recognizes even a new stamp as live.
+            inner.remember_owner(&id, opts.created_by.clone());
         }
         Ok(result)
     }
 
-    /// The journal's `killed` verdict for a session this manager is about to
-    /// `kill()`, with the screen as it stands — after the kill nothing more
-    /// arrives, so the screen at this moment IS the final screen, exactly what
-    /// `settle_exit` would have written had it won. One body for the three
-    /// kill sites (`close`, `close_all`, capacity eviction) so none of them
-    /// can pass an empty screen and leave a killed terminal's row with no
-    /// trail (the bash twin keeps its last window in `partial.txt`).
+    /// Record a successful manager kill after registry removal, with the current
+    /// screen. Admission serializes this verdict with the waiter's settlement.
+    /// Shared by close, shutdown and capacity eviction; failed kills never get
+    /// a successful `killed` verdict.
     fn record_killed(session: &PtySession) {
         let screen = session.with_screen(super::screen::Screen::visible_text);
         process_journal::record_pty_settled(&session.id, Verdict::Killed, None, &screen);
@@ -773,20 +786,34 @@ impl PtyManager {
     }
 
     pub fn close_at(&self, generation: u64, session_id: &str) -> Result<(), String> {
-        self.with_generation(generation, || self.close_admitted(session_id))
+        self.with_generation(generation, |admission| {
+            self.close_admitted(session_id, admission)
+        })
     }
 
-    fn close_admitted(&self, session_id: &str) -> Result<(), String> {
+    fn close_admitted(
+        &self,
+        session_id: &str,
+        _admission: &crate::sync_primitives::MutexGuard<'_, ()>,
+    ) -> Result<(), String> {
         let session = {
-            let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
-            inner.order.retain(|i| i != session_id);
-            inner.viewports.remove(session_id);
-            inner.sessions.remove(session_id)
+            let inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+            inner.sessions.get(session_id).cloned()
         };
         match session {
             Some(s) => {
-                Self::record_killed(&s);
-                s.kill();
+                if let Err(e) = s.try_kill() {
+                    return Err(format!("failed to kill session {session_id}: {e}"));
+                }
+                let removed = {
+                    let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+                    inner.order.retain(|i| i != session_id);
+                    inner.viewports.remove(session_id);
+                    inner.sessions.remove(session_id).is_some()
+                };
+                if removed {
+                    Self::record_killed(&s);
+                }
                 Ok(())
             }
             None => Err(format!("no such session: {session_id}")),
@@ -804,7 +831,7 @@ impl PtyManager {
     /// `running` on disk for the next boot to tombstone as a shell the
     /// restart *interrupted*.
     pub fn close_all(&self) -> usize {
-        self.with_generation(self.lifecycle.generation(), || {
+        self.with_generation(self.lifecycle.generation(), |_| {
             self.close_all_checked().map_err(|error| error.to_string())
         })
         .unwrap_or(0)
@@ -821,8 +848,13 @@ impl PtyManager {
         let failures = sessions
             .into_iter()
             .filter_map(|session| {
-                Self::record_killed(&session);
-                let error = session.try_kill().err()?;
+                let error = match session.try_kill() {
+                    Ok(()) => {
+                        Self::record_killed(&session);
+                        return None;
+                    }
+                    Err(error) => error,
+                };
                 let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
                 inner.order.push_back(session.id.clone());
                 inner.sessions.insert(session.id.clone(), session);
@@ -869,7 +901,7 @@ impl PtyManager {
     /// only face that knows who is asking, and `close_all`/`live_apply` need
     /// the whole set.
     pub fn list(&self) -> Vec<SessionInfo> {
-        self.with_generation(self.lifecycle.generation(), || Ok(self.list_admitted()))
+        self.with_generation(self.lifecycle.generation(), |_| Ok(self.list_admitted()))
             .unwrap_or_default()
     }
 
@@ -916,7 +948,7 @@ impl PtyManager {
         rows: u16,
         cols: u16,
     ) -> Result<(), String> {
-        self.with_generation(generation, || {
+        self.with_generation(generation, |_| {
             {
                 let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
                 if !inner.sessions.contains_key(session_id) {
@@ -948,7 +980,7 @@ impl PtyManager {
         let Ok(generation) = self.ready_generation() else {
             return;
         };
-        let _ = self.with_generation(generation, || {
+        let _ = self.with_generation(generation, |_| {
             let touched = {
                 let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
                 let touched = inner
@@ -997,20 +1029,20 @@ impl PtyManager {
         session_id: &str,
         f: impl FnOnce(&Arc<PtySession>) -> Result<R, String>,
     ) -> Result<R, String> {
-        self.with_generation(generation, || self.with_session_admitted(session_id, f))
+        self.with_generation(generation, |_| self.with_session_admitted(session_id, f))
     }
 
     fn with_generation<R>(
         &self,
         generation: u64,
-        effect: impl FnOnce() -> Result<R, String>,
+        effect: impl FnOnce(&crate::sync_primitives::MutexGuard<'_, ()>) -> Result<R, String>,
     ) -> Result<R, String> {
         self.admit_generation(generation)?;
         let _admission = self.admission.lock().unwrap_or_else(|e| e.into_inner());
         self.lifecycle
             .acquire_call(generation)
             .map_err(|error| error.to_string())?;
-        effect()
+        effect(&_admission)
     }
 
     fn with_session_admitted<R>(
@@ -1470,6 +1502,90 @@ mod tests {
         assert_eq!(inner.owner_order.len(), OWNER_RETENTION);
     }
 
+    #[test]
+    fn close_and_eviction_retain_failed_kills_and_serialize_success() {
+        #[derive(Debug)]
+        struct RefuseKill;
+        impl portable_pty::ChildKiller for RefuseKill {
+            fn kill(&mut self) -> std::io::Result<()> {
+                Err(std::io::Error::new(
+                    std::io::ErrorKind::PermissionDenied,
+                    "kill refused",
+                ))
+            }
+            fn clone_killer(&self) -> Box<dyn portable_pty::ChildKiller + Send + Sync> {
+                Box::new(Self)
+            }
+        }
+        #[derive(Debug)]
+        struct CountKill {
+            inner: Box<dyn portable_pty::ChildKiller + Send + Sync>,
+            calls: Arc<AtomicUsize>,
+        }
+        impl portable_pty::ChildKiller for CountKill {
+            fn kill(&mut self) -> std::io::Result<()> {
+                self.calls.fetch_add(1, Ordering::SeqCst);
+                self.inner.kill()
+            }
+            fn clone_killer(&self) -> Box<dyn portable_pty::ChildKiller + Send + Sync> {
+                Box::new(Self {
+                    inner: self.inner.clone_killer(),
+                    calls: self.calls.clone(),
+                })
+            }
+        }
+        let mgr = PtyManager::new();
+        mgr.set_max_sessions(1);
+        let opts = SpawnOptions {
+            created_by: Some("owner".into()),
+            ..Default::default()
+        };
+        let sid = mgr.spawn(&opts).unwrap().session_id;
+        let session = mgr.inner.lock().unwrap().sessions[&sid].clone();
+        let killer = session.replace_killer_for_test(Box::new(RefuseKill));
+        assert!(mgr.close(&sid).unwrap_err().contains("kill refused"));
+        assert!(mgr.spawn(&opts).unwrap_err().contains("kill refused"));
+        assert_eq!(mgr.list().len(), 1);
+        assert!(mgr.owner_of(&sid).admits(Some("owner")));
+        let calls = Arc::new(AtomicUsize::new(0));
+        session.replace_killer_for_test(Box::new(CountKill {
+            inner: killer,
+            calls: calls.clone(),
+        }));
+        let results = std::thread::scope(|scope| {
+            let first = scope.spawn(|| mgr.close(&sid));
+            let second = scope.spawn(|| mgr.close(&sid));
+            [first.join().unwrap(), second.join().unwrap()]
+        });
+        assert_eq!(results.iter().filter(|r| r.is_ok()).count(), 1);
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        assert!(mgr.list().is_empty());
+    }
+
+    #[test]
+    fn live_owner_stamps_keep_their_fifo_position_during_churn() {
+        let mgr = PtyManager::new();
+        let sid = mgr
+            .spawn(&SpawnOptions {
+                created_by: Some("long-lived-owner".into()),
+                ..Default::default()
+            })
+            .unwrap()
+            .session_id;
+        {
+            let mut inner = mgr.inner.lock().unwrap();
+            for i in 0..OWNER_RETENTION + 2 {
+                inner.remember_owner(&format!("ended-{i}"), None);
+            }
+            assert_eq!(inner.owner_order.front(), Some(&sid));
+            assert_eq!(inner.owner_order.len(), inner.owners.len());
+            assert_eq!(inner.owners.len(), OWNER_RETENTION);
+        }
+        assert!(mgr.owner_of(&sid).admits(Some("long-lived-owner")));
+        mgr.close(&sid).unwrap();
+        assert!(mgr.owner_of(&sid).admits(Some("long-lived-owner")));
+    }
+
     /// The one predicate, exhaustively — every other face delegates here, so
     /// a hole in this table is a hole on all four of them.
     #[test]
@@ -1633,6 +1749,7 @@ mod tests {
                         },
                         ..Default::default()
                     },
+                    &_admission,
                 )
                 .unwrap();
             let session = mgr.inner.lock().unwrap().sessions[&spawned.session_id].clone();

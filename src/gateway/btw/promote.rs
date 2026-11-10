@@ -74,17 +74,26 @@ pub(crate) fn latest_complete_exchange(records: &[SessionEventRecord]) -> Option
         .collect();
 
     for (nth, &start) in opens.iter().enumerate().rev() {
-        // A turn ends when the next one opens or when the run does
-        // (`SessionEvent::TurnStarted`'s own doc). Slicing on the next opener
-        // is what keeps a later turn's assistant text from being read as this
-        // turn's answer.
-        let end = opens.get(nth + 1).copied().unwrap_or(records.len());
-        let span = &records[start..end];
-        if !completed_here(span) {
-            continue;
-        }
-        if let Some(exchange) = exchange_in(span) {
-            return Some(exchange);
+        // Find the turn's actual end by locating its RunFinished(Completed),
+        // not just the next TurnStarted. This prevents warm-seeded events from
+        // a different turn (appended after this turn completed) from being
+        // treated as part of this turn's span.
+        let next_open = opens.get(nth + 1).copied().unwrap_or(records.len());
+        let span = &records[start..next_open];
+
+        if let Some(completed_idx) = span.iter().position(|r| {
+            matches!(
+                r.event,
+                SessionEvent::RunFinished {
+                    outcome: RunOutcome::Completed,
+                    ..
+                }
+            )
+        }) {
+            let closed_span = &span[..=completed_idx];
+            if let Some(exchange) = exchange_in(closed_span) {
+                return Some(exchange);
+            }
         }
     }
     None

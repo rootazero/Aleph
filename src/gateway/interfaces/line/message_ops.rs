@@ -29,6 +29,17 @@ impl LineMessagingApi {
 
     /// Send a push message (proactive to user).
     pub async fn push(&self, payload: &LinePushPayload) -> Result<String, String> {
+        // Every LINE push takes the {to, messages:[...]} envelope. The flex
+        // payload carries its recipient in the struct, so its body is
+        // serialized from the struct itself (single source of truth) and
+        // wrapped here.
+        let body = match payload {
+            LinePushPayload::Flex(flex) => {
+                let message = serde_json::to_value(flex.as_ref()).map_err(|e| e.to_string())?;
+                serde_json::json!({ "to": flex.to, "messages": [message] })
+            }
+            _ => serde_json::to_value(payload).map_err(|e| e.to_string())?,
+        };
         let url = format!("{}/v2/bot/message/push", self.api_base);
         let resp = self
             .http
@@ -37,7 +48,7 @@ impl LineMessagingApi {
                 "Authorization",
                 format!("Bearer {}", self.channel_access_token),
             )
-            .json(payload)
+            .json(&body)
             .send()
             .await
             .map_err(|e| format!("HTTP error: {e}"))?;
@@ -135,11 +146,16 @@ impl LineMessagingApi {
     /// Push a Template message.
     pub async fn push_template(
         &self,
-        _to: &str,
-        _alt_text: &str,
-        template: TemplatePayload,
+        to: &str,
+        alt_text: &str,
+        mut template: TemplatePayload,
     ) -> Result<String, String> {
-        let payload = LinePushPayload::Template(template);
+        template.template_type = "template".into();
+        template.alt_text = alt_text.into();
+        let payload = LinePushPayload::Template(TemplatePushPayload {
+            to: to.into(),
+            messages: vec![template],
+        });
         self.push(&payload).await
     }
 
@@ -269,7 +285,7 @@ impl LineMessagingApi {
 pub enum LinePushPayload {
     Text(TextPayload),
     Flex(Box<FlexPayload>),
-    Template(TemplatePayload),
+    Template(TemplatePushPayload),
     Image(ImagePayload),
     Video(VideoPayload),
     Audio(AudioPayload),
@@ -373,6 +389,10 @@ pub struct StickerPushContent {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct FlexPayload {
+    /// The recipient. The LINE push API takes the recipient in the
+    /// `to`/`messages` ENVELOPE, not inside the message object, so this field
+    /// is not part of the serialized message body.
+    #[serde(skip)]
     pub to: String,
     #[serde(rename = "altText")]
     pub alt_text: String,
@@ -538,6 +558,12 @@ impl FlexAction {
 
 // --- Template payloads ---
 
+#[derive(Debug, Clone, Serialize)]
+pub struct TemplatePushPayload {
+    pub to: String,
+    pub messages: Vec<TemplatePayload>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TemplatePayload {
     #[serde(rename = "type")]
@@ -567,7 +593,7 @@ pub struct ButtonsTemplate {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(untagged)]
+#[serde(tag = "type", rename_all = "lowercase")]
 pub enum TemplateContent {
     Confirm(ConfirmTemplate),
     Buttons(Box<ButtonsTemplate>),
@@ -669,6 +695,7 @@ pub struct QuickReply {
 }
 
 #[derive(Debug, Clone, Serialize)]
+#[serde(tag = "type", rename = "action")]
 pub struct QuickReplyItem {
     pub action: QuickReplyAction,
 }
@@ -763,6 +790,73 @@ pub struct LineUserProfile {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn rich_messages_have_valid_http_envelopes() {
+        use axum::{routing::post, Json, Router};
+        let (tx, mut rx) = tokio::sync::mpsc::channel(3);
+        let app = Router::new().route(
+            "/v2/bot/message/push",
+            post(move |Json(body): Json<serde_json::Value>| {
+                let tx = tx.clone();
+                async move {
+                    tx.send(body).await.unwrap();
+                    Json(serde_json::json!({"sentMessages":[{"id":"sent"}]}))
+                }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let api = LineMessagingApi::with_base(
+            "token".into(),
+            format!("http://{}", listener.local_addr().unwrap()),
+        );
+        let server = tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+        api.push_flex("U1", "flex alt", FlexBubbleContents::new())
+            .await
+            .unwrap();
+        api.push_template(
+            "U2",
+            "template alt",
+            TemplatePayload {
+                template_type: "wrong".into(),
+                text: None,
+                alt_text: "ignored".into(),
+                template: Box::new(TemplateContent::Confirm(ConfirmTemplate {
+                    text: "confirm?".into(),
+                    actions: vec![],
+                })),
+            },
+        )
+        .await
+        .unwrap();
+        api.push_quick_reply(
+            "U3",
+            "choose",
+            vec![QuickReplyAction::Message(QuickReplyMessageAction::new(
+                "yes", "yes",
+            ))],
+        )
+        .await
+        .unwrap();
+        let flex = rx.recv().await.unwrap();
+        assert_eq!(flex["to"], "U1");
+        assert_eq!(flex["messages"][0]["type"], "flex");
+        assert_eq!(flex["messages"][0]["altText"], "flex alt");
+        assert!(flex["messages"][0]["contents"].is_object());
+        let template = rx.recv().await.unwrap();
+        assert_eq!(template["to"], "U2");
+        assert_eq!(template["messages"][0]["type"], "template");
+        assert_eq!(template["messages"][0]["altText"], "template alt");
+        assert_eq!(template["messages"][0]["template"]["type"], "confirm");
+        let quick = rx.recv().await.unwrap();
+        assert_eq!(
+            quick["messages"][0]["quickReply"]["items"][0]["type"],
+            "action"
+        );
+        server.abort();
+    }
 
     #[test]
     fn test_build_text_payload() {

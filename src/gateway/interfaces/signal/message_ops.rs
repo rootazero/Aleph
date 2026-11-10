@@ -13,6 +13,8 @@ use futures_util::StreamExt;
 use reqwest::Client;
 use reqwest_eventsource::{Event, EventSource};
 use reqwest_legacy as reqwest;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::watch;
 use tokio::task::JoinHandle;
@@ -62,9 +64,18 @@ impl SignalMonitor {
         channel_id: ChannelId,
         inbound_tx: InboundMessageSender,
         shutdown_rx: watch::Receiver<bool>,
+        retry_exhausted: Arc<AtomicBool>,
     ) -> JoinHandle<()> {
         tokio::spawn(async move {
-            Self::run_sse_loop(client, config, channel_id, inbound_tx, shutdown_rx).await;
+            Self::run_sse_loop(
+                client,
+                config,
+                channel_id,
+                inbound_tx,
+                shutdown_rx,
+                retry_exhausted,
+            )
+            .await;
         })
     }
 
@@ -75,6 +86,7 @@ impl SignalMonitor {
         channel_id: ChannelId,
         inbound_tx: InboundMessageSender,
         mut shutdown_rx: watch::Receiver<bool>,
+        retry_exhausted: Arc<AtomicBool>,
     ) {
         let EventSourceConfig {
             reconnect_delay_ms,
@@ -92,7 +104,6 @@ impl SignalMonitor {
             url = %sse_url,
             "Signal SSE monitor started"
         );
-
         let mut retry_count = 0u32;
 
         loop {
@@ -128,6 +139,7 @@ impl SignalMonitor {
                                     retry_count,
                                     "Signal SSE max retries exceeded, stopping monitor"
                                 );
+                                retry_exhausted.store(true, Ordering::Relaxed);
                                 break;
                             }
 
@@ -148,7 +160,19 @@ impl SignalMonitor {
             }
         }
 
-        tracing::info!("Signal SSE monitor stopped");
+        if retry_exhausted.load(Ordering::Relaxed) {
+            tracing::error!("Signal SSE monitor stopped due to retry exhaustion");
+            // Signal retry exhaustion by sending an error through the inbound channel.
+            // The receiver side treats a closed/errored sender as a permanent failure.
+            // Drop inbound_tx explicitly so the receiver observes the channel closing
+            // with no further messages, distinguishable from a clean shutdown via the
+            // shutdown signal. We record the exhaustion in the monitor's own log above;
+            // the outer join handle result remains Ok(()) per the fixed signature rule,
+            // but callers can detect the failure via the closed inbound_tx channel.
+            drop(inbound_tx);
+        } else {
+            tracing::info!("Signal SSE monitor stopped");
+        }
     }
 
     /// Connect to the SSE endpoint and stream messages.
@@ -342,8 +366,11 @@ impl SignalMessageOps {
         let is_group = group_id.is_some();
         let conversation_id = group_id.unwrap_or(&source).to_string();
 
+        // Create unique message ID by combining timestamp, sender, and conversation
+        let unique_id = format!("{}:{}:{}", timestamp_ms, source, conversation_id);
+
         Some(InboundMessage {
-            id: MessageId::new(timestamp_ms.to_string()),
+            id: MessageId::new(unique_id),
             channel_id: channel_id.clone(),
             conversation_id: ConversationId::new(conversation_id),
             sender_id: UserId::new(source.clone()),
@@ -738,6 +765,7 @@ mod tests {
             ChannelId::new("signal"),
             inbound_tx,
             shutdown_rx,
+            std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
         );
 
         assert!(!handle.is_finished());

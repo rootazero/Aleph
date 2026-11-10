@@ -6,7 +6,7 @@
 //!
 //! - Multi-device support (scan QR code to link)
 //! - Chat/group messages
-//! - Image/file attachments
+//! - Text-only delivery (media attachments are explicitly unsupported)
 //! - Read receipts
 //!
 //! # Usage
@@ -68,6 +68,7 @@ pub struct WhatsAppChannel {
     fake: Option<Arc<FakeWaRuntime>>,
     pairing_state: Arc<RwLock<PairingState>>,
     shutdown_tx: Option<oneshot::Sender<()>>,
+    event_task: Option<tokio::task::JoinHandle<()>>,
     connected: Arc<AtomicBool>,
     test_mode: bool,
     reaction_handler: Option<Arc<ReactionHandler>>,
@@ -108,6 +109,7 @@ impl WhatsAppChannel {
             fake: None,
             pairing_state: Arc::new(RwLock::new(PairingState::Idle)),
             shutdown_tx: None,
+            event_task: None,
             connected: Arc::new(AtomicBool::new(false)),
             test_mode,
             reaction_handler,
@@ -185,6 +187,7 @@ impl WhatsAppChannel {
         let inbound_tx = self.channel_state.sender();
         let channel_id = self.info.id.clone();
         let history_buffer = Arc::clone(&self.history_buffer);
+        let chat_config = self.config.clone();
         let reaction_handler = Arc::clone(&reaction_handler);
         let (shutdown_tx, shutdown_rx) = oneshot::channel();
 
@@ -201,7 +204,7 @@ impl WhatsAppChannel {
         );
         let driver = PairingStateDriver::new(Arc::clone(&pairing_state));
         let mut shutdown_rx = shutdown_rx;
-        tokio::spawn(async move {
+        self.event_task = Some(tokio::spawn(async move {
             'events: loop {
                 tokio::select! {
                     Some(event) = event_rx.recv() => {
@@ -222,6 +225,10 @@ impl WhatsAppChannel {
                             }
                             _ => {
                                 for msg in crate::gateway::interfaces::whatsapp::wa_inbound::mapper::map_event_to_inbound(&event, &channel_id, &history_buffer).await {
+                                    if !chat_config.is_chat_allowed(msg.conversation_id.as_str()) {
+                                        tracing::debug!(channel = %channel_id, "Inbound chat blocked by allowed_chats");
+                                        continue;
+                                    }
                                     match policy.evaluate(&msg) {
                                         crate::gateway::interfaces::whatsapp::wa_inbound::policy::InboundPolicyResult::Accept => {
                                             if let Err(e) = reaction_handler.send_ack(&msg).await {
@@ -255,7 +262,7 @@ impl WhatsAppChannel {
             connected.store(false, Ordering::SeqCst);
             let mut state = pairing_state.write().await;
             *state = PairingState::Idle;
-        });
+        }));
 
         self.shutdown_tx = Some(shutdown_tx);
         Ok(())
@@ -278,10 +285,10 @@ impl WhatsAppChannel {
 
     fn capabilities() -> ChannelCapabilities {
         ChannelCapabilities {
-            attachments: true,
-            images: true,
-            audio: true,
-            video: true,
+            attachments: false,
+            images: false,
+            audio: false,
+            video: false,
             reactions: true,
             replies: true,
             editing: false,
@@ -297,7 +304,7 @@ impl WhatsAppChannel {
             // via `Client::execute`. Wired in `set_group_icon` below.
             group_icons: true,
             max_message_length: 65536,
-            max_attachment_size: 100 * 1024 * 1024,
+            max_attachment_size: 0,
             stream_protocol: Default::default(),
         }
     }
@@ -340,6 +347,11 @@ impl Channel for WhatsAppChannel {
 
     async fn start(&mut self) -> ChannelResult<()> {
         self.config.validate().map_err(ChannelError::ConfigError)?;
+        if self.event_task.is_some() {
+            return Err(ChannelError::Internal(
+                "WhatsApp channel already started".into(),
+            ));
+        }
 
         if self.test_mode {
             self.channel_state
@@ -397,12 +409,12 @@ impl Channel for WhatsAppChannel {
             }),
         ));
         self.reaction_handler = Some(Arc::clone(&reaction_handler));
-
         let connected = Arc::clone(&self.connected);
         let pairing_state = Arc::clone(&self.pairing_state);
         let inbound_tx = self.channel_state.sender();
         let channel_id = self.info.id.clone();
         let history_buffer = Arc::clone(&self.history_buffer);
+        let chat_config = self.config.clone();
         let reaction_handler = Arc::clone(&reaction_handler);
         let (shutdown_tx, shutdown_rx) = oneshot::channel();
 
@@ -419,7 +431,7 @@ impl Channel for WhatsAppChannel {
         );
         let driver = PairingStateDriver::new(Arc::clone(&pairing_state));
         let mut shutdown_rx = shutdown_rx;
-        tokio::spawn(async move {
+        self.event_task = Some(tokio::spawn(async move {
             'events: loop {
                 tokio::select! {
                     Some(event) = event_rx.recv() => {
@@ -431,12 +443,17 @@ impl Channel for WhatsAppChannel {
                         match event {
                             Event::Connected(_) => {
                                 connected.store(true, Ordering::SeqCst);
+                                driver.apply(&event).await;
                             }
                             Event::Disconnected(_) => {
                                 connected.store(false, Ordering::SeqCst);
                             }
                             _ => {
                                 for msg in crate::gateway::interfaces::whatsapp::wa_inbound::mapper::map_event_to_inbound(&event, &channel_id, &history_buffer).await {
+                                    if !chat_config.is_chat_allowed(msg.conversation_id.as_str()) {
+                                        tracing::debug!(channel = %channel_id, "Inbound chat blocked by allowed_chats");
+                                        continue;
+                                    }
                                     match policy.evaluate(&msg) {
                                         crate::gateway::interfaces::whatsapp::wa_inbound::policy::InboundPolicyResult::Accept => {
                                             // Spec §3.2 / Task 5: fire the configured
@@ -478,7 +495,7 @@ impl Channel for WhatsAppChannel {
             connected.store(false, Ordering::SeqCst);
             let mut state = pairing_state.write().await;
             *state = PairingState::Idle;
-        });
+        }));
 
         self.runtime = Some(runtime);
         self.shutdown_tx = Some(shutdown_tx);
@@ -489,9 +506,15 @@ impl Channel for WhatsAppChannel {
         if let Some(shutdown_tx) = self.shutdown_tx.take() {
             let _ = shutdown_tx.send(());
         }
+        if let Some(task) = self.event_task.take() {
+            // An acknowledgement may be awaiting network I/O inside the loop.
+            task.abort();
+            let _ = task.await;
+        }
         if let Some(runtime) = self.runtime.take() {
             runtime.shutdown().await;
         }
+        self.connected.store(false, Ordering::SeqCst);
         *self.pairing_state.write().await = PairingState::Idle;
         self.channel_state
             .set_status(ChannelStatus::Disconnected)
@@ -503,6 +526,11 @@ impl Channel for WhatsAppChannel {
         let runtime = self.runtime.clone();
         let test_mode = self.test_mode;
         Box::pin(async move {
+            if !message.attachments.is_empty() {
+                return Err(ChannelError::UnsupportedFeature(
+                    "WhatsApp attachment sending is not implemented; no message was sent".into(),
+                ));
+            }
             if test_mode {
                 return Ok(SendResult {
                     message_id: MessageId::new(format!(
@@ -516,10 +544,15 @@ impl Channel for WhatsAppChannel {
             let runtime = runtime
                 .as_ref()
                 .ok_or_else(|| ChannelError::NotConnected("WhatsApp runtime not started".into()))?;
-            let message_id = runtime
-                .send_message(message)
-                .await
-                .map_err(|e| ChannelError::Internal(format!("send_message: {e}")))?;
+            let message_id = runtime.send_message(message).await.map_err(|e| match e {
+                wa_runtime::WaRuntimeError::NotConnected(message) => {
+                    ChannelError::NotConnected(message)
+                }
+                wa_runtime::WaRuntimeError::SendFailed(message) => {
+                    ChannelError::SendFailed(message)
+                }
+                other => ChannelError::Internal(format!("send_message: {other}")),
+            })?;
             Ok(SendResult {
                 message_id,
                 timestamp: chrono::Utc::now(),
@@ -728,6 +761,123 @@ pub fn register_with_plugin() {
 mod tests {
     use super::*;
     use crate::gateway::interfaces::whatsapp::pairing::PairingState;
+
+    #[tokio::test]
+    async fn allowed_chats_intersects_access_policy() {
+        use crate::gateway::channel_policy::DmPolicy;
+        use std::time::Duration;
+
+        for allowed in [vec!["111@s.whatsapp.net".to_string()], vec![]] {
+            let mut config = WhatsAppConfig::default();
+            config.allowed_chats = allowed;
+            config.access.dm_policy = DmPolicy::Open;
+            let restricted = !config.allowed_chats.is_empty();
+            let (mut channel, fake) = WhatsAppChannel::for_test_with_fake("wa-test", config);
+            let mut rx = channel.inbound_subscribe();
+            channel.start().await.unwrap();
+            fake.emit_text_message("222@s.whatsapp.net", "alice", "other chat")
+                .await
+                .unwrap();
+            fake.emit_text_message("111@s.whatsapp.net", "alice", "allowed chat")
+                .await
+                .unwrap();
+            let first = tokio::time::timeout(Duration::from_secs(1), rx.recv())
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(
+                first.text,
+                if restricted {
+                    "allowed chat"
+                } else {
+                    "other chat"
+                }
+            );
+            channel.stop().await.unwrap();
+        }
+
+        let mut config = WhatsAppConfig::default();
+        config.allowed_chats = vec!["111@s.whatsapp.net".into()];
+        config.access.dm_policy = DmPolicy::Disabled;
+        let (mut channel, fake) = WhatsAppChannel::for_test_with_fake("wa-test", config);
+        let mut rx = channel.inbound_subscribe();
+        channel.start().await.unwrap();
+        fake.emit_text_message("111@s.whatsapp.net", "alice", "still blocked")
+            .await
+            .unwrap();
+        assert!(tokio::time::timeout(Duration::from_millis(20), rx.recv())
+            .await
+            .is_err());
+        channel.stop().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn unsupported_attachments_fail_before_any_text_is_sent() {
+        use crate::gateway::channel::Attachment;
+        use crate::secrets::vault::SecretVault;
+
+        let (channel, fake) =
+            WhatsAppChannel::for_test_with_fake("wa-test", WhatsAppConfig::default());
+        let caps = &channel.info().capabilities;
+        assert!(!caps.attachments && !caps.images && !caps.audio && !caps.video);
+        let dir = tempfile::tempdir().unwrap();
+        let auth = WaAuthManager::with_vault(
+            SecretVault::open(dir.path().join("auth.vault")).unwrap(),
+            "test",
+        );
+        let (tx, _rx) = tokio::sync::mpsc::channel(1);
+        let runtime = RealWaRuntime::new(auth, tx).await.unwrap();
+        for mime in ["image/png", "application/pdf", "audio/ogg", "video/mp4"] {
+            for text in ["caption", ""] {
+                let mut message = OutboundMessage::text("123@s.whatsapp.net", text);
+                message.attachments.push(Attachment {
+                    id: "media".into(),
+                    mime_type: mime.into(),
+                    filename: None,
+                    size: None,
+                    url: None,
+                    path: None,
+                    data: Some(vec![1]),
+                    is_voice_note: false,
+                    is_video_note: false,
+                });
+                assert!(matches!(
+                    channel.send(message.clone()).await,
+                    Err(ChannelError::UnsupportedFeature(_))
+                ));
+                assert!(matches!(
+                    runtime.send_message(message).await,
+                    Err(ChannelError::UnsupportedFeature(_))
+                ));
+            }
+        }
+        assert!(fake.sent_messages().await.is_empty());
+        channel
+            .send(OutboundMessage::text("123@s.whatsapp.net", "text only"))
+            .await
+            .unwrap();
+        assert_eq!(fake.sent_messages().await.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn runtime_not_connected_stays_retryable_at_channel_boundary() {
+        use crate::secrets::vault::SecretVault;
+
+        let dir = tempfile::tempdir().unwrap();
+        let auth = WaAuthManager::with_vault(
+            SecretVault::open(dir.path().join("auth.vault")).unwrap(),
+            "test",
+        );
+        let (tx, _rx) = tokio::sync::mpsc::channel(1);
+        let runtime = RealWaRuntime::new(auth, tx).await.unwrap();
+        let mut channel = WhatsAppChannel::new("wa-test", WhatsAppConfig::default());
+        channel.runtime = Some(Arc::new(runtime));
+        let error = channel
+            .send(OutboundMessage::text("123@s.whatsapp.net", "hello"))
+            .await
+            .unwrap_err();
+        assert!(matches!(error, ChannelError::NotConnected(_)), "{error}");
+    }
 
     #[test]
     fn test_factory_channel_type() {

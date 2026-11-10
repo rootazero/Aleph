@@ -46,8 +46,6 @@
 //! the final text has been committed — further `update`/`finalize` calls
 //! return errors so the caller can detect a use-after-finalize.
 
-use crate::utils::text_format::truncate_reserving;
-
 /// Emit an `AuthorityChange` audit row for a draft edit (T2.3).
 ///
 /// `action` is one of `"edit"`, `"finalize"`, `"overflow_promoted"`. The
@@ -173,8 +171,7 @@ impl DraftChunker {
     ///    latest sentence terminator within the budget.
     /// 4. **Whitespace** (any `\n`, ` `, `\t`). Last resort before a hard
     ///    cut.
-    /// 5. **Hard cut** at the exact byte boundary returned by
-    ///    [`truncate_reserving`].
+    /// 5. **Hard cut** at the character budget.
     #[must_use]
     pub fn chunk(&self, text: &str) -> Vec<DraftChunk> {
         if text.chars().count() <= self.max_chars {
@@ -190,16 +187,29 @@ impl DraftChunker {
         // keep responses bounded).
         audit_draft_event(None, "draft_chunk", "discord", "0");
 
+        // Every chunk body must leave room for the marker that is appended
+        // afterwards. Reserve the WIDEST marker up front: the last chunk
+        // carries the shorter end marker, but the split runs before we know
+        // which chunk is last. Splitting at the full cap and truncating the
+        // body afterwards (the old behaviour) silently dropped the
+        // overflow characters.
+        let marker_budget = self
+            .continuation_marker
+            .chars()
+            .count()
+            .max(self.end_marker.chars().count());
+        let body_budget = self.max_chars.saturating_sub(marker_budget);
+
         // Step 1: hard-split on `\n\n` so we never carry an unfinished
-        // paragraph across chunks. Each piece below the cap is yielded
-        // verbatim; pieces above the cap go through the boundary-aware
+        // paragraph across chunks. Each piece below the body budget is
+        // yielded verbatim; pieces above it go through the boundary-aware
         // splitter below.
         let mut pieces: Vec<String> = Vec::new();
         let mut current = String::new();
         for paragraph in text.split("\n\n") {
             if current.is_empty() {
                 current.push_str(paragraph);
-            } else if current.chars().count() + 2 + paragraph.chars().count() <= self.max_chars {
+            } else if current.chars().count() + 2 + paragraph.chars().count() <= body_budget {
                 current.push_str("\n\n");
                 current.push_str(paragraph);
             } else {
@@ -211,24 +221,20 @@ impl DraftChunker {
             pieces.push(current);
         }
 
-        // Step 2: any piece that's still over the cap goes through the
-        // boundary splitter. We append the continuation/end marker AFTER
-        // splitting so the marker doesn't interfere with the boundary
-        // search.
+        // Step 2: any piece that's still over the body budget goes through
+        // the boundary splitter.
         let mut chunks: Vec<String> = Vec::new();
         for piece in pieces {
-            if piece.chars().count() <= self.max_chars {
+            if piece.chars().count() <= body_budget {
                 chunks.push(piece);
             } else {
-                chunks.extend(self.split_piece(&piece));
+                chunks.extend(self.split_piece(&piece, body_budget));
             }
         }
 
         // Step 3: tag each chunk with index/total and append the right
-        // marker. We append after splitting because the marker would
-        // shift the boundary search; the marker is always short enough
-        // that the post-append chunk stays ≤ max_chars (the splitter
-        // reserves `marker.chars().count()` of the budget).
+        // marker. The marker budget was reserved before splitting, so the
+        // marker always fits — the body is never truncated here.
         let total = chunks.len();
         chunks
             .into_iter()
@@ -240,19 +246,10 @@ impl DraftChunker {
                 } else {
                     &self.continuation_marker
                 };
-                let budget = self.max_chars.saturating_sub(marker.chars().count());
-                // `body` is already ≤ max_chars; if appending the marker
-                // would push it over, fall back to truncate_reserving so
-                // the marker is always present.
-                let text = if body.chars().count() + marker.chars().count() <= self.max_chars {
-                    format!("{body}{marker}")
-                } else {
-                    truncate_reserving(&body, budget, marker)
-                };
                 DraftChunk {
                     index: i,
                     total,
-                    text,
+                    text: format!("{body}{marker}"),
                     is_last,
                 }
             })
@@ -260,26 +257,26 @@ impl DraftChunker {
     }
 
     /// Split a single over-budget piece at the best boundary within
-    /// `max_chars`. The boundary preference is documented on
+    /// `budget` characters. The boundary preference is documented on
     /// [`chunk`](Self::chunk).
-    fn split_piece(&self, piece: &str) -> Vec<String> {
+    fn split_piece(&self, piece: &str, budget: usize) -> Vec<String> {
         let mut out = Vec::new();
         let mut remaining = piece;
-        while remaining.chars().count() > self.max_chars {
+        while remaining.chars().count() > budget {
             // `cap` is a BYTE offset, but it is derived from the CHARACTER
             // budget: it is the byte offset at which `max_chars` characters
             // have been consumed. Using the character count directly as a
             // byte offset would cut multi-byte text at a third of the
             // intended length — and, worse, slice inside a codepoint.
-            let cap = char_ceiling(remaining, self.max_chars);
+            let cap = char_ceiling(remaining, budget);
             // Walk the candidate split points in priority order. We pick
             // the LATEST split point that still fits the cap so each chunk
             // is as full as possible.
             let split_at = find_split_index(remaining, cap).unwrap_or(cap);
-            // The boundary preferences add a fixed byte count past the
-            // needle they matched, which can land inside a multi-byte
-            // codepoint — snap down before splitting.
-            let split_at = floor_char_boundary(remaining, split_at);
+            // The fence boundary adds one byte past the needle it matched,
+            // which can land inside a multi-byte codepoint — snap down
+            // before splitting, and never past the budget.
+            let split_at = floor_char_boundary(remaining, split_at).min(cap);
             let (head, _tail) = remaining.split_at(split_at);
             // Trim trailing whitespace from `head` so the next chunk
             // doesn't start with a stray space.
@@ -313,34 +310,38 @@ impl DraftChunker {
 /// Locate the latest boundary index ≤ `cap` in `text`. Returns `None` if
 /// no boundary was found (caller falls back to a hard cut). `cap` is a BYTE
 /// budget — the caller derives it from the character budget.
+///
+/// The returned index is the offset of the END of the matched needle (see
+/// [`last_index_of`]); callers must NOT add the needle length again.
 fn find_split_index(text: &str, cap: usize) -> Option<usize> {
     if text.len() <= cap {
         return Some(text.len());
     }
 
     // 1. Code-fence boundary: find the last `\n\n``` ` or `\n``` ` within
-    //    the cap. We never split inside a fenced code block.
+    //    the cap. We never split inside a fenced code block. `idx` is the
+    //    end of the fence; +1 skips the newline that follows it.
     let fence = last_index_of(text, "\n```", cap).or_else(|| last_index_of(text, "```\n", cap));
     if let Some(idx) = fence {
         return Some(idx + 1);
     }
 
-    // 2. Paragraph break (`\n\n`).
+    // 2. Paragraph break (`\n\n`). `idx` is already past the break.
     if let Some(idx) = last_index_of(text, "\n\n", cap) {
-        return Some(idx + 2);
+        return Some(idx);
     }
 
-    // 3. Sentence end.
+    // 3. Sentence end. `idx` is already past the terminator.
     for terminator in [". ", "! ", "? ", ".\n", "!\n", "?\n"] {
         if let Some(idx) = last_index_of(text, terminator, cap) {
-            return Some(idx + terminator.len());
+            return Some(idx);
         }
     }
 
-    // 4. Whitespace.
+    // 4. Whitespace. `idx` is already past the whitespace char.
     for ws in ['\n', ' ', '\t'] {
         if let Some(idx) = last_index_of(text, &ws.to_string(), cap) {
-            return Some(idx + 1);
+            return Some(idx);
         }
     }
 
@@ -670,6 +671,40 @@ mod tests {
                 chunk.text.chars().count()
             );
         }
+    }
+
+    #[test]
+    fn chunking_preserves_every_character() {
+        // Regression: the chunker split at the full cap and then truncated
+        // the body to make room for the marker, dropping the overflow.
+        // Re-assembling the bodies must give the input back.
+        let c = DraftChunker::new(20, "..", "..");
+        let text = "x".repeat(4000);
+        let out = c.chunk(&text);
+        let reassembled: String = out
+            .iter()
+            .map(|chunk| chunk.text.strip_suffix("..").unwrap_or(chunk.text.as_str()))
+            .collect();
+        assert_eq!(reassembled, text);
+        for chunk in &out {
+            assert!(
+                chunk.text.chars().count() <= 20,
+                "chunk too long: {} chars",
+                chunk.text.chars().count()
+            );
+        }
+    }
+
+    #[test]
+    fn chunking_keeps_text_after_a_sentence_boundary() {
+        // cap 10 with empty markers: the boundary helper already returns
+        // the end of the needle, so the caller must not add the terminator
+        // length a second time (that used to eat the text after it).
+        let c = DraftChunker::new(10, "", "");
+        let text = "12345678. abcdef";
+        let out = c.chunk(text);
+        let reassembled: String = out.iter().map(|chunk| chunk.text.as_str()).collect();
+        assert_eq!(reassembled, text);
     }
 
     #[test]

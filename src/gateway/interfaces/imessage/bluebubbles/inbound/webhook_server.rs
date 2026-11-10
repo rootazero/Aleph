@@ -27,18 +27,17 @@ pub struct WebhookState {
     pub send_read_receipts: bool,
 }
 
-pub async fn run_webhook_server(state: WebhookState, host: String, port: u16, path: String) {
-    let addr = format!("{host}:{port}");
+pub async fn run_webhook_server(
+    state: WebhookState,
+    listener: tokio::net::TcpListener,
+    path: String,
+) {
+    let addr = listener
+        .local_addr()
+        .expect("bound listener has an address");
     let app = Router::new()
         .route(&path, post(handle_webhook))
         .with_state(state);
-    let listener = match tokio::net::TcpListener::bind(&addr).await {
-        Ok(l) => l,
-        Err(e) => {
-            tracing::error!("BlueBubbles webhook bind {addr} failed: {e}");
-            return;
-        }
-    };
     tracing::info!("BlueBubbles webhook listening on {addr}{path}");
     if let Err(e) = axum::serve(listener, app).await {
         tracing::error!("BlueBubbles webhook server error: {e}");

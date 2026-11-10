@@ -175,7 +175,7 @@ fn parent_pid() -> u32 {
 #[cfg(unix)]
 fn read_parent_command(ppid: u32) -> Option<String> {
     // Bounded subprocess — `ps` typically returns in <20 ms. We enforce a
-    // 250 ms wall-clock budget by polling `try_wait` in a tight loop.
+    // 250 ms wall-clock budget for the probe, with additional time for cleanup.
     let mut child = Command::new("ps")
         .arg("-p")
         .arg(ppid.to_string())
@@ -193,7 +193,9 @@ fn read_parent_command(ppid: u32) -> Option<String> {
             Ok(Some(_)) => return None,
             Ok(None) => {
                 if Instant::now() >= deadline {
-                    let _ = child.kill();
+                    if child.kill().is_ok() {
+                        let _ = child.wait();
+                    }
                     return None;
                 }
                 std::thread::sleep(Duration::from_millis(10));

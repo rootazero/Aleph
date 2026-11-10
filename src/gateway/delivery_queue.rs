@@ -965,13 +965,27 @@ impl DeliveryStore {
 
         if payload.len() > self.config.max_payload_bytes {
             let bytes = payload.len();
+            // The rejected body must NOT be persisted. The dead-letter table
+            // bounds its ROW COUNT, not its bytes, so storing the payload
+            // grows the database by exactly the size the limit exists to
+            // reject. What is kept is a bounded diagnostic: the identity of
+            // the delivery and the size it had.
+            let diagnostic = serde_json::json!({
+                "channel_id": channel_id,
+                "conversation_id": message.conversation_id.as_str(),
+                "original_bytes": bytes,
+                "max_payload_bytes": self.config.max_payload_bytes,
+                "note": "payload exceeded max_payload_bytes; the body was not retained",
+            });
+            let diagnostic_payload = serde_json::to_string(&diagnostic)
+                .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
             Self::insert_dead_letter(
                 conn,
                 self.config.max_queue_len,
                 DeadLetterInsert {
                     channel_id,
                     conversation_id: message.conversation_id.as_str(),
-                    payload: &payload,
+                    payload: &diagnostic_payload,
                     attempts: 0,
                     last_error: &format!(
                         "payload {bytes} B exceeds max_payload_bytes {} (never enqueued); last transport error: {last_error}",
@@ -1391,6 +1405,14 @@ impl DeliveryStore {
 
     /// Replay choke point: row existence, durable policy and attempt stamp are
     /// atomic. This also fences in-memory claims retired by a replacement.
+    ///
+    /// A row that still carries a stamp from a previous attempt is an
+    /// *unsettled* attempt: the previous send may have crossed the transport
+    /// boundary but never reached settlement. Replaying it automatically would
+    /// risk a duplicate delivery, which the module's policy forbids — such
+    /// rows must be surfaced as `UnknownOutcome` for explicit operator
+    /// recovery instead. We therefore refuse to claim any row whose stamp is
+    /// already set, rather than overwriting it.
     pub(crate) fn begin_replay(&self, id: i64, channel_id: &str) -> rusqlite::Result<bool> {
         let failures = self
             .policy_failures
@@ -1404,8 +1426,13 @@ impl DeliveryStore {
         if Self::has_marker(&tx, channel_id)? {
             return Ok(false);
         }
+        // Only claim a row that has no residual stamp. A stamped row is an
+        // unsettled prior attempt; overwriting the stamp here would turn an
+        // ambiguous send into an automatic retry, violating the rule that
+        // ambiguous sends become `UnknownOutcome`, never silent re-sends.
         let changed = tx.execute(
-            "UPDATE outbound_deliveries SET inflight_since = ?1 WHERE id = ?2 AND channel_id = ?3",
+            "UPDATE outbound_deliveries SET inflight_since = ?1 \
+             WHERE id = ?2 AND channel_id = ?3 AND inflight_since IS NULL",
             params![now_secs(), id, channel_id],
         )?;
         tx.commit()?;

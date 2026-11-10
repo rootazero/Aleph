@@ -14,6 +14,8 @@ use super::config::EmailConfig;
 
 const INITIAL_BACKOFF: Duration = Duration::from_secs(5);
 const MAX_BACKOFF: Duration = Duration::from_secs(300);
+const MAX_IMAP_BATCH_MESSAGES: usize = 32;
+const MAX_IMAP_MESSAGE_BYTES: u32 = 1024 * 1024;
 
 /// Email message operations helper.
 ///
@@ -121,21 +123,20 @@ impl EmailMessageOps {
     #[must_use]
     pub fn markdown_to_html_email(markdown: &str) -> String {
         // Simple Markdown-to-HTML conversion for email
-        let mut html = markdown.to_string();
+        // Escape untrusted text and destinations before inserting our fixed tags.
+        let mut html = Self::escape_html(markdown);
 
         // Convert code blocks first (before inline conversions).
         // Use a placeholder to protect code blocks from newline conversion.
         let mut code_blocks: Vec<String> = Vec::new();
         html = Self::extract_code_blocks(&html, &mut code_blocks);
+        html = Self::extract_inline_code(&html, &mut code_blocks);
 
         // Bold: **text** -> <strong>text</strong>
         html = Self::convert_paired_marker(&html, "**", "<strong>", "</strong>");
 
         // Italic: *text* -> <em>text</em>
         html = Self::convert_single_asterisk(&html, "<em>", "</em>");
-
-        // Inline code: `text` -> <code>text</code>
-        html = Self::convert_paired_marker(&html, "`", "<code>", "</code>");
 
         // Links: [text](url) -> <a href="url">text</a>
         html = Self::convert_links(&html);
@@ -148,7 +149,6 @@ impl EmailMessageOps {
         for (i, block) in code_blocks.iter().enumerate() {
             html = html.replace(&format!("\x00CODE_BLOCK_{i}\x00"), block);
         }
-
         format!(
             r#"<!DOCTYPE html>
 <html>
@@ -296,7 +296,6 @@ impl EmailMessageOps {
             tokio::net::TcpStream::connect((config.imap_host.as_str(), config.imap_port))
                 .await
                 .map_err(|e| ChannelError::Internal(format!("IMAP TCP connect failed: {e}")))?;
-
         // Wrap tokio TcpStream with compat layer so it implements futures::AsyncRead/Write
         let compat_stream = tcp_stream.compat();
 
@@ -321,104 +320,130 @@ impl EmailMessageOps {
 
         for folder in &config.folders {
             // Select the folder
-            session
+            let mailbox = session
                 .select(folder)
                 .await
                 .map_err(|e| ChannelError::Internal(format!("IMAP SELECT {folder} failed: {e}")))?;
 
-            // Search for unseen messages
-            let search_result = session
-                .search("UNSEEN")
-                .await
-                .map_err(|e| ChannelError::Internal(format!("IMAP SEARCH failed: {e}")))?;
+            // Bound SEARCH metadata as well as FETCH bodies with sequence windows.
+            for first in (1..=mailbox.exists).step_by(MAX_IMAP_BATCH_MESSAGES) {
+                let last = first
+                    .saturating_add(MAX_IMAP_BATCH_MESSAGES as u32 - 1)
+                    .min(mailbox.exists);
+                let search_result = session
+                    .uid_search(format!(
+                        "{first}:{last} UNSEEN SMALLER {}",
+                        MAX_IMAP_MESSAGE_BYTES + 1
+                    ))
+                    .await
+                    .map_err(|e| ChannelError::Internal(format!("IMAP SEARCH failed: {e}")))?;
+                if search_result.is_empty() {
+                    continue;
+                }
+                let uid_set = Self::imap_uid_batch(search_result);
 
-            if search_result.is_empty() {
-                continue;
-            }
+                // PEEK preserves UNSEEN until publication; partial FETCH bounds
+                // allocation even if a message grows after SEARCH.
+                let mut messages_stream = session
+                    .uid_fetch(
+                        &uid_set,
+                        format!(
+                            "(BODY.PEEK[]<0.{}> UID RFC822.SIZE)",
+                            MAX_IMAP_MESSAGE_BYTES + 1
+                        ),
+                    )
+                    .await
+                    .map_err(|e| ChannelError::Internal(format!("IMAP FETCH failed: {e}")))?;
 
-            // Build sequence set from UIDs
-            let uids: Vec<String> = search_result
-                .iter()
-                .map(|uid: &u32| uid.to_string())
-                .collect();
-            let uid_set = uids.join(",");
+                use futures::StreamExt;
+                let mut published_uids: Vec<String> = Vec::new();
+                while let Some(result) = messages_stream.next().await {
+                    let fetch = match result {
+                        Ok(fetch) => fetch,
+                        Err(e) => {
+                            tracing::warn!("Email: IMAP fetch error: {e}");
+                            continue;
+                        }
+                    };
+                    let body = match fetch.body() {
+                        Some(body) if Self::is_complete_imap_body(body, fetch.size) => body,
+                        _ => continue,
+                    };
 
-            // Fetch messages
-            let messages_stream = session
-                .fetch(&uid_set, "(RFC822 UID)")
-                .await
-                .map_err(|e| ChannelError::Internal(format!("IMAP FETCH failed: {e}")))?;
+                    // Parse the email
+                    let sender = match Self::extract_sender(body) {
+                        Some(s) => s,
+                        None => {
+                            tracing::warn!("Email: could not extract sender");
+                            continue;
+                        }
+                    };
 
-            // Collect fetches into a Vec to release the borrow on session
-            use futures::StreamExt;
-            let fetches: Vec<_> = messages_stream
-                .filter_map(|r| async { r.ok() })
-                .collect()
-                .await;
-
-            for fetch in &fetches {
-                let body = match fetch.body() {
-                    Some(b) => b,
-                    None => continue,
-                };
-
-                // Parse the email
-                let sender = match Self::extract_sender(body) {
-                    Some(s) => s,
-                    None => {
-                        tracing::warn!("Email: could not extract sender");
+                    // Check sender allowlist
+                    if !config.is_sender_allowed(&sender) {
+                        tracing::debug!("Email: sender {sender} not in allowed list, skipping");
                         continue;
                     }
-                };
 
-                // Check sender allowlist
-                if !config.is_sender_allowed(&sender) {
-                    tracing::debug!("Email: sender {sender} not in allowed list, skipping");
-                    continue;
+                    let subject = Self::extract_subject(body).unwrap_or_default();
+                    let text = Self::extract_body_text(body);
+                    let message_id = Self::extract_message_id(body)
+                        .unwrap_or_else(|| format!("email-{}", uuid::Uuid::new_v4()));
+
+                    if text.is_empty() {
+                        continue;
+                    }
+
+                    let inbound = InboundMessage {
+                        id: MessageId::new(&message_id),
+                        channel_id: channel_id.clone(),
+                        conversation_id: ConversationId::new(sender.clone()),
+                        sender_id: UserId::new(sender.clone()),
+                        sender_name: Some(sender.clone()),
+                        text,
+                        attachments: Vec::new(), // TODO: extract email attachments
+                        timestamp: Utc::now(),
+                        reply_to: None,
+                        is_group: false,
+                        raw: Some(serde_json::json!({
+                            "subject": subject,
+                            "from": sender,
+                            "message_id": message_id,
+                            "folder": folder,
+                        })),
+                        metadata: vec![],
+                    };
+
+                    if inbound_tx.send(inbound).is_err() {
+                        tracing::error!("Email: inbound channel closed");
+                        // Drain this bounded command before issuing STORE on the session.
+                        // Unpublished bodies remain UNSEEN.
+                        while messages_stream.next().await.is_some() {}
+                        break;
+                    }
+
+                    if let Some(uid) = fetch.uid {
+                        published_uids.push(uid.to_string());
+                    }
+
+                    total_processed += 1;
                 }
 
-                let subject = Self::extract_subject(body).unwrap_or_default();
-                let text = Self::extract_body_text(body);
-                let message_id = Self::extract_message_id(body)
-                    .unwrap_or_else(|| format!("email-{}", uuid::Uuid::new_v4()));
+                drop(messages_stream);
 
-                if text.is_empty() {
-                    continue;
-                }
-
-                let inbound = InboundMessage {
-                    id: MessageId::new(&message_id),
-                    channel_id: channel_id.clone(),
-                    conversation_id: ConversationId::new(sender.clone()),
-                    sender_id: UserId::new(sender.clone()),
-                    sender_name: Some(sender.clone()),
-                    text,
-                    attachments: Vec::new(), // TODO: extract email attachments
-                    timestamp: Utc::now(),
-                    reply_to: None,
-                    is_group: false,
-                    raw: Some(serde_json::json!({
-                        "subject": subject,
-                        "from": sender,
-                        "message_id": message_id,
-                        "folder": folder,
-                    })),
-                    metadata: vec![],
-                };
-
-                if inbound_tx.send(inbound).is_err() {
-                    tracing::error!("Email: inbound channel closed");
-                    break;
-                }
-
-                total_processed += 1;
-            }
-
-            // Mark fetched messages as seen
-            if !uid_set.is_empty() {
-                if let Ok(mut store_stream) = session.store(&uid_set, "+FLAGS (\\Seen)").await {
-                    // Consume the stream to apply the flag changes
-                    while store_stream.next().await.is_some() {}
+                // Mark ONLY the messages that were actually published as seen.
+                // Marking the whole search set would hide messages that were
+                // never delivered (fetch error, allowlist skip, closed
+                // receiver) — the next poll only searches UNSEEN, so those would
+                // never be seen again.
+                if !published_uids.is_empty() {
+                    let published_set = published_uids.join(",");
+                    if let Ok(mut store_stream) =
+                        session.uid_store(&published_set, "+FLAGS (\\Seen)").await
+                    {
+                        // Consume the stream to apply the flag changes
+                        while store_stream.next().await.is_some() {}
+                    }
                 }
             }
         }
@@ -432,6 +457,21 @@ impl EmailMessageOps {
     // ------------------------------------------------------------------
     // Private helpers
     // ------------------------------------------------------------------
+
+    fn imap_uid_batch(uids: std::collections::HashSet<u32>) -> String {
+        let mut uids: Vec<_> = uids.into_iter().collect();
+        uids.sort_unstable();
+        uids.into_iter()
+            .take(MAX_IMAP_BATCH_MESSAGES)
+            .map(|uid| uid.to_string())
+            .collect::<Vec<_>>()
+            .join(",")
+    }
+
+    fn is_complete_imap_body(body: &[u8], size: Option<u32>) -> bool {
+        body.len() <= MAX_IMAP_MESSAGE_BYTES as usize
+            && size.is_some_and(|size| size as usize == body.len())
+    }
 
     /// Strip HTML tags from a string (simple implementation).
     fn strip_html_tags(html: &str) -> String {
@@ -455,6 +495,33 @@ impl EmailMessageOps {
             .replace("&quot;", "\"")
             .replace("&#39;", "'")
             .replace("&nbsp;", " ")
+    }
+
+    fn escape_html(text: &str) -> String {
+        text.replace('&', "&amp;")
+            .replace('<', "&lt;")
+            .replace('>', "&gt;")
+            .replace('"', "&quot;")
+            .replace('\'', "&#39;")
+    }
+
+    // Input is already escaped; placeholders keep Markdown inside code literal.
+    fn extract_inline_code(text: &str, blocks: &mut Vec<String>) -> String {
+        let mut result = String::with_capacity(text.len());
+        let mut rest = text;
+        while let Some(start) = rest.find('`') {
+            let after = &rest[start + 1..];
+            let Some(end) = after.find('`') else {
+                break;
+            };
+            result.push_str(&rest[..start]);
+            let idx = blocks.len();
+            blocks.push(format!("<code>{}</code>", &after[..end]));
+            result.push_str(&format!("\x00CODE_BLOCK_{idx}\x00"));
+            rest = &after[end + 1..];
+        }
+        result.push_str(rest);
+        result
     }
 
     /// Extract fenced code blocks, replace with placeholders, store HTML in `blocks`.
@@ -724,6 +791,40 @@ mod tests {
     // ------------------------------------------------------------------
     // Markdown to HTML email
     // ------------------------------------------------------------------
+
+    #[test]
+    fn markdown_escapes_text_code_and_link_attributes() {
+        let result = EmailMessageOps::markdown_to_html_email(
+            "Use List<T> & <img src=x> `**<tag>**`\n\n[link](https://example.com/?a=\"quoted\"&b=1)\n\n```\n<tag>&amp;\nsecond line\n```",
+        );
+        assert!(result.contains("List&lt;T&gt; &amp; &lt;img src=x&gt;"));
+        assert!(result.contains("<code>**&lt;tag&gt;**</code>"));
+        assert!(!result.contains("<img"));
+        assert!(result.contains("href=\"https://example.com/?a=&quot;quoted&quot;&amp;b=1\""));
+        assert!(result.contains("&lt;tag&gt;&amp;amp;\nsecond line\n</code>"));
+    }
+
+    #[test]
+    fn imap_batch_and_body_limits_exclude_oversize_and_truncated_mail() {
+        let batch = EmailMessageOps::imap_uid_batch((1..=100).collect());
+        assert_eq!(batch.split(',').count(), MAX_IMAP_BATCH_MESSAGES);
+        assert!(batch.ends_with(",32"));
+        let body = vec![b'x'; MAX_IMAP_MESSAGE_BYTES as usize];
+        assert!(EmailMessageOps::is_complete_imap_body(
+            &body,
+            Some(MAX_IMAP_MESSAGE_BYTES)
+        ));
+        assert!(!EmailMessageOps::is_complete_imap_body(
+            &body,
+            Some(MAX_IMAP_MESSAGE_BYTES + 1)
+        ));
+        assert!(!EmailMessageOps::is_complete_imap_body(&body, None));
+        let oversize = vec![b'x'; MAX_IMAP_MESSAGE_BYTES as usize + 1];
+        assert!(!EmailMessageOps::is_complete_imap_body(
+            &oversize,
+            Some(MAX_IMAP_MESSAGE_BYTES + 1)
+        ));
+    }
 
     #[test]
     fn test_markdown_to_html_bold() {

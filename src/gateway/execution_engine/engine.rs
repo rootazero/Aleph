@@ -518,18 +518,27 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
 
     /// Cancel a run
     pub async fn cancel(&self, run_id: &str) -> Result<(), ExecutionError> {
-        let cancel_tx = {
+        let (cancel_tx, cancel_token) = {
             let runs = self.active_runs.read().await;
             match runs.get(run_id) {
                 Some(run) => match run.cancel_tx {
-                    Some(ref tx) => tx.clone(),
+                    Some(ref tx) => (tx.clone(), Some(run.cancel_token.clone())),
                     None => return Err(ExecutionError::RunNotActive(run_id.to_string())),
                 },
                 None => return Err(ExecutionError::RunNotFound(run_id.to_string())),
             }
         };
         // Lock released before await
-        let _ = cancel_tx.send(()).await;
+        // `try_send`, not `send`: the channel holds one token, and a stop
+        // that arrives while the previous token is still queued would block
+        // inside the stop path itself. A failed `try_send` means the channel
+        // already carries a pending cancel, so the run still observes it.
+        let _ = cancel_tx.try_send(());
+        // The coarse token wakes the run loop's select. The run's own token is
+        // what a fast-path dispatch — which never runs that select — watches.
+        if let Some(token) = cancel_token {
+            token.cancel();
+        }
         info!("Sent cancellation signal for run {}", run_id);
         Ok(())
     }

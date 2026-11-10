@@ -60,10 +60,10 @@ impl WeChatChannel {
 
     const fn capabilities() -> ChannelCapabilities {
         ChannelCapabilities {
-            attachments: true,
-            images: true,
-            audio: true,
-            video: true,
+            attachments: false,
+            images: false,
+            audio: false,
+            video: false,
             reactions: false,
             replies: false,
             editing: false,
@@ -112,6 +112,7 @@ impl Channel for WeChatChannel {
         let runtime = Arc::new(runtime::WeChatRuntime::new(
             self.config.clone(),
             auth::ContextTokenStore::new(&self.config.data_dir),
+            self.info.id.clone(),
         ));
 
         self.runtime = Some(runtime.clone());

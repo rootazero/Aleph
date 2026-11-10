@@ -3,6 +3,19 @@ use super::{
     SlackDebouncer, SlackMessageOps, UserDirectory, INITIAL_BACKOFF, MAX_BACKOFF,
 };
 
+async fn acknowledge_envelope<S>(sink: &mut S, envelope_id: &str) -> Result<(), S::Error>
+where
+    S: futures_util::Sink<tokio_tungstenite::tungstenite::Message> + Unpin,
+{
+    use futures_util::SinkExt;
+
+    let ack = serde_json::json!({ "envelope_id": envelope_id });
+    sink.send(tokio_tungstenite::tungstenite::Message::Text(
+        ack.to_string().into(),
+    ))
+    .await
+}
+
 impl SlackMessageOps {
     pub async fn run_socket_mode_loop(
         client: reqwest::Client,
@@ -14,13 +27,13 @@ impl SlackMessageOps {
         mut shutdown_rx: tokio::sync::watch::Receiver<bool>,
         user_directory: Option<Arc<UserDirectory>>,
     ) {
-        use futures_util::{SinkExt, StreamExt};
+        use futures_util::StreamExt;
 
         let mut backoff = INITIAL_BACKOFF;
         let mut debouncer = SlackDebouncer::new(config.debounce_ms, inbound_tx);
 
         loop {
-            if *shutdown_rx.borrow() {
+            if *shutdown_rx.borrow() || shutdown_rx.has_changed().is_err() {
                 break;
             }
 
@@ -63,11 +76,15 @@ impl SlackMessageOps {
             let should_reconnect = 'inner: loop {
                 tokio::select! {
                     _ = flush_interval.tick() => {
-                        debouncer.flush_expired().await;
+                        if debouncer.flush_expired().await {
+                            break 'inner false;
+                        }
                         continue;
                     }
                     msg = ws_rx.next() => {
-                        debouncer.flush_expired().await;
+                        if debouncer.flush_expired().await {
+                            break 'inner false;
+                        }
 
                         let msg = match msg {
                             Some(Ok(m)) => m,
@@ -108,13 +125,7 @@ impl SlackMessageOps {
                             "events_api" => {
                                 let envelope_id = payload["envelope_id"].as_str().unwrap_or("");
                                 if !envelope_id.is_empty() {
-                                    let ack = serde_json::json!({ "envelope_id": envelope_id });
-                                    if let Err(e) = ws_tx
-                                        .send(tokio_tungstenite::tungstenite::Message::Text(
-                                            serde_json::to_string(&ack).unwrap().into(),
-                                        ))
-                                        .await
-                                    {
+                                    if let Err(e) = acknowledge_envelope(&mut ws_tx, envelope_id).await {
                                         tracing::error!("Slack: failed to send ack: {e}");
                                         break 'inner true;
                                     }
@@ -191,7 +202,7 @@ impl SlackMessageOps {
                                     let thread_ts = reply_to.as_ref().map(|id| id.as_str());
                                     if debouncer.enqueue(resolved_inbound, thread_ts).await {
                                         tracing::error!("Slack: inbound channel closed");
-                                        return;
+                                        break 'inner false;
                                     }
                                 }
                             }
@@ -207,10 +218,9 @@ impl SlackMessageOps {
                             }
                         }
                     }
-                    _ = shutdown_rx.changed() => {
-                        if *shutdown_rx.borrow() {
-                            let _ = ws_tx.close().await;
-                            return;
+                    changed = shutdown_rx.changed() => {
+                        if changed.is_err() || *shutdown_rx.borrow() {
+                            break 'inner false;
                         }
                     }
                 };
@@ -225,6 +235,49 @@ impl SlackMessageOps {
             backoff = (backoff * 2).min(MAX_BACKOFF);
         }
 
+        if debouncer.drain().await {
+            tracing::error!("Slack: shutdown drain could not forward all accepted messages");
+        }
         tracing::info!("Slack Socket Mode loop stopped");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn events_api_ack_preserves_envelope_id_and_reports_write_failure() {
+        use std::convert::Infallible;
+        use tokio_tungstenite::tungstenite::Message;
+
+        let mut frames = Vec::new();
+        {
+            let sink = futures_util::sink::unfold(&mut frames, |frames, msg| {
+                frames.push(msg);
+                std::future::ready(Ok::<_, Infallible>(frames))
+            });
+            let mut sink = std::pin::pin!(sink);
+            acknowledge_envelope(&mut sink, "envelope-42")
+                .await
+                .unwrap();
+        }
+        assert_eq!(frames.len(), 1);
+        let Message::Text(text) = &frames[0] else {
+            panic!("ACK must be a text frame");
+        };
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(text).unwrap(),
+            serde_json::json!({"envelope_id": "envelope-42"})
+        );
+
+        let sink = futures_util::sink::unfold((), |(), _: Message| {
+            std::future::ready(Err::<(), _>("closed"))
+        });
+        let mut sink = std::pin::pin!(sink);
+        assert_eq!(
+            acknowledge_envelope(&mut sink, "envelope-42").await,
+            Err("closed")
+        );
     }
 }

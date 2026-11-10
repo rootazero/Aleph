@@ -249,7 +249,17 @@ pub fn parse_telegram_channel_config(
         },
     };
 
-    // Run validation and log warnings for any issues
+    // A zero-capacity Tokio channel panics; reject it at the config boundary.
+    if config.accounts.iter().any(|account| {
+        account
+            .streaming
+            .as_ref()
+            .is_some_and(|streaming| streaming.buffer_size == 0)
+    }) {
+        return Err(<serde_json::Error as serde::de::Error>::custom(
+            "Telegram streaming.buffer_size must be > 0",
+        ));
+    }
     let validation_errors = config.validate();
     if !validation_errors.is_empty() {
         for err in &validation_errors {
@@ -263,6 +273,31 @@ pub fn parse_telegram_channel_config(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn zero_stream_buffer_is_rejected_in_v2_and_legacy_configs() {
+        for raw in [
+            serde_json::json!({"accounts": [{"id": "a", "bot_token": "123:abc", "streaming": {"buffer_size": 0}}]}),
+            serde_json::json!({"bot_token": "123:abc", "streaming": {"buffer_size": 0}}),
+        ] {
+            let error = parse_telegram_channel_config(raw).unwrap_err();
+            assert!(error
+                .to_string()
+                .contains("streaming.buffer_size must be > 0"));
+        }
+        let config = parse_telegram_channel_config(serde_json::json!({
+            "accounts": [{"id": "a", "bot_token": "123:abc"}]
+        }))
+        .unwrap();
+        assert_eq!(
+            config.accounts[0]
+                .streaming
+                .clone()
+                .unwrap_or_default()
+                .buffer_size,
+            256
+        );
+    }
 
     #[test]
     fn test_default_config() {

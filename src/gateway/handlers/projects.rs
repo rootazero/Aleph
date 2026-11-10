@@ -1105,42 +1105,52 @@ pub async fn handle_workspace_list(
     };
 
     let rel = params.rel_path.unwrap_or_default();
-    let dir = match resolve_in_workspace(root, &rel) {
-        Ok(p) => p,
-        Err(refusal) => return workspace_refusal(request.id, &refusal, &rel),
-    };
-
-    let Ok(reader) = std::fs::read_dir(&dir) else {
-        return workspace_refusal(request.id, &PathRefusal::Missing, &rel);
-    };
-
-    let denied = crate::builtin_tools::file_ops::get_denied_paths();
-    let mut entries: Vec<WorkspaceEntry> = Vec::new();
-    for item in reader.flatten() {
-        // Per-entry, and on the canonical form: a denied file must not appear
-        // in a listing it would be refused from reading. An entry that cannot
-        // be canonicalized (a broken symlink, a race with a delete) is
-        // skipped rather than reported — this surface describes what is
-        // readable, and a name it cannot resolve is not.
-        let Ok(canonical) = item.path().canonicalize() else {
-            continue;
-        };
-        if crate::builtin_tools::file_ops::path_is_denied(&canonical, &denied) {
-            continue;
+    let result = tokio::task::spawn_blocking({
+        let root = root.clone();
+        let rel = rel.clone();
+        move || {
+            let dir = match resolve_in_workspace(&root, &rel) {
+                Ok(p) => p,
+                Err(refusal) => return Err(refusal),
+            };
+            let Ok(reader) = std::fs::read_dir(&dir) else {
+                return Err(PathRefusal::Missing);
+            };
+            let denied = crate::builtin_tools::file_ops::get_denied_paths();
+            let mut entries: Vec<WorkspaceEntry> = Vec::new();
+            for item in reader.flatten() {
+                // Per-entry, and on the canonical form: a denied file must not appear
+                // in a listing it would be refused from reading. An entry that cannot
+                // be canonicalized (a broken symlink, a race with a delete) is
+                // skipped rather than reported — this surface describes what is
+                // readable, and a name it cannot resolve is not.
+                let Ok(canonical) = item.path().canonicalize() else {
+                    continue;
+                };
+                if crate::builtin_tools::file_ops::path_is_denied(&canonical, &denied) {
+                    continue;
+                }
+                let Ok(meta) = item.metadata() else {
+                    continue;
+                };
+                entries.push(WorkspaceEntry {
+                    name: item.file_name().to_string_lossy().into_owned(),
+                    is_dir: meta.is_dir(),
+                    size: if meta.is_dir() { 0 } else { meta.len() },
+                });
+            }
+            // Directories first, then by name — a stable order, so a listing does not
+            // reshuffle between two reads of an unchanged directory.
+            entries.sort_by(|a, b| b.is_dir.cmp(&a.is_dir).then_with(|| a.name.cmp(&b.name)));
+            Ok(entries)
         }
-        let Ok(meta) = item.metadata() else {
-            continue;
-        };
-        entries.push(WorkspaceEntry {
-            name: item.file_name().to_string_lossy().into_owned(),
-            is_dir: meta.is_dir(),
-            size: if meta.is_dir() { 0 } else { meta.len() },
-        });
-    }
-    // Directories first, then by name — a stable order, so a listing does not
-    // reshuffle between two reads of an unchanged directory.
-    entries.sort_by(|a, b| b.is_dir.cmp(&a.is_dir).then_with(|| a.name.cmp(&b.name)));
-
+    })
+    .await;
+    let entries = match result {
+        Ok(Ok(entries)) => entries,
+        Ok(Err(refusal)) => return workspace_refusal(request.id, &refusal, &rel),
+        Err(_e) => return workspace_refusal(request.id, &PathRefusal::Missing, &rel),
+    };
     JsonRpcResponse::success(
         request.id,
         json!({ "root_bound": true, "entries": entries }),

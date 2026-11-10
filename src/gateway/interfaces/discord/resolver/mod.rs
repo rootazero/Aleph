@@ -57,16 +57,13 @@ impl DiscordResolver {
                 found
             }
             ParsedInput::GuildPrefix { guild, channel } => {
-                let target_guild = guilds_data
+                let matching_guilds: Vec<_> = guilds_data
                     .iter()
-                    .find(|(g, _)| to_guild_slug(&g.name) == to_guild_slug(guild));
+                    .filter(|(g, _)| to_guild_slug(&g.name) == to_guild_slug(guild))
+                    .map(|(g, c)| (g.clone(), c.clone()))
+                    .collect();
 
-                match target_guild {
-                    Some((guild, channels)) => {
-                        search_in_guilds(&[(guild.clone(), channels.clone())], channel)
-                    }
-                    None => Vec::new(),
-                }
+                search_in_guilds(&matching_guilds, channel)
             }
             ParsedInput::ChannelName(name) => search_in_guilds(&guilds_data, name),
         };
@@ -87,7 +84,6 @@ impl DiscordResolver {
             _ => Err(ChannelResolutionError::Ambiguous(candidates)),
         }
     }
-
     pub async fn list_channels(&self) -> Result<Vec<Candidate>, ChannelResolutionError> {
         let guilds_data = self.load_guilds_and_channels().await?;
         let mut candidates = Vec::new();
@@ -127,8 +123,9 @@ impl DiscordResolver {
         for guild in &guilds {
             match list_channels(&self.http, guild.guild_id).await {
                 Ok(chs) => channels.push((guild.clone(), chs)),
-                Err(_) => {
-                    tracing::debug!("Skipping channels for guild {} (no permission)", guild.name);
+                Err(e) => {
+                    tracing::debug!("Failed to list channels for guild {}: {:?}", guild.name, e);
+                    return Err(ChannelResolutionError::NoPermission(e));
                 }
             }
         }

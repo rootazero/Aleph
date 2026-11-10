@@ -3,7 +3,6 @@
 //! Persists the `get_updates_buf` for incremental sync across restarts.
 
 use std::path::Path;
-
 const SYNC_FILE_SUFFIX: &str = ".sync.json";
 
 fn sync_path(hermes_home: &str, account_id: &str) -> std::path::PathBuf {
@@ -36,13 +35,31 @@ pub async fn load_sync_buf(hermes_home: &str, account_id: &str) -> String {
 pub async fn save_sync_buf(hermes_home: &str, account_id: &str, sync_buf: &str) {
     let path = sync_path(hermes_home, account_id);
     if let Some(parent) = path.parent() {
-        let _ = tokio::fs::create_dir_all(parent).await;
+        if let Err(e) = tokio::fs::create_dir_all(parent).await {
+            tracing::warn!(
+                "Failed to create sync buffer directory for {}: {}",
+                account_id,
+                e
+            );
+            return;
+        }
     }
     let data = serde_json::json!({ "get_updates_buf": sync_buf });
     let tmp_path = path.with_extension("tmp");
-    if let Ok(json) = serde_json::to_string_pretty(&data) {
-        let _ = tokio::fs::write(&tmp_path, json).await;
-        let _ = tokio::fs::rename(&tmp_path, &path).await;
+    let json = match serde_json::to_string_pretty(&data) {
+        Ok(j) => j,
+        Err(e) => {
+            tracing::error!("Failed to serialize sync buffer for {}: {}", account_id, e);
+            return;
+        }
+    };
+    if let Err(e) = tokio::fs::write(&tmp_path, json).await {
+        tracing::error!("Failed to write sync buffer for {}: {}", account_id, e);
+        return;
+    }
+    if let Err(e) = tokio::fs::rename(&tmp_path, &path).await {
+        tracing::error!("Failed to rename sync buffer for {}: {}", account_id, e);
+        let _ = tokio::fs::remove_file(&tmp_path).await;
     }
 }
 

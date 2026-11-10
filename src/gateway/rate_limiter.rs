@@ -508,16 +508,22 @@ impl RateLimiter {
     /// and that have no active lockout. Call periodically to reclaim memory.
     pub fn prune_stale(&self, max_age: Duration) {
         let now = Instant::now();
-        self.windows.retain(|_key, sw| {
+        self.windows.retain(|key, sw| {
             // Keep if lockout is still active
             if let Some(until) = sw.lockout_until {
                 if now < until {
                     return true;
                 }
             }
-            // Keep if any timestamp is recent enough
+            // Keep if any timestamp is recent enough. The retention age is the
+            // caller's `max_age` **or** the entry's own scope window,
+            // whichever is longer: a caller that reaches the capacity limit
+            // with a short window must not reclaim a record that is still
+            // inside the longer window of the scope it belongs to (G3-01).
+            let scope_window = Duration::from_secs(self.config.config_for(&key.scope).window_secs);
+            let keep_for = max_age.max(scope_window);
             match sw.timestamps.back() {
-                Some(&last) => now.saturating_duration_since(last) < max_age,
+                Some(&last) => now.saturating_duration_since(last) < keep_for,
                 None => false,
             }
         });
@@ -808,10 +814,58 @@ mod tests {
         let key = RateLimitKey::new("10.0.0.99", RateLimitScope::RpcDefault);
         limiter.check_and_record(&key).unwrap();
 
-        // With a zero-duration max_age, everything is stale
+        // The retention age is the caller's `max_age` **or** the entry's own
+        // scope window, whichever is longer (G3-01): an rpc_default record is
+        // still inside its 1s window, so a zero-age prune keeps it.
         limiter.prune_stale(Duration::ZERO);
-        // The entry should have been removed — next request starts fresh
+        assert_eq!(
+            limiter.windows.len(),
+            1,
+            "a record inside its own scope window survives the reclaim"
+        );
+
+        // A scope whose own window has passed as well is reclaimed.
+        let zero_window = RateLimitConfig {
+            rpc_default: WindowConfig {
+                max_requests: 10,
+                window_secs: 0,
+                lockout_secs: None,
+            },
+            ..test_config()
+        };
+        let limiter = RateLimiter::new(zero_window);
+        let key = RateLimitKey::new("10.0.0.98", RateLimitScope::RpcDefault);
+        limiter.check_and_record(&key).unwrap();
+        limiter.prune_stale(Duration::ZERO);
         assert!(limiter.windows.is_empty(), "stale entries should be pruned");
+    }
+
+    #[test]
+    fn test_prune_stale_keeps_records_inside_a_longer_scope_window() {
+        // G3-01: the capacity reclaim must not use the *caller's* window as the
+        // retention age of entries that belong to another scope. An auth
+        // record (60s window) must survive a reclaim triggered by a
+        // short-window scope, so the short-window caller stays rejected
+        // instead of riding on the reclaimed capacity.
+        let config = RateLimitConfig {
+            max_entries: 1,
+            ..test_config()
+        };
+        let limiter = RateLimiter::new(config);
+        let auth = RateLimitKey::new("10.0.0.50", RateLimitScope::Auth);
+        assert!(limiter.check_and_record(&auth).is_ok());
+
+        // A *new* rpc_default key reaches the capacity limit and triggers the
+        // reclaim with the rpc_default window (1s).
+        let rpc = RateLimitKey::new("10.0.0.51", RateLimitScope::RpcDefault);
+        assert!(
+            limiter.check_and_record(&rpc).is_err(),
+            "the new key is rejected while the auth record is alive"
+        );
+        assert!(
+            limiter.windows.contains_key(&auth),
+            "the auth record is still inside its 60s window and must not be reclaimed"
+        );
     }
 
     #[test]

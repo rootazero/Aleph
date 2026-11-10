@@ -63,8 +63,8 @@ impl QQChannel {
 
     const fn capabilities() -> ChannelCapabilities {
         ChannelCapabilities {
-            attachments: true,
-            images: true,
+            attachments: false,
+            images: false,
             audio: false,
             video: false,
             reactions: false,
@@ -140,20 +140,19 @@ impl Channel for QQChannel {
             account.client_secret.clone(),
         ));
 
-        let token = api
-            .get_access_token()
+        api.get_access_token()
             .await
             .map_err(|e| ChannelError::AuthFailed(format!("QQ auth failed: {e}")))?;
 
         tracing::info!("QQ bot authenticated for account {}", account.id);
-        self.api_client = Some(api);
+        self.api_client = Some(api.clone());
 
         let (event_tx, mut event_rx) = tokio::sync::mpsc::channel::<QQEvent>(100);
         let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
 
         let gateway_ctx = gateway::GatewayContext {
             channel_id: self.info.id.clone(),
-            token,
+            api,
             event_tx,
             shutdown_rx,
         };

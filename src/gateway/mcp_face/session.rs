@@ -17,7 +17,30 @@
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
+use super::auth::McpCaller;
+use serde_json::Value;
 use tokio::sync::mpsc;
+use tokio_util::sync::CancellationToken;
+
+/// Stable identity from the existing admission result, never the raw bearer.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Principal {
+    User(String),
+    Device(String),
+    LegacyShared,
+}
+
+impl Principal {
+    fn of(caller: &McpCaller) -> Self {
+        if let Some(user) = &caller.user {
+            Self::User(user.clone())
+        } else if let Some(device) = &caller.device_id {
+            Self::Device(device.clone())
+        } else {
+            Self::LegacyShared
+        }
+    }
+}
 
 use crate::gateway::protocol::JsonRpcRequest;
 use crate::routing::session_key::SessionKey;
@@ -60,8 +83,35 @@ pub struct SessionView {
 
 struct Row {
     view: SessionView,
+    owner: Principal,
     last_seen: Instant,
     notifier: Option<mpsc::Sender<JsonRpcRequest>>,
+    requests: HashMap<String, CancellationToken>,
+}
+
+impl Drop for Row {
+    fn drop(&mut self) {
+        for cancel in self.requests.values() {
+            cancel.cancel();
+        }
+    }
+}
+
+/// Removes registration on normal completion or when the request future is dropped.
+pub(crate) struct PendingRequest<'a> {
+    table: &'a SessionTable,
+    session_id: String,
+    request_id: String,
+    pub cancel: CancellationToken,
+}
+
+impl Drop for PendingRequest<'_> {
+    fn drop(&mut self) {
+        let mut rows = self.table.rows.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(row) = rows.get_mut(&self.session_id) {
+            row.requests.remove(&self.request_id);
+        }
+    }
 }
 
 /// The session table. One per face.
@@ -80,12 +130,18 @@ impl SessionTable {
     }
 
     /// Mint a session. Sweeps idle rows first.
-    pub fn create(&self, client: McpClient, protocol_version: &'static str) -> SessionView {
-        self.create_at(client, protocol_version, Instant::now())
+    pub fn create(
+        &self,
+        caller: &McpCaller,
+        client: McpClient,
+        protocol_version: &'static str,
+    ) -> SessionView {
+        self.create_at(caller, client, protocol_version, Instant::now())
     }
 
     pub(crate) fn create_at(
         &self,
+        caller: &McpCaller,
         client: McpClient,
         protocol_version: &'static str,
         now: Instant,
@@ -105,8 +161,10 @@ impl SessionTable {
             id,
             Row {
                 view: view.clone(),
+                owner: Principal::of(caller),
                 last_seen: now,
                 notifier: None,
+                requests: HashMap::new(),
             },
         );
         view
@@ -114,12 +172,20 @@ impl SessionTable {
 
     /// The row, with its idle clock reset. `None` for unknown or expired ids
     /// (an expired row is removed here rather than left to the next sweep).
-    pub fn touch(&self, id: &str) -> Option<SessionView> {
-        self.touch_at(id, Instant::now())
+    pub fn touch(&self, caller: &McpCaller, id: &str) -> Option<SessionView> {
+        self.touch_at(caller, id, Instant::now())
     }
 
-    pub(crate) fn touch_at(&self, id: &str, now: Instant) -> Option<SessionView> {
+    pub(crate) fn touch_at(
+        &self,
+        caller: &McpCaller,
+        id: &str,
+        now: Instant,
+    ) -> Option<SessionView> {
         let mut rows = self.rows.lock().unwrap_or_else(|e| e.into_inner());
+        if rows.get(id)?.owner != Principal::of(caller) {
+            return None;
+        }
         let expired = rows
             .get(id)
             .is_some_and(|row| now.duration_since(row.last_seen) >= self.ttl);
@@ -145,24 +211,67 @@ impl SessionTable {
     }
 
     /// `DELETE /mcp`. `false` when the id is unknown.
-    pub fn remove(&self, id: &str) -> bool {
-        self.rows
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .remove(id)
-            .is_some()
+    pub fn remove(&self, caller: &McpCaller, id: &str) -> bool {
+        let mut rows = self.rows.lock().unwrap_or_else(|e| e.into_inner());
+        if !rows
+            .get(id)
+            .is_some_and(|row| row.owner == Principal::of(caller))
+        {
+            return false;
+        }
+        rows.remove(id).is_some()
     }
 
     /// Open (or replace) the session's server→client stream. The receiver is
     /// what `GET /mcp` turns into SSE. Replacing drops the previous sender, so
     /// a client that reconnects its stream never leaves a dead one behind.
-    pub fn attach_stream(&self, id: &str) -> Option<mpsc::Receiver<JsonRpcRequest>> {
+    pub fn attach_stream(
+        &self,
+        caller: &McpCaller,
+        id: &str,
+    ) -> Option<mpsc::Receiver<JsonRpcRequest>> {
         let mut rows = self.rows.lock().unwrap_or_else(|e| e.into_inner());
         let row = rows.get_mut(id)?;
+        if row.owner != Principal::of(caller) || row.last_seen.elapsed() >= self.ttl {
+            return None;
+        }
         let (tx, rx) = mpsc::channel(SSE_QUEUE_DEPTH);
         row.notifier = Some(tx);
         row.last_seen = Instant::now();
         Some(rx)
+    }
+
+    pub(crate) fn register_request(
+        &self,
+        session_id: &str,
+        request_id: &Value,
+    ) -> Option<PendingRequest<'_>> {
+        let mut rows = self.rows.lock().unwrap_or_else(|e| e.into_inner());
+        let row = rows.get_mut(session_id)?;
+        let key = request_id.to_string();
+        if row.requests.contains_key(&key) {
+            return None;
+        }
+        let cancel = CancellationToken::new();
+        row.requests.insert(key.clone(), cancel.clone());
+        Some(PendingRequest {
+            table: self,
+            session_id: session_id.to_string(),
+            request_id: key,
+            cancel,
+        })
+    }
+
+    pub(crate) fn cancel_request(&self, session_id: &str, request_id: &Value) -> bool {
+        let rows = self.rows.lock().unwrap_or_else(|e| e.into_inner());
+        let Some(cancel) = rows
+            .get(session_id)
+            .and_then(|row| row.requests.get(&request_id.to_string()))
+        else {
+            return false;
+        };
+        cancel.cancel();
+        true
     }
 
     /// Push one notification to every open stream. Returns how many streams
@@ -199,6 +308,7 @@ impl SessionTable {
 
 #[cfg(test)]
 mod tests {
+    use super::super::test_support::operator;
     use super::*;
     use std::time::Duration;
 
@@ -210,9 +320,44 @@ mod tests {
     }
 
     #[test]
+    fn another_principal_cannot_touch_replace_or_delete_a_session() {
+        let table = SessionTable::new(MCP_SESSION_IDLE_TTL);
+        let alice = operator();
+        let mut bob = alice.clone();
+        bob.user = Some("bob".to_string());
+        let session = table.create(&alice, client(), "2025-03-26");
+        let _stream = table.attach_stream(&alice, &session.id).unwrap();
+        assert!(table.touch(&bob, &session.id).is_none());
+        assert!(table.attach_stream(&bob, &session.id).is_none());
+        assert!(!table.remove(&bob, &session.id));
+        assert_eq!(
+            table.broadcast(&JsonRpcRequest::notification("test", None)),
+            1
+        );
+        assert!(table.touch(&alice, &session.id).is_some());
+    }
+
+    #[test]
+    fn pending_calls_are_session_scoped_and_removed_on_completion() {
+        let table = SessionTable::new(MCP_SESSION_IDLE_TTL);
+        let a = table.create(&operator(), client(), "2025-03-26");
+        let b = table.create(&operator(), client(), "2025-03-26");
+        let id = serde_json::json!(7);
+        let pending = table.register_request(&a.id, &id).unwrap();
+        assert!(!table.cancel_request(&b.id, &id));
+        assert!(!table.cancel_request(&a.id, &serde_json::json!("7")));
+        assert!(!pending.cancel.is_cancelled());
+        assert!(table.cancel_request(&a.id, &id));
+        assert!(pending.cancel.is_cancelled());
+        drop(pending);
+        assert!(!table.cancel_request(&a.id, &id));
+        assert!(table.register_request(&a.id, &id).is_some());
+    }
+
+    #[test]
     fn create_mints_a_uuid_and_a_task_session_key() {
         let table = SessionTable::new(MCP_SESSION_IDLE_TTL);
-        let view = table.create(client(), "2025-03-26");
+        let view = table.create(&operator(), client(), "2025-03-26");
         assert!(
             uuid::Uuid::parse_str(&view.id).is_ok(),
             "session id must be a uuid: {}",
@@ -230,9 +375,12 @@ mod tests {
     #[test]
     fn touch_returns_the_row_and_unknown_ids_are_none() {
         let table = SessionTable::new(MCP_SESSION_IDLE_TTL);
-        let view = table.create(client(), "2025-06-18");
-        assert_eq!(table.touch(&view.id).map(|v| v.id), Some(view.id.clone()));
-        assert!(table.touch("not-a-session").is_none());
+        let view = table.create(&operator(), client(), "2025-06-18");
+        assert_eq!(
+            table.touch(&operator(), &view.id).map(|v| v.id),
+            Some(view.id.clone())
+        );
+        assert!(table.touch(&operator(), "not-a-session").is_none());
     }
 
     #[test]
@@ -240,19 +388,19 @@ mod tests {
         let ttl = Duration::from_secs(60);
         let table = SessionTable::new(ttl);
         let t0 = Instant::now();
-        let idle = table.create_at(client(), "2025-03-26", t0);
-        let busy = table.create_at(client(), "2025-03-26", t0);
+        let idle = table.create_at(&operator(), client(), "2025-03-26", t0);
+        let busy = table.create_at(&operator(), client(), "2025-03-26", t0);
         // `busy` is used at t0+50s; `idle` never again.
         assert!(table
-            .touch_at(&busy.id, t0 + Duration::from_secs(50))
+            .touch_at(&operator(), &busy.id, t0 + Duration::from_secs(50))
             .is_some());
         // At t0+70s `idle` is past its TTL (last seen t0) and `busy` is not
         // (last seen t0+50s).
         assert!(table
-            .touch_at(&idle.id, t0 + Duration::from_secs(70))
+            .touch_at(&operator(), &idle.id, t0 + Duration::from_secs(70))
             .is_none());
         assert!(table
-            .touch_at(&busy.id, t0 + Duration::from_secs(70))
+            .touch_at(&operator(), &busy.id, t0 + Duration::from_secs(70))
             .is_some());
         assert_eq!(
             table.len(),
@@ -264,22 +412,26 @@ mod tests {
     #[test]
     fn mark_initialized_and_remove_report_whether_the_row_existed() {
         let table = SessionTable::new(MCP_SESSION_IDLE_TTL);
-        let view = table.create(client(), "2025-11-25");
+        let view = table.create(&operator(), client(), "2025-11-25");
         assert!(table.mark_initialized(&view.id));
-        assert!(table.touch(&view.id).is_some_and(|v| v.initialized));
+        assert!(table
+            .touch(&operator(), &view.id)
+            .is_some_and(|v| v.initialized));
         assert!(!table.mark_initialized("nope"));
-        assert!(table.remove(&view.id));
-        assert!(!table.remove(&view.id));
+        assert!(table.remove(&operator(), &view.id));
+        assert!(!table.remove(&operator(), &view.id));
         assert_eq!(table.len(), 0);
     }
 
     #[tokio::test]
     async fn broadcast_reaches_only_sessions_with_an_open_stream() {
         let table = SessionTable::new(MCP_SESSION_IDLE_TTL);
-        let with_stream = table.create(client(), "2025-03-26");
-        let _without_stream = table.create(client(), "2025-03-26");
-        let mut rx = table.attach_stream(&with_stream.id).expect("known session");
-        assert!(table.attach_stream("nope").is_none());
+        let with_stream = table.create(&operator(), client(), "2025-03-26");
+        let _without_stream = table.create(&operator(), client(), "2025-03-26");
+        let mut rx = table
+            .attach_stream(&operator(), &with_stream.id)
+            .expect("known session");
+        assert!(table.attach_stream(&operator(), "nope").is_none());
 
         let note = JsonRpcRequest::notification("notifications/tools/list_changed", None);
         assert_eq!(table.broadcast(&note), 1, "exactly one stream is open");
@@ -291,21 +443,23 @@ mod tests {
     #[tokio::test]
     async fn a_closed_stream_is_dropped_on_the_next_broadcast() {
         let table = SessionTable::new(MCP_SESSION_IDLE_TTL);
-        let s = table.create(client(), "2025-03-26");
-        let rx = table.attach_stream(&s.id).expect("known session");
+        let s = table.create(&operator(), client(), "2025-03-26");
+        let rx = table
+            .attach_stream(&operator(), &s.id)
+            .expect("known session");
         drop(rx); // client went away
         let note = JsonRpcRequest::notification("notifications/tools/list_changed", None);
         assert_eq!(table.broadcast(&note), 0);
         // The row survives (the client may POST again); only the stream is gone.
-        assert!(table.touch(&s.id).is_some());
+        assert!(table.touch(&operator(), &s.id).is_some());
     }
 
     #[tokio::test]
     async fn reattaching_replaces_the_previous_stream() {
         let table = SessionTable::new(MCP_SESSION_IDLE_TTL);
-        let s = table.create(client(), "2025-03-26");
-        let mut old = table.attach_stream(&s.id).unwrap();
-        let mut new = table.attach_stream(&s.id).unwrap();
+        let s = table.create(&operator(), client(), "2025-03-26");
+        let mut old = table.attach_stream(&operator(), &s.id).unwrap();
+        let mut new = table.attach_stream(&operator(), &s.id).unwrap();
         let note = JsonRpcRequest::notification("notifications/tools/list_changed", None);
         assert_eq!(table.broadcast(&note), 1);
         assert!(new.recv().await.is_some());

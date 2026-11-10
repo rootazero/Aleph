@@ -47,6 +47,19 @@ mod tests {
                 })
             })
         }
+        async fn edit(
+            &self,
+            conversation_id: &ConversationId,
+            message_id: &MessageId,
+            text: &str,
+        ) -> ChannelResult<()> {
+            assert_eq!(message_id, &MessageId::new("ok"));
+            self.sent
+                .lock()
+                .await
+                .push(OutboundMessage::text(conversation_id.as_str(), text));
+            Ok(())
+        }
     }
 
     /// Emitter wired to a recording channel; returns the emitter plus the log.
@@ -76,6 +89,168 @@ mod tests {
             pending,
         );
         (emitter, sent)
+    }
+
+    #[tokio::test]
+    async fn unspeakable_voice_replies_send_text_without_changing_failure_state() {
+        use crate::gateway::voice::VoiceState;
+        let (emitter, sent) =
+            emitter_over_recorder("gx6-voice-skip", PendingMedia::default()).await;
+        let state = VoiceState {
+            enabled: true,
+            consecutive_failures: 2,
+            ..Default::default()
+        };
+        emitter
+            .channel_registry
+            .set_voice_state("rec", state.clone())
+            .await;
+        let emitter = emitter.with_voice(
+            state,
+            Arc::new(crate::generation::GenerationProviderRegistry::new()),
+            Arc::new(tokio::sync::RwLock::new(Default::default())),
+        );
+        for _ in 0..3 {
+            emitter.send_as_voice("https://example.com").await;
+        }
+        let state = emitter.channel_registry.get_voice_state("rec").await;
+        assert!(state.enabled);
+        assert_eq!(
+            state.consecutive_failures, 2,
+            "skips neither reset nor increment strikes"
+        );
+        let messages = sent.lock().await;
+        assert_eq!(messages.len(), 3);
+        assert!(messages
+            .iter()
+            .all(|message| message.text.contains("https://example.com")
+                && message.attachments.is_empty()));
+        drop(messages);
+        // A speakable reply with no configured provider remains a real failure.
+        emitter.send_as_voice("hello").await;
+        assert!(
+            !emitter
+                .channel_registry
+                .get_voice_state("rec")
+                .await
+                .enabled
+        );
+    }
+
+    async fn response_chunk(emitter: &ReplyEmitter, delta: &str, intermediate: bool) {
+        emitter
+            .emit(crate::gateway::event_emitter::StreamEvent::ResponseChunk {
+                run_id: "run".into(),
+                seq: 0,
+                delta: delta.into(),
+                full_text: delta.into(),
+                chunk_index: 0,
+                is_final: false,
+                is_intermediate: intermediate,
+            })
+            .await
+            .unwrap();
+    }
+
+    async fn complete_run(
+        emitter: &ReplyEmitter,
+        summary: crate::gateway::event_emitter::RunSummary,
+    ) {
+        emitter
+            .emit(crate::gateway::event_emitter::StreamEvent::RunComplete {
+                run_id: "run".into(),
+                seq: 1,
+                summary,
+                total_duration_ms: 0,
+            })
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn terminal_notice_reaches_the_stream_tail_without_repeating_overflow() {
+        for threshold in [1, 100] {
+            let (mut emitter, sent) = emitter_over_recorder("run", PendingMedia::default()).await;
+            emitter.config.stream_enabled = true;
+            emitter.config.locale = crate::gateway::i18n::Locale::En;
+            emitter.config.max_message_length = if threshold == 1 { 320 } else { 0 };
+            *emitter.streaming.lock().await = crate::gateway::streaming::StreamingController::new(
+                crate::gateway::streaming::StreamingConfig {
+                    enabled: true,
+                    min_initial_chars: threshold,
+                    debounce_interval: std::time::Duration::ZERO,
+                },
+            );
+            response_chunk(&emitter, "abcdefghijklmnopqrst", false).await;
+            response_chunk(&emitter, "uvwxyz", false).await;
+            complete_run(
+                &emitter,
+                crate::gateway::event_emitter::RunSummary {
+                    terminate_reason: Some("failed".into()),
+                    ..Default::default()
+                },
+            )
+            .await;
+            let messages = sent.lock().await;
+            let last = &messages.last().unwrap().text;
+            assert!(last.contains("failed"), "{last:?}");
+            assert!(!last.contains('▍'));
+            if threshold == 1 {
+                assert!(last.starts_with("uvwxyz"), "{last:?}");
+                assert!(!last.contains("abcdefghijklmnopqrst"));
+            } else {
+                assert!(last.starts_with("abcdefghijklmnopqrstuvwxyz"), "{last:?}");
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn instant_summary_body_is_selected_before_terminal_notice() {
+        for body in ["", "chunked answer"] {
+            let (emitter, sent) = emitter_over_recorder("run", PendingMedia::default()).await;
+            response_chunk(&emitter, body, false).await;
+            complete_run(
+                &emitter,
+                crate::gateway::event_emitter::RunSummary {
+                    final_response: Some("the answer".into()),
+                    terminate_reason: Some("failed".into()),
+                    ..Default::default()
+                },
+            )
+            .await;
+            let messages = sent.lock().await;
+            assert_eq!(messages.len(), 1);
+            let expected = if body.is_empty() { "the answer" } else { body };
+            assert!(messages[0].text.starts_with(&format!("{expected}\n\n")));
+            if !body.is_empty() {
+                assert!(!messages[0].text.contains("the answer"));
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn unchanged_stream_is_settled_at_final_and_iteration_boundary() {
+        for intermediate in [false, true] {
+            let (mut emitter, sent) = emitter_over_recorder("run", PendingMedia::default()).await;
+            emitter.config.stream_enabled = true;
+            *emitter.streaming.lock().await = crate::gateway::streaming::StreamingController::new(
+                crate::gateway::streaming::StreamingConfig {
+                    enabled: true,
+                    min_initial_chars: 1,
+                    ..Default::default()
+                },
+            );
+            response_chunk(&emitter, "answer", false).await;
+            if intermediate {
+                response_chunk(&emitter, "", true).await;
+            } else {
+                complete_run(&emitter, Default::default()).await;
+            }
+            let messages = sent.lock().await;
+            assert_eq!(messages.len(), 2, "one send and one settling edit");
+            assert!(messages[0].text.contains('▍'));
+            assert_eq!(messages[1].text, "answer");
+        }
     }
 
     /// One buffer entry, already resolved — which is what the delivery buffer

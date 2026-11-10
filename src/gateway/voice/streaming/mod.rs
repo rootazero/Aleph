@@ -80,7 +80,7 @@ pub trait StreamingTranscriber: Send + Sync {
 }
 
 /// Resolved streaming target (from `[voice.streaming]` config, provider-neutral).
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct StreamingTarget {
     /// `"deepgram"` | `"whisperlive"` (case-insensitive; unknown → Deepgram).
     pub provider: String,
@@ -95,6 +95,19 @@ pub struct StreamingTarget {
     /// it (see the config field's docs — the parameter name there is
     /// model-dependent and a wrong guess is a 400).
     pub vocabulary: String,
+}
+
+impl std::fmt::Debug for StreamingTarget {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("StreamingTarget")
+            .field("provider", &self.provider)
+            .field("base_url", &self.base_url)
+            .field("api_key", &"<redacted>")
+            .field("language", &self.language)
+            .field("model", &self.model)
+            .field("vocabulary", &self.vocabulary)
+            .finish()
+    }
 }
 
 /// Which vendor wire protocol an adapter speaks.

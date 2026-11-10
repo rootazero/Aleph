@@ -1120,9 +1120,32 @@ pub(in crate::commands::start) async fn initialize_inbound_router(
             // nor a non-default tier adds nothing over the safe Chat default —
             // skip registration so `channel_configs` stays minimal (the executor
             // still defaults unregistered channels to Chat tier).
-            if slash_access.is_empty() && policy.is_default() {
+            let has_platform_policy = matches!(inst.channel_type.as_str(), "line" | "matrix");
+            if !has_platform_policy && slash_access.is_empty() && policy.is_default() {
                 continue;
             }
+            use alephcore::gateway::{
+                inbound_router::ChannelConfig,
+                interfaces::{line::LineConfig, matrix::MatrixConfig},
+            };
+            let platform_config = match inst.channel_type.as_str() {
+                "line" => serde_json::from_value::<LineConfig>(inst.config.clone())
+                    .map(|cfg| ChannelConfig::from(&cfg)),
+                "matrix" => serde_json::from_value::<MatrixConfig>(inst.config.clone())
+                    .map(|cfg| ChannelConfig::from(&cfg)),
+                _ => Ok(ChannelConfig::default()),
+            }
+            .unwrap_or_else(|error| {
+                tracing::error!(
+                    "Channel '{}' inbound policy invalid; disabling ingress: {error}",
+                    inst.id
+                );
+                ChannelConfig {
+                    dm_policy: alephcore::gateway::inbound_router::DmPolicy::Disabled,
+                    group_policy: alephcore::gateway::inbound_router::GroupPolicy::Disabled,
+                    ..Default::default()
+                }
+            });
 
             let channel_config = alephcore::gateway::inbound_router::ChannelConfig {
                 slash_access,
@@ -1130,7 +1153,7 @@ pub(in crate::commands::start) async fn initialize_inbound_router(
                 default_workspace: policy.default_workspace,
                 busy_input_mode: policy.busy_input_mode,
                 tool_permissions: policy.tool_permissions,
-                ..Default::default()
+                ..platform_config
             };
             let tier_label = channel_config.caller_role_str();
             // Registered under the id the live channel reports (see

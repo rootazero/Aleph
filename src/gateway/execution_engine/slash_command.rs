@@ -400,7 +400,48 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
             Some(fs_scope),
             self.tool_registry.execute_tool(tool_id, arguments),
         );
-        match execution.await {
+
+        let deadline = if let Some(timeout_secs) = request.timeout_secs {
+            Some(std::time::Instant::now() + std::time::Duration::from_secs(timeout_secs))
+        } else {
+            None
+        };
+
+        // The run's own cancellation token. `ExecutionEngine::cancel` marks
+        // it for every stop, so this dispatch observes `/stop` the same way
+        // the agent loop does. A run that is already gone cannot be
+        // cancelled any more, and then the deadline below is the only bound.
+        let run_cancel_token = {
+            let runs = self.active_runs.read().await;
+            runs.get(run_id).map(|run| run.cancel_token.clone())
+        };
+
+        let result = tokio::select! {
+            biased;
+            _ = async {
+                match run_cancel_token {
+                    Some(token) => token.cancelled().await,
+                    None => std::future::pending::<()>().await,
+                }
+            } => {
+                return Err(ExecutionError::Cancelled);
+            }
+            _ = async {
+                if let Some(dl) = deadline {
+                    let now = std::time::Instant::now();
+                    if dl > now {
+                        tokio::time::sleep(dl - now).await;
+                    }
+                } else {
+                    std::future::pending::<()>().await;
+                }
+            } => {
+                return Err(ExecutionError::Timeout);
+            }
+            exec_result = execution => exec_result,
+        };
+
+        match result {
             Ok(result) => {
                 // Settle any `_media` the tool declared into BOTH lanes — the
                 // artifact store (workspace pane) and this run's channel

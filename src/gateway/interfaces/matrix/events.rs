@@ -15,9 +15,21 @@ pub fn convert_timeline_event(
     own_user_id: &str,
     config: Option<&MatrixConfig>,
 ) -> Option<InboundMessage> {
+    convert_timeline_event_in_room(event, room_id, channel_id, own_user_id, config, None)
+}
+
+/// Unknown room relationships are conservatively treated as groups.
+pub fn convert_timeline_event_in_room(
+    event: &serde_json::Value,
+    room_id: &str,
+    channel_id: &ChannelId,
+    own_user_id: &str,
+    config: Option<&MatrixConfig>,
+    is_direct: Option<bool>,
+) -> Option<InboundMessage> {
     let event_type = event["type"].as_str()?;
 
-    match event_type {
+    let mut inbound = match event_type {
         "m.room.message" => convert_room_message(event, room_id, channel_id, own_user_id, config),
         "m.reaction" => convert_reaction(event, room_id, channel_id, own_user_id, config),
         "m.room.encrypted" => {
@@ -25,7 +37,9 @@ pub fn convert_timeline_event(
             None
         }
         _ => None,
-    }
+    }?;
+    inbound.is_group = !is_direct.unwrap_or(false);
+    Some(inbound)
 }
 
 fn convert_room_message(
@@ -50,7 +64,7 @@ fn convert_room_message(
     let content = &event["content"];
     let msgtype = content["msgtype"].as_str().unwrap_or("");
 
-    let (text, attachments, metadata) = match msgtype {
+    let (text, attachments, mut metadata) = match msgtype {
         "m.text" | "m.notice" => {
             let body = content["body"].as_str().unwrap_or("");
             (body.to_string(), Vec::new(), Vec::new())
@@ -95,10 +109,15 @@ fn convert_room_message(
         return None;
     }
 
-    if let Some(cfg) = config {
-        if !cfg.check_mention(&text, own_user_id, room_id) {
-            return None;
-        }
+    // Report protocol facts only; Core owns the mention requirement.
+    let native_mention = content["m.mentions"]["user_ids"]
+        .as_array()
+        .is_some_and(|users| users.iter().any(|user| user.as_str() == Some(own_user_id)));
+    let textual_mention = text.split_whitespace().any(|word| {
+        word.trim_matches(|c: char| matches!(c, ',' | '.' | '!' | '?' | '(' | ')')) == own_user_id
+    });
+    if native_mention || textual_mention {
+        metadata.push(MessageMeta::AppMention);
     }
 
     let event_id = event["event_id"].as_str().unwrap_or("").to_string();
@@ -117,6 +136,16 @@ fn convert_room_message(
         .and_then(|eid| eid.as_str())
         .map(|id| MessageId::new(id.to_string()));
 
+    // Determine whether this room is a direct (DM) room from the account-data
+    // direct-rooms map carried on the event; fall back to the room's
+    // m.direct marker in the event itself. Unknown rooms stay conservative
+    // and are treated as group rooms.
+    let is_direct_room = event["direct_rooms"][room_id]
+        .as_array()
+        .is_some_and(|users| users.iter().any(|user| user.as_str() == Some(sender)))
+        || event["room_direct"].as_bool().unwrap_or(false);
+    let is_group = !is_direct_room;
+
     Some(InboundMessage {
         id: MessageId::new(event_id),
         channel_id: channel_id.clone(),
@@ -127,7 +156,7 @@ fn convert_room_message(
         attachments,
         timestamp,
         reply_to,
-        is_group: true,
+        is_group,
         raw: Some(event.clone()),
         metadata,
     })
@@ -203,6 +232,75 @@ fn guess_mime_from_msgtype(msgtype: &str, info_mime: Option<&str>) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn room_context_applies_to_messages_and_reactions() {
+        for (kind, content) in [
+            (
+                "m.room.message",
+                serde_json::json!({"msgtype":"m.text", "body":"hi"}),
+            ),
+            (
+                "m.reaction",
+                serde_json::json!({"m.relates_to":{"rel_type":"m.annotation", "event_id":"$target", "key":"+1"}}),
+            ),
+        ] {
+            let event = serde_json::json!({"type":kind, "sender":"@u:h", "event_id":"$e", "content":content});
+            for (direct, group) in [(Some(true), false), (Some(false), true), (None, true)] {
+                let msg = convert_timeline_event_in_room(
+                    &event,
+                    "!r:h",
+                    &ChannelId::new("matrix"),
+                    "@assistant:h",
+                    None,
+                    direct,
+                )
+                .unwrap();
+                assert_eq!(msg.is_group, group);
+                assert_eq!(msg.conversation_id.as_str(), "!r:h");
+            }
+        }
+    }
+
+    #[test]
+    fn native_mentions_are_facts_independent_of_gating() {
+        for gating in [true, false] {
+            let config = MatrixConfig {
+                mention_gating: gating,
+                ..Default::default()
+            };
+            for (content, mentioned) in [
+                (
+                    serde_json::json!({"msgtype":"m.text", "body":"@assistant:example.org hello"}),
+                    true,
+                ),
+                (
+                    serde_json::json!({"msgtype":"m.text", "body":"hello", "m.mentions":{"user_ids":["@assistant:example.org"]}}),
+                    true,
+                ),
+                (
+                    serde_json::json!({"msgtype":"m.text", "body":"hello"}),
+                    false,
+                ),
+            ] {
+                let event = serde_json::json!({"type":"m.room.message", "sender":"@u:h", "event_id":"$e", "content":content});
+                let msg = convert_timeline_event(
+                    &event,
+                    "!r:h",
+                    &ChannelId::new("matrix"),
+                    "@assistant:example.org",
+                    Some(&config),
+                )
+                .unwrap();
+                assert_eq!(
+                    msg.metadata
+                        .iter()
+                        .any(|m| matches!(m, MessageMeta::AppMention)),
+                    mentioned
+                );
+            }
+        }
+    }
 
     #[test]
     fn test_convert_basic_message() {
@@ -464,8 +562,12 @@ mod tests {
             &channel_id,
             "@bot:matrix.org",
             Some(&config),
-        );
-        assert!(msg.is_none());
+        )
+        .unwrap();
+        assert!(!msg
+            .metadata
+            .iter()
+            .any(|m| matches!(m, MessageMeta::AppMention)));
     }
 
     #[test]
@@ -490,7 +592,7 @@ mod tests {
             },
         );
 
-        // Unmentioned message is gated out only in the strict room.
+        // The adapter forwards both; Core consumes the mapped room override.
         assert!(convert_timeline_event(
             &event,
             "!strict:matrix.org",
@@ -498,7 +600,7 @@ mod tests {
             "@bot:matrix.org",
             Some(&config),
         )
-        .is_none());
+        .is_some());
         assert!(convert_timeline_event(
             &event,
             "!other:matrix.org",

@@ -40,10 +40,18 @@ struct SseEventEmitter {
     created: u64,
     seq: crate::sync_primitives::AtomicU64,
     tool_tracker: Mutex<stream::ToolCallTracker>,
+    /// The request asked for a usage chunk (`stream_options.include_usage`).
+    include_usage: bool,
 }
 
 impl SseEventEmitter {
-    fn new(tx: mpsc::Sender<String>, completion_id: String, model: String, created: u64) -> Self {
+    fn new(
+        tx: mpsc::Sender<String>,
+        completion_id: String,
+        model: String,
+        created: u64,
+        include_usage: bool,
+    ) -> Self {
         Self {
             tx,
             completion_id,
@@ -51,6 +59,7 @@ impl SseEventEmitter {
             created,
             seq: crate::sync_primitives::AtomicU64::new(0),
             tool_tracker: Mutex::new(stream::ToolCallTracker::default()),
+            include_usage,
         }
     }
 
@@ -126,29 +135,51 @@ impl EventEmitter for SseEventEmitter {
             }
 
             StreamEvent::RunComplete { summary, .. } => {
-                // Single final chunk with finish_reason + usage + [DONE]
-                let chunk = ChatCompletionChunk {
-                    usage: if summary.total_tokens > 0 {
-                        Some(Usage {
-                            prompt_tokens: 0,
-                            completion_tokens: 0,
-                            total_tokens: u32::try_from(summary.total_tokens).unwrap_or(u32::MAX),
-                        })
-                    } else {
-                        None
+                // Finish chunk without usage
+                let finish_chunk = self.make_chunk(
+                    Delta {
+                        content: None,
+                        role: None,
+                        tool_calls: None,
                     },
-                    ..self.make_chunk(
-                        Delta {
-                            content: None,
-                            role: None,
-                            tool_calls: None,
-                        },
-                        Some("stop".to_string()),
-                    )
-                };
-                let frame = format!("{}{}", stream::sse_data(&chunk), SSE_DONE);
+                    Some("stop".to_string()),
+                );
                 self.tx
-                    .send(frame)
+                    .send(stream::sse_data(&finish_chunk))
+                    .await
+                    .map_err(|_| EventEmitError::ChannelClosed)?;
+
+                // Optional usage chunk if requested and available
+                if self.include_usage && summary.total_tokens > 0 {
+                    let usage_chunk = ChatCompletionChunk {
+                        usage: Some(Usage {
+                            prompt_tokens: summary
+                                .token_breakdown
+                                .as_ref()
+                                .map_or(0, |breakdown| breakdown.input),
+                            completion_tokens: summary
+                                .token_breakdown
+                                .as_ref()
+                                .map_or(0, |breakdown| breakdown.output),
+                            total_tokens: u32::try_from(summary.total_tokens).unwrap_or(u32::MAX),
+                        }),
+                        ..self.make_chunk(
+                            Delta {
+                                content: None,
+                                role: None,
+                                tool_calls: None,
+                            },
+                            None,
+                        )
+                    };
+                    self.tx
+                        .send(stream::sse_data(&usage_chunk))
+                        .await
+                        .map_err(|_| EventEmitError::ChannelClosed)?;
+                }
+
+                self.tx
+                    .send(SSE_DONE.to_string())
                     .await
                     .map_err(|_| EventEmitError::ChannelClosed)?;
                 return Ok(());
@@ -342,7 +373,12 @@ pub async fn handle(
                     _ => continue,
                 };
                 if let Some(svc) = crate::session::service::global_session_service() {
-                    let _ = svc.emit_event(&session_key, event).await;
+                    svc.emit_event(&session_key, event).await.map_err(|e| {
+                        ApiError::InternalError(format!(
+                            "failed to append client history message (role={}) to session: {}",
+                            msg.role, e
+                        ))
+                    })?;
                 } else {
                     // Same class as the main-path producers (Task 7a): this is
                     // the sole writer for client-supplied history on the
@@ -360,7 +396,6 @@ pub async fn handle(
 
     let run_id = uuid::Uuid::new_v4().to_string();
     let pending_media: PendingMedia = Arc::new(tokio::sync::Mutex::new(Vec::new()));
-
     // OpenAI-compat shim is for third-party SDKs (LangChain, LiteLLM, plain
     // `openai.ChatCompletion.create(...)`), none of which know about
     // Aleph's project picker. Clients that want project-scoped execution
@@ -385,7 +420,12 @@ pub async fn handle(
     let is_streaming = req.stream.unwrap_or(false);
 
     if is_streaming {
-        handle_streaming(adapter, agent, run_request, req.model).await
+        let include_usage = req
+            .stream_options
+            .as_ref()
+            .and_then(|options| options.include_usage)
+            .unwrap_or(false);
+        handle_streaming(adapter, agent, run_request, req.model, include_usage).await
     } else {
         handle_non_streaming(adapter, agent, run_request, req.model).await
     }
@@ -397,6 +437,7 @@ async fn handle_streaming(
     agent: Arc<crate::gateway::agent_instance::AgentInstance>,
     run_request: RunRequest,
     model: String,
+    include_usage: bool,
 ) -> Result<Response, ApiError> {
     let (tx, mut rx) = mpsc::channel::<String>(256);
 
@@ -423,10 +464,18 @@ async fn handle_streaming(
     // Best-effort send of initial chunk
     let _ = tx.send(stream::sse_data(&initial_chunk)).await;
 
-    let emitter = Arc::new(SseEventEmitter::new(tx, cid, model.clone(), created));
+    let emitter = Arc::new(SseEventEmitter::new(
+        tx,
+        cid,
+        model.clone(),
+        created,
+        include_usage,
+    ));
 
     // Spawn execution in background
-    tokio::spawn(async move {
+    let run_id = run_request.run_id.clone();
+    let adapter_clone = adapter.clone();
+    let execution_handle = tokio::spawn(async move {
         if let Err(e) = adapter.execute(run_request, agent, emitter.clone()).await {
             let error_json = serde_json::json!({
                 "error": {
@@ -441,8 +490,16 @@ async fn handle_streaming(
 
     // Build SSE body from receiver
     let body_stream = async_stream::stream! {
+        let mut execution_handle = Some(execution_handle);
         while let Some(frame) = rx.recv().await {
             yield Ok::<_, std::convert::Infallible>(frame);
+        }
+        // Stream closed - cancel execution if still running
+        if let Some(handle) = execution_handle.take() {
+            if !handle.is_finished() {
+                let _ = adapter_clone.cancel(&run_id).await;
+                let _ = handle.await;
+            }
         }
     };
 
@@ -589,7 +646,13 @@ mod tests {
     use tokio::sync::mpsc;
 
     fn emitter(tx: mpsc::Sender<String>) -> SseEventEmitter {
-        SseEventEmitter::new(tx, "cmpl-test".to_string(), "test-model".to_string(), 0)
+        SseEventEmitter::new(
+            tx,
+            "cmpl-test".to_string(),
+            "test-model".to_string(),
+            0,
+            false,
+        )
     }
 
     /// The SSE surface forwards a ResponseChunk's `delta` verbatim as the

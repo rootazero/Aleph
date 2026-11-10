@@ -38,21 +38,26 @@ pub(super) fn extract_tag_content<'a>(xml: &'a str, tag: &str) -> Option<&'a str
 /// - `from="user@example.com"` -> `Some("user@example.com")`
 /// - `from='user@example.com'` -> `Some("user@example.com")`
 pub(super) fn extract_attribute<'a>(xml: &'a str, attr: &str) -> Option<&'a str> {
+    // Find the root element opening tag (first '<' followed by non-'/' character)
+    let root_start = xml.trim_start().strip_prefix('<')?;
+    let root_tag_end = root_start.find('>')?;
+    let root_tag = &root_start[..root_tag_end];
+
     // Try double quotes first: attr="value"
     let dq_pattern = format!("{attr}=\"");
-    if let Some(start) = xml.find(&dq_pattern) {
+    if let Some(start) = root_tag.find(&dq_pattern) {
         let value_start = start + dq_pattern.len();
-        if let Some(value_end) = xml[value_start..].find('"') {
-            return Some(&xml[value_start..value_start + value_end]);
+        if let Some(value_end) = root_tag[value_start..].find('"') {
+            return Some(&root_tag[value_start..value_start + value_end]);
         }
     }
 
     // Try single quotes: attr='value'
     let sq_pattern = format!("{attr}='");
-    if let Some(start) = xml.find(&sq_pattern) {
+    if let Some(start) = root_tag.find(&sq_pattern) {
         let value_start = start + sq_pattern.len();
-        if let Some(value_end) = xml[value_start..].find('\'') {
-            return Some(&xml[value_start..value_start + value_end]);
+        if let Some(value_end) = root_tag[value_start..].find('\'') {
+            return Some(&root_tag[value_start..value_start + value_end]);
         }
     }
 
@@ -61,13 +66,36 @@ pub(super) fn extract_attribute<'a>(xml: &'a str, attr: &str) -> Option<&'a str>
 
 /// Unescape XML entities in text content.
 pub(super) fn xml_unescape(s: &str) -> String {
-    s.replace("&amp;", "&")
-        .replace("&lt;", "<")
-        .replace("&gt;", ">")
-        .replace("&quot;", "\"")
-        .replace("&apos;", "'")
-}
+    let mut result = String::with_capacity(s.len());
+    let mut chars = s.chars();
 
+    while let Some(ch) = chars.next() {
+        if ch == '&' {
+            let remaining: String = chars.clone().collect();
+            if let Some(end) = remaining.find(';') {
+                let entity = &remaining[..end];
+                let replacement = match entity {
+                    "lt" => Some("<"),
+                    "gt" => Some(">"),
+                    "quot" => Some("\""),
+                    "apos" => Some("'"),
+                    "amp" => Some("&"),
+                    _ => None,
+                };
+                if let Some(repl) = replacement {
+                    result.push_str(repl);
+                    for _ in 0..=end {
+                        chars.next();
+                    }
+                    continue;
+                }
+            }
+        }
+        result.push(ch);
+    }
+
+    result
+}
 /// Simple base64 encoding for SASL PLAIN.
 pub(super) fn base64_encode(data: &[u8]) -> String {
     // Use the base64 crate that's already a dependency

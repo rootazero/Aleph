@@ -221,10 +221,10 @@ pub async fn handle_branch_checkpoint_db(
     // above uses, rather than inventing a new one — a collision with a
     // foreign session reads identically to a missing/foreign source.
     match manager.get_metadata(&new_key).await {
-        Ok(Some(existing)) if !visibility::session_visible(&existing) => {
+        Ok(Some(_)) => {
             return visibility::not_found_response(request.id);
         }
-        Ok(_) => {}
+        Ok(None) => {}
         Err(_) => return visibility::not_found_response(request.id), // fail closed (GC 3)
     }
 

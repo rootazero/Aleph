@@ -21,14 +21,18 @@ where
     // If the TOML has the new AgentsConfig format (with "defaults" and "list" keys),
     // this will fail — in that case, return an empty HashMap with a default "main" agent.
     let value = serde_json::Value::deserialize(deserializer)?;
-    match serde_json::from_value::<HashMap<String, AgentConfig>>(value) {
-        Ok(map) => Ok(map),
-        Err(_) => {
+
+    // Check if this is the new format by looking for "defaults" or "list" keys
+    if let Some(obj) = value.as_object() {
+        if obj.contains_key("defaults") || obj.contains_key("list") {
             let mut map = HashMap::new();
             map.insert("main".to_string(), AgentConfig::default());
-            Ok(map)
+            return Ok(map);
         }
     }
+
+    // Otherwise, try to deserialize as legacy format and propagate any errors
+    serde_json::from_value::<HashMap<String, AgentConfig>>(value).map_err(serde::de::Error::custom)
 }
 
 use super::agent_instance::AgentInstanceConfig;

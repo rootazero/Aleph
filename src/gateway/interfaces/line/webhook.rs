@@ -53,11 +53,23 @@ pub async fn run_webhook_server(ctx: WebhookContext) {
     };
     tracing::info!("LINE webhook server listening on {}", addr);
 
+    let semaphore = Arc::new(tokio::sync::Semaphore::new(100));
+
     loop {
         match listener.accept().await {
             Ok((stream, _)) => {
                 let ctx = ctx.clone();
+                let permit = match semaphore.clone().try_acquire_owned() {
+                    Ok(p) => p,
+                    Err(_) => {
+                        tracing::warn!(
+                            "LINE webhook connection limit reached, dropping connection"
+                        );
+                        continue;
+                    }
+                };
                 tokio::spawn(async move {
+                    let _permit = permit;
                     if let Err(e) = handle_connection(stream, ctx).await {
                         tracing::warn!("LINE webhook connection error: {}", e);
                     }
@@ -215,7 +227,6 @@ async fn handle_connection(
         stream.write_all(response).await?;
         return Ok(());
     }
-
     // LINE delivers webhooks as an envelope: {"destination": ..., "events": [...]}.
     let payload: serde_json::Value = match serde_json::from_slice(req.body) {
         Ok(v) => v,
@@ -230,9 +241,9 @@ async fn handle_connection(
     let events = payload.get("events").and_then(|e| e.as_array()).cloned();
     if let Some(events) = events {
         for raw_event in events {
-            match serde_json::from_value::<LineEvent>(raw_event) {
+            match serde_json::from_value::<LineEvent>(raw_event.clone()) {
                 Ok(event) => {
-                    if let Err(e) = dispatch_event(&event, &ctx).await {
+                    if let Err(e) = dispatch_event(&event, &ctx, &raw_event).await {
                         tracing::warn!("Failed to dispatch LINE event: {}", e);
                     }
                 }
@@ -240,9 +251,9 @@ async fn handle_connection(
                 Err(e) => tracing::debug!("Skipping unparseable LINE event: {}", e),
             }
         }
-    } else if let Ok(event) = serde_json::from_value::<LineEvent>(payload) {
+    } else if let Ok(event) = serde_json::from_value::<LineEvent>(payload.clone()) {
         // Bare event body (non-envelope callers, e.g. local testing).
-        if let Err(e) = dispatch_event(&event, &ctx).await {
+        if let Err(e) = dispatch_event(&event, &ctx, &payload).await {
             tracing::warn!("Failed to dispatch LINE event: {}", e);
         }
     } else {
@@ -255,33 +266,112 @@ async fn handle_connection(
     Ok(())
 }
 
-async fn dispatch_event(event: &LineEvent, ctx: &WebhookContext) -> Result<(), String> {
+async fn download_media(
+    message: &super::types::LineMessage,
+    config: &LineConfig,
+) -> Result<Vec<crate::gateway::channel::Attachment>, String> {
+    use super::types::LineMessage;
+    use crate::gateway::channel::Attachment;
+    let (mime, filename, size) = match message {
+        LineMessage::Image(m) => {
+            if let Some(url) = &m.content_provider.original_content_url {
+                return Ok(vec![Attachment {
+                    id: m.id.clone(),
+                    mime_type: "image/jpeg".into(),
+                    filename: None,
+                    size: None,
+                    url: Some(url.clone()),
+                    path: None,
+                    data: None,
+                    is_voice_note: false,
+                    is_video_note: false,
+                }]);
+            }
+            ("image/jpeg", None, None)
+        }
+        LineMessage::Video(_) => ("video/mp4", None, None),
+        LineMessage::Audio(_) => ("audio/mp4", None, None),
+        LineMessage::File(m) => (
+            "application/octet-stream",
+            Some(m.file_name.clone()),
+            Some(m.file_size),
+        ),
+        _ => return Ok(Vec::new()),
+    };
+    const LIMIT: usize = 50 * 1024 * 1024;
+    let mut response = reqwest::Client::new()
+        .get(format!(
+            "https://api-data.line.me/v2/bot/message/{}/content",
+            message.id()
+        ))
+        .bearer_auth(&config.channel_access_token)
+        .send()
+        .await
+        .map_err(|e| e.to_string())?
+        .error_for_status()
+        .map_err(|e| e.to_string())?;
+    if response.content_length().is_some_and(|n| n > LIMIT as u64) {
+        return Err("LINE media exceeds 50 MiB".into());
+    }
+    let mime = response
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or(mime)
+        .to_owned();
+    let mut data = Vec::new();
+    while let Some(chunk) = response.chunk().await.map_err(|e| e.to_string())? {
+        if chunk.len() > LIMIT - data.len() {
+            return Err("LINE media exceeds 50 MiB".into());
+        }
+        data.extend_from_slice(&chunk);
+    }
+    Ok(vec![Attachment {
+        id: message.id().into(),
+        mime_type: mime,
+        filename,
+        size: size.or(Some(data.len() as u64)),
+        url: None,
+        path: None,
+        data: Some(data),
+        is_voice_note: false,
+        is_video_note: false,
+    }])
+}
+
+async fn dispatch_event(
+    event: &LineEvent,
+    ctx: &WebhookContext,
+    raw_event: &serde_json::Value,
+) -> Result<(), String> {
     let (source, reply_token, text) = match event {
         LineEvent::Message {
             reply_token,
             source,
             message,
         } => {
-            let text = message.text().unwrap_or("").to_string();
-            (source, Some(reply_token.clone()), text)
+            use super::types::LineMessage;
+            let text = match message {
+                LineMessage::Text(m) => m.text.clone(),
+                LineMessage::Location(m) => format!(
+                    "Location: {} — {} ({}, {})",
+                    m.title, m.address, m.latitude, m.longitude
+                ),
+                LineMessage::Sticker(m) => format!("Sticker: {}/{}", m.package_id, m.sticker_id),
+                LineMessage::Unknown => return Err("Unsupported LINE message type".into()),
+                _ => "[LINE attachment]".into(),
+            };
+            (source, reply_token.clone(), text)
         }
         LineEvent::Follow {
             reply_token,
             source,
-        } => (
-            source,
-            Some(reply_token.clone()),
-            "[Follow event]".to_string(),
-        ),
+        } => (source, reply_token.clone(), "[Follow event]".to_string()),
         LineEvent::Unfollow { source } => (source, None, "[Unfollow event]".to_string()),
         LineEvent::Join {
             reply_token,
             source,
-        } => (
-            source,
-            Some(reply_token.clone()),
-            "[Join event]".to_string(),
-        ),
+        } => (source, reply_token.clone(), "[Join event]".to_string()),
         LineEvent::Leave { source } => (source, None, "[Leave event]".to_string()),
         LineEvent::Postback {
             reply_token,
@@ -289,7 +379,7 @@ async fn dispatch_event(event: &LineEvent, ctx: &WebhookContext) -> Result<(), S
             postback,
         } => (
             source,
-            Some(reply_token.clone()),
+            reply_token.clone(),
             format!("[Postback: {}]", postback.data),
         ),
         LineEvent::Beacon {
@@ -298,7 +388,7 @@ async fn dispatch_event(event: &LineEvent, ctx: &WebhookContext) -> Result<(), S
             beacon,
         } => (
             source,
-            Some(reply_token.clone()),
+            reply_token.clone(),
             format!("[Beacon: {}]", beacon.hwid),
         ),
         LineEvent::AccountLink { .. } => return Ok(()),
@@ -326,24 +416,30 @@ async fn dispatch_event(event: &LineEvent, ctx: &WebhookContext) -> Result<(), S
         |s| UserId::new(s.clone()),
     );
 
-    let raw = reply_token.as_ref().map(|token| {
-        serde_json::json!({ "reply_token": token })
-            .to_string()
-            .into()
-    });
-
+    let mut raw = raw_event.clone();
+    if let Some(token) = reply_token {
+        raw["reply_token"] = token.into();
+    }
+    let (id, attachments) = if let LineEvent::Message { message, .. } = event {
+        (
+            MessageId::new(message.id()),
+            download_media(message, &ctx.config).await?,
+        )
+    } else {
+        (MessageId::new(uuid::Uuid::new_v4().to_string()), Vec::new())
+    };
     let inbound = InboundMessage {
-        id: MessageId::new(format!("line_{}", chrono::Utc::now().timestamp_millis())),
+        id,
         channel_id: ctx.channel_id.clone(),
         conversation_id,
         sender_id: user_id,
         sender_name: None,
         text,
-        attachments: Vec::new(),
+        attachments,
         timestamp: chrono::Utc::now(),
         reply_to: None,
         is_group,
-        raw,
+        raw: Some(raw),
         metadata: vec![],
     };
 
@@ -357,6 +453,34 @@ async fn dispatch_event(event: &LineEvent, ctx: &WebhookContext) -> Result<(), S
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn inbound_media_preserves_real_identity_raw_and_resolvable_url() {
+        let state = crate::gateway::channel::ChannelState::new(2);
+        let mut rx = state.inbound_subscribe();
+        let ctx = WebhookContext {
+            config: LineConfig::default(),
+            channel_id: ChannelId::new("line-instance"),
+            sender: state.sender(),
+            status_handle: Arc::new(tokio::sync::RwLock::new(ChannelStatus::Connected)),
+        };
+        let raw = serde_json::json!({"type":"message", "replyToken":"reply", "source":{"type":"user", "userId":"U1"},
+            "message":{"type":"image", "id":"actual-id", "contentProvider":{"type":"external", "originalContentUrl":"https://example.org/image.jpg", "previewImageUrl":"https://example.org/preview.jpg"}}});
+        let event: LineEvent = serde_json::from_value(raw.clone()).unwrap();
+        dispatch_event(&event, &ctx, &raw).await.unwrap();
+        let inbound = rx.recv().await.unwrap();
+        assert_eq!(inbound.id.as_str(), "actual-id");
+        assert!(!inbound.text.is_empty());
+        assert_eq!(
+            inbound.attachments[0].url.as_deref(),
+            Some("https://example.org/image.jpg")
+        );
+        assert_eq!(inbound.raw.as_ref().unwrap()["message"], raw["message"]);
+        assert_eq!(inbound.raw.as_ref().unwrap()["reply_token"], "reply");
+        let unknown = serde_json::json!({"type":"message", "source":{"type":"user", "userId":"U1"}, "message":{"type":"future"}});
+        let event: LineEvent = serde_json::from_value(unknown.clone()).unwrap();
+        assert!(dispatch_event(&event, &ctx, &unknown).await.is_err());
+    }
 
     fn compute_hmac_sha256(secret: &str, body: &[u8]) -> String {
         let mut mac = HmacSha256::new_from_slice(secret.as_bytes()).unwrap();

@@ -1245,6 +1245,7 @@ async fn the_busy_lane_sees_the_model_a_command_pinned() {
                 steps_completed: 0,
                 current_tool: None,
                 cancel_tx: None,
+                cancel_token: Default::default(),
                 seq_counter: crate::sync_primitives::AtomicU64::new(0),
                 chunk_counter: crate::sync_primitives::AtomicU32::new(0),
             },

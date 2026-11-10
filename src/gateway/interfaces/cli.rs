@@ -179,7 +179,6 @@ impl Channel for CliChannel {
     fn info(&self) -> &ChannelInfo {
         &self.info
     }
-
     fn state(&self) -> &ChannelState {
         &self.channel_state
     }
@@ -212,7 +211,9 @@ impl Channel for CliChannel {
         // Create a channel for lines from the blocking reader thread
         let (line_tx, mut line_rx) = mpsc::channel::<String>(10);
 
-        // Spawn blocking reader thread for stdin
+        // Spawn blocking reader thread for stdin. Reading stdin blocks, so it
+        // must not run on the async runtime: the thread hands every line to
+        // the async task over the channel above.
         std::thread::spawn(move || {
             let stdin = io::stdin();
             for line in stdin.lock().lines() {
@@ -240,7 +241,6 @@ impl Channel for CliChannel {
                         if text.is_empty() {
                             continue;
                         }
-
                         let message = InboundMessage {
                             id: MessageId::new(Uuid::new_v4().to_string()),
                             channel_id: ChannelId::new(&config.id),
@@ -304,16 +304,25 @@ impl Channel for CliChannel {
 
             // In test mode, skip stdout I/O
             if !test_mode {
-                let mut stdout = io::stdout().lock();
-                writeln!(stdout, "\n{}", message.text).map_err(|e| {
-                    ChannelError::SendFailed(format!("Failed to write to stdout: {e}"))
-                })?;
-                stdout.flush().map_err(|e| {
-                    ChannelError::SendFailed(format!("Failed to flush stdout: {e}"))
-                })?;
+                let message_text = message.text.clone();
+                let prompt = config.prompt.clone();
+                tokio::task::spawn_blocking(move || {
+                    let mut stdout = io::stdout().lock();
+                    writeln!(stdout, "\n{}", message_text).map_err(|e| {
+                        ChannelError::SendFailed(format!("Failed to write to stdout: {e}"))
+                    })?;
+                    stdout.flush().map_err(|e| {
+                        ChannelError::SendFailed(format!("Failed to flush stdout: {e}"))
+                    })?;
 
-                print!("{}", config.prompt);
-                io::stdout().flush().ok();
+                    print!("{}", prompt);
+                    io::stdout().flush().ok();
+                    Ok::<(), ChannelError>(())
+                })
+                .await
+                .map_err(|e| {
+                    ChannelError::SendFailed(format!("Failed to join blocking task: {e}"))
+                })??;
             }
 
             let message_id = MessageId::new(Uuid::new_v4().to_string());

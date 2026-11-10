@@ -1064,6 +1064,10 @@ impl GatewayServer {
                     .session_store
                     .clone()
                     .expect("session store must be installed before attachment routes"),
+                device_tokens: self.device_token_mgr.clone(),
+                shared_token: self.shared_token_mgr.clone(),
+                trusted_proxy_enabled: shared.trusted_proxy_enabled,
+                trusted_proxy_ips: shared.trusted_proxy_ips.clone(),
             }))
         });
 

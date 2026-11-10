@@ -56,18 +56,19 @@ impl SessionManager {
         scope_id: &str,
     ) -> Result<bool, SessionManagerError> {
         let key_str = key.to_key_string();
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| SessionManagerError::DatabaseError(format!("Lock error: {e}")))?;
-        let rows = conn
-            .execute(
-                "UPDATE sessions SET owner_user_id = ?2, scope_id = ?3
+        let owner_user_id = owner_user_id.to_owned();
+        let scope_id = scope_id.to_owned();
+        self.query_blocking(move |conn| {
+            let rows = conn
+                .execute(
+                    "UPDATE sessions SET owner_user_id = ?2, scope_id = ?3
                  WHERE key = ?1 AND owner_user_id IS NULL AND scope_id IS NULL",
-                params![&key_str, owner_user_id, scope_id],
-            )
-            .map_err(|e| SessionManagerError::DatabaseError(e.to_string()))?;
-        Ok(rows > 0)
+                    params![&key_str, owner_user_id, scope_id],
+                )
+                .map_err(|e| SessionManagerError::DatabaseError(e.to_string()))?;
+            Ok(rows > 0)
+        })
+        .await
     }
 
     /// Compact a session by removing old messages
@@ -75,11 +76,7 @@ impl SessionManager {
         let key_str = key.to_key_string();
         let keep = self.config.compaction_keep as i64;
 
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| SessionManagerError::DatabaseError(format!("Lock error: {e}")))?;
-
+        self.query_blocking(move |conn| {
         // The rows to drop, named by the SAME ranking that decides which ones
         // are "old": everything past the newest `keep` in reader order.
         //
@@ -153,6 +150,8 @@ impl SessionManager {
         );
 
         Ok(deleted)
+        })
+        .await
     }
 
     /// Close a session: set status=closed, store topic in metadata JSON
@@ -185,9 +184,7 @@ impl SessionManager {
             let capture = self.raw_memory_writer.clone().map(|writer| {
                 let agent_id = key.agent_id().to_string();
                 let session_id = key_str.clone();
-                let tail = self
-                    .read_recent_messages(&conn, &key_str, 64)
-                    .unwrap_or_default();
+                let tail = Self::read_recent_messages(&conn, &key_str, 64).unwrap_or_default();
                 // Review fix: the session-end reflector (spawned inside
                 // `emit_session_end_raw`) needs this session's P1 scope columns
                 // to write OPEN_LOOPS.md through the same composed id the

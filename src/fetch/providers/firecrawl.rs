@@ -4,6 +4,7 @@ use crate::search::providers::base::{build_client, send};
 use crate::utils::reqwest_limit::bytes_with_limit;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
+use std::time::Duration;
 
 const NAME: &str = "firecrawl";
 
@@ -59,13 +60,33 @@ pub(crate) fn map_scrape(resp: FirecrawlScrapeResponse) -> Result<Option<String>
 /// Fetch provider backed by Firecrawl's `/v2/scrape`. Config (base_url + token)
 /// is SHARED with the `[search]` Firecrawl backend (decision A).
 pub struct FirecrawlFetchProvider {
-    base_url: String,
     api_key: String,
     client: reqwest::Client,
+    scrape_url: url::Url,
+    /// Per-request timeout, when the caller configured one.
+    ///
+    /// `None` keeps the shared client's default timeout ([`build_client`]:
+    /// 30 s). The timeout is applied per request so the shared client's
+    /// other settings (redirect policy, connection pool) stay untouched.
+    timeout: Option<Duration>,
 }
 
 impl FirecrawlFetchProvider {
+    /// Build a provider with the shared client's default timeout.
     pub fn new(base_url: impl Into<String>, api_key: impl Into<String>) -> Result<Self> {
+        Self::new_with_timeout(base_url, api_key, None)
+    }
+
+    /// Build a provider whose scrape requests are bounded by `timeout_seconds`.
+    ///
+    /// The backend configuration carries a per-backend timeout; without this
+    /// the Firecrawl scrape always used the shared client's 30 s default, so
+    /// an operator-configured timeout was silently ignored.
+    pub fn new_with_timeout(
+        base_url: impl Into<String>,
+        api_key: impl Into<String>,
+        timeout_seconds: Option<u64>,
+    ) -> Result<Self> {
         let base_url = base_url.into().trim().trim_end_matches('/').to_string();
         let lower = base_url.to_lowercase();
         if !lower.starts_with("http://") && !lower.starts_with("https://") {
@@ -87,10 +108,19 @@ impl FirecrawlFetchProvider {
                 "Firecrawl api_key cannot be empty",
             ));
         }
+        // Prepare the scrape endpoint once. Re-parsing the base URL on every
+        // request was pure overhead, and the resolved endpoint is also the
+        // only place the `/v2/scrape` suffix is decided.
+        let mut scrape_url = parsed;
+        scrape_url
+            .path_segments_mut()
+            .map_err(|_| AlephError::invalid_config("firecrawl base_url cannot be a base"))?
+            .extend(&["v2", "scrape"]);
         Ok(Self {
-            base_url,
             api_key,
             client: build_client()?,
+            scrape_url,
+            timeout: timeout_seconds.map(Duration::from_secs),
         })
     }
 }
@@ -109,18 +139,18 @@ impl FetchProvider for FirecrawlFetchProvider {
         // Same funnel the search providers use: it is the only place a
         // `reqwest` failure becomes an `AlephError`, and the only place the
         // bearer token is scrubbed out of the message on the way.
-        let resp = send(
-            self.client
-                .post(format!("{}/v2/scrape", self.base_url))
-                .bearer_auth(&self.api_key)
-                .json(&ScrapeRequest {
-                    url,
-                    formats: ["markdown"],
-                }),
-            NAME,
-            Some(self.api_key.as_str()),
-        )
-        .await?;
+        let mut request = self
+            .client
+            .post(self.scrape_url.clone())
+            .bearer_auth(&self.api_key)
+            .json(&ScrapeRequest {
+                url,
+                formats: ["markdown"],
+            });
+        if let Some(timeout) = self.timeout {
+            request = request.timeout(timeout);
+        }
+        let resp = send(request, NAME, Some(self.api_key.as_str())).await?;
         // Bound body size before deserializing to avoid OOM on hostile /
         // misconfigured upstreams that return arbitrarily large responses.
         //
@@ -164,6 +194,47 @@ impl FetchProvider for FirecrawlFetchProvider {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn constructor_prepares_scrape_endpoint_once() {
+        for base_url in [
+            "https://api.firecrawl.dev",
+            "https://api.firecrawl.dev/",
+            "https://api.firecrawl.dev/proxy/",
+            "https://api.firecrawl.dev/proxy/?region=eu#section",
+        ] {
+            let provider = FirecrawlFetchProvider::new(base_url, "token").unwrap();
+            let expected_path = if base_url.contains("/proxy/") {
+                "/proxy/v2/scrape"
+            } else {
+                "/v2/scrape"
+            };
+            assert_eq!(provider.scrape_url.path(), expected_path);
+            if base_url.contains('?') {
+                assert_eq!(provider.scrape_url.query(), Some("region=eu"));
+                assert_eq!(provider.scrape_url.fragment(), Some("section"));
+            }
+        }
+        assert!(FirecrawlFetchProvider::new("https://", "token").is_err());
+    }
+
+    #[tokio::test]
+    async fn configured_timeout_is_applied_to_scrape_requests() {
+        use wiremock::{matchers::any, Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(any())
+            .respond_with(ResponseTemplate::new(200).set_delay(Duration::from_secs(2)))
+            .mount(&server)
+            .await;
+        let mut provider =
+            FirecrawlFetchProvider::new_with_timeout("https://api.firecrawl.dev", "token", Some(1))
+                .unwrap();
+        // Use the local fixture without relaxing production host validation.
+        provider.scrape_url = url::Url::parse(&format!("{}/v2/scrape", server.uri())).unwrap();
+        let err = provider.fetch("https://example.com").await.unwrap_err();
+        assert!(matches!(err, AlephError::NetworkError { .. }), "{err}");
+    }
 
     #[test]
     fn maps_markdown_from_scrape_response() {
