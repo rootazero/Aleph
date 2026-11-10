@@ -74,6 +74,14 @@ impl AccessController {
     /// `thread_id` is the forum topic id (or `None` for a non-topic message).
     /// Resolution order matches `ConfigResolver::resolve`:
     /// `topic.exact → group.chat_id → account.0`.
+    ///
+    /// The Core inbound router re-derives its own policy from the account-level
+    /// config only, so a group/topic override that is more permissive than the
+    /// account default would be rejected there even though this controller
+    /// allowed it. To keep the two policy reductions consistent, clamp the
+    /// local decision so it can never be more permissive than the account
+    /// default: if the account default denies, the local decision must deny
+    /// too. Overrides may still tighten (deny) access locally.
     #[must_use]
     pub fn check_message(
         &self,
@@ -86,7 +94,13 @@ impl AccessController {
             .resolver
             .resolve(&self.account_id, chat_id, thread_id)
             .unwrap_or(&self.account_default);
-        Self::decide(cfg, user_id, chat_id, is_group)
+        let local = Self::decide(cfg, user_id, chat_id, is_group);
+        let account = Self::decide(&self.account_default, user_id, chat_id, is_group);
+        match (account, local) {
+            (AccessDecision::Denied, _) => AccessDecision::Denied,
+            (AccessDecision::NeedsPairing, AccessDecision::Allowed) => AccessDecision::NeedsPairing,
+            (_, local) => local,
+        }
     }
 
     /// Legacy single-config form for callers that don't have a `thread_id` —

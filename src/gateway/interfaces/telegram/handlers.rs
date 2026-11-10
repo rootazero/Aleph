@@ -158,7 +158,7 @@ pub(crate) async fn convert_message(
     }
 
     Some(InboundMessage {
-        id: MessageId::new(msg.id.0.to_string()),
+        id: MessageId::new(format!("{}_{}", msg.chat.id.0, msg.id.0)),
         channel_id: channel_id.clone(),
         conversation_id,
         sender_id,

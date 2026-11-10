@@ -201,8 +201,8 @@ impl Default for ErrorPolicy {
 pub struct TelegramTopicConfig {
     pub id: String,
     pub thread_id: i32,
-    pub agent: Option<String>,
     pub block_streaming: Option<bool>,
+    pub agent: Option<String>,
     pub error_policy: Option<ErrorPolicy>,
     pub dm_policy: Option<DmPolicy>,
     pub group_policy: Option<GroupPolicy>,
@@ -214,8 +214,8 @@ pub struct TelegramTopicConfig {
 pub struct TelegramGroupConfig {
     pub id: String,
     pub chat_id: i64,
-    pub agent: Option<String>,
     pub block_streaming: Option<bool>,
+    pub agent: Option<String>,
     pub error_policy: Option<ErrorPolicy>,
     pub group_policy: Option<GroupPolicy>,
     pub send_typing: Option<bool>,

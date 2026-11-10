@@ -358,21 +358,38 @@ pub async fn send_message(
 
     // Voice-only: if text is empty but attachments exist, skip text and send attachments only
     if message.text.is_empty() && !message.attachments.is_empty() {
-        let mut first_msg_id = None;
+        let mut first_msg_id: Option<i64> = None;
+        let mut first_error: Option<ChannelError> = None;
         for attachment in &message.attachments {
             let result = send_attachment(bot, chat_id, thread_id, attachment).await;
-            if let Err(e) = result {
-                tracing::warn!("Failed to send voice attachment: {}", e);
-            }
-            if first_msg_id.is_none() {
-                // Use a placeholder message ID for the first attachment
-                first_msg_id = Some("0".to_string());
+            match result {
+                Ok(id) => {
+                    first_msg_id.get_or_insert(id);
+                }
+                Err(e) => {
+                    tracing::warn!("Failed to send voice attachment: {}", e);
+                    if first_error.is_none() {
+                        first_error = Some(e);
+                    }
+                }
             }
         }
-        return Ok(SendResult {
-            message_id: MessageId::new(first_msg_id.unwrap_or_else(|| "0".to_string())),
-            timestamp: Utc::now(),
-        });
+        match first_msg_id {
+            Some(id) => {
+                return Ok(SendResult {
+                    message_id: MessageId::new(id.to_string()),
+                    timestamp: Utc::now(),
+                });
+            }
+            None => {
+                // Every attachment failed; surface the first error so callers
+                // know the message was not delivered.
+                let err = first_error.unwrap_or_else(|| {
+                    ChannelError::SendFailed("all attachments failed to send".to_string())
+                });
+                return Err(err);
+            }
+        }
     }
 
     // Convert to HTML first, then split with HTML-aware chunking.
@@ -789,11 +806,14 @@ pub async fn send_attachments(
     // document — Telegram would 400 the whole batch.
     const ALBUM_MAX: usize = 10;
     let mut image_buf: Vec<&crate::gateway::channel::Attachment> = Vec::new();
-    let mut singles: Vec<&crate::gateway::channel::Attachment> = Vec::new();
 
     for att in attachments {
         if att.mime_type.starts_with("image/") {
             image_buf.push(att);
+            if image_buf.len() >= ALBUM_MAX {
+                flush_image_album(bot, chat_id, thread_id, &image_buf).await?;
+                image_buf.clear();
+            }
         } else {
             // Flush any in-progress album so the per-item send can start
             // clean.
@@ -801,22 +821,14 @@ pub async fn send_attachments(
                 flush_image_album(bot, chat_id, thread_id, &image_buf).await?;
                 image_buf.clear();
             }
-            singles.push(att);
-        }
-        if image_buf.len() >= ALBUM_MAX {
-            flush_image_album(bot, chat_id, thread_id, &image_buf).await?;
-            image_buf.clear();
+            send_attachment(bot, chat_id, thread_id, att).await?;
         }
     }
     if !image_buf.is_empty() {
         flush_image_album(bot, chat_id, thread_id, &image_buf).await?;
+        image_buf.clear();
     }
 
-    // Anything not in an album gets the per-item path (voice, video,
-    // sticker, document, etc.).
-    for att in singles {
-        send_attachment(bot, chat_id, thread_id, att).await?;
-    }
     Ok(())
 }
 

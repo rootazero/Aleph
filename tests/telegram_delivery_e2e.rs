@@ -107,6 +107,57 @@ fn png_attachment(id: &str) -> Attachment {
     }
 }
 
+#[tokio::test]
+async fn mixed_attachments_keep_input_order() {
+    let server = MockServer::start().await;
+    TelegramBotMock::send_photo_ok(&server).await;
+    wiremock::Mock::given(wiremock::matchers::path("/botTEST_TOKEN/SendDocument"))
+        .respond_with(
+            wiremock::ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "ok": true, "result": {"message_id": 2002, "date": 1700000000,
+                    "chat": {"id": 123, "type": "private"}}
+            })),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+    let mut document = png_attachment("document");
+    document.mime_type = "application/pdf".into();
+    document.filename = Some("middle.pdf".into());
+    let bot = bot_for(&server).await;
+    send_attachments(
+        &bot,
+        teloxide::types::ChatId(123),
+        None,
+        &[png_attachment("first"), document, png_attachment("last")],
+    )
+    .await
+    .unwrap();
+    let requests = server.received_requests().await.unwrap();
+    let paths: Vec<_> = requests.iter().map(|request| request.url.path()).collect();
+    assert_eq!(
+        paths,
+        [
+            "/botTEST_TOKEN/SendPhoto",
+            "/botTEST_TOKEN/SendDocument",
+            "/botTEST_TOKEN/SendPhoto"
+        ]
+    );
+}
+
+#[tokio::test]
+async fn attachment_only_send_returns_real_first_message_id() {
+    let server = MockServer::start().await;
+    TelegramBotMock::send_photo_ok(&server).await;
+    let mut message = text_message("123", "");
+    message.attachments = vec![png_attachment("photo")];
+    let bot = bot_for(&server).await;
+    let result = send_message(&bot, &silent_config(), &message, &ErrorCooldown::new())
+        .await
+        .unwrap();
+    assert_eq!(result.message_id.as_str(), "1001");
+}
+
 /// Send a text message through a mock that returns 200. Asserts the mock
 /// saw exactly one `sendMessage` call (no retry storm).
 #[tokio::test]
