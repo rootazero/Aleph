@@ -397,11 +397,11 @@ mod tests {
     fn planner_buffers_until_final() {
         let mut buf = InstantState::default();
         assert!(matches!(
-            plan_instant(&mut buf, &chunk("a", false), seq_source()),
+            plan_instant(&mut buf, &mut chunk("a", false), seq_source()),
             InstantOutcome::Buffered
         ));
         assert_eq!(buf.buffer, "a");
-        match plan_instant(&mut buf, &chunk("b", true), seq_source()) {
+        match plan_instant(&mut buf, &mut chunk("b", true), seq_source()) {
             InstantOutcome::Replace(events) => {
                 assert_eq!(events.len(), 1);
                 assert!(
@@ -421,7 +421,7 @@ mod tests {
             ..Default::default()
         };
         // Empty-delta intermediate = boundary marker → flush as intermediate.
-        match plan_instant(&mut buf, &intermediate(""), seq_source()) {
+        match plan_instant(&mut buf, &mut intermediate(""), seq_source()) {
             InstantOutcome::Replace(events) => {
                 assert_eq!(events.len(), 1);
                 assert!(
@@ -438,7 +438,7 @@ mod tests {
     fn planner_empty_marker_with_empty_buffer_emits_nothing() {
         let mut buf = InstantState::default();
         assert!(matches!(
-            plan_instant(&mut buf, &intermediate(""), seq_source()),
+            plan_instant(&mut buf, &mut intermediate(""), seq_source()),
             InstantOutcome::Replace(events) if events.is_empty()
         ));
     }
@@ -450,7 +450,7 @@ mod tests {
             ..Default::default()
         };
         assert!(matches!(
-            plan_instant(&mut buf, &intermediate("step done"), seq_source()),
+            plan_instant(&mut buf, &mut intermediate("step done"), seq_source()),
             InstantOutcome::Forward
         ));
         // Forwarding must not disturb the running buffer.
@@ -463,7 +463,7 @@ mod tests {
             buffer: "answer".into(),
             ..Default::default()
         };
-        match plan_instant(&mut buf, &run_complete(None), seq_source()) {
+        match plan_instant(&mut buf, &mut run_complete(None), seq_source()) {
             InstantOutcome::Prepend(events) => {
                 assert_eq!(events.len(), 1);
                 assert!(
@@ -479,7 +479,11 @@ mod tests {
     #[test]
     fn planner_run_complete_falls_back_to_summary() {
         let mut buf = InstantState::default(); // nothing streamed (fire-and-forget race)
-        match plan_instant(&mut buf, &run_complete(Some("from summary")), seq_source()) {
+        match plan_instant(
+            &mut buf,
+            &mut run_complete(Some("from summary")),
+            seq_source(),
+        ) {
             InstantOutcome::Prepend(events) => {
                 assert!(
                     matches!(&events[0], StreamEvent::ResponseChunk { delta, .. }
@@ -497,12 +501,16 @@ mod tests {
         // engine) must deliver the answer exactly once.
         let mut buf = InstantState::default();
         assert!(matches!(
-            plan_instant(&mut buf, &chunk("the answer", true), seq_source()),
+            plan_instant(&mut buf, &mut chunk("the answer", true), seq_source()),
             InstantOutcome::Replace(_)
         ));
         assert!(
             matches!(
-                plan_instant(&mut buf, &run_complete(Some("the answer")), seq_source()),
+                plan_instant(
+                    &mut buf,
+                    &mut run_complete(Some("the answer")),
+                    seq_source()
+                ),
                 InstantOutcome::Forward
             ),
             "summary fallback must not re-emit the already-flushed final text"
@@ -518,7 +526,7 @@ mod tests {
         assert!(matches!(
             plan_instant(
                 &mut buf,
-                &run_complete(Some("<think>internal scratch</think>")),
+                &mut run_complete(Some("<think>internal scratch</think>")),
                 seq_source()
             ),
             InstantOutcome::Forward
@@ -535,16 +543,24 @@ mod tests {
         let mut buf = InstantState::default();
         // Run 1: a final chunk delivers the answer, RunComplete adds nothing.
         assert!(matches!(
-            plan_instant(&mut buf, &chunk("run-1 answer", true), seq_source()),
+            plan_instant(&mut buf, &mut chunk("run-1 answer", true), seq_source()),
             InstantOutcome::Replace(_)
         ));
         assert!(matches!(
-            plan_instant(&mut buf, &run_complete(Some("run-1 answer")), seq_source()),
+            plan_instant(
+                &mut buf,
+                &mut run_complete(Some("run-1 answer")),
+                seq_source()
+            ),
             InstantOutcome::Forward
         ));
         // Run 2 on the same planner state: nothing streamed, so the summary
         // fallback MUST fire.
-        match plan_instant(&mut buf, &run_complete(Some("run-2 answer")), seq_source()) {
+        match plan_instant(
+            &mut buf,
+            &mut run_complete(Some("run-2 answer")),
+            seq_source(),
+        ) {
             InstantOutcome::Prepend(events) => assert!(
                 matches!(&events[0], StreamEvent::ResponseChunk { delta, .. }
                     if delta == "run-2 answer")
@@ -557,7 +573,7 @@ mod tests {
     fn planner_silent_run_complete_forwards_only() {
         let mut buf = InstantState::default();
         assert!(matches!(
-            plan_instant(&mut buf, &run_complete(None), seq_source()),
+            plan_instant(&mut buf, &mut run_complete(None), seq_source()),
             InstantOutcome::Forward
         ));
     }
