@@ -278,7 +278,7 @@ mod tests {
         use super::super::session_store::{
             file_backend::{FileSessionStore, FileSessionStoreConfig},
             sqlite_backend::{SqliteSessionStore, SqliteSessionStoreConfig},
-            SessionFilter,
+            types::SessionFilter,
         };
         let dir = tempfile::tempdir().unwrap();
         let stores: Vec<Arc<dyn SessionStore>> = vec![
