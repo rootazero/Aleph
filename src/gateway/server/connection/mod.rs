@@ -284,8 +284,7 @@ pub async fn handle_connection(
                 }
                 match msg {
                     Some(Ok(WsMessage::Text(text))) => {
-                        let preview_end = text.char_indices().take_while(|(i, _)| *i < 200).last().map_or(text.len(), |(i, c)| i + c.len_utf8());
-                        debug!("WS recv from {}: {}", conn_id, &text[..preview_end]);
+                        debug!("WS recv from {}: {} bytes", conn_id, text.len());
 
                         // Reverse-RPC response interception: a frame that is a
                         // JSON-RPC *response* (has `id`, no `method`, and a
@@ -716,8 +715,8 @@ pub async fn handle_connection(
                                                 match ctx.idempotency_guard.try_acquire(key) {
                                                     AcquireResult::Cached(cached) => {
                                                         debug!("Idempotency hit: key={}", key);
-                                                        // Viewer payloads are only returnable while the
-                                                        // LIVE connection still holds the same principal.
+                                                        // Reapply live login/admin authority and identity
+                                                        // before returning a cached payload.
                                                         if dispatch::revalidate_for_dispatch(&ctx.connections, &conn_id, ctx.client_is_local, &req.method, &caller_snapshot).await.is_some() {
                                                             let resp = JsonRpcResponse::success(req.id.clone(), cached);
                                                             serde_json::to_string(&resp).unwrap_or_default()
@@ -873,12 +872,22 @@ pub async fn handle_connection(
                                                     // paired device's `last_seen_at`, so the Paired-devices roster
                                                     // reflects real activity, not the pairing date. Token
                                                     // validation alone only touches the token row's `last_used_at`.
+                                                    // The write is offloaded to the blocking-storage boundary so a
+                                                    // slow SQLite UPDATE / contended mutex never stalls this async
+                                                    // worker; best-effort, same as before.
                                                     if let (Some(store), Some(did)) =
                                                         (ctx.security_store.as_ref(), authed_device_id.as_deref())
                                                     {
-                                                        if let Err(e) = store.touch_device(did) {
-                                                            tracing::debug!("touch_device on connect failed: {e}");
-                                                        }
+                                                        let store = store.clone();
+                                                        let did = did.to_string();
+                                                        let _ = tokio::task::spawn_blocking(move || {
+                                                            if let Err(e) = store.touch_device(&did) {
+                                                                tracing::warn!(
+                                                                    "touch_device({did}) failed: {e}"
+                                                                );
+                                                            }
+                                                        })
+                                                        .await;
                                                     }
                                                     // Forensic trail: a remote connection that
                                                     // failed the Gateway-token login wall. Bounded
@@ -1137,9 +1146,7 @@ pub async fn handle_connection(
                                                                 // Stamp last_seen so the offline half of
                                                                 // environments.list stays honest.
                                                                 if let Some(store) = ctx.security_store.as_ref() {
-                                                                    if let Err(e) = store.touch_device(node_id) {
-                                                                        debug!("failed to stamp node last_seen on connect for {}: {}", node_id, e);
-                                                                    }
+                                                                    cleanup::touch_device_last_seen(store.clone(), node_id.clone()).await;
                                                                 }
                                                             }
                                                             Some(serde_json::json!({

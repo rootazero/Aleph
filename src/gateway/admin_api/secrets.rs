@@ -35,9 +35,12 @@ async fn create_or_update_secret(
     Json(body): Json<CreateOrUpdateSecretRequest>,
 ) -> Result<Json<SecretSummary>, (StatusCode, String)> {
     let key = validate_secret_name(&body.key).map_err(|e| (StatusCode::BAD_REQUEST, e))?;
-    state
-        .shared_token
-        .store_secret(&key, &body.value)
+    let shared_token = state.shared_token.clone();
+    let value = body.value.clone();
+    let key_clone = key.clone();
+    tokio::task::spawn_blocking(move || shared_token.store_secret(&key_clone, &value))
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     Ok(Json(SecretSummary { key }))
 }
@@ -77,9 +80,11 @@ async fn delete_secret(
     Path(key): Path<String>,
 ) -> Result<StatusCode, (StatusCode, String)> {
     let key = validate_secret_name(&key).map_err(|e| (StatusCode::BAD_REQUEST, e))?;
-    let removed = state
-        .shared_token
-        .delete_secret(&key)
+    let shared_token = state.shared_token.clone();
+    let delete_key = key.clone();
+    let removed = tokio::task::spawn_blocking(move || shared_token.delete_secret(&delete_key))
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     if removed {
         Ok(StatusCode::NO_CONTENT)
@@ -212,6 +217,23 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn deleting_a_missing_secret_returns_404() {
+        let (app, _dir, token) = test_app();
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("DELETE")
+                    .uri("/secrets/NOT_THERE")
+                    .header("authorization", format!("Bearer {token}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
     }
 
     #[tokio::test]

@@ -149,21 +149,33 @@ pub fn viewer_principal(snapshot: &CallerSnapshot) -> Option<String> {
     )
 }
 
-/// Generic denial -- no credential, user or reason echoed.
+/// Generic denial -- no credential, user or reason echoed
 #[must_use]
 pub fn viewer_denied_response(id: Option<serde_json::Value>) -> String {
     serde_json::to_string(&JsonRpcResponse::error(id, PERMISSION_DENIED, "denied"))
         .unwrap_or_default()
 }
+/// Canonical login/admin denial under the currently scoped caller identity.
+fn authorization_error(method: &str, id: Option<serde_json::Value>) -> Option<String> {
+    let role = crate::gateway::caller_identity::current_caller_role();
+    let message = if !super::auth::wall_admits(role.as_deref(), method) {
+        super::auth::LOGIN_WALL_MESSAGE
+    } else if crate::gateway::method_admin::method_requires_admin(method)
+        && crate::gateway::caller_identity::caller_is_member()
+    {
+        ADMIN_REQUIRED_MESSAGE
+    } else {
+        return None;
+    };
+    Some(
+        serde_json::to_string(&JsonRpcResponse::error(id, AUTH_REQUIRED, message))
+            .unwrap_or_default(),
+    )
+}
 
-/// Re-validate a viewer request against the LIVE connection state.
-///
-/// Non-viewer methods pass through with the request-start snapshot untouched.
-/// For a viewer method the request-start snapshot must already hold a viewer
-/// principal, and the live state must still hold the SAME principal; the live
-/// snapshot is returned so the caller dispatches with a fresh identity (not the
-/// stale one read before queueing). Used before any cached/waiting result is
-/// returned and again after a lane permit is granted.
+/// Re-validate login, admin authority and identity against LIVE connection state.
+/// Used before cached/waiting results return and after a lane permit is granted.
+/// Viewer methods additionally require the same handshake-verified principal.
 pub async fn revalidate_for_dispatch(
     connections: &RwLock<HashMap<String, ConnectionState>>,
     conn_id: &str,
@@ -171,22 +183,34 @@ pub async fn revalidate_for_dispatch(
     method: &str,
     start: &CallerSnapshot,
 ) -> Option<CallerSnapshot> {
+    let live = CallerSnapshot::read(connections, conn_id, client_is_local).await;
+    let admitted = crate::gateway::caller_identity::with_caller_identity(
+        live.role.clone(),
+        live.user.clone(),
+        client_is_local,
+        Some(conn_id.to_string()),
+        async { authorization_error(method, None).is_none() },
+    )
+    .await;
+    if !admitted || live.user != start.user {
+        return None;
+    }
     if crate::gateway::handlers::panel_capabilities::is_context_method(method) {
-        let live = CallerSnapshot::read(connections, conn_id, client_is_local).await;
-        return (super::auth::wall_admits(live.role.as_deref(), method)
-            && viewer_principal(&live) == viewer_principal(start)
+        return (viewer_principal(&live) == viewer_principal(start)
             && live.device_id == start.device_id)
             .then_some(live);
     }
+    if !super::auth::wall_admits(live.role.as_deref(), method) {
+        return None;
+    }
     if !is_browser_viewer_method(method) {
-        return Some(start.clone());
+        return Some(live);
     }
     let expected = viewer_principal(start)?;
-    let live = CallerSnapshot::read(connections, conn_id, client_is_local).await;
     (viewer_principal(&live).as_deref() == Some(expected.as_str())).then_some(live)
 }
 
-/// Dispatch one request for a connection: revalidate (viewer methods), then
+/// Dispatch one request for a connection: revalidate live authority, then
 /// run `dispatch_with_caller_context` with the resulting snapshot. Single
 /// helper shared by `do_lane_dispatch` and the idempotency `Proceed` arm so
 /// both real dispatch paths gate and scope identically.
@@ -201,27 +225,19 @@ pub async fn dispatch_for_connection(
     req_id: Option<serde_json::Value>,
     start: &CallerSnapshot,
 ) -> String {
-    // Off-loop RPCs (Task #56 D3) can wait behind a queue and a lane permit
-    // for a long time while the connection loop keeps processing `connect`
-    // and `restamp_live_connections` demotions. Their authority must be the
-    // LIVE one at dispatch, not the arrival snapshot: re-run the login wall
-    // with its canonical predicate, then dispatch under the live role so the
-    // admin gate in `process_request` sees a demotion too.
-    let live;
-    let start = if super::off_loop::dispatches_off_loop(method) {
-        live = CallerSnapshot::read(connections, conn_id, client_is_local).await;
-        if !super::auth::wall_admits(live.role.as_deref(), method) {
-            return serde_json::to_string(&JsonRpcResponse::error(
-                req_id,
-                AUTH_REQUIRED,
-                super::auth::LOGIN_WALL_MESSAGE.to_string(),
-            ))
-            .unwrap_or_default();
-        }
-        &live
-    } else {
-        start
-    };
+    // Preserve the login/admin error contract before the stricter cache/identity gate.
+    let live = CallerSnapshot::read(connections, conn_id, client_is_local).await;
+    let denial = crate::gateway::caller_identity::with_caller_identity(
+        live.role.clone(),
+        live.user.clone(),
+        client_is_local,
+        Some(conn_id.to_string()),
+        async { authorization_error(method, req_id.clone()) },
+    )
+    .await;
+    if let Some(denial) = denial {
+        return denial;
+    }
     match revalidate_for_dispatch(connections, conn_id, client_is_local, method, start).await {
         Some(snap) => {
             dispatch_snapshot(text, mc, snap, client_is_local, Some(conn_id.to_string())).await
