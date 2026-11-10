@@ -1266,16 +1266,28 @@ impl ChannelRegistry {
         // followed by a start cannot leave two forwarders subscribed to the
         // same channel — the second one would deliver every inbound message
         // a second time.
-        {
+        // The lock is a `std::sync::Mutex`, so it must not be held across an
+        // await: the forwarder is started first and its handle stored
+        // afterwards. A concurrent start may have installed a live forwarder
+        // in the meantime — the extra one is aborted instead of replacing it.
+        let needs_forwarder = {
+            let forwarder = entry.forwarder_task.lock().unwrap();
+            !forwarder
+                .as_ref()
+                .is_some_and(|handle| !handle.is_finished())
+        };
+        if needs_forwarder {
+            let handle = self
+                .start_message_forwarder(channel_id.clone(), channel_arc.clone())
+                .await;
             let mut forwarder = entry.forwarder_task.lock().unwrap();
             let live = forwarder
                 .as_ref()
                 .is_some_and(|handle| !handle.is_finished());
-            if !live {
-                *forwarder = Some(
-                    self.start_message_forwarder(channel_id.clone(), channel_arc.clone())
-                        .await,
-                );
+            if live {
+                handle.abort();
+            } else {
+                *forwarder = Some(handle);
             }
         }
         drop(channel);
