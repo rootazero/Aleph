@@ -755,7 +755,10 @@ mod tests {
         match req.input {
             ResponsesInput::Messages(msgs) => {
                 assert_eq!(msgs.len(), 1);
-                assert_eq!(msgs[0].role, "user");
+                match &msgs[0] {
+                    ResponsesInputItem::Message(message) => assert_eq!(message.role, "user"),
+                    other => panic!("expected a message item, got {other:?}"),
+                }
             }
             _ => panic!("Expected Messages variant"),
         }
