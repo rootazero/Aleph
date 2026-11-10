@@ -120,12 +120,19 @@ pub(crate) fn mask_trace_event(masker: &SecretMasker, event: &mut LoopTraceEvent
             terminate_reason: _,
             duration_ms: _,
             token_breakdown: _,
-            tool_timeline: _,
-        } => Some(
-            final_text
+            tool_timeline,
+        } => {
+            let mut changed = final_text
                 .as_mut()
-                .is_some_and(|t| mask_in_place(masker, t)),
-        ),
+                .is_some_and(|t| mask_in_place(masker, t));
+            for invocation in tool_timeline.iter_mut() {
+                changed |= mask_in_place(masker, &mut invocation.name);
+                if let Some(ref mut err) = invocation.error {
+                    changed |= mask_in_place(masker, err);
+                }
+            }
+            Some(changed)
+        }
         LoopTraceEvent::WorktreeCreated { path } => Some(mask_path_in_place(masker, path)),
         LoopTraceEvent::WorktreeCleanedUp { path, leaked: _ } => {
             Some(mask_path_in_place(masker, path))
@@ -407,6 +414,46 @@ mod tests {
         }
     }
 
+    #[test]
+    fn redacts_secret_in_session_completed_tool_timeline() {
+        let cap = Arc::new(CaptureSink::default());
+        let sink = UnattendedRedactingSink::new(cap.clone());
+
+        // A tool error containing a credential in the timeline
+        let timeline = vec![crate::orchestrator::dispatch::ToolInvocation {
+            tool_name: "shell".into(),
+            input: serde_json::json!({"command": "echo start"}),
+            result: None,
+            error: Some(format!("AWS key AKIAIOSFODNN7EXAMPLE leaked in error")),
+            duration_ms: Some(100),
+        }];
+
+        sink.on_trace(&LoopTraceEvent::SessionCompleted {
+            outcome: LoopTraceSessionOutcome::Completed,
+            iterations: 1,
+            tool_calls_made: 1,
+            total_tokens: 0,
+            hit_limit: false,
+            final_text: Some("done".into()),
+            terminate_reason: None,
+            duration_ms: None,
+            token_breakdown: None,
+            tool_timeline: timeline,
+        });
+
+        let events = cap.events.lock().unwrap();
+        match &events[0] {
+            LoopTraceEvent::SessionCompleted { tool_timeline, .. } => {
+                let err = tool_timeline[0].error.as_ref().unwrap();
+                assert!(
+                    !err.contains("AKIAIOSFODNN7EXAMPLE"),
+                    "timeline error leaked: {err}"
+                );
+            }
+            other => panic!("unexpected event: {other:?}"),
+        }
+    }
+
     /// A real AWS key shape, so `SecretMasker`'s own pattern decides which
     /// bytes are a secret — not a pattern this test invented.
     const KEY: &str = "AKIAIOSFODNN7EXAMPLE";
@@ -474,7 +521,13 @@ mod tests {
                 terminate_reason: None,
                 duration_ms: None,
                 token_breakdown: None,
-                tool_timeline: Vec::new(),
+                tool_timeline: vec![crate::orchestrator::dispatch::ToolInvocation {
+                    tool_name: format!("tool-{KEY}"),
+                    input: serde_json::json!({"key": format!("secret {KEY}")}),
+                    result: None,
+                    error: Some(format!("failed with {KEY}")),
+                    duration_ms: Some(5),
+                }],
             },
             LoopTraceEvent::WorktreeCreated {
                 path: std::path::PathBuf::from(format!("/tmp/{KEY}")),
