@@ -28,7 +28,7 @@ pub mod types;
 mod tests;
 
 // Re-export public API (preserves all original exports)
-pub use ops::NostrMessageOps;
+pub use ops::{NostrMessageOps, PublishCommand};
 pub use protocol::{
     build_close_message, build_dm, build_event_message, build_reaction, build_subscription,
     build_text_note, compute_event_id, convert_event_to_inbound, derive_pubkey,

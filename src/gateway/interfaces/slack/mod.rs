@@ -40,7 +40,11 @@ use crate::gateway::channel::{
 };
 use crate::sync_primitives::Arc;
 use async_trait::async_trait;
+use std::time::Duration;
 use tokio::sync::{watch, RwLock};
+
+/// Outbound attachment download timeout — keeps a slow URL from stalling a send.
+const ATTACHMENT_DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(15);
 
 /// Slack channel implementation using Socket Mode + REST API.
 pub struct SlackChannel {
@@ -221,6 +225,10 @@ impl Channel for SlackChannel {
         let bot_token = self.config.bot_token.clone();
         let api_base = self.api_base.clone();
         let send_typing = self.config.send_typing;
+        // The same media budget the inbound path uses: an outbound URL
+        // download is bounded by it, so a hostile URL cannot ask the limb to
+        // buffer an arbitrary body.
+        let media_max_bytes = self.config.media_max_mb.saturating_mul(1024 * 1024);
         Box::pin(async move {
             let conversation_id = message.conversation_id.clone();
             let thread_ts = message.reply_to.as_ref().map(|id| id.as_str().to_string());
@@ -250,6 +258,7 @@ impl Channel for SlackChannel {
                     api_base.as_deref(),
                     message,
                     thread_ts.as_deref(),
+                    media_max_bytes,
                 )
                 .await;
             }
@@ -282,6 +291,11 @@ impl Channel for SlackChannel {
         message_id: &MessageId,
         reaction: &str,
     ) -> ChannelResult<()> {
+        if !self.config.enable_reactions {
+            return Err(ChannelError::UnsupportedFeature(
+                "reactions are disabled".to_string(),
+            ));
+        }
         SlackMessageOps::add_reaction_with_base(
             &self.client,
             &self.config.bot_token,
@@ -299,6 +313,11 @@ impl Channel for SlackChannel {
         message_id: &MessageId,
         new_text: &str,
     ) -> ChannelResult<()> {
+        if !self.config.enable_editing {
+            return Err(ChannelError::UnsupportedFeature(
+                "message editing is disabled".to_string(),
+            ));
+        }
         SlackMessageOps::update_message(
             &self.client,
             &self.config.bot_token,
@@ -369,10 +388,12 @@ impl SlackChannel {
         api_base: Option<&str>,
         message: OutboundMessage,
         thread_ts: Option<&str>,
+        media_max_bytes: u64,
     ) -> ChannelResult<SendResult> {
         let conversation_id = message.conversation_id.as_str();
 
         let mut last_result = None;
+        let mut caption_sent = false;
 
         for (i, attachment) in message.attachments.iter().enumerate() {
             let caption = if i == 0 && !message.text.trim().is_empty() {
@@ -416,7 +437,20 @@ impl SlackChannel {
                 )
                 .await
             } else if let Some(url) = &attachment.url {
-                let file_data = Self::download_url(client, url).await?;
+                let file_data = match Self::download_url(client, url, media_max_bytes).await? {
+                    Some(data) => data,
+                    None => {
+                        // Over the media budget: drop this attachment, keep the
+                        // rest of the message. One oversized file must not
+                        // fail the whole send.
+                        tracing::warn!(
+                            "Skipping attachment {}: download exceeds the media cap ({} bytes)",
+                            attachment.id,
+                            media_max_bytes
+                        );
+                        continue;
+                    }
+                };
                 let filename = attachment.filename.as_deref().unwrap_or("file");
                 SlackMessageOps::upload_file_with_base(
                     client,
@@ -441,6 +475,11 @@ impl SlackChannel {
 
             match upload_result {
                 Ok(file_id) => {
+                    // The caption rode along with this upload — the text is
+                    // already delivered, so it must not be sent again.
+                    if caption.is_some() {
+                        caption_sent = true;
+                    }
                     last_result = Some(SendResult {
                         message_id: MessageId::new(file_id),
                         timestamp: chrono::Utc::now(),
@@ -448,12 +487,27 @@ impl SlackChannel {
                 }
                 Err(e) => {
                     tracing::error!("Failed to upload attachment {}: {}", attachment.id, e);
+                    if last_result.is_some() {
+                        // Some attachments are already delivered — a retry
+                        // would duplicate them. `SendFailed` is the
+                        // ambiguous, never-retried verdict.
+                        return Err(ChannelError::SendFailed(format!(
+                            "Partial success: some attachments delivered, but subsequent upload failed: {}",
+                            e
+                        )));
+                    }
                     return Err(e);
                 }
             }
         }
 
-        if !message.text.trim().is_empty() && message.attachments.len() > 1 {
+        // The body goes out with the first attachment; sending it again
+        // here would repeat it. When nothing was delivered (the only
+        // attachment was dropped), the body still has to go out.
+        if !caption_sent
+            && !message.text.trim().is_empty()
+            && (message.attachments.len() > 1 || last_result.is_none())
+        {
             let formatted = crate::gateway::formatter::MessageFormatter::format(
                 &message.text,
                 crate::gateway::formatter::MarkupFormat::SlackMrkdwn,
@@ -472,7 +526,16 @@ impl SlackChannel {
         last_result.ok_or_else(|| ChannelError::SendFailed("No attachments to send".to_string()))
     }
 
-    async fn download_url(client: &reqwest::Client, url: &str) -> ChannelResult<Vec<u8>> {
+    /// Download an outbound attachment URL under the media budget.
+    ///
+    /// `Ok(None)` means the body exceeded `max_bytes`: the caller drops that
+    /// attachment instead of failing the whole message. `Err` is a transport
+    /// failure and keeps the previous behaviour of failing the send.
+    async fn download_url(
+        client: &reqwest::Client,
+        url: &str,
+        max_bytes: u64,
+    ) -> Result<Option<Vec<u8>>, ChannelError> {
         let response = client
             .get(url)
             .send()
@@ -486,12 +549,30 @@ impl SlackChannel {
             )));
         }
 
-        let bytes = response
-            .bytes()
-            .await
-            .map_err(|e| ChannelError::SendFailed(format!("Failed to read download body: {e}")))?;
+        // Bounded read: an over-budget Content-Length is refused before a
+        // chunk is read, and the body is cut off before it crosses the cap.
+        // `response.bytes()` would buffer the whole body first.
+        let body = tokio::time::timeout(
+            ATTACHMENT_DOWNLOAD_TIMEOUT,
+            crate::utils::reqwest_limit::bytes_with_limit(
+                response,
+                usize::try_from(max_bytes).unwrap_or(usize::MAX),
+            ),
+        )
+        .await
+        .map_err(|_| {
+            ChannelError::SendFailed(format!(
+                "Download timed out after {ATTACHMENT_DOWNLOAD_TIMEOUT:?}"
+            ))
+        })?;
 
-        Ok(bytes.to_vec())
+        match body {
+            Ok(Some(bytes)) => Ok(Some(bytes)),
+            Ok(None) => Ok(None),
+            Err(e) => Err(ChannelError::SendFailed(format!(
+                "Failed to read download body: {e}"
+            ))),
+        }
     }
 }
 
@@ -596,5 +677,45 @@ mod tests {
         // When the slack feature IS enabled, start() requires a live Slack API
         // which cannot be tested in unit tests, so this test only validates
         // construction succeeds.
+    }
+
+    /// An outbound attachment URL is bounded by the media budget.
+    ///
+    /// The body is refused instead of being buffered whole, and the refusal
+    /// is a value (not an error) so the caller can drop that one attachment
+    /// and still deliver the rest of the message.
+    #[tokio::test]
+    async fn download_url_refuses_a_body_over_the_media_budget() {
+        let server = wiremock::MockServer::start().await;
+        wiremock::Mock::given(wiremock::matchers::any())
+            .respond_with(wiremock::ResponseTemplate::new(200).set_body_bytes(vec![b'x'; 4096]))
+            .mount(&server)
+            .await;
+
+        let client = reqwest::Client::new();
+        let out = SlackChannel::download_url(&client, &server.uri(), 1024)
+            .await
+            .expect("download must not be a transport error");
+        assert!(
+            out.is_none(),
+            "a body over the media budget must be refused, not buffered"
+        );
+    }
+
+    /// The other side of the same seam: a body under the budget comes back
+    /// whole.
+    #[tokio::test]
+    async fn download_url_returns_a_body_under_the_media_budget() {
+        let server = wiremock::MockServer::start().await;
+        wiremock::Mock::given(wiremock::matchers::any())
+            .respond_with(wiremock::ResponseTemplate::new(200).set_body_bytes(b"hello".to_vec()))
+            .mount(&server)
+            .await;
+
+        let client = reqwest::Client::new();
+        let out = SlackChannel::download_url(&client, &server.uri(), 1024)
+            .await
+            .expect("download must not be a transport error");
+        assert_eq!(out.as_deref(), Some(&b"hello"[..]));
     }
 }

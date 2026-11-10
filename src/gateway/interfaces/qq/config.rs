@@ -1,6 +1,8 @@
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+// No `Debug`: the account configs carry `client_secret`, and a derived
+// Debug would print it into every log line that formats a config.
+#[derive(Clone, Serialize, Deserialize)]
 pub struct QQConfig {
     pub accounts: Vec<QQAccountConfig>,
 }
@@ -37,7 +39,8 @@ impl QQConfig {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+// No `Debug`: `client_secret` must not reach a log.
+#[derive(Clone, Serialize, Deserialize)]
 pub struct QQAccountConfig {
     /// Label for this account in logs and access decisions.
     ///

@@ -11,7 +11,9 @@ fn default_subscription_kinds() -> Vec<u64> {
 }
 
 /// Nostr channel configuration
-#[derive(Debug, Clone, Serialize, Deserialize)]
+// No `Debug`: `private_key` is the channel's identity and must not reach
+// a log.
+#[derive(Clone, Serialize, Deserialize)]
 pub struct NostrConfig {
     /// Private key (hex-encoded 32 bytes)
     ///

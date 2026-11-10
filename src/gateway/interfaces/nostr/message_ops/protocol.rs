@@ -26,7 +26,6 @@ pub fn compute_event_id(
     hasher.update(serialized.as_bytes());
     hex::encode(hasher.finalize())
 }
-
 /// Get current Unix timestamp in seconds.
 fn now_unix() -> u64 {
     SystemTime::now()
@@ -66,19 +65,9 @@ pub fn build_text_note(content: &str, pubkey: &str) -> NostrEvent {
 /// Tags include `["p", <recipient_pubkey>]` to identify the recipient.
 #[must_use]
 pub fn build_dm(content: &str, pubkey: &str, recipient_pubkey: &str) -> NostrEvent {
-    let created_at = now_unix();
-    let tags = vec![vec!["p".to_string(), recipient_pubkey.to_string()]];
-    let id = compute_event_id(pubkey, created_at, 4, &tags, content);
-
-    NostrEvent {
-        id,
-        pubkey: pubkey.to_string(),
-        created_at,
-        kind: 4,
-        tags,
-        content: content.to_string(),
-        sig: String::new(),
-    }
+    panic!(
+        "DM encryption not yet implemented; plaintext DMs are not supported for security reasons"
+    );
 }
 
 /// Build a kind-7 reaction event (unsigned).

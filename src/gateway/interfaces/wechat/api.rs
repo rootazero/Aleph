@@ -187,7 +187,8 @@ impl ILinkApi {
         let body = serde_json::to_string(&payload).map_err(WeChatApiError::Parse)?;
         let headers = build_headers(Some(token), &body);
 
-        self.http
+        let resp = self
+            .http
             .post(&url)
             .headers(headers)
             .body(body)
@@ -195,7 +196,22 @@ impl ILinkApi {
             .await
             .map_err(WeChatApiError::Http)?
             .error_for_status()
+            .map_err(WeChatApiError::Http)?
+            .json::<GetUpdatesResponse>()
+            .await
             .map_err(WeChatApiError::Http)?;
+
+        if resp.ret == SESSION_EXPIRED_CODE {
+            return Err(WeChatApiError::SessionExpired);
+        }
+
+        if resp.ret != 0 {
+            return Err(WeChatApiError::Api {
+                ret: resp.ret,
+                errcode: resp.errcode,
+                errmsg: resp.errmsg.clone(),
+            });
+        }
 
         Ok(())
     }
@@ -206,7 +222,8 @@ impl ILinkApi {
         let body = serde_json::to_string(&payload).map_err(WeChatApiError::Parse)?;
         let headers = build_headers(Some(token), &body);
 
-        self.http
+        let resp = self
+            .http
             .post(&url)
             .headers(headers)
             .body(body)

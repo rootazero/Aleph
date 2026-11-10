@@ -91,16 +91,9 @@ pub fn guess_chat_type(msg: &serde_json::Value, account_id: &str) -> (String, St
     let has_room = room_id
         .and_then(|v| v.as_str())
         .is_some_and(|s| !s.is_empty());
-    let is_group = has_room
-        || (to_user_id == account_id
-            && !from_user_id.is_empty()
-            && msg.get("msg_type").and_then(|v| v.as_u64()) == Some(1));
 
-    if is_group {
-        let id = room_id
-            .and_then(|v| v.as_str())
-            .unwrap_or(to_user_id)
-            .to_string();
+    if has_room {
+        let id = room_id.and_then(|v| v.as_str()).unwrap_or("").to_string();
         ("group".to_string(), id)
     } else {
         ("dm".to_string(), from_user_id.to_string())

@@ -26,7 +26,10 @@ impl UserDirectory {
     #[must_use]
     pub fn new(bot_token: String, ttl_secs: u64) -> Self {
         Self {
-            client: reqwest::Client::new(),
+            client: reqwest::Client::builder()
+                .timeout(Duration::from_secs(5))
+                .build()
+                .unwrap_or_else(|_| reqwest::Client::new()),
             bot_token,
             cache: RwLock::new(HashMap::new()),
             ttl: Duration::from_secs(ttl_secs),

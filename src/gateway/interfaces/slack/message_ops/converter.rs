@@ -14,7 +14,6 @@ impl SlackMessageOps {
         if user_id == bot_user_id {
             return None;
         }
-
         if !config.is_user_allowed(user_id) {
             tracing::debug!(
                 "Slack: user {} not in user_allowlist, filtering mention",
@@ -44,6 +43,10 @@ impl SlackMessageOps {
             .and_then(|epoch| chrono::DateTime::from_timestamp(epoch, 0))
             .unwrap_or_else(Utc::now);
 
+        let reply_to = event["thread_ts"]
+            .as_str()
+            .map(|thread_ts| MessageId::new(thread_ts.to_string()));
+
         Some(InboundMessage {
             id: MessageId::new(ts.to_string()),
             channel_id: channel_id.clone(),
@@ -53,7 +56,7 @@ impl SlackMessageOps {
             text: normalized_text,
             attachments: Vec::new(),
             timestamp,
-            reply_to: None,
+            reply_to,
             is_group: true,
             raw: Some(event.clone()),
             metadata: vec![MessageMeta::AppMention],
@@ -74,7 +77,6 @@ impl SlackMessageOps {
         if event_type != "message" {
             return None;
         }
-
         // Handle message_changed subtype: extract inner message
         let subtype = event["subtype"].as_str();
         let (msg_data, _is_edit) = match subtype {
@@ -82,7 +84,9 @@ impl SlackMessageOps {
                 let inner = event.get("message")?;
                 (inner, true)
             }
-            Some(_) => return None, // Skip other subtypes (joins, leaves, etc.)
+            Some("file_share") => (event, false),
+            Some("channel_join") | Some("channel_leave") | Some("bot_message") => return None,
+            Some(_) => return None,
             None => (event, false),
         };
 
@@ -105,7 +109,6 @@ impl SlackMessageOps {
             tracing::debug!("Slack: user {} not in user_allowlist, filtering", user_id);
             return None;
         }
-
         let slack_channel = event["channel"].as_str()?;
 
         // Filter by allowed channels

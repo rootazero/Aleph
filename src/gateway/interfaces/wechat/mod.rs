@@ -60,10 +60,10 @@ impl WeChatChannel {
 
     const fn capabilities() -> ChannelCapabilities {
         ChannelCapabilities {
-            attachments: true,
-            images: true,
-            audio: true,
-            video: true,
+            attachments: false,
+            images: false,
+            audio: false,
+            video: false,
             reactions: false,
             replies: false,
             editing: false,

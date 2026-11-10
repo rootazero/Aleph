@@ -10,7 +10,6 @@ pub fn markdown_to_wechat(markdown: &str) -> String {
     result = convert_list(&result);
     result = convert_italic(&result);
     result = convert_inline_code(&result);
-    result = truncate(&result);
 
     result.trim().to_string()
 }

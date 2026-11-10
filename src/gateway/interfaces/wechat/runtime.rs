@@ -119,7 +119,6 @@ impl WeChatRuntime {
             sleep(Duration::from_millis(backoff_ms)).await;
         }
     }
-
     async fn process_messages(
         &self,
         messages: &[super::types::Message],
@@ -163,7 +162,6 @@ impl WeChatRuntime {
         }
         true
     }
-
     pub async fn stop(&self) {
         let mut running = self.running.write().await;
         *running = false;
