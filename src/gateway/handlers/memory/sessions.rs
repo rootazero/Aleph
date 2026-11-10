@@ -103,14 +103,59 @@ pub async fn handle_list(
         Err(message) => return JsonRpcResponse::error(request.id, INTERNAL_ERROR, message),
     };
 
-    // Push the resolved visibility constraint into the storage query so a
-    // bounded page never materializes the raw corpus; derive page/count there.
-    let (sessions, total_visible) = match &visible_ids {
+    // Resolve the visibility constraint BEFORE the page is built. A scoped
+    // caller scans the corpus in bounded storage batches and keeps only the
+    // requested page, so the raw corpus is never materialized in memory
+    // (H5-18). An unrestricted caller takes its page from the store and its
+    // total from the store's own counter (H5-17).
+    const SCAN_BATCH: usize = 100;
+    let (sessions, total) = match &visible_ids {
         Some(ids) => {
-            let id_list: Vec<&str> = ids.iter().map(|s| s.as_str()).collect();
-            match store
-                .list_sessions_by_ids(
-                    &id_list,
+            let mut page: Vec<SessionMetadata> = Vec::new();
+            let mut visible_total = 0usize;
+            let mut scan_offset = 0usize;
+            loop {
+                let batch = match store
+                    .list_sessions(
+                        params.agent_id.as_deref(),
+                        params.workspace_id.as_deref(),
+                        params.start_date,
+                        params.end_date,
+                        params.compression_status.as_deref(),
+                        SCAN_BATCH,
+                        scan_offset,
+                    )
+                    .await
+                {
+                    Ok(batch) => batch,
+                    Err(e) => {
+                        return JsonRpcResponse::error(
+                            request.id,
+                            INTERNAL_ERROR,
+                            format!("Failed to list sessions: {}", e),
+                        )
+                    }
+                };
+                let batch_len = batch.len();
+                for session in batch {
+                    if !ids.contains(&session.session_id) {
+                        continue;
+                    }
+                    if visible_total >= params.offset && page.len() < limit {
+                        page.push(session);
+                    }
+                    visible_total += 1;
+                }
+                if batch_len < SCAN_BATCH {
+                    break;
+                }
+                scan_offset += batch_len;
+            }
+            (page, visible_total)
+        }
+        None => {
+            let page = match store
+                .list_sessions(
                     params.agent_id.as_deref(),
                     params.workspace_id.as_deref(),
                     params.start_date,
@@ -121,7 +166,7 @@ pub async fn handle_list(
                 )
                 .await
             {
-                Ok((page, total)) => (page, total),
+                Ok(page) => page,
                 Err(e) => {
                     return JsonRpcResponse::error(
                         request.id,
@@ -129,117 +174,18 @@ pub async fn handle_list(
                         format!("Failed to list sessions: {}", e),
                     )
                 }
-            }
-        }
-        None => {
-            let fetch_limit = limit + 1;
-            match store
-                .list_sessions(
+            };
+            let total = match store
+                .count_sessions(
                     params.agent_id.as_deref(),
                     params.workspace_id.as_deref(),
                     params.start_date,
                     params.end_date,
                     params.compression_status.as_deref(),
-                    fetch_limit,
-                    params.offset,
                 )
                 .await
             {
-                Ok(mut sessions) => {
-                    let total_visible = sessions.len();
-                    sessions.truncate(limit);
-                    (sessions, total_visible)
-                }
-                Err(e) => {
-                    return JsonRpcResponse::error(
-                        request.id,
-                        INTERNAL_ERROR,
-                        format!("Failed to list sessions: {}", e),
-                    )
-                }
-            }
-        }
-    };
-    let mut sessions = sessions;
-    let mut total_visible = total_visible;
-    loop {
-        let batch = match store
-            .list_sessions(
-                params.agent_id.as_deref(),
-                params.workspace_id.as_deref(),
-                params.start_date,
-                params.end_date,
-                params.compression_status.as_deref(),
-                fetch_limit,
-                fetch_offset,
-            )
-            .await
-        {
-            Ok(batch) => batch,
-            Err(e) => {
-                return JsonRpcResponse::error(
-                    request.id,
-                    INTERNAL_ERROR,
-                    format!("Failed to list sessions: {}", e),
-                )
-            }
-        };
-        let batch_len = batch.len();
-        for session in batch {
-            if let Some(ids) = &visible_ids {
-                if !ids.contains(&session.session_id) {
-                    continue;
-                }
-                if total_visible >= params.offset && sessions.len() < limit {
-                    sessions.push(session);
-                }
-                total_visible += 1;
-            } else {
-                sessions.push(session);
-            }
-        }
-        if visible_ids.is_none() || batch_len < fetch_limit {
-            break;
-        }
-        fetch_offset += batch_len;
-    }
-    let has_more = if visible_ids.is_some() {
-        total_visible.saturating_sub(params.offset) > limit
-    } else {
-        sessions.len() > limit
-    };
-    let total = if visible_ids.is_some() {
-        total_visible
-    } else {
-        // The unrestricted path reports how many sessions match, not how many
-        // the page holds (H5-17). Derive the count by extending the current
-        // page with the remaining batches under the same predicates, without
-        // fetching all unrestricted sessions eagerly.
-        let mut total = sessions.len();
-        while sessions.len() > limit {
-            sessions.pop();
-        }
-        loop {
-            match store
-                .list_sessions(
-                    params.agent_id.as_deref(),
-                    params.workspace_id.as_deref(),
-                    params.start_date,
-                    params.end_date,
-                    params.compression_status.as_deref(),
-                    fetch_offset,
-                    fetch_limit,
-                )
-                .await
-            {
-                Ok(batch) => {
-                    let batch_len = batch.len();
-                    total += batch_len;
-                    if batch_len < fetch_limit {
-                        break;
-                    }
-                    fetch_offset += batch_len;
-                }
+                Ok(total) => total,
                 Err(e) => {
                     return JsonRpcResponse::error(
                         request.id,
@@ -247,11 +193,13 @@ pub async fn handle_list(
                         format!("Failed to count sessions: {}", e),
                     )
                 }
-            }
+            };
+            (page, total)
         }
-        total
     };
-    sessions.truncate(limit);
+    // The visible rows start at `offset` in the store's ordering, so another
+    // page exists exactly when more visible rows follow the current one.
+    let has_more = total > params.offset.saturating_add(limit);
 
     JsonRpcResponse::success(
         request.id,

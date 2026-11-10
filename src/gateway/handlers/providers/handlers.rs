@@ -394,11 +394,15 @@ async fn create_provider_inner(
         }
         provider_config.api_key = None;
 
-        // Insert provider
-        cfg.providers.insert(params.name.clone(), provider_config);
+        // H5-04: persist a candidate copy and publish it to the shared config
+        // only after the save succeeded — a failed save must not leave the
+        // in-memory config carrying a provider that was never persisted.
+        let mut cfg_candidate = (*cfg).clone();
+        cfg_candidate
+            .providers
+            .insert(params.name.clone(), provider_config);
 
-        // Save to file
-        if let Err(e) = save_config(&cfg, &["providers"]).await {
+        if let Err(e) = save_config(&cfg_candidate, &["providers"]).await {
             error!(error = %e, "Failed to save config");
             return JsonRpcResponse::error(
                 request.id,
@@ -406,6 +410,7 @@ async fn create_provider_inner(
                 format!("Failed to save config: {e}"),
             );
         }
+        *cfg = cfg_candidate;
     }
 
     let mut constructed = false;
@@ -1118,8 +1123,12 @@ async fn set_default_provider_inner(
             None
         };
 
+        // H5-04: same candidate-then-publish discipline as create/update — the
+        // default switch is only published to the shared config once the file
+        // write succeeded.
+        let mut cfg_candidate = (*cfg).clone();
         // Use the existing set_default_provider method
-        if let Err(e) = cfg.set_default_provider(&name) {
+        if let Err(e) = cfg_candidate.set_default_provider(&name) {
             return JsonRpcResponse::error(
                 request.id.clone(),
                 INVALID_PARAMS,
@@ -1128,7 +1137,7 @@ async fn set_default_provider_inner(
         }
 
         // Save to file (redact resolved secrets before write)
-        if let Err(e) = save_config(&cfg, &["general"]).await {
+        if let Err(e) = save_config(&cfg_candidate, &["general"]).await {
             error!(error = %e, "Failed to save config");
             return JsonRpcResponse::error(
                 request.id.clone(),
@@ -1136,6 +1145,7 @@ async fn set_default_provider_inner(
                 format!("Failed to save config: {e}"),
             );
         }
+        *cfg = cfg_candidate;
     }
 
     let mut constructed = false;
