@@ -184,9 +184,7 @@ impl SessionManager {
             let capture = self.raw_memory_writer.clone().map(|writer| {
                 let agent_id = key.agent_id().to_string();
                 let session_id = key_str.clone();
-                let tail = self
-                    .read_recent_messages(&conn, &key_str, 64)
-                    .unwrap_or_default();
+                let tail = Self::read_recent_messages(&conn, &key_str, 64).unwrap_or_default();
                 // Review fix: the session-end reflector (spawned inside
                 // `emit_session_end_raw`) needs this session's P1 scope columns
                 // to write OPEN_LOOPS.md through the same composed id the

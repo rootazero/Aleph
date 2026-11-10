@@ -1433,7 +1433,7 @@ impl SessionStore for FileSessionStore {
 
         let persisted = self.get_current_epoch(base_key_pattern).await?;
         let dir = self.config.base_dir.join(".epoch-reservations");
-        let path = dir.join(format!("{:x}", Sha256::digest(base_key_pattern.as_bytes())));
+        let path = dir.join(hex::encode(Sha256::digest(base_key_pattern.as_bytes())));
         tokio::task::spawn_blocking(move || -> std::io::Result<u32> {
             std::fs::create_dir_all(&dir)?;
             with_file_lock(&path.with_extension("lock"), |_| {

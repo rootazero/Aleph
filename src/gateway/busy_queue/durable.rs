@@ -683,7 +683,7 @@ pub async fn reinject_survivors(
     if reinjected > 0 {
         tracing::info!(
             reinjected,
-            "busy-queue: re-queued messages from before a restart"
+            "busy-queue: re-delivered messages queued before a restart"
         );
     }
     reinjected
