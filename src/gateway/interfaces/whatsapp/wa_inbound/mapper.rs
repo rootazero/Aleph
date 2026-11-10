@@ -85,7 +85,7 @@ fn extract_text(msg: &whatsapp_rust::waproto::whatsapp::Message) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::gateway::interfaces::whatsapp::wa_runtime::{FakeWaRuntime, WaRuntime};
+    use crate::gateway::interfaces::whatsapp::wa_runtime::{fake::FakeWaRuntime, WaRuntime};
     use whatsapp_rust::waproto::whatsapp::{
         message::{AudioMessage, DocumentMessage, ImageMessage, VideoMessage},
         Message,

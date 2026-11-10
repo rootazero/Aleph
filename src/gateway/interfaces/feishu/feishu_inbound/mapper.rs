@@ -30,7 +30,8 @@ pub fn map_event_to_inbound(
             root_id,
         } => {
             let is_group = *chat_type == ChatType::Group;
-            let conversation_id = chat_id.to_string();
+            let conversation_id =
+                build_conversation_id(chat_id, sender_id, root_id, config, is_group);
             // Mark which mentions point at the bot once, then reuse for gating + stripping.
             let mut marked = mentions.clone();
             crate::gateway::interfaces::feishu::feishu_inbound::events::mark_bot_mentions(
