@@ -460,7 +460,7 @@ mod tests {
         assert!(read_workspace_file(&state, "docs/../secrets/key.pem").is_err());
         assert_eq!(
             read_workspace_file(&state, "docs/alias").unwrap(),
-            "allowed"
+            b"allowed".to_vec()
         );
     }
 

@@ -64,6 +64,7 @@ type GuestBarrier = (
     std::sync::mpsc::Receiver<()>,
 );
 
+#[derive(Debug)]
 struct LoadedWasmPlugin {
     plugin: Mutex<Option<extism::Plugin>>,
     kernel: Arc<WasmCapabilityKernel>,
@@ -457,6 +458,7 @@ impl WasmRuntime {
             .unwrap_or_default();
         let loaded = Arc::new(LoadedWasmPlugin {
             plugin: Mutex::new(Some(plugin)),
+            kernel: kernel.clone(),
             #[cfg(test)]
             guest_barrier,
             #[cfg(test)]
@@ -637,7 +639,7 @@ impl WasmRuntime {
             .lock()
             .map_err(|error| ExtensionError::Runtime(format!("Failed to lock plugin: {error}")))?;
 
-        self.reset_per_execution_counters();
+        loaded.kernel.reset_per_execution_counters();
 
         let result = plugin
             .as_mut()
