@@ -616,8 +616,8 @@ impl SmsRelayTransport {
             },
             None => self.authorizer.authorize(operation).await,
         };
+        let mut state = self.state.lock().await;
         if let Err(error) = authorization {
-            let mut state = self.state.lock().await;
             if state.operations.get(&operation_id).is_some_and(|stored| {
                 stored.operation == *operation
                     && stored.outcome.is_none()
@@ -627,6 +627,10 @@ impl SmsRelayTransport {
             }
             return Err(error);
         }
+        if state.operations.get(&operation_id).is_none() {
+            return Err(SmsTransportError::PrivateCancelled);
+        }
+        drop(state);
 
         // This is the final Core-side fence before the irreversible peer call.
         // The authenticated peer must perform its own generation check at the
@@ -656,12 +660,19 @@ impl SmsRelayTransport {
                     }
                     guard.check(&state, operation)?;
                 }
-                validate_operation_admission(
-                    &self.policy,
-                    &current,
-                    operation,
-                    if pinned.is_some() { Utc::now() } else { now },
-                )?;
+                let admission_time = if pinned.is_some() {
+                    Utc::now()
+                } else {
+                    let refreshed = Utc::now();
+                    if refreshed >= operation.command.expires_at {
+                        return Err(SmsTransportError::Expired {
+                            operation_id: operation_id.clone(),
+                            expires_at: operation.command.expires_at,
+                        });
+                    }
+                    refreshed
+                };
+                validate_operation_admission(&self.policy, &current, operation, admission_time)?;
                 let stored = state.operations.get_mut(&operation_id).ok_or_else(|| {
                     SmsTransportError::OperationNotFound {
                         operation_id: operation_id.clone(),

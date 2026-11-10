@@ -87,8 +87,8 @@ impl EmailChannel {
     /// Get Email-specific capabilities
     fn capabilities() -> ChannelCapabilities {
         ChannelCapabilities {
-            attachments: true,
-            images: true,
+            attachments: false,
+            images: false,
             audio: false,
             video: false,
             reactions: false,
@@ -100,8 +100,8 @@ impl EmailChannel {
             rich_text: true, // HTML email
             polls: false,
             group_icons: false,
-            max_message_length: 1_048_576,         // 1MB
-            max_attachment_size: 25 * 1024 * 1024, // 25MB
+            max_message_length: 1_048_576, // 1MB
+            max_attachment_size: 0,
             stream_protocol: Default::default(),
         }
     }
