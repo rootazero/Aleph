@@ -557,9 +557,16 @@ async fn two_sessions_same_agent_run_in_parallel() {
     assert_ne!(session_a, session_b);
 
     let req_a = gate_test_request(&session_a, "run-a");
-    let (tx_a, _rx_a) = mpsc::channel::<()>(1);
+    let (tx_a, mut rx_a) = mpsc::channel::<()>(1);
     let outcome_a = engine
-        .admit_run(&req_a, "run-a", &agent, tx_a)
+        .admit_run(
+            &req_a,
+            "run-a",
+            &agent,
+            tx_a,
+            &mut rx_a,
+            tokio_util::sync::CancellationToken::new(),
+        )
         .await
         .expect("run A must be admitted");
     assert!(
@@ -572,9 +579,16 @@ async fn two_sessions_same_agent_run_in_parallel() {
     // it), so the OLD gate would have rejected this second call outright.
     // The new per-session gate must admit it: it's a DIFFERENT session.
     let req_b = gate_test_request(&session_b, "run-b");
-    let (tx_b, _rx_b) = mpsc::channel::<()>(1);
+    let (tx_b, mut rx_b) = mpsc::channel::<()>(1);
     let outcome_b = engine
-        .admit_run(&req_b, "run-b", &agent, tx_b)
+        .admit_run(
+            &req_b,
+            "run-b",
+            &agent,
+            tx_b,
+            &mut rx_b,
+            tokio_util::sync::CancellationToken::new(),
+        )
         .await
         .expect("run B on a different session of the SAME agent must be admitted");
     assert!(
@@ -610,9 +624,16 @@ async fn a_run_waiting_for_a_concurrency_permit_can_still_be_cancelled() {
     let session_b = SessionKey::peer("capped-agent", "conv-b");
 
     let req_a = gate_test_request(&session_a, "run-a");
-    let (tx_a, _rx_a) = mpsc::channel::<()>(1);
+    let (tx_a, mut rx_a) = mpsc::channel::<()>(1);
     let _slot_a = match engine
-        .admit_run(&req_a, "run-a", &agent, tx_a)
+        .admit_run(
+            &req_a,
+            "run-a",
+            &agent,
+            tx_a,
+            &mut rx_a,
+            tokio_util::sync::CancellationToken::new(),
+        )
         .await
         .expect("run A must be admitted")
     {
@@ -628,7 +649,14 @@ async fn a_run_waiting_for_a_concurrency_permit_can_still_be_cancelled() {
     let (tx_b, mut rx_b) = mpsc::channel::<()>(1);
     let parked = tokio::spawn(async move {
         engine_b
-            .admit_run(&req_b, "run-b", &agent_b, tx_b)
+            .admit_run(
+                &req_b,
+                "run-b",
+                &agent_b,
+                tx_b,
+                &mut rx_b,
+                tokio_util::sync::CancellationToken::new(),
+            )
             .await
             .map(|outcome| matches!(outcome, GateOutcome::Admitted(_)))
     });
@@ -654,15 +682,17 @@ async fn a_run_waiting_for_a_concurrency_permit_can_still_be_cancelled() {
         .cancel("run-b")
         .await
         .expect("cancelling a permit-waiting run must not report RunNotFound");
+    // Release A so the parked admission can finish and the task can join.
+    drop(_slot_a);
+    let admitted = tokio::time::timeout(std::time::Duration::from_secs(5), parked)
+        .await
+        .expect("the parked admission must finish once the permit is released")
+        .expect("the parked admission task must not panic");
     assert!(
-        rx_b.recv().await.is_some(),
+        !admitted.unwrap_or(false),
         "the cancel must reach the run's own channel, so the loop sees it the \
          moment the permit lands instead of executing a turn the user stopped"
     );
-
-    // Release A so the parked admission can finish and the task can join.
-    drop(_slot_a);
-    let _ = tokio::time::timeout(std::time::Duration::from_secs(5), parked).await;
 }
 
 /// Task 6 regression: a second message on the SAME session while a run is
@@ -683,9 +713,16 @@ async fn second_message_same_session_takes_busy_path() {
     let session = SessionKey::peer("busy-agent", "conv-1");
 
     let req1 = gate_test_request(&session, "run-1");
-    let (tx1, _rx1) = mpsc::channel::<()>(1);
+    let (tx1, mut rx1) = mpsc::channel::<()>(1);
     let outcome1 = engine
-        .admit_run(&req1, "run-1", &agent, tx1)
+        .admit_run(
+            &req1,
+            "run-1",
+            &agent,
+            tx1,
+            &mut rx1,
+            tokio_util::sync::CancellationToken::new(),
+        )
         .await
         .expect("first run must be admitted");
     assert!(matches!(outcome1, GateOutcome::Admitted(_)));
@@ -694,8 +731,17 @@ async fn second_message_same_session_takes_busy_path() {
     // session claim from run 1 is still held, so this second call on the
     // SAME session must be rejected by `try_claim`.
     let req2 = gate_test_request(&session, "run-2");
-    let (tx2, _rx2) = mpsc::channel::<()>(1);
-    let outcome2 = engine.admit_run(&req2, "run-2", &agent, tx2).await;
+    let (tx2, mut rx2) = mpsc::channel::<()>(1);
+    let outcome2 = engine
+        .admit_run(
+            &req2,
+            "run-2",
+            &agent,
+            tx2,
+            &mut rx2,
+            tokio_util::sync::CancellationToken::new(),
+        )
+        .await;
     match outcome2 {
         Err(ExecutionError::AgentBusy(_)) => {}
         Ok(_) => panic!(
@@ -722,9 +768,16 @@ async fn run_slot_drop_releases_session_for_reclaim() {
     let session = SessionKey::peer("release-agent", "conv-1");
 
     let req1 = gate_test_request(&session, "run-1");
-    let (tx1, _rx1) = mpsc::channel::<()>(1);
+    let (tx1, mut rx1) = mpsc::channel::<()>(1);
     let outcome1 = engine
-        .admit_run(&req1, "run-1", &agent, tx1)
+        .admit_run(
+            &req1,
+            "run-1",
+            &agent,
+            tx1,
+            &mut rx1,
+            tokio_util::sync::CancellationToken::new(),
+        )
         .await
         .expect("first run must be admitted");
 
@@ -733,9 +786,16 @@ async fn run_slot_drop_releases_session_for_reclaim() {
 
     // A fresh run on the SAME session must now be admitted again.
     let req2 = gate_test_request(&session, "run-2");
-    let (tx2, _rx2) = mpsc::channel::<()>(1);
+    let (tx2, mut rx2) = mpsc::channel::<()>(1);
     let outcome2 = engine
-        .admit_run(&req2, "run-2", &agent, tx2)
+        .admit_run(
+            &req2,
+            "run-2",
+            &agent,
+            tx2,
+            &mut rx2,
+            tokio_util::sync::CancellationToken::new(),
+        )
         .await
         .expect("run after release must be admitted");
     assert!(matches!(outcome2, GateOutcome::Admitted(_)));
@@ -778,7 +838,14 @@ async fn cancel_session_cancels_in_flight_delegated_child() {
     let member_req = gate_test_request(&member_key, member_run_id);
     let (member_tx, mut member_rx) = mpsc::channel::<()>(1);
     let member_outcome = engine
-        .admit_run(&member_req, member_run_id, &agent, member_tx)
+        .admit_run(
+            &member_req,
+            member_run_id,
+            &agent,
+            member_tx,
+            &mut member_rx,
+            tokio_util::sync::CancellationToken::new(),
+        )
         .await
         .expect("member run must be admitted");
     assert!(matches!(member_outcome, GateOutcome::Admitted(_)));
@@ -847,7 +914,14 @@ async fn cancel_session_cancels_own_run_and_in_flight_delegated_child() {
     let leader_req = gate_test_request(&leader_key, leader_run_id);
     let (leader_tx, mut leader_rx) = mpsc::channel::<()>(1);
     let leader_outcome = engine
-        .admit_run(&leader_req, leader_run_id, &agent, leader_tx)
+        .admit_run(
+            &leader_req,
+            leader_run_id,
+            &agent,
+            leader_tx,
+            &mut leader_rx,
+            tokio_util::sync::CancellationToken::new(),
+        )
         .await
         .expect("leader run must be admitted");
     assert!(matches!(leader_outcome, GateOutcome::Admitted(_)));
@@ -858,7 +932,14 @@ async fn cancel_session_cancels_own_run_and_in_flight_delegated_child() {
     let member_req = gate_test_request(&member_key, member_run_id);
     let (member_tx, mut member_rx) = mpsc::channel::<()>(1);
     let member_outcome = engine
-        .admit_run(&member_req, member_run_id, &agent, member_tx)
+        .admit_run(
+            &member_req,
+            member_run_id,
+            &agent,
+            member_tx,
+            &mut member_rx,
+            tokio_util::sync::CancellationToken::new(),
+        )
         .await
         .expect("member run must be admitted");
     assert!(matches!(member_outcome, GateOutcome::Admitted(_)));
@@ -922,7 +1003,14 @@ async fn interrupt_on_fanout_session_cancels_parent_and_children() {
     let leader_req = gate_test_request(&leader_key, leader_run_id);
     let (leader_tx, mut leader_rx) = mpsc::channel::<()>(1);
     let leader_outcome = engine
-        .admit_run(&leader_req, leader_run_id, &agent, leader_tx)
+        .admit_run(
+            &leader_req,
+            leader_run_id,
+            &agent,
+            leader_tx,
+            &mut leader_rx,
+            tokio_util::sync::CancellationToken::new(),
+        )
         .await
         .expect("leader run must be admitted");
     assert!(matches!(leader_outcome, GateOutcome::Admitted(_)));
@@ -933,7 +1021,14 @@ async fn interrupt_on_fanout_session_cancels_parent_and_children() {
     let member_req = gate_test_request(&member_key, member_run_id);
     let (member_tx, mut member_rx) = mpsc::channel::<()>(1);
     let member_outcome = engine
-        .admit_run(&member_req, member_run_id, &agent, member_tx)
+        .admit_run(
+            &member_req,
+            member_run_id,
+            &agent,
+            member_tx,
+            &mut member_rx,
+            tokio_util::sync::CancellationToken::new(),
+        )
         .await
         .expect("member run must be admitted");
     assert!(matches!(member_outcome, GateOutcome::Admitted(_)));
@@ -961,9 +1056,16 @@ async fn interrupt_on_fanout_session_cancels_parent_and_children() {
         BUSY_INPUT_MODE_KEY.to_string(),
         BusyInputMode::Interrupt.as_wire().to_string(),
     );
-    let (int_tx, _int_rx) = mpsc::channel::<()>(1);
+    let (int_tx, mut int_rx) = mpsc::channel::<()>(1);
     let outcome = engine
-        .admit_run(&interrupt_req, "interrupt-run", &agent, int_tx)
+        .admit_run(
+            &interrupt_req,
+            "interrupt-run",
+            &agent,
+            int_tx,
+            &mut int_rx,
+            tokio_util::sync::CancellationToken::new(),
+        )
         .await;
     assert!(
         matches!(outcome, Err(ExecutionError::AgentBusy(_))),
