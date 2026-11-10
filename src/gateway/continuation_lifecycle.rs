@@ -181,7 +181,7 @@ pub(crate) async fn retire_side_session_now(
                 error = %e,
                 "btw: side session transcript left behind — event retire failed"
             );
-            0
+            return;
         }
     };
 
