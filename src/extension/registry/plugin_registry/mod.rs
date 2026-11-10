@@ -331,16 +331,22 @@ impl PluginRegistry {
     /// Register a skill.
     ///
     /// The skill is stored under both its namespaced key (`plugin_id:name`) and its
-    /// short name (`name`) for backward compatibility. First-come wins for the short key.
+    /// short name (`name`) for backward compatibility. First-come wins for the short key,
+    /// except that the registering plugin may refresh its own short-key entry.
     pub fn register_skill(&mut self, skill: SkillRegistration) {
         let namespaced_key =
             crate::extension::namespaced_component_key(&skill.plugin_id, &skill.name);
         let short_key = skill.name.clone();
 
-        // Register under short name for backward compat (first-come wins)
-        self.skills
+        // Register under short name: first-come wins, but the owning plugin
+        // may refresh its own entry (same-owner refresh rule).
+        let short_entry = self
+            .skills
             .entry(short_key)
             .or_insert_with(|| skill.clone());
+        if short_entry.plugin_id == skill.plugin_id {
+            *short_entry = skill.clone();
+        }
         // Always register under namespaced key
         self.skills.insert(namespaced_key, skill);
     }
@@ -385,10 +391,13 @@ impl PluginRegistry {
             crate::extension::namespaced_component_key(&agent.plugin_id, &agent.name);
         let short_key = agent.name.clone();
 
-        // Register under short name for backward compat (first-come wins)
-        self.agents
-            .entry(short_key)
-            .or_insert_with(|| agent.clone());
+        // Only claim the short key when it is unowned or already owned by this plugin.
+        match self.agents.get(&short_key) {
+            Some(existing) if existing.plugin_id != agent.plugin_id => {}
+            _ => {
+                self.agents.insert(short_key, agent.clone());
+            }
+        }
         // Always register under namespaced key
         self.agents.insert(namespaced_key, agent);
     }
@@ -513,6 +522,33 @@ impl PluginRegistry {
             context_bundles: context.bundles,
             diagnostics: self.diagnostics.len(),
         }
+    }
+}
+
+#[cfg(test)]
+mod agent_refresh_tests {
+    use super::*;
+
+    #[test]
+    fn agent_refresh_updates_own_short_key_but_not_another_plugins() {
+        let mut registry = PluginRegistry::default();
+        let mut agent = AgentRegistration {
+            plugin_id: "owner".into(),
+            name: "reviewer".into(),
+            content: "old".into(),
+            ..Default::default()
+        };
+        registry.register_agent(agent.clone());
+        agent.content = "new".into();
+        registry.register_agent(agent.clone());
+        assert_eq!(registry.agents["reviewer"].content, "new");
+        assert_eq!(registry.agents["owner:reviewer"].content, "new");
+        agent.plugin_id = "other".into();
+        agent.content = "other content".into();
+        registry.register_agent(agent);
+        assert_eq!(registry.agents["reviewer"].plugin_id, "owner");
+        assert_eq!(registry.agents["reviewer"].content, "new");
+        assert_eq!(registry.agents["other:reviewer"].content, "other content");
     }
 }
 

@@ -46,7 +46,7 @@ host_fn!(pub host_workspace_read(state: HostState; path: String) -> String {
     let state = state.get()?;
     let state = state.lock().unwrap_or_else(|e| e.into_inner());
 
-    // Check capability
+    // Check capability (lexical prefix check against the declared allowed paths)
     if let Err(e) = state.kernel.check_workspace_read(&path) {
         return Ok(serde_json::json!({"error": e.to_string()}).to_string());
     }
@@ -67,19 +67,49 @@ host_fn!(pub host_workspace_read(state: HostState; path: String) -> String {
     if !canonical.starts_with(&root) {
         return Ok(serde_json::json!({"error": "path escapes workspace"}).to_string());
     }
+    // Re-apply the allowed-prefix boundary check to the canonical path so that
+    // an in-root symlink (e.g. docs/link -> ../secrets) cannot be used to reach
+    // a target outside the granted prefix. We strip the canonical workspace root
+    // from the canonical path to obtain the workspace-relative suffix, then
+    // re-run the same capability check against that suffix.
+    let canonical_relative = match canonical.strip_prefix(&root) {
+        Ok(rel) => rel.to_string_lossy().into_owned(),
+        Err(_) => return Ok(serde_json::json!({"error": "path escapes workspace"}).to_string()),
+    };
+    if let Err(e) = state.kernel.check_workspace_read(&canonical_relative) {
+        return Ok(serde_json::json!({"error": e.to_string()}).to_string());
+    }
     // Cap the read: a plugin with the workspace capability must not pull
     // arbitrarily large files into guest memory.
-    let file_len = match std::fs::metadata(&canonical) {
-        Ok(m) => m.len(),
+    // Open the file and confirm it is a regular file before reading, so that
+    // FIFOs and other special files cannot block indefinitely. Then read
+    // through a bounded reader: if the content exceeds the cap we reject it
+    // even when metadata().len() reported a smaller (or zero) size.
+    let file = match std::fs::File::open(&canonical) {
+        Ok(f) => f,
         Err(e) => return Ok(serde_json::json!({"error": e.to_string()}).to_string()),
     };
-    if file_len > MAX_WORKSPACE_READ_BYTES {
+    let metadata = match file.metadata() {
+        Ok(m) => m,
+        Err(e) => return Ok(serde_json::json!({"error": e.to_string()}).to_string()),
+    };
+    if !metadata.is_file() {
+        return Ok(serde_json::json!({"error": "path is not a regular file"}).to_string());
+    }
+    // Read at most MAX_WORKSPACE_READ_BYTES + 1 bytes so we can distinguish
+    // "fits within cap" from "exceeds cap" without reading the whole file.
+    let mut limited = std::io::Read::take(file, MAX_WORKSPACE_READ_BYTES + 1);
+    let mut buf = Vec::new();
+    if let Err(e) = std::io::Read::read_to_end(&mut limited, &mut buf) {
+        return Ok(serde_json::json!({"error": e.to_string()}).to_string());
+    }
+    if buf.len() as u64 > MAX_WORKSPACE_READ_BYTES {
         return Ok(serde_json::json!({
-            "error": format!("file {file_len} bytes exceeds cap {MAX_WORKSPACE_READ_BYTES}")
+            "error": format!("file exceeds cap {MAX_WORKSPACE_READ_BYTES}")
         })
         .to_string());
     }
-    match std::fs::read_to_string(&canonical) {
+    match String::from_utf8(buf) {
         Ok(content) => Ok(serde_json::json!({"content": content}).to_string()),
         Err(e) => Ok(serde_json::json!({"error": e.to_string()}).to_string()),
     }
@@ -271,6 +301,10 @@ fn try_http_fetch(kernel: &WasmCapabilityKernel, request: &str) -> Result<String
     // With no `Host` of its own, the client derives it from the URL — the
     // host the allowlist matched.
     strip_host_routing_headers(&mut egress_headers);
+    // Credential injection may change the path; validate the final target too.
+    kernel
+        .check_http_request(&method, &egress_url)
+        .map_err(|_| "Not allowed: credential-injected URL failed allowlist".to_string())?;
 
     // Run the blocking client on a dedicated OS thread: reqwest::blocking spins
     // its own runtime internally, which would panic if nested inside the host's
@@ -290,7 +324,7 @@ fn try_http_fetch(kernel: &WasmCapabilityKernel, request: &str) -> Result<String
                             // silently egress to an arbitrary target.
                             .redirect(reqwest::redirect::Policy::none())
                             .build()
-                            .map_err(|e| format!("client build failed: {e}"))?;
+                            .map_err(|e| format!("client build failed: {}", e.without_url()))?;
                         let parsed_method = reqwest::Method::from_bytes(method.as_bytes())
                             .map_err(|e| format!("invalid method: {e}"))?;
                         let mut builder = client.request(parsed_method, egress_url.as_str());
@@ -300,7 +334,9 @@ fn try_http_fetch(kernel: &WasmCapabilityKernel, request: &str) -> Result<String
                         if !body.is_empty() {
                             builder = builder.body(body.clone());
                         }
-                        let resp = builder.send().map_err(|e| format!("request failed: {e}"))?;
+                        let resp = builder
+                            .send()
+                            .map_err(|e| format!("request failed: {}", e.without_url()))?;
                         let status = resp.status().as_u16();
                         let headers = resp
                             .headers()
@@ -345,9 +381,169 @@ fn try_http_fetch(kernel: &WasmCapabilityKernel, request: &str) -> Result<String
     .to_string())
 }
 
+fn read_workspace_file(state: &HostState, relative_path: &str) -> Result<Vec<u8>, String> {
+    use std::path::{Component, Path, PathBuf};
+
+    let root = state.workspace_root.canonicalize().map_err(|e| {
+        format!(
+            "workspace root {} is not accessible: {e}",
+            state.workspace_root.display()
+        )
+    })?;
+
+    let mut resolved = PathBuf::from(&root);
+    for component in Path::new(relative_path).components() {
+        match component {
+            Component::Normal(part) => resolved.push(part),
+            Component::CurDir => {}
+            _ => return Err(format!("path {relative_path} escapes the workspace")),
+        }
+    }
+
+    let canonical = resolved
+        .canonicalize()
+        .map_err(|e| format!("workspace path {relative_path} is not accessible: {e}"))?;
+
+    if !canonical.starts_with(&root) {
+        return Err(format!("path {relative_path} escapes the workspace"));
+    }
+
+    std::fs::read(&canonical).map_err(|e| format!("failed to read {}: {e}", canonical.display()))
+}
+
 #[cfg(test)]
 mod tests {
-    use super::strip_host_routing_headers;
+    use super::*;
+    use crate::extension::runtime::wasm::capabilities::{
+        CredentialBinding, CredentialInject, EndpointPattern, HttpCapability, SecretsCapability,
+        WasmCapabilities, WorkspaceCapability,
+    };
+    use crate::extension::runtime::wasm::limits::WasmResourceLimits;
+    use crate::extension::runtime::wasm::secret_resolver::InMemorySecretResolver;
+
+    fn workspace_state(root: &std::path::Path) -> HostState {
+        HostState {
+            kernel: Arc::new(WasmCapabilityKernel::new(
+                "workspace-test".into(),
+                WasmCapabilities {
+                    workspace: Some(WorkspaceCapability {
+                        allowed_prefixes: vec!["docs/".into()],
+                    }),
+                    ..Default::default()
+                },
+                WasmResourceLimits::default(),
+            )),
+            workspace_root: root.into(),
+            suppress_guest_logs: false,
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn workspace_symlinks_must_remain_in_granted_prefix() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path();
+        std::fs::create_dir(root.join("docs")).unwrap();
+        std::fs::create_dir(root.join("secrets")).unwrap();
+        std::fs::write(root.join("docs/readme"), "allowed").unwrap();
+        std::fs::write(root.join("secrets/key.pem"), "private").unwrap();
+        std::os::unix::fs::symlink("../secrets", root.join("docs/link")).unwrap();
+        std::os::unix::fs::symlink("readme", root.join("docs/alias")).unwrap();
+        std::os::unix::fs::symlink(
+            directory.path().parent().unwrap(),
+            root.join("docs/outside"),
+        )
+        .unwrap();
+        let state = workspace_state(root);
+        assert!(read_workspace_file(&state, "docs/link/key.pem").is_err());
+        assert!(read_workspace_file(&state, "docs/outside").is_err());
+        assert!(read_workspace_file(&state, "docs/../secrets/key.pem").is_err());
+        assert_eq!(
+            read_workspace_file(&state, "docs/alias").unwrap(),
+            "allowed"
+        );
+    }
+
+    #[test]
+    fn workspace_reads_reject_non_files_oversize_and_invalid_utf8() {
+        let directory = tempfile::tempdir().unwrap();
+        std::fs::create_dir(directory.path().join("docs")).unwrap();
+        let path = directory.path().join("docs/file");
+        let state = workspace_state(directory.path());
+        assert!(read_workspace_file(&state, "docs").is_err());
+        std::fs::write(&path, vec![b'a'; MAX_WORKSPACE_READ_BYTES as usize]).unwrap();
+        assert_eq!(
+            read_workspace_file(&state, "docs/file").unwrap().len(),
+            MAX_WORKSPACE_READ_BYTES as usize
+        );
+        std::fs::write(&path, vec![b'a'; MAX_WORKSPACE_READ_BYTES as usize + 1]).unwrap();
+        assert!(read_workspace_file(&state, "docs/file")
+            .unwrap_err()
+            .contains("exceeds cap"));
+        std::fs::write(&path, [0xff]).unwrap();
+        assert!(read_workspace_file(&state, "docs/file").is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn workspace_fifo_is_rejected_without_opening() {
+        let directory = tempfile::tempdir().unwrap();
+        std::fs::create_dir(directory.path().join("docs")).unwrap();
+        let fifo = directory.path().join("docs/pipe");
+        assert!(std::process::Command::new("mkfifo")
+            .arg(&fifo)
+            .status()
+            .unwrap()
+            .success());
+        assert!(read_workspace_file(&workspace_state(directory.path()), "docs/pipe").is_err());
+    }
+
+    #[test]
+    fn injected_path_must_pass_allowlist_before_egress() {
+        let resolver = InMemorySecretResolver::new(vec![("key".into(), "v2".into())]);
+        let kernel = WasmCapabilityKernel::new(
+            "final-url-test".into(),
+            WasmCapabilities {
+                http: Some(HttpCapability {
+                    allowlist: vec![EndpointPattern {
+                        host: "api.example.com".into(),
+                        path_prefix: "/v1/".into(),
+                        methods: vec!["GET".into()],
+                    }],
+                    credentials: vec![CredentialBinding {
+                        secret_name: "key".into(),
+                        inject: CredentialInject::UrlPath {
+                            placeholder: "v1".into(),
+                        },
+                        host_patterns: vec!["api.example.com".into()],
+                    }],
+                    rate_limit: None,
+                    timeout_secs: 1,
+                    max_request_bytes: 1024,
+                    max_response_bytes: 2048,
+                }),
+                secrets: Some(SecretsCapability {
+                    allowed_patterns: vec!["key".into()],
+                }),
+                ..Default::default()
+            },
+            WasmResourceLimits::default(),
+        )
+        .with_secret_resolver(Arc::new(resolver));
+        assert!(kernel
+            .check_http_request("GET", "https://api.example.com/v1/data")
+            .is_ok());
+        let error = try_http_fetch(
+            &kernel,
+            r#"{"method":"GET","url":"https://api.example.com/v1/data"}"#,
+        )
+        .unwrap_err();
+        assert!(error.starts_with("Not allowed:"), "{error}");
+        assert!(
+            !error.contains("v2"),
+            "injected secret must not reach errors"
+        );
+    }
 
     /// The allowlist validated the URL; a guest-supplied header must not be
     /// able to name a different host or path than the one it validated.

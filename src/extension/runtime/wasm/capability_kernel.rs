@@ -206,6 +206,15 @@ impl WasmCapabilityKernel {
             .unwrap_or(u64::MAX)
     }
 
+    /// Reset per-execution counters (HTTP call count and log line count) to
+    /// zero before each guest call. The sliding-window timestamp vector used
+    /// by the rate limiter is intentionally left untouched so it continues to
+    /// enforce the declared per-minute / per-hour limits across invocations.
+    pub fn reset_per_execution_counters(&self) {
+        self.http_call_count.store(0, Ordering::SeqCst);
+        self.log_line_count.store(0, Ordering::SeqCst);
+    }
+
     pub fn check_http_limit(&self) -> Result<(), CapabilityError> {
         let prev = self.http_call_count.fetch_add(1, Ordering::SeqCst);
         if prev >= self.limits.max_http_calls {

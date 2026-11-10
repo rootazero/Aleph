@@ -169,9 +169,30 @@ pub fn inject_credential(
                 .add(b'\\')
                 .add(b'@')
                 .add(b'%');
+            if placeholder.is_empty() || placeholder.contains('/') {
+                return Err(CredentialError::InvalidUrl(
+                    "credential placeholder must be within one path segment".into(),
+                ));
+            }
+            let mut modified = parsed.clone();
+            // Use the URL parser's path encoding for placeholders such as `{token}`.
+            modified.set_path(&format!("/{placeholder}"));
+            let encoded_placeholder = &modified.path()[1..];
+            if encoded_placeholder.is_empty()
+                || !parsed
+                    .path()
+                    .split('/')
+                    .any(|segment| segment.contains(encoded_placeholder))
+            {
+                return Err(CredentialError::InvalidUrl(
+                    "credential placeholder not found in URL path".into(),
+                ));
+            }
             let encoded = utf8_percent_encode(secret_value, PATH_SEGMENT).to_string();
-            let modified = url.replace(placeholder, &encoded);
-            Ok(Some(modified))
+            let path = parsed.path().replace(encoded_placeholder, &encoded);
+            let mut modified = parsed;
+            modified.set_path(&path);
+            Ok(Some(modified.to_string()))
         }
     }
 }
@@ -400,6 +421,71 @@ mod tests {
         let url = modified_url.unwrap();
         assert_eq!(url, "https://hooks.slack.com/services/T0K3N-VALUE/B123");
         assert!(headers.is_empty());
+    }
+
+    #[test]
+    fn url_path_injection_cannot_replace_other_url_components() {
+        let binding = CredentialBinding {
+            secret_name: "key".into(),
+            inject: CredentialInject::UrlPath {
+                placeholder: "api".into(),
+            },
+            host_patterns: vec!["api.example.com".into()],
+        };
+        let secrets = vec![("key".into(), "evil".into())];
+        assert!(inject_credential(
+            &binding,
+            "https://api.example.com/v1/data?api=value#api",
+            &mut vec![],
+            &secrets
+        )
+        .is_err());
+        assert_eq!(
+            inject_credential(
+                &binding,
+                "https://api.example.com/v1/api?api=value#api",
+                &mut vec![],
+                &secrets
+            )
+            .unwrap()
+            .unwrap(),
+            "https://api.example.com/v1/evil?api=value#api"
+        );
+    }
+
+    #[test]
+    fn url_path_injection_encodes_secret_and_rejects_cross_segment_placeholders() {
+        let mut binding = CredentialBinding {
+            secret_name: "key".into(),
+            inject: CredentialInject::UrlPath {
+                placeholder: "{token}".into(),
+            },
+            host_patterns: vec!["api.example.com".into()],
+        };
+        let secrets = vec![("key".into(), "a/b?c#d%40@".into())];
+        assert_eq!(
+            inject_credential(
+                &binding,
+                "https://api.example.com/v1/{token}",
+                &mut vec![],
+                &secrets
+            )
+            .unwrap()
+            .unwrap(),
+            "https://api.example.com/v1/a%2Fb%3Fc%23d%2540%40"
+        );
+        for placeholder in ["", "v1/token"] {
+            binding.inject = CredentialInject::UrlPath {
+                placeholder: placeholder.into(),
+            };
+            assert!(inject_credential(
+                &binding,
+                "https://api.example.com/v1/token",
+                &mut vec![],
+                &secrets
+            )
+            .is_err());
+        }
     }
 
     // ---------------------------------------------------------------
