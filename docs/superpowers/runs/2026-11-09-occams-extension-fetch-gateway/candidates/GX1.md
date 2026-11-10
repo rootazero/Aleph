@@ -1,0 +1,4 @@
+# ERROR — GX1 produced no output
+
+model=minimax-cn/MiniMax-M3.1-Flash
+usage={'error': 'HTTP 429: {"error":{"message":"MiniMax (China): 当前已达到 Token Plan 用量上限。为避免调用中断，请升级 Token Plan 套餐，或购买积分补充用量并开启积分自动消耗。 (2067) (out of its allowance: not asked again before 15:00 UTC+8)","type":"rate_limit_error"},"type":"error"}\n'}
