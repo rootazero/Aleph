@@ -30,13 +30,12 @@ pub fn render_with(env: &MemoryEnvelope, style: RenderStyle) -> String {
 }
 
 fn render_markdown_v1(env: &MemoryEnvelope) -> String {
-    let non_empty: Vec<&EnvelopeSlot> = env.slots.iter().filter(|s| !s.items.is_empty()).collect();
-    if non_empty.is_empty() {
+    if env.slots.iter().all(|s| s.items.is_empty()) {
         return String::new();
     }
 
     let mut out = String::from("<memory>\n\n");
-    for slot in non_empty {
+    for slot in env.slots.iter().filter(|s| !s.items.is_empty()) {
         let tag = slot_tag(slot.kind);
         out.push('<');
         out.push_str(tag);
@@ -130,38 +129,42 @@ const fn slot_directive(kind: SlotKind) -> Option<&'static str> {
 }
 
 fn render_item_markdown(out: &mut String, item: &EnvelopeItem, slot: SlotKind) {
+    use std::fmt::Write as _;
     let layer = cognitive_layer(slot, &item.source).as_str();
-    let header = match &item.source {
+    let formatted_date = format_date(item.updated_at);
+    match &item.source {
         ItemSource::Note { .. } => {
-            format!(
-                "## [{}] ({} · updated {})",
-                item.id,
-                layer,
-                format_date(item.updated_at)
-            )
+            let _ = write!(
+                out,
+                "## [{}] ({} · updated {})\n",
+                item.id, layer, formatted_date
+            );
         }
-        ItemSource::Raw { session_id, .. } => format!(
-            "## [raw @ session {}, {} · t={}]",
-            session_id,
-            layer,
-            format_date(item.updated_at)
-        ),
+        ItemSource::Raw { session_id, .. } => {
+            let _ = write!(
+                out,
+                "## [raw @ session {}, {} · t={}]\n",
+                session_id, layer, formatted_date
+            );
+        }
         ItemSource::Summary {
             layer: summary_layer,
             session_id,
-        } => format!(
-            "## [{} @ session {}, {} · t={}]",
-            summary_layer,
-            session_id,
-            layer,
-            format_date(item.updated_at)
-        ),
+        } => {
+            let _ = write!(
+                out,
+                "## [{} @ session {}, {} · t={}]\n",
+                summary_layer, session_id, layer, formatted_date
+            );
+        }
     };
-    out.push_str(&header);
-    out.push('\n');
     // Escape closing-tag sequences in user content so a recalled memory cannot
     // prematurely close the surrounding <memory> or slot fences.
-    out.push_str(&item.content.replace("</", "<\\/"));
+    if item.content.contains("</") {
+        out.push_str(&item.content.replace("</", "<\\/"));
+    } else {
+        out.push_str(&item.content);
+    }
     out.push('\n');
 }
 
@@ -176,31 +179,36 @@ fn render_xml(env: &MemoryEnvelope) -> String {
     if env.slots.iter().all(|s| s.items.is_empty()) {
         return String::new();
     }
+    use std::fmt::Write as _;
     let mut out = String::from("<MemoryEnvelope>\n");
-    out.push_str(&format!(
+    let _ = write!(
+        out,
         "  <schema_version>{}</schema_version>\n",
         env.schema_version
-    ));
-    out.push_str(&format!(
+    );
+    let _ = write!(
+        out,
         "  <query>{}</query>\n",
         escape_xml_attr(&env.query)
-    ));
+    );
     for slot in env.slots.iter().filter(|s| !s.items.is_empty()) {
-        out.push_str(&format!("  <slot kind=\"{}\">\n", slot_tag(slot.kind)));
+        let _ = write!(out, "  <slot kind=\"{}\">\n", slot_tag(slot.kind));
         if let Some(directive) = slot_directive(slot.kind) {
-            out.push_str(&format!(
+            let _ = write!(
+                out,
                 "    <directive>{}</directive>\n",
                 escape_xml_attr(directive)
-            ));
+            );
         }
         for item in &slot.items {
-            out.push_str(&format!(
+            let _ = write!(
+                out,
                 "    <item id=\"{}\" layer=\"{}\"><title>{}</title><content>{}</content></item>\n",
                 escape_xml_attr(&item.id),
                 cognitive_layer(slot.kind, &item.source).as_str(),
                 escape_xml_attr(&item.title),
                 escape_xml_attr(&item.content),
-            ));
+            );
         }
         out.push_str("  </slot>\n");
     }

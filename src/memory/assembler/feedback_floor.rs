@@ -79,7 +79,7 @@ impl FeedbackFloorLoader {
         // written once org-wide and once personally); the newer one already sorts
         // first, so keeping the first occurrence keeps the fresher rule.
         let mut seen = std::collections::HashSet::new();
-        out.retain(|e| seen.insert(e.path.clone()));
+        out.retain(|e| seen.insert(e.path.as_str()));
         out.truncate(FLOOR_CAP);
         out
     }
@@ -138,7 +138,7 @@ impl FeedbackFloorLoader {
             }
             out.push(FeedbackFloorEntry {
                 path: format!("feedback/{stem}"),
-                title: note.title.clone(),
+                title: note.title,
                 body: strip_frontmatter(&content),
                 severity: note.severity,
                 updated_at: note.updated_at,

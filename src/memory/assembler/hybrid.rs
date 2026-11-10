@@ -460,11 +460,12 @@ fn hydrate(slots: &mut [EnvelopeSlot]) {
             // Cap by CHARACTERS, matching how `budget_chars` and
             // `estimate_tokens` are both denominated. A byte cap here silently
             // under-filled every non-ASCII envelope ~3x (CJK is 3 bytes/char).
-            let truncated =
-                crate::utils::text_format::truncate_chars(&item.content, remaining_chars)
-                    .to_string();
-            item.tokens = estimate_tokens(&truncated);
-            item.content = truncated;
+            let truncated_len =
+                crate::utils::text_format::truncate_chars(&item.content, remaining_chars).len();
+            if truncated_len < item.content.len() {
+                item.content.truncate(truncated_len);
+            }
+            item.tokens = estimate_tokens(&item.content);
             used = used.saturating_add(item.tokens);
             processed += 1;
             if used >= slot.tokens_budget {

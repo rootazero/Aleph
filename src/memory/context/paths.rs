@@ -8,7 +8,7 @@
 pub fn compute_parent_path(path: &str) -> String {
     let trimmed = path.trim_end_matches('/');
     match trimmed.rfind('/') {
-        Some(pos) => format!("{}/", &trimmed[..pos]),
+        Some(pos) => trimmed[..=pos].to_string(),
         None => String::new(),
     }
 }
