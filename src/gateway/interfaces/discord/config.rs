@@ -2,6 +2,8 @@
 //!
 //! Configuration types for the Discord Bot integration.
 
+use std::fmt;
+
 use serde::{Deserialize, Serialize};
 
 // ============================================================================
@@ -9,7 +11,7 @@ use serde::{Deserialize, Serialize};
 // ============================================================================
 
 /// Discord channel configuration
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct DiscordConfig {
     /// Bot token from Discord Developer Portal
     pub bot_token: String,
@@ -37,7 +39,6 @@ pub struct DiscordConfig {
     /// Whether to respond to mentions
     #[serde(default = "default_true")]
     pub respond_to_mentions: bool,
-
     /// Whether to use slash commands
     #[serde(default = "default_true")]
     pub slash_commands_enabled: bool,
@@ -53,6 +54,26 @@ pub struct DiscordConfig {
     /// Thread binding configuration
     #[serde(default)]
     pub threads: ThreadConfig,
+}
+
+/// Hand-written so the bot token never reaches a log line, a panic message
+/// or a `tracing` field. Every other field is printed as-is.
+impl fmt::Debug for DiscordConfig {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("DiscordConfig")
+            .field("bot_token", &"<redacted>")
+            .field("application_id", &self.application_id)
+            .field("allowed_guilds", &self.allowed_guilds)
+            .field("allowed_channels", &self.allowed_channels)
+            .field("dm_allowed", &self.dm_allowed)
+            .field("command_prefix", &self.command_prefix)
+            .field("respond_to_mentions", &self.respond_to_mentions)
+            .field("slash_commands_enabled", &self.slash_commands_enabled)
+            .field("send_typing", &self.send_typing)
+            .field("intents", &self.intents)
+            .field("threads", &self.threads)
+            .finish()
+    }
 }
 
 /// Thread binding configuration
@@ -215,6 +236,15 @@ mod tests {
         assert!(config.dm_allowed);
         assert!(config.slash_commands_enabled);
         assert_eq!(config.command_prefix, "!");
+    }
+
+    #[test]
+    fn test_debug_redacts_bot_token() {
+        let mut config = DiscordConfig::default();
+        config.bot_token = "super-secret-token".to_string();
+        let rendered = format!("{config:?}");
+        assert!(!rendered.contains("super-secret-token"));
+        assert!(rendered.contains("<redacted>"));
     }
 
     #[test]
