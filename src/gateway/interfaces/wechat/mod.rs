@@ -112,6 +112,7 @@ impl Channel for WeChatChannel {
         let runtime = Arc::new(runtime::WeChatRuntime::new(
             self.config.clone(),
             auth::ContextTokenStore::new(&self.config.data_dir),
+            self.info.id.clone(),
         ));
 
         self.runtime = Some(runtime.clone());

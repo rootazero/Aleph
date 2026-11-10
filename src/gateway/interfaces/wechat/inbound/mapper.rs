@@ -80,9 +80,8 @@ fn item_to_attachment(item: &MessageItem, index: usize) -> Option<Attachment> {
 
 /// Guess chat type (dm or group) from message.
 #[must_use]
-pub fn guess_chat_type(msg: &serde_json::Value, account_id: &str) -> (String, String) {
+pub fn guess_chat_type(msg: &serde_json::Value, _account_id: &str) -> (String, String) {
     let room_id = msg.get("room_id").or(msg.get("chat_room_id"));
-    let to_user_id = msg.get("to_user_id").and_then(|v| v.as_str()).unwrap_or("");
     let from_user_id = msg
         .get("from_user_id")
         .and_then(|v| v.as_str())

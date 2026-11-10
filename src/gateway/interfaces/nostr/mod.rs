@@ -278,6 +278,18 @@ impl Channel for NostrChannel {
                 None
             };
 
+            // A Nostr direct message is private only when it is ENCRYPTED
+            // (NIP-04). This channel has no encryption layer, so publishing a
+            // kind-4 event would hand the plaintext to every relay that
+            // indexes it. Refuse the send instead of leaking it.
+            if recipient_pubkey.is_some() {
+                return Err(ChannelError::UnsupportedFeature(
+                    "Nostr direct messages are not supported: the channel has no NIP-04 \
+                     encryption, so a DM would be readable by every relay that indexes it"
+                        .to_string(),
+                ));
+            }
+
             // Build the event
             let mut event = if let Some(ref recipient) = recipient_pubkey {
                 message_ops::build_dm(&message.text, &own_pubkey, recipient)

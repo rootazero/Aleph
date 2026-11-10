@@ -132,8 +132,8 @@ impl SlackDebouncer {
         // matching the socket loop's "true => channel closed, stop" contract.
         if let Err(msg) = self.inbound_tx.send(msg) {
             tracing::error!(
-                conversation = %msg.conversation_id,
-                message_id = %msg.id,
+                conversation = %msg.conversation_id.as_str(),
+                message_id = %msg.id.as_str(),
                 "Slack: failed to forward accepted message: inbound channel closed"
             );
             return true;

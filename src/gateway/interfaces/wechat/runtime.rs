@@ -6,7 +6,7 @@ use std::time::Duration;
 use tokio::sync::{Mutex, RwLock};
 use tokio::time::sleep;
 
-use crate::gateway::channel::InboundMessageSender;
+use crate::gateway::channel::{ChannelId, InboundMessageSender};
 
 use super::api::{ApiResult, ILinkApi, WeChatApiError};
 use super::auth::ContextTokenStore;
@@ -24,17 +24,29 @@ pub struct WeChatRuntime {
     config: WeChatConfig,
     api: ILinkApi,
     token_store: ContextTokenStore,
+    /// The id this instance was REGISTERED under.
+    ///
+    /// The platform type ("wechat") is not the instance identity: a channel
+    /// registered as `wechat-work` must tag its inbound messages with that
+    /// id, otherwise routing and reply lookup point at a channel that does
+    /// not exist (or at a different instance of the same platform).
+    channel_id: ChannelId,
     sync_buf: RwLock<String>,
     running: RwLock<bool>,
     dedup: Mutex<MessageDedup>,
 }
 
 impl WeChatRuntime {
-    pub fn new(config: WeChatConfig, token_store: ContextTokenStore) -> Self {
+    pub fn new(
+        config: WeChatConfig,
+        token_store: ContextTokenStore,
+        channel_id: ChannelId,
+    ) -> Self {
         Self {
             api: ILinkApi::new(config.base_url.clone()),
             config,
             token_store,
+            channel_id,
             sync_buf: RwLock::new(String::new()),
             running: RwLock::new(false),
             dedup: Mutex::new(MessageDedup::new()),
@@ -138,11 +150,9 @@ impl WeChatRuntime {
                 continue;
             }
 
-            if let Some(inbound) = map_message_to_inbound(
-                msg,
-                &crate::gateway::channel::ChannelId::new("wechat"),
-                &self.config.account_id,
-            ) {
+            if let Some(inbound) =
+                map_message_to_inbound(msg, &self.channel_id, &self.config.account_id)
+            {
                 if let Some(context_token) = msg.context_token.clone() {
                     self.token_store
                         .set(

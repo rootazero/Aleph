@@ -222,8 +222,7 @@ impl ILinkApi {
         let body = serde_json::to_string(&payload).map_err(WeChatApiError::Parse)?;
         let headers = build_headers(Some(token), &body);
 
-        let resp = self
-            .http
+        self.http
             .post(&url)
             .headers(headers)
             .body(body)
