@@ -440,7 +440,8 @@ fn test_convert_chat_message() {
     };
 
     let channel_id = ChannelId::new("xmpp");
-    let inbound = XmppMessageOps::convert_message(&msg, &channel_id, "bot@example.com").unwrap();
+    let inbound =
+        XmppMessageOps::convert_message(&msg, &channel_id, "bot@example.com", None).unwrap();
 
     assert_eq!(inbound.channel_id.as_str(), "xmpp");
     assert_eq!(inbound.conversation_id.as_str(), "alice@example.com");
@@ -464,7 +465,8 @@ fn test_convert_groupchat_message() {
     };
 
     let channel_id = ChannelId::new("xmpp");
-    let inbound = XmppMessageOps::convert_message(&msg, &channel_id, "bot@example.com").unwrap();
+    let inbound =
+        XmppMessageOps::convert_message(&msg, &channel_id, "bot@example.com", None).unwrap();
 
     assert!(inbound.is_group);
     assert_eq!(
@@ -487,7 +489,7 @@ fn test_convert_skips_own_chat_message() {
     };
 
     let channel_id = ChannelId::new("xmpp");
-    let result = XmppMessageOps::convert_message(&msg, &channel_id, "bot@example.com");
+    let result = XmppMessageOps::convert_message(&msg, &channel_id, "bot@example.com", None);
     assert!(result.is_none());
 }
 
@@ -505,7 +507,7 @@ fn test_convert_skips_own_muc_message() {
     };
 
     let channel_id = ChannelId::new("xmpp");
-    let result = XmppMessageOps::convert_message(&msg, &channel_id, "bot@example.com");
+    let result = XmppMessageOps::convert_message(&msg, &channel_id, "bot@example.com", None);
     assert!(result.is_none());
 }
 
@@ -522,7 +524,7 @@ fn test_convert_skips_empty_body() {
     };
 
     let channel_id = ChannelId::new("xmpp");
-    let result = XmppMessageOps::convert_message(&msg, &channel_id, "bot@example.com");
+    let result = XmppMessageOps::convert_message(&msg, &channel_id, "bot@example.com", None);
     assert!(result.is_none());
 }
 
@@ -539,7 +541,7 @@ fn test_convert_skips_empty_from() {
     };
 
     let channel_id = ChannelId::new("xmpp");
-    let result = XmppMessageOps::convert_message(&msg, &channel_id, "bot@example.com");
+    let result = XmppMessageOps::convert_message(&msg, &channel_id, "bot@example.com", None);
     assert!(result.is_none());
 }
 
@@ -556,7 +558,8 @@ fn test_convert_generates_id_when_missing() {
     };
 
     let channel_id = ChannelId::new("xmpp");
-    let inbound = XmppMessageOps::convert_message(&msg, &channel_id, "bot@example.com").unwrap();
+    let inbound =
+        XmppMessageOps::convert_message(&msg, &channel_id, "bot@example.com", None).unwrap();
 
     assert!(inbound.id.as_str().starts_with("xmpp-"));
 }

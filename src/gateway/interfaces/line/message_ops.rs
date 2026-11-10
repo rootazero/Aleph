@@ -29,11 +29,15 @@ impl LineMessagingApi {
 
     /// Send a push message (proactive to user).
     pub async fn push(&self, payload: &LinePushPayload) -> Result<String, String> {
+        // Every LINE push takes the {to, messages:[...]} envelope. The flex
+        // payload carries its recipient in the struct, so its body is
+        // serialized from the struct itself (single source of truth) and
+        // wrapped here.
         let body = match payload {
-            LinePushPayload::Flex(flex) => serde_json::json!({
-                "to": flex.to,
-                "messages": [{"type": "flex", "altText": flex.alt_text, "contents": flex.contents}]
-            }),
+            LinePushPayload::Flex(flex) => {
+                let message = serde_json::to_value(flex.as_ref()).map_err(|e| e.to_string())?;
+                serde_json::json!({ "to": flex.to, "messages": [message] })
+            }
             _ => serde_json::to_value(payload).map_err(|e| e.to_string())?,
         };
         let url = format!("{}/v2/bot/message/push", self.api_base);
@@ -112,14 +116,7 @@ impl LineMessagingApi {
         alt_text: &str,
         contents: FlexBubbleContents,
     ) -> Result<String, String> {
-        let payload = LinePushPayload::Text(TextPayload {
-            to: to.to_string(),
-            messages: vec![PushMessage::Flex(FlexMessage {
-                msg_type: "flex".to_string(),
-                alt_text: alt_text.to_string(),
-                contents,
-            })],
-        });
+        let payload = LinePushPayload::Flex(Box::new(FlexPayload::new(to, alt_text, contents)));
         self.push(&payload).await
     }
 
@@ -392,6 +389,10 @@ pub struct StickerPushContent {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct FlexPayload {
+    /// The recipient. The LINE push API takes the recipient in the
+    /// `to`/`messages` ENVELOPE, not inside the message object, so this field
+    /// is not part of the serialized message body.
+    #[serde(skip)]
     pub to: String,
     #[serde(rename = "altText")]
     pub alt_text: String,

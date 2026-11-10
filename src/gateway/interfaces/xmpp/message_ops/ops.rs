@@ -42,6 +42,7 @@ impl XmppMessageOps {
         msg: &super::types::XmppMessage,
         channel_id: &ChannelId,
         own_jid: &str,
+        muc_nick: Option<&str>,
     ) -> Option<InboundMessage> {
         if msg.body.is_empty() || msg.from.is_empty() {
             return None;
@@ -61,9 +62,17 @@ impl XmppMessageOps {
             // The resource part is the sender's nick in the room
             let nick = sender_jid.resource.as_deref().unwrap_or("");
 
-            // Skip our own messages (compare nick against our bare JID)
+            // Skip our own messages. In a MUC the sender is identified by
+            // the NICK it joined with (`config.nick`), not by the bare JID —
+            // comparing the nick against the bare JID never matched, so the
+            // bot's own room messages were ingested as inbound traffic.
             if let Some(ref own) = own_parts {
                 if nick == own.bare() {
+                    return None;
+                }
+            }
+            if let Some(joined_nick) = muc_nick {
+                if !joined_nick.is_empty() && nick == joined_nick {
                     return None;
                 }
             }
@@ -371,6 +380,7 @@ impl XmppMessageOps {
                                         &msg,
                                         &channel_id,
                                         &own_jid,
+                                        Some(&config.nick),
                                     ) {
                                         tracing::debug!(
                                             "XMPP message from {}: {}",
