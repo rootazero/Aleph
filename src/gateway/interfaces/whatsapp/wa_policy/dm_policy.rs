@@ -26,12 +26,24 @@ impl DmPolicyEngine {
             DmPolicy::Open => DmPolicyResult::Pass,
             DmPolicy::Allowlist => {
                 let sender = msg.sender_id.as_str();
+                // Normalize the sender JID to a phone number for comparison with
+                // E.164 allowlist entries (e.g. "15551234567@s.whatsapp.net" -> "15551234567").
+                // The local part of a user JID is always the bare phone number; group JIDs
+                // use a different suffix and are excluded above by the is_group guard.
+                let sender_phone = sender.split('@').next().unwrap_or(sender);
                 let allowed: Vec<&str> =
                     self.access.allow_from.iter().map(String::as_str).collect();
-                if allowed.contains(&"*")
-                    || allowed.contains(&sender)
-                    || self.paired_numbers.iter().any(|n| n == sender)
-                {
+                // Strip a leading '+' from allowlist entries so that E.164 values like
+                // "+15551234567" match the JID local part "15551234567".
+                let matches_allowlist = allowed.iter().any(|entry| {
+                    let e = entry.strip_prefix('+').unwrap_or(entry);
+                    *entry == "*" || e == sender_phone || *entry == sender
+                });
+                let matches_paired = self.paired_numbers.iter().any(|n| {
+                    let n_phone = n.strip_prefix('+').unwrap_or(n.as_str());
+                    n_phone == sender_phone || n == sender
+                });
+                if matches_allowlist || matches_paired {
                     DmPolicyResult::Pass
                 } else {
                     DmPolicyResult::Block("Sender not in allowlist".into())
@@ -39,9 +51,18 @@ impl DmPolicyEngine {
             }
             DmPolicy::Pairing => {
                 let sender = msg.sender_id.as_str();
+                let sender_phone = sender.split('@').next().unwrap_or(sender);
                 let allowed: Vec<&str> =
                     self.access.allow_from.iter().map(String::as_str).collect();
-                if allowed.contains(&sender) || self.paired_numbers.iter().any(|n| n == sender) {
+                let matches_allowlist = allowed.iter().any(|entry| {
+                    let e = entry.strip_prefix('+').unwrap_or(entry);
+                    e == sender_phone || *entry == sender
+                });
+                let matches_paired = self.paired_numbers.iter().any(|n| {
+                    let n_phone = n.strip_prefix('+').unwrap_or(n.as_str());
+                    n_phone == sender_phone || n == sender
+                });
+                if matches_allowlist || matches_paired {
                     DmPolicyResult::Pass
                 } else {
                     DmPolicyResult::NeedsPairing(sender.to_string())
