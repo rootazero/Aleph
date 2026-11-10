@@ -1,8 +1,8 @@
 #[cfg(test)]
 use super::config_v2::ErrorPolicyMode;
 use super::config_v2::{
-    DmPolicy, ErrorPolicy, GroupPolicy, LinkPreviewMode, StreamingOptions, TelegramAccountConfig,
-    TelegramConfigV2, TelegramGroupConfig, TelegramTopicConfig,
+    DmPolicy, ErrorPolicy, GroupPolicy, LinkPreviewMode, StreamingMode, StreamingOptions,
+    TelegramAccountConfig, TelegramConfigV2, TelegramGroupConfig, TelegramTopicConfig,
 };
 use std::collections::HashMap;
 
@@ -44,10 +44,7 @@ impl ConfigResolver {
                 account.id
             );
             for group in &account.groups {
-                let mut group_resolved = Self::merge_group(&account_default, group);
-                if group.block_streaming == Some(true) {
-                    group_resolved.streaming.enabled = false;
-                }
+                let group_resolved = Self::merge_group(&account_default, group);
                 let group_key = (account.id.clone(), group.chat_id, None);
                 assert!(
                     lookup.insert(group_key, group_resolved.clone()).is_none(),
@@ -56,14 +53,15 @@ impl ConfigResolver {
                     account.id
                 );
                 for topic in &group.topics {
+                    // A topic inherits the group's resolved streaming.
+                    // `block_streaming: true` blocks it, `false` explicitly
+                    // unblocks it back to the ACCOUNT setting, and `None`
+                    // keeps the group's decision.
                     let mut topic_resolved = Self::merge_topic(&group_resolved, topic);
-                    topic_resolved.streaming = account_default.streaming.clone();
-                    if topic
-                        .block_streaming
-                        .or(group.block_streaming)
-                        .unwrap_or(false)
-                    {
-                        topic_resolved.streaming.enabled = false;
+                    match topic.block_streaming {
+                        Some(true) => topic_resolved.streaming.enabled = false,
+                        Some(false) => topic_resolved.streaming = account_default.streaming.clone(),
+                        None => {}
                     }
                     let topic_key = (account.id.clone(), group.chat_id, Some(topic.thread_id));
                     assert!(
@@ -123,16 +121,10 @@ impl ConfigResolver {
             .error_policy
             .clone()
             .unwrap_or_else(|| base.error_policy.clone());
-        let mut streaming = group
-            .streaming
-            .clone()
-            .unwrap_or_else(|| base.streaming.clone());
-        if matches!(streaming.mode, StreamingMode::Disabled) {
-            streaming.enabled = false;
-        }
-        if group.block_streaming.unwrap_or(false)
-            || matches!(streaming.mode, StreamingMode::Disabled)
-        {
+        // A group has no streaming block of its own: it inherits the account
+        // configuration and may only turn streaming OFF (block_streaming).
+        let mut streaming = base.streaming.clone();
+        if group.block_streaming.unwrap_or(false) {
             streaming.enabled = false;
         }
         ResolvedConfig {
@@ -151,7 +143,7 @@ impl ConfigResolver {
                 .clone()
                 .unwrap_or_else(|| base.allowed_users.clone()),
             allowed_groups: base.allowed_groups.clone(),
-            streaming: base.streaming.clone(),
+            streaming,
             max_retries: error_policy.max_retries,
             error_policy,
             html_fallback: base.html_fallback,

@@ -1126,16 +1126,29 @@ impl Channel for TelegramChannel {
         &self,
     ) -> Option<Arc<dyn crate::gateway::channel_approval::ChannelApprovalCapability>> {
         let first = self.bot_instances.first()?;
-        let instance = bot_instance::BotInstance {
-            account_id: first.account_id.clone(),
-            bot: first.bot.clone(),
-            resolved_config: first.resolved_config.clone(),
-            access: first.access.clone(),
-            offset_tracker: first.offset_tracker.clone(),
-            shutdown_tx: None,
-            health_shutdown_tx: None,
-            is_healthy: first.is_healthy.clone(),
-        };
+        // The capability must be able to reach EVERY configured account: the
+        // approval for a chat has to be delivered by the account that owns
+        // that chat. Cloning only the first instance made a multi-account
+        // deployment answer approvals with the wrong bot.
+        let instances: Vec<bot_instance::BotInstance> = self
+            .bot_instances
+            .iter()
+            .map(|inst| bot_instance::BotInstance {
+                account_id: inst.account_id.clone(),
+                bot: inst.bot.clone(),
+                resolved_config: inst.resolved_config.clone(),
+                access: inst.access.clone(),
+                offset_tracker: inst.offset_tracker.clone(),
+                shutdown_tx: None,
+                health_shutdown_tx: None,
+                is_healthy: inst.is_healthy.clone(),
+            })
+            .collect();
+        let access_by_account: std::collections::HashMap<String, Arc<AccessController>> = self
+            .bot_instances
+            .iter()
+            .map(|inst| (inst.account_id.clone(), inst.access.clone()))
+            .collect();
         let first_access = first.access.clone();
         Some(Arc::new(
             crate::gateway::interfaces::telegram::approval::TelegramChannelApprovalCapability::new(
@@ -1143,12 +1156,9 @@ impl Channel for TelegramChannel {
                     info: self.info.clone(),
                     config_v2: self.config_v2.clone(),
                     channel_state: ChannelState::new(100),
-                    bot_instances: vec![instance],
+                    bot_instances: instances,
                     tool_registry: self.tool_registry.clone(),
-                    access_by_account: std::collections::HashMap::from([(
-                        first.account_id.clone(),
-                        first_access.clone(),
-                    )]),
+                    access_by_account,
                     token_fingerprint_verdicts: self.token_fingerprint_verdicts.clone(),
                     audit_log: self.audit_log.clone(),
                     error_cooldown: self.error_cooldown.clone(),

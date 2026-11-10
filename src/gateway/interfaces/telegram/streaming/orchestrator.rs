@@ -1,6 +1,6 @@
-use crate::gateway::channel::ChannelResult;
 #[cfg(test)]
 use crate::gateway::channel::InboundMessage;
+use crate::gateway::channel::{ChannelError, ChannelResult};
 use crate::gateway::event_emitter::StreamEvent;
 use crate::gateway::interfaces::telegram::config_v2::StreamingOptions;
 use crate::gateway::interfaces::telegram::delivery::TelegramDelivery;
@@ -138,18 +138,6 @@ impl StreamOrchestrator {
                     tracing::info!("Tool ended");
                 }
                 StreamEvent::RunComplete { summary, .. } => {
-                    // Flush the reasoning lane first so any pending reasoning
-                    // content (e.g. a final delta that never reached the first
-                    // preview threshold, or a tail merged by debounce) is
-                    // delivered before the answer lane is finalized. This is a
-                    // no-op when the reasoning lane is disabled or empty.
-                    if self.reasoning_lane {
-                        let reasoning_lane = self.get_lane(LaneId::Reasoning);
-                        if let Err(e) = reasoning_lane.flush().await {
-                            tracing::warn!("Failed to flush reasoning lane: {}", e);
-                        }
-                    }
-
                     // Finalize the answer lane with the *deliverable* text: strip
                     // raw `<think>`/completion markers the model embedded in
                     // `final_response` via the same single-source sanitizer the
@@ -173,6 +161,13 @@ impl StreamOrchestrator {
                     // pure-reasoning side question therefore settles unmarked,
                     // which is the same thing that arm already promises for
                     // every other rewrite.
+                    // Settle the reasoning lane FIRST so any pending reasoning
+                    // content (a final delta that never reached the first
+                    // preview threshold, or a tail merged by debounce) is
+                    // delivered before the answer lane is finalized:
+                    // `finalize_streamed` settles on everything the lane
+                    // accumulated, previewed or not. It is a no-op when the
+                    // reasoning lane is disabled or empty.
                     let reasoning_lane = self.get_lane(LaneId::Reasoning);
                     let reasoning_result =
                         if self.reasoning_lane && reasoning_lane.has_content().await {
@@ -214,7 +209,11 @@ impl StreamOrchestrator {
                     if let Err(e) = answer_lane.finalize(&error_msg).await {
                         tracing::warn!("Failed to deliver error notice to Telegram: {}", e);
                     }
-                    return Err(anyhow::anyhow!("{}", error));
+                    // The turn failed: report it to the caller instead of
+                    // ending the loop successfully, so the caller can decide
+                    // what to surface. The error notice itself is best-effort
+                    // and must not mask the run error.
+                    return Err(ChannelError::SendFailed(format!("run failed: {error}")));
                 }
                 _ => {
                     tracing::debug!("Ignoring event in orchestrator: {:?}", event);

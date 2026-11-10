@@ -289,15 +289,54 @@ macro_rules! with_thread {
 ///
 /// - `MessageNotModified`: debounce window produced no new tokens.
 /// - `MessageCantBeEdited`: user deleted the message mid-stream.
+///
+/// `EditedMessageIsTooLong` is deliberately NOT benign: it means the answer
+/// did not fit into the preview message, so treating it as success loses the
+/// tail of the answer (the caller would believe the answer was delivered).
+/// The streaming path catches it and delivers the answer as new messages.
 const fn is_benign_edit_error(err: &teloxide::RequestError) -> bool {
     matches!(
         err,
         teloxide::RequestError::Api(
-            teloxide::ApiError::MessageNotModified
-                | teloxide::ApiError::MessageCantBeEdited
-                | teloxide::ApiError::EditedMessageIsTooLong
+            teloxide::ApiError::MessageNotModified | teloxide::ApiError::MessageCantBeEdited
         )
     )
+}
+
+/// Telegram's per-message text limit, counted in characters of the parsed
+/// text (entity markup does not count towards it).
+const TELEGRAM_MAX_TEXT_CHARS: usize = 4096;
+
+/// Whether the error is "the message text is too long".
+fn is_message_too_long(err: &teloxide::RequestError) -> bool {
+    matches!(
+        err,
+        teloxide::RequestError::Api(teloxide::ApiError::EditedMessageIsTooLong)
+    )
+}
+
+/// Split `text` into chunks of at most [`TELEGRAM_MAX_TEXT_CHARS`] characters,
+/// never splitting a character in half.
+///
+/// The split happens on the PLAIN text, before the HTML formatting, so every
+/// chunk formats into valid, independently sendable HTML.
+fn split_for_telegram(text: &str) -> Vec<&str> {
+    if text.chars().count() <= TELEGRAM_MAX_TEXT_CHARS {
+        return vec![text];
+    }
+    let mut chunks = Vec::new();
+    let mut start = 0usize;
+    let mut count = 0usize;
+    for (idx, ch) in text.char_indices() {
+        if count == TELEGRAM_MAX_TEXT_CHARS {
+            chunks.push(&text[start..idx]);
+            start = idx;
+            count = 0;
+        }
+        count += 1;
+    }
+    chunks.push(&text[start..]);
+    chunks
 }
 
 // ---------------------------------------------------------------------------
@@ -912,12 +951,17 @@ fn attachment_to_input_file(
 /// `#[doc(hidden)]` — see `send_message` for the rationale. Exposed for
 /// `tests/telegram_delivery_e2e.rs`.
 #[doc(hidden)]
+/// Send one attachment and return the id of the message Telegram created.
+///
+/// The id matters to the caller: an attachment-only delivery must report the
+/// real message id instead of a placeholder, otherwise the reply cannot be
+/// edited or referenced later.
 pub async fn send_attachment(
     bot: &Bot,
     chat_id: ChatId,
     thread_id: Option<i32>,
     attachment: &Attachment,
-) -> ChannelResult<()> {
+) -> ChannelResult<i64> {
     let input_file = if let Some(data) = &attachment.data {
         InputFile::memory(data.clone())
     } else if let Some(path) = &attachment.path {
@@ -935,25 +979,26 @@ pub async fn send_attachment(
 
     // Determine attachment type by MIME type
     let mime = &attachment.mime_type;
-    if mime == "image/webp" || mime == "application/x-tgsticker" || mime == "video/webm" {
+    let sent = if mime == "image/webp" || mime == "application/x-tgsticker" || mime == "video/webm"
+    {
         // Sticker formats: static (webp), animated (tgsticker), video (webm)
         let req = with_thread!(bot.send_sticker(chat_id, input_file), thread_id);
         req.await
-            .map_err(|e| ChannelError::SendFailed(format!("Failed to send sticker: {e}")))?;
+            .map_err(|e| ChannelError::SendFailed(format!("Failed to send sticker: {e}")))?
     } else if mime.starts_with("image/") {
         let req = with_thread!(bot.send_photo(chat_id, input_file), thread_id);
         req.await
-            .map_err(|e| ChannelError::SendFailed(format!("Failed to send photo: {e}")))?;
+            .map_err(|e| ChannelError::SendFailed(format!("Failed to send photo: {e}")))?
     } else if mime == "audio/ogg" || mime == "audio/opus" || mime == "audio/ogg; codecs=opus" {
         // Voice messages: OGG/Opus → send as voice (inline playable)
         let req = with_thread!(bot.send_voice(chat_id, input_file), thread_id);
         req.await
-            .map_err(|e| ChannelError::SendFailed(format!("Failed to send voice: {e}")))?;
+            .map_err(|e| ChannelError::SendFailed(format!("Failed to send voice: {e}")))?
     } else if mime.starts_with("audio/") {
         // Other audio: MP3, WAV, etc. → also send as voice for TTS output
         let req = with_thread!(bot.send_voice(chat_id, input_file), thread_id);
         req.await
-            .map_err(|e| ChannelError::SendFailed(format!("Failed to send voice: {e}")))?;
+            .map_err(|e| ChannelError::SendFailed(format!("Failed to send voice: {e}")))?
     } else if mime.starts_with("video/") {
         // `Some(true)` triggers the round-bubble `sendVideoNote` dispatch;
         // `Some(false)` and `None` both fall through to the generic
@@ -964,11 +1009,11 @@ pub async fn send_attachment(
             // by other channels via the `is_video_note` flag.
             let req = with_thread!(bot.send_video_note(chat_id, input_file), thread_id);
             req.await
-                .map_err(|e| ChannelError::SendFailed(format!("Failed to send video note: {e}")))?;
+                .map_err(|e| ChannelError::SendFailed(format!("Failed to send video note: {e}")))?
         } else {
             let req = with_thread!(bot.send_video(chat_id, input_file), thread_id);
             req.await
-                .map_err(|e| ChannelError::SendFailed(format!("Failed to send video: {e}")))?;
+                .map_err(|e| ChannelError::SendFailed(format!("Failed to send video: {e}")))?
         }
     } else if attachment.is_voice_note {
         // Voice-note hint on a non-audio MIME (e.g. MP4 audio track). Honour
@@ -976,14 +1021,14 @@ pub async fn send_attachment(
         // and want it rendered as the round bubble anyway.
         let req = with_thread!(bot.send_voice(chat_id, input_file), thread_id);
         req.await
-            .map_err(|e| ChannelError::SendFailed(format!("Failed to send voice: {e}")))?;
+            .map_err(|e| ChannelError::SendFailed(format!("Failed to send voice: {e}")))?
     } else {
         let req = with_thread!(bot.send_document(chat_id, input_file), thread_id);
         req.await
-            .map_err(|e| ChannelError::SendFailed(format!("Failed to send document: {e}")))?;
-    }
+            .map_err(|e| ChannelError::SendFailed(format!("Failed to send document: {e}")))?
+    };
 
-    Ok(())
+    Ok(sent.id.0.into())
 }
 
 // ---------------------------------------------------------------------------
@@ -1142,6 +1187,19 @@ impl TelegramDelivery {
             Ok(_) => Ok(()),
             Err(ref e) if is_benign_edit_error(e) => {
                 tracing::debug!("edit_text_message: benign error ignored: {}", e);
+                Ok(())
+            }
+            Err(ref e) if is_message_too_long(e) => {
+                // The preview cannot hold the answer. Deliver the answer as
+                // new messages instead of losing the tail: the chunks are
+                // split on the plain text, so each one is valid HTML.
+                tracing::warn!(
+                    "edit_text_message: answer exceeds the Telegram limit, sending it as new messages"
+                );
+                let chunks = split_for_telegram(text);
+                for chunk in chunks {
+                    self.send_text_message(chunk).await?;
+                }
                 Ok(())
             }
             Err(e) => Err(ChannelError::SendFailed(e.to_string())),
