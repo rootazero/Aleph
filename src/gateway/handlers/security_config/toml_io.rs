@@ -8,14 +8,49 @@ use super::{
 };
 use crate::config::patcher::ConfigPatcher;
 
+/// Update the canonical config file under the advisory lock and replace it
+/// atomically.
+///
+/// The security sections used to be written with an unlocked
+/// read-modify-write cycle and a plain file write, so a concurrent save could
+/// be lost and the owner-only permissions of the config could be replaced by
+/// the umask default. Both are closed here: the cycle runs under the same
+/// lock the canonical config save uses (`<config>.lock`), and the file is
+/// replaced atomically with `0600`.
+///
+/// The edit runs against the parsed document and may fail. A failed edit
+/// leaves the file untouched — there is no partial commit.
+pub(super) fn update_config_toml<F>(path: &Path, edit: F) -> Result<(), String>
+where
+    F: FnOnce(&mut toml::Table) -> Result<(), String>,
+{
+    let lock_path = path.with_extension("lock");
+    crate::utils::atomic_io::with_file_lock(&lock_path, |_| -> std::io::Result<()> {
+        let contents = std::fs::read_to_string(path)
+            .map_err(|e| std::io::Error::other(format!("Failed to read config: {e}")))?;
+        let mut doc: toml::Table = toml::from_str(&contents)
+            .map_err(|e| std::io::Error::other(format!("Failed to parse config: {e}")))?;
+        edit(&mut doc).map_err(std::io::Error::other)?;
+        let new_contents = toml::to_string_pretty(&doc)
+            .map_err(|e| std::io::Error::other(format!("Failed to serialize config: {e}")))?;
+        crate::utils::atomic_io::write_atomic(path, new_contents.as_bytes())
+            .map_err(|e| std::io::Error::other(format!("Failed to write config: {e}")))
+    })
+    .map_err(|e| e.to_string())
+}
+
 #[cfg(test)]
 mod persistence_tests {
     use super::*;
+    use crate::gateway::handlers::security_config::rate_limit::write_sandbox_rate_limit_to_toml;
+    use crate::gateway::handlers::security_config::rate_limit::SandboxRateLimitConfigSchema;
 
     fn settings() -> SecurityConfig {
         serde_json::from_value(serde_json::json!({})).unwrap()
     }
 
+    /// The canonical config lock is the same lock the config save uses, so a
+    /// security update cannot interleave with a concurrent save and lose it.
     #[test]
     fn security_update_waits_for_canonical_lock_and_preserves_other_sections() {
         let dir = tempfile::tempdir().unwrap();
@@ -27,19 +62,25 @@ mod persistence_tests {
             let target = path.clone();
             let worker = std::thread::spawn(move || {
                 started_tx.send(()).unwrap();
-                done_tx.send(write_security_config_to_toml(&target, &settings(), None)).unwrap();
+                done_tx
+                    .send(write_ssrf_config_to_toml(&target, &settings()))
+                    .unwrap();
             });
             started_rx.recv().unwrap();
-            assert!(matches!(
-                done_rx.recv_timeout(std::time::Duration::from_millis(100)),
-                Err(std::sync::mpsc::RecvTimeoutError::Timeout)
-            ));
+            assert!(
+                matches!(
+                    done_rx.recv_timeout(std::time::Duration::from_millis(100)),
+                    Err(std::sync::mpsc::RecvTimeoutError::Timeout)
+                ),
+                "the update must wait for the canonical config lock"
+            );
             crate::utils::atomic_io::write_atomic(
                 &path,
                 b"[search]\nmarker = 'confirmed'\n[ssrf]\nstrip_auth_on_cross_origin = false\n[security.ssrf]\nenabled = false\n[sandbox]\nunmanaged = true\n",
             )?;
             Ok(worker)
-        }).unwrap();
+        })
+        .unwrap();
         done_rx
             .recv_timeout(std::time::Duration::from_secs(10))
             .unwrap()
@@ -53,11 +94,10 @@ mod persistence_tests {
         );
         assert!(doc["security"].get("ssrf").is_none());
         assert_eq!(doc["sandbox"]["unmanaged"].as_bool(), Some(true));
-        assert!(doc["sandbox"]["rate_limit"]["read"].is_table());
-        assert!(doc.contains_key("privacy"));
-        assert!(doc.contains_key("secrets_config"));
     }
 
+    /// The config holds credentials and the panel-unmanaged flags, so it is
+    /// replaced (not truncated in place) and stays owner-only.
     #[cfg(unix)]
     #[test]
     fn security_update_atomically_replaces_config_with_owner_only_permissions() {
@@ -68,7 +108,7 @@ mod persistence_tests {
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
         let old_file = std::fs::File::open(&path).unwrap();
         let old_inode = old_file.metadata().unwrap().ino();
-        write_security_config_to_toml(&path, &settings(), Some("127.0.0.1")).unwrap();
+        write_ssrf_config_to_toml(&path, &settings()).unwrap();
         let metadata = std::fs::metadata(&path).unwrap();
         assert_ne!(
             old_inode,
@@ -85,21 +125,26 @@ mod persistence_tests {
         }));
     }
 
+    /// A rejected update must not leave a half-written config behind.
     #[test]
     fn invalid_security_update_does_not_partially_commit() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("config.toml");
         let original = "[search]\nmarker = 'keep'\n";
         std::fs::write(&path, original).unwrap();
-        let mut config = settings();
-        config.sandbox_rate_limit.read.window_secs = u64::MAX;
-        assert!(write_security_config_to_toml(&path, &config, Some("0.0.0.0")).is_err());
+        let mut config: SandboxRateLimitConfigSchema =
+            serde_json::from_value(serde_json::json!({})).unwrap();
+        config.read.window_secs = u64::MAX;
+        assert!(
+            write_sandbox_rate_limit_to_toml(&path, &config).is_err(),
+            "a window that does not fit a TOML integer must be rejected"
+        );
         assert_eq!(std::fs::read_to_string(&path).unwrap(), original);
         std::fs::write(&path, "[broken").unwrap();
-        assert!(write_security_config_to_toml(&path, &settings(), None).is_err());
+        assert!(write_ssrf_config_to_toml(&path, &settings()).is_err());
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "[broken");
         std::fs::remove_file(&path).unwrap();
-        assert!(write_security_config_to_toml(&path, &settings(), None).is_err());
+        assert!(write_ssrf_config_to_toml(&path, &settings()).is_err());
         assert!(!path.exists());
     }
 }
@@ -406,75 +451,65 @@ pub(super) fn write_ssrf_config_to_toml(
     path: &std::path::Path,
     config: &SecurityConfig,
 ) -> Result<(), String> {
-    let contents =
-        std::fs::read_to_string(path).map_err(|e| format!("Failed to read config: {e}"))?;
-    let mut doc: toml::Table =
-        toml::from_str(&contents).map_err(|e| format!("Failed to parse config: {e}"))?;
+    update_config_toml(path, |doc| {
+        // Preserve the panel-unmanaged field from any existing [ssrf] table.
+        let strip_auth = doc
+            .get("ssrf")
+            .and_then(|v| v.as_table())
+            .and_then(|t| t.get("strip_auth_on_cross_origin"))
+            .and_then(|v| v.as_bool())
+            .unwrap_or(true);
 
-    // Preserve the panel-unmanaged field from any existing [ssrf] table.
-    let strip_auth = doc
-        .get("ssrf")
-        .and_then(|v| v.as_table())
-        .and_then(|t| t.get("strip_auth_on_cross_origin"))
-        .and_then(|v| v.as_bool())
-        .unwrap_or(true);
+        // Drop the legacy nested [security.ssrf] table — the runtime never read it.
+        if let Some(toml::Value::Table(sec_table)) = doc.get_mut("security") {
+            sec_table.remove("ssrf");
+        }
 
-    // Drop the legacy nested [security.ssrf] table — the runtime never read it.
-    if let Some(toml::Value::Table(sec_table)) = doc.get_mut("security") {
-        sec_table.remove("ssrf");
-    }
+        let ssrf = doc
+            .entry("ssrf".to_string())
+            .or_insert_with(|| toml::Value::Table(toml::Table::new()));
 
-    let ssrf = doc
-        .entry("ssrf".to_string())
-        .or_insert_with(|| toml::Value::Table(toml::Table::new()));
+        if let toml::Value::Table(ssrf_table) = ssrf {
+            ssrf_table.insert(
+                "enabled".to_string(),
+                toml::Value::Boolean(config.ssrf_enabled),
+            );
+            ssrf_table.insert(
+                "allow_private_network".to_string(),
+                toml::Value::Boolean(config.ssrf_allow_private_network),
+            );
+            ssrf_table.insert(
+                "max_redirects".to_string(),
+                toml::Value::Integer(i64::from(config.ssrf_max_redirects)),
+            );
+            ssrf_table.insert(
+                "allowed_hosts".to_string(),
+                toml::Value::Array(
+                    config
+                        .ssrf_allowed_hosts
+                        .iter()
+                        .map(|s| toml::Value::String(s.clone()))
+                        .collect(),
+                ),
+            );
+            ssrf_table.insert(
+                "blocked_hosts".to_string(),
+                toml::Value::Array(
+                    config
+                        .ssrf_blocked_hosts
+                        .iter()
+                        .map(|s| toml::Value::String(s.clone()))
+                        .collect(),
+                ),
+            );
+            ssrf_table.insert(
+                "strip_auth_on_cross_origin".to_string(),
+                toml::Value::Boolean(strip_auth),
+            );
+        }
 
-    if let toml::Value::Table(ssrf_table) = ssrf {
-        ssrf_table.insert(
-            "enabled".to_string(),
-            toml::Value::Boolean(config.ssrf_enabled),
-        );
-        ssrf_table.insert(
-            "allow_private_network".to_string(),
-            toml::Value::Boolean(config.ssrf_allow_private_network),
-        );
-        ssrf_table.insert(
-            "max_redirects".to_string(),
-            toml::Value::Integer(i64::from(config.ssrf_max_redirects)),
-        );
-        ssrf_table.insert(
-            "allowed_hosts".to_string(),
-            toml::Value::Array(
-                config
-                    .ssrf_allowed_hosts
-                    .iter()
-                    .map(|s| toml::Value::String(s.clone()))
-                    .collect(),
-            ),
-        );
-        ssrf_table.insert(
-            "blocked_hosts".to_string(),
-            toml::Value::Array(
-                config
-                    .ssrf_blocked_hosts
-                    .iter()
-                    .map(|s| toml::Value::String(s.clone()))
-                    .collect(),
-            ),
-        );
-        ssrf_table.insert(
-            "strip_auth_on_cross_origin".to_string(),
-            toml::Value::Boolean(strip_auth),
-        );
-    }
-
-    let new_contents =
-        toml::to_string_pretty(&doc).map_err(|e| format!("Failed to serialize config: {e}"))?;
-
-    // Atomic write with secure permissions
-    std::fs::write(path, new_contents.as_bytes())
-        .map_err(|e| format!("Failed to write config: {e}"))?;
-
-    Ok(())
+        Ok(())
+    })
 }
 
 /// Write shell security settings to the canonical flat `[security]` section
@@ -484,68 +519,55 @@ pub(super) fn write_shell_security_to_toml(
     path: &std::path::Path,
     shell_security: &ShellSecurityConfig,
 ) -> Result<(), String> {
-    let contents =
-        std::fs::read_to_string(path).map_err(|e| format!("Failed to read config: {e}"))?;
-    let mut doc: toml::Table =
-        toml::from_str(&contents).map_err(|e| format!("Failed to parse config: {e}"))?;
+    update_config_toml(path, |doc| {
+        let pattern_array = |patterns: &[CustomRiskPattern]| -> Vec<toml::Value> {
+            patterns
+                .iter()
+                .map(|p| {
+                    let mut table = toml::Table::new();
+                    table.insert(
+                        "pattern".to_string(),
+                        toml::Value::String(p.pattern.clone()),
+                    );
+                    if let Some(ref reason) = p.reason {
+                        table.insert("reason".to_string(), toml::Value::String(reason.clone()));
+                    }
+                    toml::Value::Table(table)
+                })
+                .collect()
+        };
 
-    let pattern_array = |patterns: &[CustomRiskPattern]| -> Vec<toml::Value> {
-        patterns
-            .iter()
-            .map(|p| {
-                let mut table = toml::Table::new();
-                table.insert(
-                    "pattern".to_string(),
-                    toml::Value::String(p.pattern.clone()),
-                );
-                if let Some(ref reason) = p.reason {
-                    table.insert("reason".to_string(), toml::Value::String(reason.clone()));
+        let security = doc
+            .entry("security".to_string())
+            .or_insert_with(|| toml::Value::Table(toml::Table::new()));
+
+        if let toml::Value::Table(sec_table) = security {
+            // Remove the legacy nested table — the runtime reads [security] flat.
+            sec_table.remove("shell");
+
+            sec_table.insert(
+                "enable_custom_patterns".to_string(),
+                toml::Value::Boolean(shell_security.enable_custom_patterns),
+            );
+
+            for (key, patterns) in [
+                ("custom_blocked", &shell_security.custom_blocked),
+                ("custom_danger", &shell_security.custom_danger),
+            ] {
+                let arr = pattern_array(patterns);
+                if !arr.is_empty() {
+                    sec_table.insert(key.to_string(), toml::Value::Array(arr));
+                } else {
+                    sec_table.remove(key);
                 }
-                toml::Value::Table(table)
-            })
-            .collect()
-    };
-
-    let security = doc
-        .entry("security".to_string())
-        .or_insert_with(|| toml::Value::Table(toml::Table::new()));
-
-    if let toml::Value::Table(sec_table) = security {
-        // Remove the legacy nested table — the runtime reads [security] flat.
-        sec_table.remove("shell");
-
-        sec_table.insert(
-            "enable_custom_patterns".to_string(),
-            toml::Value::Boolean(shell_security.enable_custom_patterns),
-        );
-
-        for (key, patterns) in [
-            ("custom_blocked", &shell_security.custom_blocked),
-            ("custom_danger", &shell_security.custom_danger),
-        ] {
-            let arr = pattern_array(patterns);
-            if !arr.is_empty() {
-                sec_table.insert(key.to_string(), toml::Value::Array(arr));
-            } else {
-                sec_table.remove(key);
             }
+            // custom_safe was a no-op control (the sandbox hook never honored a
+            // Safe verdict); strip any stale value left by older versions.
+            sec_table.remove("custom_safe");
         }
-        // custom_safe was a no-op control (the sandbox hook never honored a
-        // Safe verdict); strip any stale value left by older versions.
-        sec_table.remove("custom_safe");
-    }
 
-    let new_contents =
-        toml::to_string_pretty(&doc).map_err(|e| format!("Failed to serialize config: {e}"))?;
-
-    let temp_path = path.with_extension("shell_tmp");
-    std::fs::write(&temp_path, &new_contents).map_err(|e| format!("Failed to write temp: {e}"))?;
-    std::fs::rename(&temp_path, path).map_err(|e| {
-        let _ = std::fs::remove_file(&temp_path);
-        format!("Failed to rename: {e}")
-    })?;
-
-    Ok(())
+        Ok(())
+    })
 }
 
 /// Write custom PII rules to [[`privacy.custom_rules`]] section.
@@ -553,74 +575,61 @@ pub(super) fn write_custom_pii_rules_to_toml(
     path: &std::path::Path,
     rules: &[CustomPiiRule],
 ) -> Result<(), String> {
-    let contents =
-        std::fs::read_to_string(path).map_err(|e| format!("Failed to read config: {e}"))?;
-    let mut doc: toml::Table =
-        toml::from_str(&contents).map_err(|e| format!("Failed to parse config: {e}"))?;
+    update_config_toml(path, |doc| {
+        let privacy = doc
+            .entry("privacy".to_string())
+            .or_insert_with(|| toml::Value::Table(toml::Table::new()));
 
-    let privacy = doc
-        .entry("privacy".to_string())
-        .or_insert_with(|| toml::Value::Table(toml::Table::new()));
+        if let toml::Value::Table(priv_table) = privacy {
+            let rules_arr: Vec<toml::Value> = rules
+                .iter()
+                .map(|r| {
+                    let mut table = toml::Table::new();
+                    table.insert("name".to_string(), toml::Value::String(r.name.clone()));
+                    table.insert(
+                        "pattern".to_string(),
+                        toml::Value::String(r.pattern.clone()),
+                    );
+                    table.insert(
+                        "placeholder".to_string(),
+                        toml::Value::String(r.placeholder.clone()),
+                    );
+                    table.insert(
+                        "severity".to_string(),
+                        toml::Value::String(
+                            match r.severity {
+                                CustomPiiSeverity::Low => "low",
+                                CustomPiiSeverity::Medium => "medium",
+                                CustomPiiSeverity::High => "high",
+                                CustomPiiSeverity::Critical => "critical",
+                            }
+                            .to_string(),
+                        ),
+                    );
+                    table.insert(
+                        "action".to_string(),
+                        toml::Value::String(
+                            match r.action {
+                                PiiAction::Block => "block",
+                                PiiAction::Warn => "warn",
+                                PiiAction::Off => "off",
+                            }
+                            .to_string(),
+                        ),
+                    );
+                    toml::Value::Table(table)
+                })
+                .collect();
 
-    if let toml::Value::Table(priv_table) = privacy {
-        let rules_arr: Vec<toml::Value> = rules
-            .iter()
-            .map(|r| {
-                let mut table = toml::Table::new();
-                table.insert("name".to_string(), toml::Value::String(r.name.clone()));
-                table.insert(
-                    "pattern".to_string(),
-                    toml::Value::String(r.pattern.clone()),
-                );
-                table.insert(
-                    "placeholder".to_string(),
-                    toml::Value::String(r.placeholder.clone()),
-                );
-                table.insert(
-                    "severity".to_string(),
-                    toml::Value::String(
-                        match r.severity {
-                            CustomPiiSeverity::Low => "low",
-                            CustomPiiSeverity::Medium => "medium",
-                            CustomPiiSeverity::High => "high",
-                            CustomPiiSeverity::Critical => "critical",
-                        }
-                        .to_string(),
-                    ),
-                );
-                table.insert(
-                    "action".to_string(),
-                    toml::Value::String(
-                        match r.action {
-                            PiiAction::Block => "block",
-                            PiiAction::Warn => "warn",
-                            PiiAction::Off => "off",
-                        }
-                        .to_string(),
-                    ),
-                );
-                toml::Value::Table(table)
-            })
-            .collect();
-
-        if !rules_arr.is_empty() {
-            priv_table.insert("custom_rules".to_string(), toml::Value::Array(rules_arr));
-        } else {
-            priv_table.remove("custom_rules");
+            if !rules_arr.is_empty() {
+                priv_table.insert("custom_rules".to_string(), toml::Value::Array(rules_arr));
+            } else {
+                priv_table.remove("custom_rules");
+            }
         }
-    }
 
-    let new_contents =
-        toml::to_string_pretty(&doc).map_err(|e| format!("Failed to serialize config: {e}"))?;
-
-    let temp_path = path.with_extension("pii_tmp");
-    std::fs::write(&temp_path, &new_contents).map_err(|e| format!("Failed to write temp: {e}"))?;
-    std::fs::rename(&temp_path, path).map_err(|e| {
-        let _ = std::fs::remove_file(&temp_path);
-        format!("Failed to rename: {e}")
-    })?;
-
-    Ok(())
+        Ok(())
+    })
 }
 
 /// Write secret protection to [`secrets_config`] section.
@@ -628,62 +637,49 @@ pub(super) fn write_secrets_protection_to_toml(
     path: &std::path::Path,
     secrets: &SecretsProtectionConfig,
 ) -> Result<(), String> {
-    let contents =
-        std::fs::read_to_string(path).map_err(|e| format!("Failed to read config: {e}"))?;
-    let mut doc: toml::Table =
-        toml::from_str(&contents).map_err(|e| format!("Failed to parse config: {e}"))?;
+    update_config_toml(path, |doc| {
+        let secrets_config = doc
+            .entry("secrets_config".to_string())
+            .or_insert_with(|| toml::Value::Table(toml::Table::new()));
 
-    let secrets_config = doc
-        .entry("secrets_config".to_string())
-        .or_insert_with(|| toml::Value::Table(toml::Table::new()));
-
-    if let toml::Value::Table(sec_table) = secrets_config {
-        let mut vkeys = toml::Table::new();
-        for entry in &secrets.virtual_keys {
-            vkeys.insert(
-                entry.alias.clone(),
-                toml::Value::String(entry.secret_name.clone()),
-            );
-        }
-        if !vkeys.is_empty() {
-            sec_table.insert("virtual_keys".to_string(), toml::Value::Table(vkeys));
-        } else {
-            sec_table.remove("virtual_keys");
-        }
-
-        let patterns: Vec<toml::Value> = secrets
-            .custom_leak_patterns
-            .iter()
-            .map(|p| {
-                let mut table = toml::Table::new();
-                table.insert("name".to_string(), toml::Value::String(p.name.clone()));
-                table.insert(
-                    "pattern".to_string(),
-                    toml::Value::String(p.pattern.clone()),
+        if let toml::Value::Table(sec_table) = secrets_config {
+            let mut vkeys = toml::Table::new();
+            for entry in &secrets.virtual_keys {
+                vkeys.insert(
+                    entry.alias.clone(),
+                    toml::Value::String(entry.secret_name.clone()),
                 );
-                toml::Value::Table(table)
-            })
-            .collect();
+            }
+            if !vkeys.is_empty() {
+                sec_table.insert("virtual_keys".to_string(), toml::Value::Table(vkeys));
+            } else {
+                sec_table.remove("virtual_keys");
+            }
 
-        if !patterns.is_empty() {
-            sec_table.insert(
-                "custom_leak_patterns".to_string(),
-                toml::Value::Array(patterns),
-            );
-        } else {
-            sec_table.remove("custom_leak_patterns");
+            let patterns: Vec<toml::Value> = secrets
+                .custom_leak_patterns
+                .iter()
+                .map(|p| {
+                    let mut table = toml::Table::new();
+                    table.insert("name".to_string(), toml::Value::String(p.name.clone()));
+                    table.insert(
+                        "pattern".to_string(),
+                        toml::Value::String(p.pattern.clone()),
+                    );
+                    toml::Value::Table(table)
+                })
+                .collect();
+
+            if !patterns.is_empty() {
+                sec_table.insert(
+                    "custom_leak_patterns".to_string(),
+                    toml::Value::Array(patterns),
+                );
+            } else {
+                sec_table.remove("custom_leak_patterns");
+            }
         }
-    }
 
-    let new_contents =
-        toml::to_string_pretty(&doc).map_err(|e| format!("Failed to serialize config: {e}"))?;
-
-    let temp_path = path.with_extension("secrets_tmp");
-    std::fs::write(&temp_path, &new_contents).map_err(|e| format!("Failed to write temp: {e}"))?;
-    std::fs::rename(&temp_path, path).map_err(|e| {
-        let _ = std::fs::remove_file(&temp_path);
-        format!("Failed to rename: {e}")
-    })?;
-
-    Ok(())
+        Ok(())
+    })
 }

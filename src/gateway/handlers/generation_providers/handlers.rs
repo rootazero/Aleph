@@ -558,7 +558,7 @@ mod probe_verification_tests {
         );
         let snapshot = |cfg: &Config, key: &str| {
             saved_generation_probe(
-                cfg,
+                &cfg.generation,
                 &vault,
                 "target",
                 "openai",
@@ -573,7 +573,7 @@ mod probe_verification_tests {
         );
         assert!(snapshot(&cfg, "inline-wrong-key").is_none());
         assert!(saved_generation_probe(
-            &cfg,
+            &cfg.generation,
             &vault,
             "target",
             "stability",
@@ -607,6 +607,36 @@ mod probe_verification_tests {
         cfg.generation.image_providers.remove("target");
         assert!(snapshot(&cfg, "rotated-key").is_none());
     }
+}
+
+/// The typed map key of the saved provider `name`, when the probed settings
+/// still describe it.
+///
+/// The probe verdict is written back to the saved provider only when the
+/// settings that were probed are the settings that are stored: a probe of a
+/// different provider type, of a different base URL, or with a different
+/// credential must not mark the saved provider verified. `None` means the
+/// probe says nothing about the saved provider.
+fn saved_generation_probe(
+    generation: &crate::config::types::generation::GenerationConfig,
+    vault: &SharedTokenManager,
+    name: &str,
+    provider_type: &str,
+    base_url: Option<&str>,
+    key: &str,
+) -> Option<String> {
+    let type_key = find_provider_type(generation, name)?;
+    let saved = get_typed_provider_map(generation, &type_key).get(name)?;
+    if saved.provider_type != provider_type {
+        return None;
+    }
+    if saved.base_url.as_deref() != base_url {
+        return None;
+    }
+    if resolve_api_key(name, vault).as_deref() != Some(key) {
+        return None;
+    }
+    Some(type_key)
 }
 
 /// Test connection to a generation provider
@@ -660,18 +690,23 @@ pub async fn handle_test_connection(
             // never claims a provider is verified when the test actually failed.
             if let Some(ref name) = provider_name {
                 let mut cfg = config.write().await;
-                if let Some(type_str) = find_provider_type(&cfg.generation, name) {
+                // Only update verified if the probed settings (type, base URL
+                // and credential) still describe the saved provider.
+                let matched = saved_generation_probe(
+                    &cfg.generation,
+                    &vault,
+                    name,
+                    &params.provider_type,
+                    params.base_url.as_deref(),
+                    &key,
+                );
+                if let Some(type_str) = matched {
                     if let Some(p) =
                         get_typed_provider_map_mut(&mut cfg.generation, &type_str).get_mut(name)
                     {
-                        // Only update verified if the probed settings match the current config
-                        let settings_match = type_str == params.provider_type
-                            && p.base_url.as_deref() == params.base_url.as_deref();
-                        if settings_match {
-                            p.verified = outcome.success;
-                            if let Err(e) = save_config(&cfg) {
-                                tracing::error!(error = %e, "Failed to save config after generation test");
-                            }
+                        p.verified = outcome.success;
+                        if let Err(e) = save_config(&cfg) {
+                            tracing::error!(error = %e, "Failed to save config after generation test");
                         }
                     }
                 }
