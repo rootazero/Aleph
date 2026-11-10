@@ -285,7 +285,19 @@ pub async fn handle_create(
 
     // Optional: active_hours
     if let Some(val) = params.get("active_hours") {
-        task.active_hours = serde_json::from_value(val.clone()).ok().flatten();
+        match serde_json::from_value::<
+            Option<crate::tasks::shared::active_hours::ActiveHoursSchedule>,
+        >(val.clone())
+        {
+            Ok(active_hours) => task.active_hours = active_hours,
+            Err(_) => {
+                return JsonRpcResponse::error(
+                    request.id,
+                    INVALID_PARAMS,
+                    "Invalid active_hours format",
+                );
+            }
+        }
     }
 
     // Optional: failure_alert. Rejected rather than ignored on a parse error —
@@ -598,6 +610,80 @@ mod tests {
         assert_eq!(parse_interval("30s").unwrap(), 30_000);
         assert_eq!(parse_interval("60000").unwrap(), 60_000);
         assert!(parse_interval("abc").is_err());
+    }
+
+    #[tokio::test]
+    async fn active_hours_rejects_bad_values_and_preserves_absent_null_semantics() {
+        use crate::gateway::protocol::{JsonRpcRequest, INVALID_PARAMS};
+        use crate::tasks::heartbeat::config::HeartbeatConfig;
+        use crate::tasks::heartbeat::store::HeartbeatStore;
+        use crate::tasks::heartbeat::HeartbeatService;
+        use crate::tasks::shared::active_hours::ActiveHoursSchedule;
+
+        let dir = tempfile::tempdir().unwrap();
+        let service = std::sync::Arc::new(tokio::sync::Mutex::new(HeartbeatService::new(
+            HeartbeatStore::open(&dir.path().join("heartbeat.db")).unwrap(),
+            HeartbeatConfig::default(),
+        )));
+        let schedule = serde_json::to_value(ActiveHoursSchedule::default()).unwrap();
+        let mut params = json!({
+            "name": "hours-test", "interval_ms": 300_000,
+            "probe": { "tool_name": "gmail.unread_count" }, "active_hours": 123
+        });
+        let response = super::handle_create(
+            JsonRpcRequest::with_id("heartbeat.create", Some(params.clone()), json!(1)),
+            service.clone(),
+        )
+        .await;
+        assert_eq!(response.error.unwrap().code, INVALID_PARAMS);
+        assert!(service.lock().await.list_tasks().await.is_empty());
+
+        params["active_hours"] = schedule.clone();
+        let response = super::handle_create(
+            JsonRpcRequest::with_id("heartbeat.create", Some(params), json!(2)),
+            service.clone(),
+        )
+        .await;
+        let task_id = response.result.unwrap()["task"]["id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+
+        let response = super::handle_update(
+            JsonRpcRequest::with_id(
+                "heartbeat.update",
+                Some(json!({"task_id": task_id, "active_hours": 123, "name": "must-not-apply"})),
+                json!(3),
+            ),
+            service.clone(),
+        )
+        .await;
+        assert_eq!(response.error.unwrap().code, INVALID_PARAMS);
+        let stored = service.lock().await.get_task(&task_id).await.unwrap();
+        assert_eq!(stored.name, "hours-test");
+        assert_eq!(serde_json::to_value(stored.active_hours).unwrap(), schedule);
+
+        for (update, expected) in [
+            (
+                json!({"task_id": task_id, "enabled": false}),
+                schedule.clone(),
+            ),
+            (
+                json!({"task_id": task_id, "active_hours": null}),
+                Value::Null,
+            ),
+            (
+                json!({"task_id": task_id, "active_hours": schedule}),
+                schedule.clone(),
+            ),
+        ] {
+            let response = super::handle_update(
+                JsonRpcRequest::with_id("heartbeat.update", Some(update), json!(4)),
+                service.clone(),
+            )
+            .await;
+            assert_eq!(response.result.unwrap()["task"]["active_hours"], expected);
+        }
     }
 
     /// `heartbeat.create` — the RPC face — must persist the calling user as

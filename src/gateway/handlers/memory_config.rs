@@ -102,6 +102,12 @@ pub async fn handle_update(
             }
         };
 
+        // Snapshot current state before mutation
+        let old_memory = cfg.memory.clone();
+        let old_compression = compression_update
+            .as_ref()
+            .map(|_| cfg.policies.memory.compression.clone());
+
         cfg.memory = merged;
 
         // Apply the bridged compression policy (partial-update tolerant) and
@@ -114,6 +120,11 @@ pub async fn handle_update(
 
         // Save to file
         if let Err(e) = cfg.save_incremental(&sections) {
+            // Rollback shared config on save failure
+            cfg.memory = old_memory;
+            if let Some(old_comp) = old_compression {
+                cfg.policies.memory.compression = old_comp;
+            }
             return JsonRpcResponse::error(
                 request.id,
                 INTERNAL_ERROR,
@@ -132,7 +143,6 @@ pub async fn handle_update(
 
     JsonRpcResponse::success(request.id, serde_json::json!({ "success": true }))
 }
-
 // ============================================================================
 // Retrieve with Trace
 // ============================================================================
@@ -390,13 +400,17 @@ fn apply_compression_update(
     comp: &serde_json::Value,
 ) {
     if let Some(v) = comp.get("turn_threshold").and_then(|x| x.as_u64()) {
-        policy.turn_threshold = v as u32;
+        if let Ok(v32) = u32::try_from(v) {
+            policy.turn_threshold = v32;
+        }
     }
     if let Some(v) = comp
         .get("background_interval_seconds")
         .and_then(|x| x.as_u64())
     {
-        policy.background_interval_seconds = v as u32;
+        if let Ok(v32) = u32::try_from(v) {
+            policy.background_interval_seconds = v32;
+        }
     }
 }
 
