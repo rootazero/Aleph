@@ -66,6 +66,13 @@ struct ChannelRegistrationEntry {
     registration: ChannelRegistration,
     runtime: Mutex<binding::EntryRuntime>,
     drained: tokio::sync::Notify,
+    /// The inbound forwarder task of this registration.
+    ///
+    /// A stop followed by a start must not leave two forwarders subscribed
+    /// to the same channel: both would deliver every inbound message, so the
+    /// agent would see each message twice. The handle lives here so the
+    /// start path can tell a live forwarder from a finished one.
+    forwarder_task: Mutex<Option<tokio::task::JoinHandle<()>>>,
 }
 
 enum ChannelRegistration {
@@ -551,6 +558,7 @@ impl ChannelRegistry {
                 },
                 runtime: Mutex::new(binding::EntryRuntime::default()),
                 drained: tokio::sync::Notify::new(),
+                forwarder_task: Mutex::new(None),
             }),
         );
 
@@ -671,6 +679,7 @@ impl ChannelRegistry {
                 },
                 runtime: Mutex::new(binding::EntryRuntime::default()),
                 drained: tokio::sync::Notify::new(),
+                forwarder_task: Mutex::new(None),
             }),
         );
 
@@ -884,6 +893,7 @@ impl ChannelRegistry {
             channel: Arc::new(RwLock::new(channel)),
             runtime: Mutex::new(binding::EntryRuntime::default()),
             drained: tokio::sync::Notify::new(),
+            forwarder_task: Mutex::new(None),
             registration: ChannelRegistration::Bound(Box::new(BoundChannelRegistration {
                 source: self.source.clone(),
                 entry_revision: source_revision,
@@ -1229,10 +1239,8 @@ impl ChannelRegistry {
                 .map_err(|error| ChannelError::Internal(error.to_string()));
         }
         let entry = self.legacy_entry(channel_id).await?;
-        let marker = self.begin_legacy_operation(channel_id, &entry).await?;
-        let result = self.start_channel_inner(channel_id, &entry).await;
-        self.finish_legacy_operation(&entry, &marker).await;
-        result
+        let _operation = self.begin_legacy_operation(channel_id, &entry).await?;
+        self.start_channel_inner(channel_id, &entry).await
     }
 
     async fn start_channel_inner(
@@ -1253,11 +1261,24 @@ impl ChannelRegistry {
         // receiving channel look dead to the health monitor.
         let mount = Self::webhook_mount_for(&**channel, channel_id, entry);
 
-        // Start forwarding inbound messages
-        self.start_message_forwarder(channel_id.clone(), channel_arc.clone())
-            .await;
+        // Start forwarding inbound messages only if no LIVE forwarder is
+        // running. The handle lives in the registration entry, so a stop
+        // followed by a start cannot leave two forwarders subscribed to the
+        // same channel — the second one would deliver every inbound message
+        // a second time.
+        {
+            let mut forwarder = entry.forwarder_task.lock().unwrap();
+            let live = forwarder
+                .as_ref()
+                .is_some_and(|handle| !handle.is_finished());
+            if !live {
+                *forwarder = Some(
+                    self.start_message_forwarder(channel_id.clone(), channel_arc.clone())
+                        .await,
+                );
+            }
+        }
         drop(channel);
-
         if let Some(mount) = mount {
             self.webhook_mounts.mount(mount).await;
         }
@@ -1918,7 +1939,11 @@ impl ChannelRegistry {
     }
 
     /// Start forwarding messages from a channel to the unified stream
-    async fn start_message_forwarder(&self, channel_id: ChannelId, channel_arc: ChannelHandle) {
+    async fn start_message_forwarder(
+        &self,
+        channel_id: ChannelId,
+        channel_arc: ChannelHandle,
+    ) -> tokio::task::JoinHandle<()> {
         let inbound_tx = self.inbound_tx.clone();
 
         tokio::spawn(async move {
@@ -1983,7 +2008,7 @@ impl ChannelRegistry {
             }
 
             info!("[Forwarder] Channel {} forwarder stopped", channel_id);
-        });
+        })
     }
 
     /// Get the voice state for a channel, returning default if not set.
