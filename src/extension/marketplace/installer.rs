@@ -492,9 +492,13 @@ mod tests {
 
         // Compute the expected hash by running the same logic
         use sha2::{Digest, Sha256};
+        let path = b"hello.txt";
+        let content = b"world";
         let mut hasher = Sha256::new();
-        hasher.update(b"hello.txt");
-        hasher.update(b"world");
+        hasher.update((path.len() as u64).to_be_bytes());
+        hasher.update(path);
+        hasher.update((content.len() as u64).to_be_bytes());
+        hasher.update(content);
         let expected = hex::encode(hasher.finalize());
 
         assert!(verify_plugin_integrity(tmp.path(), Some(&expected)).is_ok());
@@ -509,9 +513,13 @@ mod tests {
         fs::write(tmp.path().join("sub").join("f.txt"), "x").unwrap();
 
         use sha2::{Digest, Sha256};
+        let path = b"sub/f.txt";
+        let content = b"x";
         let mut hasher = Sha256::new();
-        hasher.update(b"sub/f.txt");
-        hasher.update(b"x");
+        hasher.update((path.len() as u64).to_be_bytes());
+        hasher.update(path);
+        hasher.update((content.len() as u64).to_be_bytes());
+        hasher.update(content);
         let expected = hex::encode(hasher.finalize());
 
         assert_eq!(directory_digest(tmp.path()).unwrap(), expected);
