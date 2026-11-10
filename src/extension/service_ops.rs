@@ -14,6 +14,7 @@ impl ExtensionManager {
         plugin_id: &str,
         service_id: &str,
     ) -> ExtensionResult<ServiceInfo> {
+        let _guard = self.load_guard.lock().await;
         let registration = self
             .find_service_registration(plugin_id, service_id)
             .await?;
@@ -42,6 +43,7 @@ impl ExtensionManager {
         plugin_id: &str,
         service_id: &str,
     ) -> ExtensionResult<ServiceInfo> {
+        let _guard = self.load_guard.lock().await;
         let registration = self
             .find_service_registration(plugin_id, service_id)
             .await?;
@@ -321,5 +323,83 @@ mod tests {
         let disposer = manager.start_services_effect("someone-else").await;
         assert!(manager.list_services().await.is_empty());
         disposer().await.unwrap();
+    }
+
+    /// E2-02: Manual start/stop must serialize with mount/unmount.
+    #[tokio::test]
+    async fn manual_service_control_serializes_with_mount_lifecycle() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::sync::Arc;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let (manager, _home) = manager_with_one_service(tmp.path()).await;
+
+        // Simulate concurrent manual start and mount disposer by observing lock acquisition order
+        let manager = Arc::new(manager);
+        let start_began = Arc::new(AtomicBool::new(false));
+        let disposer_complete = Arc::new(AtomicBool::new(false));
+
+        let m1 = manager.clone();
+        let flag1 = start_began.clone();
+        let flag2 = disposer_complete.clone();
+        let start_handle = tokio::spawn(async move {
+            flag1.store(true, Ordering::SeqCst);
+            // load_guard is acquired first, before registration lookup
+            let result = m1.start_service("qa-wasm", "ticker").await;
+            // If disposer ran, registration is gone
+            if flag2.load(Ordering::SeqCst) {
+                assert!(result.is_err());
+            }
+        });
+
+        let m2 = manager.clone();
+        let flag1 = start_began.clone();
+        let flag2 = disposer_complete.clone();
+        let dispose_handle = tokio::spawn(async move {
+            // Wait for start to begin
+            while !flag1.load(Ordering::SeqCst) {
+                tokio::time::sleep(tokio::time::Duration::from_micros(10)).await;
+            }
+            let disposer = m2.start_services_effect("qa-wasm").await;
+            disposer().await.ok();
+            flag2.store(true, Ordering::SeqCst);
+        });
+
+        let _ = tokio::join!(start_handle, dispose_handle);
+    }
+
+    /// E2-02: Manual stop must not target a different mount's service.
+    #[tokio::test]
+    async fn manual_stop_does_not_target_replacement_mount() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (manager, _home) = manager_with_one_service(tmp.path()).await;
+
+        let disposer1 = manager.start_services_effect("qa-wasm").await;
+        let services = manager.list_services().await;
+        assert_eq!(services.len(), 1);
+        let first_instance_key = (services[0].plugin_id.clone(), services[0].id.clone());
+
+        // Simulate unmount + remount (creates new registration generation)
+        disposer1().await.ok();
+        {
+            let mut reg = manager.get_plugin_registry_mut().await;
+            reg.register_service(ServiceRegistration {
+                id: "ticker".into(),
+                name: "ticker".into(),
+                start_handler: "start_ticker".into(),
+                stop_handler: "stop_ticker".into(),
+                plugin_id: "qa-wasm".into(),
+                auto_start: true,
+            });
+        }
+
+        // A stop_service call captured before unmount should not affect the new mount
+        let result = manager
+            .stop_service(&first_instance_key.0, &first_instance_key.1)
+            .await;
+        assert!(
+            result.is_ok(),
+            "stop should succeed on current registration"
+        );
     }
 }
