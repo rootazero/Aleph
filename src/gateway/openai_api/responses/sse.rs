@@ -46,6 +46,7 @@ struct StreamState {
     tool_calls: Vec<(String, String, String)>,
     usage: Option<ResponsesUsage>,
     done: bool,
+    sequence_number: u64,
 }
 
 // =============================================================================
@@ -71,12 +72,16 @@ pub fn provider_deltas_to_responses_sse(
     let created_event = sse_event(
         "response.created",
         &json!({
-            "id": resp_id,
-            "object": "response",
-            "created_at": created_at,
-            "status": "in_progress",
-            "model": &model,
-            "output": [],
+            "type": "response.created",
+            "sequence_number": 0,
+            "response": {
+                "id": resp_id,
+                "object": "response",
+                "created_at": created_at,
+                "status": "in_progress",
+                "model": &model,
+                "output": [],
+            }
         }),
     );
 
@@ -89,6 +94,7 @@ pub fn provider_deltas_to_responses_sse(
         tool_calls: Vec::new(),
         usage: None,
         done: false,
+        sequence_number: 1,
     };
 
     let delta_frames = fstream::unfold(state, |mut state| async move {
@@ -156,12 +162,7 @@ pub fn provider_deltas_to_responses_sse(
                                 "response.output_item.added",
                                 &json!({
                                     "type": "response.output_item.added",
-                                    "item": {
-                                        "type": "function_call",
-                                        "id": id,
-                                        "name": name,
-                                        "arguments": "",
-                                    }
+                                    "item": super::function_call_item(&id, &name, ""),
                                 }),
                             );
                             return Some((frame, state));
@@ -228,8 +229,22 @@ pub fn provider_deltas_to_responses_sse(
                             // Usage is emitted in the completed event
                             continue;
                         }
-                        ProviderDelta::Done(_reason) => {
-                            let frame = completed_frame(&state);
+                        ProviderDelta::Done(reason) => {
+                            let frame = match reason {
+                                crate::providers::StopReason::MaxTokens => sse_event(
+                                    "response.incomplete",
+                                    &json!({
+                                        "id": state.resp_id,
+                                        "object": "response",
+                                        "status": "incomplete",
+                                        "incomplete_details": {
+                                            "reason": "max_output_tokens"
+                                        },
+                                        "usage": state.usage
+                                    }),
+                                ),
+                                _ => completed_frame(&state),
+                            };
                             state.done = true;
                             return Some((frame, state));
                         }
@@ -276,12 +291,7 @@ fn completed_frame(state: &StreamState) -> String {
     }
 
     for (id, name, args) in &state.tool_calls {
-        output.push(json!({
-            "type": "function_call",
-            "id": id,
-            "name": name,
-            "arguments": args,
-        }));
+        output.push(super::function_call_item(id, name, args));
     }
 
     let usage = state.usage.as_ref().map_or_else(
@@ -411,6 +421,18 @@ mod tests {
         assert!(frames[3].contains("response.function_call_arguments.done"));
         assert!(frames[3].contains("NYC"));
         assert!(frames[4].contains("response.completed"));
+        let event = |frame: &str| -> serde_json::Value {
+            serde_json::from_str(
+                frame
+                    .lines()
+                    .find_map(|line| line.strip_prefix("data: "))
+                    .unwrap(),
+            )
+            .unwrap()
+        };
+        assert_eq!(event(&frames[1])["item"]["call_id"], "call_1");
+        assert_eq!(event(&frames[4])["output"][0]["call_id"], "call_1");
+        assert_eq!(event(&frames[4])["output"][0]["id"], "call_1");
     }
 
     #[tokio::test]

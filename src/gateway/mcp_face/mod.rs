@@ -299,6 +299,7 @@ impl McpFace {
         session: &SessionView,
         name: &str,
         arguments: Value,
+        cancel: CancellationToken,
     ) -> Result<ToolCallResult, UnknownTool> {
         if !self.expose().contains(name) {
             return Err(UnknownTool(name.to_string()));
@@ -323,7 +324,7 @@ impl McpFace {
             None,
             crate::approval::with_call_identity(
                 Some(identity),
-                svc.execute_with_cancel(name, arguments, CancellationToken::new()),
+                svc.execute_with_cancel(name, arguments, cancel),
             ),
         )
         .await;
@@ -523,6 +524,7 @@ pub(crate) mod test_support {
 
     pub(crate) fn session(face: &McpFace) -> SessionView {
         face.sessions().create(
+            &operator(),
             McpClient {
                 client_name: "test".to_string(),
                 client_version: "0".to_string(),
@@ -588,7 +590,13 @@ mod tests {
         let f = face(&["echo"], true);
         let s = session(&f);
         let r = f
-            .call_tool(&operator(), &s, "echo", json!({"text": "x"}))
+            .call_tool(
+                &operator(),
+                &s,
+                "echo",
+                json!({"text": "x"}),
+                CancellationToken::new(),
+            )
             .await
             .unwrap();
         assert_eq!(text_of(&r), "hello");
@@ -617,9 +625,15 @@ mod tests {
         let f = face(&["echo"], true);
         let s = session(&f);
         assert_eq!(
-            f.call_tool(&operator(), &s, "hidden", json!({}))
-                .await
-                .unwrap_err(),
+            f.call_tool(
+                &operator(),
+                &s,
+                "hidden",
+                json!({}),
+                CancellationToken::new()
+            )
+            .await
+            .unwrap_err(),
             UnknownTool("hidden".to_string())
         );
     }
@@ -629,7 +643,13 @@ mod tests {
         let f = face(&["broken"], true);
         let s = session(&f);
         let r = f
-            .call_tool(&operator(), &s, "broken", json!({}))
+            .call_tool(
+                &operator(),
+                &s,
+                "broken",
+                json!({}),
+                CancellationToken::new(),
+            )
             .await
             .unwrap();
         assert_eq!(r.is_error, Some(true));
@@ -646,7 +666,7 @@ mod tests {
         let s = session(&f);
         assert!(f.list_tools(&operator(), &s).await.is_empty());
         assert!(f
-            .call_tool(&operator(), &s, "echo", json!({}))
+            .call_tool(&operator(), &s, "echo", json!({}), CancellationToken::new())
             .await
             .is_err());
     }
@@ -680,7 +700,7 @@ mod tests {
     async fn notify_reaches_open_streams_and_is_a_no_op_when_disabled() {
         let f = face(&["echo"], true);
         let s = session(&f);
-        let mut rx = f.sessions().attach_stream(&s.id).unwrap();
+        let mut rx = f.sessions().attach_stream(&operator(), &s.id).unwrap();
         f.notify_tools_list_changed();
         assert_eq!(
             rx.recv().await.unwrap().method,
@@ -689,7 +709,7 @@ mod tests {
 
         let off = face(&["echo"], false);
         let s2 = session(&off);
-        let mut rx2 = off.sessions().attach_stream(&s2.id).unwrap();
+        let mut rx2 = off.sessions().attach_stream(&operator(), &s2.id).unwrap();
         off.notify_tools_list_changed();
         assert!(rx2.try_recv().is_err(), "disabled face must not broadcast");
     }

@@ -70,8 +70,13 @@ pub fn convert_tool_choice(choice: &Value) -> Option<ToolChoice> {
 ///
 /// System messages are excluded here — they are handled separately by
 /// [`extract_system_prompt`]. Only "user" and "assistant" roles are mapped.
-fn convert_messages(messages: &[ChatMessage]) -> Vec<UnifiedMessage> {
-    messages
+fn convert_messages(messages: &[ChatMessage]) -> Result<Vec<UnifiedMessage>, ApiError> {
+    if messages.iter().any(|msg| msg.role == "developer") {
+        return Err(ApiError::BadRequest(
+            "developer role is not supported by the unified provider contract".to_string(),
+        ));
+    }
+    Ok(messages
         .iter()
         .filter_map(|msg| {
             let content_text = msg.content.as_deref().unwrap_or("");
@@ -126,18 +131,53 @@ fn convert_messages(messages: &[ChatMessage]) -> Vec<UnifiedMessage> {
                         is_error: false,
                     })
                 }
+                "system" => None,
                 _ => None,
             }
         })
-        .collect()
+        .collect())
 }
 
-/// Extract the first system message's content as the system prompt.
+#[cfg(test)]
+mod gx6_tests {
+    use super::*;
+
+    #[test]
+    fn systems_are_ordered_context_once_and_developer_is_explicitly_rejected() {
+        let messages: Vec<ChatMessage> = serde_json::from_value(json!([
+            {"role":"system","content":"first"},
+            {"role":"user","content":"question"},
+            {"role":"system","content":"second"}
+        ]))
+        .unwrap();
+        assert_eq!(convert_messages(&messages).unwrap().len(), 1);
+        assert_eq!(
+            extract_system_prompt(&messages).as_deref(),
+            Some("first\n\nsecond")
+        );
+        let developer: Vec<ChatMessage> = serde_json::from_value(json!([
+            {"role":"developer","content":"distinct authority"}
+        ]))
+        .unwrap();
+        assert!(convert_messages(&developer).is_err());
+    }
+}
+
+/// Extract all system contents in order as the provider system prompt.
 fn extract_system_prompt(messages: &[ChatMessage]) -> Option<String> {
-    messages
-        .iter()
-        .find(|m| m.role == "system")
-        .and_then(|m| m.content.clone())
+    let mut system_parts = Vec::new();
+    for msg in messages.iter() {
+        if msg.role == "system" {
+            if let Some(content) = &msg.content {
+                system_parts.push(content.clone());
+            }
+        }
+    }
+    if system_parts.is_empty() {
+        None
+    } else {
+        Some(system_parts.join("\n\n"))
+    }
 }
 
 /// Handle a passthrough (non-agent) completion request.
@@ -156,7 +196,7 @@ pub async fn handle(
         .clone();
 
     // Convert messages
-    let unified_messages = convert_messages(&req.messages);
+    let unified_messages = convert_messages(&req.messages)?;
     let system_prompt = extract_system_prompt(&req.messages);
 
     // Build payload

@@ -79,18 +79,51 @@ pub(super) fn markdown_to_telegram_html(text: &str) -> String {
     repair_html_tags(&out)
 }
 
+#[cfg(test)]
+mod gx6_tests {
+    use super::*;
+
+    #[test]
+    fn telegram_code_is_literal_and_slack_fences_keep_their_content() {
+        assert_eq!(
+            markdown_to_telegram_html("`**x** <&> [x](url)` **bold** `~~x~~`"),
+            "<code>**x** &lt;&amp;&gt; [x](url)</code> <b>bold</b> <code>~~x~~</code>"
+        );
+        assert_eq!(
+            markdown_to_telegram_html("`unclosed **bold**"),
+            "`unclosed <b>bold</b>"
+        );
+        assert_eq!(
+            markdown_to_slack_mrkdwn("```rust\nlet x = 1;\n```"),
+            "```\nlet x = 1;\n```"
+        );
+    }
+}
+
 /// Apply Telegram-specific inline formatting (bold, italic, strikethrough,
 /// code, links) to already-HTML-escaped text.
 fn telegram_inline(s: &str) -> String {
-    let mut s = s.to_string();
-    s = replace_paired_marker(&s, "**", "<b>", "</b>");
-    s = replace_single_asterisk_italic(&s, "<i>", "</i>");
-    s = replace_paired_marker(&s, "~~", "<s>", "</s>");
-    s = replace_paired_marker(&s, "`", "<code>", "</code>");
-    s = replace_links(&s, |link_text, url| {
-        format!("<a href=\"{url}\">{link_text}</a>")
-    });
-    s
+    let format_text = |text: &str| {
+        let text = replace_paired_marker(text, "**", "<b>", "</b>");
+        let text = replace_single_asterisk_italic(&text, "<i>", "</i>");
+        let text = replace_paired_marker(&text, "~~", "<s>", "</s>");
+        replace_links(&text, |label, url| format!("<a href=\"{url}\">{label}</a>"))
+    };
+    let mut result = String::with_capacity(s.len());
+    let mut rest = s;
+    while let Some(open) = rest.find('`') {
+        let after_open = &rest[open + 1..];
+        let Some(close) = after_open.find('`') else {
+            break;
+        };
+        result.push_str(&format_text(&rest[..open]));
+        result.push_str("<code>");
+        result.push_str(&after_open[..close]);
+        result.push_str("</code>");
+        rest = &after_open[close + 1..];
+    }
+    result.push_str(&format_text(rest));
+    result
 }
 
 // ---------------------------------------------------------------------------
@@ -104,14 +137,8 @@ pub(super) fn markdown_to_slack_mrkdwn(text: &str) -> String {
 
     for block in &blocks {
         match block {
-            BlockElement::CodeBlock { lang, code } => {
-                // Slack supports ``` code blocks natively.
-                if lang.is_empty() {
-                    out.push_str(&format!("```\n{code}```"));
-                } else {
-                    // Slack ignores lang tag but we include it for readability.
-                    out.push_str(&format!("```\n{code}```"));
-                }
+            BlockElement::CodeBlock { code, .. } => {
+                out.push_str(&format!("```\n{code}```"));
             }
             BlockElement::Heading { text: h, .. } => {
                 ensure_newline(&mut out);
