@@ -436,49 +436,60 @@ pub async fn handle_start(
     debug!("Handling channel.start for {}", channel_id);
 
     // Re-create channel with latest config from app config (Panel UI saves here)
-    let config_snapshot = app_config.read().await;
-    if let Some(channel_config) = config_snapshot.channels.get(channel_id.as_str()) {
-        // Resolve channel type: explicit "type" field, or fall back to the channel id
-        let channel_type = channel_config
-            .get("type")
-            .and_then(|v| v.as_str())
-            .map_or_else(|| channel_id.as_str().to_string(), |s| s.to_string());
+    let (channel_type, mut clean_config) = {
+        let config_snapshot = app_config.read().await;
+        match config_snapshot.channels.get(channel_id.as_str()) {
+            Some(channel_config) => {
+                // Resolve channel type: explicit "type" field, or fall back to the channel id
+                let channel_type = channel_config
+                    .get("type")
+                    .and_then(|v| v.as_str())
+                    .map_or_else(|| channel_id.as_str().to_string(), |s| s.to_string());
 
-        // Strip the "type" field from config before passing to constructor
-        let mut clean_config = channel_config.clone();
-        if let serde_json::Value::Object(ref mut map) = clean_config {
-            map.remove("type");
-        }
-
-        // Inject secrets from vault into the config
-        inject_channel_secrets(channel_id.as_str(), &mut clean_config, &vault);
-
-        if let Some(mut new_channel) =
-            create_channel_from_config(channel_id.as_str(), &channel_type, clean_config.clone())
-                .await
-        {
-            // Re-attach ToolCatalog for telegram channels so slash commands are registered
-            if channel_type == "telegram" {
-                use crate::gateway::interfaces::telegram::{
-                    parse_telegram_channel_config, TelegramChannel,
-                };
-                if let Ok(tg_config) = parse_telegram_channel_config(clean_config) {
-                    let mut tg_channel = TelegramChannel::new(channel_id.as_str(), tg_config);
-                    if let Some(reg) = get_telegram_tool_registry() {
-                        tg_channel.set_tool_registry(reg);
-                    }
-                    new_channel = Box::new(tg_channel);
+                // Strip the "type" field from config before passing to constructor
+                let mut clean_config = channel_config.clone();
+                if let serde_json::Value::Object(ref mut map) = clean_config {
+                    map.remove("type");
                 }
+
+                (channel_type, clean_config)
             }
-            // Replace old channel with freshly configured one
-            registry.register(new_channel).await;
-            debug!(
-                "Replaced channel {} with fresh config from app config",
-                channel_id
-            );
+            None => {
+                return JsonRpcResponse::error(
+                    request.id,
+                    INTERNAL_ERROR,
+                    &format!("Channel {} not found in config", channel_id),
+                );
+            }
         }
+    };
+
+    // Inject secrets from vault into the config
+    inject_channel_secrets(channel_id.as_str(), &mut clean_config, &vault);
+
+    if let Some(mut new_channel) =
+        create_channel_from_config(channel_id.as_str(), &channel_type, clean_config.clone()).await
+    {
+        // Re-attach ToolCatalog for telegram channels so slash commands are registered
+        if channel_type == "telegram" {
+            use crate::gateway::interfaces::telegram::{
+                parse_telegram_channel_config, TelegramChannel,
+            };
+            if let Ok(tg_config) = parse_telegram_channel_config(clean_config) {
+                let mut tg_channel = TelegramChannel::new(channel_id.as_str(), tg_config);
+                if let Some(reg) = get_telegram_tool_registry() {
+                    tg_channel.set_tool_registry(reg);
+                }
+                new_channel = Box::new(tg_channel);
+            }
+        }
+        // Replace old channel with freshly configured one
+        registry.register(new_channel).await;
+        debug!(
+            "Replaced channel {} with fresh config from app config",
+            channel_id
+        );
     }
-    drop(config_snapshot);
 
     match registry.start_channel(&channel_id).await {
         Ok(()) => JsonRpcResponse::success(
@@ -744,6 +755,12 @@ pub async fn handle_create(
             .insert(id.clone(), Value::Object(config_to_save));
         if let Err(e) = app_cfg.save_incremental(&["channels"]) {
             tracing::error!(error = %e, "Failed to persist channels config to disk");
+            app_cfg.channels.remove(&id);
+            return JsonRpcResponse::error(
+                request.id,
+                INTERNAL_ERROR,
+                "Failed to persist channel configuration",
+            );
         }
     }
 
@@ -865,6 +882,25 @@ mod tests {
         let slot = telegram_tool_registry_slot();
         assert_eq!(slot.id(), "gateway/telegram-tool-registry");
         assert!(matches!(slot.missing(), MissingSemantics::FailsClosed));
+    }
+
+    #[test]
+    fn create_persists_before_creating_or_registering_a_runtime_channel() {
+        let source = include_str!("channel.rs");
+        let handler = source
+            .split("pub async fn handle_create(")
+            .nth(1)
+            .unwrap()
+            .split("/// Handle channel.delete")
+            .next()
+            .unwrap();
+        let persist = handler.find("app_cfg.save_incremental").unwrap();
+        let create = handler.find("create_channel_from_config(").unwrap();
+        let register = handler.find("registry.register(ch).await").unwrap();
+        assert!(persist < create && create < register);
+        let failure_path = &handler[persist..create];
+        assert!(failure_path.contains("app_cfg.channels.remove(&id)"));
+        assert!(failure_path.contains("return JsonRpcResponse::error("));
     }
 
     #[test]
