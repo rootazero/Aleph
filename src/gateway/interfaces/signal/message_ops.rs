@@ -13,6 +13,8 @@ use futures_util::StreamExt;
 use reqwest::Client;
 use reqwest_eventsource::{Event, EventSource};
 use reqwest_legacy as reqwest;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::watch;
 use tokio::task::JoinHandle;
@@ -62,9 +64,18 @@ impl SignalMonitor {
         channel_id: ChannelId,
         inbound_tx: InboundMessageSender,
         shutdown_rx: watch::Receiver<bool>,
+        retry_exhausted: Arc<AtomicBool>,
     ) -> JoinHandle<()> {
         tokio::spawn(async move {
-            Self::run_sse_loop(client, config, channel_id, inbound_tx, shutdown_rx).await;
+            Self::run_sse_loop(
+                client,
+                config,
+                channel_id,
+                inbound_tx,
+                shutdown_rx,
+                retry_exhausted,
+            )
+            .await;
         })
     }
 
@@ -75,6 +86,7 @@ impl SignalMonitor {
         channel_id: ChannelId,
         inbound_tx: InboundMessageSender,
         mut shutdown_rx: watch::Receiver<bool>,
+        retry_exhausted: Arc<AtomicBool>,
     ) {
         let EventSourceConfig {
             reconnect_delay_ms,
@@ -93,7 +105,6 @@ impl SignalMonitor {
             "Signal SSE monitor started"
         );
         let mut retry_count = 0u32;
-        let mut retry_exhausted = false;
 
         loop {
             let connect_started = std::time::Instant::now();
@@ -128,7 +139,7 @@ impl SignalMonitor {
                                     retry_count,
                                     "Signal SSE max retries exceeded, stopping monitor"
                                 );
-                                retry_exhausted = true;
+                                retry_exhausted.store(true, Ordering::Relaxed);
                                 break;
                             }
 
@@ -149,7 +160,7 @@ impl SignalMonitor {
             }
         }
 
-        if retry_exhausted {
+        if retry_exhausted.load(Ordering::Relaxed) {
             tracing::error!("Signal SSE monitor stopped due to retry exhaustion");
             // Signal retry exhaustion by sending an error through the inbound channel.
             // The receiver side treats a closed/errored sender as a permanent failure.
@@ -754,6 +765,7 @@ mod tests {
             ChannelId::new("signal"),
             inbound_tx,
             shutdown_rx,
+            std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
         );
 
         assert!(!handle.is_finished());

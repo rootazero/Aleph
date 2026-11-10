@@ -211,6 +211,23 @@ impl Channel for CliChannel {
         // Create a channel for lines from the blocking reader thread
         let (line_tx, mut line_rx) = mpsc::channel::<String>(10);
 
+        // Spawn blocking reader thread for stdin. Reading stdin blocks, so it
+        // must not run on the async runtime: the thread hands every line to
+        // the async task over the channel above.
+        std::thread::spawn(move || {
+            let stdin = io::stdin();
+            for line in stdin.lock().lines() {
+                match line {
+                    Ok(text) => {
+                        if line_tx.blocking_send(text).is_err() {
+                            break;
+                        }
+                    }
+                    Err(_) => break,
+                }
+            }
+        });
+
         // Spawn async task to process lines
         tokio::spawn(async move {
             loop {
