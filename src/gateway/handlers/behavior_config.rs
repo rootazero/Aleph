@@ -85,6 +85,11 @@ pub async fn handle_update(
     {
         let mut cfg = config.write().await;
 
+        // Keep the previous section so a failed save can put it back — the
+        // whole Option, since a failed request must not even leave behind a
+        // freshly initialised `behavior`.
+        let previous = cfg.behavior.clone();
+
         // Initialize behavior if None
         if cfg.behavior.is_none() {
             cfg.behavior = Some(BehaviorConfig::default());
@@ -95,6 +100,7 @@ pub async fn handle_update(
         }
 
         if let Err(e) = cfg.save_incremental(&["behavior"]) {
+            cfg.behavior = previous;
             return JsonRpcResponse::error(
                 request.id,
                 INTERNAL_ERROR,
