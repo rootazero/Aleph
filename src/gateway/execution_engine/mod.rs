@@ -541,6 +541,10 @@ pub(crate) struct ActiveRun {
     pub(crate) steps_completed: u32,
     pub(crate) current_tool: Option<String>,
     pub(crate) cancel_tx: Option<mpsc::Sender<()>>,
+    /// The run's fine-grained cancellation token. `ExecutionEngine::cancel`
+    /// marks it, so a dispatch that does not run the run loop's select — the
+    /// slash-command fast path — still observes a stop.
+    pub(crate) cancel_token: tokio_util::sync::CancellationToken,
     pub(crate) seq_counter: AtomicU64,
     pub(crate) chunk_counter: AtomicU32,
 }

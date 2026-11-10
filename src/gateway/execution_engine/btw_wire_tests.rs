@@ -1961,16 +1961,9 @@ async fn the_reasoning_preview_is_never_badged_though_it_follows_the_latch() {
     );
 }
 
-/// The control for `a_streamed_side_answer_is_badged_when_it_settles_with_nothing_left_to_write`:
-/// the same edit-capable rig, the same stream, an ordinary message — and **no
-/// edit at all**.
-///
-/// The fix issues an edit that would otherwise not happen. Asserting only that
-/// an ordinary settle is unbadged would pass even if it had started making an
-/// extra API call on every streamed reply on every channel that can edit; this
-/// asserts the byte-identical no-op that claim rests on.
+/// Ordinary streams must also settle: unchanged body bytes still have a cursor to remove.
 #[tokio::test]
-async fn an_ordinary_streamed_answer_settles_without_an_extra_edit() {
+async fn an_ordinary_streamed_answer_settles_without_a_cursor_or_badge() {
     let rig = ChannelRig::editing().await;
     rig.stream_then_complete("the file you are thinking of is config.toml");
 
@@ -1981,20 +1974,10 @@ async fn an_ordinary_streamed_answer_settles_without_an_extra_edit() {
         sent.contains("config.toml"),
         "the streamed answer never reached the channel: {sent:?}"
     );
-    // Give the settle every chance to happen before concluding it did not.
-    tokio::time::sleep(std::time::Duration::from_millis(150)).await;
-    assert!(
-        rig.edits
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .is_empty(),
-        "an ordinary run took the `StreamAction::Done` arm and issued an edit \
-         anyway: {:?}. That arm must stay a no-op unless the badge would change \
-         the text.",
-        rig.edits
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-    );
+    let settled = rig.wait_for_edit().await;
+    assert_eq!(settled, "the file you are thinking of is config.toml");
+    assert!(!settled.contains('▍'));
+    assert!(!settled.starts_with("💬 "));
 }
 
 /// `/help` on a channel really carries the `/btw` line — asserted on the wire,
