@@ -70,11 +70,38 @@ impl InboundMessageRouter {
         mut ctx: InboundContext,
     ) -> Result<InboundContext, RoutingError> {
         let channel_id = ctx.message.channel_id.as_str();
-        let channel_config = self
+        let mut channel_config = self
             .channel_configs
             .get(channel_id)
             .cloned()
             .unwrap_or_default();
+        let mut telegram_chat_id = None;
+        if let Some(handle) = self.channel_registry.get(&ctx.message.channel_id).await {
+            let channel = handle.read().await;
+            if let Some(telegram) = channel.as_any().and_then(|channel| {
+                channel.downcast_ref::<crate::gateway::interfaces::telegram::TelegramChannel>()
+            }) {
+                let config = telegram
+                    .inbound_config(&ctx.message)
+                    .map_err(|error| RoutingError::PermissionDenied(error.to_string()))?;
+                let effective = ChannelConfig::from(config);
+                channel_config.dm_policy = effective.dm_policy;
+                channel_config.group_policy = effective.group_policy;
+                channel_config.allow_from = effective.allow_from;
+                channel_config.group_allow_from = effective.group_allow_from;
+                channel_config.bot_name = effective.bot_name;
+                channel_config.require_mention = telegram.require_mention(&config.account_id);
+                telegram_chat_id = Some(
+                    crate::gateway::interfaces::telegram::delivery::parse_conversation_id(
+                        ctx.message.conversation_id.as_str(),
+                    )
+                    .map_err(|error| RoutingError::PermissionDenied(error.to_string()))?
+                    .0
+                     .0
+                    .to_string(),
+                );
+            }
+        }
 
         if ctx.message.is_group {
             // Group message permission check
@@ -85,7 +112,9 @@ impl InboundMessageRouter {
                     ));
                 }
                 GroupPolicy::Allowlist => {
-                    let chat_id = ctx.message.conversation_id.as_str();
+                    let chat_id = telegram_chat_id
+                        .as_deref()
+                        .unwrap_or(ctx.message.conversation_id.as_str());
                     if !channel_config.group_allow_from.iter().any(|a| a == chat_id) {
                         return Err(RoutingError::PermissionDenied(
                             "Group not in allowlist".to_string(),
@@ -94,7 +123,12 @@ impl InboundMessageRouter {
                 }
                 GroupPolicy::Open => {
                     // Check mention requirement
-                    if channel_config.require_mention {
+                    if channel_config
+                        .room_require_mention
+                        .get(ctx.message.conversation_id.as_str())
+                        .copied()
+                        .unwrap_or(channel_config.require_mention)
+                    {
                         // A channel adapter that already validated the mention
                         // with platform-native signals (real @username,
                         // reply-to-bot, command targeting) tags the message with
