@@ -352,6 +352,10 @@ pub(crate) fn remove_event_groups(
 /// `needle` filters by substring across the group's action fields; `None`
 /// removes every entry for the event. Returns how many groups were removed.
 pub(crate) fn remove_user_hooks(event: &str, needle: Option<&str>) -> Result<usize, String> {
+    // Same guard as `append_user_hook`: the read-modify-write of the hooks
+    // file must not interleave with a concurrent append.
+    let _guard = HOOKS_MUTEX.lock().unwrap();
+
     let (path, _exists, mut events) = read_hooks_file()?;
     let removal = match needle {
         Some(n) => HookRemoval::Command(n.to_string()),

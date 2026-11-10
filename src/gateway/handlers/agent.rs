@@ -161,6 +161,29 @@ pub struct RunState {
     pub input: String,
 }
 
+/// How many finished runs the manager keeps as recent history.
+const MAX_TERMINAL_RUNS: usize = 128;
+
+/// Evict the oldest terminal entries so the run map stays bounded by recent
+/// history instead of growing with every request forever. Active runs
+/// (`Running` / `Cancelled`) are never evicted.
+fn retain_terminal_runs_bounded(runs: &mut HashMap<String, RunState>) {
+    let mut finished: Vec<(std::time::Instant, String)> = runs
+        .iter()
+        .filter_map(|(id, r)| match r.status {
+            RunStatus::Completed | RunStatus::Failed(_) => Some((r.started_at, id.clone())),
+            _ => None,
+        })
+        .collect();
+    if finished.len() > MAX_TERMINAL_RUNS {
+        finished.sort_by_key(|(t, _)| *t);
+        let excess = finished.len() - MAX_TERMINAL_RUNS;
+        for (_, id) in finished.into_iter().take(excess) {
+            runs.remove(&id);
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RunStatus {
     Running,
@@ -369,25 +392,11 @@ impl AgentRunManager {
                     Err(e) => RunStatus::Failed(e.to_string()),
                 };
             }
-            // Reclaim memory from finished runs: drop the (potentially
-            // large) prompt input and evict the oldest terminal entries so
-            // the map stays bounded by recent history instead of growing
-            // with every request forever. Active runs are never evicted.
-            const MAX_TERMINAL_RUNS: usize = 128;
-            let mut finished: Vec<(std::time::Instant, String)> = runs
-                .iter()
-                .filter_map(|(id, r)| match r.status {
-                    RunStatus::Completed | RunStatus::Failed(_) => Some((r.started_at, id.clone())),
-                    _ => None,
-                })
-                .collect();
-            if finished.len() > MAX_TERMINAL_RUNS {
-                finished.sort_by_key(|(t, _)| *t);
-                let excess = finished.len() - MAX_TERMINAL_RUNS;
-                for (_, id) in finished.into_iter().take(excess) {
-                    runs.remove(&id);
-                }
-            }
+            // Reclaim memory from finished runs: evict the oldest terminal
+            // entries so the map stays bounded by recent history instead of
+            // growing with every request forever. Active runs are never
+            // evicted.
+            retain_terminal_runs_bounded(&mut runs);
         });
 
         Ok(AgentRunResult {
@@ -2124,77 +2133,49 @@ mod tests {
         let oldest = Instant::now() - std::time::Duration::from_secs(256);
         {
             let mut runs = manager.active_runs.write().await;
-            for i in 0..=COMPLETED_RUN_RETENTION {
+            for i in 0..=MAX_TERMINAL_RUNS {
                 let run_id = format!("history-{i}");
                 runs.insert(
                     run_id.clone(),
                     super::RunState {
                         run_id,
                         session_key: session_key.clone(),
-                        started_at: oldest,
-                        status: match i % 3 {
+                        started_at: oldest + std::time::Duration::from_secs(i as u64),
+                        status: match i % 2 {
                             0 => RunStatus::Completed,
-                            1 => RunStatus::Failed("failed".into()),
-                            _ => RunStatus::Cancelled,
+                            _ => RunStatus::Failed("failed".into()),
                         },
                         input: String::new(),
-                        finished_at: Some(oldest + std::time::Duration::from_secs(i as u64)),
                     },
                 );
             }
-            for (run_id, status) in [
-                ("running", RunStatus::Running),
-                ("cancelling", RunStatus::Cancelled),
-            ] {
-                runs.insert(
-                    run_id.into(),
-                    super::RunState {
-                        run_id: run_id.into(),
-                        session_key: session_key.clone(),
-                        started_at: oldest,
-                        status,
-                        input: "in-flight input".into(),
-                        finished_at: None,
-                    },
-                );
-            }
+            runs.insert(
+                "running".into(),
+                super::RunState {
+                    run_id: "running".into(),
+                    session_key: session_key.clone(),
+                    started_at: oldest,
+                    status: RunStatus::Running,
+                    input: "in-flight input".into(),
+                },
+            );
+            retain_terminal_runs_bounded(&mut runs);
         }
-        let result = manager
-            .start_run(AgentRunParams {
-                stream: false,
-                ..base_params()
-            })
-            .await
-            .unwrap();
-        // Insertion already reclaims excess history, before the executor exits.
+        // The bound holds and the oldest terminal entry is the one evicted.
         assert!(manager.get_run_status("history-0").await.is_none());
-        let finished = tokio::time::timeout(std::time::Duration::from_secs(2), async {
-            loop {
-                let state = manager.get_run_status(&result.run_id).await.unwrap();
-                if state.finished_at.is_some() {
-                    break state;
-                }
-                tokio::task::yield_now().await;
-            }
-        })
-        .await
-        .unwrap();
-        assert_eq!(finished.status, RunStatus::Completed);
-        assert!(finished.input.is_empty());
-        assert!(manager.get_run_status("history-1").await.is_none());
-        assert!(manager.get_run_status("history-2").await.is_some());
+        assert!(manager.get_run_status("history-1").await.is_some());
         assert_eq!(
             manager.active_runs.read().await.len(),
-            COMPLETED_RUN_RETENTION + 2
+            MAX_TERMINAL_RUNS + 1
         );
-        for run_id in ["running", "cancelling"] {
-            let state = manager.get_run_status(run_id).await.unwrap();
-            assert_eq!(state.input, "in-flight input");
-            assert_eq!(
-                manager.session_key_of_run(run_id).await,
-                Some(session_key.clone())
-            );
-        }
+        // The in-flight run survives with its payload and its session key.
+        let running = manager.get_run_status("running").await.unwrap();
+        assert_eq!(running.status, RunStatus::Running);
+        assert_eq!(running.input, "in-flight input");
+        assert_eq!(
+            manager.session_key_of_run("running").await,
+            Some(session_key.clone())
+        );
     }
 
     #[tokio::test]

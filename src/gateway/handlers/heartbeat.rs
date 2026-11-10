@@ -395,7 +395,22 @@ pub async fn handle_update(
         }
     }
     if let Some(val) = params.get("active_hours") {
-        updates.active_hours = serde_json::from_value(val.clone()).ok();
+        // A malformed value must be reported, not silently dropped: the old
+        // `.ok()` turned a bad payload into "no change" while the RPC still
+        // answered success. `null` still means "clear the schedule".
+        match serde_json::from_value::<
+            Option<crate::tasks::shared::active_hours::ActiveHoursSchedule>,
+        >(val.clone())
+        {
+            Ok(active_hours) => updates.active_hours = Some(active_hours),
+            Err(_) => {
+                return JsonRpcResponse::error(
+                    request.id,
+                    INVALID_PARAMS,
+                    "Invalid active_hours format",
+                );
+            }
+        }
     }
     match parse_failure_alert(params) {
         Ok(alert) => updates.failure_alert = alert,
