@@ -263,17 +263,23 @@ impl MessageProjector {
     pub async fn flush(&self, timeout: Duration) -> Result<(), FlushTimeout> {
         self.ensure_drain();
         let (reply_tx, reply_rx) = oneshot::channel();
-        if self
-            .sender()
-            .send(ProjectorMsg::Flush(reply_tx))
-            .await
-            .is_err()
-        {
-            return Err(FlushTimeout);
-        }
-        match tokio::time::timeout(timeout, reply_rx).await {
-            Ok(Ok(())) => Ok(()),
-            Ok(Err(_)) | Err(_) => Err(FlushTimeout),
+        let send_and_wait = async {
+            if self
+                .sender()
+                .send(ProjectorMsg::Flush(reply_tx))
+                .await
+                .is_err()
+            {
+                return Err(FlushTimeout);
+            }
+            match reply_rx.await {
+                Ok(()) => Ok(()),
+                Err(_) => Err(FlushTimeout),
+            }
+        };
+        match tokio::time::timeout(timeout, send_and_wait).await {
+            Ok(result) => result,
+            Err(_) => Err(FlushTimeout),
         }
     }
 
@@ -318,11 +324,17 @@ fn spawn_drain(
         // Lives in the task rather than on the struct because the task is the
         // only reader and the only writer — see the module doc's "single
         // writer" note.
+        const RUN_START_CACHE_CAPACITY: usize = 1024;
         let mut run_start: HashMap<SessionId, EventSeq> = HashMap::new();
         while let Some(msg) = rx.recv().await {
             match msg {
                 ProjectorMsg::Event(id, rec) => {
                     if matches!(rec.event, SessionEvent::RunStarted { .. }) {
+                        if run_start.len() >= RUN_START_CACHE_CAPACITY {
+                            if let Some(evict_key) = run_start.keys().next().cloned() {
+                                run_start.remove(&evict_key);
+                            }
+                        }
                         run_start.insert(id.clone(), rec.seq);
                     }
                     let events = resolve_events(&pinned_events);

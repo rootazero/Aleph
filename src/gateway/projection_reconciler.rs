@@ -378,10 +378,10 @@ impl ProjectionReconciler {
             // (pinned in `without_a_registrar_the_heal_is_counted_not_faked`).
             let Some(registrar) = &self.epoch_registrar else {
                 tracing::warn!(
-                    session = ?id,
-                    current,
-                    "epoch heal: forked child unregistered, and this deployment has no \
-                     epoch registrar to register it through"
+                        session = ?id,
+                        current,
+                        "epoch heal: forked child unregistered, and this deployment has no \
+                         epoch registrar to register it through"
                 );
                 report.epoch_heal_skipped += 1;
                 continue;
@@ -402,8 +402,14 @@ impl ProjectionReconciler {
             // A legacy (pre-P1) parent has no attribution and stamps nothing,
             // the same carve-out resume takes.
             let parent = self.forked_parent(id, parent_session_id);
-            let inherited = match &parent {
-                Some(parent) => self.persisted_attribution(id, parent).await,
+            let inherited: Option<crate::scope::ScopeAttribution> = match &parent {
+                Some(parent) => match self.persisted_attribution(id, parent).await {
+                    Ok(attribution) => attribution,
+                    Err(_) => {
+                        report.errored += 1;
+                        continue;
+                    }
+                },
                 None => None,
             };
             match crate::scope::with_scope(inherited, registrar.register_epoch(id)).await {
@@ -450,37 +456,37 @@ impl ProjectionReconciler {
     }
 
     /// The owner/scope the parent's session row carries, for the child to
-    /// inherit — `None` when the row cannot be read or is a legacy row with no
-    /// attribution (both columns are required; same fail-closed derivation as
-    /// `ScopeAttribution::from_persisted` everywhere else). Logged when the
-    /// parent should have been there and was not, so a child that ends up
-    /// unattributed is a child somebody can find in the boot log.
+    /// inherit — `Ok(None)` for a missing or legacy row with no attribution
+    /// (both columns are required; same fail-closed derivation as
+    /// `ScopeAttribution::from_persisted` everywhere else). Read errors are
+    /// logged and returned so the caller defers registration instead of
+    /// creating an unattributed child.
     async fn persisted_attribution(
         &self,
         child: &SessionId,
         parent: &SessionId,
-    ) -> Option<crate::scope::ScopeAttribution> {
+    ) -> Result<Option<crate::scope::ScopeAttribution>, anyhow::Error> {
         match self.session_store.get_metadata(parent).await {
-            Ok(Some(meta)) => crate::scope::ScopeAttribution::from_persisted(
+            Ok(Some(meta)) => Ok(crate::scope::ScopeAttribution::from_persisted(
                 meta.owner_user_id.as_deref(),
                 meta.scope_id.as_deref(),
-            ),
+            )),
             Ok(None) => {
                 tracing::warn!(
                     session = ?child,
                     parent = ?parent,
                     "epoch heal: parent row not found; child registered without attribution"
                 );
-                None
+                Ok(None)
             }
             Err(e) => {
                 tracing::warn!(
                     session = ?child,
                     parent = ?parent,
                     error = %e,
-                    "epoch heal: parent row unreadable; child registered without attribution"
+                    "epoch heal: parent row unreadable; deferring child registration"
                 );
-                None
+                Err(e.into())
             }
         }
     }
@@ -930,6 +936,35 @@ mod tests {
             86_400,
             Some(manager.clone() as Arc<dyn SessionEpochRegistrar>),
         );
+        // A corrupt optional text column fails metadata decoding, not epoch lookup.
+        let conn = rusqlite::Connection::open(temp.path().join("heal-attr.db")).unwrap();
+        conn.execute(
+            "UPDATE sessions SET label = X'80' WHERE key = ?1",
+            [&parent.to_key_string()],
+        )
+        .unwrap();
+        assert!(session_store.get_metadata(&parent).await.is_err());
+        let groups = event_store.load_run_markers().await.unwrap();
+        let mut deferred = ReconcileReport::default();
+        reconciler.heal_split_epochs(&groups, &mut deferred).await;
+        assert_eq!(deferred.errored, 1, "{deferred:?}");
+        assert_eq!(deferred.epochs_healed, 0, "{deferred:?}");
+        assert_eq!(
+            session_store
+                .get_current_epoch(&parent.base_key_pattern())
+                .await
+                .unwrap(),
+            0
+        );
+        assert!(manager.get_metadata(&child).await.unwrap().is_none());
+        assert!(manager.get_metadata(&side).await.unwrap().is_some());
+        conn.execute(
+            "UPDATE sessions SET label = ?1 WHERE key = ?2",
+            rusqlite::params![parent_meta.label, parent.to_key_string()],
+        )
+        .unwrap();
+        drop(conn);
+
         let report = reconciler.reconcile_candidates().await;
         assert_eq!(report.epochs_healed, 1, "{report:?}");
 
