@@ -96,7 +96,6 @@ impl IMessageChannel {
                 stream_protocol: Default::default(),
             },
         };
-
         Self {
             info,
             config,
@@ -125,10 +124,16 @@ impl IMessageChannel {
     async fn start_polling(&mut self) -> ChannelResult<()> {
         let db_path = self.config.db_path();
 
-        // Open database
-        let mut db = MessagesDb::open(&db_path).map_err(|e| {
-            ChannelError::ConfigError(format!("Failed to open Messages database: {e}"))
-        })?;
+        // Open database on a blocking worker so slow disk / SQLite lock waits
+        // never stall an async runtime thread.
+        let mut db = tokio::task::spawn_blocking(move || MessagesDb::open(&db_path))
+            .await
+            .map_err(|e| {
+                ChannelError::ConfigError(format!("Messages database worker failed: {e}"))
+            })?
+            .map_err(|e| {
+                ChannelError::ConfigError(format!("Failed to open Messages database: {e}"))
+            })?;
 
         // Apply attachment handling policy from config.
         db.set_attachment_policy(
@@ -167,8 +172,9 @@ impl IMessageChannel {
 
             while running.load(Ordering::SeqCst) {
                 // Poll for new messages, capturing the watermark to persist.
-                let (messages, watermark) = {
-                    let mut db_lock = db.lock().await;
+                let worker_db = db.clone();
+                let batch = tokio::task::spawn_blocking(move || {
+                    let mut db_lock = worker_db.blocking_lock();
                     if let Some(ref mut db) = *db_lock {
                         match db.poll_new_messages() {
                             Ok(msgs) => (msgs, db.last_rowid()),
@@ -179,6 +185,14 @@ impl IMessageChannel {
                         }
                     } else {
                         (vec![], 0)
+                    }
+                })
+                .await;
+                let (messages, watermark) = match batch {
+                    Ok(batch) => batch,
+                    Err(e) => {
+                        error!("Messages database worker failed: {e}");
+                        break;
                     }
                 };
 
@@ -263,10 +277,11 @@ impl Channel for IMessageChannel {
         }
 
         // Close database
-        {
-            let mut db_lock = self.db.lock().await;
-            *db_lock = None;
-        }
+        let db = self.db.clone();
+        let _ = tokio::task::spawn_blocking(move || {
+            *db.blocking_lock() = None;
+        })
+        .await;
 
         self.channel_state
             .set_status(ChannelStatus::Disconnected)
@@ -334,6 +349,12 @@ impl Channel for IMessageChannel {
 
             // Send attachments
             for attachment in &message.attachments {
+                if attachment.path.is_none() {
+                    return Err(ChannelError::SendFailed(
+                        "iMessage transport requires attachment.path; data/url not supported"
+                            .to_string(),
+                    ));
+                }
                 if let Some(path) = &attachment.path {
                     if !running.load(Ordering::SeqCst) {
                         return Err(stopped_before_attachment_send());

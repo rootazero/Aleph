@@ -119,7 +119,14 @@ impl Channel for MatrixChannel {
         let sdk_client = Arc::new(client::MatrixSdkClient::connect(&self.config).await?);
         tracing::info!("Matrix bot authenticated as {}", sdk_client.user_id());
 
-        let deduper = Arc::new(dedupe::EventDeduper::new(&self.config.dedupe_store_path())?);
+        let dedupe_path = self.config.dedupe_store_path();
+        let deduper = Arc::new(
+            tokio::task::spawn_blocking(move || dedupe::EventDeduper::new(&dedupe_path))
+                .await
+                .map_err(|e| {
+                    ChannelError::Internal(format!("Matrix dedupe worker failed: {e}"))
+                })??,
+        );
 
         let (shutdown_tx, shutdown_rx) = watch::channel(false);
         self.shutdown_tx = Some(shutdown_tx);

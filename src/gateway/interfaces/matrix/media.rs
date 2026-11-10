@@ -1,6 +1,4 @@
 use crate::gateway::channel::{Attachment, ChannelError};
-use matrix_sdk::media::{MediaFormat, MediaRequestParameters};
-use matrix_sdk::ruma::events::room::MediaSource;
 use matrix_sdk::Client;
 use std::time::Duration;
 
@@ -11,8 +9,8 @@ const INBOUND_MEDIA_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Returns `true` when an advertised attachment size is within `max_bytes`.
 ///
-/// An absent size (`None`) is treated as within-cap; the post-download byte
-/// check still enforces the limit against the actual payload.
+/// An absent size (`None`) is allowed here; the streaming reader enforces
+/// the limit against the actual payload.
 fn within_cap(size: Option<u64>, max_bytes: u64) -> bool {
     size.is_none_or(|s| s <= max_bytes)
 }
@@ -69,16 +67,20 @@ pub async fn hydrate_inbound_attachments(
             continue;
         }
 
-        match tokio::time::timeout(INBOUND_MEDIA_TIMEOUT, download_media(client, &mxc)).await {
-            Ok(Ok((bytes, _mime))) if bytes.len() as u64 <= max_bytes => {
+        match tokio::time::timeout(
+            INBOUND_MEDIA_TIMEOUT,
+            download_media_limited(client, &mxc, max_bytes),
+        )
+        .await
+        {
+            Ok(Ok(Some((bytes, _mime)))) => {
                 att.size = Some(bytes.len() as u64);
                 att.data = Some(bytes);
             }
-            Ok(Ok((bytes, _mime))) => {
+            Ok(Ok(None)) => {
                 tracing::warn!(
-                    "Matrix inbound media {} body {} bytes exceeds cap {} bytes, dropping bytes",
+                    "Matrix inbound media {} body exceeds cap {} bytes during streaming, dropping bytes",
                     mxc,
-                    bytes.len(),
                     max_bytes
                 );
             }
@@ -119,33 +121,72 @@ pub async fn upload_media(
     Ok(response.content_uri.to_string())
 }
 
+/// Stop reading as soon as the actual body exceeds the cap, including chunked responses.
+pub(super) async fn read_body_limited(
+    mut response: reqwest::Response,
+    max_bytes: u64,
+) -> Result<Option<Vec<u8>>, ChannelError> {
+    if response.content_length().is_some_and(|n| n > max_bytes) {
+        return Ok(None);
+    }
+    let mut data = Vec::new();
+    while let Some(chunk) = response
+        .chunk()
+        .await
+        .map_err(|e| ChannelError::ReceiveFailed(format!("Media body read failed: {e}")))?
+    {
+        if chunk.len() as u64 > max_bytes - data.len() as u64 {
+            return Ok(None);
+        }
+        data.extend_from_slice(&chunk);
+    }
+    Ok(Some(data))
+}
+
+async fn download_media_limited(
+    client: &Client,
+    mxc_uri: &str,
+    max_bytes: u64,
+) -> Result<Option<(Vec<u8>, String)>, ChannelError> {
+    let uri = matrix_sdk::ruma::OwnedMxcUri::from(mxc_uri);
+    let (server, media_id) = uri
+        .parts()
+        .map_err(|e| ChannelError::ReceiveFailed(format!("Invalid mxc URI: {e}")))?;
+    let token = client
+        .access_token()
+        .ok_or_else(|| ChannelError::ReceiveFailed("Matrix access token unavailable".into()))?;
+    // Use the authenticated endpoint on our homeserver, never on the MXC origin.
+    let mut url = client.homeserver();
+    url.set_path("/_matrix/client/v1/media/download/");
+    url.path_segments_mut()
+        .map_err(|_| ChannelError::ReceiveFailed("Invalid homeserver URL".into()))?
+        .pop_if_empty()
+        .extend([server.as_str(), media_id]);
+    let response = reqwest::Client::new()
+        .get(url)
+        .bearer_auth(token)
+        .send()
+        .await
+        .and_then(reqwest::Response::error_for_status)
+        .map_err(|e| ChannelError::ReceiveFailed(format!("Media download failed: {e}")))?;
+    let mime = response
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("application/octet-stream")
+        .to_owned();
+    Ok(read_body_limited(response, max_bytes)
+        .await?
+        .map(|bytes| (bytes, mime)))
+}
+
 pub async fn download_media(
     client: &Client,
     mxc_uri: &str,
 ) -> Result<(Vec<u8>, String), ChannelError> {
-    let uri = matrix_sdk::ruma::OwnedMxcUri::from(mxc_uri);
-    if !uri.is_valid() {
-        return Err(ChannelError::ReceiveFailed(format!(
-            "Invalid mxc URI: {mxc_uri}"
-        )));
-    }
-
-    let media_request = MediaRequestParameters {
-        source: MediaSource::Plain(uri),
-        format: MediaFormat::File,
-    };
-
-    let data = client
-        .media()
-        .get_media_content(&media_request, false)
-        .await
-        .map_err(|e| ChannelError::ReceiveFailed(format!("Media download failed: {e}")))?;
-
-    let content_type = mime_guess::from_path(mxc_uri)
-        .first_or_octet_stream()
-        .to_string();
-
-    Ok((data, content_type))
+    download_media_limited(client, mxc_uri, MATRIX_MEDIA_MAX_SIZE)
+        .await?
+        .ok_or_else(|| ChannelError::ReceiveFailed("Matrix media exceeds attachment cap".into()))
 }
 
 #[cfg(test)]
@@ -163,6 +204,33 @@ mod tests {
             data,
             is_voice_note: false,
             is_video_note: false,
+        }
+    }
+
+    #[tokio::test]
+    async fn chunked_body_is_bounded_before_full_buffering() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        for cap in [3, 4] {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let addr = listener.local_addr().unwrap();
+            let server = tokio::spawn(async move {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let mut request = [0; 2048];
+                socket.read(&mut request).await.unwrap();
+                socket.write_all(b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n2\r\nab\r\n2\r\ncd\r\n0\r\n\r\n").await.unwrap();
+            });
+            let response = reqwest::get(format!("http://{addr}")).await.unwrap();
+            assert!(response.content_length().is_none());
+            let bytes = read_body_limited(response, cap).await.unwrap();
+            assert_eq!(
+                bytes,
+                if cap == 4 {
+                    Some(b"abcd".to_vec())
+                } else {
+                    None
+                }
+            );
+            server.await.unwrap();
         }
     }
 

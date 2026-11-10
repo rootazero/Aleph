@@ -278,12 +278,20 @@ impl MessagesDb {
         let max_attachment_size = self.max_attachment_size;
         let attachments_root = self.attachments_root.clone();
 
-        for row_result in rows {
-            let raw = row_result?;
+        let mut new_watermark = self.last_message_rowid;
 
-            // Update last seen ROWID
-            if raw.rowid > self.last_message_rowid {
-                self.last_message_rowid = raw.rowid;
+        for row_result in rows {
+            let raw = match row_result {
+                Ok(r) => r,
+                Err(e) => {
+                    warn!("Message decode failed after ROWID {new_watermark}: {e}");
+                    break; // Deliver the valid prefix; retry this row next poll.
+                }
+            };
+            // Keep the prior cursor available if routing cannot be trusted.
+            let prior_watermark = new_watermark;
+            if raw.rowid > new_watermark {
+                new_watermark = raw.rowid;
             }
 
             // A non-zero associated_message_type is an add-tapback (the query
@@ -317,9 +325,23 @@ impl MessagesDb {
                 }
             };
 
-            // Get chat info if available
+            // Distinguish "no chat_id" (a genuine DM) from "chat_id present but
+            // lookup failed". The latter must not be downgraded to a DM route:
+            // a group message misrouted to a single contact would leak the
+            // reply to the wrong recipient. Roll the watermark back and retry
+            // the batch later instead of consuming an untrusted route.
             let chat_info = if let Some(chat_id) = raw.chat_id {
-                self.get_chat_info(chat_id).ok()
+                match self.get_chat_info(chat_id) {
+                    Ok(info) => Some(info),
+                    Err(e) => {
+                        warn!(
+                            "Refusing to route message ROWID {} (chat {} lookup failed: {})",
+                            raw.rowid, chat_id, e
+                        );
+                        new_watermark = prior_watermark;
+                        break;
+                    }
+                }
             } else {
                 None
             };
@@ -347,7 +369,7 @@ impl MessagesDb {
 
             // Determine conversation ID
             let conversation_id = if let Some(ref chat) = chat_info {
-                chat.chat_identifier.clone()
+                format!("chat_guid:{}", chat.guid)
             } else {
                 handle.id.clone()
             };
@@ -433,6 +455,7 @@ impl MessagesDb {
             debug!("Found {} new messages", messages.len());
         }
 
+        self.last_message_rowid = new_watermark;
         Ok(messages)
     }
 
@@ -653,6 +676,20 @@ mod tests {
         )
         .unwrap();
         conn
+    }
+
+    #[test]
+    fn unresolved_existing_chat_does_not_become_dm_or_advance_watermark() {
+        let conn = seed_db();
+        conn.execute("INSERT INTO chat_message_join VALUES (11, 99)", [])
+            .unwrap();
+        let mut db = MessagesDb::from_conn(conn);
+        let msgs = db.poll_new_messages().unwrap();
+        assert_eq!(msgs.len(), 1);
+        assert_eq!(msgs[0].id.as_str(), "g-normal");
+        assert_eq!(db.last_rowid(), 10);
+        assert!(db.poll_new_messages().unwrap().is_empty());
+        assert_eq!(db.last_rowid(), 10);
     }
 
     #[test]

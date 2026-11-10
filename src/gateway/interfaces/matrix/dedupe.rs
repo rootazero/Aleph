@@ -1,114 +1,87 @@
 use crate::gateway::channel::ChannelError;
 use crate::sync_primitives::Mutex;
-use rusqlite::{Connection, OptionalExtension};
+use rusqlite::Connection;
 use std::collections::HashSet;
 
-/// Inbound event deduplicator backed by `SQLite` with an in-memory LRU cache.
+const CACHE_LIMIT: usize = 10_000;
+const RETENTION: i64 = 7 * 24 * 60 * 60;
+
+/// SQLite is authoritative; the bounded hot cache is discarded on pruning.
 pub struct EventDeduper {
-    conn: Mutex<Connection>,
-    cache: Mutex<HashSet<(String, String)>>,
+    state: Mutex<DedupeState>,
+}
+
+struct DedupeState {
+    conn: Connection,
+    cache: HashSet<(String, String)>,
+    last_prune: i64,
 }
 
 impl EventDeduper {
-    /// Open or create the dedupe database at the given path.
     pub fn new(path: &str) -> Result<Self, ChannelError> {
         let conn = crate::utils::sqlite_open::open_sqlite_safe(std::path::Path::new(path))
             .map_err(|e| ChannelError::Internal(format!("Failed to open dedupe database: {e}")))?;
-
         conn.execute(
             "CREATE TABLE IF NOT EXISTS matrix_seen_events (
-                room_id TEXT NOT NULL,
-                event_id TEXT NOT NULL,
-                seen_at INTEGER NOT NULL,
-                PRIMARY KEY (room_id, event_id)
-            )",
+            room_id TEXT NOT NULL, event_id TEXT NOT NULL, seen_at INTEGER NOT NULL,
+            PRIMARY KEY (room_id, event_id))",
             [],
         )
         .map_err(|e| ChannelError::Internal(format!("Failed to create dedupe table: {e}")))?;
-
-        // Prune entries older than 7 days on startup
-        let week_ago = chrono::Utc::now().timestamp() - 7 * 24 * 60 * 60;
+        let now = chrono::Utc::now().timestamp();
         conn.execute(
             "DELETE FROM matrix_seen_events WHERE seen_at < ?1",
-            [week_ago],
+            [now - RETENTION],
         )
         .map_err(|e| ChannelError::Internal(format!("Failed to prune dedupe table: {e}")))?;
-
-        // Warm the in-memory cache with recent entries (limit to 10000)
-        let mut stmt = conn
-            .prepare(
-                "SELECT room_id, event_id FROM matrix_seen_events
-                 ORDER BY seen_at DESC LIMIT 10000",
-            )
-            .map_err(|e| ChannelError::Internal(format!("Failed to prepare dedupe query: {e}")))?;
-
-        let rows = stmt
-            .query_map([], |row| {
-                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
-            })
-            .map_err(|e| ChannelError::Internal(format!("Failed to query dedupe cache: {e}")))?;
-
-        let mut cache = HashSet::new();
-        for row in rows {
-            let (room_id, event_id) =
-                row.map_err(|e| ChannelError::Internal(format!("Failed to read dedupe row: {e}")))?;
-            cache.insert((room_id, event_id));
-        }
-        drop(stmt);
-
         Ok(Self {
-            conn: Mutex::new(conn),
-            cache: Mutex::new(cache),
+            state: Mutex::new(DedupeState {
+                conn,
+                cache: HashSet::new(),
+                last_prune: now,
+            }),
         })
     }
 
-    /// Returns true if the event is new and was inserted.
+    /// Call on a blocking worker. One lock serializes cache, pruning and insertion.
     pub fn try_insert(&self, room_id: &str, event_id: &str) -> Result<bool, ChannelError> {
-        let key = (room_id.to_string(), event_id.to_string());
-
-        {
-            let cache = self
-                .cache
-                .lock()
-                .map_err(|e| ChannelError::Internal(format!("Dedupe cache poisoned: {e}")))?;
-            if cache.contains(&key) {
-                return Ok(false);
-            }
-        }
-
-        let conn = self
-            .conn
+        let mut state = self
+            .state
             .lock()
-            .map_err(|e| ChannelError::Internal(format!("Dedupe connection poisoned: {e}")))?;
-
-        let existing: Option<String> = conn
-            .query_row(
-                "SELECT event_id FROM matrix_seen_events WHERE room_id = ?1 AND event_id = ?2",
-                [room_id, event_id],
-                |row| row.get(0),
-            )
-            .optional()
-            .map_err(|e| ChannelError::Internal(format!("Failed to query dedupe: {e}")))?;
-
-        if existing.is_some() {
+            .map_err(|e| ChannelError::Internal(format!("Dedupe state poisoned: {e}")))?;
+        let now = chrono::Utc::now().timestamp();
+        if now - state.last_prune >= 3600 {
+            state
+                .conn
+                .execute(
+                    "DELETE FROM matrix_seen_events WHERE seen_at < ?1",
+                    [now - RETENTION],
+                )
+                .map_err(|e| {
+                    ChannelError::Internal(format!("Failed to prune dedupe table: {e}"))
+                })?;
+            state.cache.clear();
+            state.last_prune = now;
+        }
+        let key = (room_id.to_string(), event_id.to_string());
+        if state.cache.contains(&key) {
             return Ok(false);
         }
-
-        let now = chrono::Utc::now().timestamp();
-        conn.execute(
-            "INSERT INTO matrix_seen_events (room_id, event_id, seen_at) VALUES (?1, ?2, ?3)",
-            [room_id, event_id, &now.to_string()],
-        )
-        .map_err(|e| ChannelError::Internal(format!("Failed to insert dedupe: {e}")))?;
-
-        drop(conn);
-
-        let mut cache = self
-            .cache
-            .lock()
-            .map_err(|e| ChannelError::Internal(format!("Dedupe cache poisoned: {e}")))?;
-        cache.insert(key);
-
+        let exists: bool = state.conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM matrix_seen_events WHERE room_id = ?1 AND event_id = ?2)",
+            [&key.0, &key.1],
+            |row| row.get(0),
+        ).map_err(|e| ChannelError::Internal(format!("Failed to query dedupe table: {e}")))?;
+        if exists {
+            return Ok(false);
+        }
+        if state.cache.len() >= CACHE_LIMIT {
+            state.cache.clear();
+        }
+        state.cache.insert(key);
+        state.conn.execute("INSERT OR IGNORE INTO matrix_seen_events (room_id, event_id, seen_at) VALUES (?1, ?2, ?3)",
+            [room_id, event_id, &now.to_string()])
+            .map_err(|e| ChannelError::Internal(format!("Failed to record dedupe entry: {e}")))?;
         Ok(true)
     }
 }
@@ -121,7 +94,6 @@ mod tests {
     fn test_dedupe_basic() {
         let tmp = tempfile::NamedTempFile::new().unwrap();
         let deduper = EventDeduper::new(tmp.path().to_str().unwrap()).unwrap();
-
         assert!(deduper.try_insert("!r:example.com", "$e1").unwrap());
         assert!(!deduper.try_insert("!r:example.com", "$e1").unwrap());
         assert!(deduper.try_insert("!r:example.com", "$e2").unwrap());
@@ -132,16 +104,40 @@ mod tests {
     fn test_dedupe_persists_across_instances() {
         let tmp = tempfile::NamedTempFile::new().unwrap();
         let path = tmp.path().to_str().unwrap();
+        let deduper = EventDeduper::new(path).unwrap();
+        assert!(deduper.try_insert("!r", "$e1").unwrap());
+        drop(deduper);
+        assert!(!EventDeduper::new(path)
+            .unwrap()
+            .try_insert("!r", "$e1")
+            .unwrap());
+    }
 
-        {
-            let deduper = EventDeduper::new(path).unwrap();
-            assert!(deduper.try_insert("!r:example.com", "$e1").unwrap());
+    #[test]
+    fn bounded_cache_falls_back_to_database_and_prunes_at_runtime() {
+        let deduper = EventDeduper::new(":memory:").unwrap();
+        for i in 0..=CACHE_LIMIT {
+            assert!(deduper.try_insert("!r", &format!("${i}")).unwrap());
         }
-
+        assert!(deduper.state.lock().unwrap().cache.len() <= CACHE_LIMIT);
+        assert!(!deduper.try_insert("!r", "$0").unwrap());
         {
-            let deduper = EventDeduper::new(path).unwrap();
-            assert!(!deduper.try_insert("!r:example.com", "$e1").unwrap());
-            assert!(deduper.try_insert("!r:example.com", "$e2").unwrap());
+            let mut state = deduper.state.lock().unwrap();
+            state
+                .conn
+                .execute("UPDATE matrix_seen_events SET seen_at = 0", [])
+                .unwrap();
+            state.last_prune = 0;
         }
+        assert!(deduper.try_insert("!r", "$0").unwrap());
+        let state = deduper.state.lock().unwrap();
+        assert_eq!(
+            state
+                .conn
+                .query_row("SELECT COUNT(*) FROM matrix_seen_events", [], |r| r
+                    .get::<_, i64>(0))
+                .unwrap(),
+            1
+        );
     }
 }

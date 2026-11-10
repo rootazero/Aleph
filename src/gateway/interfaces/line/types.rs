@@ -124,7 +124,7 @@ pub struct TextMessage {
 #[derive(Debug, Clone, Deserialize)]
 pub struct ImageMessage {
     pub id: String,
-    #[serde(default)]
+    #[serde(default, rename = "contentProvider")]
     pub content_provider: ContentProvider,
 }
 
@@ -143,7 +143,9 @@ pub struct AudioMessage {
 #[derive(Debug, Clone, Deserialize)]
 pub struct FileMessage {
     pub id: String,
+    #[serde(rename = "fileName")]
     pub file_name: String,
+    #[serde(rename = "fileSize")]
     pub file_size: u64,
 }
 
@@ -159,7 +161,9 @@ pub struct LocationMessage {
 #[derive(Debug, Clone, Deserialize)]
 pub struct StickerMessage {
     pub id: String,
+    #[serde(rename = "packageId")]
     pub package_id: String,
+    #[serde(rename = "stickerId")]
     pub sticker_id: String,
 }
 
@@ -167,9 +171,9 @@ pub struct StickerMessage {
 pub struct ContentProvider {
     #[serde(rename = "type", default)]
     pub provider_type: String,
-    #[serde(default)]
+    #[serde(default, rename = "originalContentUrl")]
     pub original_content_url: Option<String>,
-    #[serde(default)]
+    #[serde(default, rename = "previewImageUrl")]
     pub preview_image_url: Option<String>,
 }
 

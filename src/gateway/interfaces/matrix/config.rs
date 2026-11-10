@@ -248,6 +248,24 @@ impl MatrixConfig {
     }
 }
 
+impl From<&MatrixConfig> for crate::gateway::inbound_router::ChannelConfig {
+    fn from(config: &MatrixConfig) -> Self {
+        Self {
+            require_mention: config.mention_gating,
+            room_require_mention: config
+                .rooms
+                .iter()
+                .filter_map(|(room, policy)| {
+                    policy
+                        .require_mention
+                        .map(|required| (room.clone(), required))
+                })
+                .collect(),
+            ..Self::default()
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
