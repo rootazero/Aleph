@@ -1380,7 +1380,7 @@ impl ProjectStore {
     ) -> Result<Project, ProjectError> {
         let absolute = canonical_dir(path)?;
         let renamed = name.as_deref().map(str::trim).filter(|n| !n.is_empty());
-        let display = resolve_display_name(&absolute, name)?;
+        let display = resolve_display_name(&absolute, renamed)?;
         let now = now_secs();
         let candidate = Project {
             id: mint_id(),
@@ -1636,7 +1636,7 @@ fn canonical_dir(path: &Path) -> Result<PathBuf, ProjectError> {
 
 fn resolve_display_name(
     path: &Path,
-    override_name: Option<String>,
+    override_name: Option<&str>,
 ) -> Result<String, ProjectError> {
     if let Some(name) = override_name {
         let trimmed = name.trim();

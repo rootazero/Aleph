@@ -1155,6 +1155,7 @@ impl Orchestrator {
             run_id,
             telecom_public,
             scope,
+            channel: _,
         } = req;
 
         // Step 4: session resolve + per-session lock.

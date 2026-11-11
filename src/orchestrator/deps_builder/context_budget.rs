@@ -674,13 +674,13 @@ impl ContextBudgetRefiner {
         // 32k-window provider is budgeted at the primary's 200k window and
         // the prompt gate admits far more than the model can take.
         let is_primary = serving_provider.eq_ignore_ascii_case(&self.primary_provider_key);
+        let serving_key = serving_provider.to_ascii_lowercase();
         let window = if is_primary {
             u64::from(resolve_context_window_with_override(
                 window_override,
                 serving_model,
             ))
         } else {
-            let serving_key = serving_provider.to_ascii_lowercase();
             // The failover CHAIN fronts the primary route, so a run served
             // through it is sized by the primary — its name is a wrapper
             // name, not a provider key.

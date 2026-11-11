@@ -75,10 +75,10 @@ message. Use only what is needed to answer the caller, share nothing else from i
 do not mention the lookup or the approval. The operator reviews your exact reply before \
 it is sent.";
 
-pub const PUBLIC_LOOKUP_SYSTEM_PROMPT: &str =
-    concat!(PUBLIC_SYSTEM_PROMPT, PUBLIC_LOOKUP_PROMPT_ADDENDUM);
-pub const PRIVATE_DRAFT_SYSTEM_PROMPT: &str =
-    concat!(PUBLIC_SYSTEM_PROMPT, PRIVATE_DRAFT_PROMPT_ADDENDUM);
+pub static PUBLIC_LOOKUP_SYSTEM_PROMPT: std::sync::LazyLock<String> =
+    std::sync::LazyLock::new(|| format!("{PUBLIC_SYSTEM_PROMPT}{PUBLIC_LOOKUP_PROMPT_ADDENDUM}"));
+pub static PRIVATE_DRAFT_SYSTEM_PROMPT: std::sync::LazyLock<String> =
+    std::sync::LazyLock::new(|| format!("{PUBLIC_SYSTEM_PROMPT}{PRIVATE_DRAFT_PROMPT_ADDENDUM}"));
 
 /// Prefix of the synthetic same-turn message carrying the approved lookup
 /// result into a private draft.
@@ -159,7 +159,7 @@ pub(crate) async fn run_public_with(
             (Arc::new(NullToolService::new()), None)
         };
     let system_prompt = if lookup.is_some() {
-        PUBLIC_LOOKUP_SYSTEM_PROMPT
+        PUBLIC_LOOKUP_SYSTEM_PROMPT.as_str()
     } else {
         PUBLIC_SYSTEM_PROMPT
     };
@@ -218,7 +218,7 @@ pub(crate) async fn run_private_draft_with(
         &request.history,
         &request.text,
         Some(carrier),
-        PRIVATE_DRAFT_SYSTEM_PROMPT,
+        PRIVATE_DRAFT_SYSTEM_PROMPT.as_str(),
         Arc::new(NullToolService::new()),
         &cancel,
     )

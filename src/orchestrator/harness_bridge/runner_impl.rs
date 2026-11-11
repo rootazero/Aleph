@@ -248,7 +248,7 @@ impl HarnessRunner for AgentHarnessRunner {
         // ask MemoryContextProvider for retrieval-relevant facts. Also capture
         // whether the replayed history carries `<session_context>` compaction
         // summaries, so the system prompt can surface `SessionContextGuideLayer`.
-        let user_query = last_user_query(&input);
+        let user_query = last_user_query(&input).to_string();
         let has_session_summaries = input.carries_session_summaries();
         // The run's typed origin goes down with the seed so an unanswered tail
         // (crash before `RunStarted`) can resume with it. Same capture the

@@ -90,10 +90,10 @@ fn build_provider_with_swapped_model(
 /// cheap provider is built. In that case the returned model is the primary's
 /// own default, so callers that want "which model summarizes" (rather than
 /// "should a cheap provider be built") get the true answer either way.
-pub(crate) fn effective_summary_model<'a>(
-    config: &'a Config,
+pub(crate) fn effective_summary_model(
+    config: &Config,
     primary_provider_key: &str,
-) -> Option<(&'a str, &'static str)> {
+) -> Option<(String, &'static str)> {
     let cb = config.effective_context_budget()?;
     let base = config.providers.get(primary_provider_key)?;
     let explicit = cb
@@ -101,18 +101,19 @@ pub(crate) fn effective_summary_model<'a>(
         .as_ref()
         .map(|s| s.trim())
         .filter(|s| !s.is_empty());
-    let (model, source): (&'a str, &'static str) = match explicit {
-        Some(model) => (model, "summary_model"),
+    let (model, source): (String, &'static str) = match explicit {
+        Some(model) => (model.to_string(), "summary_model"),
         None => (
             crate::providers::get_preset(primary_provider_key)
-                .and_then(|p| p.default_aux_model)?,
+                .and_then(|p| p.default_aux_model)?
+                .to_string(),
             "preset aux_model",
         ),
     };
-    if base.models.first().is_some_and(|m| m.as_str() == model) {
+    if base.models.first().is_some_and(|m| m.as_str() == model.as_str()) {
         // Resolved model == primary default: summarization runs on the main
         // model (the byte-identical cheap provider is never built).
-        return base.models.first().map(|m| (m.as_str(), "primary default"));
+        return base.models.first().map(|m| (m.clone(), "primary default"));
     }
     Some((model, source))
 }
@@ -134,7 +135,7 @@ pub fn build_cheap_summary_provider(
     build_provider_with_swapped_model(
         base,
         primary_provider_key,
-        summary_model,
+        &summary_model,
         Some(source),
         "context budget: routing history summarization to cheap-tier model",
         "context budget: cheap summary provider build failed — summarization will use the main LLM",
