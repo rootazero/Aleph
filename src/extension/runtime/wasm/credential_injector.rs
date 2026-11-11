@@ -177,19 +177,22 @@ pub fn inject_credential(
             let mut modified = parsed.clone();
             // Use the URL parser's path encoding for placeholders such as `{token}`.
             modified.set_path(&format!("/{placeholder}"));
-            let encoded_placeholder = &modified.path()[1..];
-            if encoded_placeholder.is_empty()
-                || !parsed
-                    .path()
-                    .split('/')
-                    .any(|segment| segment.contains(encoded_placeholder))
-            {
+            let encoded_placeholder = modified.path()[1..].to_string();
+            // The placeholder has to name ONE WHOLE path segment. A substring
+            // match would inject the credential into a segment the plugin
+            // never designated (the placeholder `api` against the path
+            // `/v1/apiary` would rewrite `apiary`), and a blanket replace
+            // would put the credential into every segment that happens to
+            // contain the placeholder.
+            let mut segments: Vec<String> = parsed.path().split('/').map(str::to_string).collect();
+            let Some(idx) = segments.iter().position(|s| s == &encoded_placeholder) else {
                 return Err(CredentialError::InvalidUrl(
                     "credential placeholder not found in URL path".into(),
                 ));
-            }
+            };
             let encoded = utf8_percent_encode(secret_value, PATH_SEGMENT).to_string();
-            let path = parsed.path().replace(encoded_placeholder, &encoded);
+            segments[idx] = encoded;
+            let path = segments.join("/");
             let mut modified = parsed;
             modified.set_path(&path);
             Ok(Some(modified.to_string()))
@@ -486,6 +489,43 @@ mod tests {
             )
             .is_err());
         }
+    }
+
+    #[test]
+    fn url_path_injection_requires_a_whole_segment_and_touches_only_one() {
+        let binding = CredentialBinding {
+            secret_name: "key".into(),
+            inject: CredentialInject::UrlPath {
+                placeholder: "api".into(),
+            },
+            host_patterns: vec!["api.example.com".into()],
+        };
+        let secrets = vec![("key".into(), "s3cr3t".into())];
+
+        // A segment that merely CONTAINS the placeholder is not the
+        // placeholder: injecting here would put the credential in a path the
+        // plugin never designated.
+        assert!(inject_credential(
+            &binding,
+            "https://api.example.com/v1/apiary",
+            &mut vec![],
+            &secrets
+        )
+        .is_err());
+
+        // Two segments that both equal the placeholder: the first one is the
+        // designated slot. A blanket replace would put the credential in both.
+        assert_eq!(
+            inject_credential(
+                &binding,
+                "https://api.example.com/api/v1/api",
+                &mut vec![],
+                &secrets
+            )
+            .unwrap()
+            .unwrap(),
+            "https://api.example.com/s3cr3t/v1/api"
+        );
     }
 
     // ---------------------------------------------------------------
