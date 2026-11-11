@@ -165,8 +165,21 @@ impl LaneHandle {
 
         let text = self.lane_marked_text(final_text);
 
+        // A Telegram message cannot hold more than 4096 characters. When the
+        // answer does not fit, the preview is edited with the first chunk and
+        // the rest goes out as new messages — otherwise the tail is either
+        // lost or reported as delivered while it never left the process.
+        let chunks = crate::gateway::interfaces::telegram::delivery::split_for_telegram(&text);
+        let chunked = chunks.len() > 1;
+
         if let Some(message_id) = preview_message_id {
-            self.delivery.edit_text_message(message_id, &text).await?;
+            let first = if chunked { chunks[0] } else { text.as_str() };
+            self.delivery.edit_text_message(message_id, first).await?;
+            if chunked {
+                for chunk in chunks.iter().skip(1).copied() {
+                    self.delivery.send_text_message(chunk).await?;
+                }
+            }
 
             let mut tracker = self.tracker.lock().await;
             let state = tracker.get_mut(self.lane_id).ok_or_else(|| {
@@ -176,7 +189,22 @@ impl LaneHandle {
             state.is_streaming = false;
             Ok(message_id)
         } else {
-            let id = self.delivery.send_text_message(&text).await?;
+            let id = if chunked {
+                let mut first_id = None;
+                for chunk in chunks.iter().copied() {
+                    let sent = self.delivery.send_text_message(chunk).await?;
+                    if first_id.is_none() {
+                        first_id = Some(sent);
+                    }
+                }
+                first_id.ok_or_else(|| {
+                    crate::gateway::channel::ChannelError::SendFailed(
+                        "telegram: the answer was chunked but no chunk was sent".to_string(),
+                    )
+                })?
+            } else {
+                self.delivery.send_text_message(&text).await?
+            };
 
             let mut tracker = self.tracker.lock().await;
             let state = tracker.get_mut(self.lane_id).ok_or_else(|| {

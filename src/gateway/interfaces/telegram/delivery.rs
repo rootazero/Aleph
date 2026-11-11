@@ -320,14 +320,14 @@ fn is_message_too_long(err: &teloxide::RequestError) -> bool {
 ///
 /// The split happens on the PLAIN text, before the HTML formatting, so every
 /// chunk formats into valid, independently sendable HTML.
-fn split_for_telegram(text: &str) -> Vec<&str> {
+pub(crate) fn split_for_telegram(text: &str) -> Vec<&str> {
     if text.chars().count() <= TELEGRAM_MAX_TEXT_CHARS {
         return vec![text];
     }
     let mut chunks = Vec::new();
     let mut start = 0usize;
     let mut count = 0usize;
-    for (idx, ch) in text.char_indices() {
+    for (idx, _) in text.char_indices() {
         if count == TELEGRAM_MAX_TEXT_CHARS {
             chunks.push(&text[start..idx]);
             start = idx;
