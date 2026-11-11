@@ -1031,7 +1031,9 @@ impl PtyManager {
                 let error = match session.try_kill() {
                     Ok(()) => {
                         if let Some(source) = self.capability_source() {
-                            self.queue_source_receipt(source.withdraw_session_deferred(&session.id));
+                            self.queue_source_receipt(
+                                source.withdraw_session_deferred(&session.id),
+                            );
                         }
                         Self::record_killed(&session);
                         return None;
