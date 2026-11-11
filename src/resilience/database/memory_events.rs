@@ -107,10 +107,8 @@ impl StateDatabase {
         let admit_unpartitioned = i64::from(unpartitioned == UnpartitionedRows::Admit);
         self.with_conn(move |conn| {
             let mut stmt = conn
-                .prepare(concat!(
-                    "SELECT ",
-                    EVENT_COLUMNS,
-                    " FROM memory_events \
+                .prepare(&format!(
+                    "SELECT {EVENT_COLUMNS} FROM memory_events \
                      WHERE fact_id = ?1 \
                        AND (partition IN (SELECT value FROM json_each(?2)) \
                             OR (?3 = 1 AND partition IS NULL)) \
@@ -147,10 +145,8 @@ impl StateDatabase {
         let fact_id = fact_id.to_string();
         self.with_conn(move |conn| {
             let mut stmt = conn
-                .prepare(concat!(
-                    "SELECT ",
-                    EVENT_COLUMNS,
-                    " FROM memory_events WHERE fact_id = ?1 ORDER BY seq ASC"
+                .prepare(&format!(
+                    "SELECT {EVENT_COLUMNS} FROM memory_events WHERE fact_id = ?1 ORDER BY seq ASC"
                 ))
                 .map_err(|e| AlephError::other(format!("Failed to prepare statement: {e}")))?;
             let rows = stmt

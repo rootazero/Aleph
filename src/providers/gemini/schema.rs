@@ -265,13 +265,21 @@ fn reconcile_required(obj: &mut serde_json::Map<String, Value>) {
         .map(|m| m.keys().map(String::as_str).collect())
         .unwrap_or_default();
 
-    if let Some(Value::Array(arr)) = obj.get_mut("required") {
-        arr.retain(|item| item.as_str().is_some_and(|name| prop_names.contains(name)));
-        if arr.is_empty() {
+    let kept: Option<Vec<Value>> = obj.get("required").and_then(|r| r.as_array()).map(|arr| {
+        arr.iter()
+            .filter(|item| item.as_str().is_some_and(|name| prop_names.contains(name)))
+            .cloned()
+            .collect()
+    });
+
+    match kept {
+        Some(kept) if !kept.is_empty() => {
+            obj.insert("required".into(), Value::Array(kept));
+        }
+        // Empty after pruning, or `required` wasn't an array → remove it.
+        _ => {
             obj.remove("required");
         }
-    } else {
-        obj.remove("required");
     }
 }
 

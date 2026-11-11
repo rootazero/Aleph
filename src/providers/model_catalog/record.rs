@@ -29,7 +29,7 @@ use serde::Serialize;
 use super::capabilities::{capabilities_for, ModelCapabilities};
 use super::endpoint::{endpoint_kind_for_base_url, EndpointKind};
 use super::lifecycle::{lifecycle_for, ModelLifecycle};
-use crate::config::types::provider::{ModelCost, ModelDef, ModelInput};
+use crate::config::types::provider::{ModelCost, ModelDef};
 use crate::pricing::{rate_card, RateBasis, RateCard};
 
 // `ModelSource` is the wire's, not this module's: the picker, `list_models` and

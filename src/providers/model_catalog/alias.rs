@@ -118,7 +118,7 @@ pub fn canonical_provider_id(provider: &str) -> Option<&'static str> {
     // `-openai` suffix here marks the wire PROTOCOL, not the billing vendor, so
     // these must short-circuit before the generic "openai" substring branch
     // below — which would otherwise shadow them and mis-price the run as OpenAI.
-    match p.as_str() {
+    match p.as_ref() {
         "minimax-openai" => return Some("minimax"),
         "moonshot-openai" | "kimi-openai" => return Some("moonshot"),
         _ => {}

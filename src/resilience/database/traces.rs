@@ -230,11 +230,9 @@ impl StateDatabase {
             match before {
                 Some((ts, task_id)) => {
                     let mut stmt = conn
-                        .prepare(concat!(
+                        .prepare(&format!(
                             r#"
-                            SELECT "#,
-                            TRACE_LIST_COLUMNS,
-                            r#"
+                            SELECT {TRACE_LIST_COLUMNS}
                             FROM task_traces tr
                             LEFT JOIN agent_tasks t ON t.id = tr.task_id
                             GROUP BY tr.task_id
@@ -257,11 +255,9 @@ impl StateDatabase {
                 }
                 None => {
                     let mut stmt = conn
-                        .prepare(concat!(
+                        .prepare(&format!(
                             r#"
-                            SELECT "#,
-                            TRACE_LIST_COLUMNS,
-                            r#"
+                            SELECT {TRACE_LIST_COLUMNS}
                             FROM task_traces tr
                             LEFT JOIN agent_tasks t ON t.id = tr.task_id
                             GROUP BY tr.task_id
