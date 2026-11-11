@@ -500,7 +500,10 @@ impl BlueBubblesApi {
     /// that come back twice.
     pub async fn query_messages_after(&self, after_ms: i64) -> Vec<serde_json::Value> {
         let mut all_messages = Vec::new();
-        let mut cursor = after_ms;
+        // The filter is exclusive, so the first window starts one millisecond
+        // BEFORE the cursor the caller gave us: the message that sits exactly
+        // on that millisecond is part of what the caller wants.
+        let mut cursor = after_ms.saturating_sub(1);
         let mut seen_guids = std::collections::HashSet::new();
         // The newest millisecond seen so far. A batch that does not move it
         // forward repeated the boundary and nothing else.
