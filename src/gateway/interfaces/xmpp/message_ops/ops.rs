@@ -66,14 +66,23 @@ impl XmppMessageOps {
             // the NICK it joined with (`config.nick`), not by the bare JID —
             // comparing the nick against the bare JID never matched, so the
             // bot's own room messages were ingested as inbound traffic.
-            if let Some(ref own) = own_parts {
-                if nick == own.bare() {
-                    return None;
+            //
+            // The bare-JID comparison is only a fallback for the case where
+            // the joined nick is unknown: with a known nick it would also
+            // swallow a genuine participant whose nick happens to equal the
+            // bot's bare JID.
+            match muc_nick {
+                Some(joined_nick) if !joined_nick.is_empty() => {
+                    if nick == joined_nick {
+                        return None;
+                    }
                 }
-            }
-            if let Some(joined_nick) = muc_nick {
-                if !joined_nick.is_empty() && nick == joined_nick {
-                    return None;
+                _ => {
+                    if let Some(ref own) = own_parts {
+                        if nick == own.bare() {
+                            return None;
+                        }
+                    }
                 }
             }
 
