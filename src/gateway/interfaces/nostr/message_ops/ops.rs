@@ -9,6 +9,24 @@ pub struct PublishCommand {
     pub(crate) result: tokio::sync::oneshot::Sender<ChannelResult<()>>,
 }
 
+/// Publish attempts that are waiting for the relay acknowledgement, keyed by event id.
+type PendingWaiters =
+    std::collections::HashMap<String, Vec<tokio::sync::oneshot::Sender<ChannelResult<()>>>>;
+
+/// Fail every publish attempt that the relay has not acknowledged.
+///
+/// A dropped connection leaves the outcome of those attempts unknown, so the
+/// callers have to learn about it instead of waiting for their own timeout.
+fn fail_pending_waits(pending: &mut PendingWaiters, reason: &str) {
+    for (_, waiters) in pending.drain() {
+        for waiter in waiters {
+            let _ = waiter.send(Err(ChannelError::SendFailed(format!(
+                "{reason}; delivery unknown"
+            ))));
+        }
+    }
+}
+
 fn verify_event(event: &super::types::NostrEvent) -> Result<(), String> {
     use k256::schnorr::{Signature, VerifyingKey};
 
@@ -115,10 +133,7 @@ impl NostrMessageOps {
             );
 
             // Dropping a connection fails all of its unconfirmed attempts.
-            let mut pending: std::collections::HashMap<
-                String,
-                Vec<tokio::sync::oneshot::Sender<ChannelResult<()>>>,
-            > = std::collections::HashMap::new();
+            let mut pending: PendingWaiters = std::collections::HashMap::new();
             let mut expiry_tick = tokio::time::interval(Duration::from_secs(1));
 
             // Inner message loop
@@ -136,6 +151,10 @@ impl NostrMessageOps {
                             let _ = cmd.result.send(Err(ChannelError::SendFailed(format!(
                                 "Nostr write failed; delivery unknown: {e}"
                             ))));
+                            fail_pending_waits(
+                                &mut pending,
+                                "Nostr relay connection lost before the event was acknowledged",
+                            );
                             break 'inner true;
                         }
                         pending.entry(cmd.event_id).or_default().push(cmd.result);
@@ -157,6 +176,10 @@ impl NostrMessageOps {
                                 .send(tokio_tungstenite::tungstenite::Message::Text(close_msg.into()))
                                 .await;
                             let _ = ws_tx.close().await;
+                            fail_pending_waits(
+                                &mut pending,
+                                "Nostr channel shut down before the event was acknowledged",
+                            );
                             return;
                         }
                         continue;
@@ -263,7 +286,10 @@ impl NostrMessageOps {
                 }
             };
 
-            drop(pending);
+            fail_pending_waits(
+                &mut pending,
+                "Nostr relay connection dropped before the event was acknowledged",
+            );
             if !should_reconnect || *shutdown_rx.borrow() {
                 break;
             }
@@ -274,5 +300,36 @@ impl NostrMessageOps {
         }
 
         tracing::info!("Nostr relay loop stopped");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A dropped relay connection must fail the pending publish attempts
+    /// instead of leaving the callers waiting for their own timeout.
+    #[test]
+    fn a_dropped_relay_connection_fails_the_pending_publish_attempts() {
+        let (tx1, mut rx1) = tokio::sync::oneshot::channel();
+        let (tx2, mut rx2) = tokio::sync::oneshot::channel();
+        let mut pending: PendingWaiters = PendingWaiters::new();
+        pending.entry("event-1".to_string()).or_default().push(tx1);
+        pending.entry("event-1".to_string()).or_default().push(tx2);
+
+        fail_pending_waits(&mut pending, "relay dropped");
+
+        assert!(
+            pending.is_empty(),
+            "the failed attempts must not stay pending"
+        );
+        assert!(
+            rx1.try_recv().expect("the waiter must be settled").is_err(),
+            "a lost delivery is not a success"
+        );
+        assert!(
+            rx2.try_recv().expect("the waiter must be settled").is_err(),
+            "a lost delivery is not a success"
+        );
     }
 }
