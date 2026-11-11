@@ -1186,20 +1186,19 @@ fn truncate_chars(s: &str, max_chars: usize) -> String {
 /// the retrieval query against `MemoryContextProvider::build_memory_user_message`.
 /// Returns an empty string when no user-side text is available; callers treat
 /// the empty case as "skip retrieval".
-pub(crate) fn last_user_query(input: &FlowInput) -> &str {
-    const fn text_of(content: &crate::session::events::MessageContent) -> &str {
-        content.text.as_str()
-    }
+pub(crate) fn last_user_query(input: &FlowInput) -> String {
+    let text_of = |content: &crate::session::events::MessageContent| content.text.as_str();
     match input {
-        FlowInput::Prompt(s) => s.as_str(),
+        FlowInput::Prompt(s) => s.clone(),
         FlowInput::Messages(msgs) | FlowInput::Multimodal(msgs) => msgs
             .iter()
             .rev()
             .map(text_of)
             .find(|s| !s.is_empty())
-            .unwrap_or(""),
-        FlowInput::History { prompt, .. } => prompt.as_str(),
-        FlowInput::Resume => "",
+            .unwrap_or("")
+            .to_string(),
+        FlowInput::History { prompt, .. } => prompt.clone(),
+        FlowInput::Resume => String::new(),
     }
 }
 
