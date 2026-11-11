@@ -10,11 +10,10 @@ pub(crate) fn cfg_with_fallback(
     fb: Option<FallbackProviderToml>,
     providers: Vec<(&str, ProviderConfig)>,
 ) -> Config {
-    let mut providers_map: std::collections::HashMap<String, ProviderConfig> =
-        std::collections::HashMap::new();
-    for (k, v) in providers {
-        providers_map.insert(k.to_string(), v);
-    }
+    let providers_map: std::collections::HashMap<String, ProviderConfig> = providers
+        .into_iter()
+        .map(|(k, v)| (k.to_string(), v))
+        .collect();
     Config {
         fallback_provider: fb,
         providers: providers_map,

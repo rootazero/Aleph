@@ -241,8 +241,7 @@ pub struct AgentHarnessRunner {
     /// switch, `run.session_updated` live refresh) does not re-assemble the
     /// prompt. Session-keyed because the measured prompt is session-shaped —
     /// see [`context_estimate::OverheadCache`].
-    pub estimate_overhead_cache:
-        std::sync::Arc<crate::orchestrator::harness_bridge::context_estimate::OverheadCache>,
+    pub estimate_overhead_cache: Arc<context_estimate::OverheadCache>,
 
     /// Boot-time `[general] language`, threaded into `PromptConfig.language` so
     /// `LanguageLayer` tells the model which language to answer in.

@@ -460,10 +460,7 @@ impl ProjectStore {
         let rows = stmt
             .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))
             .map_err(db_err)?;
-        let mut pairs = Vec::new();
-        for row in rows {
-            pairs.push(row.map_err(db_err)?);
-        }
+        let pairs = rows.collect::<Result<Vec<_>, _>>().map_err(db_err)?;
         roster::publish(RosterSnapshot::from_pairs(pairs));
         Ok(())
     }
@@ -550,7 +547,7 @@ impl ProjectStore {
                 project
                     .workspace_path
                     .as_ref()
-                    .map(|p| p.to_string_lossy().to_string()),
+                    .map(|p| p.to_string_lossy()),
                 project.status.as_str(),
                 now,
             ],
@@ -598,11 +595,7 @@ impl ProjectStore {
                 )
                 .map_err(db_err)?;
             let rows = stmt.query_map([], row_to_project).map_err(db_err)?;
-            let mut out = Vec::new();
-            for row in rows {
-                out.push(row.map_err(db_err)?);
-            }
-            Ok(out)
+            rows.collect::<Result<Vec<_>, _>>().map_err(db_err)
         })
     }
 
@@ -690,24 +683,24 @@ impl ProjectStore {
     /// exactly as it always did, which is every pre-P2 caller.
     pub fn remove(&self, id: &str) -> Result<(), ProjectError> {
         self.with_conn(|conn| {
-            let claimed: Option<Option<String>> = conn
+            let has_conversation: Option<bool> = conn
                 .query_row(
-                    "SELECT current_session_key FROM projects WHERE id = ?1",
+                    "SELECT current_session_key IS NOT NULL FROM projects WHERE id = ?1",
                     [id],
-                    |r| r.get::<_, Option<String>>(0),
+                    |r| r.get::<_, bool>(0),
                 )
                 .optional()
                 .map_err(db_err)?;
-            match claimed {
+            match has_conversation {
                 None => return Err(ProjectError::NotFound(id.to_string())),
-                Some(Some(_)) => {
+                Some(true) => {
                     return Err(ProjectError::Invalid(format!(
                         "project '{id}' is a room with a conversation: removing it would leave \
                          that conversation unreachable to everyone, including you, because a \
                          room's visibility IS its roster. Archive it instead."
                     )));
                 }
-                Some(None) => {}
+                Some(false) => {}
             }
             if Self::has_channel_binding(conn, id)? {
                 return Err(ProjectError::Invalid(format!(
@@ -738,15 +731,12 @@ impl ProjectStore {
     }
 
     pub fn bind_workspace(&self, id: &str, path: Option<&Path>) -> Result<Project, ProjectError> {
-        let canonical = match path {
-            Some(p) => Some(canonical_dir(p)?),
-            None => None,
-        };
+        let canonical = path.map(canonical_dir).transpose()?;
         self.update_one(
             "UPDATE projects SET workspace_path = ?2, updated_at = ?3 WHERE id = ?1",
             rusqlite::params![
                 id,
-                canonical.as_ref().map(|p| p.to_string_lossy().to_string()),
+                canonical.as_ref().map(|p| p.to_string_lossy()),
                 now_secs()
             ],
             id,
@@ -947,15 +937,16 @@ impl ProjectStore {
                     )));
                 }
             }
-            let exists: Option<String> = conn
+            let exists = conn
                 .query_row(
-                    "SELECT id FROM projects WHERE id = ?1 AND status = 'active'",
+                    "SELECT 1 FROM projects WHERE id = ?1 AND status = 'active'",
                     [project_id],
-                    |r| r.get::<_, String>(0),
+                    |_| Ok(()),
                 )
                 .optional()
-                .map_err(db_err)?;
-            if exists.is_none() {
+                .map_err(db_err)?
+                .is_some();
+            if !exists {
                 return Err(ProjectError::NotFound(project_id.to_string()));
             }
             // Ruling R-e, decided in the statement rather than by the caller:
@@ -989,9 +980,9 @@ impl ProjectStore {
                      RETURNING label, bound_by",
                     rusqlite::params![
                         project_id,
-                        channel_key,
+                        &channel_key,
                         peer_kind_col,
-                        peer_key,
+                        &peer_key,
                         bound_by,
                         now,
                         label
@@ -1006,9 +997,9 @@ impl ProjectStore {
                 .map_err(db_err)?;
             Ok(ChannelBinding {
                 project_id: project_id.to_string(),
-                channel_id: channel_key.clone(),
+                channel_id: channel_key,
                 peer_kind,
-                peer_id: peer_key.clone(),
+                peer_id: peer_key,
                 bound_by: stored_bound_by,
                 bound_at: now,
                 label: stored_label,
@@ -1260,6 +1251,7 @@ impl ProjectStore {
                 })
                 .map_err(db_err)?;
             let mut out = Vec::new();
+            let project_id_owned = project_id.to_string();
             for row in rows {
                 let (channel_id, peer_kind_raw, peer_id, bound_by, bound_at, label) =
                     row.map_err(db_err)?;
@@ -1274,7 +1266,7 @@ impl ProjectStore {
                     continue;
                 };
                 out.push(ChannelBinding {
-                    project_id: project_id.to_string(),
+                    project_id: project_id_owned.clone(),
                     channel_id,
                     peer_kind,
                     peer_id,
@@ -1297,11 +1289,7 @@ impl ProjectStore {
             let rows = stmt
                 .query_map([id], |r| r.get::<_, String>(0))
                 .map_err(db_err)?;
-            let mut out = Vec::new();
-            for row in rows {
-                out.push(row.map_err(db_err)?);
-            }
-            Ok(out)
+            rows.collect::<Result<Vec<_>, _>>().map_err(db_err)
         })
     }
 
@@ -1330,11 +1318,7 @@ impl ProjectStore {
             let rows = stmt
                 .query_map([user_id], |r| r.get::<_, String>(0))
                 .map_err(db_err)?;
-            let mut out = Vec::new();
-            for row in rows {
-                out.push(row.map_err(db_err)?);
-            }
-            Ok(out)
+            rows.collect::<Result<Vec<_>, _>>().map_err(db_err)
         })
     }
 
@@ -1395,11 +1379,7 @@ impl ProjectStore {
         owner: Option<&str>,
     ) -> Result<Project, ProjectError> {
         let absolute = canonical_dir(path)?;
-        let renamed = name
-            .as_deref()
-            .map(str::trim)
-            .filter(|n| !n.is_empty())
-            .map(str::to_string);
+        let renamed = name.as_deref().map(str::trim).filter(|n| !n.is_empty());
         let display = resolve_display_name(&absolute, name)?;
         let now = now_secs();
         let candidate = Project {
@@ -1415,7 +1395,7 @@ impl ProjectStore {
         };
         let id = self.with_conn(|conn| {
             if let Some(existing) = Self::find_by_path_locked(conn, &absolute, owner)? {
-                Self::touch_registered_row(conn, &existing.id, renamed.as_deref())?;
+                Self::touch_registered_row(conn, &existing.id, renamed)?;
                 return Ok(existing.id);
             }
             let tx = conn.unchecked_transaction().map_err(db_err)?;
@@ -1442,7 +1422,7 @@ impl ProjectStore {
                     drop(tx);
                     let existing = Self::find_by_path_locked(conn, &absolute, owner)?
                         .ok_or_else(|| ProjectError::AlreadyExists(absolute.clone()))?;
-                    Self::touch_registered_row(conn, &existing.id, renamed.as_deref())?;
+                    Self::touch_registered_row(conn, &existing.id, renamed)?;
                     Ok(existing.id)
                 }
                 Err(e) => Err(e),
@@ -1475,13 +1455,10 @@ impl ProjectStore {
         // half that succeeded (best effort: `remove_dir` only removes an
         // EMPTY directory, and something may have been written into it in
         // the meantime).
-        match self.add(&target, Some(trimmed.to_string())) {
-            Ok(project) => Ok(project),
-            Err(e) => {
-                let _ = std::fs::remove_dir(&target);
-                Err(e)
-            }
-        }
+        self.add(&target, Some(trimmed.to_string())).map_err(|e| {
+            let _ = std::fs::remove_dir(&target);
+            e
+        })
     }
 
     /// Look up the CURRENT CALLER's project bound to `path`.
@@ -1589,14 +1566,14 @@ impl ProjectStore {
 }
 
 fn row_to_project(row: &Row<'_>) -> rusqlite::Result<Project> {
-    let status: String = row.get(4)?;
+    let status_str: &str = row.get_ref(4)?.as_str()?;
     let workspace: Option<String> = row.get(3)?;
     Ok(Project {
         id: row.get(0)?,
         name: row.get(1)?,
         owner_user_id: row.get(2)?,
         workspace_path: workspace.map(PathBuf::from),
-        status: ProjectStatus::from_stored(&status),
+        status: ProjectStatus::from_stored(status_str),
         created_at: row.get(5)?,
         updated_at: row.get(6)?,
         last_used_at: row.get(7)?,

@@ -3,6 +3,7 @@
 //! See design §5 (TOML shape) and §3.8 (hot reload via `FlowRegistry::replace`).
 
 use crate::sync_primitives::Arc;
+use std::collections::hash_map::Entry;
 use std::path::Path;
 
 use serde::Deserialize;
@@ -70,11 +71,16 @@ pub async fn load_user_flows_from_dir(dir: &Path) -> Result<FlowSet, FlowError> 
             .map_err(|e| FlowError::InvalidConfig(format!("read {path:?}: {e}")))?;
         let parsed = load_user_flows_from_str(&src)?;
         for (id, spec) in parsed {
-            // rust-doctor-disable-next-line excessive-clone
-            if merged.insert(id.clone(), spec).is_some() {
-                return Err(FlowError::InvalidConfig(format!(
-                    "duplicate flow id across files: {id}"
-                )));
+            match merged.entry(id) {
+                Entry::Vacant(e) => {
+                    e.insert(spec);
+                }
+                Entry::Occupied(e) => {
+                    return Err(FlowError::InvalidConfig(format!(
+                        "duplicate flow id across files: {}",
+                        e.key()
+                    )));
+                }
             }
         }
     }
@@ -85,24 +91,19 @@ fn parse_flow_file(src: &str) -> Result<FlowSet, String> {
     let file: FlowFile = toml::from_str(src).map_err(|e| e.to_string())?;
     let mut out = FlowSet::new();
     for spec in file.flows {
-        // rust-doctor-disable-next-line excessive-clone
-        let id = spec.id.clone();
-        // rust-doctor-disable-next-line excessive-clone
-        if out.insert(id.clone(), Arc::new(spec)).is_some() {
-            return Err(format!("duplicate flow id: {id}"));
+        if out.contains_key(&spec.id) {
+            return Err(format!("duplicate flow id: {}", spec.id));
         }
+        out.insert(spec.id.clone(), Arc::new(spec));
     }
     Ok(out)
 }
 
 /// Merge presets + user flows. User flows override presets on id collision.
 #[must_use]
-pub fn merge_catalogs(presets: FlowSet, user: FlowSet) -> FlowSet {
-    let mut out = presets;
-    for (id, spec) in user {
-        out.insert(id, spec);
-    }
-    out
+pub fn merge_catalogs(mut presets: FlowSet, user: FlowSet) -> FlowSet {
+    presets.extend(user);
+    presets
 }
 
 /// The single answer to "what is the flow catalog for this home directory?".

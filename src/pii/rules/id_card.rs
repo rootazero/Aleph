@@ -64,17 +64,14 @@ impl IdCardRule {
 
     /// Validate birth date (digits 6-13, YYYYMMDD) with exact month/day limits.
     fn is_valid_date(id: &str) -> bool {
-        let year: u32 = match id.get(6..10).and_then(|s| s.parse().ok()) {
-            Some(y) => y,
-            None => return false,
+        let Some(year) = id.get(6..10).and_then(|s| s.parse::<u32>().ok()) else {
+            return false;
         };
-        let month: u32 = match id.get(10..12).and_then(|s| s.parse().ok()) {
-            Some(m) => m,
-            None => return false,
+        let Some(month) = id.get(10..12).and_then(|s| s.parse::<u32>().ok()) else {
+            return false;
         };
-        let day: u32 = match id.get(12..14).and_then(|s| s.parse().ok()) {
-            Some(d) => d,
-            None => return false,
+        let Some(day) = id.get(12..14).and_then(|s| s.parse::<u32>().ok()) else {
+            return false;
         };
 
         if !(1900..=2100).contains(&year) || !(1..=12).contains(&month) || day == 0 {
@@ -117,10 +114,7 @@ impl IdCardRule {
             })
             .sum();
         let expected = CHECK_CODES[(sum % 11) as usize];
-        let last = match id.chars().last() {
-            Some(c) => c.to_ascii_uppercase(),
-            None => return false,
-        };
+        let last = (bytes[17] as char).to_ascii_uppercase();
         last == expected
     }
 
@@ -206,14 +200,26 @@ impl PiiRule for IdCardRule {
             // (e.g. "110101 1990 0307 002X"). The matched span keeps the
             // original separators so the placeholder aligns with what the
             // user sees, but the checksum only sees the 18 raw chars.
-            let digits_only: String = matched
-                .chars()
-                .filter(|c| !c.is_whitespace() && *c != '-')
-                .collect();
-
-            // Normalize X to uppercase for validation
-            let normalized = digits_only.to_uppercase();
-            if !Self::is_valid_id_card(&normalized) {
+            let mut buf = [0u8; 18];
+            let mut count = 0;
+            for &b in matched.as_bytes() {
+                if b.is_ascii_whitespace() || b == b'-' {
+                    continue;
+                }
+                if count >= 18 {
+                    count += 1;
+                    break;
+                }
+                buf[count] = b.to_ascii_uppercase();
+                count += 1;
+            }
+            if count != 18 {
+                continue;
+            }
+            let Ok(normalized) = std::str::from_utf8(&buf) else {
+                continue;
+            };
+            if !Self::is_valid_id_card(normalized) {
                 continue;
             }
 

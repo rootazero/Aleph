@@ -78,9 +78,9 @@ impl ReplayPreparer for ReplayAdapter {
     fn prepare(&self, req: &ReplayRequest) -> ReplayPrepare {
         // C4: the effective-input gate is first — refuse before any snapshot or
         // eligibility read, so a `None` never reaches the registry.
-        let Some(effective_input) = req.effective_input.clone() else {
+        if req.effective_input.is_none() {
             return ReplayPrepare::Refused;
-        };
+        }
         let Some(stored) = req.stored_identity else {
             return ReplayPrepare::Refused;
         };
@@ -109,6 +109,7 @@ impl ReplayPreparer for ReplayAdapter {
         {
             return ReplayPrepare::Refused;
         }
+        let effective_input = req.effective_input.as_ref().cloned().unwrap_or_default();
         ReplayPrepare::Ready(ReplayPermit::new(Box::new(PermitInvoker {
             handler: entry.handler.clone(),
             admission: ReplayAdmissionToken::new(
