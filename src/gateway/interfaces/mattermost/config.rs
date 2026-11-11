@@ -9,7 +9,7 @@ const fn default_true() -> bool {
 }
 
 /// Mattermost channel configuration
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct MattermostConfig {
     /// Mattermost server URL (e.g., "<https://mattermost.example.com>")
     pub server_url: String,
@@ -24,6 +24,19 @@ pub struct MattermostConfig {
     /// Send typing indicator while processing
     #[serde(default = "default_true")]
     pub send_typing: bool,
+}
+
+/// Hand-written so the bot token never reaches a log line, a panic message or
+/// a `tracing` field. Every other field is printed as-is.
+impl std::fmt::Debug for MattermostConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("MattermostConfig")
+            .field("server_url", &self.server_url)
+            .field("bot_token", &"<redacted>")
+            .field("allowed_channels", &self.allowed_channels)
+            .field("send_typing", &self.send_typing)
+            .finish()
+    }
 }
 
 impl Default for MattermostConfig {

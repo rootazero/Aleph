@@ -140,6 +140,78 @@ pub fn register_channel_plugins() {
     register_plain_channel!("xmpp", XmppChannelFactory);
 }
 
+
+#[cfg(test)]
+mod credential_debug_tests {
+    //! A channel config is a credential container. `format!("{cfg:?}")` is the
+    //! shortest path a secret can take to a log line, a panic message or a
+    //! `tracing` field, so every config that carries a credential prints it
+    //! redacted.
+    //!
+    //! The tripwire is the secret VALUE, not the field name: a derived `Debug`
+    //! prints the value, and a hand-written one that merely renamed the field
+    //! would still leak it.
+
+    const SECRET: &str = "s3cr3t-value-that-must-not-be-printed";
+
+    fn assert_redacted(label: &str, debug: &str) {
+        assert!(
+            !debug.contains(SECRET),
+            "{label} printed its credential: {debug}"
+        );
+    }
+
+    #[test]
+    fn channel_config_debug_output_never_contains_the_credential() {
+        use super::email::config::EmailConfig;
+        use super::feishu::config::FeishuConfig;
+        use super::irc::config::IrcConfig;
+        use super::matrix::config::MatrixConfig;
+        use super::mattermost::config::MattermostConfig;
+        use super::telegram::config::TelegramConfig;
+        use super::telegram::config_v2::TelegramAccountConfig;
+        use super::xmpp::config::XmppConfig;
+
+        let mut irc = IrcConfig::default();
+        irc.password = Some(SECRET.to_string());
+        assert_redacted("IrcConfig", &format!("{irc:?}"));
+
+        let mut mattermost = MattermostConfig::default();
+        mattermost.bot_token = SECRET.to_string();
+        assert_redacted("MattermostConfig", &format!("{mattermost:?}"));
+
+        let mut email = EmailConfig::default();
+        email.password = SECRET.to_string();
+        assert_redacted("EmailConfig", &format!("{email:?}"));
+
+        let mut matrix = MatrixConfig::default();
+        matrix.access_token = SECRET.to_string();
+        assert_redacted("MatrixConfig", &format!("{matrix:?}"));
+
+        let feishu: FeishuConfig = serde_json::from_value(serde_json::json!({
+            "app_id": "cli_test",
+            "app_secret": SECRET,
+            "domain": "example.test",
+            "verification_token": SECRET,
+            "encrypt_key": SECRET,
+        }))
+        .expect("feishu config deserializes");
+        assert_redacted("FeishuConfig", &format!("{feishu:?}"));
+
+        let mut telegram = TelegramConfig::default();
+        telegram.bot_token = SECRET.to_string();
+        assert_redacted("TelegramConfig", &format!("{telegram:?}"));
+
+        let mut account = TelegramAccountConfig::default();
+        account.bot_token = SECRET.to_string();
+        assert_redacted("TelegramAccountConfig", &format!("{account:?}"));
+
+        let mut xmpp = XmppConfig::default();
+        xmpp.password = SECRET.to_string();
+        assert_redacted("XmppConfig", &format!("{xmpp:?}"));
+    }
+}
+
 #[cfg(test)]
 mod register_tests {
     use aleph_protocol::channels::{CONFIGURABLE_CHANNEL_TYPES, FACTORY_TABLE_BYPASS};

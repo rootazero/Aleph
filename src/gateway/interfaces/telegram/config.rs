@@ -11,7 +11,7 @@ use super::config_v2::{
 };
 
 /// Telegram channel configuration
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct TelegramConfig {
     /// Bot token from @`BotFather`
     pub bot_token: String,
@@ -68,6 +68,29 @@ pub struct TelegramConfig {
     /// Link preview policy for outbound messages (default: `Enabled`).
     #[serde(default)]
     pub link_preview: super::config_v2::LinkPreviewMode,
+}
+
+/// Hand-written so the credentials never reach a log line, a panic message
+/// or a `tracing` field. Every other field is printed as-is.
+impl std::fmt::Debug for TelegramConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TelegramConfig")
+            .field("bot_token", &"<redacted>")
+            .field("bot_username", &self.bot_username)
+            .field("allowed_users", &self.allowed_users)
+            .field("allowed_groups", &self.allowed_groups)
+            .field("dm_allowed", &self.dm_allowed)
+            .field("groups_allowed", &self.groups_allowed)
+            .field("dm_policy", &self.dm_policy)
+            .field("group_policy", &self.group_policy)
+            .field("polling_interval_secs", &self.polling_interval_secs)
+            .field("send_typing", &self.send_typing)
+            .field("max_retries", &self.max_retries)
+            .field("coalescing", &self.coalescing)
+            .field("streaming", &self.streaming)
+            .field("link_preview", &self.link_preview)
+            .finish()
+    }
 }
 
 const fn default_true() -> bool {

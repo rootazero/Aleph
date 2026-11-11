@@ -33,7 +33,7 @@ pub struct MatrixRoomPolicy {
 }
 
 /// Matrix channel configuration
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct MatrixConfig {
     /// Matrix homeserver URL (e.g., "<https://matrix.org>")
     pub homeserver_url: String,
@@ -92,6 +92,29 @@ pub struct MatrixConfig {
     /// Room-level policy overrides
     #[serde(default)]
     pub rooms: HashMap<String, MatrixRoomPolicy>,
+}
+
+/// Hand-written so the credentials never reach a log line, a panic message
+/// or a `tracing` field. Every other field is printed as-is.
+impl std::fmt::Debug for MatrixConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("MatrixConfig")
+            .field("homeserver_url", &self.homeserver_url)
+            .field("access_token", &"<redacted>")
+            .field("allowed_rooms", &self.allowed_rooms)
+            .field("sync_timeout_ms", &self.sync_timeout_ms)
+            .field("send_typing", &self.send_typing)
+            .field("mention_gating", &self.mention_gating)
+            .field("allowed_users", &self.allowed_users)
+            .field("state_store_path", &self.state_store_path)
+            .field("dedupe_store_path", &self.dedupe_store_path)
+            .field("initial_sync_limit", &self.initial_sync_limit)
+            .field("auto_join_invites", &self.auto_join_invites)
+            .field("download_media", &self.download_media)
+            .field("media_max_mb", &self.media_max_mb)
+            .field("rooms", &self.rooms)
+            .finish()
+    }
 }
 
 impl Default for MatrixConfig {

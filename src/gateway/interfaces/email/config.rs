@@ -68,6 +68,26 @@ pub struct EmailConfig {
     pub use_tls: bool,
 }
 
+/// Hand-written so the IMAP/SMTP password never reaches a log line, a panic
+/// message or a `tracing` field. Every other field is printed as-is.
+impl std::fmt::Debug for EmailConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("EmailConfig")
+            .field("imap_host", &self.imap_host)
+            .field("imap_port", &self.imap_port)
+            .field("smtp_host", &self.smtp_host)
+            .field("smtp_port", &self.smtp_port)
+            .field("username", &self.username)
+            .field("password", &"<redacted>")
+            .field("from_address", &self.from_address)
+            .field("poll_interval_secs", &self.poll_interval_secs)
+            .field("folders", &self.folders)
+            .field("allowed_senders", &self.allowed_senders)
+            .field("use_tls", &self.use_tls)
+            .finish()
+    }
+}
+
 impl Default for EmailConfig {
     fn default() -> Self {
         Self {
