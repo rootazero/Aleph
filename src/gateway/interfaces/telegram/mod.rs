@@ -744,8 +744,16 @@ impl Channel for TelegramChannel {
                             ),
                         };
 
+                        // The poll id alone is not unique: the same poll id
+                        // can appear in different chats, and several voters
+                        // can answer the same poll. Scope the id by the
+                        // voter so two answers never collide.
                         let mut inbound = InboundMessage {
-                            id: MessageId::new(format!("poll_{}", q.poll_id)),
+                            id: MessageId::new(format!(
+                                "poll_{}_{}",
+                                q.poll_id,
+                                sender_id.as_str()
+                            )),
                             channel_id,
                             conversation_id,
                             sender_id,

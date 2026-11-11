@@ -26,9 +26,16 @@ pub fn convert_reaction(
     let user = update.user()?;
 
     Some(InboundMessage {
+        // The chat and the message are not enough: several users can react
+        // to the same message, and the same user can react to the same
+        // message with more than one emoji. Scope the id by the reacting
+        // user and the emoji set so two reactions never collide.
         id: MessageId::new(format!(
-            "react_{}_{}",
-            update.chat.id.0, update.message_id.0
+            "react_{}_{}_{}_{}",
+            update.chat.id.0,
+            update.message_id.0,
+            user.id,
+            emojis.join("")
         )),
         channel_id: ChannelId::new(channel_id),
         conversation_id: ConversationId::new(update.chat.id.0.to_string()),
