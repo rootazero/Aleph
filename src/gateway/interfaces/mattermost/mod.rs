@@ -93,10 +93,14 @@ impl MattermostChannel {
     /// Get Mattermost-specific capabilities
     fn capabilities() -> ChannelCapabilities {
         ChannelCapabilities {
-            attachments: true,
-            images: true,
-            audio: true,
-            video: true,
+            // The send path builds no attachment list (see
+            // `message_ops::build_outbound`: `attachments: Vec::new()`), so
+            // advertising the media capabilities would promise something the
+            // adapter cannot deliver.
+            attachments: false,
+            images: false,
+            audio: false,
+            video: false,
             reactions: true,
             replies: true,
             editing: true,

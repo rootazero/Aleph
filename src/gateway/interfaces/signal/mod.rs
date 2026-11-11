@@ -100,11 +100,16 @@ impl SignalChannel {
     /// Get Signal-specific capabilities
     fn capabilities() -> ChannelCapabilities {
         ChannelCapabilities {
-            attachments: true,
-            images: true,
-            audio: true,
-            video: true,
-            reactions: true,
+            // The send path builds no attachment list (see
+            // `message_ops::build_outbound`: `attachments: Vec::new()`), so
+            // advertising the media capabilities would promise something the
+            // adapter cannot deliver.
+            attachments: false,
+            images: false,
+            audio: false,
+            video: false,
+            // `react` answers UnsupportedFeature.
+            reactions: false,
             replies: true,
             editing: false,
             deletion: false,
