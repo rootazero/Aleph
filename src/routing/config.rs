@@ -102,12 +102,12 @@ pub struct PeerMatchConfig {
 pub fn binding_problems(bindings: &[RouteBinding]) -> Vec<String> {
     let mut out = Vec::new();
     for (i, binding) in bindings.iter().enumerate() {
-        out.extend(binding_problems_for(i, binding));
+        binding_problems_for(i, binding, &mut out);
     }
     out
 }
 
-fn binding_problems_for(index: usize, binding: &RouteBinding) -> Vec<String> {
+fn binding_problems_for(index: usize, binding: &RouteBinding, out: &mut Vec<String>) {
     let who = if binding.agent_id.trim().is_empty() {
         format!("[[bindings]] #{index}")
     } else {
@@ -116,17 +116,15 @@ fn binding_problems_for(index: usize, binding: &RouteBinding) -> Vec<String> {
             binding.agent_id
         )
     };
-    let mut out = Vec::new();
-    report_agent_problem(&who, binding, &mut out);
-    report_peer_problems(&who, &binding.match_rule.peer, &mut out);
-    report_account_problem(&who, &binding.match_rule.account_id, &mut out);
+    report_agent_problem(&who, binding, out);
+    report_peer_problems(&who, &binding.match_rule.peer, out);
+    report_account_problem(&who, &binding.match_rule.account_id, out);
     if is_unscoped(&binding.match_rule) {
         out.push(format!(
             "{who}: matches every message on every channel — it shadows every \
              binding after it; put it last or give it a scope"
         ));
     }
-    out
 }
 
 fn report_agent_problem(who: &str, binding: &RouteBinding, out: &mut Vec<String>) {
@@ -143,7 +141,7 @@ fn report_peer_problems(who: &str, peer: &Option<PeerMatchConfig>, out: &mut Vec
         return;
     };
     let kind = peer.kind.trim();
-    if !["dm", "group"].contains(&kind.to_ascii_lowercase().as_str()) {
+    if !kind.eq_ignore_ascii_case("dm") && !kind.eq_ignore_ascii_case("group") {
         out.push(format!(
             "{who}: match.peer.kind = \"{}\" is not one of dm|group — \
              this binding can never match",
