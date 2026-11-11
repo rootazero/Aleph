@@ -52,8 +52,8 @@ pub fn normalize_openai_model_id<'a>(model_id: &'a str, base_url: Option<&str>) 
         _ => None,
     };
     match canonical {
-        Some(c) => Cow::Owned(c.to_string()),
-        None if core.len() != trimmed.len() => Cow::Owned(core.to_string()),
+        Some(c) => Cow::Borrowed(c),
+        None if core.len() != model_id.len() => Cow::Borrowed(core),
         None => Cow::Borrowed(model_id),
     }
 }

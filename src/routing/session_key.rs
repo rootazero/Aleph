@@ -305,7 +305,7 @@ impl SessionKey {
     }
 
     /// Format the base string for a DM session key (shared between `to_key_string` and `base_key_pattern`).
-    fn format_dm_base(agent_id: &str, channel: &str, peer_id: &str, dm_scope: &DmScope) -> String {
+    fn format_dm_base(agent_id: &str, channel: &str, peer_id: &str, dm_scope: DmScope) -> String {
         match dm_scope {
             DmScope::Main => format!("agent:{agent_id}:main"),
             DmScope::PerPeer if channel.is_empty() => {
@@ -319,12 +319,12 @@ impl SessionKey {
     }
 
     /// Append epoch suffix if non-zero.
-    fn append_epoch(base: String, epoch: u32) -> String {
+    fn append_epoch(mut base: String, epoch: u32) -> String {
         if epoch > 0 {
-            format!("{base}:s{epoch}")
-        } else {
-            base
+            use std::fmt::Write;
+            let _ = write!(base, ":s{epoch}");
         }
+        base
     }
 
     /// Get the agent ID from this session key
@@ -456,7 +456,7 @@ impl SessionKey {
                 peer_id,
                 dm_scope,
                 ..
-            } => Self::format_dm_base(agent_id, channel, peer_id, dm_scope),
+            } => Self::format_dm_base(agent_id, channel, peer_id, *dm_scope),
             // Non-epoch types: base_key_pattern == to_key_string
             _ => self.to_key_string(),
         }
@@ -516,7 +516,7 @@ impl SessionKey {
                 dm_scope,
                 epoch,
             } => {
-                let base = Self::format_dm_base(agent_id, channel, peer_id, dm_scope);
+                let base = Self::format_dm_base(agent_id, channel, peer_id, *dm_scope);
                 Self::append_epoch(base, *epoch)
             }
             Self::Group {
@@ -794,34 +794,26 @@ pub fn normalize_agent_id(id: &str) -> String {
         return DEFAULT_AGENT_ID.to_string();
     }
 
-    let normalized: String = trimmed
-        .to_lowercase()
-        .chars()
-        .map(|c| {
-            if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
-                c
-            } else {
-                '-'
-            }
-        })
-        .collect();
+    let mut normalized = String::with_capacity(trimmed.len());
+    for c in trimmed.chars() {
+        let lower = c.to_ascii_lowercase();
+        if lower.is_ascii_alphanumeric() || lower == '-' || lower == '_' {
+            normalized.push(lower);
+        } else {
+            normalized.push('-');
+        }
+    }
 
     let result = normalized
         .trim_start_matches('-')
-        .trim_end_matches('-')
-        .to_string();
+        .trim_end_matches('-');
 
     if result.is_empty() {
         DEFAULT_AGENT_ID.to_string()
     } else if result.len() > 64 {
-        // Safe: chars().take(64) is a *character*-based truncation, not a
-        // byte-indexed slice. The current filter above only emits ASCII, so
-        // chars and bytes are equivalent on a 64-cap, but chars().take() is
-        // what the code actually does — a future filter that admits any
-        // multi-byte UTF-8 would otherwise panic at a non-boundary index.
         result.chars().take(64).collect()
     } else {
-        result
+        result.to_string()
     }
 }
 
@@ -840,24 +832,21 @@ pub(crate) fn sanitize_component(s: &str) -> String {
     if trimmed.is_empty() {
         return String::new();
     }
-    let normalized: String = trimmed
-        .to_lowercase()
-        .chars()
-        .map(|c| {
-            if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
-                c
-            } else {
-                '-'
-            }
-        })
-        .collect();
+    let mut normalized = String::with_capacity(trimmed.len());
+    for c in trimmed.chars() {
+        let lower = c.to_ascii_lowercase();
+        if lower.is_ascii_alphanumeric() || lower == '-' || lower == '_' {
+            normalized.push(lower);
+        } else {
+            normalized.push('-');
+        }
+    }
 
     // Cap component length to prevent unbounded session key growth.
     if normalized.len() > 64 {
-        normalized.chars().take(64).collect()
-    } else {
-        normalized
+        normalized.truncate(64);
     }
+    normalized
 }
 
 impl fmt::Display for SessionKey {

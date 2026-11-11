@@ -248,6 +248,9 @@ impl ProviderPreset {
 /// (`display_name` / description / homepage / modalities), so the parallel
 /// `PRESET_METADATA` map is just a cached view onto the same data.
 pub fn provider_metadata(name: &str) -> Option<&'static ProviderMetadata> {
+    if let Some(m) = PRESET_METADATA.get(name) {
+        return Some(m);
+    }
     PRESET_METADATA.get(name.to_lowercase().as_str())
 }
 
@@ -271,6 +274,9 @@ pub fn presets_by_modality(modality: Modality) -> Vec<&'static str> {
 
 /// Get a preset by name (case-insensitive). Walks aliases on miss.
 pub fn get_preset(name: &str) -> Option<&'static ProviderPreset> {
+    if let Some(p) = PRESETS.get(name) {
+        return Some(p);
+    }
     let lower = name.to_lowercase();
     PRESETS.get(lower.as_str())
 }

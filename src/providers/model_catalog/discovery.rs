@@ -173,11 +173,15 @@ pub async fn refresh_models(
     let started = now_secs();
     let lock = {
         let mut locks = REFRESH_LOCKS.lock().unwrap_or_else(|e| e.into_inner());
-        Arc::clone(
-            locks
-                .entry(provider.to_string())
-                .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(()))),
-        )
+        if let Some(existing) = locks.get(provider) {
+            Arc::clone(existing)
+        } else {
+            Arc::clone(
+                locks
+                    .entry(provider.to_string())
+                    .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(()))),
+            )
+        }
     };
     let _permit = lock.lock().await;
     if let Some(cached) = cached_models_async(provider, base_url).await {

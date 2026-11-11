@@ -137,6 +137,7 @@ impl ProtocolRegistry {
         let mut protocols: Vec<String> = read_recover(&self.builtin).keys().cloned().collect();
         protocols.extend(read_recover(&self.dynamic).keys().cloned());
         protocols.sort();
+        protocols.dedup();
         protocols
     }
 }

@@ -93,13 +93,14 @@ impl ProviderRegistry {
     /// duplicate detection across worker threads.
     pub fn register(&self, name: String, provider: Arc<dyn AiProvider>) -> Result<()> {
         use dashmap::mapref::entry::Entry;
-        match self.providers.entry(name.clone()) {
+        match self.providers.entry(name) {
             Entry::Vacant(slot) => {
                 slot.insert(provider);
                 Ok(())
             }
-            Entry::Occupied(_) => Err(AlephError::invalid_config(format!(
-                "Provider '{name}' is already registered"
+            Entry::Occupied(slot) => Err(AlephError::invalid_config(format!(
+                "Provider '{}' is already registered",
+                slot.key()
             ))),
         }
     }
@@ -162,7 +163,7 @@ impl ProviderRegistry {
     #[must_use]
     pub fn names(&self) -> Vec<String> {
         let mut names: Vec<_> = self.providers.iter().map(|r| r.key().clone()).collect();
-        names.sort();
+        names.sort_unstable();
         names
     }
 

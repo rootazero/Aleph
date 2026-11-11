@@ -36,19 +36,17 @@ const CLAUDE_CODE_IDENTITY: &str = "You are Claude Code, Anthropic's official CL
 /// transform is deterministic so identical inputs always sanitize to the same
 /// output, allowing a per-process `sanitized → original` map to round-trip.
 pub(crate) fn sanitize_anthropic_tool_name(name: &str) -> String {
-    let mut out: String = name
-        .chars()
-        .map(|c| {
-            if c.is_ascii_alphanumeric() || c == '_' || c == '-' {
-                c
-            } else {
-                '_'
-            }
-        })
-        .collect();
-    let needs_prefix = out.chars().next().is_none_or(|c| !c.is_ascii_alphabetic());
+    let needs_prefix = name.chars().next().is_none_or(|c| !c.is_ascii_alphabetic());
+    let mut out = String::with_capacity(name.len() + if needs_prefix { 2 } else { 0 });
     if needs_prefix {
-        out = format!("t_{out}");
+        out.push_str("t_");
+    }
+    for c in name.chars() {
+        if c.is_ascii_alphanumeric() || c == '_' || c == '-' {
+            out.push(c);
+        } else {
+            out.push('_');
+        }
     }
     if out.len() > 128 {
         out.truncate(128);
