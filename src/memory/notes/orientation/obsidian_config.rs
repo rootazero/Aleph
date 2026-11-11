@@ -24,7 +24,7 @@ pub async fn ensure_obsidian_config(agent_dir: &Path) -> Result<(), AlephError> 
         ("graph.json", GRAPH_JSON),
     ] {
         let p = dir.join(name);
-        if !p.exists() {
+        if !tokio::fs::try_exists(&p).await.unwrap_or(false) {
             tokio::fs::write(&p, body)
                 .await
                 .map_err(|e| AlephError::other(format!("write {name}: {e}")))?;

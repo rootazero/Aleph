@@ -73,9 +73,7 @@ pub struct DefaultQueryFiler {
 /// Compute SHA-256 hex digest of a normalized query string.
 fn query_hash(query: &str) -> String {
     let normalized = query.trim().to_lowercase();
-    let mut hasher = Sha256::new();
-    hasher.update(normalized.as_bytes());
-    hex::encode(hasher.finalize())
+    crate::memory::notes::indexer::sha2_hash(&normalized)
 }
 
 #[async_trait]

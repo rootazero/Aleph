@@ -83,11 +83,7 @@ fn extract_section<'a>(raw: &'a str, name: &str) -> Option<&'a str> {
     Some(&raw[start..end])
 }
 
-fn hash(s: &str) -> String {
-    let mut h = Sha256::new();
-    h.update(s.as_bytes());
-    hex::encode(h.finalize())
-}
+use crate::memory::notes::indexer::sha2_hash as hash;
 
 /// Reader/writer for `SCHEMA.md`.
 pub struct SchemaStore {
