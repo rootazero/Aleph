@@ -1239,8 +1239,10 @@ impl ChannelRegistry {
                 .map_err(|error| ChannelError::Internal(error.to_string()));
         }
         let entry = self.legacy_entry(channel_id).await?;
-        let _operation = self.begin_legacy_operation(channel_id, &entry).await?;
-        self.start_channel_inner(channel_id, &entry).await
+        let marker = self.begin_legacy_operation(channel_id, &entry).await?;
+        let result = self.start_channel_inner(channel_id, &entry).await;
+        self.finish_legacy_operation(&entry, &marker).await;
+        result
     }
 
     async fn start_channel_inner(
