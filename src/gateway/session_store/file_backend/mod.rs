@@ -1160,6 +1160,17 @@ impl SessionStore for FileSessionStore {
         // branched session could write between the rewrite and the commit
         // and be lost by the rewrite.
         let mut guard = self.lock_metadata(&new_key_str).await?;
+        // Create-if-absent, decided by the store under its own lock. The
+        // caller-side preflight (`get_metadata`) is a fast path only: another
+        // writer can create the target between that check and this call, and
+        // the branch would then replace a session the caller never owned.
+        // The guard read the document after taking the lock, so `None` here is
+        // authoritative — no window between "does it exist" and "write it".
+        if guard.existing().is_some() {
+            return Err(SessionStoreError::AlreadyExists(format!(
+                "Session {new_key_str} already exists"
+            )));
+        }
         self.write_transcript_locked(&guard, &new_key_str, &checkpoint_messages)
             .await?;
         // P1 data isolation: this is a freshly-created session (new_key), so

@@ -5,6 +5,7 @@ use serde_json::{json, Value};
 
 use crate::gateway::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR, INVALID_PARAMS};
 use crate::gateway::router::SessionKey;
+use crate::gateway::session_store::error::SessionStoreError;
 use crate::gateway::session_store::SessionStore;
 use crate::gateway::visibility;
 
@@ -256,6 +257,11 @@ pub async fn handle_branch_checkpoint_db(
                 "created": true,
             }),
         ),
+        // A target collision is reported exactly like the preflight above
+        // reports it — same response, same code. The store decides under its
+        // own lock (the preflight can be raced), and a different error code
+        // here would turn "does this key exist?" back into an oracle.
+        Err(SessionStoreError::AlreadyExists(_)) => visibility::not_found_response(request.id),
         Err(e) => JsonRpcResponse::error(
             request.id,
             INTERNAL_ERROR,
@@ -382,6 +388,59 @@ mod visibility_guards {
         // branch must have no side effect either.
         let new_key = SessionKey::from_key_string("agent:bobsnewbranch:main").unwrap();
         assert!(store.get_metadata(&new_key).await.unwrap().is_none());
+    }
+
+    /// The target-collision check in the handler is a PREFLIGHT — another
+    /// writer can create the target between that check and the store's
+    /// write. The store therefore decides under its own lock: the branch
+    /// refuses to replace a session that already exists, so the race cannot
+    /// overwrite a session the caller never owned.
+    #[tokio::test]
+    async fn branch_refuses_to_replace_an_existing_target_session() {
+        let temp = TempDir::new().unwrap();
+        let store = store(&temp);
+        let source_key = owned_session(&store, "cpbranchrace", "u-alice").await;
+
+        // A checkpoint on the source session.
+        let cp_dir = crate::gateway::session_store::file_backend::session_dir_for(
+            temp.path(),
+            &source_key.to_key_string(),
+        )
+        .join("checkpoints");
+        tokio::fs::create_dir_all(&cp_dir).await.unwrap();
+        let row = json!({
+            "id": "m1",
+            "role": "user",
+            "content": "hello",
+            "timestamp": 1,
+            "metadata": null,
+        });
+        tokio::fs::write(cp_dir.join("cp-1.jsonl"), format!("{row}\n"))
+            .await
+            .unwrap();
+
+        // The target session already exists.
+        let target_key = SessionKey::from_key_string("agent:cpbranchracetarget:main").unwrap();
+        with_scope(
+            Some(ScopeAttribution::personal("u-bob")),
+            store.get_or_create(&target_key),
+        )
+        .await
+        .unwrap();
+
+        let err = store
+            .branch_from_checkpoint(&source_key, "cp-1", &target_key)
+            .await
+            .expect_err("the branch must refuse an existing target");
+        assert!(
+            matches!(err, SessionStoreError::AlreadyExists(_)),
+            "unexpected error: {err:?}"
+        );
+
+        // The target came through untouched — no checkpoint content copied
+        // over it, no message count from the branch.
+        let meta = store.get_metadata(&target_key).await.unwrap().unwrap();
+        assert_eq!(meta.message_count, 0);
     }
 
     /// The read-compromise shape team-lead review flagged: bob owns the
