@@ -70,17 +70,32 @@ pub(crate) const JUSTIFICATION_MAX_CHARS: usize = 240;
 /// length. Returns `None` when nothing meaningful remains, so the caller falls
 /// back to the byte-identical capabilities-only string.
 pub(crate) fn sanitize_justification(raw: String) -> Option<String> {
-    let cleaned: String = raw
-        .chars()
-        .map(|c| if c.is_control() { ' ' } else { c })
-        .collect();
-    let collapsed = cleaned.split_whitespace().collect::<Vec<_>>().join(" ");
-    if collapsed.is_empty() {
-        return None;
+    let mut out = String::new();
+    let mut char_count = 0;
+    for word in raw.split(|c: char| c.is_whitespace() || c.is_control()) {
+        if word.is_empty() {
+            continue;
+        }
+        if char_count > 0 {
+            if char_count >= JUSTIFICATION_MAX_CHARS {
+                break;
+            }
+            out.push(' ');
+            char_count += 1;
+        }
+        for ch in word.chars() {
+            if char_count >= JUSTIFICATION_MAX_CHARS {
+                break;
+            }
+            out.push(ch);
+            char_count += 1;
+        }
     }
-    // UTF-8-safe clamp (P7): take whole chars, never split a codepoint.
-    let clamped: String = collapsed.chars().take(JUSTIFICATION_MAX_CHARS).collect();
-    Some(clamped)
+    if out.is_empty() {
+        None
+    } else {
+        Some(out)
+    }
 }
 
 #[cfg(test)]

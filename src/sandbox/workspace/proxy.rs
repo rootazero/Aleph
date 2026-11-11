@@ -48,7 +48,7 @@ pub(crate) async fn maybe_spawn_proxy(
     cmd: &mut SandboxCommand,
 ) -> Result<Option<ActiveProxy>, SandboxError> {
     let hosts = match &cmd.capabilities.network {
-        NetworkPolicy::AllowHosts { hosts } if !hosts.is_empty() => hosts.clone(),
+        NetworkPolicy::AllowHosts { hosts } if !hosts.is_empty() => hosts,
         _ => return Ok(None),
     };
 
@@ -65,7 +65,7 @@ pub(crate) async fn maybe_spawn_proxy(
         return Ok(None);
     }
 
-    let allowlist = AllowList::new(&hosts);
+    let allowlist = AllowList::new(hosts);
     let handle = sandbox_proxy::spawn(allowlist)
         .await
         .map_err(|e| SandboxError::Other(format!("managed proxy spawn: {e}")))?;

@@ -48,10 +48,10 @@ pub(super) enum TargetHost {
 }
 
 impl TargetHost {
-    fn as_lookup_str(&self) -> String {
+    fn as_lookup_cow(&self) -> std::borrow::Cow<'_, str> {
         match self {
-            Self::Ip(ip) => ip.to_string(),
-            Self::Domain(d) => d.clone(),
+            Self::Ip(ip) => std::borrow::Cow::Owned(ip.to_string()),
+            Self::Domain(d) => std::borrow::Cow::Borrowed(d.as_str()),
         }
     }
 }
@@ -81,8 +81,9 @@ pub(super) async fn handle(inbound: TcpStream, allowlist: AllowList) -> Result<(
         // avoid unnecessary allocation from a malformed or malicious greeting.
         return Ok(());
     }
-    let mut methods = vec![0u8; nmethods];
-    rd.read_exact(&mut methods).await?;
+    let mut methods = [0u8; 16];
+    let methods = &mut methods[..nmethods];
+    rd.read_exact(methods).await?;
     if !methods.contains(&NO_AUTH) {
         wr.write_all(&[VER, NO_ACCEPTABLE]).await?;
         return Ok(());
@@ -108,7 +109,7 @@ pub(super) async fn handle(inbound: TcpStream, allowlist: AllowList) -> Result<(
         }
     };
 
-    let host_for_log = req.target.as_lookup_str();
+    let host_for_log = req.target.as_lookup_cow();
     if !allowlist.permits(&host_for_log) {
         tracing::debug!(
             target = "sandbox.proxy",
@@ -165,7 +166,7 @@ pub(super) async fn handle(inbound: TcpStream, allowlist: AllowList) -> Result<(
 
     let mut inbound = rd
         .reunite(wr)
-        .map_err(|e| std::io::Error::other(format!("{e}")))?;
+        .map_err(std::io::Error::other)?;
     let mut upstream = upstream;
     let _ = tokio::io::copy_bidirectional(&mut inbound, &mut upstream).await;
     Ok(())

@@ -1,6 +1,6 @@
 //! Post-install action runners for runtime specs.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use tokio::process::Command;
 use tokio::time::{timeout, Duration};
@@ -65,7 +65,7 @@ async fn run_cmd_with_timeout(cmd: &mut Command) -> Result<std::process::Output,
 
 /// Run a single post-install action. `bin_path` is the just-installed
 /// capability binary (used for `RunSubcommand` and `AssetProbe`).
-pub async fn run(action: &PostInstallAction, bin_path: &PathBuf) -> Result<(), PostInstallError> {
+pub async fn run(action: &PostInstallAction, bin_path: &Path) -> Result<(), PostInstallError> {
     match action {
         PostInstallAction::RunSubcommand {
             args,
@@ -80,7 +80,7 @@ pub async fn run(action: &PostInstallAction, bin_path: &PathBuf) -> Result<(), P
 }
 
 async fn run_subcommand(
-    bin_path: &PathBuf,
+    bin_path: &Path,
     args: &[&str],
     target_dir: Option<&str>,
     env: &[super::specs::EnvFromConfig],
@@ -92,7 +92,7 @@ async fn run_subcommand(
     }
     if let Some(td) = target_dir {
         let expanded = expand_home(td)?;
-        if let Some(parent) = PathBuf::from(&expanded).parent() {
+        if let Some(parent) = Path::new(&expanded).parent() {
             if let Err(e) = tokio::fs::create_dir_all(parent).await {
                 warn!(
                     "Failed to create target directory {}: {}",
@@ -158,8 +158,7 @@ async fn create_fnm_alias(alias_name: &str) -> Result<(), PostInstallError> {
     let text = String::from_utf8_lossy(&list.stdout);
     let version = text
         .lines()
-        .filter_map(|l| {
-            // Look for the default version marked with '*'
+        .find_map(|l| {
             if l.trim().starts_with('*') {
                 l.split_whitespace()
                     .find(|t| t.starts_with('v'))
@@ -168,7 +167,6 @@ async fn create_fnm_alias(alias_name: &str) -> Result<(), PostInstallError> {
                 None
             }
         })
-        .next()
         .ok_or(PostInstallError::NoNodeVersion)?;
     let output =
         run_cmd_with_timeout(Command::new("fnm").args(["alias", &version, alias_name])).await?;
@@ -181,7 +179,7 @@ async fn create_fnm_alias(alias_name: &str) -> Result<(), PostInstallError> {
 }
 
 async fn verify_or_repair(
-    bin_path: &PathBuf,
+    bin_path: &Path,
     path_template: &str,
     repair: &[&str],
 ) -> Result<(), PostInstallError> {
