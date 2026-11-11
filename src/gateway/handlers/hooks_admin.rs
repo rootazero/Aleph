@@ -469,6 +469,12 @@ pub async fn handle_hooks_remove(request: JsonRpcRequest) -> JsonRpcResponse {
         }
     };
 
+    // The read-modify-write has to be one critical section. `hooks.add`
+    // appends under this same lock, so a concurrent add that lands between
+    // our read and our write would have its hook overwritten by ours — both
+    // calls would report success and one hook would be silently gone.
+    let _guard = HOOKS_MUTEX.lock().unwrap();
+
     let (path, _exists, mut events) = match read_hooks_file() {
         Ok(v) => v,
         Err(e) => return JsonRpcResponse::error(request.id, INTERNAL_ERROR, e),
@@ -485,6 +491,7 @@ pub async fn handle_hooks_remove(request: JsonRpcRequest) -> JsonRpcResponse {
     if let Err(e) = write_hooks_file(&path, &events) {
         return JsonRpcResponse::error(request.id, INTERNAL_ERROR, e);
     }
+    drop(_guard);
     trigger_reload();
     let mut payload = list_response(path, true, events);
     if let Some(obj) = payload.as_object_mut() {
