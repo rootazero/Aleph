@@ -222,7 +222,7 @@ fn render_json(env: &MemoryEnvelope) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::super::envelope::EnvelopeMeta;
+    use super::super::envelope::{EnvelopeMeta, EnvelopeSlot};
     use super::*;
 
     fn empty() -> MemoryEnvelope {
