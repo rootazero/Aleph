@@ -43,16 +43,31 @@ pub enum RetryVerdict {
 /// read as a day-of-month: the digits were right there, nobody checked what
 /// they were attached to.
 ///
+fn format_u16_stack(buf: &mut [u8; 5], mut n: u16) -> &str {
+    if n == 0 {
+        return "0";
+    }
+    let mut i = buf.len();
+    while n > 0 && i > 0 {
+        i -= 1;
+        buf[i] = b'0' + (n % 10) as u8;
+        n /= 10;
+    }
+    // Safety: only ASCII digits written
+    std::str::from_utf8(&buf[i..]).unwrap_or("")
+}
+
 /// The test is deliberately narrow — the neighbouring characters must not be
 /// ASCII digits. Everything a real message puts around a status code (spaces,
 /// `(`, `:`, `=`, `,`, `/`, end of string) still matches, so no genuine
 /// classification is lost.
 #[must_use]
 pub fn has_status_code(msg: &str, code: u16) -> bool {
-    let needle = code.to_string();
+    let mut buf = [0u8; 5];
+    let needle = format_u16_stack(&mut buf, code);
     let bytes = msg.as_bytes();
     let mut from = 0usize;
-    while let Some(rel) = msg.get(from..).and_then(|slice| slice.find(&needle)) {
+    while let Some(rel) = msg.get(from..).and_then(|slice| slice.find(needle)) {
         let start = from + rel;
         let end = start + needle.len();
         let left_ok =
@@ -95,14 +110,10 @@ pub fn parse_token_gap_str(msg: &str) -> Option<usize> {
     let after_tokens = lower.get(tokens_idx..)?;
     let gt_idx = after_tokens.find('>')?;
     let after_gt = after_tokens.get(gt_idx + 1..)?.trim_start();
-    let limit_str: String = after_gt
-        .chars()
-        .take_while(|c| c.is_ascii_digit())
-        .collect();
-    if limit_str.is_empty() {
-        return None;
-    }
-    let limit: usize = limit_str.parse().ok()?;
+    let limit_end = after_gt
+        .find(|c: char| !c.is_ascii_digit())
+        .unwrap_or(after_gt.len());
+    let limit: usize = after_gt.get(..limit_end)?.parse().ok()?;
 
     Some(actual.saturating_sub(limit))
 }
@@ -224,12 +235,9 @@ pub fn extract_retry_after_str(raw: &str) -> Option<Duration> {
         .find("retry after ")
         .or_else(|| msg.find("retry-after: "))?;
     let start = msg.get(after_idx..)?.find(|c: char| c.is_ascii_digit())? + after_idx;
-    let num_str: String = msg
-        .get(start..)?
-        .chars()
-        .take_while(|c| c.is_ascii_digit())
-        .collect();
-    let secs: u64 = num_str.parse().ok()?;
+    let rest = msg.get(start..)?;
+    let end = rest.find(|c: char| !c.is_ascii_digit()).unwrap_or(rest.len());
+    let secs: u64 = rest.get(..end)?.parse().ok()?;
     Some(Duration::from_secs(secs))
 }
 
