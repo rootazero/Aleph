@@ -1114,7 +1114,9 @@ fn build_agent_catalog(
     // those this session may see — the caller already applied `visibility`
     // (the same value the skill snapshot used; same run).
     for a in plugin_subagents {
-        by_id.entry(a.id.clone()).or_insert(a);
+        if !by_id.contains_key(&a.id) {
+            by_id.insert(a.id.clone(), a);
+        }
     }
     if by_id.is_empty() {
         return None;
@@ -1164,7 +1166,11 @@ fn merge_stable_memory_envelopes(
     orientation: Option<String>,
 ) -> Option<String> {
     match (curated, orientation) {
-        (Some(c), Some(o)) => Some(format!("{c}\n{o}")),
+        (Some(mut c), Some(o)) => {
+            c.push('\n');
+            c.push_str(&o);
+            Some(c)
+        }
         (c, o) => c.or(o),
     }
 }
@@ -1180,23 +1186,20 @@ fn truncate_chars(s: &str, max_chars: usize) -> String {
 /// the retrieval query against `MemoryContextProvider::build_memory_user_message`.
 /// Returns an empty string when no user-side text is available; callers treat
 /// the empty case as "skip retrieval".
-pub(crate) fn last_user_query(input: &FlowInput) -> String {
+pub(crate) fn last_user_query(input: &FlowInput) -> &str {
     const fn text_of(content: &crate::session::events::MessageContent) -> &str {
         content.text.as_str()
     }
     match input {
-        // rust-doctor-disable-next-line excessive-clone
-        FlowInput::Prompt(s) => s.clone(),
+        FlowInput::Prompt(s) => s.as_str(),
         FlowInput::Messages(msgs) | FlowInput::Multimodal(msgs) => msgs
             .iter()
             .rev()
             .map(text_of)
             .find(|s| !s.is_empty())
-            .map(str::to_string)
-            .unwrap_or_default(),
-        // rust-doctor-disable-next-line excessive-clone
-        FlowInput::History { prompt, .. } => prompt.clone(),
-        FlowInput::Resume => String::new(),
+            .unwrap_or(""),
+        FlowInput::History { prompt, .. } => prompt.as_str(),
+        FlowInput::Resume => "",
     }
 }
 

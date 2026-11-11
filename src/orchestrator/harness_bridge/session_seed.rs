@@ -104,7 +104,7 @@ async fn seed_messages(
     for (i, content) in msgs.into_iter().enumerate() {
         if i == last {
             let turn_id = uuid::Uuid::new_v4();
-            emit_seed_provenance(service, session_id, turn_id, origin.clone()).await?;
+            emit_seed_provenance(service, session_id, turn_id, origin).await?;
             emit_user_message(service, session_id, turn_id, content).await?;
         } else {
             emit_message(service, session_id, content, true).await?;
