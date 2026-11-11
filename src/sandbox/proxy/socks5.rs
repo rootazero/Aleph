@@ -262,11 +262,11 @@ mod tests {
     #[test]
     fn target_host_lookup_str() {
         assert_eq!(
-            TargetHost::Ip(IpAddr::V4(Ipv4Addr::new(1, 2, 3, 4))).as_lookup_str(),
+            TargetHost::Ip(IpAddr::V4(Ipv4Addr::new(1, 2, 3, 4))).as_lookup_cow(),
             "1.2.3.4"
         );
         assert_eq!(
-            TargetHost::Domain("example.com".into()).as_lookup_str(),
+            TargetHost::Domain("example.com".into()).as_lookup_cow(),
             "example.com"
         );
     }
