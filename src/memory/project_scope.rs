@@ -99,11 +99,10 @@ pub fn project_namespace(project_root: Option<&Path>) -> String {
     let mut hasher = Sha256::new();
     hasher.update(canonical.to_string_lossy().as_bytes());
     let digest = hasher.finalize();
-    let mut hex = String::with_capacity(8);
-    for byte in &digest[..4] {
-        hex.push_str(&format!("{byte:02x}"));
-    }
-    format!("proj-{hex}")
+    format!(
+        "proj-{:02x}{:02x}{:02x}{:02x}",
+        digest[0], digest[1], digest[2], digest[3]
+    )
 }
 
 /// Returns `true` when `ns` is the global sentinel (no project / feature off).
@@ -416,7 +415,7 @@ pub fn partition_is_shared_room(agent_id: &str) -> bool {
 /// have pre-existing single-user content to inherit.
 #[must_use]
 pub fn owner_adoption_base(agent_id: &str) -> Option<&str> {
-    agent_id.strip_suffix(&format!("{NS_SEP}{OWNER_USER_ID}"))
+    agent_id.strip_suffix(OWNER_USER_ID)?.strip_suffix(NS_SEP)
 }
 
 /// Copy a pre-P1 base-partition file into the owner's personal-scope path,

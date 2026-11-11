@@ -203,7 +203,7 @@ impl MemoryExtensionRegistry {
         envelope: &mut MemoryEnvelope,
     ) -> Result<(), AlephError> {
         for ext in self.snapshot() {
-            let name = ext.name().to_string();
+            let name = ext.name();
             match timeout(ON_RETRIEVE_TIMEOUT, ext.on_retrieve(ctx, envelope)).await {
                 Ok(Ok(())) => {}
                 Ok(Err(e)) => warn!("memory extension '{name}' on_retrieve failed: {e}"),
@@ -234,7 +234,7 @@ impl MemoryExtensionRegistry {
     ) -> Result<CaptureDecision, AlephError> {
         let mut failures: Vec<String> = Vec::new();
         for ext in self.snapshot() {
-            let name = ext.name().to_string();
+            let name = ext.name();
             match timeout(ON_CAPTURE_TIMEOUT, ext.on_capture(ctx, raw)).await {
                 Ok(Ok(CaptureDecision::Allow)) => continue,
                 Ok(Ok(blk @ CaptureDecision::Block { .. })) => {
@@ -300,7 +300,7 @@ impl MemoryExtensionRegistry {
     /// producer here only if a real session-rotation event is introduced.
     pub async fn dispatch_on_session_switch(&self, ctx: &SessionSwitchCtx) {
         for ext in self.snapshot() {
-            let name = ext.name().to_string();
+            let name = ext.name();
             match timeout(ON_SESSION_SWITCH_TIMEOUT, ext.on_session_switch(ctx)).await {
                 Ok(Ok(())) => {}
                 Ok(Err(e)) => warn!("memory extension '{name}' on_session_switch failed: {e}"),
@@ -330,7 +330,7 @@ impl MemoryExtensionRegistry {
         let mut parts: Vec<String> = Vec::new();
         let mut bytes_used = 0usize;
         for ext in self.snapshot() {
-            let name = ext.name().to_string();
+            let name = ext.name();
             match timeout(ON_PRE_COMPRESS_TIMEOUT, ext.on_pre_compress(ctx)).await {
                 Ok(Ok(s)) => {
                     let trimmed = s.trim();
@@ -413,7 +413,7 @@ impl MemoryExtensionRegistry {
 
     pub async fn dispatch_on_delegation(&self, ctx: &DelegationCtx) {
         for ext in self.snapshot() {
-            let name = ext.name().to_string();
+            let name = ext.name();
             match timeout(ON_DELEGATION_TIMEOUT, ext.on_delegation(ctx)).await {
                 Ok(Ok(())) => {}
                 Ok(Err(e)) => warn!("memory extension '{name}' on_delegation failed: {e}"),

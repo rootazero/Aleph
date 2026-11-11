@@ -30,21 +30,27 @@
 /// Single-variant by design — see the module docs. This is a column value, not
 /// an access-control decision. Adding a variant does not create isolation;
 /// isolation lives in `memory::project_scope` and `gateway::visibility`.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NamespaceScope {
     /// Owner namespace — the only namespace Aleph writes.
     Owner,
 }
 
 impl NamespaceScope {
+    /// Converts namespace scope to static str database column value
+    #[must_use]
+    pub const fn as_str(&self) -> &'static str {
+        match self {
+            Self::Owner => "owner",
+        }
+    }
+
     /// Converts namespace scope to database column value
     ///
     /// Used for INSERT/UPDATE operations
     #[must_use]
     pub fn to_namespace_value(&self) -> String {
-        match self {
-            Self::Owner => "owner".to_string(),
-        }
+        self.as_str().to_string()
     }
 }
 

@@ -64,10 +64,19 @@ impl MemoryMode {
     /// as well as from a pill.
     #[must_use]
     pub fn from_id(id: &str) -> Option<Self> {
-        match id.trim().to_ascii_lowercase().as_str() {
-            "on" | "enabled" | "true" => Some(Self::On),
-            "off" | "disabled" | "false" => Some(Self::Off),
-            _ => None,
+        let t = id.trim();
+        if t.eq_ignore_ascii_case("on")
+            || t.eq_ignore_ascii_case("enabled")
+            || t.eq_ignore_ascii_case("true")
+        {
+            Some(Self::On)
+        } else if t.eq_ignore_ascii_case("off")
+            || t.eq_ignore_ascii_case("disabled")
+            || t.eq_ignore_ascii_case("false")
+        {
+            Some(Self::Off)
+        } else {
+            None
         }
     }
 
