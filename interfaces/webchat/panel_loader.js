@@ -8,6 +8,33 @@ const requireSync = (value) => {
     throw Error('async ABI result');
 };
 
+/** @type {WeakMap<object, Promise<void>>} */
+const initializingModules = new WeakMap();
+
+/**
+ * Share only an in-flight initializer for this exact ESM namespace.
+ * Successful and failed settlements both retain the existing later-call contract.
+ * @param {{ default?: unknown }} module
+ * @returns {Promise<void>}
+ */
+const initializeModule = async (module) => {
+    const initialize = module.default;
+    if (typeof initialize !== 'function') return;
+    let pending = initializingModules.get(module);
+    if (!pending) {
+        // Publish before invoking user initialization, including synchronous reentry.
+        pending = Promise.resolve().then(async () => {
+            try {
+                await initialize.call(module);
+            } finally {
+                initializingModules.delete(module);
+            }
+        });
+        initializingModules.set(module, pending);
+    }
+    await pending;
+};
+
 const parseIntegrity = (integrity) => {
     const match = /^sha256-([A-Za-z0-9+/]{43}=)$/.exec(integrity);
     if (!match) throw failure('InvalidAssetIntegrity');
@@ -61,7 +88,7 @@ const importVerifiedModule = async (entry, integrity, credential) => {
     const blobUrl = URL.createObjectURL(new Blob([bytes], { type: 'text/javascript' }));
     try {
         const module = await import(blobUrl);
-        if (typeof module.default === 'function') await module.default();
+        await initializeModule(module);
         return module;
     } finally {
         URL.revokeObjectURL(blobUrl);
@@ -72,7 +99,7 @@ export async function loadPanelModule(entry, integrity = null, credential = null
     let module;
     try {
         module = integrity === null ? await import(new URL(entry, import.meta.url).href) : await importVerifiedModule(entry, integrity, credential);
-        if (integrity === null && typeof module.default === 'function') await module.default();
+        if (integrity === null) await initializeModule(module);
     } catch (cause) {
         if (cause?.code === 'AssetFetchFailed' || cause?.code === 'InvalidAssetIntegrity' || cause?.code === 'IntegrityMismatch') throw cause;
         throw failure('ImportFailed', cause);

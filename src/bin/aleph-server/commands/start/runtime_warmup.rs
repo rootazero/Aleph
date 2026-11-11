@@ -77,16 +77,70 @@ pub(super) async fn runtime_startup_warmup() {
 #[cfg(test)]
 mod warmup_tests {
     use super::runtime_startup_warmup;
+    use std::process::{Command, Output, Stdio};
     use tempfile::TempDir;
+
+    const WARMUP_TEST_ID: &str =
+        "commands::start::runtime_warmup::warmup_tests::test_warmup_runs_and_persists_ledger";
+    const CHILD_FLAG: &str = "ALEPH_TEST_RUNTIME_WARMUP_CHILD";
+    const COMPLETION_MARKER: &str = "ALEPH_WARMUP_LEDGER_COMPLETE";
+
+    fn warmup_child_completed(output: &Output) -> bool {
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        output.status.success()
+            && stdout
+                .lines()
+                .any(|line| line == format!("test {WARMUP_TEST_ID} ... ok"))
+            && stdout.lines().any(|line| {
+                line.starts_with("test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; ")
+            })
+            && stderr
+                .lines()
+                .any(|line| line == format!("{COMPLETION_MARKER}:{WARMUP_TEST_ID}"))
+    }
 
     #[tokio::test]
     async fn test_warmup_runs_and_persists_ledger() {
-        let dir = TempDir::new().unwrap();
-        std::env::set_var("HOME", dir.path());
+        if std::env::var(CHILD_FLAG).as_deref() != Ok(WARMUP_TEST_ID) {
+            let dir = TempDir::new().unwrap();
+            let home = dir.path().join("home");
+            let aleph_home = dir.path().join("aleph-home");
+            std::fs::create_dir_all(&home).unwrap();
+            std::fs::create_dir_all(&aleph_home).unwrap();
+            // Only the exact child changes environment; it inherits the outer command's group/bound.
+            let output = Command::new(std::env::current_exe().unwrap())
+                .args([WARMUP_TEST_ID, "--exact", "--nocapture", "--test-threads=1"])
+                .env(CHILD_FLAG, WARMUP_TEST_ID)
+                .env("HOME", &home)
+                .env("ALEPH_HOME", &aleph_home)
+                .stdin(Stdio::null())
+                .output()
+                .expect("run the exact warmup child in the current test binary");
+            assert!(
+                warmup_child_completed(&output),
+                "warmup child did not prove completion: status={}, stdout={:?}, stderr={:?}",
+                output.status,
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            eprintln!(
+                "warmup-child evidence: id={WARMUP_TEST_ID}, stdout={:?}, stderr={:?}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            return;
+        }
 
+        let home = std::path::PathBuf::from(std::env::var_os("HOME").unwrap());
+        let aleph_home = std::path::PathBuf::from(std::env::var_os("ALEPH_HOME").unwrap());
+        assert_eq!(
+            alephcore::runtimes::get_runtimes_dir().unwrap(),
+            aleph_home.join("runtimes")
+        );
         runtime_startup_warmup().await;
 
-        let ledger_path = dir.path().join(".aleph/runtimes/ledger.json");
+        let ledger_path = aleph_home.join("runtimes/ledger.json");
         assert!(
             ledger_path.exists(),
             "ledger must be persisted at {}",
@@ -95,5 +149,41 @@ mod warmup_tests {
         let content = tokio::fs::read_to_string(&ledger_path).await.unwrap();
         let _: serde_json::Value =
             serde_json::from_str(&content).expect("ledger must be valid JSON");
+        assert!(!home.join(".aleph/runtimes/ledger.json").exists());
+        eprintln!("{COMPLETION_MARKER}:{WARMUP_TEST_ID}");
+    }
+
+    #[test]
+    fn warmup_parent_rejects_zero_match_child() {
+        let dir = TempDir::new().unwrap();
+        let unmatched = format!("{WARMUP_TEST_ID}::unmatched_child_control");
+        let output = Command::new(std::env::current_exe().unwrap())
+            .args([
+                unmatched.as_str(),
+                "--exact",
+                "--nocapture",
+                "--test-threads=1",
+            ])
+            .env(CHILD_FLAG, WARMUP_TEST_ID)
+            .env("HOME", dir.path())
+            .env("ALEPH_HOME", dir.path().join("aleph-home"))
+            .stdin(Stdio::null())
+            .output()
+            .expect("run a real unmatched exact child");
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            output.status.success(),
+            "unmatched child must really exit zero"
+        );
+        assert!(stdout.contains("running 0 tests"));
+        assert!(stdout
+            .lines()
+            .any(|line| line
+                .starts_with("test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; ")));
+        assert!(!warmup_child_completed(&output));
+        eprintln!(
+            "warmup-zero-match rejected: filter={unmatched}, stdout={stdout:?}, stderr={:?}",
+            String::from_utf8_lossy(&output.stderr)
+        );
     }
 }

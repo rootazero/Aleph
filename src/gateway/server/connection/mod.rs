@@ -44,6 +44,49 @@ use super::per_client_buffer::PerClientBuffer;
 use super::ConnectionState;
 use crate::gateway::security::SecurityStore;
 
+/// UI display events are delivered only to the connection that owns the surface.
+/// The event bus itself is process-wide, so this check belongs at the transport
+/// boundary rather than relying on a Panel-side surface-id check.
+#[must_use]
+fn ui_display_admits_connection(
+    topic: &str,
+    event_data: Option<&serde_json::Value>,
+    connection_id: &str,
+) -> bool {
+    if topic != "capabilities.ui.display" {
+        return true;
+    }
+    let host = crate::capability::projection_host::projection_host();
+    ui_display_admits_connection_at_host(
+        topic,
+        event_data,
+        connection_id,
+        host.as_deref().map(|host| host.as_ref()),
+    )
+}
+
+fn ui_display_admits_connection_at_host(
+    topic: &str,
+    event_data: Option<&serde_json::Value>,
+    connection_id: &str,
+    host: Option<&crate::capability::projection_host::ProjectionHost>,
+) -> bool {
+    topic != "capabilities.ui.display"
+        || event_data.is_some_and(|data| {
+            data.get("connection_id")
+                .and_then(serde_json::Value::as_str)
+                == Some(connection_id)
+                && host.is_some_and(|host| {
+                    crate::gateway::capability_ui::display_mount_is_current(
+                        data,
+                        connection_id,
+                        host,
+                    )
+                })
+        })
+}
+
+mod acknowledged_effects;
 pub mod auth;
 pub mod cleanup;
 pub mod dispatch;
@@ -274,6 +317,16 @@ pub async fn handle_connection(
     // work, aborts active tasks and waits at most `OFF_LOOP_SHUTDOWN_GRACE` for
     // them before the connection cleanup runs (see the end of this function).
     let mut off_loop_rpcs = off_loop::OffLoopRpcs::new();
+    let mut ui_effects = acknowledged_effects::AcknowledgedEffects::new();
+    let ui_dispatch = acknowledged_effects::EffectDispatch {
+        middleware: ctx.middleware_chain.clone(),
+        connections: ctx.connections.clone(),
+        lanes: ctx.lane_manager.clone(),
+        idempotency: ctx.idempotency_guard.clone(),
+        conn_id: conn_id.clone(),
+        class: ctx.channel_class,
+        client_is_local: ctx.client_is_local,
+    };
 
     loop {
         tokio::select! {
@@ -667,6 +720,22 @@ pub async fn handle_connection(
                                                 break;
                                             }
                                             continue;
+                                        }
+
+                                        // Acknowledged UI effects must not wait inline for their
+                                        // own event/ack, Execute permit, or duplicate producer.
+                                        // Ack/input/detach stay in their unchanged Mutate lane.
+                                        if req.method == "capabilities.ui.invoke" {
+                                            match ui_dispatch.submit(&mut ui_effects, text.to_string(), req.id.clone(), caller_snapshot.clone(), idempotency_key.clone()).await {
+                                                Ok(()) => continue,
+                                                Err(response) => {
+                                                    if let Err(error) = write.send(WsMessage::Text(response.into())).await {
+                                                        error!(%error, %conn_id, "failed UI effect response");
+                                                        break;
+                                                    }
+                                                    continue;
+                                                }
+                                            }
                                         }
 
                                         // Helper closure: standard lane dispatch (no idempotency)
@@ -1372,6 +1441,14 @@ pub async fn handle_connection(
                             if !crate::gateway::pty::manager::frame_admits(topic, event_data) {
                                 continue;
                             }
+                            // The event bus is process-wide; enforce UI ownership at
+                            // this transport boundary before the generic subscriber
+                            // receives the payload. Panel surface-id filtering is only
+                            // a second line of defense.
+                            if !ui_display_admits_connection(topic, event_data, &conn_id)
+                                || (topic == "capabilities.ui.display" && !crate::gateway::capability_ui::display_mount_admits(event_data, &conn_id)) {
+                                continue;
+                            }
 
                             // The login wall + permission-based scope guard check +
                             // surface audience + caller identity for the owner-scoped
@@ -1434,7 +1511,7 @@ pub async fn handle_connection(
                                 .note_frame(topic, visibility_payload)
                                 .await;
 
-                            let admits = wall_ok
+                            let mut admits = wall_ok
                                 && scope_allowed
                                 && crate::gateway::surface::delivery::audience_allows(
                                     event_data,
@@ -1457,8 +1534,19 @@ pub async fn handle_connection(
                                     // No store wired (probe/legacy wiring): skip the
                                     // 4th term entirely — zero-change guarantee, see
                                     // `GatewaySharedState::session_store`.
-                                    None => true,
+                                    None => !matches!(topic, "capability.event" | "capability.event.status" | "capabilities.ui.display"),
                                 };
+                            if admits && matches!(topic, "capability.event" | "capability.event.status" | "capabilities.ui.display") {
+                                // Session I/O cannot bless an identity restamped while
+                                // it was in flight. Selection and authority stay separate.
+                                admits = ctx.connections.read().await.get(&conn_id).is_some_and(|state| {
+                                    !state.first_message && state.caller_user == event_caller_user
+                                        && state.caller_role == event_caller_role
+                                        && wall_admits(Some(&state.caller_role), "")
+                                        && ctx.event_scope_guard.can_receive(topic, &state.permissions)
+                                        && crate::gateway::surface::delivery::audience_allows(event_data, state.channel_kind)
+                                }) && (topic != "capabilities.ui.display" || crate::gateway::capability_ui::display_mount_admits(event_data, &conn_id));
+                            }
 
                             // 5th term, and the only one that is not pass/fail:
                             // one frame (`stream.running_set_changed`) carries a
@@ -1542,6 +1630,12 @@ pub async fn handle_connection(
             Some(response) = off_loop_rpcs.next_response(), if !off_loop_rpcs.is_empty() => {
                 if let Err(e) = write.send(WsMessage::Text(response.into())).await {
                     error!("Failed to send response to {}: {}", conn_id, e);
+                    break;
+                }
+            }
+            Some(response) = ui_effects.next_response(), if !ui_effects.is_empty() => {
+                if let Err(error) = write.send(WsMessage::Text(response.into())).await {
+                    error!(%error, %conn_id, "failed UI effect completion response");
                     break;
                 }
             }
@@ -1630,6 +1724,9 @@ pub async fn handle_connection(
     // Drop queued and abort active off-loop RPCs BEFORE cleanup, waiting at most
     // `off_loop::OFF_LOOP_SHUTDOWN_GRACE`: a task stuck in a sync section must
     // not hold teardown hostage (it is cancelled at its next yield point).
+    ui_effects.stop();
+    crate::gateway::capability_ui::close_connection_surfaces(&conn_id).await;
+    ui_effects.join().await;
     off_loop_rpcs.shutdown().await;
     cleanup::run_cleanup(&conn_id, &ctx, &rpc_pending).await;
     Ok(())
@@ -1643,6 +1740,186 @@ mod response_frame_tests {
     /// recognised as a response, otherwise the pending reverse-RPC call waits
     /// out its full timeout even though the peer completed. serde maps JSON
     /// `null` to `None`, so only the KEY's presence tells the two apart.
+    #[tokio::test]
+    async fn ui_display_is_admitted_only_to_its_owner_connection() {
+        use crate::capability::descriptor::CapabilityId;
+        use crate::capability::ownership::{
+            LifetimeScope, OwnerRef, OwnershipTree, VisibilityScope,
+        };
+        use crate::capability::policy_runtime::CapabilityCallContext;
+        use crate::capability::projection_host::ProjectionHost;
+        use crate::capability::provider::{
+            ProviderHandle, ProviderId, ProviderLifecycle, ProviderTransport,
+        };
+        use crate::capability::special::{CapabilityHandlerRegistry, SpecialRegistration};
+        use crate::capability::ui_surface::UiSurface;
+        let root = tempfile::tempdir().unwrap();
+        let tree = Arc::new(OwnershipTree::new());
+        let memory = crate::memory::runtime::MemoryRuntime::new(
+            crate::memory::runtime::MemoryRuntimeConfig {
+                metadata_path: root.path().join("memory.db"),
+                note_memory_dir: root.path().join("notes"),
+            },
+            tree.clone(),
+        );
+        let policy = crate::capability::production_init::build_capability_policy(
+            &crate::Config::default(),
+            tree.clone(),
+        )
+        .unwrap();
+        let specials = CapabilityHandlerRegistry::new();
+        let host = ProjectionHost::mount_with_runtime_and_events(
+            crate::tools::registry::ToolHandlerRegistry::new(),
+            tree,
+            memory,
+            specials.clone(),
+            policy,
+            Arc::new(crate::capability::events::InMemoryEventStream::default()),
+            false,
+        );
+        assert!(host.wait_until_ready().await);
+        // Never install a process-global host: both the production gate and this
+        // isolated fixture use the same concrete host/source lookup below.
+        let surface_id = format!("current-mount-{}", uuid::Uuid::new_v4());
+        let id = CapabilityId {
+            namespace: "aleph/ui".into(),
+            name: surface_id.clone(),
+        };
+        let mount = |generation| {
+            let call = CapabilityCallContext::from_trusted_parts(
+                OwnerRef::Runtime,
+                Some("alice".into()),
+                None,
+                None,
+                Some("conn-a".into()),
+                "current-mount-fixture".into(),
+            );
+            let surface = Arc::new(UiSurface::new(
+                aleph_protocol::capability::UiAttachment {
+                    surface_id: surface_id.clone(),
+                    mount_generation: generation,
+                },
+                call,
+                Arc::new(|_| Ok(())),
+            ));
+            let mut descriptor = crate::capability::ui::descriptor();
+            descriptor.id = id.clone();
+            descriptor.lifetime = LifetimeScope::Session;
+            descriptor.visibility = VisibilityScope {
+                principal: Some("alice".into()),
+                ..Default::default()
+            };
+            let _ = host
+                .facade()
+                .bind_terminal_session(id.clone(), descriptor.visibility.clone())
+                .unwrap();
+            let provider = ProviderHandle::new(ProviderLifecycle::ready(
+                ProviderId::new(format!("fixture/{surface_id}/{generation}")).unwrap(),
+                ProviderTransport::InProcess,
+            ));
+            let registration = specials
+                .register_with_handle(
+                    SpecialRegistration::new(
+                        descriptor,
+                        crate::capability::ui::schema(),
+                        surface.clone(),
+                        provider,
+                    )
+                    .with_ui_surface(surface.clone()),
+                )
+                .unwrap();
+            (surface, registration)
+        };
+        let (first_surface, first_mount) = mount(7);
+        let event = serde_json::json!({"connection_id":"conn-a", "surface_id":surface_id, "mount_generation":7});
+        let admitted = |data: Option<&serde_json::Value>, connection: &str| {
+            ui_display_admits_connection_at_host(
+                "capabilities.ui.display",
+                data,
+                connection,
+                Some(host.as_ref()),
+            )
+        };
+        let mut facts = vec![
+            ("real own current mount", admitted(Some(&event), "conn-a")),
+            ("foreign connection", !admitted(Some(&event), "conn-b")),
+            ("missing frame", !admitted(None, "conn-a")),
+            (
+                "missing actual host",
+                !ui_display_admits_connection_at_host(
+                    "capabilities.ui.display",
+                    Some(&event),
+                    "conn-a",
+                    None,
+                ),
+            ),
+        ];
+        for invalid in [
+            serde_json::json!({"connection_id":"conn-a"}),
+            serde_json::json!({"connection_id":"conn-a", "surface_id":surface_id}),
+            serde_json::json!({"connection_id":"conn-a", "surface_id":surface_id, "mount_generation":"7"}),
+            serde_json::json!({"connection_id":"conn-a", "surface_id":surface_id, "mount_generation":-1}),
+            serde_json::json!({"connection_id":"conn-a", "surface_id":surface_id, "mount_generation":6}),
+            serde_json::json!({"connection_id":"conn-a", "surface_id":"missing-surface", "mount_generation":7}),
+            serde_json::json!({"connection_id":"conn-b", "surface_id":surface_id, "mount_generation":7}),
+        ] {
+            facts.push((
+                "missing/malformed/stale/forged attachment",
+                !admitted(Some(&invalid), invalid["connection_id"].as_str().unwrap()),
+            ));
+        }
+        first_surface.close().await.unwrap();
+        facts.push(("closed current surface", !admitted(Some(&event), "conn-a")));
+        let _ = first_mount.dispose();
+        facts.push(("withdrawn mount", !admitted(Some(&event), "conn-a")));
+        let (replacement_surface, replacement_mount) = mount(8);
+        let replacement = serde_json::json!({"connection_id":"conn-a", "surface_id":surface_id, "mount_generation":8});
+        facts.push((
+            "old mount cannot inherit replacement",
+            !admitted(Some(&event), "conn-a"),
+        ));
+        facts.push((
+            "real replacement own positive",
+            admitted(Some(&replacement), "conn-a"),
+        ));
+        facts.push((
+            "unrelated topic compatibility",
+            ui_display_admits_connection_at_host("session.created", Some(&event), "conn-b", None),
+        ));
+        replacement_surface.close().await.unwrap();
+        let _ = replacement_mount.dispose();
+        facts.push((
+            "replacement withdrawn",
+            !admitted(Some(&replacement), "conn-a"),
+        ));
+        // Close all fixture-owned workers before asserting the observed facts.
+        let closed = tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            host.clone().close_and_await(),
+        )
+        .await
+        .unwrap();
+        assert!(closed.source_joined && closed.applier_joined);
+        for (scenario, observed) in facts {
+            assert!(observed, "current mount gate: {scenario}");
+        }
+    }
+
+    #[test]
+    fn unrelated_events_and_legacy_ui_frames_remain_admitted() {
+        let event = serde_json::json!({"connection_id": "conn-a"});
+        assert!(ui_display_admits_connection(
+            "session.created",
+            Some(&event),
+            "conn-b"
+        ));
+        assert!(!ui_display_admits_connection(
+            "capabilities.ui.display",
+            None,
+            "conn-b"
+        ));
+    }
+
     #[test]
     fn a_null_result_frame_is_a_response() {
         let resp = parse_response_frame(r#"{"jsonrpc":"2.0","id":"rpc-0","result":null}"#)

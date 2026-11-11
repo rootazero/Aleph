@@ -1949,25 +1949,8 @@ pub(super) fn mcp_handler_admitted(
     }
 }
 
-/// Face ⑤, the one derivation of "may this run see MCP server `server_id`",
-/// built once per run: the join's gate and every capability builtin read this
-/// one value. A server no plugin declared is visible; a plugin-owned one iff
-/// the extension manager can see its owner from `visibility`. No manager ⇒ an
-/// owned server is refused: the manager is the only authority on where a
-/// plugin came from, and "I cannot tell" is not "yes".
-pub(super) fn visible_mcp_servers(
-    visibility: crate::extension::visibility::VisibilityCtx,
-    ext: Option<Arc<crate::extension::ExtensionManager>>,
-) -> crate::tools::handlers::McpServerFilter {
-    Arc::new(move |server_id| {
-        match crate::extension::mcp_config::owning_plugin_of_server_id(server_id) {
-            None => true,
-            Some(owner) => {
-                crate::extension::visibility::owner_visible_via(ext.as_deref(), owner, &visibility)
-            }
-        }
-    })
-}
+/// Shared MCP-server visibility derivation used by the run loop and MCP face.
+pub(super) use crate::gateway::execution_engine::tool_service_builder::visible_mcp_servers;
 
 /// RAII guard for the per-session media cache.
 ///

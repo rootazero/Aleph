@@ -3,7 +3,7 @@
 //! `CapabilityBackend` is the trait every concrete registry implements.
 //! `ToolBackendAdapter` wraps the existing
 //! [`crate::tools::registry::ToolHandlerRegistry`], while
-//! [`CapabilityHandlerRegistry`] owns the lightweight special-capability
+//! [`LegacyCapabilityHandlerRegistry`] owns the lightweight special-capability
 //! handler entries without duplicating their descriptor source.
 
 use crate::capability::descriptor::{
@@ -13,14 +13,27 @@ use crate::capability::descriptor::{
 use crate::capability::events::{CapabilityEvent, CapabilityEventEmitter, HandlerResult};
 use crate::capability::facade::{CapabilitySnapshot, Cursor, Scope};
 use crate::capability::ownership::{LifetimeScope, OwnerRef, VisibilityScope};
+use crate::capability::provider::{
+    ProviderHandle, ProviderId, ProviderLifecycle, ProviderTransport,
+};
+use crate::capability::special as special_backend;
 use crate::sync_primitives::Arc;
 use crate::tools::descriptor::{
-    canonicalize_json, canonicalize_services, ReplayPolicy, ToolCapabilityDescriptor, ToolSource,
+    ReplayPolicy, ToolCapabilityDescriptor, ToolSource, canonicalize_json, canonicalize_services,
 };
+use async_trait::async_trait;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
-use std::collections::HashMap;
-use std::sync::RwLock;
+use tokio_util::sync::CancellationToken;
+
+/// Legacy synchronous special registry retained for existing ambient/terminal/UI
+/// tests and event instrumentation. New captured async records live in `special`.
+pub use self::{
+    LegacyCapabilityDispatchError as CapabilityDispatchError,
+    LegacyCapabilityHandler as CapabilityHandler,
+    LegacyCapabilityHandlerRegistry as CapabilityHandlerRegistry,
+    LegacyCapabilityRegistryError as CapabilityRegistryError,
+};
 
 /// Namespace under which the tool backend registers its capabilities.
 pub const TOOL_NAMESPACE: &str = "aleph/tools";
@@ -39,7 +52,7 @@ pub trait CapabilityBackend: Send + Sync {
 
 /// Errors produced by a capability handler during invocation.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
-pub enum CapabilityDispatchError {
+pub enum LegacyCapabilityDispatchError {
     #[error("capability handler received invalid input: {0}")]
     InvalidInput(String),
     #[error("capability handler execution failed: {0}")]
@@ -53,12 +66,12 @@ pub enum CapabilityDispatchError {
 /// Handlers receive owned JSON so the registry never exposes mutable internal
 /// state. A handler may perform an effect at this boundary, but its descriptor
 /// remains an immutable value owned by the registry entry.
-pub trait CapabilityHandler: Send + Sync {
-    fn invoke(&self, input: Value) -> Result<Value, CapabilityDispatchError>;
+pub trait LegacyCapabilityHandler: Send + Sync {
+    fn invoke(&self, input: Value) -> Result<Value, LegacyCapabilityDispatchError>;
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
-pub enum CapabilityRegistryError {
+pub enum LegacyCapabilityRegistryError {
     #[error("capability is already registered: {0:?}")]
     Duplicate(CapabilityId),
     #[error("capability id must have a non-empty namespace and name")]
@@ -67,32 +80,53 @@ pub enum CapabilityRegistryError {
     RevisionExhausted,
 }
 
+/// Compatibility adapter for the pre-async terminal/UI handler contract.
+/// Storage and dispatch still belong to the async special registry.
+struct LegacyHandlerAdapter {
+    handler: Arc<dyn LegacyCapabilityHandler>,
+}
+
+#[async_trait]
+impl special_backend::CapabilityHandler for LegacyHandlerAdapter {
+    async fn invoke(
+        &self,
+        input: Value,
+        _call: special_backend::CapabilityHandlerCall,
+        _cancel: CancellationToken,
+    ) -> Result<Value, special_backend::CapabilityDispatchError> {
+        self.handler.invoke(input).map_err(|error| match error {
+            LegacyCapabilityDispatchError::InvalidInput(message) => {
+                special_backend::CapabilityDispatchError::InvalidInput(message)
+            }
+            LegacyCapabilityDispatchError::Execution(message) => {
+                special_backend::CapabilityDispatchError::Execution(message)
+            }
+            LegacyCapabilityDispatchError::NotFound(id) => {
+                special_backend::CapabilityDispatchError::NotFound(id)
+            }
+        })
+    }
+}
+
+/// Compatibility registry that delegates all record storage and handler
+/// resolution to the one async special registry. Its old sync methods remain
+/// only for terminal/UI callers that have not migrated yet.
 #[derive(Clone)]
-struct HandlerEntry {
-    descriptor: CapabilityDescriptor,
-    handler: Arc<dyn CapabilityHandler>,
-}
-
-#[derive(Default)]
-struct HandlerRegistryState {
-    entries: HashMap<CapabilityId, HandlerEntry>,
-    revision: u64,
-}
-
-/// A descriptor-backed registry for callable special capabilities.
-///
-/// The map stores descriptor and handler together as one entry, so discovery
-/// and dispatch cannot pair values from independent registries. This backend is
-/// intentionally separate from [`ToolBackendAdapter`]: Tool dispatch keeps its
-/// existing approval and provider gates, while special handlers use this small
-/// typed boundary until their concrete platform bridges are mounted.
-#[derive(Clone, Default)]
-pub struct CapabilityHandlerRegistry {
-    state: Arc<RwLock<HandlerRegistryState>>,
+pub struct LegacyCapabilityHandlerRegistry {
+    special: special_backend::CapabilityHandlerRegistry,
     events: Option<CapabilityEventEmitter>,
 }
 
-impl CapabilityHandlerRegistry {
+impl Default for LegacyCapabilityHandlerRegistry {
+    fn default() -> Self {
+        Self {
+            special: special_backend::CapabilityHandlerRegistry::new(),
+            events: None,
+        }
+    }
+}
+
+impl LegacyCapabilityHandlerRegistry {
     #[must_use]
     pub fn new() -> Self {
         Self::default()
@@ -110,71 +144,70 @@ impl CapabilityHandlerRegistry {
     pub fn register(
         &self,
         mut descriptor: CapabilityDescriptor,
-        handler: Arc<dyn CapabilityHandler>,
-    ) -> Result<CapabilityId, CapabilityRegistryError> {
+        handler: Arc<dyn LegacyCapabilityHandler>,
+    ) -> Result<CapabilityId, LegacyCapabilityRegistryError> {
         if descriptor.id.namespace.trim().is_empty() || descriptor.id.name.trim().is_empty() {
-            return Err(CapabilityRegistryError::InvalidId);
+            return Err(LegacyCapabilityRegistryError::InvalidId);
         }
-        let mut state = self
-            .state
-            .write()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if state.entries.contains_key(&descriptor.id) {
-            return Err(CapabilityRegistryError::Duplicate(descriptor.id));
-        }
-        let revision = state
-            .revision
-            .checked_add(1)
-            .ok_or(CapabilityRegistryError::RevisionExhausted)?;
-        descriptor.revision = CapabilityRevision(revision);
-        let id = descriptor.id.clone();
-        state.entries.insert(
-            id.clone(),
-            HandlerEntry {
+        descriptor.revision = CapabilityRevision(self.special.revision().saturating_add(1));
+        let provider = ProviderHandle::new(ProviderLifecycle::ready(
+            ProviderId::new("legacy-compat")
+                .map_err(|_| LegacyCapabilityRegistryError::InvalidId)?,
+            ProviderTransport::InProcess,
+        ));
+        self.special
+            .register_legacy(
                 descriptor,
-                handler,
-            },
-        );
-        state.revision = revision;
-        Ok(id)
+                Arc::new(LegacyHandlerAdapter { handler }),
+                provider,
+            )
+            .map_err(|error| match error {
+                special_backend::CapabilityRegistryError::Duplicate(id) => {
+                    LegacyCapabilityRegistryError::Duplicate(id)
+                }
+                special_backend::CapabilityRegistryError::RevisionExhausted => {
+                    LegacyCapabilityRegistryError::RevisionExhausted
+                }
+                _ => LegacyCapabilityRegistryError::InvalidId,
+            })
     }
 
-    /// Invoke a registered handler without holding the registry lock.
-    ///
-    /// This is an internal, pre-gated seam. Callers must validate the Phase 6
-    /// lease, policy, visibility, and Task 1 activation contract before entry;
-    /// the registry only performs lookup and handler execution here. Keeping it
-    /// crate-private prevents external callers from treating an ID plus JSON as
-    /// an authorization decision.
     pub(crate) fn dispatch(
         &self,
         id: &CapabilityId,
         input: Value,
-    ) -> Result<Value, CapabilityDispatchError> {
+    ) -> Result<Value, LegacyCapabilityDispatchError> {
         let operation = input
             .get("operation")
             .and_then(Value::as_str)
             .unwrap_or("invoke")
             .to_owned();
-        let handler = {
-            let state = self
-                .state
-                .read()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            state
-                .entries
-                .get(id)
-                .map(|entry| Arc::clone(&entry.handler))
-        };
-        let result = handler
-            .ok_or_else(|| CapabilityDispatchError::NotFound(id.clone()))
-            .and_then(|handler| handler.invoke(input));
+        let result = self
+            .special
+            .dispatch_legacy(id, input)
+            .map_err(|error| match error {
+                special_backend::CapabilityDispatchError::InvalidInput(message) => {
+                    LegacyCapabilityDispatchError::InvalidInput(message)
+                }
+                special_backend::CapabilityDispatchError::Execution(message) => {
+                    LegacyCapabilityDispatchError::Execution(message)
+                }
+                special_backend::CapabilityDispatchError::NotFound(id) => {
+                    LegacyCapabilityDispatchError::NotFound(id)
+                }
+                special_backend::CapabilityDispatchError::Unavailable => {
+                    LegacyCapabilityDispatchError::Execution("capability unavailable".into())
+                }
+                special_backend::CapabilityDispatchError::Cancelled => {
+                    LegacyCapabilityDispatchError::Execution("capability cancelled".into())
+                }
+            });
         if let Some(events) = &self.events {
             let handler_result = match &result {
                 Ok(_) => HandlerResult::Success,
-                Err(CapabilityDispatchError::InvalidInput(_)) => HandlerResult::InvalidInput,
-                Err(CapabilityDispatchError::Execution(_)) => HandlerResult::ExecutionFailed,
-                Err(CapabilityDispatchError::NotFound(_)) => HandlerResult::NotFound,
+                Err(LegacyCapabilityDispatchError::InvalidInput(_)) => HandlerResult::InvalidInput,
+                Err(LegacyCapabilityDispatchError::Execution(_)) => HandlerResult::ExecutionFailed,
+                Err(LegacyCapabilityDispatchError::NotFound(_)) => HandlerResult::NotFound,
             };
             events.emit(
                 OwnerRef::Runtime,
@@ -190,66 +223,33 @@ impl CapabilityHandlerRegistry {
 
     #[must_use]
     pub fn revision(&self) -> u64 {
-        self.state
-            .read()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .revision
-    }
-
-    fn descriptors(&self, scope: &Scope) -> Vec<CapabilityDescriptor> {
-        let state = self
-            .state
-            .read()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        Self::descriptors_from_state(&state, scope)
-    }
-
-    fn descriptors_from_state(
-        state: &HandlerRegistryState,
-        scope: &Scope,
-    ) -> Vec<CapabilityDescriptor> {
-        state
-            .entries
-            .values()
-            .map(|entry| {
-                let mut descriptor = entry.descriptor.clone();
-                descriptor.visibility = scope.visibility.clone();
-                descriptor
-            })
-            .filter(|descriptor| {
-                scope.kind.is_none_or(|kind| descriptor.kind == kind)
-                    && scope
-                        .namespace
-                        .as_ref()
-                        .is_none_or(|namespace| descriptor.id.namespace == *namespace)
-                    && scope.facet.is_none_or(|facet| descriptor.supports(facet))
-            })
-            .collect()
+        self.special.revision()
     }
 }
 
-impl CapabilityBackend for CapabilityHandlerRegistry {
+impl CapabilityBackend for LegacyCapabilityHandlerRegistry {
     fn lookup(&self, id: &CapabilityId) -> Option<CapabilityDescriptor> {
-        self.state
-            .read()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .entries
-            .get(id)
-            .map(|entry| entry.descriptor.clone())
+        self.special
+            .capture(id)
+            .map(|capture| capture.descriptor().clone())
     }
 
     fn enumerate(&self, scope: &Scope) -> Vec<CapabilityDescriptor> {
-        self.descriptors(scope)
+        self.special
+            .describe(scope)
+            .into_iter()
+            .map(|capture| {
+                let mut descriptor = capture.descriptor().clone();
+                descriptor.visibility = scope.visibility.clone();
+                descriptor
+            })
+            .collect()
     }
 
     fn snapshot(&self, scope: &Scope) -> CapabilitySnapshot {
-        let state = self
-            .state
-            .read()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
         CapabilitySnapshot {
-            capabilities: Self::descriptors_from_state(&state, scope),
-            committed_cursor: Cursor(state.revision),
+            capabilities: self.enumerate(scope),
+            committed_cursor: Cursor(self.special.revision()),
         }
     }
 }
@@ -433,13 +433,13 @@ mod tests {
         }
     }
 
-    struct JsonCapabilityHandler;
+    struct JsonLegacyCapabilityHandler;
 
-    impl CapabilityHandler for JsonCapabilityHandler {
+    impl LegacyCapabilityHandler for JsonLegacyCapabilityHandler {
         fn invoke(
             &self,
             input: serde_json::Value,
-        ) -> Result<serde_json::Value, CapabilityDispatchError> {
+        ) -> Result<serde_json::Value, LegacyCapabilityDispatchError> {
             Ok(input)
         }
     }
@@ -467,22 +467,22 @@ mod tests {
 
     #[test]
     fn handler_registry_rejects_duplicate_ids() {
-        let registry = CapabilityHandlerRegistry::new();
+        let registry = LegacyCapabilityHandlerRegistry::new();
         let descriptor = special_descriptor("test/ambient", "duplicate");
         let id = descriptor.id.clone();
         registry
-            .register(descriptor.clone(), Arc::new(JsonCapabilityHandler))
+            .register(descriptor.clone(), Arc::new(JsonLegacyCapabilityHandler))
             .unwrap();
 
         assert_eq!(
-            registry.register(descriptor, Arc::new(JsonCapabilityHandler)),
-            Err(CapabilityRegistryError::Duplicate(id))
+            registry.register(descriptor, Arc::new(JsonLegacyCapabilityHandler)),
+            Err(LegacyCapabilityRegistryError::Duplicate(id))
         );
     }
 
     #[test]
     fn handler_registry_lookup_of_an_invalid_id_is_none() {
-        let registry = CapabilityHandlerRegistry::new();
+        let registry = LegacyCapabilityHandlerRegistry::new();
         let invalid = CapabilityId {
             namespace: String::new(),
             name: String::new(),
@@ -493,28 +493,28 @@ mod tests {
 
     #[test]
     fn handler_registry_rejects_registration_with_an_invalid_id() {
-        let registry = CapabilityHandlerRegistry::new();
+        let registry = LegacyCapabilityHandlerRegistry::new();
         let descriptor = special_descriptor("", "invalid");
 
         assert_eq!(
-            registry.register(descriptor, Arc::new(JsonCapabilityHandler)),
-            Err(CapabilityRegistryError::InvalidId)
+            registry.register(descriptor, Arc::new(JsonLegacyCapabilityHandler)),
+            Err(LegacyCapabilityRegistryError::InvalidId)
         );
     }
 
     #[test]
     fn handler_registry_enumerates_only_the_requested_namespace() {
-        let registry = CapabilityHandlerRegistry::new();
+        let registry = LegacyCapabilityHandlerRegistry::new();
         registry
             .register(
                 special_descriptor("test/one", "a"),
-                Arc::new(JsonCapabilityHandler),
+                Arc::new(JsonLegacyCapabilityHandler),
             )
             .unwrap();
         registry
             .register(
                 special_descriptor("test/two", "b"),
-                Arc::new(JsonCapabilityHandler),
+                Arc::new(JsonLegacyCapabilityHandler),
             )
             .unwrap();
         let scope = Scope {
@@ -529,7 +529,7 @@ mod tests {
 
     #[test]
     fn handler_registry_snapshot_cursor_tracks_registration_revision() {
-        let registry = CapabilityHandlerRegistry::new();
+        let registry = LegacyCapabilityHandlerRegistry::new();
         assert_eq!(
             registry.snapshot(&Scope::default()).committed_cursor,
             Cursor(0)
@@ -538,7 +538,7 @@ mod tests {
         registry
             .register(
                 special_descriptor("test/revision", "a"),
-                Arc::new(JsonCapabilityHandler),
+                Arc::new(JsonLegacyCapabilityHandler),
             )
             .unwrap();
         assert_eq!(
@@ -549,7 +549,7 @@ mod tests {
         registry
             .register(
                 special_descriptor("test/revision", "b"),
-                Arc::new(JsonCapabilityHandler),
+                Arc::new(JsonLegacyCapabilityHandler),
             )
             .unwrap();
         assert_eq!(
@@ -560,25 +560,21 @@ mod tests {
 
     #[test]
     fn handler_registry_rejects_revision_exhaustion() {
-        let registry = CapabilityHandlerRegistry::new();
-        registry
-            .state
-            .write()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .revision = u64::MAX;
+        let registry = LegacyCapabilityHandlerRegistry::new();
+        registry.special.set_revision_for_test(u64::MAX);
 
         assert_eq!(
             registry.register(
                 special_descriptor("test/exhausted", "a"),
-                Arc::new(JsonCapabilityHandler)
+                Arc::new(JsonLegacyCapabilityHandler)
             ),
-            Err(CapabilityRegistryError::RevisionExhausted)
+            Err(LegacyCapabilityRegistryError::RevisionExhausted)
         );
     }
 
     #[test]
     fn handler_registry_supports_concurrent_registration_and_enumeration() {
-        let registry = CapabilityHandlerRegistry::new();
+        let registry = LegacyCapabilityHandlerRegistry::new();
         std::thread::scope(|scope| {
             for index in 0..8 {
                 let registry = registry.clone();
@@ -586,7 +582,7 @@ mod tests {
                     registry
                         .register(
                             special_descriptor("test/concurrent", &format!("cap-{index}")),
-                            Arc::new(JsonCapabilityHandler),
+                            Arc::new(JsonLegacyCapabilityHandler),
                         )
                         .unwrap();
                 });
@@ -682,9 +678,11 @@ mod tests {
         assert_eq!(snapshot.capabilities.len(), 1);
         assert_eq!(snapshot.capabilities[0].kind, CapabilityKind::Tool);
         assert_eq!(snapshot.committed_cursor, Cursor(1));
-        assert!(CapabilityBackend::snapshot(&backend, &events)
-            .capabilities
-            .is_empty());
+        assert!(
+            CapabilityBackend::snapshot(&backend, &events)
+                .capabilities
+                .is_empty()
+        );
     }
 
     #[test]

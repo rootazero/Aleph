@@ -130,7 +130,7 @@ pub async fn handle_update(
         // `reload_impact::LIVE_SECTIONS`'s own doc states: one table, one
         // executor, however many write surfaces.
         let landed =
-            crate::config::live_apply::apply_live_sections(&cfg, &["execution"], None).await;
+            crate::config::live_apply::apply_live_sections(&cfg, &["execution"], None, None).await;
         let impact = crate::config::classify_verified("execution", &landed);
 
         (

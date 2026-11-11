@@ -108,6 +108,7 @@ const ADMIN_PREFIXES: &[&str] = &[
     // --- Gateway trust boundary: tokens, tickets, devices, credentials ---
     "telecom.approval.", // operator-only private-read/disclosure control plane.
     "gateway.",          // token.{current,rotate}, ticket.{create,list,revoke},
+    "capabilities.terminal.", // PTY control is operator-only and effectful.
     // devices.{list,revoke},
     // identity.get, metrics.*, credentials, flow.reload. One carve-out since
     // 2026-08-07: `gateway.metrics.run_concurrency`, whose response is now

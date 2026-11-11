@@ -168,6 +168,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
     canonical_tools: Arc<alephcore::tools::ToolHandlerRegistry>,
     // Startup-scoped diagnostics over the already-mounted canonical host/tree.
     diagnostics_control: Option<Arc<alephcore::capability::diagnostic_control::DiagnosticControl>>,
+    capability_policy: Arc<alephcore::capability::policy::PolicyEngine>,
 ) -> alephcore::Result<AgentHandlersResult> {
     // Assigned in both the real-execution branch and the simulated branch
     // below; deferred init keeps the dead initial value out (and lets the
@@ -841,6 +842,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
                 .with_raw_memory_writer(raw_store.clone())
                 .with_memory_runtime(memory_runtime.clone())
                 .with_app_config(app_config_arc.clone())
+                .with_capability_policy(capability_policy.clone())
                 .with_tool_health(tool_health.clone())
                 // Share the one parser cell with `chat.send` and `agent.run`, so the
                 // slash surfaces resolve `/foo` identically.
@@ -1681,6 +1683,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
             daemon,
             tool_catalog.clone(),
             canonical_tools,
+            capability_policy,
         )
         .await,
     );

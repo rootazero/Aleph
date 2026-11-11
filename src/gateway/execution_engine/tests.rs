@@ -1643,6 +1643,18 @@ fn slash_engine<R: crate::executor::ToolRegistry + 'static>(
     )
 }
 
+fn configured_slash_policy(tool: &str) -> Arc<crate::capability::policy::PolicyEngine> {
+    let config: crate::Config = toml::from_str(&format!(
+        "[policies.capability_constraints.\"aleph/tools/{tool}\"]\nrequired_conditions = {{ provider_ready = true }}\n"
+    ))
+    .unwrap();
+    crate::capability::production_init::build_capability_policy(
+        &config,
+        Arc::new(crate::capability::ownership::OwnershipTree::new()),
+    )
+    .unwrap()
+}
+
 /// A run carrying a resolved `/tool args` slash command, from `caller_role`.
 /// `None` = the Panel / CLI / loopback operator (no channel role stamped).
 fn slash_request(session_key: &SessionKey, caller_role: Option<&str>) -> RunRequest {
@@ -1825,6 +1837,52 @@ async fn auto_tier_destructive_file_ops_argument_falls_through_but_a_read_does_n
         registry.calls(),
         1,
         "the gate must not over-block: Auto allows a `list`"
+    );
+}
+
+/// Production policy presence withdraws only the raw shortcut. The configured
+/// target returns Fallthrough (not unconditional denial), while an unconfigured
+/// target keeps the old direct effect.
+#[tokio::test]
+async fn configured_slash_target_falls_through_and_unconfigured_target_fast_paths() {
+    let temp = tempfile::tempdir().unwrap();
+    let agent = gate_test_agent(&temp, "slash-capability-wire").await;
+    let registry = Arc::new(CountingToolRegistry::new());
+    let engine = slash_engine(Arc::clone(&registry))
+        .with_capability_policy(configured_slash_policy("search"));
+    let emitter = Arc::new(TestEmitter::new());
+    let session = SessionKey::main("slash-capability-wire");
+
+    let configured = engine
+        .execute_slash_command_fast_path(
+            "slash-run",
+            &slash_mode("search", "hello"),
+            &slash_request(&session, None),
+            Arc::clone(&agent),
+            Arc::clone(&emitter),
+        )
+        .await
+        .expect_err("configured canonical target must leave the raw shortcut");
+    assert!(
+        matches!(configured, ExecutionError::Fallthrough { .. }),
+        "configured target must fall through, not deny at the shortcut: {configured:?}"
+    );
+    assert_eq!(registry.calls(), 0, "configured target reached raw effect");
+
+    engine
+        .execute_slash_command_fast_path(
+            "slash-run",
+            &slash_mode("search_unconfigured", "hello"),
+            &slash_request(&session, None),
+            agent,
+            emitter,
+        )
+        .await
+        .expect("unconfigured target retains the fast path");
+    assert_eq!(
+        registry.calls(),
+        1,
+        "unconfigured target did not run directly"
     );
 }
 

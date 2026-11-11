@@ -13,6 +13,8 @@ use futures::future::BoxFuture;
 use serde_json::Value;
 use tokio_util::sync::CancellationToken;
 
+use crate::capability::backend::TOOL_NAMESPACE;
+use crate::capability::descriptor::CapabilityId;
 use crate::capability::{CapabilitySlot, MissingSemantics, SlotStatus};
 use crate::executor::ToolRegistry;
 use crate::mcp::protocol::{ToolAnnotations, ToolCallResult, ToolDefinition, ToolResultContent};
@@ -70,6 +72,12 @@ pub struct McpFace {
     tool_health: Option<Arc<ToolHealthCache>>,
     operator_presence: OperatorPresence,
     sessions: SessionTable,
+    /// The canonical capability source mounted by production startup. `None`
+    /// preserves the compatibility constructor used by tests and non-production
+    /// callers; production never reconstructs this source inside the MCP face.
+    canonical_registry: Option<Arc<crate::tools::registry::ToolHandlerRegistry>>,
+    canonical_host: Option<Arc<crate::capability::projection_host::ProjectionHost>>,
+    capability_policy: Option<Arc<crate::capability::policy::PolicyEngine>>,
 }
 
 impl McpFace {
@@ -81,6 +89,59 @@ impl McpFace {
         app_config: Option<Arc<tokio::sync::RwLock<crate::Config>>>,
         tool_health: Option<Arc<ToolHealthCache>>,
         operator_presence: OperatorPresence,
+    ) -> Self {
+        Self::new_inner(
+            config,
+            tool_registry,
+            static_tools,
+            app_config,
+            tool_health,
+            operator_presence,
+            None,
+            None,
+            None,
+        )
+    }
+
+    /// Construct the production face over the exact canonical registry, mounted
+    /// projection host, and startup-compiled policy. The host is retained so a
+    /// closed or not-yet-applied projection cannot silently degrade into the
+    /// descriptorless compatibility path.
+    #[must_use]
+    pub fn new_with_canonical_source(
+        config: &McpFaceConfig,
+        tool_registry: Arc<dyn ToolRegistry>,
+        static_tools: Vec<UnifiedTool>,
+        app_config: Option<Arc<tokio::sync::RwLock<crate::Config>>>,
+        tool_health: Option<Arc<ToolHealthCache>>,
+        operator_presence: OperatorPresence,
+        canonical_registry: Arc<crate::tools::registry::ToolHandlerRegistry>,
+        canonical_host: Arc<crate::capability::projection_host::ProjectionHost>,
+        capability_policy: Arc<crate::capability::policy::PolicyEngine>,
+    ) -> Self {
+        Self::new_inner(
+            config,
+            tool_registry,
+            static_tools,
+            app_config,
+            tool_health,
+            operator_presence,
+            Some(canonical_registry),
+            Some(canonical_host),
+            Some(capability_policy),
+        )
+    }
+
+    fn new_inner(
+        config: &McpFaceConfig,
+        tool_registry: Arc<dyn ToolRegistry>,
+        static_tools: Vec<UnifiedTool>,
+        app_config: Option<Arc<tokio::sync::RwLock<crate::Config>>>,
+        tool_health: Option<Arc<ToolHealthCache>>,
+        operator_presence: OperatorPresence,
+        canonical_registry: Option<Arc<crate::tools::registry::ToolHandlerRegistry>>,
+        canonical_host: Option<Arc<crate::capability::projection_host::ProjectionHost>>,
+        capability_policy: Option<Arc<crate::capability::policy::PolicyEngine>>,
     ) -> Self {
         Self {
             enabled: config.enabled,
@@ -96,6 +157,9 @@ impl McpFace {
             tool_health,
             operator_presence,
             sessions: SessionTable::new(session::MCP_SESSION_IDLE_TTL),
+            canonical_registry,
+            canonical_host,
+            capability_policy,
         }
     }
 
@@ -141,12 +205,52 @@ impl McpFace {
                     .map(|t| t.name),
             );
         }
-        if let Some(reg) =
+        let mcp_registry = self.canonical_registry.as_ref().or_else(|| {
             crate::gateway::execution_engine::tool_service_builder::mcp_tool_registry()
-        {
+        });
+        if let Some(reg) = mcp_registry {
             names.extend(reg.snapshot().keys().cloned());
         }
         names
+    }
+
+    /// Return the mounted canonical source only when all three identity and
+    /// lifecycle checks agree. A configured source never falls back to a
+    /// descriptorless registry when this returns `None`.
+    fn canonical_source(
+        &self,
+    ) -> Option<(
+        Arc<crate::tools::registry::ToolHandlerRegistry>,
+        Arc<crate::capability::zahir_facade::ZahirFacade>,
+    )> {
+        let registry = self.canonical_registry.as_ref()?.clone();
+        let host = self.canonical_host.as_ref()?;
+        let policy = self.capability_policy.as_ref()?;
+        host.current_snapshot()?;
+        let facade = host.facade();
+        if !facade.is_backed_by_registry(&registry) {
+            return None;
+        }
+        let mounted_policy = facade.policy();
+        if !Arc::ptr_eq(&mounted_policy, policy) {
+            return None;
+        }
+        Some((registry, facade))
+    }
+
+    fn configured_capability_id(&self, name: &str) -> Option<CapabilityId> {
+        self.capability_policy
+            .as_ref()
+            .filter(|policy| {
+                policy.is_configured(&CapabilityId {
+                    namespace: TOOL_NAMESPACE.to_string(),
+                    name: name.to_string(),
+                })
+            })
+            .map(|_| CapabilityId {
+                namespace: TOOL_NAMESPACE.to_string(),
+                name: name.to_string(),
+            })
     }
 
     /// The per-call registry: `expose ∩ (static builtins ∪ live plugin tools
@@ -180,19 +284,31 @@ impl McpFace {
             &unified,
         );
         let mut allowed: BTreeSet<String> = unified.iter().map(|t| t.name.clone()).collect();
-        if let Some(reg) =
+        let canonical = self.canonical_source();
+        let mcp_registry = self.canonical_registry.as_ref().or_else(|| {
             crate::gateway::execution_engine::tool_service_builder::mcp_tool_registry()
-        {
+        });
+        let visible = crate::gateway::execution_engine::tool_service_builder::visible_mcp_servers(
+            crate::extension::visibility::VisibilityCtx::default(),
+            crate::extension::try_extension_manager().cloned(),
+        );
+        if let Some((canonical_registry, canonical_facade)) = canonical.as_ref() {
+            registry.bind_canonical_registry(Arc::clone(canonical_registry), visible.clone());
+            // `canonical_source` already proved this identity; failure here is
+            // an impossible mismatch, but leave the registry unbound rather
+            // than admitting a descriptorless canonical call.
+            if !registry.bind_canonical_facade(Arc::clone(canonical_facade)) {
+                tracing::error!("MCP canonical facade failed registry identity check");
+            }
+        }
+        if let Some(reg) = mcp_registry {
             let snapshot = reg.entries_snapshot();
             for (name, entry) in snapshot.iter() {
                 if !expose.contains(name) || registry.get(name).is_some() {
                     continue;
                 }
                 registry.register(Box::new(
-                    crate::tools::adapters::McpRegistryTool::from_registry_entry(
-                        Arc::clone(&entry.handler),
-                        &entry.descriptor,
-                    ),
+                    crate::tools::adapters::McpRegistryTool::from_canonical_entry(entry, &visible),
                 ));
                 allowed.insert(name.clone());
             }
@@ -302,6 +418,17 @@ impl McpFace {
     ) -> Result<ToolCallResult, UnknownTool> {
         if !self.expose().contains(name) {
             return Err(UnknownTool(name.to_string()));
+        }
+        if self.configured_capability_id(name).is_some() {
+            let canonical_target_available = self
+                .canonical_source()
+                .is_some_and(|(registry, _)| registry.entries_snapshot().contains_key(name));
+            if !canonical_target_available {
+                return Ok(error_to_result(&ToolError::PermissionDenied {
+                    name: name.to_string(),
+                    reason: "canonical capability source is not mounted and ready".into(),
+                }));
+            }
         }
         let svc = self.tool_service(caller, session).await;
         // §6.2 — every production dispatch into the scoped gate is scoped by a
@@ -692,6 +819,141 @@ mod tests {
         let mut rx2 = off.sessions().attach_stream(&s2.id).unwrap();
         off.notify_tools_list_changed();
         assert!(rx2.try_recv().is_err(), "disabled face must not broadcast");
+    }
+
+    struct CountingCanonicalHandler {
+        definition: crate::tools::service::ToolDefinition,
+        effects: Arc<crate::sync_primitives::AtomicUsize>,
+    }
+
+    #[async_trait::async_trait]
+    impl crate::tools::handlers::ToolHandler for CountingCanonicalHandler {
+        fn definition(&self) -> crate::tools::service::ToolDefinition {
+            self.definition.clone()
+        }
+
+        async fn invoke(
+            &self,
+            _input: Value,
+        ) -> Result<crate::tools::service::ToolOutput, crate::tools::service::ToolError> {
+            self.effects
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Ok(crate::tools::service::ToolOutput {
+                value: json!({"sentinel": "mcp"}),
+                metadata: Default::default(),
+            })
+        }
+    }
+
+    async fn canonical_mcp_fixture(
+        required_conditions: bool,
+    ) -> (
+        McpFace,
+        Arc<crate::capability::projection_host::ProjectionHost>,
+        Arc<crate::tools::registry::ToolHandlerRegistry>,
+        Arc<crate::sync_primitives::AtomicUsize>,
+        tempfile::TempDir,
+    ) {
+        let root = tempfile::tempdir().unwrap();
+        let tree = Arc::new(crate::capability::ownership::OwnershipTree::new());
+        let config: crate::Config = if required_conditions {
+            toml::from_str(
+                "[policies.capability_constraints.\"aleph/tools/mcp_policy_fixture\"]\nrequired_conditions = { provider_ready = true }\n",
+            )
+            .unwrap()
+        } else {
+            crate::Config::default()
+        };
+        let policy =
+            crate::capability::production_init::build_capability_policy(&config, tree.clone())
+                .unwrap();
+        let memory = crate::memory::runtime::MemoryRuntime::new(
+            crate::memory::runtime::MemoryRuntimeConfig {
+                metadata_path: root.path().join("metadata.db"),
+                note_memory_dir: root.path().join("notes"),
+            },
+            tree.clone(),
+        );
+        memory.start().await.unwrap();
+        let registry = Arc::new(crate::tools::registry::ToolHandlerRegistry::new());
+        let effects = Arc::new(crate::sync_primitives::AtomicUsize::new(0));
+        let definition = crate::tools::service::ToolDefinition {
+            name: "mcp_policy_fixture".into(),
+            description: "MCP policy fixture".into(),
+            input_schema: json!({"type": "object"}),
+            source: crate::tools::service::ToolSource::Builtin,
+            metadata: Default::default(),
+        };
+        registry
+            .register(
+                crate::tools::descriptor::ToolCapabilityDescriptor::from_definition(&definition, 0),
+                Arc::new(CountingCanonicalHandler {
+                    definition,
+                    effects: effects.clone(),
+                }),
+            )
+            .unwrap();
+        let host = crate::capability::projection_host::ProjectionHost::mount_with_policy(
+            registry.as_ref().clone(),
+            tree,
+            memory.clone(),
+            policy.clone(),
+            false,
+        );
+        assert!(host.wait_until_ready().await);
+        let config = McpFaceConfig {
+            enabled: true,
+            expose: vec!["mcp_policy_fixture".into()],
+        };
+        let face = McpFace::new_with_canonical_source(
+            &config,
+            StubRegistry::with(vec![]),
+            vec![],
+            None,
+            None,
+            Arc::new(|| Box::pin(async { true })),
+            registry.clone(),
+            host.clone(),
+            policy,
+        );
+        (face, host, registry, effects, root)
+    }
+
+    #[tokio::test]
+    async fn real_call_tool_denies_stale_capability_facts_without_effect_and_allows_healthy_source()
+    {
+        let (face, host, registry, effects, _root) = canonical_mcp_fixture(true).await;
+        let session = session(&face);
+        let caller = operator();
+
+        let provider = registry.provider();
+        provider
+            .transition(crate::capability::provider::ProviderState::Stopping)
+            .unwrap();
+        provider
+            .transition(crate::capability::provider::ProviderState::Stopped)
+            .unwrap();
+        provider
+            .transition(crate::capability::provider::ProviderState::Starting)
+            .unwrap();
+        let denied = face
+            .call_tool(&caller, &session, "mcp_policy_fixture", json!({}))
+            .await
+            .unwrap();
+        assert_eq!(denied.is_error, Some(true));
+        assert_eq!(effects.load(std::sync::atomic::Ordering::SeqCst), 0);
+
+        registry
+            .provider()
+            .transition(crate::capability::provider::ProviderState::Ready)
+            .unwrap();
+        assert!(host.wait_until_ready().await);
+        let allowed = face
+            .call_tool(&caller, &session, "mcp_policy_fixture", json!({}))
+            .await
+            .unwrap();
+        assert_eq!(allowed.is_error, Some(false));
+        assert_eq!(effects.load(std::sync::atomic::Ordering::SeqCst), 1);
     }
 
     #[test]

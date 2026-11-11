@@ -271,17 +271,29 @@ struct BindingKey {
     visibility: VisibilityScope,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct RegistrationToken {
+    capability: CapabilityId,
+    visibility: VisibilityScope,
+    owner: OwnerRef,
+    lifetime: LifetimeScope,
+    generation: OwnerGeneration,
+    binding_nonce: u64,
+}
+
 #[derive(Debug)]
 struct Binding {
     owner: OwnerRef,
     lifetime: LifetimeScope,
     generation: OwnerGeneration,
+    binding_nonce: u64,
     claims: HashMap<FencingToken, (OwnerGeneration, OwnerRef)>,
 }
 
 #[derive(Debug)]
 struct OwnershipInner {
     generation_nonce: u64,
+    binding_nonce: u64,
     fencing_nonce: u64,
     revoked: HashSet<CapabilityId>,
     disposed: HashSet<LifetimeScope>,
@@ -307,6 +319,7 @@ impl OwnershipTree {
         Self {
             inner: Mutex::new(OwnershipInner {
                 generation_nonce: 0,
+                binding_nonce: 0,
                 fencing_nonce: 0,
                 revoked: HashSet::new(),
                 disposed: HashSet::new(),
@@ -364,6 +377,14 @@ impl OwnershipTree {
         Ok(())
     }
 
+    fn next_binding_nonce(inner: &mut OwnershipInner) -> Result<u64, RegisterError> {
+        let nonce = inner.binding_nonce;
+        inner.binding_nonce = nonce
+            .checked_add(1)
+            .ok_or(RegisterError::GenerationExhausted)?;
+        Ok(nonce)
+    }
+
     /// Register or replace an ownership binding.
     ///
     /// The owner generation is the TREE EPOCH, not a per-binding counter: a
@@ -400,12 +421,14 @@ impl OwnershipTree {
             return Err(RegisterError::GenerationExhausted);
         }
         let generation = OwnerGeneration(inner.generation_nonce);
+        let binding_nonce = Self::next_binding_nonce(&mut inner)?;
         inner.bindings.insert(
             key,
             Binding {
                 owner,
                 lifetime,
                 generation,
+                binding_nonce,
                 claims: HashMap::new(),
             },
         );
@@ -421,26 +444,103 @@ impl OwnershipTree {
         lifetime: LifetimeScope,
         visibility: VisibilityScope,
     ) -> Result<(), RegisterError> {
+        self.register_if_absent_with_token(capability, owner, lifetime, visibility)
+            .map(|_| ())
+    }
+
+    /// Insert only when absent and return an incarnation token for exact rollback.
+    pub(crate) fn register_if_absent_with_token(
+        &self,
+        capability: CapabilityId,
+        owner: OwnerRef,
+        lifetime: LifetimeScope,
+        visibility: VisibilityScope,
+    ) -> Result<Option<RegistrationToken>, RegisterError> {
+        self.register_if_absent_batch(std::iter::once((capability, owner, lifetime, visibility)))
+            .map(|mut tokens| tokens.pop())
+    }
+
+    /// Atomically insert every absent binding after validating every refusal gate.
+    /// No caller can observe a partial multi-capability registration.
+    pub(crate) fn register_if_absent_batch(
+        &self,
+        registrations: impl IntoIterator<
+            Item = (CapabilityId, OwnerRef, LifetimeScope, VisibilityScope),
+        >,
+    ) -> Result<Vec<RegistrationToken>, RegisterError> {
+        let registrations: Vec<_> = registrations.into_iter().collect();
         let mut inner = self
             .inner
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        Self::guard(&inner, &capability, lifetime)?;
-        let key = Self::key(&capability, &visibility);
-        if inner.bindings.contains_key(&key) {
-            return Ok(());
+        let mut pending = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+        for (capability, owner, lifetime, visibility) in &registrations {
+            Self::guard(&inner, capability, *lifetime)?;
+            let key = Self::key(capability, visibility);
+            if inner.bindings.contains_key(&key) || !seen.insert(key) {
+                continue;
+            }
+            pending.push((
+                capability.clone(),
+                owner.clone(),
+                *lifetime,
+                visibility.clone(),
+            ));
         }
-        if inner.generation_nonce == u64::MAX {
+        if inner.generation_nonce == u64::MAX && !pending.is_empty() {
+            return Err(RegisterError::GenerationExhausted);
+        }
+        let missing = pending.len() as u64;
+        if inner.binding_nonce.checked_add(missing).is_none() {
             return Err(RegisterError::GenerationExhausted);
         }
         let generation = OwnerGeneration(inner.generation_nonce);
-        inner.bindings.entry(key).or_insert_with(|| Binding {
-            owner,
-            lifetime,
-            generation,
-            claims: HashMap::new(),
+        let mut tokens = Vec::with_capacity(pending.len());
+        for (capability, owner, lifetime, visibility) in pending {
+            let binding_nonce = inner.binding_nonce;
+            inner.binding_nonce += 1;
+            inner.bindings.insert(
+                Self::key(&capability, &visibility),
+                Binding {
+                    owner: owner.clone(),
+                    lifetime,
+                    generation,
+                    binding_nonce,
+                    claims: HashMap::new(),
+                },
+            );
+            tokens.push(RegistrationToken {
+                capability,
+                visibility,
+                owner,
+                lifetime,
+                generation,
+                binding_nonce,
+            });
+        }
+        Ok(tokens)
+    }
+
+    /// Remove one binding only when the exact registration incarnation remains
+    /// unclaimed and unrotated. Claims, replacement, and rotation all fail safe.
+    pub(crate) fn rollback_if_matches(&self, token: &RegistrationToken) -> bool {
+        let mut inner = self
+            .inner
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let key = Self::key(&token.capability, &token.visibility);
+        let matches = inner.bindings.get(&key).is_some_and(|binding| {
+            binding.owner == token.owner
+                && binding.lifetime == token.lifetime
+                && binding.generation == token.generation
+                && binding.binding_nonce == token.binding_nonce
+                && binding.claims.is_empty()
         });
-        Ok(())
+        if matches {
+            inner.bindings.remove(&key);
+        }
+        matches
     }
 
     pub fn resolve(&self, capability: &CapabilityId, visibility: &VisibilityScope) -> Option<()> {
@@ -474,6 +574,14 @@ impl OwnershipTree {
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         let key = Self::key(capability, visibility);
         inner.bindings.get(&key).map(|binding| binding.generation)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn exhaust_generation_for_test(&self) {
+        self.inner
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .generation_nonce = u64::MAX;
     }
 
     /// Read the owner of one `(CapabilityId, VisibilityScope)` binding.
@@ -770,23 +878,34 @@ impl OwnershipTree {
     /// An existing binding is revoked with the identical irreversible
     /// transition as [`revoke`](Self::revoke).
     pub fn revoke_bound(&self, capability: &CapabilityId) -> BoundRevoke {
+        self.revoke_bound_with_receipt(capability).0
+    }
+
+    /// Factual removal receipt from the SAME mutation critical section.
+    /// Bindings are not source incarnations or human audience authority.
+    pub(crate) fn revoke_bound_with_receipt(
+        &self,
+        capability: &CapabilityId,
+    ) -> (BoundRevoke, Vec<CapturedBinding>) {
         let mut inner = self
             .inner
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         if inner.revoked.contains(capability) {
-            return BoundRevoke::AlreadyRevoked;
+            return (BoundRevoke::AlreadyRevoked, Vec::new());
         }
-        if !inner
+        let bindings = inner
             .bindings
-            .keys()
-            .any(|key| &key.capability == capability)
-        {
-            return BoundRevoke::NotBound;
+            .iter()
+            .filter(|(key, _)| &key.capability == capability)
+            .map(|(key, binding)| Self::captured_binding(key, binding))
+            .collect::<Vec<_>>();
+        if bindings.is_empty() {
+            return (BoundRevoke::NotBound, bindings);
         }
         let removed = Self::revoke_locked(&mut inner, capability);
         debug_assert!(removed, "a bound capability must lose its binding");
-        BoundRevoke::Revoked
+        (BoundRevoke::Revoked, bindings)
     }
 
     fn revoke_locked(inner: &mut OwnershipInner, capability: &CapabilityId) -> bool {
@@ -811,23 +930,43 @@ impl OwnershipTree {
     /// Disposing `Runtime` removes every binding and permanently blocks all
     /// later registration in this tree.
     pub fn dispose(&self, scope: LifetimeScope) -> bool {
+        !self.dispose_with_receipt(scope).is_empty()
+    }
+
+    fn captured_binding(key: &BindingKey, binding: &Binding) -> CapturedBinding {
+        CapturedBinding {
+            capability: key.capability.clone(),
+            visibility: key.visibility.clone(),
+            generation: binding.generation,
+            owner: binding.owner.clone(),
+            lifetime: binding.lifetime,
+        }
+    }
+
+    /// Return precisely the facts removed by this dispose, including replacements
+    /// that won before its lock. Empty Runtime dispose still creates a tombstone.
+    pub(crate) fn dispose_with_receipt(&self, scope: LifetimeScope) -> Vec<CapturedBinding> {
         let mut inner = self
             .inner
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let before = inner.bindings.len();
-        inner
-            .bindings
-            .retain(|_, binding| rank(binding.lifetime) > rank(scope));
+        let mut removed = Vec::new();
+        inner.bindings.retain(|key, binding| {
+            if rank(binding.lifetime) > rank(scope) {
+                return true;
+            }
+            removed.push(Self::captured_binding(key, binding));
+            false
+        });
         let new_tombstone = inner.disposed.insert(scope);
-        let bindings_released = before != inner.bindings.len();
+        let bindings_released = !removed.is_empty();
         if new_tombstone || bindings_released {
             // Emit on a real state transition: a binding was released, or a
             // fresh tombstone was inserted (empty-scope dispose). A duplicate
             // dispose on an already-tombstoned scope emits nothing.
             let _ = inner.changes.send(OwnershipChange::Disposed { scope });
         }
-        bindings_released
+        removed
     }
 }
 
@@ -881,6 +1020,86 @@ mod tests {
         VisibilityScope {
             workspace: Some(workspace.to_string()),
             ..VisibilityScope::default()
+        }
+    }
+
+    #[test]
+    fn mutation_receipts_preserve_public_tombstone_and_idempotence_semantics() {
+        let tree = OwnershipTree::new();
+        let id = cap_id("receipt");
+        assert_eq!(
+            tree.revoke_bound_with_receipt(&id),
+            (BoundRevoke::NotBound, vec![])
+        );
+        assert!(!tree.is_revoked(&id));
+        tree.register(
+            id.clone(),
+            OwnerRef::Runtime,
+            LifetimeScope::Runtime,
+            full_vis(),
+        )
+        .unwrap();
+        tree.register(
+            id.clone(),
+            OwnerRef::Task(TaskId("task".into())),
+            LifetimeScope::Task,
+            restricted_vis("private"),
+        )
+        .unwrap();
+        let (outcome, removed) = tree.revoke_bound_with_receipt(&id);
+        assert_eq!(outcome, BoundRevoke::Revoked);
+        assert_eq!(removed.len(), 2);
+        assert!(removed.iter().any(|binding| binding.owner
+            == OwnerRef::Task(TaskId("task".into()))
+            && binding.visibility == restricted_vis("private")));
+        assert_eq!(
+            tree.revoke_bound_with_receipt(&id),
+            (BoundRevoke::AlreadyRevoked, vec![])
+        );
+        assert_eq!(tree.revoke_bound(&id), BoundRevoke::AlreadyRevoked);
+        assert!(tree.dispose_with_receipt(LifetimeScope::Runtime).is_empty());
+        assert!(tree.is_disposed(LifetimeScope::Runtime));
+        assert!(!tree.dispose(LifetimeScope::Runtime));
+        assert_eq!(
+            tree.register(
+                cap_id("late"),
+                OwnerRef::Runtime,
+                LifetimeScope::Runtime,
+                full_vis()
+            ),
+            Err(RegisterError::Disposed)
+        );
+    }
+
+    #[test]
+    fn dispose_receipt_tracks_the_actual_concurrent_replacement() {
+        for _ in 0..32 {
+            let tree = std::sync::Arc::new(OwnershipTree::new());
+            let id = cap_id("replace-receipt");
+            let before = OwnerRef::Task(TaskId("before".into()));
+            let after = OwnerRef::Task(TaskId("after".into()));
+            tree.register(id.clone(), before.clone(), LifetimeScope::Task, full_vis())
+                .unwrap();
+            let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
+            let worker_tree = tree.clone();
+            let worker_barrier = barrier.clone();
+            let worker_id = id.clone();
+            let replacement = after.clone();
+            let worker = std::thread::spawn(move || {
+                worker_barrier.wait();
+                worker_tree.register(worker_id, replacement, LifetimeScope::Task, full_vis())
+            });
+            barrier.wait();
+            let removed = tree.dispose_with_receipt(LifetimeScope::Runtime);
+            let result = worker.join().unwrap();
+            assert_eq!(removed.len(), 1);
+            assert_eq!(removed[0].capability, id);
+            assert_eq!(
+                removed[0].owner,
+                if result.is_ok() { after } else { before }
+            );
+            assert!(tree.dispose_with_receipt(LifetimeScope::Runtime).is_empty());
+            assert!(tree.generation(&id, &full_vis()).is_none());
         }
     }
 

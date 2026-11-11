@@ -117,6 +117,15 @@ pub(crate) mod tests {
         ("canvas.get", Class::Open),
         ("canvas.list", Class::Open),
         ("canvas.selection.set", Class::Open),
+        // Existing method_admin treatment only: discovery and UI remain subject
+        // to authentication, session/mount ownership and per-resource Policy.
+        ("capabilities.describe", Class::Open),
+        ("capabilities.terminal.invoke", Class::Admin),
+        ("capabilities.ui.ack", Class::Open),
+        ("capabilities.ui.attach", Class::Open),
+        ("capabilities.ui.detach", Class::Open),
+        ("capabilities.ui.invoke", Class::Open),
+        ("capabilities.ui.submit_input", Class::Open),
         ("channel.create", Class::Admin),
         ("channel.delete", Class::Admin),
         ("channel.pairing.approve", Class::Admin),
@@ -404,6 +413,8 @@ pub(crate) mod tests {
         ("skills.update", Class::Admin),
         ("spend.query", Class::Admin),
         ("subagent.tree", Class::Open),
+        // Existing protocol/version handshake; Open is not an auth exemption.
+        ("system.hello", Class::Open),
         ("system.info", Class::Open),
         ("teams.acp_member.add", Class::Open),
         ("teams.acp_member.list", Class::Open),
@@ -661,6 +672,75 @@ pub(crate) mod tests {
         let rest = after_receiver.strip_prefix('"')?;
         let close = rest.find('"')?;
         Some(rest[..close].to_string())
+    }
+
+    #[test]
+    fn capability_and_handshake_methods_remain_in_the_actual_rpc_sweep() {
+        let (swept, unknown) = sweep_rpc_methods();
+        assert!(
+            unknown.is_empty(),
+            "unclassified actual registrations: {unknown:?}"
+        );
+        let expected = [
+            (
+                "capabilities.describe",
+                Class::Open,
+                "src/gateway/handlers/mod.rs",
+            ),
+            (
+                "capabilities.terminal.invoke",
+                Class::Admin,
+                "src/gateway/handlers/mod.rs",
+            ),
+            (
+                "capabilities.ui.attach",
+                Class::Open,
+                "src/gateway/server/mod.rs",
+            ),
+            (
+                "capabilities.ui.invoke",
+                Class::Open,
+                "src/gateway/server/mod.rs",
+            ),
+            (
+                "capabilities.ui.ack",
+                Class::Open,
+                "src/gateway/server/mod.rs",
+            ),
+            (
+                "capabilities.ui.submit_input",
+                Class::Open,
+                "src/gateway/server/mod.rs",
+            ),
+            (
+                "capabilities.ui.detach",
+                Class::Open,
+                "src/gateway/server/mod.rs",
+            ),
+            ("system.hello", Class::Open, "src/gateway/handlers/mod.rs"),
+        ];
+        for (method, class, registration_file) in expected {
+            assert_eq!(
+                swept.get(method).map(String::as_str),
+                Some(registration_file),
+                "{method} must remain an actual RPC from its owning registration file"
+            );
+            let recorded: Vec<_> = RPC_METHOD_CENSUS
+                .iter()
+                .filter(|(name, _)| *name == method)
+                .map(|(_, class)| *class)
+                .collect();
+            assert_eq!(
+                recorded,
+                vec![class],
+                "{method} must have exactly one explicit ruling"
+            );
+            assert_eq!(
+                method_admin::method_requires_admin(method),
+                class == Class::Admin,
+                "{method} must retain its existing runtime role gate"
+            );
+        }
     }
 
     #[test]

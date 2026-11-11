@@ -34,6 +34,8 @@ pub(crate) use ledger::record_allowlist_refusal;
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod production_policy_tests;
 // POSIX-only: the hooks under test are `sh` commands.
 #[cfg(all(test, unix))]
 mod hook_block_tests;
@@ -111,6 +113,8 @@ pub struct ScopedToolService {
     /// Handle to the mounted Zahir facade for canonical lease validation.
     /// This is a reference to the existing authority, never a second source.
     pub(super) canonical_facade: Option<Arc<crate::capability::zahir_facade::ZahirFacade>>,
+    /// Startup restrictions shared with the mounted canonical facade.
+    pub(super) capability_policy: Option<Arc<crate::capability::policy::PolicyEngine>>,
     /// Optional activation controllers keyed by canonical tool name. The
     /// controller is the capability-layer authority for runtime restrictions;
     /// this service only invokes its validation at the handler seam.

@@ -8,7 +8,7 @@ use crate::tools::descriptor::{ToolCapabilityDescriptor, ToolSource};
 use crate::tools::handlers::ToolHandler;
 use crate::tools::registry::ToolHandlerRegistry;
 use crate::tools::service::{ToolDefinition, ToolDefinitionMetadata, ToolError, ToolOutput};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 struct MemoryHandler(ToolDefinition);
 
@@ -76,12 +76,14 @@ async fn resource_resolve_does_not_mint_custom_scope_or_accept_another_tree() {
         Arc::new(OwnershipTree::new()),
         runtime.clone(),
     );
-    assert!(foreign
-        .resolve(Reference {
-            id: reference.id,
-            visibility: VisibilityScope::default()
-        })
-        .is_err());
+    assert!(
+        foreign
+            .resolve(Reference {
+                id: reference.id,
+                visibility: VisibilityScope::default()
+            })
+            .is_err()
+    );
     assert!(foreign.validate_lease(&lease).is_err());
     runtime.stop().await.unwrap();
     assert!(facade.validate_lease(&lease).is_err());
@@ -157,14 +159,16 @@ async fn resource_lease_is_source_backed_and_controls_stay_independent() {
         },
         visibility: VisibilityScope::default(),
     };
-    assert!(facade
-        .describe(Scope {
-            kind: Some(CapabilityKind::Resource),
-            ..Default::default()
-        })
-        .capabilities
-        .iter()
-        .any(|descriptor| descriptor.id == reference.id));
+    assert!(
+        facade
+            .describe(Scope {
+                kind: Some(CapabilityKind::Resource),
+                ..Default::default()
+            })
+            .capabilities
+            .iter()
+            .any(|descriptor| descriptor.id == reference.id)
+    );
     assert!(
         facade.resolve(reference.clone()).is_err(),
         "Off must not issue a usable Resource lease"

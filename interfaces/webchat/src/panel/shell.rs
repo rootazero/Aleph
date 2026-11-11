@@ -1,4 +1,5 @@
 use super::{
+    capability_surface::CapabilitySurface,
     loader::{PanelLoadStatus, PanelLoader},
     projection::PanelProjection,
     sdk::PanelSdk,
@@ -96,6 +97,7 @@ pub fn PanelShell(projection: PanelProjection, initial_tab: Option<PanelTabKey>)
 
     view! {
         <section class="h-full flex flex-col" data-panel-shell=shell_kind>
+            <CapabilitySurface state=state />
             <nav aria-label=move || t_string!(i18n, panel_spike.tabs) class="flex gap-2 p-3">
                 {move || {
                     revision.get();

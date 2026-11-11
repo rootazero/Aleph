@@ -186,6 +186,28 @@ pub async fn revalidate_for_dispatch(
     (viewer_principal(&live).as_deref() == Some(expected.as_str())).then_some(live)
 }
 
+/// UI effects may wait outside the connection loop. Never use the loopback
+/// fallback for a missing/closed connection, nor execute under a changed login.
+/// The record and its identity are read under one lock after queue/permit waits.
+pub(super) async fn live_ui_caller(
+    connections: &RwLock<HashMap<String, ConnectionState>>,
+    conn_id: &str,
+    start: &CallerSnapshot,
+) -> Option<CallerSnapshot> {
+    let connections = connections.read().await;
+    let state = connections.get(conn_id)?;
+    if state.first_message || !super::auth::wall_admits(Some(&state.caller_role), "capabilities.ui.invoke") {
+        return None;
+    }
+    let live = CallerSnapshot {
+        role: Some(state.caller_role.clone()),
+        user: state.caller_user.clone(),
+        verified_user: state.verified_user.clone(),
+        device_id: state.device_id.clone(),
+    };
+    (live.user.as_deref().is_some_and(|user| !user.is_empty()) && &live == start).then_some(live)
+}
+
 /// Dispatch one request for a connection: revalidate (viewer methods), then
 /// run `dispatch_with_caller_context` with the resulting snapshot. Single
 /// helper shared by `do_lane_dispatch` and the idempotency `Proceed` arm so
@@ -201,6 +223,12 @@ pub async fn dispatch_for_connection(
     req_id: Option<serde_json::Value>,
     start: &CallerSnapshot,
 ) -> String {
+    if method == "capabilities.ui.invoke" {
+        return match live_ui_caller(connections, conn_id, start).await {
+            Some(live) => dispatch_snapshot(text, mc, live, client_is_local, Some(conn_id.to_owned())).await,
+            None => viewer_denied_response(req_id),
+        };
+    }
     // Off-loop RPCs (Task #56 D3) can wait behind a queue and a lane permit
     // for a long time while the connection loop keeps processing `connect`
     // and `restamp_live_connections` demotions. Their authority must be the

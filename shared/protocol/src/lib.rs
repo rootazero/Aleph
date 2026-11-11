@@ -20,6 +20,7 @@ pub mod browser;
 pub mod browser_live;
 pub mod btw;
 pub mod canvas;
+pub mod capability;
 pub mod channel_pairing;
 pub mod channels;
 pub mod clarification;

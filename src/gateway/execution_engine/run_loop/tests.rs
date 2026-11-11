@@ -2459,6 +2459,8 @@ fn canonical_test_entry(name: &str, server: &'static str) -> crate::tools::regis
         max_result_tokens: None,
         ready: None,
         cold: None,
+        observation: None,
+        domain_policy: None,
     }
 }
 
@@ -2513,6 +2515,8 @@ fn invoking_canonical_test_entry(
         max_result_tokens: None,
         ready: None,
         cold: None,
+        observation: None,
+        domain_policy: None,
     }
 }
 

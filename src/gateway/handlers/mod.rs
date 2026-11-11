@@ -51,6 +51,7 @@ pub mod browser_viewer;
 pub mod bundled_sync;
 pub mod canvas;
 pub mod canvas_error;
+pub mod capabilities;
 pub mod channel;
 pub mod chat;
 pub mod clarification;
@@ -327,6 +328,11 @@ impl HandlerRegistry {
 
         // Config handlers (schema is stateless)
         registry.register("config.schema", config::handle_schema);
+        registry.register("capabilities.describe", capabilities::handle);
+        registry.register(
+            "capabilities.terminal.invoke",
+            capabilities::handle_terminal_invoke,
+        );
 
         // Logs handlers
         registry.register("logs.getLevel", logs::handle_get_level);

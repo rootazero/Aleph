@@ -214,7 +214,7 @@ pub async fn handle_update(
     // `execution_config::handle_update` for the precedent.
     let impact = {
         let cfg = config.read().await;
-        let landed = crate::config::live_apply::apply_live_sections(&cfg, &["search"], None).await;
+        let landed = crate::config::live_apply::apply_live_sections(&cfg, &["search"], None, None).await;
         crate::config::classify_verified("search", &landed)
     };
 

@@ -539,6 +539,13 @@ pub const SCOPED_METHODS: &[(&str, Treatment)] = &[
     // Project selection and discovery revalidate the current paired principal.
     ("panel.project.select", Treatment::KeyChecked),
     ("panel.capabilities.snapshot", Treatment::ListFiltered),
+    // UI attachment controls are connection- and mount-key checked by the
+    // capability_ui handlers; the opaque surface id is never sufficient.
+    ("capabilities.ui.attach", Treatment::KeyChecked),
+    ("capabilities.ui.invoke", Treatment::KeyChecked),
+    ("capabilities.ui.ack", Treatment::KeyChecked),
+    ("capabilities.ui.submit_input", Treatment::KeyChecked),
+    ("capabilities.ui.detach", Treatment::KeyChecked),
     // Browser issuer RPCs resolve opaque keys against server-owned state.
     // Ownership is exact even for operators; no cross-user admin override.
     ("browser.viewer.grant.issue", Treatment::KeyChecked),

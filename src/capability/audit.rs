@@ -6,6 +6,7 @@
 //! require a separately supplied persistence sink and are not claimed here.
 
 use crate::capability::descriptor::CapabilityId;
+use crate::capability::event_audience::{EventAudience, TrustedEventScope};
 use crate::capability::events::{
     CapabilityEvent, CapabilityEventRecord, CapabilityEventType, EventError, EventFilter,
     HandlerResult, InMemoryEventStream,
@@ -48,6 +49,9 @@ impl AuditLog {
     }
     pub fn actor(&self) -> &OwnerRef {
         self.record.actor()
+    }
+    pub fn audience(&self) -> &EventAudience {
+        self.record.audience()
     }
     pub fn resource(&self) -> &CapabilityId {
         self.record.event().id()
@@ -95,11 +99,12 @@ impl AuditLog {
 
 impl Serialize for AuditLog {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        let mut state = serializer.serialize_struct("AuditLog", 8)?;
+        let mut state = serializer.serialize_struct("AuditLog", 9)?;
         state.serialize_field("sequence", &self.sequence())?;
         state.serialize_field("timestamp", &self.timestamp())?;
         state.serialize_field("event_type", &self.event_type())?;
         state.serialize_field("actor", self.actor())?;
+        state.serialize_field("audience", self.audience())?;
         state.serialize_field("resource", self.resource())?;
         state.serialize_field("action", self.action())?;
         state.serialize_field("result", self.result())?;
@@ -173,6 +178,21 @@ impl AuditCollector {
                 record: Arc::clone(record),
             })
             .collect())
+    }
+
+    /// Query the same retained cut, then apply CURRENT request access outside the lock.
+    pub async fn query_scoped(
+        &self,
+        scope: &TrustedEventScope,
+        query: &AuditQuery,
+    ) -> Result<Vec<AuditLog>, AuditError> {
+        let mut visible = Vec::new();
+        for entry in self.query(query)? {
+            if scope.admits(&entry.record).await {
+                visible.push(entry);
+            }
+        }
+        Ok(visible)
     }
 
     pub fn report(&self, query: &AuditQuery) -> Result<ComplianceReport, AuditError> {

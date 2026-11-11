@@ -91,7 +91,7 @@ async fn cleanup_failure_never_reports_live_or_discards_the_failed_session() {
     let driver = pty::manager::test_driver_id(pty::manager());
     let mut disabled = Config::default();
     disabled.policies.terminal.enabled = false;
-    let applied = apply_live_sections(&disabled, &["policies.terminal"], Some(&bus)).await;
+    let applied = apply_live_sections(&disabled, &["policies.terminal"], Some(&bus), None).await;
     assert!(applied.is_empty());
     let failure = pty::manager().lifecycle_snapshot();
     assert_eq!(failure.state, ProviderState::Failed);
@@ -111,19 +111,19 @@ async fn cleanup_failure_never_reports_live_or_discards_the_failed_session() {
     session.replace_killer_for_test(original);
     // Retried cleanup joins the driver, but the recorded source failure remains non-live.
     assert!(
-        apply_live_sections(&disabled, &["policies.terminal"], Some(&bus))
+        apply_live_sections(&disabled, &["policies.terminal"], Some(&bus), None)
             .await
             .is_empty()
     );
     assert_eq!(pty::manager::test_driver_id(pty::manager()), None);
     assert!(pty::manager::test_session(pty::manager(), &sid).is_none());
     assert!(
-        apply_live_sections(&Config::default(), &["policies.terminal"], Some(&bus))
+        apply_live_sections(&Config::default(), &["policies.terminal"], Some(&bus), None)
             .await
             .contains(&"policies.terminal")
     );
     assert!(
-        apply_live_sections(&disabled, &["policies.terminal"], Some(&bus))
+        apply_live_sections(&disabled, &["policies.terminal"], Some(&bus), None)
             .await
             .contains(&"policies.terminal")
     );
@@ -142,7 +142,8 @@ async fn enabling_while_stopping_observes_the_same_wait_budget() {
         let mut stop = std::pin::pin!(apply_live_sections(
             &disabled,
             &["policies.terminal"],
-            Some(&bus)
+            Some(&bus),
+            None,
         ));
         assert!(stop
             .as_mut()
@@ -152,7 +153,7 @@ async fn enabling_while_stopping_observes_the_same_wait_budget() {
     tokio::time::pause();
     let started = tokio::time::Instant::now();
     assert!(
-        apply_live_sections(&Config::default(), &["policies.terminal"], Some(&bus))
+        apply_live_sections(&Config::default(), &["policies.terminal"], Some(&bus), None)
             .await
             .is_empty()
     );
@@ -161,13 +162,13 @@ async fn enabling_while_stopping_observes_the_same_wait_budget() {
     assert_eq!(pty::manager().lifecycle_snapshot().generation, generation);
     release.send(()).unwrap();
     assert!(
-        apply_live_sections(&Config::default(), &["policies.terminal"], Some(&bus))
+        apply_live_sections(&Config::default(), &["policies.terminal"], Some(&bus), None)
             .await
             .contains(&"policies.terminal")
     );
     assert!(pty::manager().ready_generation().unwrap() > generation);
     assert!(
-        apply_live_sections(&disabled, &["policies.terminal"], Some(&bus))
+        apply_live_sections(&disabled, &["policies.terminal"], Some(&bus), None)
             .await
             .contains(&"policies.terminal")
     );
@@ -184,7 +185,7 @@ async fn stop_timeout_retains_the_same_driver_until_explicit_retry() {
     cfg.policies.terminal.enabled = false;
     tokio::time::pause();
     let started = tokio::time::Instant::now();
-    let applied = apply_live_sections(&cfg, &["policies.terminal"], Some(&bus)).await;
+    let applied = apply_live_sections(&cfg, &["policies.terminal"], Some(&bus), None).await;
     assert!(started.elapsed() >= Duration::from_secs(5));
     assert!(applied.is_empty());
     assert_eq!(
@@ -199,7 +200,7 @@ async fn stop_timeout_retains_the_same_driver_until_explicit_retry() {
     assert!(pty::manager().spawn(&pty::SpawnOptions::default()).is_err());
     release.send(()).unwrap();
     assert_eq!(
-        apply_live_sections(&cfg, &["policies.terminal"], Some(&bus)).await,
+        apply_live_sections(&cfg, &["policies.terminal"], Some(&bus), None).await,
         vec!["policies.terminal"]
     );
     assert_eq!(pty::manager::test_driver_id(pty::manager()), None);
@@ -218,7 +219,8 @@ async fn stopping_enable_waits_for_retained_join_before_new_generation() {
         let mut stop = std::pin::pin!(apply_live_sections(
             &disabled,
             &["policies.terminal"],
-            Some(&bus)
+            Some(&bus),
+            None,
         ));
         assert!(stop
             .as_mut()
@@ -231,7 +233,8 @@ async fn stopping_enable_waits_for_retained_join_before_new_generation() {
     let mut enable = std::pin::pin!(apply_live_sections(
         &enabled,
         &["policies.terminal"],
-        Some(&bus)
+        Some(&bus),
+        None,
     ));
     assert!(enable
         .as_mut()
@@ -249,7 +252,7 @@ async fn stopping_enable_waits_for_retained_join_before_new_generation() {
         Some(&serde_json::json!({"provider_generation": first}))
     ));
     assert_eq!(
-        apply_live_sections(&disabled, &["policies.terminal"], Some(&bus)).await,
+        apply_live_sections(&disabled, &["policies.terminal"], Some(&bus), None).await,
         vec!["policies.terminal"]
     );
     assert_eq!(pty::manager::test_driver_id(pty::manager()), None);
@@ -262,26 +265,26 @@ async fn a_failed_join_and_missing_or_wrong_bus_never_earn_terminal_live() {
     let bus = Arc::new(GatewayEventBus::new());
     let first = pty::attach_event_bus(bus.clone()).unwrap();
     let cfg = Config::default();
-    assert!(apply_live_sections(&cfg, &["policies.terminal"], None)
+    assert!(apply_live_sections(&cfg, &["policies.terminal"], None, None)
         .await
         .is_empty());
     let wrong = Arc::new(GatewayEventBus::new());
     assert!(
-        apply_live_sections(&cfg, &["policies.terminal"], Some(&wrong))
+        apply_live_sections(&cfg, &["policies.terminal"], Some(&wrong), None)
             .await
             .is_empty()
     );
     assert_eq!(pty::manager().ready_generation().unwrap(), first);
     let driver = pty::manager::test_driver_id(pty::manager());
     assert_eq!(
-        apply_live_sections(&cfg, &["policies.terminal"], Some(&bus)).await,
+        apply_live_sections(&cfg, &["policies.terminal"], Some(&bus), None).await,
         vec!["policies.terminal"]
     );
     assert_eq!(pty::manager::test_driver_id(pty::manager()), driver);
     pty::manager::abort_test_driver(pty::manager());
     let mut disabled = cfg;
     disabled.policies.terminal.enabled = false;
-    let applied = apply_live_sections(&disabled, &["policies.terminal"], Some(&bus)).await;
+    let applied = apply_live_sections(&disabled, &["policies.terminal"], Some(&bus), None).await;
     assert!(applied.is_empty());
     let snapshot = pty::manager().lifecycle_snapshot();
     assert_eq!(snapshot.state, ProviderState::Failed);
@@ -296,7 +299,7 @@ async fn a_failed_join_and_missing_or_wrong_bus_never_earn_terminal_live() {
     );
     assert!(pty::attach_event_bus(bus.clone()).unwrap() > first);
     assert_eq!(
-        apply_live_sections(&disabled, &["policies.terminal"], Some(&bus)).await,
+        apply_live_sections(&disabled, &["policies.terminal"], Some(&bus), None).await,
         vec!["policies.terminal"]
     );
 }
@@ -428,7 +431,7 @@ async fn competing_config_writer_waits_for_the_apply_read_guard() {
     writer.await.policies.terminal.enabled = true;
     let cfg = fixture.config.read().await;
     assert_eq!(
-        apply_live_sections(&cfg, &["policies.terminal"], Some(&fixture.bus)).await,
+        apply_live_sections(&cfg, &["policies.terminal"], Some(&fixture.bus), None).await,
         vec!["policies.terminal"]
     );
     assert!(pty::manager().ready_generation().unwrap() > first);

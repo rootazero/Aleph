@@ -5,7 +5,8 @@
 //! contract and a deterministic adapter for tests and future bridges.
 
 use crate::capability::backend::{
-    CapabilityDispatchError, CapabilityHandler, CapabilityHandlerRegistry, CapabilityRegistryError,
+    LegacyCapabilityDispatchError, LegacyCapabilityHandler, LegacyCapabilityHandlerRegistry,
+    LegacyCapabilityRegistryError,
 };
 use crate::capability::descriptor::{
     CapabilityDescriptor, CapabilityFacet, CapabilityFacets, CapabilityId, CapabilityKind,
@@ -13,6 +14,7 @@ use crate::capability::descriptor::{
 };
 use crate::capability::ownership::{LifetimeScope, OwnerRef, VisibilityScope};
 use crate::sync_primitives::Arc;
+use aleph_protocol::capability::UiInputEvent;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::collections::VecDeque;
@@ -28,6 +30,20 @@ pub enum UiError {
     InvalidInput(String),
     #[error("UI state lock is poisoned")]
     Poisoned,
+    #[error("UI surface is unavailable")]
+    Unavailable,
+    #[error("UI surface attachment is stale")]
+    StaleAttachment,
+    #[error("UI input queue is full")]
+    QueueFull,
+    #[error("UI surface already has a pending display")]
+    Busy,
+    #[error("UI render acknowledgement reported failure")]
+    RenderFailed,
+    #[error("UI render acknowledgement timed out")]
+    Timeout,
+    #[error("UI display was cancelled")]
+    Cancelled,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -35,20 +51,11 @@ pub enum UiElement {
     Text(String),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum UiInputEvent {
-    KeyDown { key: String },
-    MouseDown { x: i32, y: i32, button: u8 },
-}
-
-impl UiInputEvent {
-    #[must_use]
-    pub fn to_json(&self) -> Value {
-        match self {
-            Self::KeyDown { key } => json!({"kind":"key_down","key":key}),
-            Self::MouseDown { x, y, button } => {
-                json!({"kind":"mouse_down","x":x,"y":y,"button":button})
-            }
+fn input_to_json(event: &UiInputEvent) -> Value {
+    match event {
+        UiInputEvent::KeyDown { key } => json!({"kind":"key_down","key":key}),
+        UiInputEvent::MouseDown { x, y, button } => {
+            json!({"kind":"mouse_down","x":x,"y":y,"button":button})
         }
     }
 }
@@ -131,41 +138,41 @@ impl UiHandler {
     }
 }
 
-impl CapabilityHandler for UiHandler {
-    fn invoke(&self, input: Value) -> Result<Value, CapabilityDispatchError> {
+impl LegacyCapabilityHandler for UiHandler {
+    fn invoke(&self, input: Value) -> Result<Value, LegacyCapabilityDispatchError> {
         let input = input.as_object().ok_or_else(|| {
-            CapabilityDispatchError::InvalidInput("UI input must be an object".into())
+            LegacyCapabilityDispatchError::InvalidInput("UI input must be an object".into())
         })?;
         let operation = input
             .get("operation")
             .and_then(Value::as_str)
             .ok_or_else(|| {
-                CapabilityDispatchError::InvalidInput("UI operation is required".into())
+                LegacyCapabilityDispatchError::InvalidInput("UI operation is required".into())
             })?;
         match operation {
             "display" => {
                 let text = input.get("text").and_then(Value::as_str).ok_or_else(|| {
-                    CapabilityDispatchError::InvalidInput("display text is required".into())
+                    LegacyCapabilityDispatchError::InvalidInput("display text is required".into())
                 })?;
                 self.capability
                     .display_text(text)
-                    .map_err(|error| CapabilityDispatchError::Execution(error.to_string()))?;
+                    .map_err(|error| LegacyCapabilityDispatchError::Execution(error.to_string()))?;
                 Ok(json!({"displayed":true}))
             }
             "input" => self
                 .capability
                 .capture_input()
-                .map(|event| event.map_or(Value::Null, |event| event.to_json()))
-                .map_err(|error| CapabilityDispatchError::Execution(error.to_string())),
-            other => Err(CapabilityDispatchError::InvalidInput(format!(
+                .map(|event| event.map_or(Value::Null, |event| input_to_json(&event)))
+                .map_err(|error| LegacyCapabilityDispatchError::Execution(error.to_string())),
+            other => Err(LegacyCapabilityDispatchError::InvalidInput(format!(
                 "unsupported UI operation: {other}"
             ))),
         }
     }
 }
 
-fn descriptor() -> CapabilityDescriptor {
-    let schema = json!({
+pub(crate) fn schema() -> Value {
+    json!({
         "oneOf":[
             {
                 "type":"object",
@@ -185,7 +192,11 @@ fn descriptor() -> CapabilityDescriptor {
                 "additionalProperties":false
             }
         ]
-    });
+    })
+}
+
+pub(crate) fn descriptor() -> CapabilityDescriptor {
+    let schema = schema();
     let mut bytes = Vec::new();
     crate::tools::descriptor::canonicalize_json(&schema, &mut bytes);
     CapabilityDescriptor {
@@ -209,16 +220,16 @@ fn descriptor() -> CapabilityDescriptor {
 }
 
 pub fn register_handler(
-    registry: &CapabilityHandlerRegistry,
+    registry: &LegacyCapabilityHandlerRegistry,
     capability: Arc<UiCapability>,
-) -> Result<CapabilityId, CapabilityRegistryError> {
+) -> Result<CapabilityId, LegacyCapabilityRegistryError> {
     registry.register(descriptor(), Arc::new(UiHandler::new(capability)))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::capability::backend::{CapabilityBackend, CapabilityHandlerRegistry};
+    use crate::capability::backend::{CapabilityBackend, LegacyCapabilityHandlerRegistry};
     use crate::sync_primitives::Arc;
     use serde_json::json;
     use std::sync::Barrier;
@@ -310,7 +321,7 @@ mod tests {
             key: "Enter".into(),
         })
         .unwrap();
-        let registry = CapabilityHandlerRegistry::new();
+        let registry = LegacyCapabilityHandlerRegistry::new();
         let id = register_handler(&registry, ui.clone()).unwrap();
 
         assert_eq!(
@@ -333,18 +344,18 @@ mod tests {
 
     #[test]
     fn ui_handler_rejects_invalid_operations() {
-        let registry = CapabilityHandlerRegistry::new();
+        let registry = LegacyCapabilityHandlerRegistry::new();
         let id = register_handler(&registry, Arc::new(UiCapability::in_memory())).unwrap();
 
         assert!(matches!(
             registry.dispatch(&id, json!({"operation":"click"})),
-            Err(crate::capability::backend::CapabilityDispatchError::InvalidInput(_))
+            Err(crate::capability::backend::LegacyCapabilityDispatchError::InvalidInput(_))
         ));
     }
 
     #[test]
     fn ui_handler_exposes_ui_descriptor() {
-        let registry = CapabilityHandlerRegistry::new();
+        let registry = LegacyCapabilityHandlerRegistry::new();
         let id = register_handler(&registry, Arc::new(UiCapability::in_memory())).unwrap();
 
         assert_eq!(registry.lookup(&id).unwrap().kind, CapabilityKind::Ui);

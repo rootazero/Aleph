@@ -578,15 +578,52 @@ mod tests {
             "production boundary must exclude tests"
         );
         let production = alephcore::utils::source_scan::code_text(&prefix);
-        for reaper in [
-            "kill_all_running_background",
-            "shutdown_browsers_global",
-            "close_all",
-        ] {
+        for reaper in ["kill_all_running_background", "shutdown_browsers_global"] {
             assert!(
                 production.contains(&format!("{reaper}(")),
                 "the common teardown must still call {reaper}()"
             );
+        }
+        assert!(production.contains("startup_resources.install_pty(manager)"));
+        assert!(production.contains("startup_resources.finish(result).await"));
+        let cleanup_at = production
+            .find("startup_resources.cleanup().await")
+            .expect("the orderly path must await owned cleanup");
+        let scope_at = production
+            .find("builtin_registration_scope.take()")
+            .expect("the registry scope must remain owned until cleanup");
+        assert!(cleanup_at < scope_at);
+
+        let owner_src = include_str!("builder/startup_resources.rs").replace('\r', "");
+        let owner_prefix = alephcore::utils::source_scan::production_prefix(&owner_src);
+        assert!(owner_prefix.len() < owner_src.len());
+        let owner = alephcore::utils::source_scan::code_text(&owner_prefix);
+        assert!(owner.contains("self.pty = Some(manager)"));
+        assert!(owner.contains("self.cleanup().await"));
+        assert!(owner.contains("if let Some(manager) = self.pty"));
+        let stop_at = owner
+            .find("manager.deactivate().await")
+            .expect("the installed PTY manager must be stopped and joined");
+        for teardown in [
+            "events.close()",
+            "bridge.clone().join().await",
+            "host.clone().close_and_await().await",
+        ] {
+            let teardown_at = owner.find(teardown).expect("owned teardown must remain");
+            assert!(stop_at < teardown_at, "PTY stop must precede {teardown}");
+        }
+
+        let pty_src = include_str!("../../../../gateway/pty/manager.rs").replace('\r', "");
+        let pty_prefix = alephcore::utils::source_scan::production_prefix(&pty_src);
+        assert!(pty_prefix.len() < pty_src.len());
+        let pty = alephcore::utils::source_scan::code_text(&pty_prefix);
+        for stop_edge in [
+            "let cleanup = self.close_all_checked()",
+            "let generation = self.begin_stop()?",
+            "poll_fn(|cx| self.poll_stop(generation, cx)).await",
+            "Pin::new(&mut owned.handle).poll(cx)",
+        ] {
+            assert!(pty.contains(stop_edge), "PTY stop must retain {stop_edge}");
         }
     }
 }

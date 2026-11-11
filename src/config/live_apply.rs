@@ -57,6 +57,7 @@ pub async fn apply_live_sections(
     cfg: &Config,
     top_sections: &[&str],
     event_bus: Option<&Arc<GatewayEventBus>>,
+    terminal_source: Option<&Arc<crate::capability::tool_adapters::TerminalCapabilitySource>>,
 ) -> Vec<&'static str> {
     let mut applied = Vec::new();
 
@@ -142,6 +143,16 @@ pub async fn apply_live_sections(
                             }
                         }
                         crate::gateway::pty::attach_event_bus(bus.clone())?;
+                        if let (Some(manager), Some(source)) =
+                            (crate::gateway::pty::try_manager(), terminal_source)
+                        {
+                            manager
+                                .bind_capability_source(Arc::downgrade(source))
+                                .map_err(|error| crate::gateway::pty::manager::TerminalResidual {
+                                    generation: manager.lifecycle_snapshot().generation,
+                                    detail: error.to_string(),
+                                })?;
+                        }
                         return Ok(true);
                     }
                     match crate::gateway::pty::try_manager() {
@@ -293,17 +304,17 @@ mod tests {
         let mut cfg = Config::default();
         cfg.policies.terminal.enabled = false;
         assert_eq!(
-            apply_live_sections(&cfg, &["policies.terminal"], None).await,
+            apply_live_sections(&cfg, &["policies.terminal"], None, None).await,
             vec!["policies.terminal"]
         );
         assert!(crate::gateway::pty::try_manager().is_none());
         cfg.policies.terminal.enabled = true;
-        assert!(apply_live_sections(&cfg, &["policies.terminal"], None)
+        assert!(apply_live_sections(&cfg, &["policies.terminal"], None, None)
             .await
             .is_empty());
         assert!(crate::gateway::pty::try_manager().is_none());
         let bus = Arc::new(GatewayEventBus::new());
-        let applied = apply_live_sections(&cfg, &["policies.terminal"], Some(&bus)).await;
+        let applied = apply_live_sections(&cfg, &["policies.terminal"], Some(&bus), None).await;
         assert_eq!(
             applied,
             vec!["policies.terminal"],
@@ -311,7 +322,7 @@ mod tests {
         );
         cfg.policies.terminal.enabled = false;
         assert!(
-            apply_live_sections(&cfg, &["policies.terminal"], Some(&bus))
+            apply_live_sections(&cfg, &["policies.terminal"], Some(&bus), None)
                 .await
                 .contains(&"policies.terminal")
         );
@@ -332,7 +343,7 @@ mod tests {
         crate::gateway::pty::attach_event_bus(bus).unwrap();
         let mut cfg = Config::default();
         cfg.policies.terminal.enabled = false;
-        let applied = apply_live_sections(&cfg, &["policies.terminal"], None).await;
+        let applied = apply_live_sections(&cfg, &["policies.terminal"], None, None).await;
         assert_eq!(
             applied,
             vec!["policies.terminal"],
@@ -351,7 +362,7 @@ mod tests {
     #[tokio::test]
     async fn non_live_sections_are_ignored() {
         let cfg = Config::default();
-        assert!(apply_live_sections(&cfg, &["providers", "memory"], None)
+        assert!(apply_live_sections(&cfg, &["providers", "memory"], None, None)
             .await
             .is_empty());
     }
@@ -362,7 +373,7 @@ mod tests {
         // which the patcher already swapped — no boot-time handle involved.
         let cfg = Config::default();
         assert_eq!(
-            apply_live_sections(&cfg, &["behavior"], None).await,
+            apply_live_sections(&cfg, &["behavior"], None, None).await,
             vec!["behavior"]
         );
     }
@@ -384,7 +395,7 @@ mod tests {
         let restore = max_concurrent_subagents();
         let mut cfg = Config::default();
         cfg.execution.max_concurrent_subagents = 11;
-        let _ = apply_live_sections(&cfg, &["execution"], None).await;
+        let _ = apply_live_sections(&cfg, &["execution"], None, None).await;
         let observed = max_concurrent_subagents();
         set_max_concurrent_subagents(restore);
         assert_eq!(
@@ -470,7 +481,7 @@ mod tests {
             ..Config::default()
         };
 
-        let applied = apply_live_sections(&cfg, &["search"], None).await;
+        let applied = apply_live_sections(&cfg, &["search"], None, None).await;
         assert_eq!(applied, vec!["search"]);
         assert_eq!(
             classify_verified("search.max_results", &applied),
@@ -551,7 +562,7 @@ mod tests {
     async fn policies_spend_arm_fires_from_the_coarse_top_level_name() {
         crate::spend::install_policy(crate::config::types::policies::SpendPolicy::default());
         let cfg = Config::default();
-        assert!(apply_live_sections(&cfg, &["policies"], None)
+        assert!(apply_live_sections(&cfg, &["policies"], None, None)
             .await
             .contains(&"policies.spend"));
     }
@@ -625,7 +636,7 @@ mod tests {
         // The single-patch caller's exact shape: `top_sections` carries only
         // the coarse top-level segment, never "policies.spend" itself.
         // The sibling Terminal arm may be absent or joining; spend still lands.
-        let applied = apply_live_sections(&cfg, &["policies"], None).await;
+        let applied = apply_live_sections(&cfg, &["policies"], None, None).await;
         assert!(applied.contains(&"policies.spend"));
         assert_eq!(
             classify_verified("policies.spend.per_user_usd", &applied),
@@ -640,7 +651,7 @@ mod tests {
         // Lower the ceiling below what is already spent — live, with no
         // restart and no new process. `check`'s very next call must see it.
         cfg.policies.spend.per_user_usd = Some(1.0);
-        let applied = apply_live_sections(&cfg, &["policies"], None).await;
+        let applied = apply_live_sections(&cfg, &["policies"], None, None).await;
         assert!(applied.contains(&"policies.spend"));
         assert!(matches!(
             crate::spend::check(&principal, now_ms),
@@ -830,7 +841,7 @@ mod tests {
 
         let mut cfg = Config::default();
         cfg.policies.terminal.enabled = false;
-        let applied = apply_live_sections(&cfg, &["policies"], None).await;
+        let applied = apply_live_sections(&cfg, &["policies"], None, None).await;
 
         assert!(applied.contains(&"policies.terminal"));
         assert_eq!(crate::gateway::pty::manager::test_driver_id(mgr), None);
@@ -840,7 +851,7 @@ mod tests {
         );
         cfg.policies.terminal.enabled = true;
         assert!(
-            apply_live_sections(&cfg, &["policies"], mgr.current_bus().as_ref())
+            apply_live_sections(&cfg, &["policies"], mgr.current_bus().as_ref(), None)
                 .await
                 .contains(&"policies.terminal")
         );
@@ -849,7 +860,7 @@ mod tests {
             "the in-flight session must be gone, not merely reported gone"
         );
         cfg.policies.terminal.enabled = false;
-        assert!(apply_live_sections(&cfg, &["policies.terminal"], None)
+        assert!(apply_live_sections(&cfg, &["policies.terminal"], None, None)
             .await
             .contains(&"policies.terminal"));
         assert_eq!(crate::gateway::pty::manager::test_driver_id(mgr), None);

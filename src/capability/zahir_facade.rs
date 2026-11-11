@@ -14,7 +14,8 @@
 
 use crate::capability::backend::{CapabilityBackend, ToolBackendAdapter, TOOL_NAMESPACE};
 use crate::capability::descriptor::{
-    CapabilityDescriptor, CapabilityId, CapabilityRevision, ProjectionMetadata, ServiceRelation,
+    CapabilityDescriptor, CapabilityId, CapabilityKind, CapabilityRevision, ProjectionMetadata,
+    ServiceRelation,
 };
 use crate::capability::facade::{
     BackendLease, BackendSourceEvidence, CapabilityChange, CapabilityChangeStream,
@@ -24,17 +25,26 @@ use crate::capability::ownership::{
     BindingValidationError, CapturedBinding, LifetimeScope, OwnerGeneration, OwnerRef,
     OwnershipTree, RegisterError, VisibilityScope,
 };
+use crate::capability::policy_runtime::{
+    CapabilityCallContext, ConstraintFactsSource, PolicyFactSourceKey, ResourceUse,
+};
 use crate::capability::provider::ProviderHandle;
 use crate::capability::provider_backend::ProviderBackendAdapter;
 use crate::capability::provider_registry::ActivationError;
 use crate::capability::provider_registry::ProviderRegistry;
+use crate::capability::special::{
+    AdmittedSpecialCall, CapabilityHandlerCall, CapabilityHandlerRegistry,
+};
+use crate::capability::special_dispatch::{CapabilityInvocationError, CapabilityInvocationOrigin};
 use crate::memory::runtime::{MemoryHandle, MemoryOperation, MemoryRuntime};
 use crate::sync_primitives::Arc;
 use crate::tools::registry::{
     CanonicalEntryLease, RegistryChange, RegistryEntry, RegistryPublication, RegistrySnapshot,
     ToolHandlerRegistry,
 };
-use std::sync::Weak;
+use serde_json::Value;
+use std::sync::{OnceLock, Weak};
+use tokio_util::sync::CancellationToken;
 #[cfg(test)]
 #[path = "zahir_facade_memory_tests.rs"]
 mod memory_tests;
@@ -97,7 +107,133 @@ pub(crate) struct FacadeEntriesSnapshot {
     /// under ONE mutex so a concurrent `bump` cannot mix generations (owner
     /// cut). Per-binding generations, NOT a registry revision.
     pub(crate) owner_generations: HashMap<CapabilityId, OwnerGeneration>,
+    /// Special records are projected separately from ordinary Tool entries and
+    /// resources, while remaining in this same authoritative facade cut.
+    pub(crate) specials: Vec<CapabilityDescriptor>,
     pub(crate) resources: Vec<CapabilityDescriptor>,
+}
+
+/// Live facts from the captured Tool provider, never from request parameters.
+struct ToolPolicyFacts {
+    provider: ProviderHandle,
+    generation: u64,
+    key: crate::capability::policy_runtime::PolicyFactSourceKey,
+}
+impl crate::capability::policy_runtime::ConstraintFactsSource for ToolPolicyFacts {
+    fn source_key(&self) -> crate::capability::policy_runtime::PolicyFactSourceKey {
+        self.key.clone()
+    }
+    fn supported_conditions(&self) -> &'static [&'static str] {
+        &["provider_ready"]
+    }
+    fn supported_units(
+        &self,
+    ) -> &'static [crate::config::types::policies::capability_constraints::ResourceUnit] {
+        &[crate::config::types::policies::capability_constraints::ResourceUnit::ActiveCalls]
+    }
+    fn snapshot(
+        &self,
+        _call: &crate::capability::policy_runtime::CapabilityCallContext,
+        _unit: Option<crate::config::types::policies::capability_constraints::ResourceUnit>,
+        other_active_calls: usize,
+    ) -> Result<
+        crate::capability::constraints::ConstraintContext,
+        crate::capability::constraints::ConstraintViolation,
+    > {
+        let (state, generation) = self.provider.snapshot();
+        Ok(
+            crate::capability::constraints::ConstraintContext::now(other_active_calls)?
+                .with_condition(
+                    "provider_ready",
+                    state == crate::capability::provider::ProviderState::Ready
+                        && generation == self.generation,
+                ),
+        )
+    }
+}
+
+/// Facts remain owned by the real mounted domain, not the catalog adapter.
+enum SpecialFactOwner {
+    Terminal(Weak<super::tool_adapters::TerminalCapabilitySource>),
+    Ui(Weak<super::ui_surface::UiSurface>),
+    Provider,
+}
+struct SpecialPolicyFacts {
+    provider: ProviderHandle,
+    generation: u64,
+    key: PolicyFactSourceKey,
+    owner: SpecialFactOwner,
+}
+impl ConstraintFactsSource for SpecialPolicyFacts {
+    fn source_key(&self) -> PolicyFactSourceKey {
+        self.key.clone()
+    }
+    fn supported_conditions(&self) -> &'static [&'static str] {
+        match &self.owner {
+            SpecialFactOwner::Ui(_) => &["provider_ready", "attachment_ready"],
+            _ => &["provider_ready"],
+        }
+    }
+    fn supported_units(
+        &self,
+    ) -> &'static [crate::config::types::policies::capability_constraints::ResourceUnit] {
+        use crate::config::types::policies::capability_constraints::ResourceUnit;
+        match &self.owner {
+            SpecialFactOwner::Terminal(_) => {
+                &[ResourceUnit::ActiveCalls, ResourceUnit::PtySessions]
+            }
+            _ => &[ResourceUnit::ActiveCalls],
+        }
+    }
+    fn snapshot(
+        &self,
+        call: &CapabilityCallContext,
+        unit: Option<crate::config::types::policies::capability_constraints::ResourceUnit>,
+        other_active_calls: usize,
+    ) -> Result<
+        crate::capability::constraints::ConstraintContext,
+        crate::capability::constraints::ConstraintViolation,
+    > {
+        use crate::capability::constraints::{ConstraintContext, ConstraintViolation};
+        use crate::config::types::policies::capability_constraints::ResourceUnit;
+        let unknown = || ConstraintViolation::ConditionNotMet {
+            name: "provider_ready".into(),
+            expected: true,
+            actual: None,
+        };
+        let (state, generation) = self.provider.snapshot();
+        let ready = state == crate::capability::provider::ProviderState::Ready
+            && generation == self.generation;
+        let occupied = match &self.owner {
+            SpecialFactOwner::Terminal(source) => {
+                let source = source.upgrade().ok_or_else(unknown)?;
+                let (provider, generation, occupied) =
+                    source.policy_snapshot().map_err(|_| unknown())?;
+                if !provider.same_instance(&self.provider) || generation != self.generation {
+                    return Err(unknown());
+                }
+                if unit == Some(ResourceUnit::PtySessions) {
+                    occupied
+                } else {
+                    other_active_calls
+                }
+            }
+            _ => other_active_calls,
+        };
+        let facts = ConstraintContext::now(occupied)?.with_condition("provider_ready", ready);
+        match &self.owner {
+            SpecialFactOwner::Ui(surface) => {
+                let surface = surface.upgrade().ok_or_else(unknown)?;
+                Ok(facts.with_condition(
+                    "attachment_ready",
+                    !surface.is_closed()
+                        && call.connection_id() == Some(surface.owner_connection())
+                        && call.principal() == surface.owner_context().principal(),
+                ))
+            }
+            _ => Ok(facts),
+        }
+    }
 }
 
 /// The one live [`Zahir`] implementation.
@@ -106,6 +242,10 @@ pub struct ZahirFacade {
     provider_adapter: ProviderBackendAdapter,
     tree: Arc<OwnershipTree>,
     memory: Option<Arc<MemoryRuntime>>,
+    policy: Arc<crate::capability::policy::PolicyEngine>,
+    specials: CapabilityHandlerRegistry,
+    events: Arc<crate::capability::events::InMemoryEventStream>,
+    terminal_source: OnceLock<Weak<crate::capability::tool_adapters::TerminalCapabilitySource>>,
 }
 
 impl ZahirFacade {
@@ -124,12 +264,61 @@ impl ZahirFacade {
         tree: Arc<OwnershipTree>,
         providers: ProviderRegistry,
     ) -> Arc<Self> {
-        Arc::new(Self {
+        let facade = Arc::new(Self {
             adapter: ToolBackendAdapter { registry },
             provider_adapter: ProviderBackendAdapter::new(providers),
+            policy: Arc::new(
+                crate::capability::policy::PolicyEngine::with_shared_tree(
+                    tree.clone(),
+                    Default::default(),
+                )
+                .expect("empty capability rules are valid"),
+            ),
             tree,
             memory: None,
-        })
+            specials: CapabilityHandlerRegistry::new(),
+            events: Arc::new(crate::capability::events::InMemoryEventStream::default()),
+            terminal_source: OnceLock::new(),
+        });
+        facade.install_source_events();
+        facade
+    }
+
+    /// Compose the special handler source without a second registry.
+    #[must_use]
+    pub fn new_with_specials(
+        registry: ToolHandlerRegistry,
+        tree: Arc<OwnershipTree>,
+        specials: CapabilityHandlerRegistry,
+    ) -> Arc<Self> {
+        let policy = Arc::new(
+            crate::capability::policy::PolicyEngine::with_shared_tree(
+                tree.clone(),
+                Default::default(),
+            )
+            .expect("empty capability rules are valid"),
+        );
+        Self::new_with_specials_and_policy(registry, tree, specials, policy)
+    }
+
+    pub(crate) fn new_with_specials_and_policy(
+        registry: ToolHandlerRegistry,
+        tree: Arc<OwnershipTree>,
+        specials: CapabilityHandlerRegistry,
+        policy: Arc<crate::capability::policy::PolicyEngine>,
+    ) -> Arc<Self> {
+        let facade = Arc::new(Self {
+            adapter: ToolBackendAdapter { registry },
+            provider_adapter: ProviderBackendAdapter::new(ProviderRegistry::new()),
+            tree,
+            memory: None,
+            policy,
+            specials,
+            events: Arc::new(crate::capability::events::InMemoryEventStream::default()),
+            terminal_source: OnceLock::new(),
+        });
+        facade.install_source_events();
+        facade
     }
 
     /// Compose the concrete Memory source without a second registry.
@@ -139,16 +328,769 @@ impl ZahirFacade {
         tree: Arc<OwnershipTree>,
         memory: Arc<MemoryRuntime>,
     ) -> Arc<Self> {
+        let policy = Arc::new(
+            crate::capability::policy::PolicyEngine::with_shared_tree(
+                tree.clone(),
+                Default::default(),
+            )
+            .expect("empty capability rules are valid"),
+        );
+        Self::new_with_memory_and_policy(registry, tree, memory, policy)
+    }
+
+    /// Compose Memory, startup Policy, and the one special registry.
+    #[must_use]
+    pub fn new_with_memory_and_policy_and_specials(
+        registry: ToolHandlerRegistry,
+        tree: Arc<OwnershipTree>,
+        memory: Arc<MemoryRuntime>,
+        policy: Arc<crate::capability::policy::PolicyEngine>,
+        specials: CapabilityHandlerRegistry,
+    ) -> Arc<Self> {
+        Self::new_with_memory_and_policy_and_specials_and_events(
+            registry,
+            tree,
+            memory,
+            policy,
+            specials,
+            Arc::new(crate::capability::events::InMemoryEventStream::default()),
+        )
+    }
+
+    /// Compose the same bounded event source used by startup and audit.
+    #[must_use]
+    pub fn new_with_memory_and_policy_and_specials_and_events(
+        registry: ToolHandlerRegistry,
+        tree: Arc<OwnershipTree>,
+        memory: Arc<MemoryRuntime>,
+        policy: Arc<crate::capability::policy::PolicyEngine>,
+        specials: CapabilityHandlerRegistry,
+        events: Arc<crate::capability::events::InMemoryEventStream>,
+    ) -> Arc<Self> {
         let providers = ProviderRegistry::new();
         providers
             .register(memory.provider_registration())
             .expect("memory provider must be registered once");
-        Arc::new(Self {
+        let facade = Arc::new(Self {
             adapter: ToolBackendAdapter { registry },
             provider_adapter: ProviderBackendAdapter::new(providers),
             tree,
             memory: Some(memory),
-        })
+            policy,
+            specials,
+            events,
+            terminal_source: OnceLock::new(),
+        });
+        facade.install_source_events();
+        facade
+    }
+
+    /// Compose Memory and the startup Policy without replacing their authorities.
+    #[must_use]
+    pub fn new_with_memory_and_policy(
+        registry: ToolHandlerRegistry,
+        tree: Arc<OwnershipTree>,
+        memory: Arc<MemoryRuntime>,
+        policy: Arc<crate::capability::policy::PolicyEngine>,
+    ) -> Arc<Self> {
+        let providers = ProviderRegistry::new();
+        providers
+            .register(memory.provider_registration())
+            .expect("memory provider must be registered once");
+        let facade = Arc::new(Self {
+            adapter: ToolBackendAdapter { registry },
+            provider_adapter: ProviderBackendAdapter::new(providers),
+            tree,
+            memory: Some(memory),
+            policy,
+            specials: CapabilityHandlerRegistry::new(),
+            events: Arc::new(crate::capability::events::InMemoryEventStream::default()),
+            terminal_source: OnceLock::new(),
+        });
+        facade.install_source_events();
+        facade
+    }
+
+    fn install_source_events(&self) {
+        let emitter = crate::capability::events::CapabilityEventEmitter::new(self.events.clone());
+        self.policy.install_event_observer(emitter.clone());
+        let factory = Arc::new(crate::capability::events::SourceEventFactory {
+            policy: self.policy.clone(),
+            emitter,
+        });
+        self.adapter
+            .registry
+            .install_source_observer(factory.clone());
+        self.specials.install_source_observer(factory.clone());
+        if let Some(memory) = &self.memory {
+            memory.install_source_observer(factory);
+        }
+    }
+
+    /// Stable source records are held through the Tree mutation. No observer is
+    /// called under a source or ownership lock (Tool → Special → Memory → Tree).
+    fn mutate_source_bindings<R>(
+        &self,
+        mutate: impl FnOnce() -> (R, Vec<crate::capability::ownership::CapturedBinding>),
+    ) -> R {
+        let (result, observations) =
+            self.adapter
+                .registry
+                .with_source_observations(|mut observations| {
+                    self.specials.with_source_observations(|specials| {
+                        observations.extend(specials);
+                        let finish =
+                            |memory: Option<Arc<crate::capability::events::SourceObservation>>| {
+                                observations.extend(memory);
+                                let (result, removed) = mutate();
+                                observations.retain(|observation| {
+                                    removed.iter().any(|binding| observation.matches(binding))
+                                });
+                                for observation in &observations {
+                                    observation.mark_withdrawn();
+                                }
+                                (result, observations)
+                            };
+                        match &self.memory {
+                            Some(memory) => memory.with_source_observation(finish),
+                            None => finish(None),
+                        }
+                    })
+                });
+        for observation in observations {
+            observation.flush();
+        }
+        result
+    }
+
+    pub(crate) fn revoke_observed_bound(
+        &self,
+        id: &CapabilityId,
+    ) -> crate::capability::ownership::BoundRevoke {
+        self.mutate_source_bindings(|| self.tree.revoke_bound_with_receipt(id))
+    }
+
+    pub(crate) fn dispose_observed_scope(&self, scope: LifetimeScope) {
+        self.mutate_source_bindings(|| ((), self.tree.dispose_with_receipt(scope)));
+    }
+
+    /// Shared event source; its bounded records are also the audit source.
+    pub fn event_stream(&self) -> Arc<crate::capability::events::InMemoryEventStream> {
+        Arc::clone(&self.events)
+    }
+
+    /// The same startup Policy consumed by every controlled Tool ingress.
+    #[must_use]
+    pub fn policy(&self) -> Arc<crate::capability::policy::PolicyEngine> {
+        Arc::clone(&self.policy)
+    }
+
+    /// Bind the one late source slot used by the pre-catalog terminal adapter.
+    pub fn bind_terminal_source(
+        &self,
+        source: Weak<crate::capability::tool_adapters::TerminalCapabilitySource>,
+    ) -> Result<(), CapabilityInvocationError> {
+        if let Some(existing) = self.terminal_source.get() {
+            return if Weak::ptr_eq(existing, &source) {
+                Ok(())
+            } else {
+                Err(CapabilityInvocationError::Unavailable)
+            };
+        }
+        match self.terminal_source.set(source.clone()) {
+            Ok(()) => Ok(()),
+            Err(_) => self
+                .terminal_source
+                .get()
+                .filter(|existing| Weak::ptr_eq(existing, &source))
+                .map(|_| ())
+                .ok_or(CapabilityInvocationError::Unavailable),
+        }
+    }
+
+    #[must_use]
+    pub fn terminal_source(
+        &self,
+    ) -> Option<Arc<crate::capability::tool_adapters::TerminalCapabilitySource>> {
+        self.terminal_source.get().and_then(Weak::upgrade)
+    }
+
+    /// Invoke a source-owned terminal session from the authenticated gateway face.
+    ///
+    /// The handler supplies only wire parameters; caller identity and policy facts
+    /// are rebuilt from the gateway task-local scope here before resolving the
+    /// exact session capability. This keeps untrusted JSON from minting a call.
+    pub(crate) async fn invoke_terminal_gateway(
+        &self,
+        params: aleph_protocol::capability::PtyInvokeParams,
+        call_id: String,
+        cancel: CancellationToken,
+        captured: Option<crate::gateway::handlers::pty::OwnedPtySession>,
+    ) -> Result<Value, CapabilityInvocationError> {
+        let session_id = params.session_id.clone();
+        if let Some(captured) = &captured {
+            let manager =
+                crate::gateway::pty::try_manager().ok_or(CapabilityInvocationError::Unavailable)?;
+            let current_generation = manager.lifecycle_snapshot().generation;
+            if !captured.provider_matches(&manager.provider_handle(), current_generation) {
+                return Err(CapabilityInvocationError::Resolve(
+                    ResolveError::StaleProvider,
+                ));
+            }
+            if let Some(captured_source) = captured.source() {
+                let current_source = self
+                    .terminal_source()
+                    .ok_or(CapabilityInvocationError::Unavailable)?;
+                if !Arc::ptr_eq(&captured_source, &current_source) {
+                    return Err(CapabilityInvocationError::Unavailable);
+                }
+            }
+        }
+        let context = Self::terminal_call_context(call_id);
+        let reference = Reference {
+            id: CapabilityId {
+                namespace: "aleph/terminal".into(),
+                name: format!("session-{session_id}"),
+            },
+            visibility: VisibilityScope {
+                principal: context.principal().map(str::to_owned),
+                ..VisibilityScope::default()
+            },
+        };
+        let lease = self
+            .resolve_special_for_call(&reference, &context)
+            .map_err(CapabilityInvocationError::Resolve)?;
+        if let Some(captured) = &captured {
+            let BackendSourceEvidence::Special {
+                capture: lease_capture,
+                provider_generation,
+            } = &lease.source
+            else {
+                return Err(CapabilityInvocationError::Unavailable);
+            };
+            if !captured.provider_matches(&lease_capture.provider_handle(), *provider_generation) {
+                return Err(CapabilityInvocationError::Resolve(
+                    ResolveError::StaleProvider,
+                ));
+            }
+            if let Some(captured_source) = captured.source() {
+                let current_source = self
+                    .terminal_source()
+                    .ok_or(CapabilityInvocationError::Unavailable)?;
+                if !Arc::ptr_eq(&captured_source, &current_source) {
+                    return Err(CapabilityInvocationError::Unavailable);
+                }
+            }
+        }
+        let resource_use = if matches!(
+            &params.operation,
+            aleph_protocol::capability::PtyOperation::Close
+        ) {
+            ResourceUse::Release
+        } else {
+            ResourceUse::Existing
+        };
+        let call = CapabilityHandlerCall::new(context, Vec::new());
+        let input = serde_json::to_value(params).map_err(|error| {
+            CapabilityInvocationError::Handler(
+                crate::capability::special::CapabilityDispatchError::InvalidInput(
+                    error.to_string(),
+                ),
+            )
+        })?;
+        self.invoke_special(
+            &lease,
+            input,
+            call,
+            CapabilityInvocationOrigin::GatewayDomain,
+            resource_use,
+            cancel,
+        )
+        .await
+    }
+
+    fn terminal_call_context(call_id: String) -> CapabilityCallContext {
+        super::special_dispatch::DOMAIN_TOOL_CALL
+            .try_with(|call| call.context.clone())
+            .unwrap_or_else(|_| {
+                CapabilityCallContext::from_trusted_parts(
+                    OwnerRef::Runtime,
+                    crate::gateway::caller_identity::current_caller_user(),
+                    None,
+                    None,
+                    crate::gateway::caller_identity::current_caller_conn_id(),
+                    call_id,
+                )
+            })
+    }
+
+    /// Invoke the shared terminal Tool contract through the same policy and lease
+    /// admission used by the capability RPC.
+    pub(crate) async fn invoke_terminal_tool_gateway(
+        &self,
+        params: aleph_protocol::capability::PtyToolParams,
+        call_id: String,
+        cancel: CancellationToken,
+        captured: Option<crate::gateway::handlers::pty::OwnedPtySession>,
+    ) -> Result<Value, CapabilityInvocationError> {
+        match params {
+            aleph_protocol::capability::PtyToolParams::Input {
+                session_id,
+                data,
+                base64,
+            } => {
+                self.invoke_terminal_gateway(
+                    aleph_protocol::capability::PtyInvokeParams {
+                        session_id,
+                        operation: aleph_protocol::capability::PtyOperation::Input { data, base64 },
+                    },
+                    call_id,
+                    cancel,
+                    captured.clone(),
+                )
+                .await
+            }
+            aleph_protocol::capability::PtyToolParams::Attach { session_id } => {
+                self.invoke_terminal_gateway(
+                    aleph_protocol::capability::PtyInvokeParams {
+                        session_id,
+                        operation: aleph_protocol::capability::PtyOperation::Attach,
+                    },
+                    call_id,
+                    cancel,
+                    captured.clone(),
+                )
+                .await
+            }
+            aleph_protocol::capability::PtyToolParams::Resize {
+                session_id,
+                rows,
+                cols,
+            } => {
+                self.invoke_terminal_gateway(
+                    aleph_protocol::capability::PtyInvokeParams {
+                        session_id,
+                        operation: aleph_protocol::capability::PtyOperation::Resize { rows, cols },
+                    },
+                    call_id,
+                    cancel,
+                    captured.clone(),
+                )
+                .await
+            }
+            aleph_protocol::capability::PtyToolParams::Close { session_id } => {
+                self.invoke_terminal_gateway(
+                    aleph_protocol::capability::PtyInvokeParams {
+                        session_id,
+                        operation: aleph_protocol::capability::PtyOperation::Close,
+                    },
+                    call_id,
+                    cancel,
+                    captured,
+                )
+                .await
+            }
+            params @ (aleph_protocol::capability::PtyToolParams::Spawn { .. }
+            | aleph_protocol::capability::PtyToolParams::List {}) => {
+                let context = Self::terminal_call_context(call_id);
+                let reference = Reference {
+                    id: CapabilityId {
+                        namespace: TOOL_NAMESPACE.into(),
+                        name: "terminal_capability".into(),
+                    },
+                    visibility: VisibilityScope::default(),
+                };
+                let lease = self
+                    .resolve_special_for_call(&reference, &context)
+                    .map_err(CapabilityInvocationError::Resolve)?;
+                let call = CapabilityHandlerCall::new(context, Vec::new());
+                let resource_use = match &params {
+                    aleph_protocol::capability::PtyToolParams::Spawn { .. } => {
+                        ResourceUse::Allocate
+                    }
+                    aleph_protocol::capability::PtyToolParams::List {} => ResourceUse::Existing,
+                    _ => ResourceUse::Existing,
+                };
+                let input = serde_json::to_value(params).map_err(|error| {
+                    CapabilityInvocationError::Handler(
+                        crate::capability::special::CapabilityDispatchError::InvalidInput(
+                            error.to_string(),
+                        ),
+                    )
+                })?;
+                self.invoke_special(
+                    &lease,
+                    input,
+                    call,
+                    CapabilityInvocationOrigin::GatewayDomain,
+                    resource_use,
+                    cancel,
+                )
+                .await
+            }
+        }
+    }
+
+    /// Resolve the real attached surface for both authenticated RPC and canonical Tool.
+    pub(crate) async fn invoke_ui_gateway(
+        &self,
+        params: aleph_protocol::capability::UiInvokeParams,
+        context: CapabilityCallContext,
+        origin: CapabilityInvocationOrigin,
+        cancel: CancellationToken,
+    ) -> Result<Value, CapabilityInvocationError> {
+        params.validate().map_err(|error| {
+            CapabilityInvocationError::Handler(
+                crate::capability::special::CapabilityDispatchError::InvalidInput(error.into()),
+            )
+        })?;
+        let connection = context
+            .connection_id()
+            .ok_or(CapabilityInvocationError::Unavailable)?;
+        let principal = context
+            .principal()
+            .ok_or(CapabilityInvocationError::Unavailable)?;
+        let id = CapabilityId {
+            namespace: "aleph/ui".into(),
+            name: params.surface_id.clone(),
+        };
+        let surface = self
+            .specials
+            .capture(&id)
+            .and_then(|capture| capture.ui_surface())
+            .ok_or(CapabilityInvocationError::Unavailable)?;
+        surface
+            .validate_attachment(connection, &params.surface_id, params.mount_generation)
+            .map_err(|_| CapabilityInvocationError::Unavailable)?;
+        if surface.owner_context().principal() != Some(principal)
+            || context
+                .session_key()
+                .is_some_and(|session| surface.owner_context().session_key() != Some(session))
+        {
+            return Err(CapabilityInvocationError::Unavailable);
+        }
+        let reference = Reference {
+            id,
+            visibility: VisibilityScope {
+                principal: Some(principal.to_owned()),
+                ..Default::default()
+            },
+        };
+        let context = CapabilityCallContext::from_trusted_parts(
+            context.actor().clone(),
+            Some(principal.to_owned()),
+            surface.owner_context().session_key().map(str::to_owned),
+            surface.owner_context().workspace().map(str::to_owned),
+            Some(connection.to_owned()),
+            context.call_id().to_owned(),
+        );
+        let lease = self
+            .resolve_special_for_call(&reference, &context)
+            .map_err(CapabilityInvocationError::Resolve)?;
+        let input = serde_json::to_value(params.operation).map_err(|error| {
+            CapabilityInvocationError::Handler(
+                crate::capability::special::CapabilityDispatchError::InvalidInput(
+                    error.to_string(),
+                ),
+            )
+        })?;
+        self.invoke_special(
+            &lease,
+            input,
+            CapabilityHandlerCall::new(context, Vec::new()),
+            origin,
+            ResourceUse::Existing,
+            cancel,
+        )
+        .await
+    }
+
+    /// Register one source-owned session in the shared ownership tree.
+    pub(crate) fn bind_terminal_session(
+        &self,
+        id: CapabilityId,
+        visibility: VisibilityScope,
+    ) -> Result<Option<crate::capability::ownership::RegistrationToken>, ResolveError> {
+        self.tree
+            .register_if_absent_with_token(
+                id,
+                OwnerRef::Runtime,
+                LifetimeScope::Session,
+                visibility,
+            )
+            .map_err(|_error| ResolveError::Unknown)
+    }
+
+    pub(crate) fn commit_terminal_session<R>(
+        &self,
+        id: &CapabilityId,
+        commit: impl FnOnce() -> R,
+    ) -> Result<(R, crate::capability::events::SourceObservationReceipt), ResolveError> {
+        self.specials.commit_source(id, &self.tree, commit)
+    }
+
+    /// Roll back one exact, unclaimed registration without creating a tombstone.
+    pub(crate) fn rollback_terminal_session(
+        &self,
+        token: &crate::capability::ownership::RegistrationToken,
+    ) -> bool {
+        self.tree.rollback_if_matches(token)
+    }
+
+    /// Revoke one published terminal session without tombstoning an unbound id.
+    pub(crate) fn withdraw_terminal_session(&self, id: &CapabilityId) {
+        let _ = self.tree.revoke_bound(id);
+    }
+
+    fn special_policy_facts(
+        &self,
+        capture: &crate::capability::special::CapturedSpecialEntry,
+    ) -> Result<Arc<SpecialPolicyFacts>, CapabilityInvocationError> {
+        let (provider, generation, owner) = match capture.descriptor().kind {
+            CapabilityKind::Terminal => {
+                let source = self
+                    .terminal_source()
+                    .ok_or(CapabilityInvocationError::Unavailable)?;
+                let (provider, generation, _) = source
+                    .policy_snapshot()
+                    .map_err(CapabilityInvocationError::from)?;
+                (
+                    provider,
+                    generation,
+                    SpecialFactOwner::Terminal(Arc::downgrade(&source)),
+                )
+            }
+            CapabilityKind::Ui => {
+                let surface = capture
+                    .ui_surface()
+                    .ok_or(CapabilityInvocationError::Unavailable)?;
+                (
+                    capture.provider_handle(),
+                    capture.provider_generation(),
+                    SpecialFactOwner::Ui(Arc::downgrade(&surface)),
+                )
+            }
+            _ => (
+                capture.provider_handle(),
+                capture.provider_generation(),
+                SpecialFactOwner::Provider,
+            ),
+        };
+        // Both policy targets share the actual source identity, but retain their
+        // own per-CapabilityId counters. Surface retirement withdraws both.
+        let key = PolicyFactSourceKey::for_source(
+            &provider,
+            &capture.descriptor().id,
+            capture.descriptor().revision.0,
+        );
+        if let SpecialFactOwner::Ui(surface) = &owner {
+            surface
+                .upgrade()
+                .ok_or(CapabilityInvocationError::Unavailable)?
+                .bind_policy_source(&self.policy, key.clone())
+                .map_err(|_| CapabilityInvocationError::Unavailable)?;
+        }
+        Ok(Arc::new(SpecialPolicyFacts {
+            provider,
+            generation,
+            key,
+            owner,
+        }))
+    }
+
+    fn prepare_special_policy(
+        &self,
+        lease: &BackendLease,
+        facts: Arc<SpecialPolicyFacts>,
+        call: &CapabilityCallContext,
+    ) -> Result<crate::capability::policy_runtime::PolicyAttachment, CapabilityInvocationError>
+    {
+        self.policy
+            .prepare_attachment(lease, facts)
+            .map_err(|denial| {
+                self.policy.observe_refusal(lease, call, &denial);
+                CapabilityInvocationError::Policy(denial)
+            })
+    }
+
+    fn admit_special_policy(
+        &self,
+        lease: &BackendLease,
+        attachment: &crate::capability::policy_runtime::PolicyAttachment,
+        call: &CapabilityCallContext,
+        requested: ResourceUse,
+    ) -> Result<crate::capability::policy_runtime::RunningCapabilityCall, CapabilityInvocationError>
+    {
+        use crate::config::types::policies::capability_constraints::ResourceUnit;
+        let resource_use = match (self.policy.resource_unit(&lease.descriptor.id), requested) {
+            (_, ResourceUse::Release) => ResourceUse::Release,
+            (Some(ResourceUnit::ActiveCalls), _) => ResourceUse::Allocate,
+            _ => requested,
+        };
+        self.policy
+            .admit_runtime(lease, Some(attachment), call, resource_use)
+            .map_err(CapabilityInvocationError::Policy)
+    }
+
+    /// Admit and invoke a captured special capability through the sole mounted
+    /// registry. No caller can construct the admitted call or bypass these
+    /// current lease/provider/capture checks.
+    pub(crate) async fn invoke_special(
+        &self,
+        lease: &BackendLease,
+        input: Value,
+        call: CapabilityHandlerCall,
+        origin: CapabilityInvocationOrigin,
+        resource_use: ResourceUse,
+        cancel: CancellationToken,
+    ) -> Result<Value, CapabilityInvocationError> {
+        let BackendSourceEvidence::Special {
+            capture,
+            provider_generation,
+        } = &lease.source
+        else {
+            return Err(CapabilityInvocationError::Unavailable);
+        };
+        match origin {
+            CapabilityInvocationOrigin::CanonicalIngress
+            | CapabilityInvocationOrigin::GatewayDomain => {}
+        }
+        self.validate_lease(lease)
+            .map_err(CapabilityInvocationError::Resolve)?;
+        let mut expected_descriptor = capture.descriptor().clone();
+        expected_descriptor.visibility = lease.descriptor.visibility.clone();
+        if lease.descriptor != expected_descriptor
+            || *provider_generation != capture.provider_generation()
+        {
+            return Err(CapabilityInvocationError::Resolve(
+                ResolveError::StaleProvider,
+            ));
+        }
+        let current = self
+            .specials
+            .capture(&lease.descriptor.id)
+            .ok_or(CapabilityInvocationError::Unavailable)?;
+        if current != *capture || !capture.validate_provider() {
+            return Err(CapabilityInvocationError::Unavailable);
+        }
+        let provider = capture.provider_handle();
+        let _provider_call = provider
+            .acquire_call(capture.provider_generation())
+            .map_err(|_| CapabilityInvocationError::Unavailable)?;
+        let facts = self.special_policy_facts(capture)?;
+        let ingress = match lease.descriptor.kind {
+            CapabilityKind::Terminal => Some("terminal_capability"),
+            CapabilityKind::Ui => Some("ui_capability"),
+            _ => None,
+        };
+        let stable = if let Some(name) = ingress.filter(|name| {
+            lease.descriptor.id.namespace != TOOL_NAMESPACE || lease.descriptor.id.name != *name
+        }) {
+            // The stable adapter has one runtime-owned public binding. Identity
+            // stays in the call; the exact target retains its private binding.
+            let stable = self
+                .resolve_special_for_call(
+                    &Reference {
+                        id: CapabilityId {
+                            namespace: TOOL_NAMESPACE.into(),
+                            name: name.into(),
+                        },
+                        visibility: VisibilityScope::default(),
+                    },
+                    call.context(),
+                )
+                .map_err(CapabilityInvocationError::Resolve)?;
+            self.validate_lease(&stable)
+                .map_err(CapabilityInvocationError::Resolve)?;
+            Some(stable)
+        } else {
+            None
+        };
+        let key = facts.key.clone();
+        let prepare = || {
+            let stable_attachment = stable
+                .as_ref()
+                .map(|stable| self.prepare_special_policy(stable, facts.clone(), call.context()))
+                .transpose()?;
+            let attachment = self.prepare_special_policy(lease, facts, call.context())?;
+            Ok((stable_attachment, attachment))
+        };
+        let (stable_attachment, attachment) = if lease.descriptor.kind == CapabilityKind::Terminal
+            && lease.descriptor.lifetime == LifetimeScope::Session
+        {
+            capture.with_terminal_policy_source(&self.policy, key, prepare)?
+        } else {
+            prepare()?
+        };
+        // Runtime facts may acquire the real manager admission lock. Never hold
+        // the registration retirement lock while reading those owning facts.
+        // A concurrent withdrawal revokes these captured attachments instead.
+        let call =
+            if let Some((stable, attachment)) = stable.as_ref().zip(stable_attachment.as_ref()) {
+                let running =
+                    self.admit_special_policy(stable, attachment, call.context(), resource_use)?;
+                call.with_running_call(running)
+            } else {
+                call
+            };
+        let running =
+            self.admit_special_policy(lease, &attachment, call.context(), resource_use)?;
+        let observation = self
+            .policy
+            .invocation_observation(lease, call.context(), &running);
+        let call = call
+            .with_observation(observation)
+            .with_running_call(running);
+        self.specials
+            .dispatch_admitted(AdmittedSpecialCall {
+                capture: capture.clone(),
+                input,
+                call,
+                cancel,
+            })
+            .await
+            .map_err(Into::into)
+    }
+
+    /// Prepare restrictions for an exact captured Tool source. Admission later
+    /// re-reads these facts after all human approval waits.
+    pub(crate) fn prepare_tool_policy(
+        &self,
+        policy: &crate::capability::policy::PolicyEngine,
+        lease: &BackendLease,
+    ) -> Result<
+        crate::capability::policy_runtime::PolicyAttachment,
+        crate::capability::policy::PolicyDenial,
+    > {
+        let provider = self.provider();
+        let facts = Arc::new(ToolPolicyFacts {
+            generation: lease
+                .tool_provider_generation()
+                .expect("canonical Tool capture has a provider generation"),
+            key: crate::capability::policy_runtime::PolicyFactSourceKey::for_source(
+                &provider,
+                &lease.descriptor.id,
+                lease.descriptor.revision.0,
+            ),
+            provider,
+        });
+        policy.prepare_attachment(lease, facts)
+    }
+
+    pub(crate) fn prepare_tool_policy_for_call(
+        &self,
+        policy: &crate::capability::policy::PolicyEngine,
+        lease: &BackendLease,
+        call: &crate::capability::policy_runtime::CapabilityCallContext,
+    ) -> Result<
+        crate::capability::policy_runtime::PolicyAttachment,
+        crate::capability::policy::PolicyDenial,
+    > {
+        let result = self.prepare_tool_policy(policy, lease);
+        if let Err(denial) = &result {
+            policy.observe_refusal(lease, call, denial);
+        }
+        result
     }
 
     /// The shared provider lifecycle gate for this facade's Tool surface.
@@ -245,8 +1187,30 @@ impl ZahirFacade {
     ) -> FacadeEntriesSnapshot {
         self.reconcile_snapshot(snap);
 
-        let registry_cursor = Cursor(snap.revision());
+        let registry_cursor = Cursor(snap.revision().max(self.specials.revision()));
         let registry_closed = snap.is_closed();
+
+        // Special records are part of the same facade publication cut, but are
+        // kept out of ordinary Tool entries and Resource descriptors. Their
+        // ownership/visibility binding remains the sole authority for exposure.
+        let specials = if self.specials.is_closed() {
+            Vec::new()
+        } else {
+            self.specials
+                .describe(scope)
+                .into_iter()
+                .filter_map(|capture| {
+                    let descriptor = capture.descriptor();
+                    self.tree
+                        .generation(&descriptor.id, &scope.visibility)
+                        .map(|_| {
+                            let mut descriptor = descriptor.clone();
+                            descriptor.visibility = scope.visibility.clone();
+                            descriptor
+                        })
+                })
+                .collect()
+        };
 
         // Candidate ids: registry entries passing the shared kind/namespace
         // and behavior-facet filter (`in_scope` does NOT check visibility —
@@ -282,6 +1246,7 @@ impl ZahirFacade {
             registry_cursor,
             registry_closed,
             owner_generations,
+            specials,
             resources: if registry_closed {
                 Vec::new()
             } else {
@@ -424,6 +1389,60 @@ impl ZahirFacade {
         }
         stream
     }
+    /// Only the real call ingress supplies caller facts; metadata resolve stays silent.
+    pub(crate) fn resolve_with_capture_for_call(
+        &self,
+        reference: Reference,
+        canonical_entry: CanonicalEntryLease,
+        call: &crate::capability::policy_runtime::CapabilityCallContext,
+    ) -> Result<BackendLease, ResolveError> {
+        let id = reference.id.clone();
+        let private = reference.visibility.principal.is_some();
+        let incarnation = canonical_entry
+            .entry()
+            .observation
+            .as_ref()
+            .map(|observation| observation.incarnation().to_owned());
+        let result = self.resolve_with_capture(reference, canonical_entry);
+        if let Err(error) = &result {
+            self.observe_resolve_failure(&id, private, incarnation, call, error);
+        }
+        result
+    }
+
+    fn observe_resolve_failure(
+        &self,
+        id: &CapabilityId,
+        private: bool,
+        incarnation: Option<String>,
+        call: &CapabilityCallContext,
+        error: &ResolveError,
+    ) {
+        if private
+            && !call
+                .principal()
+                .is_some_and(|principal| !principal.trim().is_empty())
+        {
+            return;
+        }
+        let reason = match error {
+            ResolveError::Revoked => "source_withdrawn",
+            ResolveError::StaleOwner => "stale_owner",
+            ResolveError::StaleProvider => "stale_provider",
+            ResolveError::NotVisible => "not_visible",
+            _ => "source_unavailable",
+        };
+        crate::capability::events::CapabilityEventEmitter::new(self.events.clone()).emit_scoped(
+            call.actor().clone(),
+            crate::capability::event_audience::EventAudience::from_call(call, incarnation),
+            crate::capability::events::CapabilityEvent::ExecutionFailed {
+                id: id.clone(),
+                operation: "resolve".into(),
+                reason: reason.into(),
+            },
+        );
+    }
+
     pub(crate) fn resolve_with_capture(
         &self,
         reference: Reference,
@@ -728,8 +1747,132 @@ impl ZahirFacade {
     }
 }
 
+impl ZahirFacade {
+    pub(crate) fn resolve_special(
+        &self,
+        reference: &Reference,
+    ) -> Result<BackendLease, ResolveError> {
+        let capture = self
+            .specials
+            .capture(&reference.id)
+            .ok_or(ResolveError::Unknown)?;
+        self.resolve_captured_special(reference, capture)
+    }
+
+    /// Observe only a real contextual attempt against this same immutable record.
+    pub(crate) fn resolve_special_for_call(
+        &self,
+        reference: &Reference,
+        call: &CapabilityCallContext,
+    ) -> Result<BackendLease, ResolveError> {
+        let capture = self
+            .specials
+            .capture(&reference.id)
+            .ok_or(ResolveError::Unknown)?;
+        let private = reference.visibility.principal.is_some()
+            || matches!(
+                capture.descriptor().kind,
+                CapabilityKind::Terminal | CapabilityKind::Ui
+            );
+        let incarnation = capture
+            .source_observation()
+            .map(|observation| observation.incarnation().to_owned());
+        let result = self.resolve_captured_special(reference, capture);
+        if let Err(error) = &result {
+            self.observe_resolve_failure(&reference.id, private, incarnation, call, error);
+        }
+        result
+    }
+
+    fn resolve_captured_special(
+        &self,
+        reference: &Reference,
+        capture: crate::capability::special::CapturedSpecialEntry,
+    ) -> Result<BackendLease, ResolveError> {
+        if !capture.validate_provider() {
+            return Err(ResolveError::StaleProvider);
+        }
+        let owner_generation = self
+            .tree
+            .generation(&reference.id, &reference.visibility)
+            .ok_or_else(|| {
+                if self.tree.is_revoked(&reference.id) {
+                    ResolveError::Revoked
+                } else {
+                    ResolveError::NotVisible
+                }
+            })?;
+        let owner = self
+            .tree
+            .owner_of(&reference.id, &reference.visibility)
+            .ok_or(ResolveError::NotVisible)?;
+        let mut descriptor = capture.descriptor().clone();
+        descriptor.visibility = reference.visibility.clone();
+        Ok(BackendLease {
+            descriptor,
+            owner_generation,
+            owner,
+            source: BackendSourceEvidence::Special {
+                provider_generation: capture.provider_generation(),
+                capture,
+            },
+            required_resources: Vec::new(),
+        })
+    }
+
+    fn validate_special_lease(&self, lease: &BackendLease) -> Result<(), ResolveError> {
+        let BackendSourceEvidence::Special {
+            capture,
+            provider_generation,
+        } = &lease.source
+        else {
+            return Err(ResolveError::Unknown);
+        };
+        let current = self
+            .specials
+            .capture(&lease.descriptor.id)
+            .ok_or(ResolveError::StaleProvider)?;
+        let mut expected_descriptor = capture.descriptor().clone();
+        expected_descriptor.visibility = lease.descriptor.visibility.clone();
+        if current != *capture
+            || *provider_generation != capture.provider_generation()
+            || !capture.validate_provider()
+            || lease.descriptor != expected_descriptor
+        {
+            return Err(ResolveError::StaleProvider);
+        }
+        self.tree
+            .with_current_bindings(std::slice::from_ref(&Self::binding(lease)), || ())
+            .map_err(|_| ResolveError::StaleOwner)
+    }
+}
+
 impl Zahir for ZahirFacade {
+    fn subscribe_events(
+        &self,
+        scope: crate::capability::event_audience::TrustedEventScope,
+        filter: crate::capability::events::EventFilter,
+    ) -> Result<
+        crate::capability::events::ScopedEventSubscription,
+        crate::capability::events::EventError,
+    > {
+        Ok(self.events.subscribe_scoped(scope, filter))
+    }
+
     fn descriptor_revision(&self, reference: &Reference) -> Option<CapabilityRevision> {
+        // A special record owns the identity whenever its ID is present. An
+        // ordinary Tool with the same name must never provide a cache revision
+        // for that identity, even when the special source is not visible.
+        if let Some(capture) = self.specials.capture(&reference.id) {
+            if self
+                .tree
+                .generation(&reference.id, &reference.visibility)
+                .is_none()
+            {
+                return None;
+            }
+            return Some(capture.descriptor().revision);
+        }
         // Only the Tool source currently guarantees non-reused per-descriptor
         // revisions. Provider/Memory metadata remains conservatively uncached.
         if reference.id.namespace != TOOL_NAMESPACE || self.adapter.registry.is_closed() {
@@ -753,8 +1896,23 @@ impl Zahir for ZahirFacade {
         if self.adapter.registry.is_closed() {
             return None;
         }
-        // Match describe's first-match order: eligible canonical Tool metadata,
-        // then generic metadata, even when its ID uses the Tool namespace.
+        // A special record owns the identity whenever its ID is present. An
+        // ordinary Tool or provider metadata entry with the same ID cannot
+        // shadow its descriptor or mint a cacheable admission.
+        if let Some(capture) = self.specials.capture(&reference.id) {
+            if self
+                .tree
+                .generation(&reference.id, &reference.visibility)
+                .is_none()
+            {
+                return None;
+            }
+            let mut descriptor = capture.descriptor().clone();
+            descriptor.visibility = reference.visibility.clone();
+            return Some((descriptor, true));
+        }
+        // Match describe's ordinary Tool metadata order only after the special
+        // identity check above.
         let tool_entry = if reference.id.namespace == TOOL_NAMESPACE {
             self.adapter
                 .registry
@@ -798,11 +1956,12 @@ impl Zahir for ZahirFacade {
             };
         }
         self.reconcile_snapshot(&source_snapshot);
-        let mut capabilities: Vec<_> = source_snapshot
-            .entries()
-            .values()
-            .map(|entry| crate::capability::backend::to_descriptor(entry.descriptor.as_ref()))
-            .map(|mut descriptor| {
+        let special_descriptors: Vec<_> = self
+            .specials
+            .describe(&scope)
+            .into_iter()
+            .map(|capture| {
+                let mut descriptor = capture.descriptor().clone();
                 descriptor.visibility = scope.visibility.clone();
                 descriptor
             })
@@ -813,14 +1972,38 @@ impl Zahir for ZahirFacade {
                     .is_some()
             })
             .collect();
+        let special_ids: std::collections::HashSet<_> = special_descriptors
+            .iter()
+            .map(|descriptor| descriptor.id.clone())
+            .collect();
+        let mut capabilities: Vec<_> = source_snapshot
+            .entries()
+            .values()
+            .map(|entry| crate::capability::backend::to_descriptor(entry.descriptor.as_ref()))
+            .map(|mut descriptor| {
+                descriptor.visibility = scope.visibility.clone();
+                descriptor
+            })
+            .filter(|descriptor| !special_ids.contains(&descriptor.id))
+            .filter(|descriptor| ToolBackendAdapter::descriptor_in_scope(descriptor, &scope))
+            .filter(|descriptor| {
+                self.tree
+                    .generation(&descriptor.id, &scope.visibility)
+                    .is_some()
+            })
+            .collect();
+        capabilities.extend(special_descriptors);
         capabilities.extend(self.resources_in_scope(&scope));
         CapabilitySnapshot {
             capabilities,
-            committed_cursor: Cursor(source_snapshot.revision()),
+            committed_cursor: Cursor(source_snapshot.revision().max(self.specials.revision())),
         }
     }
 
     fn resolve(&self, reference: Reference) -> Result<BackendLease, ResolveError> {
+        if self.specials.capture(&reference.id).is_some() {
+            return self.resolve_special(&reference);
+        }
         if reference.id == crate::memory::runtime::resource_id() {
             if self
                 .provider_adapter
@@ -846,6 +2029,13 @@ impl Zahir for ZahirFacade {
     }
 
     fn validate_lease(&self, lease: &BackendLease) -> Result<(), ResolveError> {
+        if matches!(&lease.source, BackendSourceEvidence::Special { .. }) {
+            self.validate_special_lease(lease)?;
+            for resource in &lease.required_resources {
+                self.validate_lease(resource)?;
+            }
+            return Ok(());
+        }
         if matches!(&lease.source, BackendSourceEvidence::Provider { .. }) {
             self.validate_provider_lease(lease)?;
             for resource in &lease.required_resources {

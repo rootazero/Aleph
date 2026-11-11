@@ -4,7 +4,7 @@
 
 use super::PanelHostState;
 use crate::appearance::{Accent, ThemeMode};
-use crate::context::{DashboardState, GatewayEvent};
+use crate::context::{DashboardState, GatewayEvent, PtyTopicLease};
 use aleph_protocol::panel::{PanelTabDescriptor, PanelTabKey, PanelTabStatus};
 use futures::future::LocalBoxFuture;
 use futures::FutureExt;
@@ -15,7 +15,7 @@ use leptos::task::spawn_local;
 use serde_json::Value;
 use std::collections::VecDeque;
 use std::fmt;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, Weak};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -48,7 +48,7 @@ pub struct PanelThemeSnapshot {
 
 type HostRpc =
     dyn Fn(String, Value) -> LocalBoxFuture<'static, Result<Value, String>> + Send + Sync;
-type HostPtySubscribe = dyn Fn(String) -> LocalBoxFuture<'static, Result<(), String>> + Send + Sync;
+type HostPtySubscribe = dyn Fn(String) -> LocalBoxFuture<'static, Result<PtyTopicLease, String>> + Send + Sync;
 
 /// Private host operations only; no public transport or context accessor.
 #[derive(Clone)]
@@ -98,7 +98,7 @@ impl PanelSdk {
                 async move { state.rpc_call(&method, params).await }.boxed_local()
             }),
             pty_subscribe: Arc::new(move |topic| {
-                async move { state.subscribe_topic_ephemeral(&topic).await }.boxed_local()
+                async move { state.acquire_pty_topic(&topic).await }.boxed_local()
             }),
             lifecycle,
             locale: use_context::<crate::i18n::I18nCtx>()
@@ -222,12 +222,23 @@ impl PanelSdk {
         Ok(PanelConnectionSnapshot { connected, epoch })
     }
 
-    /// Exact-topic local event subscription. The Shell owns upstream Gateway
-    /// topic coverage; disposing a Tab must not unsubscribe shared socket topics.
+    /// Exact-topic local event subscription. PTY consumers own a shared,
+    /// epoch-bound upstream lease; disposing the last consumer releases it
+    /// without removing independently recorded Shell subscriptions.
     /// Its explicit permission is `events.subscribe:<topic>` (no wildcard grant).
     pub fn subscribe(
         &self,
         topic: &str,
+    ) -> LocalBoxFuture<'static, Result<PanelSubscription, String>> {
+        self.subscribe_with_observer(topic, install_pty_reconnect_observer)
+    }
+
+    // The installer is the executor seam; registration and lease ownership stay
+    // on this one production path, including native tests without a global runtime.
+    fn subscribe_with_observer(
+        &self,
+        topic: &str,
+        observe: impl Fn(&Arc<SubscriptionState>, String) + 'static,
     ) -> LocalBoxFuture<'static, Result<PanelSubscription, String>> {
         let sdk = self.clone();
         let topic = topic.to_string();
@@ -240,7 +251,7 @@ impl PanelSdk {
             sdk.require_permission(&permission)
                 .map_err(|error| error.to_string())?;
             let pty_topic = is_pty_topic(&topic);
-            let covered_pty_epoch = if pty_topic {
+            let pty_coverage = if pty_topic {
                 // PTY coverage is mounted by this consumer. The await is part of
                 // subscribe's readiness contract, so a caller never receives a
                 // local listener before the host has accepted the topic on the
@@ -252,17 +263,9 @@ impl PanelSdk {
             let inner = Arc::new(SubscriptionState {
                 sdk: sdk.clone(),
                 permission,
-                pty_epoch: AtomicU64::new(
-                    covered_pty_epoch.unwrap_or(
-                        sdk.state
-                            .connection_epoch
-                            .try_get_untracked()
-                            .ok_or(PanelSdkError::Disposed)
-                            .map_err(|error| error.to_string())?,
-                    ),
-                ),
                 resources: Mutex::new(SubscriptionResources {
                     cleanup: None,
+                    pty_coverage,
                     pending: VecDeque::new(),
                 }),
             });
@@ -283,11 +286,13 @@ impl PanelSdk {
                     state.unsubscribe_events(id);
                 }
             }));
-            let mut subscriptions = sdk.lifecycle.subscriptions.lock().unwrap();
-            subscriptions.retain(|entry| entry.strong_count() > 0);
-            subscriptions.push(Arc::downgrade(&inner));
+            {
+                let mut subscriptions = sdk.lifecycle.subscriptions.lock().unwrap();
+                subscriptions.retain(|entry| entry.strong_count() > 0);
+                subscriptions.push(Arc::downgrade(&inner));
+            }
             if pty_topic {
-                install_pty_reconnect_observer(&inner, topic.clone());
+                observe(&inner, topic.clone());
             }
             Ok(PanelSubscription { inner })
         }
@@ -357,7 +362,7 @@ impl PanelSdk {
         Ok(())
     }
 
-    async fn establish_pty_coverage(&self, topic: &str, permission: &str) -> Result<u64, String> {
+    async fn establish_pty_coverage(&self, topic: &str, permission: &str) -> Result<PtyTopicLease, String> {
         // One retry is specific to the PTY readiness boundary: a failed host
         // request or a reply superseded by reconnect must not be mistaken for
         // coverage, while an endlessly flapping socket must not create a loop.
@@ -367,28 +372,22 @@ impl PanelSdk {
             self.authorize().map_err(|error| error.to_string())?;
             self.require_permission(permission)
                 .map_err(|error| error.to_string())?;
-            let epoch_then = self
-                .state
-                .connection_epoch
-                .try_get_untracked()
-                .ok_or(PanelSdkError::Disposed)
-                .map_err(|error| error.to_string())?;
-            match (self.pty_subscribe)(topic.to_string()).await {
-                Ok(()) => {}
+            let coverage = match (self.pty_subscribe)(topic.to_string()).await {
+                Ok(coverage) => coverage,
                 Err(error) => {
                     last_error = Some(error);
                     continue;
                 }
-            }
+            };
             // The host call can race a mount revocation or owner disposal.
             // Do not publish a successful late subscription in that case.
             self.authorize().map_err(|error| error.to_string())?;
             self.require_permission(permission)
                 .map_err(|error| error.to_string())?;
             let still_current = self.state.is_connected.try_get_untracked() == Some(true)
-                && self.state.connection_epoch.try_get_untracked() == Some(epoch_then);
+                && self.state.connection_epoch.try_get_untracked() == Some(coverage.epoch());
             if still_current {
-                return Ok(epoch_then);
+                return Ok(coverage);
             }
             last_error = Some("Connection changed during PTY subscription".into());
         }
@@ -432,24 +431,19 @@ fn reestablish_pty_subscription(
     topic: String,
 ) -> LocalBoxFuture<'static, ()> {
     async move {
+        if !subscription.authorize() { return; }
         let permission = subscription.permission.clone();
-        let result = subscription
-            .sdk
-            .establish_pty_coverage(&topic, &permission)
-            .await;
-        // The helper can retry across a reconnect and return coverage for a
-        // newer epoch than the observer that started it. Validate and store
-        // the epoch actually covered by the successful host call.
-        if let Ok(covered_epoch) = result {
+        let result = subscription.sdk.establish_pty_coverage(&topic, &permission).await;
+        if let Ok(coverage) = result {
             let still_current = state.is_connected.try_get_untracked() == Some(true)
-                && state.connection_epoch.try_get_untracked() == Some(covered_epoch);
-            // pty_epoch is the last epoch with confirmed host coverage. It is
-            // deliberately written only after the request succeeds and remains
-            // current, so failures and stale completions remain retryable.
+                && state.connection_epoch.try_get_untracked() == Some(coverage.epoch());
             if still_current && subscription.authorize() {
-                subscription
-                    .pty_epoch
-                    .store(covered_epoch, Ordering::SeqCst);
+                let previous = {
+                    let mut resources = subscription.resources.lock().unwrap();
+                    if resources.cleanup.is_none() { return; }
+                    resources.pty_coverage.replace(coverage)
+                };
+                drop(previous);
             }
         }
     }
@@ -457,13 +451,14 @@ fn reestablish_pty_subscription(
 }
 
 fn install_pty_reconnect_observer(subscription: &Arc<SubscriptionState>, topic: String) {
-    let subscription = Arc::clone(subscription);
     let state = subscription.sdk.state;
+    let weak = Arc::downgrade(subscription);
     Effect::new(move |_| {
         let epoch = state.connection_epoch.get();
+        let Some(subscription) = weak.upgrade() else { return; };
         if !state.is_connected.get()
             || subscription.is_disposed()
-            || subscription.pty_epoch.load(Ordering::SeqCst) == epoch
+            || subscription.pty_epoch() == Some(epoch)
         {
             return;
         }
@@ -475,17 +470,21 @@ fn install_pty_reconnect_observer(subscription: &Arc<SubscriptionState>, topic: 
 
 struct SubscriptionResources {
     cleanup: Option<Box<dyn FnOnce() + Send + Sync>>,
+    pty_coverage: Option<PtyTopicLease>,
     pending: VecDeque<GatewayEvent>,
 }
 
 struct SubscriptionState {
     sdk: PanelSdk,
     permission: String,
-    pty_epoch: AtomicU64,
     resources: Mutex<SubscriptionResources>,
 }
 
 impl SubscriptionState {
+    fn pty_epoch(&self) -> Option<u64> {
+        self.resources.lock().unwrap().pty_coverage.as_ref().map(PtyTopicLease::epoch)
+    }
+
     fn is_disposed(&self) -> bool {
         self.resources.lock().unwrap().cleanup.is_none()
     }
@@ -504,6 +503,7 @@ impl SubscriptionState {
     }
 
     fn authorize(&self) -> bool {
+        if self.is_disposed() { return false; }
         if self
             .sdk
             .authorize()
@@ -518,14 +518,15 @@ impl SubscriptionState {
     }
 
     fn dispose(&self) {
-        let cleanup = {
+        let (cleanup, coverage) = {
             let mut resources = self.resources.lock().unwrap();
             resources.pending.clear();
-            resources.cleanup.take()
+            (resources.cleanup.take(), resources.pty_coverage.take())
         };
         if let Some(cleanup) = cleanup {
             cleanup();
         }
+        drop(coverage);
     }
 }
 
@@ -539,7 +540,7 @@ impl Drop for SubscriptionState {
 /// dropping the last clone also releases the listener. The pending buffer keeps
 /// at most 256 events, dropping the oldest on overflow. PTY upstream coverage is
 /// a lossy notification subscription; sequence-gap recovery belongs to Task 2.
-/// Revoked authority clears the buffer and unregisters only the local listener.
+/// Revoked authority clears the buffer and releases local and leased resources.
 #[derive(Clone)]
 pub struct PanelSubscription {
     inner: Arc<SubscriptionState>,
@@ -641,9 +642,9 @@ mod tests {
         Arc::new(super::SubscriptionState {
             sdk: sdk.clone(),
             permission: "events.subscribe:pty.screen".into(),
-            pty_epoch: std::sync::atomic::AtomicU64::new(0),
             resources: Mutex::new(super::SubscriptionResources {
                 cleanup: Some(Box::new(|| {})),
+                pty_coverage: None,
                 pending: std::collections::VecDeque::new(),
             }),
         })
@@ -969,7 +970,7 @@ mod tests {
         assert!(super::is_pty_topic(aleph_protocol::pty::PTY_EXIT_TOPIC));
         assert!(!super::is_pty_topic("pty.*"));
         Owner::new().with(|| {
-            let (sdk, host, _) = fixture();
+            let (mut sdk, host, _) = fixture();
             assert!(matches!(
                 block_on(sdk.subscribe(aleph_protocol::pty::PTY_SCREEN_TOPIC)),
                 Err(error) if error == PanelSdkError::Denied.to_string()
@@ -988,8 +989,12 @@ mod tests {
                 .insert_or_replace(row)
                 .unwrap();
             sdk.state.is_connected.set(true);
+            let transport = crate::context::tests::PtyHarness::with_rpc(sdk.state, |method, _| {
+                async move { if method == "events.subscribe" { Err("Not connected".into()) } else { Ok(Value::Null) } }.boxed_local()
+            });
+            wire_pty(&mut sdk, &transport);
             assert!(matches!(
-                block_on(sdk.subscribe(aleph_protocol::pty::PTY_SCREEN_TOPIC)),
+                drive_pty(&transport, sdk.subscribe(aleph_protocol::pty::PTY_SCREEN_TOPIC)),
                 Err(error) if error == "Not connected"
             ));
             // The host readiness failure is returned before a local listener is published.
@@ -998,25 +1003,109 @@ mod tests {
     }
 
     #[test]
+    fn pty_lease_disposal_drives_one_release_for_clones_sdk_cleanup_and_permission_loss() {
+        for disposal in 0..4 {
+            Owner::new().with(|| {
+                let (mut sdk, host, _) = fixture();
+                allow_pty(&host);
+                let tab_owner = Owner::new();
+                sdk = tab_owner.with(|| PanelSdk::new(sdk.state, key("home")));
+                sdk.state.is_connected.set(true);
+                let transport = crate::context::tests::PtyHarness::new(sdk.state);
+                let state = sdk.state;
+                let io = transport.io.clone();
+                sdk.pty_subscribe = Arc::new(move |topic| {
+                    let io = io.clone();
+                    async move { state.acquire_pty_topic_with_io(&topic, io).await }.boxed_local()
+                });
+                let observed = Arc::new(Mutex::new(Vec::new()));
+                let scheduled = observed.clone();
+                let mut pending = sdk.subscribe_with_observer("pty.screen", move |subscription, topic| {
+                    scheduled.lock().unwrap().push((Arc::downgrade(subscription), topic));
+                });
+                assert!(pending.as_mut().now_or_never().is_none());
+                assert_eq!(transport.flush(), [Ok(())]);
+                let subscription = block_on(pending).unwrap();
+                assert_eq!(observed.lock().unwrap()[0].1, "pty.screen");
+                if disposal == 1 {
+                    let mut row = host.registry.lock().unwrap().get(&key("home")).unwrap().clone();
+                    row.permissions.clear();
+                    host.registry.lock().unwrap().insert_or_replace(row).unwrap();
+                    assert!(subscription.drain().is_empty());
+                } else if disposal == 0 {
+                    subscription.clone().dispose();
+                } else if disposal == 2 {
+                    tab_owner.cleanup();
+                }
+                if disposal != 3 {
+                    subscription.clone().dispose();
+                    sdk.dispose();
+                    sdk.dispose();
+                }
+                drop(subscription);
+                assert!(observed.lock().unwrap()[0].0.upgrade().is_none());
+                assert_eq!(transport.flush(), [Ok(())]);
+                assert_eq!(transport.methods(), ["events.subscribe", "events.unsubscribe"]);
+            });
+        }
+    }
+
+    #[test]
+    fn pty_pending_subscribe_disposed_sdk_never_publishes_and_releases_confirmed_coverage() {
+        Owner::new().with(|| {
+            let (mut sdk, host, _) = fixture();
+            allow_pty(&host);
+            sdk.state.is_connected.set(true);
+            let transport = crate::context::tests::PtyHarness::new(sdk.state);
+            let state = sdk.state;
+            let io = transport.io.clone();
+            sdk.pty_subscribe = Arc::new(move |topic| {
+                let io = io.clone();
+                async move { state.acquire_pty_topic_with_io(&topic, io).await }.boxed_local()
+            });
+            let mut pending = sdk.subscribe("pty.screen");
+            assert!(pending.as_mut().now_or_never().is_none());
+            sdk.dispose();
+            assert_eq!(transport.flush(), [Ok(())]);
+            assert!(matches!(block_on(pending), Err(error) if error == PanelSdkError::Disposed.to_string()));
+            assert_eq!(sdk.state.subscribe_events(|_| {}), 0);
+            assert_eq!(transport.flush(), [Ok(())]);
+            assert_eq!(transport.methods(), ["events.subscribe", "events.unsubscribe"]);
+        });
+    }
+
+    fn wire_pty(sdk: &mut PanelSdk, transport: &crate::context::tests::PtyHarness) {
+        let state = sdk.state;
+        let io = transport.io.clone();
+        sdk.pty_subscribe = Arc::new(move |topic| {
+            let io = io.clone();
+            async move { state.acquire_pty_topic_with_io(&topic, io).await }.boxed_local()
+        });
+    }
+
+    fn drive_pty<T>(transport: &crate::context::tests::PtyHarness, future: impl std::future::Future<Output = T>) -> T {
+        let mut future = Box::pin(future);
+        loop {
+            if let Some(result) = future.as_mut().now_or_never() { return result; }
+            let results = transport.flush();
+            assert!(!results.is_empty(), "pending coverage has owned executor work");
+            assert!(results.iter().all(Result::is_ok));
+        }
+    }
+
+    #[test]
     fn successful_pty_readiness_accepts_current_coverage() {
         Owner::new().with(|| {
             let (mut sdk, host, _) = fixture();
             allow_pty(&host);
             sdk.state.is_connected.set(true);
-            let calls = Arc::new(AtomicUsize::new(0));
-            let recorded = calls.clone();
-            sdk.pty_subscribe = Arc::new(move |_| {
-                recorded.fetch_add(1, Ordering::SeqCst);
-                async { Ok(()) }.boxed_local()
-            });
-            assert_eq!(
-                block_on(sdk.establish_pty_coverage(
-                    aleph_protocol::pty::PTY_SCREEN_TOPIC,
-                    "events.subscribe:pty.screen",
-                )),
-                Ok(0)
-            );
-            assert_eq!(calls.load(Ordering::SeqCst), 1);
+            let transport = crate::context::tests::PtyHarness::new(sdk.state);
+            wire_pty(&mut sdk, &transport);
+            let lease = drive_pty(&transport, sdk.establish_pty_coverage("pty.screen", "events.subscribe:pty.screen")).unwrap();
+            assert_eq!(lease.epoch(), 0);
+            assert_eq!(transport.methods(), ["events.subscribe"]);
+            drop(lease);
+            assert_eq!(transport.flush(), [Ok(())]);
         });
     }
 
@@ -1026,21 +1115,15 @@ mod tests {
             let (mut sdk, host, _) = fixture();
             allow_pty(&host);
             sdk.state.is_connected.set(true);
-            let calls = Arc::new(AtomicUsize::new(0));
-            let recorded = calls.clone();
-            sdk.pty_subscribe = Arc::new(move |_| {
-                recorded.fetch_add(1, Ordering::SeqCst);
-                async { Ok(()) }.boxed_local()
-            });
+            let transport = crate::context::tests::PtyHarness::new(sdk.state);
+            wire_pty(&mut sdk, &transport);
             let subscription = pty_subscription_state(&sdk);
             sdk.state.connection_epoch.set(1);
-            block_on(super::reestablish_pty_subscription(
-                Arc::clone(&subscription),
-                sdk.state,
-                aleph_protocol::pty::PTY_SCREEN_TOPIC.into(),
-            ));
-            assert_eq!(calls.load(Ordering::SeqCst), 1);
-            assert_eq!(subscription.pty_epoch.load(Ordering::SeqCst), 1);
+            drive_pty(&transport, super::reestablish_pty_subscription(Arc::clone(&subscription), sdk.state, "pty.screen".into()));
+            assert_eq!(transport.methods(), ["events.subscribe"]);
+            assert_eq!(subscription.pty_epoch(), Some(1));
+            subscription.dispose();
+            assert_eq!(transport.flush(), [Ok(())]);
         });
     }
 
@@ -1050,27 +1133,24 @@ mod tests {
             let (mut sdk, host, _) = fixture();
             allow_pty(&host);
             sdk.state.is_connected.set(true);
+            let state = sdk.state;
             let calls = Arc::new(AtomicUsize::new(0));
             let recorded = calls.clone();
-            let state = sdk.state;
-            sdk.pty_subscribe = Arc::new(move |_| {
-                let call = recorded.fetch_add(1, Ordering::SeqCst) + 1;
-                if call == 1 {
-                    state.connection_epoch.set(2);
-                } else {
-                    state.connection_epoch.set(3);
+            let transport = crate::context::tests::PtyHarness::with_rpc(state, move |method, _| {
+                if method == "events.subscribe" {
+                    let call = recorded.fetch_add(1, Ordering::SeqCst) + 1;
+                    state.connection_epoch.set(if call == 1 { 2 } else { 3 });
                 }
-                async { Ok(()) }.boxed_local()
+                async { Ok(Value::Null) }.boxed_local()
             });
+            wire_pty(&mut sdk, &transport);
             let subscription = pty_subscription_state(&sdk);
             sdk.state.connection_epoch.set(1);
-            block_on(super::reestablish_pty_subscription(
-                Arc::clone(&subscription),
-                sdk.state,
-                aleph_protocol::pty::PTY_SCREEN_TOPIC.into(),
-            ));
+            drive_pty(&transport, super::reestablish_pty_subscription(Arc::clone(&subscription), sdk.state, "pty.screen".into()));
             assert_eq!(calls.load(Ordering::SeqCst), 2);
-            assert_eq!(subscription.pty_epoch.load(Ordering::SeqCst), 0);
+            assert_eq!(subscription.pty_epoch(), None);
+            subscription.dispose();
+            assert!(transport.flush().iter().all(Result::is_ok));
         });
     }
 
@@ -1080,25 +1160,23 @@ mod tests {
             let (mut sdk, host, _) = fixture();
             allow_pty(&host);
             sdk.state.is_connected.set(true);
+            let state = sdk.state;
             let calls = Arc::new(AtomicUsize::new(0));
             let recorded = calls.clone();
-            let state = sdk.state;
-            sdk.pty_subscribe = Arc::new(move |_| {
-                let call = recorded.fetch_add(1, Ordering::SeqCst) + 1;
-                if call == 1 {
+            let transport = crate::context::tests::PtyHarness::with_rpc(state, move |method, _| {
+                if method == "events.subscribe" && recorded.fetch_add(1, Ordering::SeqCst) == 0 {
                     state.connection_epoch.set(2);
                 }
-                async { Ok(()) }.boxed_local()
+                async { Ok(Value::Null) }.boxed_local()
             });
+            wire_pty(&mut sdk, &transport);
             let subscription = pty_subscription_state(&sdk);
             sdk.state.connection_epoch.set(1);
-            block_on(super::reestablish_pty_subscription(
-                Arc::clone(&subscription),
-                sdk.state,
-                aleph_protocol::pty::PTY_SCREEN_TOPIC.into(),
-            ));
+            drive_pty(&transport, super::reestablish_pty_subscription(Arc::clone(&subscription), sdk.state, "pty.screen".into()));
             assert_eq!(calls.load(Ordering::SeqCst), 2);
-            assert_eq!(subscription.pty_epoch.load(Ordering::SeqCst), 2);
+            assert_eq!(subscription.pty_epoch(), Some(2));
+            subscription.dispose();
+            assert!(transport.flush().iter().all(Result::is_ok));
         });
     }
 
@@ -1110,26 +1188,18 @@ mod tests {
             sdk.state.is_connected.set(true);
             let calls = Arc::new(AtomicUsize::new(0));
             let recorded = calls.clone();
-            sdk.pty_subscribe = Arc::new(move |_| {
-                let call = recorded.fetch_add(1, Ordering::SeqCst) + 1;
-                async move {
-                    if call == 1 {
-                        Err("temporary coverage failure".into())
-                    } else {
-                        Ok(())
-                    }
-                }
-                .boxed_local()
+            let transport = crate::context::tests::PtyHarness::with_rpc(sdk.state, move |method, _| {
+                let fail = method == "events.subscribe" && recorded.fetch_add(1, Ordering::SeqCst) == 0;
+                async move { if fail { Err("temporary coverage failure".into()) } else { Ok(Value::Null) } }.boxed_local()
             });
+            wire_pty(&mut sdk, &transport);
             let subscription = pty_subscription_state(&sdk);
             sdk.state.connection_epoch.set(1);
-            block_on(super::reestablish_pty_subscription(
-                Arc::clone(&subscription),
-                sdk.state,
-                aleph_protocol::pty::PTY_SCREEN_TOPIC.into(),
-            ));
+            drive_pty(&transport, super::reestablish_pty_subscription(Arc::clone(&subscription), sdk.state, "pty.screen".into()));
             assert_eq!(calls.load(Ordering::SeqCst), 2);
-            assert_eq!(subscription.pty_epoch.load(Ordering::SeqCst), 1);
+            assert_eq!(subscription.pty_epoch(), Some(1));
+            subscription.dispose();
+            assert_eq!(transport.flush(), [Ok(())]);
         });
     }
 

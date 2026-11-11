@@ -15,6 +15,7 @@ use crate::capability::descriptor::{
 use crate::capability::ownership::{OwnerGeneration, OwnerRef, VisibilityScope};
 use crate::capability::provider::ProviderId;
 use crate::capability::provider_registry::ActivationError;
+use crate::capability::special::CapturedSpecialEntry;
 use crate::memory::runtime::MemoryRuntime;
 use std::sync::Weak;
 
@@ -30,6 +31,11 @@ pub enum BackendSourceEvidence {
         provider_generation: u64,
     },
     MemoryResource(Weak<MemoryRuntime>),
+    /// A special capability capture from the canonical special registry.
+    Special {
+        capture: CapturedSpecialEntry,
+        provider_generation: u64,
+    },
 }
 
 impl PartialEq for BackendSourceEvidence {
@@ -56,6 +62,16 @@ impl PartialEq for BackendSourceEvidence {
                 },
             ) => a_id == b_id && a_generation == b_generation,
             (Self::MemoryResource(a), Self::MemoryResource(b)) => Weak::ptr_eq(a, b),
+            (
+                Self::Special {
+                    capture: a,
+                    provider_generation: ag,
+                },
+                Self::Special {
+                    capture: b,
+                    provider_generation: bg,
+                },
+            ) => a == b && ag == bg,
             _ => false,
         }
     }
@@ -131,9 +147,9 @@ impl BackendLease {
                 provider_generation,
                 ..
             } => Some(*provider_generation),
-            BackendSourceEvidence::Provider { .. } | BackendSourceEvidence::MemoryResource(_) => {
-                None
-            }
+            BackendSourceEvidence::Provider { .. }
+            | BackendSourceEvidence::MemoryResource(_)
+            | BackendSourceEvidence::Special { .. } => None,
         }
     }
 }
@@ -372,6 +388,17 @@ pub trait Zahir {
     fn validate_lease(&self, lease: &BackendLease) -> Result<(), ResolveError>;
     fn activate(&self, reference: Reference) -> Result<BackendLease, ActivationError>;
     fn subscribe(&self, scope: Scope, cursor: Cursor) -> CapabilityChangeStream;
+    /// Independent, live-only observations. Filters cannot supply authorization.
+    fn subscribe_events(
+        &self,
+        _scope: crate::capability::event_audience::TrustedEventScope,
+        _filter: crate::capability::events::EventFilter,
+    ) -> Result<
+        crate::capability::events::ScopedEventSubscription,
+        crate::capability::events::EventError,
+    > {
+        Err(crate::capability::events::EventError::Unsupported)
+    }
     fn project(&self, target: TransportTarget, scope: Scope) -> Projection;
 }
 

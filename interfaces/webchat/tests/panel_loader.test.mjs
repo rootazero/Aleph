@@ -322,6 +322,180 @@ test('async unmount is rejected as UnmountFailed without leaking a rejection', a
     }
 });
 
+// Each fixture is a real, uniquely named ESM namespace with controlled init gates.
+const controlledInitializer = async (t) => {
+    const root = await mkdtemp(join(tmpdir(), 'panel-init-'));
+    t.after(() => rm(root, { recursive: true, force: true }));
+    const entry = pathToFileURL(join(root, 'panel.mjs')).href;
+    const body = `
+        let calls = 0;
+        let current = null;
+        let failure = null;
+        let releaseFuture = false;
+        let firstEntered;
+        const entered = new Promise(resolve => { firstEntered = resolve; });
+        const gates = [];
+        export const controls = {
+            entered,
+            get calls() { return calls; },
+            get current() { return current; },
+            cleaned: 0,
+            failWith(error) { failure = error; },
+            release(attempt) { gates[attempt - 1](); },
+            releaseAll() { releaseFuture = true; for (const release of gates) release(); },
+        };
+        export default async function initialize() {
+            const attempt = ++calls;
+            firstEntered();
+            await new Promise(resolve => {
+                gates.push(resolve);
+                if (releaseFuture) resolve();
+            });
+            if (failure) throw failure;
+            current = Object.freeze({ attempt });
+        }
+        export function describe() {
+            if (current === null) throw Error('not initialized');
+            return { api_major: 1, initialized: current.attempt };
+        }
+        export function mount(sidebar, content, sdk) {
+            content.instance = current;
+            content.sdk = sdk;
+            content.closed = false;
+            return { unmount() { content.closed = true; controls.cleaned++; } };
+        }
+    `;
+    await writeFile(new URL(entry), body);
+    const { controls } = await import(entry);
+    return { entry, body, controls };
+};
+
+test('concurrent loads share initialization without replacing a mounted instance', async (t) => {
+    const { entry, controls } = await controlledInitializer(t);
+    const loads = [loadPanelModule(entry), loadPanelModule(entry)];
+    const settled = Promise.allSettled(loads);
+    const handles = [];
+    try {
+        await controls.entered;
+        // Both loader imports were queued first; this module-ready barrier leaves
+        // initializer gates closed, without a timer, sleep, poll, or retry.
+        await import(entry);
+        const firstCompleted = controls.calls > 1 ? 1 : 0;
+        controls.release(controls.calls);
+        const winner = await loads[firstCompleted];
+        const winnerContent = {}, otherContent = {};
+        const firstSdk = { name: 'first SDK' }, secondSdk = { name: 'second SDK' };
+        handles.push(winner.mount({}, winnerContent, firstSdk));
+        controls.releaseAll();
+        const modules = await Promise.all(loads);
+        handles.push(modules[1 - firstCompleted].mount({}, otherContent, secondSdk));
+        assert.strictEqual(winnerContent.instance, controls.current,
+            'late initialization must not replace the identity used by a mounted result');
+        assert.equal(controls.calls, 1, 'one exact namespace must have one in-flight initializer');
+        assert.notStrictEqual(modules[0], modules[1], 'load wrappers remain independent');
+        assert.strictEqual(winnerContent.sdk, firstSdk);
+        assert.strictEqual(otherContent.sdk, secondSdk);
+        handles[0].unmount();
+        handles[0].unmount();
+        assert.equal(controls.cleaned, 1);
+        assert.equal(otherContent.closed, false, 'one handle must not close the other mount');
+        handles[1].unmount();
+        assert.equal(controls.cleaned, 2);
+    } finally {
+        controls.releaseAll();
+        await settled;
+        for (const handle of handles) handle.unmount();
+    }
+});
+
+test('concurrent initializer rejection preserves the cause and permits a later retry', async (t) => {
+    const { entry, controls } = await controlledInitializer(t);
+    const cause = Error('controlled initializer failure');
+    controls.failWith(cause);
+    const settled = Promise.allSettled([loadPanelModule(entry), loadPanelModule(entry)]);
+    try {
+        await controls.entered;
+        await import(entry);
+        controls.releaseAll();
+        const results = await settled;
+        for (const result of results) {
+            assert.equal(result.status, 'rejected');
+            assert.equal(result.reason.code, 'ImportFailed');
+            assert.strictEqual(result.reason.cause, cause);
+        }
+        assert.equal(controls.calls, 1);
+        controls.failWith(null);
+        const retried = await loadPanelModule(entry);
+        assert.equal(controls.calls, 2, 'a rejected pending initializer must not poison retries');
+        assert.equal(JSON.parse(retried.descriptorJson).initialized, 2);
+    } finally {
+        controls.releaseAll();
+        await settled;
+    }
+});
+
+test('distinct ESM namespaces never share an initialization promise', async (t) => {
+    const first = await controlledInitializer(t), second = await controlledInitializer(t);
+    const loads = [loadPanelModule(first.entry), loadPanelModule(second.entry)];
+    const settled = Promise.allSettled(loads);
+    try {
+        await first.controls.entered;
+        await import(second.entry);
+        assert.equal(first.controls.calls, 1);
+        assert.equal(second.controls.calls, 1);
+        first.controls.releaseAll();
+        second.controls.releaseAll();
+        const modules = await Promise.all(loads);
+        assert.notStrictEqual(first.controls.current, second.controls.current);
+        assert.equal(modules.length, 2);
+    } finally {
+        first.controls.releaseAll();
+        second.controls.releaseAll();
+        await settled;
+    }
+});
+
+test('canonical and verified loads share only init, not verification requests', async (t) => {
+    const { entry, body, controls } = await controlledInitializer(t);
+    let requests = 0, created = 0, revoked = 0, bothCreated;
+    const importsReady = new Promise(resolve => { bothCreated = resolve; });
+    const root = await serve(t, { '/panel.mjs': { get body() { requests++; return body; } } });
+    const originalCreate = URL.createObjectURL, originalRevoke = URL.revokeObjectURL;
+    URL.createObjectURL = () => { if (++created === 2) bothCreated(); return entry; };
+    URL.revokeObjectURL = () => { revoked++; };
+    t.after(() => { URL.createObjectURL = originalCreate; URL.revokeObjectURL = originalRevoke; });
+    const loads = [loadPanelModule(entry),
+        loadPanelModule(`${root}/panel.mjs`, integrity(body)),
+        loadPanelModule(`${root}/panel.mjs`, integrity(body))];
+    const settled = Promise.allSettled(loads);
+    try {
+        await importsReady;
+        await controls.entered;
+        await import(entry);
+        assert.equal(requests, 2, 'each verified load still fetches and checks its own bytes');
+        assert.equal(controls.calls, 1);
+        controls.releaseAll();
+        const modules = await Promise.all(loads);
+        assert.equal(revoked, 2);
+        assert.notStrictEqual(modules[0], modules[1]);
+        await assert.rejects(loadPanelModule(`${root}/panel.mjs`, 'invalid'), rejected('InvalidAssetIntegrity'));
+        assert.equal(requests, 2, 'invalid integrity cannot reuse another load admission');
+    } finally {
+        controls.releaseAll();
+        await settled;
+    }
+});
+
+test('settled initialization retains the existing non-concurrent default-call contract', async (t) => {
+    const { entry, controls } = await controlledInitializer(t);
+    controls.releaseAll();
+    const first = await loadPanelModule(entry);
+    const second = await loadPanelModule(entry);
+    assert.equal(controls.calls, 2, 'only in-flight initialization is coalesced');
+    assert.equal(JSON.parse(first.descriptorJson).initialized, 1);
+    assert.equal(JSON.parse(second.descriptorJson).initialized, 2);
+});
+
 test('unmount is called once with receiver and maps failure without retrying', async () => {
     for (const throws of [false, true]) {
         const module = await loadPanelModule(source(`${valid}

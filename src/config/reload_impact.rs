@@ -357,6 +357,8 @@ mod tests {
             // fields too. See `LIVE_SUBSECTIONS`'s doc.
             "policies",
             "policies.tool_permissions",
+            "policies.capability_constraints",
+            "policies.capability_constraints.aleph/tools/ui.resource.max_active",
         ] {
             assert_eq!(
                 ReloadImpact::classify(s),

@@ -17,6 +17,13 @@
     "select": "Select a tab",
     "failed": "Tab failed"
   },
+  "capability_surface": {
+    "title": "Capability surface",
+    "session_key": "Session key",
+    "attach": "Attach",
+    "attached": "Attached",
+    "disconnected": "Disconnected"
+  },
   "session": {
     "healthy": "Healthy",
     "degraded": "Degraded",

@@ -23,10 +23,21 @@ use crate::capability::events::{AuditedPolicyEngine, CapabilityEventEmitter};
 use crate::capability::ownership::{
     LifetimeScope, OwnerGeneration, OwnerRef, OwnershipTree, VisibilityScope,
 };
+use crate::capability::policy_runtime::PolicyRuntime;
+use std::sync::Arc;
 
 /// Why a capability access request was denied.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum PolicyDenial {
+    #[error("invalid capability constraints: {reason}")]
+    InvalidConstraints { reason: String },
+
+    #[error("capability restriction attachment unavailable: {id:?}")]
+    AttachmentUnavailable { id: CapabilityId },
+
+    #[error("capability constraint denied: {reason}")]
+    ConstraintDenied { reason: String },
+
     /// No binding exists for this `(CapabilityId, VisibilityScope)` pair.
     #[error("capability not found")]
     NotFound,
@@ -99,13 +110,17 @@ pub struct CapabilityLease {
 ///
 /// Every method is fail-closed: a denial at any gate stops the request.
 pub struct PolicyEngine {
-    tree: OwnershipTree,
+    pub(super) tree: Arc<OwnershipTree>,
+    pub(super) runtime: PolicyRuntime,
 }
 
 impl PolicyEngine {
     #[must_use]
     pub fn new(tree: OwnershipTree) -> Self {
-        Self { tree }
+        Self {
+            tree: Arc::new(tree),
+            runtime: PolicyRuntime::default(),
+        }
     }
 
     /// Observe capability-specific policy gates without changing their decisions.

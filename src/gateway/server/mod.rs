@@ -868,7 +868,37 @@ impl GatewayServer {
         &mut self,
         store: Arc<dyn crate::gateway::session_store::SessionStore>,
     ) {
-        self.session_store = Some(store);
+        self.session_store = Some(Arc::clone(&store));
+        self.register_capability_ui_handlers(store);
+    }
+
+    fn register_capability_ui_handlers(
+        &mut self,
+        session_store: Arc<dyn crate::gateway::session_store::SessionStore>,
+    ) {
+        let event_bus = Arc::clone(&self.event_bus);
+        let attach_store = Arc::clone(&session_store);
+        self.handlers_mut().register("capabilities.ui.attach", move |request| {
+            let store = Arc::clone(&attach_store);
+            let bus = Arc::clone(&event_bus);
+            async move { crate::gateway::capability_ui::handle_attach(request, store, bus).await }
+        });
+        self.handlers_mut().register(
+            "capabilities.ui.invoke",
+            crate::gateway::capability_ui::handle_invoke,
+        );
+        self.handlers_mut().register(
+            "capabilities.ui.ack",
+            crate::gateway::capability_ui::handle_ack,
+        );
+        self.handlers_mut().register(
+            "capabilities.ui.submit_input",
+            crate::gateway::capability_ui::handle_submit_input,
+        );
+        self.handlers_mut().register(
+            "capabilities.ui.detach",
+            crate::gateway::capability_ui::handle_detach,
+        );
     }
 
     /// Install the `TeamStore` so the WS event-delivery loop can resolve the
@@ -935,6 +965,14 @@ impl GatewayServer {
             if config.policies.terminal.enabled {
                 if let Err(error) = crate::gateway::pty::attach_event_bus(self.event_bus.clone()) {
                     warn!(%error, "terminal activation failed during gateway boot");
+                } else if let Some(source) = crate::capability::projection_host::projection_host()
+                    .and_then(|host| host.facade().terminal_source())
+                {
+                    if let Err(error) = crate::gateway::pty::manager()
+                        .bind_capability_source(Arc::downgrade(&source))
+                    {
+                        warn!(%error, "terminal capability source binding failed during gateway boot");
+                    }
                 }
             }
         }
@@ -1594,6 +1632,7 @@ mod tests {
             &disabled,
             &["policies.terminal"],
             Some(&server.event_bus()),
+            None,
         )
         .await;
         assert!(manager.ready_generation().is_err());
@@ -1612,7 +1651,8 @@ mod tests {
         assert!(crate::config::live_apply::apply_live_sections(
             &enabled,
             &["policies.terminal"],
-            Some(&server.event_bus())
+            Some(&server.event_bus()),
+            None,
         )
         .await
         .contains(&"policies.terminal"));
@@ -1624,6 +1664,7 @@ mod tests {
             &disabled,
             &["policies.terminal"],
             Some(&server.event_bus()),
+            None,
         )
         .await
         .contains(&"policies.terminal"));

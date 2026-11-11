@@ -111,10 +111,13 @@ pub async fn handle_reload_with_subsystems(
                 // `policies.spend` captured handles at boot and would
                 // otherwise keep serving the pre-reload values while this
                 // response says "reloaded".
+                let terminal_source = crate::capability::projection_host::projection_host()
+                    .and_then(|host| host.facade().terminal_source());
                 crate::config::live_apply::apply_live_sections(
                     &config_guard,
                     &crate::config::reload_impact::live_targets(),
                     Some(&event_bus),
+                    terminal_source.as_ref(),
                 )
                 .await
             };

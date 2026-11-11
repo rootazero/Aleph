@@ -27,6 +27,7 @@ use alephcore::tasks::heartbeat::{HeartbeatService, SharedHeartbeatService};
 use alephcore::ProviderRegistry as _; // trait needed for .default_provider()
 
 mod builder;
+mod capability_init;
 use builder::{
     initialize_channels, initialize_inbound_router, initialize_vault, load_app_config,
     register_agent_handlers, register_agents_handlers, register_artifact_handlers,
@@ -240,6 +241,7 @@ async fn start_server_body(
     // Plugins are now installed via marketplace: `aleph plugin marketplace update && aleph plugin install <name>`
 
     let ownership_tree = Arc::new(OwnershipTree::new());
+    startup_resources.install_ownership_tree(ownership_tree.clone());
     let aleph_home = alephcore::utils::paths::get_config_dir().map_err(|e| {
         format!("Error: Failed to resolve config directory for metadata database: {e}")
     })?;
@@ -286,10 +288,27 @@ async fn start_server_body(
             .ok()
             .as_deref(),
     );
-    let projection_host = ProjectionHost::mount_with_memory(
+    let capability_policy =
+        capability_init::build_capability_policy(&loaded_app_config, Arc::clone(&ownership_tree))
+            .map_err(|error| format!("failed to compile startup capability policy: {error}"))?;
+    let special_registry = alephcore::capability::special::CapabilityHandlerRegistry::new();
+    let capability_events = capability_init::build_capability_events();
+    let capability_event_bridge = capability_init::start_capability_event_bridge(
+        &capability_events,
+        server.event_bus().clone(),
+    );
+    startup_resources.install_capability_events(
+        capability_policy.clone(),
+        capability_events.clone(),
+        capability_event_bridge,
+    );
+    let projection_host = ProjectionHost::mount_with_runtime_and_events(
         (*tool_registry_phase2).clone(),
         Arc::clone(&ownership_tree),
         memory_runtime.clone(),
+        special_registry,
+        Arc::clone(&capability_policy),
+        capability_events,
         diagnostics_enabled,
     );
     startup_resources.install_projection_host(projection_host.clone());
@@ -1136,6 +1155,31 @@ async fn start_server_body(
     // Wrap app config in Arc<RwLock> early so agent handlers can read output_mode dynamically
     let app_config = Arc::new(tokio::sync::RwLock::new(loaded_app_config));
 
+    // Bind the real PTY source only after the shared Config exists. The
+    // canonical adapter was published during host mount; its weak slot is now
+    // connected to this one source, never replaced by a second owner.
+    let terminal_source = Arc::new(
+        alephcore::capability::tool_adapters::TerminalCapabilitySource::new(
+            projection_host.specials(),
+            Arc::clone(&capability_policy),
+            Arc::downgrade(&projection_host.facade()),
+            Arc::clone(&app_config),
+        ),
+    );
+    projection_host
+        .facade()
+        .bind_terminal_source(Arc::downgrade(&terminal_source))
+        .map_err(|error| format!("failed to bind terminal capability source: {error:?}"))?;
+    terminal_source
+        .bind_handler()
+        .map_err(|error| format!("failed to bind terminal capability handler: {error:?}"))?;
+    projection_host
+        .register_special_tool_adapters_with_terminal_source(
+            tool_registry_phase2.as_ref(),
+            Some(&terminal_source),
+        )
+        .map_err(|error| format!("failed to mount special capability adapters: {error}"))?;
+
     // One-time migration of legacy Settings-page MCP servers
     // (config.unified_tools.mcp) into the live actor store. Runs after the actor
     // is running with its secret resolver, so imported {{secret:..}} servers can
@@ -1508,6 +1552,7 @@ async fn start_server_body(
         canvas_store.clone(),
         tool_registry_phase2.clone(),
         diagnostics_control,
+        Arc::clone(&capability_policy),
     )
     .await?;
     if app_config.read().await.memory.enabled {
@@ -2016,7 +2061,8 @@ async fn start_server_body(
         Arc::new(
             alephcore::ConfigPatcher::new(app_config.clone(), config_path, backup)
                 .with_vault(auth_bundle.auth_ctx.shared_token_mgr.clone())
-                .with_event_bus(event_bus.clone()),
+                .with_event_bus(event_bus.clone())
+                .with_terminal_capability_source(terminal_source.clone()),
         )
     };
     let app_config_for_channels = app_config.clone();
@@ -2105,14 +2151,19 @@ async fn start_server_body(
             }
             (true, Some(tool_registry)) => {
                 let registry: Arc<dyn alephcore::executor::ToolRegistry> = tool_registry.clone();
-                let face = Arc::new(alephcore::gateway::mcp_face::McpFace::new(
-                    &mcp_server_cfg,
-                    registry,
-                    tool_registry.unified_tools().cloned().collect(),
-                    Some(app_config.clone()),
-                    agent_result.tool_catalog.as_ref().map(|c| c.health()),
-                    server.operator_presence_probe(),
-                ));
+                let face = Arc::new(
+                    alephcore::gateway::mcp_face::McpFace::new_with_canonical_source(
+                        &mcp_server_cfg,
+                        registry,
+                        tool_registry.unified_tools().cloned().collect(),
+                        Some(app_config.clone()),
+                        agent_result.tool_catalog.as_ref().map(|c| c.health()),
+                        server.operator_presence_probe(),
+                        Arc::clone(&tool_registry_phase2),
+                        projection_host.clone(),
+                        Arc::clone(&capability_policy),
+                    ),
+                );
                 // G5, runtime half: every configured name the catalogue does
                 // not know at boot. A warning, not a refusal — bridged MCP
                 // tools register asynchronously and a name that belongs to
@@ -2204,7 +2255,10 @@ async fn start_server_body(
     // session gate, and the scrollback/session-cap values) — its siblings
     // are already registered stateless in `HandlerRegistry::new()`. See
     // `register_pty_handlers`'s doc for why it alone is wired here.
-    register_pty_handlers(&mut server, &app_config_for_pty);
+    register_pty_handlers(&mut server, &app_config_for_pty, &terminal_source);
+    if let Some(manager) = alephcore::gateway::pty::try_manager() {
+        startup_resources.install_pty(manager);
+    }
     server.set_application_config(app_config_for_pty.clone());
 
     // OAuth state: restore from vault if chatgpt provider exists
@@ -4003,21 +4057,8 @@ async fn start_server_body(
     if reaped > 0 {
         tracing::info!(count = reaped, "reaped background bash jobs on shutdown");
     }
-    // The bash reaper's twin for terminal sessions. A shell a person opened
-    // through the Panel is a child of this process too, and after the daemon
-    // is gone nothing can re-attach to it — but the reason this line exists
-    // is the journal: the bash reap above records `killed` on every job, and
-    // a clean stop that closed no terminal left every open PTY row `running`
-    // on disk, which the next boot tombstoned as a shell the restart had
-    // *interrupted*, and the terminal faces then told the person who merely
-    // restarted the server that their shell was lost. Lifecycle stop records
-    // `killed` before each kill, then joins the source-owned flush driver.
-    if let Some(manager) = alephcore::gateway::pty::try_manager() {
-        match manager.deactivate().await {
-            Ok(()) => tracing::info!("stopped terminal driver on shutdown"),
-            Err(error) => tracing::warn!(%error, "terminal driver shutdown failed"),
-        }
-    }
+    // PTY kill/journal/driver join is owned by StartupResources above, before
+    // final capability events, event-hub close, bridge join and scope disposal.
     // Same shape and the same reason as the background-bash reap above: the
     // browsers are OUR child processes, `Child` does not kill on drop, and
     // under `attach --cdp` playwright-cli was never their parent. Reached by
@@ -4418,12 +4459,21 @@ mod tests {
             &alephcore::utils::source_scan::production_prefix(&src),
         );
         let mount = production
-            .find("ProjectionHost::mount_with_memory(")
+            .find("ProjectionHost::mount_with_runtime_and_events(")
             .expect("startup must mount the canonical host with one diagnostics decision");
         let decision = production
             .find("let diagnostics_enabled =")
             .expect("startup must make one exact diagnostics enablement decision");
+        assert_eq!(production.matches("let diagnostics_enabled =").count(), 1);
         assert!(decision < mount);
+        let mount_call = production[mount..]
+            .split_once(");")
+            .expect("the canonical mount call must terminate")
+            .0;
+        assert!(
+            mount_call.trim_end().ends_with("diagnostics_enabled,"),
+            "the canonical mount must receive the single diagnostics decision"
+        );
         let registration = production
             .find("register_agent_handlers(")
             .expect("startup must pass the decision into agent registration");
@@ -4483,7 +4533,7 @@ mod tests {
         let production = alephcore::utils::source_scan::code_text(&production);
 
         for call in [
-            "ProjectionHost::mount_with_memory(",
+            "ProjectionHost::mount_with_runtime_and_events(",
             "set_projection_host(",
             "wait_until_ready(",
         ] {
@@ -4503,8 +4553,18 @@ mod tests {
             .find("set_mcp_tool_registry(")
             .expect("set_mcp_tool_registry call must exist (sibling census)");
         let mount_at = production
-            .find("ProjectionHost::mount_with_memory(")
-            .expect("ProjectionHost::mount_with_memory call must exist (asserted above)");
+            .find("ProjectionHost::mount_with_runtime_and_events(")
+            .expect(
+                "ProjectionHost::mount_with_runtime_and_events call must exist (asserted above)",
+            );
+        let mount_call = production[mount_at..]
+            .split_once(");")
+            .expect("the canonical mount call must terminate")
+            .0;
+        assert!(production.contains("set_mcp_tool_registry(tool_registry_phase2.clone())"));
+        assert!(mount_call.contains("(*tool_registry_phase2).clone()"));
+        assert!(mount_call.contains("Arc::clone(&ownership_tree)"));
+        assert!(production.contains("projection_host.wait_until_ready().await"));
         assert!(
             mount_at > install_at,
             "ProjectionHost::mount must be installed AFTER set_mcp_tool_registry — \

@@ -21,7 +21,7 @@ use shared_ui_logic::connection::{
     OriginLiveness,
 };
 use std::collections::{BTreeSet, HashMap};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::sync::Mutex;
 
@@ -642,6 +642,119 @@ const fn approval_seed_applies(
     epoch_then == epoch_now && edits_then == edits_now
 }
 
+type PtyCoverageRpc = dyn Fn(&'static str, Value) -> futures::future::LocalBoxFuture<'static, Result<Value, String>> + Send + Sync;
+
+#[derive(Clone)]
+pub(crate) struct PtyCoverageIo {
+    rpc: Arc<PtyCoverageRpc>,
+    schedule: Arc<dyn Fn(PtyCoverageWork) + Send + Sync>,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum PtyCoverageStatus {
+    Absent,
+    Unconfirmed,
+    Confirmed,
+}
+
+/// Exact-topic coverage belongs to one connection epoch, not a mounted tab.
+struct PtyTopicCoverage {
+    state: DashboardState,
+    epoch: u64,
+    topic: &'static str,
+    owners: AtomicUsize,
+    effect: futures::lock::Mutex<PtyCoverageStatus>,
+    ledger: Arc<Mutex<BTreeSet<LedgerEntry>>>,
+    io: PtyCoverageIo,
+}
+
+/// A confirmed upstream subscription and the epoch that actually established it.
+pub(crate) struct PtyTopicLease {
+    coverage: Arc<PtyTopicCoverage>,
+}
+
+impl PtyTopicLease {
+    pub(crate) fn epoch(&self) -> u64 {
+        self.coverage.epoch
+    }
+}
+
+impl Drop for PtyTopicLease {
+    fn drop(&mut self) {
+        if self.coverage.owners.fetch_sub(1, Ordering::AcqRel) == 1 {
+            (self.coverage.io.schedule)(PtyCoverageWork::Release(self.coverage.clone()));
+        }
+    }
+}
+
+// Work owns the reservation until the RPC finishes, even if its caller cancels.
+// Neither this work nor its unscoped executor retains a reactive Owner.
+enum PtyCoverageWork {
+    Acquire {
+        lease: PtyTopicLease,
+        reply: oneshot::Sender<Result<PtyTopicLease, String>>,
+    },
+    Release(Arc<PtyTopicCoverage>),
+}
+
+impl PtyCoverageWork {
+    async fn run(self) -> Result<(), String> {
+        match self {
+            Self::Acquire { lease, reply } => {
+                let result = lease.coverage.confirm().await.map(|()| lease);
+                // An abandoned receiver drops any delivered lease here.
+                let _ = reply.send(result);
+                Ok(())
+            }
+            Self::Release(coverage) => coverage.release().await,
+        }
+    }
+}
+
+impl PtyTopicCoverage {
+    fn is_current(&self) -> bool {
+        self.state.current_connection_epoch() == Some(self.epoch)
+    }
+
+    async fn confirm(&self) -> Result<(), String> {
+        let mut status = self.effect.lock().await;
+        if !self.is_current() {
+            return Err("PTY connection superseded".into());
+        }
+        if *status != PtyCoverageStatus::Confirmed {
+            // An ambiguous reply is not confirmation; final release still pairs
+            // a request which may already have reached the server.
+            *status = PtyCoverageStatus::Unconfirmed;
+            (self.io.rpc)("events.subscribe", topics_request(self.topic, &[])).await?;
+            if !self.is_current() {
+                return Err("PTY connection superseded".into());
+            }
+            *status = PtyCoverageStatus::Confirmed;
+        }
+        Ok(())
+    }
+
+    async fn release(&self) -> Result<(), String> {
+        let mut status = self.effect.lock().await;
+        if !self.is_current()
+            || self.owners.load(Ordering::Acquire) != 0
+            || self.ledger.lock().unwrap_or_else(|e| e.into_inner()).contains(&(self.topic.into(), Vec::new()))
+            || *status == PtyCoverageStatus::Absent
+        {
+            return Ok(());
+        }
+        // Keep this gate until the actual unsubscribe finishes. A new owner
+        // waits here and confirms coverage again, including on RPC error.
+        *status = PtyCoverageStatus::Absent;
+        (self.io.rpc)("events.unsubscribe", topics_request(self.topic, &[])).await?;
+        Ok(())
+    }
+}
+
+fn is_pty_topic(topic: &str) -> bool {
+    matches!(topic, "pty.screen" | "pty.exit")
+}
+
 #[derive(Clone, Copy)]
 pub struct DashboardState {
     pub is_connected: RwSignal<bool>,
@@ -705,6 +818,8 @@ pub struct DashboardState {
     /// deliberately no separate "intent" set - a failed subscribe is reported
     /// to its caller instead of being silently retried by the next replay.
     subscribed_topics: StoredValue<Arc<Mutex<BTreeSet<LedgerEntry>>>>,
+    // Only the two exact PTY topics; stale epochs are replaced, never replayed.
+    pty_topic_coverage: StoredValue<Arc<Mutex<HashMap<&'static str, Arc<PtyTopicCoverage>>>>>,
 
     // Channel for stopping the message loop
     disconnect_tx: StoredValue<Option<oneshot::Sender<()>>>,
@@ -1017,6 +1132,7 @@ impl DashboardState {
             next_id: StoredValue::new(Arc::new(Mutex::new(1))),
             event_handlers: StoredValue::new(Arc::new(Mutex::new(Vec::new()))),
             subscribed_topics: StoredValue::new(Arc::new(Mutex::new(BTreeSet::new()))),
+            pty_topic_coverage: StoredValue::new(Arc::new(Mutex::new(HashMap::new()))),
             disconnect_tx: StoredValue::new(None),
             alerts: RwSignal::new(HashMap::new()),
             alert_subscription_id: StoredValue::new(None),
@@ -1254,19 +1370,18 @@ impl DashboardState {
             let Some(epoch_then) = self.connection_epoch.try_get_untracked() else {
                 break;
             };
-            let result = subscribe_recorded(
-                &ledger,
-                (pattern.to_string(), except.clone()),
-                epoch_then,
-                || {
-                    let connected = self.is_connected.try_get_untracked().unwrap_or(false);
-                    connected
-                        .then(|| self.connection_epoch.try_get_untracked())
-                        .flatten()
-                },
-                self.send_rpc("events.subscribe", topics_request(pattern, &except)),
-            )
-            .await;
+            let result = if is_pty_topic(pattern) && except.is_empty() {
+                self.subscribe_pty_recorded(pattern, self.pty_coverage_io()).await
+            } else {
+                subscribe_recorded(
+                    &ledger,
+                    (pattern.to_string(), except.clone()),
+                    epoch_then,
+                    || self.current_connection_epoch(),
+                    self.send_rpc("events.subscribe", topics_request(pattern, &except)),
+                )
+                .await
+            };
             log_subscribe_diagnostic(pattern, &result);
             match result {
                 Ok(()) => return Ok(()),
@@ -1275,6 +1390,92 @@ impl DashboardState {
             }
         }
         Err(last.into_message())
+    }
+
+    fn current_connection_epoch(&self) -> Option<u64> {
+        self.is_connected.try_get_untracked().unwrap_or(false)
+            .then(|| self.connection_epoch.try_get_untracked()).flatten()
+    }
+
+    fn pty_coverage_io(&self) -> PtyCoverageIo {
+        let state = *self;
+        PtyCoverageIo {
+            rpc: Arc::new(move |method, params| async move {
+                // No readiness wait here: the effect gate already selected the
+                // current epoch, and send_rpc sends before its first await.
+                state.send_rpc(method, params).await.map_err(|error| error.message)
+            }.boxed_local()),
+            schedule: Arc::new(|work| spawn_local(async move {
+                if work.run().await.is_err() {
+                    // Never expose an RPC payload or retain a disposed Owner.
+                    #[cfg(target_arch = "wasm32")]
+                    web_sys::console::warn_1(&"PTY topic release failed".into());
+                }
+            })),
+        }
+    }
+
+    fn pty_coverage_slot(&self, topic: &str, io: PtyCoverageIo) -> Result<Arc<PtyTopicCoverage>, String> {
+        let topic = match topic {
+            "pty.screen" => "pty.screen",
+            "pty.exit" => "pty.exit",
+            _ => return Err("Unsupported PTY topic".into()),
+        };
+        let epoch = self.current_connection_epoch().ok_or("Not connected")?;
+        let slots = self.pty_topic_coverage.try_get_value().ok_or("Panel disposed")?;
+        let ledger = self.subscribed_topics.try_get_value().ok_or("Panel disposed")?;
+        let mut slots = slots.lock().unwrap_or_else(|e| e.into_inner());
+        let slot = slots.entry(topic).or_insert_with(|| Arc::new(PtyTopicCoverage {
+            state: *self, epoch, topic, owners: AtomicUsize::new(0),
+            effect: futures::lock::Mutex::new(PtyCoverageStatus::Absent), ledger: ledger.clone(), io: io.clone(),
+        }));
+        if slot.epoch != epoch {
+            *slot = Arc::new(PtyTopicCoverage {
+                state: *self, epoch, topic, owners: AtomicUsize::new(0),
+                effect: futures::lock::Mutex::new(PtyCoverageStatus::Absent), ledger, io,
+            });
+        }
+        Ok(slot.clone())
+    }
+
+    pub(crate) async fn acquire_pty_topic(&self, topic: &str) -> Result<PtyTopicLease, String> {
+        self.await_gateway_ready().await?;
+        self.acquire_pty_topic_with_io(topic, self.pty_coverage_io()).await
+    }
+
+    pub(crate) async fn acquire_pty_topic_with_io(&self, topic: &str, io: PtyCoverageIo) -> Result<PtyTopicLease, String> {
+        let coverage = self.pty_coverage_slot(topic, io)?;
+        coverage.owners.fetch_add(1, Ordering::AcqRel);
+        let (reply, result) = oneshot::channel();
+        (coverage.io.schedule)(PtyCoverageWork::Acquire { lease: PtyTopicLease { coverage: coverage.clone() }, reply });
+        result.await.map_err(|_| "PTY coverage work stopped".to_string())?
+    }
+
+    async fn subscribe_pty_recorded(&self, topic: &str, io: PtyCoverageIo) -> Result<(), SubscribeError> {
+        let coverage = self.pty_coverage_slot(topic, io).map_err(|message| SubscribeError::Rpc(RpcFailure::local(message)))?;
+        let mut status = coverage.effect.lock().await;
+        if !coverage.is_current() { return Err(SubscribeError::Superseded); }
+        *status = PtyCoverageStatus::Unconfirmed;
+        let result = subscribe_recorded(
+            &coverage.ledger, (topic.into(), Vec::new()), coverage.epoch,
+            || self.current_connection_epoch(),
+            async { (coverage.io.rpc)("events.subscribe", topics_request(topic, &[])).await.map_err(RpcFailure::local) },
+        ).await;
+        if result.is_ok() { *status = PtyCoverageStatus::Confirmed; }
+        result
+    }
+
+    async fn unsubscribe_pty_recorded(&self, topic: &str, io: PtyCoverageIo) -> Result<(), String> {
+        let coverage = self.pty_coverage_slot(topic, io)?;
+        let mut status = coverage.effect.lock().await;
+        if !coverage.is_current() { return Err("PTY connection superseded".into()); }
+        if coverage.owners.load(Ordering::Acquire) == 0 {
+            *status = PtyCoverageStatus::Absent;
+            (coverage.io.rpc)("events.unsubscribe", topics_request(topic, &[])).await?;
+            if !coverage.is_current() { return Err("PTY connection superseded".into()); }
+        }
+        coverage.ledger.lock().unwrap_or_else(|e| e.into_inner()).remove(&(topic.into(), Vec::new()));
+        Ok(())
     }
 
     /// Subscribe **without** filing the pattern in the reconnect ledger.
@@ -1303,6 +1504,10 @@ impl DashboardState {
         pattern: &str,
         except: &[&str],
     ) -> Result<(), String> {
+        if is_pty_topic(pattern) && except.is_empty() {
+            self.await_gateway_ready().await?;
+            return self.unsubscribe_pty_recorded(pattern, self.pty_coverage_io()).await;
+        }
         let except: Vec<String> = except.iter().map(|e| (*e).to_string()).collect();
         self.rpc_call("events.unsubscribe", topics_request(pattern, &except))
             .await?;
@@ -2795,7 +3000,7 @@ mod native_lifecycle_tests {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     // `role_is_operator` was imported here until 2026-08-08 — by NOTHING, the
     // import line was its only mention. It went out with the client-side role
     // predicate on 2026-08-07 (see the `DashboardState` field comment above),
@@ -2827,8 +3032,236 @@ mod tests {
         BASE_TOPICS,
         GATEWAY_NOT_READY,
     };
-    use leptos::prelude::{GetUntracked, Update};
+    use leptos::prelude::{GetUntracked, GetValue, Update};
     use std::collections::BTreeSet;
+
+    /// Drives the production coverage work and RPC boundary without a global executor.
+    pub(crate) struct PtyHarness {
+        pub(crate) state: super::DashboardState,
+        pub(crate) io: super::PtyCoverageIo,
+        pub(crate) effects: std::sync::Arc<std::sync::Mutex<Vec<(&'static str, serde_json::Value)>>>,
+        jobs: std::sync::Arc<std::sync::Mutex<std::collections::VecDeque<super::PtyCoverageWork>>>,
+    }
+
+    impl PtyHarness {
+        pub(crate) fn new(state: super::DashboardState) -> Self {
+            Self::with_rpc(state, |_, _| async { Ok(serde_json::Value::Null) }.boxed_local())
+        }
+
+        pub(crate) fn with_rpc(
+            state: super::DashboardState,
+            rpc: impl Fn(&'static str, serde_json::Value) -> futures::future::LocalBoxFuture<'static, Result<serde_json::Value, String>> + Send + Sync + 'static,
+        ) -> Self {
+            let effects = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+            let jobs = std::sync::Arc::new(std::sync::Mutex::new(std::collections::VecDeque::new()));
+            let recorded = effects.clone();
+            let scheduled = jobs.clone();
+            let io = super::PtyCoverageIo {
+                rpc: std::sync::Arc::new(move |method, params| {
+                    recorded.lock().unwrap().push((method, params.clone()));
+                    rpc(method, params)
+                }),
+                schedule: std::sync::Arc::new(move |work| scheduled.lock().unwrap().push_back(work)),
+            };
+            Self { state, io, effects, jobs }
+        }
+
+        pub(crate) fn next(&self) -> futures::future::LocalBoxFuture<'static, Result<(), String>> {
+            self.jobs.lock().unwrap().pop_front().expect("owned coverage work").run().boxed_local()
+        }
+
+        pub(crate) fn flush(&self) -> Vec<Result<(), String>> {
+            let mut results = Vec::new();
+            while !self.jobs.lock().unwrap().is_empty() {
+                results.push(futures::executor::block_on(self.next()));
+            }
+            results
+        }
+
+        pub(crate) fn acquire(&self) -> super::PtyTopicLease {
+            let mut pending = self.state.acquire_pty_topic_with_io("pty.screen", self.io.clone()).boxed_local();
+            assert!(pending.as_mut().now_or_never().is_none());
+            assert!(self.flush().iter().all(Result::is_ok));
+            futures::executor::block_on(pending).unwrap()
+        }
+
+        pub(crate) fn methods(&self) -> Vec<&'static str> {
+            self.effects.lock().unwrap().iter().map(|(method, _)| *method).collect()
+        }
+    }
+
+    fn pty_fixture() -> (leptos::prelude::Owner, PtyHarness) {
+        use leptos::prelude::Set;
+        let owner = leptos::prelude::Owner::new();
+        let state = owner.with(super::DashboardState::new);
+        state.is_connected.set(true);
+        state.connection_epoch.set(1);
+        (owner, PtyHarness::new(state))
+    }
+
+    use futures::FutureExt;
+
+    #[test]
+    fn pty_coverage_shared_consumers_release_only_the_last_owner() {
+        let (_owner, host) = pty_fixture();
+        let first = host.acquire();
+        let second = host.acquire();
+        assert_eq!(first.epoch(), 1);
+        assert_eq!(host.methods(), ["events.subscribe"]);
+        drop(first);
+        assert!(host.flush().is_empty());
+        assert_eq!(host.methods(), ["events.subscribe"]);
+        drop(second);
+        assert_eq!(host.flush(), [Ok(())]);
+        assert_eq!(host.methods(), ["events.subscribe", "events.unsubscribe"]);
+        assert!(host.effects.lock().unwrap().iter().all(|(_, params)| params == &super::topics_request("pty.screen", &[])));
+    }
+
+    #[test]
+    fn pty_coverage_same_epoch_reacquire_before_queued_release_keeps_coverage() {
+        let (_owner, host) = pty_fixture();
+        drop(host.acquire());
+        let mut next = host.state.acquire_pty_topic_with_io("pty.screen", host.io.clone()).boxed_local();
+        assert!(next.as_mut().now_or_never().is_none());
+        assert!(host.flush().iter().all(Result::is_ok));
+        let next = futures::executor::block_on(next).unwrap();
+        assert_eq!(host.methods(), ["events.subscribe"]);
+        drop(next);
+        assert_eq!(host.flush(), [Ok(())]);
+        assert_eq!(host.methods(), ["events.subscribe", "events.unsubscribe"]);
+    }
+
+    #[test]
+    fn pty_coverage_same_epoch_reacquire_waits_for_pending_unsubscribe_then_subscribes() {
+        let (_owner, base) = pty_fixture();
+        let (tx, rx) = futures::channel::oneshot::channel();
+        let reply = std::sync::Mutex::new(Some(rx));
+        let host = PtyHarness::with_rpc(base.state, move |method, _| {
+            let reply = (method == "events.unsubscribe").then(|| reply.lock().unwrap().take()).flatten();
+            async move { if let Some(reply) = reply { reply.await.unwrap() } else { Ok(serde_json::Value::Null) } }.boxed_local()
+        });
+        drop(host.acquire());
+        let mut release = host.next();
+        assert!(release.as_mut().now_or_never().is_none());
+        let mut acquire = host.state.acquire_pty_topic_with_io("pty.screen", host.io.clone()).boxed_local();
+        assert!(acquire.as_mut().now_or_never().is_none());
+        let mut worker = host.next();
+        assert!(worker.as_mut().now_or_never().is_none());
+        assert_eq!(host.methods(), ["events.subscribe", "events.unsubscribe"]);
+        tx.send(Ok(serde_json::Value::Null)).unwrap();
+        assert_eq!(futures::executor::block_on(release), Ok(()));
+        assert_eq!(futures::executor::block_on(worker), Ok(()));
+        let lease = futures::executor::block_on(acquire).unwrap();
+        assert_eq!(host.methods(), ["events.subscribe", "events.unsubscribe", "events.subscribe"]);
+        drop(lease);
+        assert_eq!(host.flush(), [Ok(())]);
+    }
+
+    #[test]
+    fn pty_coverage_cancelled_pending_acquire_still_finishes_and_releases() {
+        let (_owner, base) = pty_fixture();
+        let (tx, rx) = futures::channel::oneshot::channel();
+        let reply = std::sync::Mutex::new(Some(rx));
+        let host = PtyHarness::with_rpc(base.state, move |method, _| {
+            let reply = (method == "events.subscribe").then(|| reply.lock().unwrap().take()).flatten();
+            async move { if let Some(reply) = reply { reply.await.unwrap() } else { Ok(serde_json::Value::Null) } }.boxed_local()
+        });
+        let mut acquire = host.state.acquire_pty_topic_with_io("pty.screen", host.io.clone()).boxed_local();
+        assert!(acquire.as_mut().now_or_never().is_none());
+        let mut worker = host.next();
+        assert!(worker.as_mut().now_or_never().is_none());
+        drop(acquire);
+        tx.send(Ok(serde_json::Value::Null)).unwrap();
+        assert_eq!(futures::executor::block_on(worker), Ok(()));
+        assert_eq!(host.flush(), [Ok(())]);
+        assert_eq!(host.methods(), ["events.subscribe", "events.unsubscribe"]);
+    }
+
+    #[test]
+    fn pty_coverage_old_epoch_drop_cannot_release_replacement() {
+        use leptos::prelude::Set;
+        let (_owner, host) = pty_fixture();
+        let old = host.acquire();
+        host.state.connection_epoch.set(2);
+        let current = host.acquire();
+        assert_eq!(current.epoch(), 2);
+        drop(old);
+        assert_eq!(host.flush(), [Ok(())]);
+        assert_eq!(host.methods(), ["events.subscribe", "events.subscribe"]);
+        drop(current);
+        assert_eq!(host.flush(), [Ok(())]);
+        assert_eq!(host.methods(), ["events.subscribe", "events.subscribe", "events.unsubscribe"]);
+    }
+
+    #[test]
+    fn pty_coverage_stale_subscribe_reply_never_publishes_lease_or_unsubscribes_new_epoch() {
+        use leptos::prelude::Set;
+        let (_owner, base) = pty_fixture();
+        let (tx, rx) = futures::channel::oneshot::channel();
+        let reply = std::sync::Mutex::new(Some(rx));
+        let host = PtyHarness::with_rpc(base.state, move |_, _| {
+            let reply = reply.lock().unwrap().take();
+            async move { if let Some(reply) = reply { reply.await.unwrap() } else { Ok(serde_json::Value::Null) } }.boxed_local()
+        });
+        let mut old = host.state.acquire_pty_topic_with_io("pty.screen", host.io.clone()).boxed_local();
+        assert!(old.as_mut().now_or_never().is_none());
+        let mut worker = host.next();
+        assert!(worker.as_mut().now_or_never().is_none());
+        host.state.connection_epoch.set(2);
+        let current = host.acquire();
+        tx.send(Ok(serde_json::Value::Null)).unwrap();
+        assert_eq!(futures::executor::block_on(worker), Ok(()));
+        assert!(futures::executor::block_on(old).is_err());
+        assert_eq!(host.flush(), [Ok(())]);
+        assert_eq!(host.methods(), ["events.subscribe", "events.subscribe"]);
+        drop(current);
+        assert_eq!(host.flush(), [Ok(())]);
+    }
+
+    #[test]
+    fn pty_coverage_unsubscribe_failure_is_reported_and_new_owner_requires_confirmation() {
+        let (_owner, base) = pty_fixture();
+        let fail = std::sync::atomic::AtomicBool::new(true);
+        let host = PtyHarness::with_rpc(base.state, move |method, _| {
+            let fail = method == "events.unsubscribe" && fail.swap(false, std::sync::atomic::Ordering::SeqCst);
+            async move { if fail { Err("test release failure".into()) } else { Ok(serde_json::Value::Null) } }.boxed_local()
+        });
+        drop(host.acquire());
+        assert_eq!(host.flush(), [Err("test release failure".into())]);
+        let next = host.acquire();
+        assert_eq!(host.methods(), ["events.subscribe", "events.unsubscribe", "events.subscribe"]);
+        drop(next);
+        assert_eq!(host.flush(), [Ok(())]);
+    }
+
+    #[test]
+    fn pty_coverage_recorded_owner_and_lease_release_do_not_erase_each_other() {
+        let (_owner, host) = pty_fixture();
+        futures::executor::block_on(host.state.subscribe_pty_recorded("pty.screen", host.io.clone())).unwrap();
+        let lease = host.acquire();
+        drop(lease);
+        assert_eq!(host.flush(), [Ok(())]);
+        assert_eq!(host.methods(), ["events.subscribe"]);
+        let ledger = host.state.subscribed_topics.get_value();
+        assert!(ledger.lock().unwrap().contains(&("pty.screen".into(), Vec::new())));
+        let lease = host.acquire();
+        futures::executor::block_on(host.state.unsubscribe_pty_recorded("pty.screen", host.io.clone())).unwrap();
+        assert_eq!(host.methods(), ["events.subscribe"]);
+        assert!(!ledger.lock().unwrap().contains(&("pty.screen".into(), Vec::new())));
+        drop(lease);
+        assert_eq!(host.flush(), [Ok(())]);
+        assert_eq!(host.methods(), ["events.subscribe", "events.unsubscribe"]);
+    }
+
+    #[test]
+    fn pty_coverage_cleanup_after_connection_owner_disposal_sends_nothing() {
+        let (owner, host) = pty_fixture();
+        let lease = host.acquire();
+        owner.cleanup();
+        drop(lease);
+        assert_eq!(host.flush(), [Ok(())]);
+        assert_eq!(host.methods(), ["events.subscribe"]);
+    }
 
     #[test]
     fn telecom_poll_needs_initial_success_and_stops_on_role_refusal() {

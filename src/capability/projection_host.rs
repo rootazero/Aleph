@@ -38,6 +38,7 @@ use crate::capability::diagnostic_control::{
 };
 use crate::capability::facade::{CapabilityChange, Cursor, Scope};
 use crate::capability::ownership::{OwnerGeneration, OwnershipChange, OwnershipTree};
+use crate::capability::special::{CapabilityHandlerRegistry, SpecialPublication};
 use crate::capability::zahir_facade::{FacadeEntriesSnapshot, ZahirFacade};
 use crate::capability::{CapabilitySlot, MissingSemantics, SlotStatus};
 use crate::sync_primitives::Arc;
@@ -51,6 +52,30 @@ use std::time::Duration;
 use tokio::sync::{broadcast, Notify};
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
+
+#[cfg(test)]
+static REGISTRATION_ROLLBACK_HOOK: std::sync::OnceLock<Mutex<Option<Arc<dyn Fn() + Send + Sync>>>> =
+    std::sync::OnceLock::new();
+
+#[cfg(test)]
+fn run_registration_rollback_hook() {
+    let hook = REGISTRATION_ROLLBACK_HOOK
+        .get_or_init(|| Mutex::new(None))
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .take();
+    if let Some(hook) = hook {
+        hook();
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn set_registration_rollback_hook(hook: Arc<dyn Fn() + Send + Sync>) {
+    *REGISTRATION_ROLLBACK_HOOK
+        .get_or_init(|| Mutex::new(None))
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(hook);
+}
 
 /// Per-consumer pending-event capacity (Ruling14). The default consumer
 /// applies snapshots into run-loop-readable state and effectively never
@@ -110,6 +135,9 @@ pub struct HostSnapshot {
     pub registry_closed: bool,
     /// Owner generation for every id in `entries` (identical membership).
     pub owner_generations: HashMap<CapabilityId, OwnerGeneration>,
+    /// Special capability descriptors projected by the same facade cut. These
+    /// are callable capabilities, not ordinary Resource descriptors.
+    pub specials: Vec<crate::capability::descriptor::CapabilityDescriptor>,
 }
 
 #[cfg(test)]
@@ -124,6 +152,7 @@ impl HostSnapshot {
             registry_cursor: f.registry_cursor,
             registry_closed: f.registry_closed,
             owner_generations: f.owner_generations,
+            specials: f.specials,
         }
     }
 }
@@ -151,6 +180,10 @@ impl std::fmt::Debug for HostSnapshot {
             .field("registry_cursor", &self.registry_cursor)
             .field("registry_closed", &self.registry_closed)
             .field("owner_generations", &self.owner_generations)
+            .field(
+                "special_ids",
+                &self.specials.iter().map(|d| &d.id).collect::<Vec<_>>(),
+            )
             .finish()
     }
 }
@@ -479,6 +512,8 @@ impl ApplierTestGate {
 struct HostInner {
     facade: Arc<ZahirFacade>,
     registry: ToolHandlerRegistry,
+    /// The sole special-capability record source mounted with this host.
+    specials: CapabilityHandlerRegistry,
     /// The owner authority this host is mounted on. Also exposed (by Arc
     /// identity) so diagnostic control can refuse a second authority.
     tree: Arc<OwnershipTree>,
@@ -565,10 +600,84 @@ impl ProjectionHost {
         memory: Arc<crate::memory::runtime::MemoryRuntime>,
         diagnostics_enabled: bool,
     ) -> Arc<Self> {
+        let facade = ZahirFacade::new_with_memory(registry.clone(), tree.clone(), memory);
         Self::mount_sources(
             registry,
             tree,
-            Some(memory),
+            facade,
+            CapabilityHandlerRegistry::new(),
+            DEFAULT_PENDING_CAPACITY,
+            diagnostics_enabled,
+        )
+    }
+
+    /// Mount the startup Policy on the same canonical Tool and Memory sources.
+    #[must_use]
+    pub fn mount_with_policy(
+        registry: ToolHandlerRegistry,
+        tree: Arc<OwnershipTree>,
+        memory: Arc<crate::memory::runtime::MemoryRuntime>,
+        policy: Arc<crate::capability::policy::PolicyEngine>,
+        diagnostics_enabled: bool,
+    ) -> Arc<Self> {
+        let facade =
+            ZahirFacade::new_with_memory_and_policy(registry.clone(), tree.clone(), memory, policy);
+        Self::mount_sources(
+            registry,
+            tree,
+            facade,
+            CapabilityHandlerRegistry::new(),
+            DEFAULT_PENDING_CAPACITY,
+            diagnostics_enabled,
+        )
+    }
+
+    /// Mount the production runtime with one explicit special registry and the
+    /// same policy/tree authorities used by the facade.
+    #[must_use]
+    pub fn mount_with_runtime(
+        registry: ToolHandlerRegistry,
+        tree: Arc<OwnershipTree>,
+        memory: Arc<crate::memory::runtime::MemoryRuntime>,
+        specials: CapabilityHandlerRegistry,
+        policy: Arc<crate::capability::policy::PolicyEngine>,
+        diagnostics_enabled: bool,
+    ) -> Arc<Self> {
+        Self::mount_with_runtime_and_events(
+            registry,
+            tree,
+            memory,
+            specials,
+            policy,
+            Arc::new(crate::capability::events::InMemoryEventStream::default()),
+            diagnostics_enabled,
+        )
+    }
+
+    /// Mount the actual startup event source, shared by facade subscriptions and audit.
+    #[must_use]
+    pub fn mount_with_runtime_and_events(
+        registry: ToolHandlerRegistry,
+        tree: Arc<OwnershipTree>,
+        memory: Arc<crate::memory::runtime::MemoryRuntime>,
+        specials: CapabilityHandlerRegistry,
+        policy: Arc<crate::capability::policy::PolicyEngine>,
+        events: Arc<crate::capability::events::InMemoryEventStream>,
+        diagnostics_enabled: bool,
+    ) -> Arc<Self> {
+        let facade = ZahirFacade::new_with_memory_and_policy_and_specials_and_events(
+            registry.clone(),
+            tree.clone(),
+            memory,
+            policy,
+            specials.clone(),
+            events,
+        );
+        Self::mount_sources(
+            registry,
+            tree,
+            facade,
+            specials,
             DEFAULT_PENDING_CAPACITY,
             diagnostics_enabled,
         )
@@ -580,24 +689,30 @@ impl ProjectionHost {
         capacity: usize,
         diagnostics_enabled: bool,
     ) -> Arc<Self> {
-        Self::mount_sources(registry, tree, None, capacity, diagnostics_enabled)
+        let facade = ZahirFacade::new(registry.clone(), tree.clone());
+        Self::mount_sources(
+            registry,
+            tree,
+            facade,
+            CapabilityHandlerRegistry::new(),
+            capacity,
+            diagnostics_enabled,
+        )
     }
 
     fn mount_sources(
         registry: ToolHandlerRegistry,
         tree: Arc<OwnershipTree>,
-        memory: Option<Arc<crate::memory::runtime::MemoryRuntime>>,
+        facade: Arc<ZahirFacade>,
+        specials: CapabilityHandlerRegistry,
         capacity: usize,
         diagnostics_enabled: bool,
     ) -> Arc<Self> {
-        let facade = match memory {
-            Some(memory) => ZahirFacade::new_with_memory(registry.clone(), tree.clone(), memory),
-            None => ZahirFacade::new(registry.clone(), tree.clone()),
-        };
         // Subscribe to BOTH live sources BEFORE reading the initial snapshot
         // (subscribe-before-snapshot).
         let registry_rx = registry.subscribe_publications();
         let ownership_rx = tree.subscribe_changes();
+        let special_rx = specials.subscribe();
 
         let default_scope = Scope::default();
         let initial = HostSnapshot::from_facade(facade.snapshot_entries_in_scope(&default_scope));
@@ -614,6 +729,7 @@ impl ProjectionHost {
         let inner = Arc::new(HostInner {
             facade,
             registry: registry.clone(),
+            specials,
             tree,
             publish: Mutex::new(()),
             consumers: Mutex::new(ConsumerMap {
@@ -663,6 +779,7 @@ impl ProjectionHost {
             inner.cancel.clone(),
             registry_rx,
             ownership_rx,
+            special_rx,
         ));
         let applier = tokio::spawn(applier_worker(
             Arc::clone(&default_consumer),
@@ -751,8 +868,78 @@ impl ProjectionHost {
     /// The existing facade mounted with this host. This is a handle-only
     /// bridge; the host does not expose any callable registry or owner state.
     #[must_use]
-    pub(crate) fn facade(&self) -> Arc<ZahirFacade> {
+    pub fn facade(&self) -> Arc<ZahirFacade> {
         Arc::clone(&self.inner.facade)
+    }
+
+    /// The mounted facade's one bounded observation source (not metadata changes).
+    pub fn event_stream(&self) -> Arc<crate::capability::events::InMemoryEventStream> {
+        self.inner.facade.event_stream()
+    }
+
+    pub fn audit_collector(&self) -> crate::capability::audit::AuditCollector {
+        crate::capability::audit::AuditCollector::new(self.event_stream())
+    }
+
+    /// The single special-capability registry mounted with this host.
+    #[must_use]
+    pub fn specials(&self) -> CapabilityHandlerRegistry {
+        self.inner.specials.clone()
+    }
+
+    /// Register the host-owned canonical adapters. Domain owners are not
+    /// mounted in Task3, so their handlers remain typed `Unavailable`.
+    pub fn register_special_tool_adapters(
+        &self,
+        tools: &ToolHandlerRegistry,
+    ) -> Result<Vec<crate::capability::descriptor::CapabilityId>, String> {
+        self.register_special_tool_adapters_with_terminal_source(tools, None)
+    }
+
+    pub fn register_special_tool_adapters_with_terminal_source(
+        &self,
+        tools: &ToolHandlerRegistry,
+        terminal_source: Option<&Arc<crate::capability::tool_adapters::TerminalCapabilitySource>>,
+    ) -> Result<Vec<crate::capability::descriptor::CapabilityId>, String> {
+        if !self.inner.facade.is_backed_by_registry(tools) {
+            return Err("special adapters must use the mounted canonical Tool registry".into());
+        }
+        self.inner
+            .specials
+            .bind_domain_facade(&self.inner.facade)
+            .map_err(|error| error.to_string())?;
+        let bundle =
+            crate::capability::tool_adapters::register_canonical_adapters_with_tools_bundle(
+                &self.inner.specials,
+                Some(tools),
+                terminal_source,
+            )
+            .map_err(|error| error.to_string())?;
+        let ids = bundle.ids.clone();
+        let registrations = ids.iter().cloned().map(|id| {
+            (
+                id,
+                crate::capability::ownership::OwnerRef::Runtime,
+                crate::capability::ownership::LifetimeScope::Runtime,
+                crate::capability::ownership::VisibilityScope::default(),
+            )
+        });
+        if let Err(error) = self.inner.tree.register_if_absent_batch(registrations) {
+            #[cfg(test)]
+            run_registration_rollback_hook();
+            bundle.dispose();
+            return Err(format!("ownership registration failed: {error:?}"));
+        }
+        // Registration happens after mount in the production startup seam. Queue
+        // a fresh snapshot so the real applier, not publisher state, observes it.
+        let _publish = self
+            .inner
+            .publish
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let snapshot = build_snapshot(&self.inner, &Scope::default());
+        self.inner.default_consumer.enqueue_snapshot(snapshot);
+        Ok(ids)
     }
 
     /// `true` once the host has been requested to close or has reached its
@@ -1242,6 +1429,10 @@ fn request_local_close(inner: &Arc<HostInner>) {
         inner.default_consumer.mark_closed();
     }
     drop(_publish);
+    // Specials are host-owned records, unlike the shared Tool registry; close
+    // them at this lifecycle boundary so captured entries fail closed after the
+    // host is gone.
+    let _ = inner.specials.close();
     inner.cancel.cancel();
 }
 
@@ -1331,6 +1522,7 @@ async fn source_worker(
     cancel: CancellationToken,
     mut registry_rx: broadcast::Receiver<RegistryPublication>,
     mut ownership_rx: broadcast::Receiver<OwnershipChange>,
+    mut special_rx: broadcast::Receiver<SpecialPublication>,
 ) {
     let Some(initial_inner) = inner.upgrade() else {
         return;
@@ -1399,6 +1591,23 @@ async fn source_worker(
                     Err(broadcast::error::RecvError::Lagged(_)) => {
                         if let Some(inner) = inner.upgrade() {
                             inner.lag_count.fetch_add(1, Ordering::Relaxed);
+                            invalidate_all(&inner);
+                        } else {
+                            return;
+                        }
+                    }
+                    Err(broadcast::error::RecvError::Closed) => {
+                        if let Some(inner) = inner.upgrade() {
+                            deliver_close(&inner);
+                        }
+                        return;
+                    }
+                }
+            }
+            res = special_rx.recv() => {
+                match res {
+                    Ok(_) | Err(broadcast::error::RecvError::Lagged(_)) => {
+                        if let Some(inner) = inner.upgrade() {
                             invalidate_all(&inner);
                         } else {
                             return;
@@ -1662,9 +1871,15 @@ mod tests {
     use super::*;
     use crate::approval::{with_call_identity, CallIdentity};
     use crate::capability::backend::TOOL_NAMESPACE;
-    use crate::capability::descriptor::{CapabilityId, CapabilityRevision};
+    use crate::capability::descriptor::{
+        CapabilityDescriptor, CapabilityId, CapabilityKind, CapabilityRevision,
+    };
     use crate::capability::facade::{Reference, ResolveError, Zahir};
-    use crate::capability::ownership::{LifetimeScope, VisibilityScope};
+    use crate::capability::ownership::{LifetimeScope, OwnerRef, VisibilityScope};
+    use crate::capability::special::CapabilityHandlerRegistry;
+    use crate::capability::tool_adapters::{
+        register_canonical_adapters, register_canonical_adapters_with_tools,
+    };
     use crate::session::events::{ToolOutput, TurnId};
     use crate::tools::adapters::McpRegistryTool;
     use crate::tools::descriptor::{
@@ -1679,6 +1894,161 @@ mod tests {
     use async_trait::async_trait;
     use serde_json::Value;
     use std::sync::atomic::AtomicUsize;
+
+    fn special_descriptors(facade: &ZahirFacade) -> Vec<CapabilityDescriptor> {
+        let mut descriptors = facade
+            .describe(Scope::default())
+            .capabilities
+            .into_iter()
+            .filter(|descriptor| {
+                matches!(
+                    descriptor.kind,
+                    CapabilityKind::Terminal | CapabilityKind::Ui
+                )
+            })
+            .collect::<Vec<_>>();
+        descriptors.sort_by(|left, right| {
+            (left.id.namespace.as_str(), left.id.name.as_str())
+                .cmp(&(right.id.namespace.as_str(), right.id.name.as_str()))
+        });
+        descriptors
+    }
+
+    fn sort_specials(mut descriptors: Vec<CapabilityDescriptor>) -> Vec<CapabilityDescriptor> {
+        descriptors.sort_by(|left, right| {
+            (left.id.namespace.as_str(), left.id.name.as_str())
+                .cmp(&(right.id.namespace.as_str(), right.id.name.as_str()))
+        });
+        descriptors
+    }
+
+    #[tokio::test]
+    async fn special_withdrawal_rebuilds_existing_host_projection() {
+        let tools = ToolHandlerRegistry::new();
+        let specials = CapabilityHandlerRegistry::new();
+        let ids = register_canonical_adapters(&specials).expect("canonical special adapters");
+        let tree = Arc::new(OwnershipTree::new());
+        for id in &ids {
+            tree.register(
+                id.clone(),
+                OwnerRef::Runtime,
+                LifetimeScope::Runtime,
+                VisibilityScope::default(),
+            )
+            .expect("special owner binding");
+        }
+        let facade =
+            ZahirFacade::new_with_specials(tools.clone(), Arc::clone(&tree), specials.clone());
+        let host = ProjectionHost::mount_sources(
+            tools,
+            tree,
+            facade,
+            specials.clone(),
+            DEFAULT_PENDING_CAPACITY,
+            false,
+        );
+        let mut consumer = host.attach(Scope::default());
+        let initial = match recv_bounded(&mut consumer).await {
+            ProjectionEvent::Snapshot(snapshot) => snapshot,
+            other => panic!("expected initial snapshot, got {other:?}"),
+        };
+        assert!(initial
+            .specials
+            .iter()
+            .any(|descriptor| descriptor.id.name == "terminal_capability"));
+        let initial_cursor = initial.registry_cursor;
+        let facade = host.facade();
+        assert_eq!(
+            sort_specials(initial.specials.clone()),
+            special_descriptors(&facade),
+            "HostSnapshot specials must equal the complete facade descriptor cut"
+        );
+
+        let terminal_id = CapabilityId {
+            namespace: "aleph/tools".into(),
+            name: "terminal_capability".into(),
+        };
+        specials.unregister(&terminal_id).expect("withdraw special");
+        assert!(matches!(
+            recv_bounded(&mut consumer).await,
+            ProjectionEvent::Invalidated
+        ));
+        let replacement = match recv_bounded(&mut consumer).await {
+            ProjectionEvent::Snapshot(snapshot) => snapshot,
+            other => panic!("expected replacement snapshot, got {other:?}"),
+        };
+        assert!(!replacement
+            .specials
+            .iter()
+            .any(|descriptor| descriptor.id == terminal_id));
+        assert!(replacement.registry_cursor > initial_cursor);
+        assert_eq!(
+            sort_specials(replacement.specials.clone()),
+            special_descriptors(&facade),
+            "replacement HostSnapshot must equal the complete facade descriptor cut"
+        );
+        assert!(!facade
+            .describe(Scope::default())
+            .capabilities
+            .iter()
+            .any(|descriptor| descriptor.id == terminal_id));
+        host.close_and_await().await;
+    }
+
+    #[tokio::test]
+    async fn failed_host_registration_preserves_replacement_bundle() {
+        let tools = ToolHandlerRegistry::new();
+        let specials = CapabilityHandlerRegistry::new();
+        let tree = Arc::new(OwnershipTree::new());
+        let terminal_id = CapabilityId {
+            namespace: "aleph/tools".into(),
+            name: "terminal_capability".into(),
+        };
+        let ui_id = CapabilityId {
+            namespace: "aleph/tools".into(),
+            name: "ui_capability".into(),
+        };
+        tree.exhaust_generation_for_test();
+        let facade =
+            ZahirFacade::new_with_specials(tools.clone(), Arc::clone(&tree), specials.clone());
+        let host = ProjectionHost::mount_sources(
+            tools.clone(),
+            Arc::clone(&tree),
+            facade,
+            specials.clone(),
+            DEFAULT_PENDING_CAPACITY,
+            false,
+        );
+
+        let replacement_specials = specials.clone();
+        let replacement_tools = tools.clone();
+        let replacement_terminal_id = terminal_id.clone();
+        let replacement_ui_id = ui_id.clone();
+        set_registration_rollback_hook(Arc::new(move || {
+            let _ = replacement_specials.unregister(&replacement_terminal_id);
+            let _ = replacement_specials.unregister(&replacement_ui_id);
+            let _ = replacement_tools.unregister("terminal_capability");
+            let _ = replacement_tools.unregister("ui_capability");
+            register_canonical_adapters_with_tools(&replacement_specials, Some(&replacement_tools))
+                .expect("replacement publication");
+        }));
+
+        let error = host
+            .register_special_tool_adapters(&tools)
+            .expect_err("incumbent batch must fail after publication");
+        assert!(error.contains("ownership registration failed"));
+        assert!(specials.capture(&terminal_id).is_some());
+        assert!(specials.capture(&ui_id).is_some());
+        assert!(tools.descriptor("terminal_capability").is_some());
+        assert!(tools.descriptor("ui_capability").is_some());
+        assert!(tree
+            .generation(&terminal_id, &VisibilityScope::default())
+            .is_none());
+        assert!(tree
+            .generation(&ui_id, &VisibilityScope::default())
+            .is_none());
+        host.close_and_await().await;
+    }
 
     struct FakeHandler {
         name: String,
@@ -3787,9 +4157,7 @@ mod tests {
             "recorded tool-id set MUST exactly equal the actual applied              replacement payload's entries (a set equality, not `any`); an              implementation that recorded the initial set or a stale set              would fail this"
         );
         assert!(
-            recorded_ids
-                .iter()
-                .all(|n| n != "alpha"),
+            recorded_ids.iter().all(|n| n != "alpha"),
             "the replacement set MUST NOT contain the initial tool;              proving the receipt came from the post-mutation payload"
         );
         assert!(

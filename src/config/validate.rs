@@ -537,6 +537,10 @@ impl Config {
 
     /// Refuse `exec_tier = "plan"` as an install-wide default.
     fn validate_policies(&self) -> Result<()> {
+        crate::config::types::policies::capability_constraints::compile_constraints(
+            &self.policies.capability_constraints,
+        )
+        .map_err(AlephError::invalid_config)?;
         // `plan` deserializes here — it is a real `ExecTier`, just not an
         // INSTALL one: it is a per-conversation posture that ENDS when a human
         // approves a plan, and ending it means falling back to this very

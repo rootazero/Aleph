@@ -179,6 +179,9 @@ pub struct ConfigPatcher {
     vault: Option<Arc<crate::gateway::security::SharedTokenManager>>,
     /// Existing Gateway bus; wiring this context does not initialize Terminal.
     event_bus: Option<Arc<GatewayEventBus>>,
+    /// Existing terminal source; wiring this context does not initialize it.
+    terminal_source:
+        Option<Arc<crate::capability::tool_adapters::TerminalCapabilitySource>>,
 }
 
 impl ConfigPatcher {
@@ -191,6 +194,7 @@ impl ConfigPatcher {
             last_known_mtime: Mutex::new(None),
             vault: None,
             event_bus: None,
+            terminal_source: None,
         }
     }
 
@@ -208,6 +212,16 @@ impl ConfigPatcher {
     #[must_use]
     pub fn with_event_bus(mut self, event_bus: Arc<GatewayEventBus>) -> Self {
         self.event_bus = Some(event_bus);
+        self
+    }
+
+    /// Supply the existing terminal capability source for live enable/disable.
+    #[must_use]
+    pub fn with_terminal_capability_source(
+        mut self,
+        source: Arc<crate::capability::tool_adapters::TerminalCapabilitySource>,
+    ) -> Self {
+        self.terminal_source = Some(source);
         self
     }
 
@@ -386,6 +400,7 @@ impl ConfigPatcher {
                 &cfg,
                 &[top_section.as_str()],
                 self.event_bus.as_ref(),
+                self.terminal_source.as_ref(),
             )
             .await
         };
@@ -686,6 +701,7 @@ impl ConfigPatcher {
                 &cfg,
                 &live_targets,
                 self.event_bus.as_ref(),
+                self.terminal_source.as_ref(),
             )
             .await;
             let complete = live_targets

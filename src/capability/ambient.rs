@@ -1,7 +1,8 @@
 //! Immutable ambient authority snapshots and their callable handlers.
 
 use crate::capability::backend::{
-    CapabilityDispatchError, CapabilityHandler, CapabilityHandlerRegistry, CapabilityRegistryError,
+    LegacyCapabilityDispatchError, LegacyCapabilityHandler, LegacyCapabilityHandlerRegistry,
+    LegacyCapabilityRegistryError,
 };
 use crate::capability::descriptor::{
     CapabilityDescriptor, CapabilityFacet, CapabilityFacets, CapabilityId, CapabilityKind,
@@ -30,7 +31,7 @@ pub enum AmbientRegistrationError {
     #[error(transparent)]
     Ambient(#[from] AmbientError),
     #[error(transparent)]
-    Registry(#[from] CapabilityRegistryError),
+    Registry(#[from] LegacyCapabilityRegistryError),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -181,17 +182,17 @@ impl AmbientHandler {
     }
 }
 
-impl CapabilityHandler for AmbientHandler {
-    fn invoke(&self, input: Value) -> Result<Value, CapabilityDispatchError> {
+impl LegacyCapabilityHandler for AmbientHandler {
+    fn invoke(&self, input: Value) -> Result<Value, LegacyCapabilityDispatchError> {
         if !input.is_object() {
-            return Err(CapabilityDispatchError::InvalidInput(
+            return Err(LegacyCapabilityDispatchError::InvalidInput(
                 "ambient handlers accept an object input".into(),
             ));
         }
         self.capability
             .snapshot()
             .map(|snapshot| snapshot.to_json())
-            .map_err(|error| CapabilityDispatchError::Execution(error.to_string()))
+            .map_err(|error| LegacyCapabilityDispatchError::Execution(error.to_string()))
     }
 }
 
@@ -220,8 +221,8 @@ fn descriptor(name: &str) -> CapabilityDescriptor {
 }
 
 pub fn register_process_handler(
-    registry: &CapabilityHandlerRegistry,
-) -> Result<CapabilityId, CapabilityRegistryError> {
+    registry: &LegacyCapabilityHandlerRegistry,
+) -> Result<CapabilityId, LegacyCapabilityRegistryError> {
     registry.register(
         descriptor("process.id"),
         Arc::new(AmbientHandler::new(Arc::new(ProcessId::current()))),
@@ -229,7 +230,7 @@ pub fn register_process_handler(
 }
 
 pub fn register_user_handler(
-    registry: &CapabilityHandlerRegistry,
+    registry: &LegacyCapabilityHandlerRegistry,
 ) -> Result<CapabilityId, AmbientRegistrationError> {
     let capability = UserId::current()?;
     Ok(registry.register(
@@ -239,7 +240,7 @@ pub fn register_user_handler(
 }
 
 pub fn register_environment_handler(
-    registry: &CapabilityHandlerRegistry,
+    registry: &LegacyCapabilityHandlerRegistry,
     name: impl Into<String>,
 ) -> Result<CapabilityId, AmbientRegistrationError> {
     let capability = EnvironmentVariable::new(name)?;
@@ -252,7 +253,7 @@ pub fn register_environment_handler(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::capability::backend::{CapabilityBackend, CapabilityHandlerRegistry};
+    use crate::capability::backend::{CapabilityBackend, LegacyCapabilityHandlerRegistry};
     use serde_json::json;
 
     #[test]
@@ -310,7 +311,7 @@ mod tests {
 
     #[test]
     fn ambient_process_handler_is_discoverable_and_dispatchable() {
-        let registry = CapabilityHandlerRegistry::new();
+        let registry = LegacyCapabilityHandlerRegistry::new();
         let id = register_process_handler(&registry).expect("register process capability");
 
         let descriptor = registry.lookup(&id).expect("descriptor is discoverable");
@@ -321,7 +322,7 @@ mod tests {
 
     #[test]
     fn ambient_registry_fails_closed_for_an_unknown_id() {
-        let registry = CapabilityHandlerRegistry::new();
+        let registry = LegacyCapabilityHandlerRegistry::new();
         let missing = CapabilityId {
             namespace: AMBIENT_NAMESPACE.into(),
             name: "missing".into(),
@@ -329,18 +330,18 @@ mod tests {
 
         assert!(matches!(
             registry.dispatch(&missing, json!({})),
-            Err(CapabilityDispatchError::NotFound(id)) if id == missing
+            Err(LegacyCapabilityDispatchError::NotFound(id)) if id == missing
         ));
     }
 
     #[test]
     fn ambient_handler_rejects_non_object_input() {
-        let registry = CapabilityHandlerRegistry::new();
+        let registry = LegacyCapabilityHandlerRegistry::new();
         let id = register_process_handler(&registry).expect("register process capability");
 
         assert!(matches!(
             registry.dispatch(&id, json!(null)),
-            Err(CapabilityDispatchError::InvalidInput(_))
+            Err(LegacyCapabilityDispatchError::InvalidInput(_))
         ));
     }
 }

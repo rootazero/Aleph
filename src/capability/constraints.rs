@@ -278,6 +278,18 @@ impl ConstraintSet {
             .iter()
             .try_for_each(|constraint| constraint.evaluate(context))
     }
+
+    /// Existing operations and release still obey time and condition gates.
+    /// Only allocation consumes a new resource slot.
+    pub fn evaluate_non_allocating(
+        &self,
+        context: &ConstraintContext,
+    ) -> Result<(), ConstraintViolation> {
+        self.constraints
+            .iter()
+            .filter(|constraint| !matches!(constraint, Constraint::Resource(_)))
+            .try_for_each(|constraint| constraint.evaluate(context))
+    }
 }
 
 impl From<Vec<Constraint>> for ConstraintSet {

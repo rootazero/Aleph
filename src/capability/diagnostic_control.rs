@@ -214,7 +214,7 @@ impl DiagnosticControl {
             namespace: crate::capability::backend::TOOL_NAMESPACE.to_string(),
             name: tool_name.to_string(),
         };
-        let revoked = match self.tree.revoke_bound(&id) {
+        let revoked = match self.host.facade().revoke_observed_bound(&id) {
             BoundRevoke::Revoked => true,
             BoundRevoke::AlreadyRevoked => false,
             BoundRevoke::NotBound => {
@@ -255,9 +255,9 @@ impl DiagnosticControl {
         // `dispose` returns true only when a binding was released. The
         // tree ALSO inserts the scope into its `disposed` set on every call,
         // so we ignore the bool and always succeed when the host is open.
-        let _ = self
-            .tree
-            .dispose(crate::capability::ownership::LifetimeScope::Runtime);
+        self.host
+            .facade()
+            .dispose_observed_scope(crate::capability::ownership::LifetimeScope::Runtime);
         // The dispose and the completion-boundary check are not performed
         // under one lock, so a close that landed in the gap would be
         // reported as a successful dispose on a dead surface. Re-check

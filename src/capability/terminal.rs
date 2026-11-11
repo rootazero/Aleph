@@ -1,7 +1,8 @@
 //! Terminal I/O capability with explicit close and fail-closed handlers.
 
 use crate::capability::backend::{
-    CapabilityDispatchError, CapabilityHandler, CapabilityHandlerRegistry, CapabilityRegistryError,
+    LegacyCapabilityDispatchError, LegacyCapabilityHandler, LegacyCapabilityHandlerRegistry,
+    LegacyCapabilityRegistryError,
 };
 use crate::capability::descriptor::{
     CapabilityDescriptor, CapabilityFacet, CapabilityFacets, CapabilityId, CapabilityKind,
@@ -124,16 +125,16 @@ impl TerminalHandler {
     }
 }
 
-impl CapabilityHandler for TerminalHandler {
-    fn invoke(&self, input: Value) -> Result<Value, CapabilityDispatchError> {
+impl LegacyCapabilityHandler for TerminalHandler {
+    fn invoke(&self, input: Value) -> Result<Value, LegacyCapabilityDispatchError> {
         let input = input.as_object().ok_or_else(|| {
-            CapabilityDispatchError::InvalidInput("terminal input must be an object".into())
+            LegacyCapabilityDispatchError::InvalidInput("terminal input must be an object".into())
         })?;
         let operation = input
             .get("operation")
             .and_then(Value::as_str)
             .ok_or_else(|| {
-                CapabilityDispatchError::InvalidInput("terminal operation is required".into())
+                LegacyCapabilityDispatchError::InvalidInput("terminal operation is required".into())
             })?;
         let result = match operation {
             "read_stdin" => {
@@ -142,39 +143,43 @@ impl CapabilityHandler for TerminalHandler {
                     .and_then(Value::as_u64)
                     .and_then(|value| usize::try_from(value).ok())
                     .ok_or_else(|| {
-                        CapabilityDispatchError::InvalidInput(
+                        LegacyCapabilityDispatchError::InvalidInput(
                             "max_bytes must be a positive integer".into(),
                         )
                     })?;
                 if max_bytes == 0 || max_bytes > MAX_READ_BYTES {
-                    return Err(CapabilityDispatchError::InvalidInput(format!(
+                    return Err(LegacyCapabilityDispatchError::InvalidInput(format!(
                         "max_bytes must be in the range 1..={MAX_READ_BYTES}"
                     )));
                 }
                 let data = self
                     .capability
                     .read_stdin(max_bytes)
-                    .map_err(|error| CapabilityDispatchError::Execution(error.to_string()))?;
+                    .map_err(|error| LegacyCapabilityDispatchError::Execution(error.to_string()))?;
                 let bytes_read = data.len();
                 json!({"data": data, "bytes_read": bytes_read})
             }
             "write_stdout" | "write_stderr" => {
                 let data = input.get("data").and_then(Value::as_str).ok_or_else(|| {
-                    CapabilityDispatchError::InvalidInput("data is required".into())
+                    LegacyCapabilityDispatchError::InvalidInput("data is required".into())
                 })?;
                 let bytes = if operation == "write_stdout" {
                     self.capability
                         .write_stdout(data.as_bytes())
-                        .map_err(|error| CapabilityDispatchError::Execution(error.to_string()))?
+                        .map_err(|error| {
+                            LegacyCapabilityDispatchError::Execution(error.to_string())
+                        })?
                 } else {
                     self.capability
                         .write_stderr(data.as_bytes())
-                        .map_err(|error| CapabilityDispatchError::Execution(error.to_string()))?
+                        .map_err(|error| {
+                            LegacyCapabilityDispatchError::Execution(error.to_string())
+                        })?
                 };
                 json!({"bytes_written": bytes})
             }
             other => {
-                return Err(CapabilityDispatchError::InvalidInput(format!(
+                return Err(LegacyCapabilityDispatchError::InvalidInput(format!(
                     "unsupported terminal operation: {other}"
                 )))
             }
@@ -229,16 +234,16 @@ fn descriptor() -> CapabilityDescriptor {
 }
 
 pub fn register_handler(
-    registry: &CapabilityHandlerRegistry,
+    registry: &LegacyCapabilityHandlerRegistry,
     capability: Arc<TerminalCapability>,
-) -> Result<CapabilityId, CapabilityRegistryError> {
+) -> Result<CapabilityId, LegacyCapabilityRegistryError> {
     registry.register(descriptor(), Arc::new(TerminalHandler::new(capability)))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::capability::backend::CapabilityHandlerRegistry;
+    use crate::capability::backend::LegacyCapabilityHandlerRegistry;
     use crate::sync_primitives::Arc;
     use serde_json::json;
     use std::io::{Cursor, Write};
@@ -343,7 +348,7 @@ mod tests {
             stdout.clone(),
             SharedWriter::default(),
         ));
-        let registry = CapabilityHandlerRegistry::new();
+        let registry = LegacyCapabilityHandlerRegistry::new();
         let id = register_handler(&registry, terminal).unwrap();
 
         assert_eq!(
@@ -368,7 +373,7 @@ mod tests {
             SharedWriter::default(),
             SharedWriter::default(),
         ));
-        let registry = CapabilityHandlerRegistry::new();
+        let registry = LegacyCapabilityHandlerRegistry::new();
         let id = register_handler(&registry, terminal).unwrap();
 
         assert_eq!(
@@ -400,12 +405,12 @@ mod tests {
             SharedWriter::default(),
             SharedWriter::default(),
         ));
-        let registry = CapabilityHandlerRegistry::new();
+        let registry = LegacyCapabilityHandlerRegistry::new();
         let id = register_handler(&registry, terminal).unwrap();
 
         assert!(matches!(
             registry.dispatch(&id, json!({"operation":"seek"})),
-            Err(crate::capability::backend::CapabilityDispatchError::InvalidInput(_))
+            Err(crate::capability::backend::LegacyCapabilityDispatchError::InvalidInput(_))
         ));
     }
 
@@ -417,12 +422,12 @@ mod tests {
             SharedWriter::default(),
         ));
         terminal.close_stdout().unwrap();
-        let registry = CapabilityHandlerRegistry::new();
+        let registry = LegacyCapabilityHandlerRegistry::new();
         let id = register_handler(&registry, terminal).unwrap();
 
         assert!(matches!(
             registry.dispatch(&id, json!({"operation":"write_stdout","data":"x"})),
-            Err(crate::capability::backend::CapabilityDispatchError::Execution(_))
+            Err(crate::capability::backend::LegacyCapabilityDispatchError::Execution(_))
         ));
     }
 }

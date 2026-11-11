@@ -40,19 +40,28 @@ pub(in crate::commands::start) fn register_browser_viewer_handlers(server: &mut 
 
 // ─── register_pty_handlers ────────────────────────────────────────────────
 
-/// Registers `pty.spawn` — the one `pty.*` method that needs the live
-/// config (`[policies.terminal]`'s gate and scrollback/session-cap values).
-/// Its siblings (`pty.input`/`resize`/`close`/`list`/`attach`) stay
-/// stateless and are registered in `HandlerRegistry::new()`
-/// (`gateway::handlers::mod`) — see that registration site's comment for why
-/// `pty.spawn` alone was moved out here.
+/// Registers the live terminal ingress for every `pty.*` method.
+/// The shared source keeps legacy RPCs on the same policy/facts/effect path as
+/// the canonical Tool and the capability RPC.
 pub(in crate::commands::start) fn register_pty_handlers(
     server: &mut GatewayServer,
     config: &Arc<tokio::sync::RwLock<alephcore::Config>>,
+    source: &Arc<alephcore::capability::tool_adapters::TerminalCapabilitySource>,
 ) {
     use alephcore::gateway::handlers::pty;
 
-    register_handler!(server, "pty.spawn", pty::handle_spawn, config);
+    register_handler!(
+        server,
+        "pty.spawn",
+        pty::handle_spawn_with_source,
+        config,
+        source
+    );
+    register_handler!(server, "pty.input", pty::handle_input_with_source, source);
+    register_handler!(server, "pty.attach", pty::handle_attach_with_source, source);
+    register_handler!(server, "pty.resize", pty::handle_resize_with_source, source);
+    register_handler!(server, "pty.close", pty::handle_close_with_source, source);
+    register_handler!(server, "pty.list", pty::handle_list_with_source, source);
 }
 
 // ─── register_oauth_handlers ─────────────────────────────────────────────────

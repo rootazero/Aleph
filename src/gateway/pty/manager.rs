@@ -12,7 +12,7 @@
 use std::collections::{HashMap, VecDeque};
 use std::future::{poll_fn, Future};
 use std::pin::Pin;
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Mutex, OnceLock, Weak};
 use std::task::{Context, Poll, Waker};
 
 use serde::Serialize;
@@ -123,6 +123,8 @@ struct Inner {
     owners: HashMap<String, Option<String>>,
     /// Insertion order for [`OWNER_RETENTION`] eviction.
     owner_order: VecDeque<String>,
+    /// Post-lock mechanical observation receipts, drained by the operation owner.
+    source_receipts: Vec<crate::capability::events::SourceObservationReceipt>,
 }
 
 impl Inner {
@@ -239,6 +241,18 @@ pub struct PtyManager {
     /// The current concurrent session ceiling — see [`DEFAULT_MAX_SESSIONS`]
     /// and [`Self::set_max_sessions`].
     max_sessions: AtomicUsize,
+    /// Late-bound source assembly handle; it is not a second session authority.
+    capability_source:
+        Mutex<Option<Weak<crate::capability::tool_adapters::TerminalCapabilitySource>>>,
+    /// Serializes source registration with manager publication so exit cannot
+    /// observe a half-published session.
+    publication: Mutex<()>,
+    #[cfg(test)]
+    registration_killer: Mutex<Option<Box<dyn portable_pty::ChildKiller + Send + Sync>>>,
+    #[cfg(test)]
+    registration_original: Mutex<Option<Box<dyn portable_pty::ChildKiller + Send + Sync>>>,
+    #[cfg(test)]
+    registration_session: Mutex<Option<Arc<PtySession>>>,
 }
 
 /// Take the next incremental frame from a session.
@@ -301,6 +315,40 @@ pub(crate) fn no_such_session(session_id: &str) -> String {
 
 impl PtyManager {
     #[cfg(test)]
+    pub(crate) fn cold_for_test() -> Self {
+        Self::cold()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn fail_next_registration_cleanup_for_test(
+        &self,
+        killer: Box<dyn portable_pty::ChildKiller + Send + Sync>,
+    ) {
+        *self
+            .registration_killer
+            .lock()
+            .unwrap_or_else(|error| error.into_inner()) = Some(killer);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn take_registration_failure_session(&self) -> Option<Arc<PtySession>> {
+        self.registration_session
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .take()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn take_registration_original_killer(
+        &self,
+    ) -> Option<Box<dyn portable_pty::ChildKiller + Send + Sync>> {
+        self.registration_original
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .take()
+    }
+
+    #[cfg(test)]
     fn new() -> TestManager {
         let runtime = tokio::runtime::Builder::new_multi_thread()
             .worker_threads(1)
@@ -331,6 +379,14 @@ impl PtyManager {
             stop_wait: tokio::sync::Mutex::new(()),
             failure: Mutex::new(None),
             max_sessions: AtomicUsize::new(DEFAULT_MAX_SESSIONS),
+            capability_source: Mutex::new(None),
+            publication: Mutex::new(()),
+            #[cfg(test)]
+            registration_killer: Mutex::new(None),
+            #[cfg(test)]
+            registration_original: Mutex::new(None),
+            #[cfg(test)]
+            registration_session: Mutex::new(None),
         }
     }
 
@@ -354,6 +410,47 @@ impl PtyManager {
         let generation = self.lifecycle.generation();
         self.admit_generation(generation)?;
         Ok(generation)
+    }
+
+    /// Clone the manager's real provider handle without creating another source.
+    #[must_use]
+    pub fn provider_handle(&self) -> ProviderHandle {
+        self.lifecycle.clone()
+    }
+
+    /// Bind the existing manager to the source-owned terminal capability.
+    pub fn bind_capability_source(
+        &self,
+        source: Weak<crate::capability::tool_adapters::TerminalCapabilitySource>,
+    ) -> Result<(), crate::gateway::handlers::pty::PtyCapabilityError> {
+        let strong = source
+            .upgrade()
+            .ok_or(crate::gateway::handlers::pty::PtyCapabilityError::Unavailable)?;
+        let provider = self.provider_handle();
+        let mut bound = self
+            .capability_source
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        if let Some(existing) = bound.as_ref() {
+            if !Weak::ptr_eq(existing, &source) {
+                return Err(crate::gateway::handlers::pty::PtyCapabilityError::Unavailable);
+            }
+            drop(bound);
+            return strong.bind_manager_handle(provider);
+        }
+        strong.bind_manager_handle(provider)?;
+        *bound = Some(source);
+        Ok(())
+    }
+
+    pub(crate) fn capability_source(
+        &self,
+    ) -> Option<Arc<crate::capability::tool_adapters::TerminalCapabilitySource>> {
+        self.capability_source
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .as_ref()
+            .and_then(Weak::upgrade)
     }
 
     /// Check a captured generation; effects use the guarded form below.
@@ -495,6 +592,9 @@ impl PtyManager {
             .expect("driver is present")
             .stop
             .notify_one();
+        drop(_admission);
+        drop(driver);
+        self.flush_source_receipts();
         cleanup?;
         Ok(generation)
     }
@@ -612,6 +712,7 @@ impl PtyManager {
         let lifecycle = self.lifecycle.clone();
         let inner = self.inner.clone();
         let admission = self.admission.clone();
+        let capability_source = self.capability_source();
         let sink = Arc::new(move |session: &PtySession, exit_code: Option<u32>| {
             // The journal settles before this generation-fenced publication/removal.
             let _admission = admission.lock().unwrap_or_else(|e| e.into_inner());
@@ -638,6 +739,14 @@ impl PtyManager {
                 inner.order.retain(|id| id != &session.id);
                 inner.viewports.remove(&session.id);
                 inner.sessions.remove(&session.id);
+                drop(inner);
+                let receipt = capability_source
+                    .as_ref()
+                    .map(|source| source.withdraw_session_deferred(&session.id));
+                drop(_admission);
+                if let Some(receipt) = receipt {
+                    receipt.flush();
+                }
             }
         });
         let session = match PtySession::spawn_with_sink(id.clone(), opts, sink) {
@@ -651,6 +760,23 @@ impl PtyManager {
                 return Err(e);
             }
         };
+        #[cfg(test)]
+        if let Some(replacement) = self
+            .registration_killer
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .take()
+        {
+            let original = session.replace_killer_for_test(replacement);
+            *self
+                .registration_original
+                .lock()
+                .unwrap_or_else(|error| error.into_inner()) = Some(original);
+            *self
+                .registration_session
+                .lock()
+                .unwrap_or_else(|error| error.into_inner()) = Some(Arc::clone(&session));
+        }
         if let Some(pid) = session.shell_pid() {
             process_journal::record_pty_child(&id, pid);
         }
@@ -659,13 +785,41 @@ impl PtyManager {
             shell: session.shell.clone(),
         };
 
+        // Serialize source registration with publication. The reader may exit
+        // immediately, but its sink blocks on this guard until publication is
+        // complete and then withdraws the exact same session once.
+        let _publication = self
+            .publication
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        if let Some(source) = self.capability_source() {
+            if let Err(error) =
+                source.register_session(&result.session_id, opts.created_by.as_deref())
+            {
+                match session.try_kill() {
+                    Ok(()) => {
+                        let detail = error.to_string();
+                        // The child existed and was deliberately killed; the
+                        // reader may still publish its natural exit later, but
+                        // the first verdict must describe this owner action.
+                        Self::record_killed(&session);
+                        return Err(detail);
+                    }
+                    Err(cleanup) => {
+                        // Leave the intent row Running. The reader remains the
+                        // sole authority allowed to record Exited after it
+                        // observes the child settlement; returning the cleanup
+                        // error keeps the failure visible to the caller.
+                        return Err(format!("{error}; cleanup failed: {cleanup}"));
+                    }
+                }
+            }
+        }
         // Evict-then-insert under the lock so the map never exceeds the cap.
         let cap = self.max_sessions.load(Ordering::SeqCst);
-        let evicted = {
+        let insert = || {
             let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
-            // Stamp the owner under the SAME lock acquisition that inserts the
-            // session, so no face can observe a live session with no ownership
-            // record and fall through to whatever its "unknown" arm does.
+            // Owner and physical session become visible in the SAME commit.
             inner.remember_owner(&id, opts.created_by.clone());
             let mut evicted: Option<Arc<PtySession>> = None;
             if inner.sessions.len() >= cap {
@@ -674,14 +828,37 @@ impl PtyManager {
                 }
             }
             inner.order.push_back(id.clone());
-            inner.sessions.insert(id, session);
+            inner.sessions.insert(id.clone(), session.clone());
             evicted
         };
+        let evicted = if let Some(source) = self.capability_source() {
+            match source.commit_session(&id, insert) {
+                Ok((evicted, receipt)) => {
+                    self.queue_source_receipt(receipt);
+                    evicted
+                }
+                Err(error) => {
+                    self.queue_source_receipt(source.withdraw_session_deferred(&id));
+                    Self::record_killed(&session);
+                    return match session.try_kill() {
+                        Ok(()) => Err(error),
+                        Err(cleanup) => Err(format!("{error}; cleanup failed: {cleanup}")),
+                    };
+                }
+            }
+        } else {
+            insert()
+        };
         if let Some(old) = evicted {
+            if let Some(source) = self.capability_source() {
+                self.queue_source_receipt(source.withdraw_session_deferred(&old.id));
+            }
             // The operator's capacity policy ending a shell, not orphan
             // handling: recorded as `killed` before the kill, like `close`.
             Self::record_killed(&old);
-            old.kill();
+            if let Err(error) = old.try_kill() {
+                let _ = self.fail(format!("capacity cleanup failed: {error}"));
+            }
         }
         Ok(result)
     }
@@ -785,8 +962,11 @@ impl PtyManager {
         };
         match session {
             Some(s) => {
+                if let Some(source) = self.capability_source() {
+                    self.queue_source_receipt(source.withdraw_session_deferred(&s.id));
+                }
                 Self::record_killed(&s);
-                s.kill();
+                s.try_kill()?;
                 Ok(())
             }
             None => Err(format!("no such session: {session_id}")),
@@ -821,6 +1001,9 @@ impl PtyManager {
         let failures = sessions
             .into_iter()
             .filter_map(|session| {
+                if let Some(source) = self.capability_source() {
+                    self.queue_source_receipt(source.withdraw_session_deferred(&session.id));
+                }
                 Self::record_killed(&session);
                 let error = session.try_kill().err()?;
                 let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
@@ -841,7 +1024,13 @@ impl PtyManager {
         let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
         inner.order.retain(|i| i != session_id);
         inner.viewports.remove(session_id);
-        inner.sessions.remove(session_id);
+        let removed = inner.sessions.remove(session_id).is_some();
+        drop(inner);
+        if removed {
+            if let Some(source) = self.capability_source() {
+                source.withdraw_session(session_id);
+            }
+        }
     }
 
     /// Who created a session — the ownership input for every `pty.*` face.
@@ -871,6 +1060,17 @@ impl PtyManager {
     pub fn list(&self) -> Vec<SessionInfo> {
         self.with_generation(self.lifecycle.generation(), || Ok(self.list_admitted()))
             .unwrap_or_default()
+    }
+
+    /// Committed global PTY occupancy. A prospective spawn is not published yet.
+    pub(crate) fn occupied_sessions_at(&self, generation: u64) -> Result<usize, String> {
+        self.with_generation(generation, || {
+            let inner = self
+                .inner
+                .lock()
+                .map_err(|_| "PTY manager state is poisoned".to_owned())?;
+            Ok(inner.sessions.len())
+        })
     }
 
     fn list_admitted(&self) -> Vec<SessionInfo> {
@@ -1000,6 +1200,27 @@ impl PtyManager {
         self.with_generation(generation, || self.with_session_admitted(session_id, f))
     }
 
+    fn queue_source_receipt(&self, receipt: crate::capability::events::SourceObservationReceipt) {
+        self.inner
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .source_receipts
+            .push(receipt);
+    }
+
+    fn flush_source_receipts(&self) {
+        let receipts = std::mem::take(
+            &mut self
+                .inner
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .source_receipts,
+        );
+        for receipt in receipts {
+            receipt.flush();
+        }
+    }
+
     fn with_generation<R>(
         &self,
         generation: u64,
@@ -1010,7 +1231,10 @@ impl PtyManager {
         self.lifecycle
             .acquire_call(generation)
             .map_err(|error| error.to_string())?;
-        effect()
+        let result = effect();
+        drop(_admission);
+        self.flush_source_receipts();
+        result
     }
 
     fn with_session_admitted<R>(
@@ -1178,6 +1402,270 @@ impl Drop for TestManager {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::capability::ownership::{LifetimeScope, OwnerRef, OwnershipTree, VisibilityScope};
+    use crate::capability::special::CapabilityHandlerRegistry;
+    use crate::tools::registry::ToolHandlerRegistry;
+
+    fn terminal_test_source(
+        specials: CapabilityHandlerRegistry,
+        facade: Option<&Arc<crate::capability::zahir_facade::ZahirFacade>>,
+    ) -> Arc<crate::capability::tool_adapters::TerminalCapabilitySource> {
+        Arc::new(
+            crate::capability::tool_adapters::TerminalCapabilitySource::new(
+                specials,
+                Arc::new(crate::capability::policy::PolicyEngine::new(
+                    OwnershipTree::new(),
+                )),
+                facade.map_or_else(Weak::new, Arc::downgrade),
+                Arc::new(tokio::sync::RwLock::new(crate::Config::default())),
+            ),
+        )
+    }
+
+    #[test]
+    fn registration_failure_never_publishes_an_untracked_session() {
+        let specials = CapabilityHandlerRegistry::new();
+        let tree = Arc::new(OwnershipTree::new());
+        let facade = crate::capability::zahir_facade::ZahirFacade::new_with_specials(
+            ToolHandlerRegistry::new(),
+            Arc::clone(&tree),
+            specials.clone(),
+        );
+        let source = terminal_test_source(specials.clone(), Some(&facade));
+        let mgr = PtyManager::new();
+        mgr.bind_capability_source(Arc::downgrade(&source))
+            .expect("source binding");
+        source.fail_next_registration_after_binding();
+
+        let result = mgr.spawn(&SpawnOptions {
+            command: Some(if cfg!(windows) { "cmd.exe" } else { "cat" }.into()),
+            ..Default::default()
+        });
+        assert!(
+            result.is_err(),
+            "a source registration failure must fail spawn"
+        );
+        assert!(
+            mgr.list().is_empty(),
+            "failed publication must not enter manager"
+        );
+        assert!(specials
+            .describe(&crate::capability::facade::Scope::default())
+            .is_empty());
+        assert_eq!(specials.revision(), 2, "partial publication withdraws once");
+        let failed_id = source
+            .last_registration_id()
+            .expect("post-publication failure records exact session");
+        let failed_capability = crate::capability::descriptor::CapabilityId {
+            namespace: "aleph/terminal".into(),
+            name: format!("session-{failed_id}"),
+        };
+        assert!(
+            !tree.is_revoked(&failed_capability),
+            "failed publication must not tombstone"
+        );
+        source.withdraw_session(&failed_id);
+        assert_eq!(specials.revision(), 2, "repeated withdrawal is a no-op");
+        tree.register(
+            failed_capability,
+            OwnerRef::Runtime,
+            LifetimeScope::Runtime,
+            VisibilityScope::default(),
+        )
+        .expect("real facade tree remains available for later registration");
+    }
+
+    #[tokio::test]
+    async fn registration_cleanup_failure_waits_for_reader_settlement() {
+        use crate::builtin_tools::process_journal as journal;
+
+        #[derive(Debug)]
+        struct RefuseKill;
+        impl portable_pty::ChildKiller for RefuseKill {
+            fn kill(&mut self) -> std::io::Result<()> {
+                Err(std::io::Error::new(
+                    std::io::ErrorKind::PermissionDenied,
+                    "registration cleanup refused",
+                ))
+            }
+
+            fn clone_killer(&self) -> Box<dyn portable_pty::ChildKiller + Send + Sync> {
+                Box::new(Self)
+            }
+        }
+
+        let _journal_gate = journal::test_gate();
+        let temp = tempfile::tempdir().expect("journal temp dir");
+        journal::enable_for_test(temp.path().to_path_buf());
+        let specials = CapabilityHandlerRegistry::new();
+        let tree = Arc::new(OwnershipTree::new());
+        let facade = crate::capability::zahir_facade::ZahirFacade::new_with_specials(
+            ToolHandlerRegistry::new(),
+            Arc::clone(&tree),
+            specials.clone(),
+        );
+        let source = terminal_test_source(specials, Some(&facade));
+        let manager = PtyManager::cold();
+        let bus = Arc::new(GatewayEventBus::new());
+        let generation = manager
+            .activate(Arc::clone(&bus))
+            .expect("activate manager");
+        manager
+            .bind_capability_source(Arc::downgrade(&source))
+            .expect("bind source");
+        manager.fail_next_registration_cleanup_for_test(Box::new(RefuseKill));
+        source.fail_next_registration_after_binding();
+        let mut exit_events = bus.subscribe();
+        let result = manager.spawn_at(
+            generation,
+            &SpawnOptions {
+                command: Some(if cfg!(windows) { "cmd.exe" } else { "cat" }.into()),
+                created_by: Some("u-fix4-cleanup".into()),
+                ..Default::default()
+            },
+        );
+        assert!(
+            result
+                .as_ref()
+                .is_err_and(|error| error.contains("cleanup failed")),
+            "registration cleanup failure must reach the caller: {result:?}"
+        );
+        let session_id = source
+            .last_registration_id()
+            .expect("exact failed registration id");
+        let running = journal::lookup_pty(&session_id).expect("running intent row");
+        assert_eq!(running.record.phase, journal::JobPhase::Running);
+        assert_eq!(running.record.outcome, None);
+        let session = manager
+            .take_registration_failure_session()
+            .expect("retained failure session");
+        let original = manager
+            .take_registration_original_killer()
+            .expect("retained original killer");
+        session.replace_killer_for_test(original);
+        session
+            .try_kill()
+            .expect("release child after state assertion");
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            loop {
+                let event = exit_events.recv().await.expect("pty exit event");
+                if event.contains(&session_id) {
+                    break;
+                }
+            }
+        })
+        .await
+        .expect("reader settlement event");
+        let settled = journal::lookup_pty(&session_id).expect("settled row");
+        assert_eq!(settled.record.phase, journal::JobPhase::Settled);
+        let outcome = settled
+            .record
+            .outcome
+            .clone()
+            .expect("one terminal verdict");
+        journal::record_pty_settled(&session_id, journal::Verdict::Killed, None, "loser");
+        assert_eq!(
+            journal::lookup_pty(&session_id)
+                .expect("row remains")
+                .record
+                .outcome
+                .as_deref(),
+            Some(outcome.as_str()),
+            "first terminal verdict must remain authoritative"
+        );
+        manager.deactivate().await.expect("deactivate manager");
+    }
+
+    #[test]
+    fn close_and_exit_withdraw_the_same_session_exactly_once() {
+        let specials = CapabilityHandlerRegistry::new();
+        let tree = Arc::new(OwnershipTree::new());
+        let facade = crate::capability::zahir_facade::ZahirFacade::new_with_specials(
+            ToolHandlerRegistry::new(),
+            tree,
+            specials.clone(),
+        );
+        let source = terminal_test_source(specials.clone(), Some(&facade));
+        let mgr = PtyManager::new();
+        mgr.bind_capability_source(Arc::downgrade(&source))
+            .expect("source binding");
+        let sid = mgr
+            .spawn(&SpawnOptions {
+                command: Some(if cfg!(windows) { "cmd.exe" } else { "cat" }.into()),
+                ..Default::default()
+            })
+            .expect("real source-backed spawn")
+            .session_id;
+        assert_eq!(
+            specials.revision(),
+            1,
+            "publication registers one descriptor"
+        );
+
+        mgr.close(&sid).expect("close at capacity");
+        for _ in 0..100 {
+            if specials
+                .describe(&crate::capability::facade::Scope::default())
+                .is_empty()
+            {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert!(specials
+            .describe(&crate::capability::facade::Scope::default())
+            .is_empty());
+        assert_eq!(
+            specials.revision(),
+            2,
+            "close and exit share one withdrawal"
+        );
+        source.withdraw_session(&sid);
+        assert_eq!(specials.revision(), 2, "repeated withdrawal is a no-op");
+    }
+
+    #[test]
+    fn immediate_child_exit_cannot_leave_a_stale_descriptor() {
+        let specials = CapabilityHandlerRegistry::new();
+        let tree = Arc::new(OwnershipTree::new());
+        let facade = crate::capability::zahir_facade::ZahirFacade::new_with_specials(
+            ToolHandlerRegistry::new(),
+            tree,
+            specials.clone(),
+        );
+        let source = terminal_test_source(specials.clone(), Some(&facade));
+        let mgr = PtyManager::new();
+        mgr.bind_capability_source(Arc::downgrade(&source))
+            .expect("source binding");
+        mgr.spawn(&SpawnOptions {
+            command: Some(if cfg!(windows) { "cmd.exe" } else { "sh" }.into()),
+            args: if cfg!(windows) {
+                vec!["/C".into(), "exit 0".into()]
+            } else {
+                vec!["-c".into(), "exit 0".into()]
+            },
+            ..Default::default()
+        })
+        .expect("immediate child publication");
+        for _ in 0..100 {
+            if mgr.list().is_empty() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert!(
+            mgr.list().is_empty(),
+            "child exit must remove published session"
+        );
+        assert!(specials
+            .describe(&crate::capability::facade::Scope::default())
+            .is_empty());
+        assert_eq!(
+            specials.revision(),
+            2,
+            "registration and one withdrawal only"
+        );
+    }
 
     #[test]
     fn spawn_write_list_close_roundtrip() {

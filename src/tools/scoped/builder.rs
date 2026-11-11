@@ -28,6 +28,7 @@ impl ScopedToolService {
     pub fn new(inner: Arc<LoopToolRegistry>, allowed: BTreeSet<String>) -> Self {
         Self {
             canonical_registry: inner.canonical_registry(),
+            capability_policy: inner.canonical_facade().map(|facade| facade.policy()),
             canonical_facade: inner.canonical_facade(),
             capability_activations: BTreeMap::new(),
             capability_constraint_context: None,
@@ -68,6 +69,15 @@ impl ScopedToolService {
         self
     }
 
+    /// Share startup restrictions; this never replaces existing Tool authorization.
+    #[must_use]
+    pub fn with_capability_policy(mut self, policy: Arc<crate::capability::policy::PolicyEngine>) -> Self {
+        self.capability_policy = Some(policy);
+        self
+    }
+
+    /// Compatibility opt-in using the same capability activation evaluator.
+    /// Production rules are installed through the shared Policy, not this map.
     /// Attach a capability-layer activation controller for one canonical tool.
     ///
     /// Dispatch invokes this controller immediately before the handler and

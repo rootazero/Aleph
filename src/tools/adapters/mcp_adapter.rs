@@ -190,13 +190,40 @@ pub(crate) async fn invoke_handler(
     input: Value,
     cancel: CancellationToken,
 ) -> Result<crate::session::events::ToolOutput, crate::tools::service::ToolError> {
-    let mut output = tokio::select! {
+    let output = tokio::select! {
         biased;
         _ = cancel.cancelled() => {
             return Err(crate::tools::service::ToolError::Cancelled { name: descriptor.name.clone() });
         }
         result = handler.invoke(input) => result?,
     };
+    Ok(fence_handler_output(handler, descriptor, output))
+}
+
+/// Only for a captured, already-admitted effect owner, not the legacy LoopTool
+/// face. The supplied token retains caller/run ancestry and can prevent start.
+/// After this start checkpoint the actual handler future is driven to settlement:
+/// caller disinterest is handled separately and must not drop in-flight I/O.
+pub(crate) async fn invoke_handler_to_settlement(
+    handler: &Arc<dyn ToolHandler>,
+    descriptor: &crate::tools::descriptor::ToolCapabilityDescriptor,
+    input: Value,
+    cancel: CancellationToken,
+) -> Result<crate::session::events::ToolOutput, crate::tools::service::ToolError> {
+    if cancel.is_cancelled() {
+        return Err(crate::tools::service::ToolError::Cancelled {
+            name: descriptor.name.clone(),
+        });
+    }
+    let output = handler.invoke(input).await?;
+    Ok(fence_handler_output(handler, descriptor, output))
+}
+
+fn fence_handler_output(
+    handler: &Arc<dyn ToolHandler>,
+    descriptor: &crate::tools::descriptor::ToolCapabilityDescriptor,
+    mut output: crate::session::events::ToolOutput,
+) -> crate::session::events::ToolOutput {
     if handler.fences_output() {
         let source = match &descriptor.source {
             ToolSource::Extension { plugin_id } => ContentSource::PluginTool {
@@ -216,7 +243,7 @@ pub(crate) async fn invoke_handler(
         };
         output.value = fence_mcp_result(output.value, &source);
     }
-    Ok(output)
+    output
 }
 
 /// Fence an MCP tool result for the model **without flattening it**.

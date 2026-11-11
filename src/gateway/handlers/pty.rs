@@ -34,12 +34,195 @@
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
 use serde::Deserialize;
 use serde_json::json;
+use thiserror::Error;
 use tokio::sync::RwLock;
+use tokio_util::sync::CancellationToken;
 
-use super::super::protocol::{JsonRpcRequest, JsonRpcResponse, INVALID_PARAMS};
+use super::super::protocol::{
+    JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR, INVALID_PARAMS, PERMISSION_DENIED,
+    SERVICE_UNAVAILABLE,
+};
 use crate::config::Config;
 use crate::gateway::pty::{self, SpawnOptions};
 use crate::sync_primitives::Arc;
+pub use aleph_protocol::capability::{PtySpawnParams, SpawnParams};
+
+#[cfg(test)]
+type HandlerHandoffHook = (
+    Arc<tokio::sync::Notify>,
+    Arc<tokio::sync::Notify>,
+    Arc<tokio::sync::Notify>,
+);
+
+#[cfg(test)]
+fn handler_handoff_hook() -> &'static std::sync::Mutex<Option<HandlerHandoffHook>> {
+    static HOOK: std::sync::OnceLock<std::sync::Mutex<Option<HandlerHandoffHook>>> =
+        std::sync::OnceLock::new();
+    HOOK.get_or_init(|| std::sync::Mutex::new(None))
+}
+
+#[cfg(test)]
+pub(crate) struct HandlerHandoffGuard;
+
+#[cfg(test)]
+impl Drop for HandlerHandoffGuard {
+    fn drop(&mut self) {
+        *handler_handoff_hook()
+            .lock()
+            .unwrap_or_else(|error| error.into_inner()) = None;
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn install_handler_handoff_hook() -> (
+    HandlerHandoffGuard,
+    Arc<tokio::sync::Notify>,
+    Arc<tokio::sync::Notify>,
+    Arc<tokio::sync::Notify>,
+) {
+    let hook = (
+        Arc::new(tokio::sync::Notify::new()),
+        Arc::new(tokio::sync::Notify::new()),
+        Arc::new(tokio::sync::Notify::new()),
+    );
+    *handler_handoff_hook()
+        .lock()
+        .unwrap_or_else(|error| error.into_inner()) = Some(hook.clone());
+    (HandlerHandoffGuard, hook.0, hook.1, hook.2)
+}
+
+#[cfg(test)]
+async fn wait_for_handler_handoff() {
+    let hook = handler_handoff_hook()
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .clone();
+    if let Some((captured, release, _)) = hook {
+        captured.notify_one();
+        release.notified().await;
+    }
+}
+
+#[cfg(test)]
+fn observe_stale_provider(
+    result: &Result<
+        serde_json::Value,
+        crate::capability::special_dispatch::CapabilityInvocationError,
+    >,
+) {
+    if matches!(
+        result,
+        Err(
+            crate::capability::special_dispatch::CapabilityInvocationError::Resolve(
+                crate::capability::facade::ResolveError::StaleProvider,
+            )
+        )
+    ) {
+        if let Some((_, _, stale)) = handler_handoff_hook()
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .as_ref()
+        {
+            stale.notify_one();
+        }
+    }
+}
+
+/// Typed domain failures for all owned terminal operations.
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+pub enum PtyCapabilityError {
+    #[error("terminal session was not found")]
+    NotFound,
+    #[error("terminal provider is unavailable")]
+    Unavailable,
+    #[error("invalid terminal input: {0}")]
+    InvalidInput(String),
+    #[error("terminal I/O failed: {0}")]
+    Io(String),
+}
+
+/// The only capture a terminal operation may carry across an async boundary.
+/// The session id and provider generation are private so callers cannot mint a
+/// lease from wire data or reuse a prior provider incarnation.
+#[derive(Clone)]
+pub(crate) struct OwnedPtySession {
+    session_id: String,
+    provider_generation: u64,
+    provider: crate::capability::provider::ProviderHandle,
+    source: Option<Arc<crate::capability::tool_adapters::TerminalCapabilitySource>>,
+}
+
+impl OwnedPtySession {
+    pub(crate) fn generation(&self) -> u64 {
+        self.provider_generation
+    }
+
+    pub(crate) fn session_id(&self) -> &str {
+        &self.session_id
+    }
+
+    pub(crate) fn provider_matches(
+        &self,
+        provider: &crate::capability::provider::ProviderHandle,
+        generation: u64,
+    ) -> bool {
+        self.provider.same_instance(provider) && self.provider_generation == generation
+    }
+
+    pub(crate) fn source(
+        &self,
+    ) -> Option<Arc<crate::capability::tool_adapters::TerminalCapabilitySource>> {
+        self.source.clone()
+    }
+
+    pub(crate) fn with_source(
+        mut self,
+        source: Arc<crate::capability::tool_adapters::TerminalCapabilitySource>,
+    ) -> Self {
+        self.source = Some(source);
+        self
+    }
+}
+
+/// Resolve the ambient caller's owned session against the live manager.
+///
+/// This is the typed domain gate used by legacy RPC and capability faces. It
+/// deliberately collapses a foreign owner and an unknown id into `NotFound`
+/// so the existing no-oracle response remains byte-identical.
+pub(crate) fn require_owned_session_with_source(
+    session_id: &str,
+    source: &Arc<crate::capability::tool_adapters::TerminalCapabilitySource>,
+) -> Result<OwnedPtySession, PtyCapabilityError> {
+    let mut owned = require_owned_session(session_id)?;
+    owned.source = Some(Arc::clone(source));
+    Ok(owned)
+}
+
+pub(crate) fn require_owned_session(
+    session_id: &str,
+) -> Result<OwnedPtySession, PtyCapabilityError> {
+    if session_id.trim().is_empty() {
+        return Err(PtyCapabilityError::InvalidInput(
+            "session_id must not be empty".into(),
+        ));
+    }
+    let actor = crate::capability::special_dispatch::DOMAIN_TOOL_CALL
+        .try_with(|call| call.owner_actor.clone())
+        .unwrap_or_else(|_| crate::gateway::visibility::ambient_actor());
+    let manager = pty::try_manager().ok_or(PtyCapabilityError::Unavailable)?;
+    if !manager.owner_of(session_id).admits(actor.as_deref()) {
+        return Err(PtyCapabilityError::NotFound);
+    }
+    let provider_generation = manager
+        .ready_generation()
+        .map_err(|_| PtyCapabilityError::Unavailable)?;
+    Ok(OwnedPtySession {
+        session_id: session_id.to_owned(),
+        provider_generation,
+        provider: manager.provider_handle(),
+        source: manager.capability_source(),
+    })
+}
 
 /// The largest terminal geometry `pty.spawn` / `pty.resize` will accept, per
 /// axis.
@@ -79,7 +262,7 @@ pub const MAX_TERMINAL_DIMENSION: u16 = 1000;
 /// admitted on purpose — it is the wire's "unset", which `PtySession::spawn`
 /// substitutes 24/80 for and `note_viewport` raises with `.max(1)`; refusing
 /// it here would break every client that omits the fields.
-fn check_dimensions(rows: u16, cols: u16) -> Result<(), String> {
+pub(crate) fn check_dimensions(rows: u16, cols: u16) -> Result<(), String> {
     if rows > MAX_TERMINAL_DIMENSION || cols > MAX_TERMINAL_DIMENSION {
         return Err(format!(
             "terminal geometry {rows}x{cols} exceeds the maximum of \
@@ -87,23 +270,6 @@ fn check_dimensions(rows: u16, cols: u16) -> Result<(), String> {
         ));
     }
     Ok(())
-}
-
-#[derive(Debug, Default, Deserialize)]
-pub struct SpawnParams {
-    #[serde(default)]
-    pub command: Option<String>,
-    #[serde(default)]
-    pub args: Vec<String>,
-    #[serde(default)]
-    pub cwd: Option<String>,
-    /// Extra env vars layered on the inherited environment.
-    #[serde(default)]
-    pub env: std::collections::HashMap<String, String>,
-    #[serde(default)]
-    pub rows: u16,
-    #[serde(default)]
-    pub cols: u16,
 }
 
 #[derive(Debug, Deserialize)]
@@ -145,6 +311,244 @@ pub struct AttachParams {
 /// could disagree within a single spawn; see `jail.rs`'s module doc on why a
 /// fallback that answers a different question than the one asked is a lie,
 /// not a default.
+pub async fn handle_spawn_with_source(
+    request: JsonRpcRequest,
+    config: Arc<RwLock<Config>>,
+    source: Arc<crate::capability::tool_adapters::TerminalCapabilitySource>,
+) -> JsonRpcResponse {
+    let id = request.id.clone();
+    let params: SpawnParams = match &request.params {
+        Some(params) => match serde_json::from_value(params.clone()) {
+            Ok(value) => value,
+            Err(error) => {
+                return JsonRpcResponse::error(
+                    id,
+                    INVALID_PARAMS,
+                    format!("invalid params: {error}"),
+                );
+            }
+        },
+        None => SpawnParams::default(),
+    };
+    if let Some(manager) = pty::try_manager() {
+        if let Err(error) = manager.bind_capability_source(Arc::downgrade(&source)) {
+            return JsonRpcResponse::error(id, INVALID_PARAMS, error.to_string());
+        }
+    }
+    let _ = config;
+    gateway_response(
+        id.clone(),
+        source
+            .invoke_legacy_gateway(
+                aleph_protocol::capability::PtyToolParams::Spawn { params },
+                format!(
+                    "pty.spawn:{}",
+                    id.as_ref()
+                        .map(ToString::to_string)
+                        .unwrap_or_else(|| "notification".into())
+                ),
+                CancellationToken::new(),
+                None,
+            )
+            .await,
+    )
+}
+
+fn gateway_response(
+    id: Option<serde_json::Value>,
+    result: Result<
+        serde_json::Value,
+        crate::capability::special_dispatch::CapabilityInvocationError,
+    >,
+) -> JsonRpcResponse {
+    match result {
+        Ok(value) => JsonRpcResponse::success(id, value),
+        Err(crate::capability::special_dispatch::CapabilityInvocationError::Policy(error)) => {
+            JsonRpcResponse::error(id, PERMISSION_DENIED, error.to_string())
+        }
+        Err(crate::capability::special_dispatch::CapabilityInvocationError::Unavailable)
+        | Err(crate::capability::special_dispatch::CapabilityInvocationError::Resolve(_))
+        | Err(crate::capability::special_dispatch::CapabilityInvocationError::Cancelled) => {
+            JsonRpcResponse::error(id, SERVICE_UNAVAILABLE, "terminal capability unavailable")
+        }
+        Err(crate::capability::special_dispatch::CapabilityInvocationError::Handler(
+            crate::capability::special::CapabilityDispatchError::NotFound(_),
+        )) => JsonRpcResponse::error(id, INVALID_PARAMS, "terminal session was not found"),
+        Err(crate::capability::special_dispatch::CapabilityInvocationError::Handler(error)) => {
+            JsonRpcResponse::error(id, INTERNAL_ERROR, error.to_string())
+        }
+    }
+}
+
+pub async fn handle_input_with_source(
+    request: JsonRpcRequest,
+    source: Arc<crate::capability::tool_adapters::TerminalCapabilitySource>,
+) -> JsonRpcResponse {
+    let id = request.id.clone();
+    let params: InputParams = match parse(&request) {
+        Ok(value) => value,
+        Err(response) => return response,
+    };
+    let owned = match require_owned_session(&params.session_id)
+        .map(|owned| owned.with_source(Arc::clone(&source)))
+    {
+        Ok(owned) => owned,
+        Err(error) => return JsonRpcResponse::error(id, INVALID_PARAMS, error.to_string()),
+    };
+    gateway_response(
+        id.clone(),
+        source
+            .invoke_legacy_gateway(
+                aleph_protocol::capability::PtyToolParams::Input {
+                    session_id: params.session_id,
+                    data: params.data,
+                    base64: params.base64,
+                },
+                format!(
+                    "pty.input:{}",
+                    id.as_ref()
+                        .map(ToString::to_string)
+                        .unwrap_or_else(|| "notification".into())
+                ),
+                CancellationToken::new(),
+                Some(owned),
+            )
+            .await,
+    )
+}
+
+pub async fn handle_attach_with_source(
+    request: JsonRpcRequest,
+    source: Arc<crate::capability::tool_adapters::TerminalCapabilitySource>,
+) -> JsonRpcResponse {
+    let id = request.id.clone();
+    let params: AttachParams = match parse(&request) {
+        Ok(value) => value,
+        Err(response) => return response,
+    };
+    let owned = match require_owned_session(&params.session_id)
+        .map(|owned| owned.with_source(Arc::clone(&source)))
+    {
+        Ok(owned) => owned,
+        Err(error) => return JsonRpcResponse::error(id, INVALID_PARAMS, error.to_string()),
+    };
+    #[cfg(test)]
+    wait_for_handler_handoff().await;
+    let result = source
+        .invoke_legacy_gateway(
+            aleph_protocol::capability::PtyToolParams::Attach {
+                session_id: params.session_id,
+            },
+            format!(
+                "pty.attach:{}",
+                id.as_ref()
+                    .map(ToString::to_string)
+                    .unwrap_or_else(|| "notification".into())
+            ),
+            CancellationToken::new(),
+            Some(owned),
+        )
+        .await;
+    #[cfg(test)]
+    observe_stale_provider(&result);
+    gateway_response(id, result)
+}
+
+pub async fn handle_resize_with_source(
+    request: JsonRpcRequest,
+    source: Arc<crate::capability::tool_adapters::TerminalCapabilitySource>,
+) -> JsonRpcResponse {
+    let id = request.id.clone();
+    let params: ResizeParams = match parse(&request) {
+        Ok(value) => value,
+        Err(response) => return response,
+    };
+    let owned = match require_owned_session(&params.session_id)
+        .map(|owned| owned.with_source(Arc::clone(&source)))
+    {
+        Ok(owned) => owned,
+        Err(error) => return JsonRpcResponse::error(id, INVALID_PARAMS, error.to_string()),
+    };
+    gateway_response(
+        id.clone(),
+        source
+            .invoke_legacy_gateway(
+                aleph_protocol::capability::PtyToolParams::Resize {
+                    session_id: params.session_id,
+                    rows: params.rows,
+                    cols: params.cols,
+                },
+                format!(
+                    "pty.resize:{}",
+                    id.as_ref()
+                        .map(ToString::to_string)
+                        .unwrap_or_else(|| "notification".into())
+                ),
+                CancellationToken::new(),
+                Some(owned),
+            )
+            .await,
+    )
+}
+
+pub async fn handle_close_with_source(
+    request: JsonRpcRequest,
+    source: Arc<crate::capability::tool_adapters::TerminalCapabilitySource>,
+) -> JsonRpcResponse {
+    let id = request.id.clone();
+    let params: CloseParams = match parse(&request) {
+        Ok(value) => value,
+        Err(response) => return response,
+    };
+    let owned = match require_owned_session(&params.session_id)
+        .map(|owned| owned.with_source(Arc::clone(&source)))
+    {
+        Ok(owned) => owned,
+        Err(error) => return JsonRpcResponse::error(id, INVALID_PARAMS, error.to_string()),
+    };
+    gateway_response(
+        id.clone(),
+        source
+            .invoke_legacy_gateway(
+                aleph_protocol::capability::PtyToolParams::Close {
+                    session_id: params.session_id,
+                },
+                format!(
+                    "pty.close:{}",
+                    id.as_ref()
+                        .map(ToString::to_string)
+                        .unwrap_or_else(|| "notification".into())
+                ),
+                CancellationToken::new(),
+                Some(owned),
+            )
+            .await,
+    )
+}
+
+pub async fn handle_list_with_source(
+    request: JsonRpcRequest,
+    source: Arc<crate::capability::tool_adapters::TerminalCapabilitySource>,
+) -> JsonRpcResponse {
+    let id = request.id;
+    gateway_response(
+        id.clone(),
+        source
+            .invoke_legacy_gateway(
+                aleph_protocol::capability::PtyToolParams::List {},
+                format!(
+                    "pty.list:{}",
+                    id.as_ref()
+                        .map(ToString::to_string)
+                        .unwrap_or_else(|| "notification".into())
+                ),
+                CancellationToken::new(),
+                None,
+            )
+            .await,
+    )
+}
+
 pub async fn handle_spawn(request: JsonRpcRequest, config: Arc<RwLock<Config>>) -> JsonRpcResponse {
     let id = request.id.clone();
     let params: SpawnParams = match &request.params {
@@ -454,24 +858,21 @@ pub async fn handle_list(request: JsonRpcRequest) -> JsonRpcResponse {
 #[allow(clippy::result_large_err)]
 fn require_owned(request: &JsonRpcRequest, session_id: &str) -> Result<u64, JsonRpcResponse> {
     let actor = crate::gateway::visibility::ambient_actor();
+    if let Ok(owned) = require_owned_session(session_id) {
+        return Ok(owned.generation());
+    }
+
+    // Preserve the historical tombstone response for a session that belonged
+    // to this caller but was lost with a previous daemon. Foreign/unknown and
+    // provider-unavailable cases intentionally share the normal no-such oracle.
     let owner = pty::try_manager()
         .map(|manager| manager.owner_of(session_id))
         .unwrap_or(pty::SessionOwner::Unknown);
-    if owner.admits(actor.as_deref()) {
-        if let Some(generation) =
-            pty::try_manager().and_then(|manager| manager.ready_generation().ok())
-        {
-            return Ok(generation);
-        }
-    }
     if matches!(owner, pty::SessionOwner::Unknown) {
         if let Some(job) = crate::builtin_tools::process_journal::lookup_pty(session_id) {
             if pty::owner_admits(Some(job.record.owner.as_str()), actor.as_deref()) {
                 if let Some(report) = crate::builtin_tools::process_journal::tombstone_report(&job)
                 {
-                    // `text_with_output`: an error message has no slot for
-                    // the recorded output, so the clause rides the prose —
-                    // the same composition the terminal tool renders.
                     return Err(JsonRpcResponse::error(
                         request.id.clone(),
                         INVALID_PARAMS,
@@ -1541,7 +1942,7 @@ mod tests {
     fn every_addressed_pty_handler_checks_ownership() {
         use crate::utils::source_scan::{code_text, production_prefix};
 
-        const GATE: &str = "require_owned(";
+        const GATES: &[&str] = &["require_owned(", "require_owned_session("];
         const ADDRESSED: &str = "params.session_id";
 
         let src = std::fs::read_to_string(
@@ -1573,7 +1974,7 @@ mod tests {
             let body = lines[i..=end].join("\n");
             if body.contains(ADDRESSED) {
                 addressed.push(name.clone());
-                if !body.contains(GATE) {
+                if !GATES.iter().any(|gate| body.contains(gate)) {
                     ungated.push(name);
                 }
             }
@@ -1583,7 +1984,7 @@ mod tests {
         assert!(
             ungated.is_empty(),
             "these `pty.*` handlers address a caller-supplied session id without \
-             passing `{GATE}`. Every face of the ownership rule has to carry it: \
+             passing a typed ownership gate (`require_owned` or `require_owned_session`). Every face of the ownership rule has to carry it: \
              a session hidden from `pty.list` is still reachable by id.\n  {}",
             ungated.join("\n  ")
         );

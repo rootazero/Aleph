@@ -49,6 +49,92 @@ fn emitter(stream: &Arc<InMemoryEventStream>) -> CapabilityEventEmitter {
 }
 
 #[test]
+fn legacy_event_envelope_has_operator_only_audience() {
+    let stream = InMemoryEventStream::new(1).unwrap();
+    stream.emit(OwnerRef::Runtime, revoked("legacy")).unwrap();
+    let snapshot = stream.snapshot().unwrap();
+    let record = serde_json::to_value(&snapshot.records()[0]).unwrap();
+    assert_eq!(record["audience"], json!({ "kind": "operator_only" }));
+}
+
+#[test]
+fn legacy_faces_fail_closed_for_unsupported_scoped_events() {
+    use crate::capability::facade::{
+        BackendLease, CapabilityChangeStream, CapabilitySnapshot, Cursor, Projection, Reference,
+        ResolveError, Scope, TransportTarget, Zahir,
+    };
+    struct LegacyFace;
+    impl Zahir for LegacyFace {
+        fn describe(&self, _: Scope) -> CapabilitySnapshot {
+            unreachable!("not used by scoped default")
+        }
+        fn resolve(&self, _: Reference) -> Result<BackendLease, ResolveError> {
+            unreachable!("not used by scoped default")
+        }
+        fn validate_lease(&self, _: &BackendLease) -> Result<(), ResolveError> {
+            unreachable!("not used by scoped default")
+        }
+        fn activate(
+            &self,
+            _: Reference,
+        ) -> Result<BackendLease, crate::capability::provider_registry::ActivationError> {
+            unreachable!("not used by scoped default")
+        }
+        fn subscribe(&self, _: Scope, _: Cursor) -> CapabilityChangeStream {
+            unreachable!("not used by scoped default")
+        }
+        fn project(&self, _: TransportTarget, _: Scope) -> Projection {
+            unreachable!("not used by scoped default")
+        }
+    }
+    struct MustNotRun;
+    #[async_trait::async_trait]
+    impl crate::capability::event_audience::CapabilityEventAccess for MustNotRun {
+        async fn admits(&self, _: &CapabilityEventRecord) -> bool {
+            panic!("unsupported face must not invoke access")
+        }
+    }
+    struct LegacyStream(InMemoryEventStream);
+    impl CapabilityEventStream for LegacyStream {
+        fn emit(&self, actor: OwnerRef, event: CapabilityEvent) -> Result<(), EventError> {
+            self.0.emit(actor, event)
+        }
+        fn subscribe(&self, filter: EventFilter) -> EventSubscription {
+            self.0.subscribe(filter)
+        }
+    }
+    let scope = TrustedEventScope::from_access(Arc::new(MustNotRun));
+    assert!(matches!(
+        LegacyFace.subscribe_events(scope.clone(), EventFilter::default()),
+        Err(EventError::Unsupported)
+    ));
+    let stream = Arc::new(LegacyStream(InMemoryEventStream::new(2).unwrap()));
+    assert!(matches!(
+        stream.emit_scoped(
+            OwnerRef::Runtime,
+            EventAudience::OperatorOnly,
+            revoked("unsupported")
+        ),
+        Err(EventError::Unsupported)
+    ));
+    CapabilityEventEmitter::new(stream.clone()).emit_scoped(
+        OwnerRef::Runtime,
+        EventAudience::OperatorOnly,
+        revoked("best-effort"),
+    );
+    assert!(stream.0.snapshot().unwrap().records().is_empty());
+    let audited = AuditedZahir::new(
+        Arc::new(LegacyFace),
+        OwnerRef::Runtime,
+        CapabilityEventEmitter::new(stream),
+    );
+    assert!(matches!(
+        audited.subscribe_events(scope, EventFilter::default()),
+        Err(EventError::Unsupported)
+    ));
+}
+
+#[test]
 fn rejects_zero_capacity_without_panicking() {
     assert!(matches!(
         InMemoryEventStream::new(0),

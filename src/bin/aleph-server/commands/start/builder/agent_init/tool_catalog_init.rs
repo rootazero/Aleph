@@ -31,6 +31,7 @@ pub(super) async fn init_tool_catalog(
     daemon: bool,
     tool_catalog: Arc<alephcore::tool_metadata::ToolCatalog>,
     canonical_tools: Arc<alephcore::tools::ToolHandlerRegistry>,
+    capability_policy: Arc<alephcore::capability::policy::PolicyEngine>,
 ) -> Arc<alephcore::tool_metadata::ToolCatalog> {
     use alephcore::executor::BUILTIN_TOOL_DEFINITIONS;
 
@@ -298,9 +299,12 @@ pub(super) async fn init_tool_catalog(
         server.handlers_mut().register("tools.invoke", move |req| {
             let registry = reg.clone();
             let agents = Some(agents_for_invoke.clone());
+            let policy = Arc::clone(&capability_policy);
             async move {
-                alephcore::gateway::handlers::tools_invoke::handle_invoke(req, registry, agents)
-                    .await
+                alephcore::gateway::handlers::tools_invoke::handle_invoke(
+                    req, registry, agents, policy,
+                )
+                .await
             }
         });
         if !daemon {

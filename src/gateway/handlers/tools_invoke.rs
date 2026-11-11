@@ -87,6 +87,7 @@ pub async fn handle_invoke<R>(
     request: JsonRpcRequest,
     registry: Arc<R>,
     agents: Option<Arc<AgentRegistry>>,
+    policy: Arc<crate::capability::policy::PolicyEngine>,
 ) -> JsonRpcResponse
 where
     R: ToolRegistry + ?Sized,
@@ -256,6 +257,20 @@ where
         }
     }
 
+    // This raw surface has no captured lease, source facts, or owned-operation
+    // guard. Existing gateway overrides cannot grant capability admission.
+    // Raw dispatch is exact-name; do not invent an alias authorization here.
+    let capability_id = crate::capability::descriptor::CapabilityId {
+        namespace: crate::capability::backend::TOOL_NAMESPACE.into(),
+        name: params.tool_name.clone(),
+    };
+    if policy.is_configured(&capability_id) {
+        return JsonRpcResponse::error(request.id, INVALID_PARAMS, format!(
+            "tool '{}' has capability policy restrictions unsupported by raw tools.invoke; use the controlled agent or dedicated capability ingress",
+            params.tool_name,
+        ));
+    }
+
     let arguments = merge_agent_id(params.arguments, params.agent_id.as_deref());
 
     let outcome = registry
@@ -371,6 +386,81 @@ mod tests {
     use crate::tool_metadata::UnifiedTool;
     use std::collections::HashMap;
 
+    fn empty_policy() -> Arc<crate::capability::policy::PolicyEngine> {
+        crate::capability::production_init::build_capability_policy(
+            &crate::Config::default(),
+            Arc::new(crate::capability::ownership::OwnershipTree::new()),
+        )
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn raw_invoke_override_cannot_bypass_configured_policy() {
+        const TEST_NAME: &str =
+            "gateway::handlers::tools_invoke::tests::raw_invoke_override_cannot_bypass_configured_policy";
+        const CHILD_ENV: &str = "ALEPH_RAW_INVOKE_POLICY_TEST_CHILD";
+        let key = crate::security::dangerous_tools::GATEWAY_TOOLS_ALLOW_ENV;
+
+        // Set the override only in a child process. Other tests in this binary
+        // and security::dangerous_tools use the same process-wide key, so an
+        // in-process restore/lock would still race their writers.
+        if std::env::var(CHILD_ENV).ok().as_deref() != Some(TEST_NAME) {
+            let output =
+                std::process::Command::new(std::env::current_exe().expect("test executable"))
+                    .args(["--exact", TEST_NAME, "--nocapture", "--test-threads=1"])
+                    .env(CHILD_ENV, TEST_NAME)
+                    .env(key, "file_write")
+                    .output()
+                    .expect("spawn isolated raw-invoke policy test");
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            assert!(
+                output.status.success(),
+                "isolated raw-invoke test failed: {}\n{stdout}\n{stderr}",
+                output.status
+            );
+            assert!(
+                stdout.contains("1 passed; 0 failed"),
+                "isolated raw-invoke test did not execute: {stdout}\n{stderr}"
+            );
+            println!("isolated raw-invoke policy receipt:\n{stdout}");
+            return;
+        }
+
+        let config: crate::Config = toml::from_str(
+            "[policies.capability_constraints.\"aleph/tools/file_write\"]\nrequired_conditions = { provider_ready = true }\n",
+        )
+        .unwrap();
+        let tree = Arc::new(crate::capability::ownership::OwnershipTree::new());
+        let policy =
+            crate::capability::production_init::build_capability_policy(&config, tree.clone())
+                .unwrap();
+        let reg = Arc::new(StubRegistry::new().with_ok("file_write", json!({"written":true})));
+        let request = || {
+            JsonRpcRequest::with_id(
+                "tools.invoke",
+                Some(json!({"tool_name":"file_write","arguments":{}})),
+                json!("raw-policy"),
+            )
+        };
+        let denied = handle_invoke(request(), reg.clone(), None, policy).await;
+        assert!(
+            !denied.is_success(),
+            "raw configured target must be explicitly refused"
+        );
+        assert!(denied.error.unwrap().message.contains("capability"));
+        assert!(reg.last_call().is_none(), "raw override produced an effect");
+        let unconfigured = crate::capability::production_init::build_capability_policy(
+            &crate::Config::default(),
+            tree,
+        )
+        .unwrap();
+        assert!(handle_invoke(request(), reg.clone(), None, unconfigured)
+            .await
+            .is_success());
+        assert_eq!(reg.last_call().unwrap().0, "file_write");
+    }
+
     /// Minimal in-test ToolRegistry returning canned values keyed by tool name.
     /// Returns an error for unknown tools so we can exercise the error path.
     struct StubRegistry {
@@ -434,7 +524,7 @@ mod tests {
     async fn rejects_missing_params() {
         let reg = Arc::new(StubRegistry::new());
         let req = JsonRpcRequest::with_id("tools.invoke", None, json!(1));
-        let resp = handle_invoke(req, reg, None).await;
+        let resp = handle_invoke(req, reg, None, empty_policy()).await;
         assert!(!resp.is_success(), "expected error response");
         assert_eq!(resp.error.unwrap().code, INVALID_PARAMS);
     }
@@ -444,7 +534,7 @@ mod tests {
         let reg = Arc::new(StubRegistry::new());
         let params = json!({"tool_name": "  ", "arguments": {}});
         let req = JsonRpcRequest::with_id("tools.invoke", Some(params), json!(1));
-        let resp = handle_invoke(req, reg, None).await;
+        let resp = handle_invoke(req, reg, None, empty_policy()).await;
         assert!(!resp.is_success());
         assert_eq!(resp.error.unwrap().code, INVALID_PARAMS);
     }
@@ -457,7 +547,7 @@ mod tests {
         let reg = Arc::new(StubRegistry::new().with_ok("bash", json!({"ok": true})));
         let params = json!({"tool_name": "bash", "arguments": {}});
         let req = JsonRpcRequest::with_id("tools.invoke", Some(params), json!(1));
-        let resp = handle_invoke(req, reg.clone(), None).await;
+        let resp = handle_invoke(req, reg.clone(), None, empty_policy()).await;
         assert!(!resp.is_success(), "dangerous tool must be denied");
         assert_eq!(resp.error.unwrap().code, INVALID_PARAMS);
         assert!(
@@ -478,7 +568,7 @@ mod tests {
             let reg = Arc::new(StubRegistry::new().with_ok(tool, json!({"ok": true})));
             let params = json!({"tool_name": tool, "arguments": {"action": "status"}});
             let req = JsonRpcRequest::with_id("tools.invoke", Some(params), json!(1));
-            let resp = handle_invoke(req, reg.clone(), None).await;
+            let resp = handle_invoke(req, reg.clone(), None, empty_policy()).await;
             assert!(!resp.is_success(), "{tool} must be denied");
             assert!(
                 resp.error.unwrap().message.contains("continuation-driven"),
@@ -502,7 +592,7 @@ mod tests {
             let reg = Arc::new(StubRegistry::new().with_ok(tool, json!({"ok": true})));
             let params = json!({"tool_name": tool, "arguments": {}});
             let req = JsonRpcRequest::with_id("tools.invoke", Some(params), json!(1));
-            let resp = handle_invoke(req, reg.clone(), None).await;
+            let resp = handle_invoke(req, reg.clone(), None, empty_policy()).await;
             assert!(!resp.is_success(), "{tool} must be denied");
             assert_eq!(resp.error.unwrap().code, INVALID_PARAMS);
             assert!(
@@ -517,7 +607,7 @@ mod tests {
         let reg = Arc::new(StubRegistry::new());
         let params = json!({"tool_name": "missing_tool", "arguments": {}});
         let req = JsonRpcRequest::with_id("tools.invoke", Some(params), json!(1));
-        let resp = handle_invoke(req, reg, None).await;
+        let resp = handle_invoke(req, reg, None, empty_policy()).await;
         assert!(!resp.is_success());
         let err = resp.error.unwrap();
         assert_eq!(err.code, INTERNAL_ERROR);
@@ -539,7 +629,7 @@ mod tests {
             "arguments": {"query": "hello"},
         });
         let req = JsonRpcRequest::with_id("tools.invoke", Some(params), json!(1));
-        let resp = handle_invoke(req, reg.clone(), None).await;
+        let resp = handle_invoke(req, reg.clone(), None, empty_policy()).await;
         assert!(resp.is_success(), "expected success: {:?}", resp.error);
         let result = resp.result.unwrap();
         assert_eq!(result["ok"], true);
@@ -559,7 +649,7 @@ mod tests {
             "agent_id": "research",
         });
         let req = JsonRpcRequest::with_id("tools.invoke", Some(params), json!(1));
-        let resp = handle_invoke(req, reg.clone(), None).await;
+        let resp = handle_invoke(req, reg.clone(), None, empty_policy()).await;
         assert!(resp.is_success());
         let (_, called_args) = reg.last_call().unwrap();
         assert_eq!(called_args["agent_id"], "research");
@@ -610,7 +700,7 @@ mod tests {
             "arguments": {}
         });
         let req = JsonRpcRequest::with_id("tools.invoke", Some(params), json!(1));
-        let resp = handle_invoke(req, tool_reg.clone(), Some(agents)).await;
+        let resp = handle_invoke(req, tool_reg.clone(), Some(agents), empty_policy()).await;
 
         assert!(
             !resp.is_success(),
@@ -634,7 +724,7 @@ mod tests {
             "arguments": {}
         });
         let req = JsonRpcRequest::with_id("tools.invoke", Some(params), json!(1));
-        let resp = handle_invoke(req, tool_reg, Some(agents)).await;
+        let resp = handle_invoke(req, tool_reg, Some(agents), empty_policy()).await;
 
         assert!(resp.is_success(), "expected success: {:?}", resp.error);
     }
@@ -649,7 +739,7 @@ mod tests {
             "arguments": {}
         });
         let req = JsonRpcRequest::with_id("tools.invoke", Some(params), json!(1));
-        let resp = handle_invoke(req, tool_reg, None).await;
+        let resp = handle_invoke(req, tool_reg, None, empty_policy()).await;
         assert!(resp.is_success());
     }
 
@@ -691,7 +781,7 @@ mod tests {
                 let reg = Arc::new(StubRegistry::new().with_ok("cron_manage", json!({"ok": true})));
                 let params = json!({"tool_name": "cron_manage", "arguments": {"action": "list"}});
                 let req = JsonRpcRequest::with_id("tools.invoke", Some(params), json!(1));
-                let resp = handle_invoke(req, reg.clone(), None).await;
+                let resp = handle_invoke(req, reg.clone(), None, empty_policy()).await;
                 assert!(
                     !resp.is_success(),
                     "a member must be denied an operator-tier tool"
@@ -720,7 +810,7 @@ mod tests {
                     Arc::new(StubRegistry::new().with_ok("memory_search", json!({"hits": []})));
                 let params = json!({"tool_name": "memory_search", "arguments": {"query": "x"}});
                 let req = JsonRpcRequest::with_id("tools.invoke", Some(params), json!(1));
-                let resp = handle_invoke(req, reg.clone(), None).await;
+                let resp = handle_invoke(req, reg.clone(), None, empty_policy()).await;
                 assert!(
                     !resp.is_success(),
                     "memory_search is not on MEMBER_ALLOWED_TOOLS — must be denied"
@@ -746,7 +836,7 @@ mod tests {
                 let params =
                     json!({"tool_name": "team_from_template", "arguments": {"template": "x"}});
                 let req = JsonRpcRequest::with_id("tools.invoke", Some(params), json!(1));
-                let resp = handle_invoke(req, reg.clone(), None).await;
+                let resp = handle_invoke(req, reg.clone(), None, empty_policy()).await;
                 assert!(resp.is_success(), "expected success: {:?}", resp.error);
                 assert!(reg.last_call().is_some());
             })
@@ -769,7 +859,7 @@ mod tests {
                     "arguments": {"conversation_id": "c1", "text": "hi"}
                 });
                 let req = JsonRpcRequest::with_id("tools.invoke", Some(params), json!(1));
-                let resp = handle_invoke(req, reg.clone(), None).await;
+                let resp = handle_invoke(req, reg.clone(), None, empty_policy()).await;
                 assert!(!resp.is_success(), "channel_message must be denied");
                 assert_eq!(resp.error.unwrap().code, AUTH_REQUIRED);
                 assert!(reg.last_call().is_none());
@@ -788,7 +878,7 @@ mod tests {
                 let reg = Arc::new(StubRegistry::new().with_ok("gui_click", json!({"ok": true})));
                 let params = json!({"tool_name": "gui_click", "arguments": {"x": 1, "y": 1}});
                 let req = JsonRpcRequest::with_id("tools.invoke", Some(params), json!(1));
-                let resp = handle_invoke(req, reg.clone(), None).await;
+                let resp = handle_invoke(req, reg.clone(), None, empty_policy()).await;
                 assert!(!resp.is_success(), "gui_click must be denied");
                 assert_eq!(resp.error.unwrap().code, AUTH_REQUIRED);
                 assert!(reg.last_call().is_none());
@@ -803,7 +893,7 @@ mod tests {
                 let reg = Arc::new(StubRegistry::new().with_ok("cron_manage", json!({"ok": true})));
                 let params = json!({"tool_name": "cron_manage", "arguments": {"action": "list"}});
                 let req = JsonRpcRequest::with_id("tools.invoke", Some(params), json!(1));
-                let resp = handle_invoke(req, reg.clone(), None).await;
+                let resp = handle_invoke(req, reg.clone(), None, empty_policy()).await;
                 assert!(
                     resp.is_success(),
                     "operator must be allowed: {:?}",
@@ -819,7 +909,7 @@ mod tests {
         let reg = Arc::new(StubRegistry::new().with_ok("cron_manage", json!({"ok": true})));
         let params = json!({"tool_name": "cron_manage", "arguments": {"action": "list"}});
         let req = JsonRpcRequest::with_id("tools.invoke", Some(params), json!(1));
-        let resp = handle_invoke(req, reg.clone(), None).await;
+        let resp = handle_invoke(req, reg.clone(), None, empty_policy()).await;
         assert!(resp.is_success(), "expected success: {:?}", resp.error);
     }
 
@@ -834,7 +924,7 @@ mod tests {
             "arguments": {}
         });
         let req = JsonRpcRequest::with_id("tools.invoke", Some(params), json!(1));
-        let resp = handle_invoke(req, tool_reg, Some(agents)).await;
+        let resp = handle_invoke(req, tool_reg, Some(agents), empty_policy()).await;
         assert!(!resp.is_success());
         assert_eq!(resp.error.unwrap().code, INVALID_PARAMS);
     }
@@ -877,7 +967,7 @@ mod tests {
         ));
         let params = json!({"tool_name": "a_presentation_attaching_tool", "arguments": {}});
         let req = JsonRpcRequest::with_id("tools.invoke", Some(params), json!(1));
-        let resp = handle_invoke(req, reg, None).await;
+        let resp = handle_invoke(req, reg, None, empty_policy()).await;
         assert!(resp.is_success(), "expected success: {:?}", resp.error);
 
         let body = serde_json::to_string(&resp.result.unwrap()).unwrap();
@@ -902,7 +992,7 @@ mod tests {
         ));
         let params = json!({"tool_name": "some_future_tool", "arguments": {}});
         let req = JsonRpcRequest::with_id("tools.invoke", Some(params), json!(1));
-        let resp = handle_invoke(req, reg, None).await;
+        let resp = handle_invoke(req, reg, None, empty_policy()).await;
         assert!(resp.is_success(), "expected success: {:?}", resp.error);
 
         let body = serde_json::to_string(&resp.result.unwrap()).unwrap();

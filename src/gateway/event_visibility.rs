@@ -165,6 +165,11 @@ use aleph_protocol::team_topic::team_topic_id;
 /// JSON-RPC notification frames — see `event_bus.rs::publish_frame`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SessionIdentity {
+    /// A trusted process-local produced envelope. Evaluated with fresh facts.
+    CapabilityAudience,
+    /// Capability ledger loss status has no private payload, but still requires
+    /// an explicitly authenticated current operator and a configured store.
+    CapabilityStatus,
     /// The frame's own payload names its session directly.
     BySessionKey(String),
     /// The frame names only a `run_id`; the session must be resolved through
@@ -406,6 +411,8 @@ pub(crate) fn classify(topic: &str, data: Option<&Value>) -> Option<SessionIdent
         return Some(SessionIdentity::ByTeamId(team_id.to_string()));
     }
     Some(match topic {
+        "capability.event" | "capabilities.ui.display" => SessionIdentity::CapabilityAudience,
+        "capability.event.status" => SessionIdentity::CapabilityStatus,
         // The two clarification frames are plain `BySessionKey`: they must
         // admit exactly whom their two RPC faces admit, and those faces are
         // OWNER-keyed — `clarification.pending` filters every item through
@@ -963,6 +970,49 @@ impl EventVisibilityIndex {
     /// [`role_is_operator`](crate::tools::turn_context::role_is_operator) reads
     /// as trusted local/internal — the repo-wide convention, and why the
     /// boolean shim above is safe for internal callers rather than a hole.
+    /// Capability observations use fresh existing session metadata and roster
+    /// facts. The historical session cache and legacy missing-role exemption do
+    /// not authorize these new topics, even for an operator.
+    pub async fn capability_audience_admits(
+        &self,
+        audience: &crate::capability::event_audience::EventAudience,
+        caller_user: Option<&str>,
+        caller_role: Option<&str>,
+        store: &Arc<dyn SessionStore>,
+    ) -> bool {
+        use crate::capability::event_audience::EventAudience;
+        let Some(user) = caller_user.filter(|user| !user.trim().is_empty()) else {
+            return false;
+        };
+        if !matches!(caller_role, Some("operator" | "member")) {
+            return false;
+        }
+        match audience {
+            EventAudience::OperatorOnly => caller_role == Some("operator"),
+            EventAudience::Principal(principal) => {
+                if principal.user_id() != user {
+                    return false;
+                }
+                let Some(session) = principal.session_key() else {
+                    return principal.workspace().is_none();
+                };
+                let Some(key) = SessionKey::from_key_string(session) else {
+                    return false;
+                };
+                let Ok(Some(meta)) = store.get_metadata(&key).await else {
+                    return false;
+                };
+                if principal
+                    .workspace()
+                    .is_some_and(|workspace| meta.scope_id.as_deref() != Some(workspace))
+                {
+                    return false;
+                }
+                crate::gateway::visibility::session_visible_to(&meta, user)
+            }
+        }
+    }
+
     pub async fn event_admits_for(
         &self,
         topic: &str,
@@ -973,6 +1023,19 @@ impl EventVisibilityIndex {
         teams: Option<&Arc<dyn TeamStore>>,
     ) -> bool {
         match session_identity_of(topic, data) {
+            SessionIdentity::CapabilityAudience => {
+                let Some(audience) = data.and_then(
+                    crate::capability::event_audience::EventAudience::from_produced_frame,
+                ) else {
+                    return false;
+                };
+                self.capability_audience_admits(&audience, caller_user, caller_role, store)
+                    .await
+            }
+            SessionIdentity::CapabilityStatus => {
+                caller_user.is_some_and(|user| !user.trim().is_empty())
+                    && caller_role == Some("operator")
+            }
             SessionIdentity::Global => true,
             SessionIdentity::OperatorOnly => {
                 crate::tools::turn_context::role_is_operator(caller_role)

@@ -17,6 +17,13 @@
     "select": "请选择标签",
     "failed": "标签加载失败"
   },
+  "capability_surface": {
+    "title": "能力表面",
+    "session_key": "会话键",
+    "attach": "连接",
+    "attached": "已连接",
+    "disconnected": "未连接"
+  },
   "session": {
     "healthy": "正常",
     "degraded": "降级",

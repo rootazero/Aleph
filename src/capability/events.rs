@@ -6,6 +6,7 @@
 //! may complete out of order, so sinks must order by record sequence if needed.
 
 use crate::capability::descriptor::CapabilityId;
+use crate::capability::event_audience::{EventAudience, TrustedEventScope};
 use crate::capability::ownership::{OwnerRef, VisibilityScope};
 use crate::sync_primitives::Arc;
 use chrono::{DateTime, Utc};
@@ -119,6 +120,7 @@ pub struct CapabilityEventRecord {
     sequence: u64,
     timestamp: DateTime<Utc>,
     actor: OwnerRef,
+    audience: EventAudience,
     event: CapabilityEvent,
 }
 
@@ -134,6 +136,9 @@ impl CapabilityEventRecord {
     }
     pub fn event(&self) -> &CapabilityEvent {
         &self.event
+    }
+    pub fn audience(&self) -> &EventAudience {
+        &self.audience
     }
 }
 
@@ -161,6 +166,8 @@ impl EventFilter {
 
 #[derive(Debug, thiserror::Error)]
 pub enum EventError {
+    #[error("scoped capability events are unsupported by this source")]
+    Unsupported,
     #[error("event buffer capacity is zero or exceeds the broadcast channel limit")]
     InvalidCapacity,
     #[error("event buffer lock is poisoned")]
@@ -184,6 +191,14 @@ pub trait EventPersistence: Send + Sync {
 /// Offload slow I/O in the sink rather than blocking the capability owner.
 pub trait CapabilityEventStream: Send + Sync {
     fn emit(&self, actor: OwnerRef, event: CapabilityEvent) -> Result<(), EventError>;
+    fn emit_scoped(
+        &self,
+        _actor: OwnerRef,
+        _audience: EventAudience,
+        _event: CapabilityEvent,
+    ) -> Result<(), EventError> {
+        Err(EventError::Unsupported)
+    }
     /// Live-only, with no historical replay; subscribe before starting producers.
     fn subscribe(&self, filter: EventFilter) -> EventSubscription;
 }
@@ -194,6 +209,19 @@ pub struct EventSubscription {
 }
 
 impl EventSubscription {
+    /// Live-only asynchronous receive. Closure drains queued matching records first.
+    pub async fn recv(&mut self) -> Result<Arc<CapabilityEventRecord>, EventError> {
+        loop {
+            let record = self.receiver.recv().await.map_err(|error| match error {
+                broadcast::error::RecvError::Closed => EventError::Closed,
+                broadcast::error::RecvError::Lagged(count) => EventError::Lagged(count),
+            })?;
+            if self.filter.matches(&record) {
+                return Ok(record);
+            }
+        }
+    }
+
     /// `None` means currently empty, never "history complete".
     pub fn try_recv(&mut self) -> Result<Option<Arc<CapabilityEventRecord>>, EventError> {
         loop {
@@ -205,6 +233,22 @@ impl EventSubscription {
                 Err(broadcast::error::TryRecvError::Lagged(count)) => {
                     return Err(EventError::Lagged(count))
                 }
+            }
+        }
+    }
+}
+
+/// Owned live receiver, independent of the (intentionally non-Send) Zahir face.
+pub struct ScopedEventSubscription {
+    subscription: EventSubscription,
+    scope: TrustedEventScope,
+}
+impl ScopedEventSubscription {
+    pub async fn recv(&mut self) -> Result<Arc<CapabilityEventRecord>, EventError> {
+        loop {
+            let record = self.subscription.recv().await?;
+            if self.scope.admits(&record).await {
+                return Ok(record);
             }
         }
     }
@@ -226,18 +270,28 @@ impl EventSnapshot {
     }
 }
 
-#[derive(Default)]
 struct Buffer {
     records: VecDeque<Arc<CapabilityEventRecord>>,
     sequence: u64,
     dropped: u64,
+    // The sole sender is taken at close under the same commit mutex.
+    sender: Option<broadcast::Sender<Arc<CapabilityEventRecord>>>,
+    // Resubscription anchor for this SAME hub, including after explicit close.
+    // It neither forwards records nor keeps a producer alive.
+    receiver: broadcast::Receiver<Arc<CapabilityEventRecord>>,
 }
+
+pub const DEFAULT_EVENT_CAPACITY: usize = 1024;
 
 pub struct InMemoryEventStream {
     capacity: usize,
     buffer: Mutex<Buffer>,
-    sender: broadcast::Sender<Arc<CapabilityEventRecord>>,
     persistence: Option<Arc<dyn EventPersistence>>,
+}
+impl Default for InMemoryEventStream {
+    fn default() -> Self {
+        Self::new(DEFAULT_EVENT_CAPACITY).expect("static event capacity is valid")
+    }
 }
 
 impl InMemoryEventStream {
@@ -252,12 +306,36 @@ impl InMemoryEventStream {
         if capacity == 0 || capacity > usize::MAX / 2 {
             return Err(EventError::InvalidCapacity);
         }
+        let (sender, receiver) = broadcast::channel(capacity);
         Ok(Self {
             capacity,
-            buffer: Mutex::new(Buffer::default()),
-            sender: broadcast::channel(capacity).0,
+            buffer: Mutex::new(Buffer {
+                records: VecDeque::new(),
+                sequence: 0,
+                dropped: 0,
+                sender: Some(sender),
+                receiver,
+            }),
             persistence,
         })
+    }
+
+    /// Synchronously seals emission and wakes receivers, even while emitters keep Arcs.
+    pub fn close(&self) -> Result<(), EventError> {
+        let mut buffer = self.buffer.lock().map_err(|_| EventError::Poisoned)?;
+        drop(buffer.sender.take());
+        Ok(())
+    }
+
+    pub fn subscribe_scoped(
+        &self,
+        scope: TrustedEventScope,
+        filter: EventFilter,
+    ) -> ScopedEventSubscription {
+        ScopedEventSubscription {
+            subscription: self.subscribe(filter),
+            scope,
+        }
     }
 
     pub fn snapshot(&self) -> Result<EventSnapshot, EventError> {
@@ -271,26 +349,43 @@ impl InMemoryEventStream {
 
 impl CapabilityEventStream for InMemoryEventStream {
     fn emit(&self, actor: OwnerRef, event: CapabilityEvent) -> Result<(), EventError> {
+        self.emit_scoped(actor, EventAudience::OperatorOnly, event)
+    }
+
+    fn emit_scoped(
+        &self,
+        actor: OwnerRef,
+        audience: EventAudience,
+        event: CapabilityEvent,
+    ) -> Result<(), EventError> {
         let record = {
             let mut buffer = self.buffer.lock().map_err(|_| EventError::Poisoned)?;
-            let sequence = buffer
-                .sequence
+            let Buffer {
+                records,
+                sequence,
+                dropped,
+                sender,
+                ..
+            } = &mut *buffer;
+            let sender = sender.as_ref().ok_or(EventError::Closed)?;
+            let next = sequence
                 .checked_add(1)
                 .ok_or(EventError::SequenceExhausted)?;
             let record = Arc::new(CapabilityEventRecord {
-                sequence,
+                sequence: next,
                 timestamp: Utc::now(),
                 actor,
+                audience,
                 event,
             });
-            if buffer.records.len() == self.capacity {
-                buffer.records.pop_front();
-                buffer.dropped += 1;
+            if records.len() == self.capacity {
+                records.pop_front();
+                *dropped += 1;
             }
-            buffer.records.push_back(Arc::clone(&record));
-            buffer.sequence = sequence;
-            // No listeners is normal. Memory collection does not depend on live subscribers.
-            let _ = self.sender.send(Arc::clone(&record));
+            records.push_back(Arc::clone(&record));
+            *sequence = next;
+            // Commit and notification precede close under this SAME mutex.
+            let _ = sender.send(Arc::clone(&record));
             record
         };
         if let Some(persistence) = &self.persistence {
@@ -303,7 +398,12 @@ impl CapabilityEventStream for InMemoryEventStream {
 
     fn subscribe(&self, filter: EventFilter) -> EventSubscription {
         EventSubscription {
-            receiver: self.sender.subscribe(),
+            receiver: self
+                .buffer
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .receiver
+                .resubscribe(),
             filter,
         }
     }
@@ -332,6 +432,285 @@ impl CapabilityEventEmitter {
             tracing::warn!(event_type = ?kind, error = %error, "capability event emission failed");
         }
     }
+
+    pub fn emit_scoped(&self, actor: OwnerRef, audience: EventAudience, event: CapabilityEvent) {
+        let kind = event.event_type();
+        if let Err(error) = self.0.emit_scoped(actor, audience, event) {
+            tracing::warn!(event_type = ?kind, error = %error, "capability scoped event emission failed");
+        }
+    }
+}
+
+/// Observation metadata retained by the actual immutable source record.
+/// Flags are not authority; source owners set them only inside their existing commit.
+#[derive(Debug)]
+pub(crate) struct SourceObservation {
+    descriptor: crate::capability::descriptor::CapabilityDescriptor,
+    audience: EventAudience,
+    incarnation: String,
+    emitter: CapabilityEventEmitter,
+    state: std::sync::atomic::AtomicU8,
+}
+
+impl SourceObservation {
+    pub(crate) fn new(
+        descriptor: crate::capability::descriptor::CapabilityDescriptor,
+        audience: EventAudience,
+        incarnation: String,
+        emitter: CapabilityEventEmitter,
+    ) -> Arc<Self> {
+        Arc::new(Self {
+            descriptor,
+            audience,
+            incarnation,
+            emitter,
+            state: std::sync::atomic::AtomicU8::new(0),
+        })
+    }
+
+    pub(crate) fn mark_committed(&self) {
+        self.state.fetch_or(1, std::sync::atomic::Ordering::SeqCst);
+    }
+    pub(crate) fn mark_withdrawn(&self) {
+        self.state.fetch_or(2, std::sync::atomic::Ordering::SeqCst);
+    }
+    pub(crate) fn incarnation(&self) -> &str {
+        &self.incarnation
+    }
+    pub(crate) fn matches(&self, binding: &crate::capability::ownership::CapturedBinding) -> bool {
+        self.descriptor.id == binding.capability
+            && self.descriptor.visibility == binding.visibility
+            && self.descriptor.owner == binding.owner
+            && self.descriptor.lifetime == binding.lifetime
+    }
+
+    /// Drain one record's ordered observations without holding any source/tree mutex.
+    /// A reentrant persistence callback only adds pending flags for this same drainer.
+    pub(crate) fn flush(&self) {
+        use std::sync::atomic::Ordering::SeqCst;
+        loop {
+            if self.state.fetch_or(32, SeqCst) & 32 != 0 {
+                return;
+            }
+            loop {
+                let state = self.state.load(SeqCst);
+                let next = if state & 1 != 0 && state & 4 == 0 {
+                    Some((
+                        4,
+                        CapabilityEvent::CapabilityCreated {
+                            id: self.descriptor.id.clone(),
+                            owner: self.descriptor.owner.clone(),
+                            visibility: Box::new(self.descriptor.visibility.clone()),
+                        },
+                    ))
+                } else if state & 1 != 0 && state & 8 == 0 {
+                    Some((
+                        8,
+                        CapabilityEvent::CapabilityActivated {
+                            id: self.descriptor.id.clone(),
+                            lease_id: self.incarnation.clone(),
+                            constraints_applied: 0,
+                        },
+                    ))
+                } else if state & 3 == 3 && state & 16 == 0 {
+                    Some((
+                        16,
+                        CapabilityEvent::CapabilityRevoked {
+                            id: self.descriptor.id.clone(),
+                            reason: "source_withdrawn".into(),
+                        },
+                    ))
+                } else {
+                    None
+                };
+                let Some((flag, event)) = next else { break };
+                self.state.fetch_or(flag, SeqCst);
+                self.emitter.emit_scoped(
+                    self.descriptor.owner.clone(),
+                    self.audience.clone(),
+                    event,
+                );
+            }
+            self.state.fetch_and(!32, SeqCst);
+            let state = self.state.load(SeqCst);
+            if !(state & 1 != 0 && state & 12 != 12 || state & 3 == 3 && state & 16 == 0) {
+                return;
+            }
+        }
+    }
+}
+
+/// Mechanical outbox item, never a source or authorization registry. Its
+/// reservation keeps STOP/DRAIN open until post-lock observation completes.
+pub(crate) struct SourceObservationReceipt {
+    observation: Option<Arc<SourceObservation>>,
+    running: Option<crate::capability::policy_runtime::RunningCapabilityCall>,
+}
+
+impl SourceObservationReceipt {
+    pub(crate) fn new(
+        observation: Option<Arc<SourceObservation>>,
+        running: Option<crate::capability::policy_runtime::RunningCapabilityCall>,
+    ) -> Self {
+        Self {
+            observation,
+            running,
+        }
+    }
+    pub(crate) fn flush(self) {
+        if let Some(observation) = self.observation {
+            observation.flush();
+        }
+        drop(self.running);
+    }
+}
+
+/// Shared composition, not a source catalog or an authorization authority.
+#[derive(Clone)]
+pub(crate) struct SourceEventFactory {
+    pub(crate) policy: Arc<crate::capability::policy::PolicyEngine>,
+    pub(crate) emitter: CapabilityEventEmitter,
+}
+
+impl SourceEventFactory {
+    pub(crate) fn tool(
+        &self,
+        descriptor: &crate::tools::descriptor::ToolCapabilityDescriptor,
+    ) -> Arc<SourceObservation> {
+        self.system(crate::capability::backend::to_descriptor(descriptor))
+    }
+
+    pub(crate) fn system(
+        &self,
+        descriptor: crate::capability::descriptor::CapabilityDescriptor,
+    ) -> Arc<SourceObservation> {
+        let incarnation = uuid::Uuid::new_v4().to_string();
+        SourceObservation::new(
+            descriptor,
+            EventAudience::OperatorOnly,
+            incarnation,
+            self.emitter.clone(),
+        )
+    }
+
+    pub(crate) fn principal(
+        &self,
+        descriptor: crate::capability::descriptor::CapabilityDescriptor,
+        call: &crate::capability::policy_runtime::CapabilityCallContext,
+    ) -> Option<Arc<SourceObservation>> {
+        call.principal().filter(|principal| !principal.is_empty())?;
+        let incarnation = uuid::Uuid::new_v4().to_string();
+        Some(SourceObservation::new(
+            descriptor,
+            EventAudience::from_call(call, Some(incarnation.clone())),
+            incarnation,
+            self.emitter.clone(),
+        ))
+    }
+}
+
+/// One actual operation completion, retained by detached-from-caller source owners.
+#[derive(Clone)]
+pub(crate) struct InvocationObservation(Arc<InvocationObservationInner>);
+
+struct InvocationObservationInner {
+    id: CapabilityId,
+    actor: OwnerRef,
+    audience: EventAudience,
+    emitter: CapabilityEventEmitter,
+    completed: std::sync::atomic::AtomicBool,
+    _running: Option<crate::capability::policy_runtime::RunningCapabilityCall>,
+}
+
+impl InvocationObservation {
+    pub(crate) fn new(
+        lease: &crate::capability::facade::BackendLease,
+        call: &crate::capability::policy_runtime::CapabilityCallContext,
+        emitter: CapabilityEventEmitter,
+        running: crate::capability::policy_runtime::RunningCapabilityCall,
+    ) -> Option<Self> {
+        let private = lease.descriptor.visibility.principal.is_some()
+            || matches!(
+                lease.descriptor.kind,
+                crate::capability::descriptor::CapabilityKind::Terminal
+                    | crate::capability::descriptor::CapabilityKind::Ui
+            );
+        if private && call.principal().is_none() {
+            return None;
+        }
+        Some(Self(Arc::new(InvocationObservationInner {
+            id: lease.descriptor.id.clone(),
+            actor: call.actor().clone(),
+            audience: invocation_audience(lease, call),
+            emitter,
+            completed: std::sync::atomic::AtomicBool::new(false),
+            _running: Some(running),
+        })))
+    }
+
+    pub(crate) fn complete(&self, result: HandlerResult) {
+        if self
+            .0
+            .completed
+            .swap(true, std::sync::atomic::Ordering::SeqCst)
+        {
+            return;
+        }
+        let event = if result == HandlerResult::ExecutionFailed {
+            CapabilityEvent::ExecutionFailed {
+                id: self.0.id.clone(),
+                operation: "invoke".into(),
+                reason: "execution_failed".into(),
+            }
+        } else {
+            CapabilityEvent::CapabilityInvoked {
+                id: self.0.id.clone(),
+                operation: "invoke".into(),
+                handler_result: result,
+            }
+        };
+        self.0
+            .emitter
+            .emit_scoped(self.0.actor.clone(), self.0.audience.clone(), event);
+    }
+}
+
+pub(crate) fn invocation_audience(
+    lease: &crate::capability::facade::BackendLease,
+    call: &crate::capability::policy_runtime::CapabilityCallContext,
+) -> EventAudience {
+    use crate::capability::facade::BackendSourceEvidence;
+    let incarnation = match &lease.source {
+        BackendSourceEvidence::Tool {
+            canonical_entry, ..
+        } => canonical_entry
+            .entry()
+            .observation
+            .as_ref()
+            .map(|observation| observation.incarnation().to_owned()),
+        BackendSourceEvidence::Special { capture, .. } => capture
+            .source_observation()
+            .map(|observation| observation.incarnation().to_owned()),
+        BackendSourceEvidence::Provider {
+            provider_id,
+            provider_generation,
+        } => Some(format!("provider/{provider_id:?}/{provider_generation}")),
+        BackendSourceEvidence::MemoryResource(source) => source
+            .upgrade()
+            .and_then(|runtime| {
+                runtime.source_observation_for_binding(
+                    &crate::capability::ownership::CapturedBinding {
+                        capability: lease.descriptor.id.clone(),
+                        visibility: lease.descriptor.visibility.clone(),
+                        generation: lease.owner_generation,
+                        owner: lease.owner.clone(),
+                        lifetime: lease.descriptor.lifetime,
+                    },
+                )
+            })
+            .map(|observation| observation.incarnation().to_owned()),
+    };
+    EventAudience::from_call(call, incarnation)
 }
 
 /// An observational decorator; policy decisions still belong exclusively to PolicyEngine.
@@ -511,6 +890,14 @@ impl crate::capability::facade::Zahir for AuditedZahir {
         cursor: crate::capability::facade::Cursor,
     ) -> crate::capability::facade::CapabilityChangeStream {
         self.inner.subscribe(scope, cursor)
+    }
+
+    fn subscribe_events(
+        &self,
+        scope: TrustedEventScope,
+        filter: EventFilter,
+    ) -> Result<ScopedEventSubscription, EventError> {
+        self.inner.subscribe_events(scope, filter)
     }
 
     fn project(

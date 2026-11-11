@@ -550,6 +550,19 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
         let mode = self.resolve_turn_mode(request).await;
         let think = self.resolve_turn_think_level(request).await;
         let memory = self.resolve_turn_memory_mode(request).await;
+        // A configured canonical capability must not use this raw shortcut.
+        // Returning Fallthrough is deliberate: the guarded full loop remains
+        // the sole place that evaluates facts, approval, and effects.
+        if self.capability_policy.as_ref().is_some_and(|policy| {
+            policy.is_configured(&crate::capability::descriptor::CapabilityId {
+                namespace: crate::capability::backend::TOOL_NAMESPACE.to_string(),
+                name: name.to_string(),
+            })
+        }) {
+            return Err(format!(
+                "`/{name}` targets a configured capability and must use the guarded path"
+            ));
+        }
         let caller_role = request.metadata.get("caller_role").map(String::as_str);
         let caller_is_operator = crate::tools::turn_context::role_is_operator(caller_role);
 
