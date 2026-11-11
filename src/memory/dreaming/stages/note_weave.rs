@@ -217,10 +217,9 @@ impl DreamStage for NoteWeaveStage {
         // deterministically, and (via the bare `?` below) took the whole dream
         // pipeline down with it, every cycle, forever. Cap the inputs like
         // MentionWeave caps its own (MAX_MENTIONS_PER_CYCLE).
-        let orphan_batch: Vec<String> = orphans
+        let orphan_batch: Vec<&String> = orphans
             .iter()
             .take(MAX_ORPHANS_PER_EXTRACTION)
-            .cloned()
             .collect();
         let peer_batch: Vec<&String> = others.iter().take(MAX_PEERS_PER_EXTRACTION).collect();
         if orphans.len() > orphan_batch.len() || others.len() > peer_batch.len() {
@@ -235,6 +234,7 @@ impl DreamStage for NoteWeaveStage {
 
         let inputs: Vec<NoteForExtraction> = orphan_batch
             .iter()
+            .copied()
             .chain(peer_batch)
             .map(|path| build_extraction_input(path, orphan_bodies.get(path).map(String::as_str)))
             .collect();
@@ -495,7 +495,7 @@ async fn write_typed_link(ctx: &mut DreamContext, from: &str, to: &str, relation
     let to_link = [to.to_string()];
     if let Err(e) = ctx
         .indexer
-        .append_to_note(&ctx.agent_id, from, &Vec::<String>::new(), &to_link)
+        .append_to_note(&ctx.agent_id, from, &[], &to_link)
         .await
     {
         warn!(from = %from, to = %to, error = %e, "NoteWeave: body link write failed");
