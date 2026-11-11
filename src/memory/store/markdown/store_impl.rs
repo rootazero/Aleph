@@ -500,9 +500,7 @@ impl RawSessionStore for MarkdownSessionStore {
 
         // Update metadata
         metadata.ended_at = Some(ended_at);
-        if let Some(started) = Some(metadata.started_at) {
-            metadata.duration_seconds = Some(ended_at - started);
-        }
+        metadata.duration_seconds = Some(ended_at - metadata.started_at);
 
         // Compute content hash
         let transcript = self.read_transcript(session_id).await?;

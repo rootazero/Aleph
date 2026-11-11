@@ -2491,8 +2491,8 @@ impl NoteStore for SqliteMemoryBackend {
                     .query(rusqlite::params_from_iter(
                         chunk
                             .iter()
-                            .cloned()
-                            .chain(std::iter::once(agent_id.to_string())),
+                            .map(|s| s.as_str())
+                            .chain(std::iter::once(agent_id)),
                     ))
                     .map_err(|e| AlephError::config(format!("recall_hit_counts query: {e}")))?;
                 while let Some(row) = rows

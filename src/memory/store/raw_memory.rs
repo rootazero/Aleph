@@ -133,12 +133,14 @@ impl RawMemorySource {
             "session_end" => {
                 let reason = detail
                     .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok())
-                    .and_then(|v| v.get("reason").and_then(|x| x.as_str().map(str::to_string)))
-                    .unwrap_or_else(|| "disconnect".into());
-                let reason = match reason.as_str() {
-                    "task_done" => SessionEndReason::TaskDone,
-                    _ => SessionEndReason::Disconnect,
-                };
+                    .and_then(|v| {
+                        let r = v.get("reason")?.as_str()?;
+                        Some(match r {
+                            "task_done" => SessionEndReason::TaskDone,
+                            _ => SessionEndReason::Disconnect,
+                        })
+                    })
+                    .unwrap_or(SessionEndReason::Disconnect);
                 Self::SessionEnd { reason }
             }
             "correction" => {
