@@ -45,73 +45,9 @@ host_fn!(pub host_now_millis(state: HostState;) -> u64 {
 host_fn!(pub host_workspace_read(state: HostState; path: String) -> String {
     let state = state.get()?;
     let state = state.lock().unwrap_or_else(|e| e.into_inner());
-
-    // Check capability (lexical prefix check against the declared allowed paths)
-    if let Err(e) = state.kernel.check_workspace_read(&path) {
-        return Ok(serde_json::json!({"error": e.to_string()}).to_string());
-    }
-
-    // Read file from workspace. The capability check above is lexical only and
-    // cannot see symlinks, so canonicalize the resolved path and confine it to
-    // the workspace root — a symlink inside the workspace must not escape the
-    // sandbox.
-    let full_path = state.workspace_root.join(&path);
-    let canonical = match std::fs::canonicalize(&full_path) {
-        Ok(p) => p,
-        Err(e) => return Ok(serde_json::json!({"error": e.to_string()}).to_string()),
-    };
-    let root = match std::fs::canonicalize(&state.workspace_root) {
-        Ok(p) => p,
-        Err(e) => return Ok(serde_json::json!({"error": e.to_string()}).to_string()),
-    };
-    if !canonical.starts_with(&root) {
-        return Ok(serde_json::json!({"error": "path escapes workspace"}).to_string());
-    }
-    // Re-apply the allowed-prefix boundary check to the canonical path so that
-    // an in-root symlink (e.g. docs/link -> ../secrets) cannot be used to reach
-    // a target outside the granted prefix. We strip the canonical workspace root
-    // from the canonical path to obtain the workspace-relative suffix, then
-    // re-run the same capability check against that suffix.
-    let canonical_relative = match canonical.strip_prefix(&root) {
-        Ok(rel) => rel.to_string_lossy().into_owned(),
-        Err(_) => return Ok(serde_json::json!({"error": "path escapes workspace"}).to_string()),
-    };
-    if let Err(e) = state.kernel.check_workspace_read(&canonical_relative) {
-        return Ok(serde_json::json!({"error": e.to_string()}).to_string());
-    }
-    // Cap the read: a plugin with the workspace capability must not pull
-    // arbitrarily large files into guest memory.
-    // Open the file and confirm it is a regular file before reading, so that
-    // FIFOs and other special files cannot block indefinitely. Then read
-    // through a bounded reader: if the content exceeds the cap we reject it
-    // even when metadata().len() reported a smaller (or zero) size.
-    let file = match std::fs::File::open(&canonical) {
-        Ok(f) => f,
-        Err(e) => return Ok(serde_json::json!({"error": e.to_string()}).to_string()),
-    };
-    let metadata = match file.metadata() {
-        Ok(m) => m,
-        Err(e) => return Ok(serde_json::json!({"error": e.to_string()}).to_string()),
-    };
-    if !metadata.is_file() {
-        return Ok(serde_json::json!({"error": "path is not a regular file"}).to_string());
-    }
-    // Read at most MAX_WORKSPACE_READ_BYTES + 1 bytes so we can distinguish
-    // "fits within cap" from "exceeds cap" without reading the whole file.
-    let mut limited = std::io::Read::take(file, MAX_WORKSPACE_READ_BYTES + 1);
-    let mut buf = Vec::new();
-    if let Err(e) = std::io::Read::read_to_end(&mut limited, &mut buf) {
-        return Ok(serde_json::json!({"error": e.to_string()}).to_string());
-    }
-    if buf.len() as u64 > MAX_WORKSPACE_READ_BYTES {
-        return Ok(serde_json::json!({
-            "error": format!("file exceeds cap {MAX_WORKSPACE_READ_BYTES}")
-        })
-        .to_string());
-    }
-    match String::from_utf8(buf) {
+    match read_workspace_file(&state, &path) {
         Ok(content) => Ok(serde_json::json!({"content": content}).to_string()),
-        Err(e) => Ok(serde_json::json!({"error": e.to_string()}).to_string()),
+        Err(e) => Ok(serde_json::json!({"error": e}).to_string()),
     }
 });
 
@@ -381,34 +317,69 @@ fn try_http_fetch(kernel: &WasmCapabilityKernel, request: &str) -> Result<String
     .to_string())
 }
 
-fn read_workspace_file(state: &HostState, relative_path: &str) -> Result<Vec<u8>, String> {
-    use std::path::{Component, Path, PathBuf};
+/// Read a workspace file on behalf of a plugin.
+///
+/// This is the single implementation behind the `workspace.read` host function:
+/// the declared capability prefix, the workspace root after symlink
+/// resolution, the granted-prefix re-check against the resolved path, the
+/// regular-file check and the size cap are all enforced here, so the unit
+/// tests below cover exactly the path the guest takes.
+///
+/// The capability check is lexical and cannot see symlinks, so the resolved
+/// path is canonicalized and confined to the workspace root — a symlink inside
+/// the workspace must not escape the sandbox. The allowed-prefix check is then
+/// re-applied to the canonical, workspace-relative path so that an in-root
+/// symlink (e.g. `docs/link -> ../secrets`) cannot reach a target outside the
+/// granted prefix.
+fn read_workspace_file(state: &HostState, relative_path: &str) -> Result<String, String> {
+    state
+        .kernel
+        .check_workspace_read(relative_path)
+        .map_err(|e| e.to_string())?;
 
-    let root = state.workspace_root.canonicalize().map_err(|e| {
+    let root = std::fs::canonicalize(&state.workspace_root).map_err(|e| {
         format!(
             "workspace root {} is not accessible: {e}",
             state.workspace_root.display()
         )
     })?;
-
-    let mut resolved = PathBuf::from(&root);
-    for component in Path::new(relative_path).components() {
-        match component {
-            Component::Normal(part) => resolved.push(part),
-            Component::CurDir => {}
-            _ => return Err(format!("path {relative_path} escapes the workspace")),
-        }
-    }
-
-    let canonical = resolved
-        .canonicalize()
-        .map_err(|e| format!("workspace path {relative_path} is not accessible: {e}"))?;
-
+    let full_path = state.workspace_root.join(relative_path);
+    let canonical = std::fs::canonicalize(&full_path).map_err(|e| {
+        format!("workspace path {relative_path} is not accessible: {e}")
+    })?;
     if !canonical.starts_with(&root) {
         return Err(format!("path {relative_path} escapes the workspace"));
     }
+    let canonical_relative = canonical
+        .strip_prefix(&root)
+        .map_err(|_| format!("path {relative_path} escapes the workspace"))?
+        .to_string_lossy()
+        .into_owned();
+    state
+        .kernel
+        .check_workspace_read(&canonical_relative)
+        .map_err(|e| e.to_string())?;
 
-    std::fs::read(&canonical).map_err(|e| format!("failed to read {}: {e}", canonical.display()))
+    // Open the file and confirm it is a regular file before reading, so that
+    // FIFOs and other special files cannot block indefinitely. Then read
+    // through a bounded reader: if the content exceeds the cap we reject it
+    // even when metadata().len() reported a smaller (or zero) size.
+    let file = std::fs::File::open(&canonical)
+        .map_err(|e| format!("failed to read {}: {e}", canonical.display()))?;
+    let metadata = file
+        .metadata()
+        .map_err(|e| format!("failed to stat {}: {e}", canonical.display()))?;
+    if !metadata.is_file() {
+        return Err("path is not a regular file".to_string());
+    }
+    let mut limited = std::io::Read::take(file, MAX_WORKSPACE_READ_BYTES + 1);
+    let mut buf = Vec::new();
+    std::io::Read::read_to_end(&mut limited, &mut buf)
+        .map_err(|e| format!("failed to read {}: {e}", canonical.display()))?;
+    if buf.len() as u64 > MAX_WORKSPACE_READ_BYTES {
+        return Err(format!("file exceeds cap {MAX_WORKSPACE_READ_BYTES}"));
+    }
+    String::from_utf8(buf).map_err(|e| e.to_string())
 }
 
 #[cfg(test)]
@@ -458,10 +429,7 @@ mod tests {
         assert!(read_workspace_file(&state, "docs/link/key.pem").is_err());
         assert!(read_workspace_file(&state, "docs/outside").is_err());
         assert!(read_workspace_file(&state, "docs/../secrets/key.pem").is_err());
-        assert_eq!(
-            read_workspace_file(&state, "docs/alias").unwrap(),
-            b"allowed".to_vec()
-        );
+        assert_eq!(read_workspace_file(&state, "docs/alias").unwrap(), "allowed");
     }
 
     #[test]
