@@ -148,6 +148,22 @@ pub struct PiiEngine {
     excluded_providers: HashSet<String>,
 }
 
+fn build_lookup_tables(
+    config: &PrivacyConfig,
+) -> (HashMap<String, PiiAction>, HashSet<String>) {
+    let custom_rule_actions = config
+        .custom_rules
+        .iter()
+        .map(|r| (r.name.clone(), r.action.clone()))
+        .collect();
+    let excluded_providers = config
+        .exclude_providers
+        .iter()
+        .map(|p| p.to_ascii_lowercase())
+        .collect();
+    (custom_rule_actions, excluded_providers)
+}
+
 impl PiiEngine {
     /// Create a new PII engine with the given configuration
     #[must_use]
@@ -155,16 +171,7 @@ impl PiiEngine {
         let rules = crate::pii::rules::build_rules(&config.custom_rules);
         warn_if_partial_custom_load(&config, &rules);
         let allowlist = PiiAllowlist::default();
-        let custom_rule_actions = config
-            .custom_rules
-            .iter()
-            .map(|r| (r.name.clone(), r.action.clone()))
-            .collect();
-        let excluded_providers = config
-            .exclude_providers
-            .iter()
-            .map(|p| p.to_ascii_lowercase())
-            .collect();
+        let (custom_rule_actions, excluded_providers) = build_lookup_tables(&config);
         Self {
             rules,
             allowlist,
@@ -208,16 +215,7 @@ impl PiiEngine {
             // Build rules and lookup tables outside the lock to avoid blocking readers.
             let new_rules = crate::pii::rules::build_rules(&config.custom_rules);
             warn_if_partial_custom_load(&config, &new_rules);
-            let custom_rule_actions = config
-                .custom_rules
-                .iter()
-                .map(|r| (r.name.clone(), r.action.clone()))
-                .collect();
-            let excluded_providers = config
-                .exclude_providers
-                .iter()
-                .map(|p| p.to_ascii_lowercase())
-                .collect();
+            let (custom_rule_actions, excluded_providers) = build_lookup_tables(&config);
             let mut guard = engine.write().unwrap_or_else(|e| e.into_inner());
             guard.rules = new_rules;
             guard.config = config;
@@ -231,6 +229,12 @@ impl PiiEngine {
     /// Check if a specific provider should be excluded from filtering
     #[must_use]
     pub fn is_provider_excluded(&self, provider_name: &str) -> bool {
+        if self.excluded_providers.is_empty() {
+            return false;
+        }
+        if self.excluded_providers.contains(provider_name) {
+            return true;
+        }
         let lower = provider_name.to_ascii_lowercase();
         self.excluded_providers.contains(&lower)
     }
@@ -277,16 +281,16 @@ impl PiiEngine {
         if self.is_provider_excluded(provider) {
             return true;
         }
-        if let Some(p) = platform {
-            if let Some(policy) = self.lookup_platform_policy(p) {
-                if let Some(ref excluded) = policy.exclude_providers {
-                    if excluded.iter().any(|e| e.eq_ignore_ascii_case(provider)) {
-                        return true;
-                    }
-                }
-            }
-        }
-        false
+        let Some(p) = platform else {
+            return false;
+        };
+        let Some(policy) = self.lookup_platform_policy(p) else {
+            return false;
+        };
+        let Some(ref excluded) = policy.exclude_providers else {
+            return false;
+        };
+        excluded.iter().any(|e| e.eq_ignore_ascii_case(provider))
     }
 
     /// Get the configured action for a rule by name from the given config.
@@ -411,10 +415,11 @@ impl PiiEngine {
 
         let deduped = dedup_overlapping(text, all_matches);
 
-        // Sort by start descending so we can replace from back to front
-        // without invalidating earlier offsets.
+        // Deduped matches are in ascending order of `start`. Reverse to
+        // descending so we can replace from back to front without invalidating
+        // earlier offsets.
         let mut sorted = deduped;
-        sorted.sort_by_key(|x| std::cmp::Reverse(x.start));
+        sorted.reverse();
 
         let mut result = text.to_string();
         let mut blocked_count = 0;
@@ -575,9 +580,16 @@ fn dedup_overlapping(text: &str, matches: Vec<PiiMatch>) -> Vec<PiiMatch> {
             }
         }
 
+        // Clean match: if parts was not fragmented and still matches m, move m directly.
+        if parts.len() == 1 && parts[0] == (m.start, m.end) {
+            let at = kept.partition_point(|k| k.start < m.start);
+            kept.insert(at, m);
+            continue;
+        }
+
         for (s, e) in parts {
-            // An inverted range carries no text; there is nothing to redact.
-            if s > e {
+            // An inverted or empty range carries no text; there is nothing to redact.
+            if s >= e {
                 continue;
             }
             let part = PiiMatch {
