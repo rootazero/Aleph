@@ -483,6 +483,38 @@ P0 + P1 收口轮在同一台机器上跑**同一条**命令（`/tmp/cc_p0b.sh`�
 
 **新增测试同样只是被编译，从未被运行**（见 §7）。
 
+### 5.1c 定向测试的实跑结果（收口轮）
+
+收口轮的验收标准要求"新增测试**真的被运行过**"，所以这一轮第一次把测试跑了起来
+（此前所有轮次都只做到 `cargo check --all-targets`，即只证明能编译）。
+
+- 构建：`cargo test -p alephcore --lib --no-run -j1` → 19m50s，0 error（`evidence/test-build.log`）。
+- 执行：13 条定向测试逐条用子串过滤跑（该 lib 测试目标共 22091 条），**首轮 12 过 1 挂**。
+
+| # | 测试 | 覆盖条目 | 首轮 | 修复后 |
+|---|------|---------|------|--------|
+| 1 | `channel_config_debug_output_never_contains_the_credential` | IF6-03 | ok | ok |
+| 2 | `a_factory_registers_the_channel_under_the_configured_instance_id` | IF6-05 | ok | ok |
+| 3 | `url_path_injection_requires_a_whole_segment_and_touches_only_one` | E5-03 | ok | ok |
+| 4 | `branch_refuses_to_replace_an_existing_target_session` | H5-01 | ok | ok |
+| 5 | `the_query_cursor_includes_the_boundary_millisecond` | IF4-06 | **FAILED** | ok |
+| 6 | `a_dropped_relay_connection_fails_the_pending_publish_attempts` | IF5-05 | ok | ok |
+| 7 | `redacts_secret_in_session_completed_tool_timeline` | EE1-01 | ok | ok |
+| 8 | `concurrent_hook_writers_preserve_appends_and_both_removal_faces` | H1-01 | ok | ok |
+| 9 | `per_group_override_opens_a_group_that_the_account_level_disables` | IF1-06 | ok | ok |
+| 10 | `workspace_reads_reject_non_files_oversize_and_invalid_utf8` | E5-01 | ok | ok |
+| 11 | `workspace_symlinks_must_remain_in_granted_prefix` | E5-01 | ok | ok |
+| 12 | `disabled_streaming_accumulates_without_preview_but_delivers_final_text` | IF1-08 | ok | ok |
+| 13 | `probe_snapshot_requires_saved_settings_and_credentials_to_remain_unchanged` | H6-02 | ok | ok |
+
+**唯一失败的那条是真 bug**：IF4-06 的实现把首窗起点留在 `after_ms`，而 BlueBubbles 的
+`after` 过滤是**排他**的，于是"游标正好压在最新那条消息的毫秒上"时，同毫秒的其它消息被丢掉。
+断言 `requests[0]["after"] == 999` 拿到 `1000`。修法：首窗从 `after_ms - 1` 起
+（`after_ms.saturating_sub(1)`），边界仍是 `after_ms`；提交 `1e0f0522a`。
+
+> **教训**：只编译不运行的测试等于没有测试。这条 bug 在整轮审查（跨族裁决 + 两轮 diff 复核）
+> 里都没有被发现，是实跑才暴露的。
+
 ### 5.2 rustfmt 闸门
 
 `rustfmt --edition 2021 --check --config skip_children=true`（`skip_children` 避免格式化污染模块树）
@@ -553,7 +585,7 @@ B 轨的脚本让模型重写一个 ±30 行区域再按区域回填。**它不�
 ## 7. 本轮没有验证的部分
 
 
-- **新增单元测试未运行**：`cargo check --all-targets` 只证明它们能编译；**没有任何一条被断言过**。
+- **新增单元测试大部分未运行**：`cargo check --all-targets` 只证明它们能编译；收口轮只**实际运行了 13 条**针对本轮改动的定向测试（全部通过，见 §5.1c），**其余新增测试从未被断言过**。
 - **未跑 `cargo clippy`**：新增代码的 lint 面（ needless clone、单测里的 `unwrap`、冗余分支）未检查。
 - **未构建 Panel / WASM 侧**：`src/extension` 涉及面板发布路径，但 Leptos/WASM crate 未构建。
 - **未做真机 QA**：§6 第 10 条列出的全部通道均无真实收发验证；本轮所有"修复完成"的结论都建立在

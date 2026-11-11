@@ -612,7 +612,10 @@ handle_hooks_remove 与 append_user_hook、remove_user_hooks 共用 HOOKS_MUTEX�
 
 ## 20. IF4-06 — P0 — IF4 — 本轮已修
 
-> **本轮已修**（提交 `40919d0cb`）：imessage 查询游标保留边界毫秒（`cursor = max_timestamp - 1`），同一毫秒内的其它消息不会再被跳过。
+> **本轮已修**（提交 `40919d0cb` + `1e0f0522a`）：imessage 查询游标保留边界毫秒（`cursor = max_timestamp - 1`），同一毫秒内的其它消息不会再被跳过；
+> **实跑补正**（`1e0f0522a`）：第一版把首窗起点留在 `after_ms`，而 BlueBubbles 的 `after` 是**排他**过滤，于是游标压在最新那条消息的毫秒上时，同毫秒的其它消息仍会被丢掉；
+> 实跑测试 `the_query_cursor_includes_the_boundary_millisecond` 断言 `requests[0]["after"] == 999` 拿到 `1000` 才暴露出来。
+> 修法：首窗从 `after_ms.saturating_sub(1)` 起，边界仍是 `after_ms`。
 
 **位置**：`src/gateway/interfaces/imessage/bluebubbles/api.rs:458`
 
