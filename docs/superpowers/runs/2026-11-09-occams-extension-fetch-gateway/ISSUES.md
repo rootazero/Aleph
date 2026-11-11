@@ -13,7 +13,12 @@
 
 
 
-**本清单共 16 条**（复核条目总数 54，已修 38 条——其中 16 条在审查轮内修完，22 条在 2026-11-11 的收口轮修完）。
+
+
+---
+
+
+**本清单共 15 条**（复核条目总数 54，已修 39 条——其中 16 条在审查轮内修完，23 条在 2026-11-11 的收口轮修完）。
 
 每条都写成可以直接开 issue 的形状：**现象 → 复现 → 为什么没修 → 建议改法 → 验收标准**。
 
@@ -23,51 +28,77 @@
 
 | # | ID | 批次 | 严重级 | 类别 | 位置 | 一句话 |
 |---|---|---|---|---|---|---|
-| 1 | **EE1-03** | EE1 | P1 | A | ``src/gateway/execution_engine/goal_wait.rs:379`` | The wake service reads a goal waiting on task A, then awaits the task-store check; while it waits,… |
-| 2 | **G1-04** | G1 | P1 | A | ``src/gateway/delivery_queue.rs:1408`` | An inline backlog flush stamps a queued row and sends it.… |
-| 3 | **H5-13** | H5 | P1 | A | ``src/gateway/handlers/teams/tasks.rs:832`` | A team has valid conversation bubbles followed by 600 directed system notifications.… |
-| 4 | **H5-14** | H5 | P1 | A | ``src/gateway/handlers/memory/sessions.rs:522`` | An authenticated user has a matching session, but another user's session has the highest FTS rank.… |
-| 5 | **IF4-24** | IF4 | P1 | A | ``src/gateway/interfaces/matrix/events.rs:120`` | Matrix 的 direct room 发来正常私人消息 → adapter 无论房间关系一律标 is_group=true；… |
-| 6 | **GX1-08** | GX1 | P2 | A | ``src/gateway/server/connection/upgrade.rs:143-178,191-223`` | With the global or per-IP cap one slot from full,… |
-| 7 | **GX1-09** | GX1 | P2 | A | ``src/gateway/server/mod.rs:1178-1255,1295-1297,1353-1355,1405-1414`` | `run_until_shutdown` returns, a start attempt fails exposure/bind validation,… |
-| 8 | **GX1-10** | GX1 | P2 | A | ``src/gateway/server/connection/mod.rs:315-394`` | A registered node sends approval requests faster than operators resolve them … |
-| 9 | **H1-08** | H1 | P2 | A | ``src/gateway/handlers/agent.rs:363`` | 使用该 manager 的进程持续接收运行请求 → 每次以新 UUID 插入一个含完整 input 的 RunState；… |
-| 10 | **H5-18** | H5 | P2 | A | ``src/gateway/handlers/memory/sessions.rs:108`` | A normal authenticated/scoped caller requests even a one-row page with no agent/date restriction.… |
-| 11 | **IF4-23** | IF4 | P2 | A | ``src/gateway/interfaces/line/webhook.rs:56`` | 外部客户端持续建立 TCP 连接但不发送/不完成请求 → 每个连接都创建独立 task/socket/buffer，read 永远等待，任何签名检查都还没执行。单请求 64KiB cap 不限制连接总数；… |
-| 12 | **IF4-27** | IF4 | P2 | A | ``src/gateway/interfaces/matrix/dedupe.rs:9`` | 通道长期不重启，已加入房间中的用户持续产生新 event_id → 每条记录同时加入 HashSet 和 SQLite，运行期间均无淘汰/清理。初始化 SELECT 的 LIMIT 10000 只限制预热，… |
-| 13 | **IF5-22** | IF5 | P2 | A | ``src/gateway/interfaces/wechat/sync_buf.rs:36–46`` | 数据目录只读、磁盘满或 rename 失败 → 两处持久化均返回 unit 并丢弃所有文件错误；… |
-| 14 | **IF6-12** | IF6 | P2 | A | ``src/gateway/interfaces/cli.rs:212-228`` | 无输入时 start 后 stop，并让异步 line consumer 退出，再 start → 旧 std 线程仍阻塞在持有 StdinLock 的 lines() 中，新线程等待同一锁。下一行先由旧线程读取；… |
-| 15 | **IF6-13** | IF6 | P2 | A | ``src/gateway/interfaces/sms/transport.rs:599-617`` | 公共 submit/submit_at future 在 authorizer await 期间被 timeout/drop，或在 peer await 期间被取消 → 操作已经插入 operations，… |
-| 16 | **IF6-15** | IF6 | P2 | A | ``src/gateway/interfaces/email/message_ops.rs:329-356`` | 一个积累大量未读邮件的账户启动轮询，或外部发送者在轮询间隔内投递大量/大体积邮件 → SEARCH 全量组装 fetch set，随后把所有 RFC822 正文 collect 到 Vec，… |
+| 1 | **EE1-03** | EE1 | P1 | A | ```src/gateway/execution_engine/goal_wait.rs:379``` | The wake service reads a goal waiting on task A, then awaits the task-store check; while it waits,… |
+| 2 | **G1-04** | G1 | P1 | A | ```src/gateway/delivery_queue.rs:1408``` | An inline backlog flush stamps a queued row and sends it.… |
+| 3 | **H5-13** | H5 | P1 | A | ```src/gateway/handlers/teams/tasks.rs:832``` | A team has valid conversation bubbles followed by 600 directed system notifications.… |
+| 4 | **H5-14** | H5 | P1 | A | ```src/gateway/handlers/memory/sessions.rs:522``` | An authenticated user has a matching session, but another user's session has the highest FTS rank.… |
+| 5 | **GX1-08** | GX1 | P2 | A | ```src/gateway/server/connection/upgrade.rs:143-178,191-223``` | With the global or per-IP cap one slot from full,… |
+| 6 | **GX1-09** | GX1 | P2 | A | ```src/gateway/server/mod.rs:1178-1255,1295-1297,1353-1355,1405-1414``` | `run_until_shutdown` returns, a start attempt fails exposure/bind validation,… |
+| 7 | **GX1-10** | GX1 | P2 | A | ```src/gateway/server/connection/mod.rs:315-394``` | A registered node sends approval requests faster than operators resolve them … |
+| 8 | **H1-08** | H1 | P2 | A | ```src/gateway/handlers/agent.rs:363``` | 使用该 manager 的进程持续接收运行请求 → 每次以新 UUID 插入一个含完整 input 的 RunState；… |
+| 9 | **H5-18** | H5 | P2 | A | ```src/gateway/handlers/memory/sessions.rs:108``` | A normal authenticated/scoped caller requests even a one-row page with no agent/date restriction.… |
+| 10 | **IF4-23** | IF4 | P2 | A | ```src/gateway/interfaces/line/webhook.rs:56``` | 外部客户端持续建立 TCP 连接但不发送/不完成请求 → 每个连接都创建独立 task/socket/buffer，read 永远等待，任何签名检查都还没执行。单请求 64KiB cap 不限制连接总数；… |
+| 11 | **IF4-27** | IF4 | P2 | A | ```src/gateway/interfaces/matrix/dedupe.rs:9``` | 通道长期不重启，已加入房间中的用户持续产生新 event_id → 每条记录同时加入 HashSet 和 SQLite，运行期间均无淘汰/清理。初始化 SELECT 的 LIMIT 10000 只限制预热，… |
+| 12 | **IF5-22** | IF5 | P2 | A | ```src/gateway/interfaces/wechat/sync_buf.rs:36–46``` | 数据目录只读、磁盘满或 rename 失败 → 两处持久化均返回 unit 并丢弃所有文件错误；… |
+| 13 | **IF6-12** | IF6 | P2 | A | ```src/gateway/interfaces/cli.rs:212-228``` | 无输入时 start 后 stop，并让异步 line consumer 退出，再 start → 旧 std 线程仍阻塞在持有 StdinLock 的 lines() 中，新线程等待同一锁。下一行先由旧线程读取；… |
+| 14 | **IF6-13** | IF6 | P2 | A | ```src/gateway/interfaces/sms/transport.rs:599-617``` | 公共 submit/submit_at future 在 authorizer await 期间被 timeout/drop，或在 peer await 期间被取消 → 操作已经插入 operations，… |
+| 15 | **IF6-15** | IF6 | P2 | A | ```src/gateway/interfaces/email/message_ops.rs:329-356``` | 一个积累大量未读邮件的账户启动轮询，或外部发送者在轮询间隔内投递大量/大体积邮件 → SEARCH 全量组装 fetch set，随后把所有 RFC822 正文 collect 到 Vec，… |
 
 ## 本轮修完的条目
 
 | # | ID | 批次 | 严重级 | 位置 | 修复提交 | 一句话 |
 |---|---|---|---|---|---|---|
-| 1 | **E5-01** | E5 | P1 | ``5d8b76c7a`` | `5d8b76c7a` | A plugin granted only `docs/` requests `docs/link/key.pem`,… |
-| 2 | **GX3-01** | GX3 | P1 | ``c793f3db3`` | `c793f3db3` | Any call path that locks `self.conn` (a `std::sync::Mutex<rusqlite::Connection>`) and then executes a SQLite q… |
-| 3 | **H5-04** | H5 | P1 | ``3f2d9788e`` | `3f2d9788e` | A provider mutation passes validation, mutates the shared `Config`, then `save_config` fails.… |
-| 4 | **H5-05** | H5 | P1 | ``3f2d9788e`` | `3f2d9788e` | Submit a provider update with an unknown protocol such as `does-not-exist` and otherwise valid fields.… |
-| 5 | **IF1-02** | IF1 | P1 | ```` | `—` | 新账户启动时诊断请求没有更新，tracker 保持 0；此后 dispatcher 正常接收许多消息，但没有任何正常处理路径调用 `advance`。停止后积压的新消息在下次启动仍被当作首次启动，… |
-| 6 | **IF1-03** | IF1 | P1 | ``ee101c3a1`` | `ee101c3a1` | 两个群在五分钟内分别收到 Telegram message ID 相同的消息 → 转换后 ID 相同；… |
-| 7 | **IF1-06** | IF1 | P1 | ``2e619d8a8`` | `2e619d8a8` | 账户 group policy 为 Disabled，但明确给某群覆写 Open → 本地 controller 按群级 resolver 放行并入队；… |
-| 8 | **IF1-08** | IF1 | P1 | ``6b9e2a56b`` | `6b9e2a56b` | 已存在流式 preview，累计/最终答案超过 Telegram 4096 字符限制 → edit 返回 `EditedMessageIsTooLong` 却被转成 `Ok(())`，lane 认为最终答案已落地；… |
-| 9 | **IF4-29** | IF4 | P1 | ``ffe621a1a`` | `ffe621a1a` | JID bot@example.org、默认 MUC nick=aleph → join 使用 aleph，但过滤把回声资源名与 own.local=bot 比较。room/aleph 的自身消息被当成用户消息重新路由，… |
-| 10 | **IF5-05** | IF5 | P1 | ``7d3049f7f`` | `7d3049f7f` | 本地 write channel 接受事件后 `send` 已返回成功；随后 WebSocket 写失败，已取出的命令被丢弃，或者 relay 返回 `OK accepted=false`，… |
-| 11 | **IF5-12** | IF5 | P1 | ``4bc3481d6`` | `4bc3481d6` | 保持默认 `enable_deletion=false`，随后调用 Channel::delete → adapter 无条件执行 Slack chat.delete，… |
-| 12 | **IF6-10** | IF6 | P1 | ``6444037a5`` | `6444037a5` | 根据 capability 声明向任一适配器发送含正常非空文本与附件的 OutboundMessage → 三条实际发送路径仅传文本，未读取 message.attachments，远端文本发送成功后仍返回成功，… |
-| 13 | **IF6-11** | IF6 | P1 | ``553d0e9b9`` | `553d0e9b9` | CLI 输出被重定向到已满且暂不读取的 pipe，或终端输出阻塞 → async send future 在 runtime worker 上执行 std stdout.lock/write/flush，… |
-| 14 | **E5-03** | E5 | P0 | ``8ec68c7ac`` | `8ec68c7ac` | A `UrlPath` binding with placeholder `api` targets `https://api.example.com/v1/data`; after the binding resolv… |
-| 15 | **EE1-01** | EE1 | P0 | ``b1113b1f8`` | `b1113b1f8` | An unattended run encounters a tool error containing a recognizable credential,… |
-| 16 | **H1-01** | H1 | P0 | ``78dcd21f2`` | `78dcd21f2` | 两个并发 RPC（或 RPC 与工具调用）在不同 runtime worker 上读取同一版 hooks，然后分别追加/删除并写回 → 后写入者覆盖前一个已提交的修改。即使两次 rename 不重叠、两个调用都成功，… |
-| 17 | **H5-01** | H5 | P0 | ``86b4f3787`` | `86b4f3787` | Create checkpoint C, append further messages,… |
-| 18 | **H6-02** | H6 | P0 | ``e63c20ea3`` | `e63c20ea3` | 删除一个非默认 provider，其 Vault 可写但 config.toml 不可写、解析失败或增量保存拒绝外部变更 → handler 先修改共享配置并持久删除 Vault 密钥，… |
-| 19 | **IF4-06** | IF4 | P0 | ``40919d0cb`` | `40919d0cb` | 离线期间同一 `dateCreated` 毫秒积累超过 100 条记录 → 查询只返回按时间升序的前 100 条，水位直接提交该毫秒；… |
-| 20 | **IF6-02** | IF6 | P0 | ``449d8b90a`` | `449d8b90a` | `UNSEEN` 找到一批邮件 → 使用会隐式置 `\\Seen` 的 `RFC822` FETCH 读取正文；… |
-| 21 | **IF6-03** | IF6 | P0 | ``a43c3aa90`` | `a43c3aa90` | 对任一配置执行正常的 `format!("{config:?}")` 或调试日志 → 派生的 Debug 输出完整邮件密码、NickServ 密码或 Mattermost bot token。三个类型均直接派生 Debu… |
-| 22 | **IF6-05** | IF6 | P0 | ``4bc3481d6`` | `4bc3481d6` | 注册 `email-work` 与 `email-personal` 等两个合法同类型实例 → 四个工厂只实现 create，… |
+| 1 | **IF4-24** | IF4 | P1 | ```src/gateway/interfaces/matrix/events.rs:120``` | `c793f3db3` | Matrix 的 direct room 发来正常私人消息 → adapter 无论房间关系一律标 is_group=true；… |
+| 2 | **E5-01** | E5 | P1 | ``5d8b76c7a`` | `5d8b76c7a` | A plugin granted only `docs/` requests `docs/link/key.pem`,… |
+| 3 | **GX3-01** | GX3 | P1 | ``c793f3db3`` | `c793f3db3` | Any call path that locks `self.conn` (a `std::sync::Mutex<rusqlite::Connection>`) and then executes a SQLite q… |
+| 4 | **H5-04** | H5 | P1 | ``3f2d9788e`` | `3f2d9788e` | A provider mutation passes validation, mutates the shared `Config`, then `save_config` fails.… |
+| 5 | **H5-05** | H5 | P1 | ``3f2d9788e`` | `3f2d9788e` | Submit a provider update with an unknown protocol such as `does-not-exist` and otherwise valid fields.… |
+| 6 | **IF1-02** | IF1 | P1 | ``—`` | `—` | 新账户启动时诊断请求没有更新，tracker 保持 0；此后 dispatcher 正常接收许多消息，但没有任何正常处理路径调用 `advance`。停止后积压的新消息在下次启动仍被当作首次启动，… |
+| 7 | **IF1-03** | IF1 | P1 | ``ee101c3a1`` | `ee101c3a1` | 两个群在五分钟内分别收到 Telegram message ID 相同的消息 → 转换后 ID 相同；… |
+| 8 | **IF1-06** | IF1 | P1 | ``2e619d8a8`` | `2e619d8a8` | 账户 group policy 为 Disabled，但明确给某群覆写 Open → 本地 controller 按群级 resolver 放行并入队；… |
+| 9 | **IF1-08** | IF1 | P1 | ``6b9e2a56b`` | `6b9e2a56b` | 已存在流式 preview，累计/最终答案超过 Telegram 4096 字符限制 → edit 返回 `EditedMessageIsTooLong` 却被转成 `Ok(())`，lane 认为最终答案已落地；… |
+| 10 | **IF4-29** | IF4 | P1 | ``ffe621a1a`` | `ffe621a1a` | JID bot@example.org、默认 MUC nick=aleph → join 使用 aleph，但过滤把回声资源名与 own.local=bot 比较。room/aleph 的自身消息被当成用户消息重新路由，… |
+| 11 | **IF5-05** | IF5 | P1 | ``7d3049f7f`` | `7d3049f7f` | 本地 write channel 接受事件后 `send` 已返回成功；随后 WebSocket 写失败，已取出的命令被丢弃，或者 relay 返回 `OK accepted=false`，… |
+| 12 | **IF5-12** | IF5 | P1 | ``4bc3481d6`` | `4bc3481d6` | 保持默认 `enable_deletion=false`，随后调用 Channel::delete → adapter 无条件执行 Slack chat.delete，… |
+| 13 | **IF6-10** | IF6 | P1 | ``6444037a5`` | `6444037a5` | 根据 capability 声明向任一适配器发送含正常非空文本与附件的 OutboundMessage → 三条实际发送路径仅传文本，未读取 message.attachments，远端文本发送成功后仍返回成功，… |
+| 14 | **IF6-11** | IF6 | P1 | ``553d0e9b9`` | `553d0e9b9` | CLI 输出被重定向到已满且暂不读取的 pipe，或终端输出阻塞 → async send future 在 runtime worker 上执行 std stdout.lock/write/flush，… |
+| 15 | **E5-03** | E5 | P0 | ``8ec68c7ac`` | `8ec68c7ac` | A `UrlPath` binding with placeholder `api` targets `https://api.example.com/v1/data`; after the binding resolv… |
+| 16 | **EE1-01** | EE1 | P0 | ``b1113b1f8`` | `b1113b1f8` | An unattended run encounters a tool error containing a recognizable credential,… |
+| 17 | **H1-01** | H1 | P0 | ``78dcd21f2`` | `78dcd21f2` | 两个并发 RPC（或 RPC 与工具调用）在不同 runtime worker 上读取同一版 hooks，然后分别追加/删除并写回 → 后写入者覆盖前一个已提交的修改。即使两次 rename 不重叠、两个调用都成功，… |
+| 18 | **H5-01** | H5 | P0 | ``86b4f3787`` | `86b4f3787` | Create checkpoint C, append further messages,… |
+| 19 | **H6-02** | H6 | P0 | ``e63c20ea3`` | `e63c20ea3` | 删除一个非默认 provider，其 Vault 可写但 config.toml 不可写、解析失败或增量保存拒绝外部变更 → handler 先修改共享配置并持久删除 Vault 密钥，… |
+| 20 | **IF4-06** | IF4 | P0 | ``40919d0cb`` | `40919d0cb` | 离线期间同一 `dateCreated` 毫秒积累超过 100 条记录 → 查询只返回按时间升序的前 100 条，水位直接提交该毫秒；… |
+| 21 | **IF6-02** | IF6 | P0 | ``449d8b90a`` | `449d8b90a` | `UNSEEN` 找到一批邮件 → 使用会隐式置 `\\Seen` 的 `RFC822` FETCH 读取正文；… |
+| 22 | **IF6-03** | IF6 | P0 | ``a43c3aa90`` | `a43c3aa90` | 对任一配置执行正常的 `format!("{config:?}")` 或调试日志 → 派生的 Debug 输出完整邮件密码、NickServ 密码或 Mattermost bot token。三个类型均直接派生 Debu… |
+| 23 | **IF6-05** | IF6 | P0 | ``4bc3481d6`` | `4bc3481d6` | 注册 `email-work` 与 `email-personal` 等两个合法同类型实例 → 四个工厂只实现 create，… |
 
-## 1. E5-01 — P1 — E5 — 本轮已修
+## 1. IF4-24 — P1 — IF4 — 本轮已修
+
+**位置**：`src/gateway/interfaces/matrix/events.rs:120`
+
+**现象**：Matrix 的 direct room 发来正常私人消息 → adapter 无论房间关系一律标 is_group=true；Core 因而走群策略/群 mention，而不是 DM 配对策略。默认 require_mention 时普通 DM 被无声拒绝，DM 配对门也不会在这些消息上执行。
+
+**复核意见（PARTIAL）**：`run_sync_loop` obtains `room.is_direct().await.ok()` and passes it to the converter, but a missing or failed lookup remains `None` and is conservatively treated as a group. \|
+
+**当前代码状态**：src/gateway/interfaces/matrix/events.rs:41 — "inbound.is_group = !is_direct.unwrap_or(false);" (fed by sync.rs:62-65 "room.is_direct().await.ok()") — A missing or failed direct-lookup still yields `None`, which is still conservatively treated as a group room.
+
+**本轮怎么修的**
+复核后确认已修复：审查前的基线（43f3c7a0f）完全没有 is_direct 处理（恒为 is_group=true），审查轮新增的 convert_timeline_event_in_room(..., is_direct: Option<bool>) 与 inbound.is_group = !is_direct.unwrap_or(false) 正是本条的修复；SDK 侧 matrix-sdk-base 的 Room::is_direct 读的是已由 m.direct 账户数据填充的 store，因此该判定是权威的。事件里的 direct_rooms/room_direct 字段是 SDK 从不注入的死字段，未改动。
+
+**建议改法**（审查轮提出，置信度 0.99）：在拥有 Matrix 房间上下文的 sync 层读取 direct-room 信息并传给转换，反应消息使用相同判据；未知房间类型需明确保守处理。保留 room_id 身份，不用人数临时猜测 direct。范围外确认 `src/gateway/inbound_router/permission.rs:79-149` 完全按 is_group 选择权限分支。
+
+**验收标准**：
+
+- 一条能复现上述现象的单元测试：修复前失败、修复后通过；
+- 该测试随 `cargo check -p alephcore --all-targets` 编译通过，且**真的被运行过**（本轮的新增测试只被编译、未运行——见 README §7）；
+- 不改变本条之外的公共 API、错误变体与顺序 / 幂等语义。
+
+
+
+
+
+
+## 2. E5-01 — P1 — E5 — 本轮已修
 
 > **本轮已修**（提交 `5d8b76c7a`）：工作区读取收敛为单一实现：词法能力检查 → 规范化根目录约束 → 对规范化后的相对路径重新校验已授予前缀 → 常规文件检查 → 按 MAX_WORKSPACE_READ_BYTES+1 限量读取 → UTF-8；宿主函数改为委托它，测试覆盖客人实际走的那条路径。
 
@@ -95,7 +126,8 @@
 
 
 
-## 2. GX3-01 — P1 — GX3 — 本轮已修
+
+## 3. GX3-01 — P1 — GX3 — 本轮已修
 
 > **本轮已修**（提交 `c793f3db3`）：会话管理的 8 处直接加锁查询全部迁到既有的 spawn_blocking 辅助函数，SQLite 工作不再占用 Tokio worker；每段语句的分组与顺序保持不变。
 
@@ -123,7 +155,8 @@
 
 
 
-## 3. H5-04 — P1 — H5 — 本轮已修
+
+## 4. H5-04 — P1 — H5 — 本轮已修
 
 > **本轮已修**（提交 `3f2d9788e`）：删除通道改为在候选配置上操作，保存成功后才发布到内存配置；保存失败不再让磁盘与内存分叉。
 
@@ -151,7 +184,8 @@
 
 
 
-## 4. H5-05 — P1 — H5 — 本轮已修
+
+## 5. H5-05 — P1 — H5 — 本轮已修
 
 > **本轮已修**（提交 `3f2d9788e`）：创建与设默认通道先构造 provider 再落库，构造失败不再被报告为已创建。
 
@@ -179,7 +213,8 @@
 
 
 
-## 5. IF1-02 — P1 — IF1 — 本轮已修
+
+## 6. IF1-02 — P1 — IF1 — 本轮已修
 
 > **本轮已修**（提交 ``）：复核意见的前提有误：dispatch 返回 ControlFlow<Result<(), Infallible>>，没有可被丢弃的失败；首启积压删除已由 tracker.initialize("polling") 的一次性持久化事实处理。本轮不改代码。
 
@@ -207,7 +242,8 @@
 
 
 
-## 6. IF1-03 — P1 — IF1 — 本轮已修
+
+## 7. IF1-03 — P1 — IF1 — 本轮已修
 
 > **本轮已修**（提交 `ee101c3a1`）：poll id 改为 poll_{poll_id}_{sender_id}，reaction id 改为 react_{chat}_{message_id}_{user_id}_{emojis}，跨会话与跨投票者不再撞 id。
 
@@ -235,7 +271,8 @@ poll id 改为 poll_{poll_id}_{sender_id}，reaction id 改为 react_{chat}_{mes
 
 
 
-## 7. IF1-06 — P1 — IF1 — 本轮已修
+
+## 8. IF1-06 — P1 — IF1 — 本轮已修
 
 > **本轮已修**（提交 `2e619d8a8`）：去掉把本地判定钳到账户默认的逻辑，直接返回生效判定；Core 的 inbound_router 解析的是同一份生效配置，钳制只会造成误拒。
 
@@ -263,7 +300,8 @@ poll id 改为 poll_{poll_id}_{sender_id}，reaction id 改为 react_{chat}_{mes
 
 
 
-## 8. IF1-08 — P1 — IF1 — 本轮已修
+
+## 9. IF1-08 — P1 — IF1 — 本轮已修
 
 > **本轮已修**（提交 `6b9e2a56b`）：长答案用 split_for_telegram 切块：预览消息改成第一块，其余块作为新消息发出；不再出现 id 为 0 的返回值。
 
@@ -291,7 +329,8 @@ poll id 改为 poll_{poll_id}_{sender_id}，reaction id 改为 react_{chat}_{mes
 
 
 
-## 9. IF4-29 — P1 — IF4 — 本轮已修
+
+## 10. IF4-29 — P1 — IF4 — 本轮已修
 
 > **本轮已修**（提交 `ffe621a1a`）：MUC 回声过滤改用实际加入房间时的 nick，裸 JID 仅作兜底。
 
@@ -319,7 +358,8 @@ MUC 回声过滤改用实际加入房间时的 nick，裸 JID 仅作兜底。
 
 
 
-## 10. IF5-05 — P1 — IF5 — 本轮已修
+
+## 11. IF5-05 — P1 — IF5 — 本轮已修
 
 > **本轮已修**（提交 `7d3049f7f`）：中继连接断开时，所有等待中的发布请求以 SendFailed 结算，调用方不再只能等自己的超时。
 
@@ -347,7 +387,8 @@ MUC 回声过滤改用实际加入房间时的 nick，裸 JID 仅作兜底。
 
 
 
-## 11. IF5-12 — P1 — IF5 — 本轮已修
+
+## 12. IF5-12 — P1 — IF5 — 本轮已修
 
 > **本轮已修**（提交 `4bc3481d6`）：随 IF6-05 的工厂改造一并修复（同一文件）。
 
@@ -375,7 +416,8 @@ MUC 回声过滤改用实际加入房间时的 nick，裸 JID 仅作兜底。
 
 
 
-## 12. IF6-10 — P1 — IF6 — 本轮已修
+
+## 13. IF6-10 — P1 — IF6 — 本轮已修
 
 > **本轮已修**（提交 `6444037a5`）：signal 与 mattermost 的附件能力位改为 false，与其发送路径恒传空附件列表的事实一致。
 
@@ -403,7 +445,8 @@ signal 与 mattermost 的附件能力位改为 false，与其发送路径恒传�
 
 
 
-## 13. IF6-11 — P1 — IF6 — 本轮已修
+
+## 14. IF6-11 — P1 — IF6 — 本轮已修
 
 > **本轮已修**（提交 `553d0e9b9`）：CLI 的消息文本改为 move 进 spawn_blocking 闭包，不再在异步 worker 上克隆。
 
@@ -431,7 +474,8 @@ CLI 的消息文本改为 move 进 spawn_blocking 闭包，不再在异步 worke
 
 
 
-## 14. E5-03 — P0 — E5 — 本轮已修
+
+## 15. E5-03 — P0 — E5 — 本轮已修
 
 > **本轮已修**（提交 `8ec68c7ac`）：WASM 凭据的 UrlPath 注入只替换完整的一段（`/api` 命中，`/apiary` 不命中），不再对整个 path 做字符串 replace。
 
@@ -457,7 +501,8 @@ UrlPath 注入不再做整串替换：占位符必须匹配一个完整路径段
 - 不改变本条之外的公共 API、错误变体与顺序 / 幂等语义。
 
 
-## 15. EE1-01 — P0 — EE1 — 本轮已修
+
+## 16. EE1-01 — P0 — EE1 — 本轮已修
 
 > **本轮已修**（提交 `b1113b1f8`）：unattended 时间线现在也遮蔽 `ToolInvocation.id`（之前只遮 name / error，工具调用 id 里的凭据会原样进时间线）。
 
@@ -483,7 +528,8 @@ UrlPath 注入不再做整串替换：占位符必须匹配一个完整路径段
 - 不改变本条之外的公共 API、错误变体与顺序 / 幂等语义。
 
 
-## 16. H1-01 — P0 — H1 — 本轮已修
+
+## 17. H1-01 — P0 — H1 — 本轮已修
 
 > **本轮已修**（提交 `78dcd21f2`）：`handle_hooks_remove` 也持有 `HOOKS_MUTEX`，不再与并发的 hooks.add 互相覆盖。
 
@@ -509,7 +555,8 @@ handle_hooks_remove 与 append_user_hook、remove_user_hooks 共用 HOOKS_MUTEX�
 - 不改变本条之外的公共 API、错误变体与顺序 / 幂等语义。
 
 
-## 17. H5-01 — P0 — H5 — 本轮已修
+
+## 18. H5-01 — P0 — H5 — 本轮已修
 
 > **本轮已修**（提交 `86b4f3787`）：checkpoint 分支在已持有的 metadata 锁内做 create-if-absent，目标会话已存在时返回 `AlreadyExists`，不再有先查后写的窗口。
 
@@ -535,7 +582,8 @@ handle_hooks_remove 与 append_user_hook、remove_user_hooks 共用 HOOKS_MUTEX�
 - 不改变本条之外的公共 API、错误变体与顺序 / 幂等语义。
 
 
-## 18. H6-02 — P0 — H6 — 本轮已修
+
+## 19. H6-02 — P0 — H6 — 本轮已修
 
 > **本轮已修**（提交 `e63c20ea3`）：删除 provider 时凭据清理失败会在响应里报告（`credential_cleanup` 字段），不再只记日志就报成功；embedding provider 的同一类问题也一并改成先存后删。
 
@@ -561,7 +609,8 @@ handle_hooks_remove 与 append_user_hook、remove_user_hooks 共用 HOOKS_MUTEX�
 - 不改变本条之外的公共 API、错误变体与顺序 / 幂等语义。
 
 
-## 19. IF4-06 — P0 — IF4 — 本轮已修
+
+## 20. IF4-06 — P0 — IF4 — 本轮已修
 
 > **本轮已修**（提交 `40919d0cb`）：imessage 查询游标保留边界毫秒（`cursor = max_timestamp - 1`），同一毫秒内的其它消息不会再被跳过。
 
@@ -587,7 +636,8 @@ imessage 游标改为保留边界毫秒：游标回退 1ms 使同毫秒消息落
 - 不改变本条之外的公共 API、错误变体与顺序 / 幂等语义。
 
 
-## 20. IF6-02 — P0 — IF6 — 本轮已修
+
+## 21. IF6-02 — P0 — IF6 — 本轮已修
 
 > **本轮已修**（提交 `449d8b90a`）：IMAP FETCH 出错不再被 `continue` 吞掉：中断本批并返回 `ChannelError::Internal`，未读邮件保持 UNSEEN，下一轮重试。
 
@@ -613,7 +663,8 @@ IMAP FETCH 流出错时停止本轮并返回 ChannelError::Internal；未读标�
 - 不改变本条之外的公共 API、错误变体与顺序 / 幂等语义。
 
 
-## 21. IF6-03 — P0 — IF6 — 本轮已修
+
+## 22. IF6-03 — P0 — IF6 — 本轮已修
 
 > **本轮已修**（提交 `a43c3aa90`）：凭据型 channel 配置不再 derive Debug：irc / mattermost / matrix / feishu / telegram / telegram account / xmpp 八个类型改成手写 redact 版 Debug（密钥打印成 `<redacted>`，仍然看得出是否配置），EmailConfig 补上同款 redact Debug。
 
@@ -639,7 +690,8 @@ IMAP FETCH 流出错时停止本轮并返回 ChannelError::Internal；未读标�
 - 不改变本条之外的公共 API、错误变体与顺序 / 幂等语义。
 
 
-## 22. IF6-05 — P0 — IF6 — 本轮已修
+
+## 23. IF6-05 — P0 — IF6 — 本轮已修
 
 > **本轮已修**（提交 `4bc3481d6`）：14 个 channel factory 实现 `create_with_id`，注册时使用配置里的实例 id（原来一律用适配器名，同类型两个实例会撞车）；imessage 增加 `with_id`。
 
@@ -665,6 +717,7 @@ IMAP FETCH 流出错时停止本轮并返回 ChannelError::Internal；未读标�
 - 不改变本条之外的公共 API、错误变体与顺序 / 幂等语义。
 
 
+
 ## 仍成立的条目
 
 ## 1. EE1-03 — P1 — EE1 — A 类：缺陷仍可触发
@@ -686,6 +739,7 @@ IMAP FETCH 流出错时停止本轮并返回 ChannelError::Internal；未读标�
 - 一条能复现上述现象的单元测试：修复前失败、修复后通过；
 - 该测试随 `cargo check -p alephcore --all-targets` 编译通过，且**真的被运行过**（本轮的新增测试只被编译、未运行——见 README §7）；
 - 不改变本条之外的公共 API、错误变体与顺序 / 幂等语义。
+
 
 
 
@@ -715,6 +769,7 @@ IMAP FETCH 流出错时停止本轮并返回 ChannelError::Internal；未读标�
 
 
 
+
 ## 3. H5-13 — P1 — H5 — A 类：缺陷仍可触发
 
 **位置**：`src/gateway/handlers/teams/tasks.rs:832`
@@ -734,6 +789,7 @@ IMAP FETCH 流出错时停止本轮并返回 ChannelError::Internal；未读标�
 - 一条能复现上述现象的单元测试：修复前失败、修复后通过；
 - 该测试随 `cargo check -p alephcore --all-targets` 编译通过，且**真的被运行过**（本轮的新增测试只被编译、未运行——见 README §7）；
 - 不改变本条之外的公共 API、错误变体与顺序 / 幂等语义。
+
 
 
 
@@ -763,31 +819,8 @@ IMAP FETCH 流出错时停止本轮并返回 ChannelError::Internal；未读标�
 
 
 
-## 5. IF4-24 — P1 — IF4 — A 类：缺陷仍可触发
 
-**位置**：`src/gateway/interfaces/matrix/events.rs:120`
-
-**现象**：Matrix 的 direct room 发来正常私人消息 → adapter 无论房间关系一律标 is_group=true；Core 因而走群策略/群 mention，而不是 DM 配对策略。默认 require_mention 时普通 DM 被无声拒绝，DM 配对门也不会在这些消息上执行。
-
-**复核意见（PARTIAL）**：`run_sync_loop` obtains `room.is_direct().await.ok()` and passes it to the converter, but a missing or failed lookup remains `None` and is conservatively treated as a group. \|
-
-**当前代码状态**：src/gateway/interfaces/matrix/events.rs:41 — "inbound.is_group = !is_direct.unwrap_or(false);" (fed by sync.rs:62-65 "room.is_direct().await.ok()") — A missing or failed direct-lookup still yields `None`, which is still conservatively treated as a group room.
-
-**为什么本轮没修**：`room.is_direct()` 失败或缺失时保守当作非 DM；需要「未知」与「非 DM」的区分
-
-**建议改法**（审查轮提出，置信度 0.99）：在拥有 Matrix 房间上下文的 sync 层读取 direct-room 信息并传给转换，反应消息使用相同判据；未知房间类型需明确保守处理。保留 room_id 身份，不用人数临时猜测 direct。范围外确认 `src/gateway/inbound_router/permission.rs:79-149` 完全按 is_group 选择权限分支。
-
-**验收标准**：
-
-- 一条能复现上述现象的单元测试：修复前失败、修复后通过；
-- 该测试随 `cargo check -p alephcore --all-targets` 编译通过，且**真的被运行过**（本轮的新增测试只被编译、未运行——见 README §7）；
-- 不改变本条之外的公共 API、错误变体与顺序 / 幂等语义。
-
-
-
-
-
-## 6. GX1-08 — P2 — GX1 — A 类：缺陷仍可触发
+## 5. GX1-08 — P2 — GX1 — A 类：缺陷仍可触发
 
 **位置**：`src/gateway/server/connection/upgrade.rs:143-178,191-223`
 
@@ -811,7 +844,8 @@ IMAP FETCH 流出错时停止本轮并返回 ChannelError::Internal；未读标�
 
 
 
-## 7. GX1-09 — P2 — GX1 — A 类：缺陷仍可触发
+
+## 6. GX1-09 — P2 — GX1 — A 类：缺陷仍可触发
 
 **位置**：`src/gateway/server/mod.rs:1178-1255,1295-1297,1353-1355,1405-1414`
 
@@ -835,7 +869,8 @@ IMAP FETCH 流出错时停止本轮并返回 ChannelError::Internal；未读标�
 
 
 
-## 8. GX1-10 — P2 — GX1 — A 类：缺陷仍可触发
+
+## 7. GX1-10 — P2 — GX1 — A 类：缺陷仍可触发
 
 **位置**：`src/gateway/server/connection/mod.rs:315-394`
 
@@ -859,7 +894,8 @@ IMAP FETCH 流出错时停止本轮并返回 ChannelError::Internal；未读标�
 
 
 
-## 9. H1-08 — P2 — H1 — A 类：缺陷仍可触发
+
+## 8. H1-08 — P2 — H1 — A 类：缺陷仍可触发
 
 **位置**：`src/gateway/handlers/agent.rs:363`
 
@@ -883,7 +919,8 @@ IMAP FETCH 流出错时停止本轮并返回 ChannelError::Internal；未读标�
 
 
 
-## 10. H5-18 — P2 — H5 — A 类：缺陷仍可触发
+
+## 9. H5-18 — P2 — H5 — A 类：缺陷仍可触发
 
 **位置**：`src/gateway/handlers/memory/sessions.rs:108`
 
@@ -907,7 +944,8 @@ IMAP FETCH 流出错时停止本轮并返回 ChannelError::Internal；未读标�
 
 
 
-## 11. IF4-23 — P2 — IF4 — A 类：缺陷仍可触发
+
+## 10. IF4-23 — P2 — IF4 — A 类：缺陷仍可触发
 
 **位置**：`src/gateway/interfaces/line/webhook.rs:56`
 
@@ -931,7 +969,8 @@ IMAP FETCH 流出错时停止本轮并返回 ChannelError::Internal；未读标�
 
 
 
-## 12. IF4-27 — P2 — IF4 — A 类：缺陷仍可触发
+
+## 11. IF4-27 — P2 — IF4 — A 类：缺陷仍可触发
 
 **位置**：`src/gateway/interfaces/matrix/dedupe.rs:9`
 
@@ -955,7 +994,8 @@ IMAP FETCH 流出错时停止本轮并返回 ChannelError::Internal；未读标�
 
 
 
-## 13. IF5-22 — P2 — IF5 — A 类：缺陷仍可触发
+
+## 12. IF5-22 — P2 — IF5 — A 类：缺陷仍可触发
 
 **位置**：`src/gateway/interfaces/wechat/sync_buf.rs:36–46`
 
@@ -979,7 +1019,8 @@ IMAP FETCH 流出错时停止本轮并返回 ChannelError::Internal；未读标�
 
 
 
-## 14. IF6-12 — P2 — IF6 — A 类：缺陷仍可触发
+
+## 13. IF6-12 — P2 — IF6 — A 类：缺陷仍可触发
 
 **位置**：`src/gateway/interfaces/cli.rs:212-228`
 
@@ -1003,7 +1044,8 @@ IMAP FETCH 流出错时停止本轮并返回 ChannelError::Internal；未读标�
 
 
 
-## 15. IF6-13 — P2 — IF6 — A 类：缺陷仍可触发
+
+## 14. IF6-13 — P2 — IF6 — A 类：缺陷仍可触发
 
 **位置**：`src/gateway/interfaces/sms/transport.rs:599-617`
 
@@ -1027,7 +1069,8 @@ IMAP FETCH 流出错时停止本轮并返回 ChannelError::Internal；未读标�
 
 
 
-## 16. IF6-15 — P2 — IF6 — A 类：缺陷仍可触发
+
+## 15. IF6-15 — P2 — IF6 — A 类：缺陷仍可触发
 
 **位置**：`src/gateway/interfaces/email/message_ops.rs:329-356`
 
