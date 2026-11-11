@@ -99,6 +99,15 @@ pub(crate) async fn maybe_spawn_proxy(
         None
     };
 
+    tracing::debug!(
+        target: "sandbox.proxy",
+        allowlist = ?hosts,
+        proxy = %proxy_url,
+        platform = %platform,
+        bridged = bridge.is_some(),
+        "spawned managed proxy for AllowHosts"
+    );
+
     // Collapse the OS-level allowlist to the proxy's loopback address.
     // The proxy itself enforces the hostname allowlist; the OS just
     // ensures nothing escapes loopback.
@@ -123,15 +132,6 @@ pub(crate) async fn maybe_spawn_proxy(
     cmd.env
         .entry("no_proxy".to_string())
         .or_insert_with(|| "127.0.0.1,localhost,::1".to_string());
-
-    tracing::debug!(
-        target: "sandbox.proxy",
-        allowlist = ?hosts,
-        proxy = %proxy_url,
-        platform = %platform,
-        bridged = bridge.is_some(),
-        "spawned managed proxy for AllowHosts"
-    );
 
     Ok(Some(ActiveProxy {
         _proxy: handle,

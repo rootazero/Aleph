@@ -13,7 +13,6 @@
 //! peer EOF or local socket dropped).
 
 use std::net::SocketAddr;
-use std::sync::Arc;
 
 use tokio::net::TcpListener;
 use tokio::sync::watch;
