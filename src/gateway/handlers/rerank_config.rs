@@ -106,6 +106,11 @@ pub async fn handle_update(
     if !rerank_config.api_key.is_empty() {
         if let Err(e) = vault.store_secret(&vault_key(&provider_name), &rerank_config.api_key) {
             error!(error = %e, "Failed to store rerank API key in vault");
+            return JsonRpcResponse::error(
+                request.id,
+                INTERNAL_ERROR,
+                "Failed to store rerank API key",
+            );
         }
     }
     // Clear api_key before saving to config (it's in vault now)

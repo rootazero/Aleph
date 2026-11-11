@@ -2,6 +2,7 @@ use alephcore::capability::projection_host::ProjectionHost;
 use alephcore::error::AlephError;
 use alephcore::memory::runtime::MemoryRuntime;
 use alephcore::sync_primitives::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 /// Keeps acquired startup resources reachable until common cleanup completes.
 pub(in crate::commands::start) struct StartupResources {
@@ -13,6 +14,7 @@ pub(in crate::commands::start) struct StartupResources {
     events: Option<Arc<alephcore::capability::events::InMemoryEventStream>>,
     bridge: Option<alephcore::gateway::capability_events::CapabilityEventBridge>,
     pty: Option<&'static alephcore::gateway::pty::PtyManager>,
+    cleanup_called: AtomicBool,
 }
 
 impl StartupResources {
@@ -26,6 +28,7 @@ impl StartupResources {
             events: None,
             bridge: None,
             pty: None,
+            cleanup_called: AtomicBool::new(false),
         }
     }
 
@@ -66,6 +69,9 @@ impl StartupResources {
     }
 
     pub(in crate::commands::start) async fn cleanup(&mut self) -> Result<(), AlephError> {
+        if self.cleanup_called.swap(true, Ordering::SeqCst) {
+            return Ok(()); // Already cleaned up
+        }
         // STOP linearizes with both no-rule admissions and source publication.
         // UI waits must be released before waiting on their operation guards.
         let policy = self.policy.clone().or_else(|| {

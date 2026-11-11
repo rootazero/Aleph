@@ -248,10 +248,6 @@ impl MemoryRuntime {
         .with_activator(Arc::new(MemoryActivator::new(self)))
     }
 
-    pub(crate) fn provider(&self) -> ProviderHandle {
-        self.provider.clone()
-    }
-
     pub fn status(&self) -> MemoryStatus {
         self.inner
             .lock()
@@ -349,6 +345,7 @@ impl MemoryRuntime {
         self.changed.notify_waiters();
     }
 
+    #[cfg(test)]
     pub(crate) fn worker_stop(&self) -> Result<tokio::sync::watch::Receiver<bool>, AlephError> {
         self.inner
             .lock()

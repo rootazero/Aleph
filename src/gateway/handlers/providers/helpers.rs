@@ -80,9 +80,18 @@ pub(super) fn resolve_api_key(name: &str, vault: &SharedTokenManager) -> Option<
 
 pub(super) use crate::gateway::handlers::normalize_optional_string;
 
-pub(super) fn save_config(cfg: &Config, sections: &[&str]) -> Result<(), String> {
+pub(super) async fn save_config(cfg: &Config, sections: &[&str]) -> Result<(), String> {
     // api_key is #[serde(skip)] — never persisted to disk
-    cfg.save_incremental(sections).map_err(|e| e.to_string())
+    let cfg_clone = cfg.clone();
+    let sections_vec: Vec<String> = sections.iter().map(|s| s.to_string()).collect();
+    tokio::task::spawn_blocking(move || {
+        let section_refs: Vec<&str> = sections_vec.iter().map(|s| s.as_str()).collect();
+        cfg_clone
+            .save_incremental(&section_refs)
+            .map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| format!("blocking task failed: {}", e))?
 }
 
 /// Build the `ProviderConfig` to persist for a create/update RPC.

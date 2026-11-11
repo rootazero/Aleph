@@ -16,6 +16,7 @@
 
 use super::error::ToolError;
 use crate::config::Crawl4aiConfig;
+use crate::search::providers::base::redact;
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
 
@@ -135,20 +136,26 @@ impl Crawl4aiBackend {
         if let Some(ref token) = self.token {
             req = req.bearer_auth(token);
         }
-        let resp = req
-            .send()
-            .await
-            .map_err(|e| ToolError::Network(format!("crawl4ai request failed: {e}")))?;
+        let resp = req.send().await.map_err(|e| {
+            ToolError::Network(redact(
+                format!("crawl4ai request failed: {e}"),
+                self.token.as_deref(),
+            ))
+        })?;
         if !resp.status().is_success() {
-            return Err(ToolError::Network(format!(
-                "crawl4ai HTTP {} for {url}",
-                resp.status()
+            return Err(ToolError::Execution(redact(
+                format!("crawl4ai HTTP {} for {url}", resp.status()),
+                self.token.as_deref(),
             )));
         }
-        let parsed: CrawlResponse = resp
-            .json()
-            .await
-            .map_err(|e| ToolError::Execution(format!("crawl4ai bad JSON: {e}")))?;
+        let parsed: CrawlResponse = resp.json().await.map_err(|e| {
+            let message = redact(format!("crawl4ai bad JSON: {e}"), self.token.as_deref());
+            if e.is_decode() {
+                ToolError::Execution(message)
+            } else {
+                ToolError::Network(message)
+            }
+        })?;
         Self::extract_markdown(parsed)
     }
 

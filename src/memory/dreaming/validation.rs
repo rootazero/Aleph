@@ -18,7 +18,7 @@
 //! cycle *per corpus*, and a semantic-coherence verdict overlaps what the
 //! `note_drift` stage already produces — R7), not a wiring gap to close.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
 
@@ -102,8 +102,7 @@ fn validate_frontmatter(content: &str, note_path: &str) -> Vec<ValidationIssue> 
         // the prior hand-maintained `synthesis`/`query` allowances (and the
         // missing `entity`, which made L1 flag every ingest-written entity note
         // invalid) are subsumed here.
-        let valid_categories: HashSet<&str> = CATEGORY_DIRS.iter().copied().collect();
-        if !valid_categories.contains(cat.as_str()) {
+        if !CATEGORY_DIRS.contains(&cat) {
             issues.push(ValidationIssue {
                 // rust-doctor-disable-next-line excessive-clone
                 tier: tier.clone(),
@@ -126,17 +125,16 @@ fn validate_frontmatter(content: &str, note_path: &str) -> Vec<ValidationIssue> 
 }
 
 /// Simple YAML value extractor for `key: value` lines.
-fn extract_yaml_value(yaml: &str, key: &str) -> Option<String> {
-    let prefix = format!("{key}:");
-    yaml.lines()
-        .find(|line| line.trim_start().starts_with(&prefix))
-        .map(|line| {
-            line.trim_start()
-                .strip_prefix(&prefix)
-                .unwrap_or("")
-                .trim()
-                .to_string()
-        })
+fn extract_yaml_value<'a>(yaml: &'a str, key: &str) -> Option<&'a str> {
+    for line in yaml.lines() {
+        let trimmed = line.trim_start();
+        if let Some(rest) = trimmed.strip_prefix(key) {
+            if let Some(val) = rest.strip_prefix(':') {
+                return Some(val.trim());
+            }
+        }
+    }
+    None
 }
 
 // ---------------------------------------------------------------------------

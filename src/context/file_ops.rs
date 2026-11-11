@@ -84,8 +84,10 @@ pub(crate) fn canonical_path(args: &Value) -> Option<String> {
 #[must_use]
 pub(crate) fn canonicalize_path_string(raw: &str) -> String {
     let trimmed = raw.trim();
+    let normalized = trimmed.replace('\\', "/");
+    let is_absolute = normalized.starts_with('/');
     let mut components = Vec::new();
-    for component in trimmed.split('/') {
+    for component in normalized.split('/') {
         match component {
             "" | "." => {}
             ".." => {
@@ -94,14 +96,19 @@ pub(crate) fn canonicalize_path_string(raw: &str) -> String {
                     .is_some_and(|component| *component != "..")
                 {
                     components.pop();
-                } else {
+                } else if !is_absolute {
                     components.push("..");
                 }
             }
             component => components.push(component),
         }
     }
-    components.join("/")
+    let joined = components.join("/");
+    if is_absolute {
+        format!("/{joined}")
+    } else {
+        joined
+    }
 }
 
 /// The `tool_call_id`s in `messages` whose `ToolResult` arrived with

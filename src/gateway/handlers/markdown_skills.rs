@@ -234,32 +234,57 @@ async fn install_from_zip(source: &str, skills_dir: &std::path::Path) -> Result<
             .map_err(|e| format!("Failed to read ZIP file: {e}"))?
     };
 
-    // Derive folder name from filename (strip .zip)
+    // Derive folder name from filename (strip .zip).
+    // Reject any name that is empty, a dot-segment, or contains path separators,
+    // or resolves to anything other than a single Normal component.  This prevents
+    // an archive named `..zip` (stem "..") or `.zip` (stem ".") from escaping
+    // the skills directory.
     let file_stem = std::path::Path::new(source)
         .file_stem()
         .and_then(|s| s.to_str())
         .unwrap_or("skills-zip");
+    if file_stem.is_empty()
+        || file_stem == "."
+        || file_stem == ".."
+        || file_stem.contains('/')
+        || file_stem.contains('\\')
+        || !matches!(
+            Path::new(file_stem).components().next(),
+            Some(std::path::Component::Normal(_))
+        )
+        || Path::new(file_stem).components().count() != 1
+    {
+        return Err(format!("Invalid archive name: {source}"));
+    }
     let dest_path = skills_dir.join(file_stem);
 
-    // Extract ZIP
-    let cursor = std::io::Cursor::new(zip_data);
-    let mut archive =
-        zip::ZipArchive::new(cursor).map_err(|e| format!("Invalid ZIP archive: {e}"))?;
-
-    // Clean existing and extract fresh
-    if dest_path.exists() {
-        let _ = std::fs::remove_dir_all(&dest_path);
+    // Extra guard: the resolved destination must be a direct child of skills_dir.
+    // This catches any edge-cases the name check above might not cover on the
+    // current platform (e.g. UNC paths on Windows).
+    if dest_path.parent() != Some(skills_dir) {
+        return Err(format!("Invalid archive name: {source}"));
     }
-    tokio::fs::create_dir_all(&dest_path)
-        .await
-        .map_err(|e| format!("Failed to create directory: {e}"))?;
 
-    archive
-        .extract(&dest_path)
-        .map_err(|e| format!("Failed to extract ZIP: {e}"))?;
+    tokio::task::spawn_blocking(move || {
+        let cursor = std::io::Cursor::new(zip_data);
+        let mut archive =
+            zip::ZipArchive::new(cursor).map_err(|e| format!("Invalid ZIP archive: {e}"))?;
 
-    info!(dest = %dest_path.display(), entries = archive.len(), "Extracted ZIP archive");
-    Ok(dest_path)
+        // Clean existing and extract fresh, off the async executor.
+        if dest_path.exists() {
+            let _ = std::fs::remove_dir_all(&dest_path);
+        }
+        std::fs::create_dir_all(&dest_path)
+            .map_err(|e| format!("Failed to create directory: {e}"))?;
+
+        archive
+            .extract(&dest_path)
+            .map_err(|e| format!("Failed to extract ZIP: {e}"))?;
+        info!(dest = %dest_path.display(), entries = archive.len(), "Extracted ZIP archive");
+        Ok(dest_path)
+    })
+    .await
+    .map_err(|e| format!("zip install task failed: {e}"))?
 }
 
 /// Whether `path` lives inside `root`.

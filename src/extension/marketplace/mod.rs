@@ -667,7 +667,17 @@ fn resolve_plugin_path(
         .filter(|c| matches!(c, Component::Normal(_)))
         .collect();
 
-    Some(marketplace_dir.join(safe))
+    // Filtering the components is not enough: an intermediate symlink inside
+    // the marketplace is followed by the filesystem, so the joined path can
+    // still land outside the marketplace root. Canonicalize both sides and
+    // keep the result only when it is inside the canonical root.
+    let candidate = marketplace_dir.join(safe);
+    let canonical_root = marketplace_dir.canonicalize().ok()?;
+    let canonical = candidate.canonicalize().ok()?;
+    if !canonical.starts_with(&canonical_root) {
+        return None;
+    }
+    Some(canonical)
 }
 
 // =============================================================================
@@ -677,6 +687,55 @@ fn resolve_plugin_path(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn removing_dot_preserves_every_marketplace_cache() {
+        let cache = tempfile::TempDir::new().unwrap();
+        for name in [BUILTIN_MARKETPLACE_NAME, "other"] {
+            std::fs::create_dir(cache.path().join(name)).unwrap();
+            std::fs::write(cache.path().join(name).join("keep.txt"), name).unwrap();
+        }
+        let mut mgr = MarketplaceManager::new(HashMap::new(), Some(cache.path().to_path_buf()));
+        assert!(mgr.remove(".").is_err());
+        for name in [BUILTIN_MARKETPLACE_NAME, "other"] {
+            assert_eq!(
+                std::fs::read_to_string(cache.path().join(name).join("keep.txt")).unwrap(),
+                name
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn plugin_source_symlinks_must_stay_inside_the_marketplace() {
+        use std::os::unix::fs::symlink;
+        use types::MarketplacePluginSource;
+
+        let root = tempfile::TempDir::new().unwrap();
+        let outside = tempfile::TempDir::new().unwrap();
+        std::fs::create_dir(outside.path().join("existing-plugin")).unwrap();
+        symlink(outside.path(), root.path().join("alias")).unwrap();
+        let escaped = MarketplacePluginSource::Path("./alias/existing-plugin".to_string());
+        assert_eq!(resolve_plugin_path(root.path(), &escaped), None);
+
+        std::fs::create_dir(root.path().join("plugins")).unwrap();
+        std::fs::create_dir(root.path().join("plugins/inside")).unwrap();
+        symlink(root.path().join("plugins"), root.path().join("internal")).unwrap();
+        let internal = MarketplacePluginSource::Path("./internal/inside".to_string());
+        assert_eq!(
+            resolve_plugin_path(root.path(), &internal),
+            Some(root.path().join("plugins/inside").canonicalize().unwrap())
+        );
+        for source in ["../existing-plugin", "/plugins/inside", "./missing"] {
+            assert_eq!(
+                resolve_plugin_path(
+                    root.path(),
+                    &MarketplacePluginSource::Path(source.to_string())
+                ),
+                None
+            );
+        }
+    }
 
     #[test]
     fn should_update_skips_equal_versions() {

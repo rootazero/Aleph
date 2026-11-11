@@ -26,7 +26,7 @@ const fn default_true() -> bool {
 }
 
 /// Email channel configuration
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct EmailConfig {
     /// IMAP server host (e.g., "imap.gmail.com")
     pub imap_host: String,
@@ -66,6 +66,26 @@ pub struct EmailConfig {
     /// Use TLS for connections (default: true)
     #[serde(default = "default_true")]
     pub use_tls: bool,
+}
+
+/// Hand-written so the IMAP/SMTP password never reaches a log line, a panic
+/// message or a `tracing` field. Every other field is printed as-is.
+impl std::fmt::Debug for EmailConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("EmailConfig")
+            .field("imap_host", &self.imap_host)
+            .field("imap_port", &self.imap_port)
+            .field("smtp_host", &self.smtp_host)
+            .field("smtp_port", &self.smtp_port)
+            .field("username", &self.username)
+            .field("password", &"<redacted>")
+            .field("from_address", &self.from_address)
+            .field("poll_interval_secs", &self.poll_interval_secs)
+            .field("folders", &self.folders)
+            .field("allowed_senders", &self.allowed_senders)
+            .field("use_tls", &self.use_tls)
+            .finish()
+    }
 }
 
 impl Default for EmailConfig {
@@ -141,9 +161,16 @@ impl EmailConfig {
         if self.allowed_senders.is_empty() {
             true
         } else {
-            self.allowed_senders
-                .iter()
-                .any(|allowed| sender.contains(allowed))
+            self.allowed_senders.iter().any(|allowed| {
+                if allowed.starts_with('@') {
+                    sender
+                        .split('@')
+                        .nth(1)
+                        .map_or(false, |domain| domain == &allowed[1..])
+                } else {
+                    sender == allowed
+                }
+            })
         }
     }
 }
@@ -167,7 +194,6 @@ mod tests {
         assert!(config.allowed_senders.is_empty());
         assert!(config.use_tls);
     }
-
     #[test]
     fn test_validate_empty_imap_host() {
         let config = EmailConfig::default();

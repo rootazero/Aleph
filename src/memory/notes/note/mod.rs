@@ -227,40 +227,42 @@ impl KnowledgeNote {
 
         let mut out = String::new();
         out.push_str("---\n");
+        use std::fmt::Write as _;
+
         // Vault-compat header (Obsidian / llm_wiki): type/title/aliases.
         // Scalars are quoted when needed — an unquoted `title: [wip] plans`
         // makes the whole note permanently unparseable.
-        let note_type = self
-            .note_type
-            .clone()
-            .unwrap_or_else(|| self.category.clone());
-        out.push_str(&format!("type: {}\n", yaml_scalar(&note_type)));
-        out.push_str(&format!("title: {}\n", yaml_scalar(&self.title)));
-        out.push_str(&format!("aliases: {}\n", yaml_inline_array(&self.aliases)));
-        out.push_str(&format!("category: {}\n", yaml_scalar(&self.category)));
-        out.push_str(&format!("tags: {}\n", yaml_inline_array(&self.tags)));
-        out.push_str(&format!("created: \"{created}\"\n"));
-        out.push_str(&format!("updated: \"{updated}\"\n"));
-        out.push_str(&format!("confidence: {:.4}\n", self.confidence));
+        let note_type = self.note_type.as_deref().unwrap_or(&self.category);
+        let _ = writeln!(out, "type: {}", yaml_scalar(note_type));
+        let _ = writeln!(out, "title: {}", yaml_scalar(&self.title));
+        let _ = writeln!(out, "aliases: {}", yaml_inline_array(&self.aliases));
+        let _ = writeln!(out, "category: {}", yaml_scalar(&self.category));
+        let _ = writeln!(out, "tags: {}", yaml_inline_array(&self.tags));
+        let _ = writeln!(out, "created: \"{created}\"");
+        let _ = writeln!(out, "updated: \"{updated}\"");
+        let _ = writeln!(out, "confidence: {:.4}", self.confidence);
         let severity_str = match self.severity {
             types::Severity::Low => "low",
             types::Severity::Med => "med",
             types::Severity::High => "high",
             types::Severity::Critical => "critical",
         };
-        out.push_str(&format!("severity: {severity_str}\n"));
-        out.push_str(&format!(
-            "source_notes: {}\n",
+        let _ = writeln!(out, "severity: {severity_str}");
+        let _ = writeln!(
+            out,
+            "source_notes: {}",
             yaml_inline_array(&self.source_notes)
-        ));
-        out.push_str(&format!(
-            "supersedes: {}\n",
+        );
+        let _ = writeln!(
+            out,
+            "supersedes: {}",
             yaml_inline_array(&self.supersedes)
-        ));
-        out.push_str(&format!(
-            "superseded_by: {}\n",
+        );
+        let _ = writeln!(
+            out,
+            "superseded_by: {}",
             yaml_inline_array(&self.superseded_by)
-        ));
+        );
         // Only emit `relations:` when non-empty, so notes without typed edges
         // serialize byte-for-byte as before this field existed (legacy parity).
         if !self.relations.is_empty() {
@@ -513,13 +515,23 @@ fn join_body_and_related(head: &str, targets: &[String]) -> String {
     if targets.is_empty() {
         return head.to_string();
     }
-    let rendered: Vec<String> = targets.iter().map(|t| format!("[[{t}]]")).collect();
-    let footer = format!("{RELATED_PREFIX} {}\n", rendered.join(" "));
-    if head.is_empty() {
-        return footer;
+    let mut out = String::with_capacity(head.len() + targets.len() * 32 + 32);
+    if !head.is_empty() {
+        out.push_str(head);
+        if head.ends_with('\n') {
+            out.push('\n');
+        } else {
+            out.push_str("\n\n");
+        }
     }
-    let separator = if head.ends_with('\n') { "\n" } else { "\n\n" };
-    format!("{head}{separator}{footer}")
+    out.push_str(RELATED_PREFIX);
+    for t in targets {
+        out.push_str(" [[");
+        out.push_str(t);
+        out.push_str("]]");
+    }
+    out.push('\n');
+    out
 }
 
 /// Append one fact as a `- ` bullet, indenting continuation lines by two
@@ -530,7 +542,9 @@ fn push_fact_bullet(out: &mut String, fact: &str) {
     let Some(first) = lines.next() else {
         return;
     };
-    out.push_str(&format!("- {first}\n"));
+    out.push_str("- ");
+    out.push_str(first);
+    out.push('\n');
     for cont in lines {
         if !cont.starts_with("  ") {
             out.push_str("  ");

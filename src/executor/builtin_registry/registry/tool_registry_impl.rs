@@ -318,66 +318,9 @@ impl ToolRegistry for BuiltinToolRegistry {
             }),
             "goal" => Box::pin(async move { self.goal_tool.call_json(arguments).await }),
             "loop_graph" => {
-                // Same delivery plumbing `cron_manage` gets, for the same
-                // reason: `enable_audit` / `pair` INSTALL cron jobs, and those
-                // jobs' whole point is to report a governance verdict back to
-                // the user (AUDIT_TEMPLATE step 7 / WATCH_TEMPLATE_FOOTER).
-                // Without a channel they run, decide, and deliver nowhere.
-                // Prefer the race-free per-turn context over the process-global
-                // mirror, which a concurrent run can swap mid-turn.
                 let arguments = {
                     let mut args = arguments;
-                    let (channel, conversation_id) =
-                        match crate::tools::turn_context::current_turn_context() {
-                            Some(t) => {
-                                (Some(t.channel_id.clone()), Some(t.conversation_id.clone()))
-                            }
-                            None => self
-                                .session_context_handle
-                                .as_ref()
-                                .and_then(|h| match h.try_read() {
-                                    Ok(ctx) => Some(ctx),
-                                    Err(_) => {
-                                        tracing::warn!(
-                                            "loop_graph: session context lock contended; the \
-                                             installed cron job will have no delivery route"
-                                        );
-                                        None
-                                    }
-                                })
-                                .map(|ctx| {
-                                    (Some(ctx.channel.clone()), Some(ctx.conversation_id.clone()))
-                                })
-                                .unwrap_or((None, None)),
-                        };
-                    // Only inject a route that names something. `TurnContext`
-                    // carries `channel_id`/`conversation_id` as `String`, and
-                    // they are EMPTY for exactly the turns that have no channel
-                    // — a governance or steward cron, a heartbeat probe, a
-                    // webhook turn, a `tools.invoke` call. Wrapping those in
-                    // `Some("")` is not "no route", it is a route that fails
-                    // every `is_some()` test the delivery side runs: the
-                    // installed job would be stamped
-                    // `source_channel_id = Some("")`, which makes
-                    // `cron::executor`'s `approval_is_routable` true, so
-                    // `UNATTENDED_KEY` is never set and the weekly audit run is
-                    // treated as attended; and `build_cron_prompt` then tells
-                    // the auditor "the runtime will deliver it to the user
-                    // automatically. Do NOT call any messaging tool" — taking
-                    // away the model's own fallback in favour of a delivery
-                    // that cannot happen. `None` is the honest value and every
-                    // one of those paths already handles it.
-                    if let Some(obj) = args.as_object_mut() {
-                        if let Some(channel) = channel.filter(|c| !c.is_empty()) {
-                            obj.insert("__channel".into(), serde_json::Value::String(channel));
-                        }
-                        if let Some(conversation_id) = conversation_id.filter(|c| !c.is_empty()) {
-                            obj.insert(
-                                "__conversation_id".into(),
-                                serde_json::Value::String(conversation_id),
-                            );
-                        }
-                    }
+                    self.inject_delivery_route(&mut args);
                     args
                 };
                 Box::pin(async move { self.loop_graph_tool.call_json(arguments).await })

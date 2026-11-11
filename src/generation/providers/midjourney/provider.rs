@@ -14,7 +14,6 @@ use std::time::Instant;
 use tracing::info;
 
 use super::builder::MidjourneyProviderBuilder;
-use super::submit_polling::SubmitPolling;
 use super::types::{ImagineRequest, MidjourneyMode, PROVIDER_NAME};
 
 /// `T8Star` Midjourney Image Generation Provider
@@ -203,7 +202,8 @@ impl GenerationProvider for MidjourneyProvider {
 
             // Download image bytes
             let bytes = self.download_image(&image_url).await?;
-            let data = GenerationData::bytes(bytes.clone());
+            let size_bytes = u64::try_from(bytes.len()).unwrap_or(u64::MAX);
+            let data = GenerationData::bytes(bytes);
 
             // Build metadata
             let duration = start_time.elapsed();
@@ -212,7 +212,7 @@ impl GenerationProvider for MidjourneyProvider {
                 .with_model(PROVIDER_NAME)
                 .with_duration(duration)
                 .with_content_type("image/png")
-                .with_size_bytes(u64::try_from(bytes.len()).unwrap_or(u64::MAX));
+                .with_size_bytes(size_bytes);
 
             // Add mode info
             metadata.extra.insert(
@@ -225,17 +225,14 @@ impl GenerationProvider for MidjourneyProvider {
             );
 
             // Add buttons info if available
-            if let Some(buttons) = &task.buttons {
-                let button_labels: Vec<String> = buttons.iter().map(|b| b.label.clone()).collect();
-                metadata.extra.insert(
-                    "actions".to_string(),
-                    serde_json::Value::Array(
-                        button_labels
-                            .iter()
-                            .map(|l| serde_json::Value::String(l.clone()))
-                            .collect(),
-                    ),
-                );
+            if let Some(buttons) = task.buttons {
+                let actions: Vec<serde_json::Value> = buttons
+                    .into_iter()
+                    .map(|b| serde_json::Value::String(b.label))
+                    .collect();
+                metadata
+                    .extra
+                    .insert("actions".to_string(), serde_json::Value::Array(actions));
             }
 
             info!(

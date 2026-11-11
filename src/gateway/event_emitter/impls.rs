@@ -63,7 +63,7 @@ impl GatewayEventEmitter {
 
 #[async_trait]
 impl EventEmitter for GatewayEventEmitter {
-    async fn emit(&self, event: StreamEvent) -> Result<(), EventEmitError> {
+    async fn emit(&self, mut event: StreamEvent) -> Result<(), EventEmitError> {
         // Instant mode: coalesce streamed response text through the shared
         // planner (single-sourced with `InstantBufferingEmitter`) before it
         // reaches the bus. `Prepend`/`Forward` fall through to the common
@@ -71,7 +71,7 @@ impl EventEmitter for GatewayEventEmitter {
         if self.output_mode == OutputMode::Instant {
             let outcome = {
                 let mut buffer = self.instant_buffer.lock().await;
-                plan_instant(&mut buffer, &event, || self.next_seq())
+                plan_instant(&mut buffer, &mut event, || self.next_seq())
             };
             match outcome {
                 InstantOutcome::Buffered => return Ok(()),

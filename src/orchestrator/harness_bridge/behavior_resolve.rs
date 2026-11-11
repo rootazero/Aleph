@@ -41,7 +41,6 @@ pub fn resolve_behavior(provider: &dyn AiProvider) -> Cow<'static, str> {
 mod tests {
     use super::*;
     use crate::providers::adapter::{ProviderResponse, RequestPayload};
-    use crate::providers::message::UnifiedMessage;
     use std::future::Future;
     use std::pin::Pin;
 
@@ -89,7 +88,6 @@ mod tests {
 
     #[test]
     fn override_wins_over_everything() {
-        let _ = UnifiedMessage::user("warmup");
         assert_eq!(
             resolve_behavior(&p("anthropic", Some("openai"), Some("strict"))),
             "openai"

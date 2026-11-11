@@ -123,10 +123,8 @@ pub(super) fn parse_args(input: &Value) -> Result<SubagentAction, String> {
 
     // Determine action from explicit field, falling back to legacy heuristics.
     let action = match input.get("action") {
-        Some(v) => match v.as_str() {
-            Some(s) => s,
-            None => return Err("'action' must be a string".to_string()),
-        },
+        Some(Value::String(s)) => s.as_str(),
+        Some(_) => return Err("'action' must be a string".to_string()),
         None => "",
     };
 
@@ -332,17 +330,15 @@ pub(super) fn parse_args(input: &Value) -> Result<SubagentAction, String> {
 
     // Run action — top-level `task` is required UNLESS batch_tasks supplies
     // the actual sub-task descriptions.
-    let task =
-        match task {
-            Some(t) if !t.trim().is_empty() => t,
-            Some(_) if has_batch => String::new(),
-            Some(_) => return Err("task must not be empty".to_string()),
-            None if has_batch => String::new(),
-            None => return Err(
-                "missing required field: task (or provide request_id to check background status)"
-                    .to_string(),
-            ),
-        };
+    let task = match task {
+        Some(t) if !t.trim().is_empty() => t,
+        _ if has_batch => String::new(),
+        Some(_) => return Err("task must not be empty".to_string()),
+        None => return Err(
+            "missing required field: task (or provide request_id to check background status)"
+                .to_string(),
+        ),
+    };
 
     // Optional scalars are read through the strict helpers above: a
     // wrong-typed value is an error, not a default. Defaulting it would run

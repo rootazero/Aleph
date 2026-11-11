@@ -228,11 +228,7 @@ pub fn read_max_retries(metadata: &Value) -> Option<u32> {
     metadata
         .get(MAX_RETRIES_METADATA_KEY)
         .and_then(Value::as_u64)
-        .map(|n| {
-            u32::try_from(n)
-                .unwrap_or(MAX_RETRIES_CEILING)
-                .min(MAX_RETRIES_CEILING)
-        })
+        .map(|n| n.min(MAX_RETRIES_CEILING as u64) as u32)
 }
 
 /// Return a new metadata value with `max_retries` merged in under
@@ -410,17 +406,7 @@ pub fn with_retry_not_before(metadata: Value, not_before: u64) -> Value {
 /// `current` must be the row as read at write time.
 #[must_use]
 pub fn merge_retry_not_before(current: &Value, not_before: u64) -> Value {
-    let mut value = match current {
-        Value::Object(_) => current.clone(),
-        _ => Value::Object(serde_json::Map::new()),
-    };
-    if let Some(obj) = value.as_object_mut() {
-        obj.insert(
-            RETRY_NOT_BEFORE_METADATA_KEY.to_string(),
-            Value::Number(not_before.into()),
-        );
-    }
-    value
+    with_retry_not_before(current.clone(), not_before)
 }
 
 /// Count the failed/timed-out attempts in a task's run history: clean

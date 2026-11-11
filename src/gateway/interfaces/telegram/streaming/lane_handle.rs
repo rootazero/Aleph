@@ -79,6 +79,11 @@ impl LaneHandle {
             .ok_or_else(|| ChannelError::Internal("lane not initialized in tracker".to_string()))?;
 
         state.accumulated.push_str(delta);
+        if !stream_cfg.enabled
+            || stream_cfg.mode == super::super::config_v2::StreamingMode::Disabled
+        {
+            return Ok(());
+        }
 
         match state.preview_message_id {
             None => {
@@ -87,16 +92,10 @@ impl LaneHandle {
                     return Ok(());
                 }
                 let text = self.lane_marked_text(&state.accumulated);
-                // Reserve the throttle slot before releasing the lock so a
-                // concurrent delta can't race a second send.
-                state.last_update = std::time::Instant::now();
-                drop(tracker);
                 let id = self.delivery.send_text_message(&text).await?;
-                let mut tracker = self.tracker.lock().await;
-                if let Some(state) = tracker.get_mut(self.lane_id) {
-                    state.preview_message_id = Some(id);
-                    state.is_streaming = true;
-                }
+                state.last_update = std::time::Instant::now();
+                state.preview_message_id = Some(id);
+                state.is_streaming = true;
                 Ok(())
             }
             Some(message_id) => {
@@ -104,9 +103,8 @@ impl LaneHandle {
                     return Ok(());
                 }
                 let text = self.lane_marked_text(&state.accumulated);
-                state.last_update = std::time::Instant::now();
-                drop(tracker);
                 self.delivery.edit_text_message(message_id, &text).await?;
+                state.last_update = std::time::Instant::now();
                 Ok(())
             }
         }
@@ -138,6 +136,13 @@ impl LaneHandle {
     /// drain scrubbed it), so settling on it keeps the promise that a
     /// pure-reasoning turn never blanks an existing message without delivering
     /// anything the sanitiser refused.
+    pub async fn has_content(&self) -> bool {
+        let tracker = self.tracker.lock().await;
+        tracker
+            .get(self.lane_id)
+            .is_some_and(|state| !state.accumulated.is_empty())
+    }
+
     pub async fn finalize_streamed(&self) -> ChannelResult<i64> {
         let streamed = {
             let tracker = self.tracker.lock().await;
@@ -150,32 +155,65 @@ impl LaneHandle {
     }
 
     pub async fn finalize(&self, final_text: &str) -> ChannelResult<i64> {
-        let mut tracker = self.tracker.lock().await;
-        let state = tracker
-            .get_mut(self.lane_id)
-            .ok_or_else(|| ChannelError::Internal("lane not initialized in tracker".to_string()))?;
-
-        let message_id = if let Some(id) = state.preview_message_id {
-            id
-        } else {
-            let text = self.lane_marked_text(final_text);
-            let id = self.delivery.send_text_message(&text).await?;
-            state.final_message_id = Some(id);
-            state.is_streaming = false;
-            return Ok(id);
+        let preview_message_id = {
+            let tracker = self.tracker.lock().await;
+            let state = tracker.get(self.lane_id).ok_or_else(|| {
+                ChannelError::Internal("lane not initialized in tracker".to_string())
+            })?;
+            state.preview_message_id
         };
 
-        drop(tracker);
         let text = self.lane_marked_text(final_text);
-        self.delivery.edit_text_message(message_id, &text).await?;
 
-        let mut tracker = self.tracker.lock().await;
-        let state = tracker
-            .get_mut(self.lane_id)
-            .ok_or_else(|| ChannelError::Internal("lane not initialized in tracker".to_string()))?;
-        state.final_message_id = Some(message_id);
-        state.is_streaming = false;
-        Ok(message_id)
+        // A Telegram message cannot hold more than 4096 characters. When the
+        // answer does not fit, the preview is edited with the first chunk and
+        // the rest goes out as new messages — otherwise the tail is either
+        // lost or reported as delivered while it never left the process.
+        let chunks = crate::gateway::interfaces::telegram::delivery::split_for_telegram(&text);
+        let chunked = chunks.len() > 1;
+
+        if let Some(message_id) = preview_message_id {
+            let first = if chunked { chunks[0] } else { text.as_str() };
+            self.delivery.edit_text_message(message_id, first).await?;
+            if chunked {
+                for chunk in chunks.iter().skip(1).copied() {
+                    self.delivery.send_text_message(chunk).await?;
+                }
+            }
+
+            let mut tracker = self.tracker.lock().await;
+            let state = tracker.get_mut(self.lane_id).ok_or_else(|| {
+                ChannelError::Internal("lane not initialized in tracker".to_string())
+            })?;
+            state.final_message_id = Some(message_id);
+            state.is_streaming = false;
+            Ok(message_id)
+        } else {
+            let id = if chunked {
+                let mut first_id = None;
+                for chunk in chunks.iter().copied() {
+                    let sent = self.delivery.send_text_message(chunk).await?;
+                    if first_id.is_none() {
+                        first_id = Some(sent);
+                    }
+                }
+                first_id.ok_or_else(|| {
+                    crate::gateway::channel::ChannelError::SendFailed(
+                        "telegram: the answer was chunked but no chunk was sent".to_string(),
+                    )
+                })?
+            } else {
+                self.delivery.send_text_message(&text).await?
+            };
+
+            let mut tracker = self.tracker.lock().await;
+            let state = tracker.get_mut(self.lane_id).ok_or_else(|| {
+                ChannelError::Internal("lane not initialized in tracker".to_string())
+            })?;
+            state.final_message_id = Some(id);
+            state.is_streaming = false;
+            Ok(id)
+        }
     }
 }
 
@@ -185,6 +223,87 @@ mod tests {
     use crate::gateway::interfaces::telegram::delivery::TelegramDelivery;
     use crate::gateway::interfaces::telegram::error_cooldown::ErrorCooldown;
     use crate::sync_primitives::Arc;
+
+    fn delivery_for(
+        server: &wiremock::MockServer,
+        streaming: serde_json::Value,
+    ) -> TelegramDelivery {
+        use crate::gateway::interfaces::telegram::{ConfigResolver, TelegramConfigV2};
+        let config: TelegramConfigV2 = serde_json::from_value(serde_json::json!({
+            "accounts": [{"id": "test", "bot_token": "123:test", "send_typing": false,
+                "html_fallback": false, "streaming": streaming}]
+        }))
+        .unwrap();
+        TelegramDelivery::new(
+            teloxide::Bot::new("123:test").set_api_url(server.uri().parse().unwrap()),
+            ConfigResolver::from_v2(&config)
+                .resolve("test", 123, None)
+                .unwrap()
+                .clone(),
+            Arc::new(ErrorCooldown::new()),
+            "123",
+        )
+    }
+
+    #[tokio::test]
+    async fn disabled_streaming_accumulates_without_preview_but_delivers_final_text() {
+        use wiremock::{matchers::path, Mock, MockServer, ResponseTemplate};
+        for streaming in [
+            serde_json::json!({"enabled": false}),
+            serde_json::json!({"mode": "disabled"}),
+        ] {
+            let server = MockServer::start().await;
+            Mock::given(path("/bot123:test/SendMessage"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                    "ok": true, "result": {"message_id": 42, "date": 1700000000,
+                        "chat": {"id": 123, "type": "private"}}
+                })))
+                .expect(1)
+                .mount(&server)
+                .await;
+            let delivery = delivery_for(&server, streaming);
+            let tracker = Arc::new(Mutex::new(LaneDeliveryTracker::new(123, None)));
+            let lane = LaneHandle::new(LaneId::Answer, tracker.clone(), delivery);
+            lane.write_chunk(&"x".repeat(1000)).await.unwrap();
+            assert!(server.received_requests().await.unwrap().is_empty());
+            assert!(tracker
+                .lock()
+                .await
+                .get(LaneId::Answer)
+                .unwrap()
+                .preview_message_id
+                .is_none());
+            assert_eq!(lane.finalize_streamed().await.unwrap(), 42);
+        }
+    }
+
+    #[tokio::test]
+    async fn failed_preview_edit_does_not_commit_delivery_timestamp() {
+        use wiremock::{matchers::path, Mock, MockServer, ResponseTemplate};
+        let server = MockServer::start().await;
+        Mock::given(path("/bot123:test/EditMessageText"))
+            .respond_with(ResponseTemplate::new(400).set_body_json(serde_json::json!({
+                "ok": false, "error_code": 400, "description": "Bad Request: rejected"
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let delivery = delivery_for(&server, serde_json::json!({"debounce_ms": 0}));
+        let tracker = Arc::new(Mutex::new(LaneDeliveryTracker::new(123, None)));
+        let before = std::time::Instant::now() - std::time::Duration::from_secs(1);
+        {
+            let mut tracker = tracker.lock().await;
+            let state = tracker.get_mut(LaneId::Answer).unwrap();
+            state.preview_message_id = Some(42);
+            state.last_update = before;
+        }
+        let lane = LaneHandle::new(LaneId::Answer, tracker.clone(), delivery);
+        assert!(lane.write_chunk("pending").await.is_err());
+        let tracker = tracker.lock().await;
+        let state = tracker.get(LaneId::Answer).unwrap();
+        assert_eq!(state.last_update, before);
+        assert_eq!(state.accumulated, "pending");
+    }
 
     #[tokio::test]
     async fn test_lane_handle_creation() {

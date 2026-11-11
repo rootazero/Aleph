@@ -150,15 +150,19 @@ impl LinkResolveContext {
 /// U+3000) to half-width + trim. Zero-dep normalization for tier 4.
 #[must_use]
 pub fn normalize_link_key(s: &str) -> String {
-    s.trim()
-        .chars()
-        .map(|c| match c {
+    let trimmed = s.trim();
+    let mut out = String::with_capacity(trimmed.len());
+    for c in trimmed.chars() {
+        let folded = match c {
             '\u{3000}' => ' ',
             '\u{FF01}'..='\u{FF5E}' => char::from_u32(c as u32 - 0xFF00 + 0x20).unwrap_or(c),
             _ => c,
-        })
-        .collect::<String>()
-        .to_lowercase()
+        };
+        for lc in folded.to_lowercase() {
+            out.push(lc);
+        }
+    }
+    out
 }
 
 /// Run the strategy chain for one raw wikilink target.

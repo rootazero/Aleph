@@ -122,11 +122,12 @@ fn list_response(path: PathBuf, exists: bool, events: Map<String, Value>) -> Val
 }
 
 pub async fn handle_hooks_list(request: JsonRpcRequest) -> JsonRpcResponse {
-    match read_hooks_file() {
-        Ok((path, exists, events)) => {
+    match tokio::task::spawn_blocking(read_hooks_file).await {
+        Ok(Ok((path, exists, events))) => {
             JsonRpcResponse::success(request.id, list_response(path, exists, events))
         }
-        Err(e) => JsonRpcResponse::error(request.id, INTERNAL_ERROR, e),
+        Ok(Err(e)) => JsonRpcResponse::error(request.id, INTERNAL_ERROR, e),
+        Err(e) => JsonRpcResponse::error(request.id, INTERNAL_ERROR, format!("task join: {e}")),
     }
 }
 
@@ -201,6 +202,12 @@ pub(crate) fn read_user_hooks_file() -> Result<(PathBuf, bool, Map<String, Value
     read_hooks_file()
 }
 
+/// Process-wide guard serializing every hooks-file mutation (append or
+/// remove) so concurrent writers cannot clobber each other's read-modify-write
+/// cycles. Shared by `append_user_hook`, `remove_user_hooks`, and
+/// `handle_hooks_remove`.
+static HOOKS_MUTEX: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 /// Append one action (optionally matcher-scoped) to `event` in the global
 /// hooks file, then trigger a reload. Extracted from `handle_hooks_add` so
 /// the RPC and the tool share one write path — including the atomic write,
@@ -210,6 +217,8 @@ pub(crate) fn append_user_hook(
     action: Value,
     matcher: Option<&str>,
 ) -> Result<(), String> {
+    let _guard = HOOKS_MUTEX.lock().unwrap();
+
     let (path, _exists, mut events) = read_hooks_file()?;
 
     let group = {
@@ -343,6 +352,10 @@ pub(crate) fn remove_event_groups(
 /// `needle` filters by substring across the group's action fields; `None`
 /// removes every entry for the event. Returns how many groups were removed.
 pub(crate) fn remove_user_hooks(event: &str, needle: Option<&str>) -> Result<usize, String> {
+    // Same guard as `append_user_hook`: the read-modify-write of the hooks
+    // file must not interleave with a concurrent append.
+    let _guard = HOOKS_MUTEX.lock().unwrap();
+
     let (path, _exists, mut events) = read_hooks_file()?;
     let removal = match needle {
         Some(n) => HookRemoval::Command(n.to_string()),
@@ -456,6 +469,12 @@ pub async fn handle_hooks_remove(request: JsonRpcRequest) -> JsonRpcResponse {
         }
     };
 
+    // The read-modify-write has to be one critical section. `hooks.add`
+    // appends under this same lock, so a concurrent add that lands between
+    // our read and our write would have its hook overwritten by ours — both
+    // calls would report success and one hook would be silently gone.
+    let _guard = HOOKS_MUTEX.lock().unwrap();
+
     let (path, _exists, mut events) = match read_hooks_file() {
         Ok(v) => v,
         Err(e) => return JsonRpcResponse::error(request.id, INTERNAL_ERROR, e),
@@ -472,6 +491,7 @@ pub async fn handle_hooks_remove(request: JsonRpcRequest) -> JsonRpcResponse {
     if let Err(e) = write_hooks_file(&path, &events) {
         return JsonRpcResponse::error(request.id, INTERNAL_ERROR, e);
     }
+    drop(_guard);
     trigger_reload();
     let mut payload = list_response(path, true, events);
     if let Some(obj) = payload.as_object_mut() {
@@ -599,6 +619,68 @@ fn trigger_reload() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn concurrent_hook_writers_preserve_appends_and_both_removal_faces() {
+        let _home = crate::utils::paths::IsolatedAlephHome::new();
+        let path = user_hooks_path().unwrap();
+        fs::write(&path, r#"{"keep":"metadata","hooks":{}}"#).unwrap();
+        for i in 0..16 {
+            append_user_hook(
+                "PreToolUse",
+                json!({"command": format!("remove-{i}!")}),
+                None,
+            )
+            .unwrap();
+            append_user_hook("PostToolUse", json!({"command": "indexed"}), None).unwrap();
+        }
+        let mut tasks = Vec::new();
+        for i in 0..16 {
+            tasks.push(tokio::spawn(async move {
+                let response = handle_hooks_add(JsonRpcRequest::with_id(
+                    "hooks.add",
+                    Some(json!({"event": "PreToolUse", "command": format!("keep-{i}")})),
+                    json!(i),
+                ))
+                .await;
+                assert!(response.is_success(), "{response:?}");
+            }));
+            tasks.push(tokio::spawn(async move {
+                tokio::task::spawn_blocking(move || {
+                    assert_eq!(
+                        remove_user_hooks("before_tool_call", Some(&format!("remove-{i}!")))
+                            .unwrap(),
+                        1
+                    );
+                })
+                .await
+                .unwrap();
+            }));
+            tasks.push(tokio::spawn(async move {
+                let response = handle_hooks_remove(JsonRpcRequest::with_id(
+                    "hooks.remove",
+                    Some(json!({"event": "after_tool_call", "index": 0})),
+                    json!(i),
+                ))
+                .await;
+                assert!(response.is_success(), "{response:?}");
+            }));
+        }
+        for task in tasks {
+            task.await.unwrap();
+        }
+        let (_, _, events) = read_hooks_file().unwrap();
+        let remaining = events["PreToolUse"].as_array().unwrap();
+        assert_eq!(remaining.len(), 16);
+        for i in 0..16 {
+            assert!(remaining
+                .iter()
+                .any(|g| g["hooks"][0]["command"] == format!("keep-{i}")));
+        }
+        assert!(!events.contains_key("PostToolUse"));
+        let top: Value = serde_json::from_str(&fs::read_to_string(path).unwrap()).unwrap();
+        assert_eq!(top["keep"], "metadata");
+    }
 
     #[test]
     fn is_known_event_accepts_snake_and_pascal() {

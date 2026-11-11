@@ -424,6 +424,11 @@ pub trait SessionStore: Send + Sync {
         source_channel: &str,
     ) -> Result<aleph_protocol::IdentityContext, SessionStoreError>;
     async fn get_current_epoch(&self, base_key_pattern: &str) -> Result<u32, SessionStoreError>;
+    /// Atomically reserve an epoch above persisted sessions and prior reservations,
+    /// without creating a conversation or retiring its predecessor.
+    async fn reserve_next_epoch(&self, _base_key_pattern: &str) -> Result<u32, SessionStoreError> {
+        Err(SessionStoreError::Unsupported)
+    }
     async fn get_session_topic(
         &self,
         key: &SessionKey,

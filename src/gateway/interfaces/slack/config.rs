@@ -13,7 +13,7 @@ const fn default_directory_ttl() -> u64 {
 }
 
 /// Slack channel configuration
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct SlackConfig {
     /// App-level token for Socket Mode (xapp-...)
     pub app_token: String,

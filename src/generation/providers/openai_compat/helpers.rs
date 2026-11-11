@@ -82,12 +82,18 @@ impl OpenAiCompatProvider {
             None
         };
 
+        let (size, image_size) = if is_siliconflow {
+            (None, size)
+        } else {
+            (size, None)
+        };
+
         ImageGenerationRequest {
             model,
             prompt: request.prompt.clone(),
             image,
-            size: if is_siliconflow { None } else { size.clone() },
-            image_size: if is_siliconflow { size } else { None },
+            size,
+            image_size,
             quality: request.params.quality.clone(),
             style: request.params.style.clone(),
             n: request.params.n,
@@ -196,8 +202,11 @@ impl OpenAiCompatProvider {
 /// HTTP(S) URLs and `data:` URLs pass through unchanged; a bare base64 string
 /// is wrapped as a JPEG `data:` URL (Ark rejects unprefixed base64).
 pub(crate) fn normalize_image_ref(reference: &str) -> String {
-    let lower = reference.trim_start().to_lowercase();
-    if lower.starts_with("http://") || lower.starts_with("https://") || lower.starts_with("data:") {
+    let trimmed = reference.trim_start();
+    let is_url_or_data = trimmed.get(..7).is_some_and(|s| s.eq_ignore_ascii_case("http://"))
+        || trimmed.get(..8).is_some_and(|s| s.eq_ignore_ascii_case("https://"))
+        || trimmed.get(..5).is_some_and(|s| s.eq_ignore_ascii_case("data:"));
+    if is_url_or_data {
         reference.to_string()
     } else {
         format!("data:image/jpeg;base64,{reference}")
@@ -225,19 +234,20 @@ fn resolution_token(params: &GenerationParams) -> Option<&'static str> {
 /// seed) as text flags on the prompt rather than as JSON fields. Only
 /// well-supported flags are emitted; unset params fall back to API defaults.
 fn build_video_prompt_text(prompt: &str, params: &GenerationParams) -> String {
+    use std::fmt::Write;
     let mut text = prompt.trim().to_string();
 
     if let Some(ratio) = params.aspect_ratio.as_deref().filter(|s| !s.is_empty()) {
-        text.push_str(&format!(" --ratio {ratio}"));
+        let _ = write!(text, " --ratio {ratio}");
     }
     if let Some(resolution) = resolution_token(params) {
-        text.push_str(&format!(" --resolution {resolution}"));
+        let _ = write!(text, " --resolution {resolution}");
     }
     if let Some(duration) = params.duration_seconds.filter(|d| *d > 0.0) {
-        text.push_str(&format!(" --duration {}", duration.round() as i64));
+        let _ = write!(text, " --duration {}", duration.round() as i64);
     }
     if let Some(seed) = params.seed.filter(|s| *s >= 0) {
-        text.push_str(&format!(" --seed {seed}"));
+        let _ = write!(text, " --seed {seed}");
     }
 
     text

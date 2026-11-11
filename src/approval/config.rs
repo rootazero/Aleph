@@ -4,6 +4,7 @@
 //! action requests against blocklists, allowlists, and per-action-type defaults.
 
 use std::collections::HashMap;
+use std::io::Read;
 use std::path::PathBuf;
 
 use async_trait::async_trait;
@@ -39,6 +40,14 @@ pub struct PolicyRule {
     /// Glob pattern matched against the action target.
     pub pattern: String,
 }
+
+/// Upper bound on the size of the policy file that is read from disk.
+///
+/// A policy file is a small JSON document written by a human. The limit
+/// keeps a huge (or endless) file from being pulled into memory on the
+/// approval path; a file over the limit is treated like a broken file
+/// (every action escalates to `Ask`).
+const MAX_POLICY_FILE_BYTES: u64 = 1024 * 1024;
 
 // ---------------------------------------------------------------------------
 // Glob matching
@@ -121,8 +130,10 @@ fn cached_glob_regex(pattern: &str) -> Result<regex::Regex, regex::Error> {
         // silently and falls back to the default permission (fail open). The
         // blocklist path is deliberately fail-closed for the same reason, so
         // the failure is logged loudly here instead of being swallowed.
+        // The pattern itself is operator-authored and may embed a secret, so
+        // only its redacted form reaches the log.
         error!(
-            pattern = %pattern,
+            pattern = %redact_target(pattern),
             error = %e,
             "glob pattern does not compile; rules using it will not match"
         );
@@ -165,11 +176,26 @@ pub fn try_matches_glob(value: &str, pattern: &str) -> Result<bool, regex::Error
     cached_glob_regex(pattern).map(|re| re.is_match(value))
 }
 
-/// First compiled rule in `rules` whose regex matches `target`. Used by the
-/// blocklist-then-allowlist scan in `ConfigApprovalPolicy::check` so the two
-/// arms share the find-first-match iteration.
-fn first_match<'a>(rules: &'a [CompiledRule], target: &str) -> Option<&'a CompiledRule> {
-    rules.iter().find(|r| r.regex.is_match(target))
+/// The compiled rules that apply to `action`: the rules written for the
+/// action itself first, then the rules written for the action it was renamed
+/// from (see [`ActionType::inherited_from`]).
+///
+/// The parent's rules are consulted even when the child has rules of its own:
+/// a rule written for the parent is a rule about the whole family, and
+/// dropping it because the child happens to name another target would
+/// silently widen what the child may do — for the blocklist, that is exactly
+/// the "rename the action and the deny rule stops applying" hole.
+fn applicable_rules<'a>(
+    by_type: &'a HashMap<ActionType, Vec<CompiledRule>>,
+    action: &ActionType,
+) -> impl Iterator<Item = &'a CompiledRule> {
+    let own = by_type.get(action).map(|r| r.as_slice()).unwrap_or(&[]);
+    let inherited = action
+        .inherited_from()
+        .and_then(|parent| by_type.get(&parent))
+        .map(|rules| rules.as_slice())
+        .unwrap_or(&[]);
+    own.iter().chain(inherited.iter())
 }
 
 /// A compiled policy rule, pairing the original glob pattern with its regex.
@@ -219,7 +245,21 @@ fn compile_rules_grouped(
 
     let mut grouped: HashMap<ActionType, Vec<CompiledRule>> = HashMap::new();
     for rule in rules {
-        let regex_str = glob_to_regex_str(&rule.pattern);
+        // The RULE is folded the same way the TARGET is folded at match time
+        // (see `canonicalize_url_case`), so a rule written in lower case
+        // still matches a URL that spells its scheme or host in upper case.
+        // Only a URL action is folded: for every other action the target is
+        // case-sensitive text (a script, a selector, a cookie value), and
+        // folding one side only would make the rule match a target the
+        // operator never wrote.
+        // `CompiledRule::pattern` keeps the operator's original text: it is
+        // what the deny reason quotes.
+        let pattern = if target_is_url(&rule.action_type) {
+            canonicalize_url_case(&rule.pattern)
+        } else {
+            rule.pattern.clone()
+        };
+        let regex_str = glob_to_regex_str(&pattern);
         match crate::security::safe_regex::bounded_builder(&regex_str).build() {
             Ok(regex) => {
                 grouped
@@ -240,7 +280,7 @@ fn compile_rules_grouped(
                         regex::Regex::new("(?s).*").expect("static regex pattern `(?s).*`")
                     });
                     error!(
-                        pattern = %rule.pattern,
+                        pattern = %redact_target(&rule.pattern),
                         error = %e,
                         "Failed to compile {label} glob pattern; denying all matching actions (fail-closed)"
                     );
@@ -253,7 +293,7 @@ fn compile_rules_grouped(
                         });
                 } else {
                     warn!(
-                        pattern = %rule.pattern,
+                        pattern = %redact_target(&rule.pattern),
                         error = %e,
                         "Failed to compile {label} glob pattern; skipping rule"
                     );
@@ -303,9 +343,22 @@ impl ConfigApprovalPolicy {
     ///
     /// See [`Self::load_from`] for what happens when the file is absent or
     /// unusable — the two cases are deliberately not the same.
+    ///
+    /// The policy is read from ONE canonical location. When that location
+    /// cannot be determined (no `HOME` / `USERPROFILE`), there is no
+    /// trustworthy place to read a policy from: a file in the current
+    /// directory or in the shared temp directory is writable by anything
+    /// running as this user, so it is not a policy source. The safe posture
+    /// (every action escalates to `Ask`) is used instead.
     #[must_use]
     pub fn load() -> Self {
-        Self::load_from(Self::config_path())
+        let Some(path) = Self::canonical_config_path() else {
+            error!(
+                "Cannot determine the configuration directory, so there is no approval policy to read. Falling back to the safe posture: every action requires approval."
+            );
+            return Self::safe_default();
+        };
+        Self::load_from(path)
     }
 
     /// Load the policy from the given path. The fallback is chosen by **cause**,
@@ -329,21 +382,43 @@ impl ConfigApprovalPolicy {
     /// approval surface that a resulting `Ask` is routed to lives in
     /// `src/exec/approval` + `src/tools/scoped`.
     pub fn load_from(path: PathBuf) -> Self {
-        match std::fs::read_to_string(&path) {
-            Ok(contents) => match serde_json::from_str::<PolicyConfig>(&contents) {
-                Ok(config) => {
-                    debug!("Loaded approval policy from {}", path.display());
-                    Self::new(config)
-                }
-                Err(e) => {
+        // The policy file is a small JSON document written by a human, so it
+        // is read through a BOUNDED reader: an unbounded read would pull a
+        // huge (or endless) file into memory on the approval path. One byte
+        // past the limit is read on purpose — that extra byte is what makes
+        // "this file is longer than the limit" observable without reading
+        // all of it.
+        let read = std::fs::File::open(&path).and_then(|file| {
+            let mut limited = file.take(MAX_POLICY_FILE_BYTES + 1);
+            let mut contents = String::new();
+            limited.read_to_string(&mut contents)?;
+            Ok(contents)
+        });
+        match read {
+            Ok(contents) => {
+                if contents.len() as u64 > MAX_POLICY_FILE_BYTES {
                     error!(
-                        "Failed to parse approval policy at {}: {}. The file exists but is broken, so falling back to the safe posture: every action requires approval.",
+                        "Approval policy at {} is larger than the {}-byte limit, so it is not read. Falling back to the safe posture: every action requires approval.",
                         path.display(),
-                        e
+                        MAX_POLICY_FILE_BYTES
                     );
-                    Self::safe_default()
+                    return Self::safe_default();
                 }
-            },
+                match serde_json::from_str::<PolicyConfig>(&contents) {
+                    Ok(config) => {
+                        debug!("Loaded approval policy from {}", path.display());
+                        Self::new(config)
+                    }
+                    Err(e) => {
+                        error!(
+                            "Failed to parse approval policy at {}: {}. The file exists but is broken, so falling back to the safe posture: every action requires approval.",
+                            path.display(),
+                            e
+                        );
+                        Self::safe_default()
+                    }
+                }
+            }
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
                 debug!(
                     "No approval policy at {}. Using the curated built-in defaults (read-only browser motion allowed; state-changing, egress, desktop, PIM, media and hooks actions ask).",
@@ -362,22 +437,31 @@ impl ConfigApprovalPolicy {
         }
     }
 
+    /// The canonical location of the policy file, or `None` when the
+    /// configuration directory cannot be determined (no `HOME` /
+    /// `USERPROFILE`).
+    fn canonical_config_path() -> Option<PathBuf> {
+        crate::utils::paths::get_config_dir()
+            .ok()
+            .map(|dir| dir.join("approval-policy.json"))
+    }
+
     /// Return the expected path for the configuration file. Also one of the
     /// paths the model's file tools may never touch
     /// (`builtin_tools::file_ops::get_denied_paths`).
+    ///
+    /// This is the DENY-LIST entry, not the read path: the policy itself is
+    /// only ever read from [`Self::canonical_config_path`] (see
+    /// [`Self::load`]), so the fallback below is a placeholder that keeps the
+    /// deny-list shape stable when the configuration directory is unknown.
     pub(crate) fn config_path() -> PathBuf {
-        crate::utils::paths::get_config_dir().map_or_else(
-            |_| {
-                warn!(
-                    "Cannot determine home directory; approval policy will use current dir fallback"
-                );
-                std::env::current_dir()
-                    .unwrap_or_else(|_| std::env::temp_dir())
-                    .join(".aleph")
-                    .join("approval-policy.json")
-            },
-            |home| home.join("approval-policy.json"),
-        )
+        Self::canonical_config_path().unwrap_or_else(|| {
+            warn!("Cannot determine home directory; the approval policy path is unknown");
+            std::env::current_dir()
+                .unwrap_or_else(|_| std::env::temp_dir())
+                .join(".aleph")
+                .join("approval-policy.json")
+        })
     }
 
     /// Safe fallback for the one cause that warrants it: the policy file
@@ -473,23 +557,31 @@ impl ConfigApprovalPolicy {
     /// knows a decision was produced is also the place that records it.
     fn decide(&self, request: &ActionRequest) -> ApprovalDecision {
         let action = &request.action_type;
-        let target = &request.target;
         let prompt_target = if request.display_target.is_empty() {
-            target
+            &request.target
         } else {
             &request.display_target
         };
+        // The scheme and the host of a URL are case-insensitive, but a glob
+        // rule is matched literally — so the target is folded the same way the
+        // rule was folded when it was compiled (see `canonicalize_url_case`).
+        // Only a URL action is folded: for every other action the target is
+        // case-sensitive text, and folding it would make a rule match a
+        // target the operator never wrote.
+        let target = if target_is_url(action) {
+            canonicalize_url_case(&request.target)
+        } else {
+            request.target.clone()
+        };
 
         // 1. Blocklist takes priority (pre-compiled regexes, grouped by ActionType)
-        if let Some(rule) = self
-            .blocklist_by_type
-            .get(action)
-            .and_then(|r| first_match(r, target))
+        if let Some(rule) = applicable_rules(&self.blocklist_by_type, action)
+            .find(|rule| rule.regex.is_match(&target))
         {
             debug!(
                 action = ?action,
-                target = %redact_target(target),
-                pattern = %rule.pattern,
+                target = %redact_target(&request.target),
+                pattern = %redact_target(&rule.pattern),
                 "Blocked by blocklist rule"
             );
             return ApprovalDecision::Deny {
@@ -498,15 +590,13 @@ impl ConfigApprovalPolicy {
         }
 
         // 2. Allowlist overrides defaults (pre-compiled regexes, grouped by ActionType)
-        if let Some(rule) = self
-            .allowlist_by_type
-            .get(action)
-            .and_then(|r| first_match(r, target))
+        if let Some(rule) = applicable_rules(&self.allowlist_by_type, action)
+            .find(|rule| rule.regex.is_match(&target))
         {
             debug!(
                 action = ?action,
-                target = %redact_target(target),
-                pattern = %rule.pattern,
+                target = %redact_target(&request.target),
+                pattern = %redact_target(&rule.pattern),
                 "Allowed by allowlist rule"
             );
             return ApprovalDecision::Allow;
@@ -544,6 +634,30 @@ impl ConfigApprovalPolicy {
             ),
         }
     }
+
+    /// Replace every rule pattern that appears in `text` with its redacted
+    /// form.
+    ///
+    /// A pattern is operator-authored and may embed a secret (a token inside a
+    /// URL, a private path). The decision text keeps the pattern — the
+    /// operator has to see WHICH rule fired — while the log gets only the
+    /// redacted form, exactly like the target.
+    fn redact_patterns_in(&self, text: &str) -> String {
+        let mut out = text.to_string();
+        for rules in self
+            .blocklist_by_type
+            .values()
+            .chain(self.allowlist_by_type.values())
+        {
+            for rule in rules {
+                if rule.pattern.is_empty() || !out.contains(&rule.pattern) {
+                    continue;
+                }
+                out = out.replace(&rule.pattern, &redact_target(&rule.pattern));
+            }
+        }
+        out
+    }
 }
 
 #[async_trait]
@@ -580,27 +694,22 @@ impl ApprovalPolicy for ConfigApprovalPolicy {
         let decision_summary = match decision {
             ApprovalDecision::Allow => "Allow".to_string(),
             ApprovalDecision::Deny { reason } => {
-                format!("Deny {{ reason: {} }}", masker.mask(reason))
+                // The DECISION text keeps the pattern — the operator has to see
+                // which rule fired — but the LOG must not carry it: a pattern
+                // is operator-authored and may embed a secret.
+                let redacted = self.redact_patterns_in(reason);
+                format!("Deny {{ reason: {} }}", capped_audit_field(&masker.mask(&redacted)))
             }
             ApprovalDecision::Ask { prompt } => {
-                let mut masked = masker.mask(prompt);
-                if masked.len() > 256 {
-                    // The cap is a BYTE budget, walked back to a codepoint
-                    // boundary: `String::truncate` PANICS when the cut lands
-                    // inside a multi-byte codepoint, and a masked prompt
-                    // carries arbitrary user-supplied targets.
-                    let cut = crate::utils::text_format::truncate_bytes(&masked, 256).len();
-                    masked.truncate(cut);
-                    masked.push('…');
-                }
+                let masked = capped_audit_field(&masker.mask(prompt));
                 format!("Ask {{ prompt: {masked} }}")
             }
         };
         info!(
             action = ?request.action_type,
             target = %redact_target(&request.target),
-            agent = %request.agent_id,
-            context = %masker.mask(&request.context),
+            agent = %capped_audit_field(&request.agent_id),
+            context = %capped_audit_field(&masker.mask(&request.context)),
             decision = %decision_summary,
             "Approval decision recorded"
         );
@@ -617,12 +726,117 @@ impl ApprovalPolicy for ConfigApprovalPolicy {
 /// historically been `SipHasher13`). This is acceptable: `redact_target`
 /// runs only on the log emitter's path and the hash is never persisted or
 /// compared across processes.
+///
+/// The same redaction is applied to operator-authored rule patterns: a pattern
+/// may embed a secret (a token in a URL, a private path), so only its length
+/// and a correlation hash reach the log.
 fn redact_target(target: &str) -> String {
     use std::collections::hash_map::DefaultHasher;
     use std::hash::{Hash, Hasher};
     let mut h = DefaultHasher::new();
     target.hash(&mut h);
     format!("<redacted len={} sha={:016x}>", target.len(), h.finish())
+}
+
+/// Cap a free-form audit field to a byte budget, walked back to a codepoint
+/// boundary.
+///
+/// [`String::truncate`] PANICS when the cut lands inside a multi-byte
+/// codepoint, and every field this caps carries arbitrary user-supplied text
+/// (a masked context, an agent id, a deny reason), so the cut has to be
+/// codepoint-safe. The cap keeps enough of the prefix to diagnose the
+/// decision; it never changes the decision itself.
+fn capped_audit_field(value: &str) -> String {
+    const AUDIT_FIELD_MAX_BYTES: usize = 256;
+    if value.len() <= AUDIT_FIELD_MAX_BYTES {
+        return value.to_string();
+    }
+    let cut = crate::utils::text_format::truncate_bytes(value, AUDIT_FIELD_MAX_BYTES);
+    let mut capped = cut.to_string();
+    capped.push('…');
+    capped
+}
+
+/// Whether the target of `action` is a URL — the only target whose scheme and
+/// host may be case-folded.
+///
+/// A URL's scheme and host are case-insensitive; every other target (a
+/// script, a selector, a cookie value, a file path) is case-SENSITIVE text.
+/// Folding it would let a rule written in one case match a target written in
+/// another — a rule the operator never wrote, applied to a target they never
+/// saw.
+///
+/// An action that INHERITS a URL action's rules inherits its folding too, so
+/// the rule and the target stay folded alike (see `applicable_rules`).
+#[must_use]
+fn target_is_url(action: &ActionType) -> bool {
+    if matches!(action, ActionType::BrowserNavigate | ActionType::BrowserOpen) {
+        return true;
+    }
+    action
+        .inherited_from()
+        .is_some_and(|parent| matches!(parent, ActionType::BrowserOpen))
+}
+
+/// Fold the case of the scheme and the host of the URL in `value`.
+///
+/// A URL's scheme and host are case-insensitive, but a glob rule is matched
+/// literally — so `HTTPS://MALICIOUS.COM/payload` slips past a rule written
+/// as `*://malicious.com/*`. The rule and the target are folded the same way
+/// (at compile time and at match time), so the rule still means what the
+/// operator wrote.
+///
+/// Only the FIRST scheme/authority span is folded. Everything after it — the
+/// path, the query, the fragment, and any text that merely CONTAINS `://` —
+/// is copied unchanged, because those parts are case-sensitive: folding them
+/// would let a rule about one spelling match another.
+///
+/// Only the scheme token and the host are folded: the path and the query ARE
+/// case-sensitive parts of a URL, and a target that holds no URL is returned
+/// unchanged. The userinfo (`user:secret@host`) keeps its case as well — it
+/// is a credential, not a name.
+fn canonicalize_url_case(value: &str) -> String {
+    let Some(idx) = value.find("://") else {
+        return value.to_string();
+    };
+    // The scheme token runs back to the nearest delimiter. It is not
+    // required to be a real scheme name: a rule may put a glob `*` there.
+    let head = &value[..idx];
+    // The scan walks CHARACTERS, so the cut lands on a codepoint
+    // boundary: a multi-byte delimiter (a CJK character in a target
+    // string) must not be cut in half.
+    let scheme_start = head
+        .char_indices()
+        .rev()
+        .find(|(_, c)| !is_url_token_char(*c))
+        .map_or(0, |(i, c)| i + c.len_utf8());
+    let authority_start = idx + "://".len();
+    let authority_end = value[authority_start..]
+        .find(|c| c == '/' || c == '?' || c == '#')
+        .map_or(value.len(), |i| authority_start + i);
+    let authority = &value[authority_start..authority_end];
+    // Only the host (after the last `@`) is a name; the userinfo before it
+    // is a credential and keeps its case.
+    let (userinfo, host) = match authority.rfind('@') {
+        Some(at) => (&authority[..=at], &authority[at + 1..]),
+        None => ("", authority),
+    };
+    let mut out = String::with_capacity(value.len());
+    out.push_str(&value[..scheme_start]);
+    out.push_str(&head[scheme_start..].to_ascii_lowercase());
+    out.push_str("://");
+    out.push_str(userinfo);
+    out.push_str(&host.to_ascii_lowercase());
+    // The remainder — path, query, fragment and any embedded `://` text — is
+    // copied unchanged.
+    out.push_str(&value[authority_end..]);
+    out
+}
+
+/// Characters that may appear in the scheme token of a URL (RFC 3986 §3.1),
+/// plus the glob metacharacters a rule may use in that position.
+fn is_url_token_char(c: char) -> bool {
+    c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.' | '*' | '?')
 }
 
 // ---------------------------------------------------------------------------
@@ -800,6 +1014,16 @@ mod tests {
             }
         }
         None
+    }
+
+    /// Every captured field value of one log event, joined — the event as the
+    /// subscriber saw it, without the field names.
+    fn all_field_values(fields: &[(String, String)]) -> String {
+        fields
+            .iter()
+            .map(|(_, value)| value.as_str())
+            .collect::<Vec<_>>()
+            .join(" ")
     }
 
     #[tokio::test]
@@ -1169,6 +1393,252 @@ mod tests {
         assert!(
             matches!(policy.check(&req).await, ApprovalDecision::Allow),
             "a broken allowlist rule is dropped; the default posture is preserved"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Rename inheritance in the RULE lists (B1-03 / B2-001)
+    // -----------------------------------------------------------------------
+
+    /// A rule written for the OLD name of an action still applies to the
+    /// action's new names.
+    ///
+    /// The defaults map already inherited; the blocklist and the allowlist did
+    /// not, which turned every rename into a hole: an operator who denied
+    /// `browser_cookies_write` was silently permitting
+    /// `browser_identity_override` and `browser_session_state`.
+    #[tokio::test]
+    async fn a_renamed_action_inherits_the_blocklist_rule_written_for_the_old_name() {
+        let policy = ConfigApprovalPolicy::new(PolicyConfig {
+            defaults: HashMap::new(),
+            allowlist: vec![],
+            blocklist: vec![PolicyRule {
+                action_type: ActionType::BrowserCookiesWrite,
+                pattern: "*secret*".to_string(),
+            }],
+        });
+
+        for split_out in [
+            ActionType::BrowserIdentityOverride,
+            ActionType::BrowserSessionState,
+        ] {
+            let req = make_request_with_target(split_out.clone(), "the-secret-cookie");
+            assert!(
+                matches!(policy.check(&req).await, ApprovalDecision::Deny { .. }),
+                "{split_out} must inherit the blocklist rule written for BrowserCookiesWrite"
+            );
+        }
+    }
+
+    /// …and the same inheritance applies to the ALLOWLIST: a rule written for
+    /// the old name still permits the new ones.
+    #[tokio::test]
+    async fn a_renamed_action_inherits_the_allowlist_rule_written_for_the_old_name() {
+        let policy = ConfigApprovalPolicy::new(PolicyConfig {
+            defaults: HashMap::new(),
+            allowlist: vec![PolicyRule {
+                action_type: ActionType::BrowserCookiesWrite,
+                pattern: "*allowed*".to_string(),
+            }],
+            blocklist: vec![],
+        });
+
+        let req = make_request_with_target(ActionType::BrowserIdentityOverride, "allowed-target");
+        assert_eq!(
+            policy.check(&req).await,
+            ApprovalDecision::Allow,
+            "an allowlist rule written for the old name must apply to the new names"
+        );
+    }
+
+    /// Naming the new action explicitly must not DISCARD the parent's
+    /// blocklist rule. The blocklist is consulted first and covers both
+    /// names, so an explicit allowlist entry for the child cannot buy its way
+    /// past a deny the operator wrote for the whole family.
+    #[tokio::test]
+    async fn an_explicit_child_allowlist_cannot_discard_an_inherited_blocklist_rule() {
+        let policy = ConfigApprovalPolicy::new(PolicyConfig {
+            defaults: HashMap::new(),
+            allowlist: vec![PolicyRule {
+                action_type: ActionType::BrowserIdentityOverride,
+                pattern: "*cookie*".to_string(),
+            }],
+            blocklist: vec![PolicyRule {
+                action_type: ActionType::BrowserCookiesWrite,
+                pattern: "*cookie*".to_string(),
+            }],
+        });
+
+        let req = make_request_with_target(ActionType::BrowserIdentityOverride, "cookie-jar");
+        assert!(
+            matches!(policy.check(&req).await, ApprovalDecision::Deny { .. }),
+            "the inherited blocklist rule outranks an explicit allowlist entry for the child"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // URL scheme / host case folding (B2-006)
+    // -----------------------------------------------------------------------
+
+    /// A URL's scheme and host are case-insensitive; a glob rule is matched
+    /// literally. Without folding, `HTTPS://MALICIOUS.COM/payload` slips
+    /// past a rule written as `*://malicious.com/*`.
+    #[tokio::test]
+    async fn a_mixed_case_url_scheme_and_host_still_hit_the_blocklist_rule() {
+        let policy = ConfigApprovalPolicy::new(PolicyConfig {
+            defaults: HashMap::new(),
+            allowlist: vec![],
+            blocklist: vec![PolicyRule {
+                action_type: ActionType::BrowserNavigate,
+                pattern: "*://malicious.com/*".to_string(),
+            }],
+        });
+
+        for target in [
+            "https://malicious.com/payload",
+            "HTTPS://MALICIOUS.COM/payload",
+            "HtTpS://Malicious.Com/payload",
+        ] {
+            let req = make_request_with_target(ActionType::BrowserNavigate, target);
+            assert!(
+                matches!(policy.check(&req).await, ApprovalDecision::Deny { .. }),
+                "{target} must hit the blocklist rule written for the lower-case host"
+            );
+        }
+    }
+
+    /// …but the PATH stays case-sensitive: folding it would turn a rule about
+    /// one path into a rule about every spelling of it.
+    #[tokio::test]
+    async fn the_url_path_stays_case_sensitive() {
+        let policy = ConfigApprovalPolicy::new(PolicyConfig {
+            defaults: HashMap::new(),
+            allowlist: vec![],
+            blocklist: vec![PolicyRule {
+                action_type: ActionType::BrowserNavigate,
+                pattern: "https://example.com/Secret*".to_string(),
+            }],
+        });
+
+        let req = make_request_with_target(
+            ActionType::BrowserNavigate,
+            "https://example.com/secret-path",
+        );
+        assert!(
+            !matches!(policy.check(&req).await, ApprovalDecision::Deny { .. }),
+            "the path is a case-sensitive part of a URL and must not be folded"
+        );
+    }
+
+    /// A `://` AFTER the authority is TEXT, not a second URL: only the scheme
+    /// and the host are folded, so a rule written about one spelling of the
+    /// text must not match another spelling.
+    #[tokio::test]
+    async fn only_the_scheme_and_the_host_of_a_url_are_folded() {
+        let policy = ConfigApprovalPolicy::new(PolicyConfig {
+            defaults: HashMap::new(),
+            allowlist: vec![],
+            blocklist: vec![PolicyRule {
+                action_type: ActionType::BrowserNavigate,
+                pattern: "https://example.com/a://BLAH*".to_string(),
+            }],
+        });
+
+        let req = make_request_with_target(
+            ActionType::BrowserNavigate,
+            "https://example.com/a://blah-payload",
+        );
+        assert!(
+            !matches!(policy.check(&req).await, ApprovalDecision::Deny { .. }),
+            "text after the authority is case-sensitive and must not be folded"
+        );
+    }
+
+    /// A non-URL target (a script, a selector, a cookie value) is
+    /// case-SENSITIVE text: folding it would make a rule written in one case
+    /// match a target written in another.
+    #[tokio::test]
+    async fn a_non_url_target_is_compared_literally() {
+        let policy = ConfigApprovalPolicy::new(PolicyConfig {
+            defaults: HashMap::new(),
+            allowlist: vec![],
+            blocklist: vec![PolicyRule {
+                action_type: ActionType::BrowserEvaluate,
+                pattern: "*://EXAMPLE.COM/*".to_string(),
+            }],
+        });
+
+        let req = make_request_with_target(
+            ActionType::BrowserEvaluate,
+            "fetch('https://example.com/x')",
+        );
+        assert!(
+            !matches!(policy.check(&req).await, ApprovalDecision::Deny { .. }),
+            "a script target is case-sensitive text and must not be folded"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Log hygiene (B2-003) and bounded policy file (B2-005)
+    // -----------------------------------------------------------------------
+
+    /// A rule pattern is operator-authored and may embed a secret (a token in
+    /// a URL, a private path). It reaches the log only in redacted form —
+    /// including through the deny reason, which carries the pattern.
+    #[tokio::test]
+    async fn a_rule_pattern_never_reaches_the_log_in_the_clear() {
+        let secret_pattern = "https://internal.example.com/TOKEN-abc123";
+        let req = make_request_with_target(ActionType::BrowserNavigate, secret_pattern);
+        let policy = ConfigApprovalPolicy::new(PolicyConfig {
+            defaults: HashMap::new(),
+            allowlist: vec![],
+            blocklist: vec![PolicyRule {
+                action_type: ActionType::BrowserNavigate,
+                pattern: secret_pattern.to_string(),
+            }],
+        });
+
+        let sink = captured_runs();
+        let layer = CaptureLayer {
+            events: Arc::clone(&sink),
+        };
+        let _guard = tracing_subscriber::registry()
+            .with(EnvFilter::new("debug"))
+            .with(layer)
+            .set_default();
+
+        let decision = policy.check(&req).await;
+        // The caller records the FINAL decision — for a denial that reason
+        // carries the rule pattern.
+        policy.record(&req, &decision).await;
+
+        drop(_guard);
+        let captured = sink.lock().unwrap();
+        assert!(!captured.is_empty(), "expected log events from check()/record()");
+        for fields in captured.iter() {
+            let values = all_field_values(fields);
+            assert!(
+                !values.contains(secret_pattern),
+                "the rule pattern must not appear in the log, got: {values}"
+            );
+        }
+    }
+
+    /// A policy file is a small JSON document written by a human. An
+    /// oversized one is not read — it would be pulled into memory on the
+    /// approval path — and falls back to the safe posture.
+    #[tokio::test]
+    async fn an_oversized_policy_file_falls_back_to_the_safe_posture() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("approval-policy.json");
+        std::fs::write(&path, "x".repeat((MAX_POLICY_FILE_BYTES + 1) as usize))
+            .expect("write oversized policy");
+
+        let policy = ConfigApprovalPolicy::load_from(path);
+        let req = make_request_with_target(ActionType::BrowserNavigate, "https://example.com");
+        assert!(
+            matches!(policy.check(&req).await, ApprovalDecision::Ask { .. }),
+            "a policy file over the size limit must not be read; the safe posture applies"
         );
     }
 }

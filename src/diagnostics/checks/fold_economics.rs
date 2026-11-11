@@ -29,13 +29,14 @@ use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use async_trait::async_trait;
-use rusqlite::{params, Connection, OpenFlags};
+use rusqlite::{params, Connection};
 
 use crate::context::compact::fold_ledger::{judge_fold, FoldVerdict, Payback};
 use crate::context::compact::folds::{list_folds, FoldRecord};
 use crate::diagnostics::check::{unknown_finding, HealthCheck, Posture, Presence};
 use crate::diagnostics::finding::{Finding, Severity};
 use crate::session::events::SessionEvent;
+use crate::utils::sqlite_open::open_sqlite_readonly;
 
 const ID: &str = "core/fold-economics";
 const TITLE: &str = "Fold economics";
@@ -282,7 +283,7 @@ fn load_folds(
     sessions_db: &Path,
     cutoff_ms: i64,
 ) -> Result<(Vec<FoldRecord>, usize, Option<String>), String> {
-    let conn = Connection::open_with_flags(sessions_db, OpenFlags::SQLITE_OPEN_READ_ONLY)
+    let conn = open_sqlite_readonly(sessions_db)
         .map_err(|e| format!("open {}: {e}", sessions_db.display()))?;
     if !table_exists(&conn, "session_events")? {
         return Ok((Vec::new(), 0, None));
@@ -328,7 +329,7 @@ fn load_folds(
 /// Read the last window's `provider_usage` rows out of `state.db`. A missing
 /// `task_traces` table means "no telemetry yet", not an error.
 fn load_usage(state_db: &Path, cutoff_s: i64) -> Result<Vec<UsageRow>, String> {
-    let conn = Connection::open_with_flags(state_db, OpenFlags::SQLITE_OPEN_READ_ONLY)
+    let conn = open_sqlite_readonly(state_db)
         .map_err(|e| format!("open {}: {e}", state_db.display()))?;
     if !table_exists(&conn, "task_traces")? {
         return Ok(Vec::new());

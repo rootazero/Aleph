@@ -55,10 +55,8 @@ pub struct EventFilter {
     pub event_types: Vec<EventType>,
 }
 
-fn add_to_option_set(target: &mut Option<HashSet<String>>, value: &str) {
-    target
-        .get_or_insert_with(HashSet::new)
-        .insert(value.to_string());
+fn add_to_option_set(target: &mut Option<HashSet<String>>, value: String) {
+    target.get_or_insert_with(HashSet::new).insert(value);
 }
 
 impl EventFilter {
@@ -107,8 +105,8 @@ impl EventFilter {
     ///
     /// * `session_id` - The session ID to include
     #[must_use]
-    pub fn with_session(mut self, session_id: &str) -> Self {
-        add_to_option_set(&mut self.session_ids, session_id);
+    pub fn with_session(mut self, session_id: impl Into<String>) -> Self {
+        add_to_option_set(&mut self.session_ids, session_id.into());
         self
     }
 
@@ -142,8 +140,8 @@ impl EventFilter {
     ///
     /// * `agent_id` - The agent ID to include
     #[must_use]
-    pub fn with_agent(mut self, agent_id: &str) -> Self {
-        add_to_option_set(&mut self.agent_ids, agent_id);
+    pub fn with_agent(mut self, agent_id: impl Into<String>) -> Self {
+        add_to_option_set(&mut self.agent_ids, agent_id.into());
         self
     }
 
@@ -166,18 +164,32 @@ impl EventFilter {
     /// Check if an event matches this filter.
     ///
     /// Returns `true` if ALL of the following conditions are met:
-    /// 1. Session filter passes (no filter OR event session is in the set)
-    /// 2. Agent filter passes (no filter OR the event's agent is in the set).
+    /// 1. Event type filter passes (`event_types` contains `EventType::All` OR event type is in the list)
+    /// 2. Session filter passes (no filter OR event session is in the set)
+    /// 3. Agent filter passes (no filter OR the event's agent is in the set).
     ///    An event with an EMPTY agent id never matches a filter that names
     ///    agents — the check fails closed, so a nameless event is not
     ///    delivered to an agent-scoped subscriber.
-    /// 3. Event type filter passes (`event_types` contains `EventType::All` OR event type is in the list)
     ///
     /// # Arguments
     ///
     /// * `event` - The global event to check against this filter
     #[must_use]
     pub fn matches(&self, event: &GlobalEvent) -> bool {
+        // Fast-path: check event type filter first (cheapest discriminant integer comparison)
+        if self.event_types.is_empty() {
+            return false;
+        }
+
+        let target_type = event.event.event_type();
+        if !self
+            .event_types
+            .iter()
+            .any(|&t| t == EventType::All || t == target_type)
+        {
+            return false;
+        }
+
         // Check session filter
         if let Some(ref session_ids) = self.session_ids {
             if !session_ids.contains(&event.source_session_id) {
@@ -196,16 +208,7 @@ impl EventFilter {
             }
         }
 
-        // Check event type filter
-        if self.event_types.is_empty() {
-            return false;
-        }
-
-        if self.event_types.contains(&EventType::All) {
-            return true;
-        }
-
-        self.event_types.contains(&event.event.event_type())
+        true
     }
 }
 

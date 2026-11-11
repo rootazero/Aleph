@@ -155,15 +155,18 @@ impl GoogleImagenProvider {
         base_url: Option<String>,
         model: Option<String>,
     ) -> GenerationResult<Self> {
-        let client = Client::builder()
-            .timeout(Duration::from_secs(DEFAULT_TIMEOUT_SECS))
-            .build()
+        let client = super::http::generation_http_client(Duration::from_secs(DEFAULT_TIMEOUT_SECS))
             .map_err(|e| GenerationError::network(format!("Failed to build HTTP client: {e}")))?;
+
+        let endpoint = base_url
+            .unwrap_or_else(|| DEFAULT_ENDPOINT.to_string())
+            .trim_end_matches('/')
+            .to_string();
 
         Ok(Self {
             client,
             api_key: api_key.into(),
-            endpoint: base_url.unwrap_or_else(|| DEFAULT_ENDPOINT.to_string()),
+            endpoint,
             model: model.unwrap_or_else(|| DEFAULT_MODEL.to_string()),
         })
     }
@@ -224,6 +227,13 @@ impl GoogleImagenProvider {
 
     /// Determine aspect ratio from request parameters
     fn determine_aspect_ratio(&self, request: &GenerationRequest) -> String {
+        // If explicit aspect_ratio in params, prioritize it
+        if let Some(ar) = &request.params.aspect_ratio {
+            if ASPECT_RATIOS.contains(&ar.as_str()) {
+                return ar.clone();
+            }
+        }
+
         // If explicit aspect ratio in style, use it
         if let Some(style) = &request.params.style {
             if ASPECT_RATIOS.contains(&style.as_str()) {
@@ -259,6 +269,15 @@ impl GoogleImagenProvider {
 
     /// Parse API error response and convert to `GenerationError`
     fn parse_error_response(status: reqwest::StatusCode, body: &str) -> GenerationError {
+        Self::parse_error_response_for_model(status, body, DEFAULT_MODEL)
+    }
+
+    /// Parse API error response for a specific model and convert to `GenerationError`
+    fn parse_error_response_for_model(
+        status: reqwest::StatusCode,
+        body: &str,
+        model: &str,
+    ) -> GenerationError {
         // Try to parse as Google API error format
         if let Ok(error_response) = serde_json::from_str::<GoogleErrorResponse>(body) {
             let message = error_response
@@ -295,7 +314,7 @@ impl GoogleImagenProvider {
                 }
                 Some(429) => return GenerationError::rate_limit(message, None),
                 Some(404) => {
-                    return GenerationError::model_not_found(DEFAULT_MODEL, "google-imagen")
+                    return GenerationError::model_not_found(model, "google-imagen")
                 }
                 _ => {}
             }
@@ -310,7 +329,7 @@ impl GoogleImagenProvider {
                 GenerationError::authentication("Invalid API key or unauthorized", "google-imagen")
             }
             429 => GenerationError::rate_limit("Rate limit exceeded", None),
-            404 => GenerationError::model_not_found(DEFAULT_MODEL, "google-imagen"),
+            404 => GenerationError::model_not_found(model, "google-imagen"),
             500..=599 => GenerationError::provider(
                 format!("Google API server error: {body}"),
                 Some(status.as_u16()),
@@ -465,7 +484,11 @@ impl GenerationProvider for GoogleImagenProvider {
                     body = %response_text,
                     "Google Imagen API request failed"
                 );
-                return Err(Self::parse_error_response(status, &response_text));
+                return Err(Self::parse_error_response_for_model(
+                    status,
+                    &response_text,
+                    &self.model,
+                ));
             }
 
             // Parse successful response
@@ -820,6 +843,34 @@ mod tests {
             error,
             GenerationError::ContentFilteredError { .. }
         ));
+    }
+
+    #[test]
+    fn test_parse_error_response_model_not_found() {
+        let error = GoogleImagenProvider::parse_error_response_for_model(
+            reqwest::StatusCode::NOT_FOUND,
+            "Not found",
+            "custom-imagen-model",
+        );
+
+        match error {
+            GenerationError::ModelNotFoundError { model, provider } => {
+                assert_eq!(model, "custom-imagen-model");
+                assert_eq!(provider, "google-imagen");
+            }
+            _ => panic!("Expected ModelNotFoundError, got {:?}", error),
+        }
+    }
+
+    #[test]
+    fn test_determine_aspect_ratio_from_params() {
+        let provider = GoogleImagenProvider::new("test-key", None, None).unwrap();
+        let request = GenerationRequest::image("test").with_params(
+            crate::generation::GenerationParams::builder()
+                .aspect_ratio("16:9")
+                .build(),
+        );
+        assert_eq!(provider.determine_aspect_ratio(&request), "16:9");
     }
 
     // === Response parsing tests ===

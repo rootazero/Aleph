@@ -184,8 +184,20 @@ impl CanvasStore {
                 }
             };
             let name = entry.file_name().to_string_lossy().into_owned();
-            if !entry.path().is_dir() {
-                continue; // stray files (.DS_Store and friends) are not rows
+            // `metadata` (not `entry.file_type()`) FOLLOWS symlinks, so a
+            // canvas directory reached through a symlink still counts as a
+            // row — `Path::is_dir()` had that same property, and losing it
+            // would silently drop a row from the library. A failed stat is
+            // "unknown", and unknown is not "a row": skipped LOUDLY, like
+            // every other broken row here (§5.23b).
+            match tokio::fs::metadata(entry.path()).await {
+                Ok(metadata) if metadata.is_dir() => {}
+                Ok(_) => continue, // stray files (.DS_Store and friends) are not rows
+                Err(e) => {
+                    warn!(canvas = %name, error = %e,
+                        "canvas: cannot stat canvas entry — skipping");
+                    continue;
+                }
             }
             match super::doc_io::read(&entry.path().join("doc.json")).await {
                 Ok(Some(doc)) => {
@@ -254,6 +266,13 @@ impl CanvasStore {
         validate::apply_ops(doc, &ops)?;
         doc.revision += 1;
         doc.updated_at_ms = now_ms();
+        // The byte budget is checked HERE, after the revision and the
+        // timestamp have been bumped and before the commit: those two
+        // fields are part of the bytes that land on disk, so the gate has
+        // to measure the document as it will be written. A rejection drops
+        // the guard uncommitted — the file on disk is left exactly as it
+        // was.
+        validate::check_document_size(doc)?;
         // `commit(&mut self)` keeps the per-canvas lock (see doc_io): the
         // publish below must happen inside the same critical section, or two
         // racing applies could publish in reverse revision order.

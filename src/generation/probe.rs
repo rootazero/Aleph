@@ -37,7 +37,8 @@ const PROBE_TIMEOUT: Duration = Duration::from_secs(10);
 /// non-Bearer providers (a valid key must not be rejected just because we sent
 /// the wrong header). Provider-type strings mirror `providers/factory.rs`.
 fn auth_header_for(provider_type: &str, api_key: &str) -> (&'static str, String) {
-    match provider_type {
+    let normalized = provider_type.trim().to_ascii_lowercase();
+    match normalized.as_str() {
         "deepgram_stt" | "deepgram" | "deepgram_tts" => {
             ("Authorization", format!("Token {api_key}"))
         }
@@ -66,13 +67,13 @@ fn auth_header_for(provider_type: &str, api_key: &str) -> (&'static str, String)
 /// that into a clear error rather than a misleading "success".
 fn probe_url(base_url: Option<&str>, provider_type: &str) -> Option<String> {
     let raw = base_url
-        .map(str::to_string)
-        .filter(|s| !s.trim().is_empty())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
         .or_else(|| {
-            get_preset_by_type(provider_type).and_then(|p| p.base_url.map(str::to_string))
+            get_preset_by_type(provider_type).and_then(|p| p.base_url)
         })?;
 
-    match resolve_base_url(&raw) {
+    match resolve_base_url(raw) {
         ResolvedUrl::Standard(base) => Some(format!("{base}/v1/models")),
         ResolvedUrl::Custom(url) => Some(url),
     }
@@ -93,6 +94,7 @@ fn interpret(
     status: Option<u16>,
     transport_err: Option<&str>,
 ) -> GenerationProbeOutcome {
+    let normalized = provider_type.trim().to_ascii_lowercase();
     // Providers with no `/v1/models` endpoint: a 404 here is an artifact of
     // the probe URL, not evidence the credentials work.
     const NO_MODELS_ENDPOINT: &[&str] = &[
@@ -105,7 +107,7 @@ fn interpret(
         "suno",
         "midjourney",
     ];
-    if matches!(status, Some(404)) && NO_MODELS_ENDPOINT.contains(&provider_type) {
+    if matches!(status, Some(404)) && NO_MODELS_ENDPOINT.contains(&normalized.as_str()) {
         return GenerationProbeOutcome {
             success: false,
             message: "端点不提供 /v1/models，无法用轻量请求验证；请通过一次真实生成测试凭据"
@@ -119,9 +121,9 @@ fn interpret(
         };
     }
     match status {
-        Some(401 | 403) => GenerationProbeOutcome {
+        Some(code @ (401 | 403)) => GenerationProbeOutcome {
             success: false,
-            message: format!("认证失败：API 密钥被拒绝 (HTTP {})", status.unwrap_or(401)),
+            message: format!("认证失败：API 密钥被拒绝 (HTTP {code})"),
         },
         Some(s) => GenerationProbeOutcome {
             success: true,
@@ -141,18 +143,21 @@ pub async fn probe_generation_provider(
     api_key: &str,
     base_url: Option<&str>,
 ) -> GenerationProbeOutcome {
-    let Some(url) = probe_url(base_url, provider_type) else {
+    let normalized = provider_type.trim().to_ascii_lowercase();
+    let pt = normalized.as_str();
+
+    let Some(url) = probe_url(base_url, pt) else {
         return GenerationProbeOutcome {
             success: false,
             message: "未配置 base_url，无法测试连接".to_string(),
         };
     };
 
-    let (header_name, header_value) = auth_header_for(provider_type, api_key);
+    let (header_name, header_value) = auth_header_for(pt, api_key);
 
     let client = match reqwest::Client::builder().timeout(PROBE_TIMEOUT).build() {
         Ok(c) => c,
-        Err(e) => return interpret(provider_type, None, Some(&e.to_string())),
+        Err(e) => return interpret(pt, None, Some(&e.to_string())),
     };
 
     match client
@@ -161,8 +166,8 @@ pub async fn probe_generation_provider(
         .send()
         .await
     {
-        Ok(resp) => interpret(provider_type, Some(resp.status().as_u16()), None),
-        Err(e) => interpret(provider_type, None, Some(&e.to_string())),
+        Ok(resp) => interpret(pt, Some(resp.status().as_u16()), None),
+        Err(e) => interpret(pt, None, Some(&e.to_string())),
     }
 }
 

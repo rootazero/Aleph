@@ -33,7 +33,8 @@ pub enum GroupPolicy {
 }
 
 /// `WeChat` channel configuration.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+// No `Debug`: `token` is a credential and must not reach a log.
+#[derive(Clone, Serialize, Deserialize)]
 pub struct WeChatConfig {
     /// Account identifier for this `WeChat` instance.
     pub account_id: String,

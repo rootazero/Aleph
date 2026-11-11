@@ -36,10 +36,13 @@ impl FetchProvider for Crawl4aiFetchProvider {
         // against the operator's SsrfPolicy. The only production caller is
         // the connection-test RPC (`fetch_config.test`), which passes a
         // hardcoded https://example.com. See `FetchProvider::fetch`.
-        self.inner
-            .fetch_markdown(url)
-            .await
-            .map_err(|e| AlephError::provider(format!("crawl4ai: {e}")))
+        self.inner.fetch_markdown(url).await.map_err(|e| {
+            let message = format!("crawl4ai: {e}");
+            match e {
+                crate::builtin_tools::error::ToolError::Network(_) => AlephError::network(message),
+                _ => AlephError::provider(message),
+            }
+        })
     }
     fn name(&self) -> &str {
         NAME
@@ -49,6 +52,53 @@ impl FetchProvider for Crawl4aiFetchProvider {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn transport_errors_are_network_but_upstream_errors_are_provider_errors() {
+        use std::time::Duration;
+        use wiremock::{matchers::any, Mock, MockServer, ResponseTemplate};
+
+        let cases = [
+            (ResponseTemplate::new(503), false),
+            (
+                ResponseTemplate::new(200).set_body_string("not JSON"),
+                false,
+            ),
+            (
+                ResponseTemplate::new(200).set_body_json(serde_json::json!({"success": false})),
+                false,
+            ),
+            (
+                ResponseTemplate::new(200).set_delay(Duration::from_secs(2)),
+                true,
+            ),
+        ];
+        for (response, network) in cases {
+            let server = MockServer::start().await;
+            Mock::given(any())
+                .respond_with(response)
+                .mount(&server)
+                .await;
+            let backend = FetchBackendConfig {
+                provider_type: "crawl4ai".into(),
+                api_key: Some("super-secret-token".into()),
+                base_url: Some(format!("{}/connection/super-secret-token", server.uri())),
+                timeout_seconds: Some(1),
+                verified: false,
+                enabled: true,
+            };
+            let provider = Crawl4aiFetchProvider::from_backend(&backend).unwrap();
+            let err = provider.fetch("https://example.com").await.unwrap_err();
+            if network {
+                assert!(matches!(&err, AlephError::NetworkError { .. }), "{err}");
+            } else {
+                assert!(matches!(&err, AlephError::ProviderError { .. }), "{err}");
+            }
+            let message = err.to_string();
+            assert!(message.contains("crawl4ai:"), "{message}");
+            assert!(!message.contains("super-secret-token"), "{message}");
+        }
+    }
 
     #[test]
     fn factory_builds_from_backend_config_with_base_url() {

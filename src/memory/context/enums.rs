@@ -156,24 +156,40 @@ impl std::str::FromStr for NoteType {
 
     // rust-doctor-disable-next-line high-cyclomatic-complexity
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s.to_lowercase().as_str() {
-            "preference" => Ok(Self::Preference),
-            "plan" => Ok(Self::Plan),
-            "learning" => Ok(Self::Learning),
-            "project" => Ok(Self::Project),
-            "personal" => Ok(Self::Personal),
-            "tool" => Ok(Self::Tool),
-            "lesson" => Ok(Self::Lesson),
-            "skill" => Ok(Self::Skill),
-            "reference" => Ok(Self::Reference),
-            "feedback" => Ok(Self::Feedback),
-            "subagent_run" => Ok(Self::SubagentRun),
-            "subagent_session" => Ok(Self::SubagentSession),
-            "subagent_checkpoint" => Ok(Self::SubagentCheckpoint),
-            "subagent_transcript" => Ok(Self::SubagentTranscript),
-            "transcript" => Ok(Self::Transcript),
-            "other" => Ok(Self::Other),
-            _ => Err(format!("Unknown fact type: {s}")),
+        if s.eq_ignore_ascii_case("preference") {
+            Ok(Self::Preference)
+        } else if s.eq_ignore_ascii_case("plan") {
+            Ok(Self::Plan)
+        } else if s.eq_ignore_ascii_case("learning") {
+            Ok(Self::Learning)
+        } else if s.eq_ignore_ascii_case("project") {
+            Ok(Self::Project)
+        } else if s.eq_ignore_ascii_case("personal") {
+            Ok(Self::Personal)
+        } else if s.eq_ignore_ascii_case("tool") {
+            Ok(Self::Tool)
+        } else if s.eq_ignore_ascii_case("lesson") {
+            Ok(Self::Lesson)
+        } else if s.eq_ignore_ascii_case("skill") {
+            Ok(Self::Skill)
+        } else if s.eq_ignore_ascii_case("reference") {
+            Ok(Self::Reference)
+        } else if s.eq_ignore_ascii_case("feedback") {
+            Ok(Self::Feedback)
+        } else if s.eq_ignore_ascii_case("subagent_run") {
+            Ok(Self::SubagentRun)
+        } else if s.eq_ignore_ascii_case("subagent_session") {
+            Ok(Self::SubagentSession)
+        } else if s.eq_ignore_ascii_case("subagent_checkpoint") {
+            Ok(Self::SubagentCheckpoint)
+        } else if s.eq_ignore_ascii_case("subagent_transcript") {
+            Ok(Self::SubagentTranscript)
+        } else if s.eq_ignore_ascii_case("transcript") {
+            Ok(Self::Transcript)
+        } else if s.eq_ignore_ascii_case("other") {
+            Ok(Self::Other)
+        } else {
+            Err(format!("Unknown fact type: {s}"))
         }
     }
 }
@@ -222,14 +238,20 @@ impl FactSource {
 
     #[must_use]
     pub fn from_str_or_default(s: &str) -> Self {
-        match s.to_lowercase().as_str() {
-            "extracted" => Self::Extracted,
-            "summary" => Self::Summary,
-            "document" => Self::Document,
-            "manual" => Self::Manual,
-            "session_compressed" => Self::SessionCompressed,
-            "synthesis" => Self::Synthesis,
-            _ => Self::Extracted,
+        if s.eq_ignore_ascii_case("extracted") {
+            Self::Extracted
+        } else if s.eq_ignore_ascii_case("summary") {
+            Self::Summary
+        } else if s.eq_ignore_ascii_case("document") {
+            Self::Document
+        } else if s.eq_ignore_ascii_case("manual") {
+            Self::Manual
+        } else if s.eq_ignore_ascii_case("session_compressed") {
+            Self::SessionCompressed
+        } else if s.eq_ignore_ascii_case("synthesis") {
+            Self::Synthesis
+        } else {
+            Self::Extracted
         }
     }
 }
@@ -238,14 +260,20 @@ impl std::str::FromStr for FactSource {
     type Err = String;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s.to_lowercase().as_str() {
-            "extracted" => Ok(Self::Extracted),
-            "summary" => Ok(Self::Summary),
-            "document" => Ok(Self::Document),
-            "manual" => Ok(Self::Manual),
-            "session_compressed" => Ok(Self::SessionCompressed),
-            "synthesis" => Ok(Self::Synthesis),
-            _ => Err(format!("Unknown fact source: {s}")),
+        if s.eq_ignore_ascii_case("extracted") {
+            Ok(Self::Extracted)
+        } else if s.eq_ignore_ascii_case("summary") {
+            Ok(Self::Summary)
+        } else if s.eq_ignore_ascii_case("document") {
+            Ok(Self::Document)
+        } else if s.eq_ignore_ascii_case("manual") {
+            Ok(Self::Manual)
+        } else if s.eq_ignore_ascii_case("session_compressed") {
+            Ok(Self::SessionCompressed)
+        } else if s.eq_ignore_ascii_case("synthesis") {
+            Ok(Self::Synthesis)
+        } else {
+            Err(format!("Unknown fact source: {s}"))
         }
     }
 }
@@ -293,11 +321,14 @@ impl std::str::FromStr for MemoryLayer {
     type Err = String;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s.to_lowercase().as_str() {
-            "l0_abstract" => Ok(Self::L0Abstract),
-            "l1_overview" => Ok(Self::L1Overview),
-            "l2_detail" => Ok(Self::L2Detail),
-            _ => Err(format!("Unknown memory layer: {s}")),
+        if s.eq_ignore_ascii_case("l0_abstract") {
+            Ok(Self::L0Abstract)
+        } else if s.eq_ignore_ascii_case("l1_overview") {
+            Ok(Self::L1Overview)
+        } else if s.eq_ignore_ascii_case("l2_detail") {
+            Ok(Self::L2Detail)
+        } else {
+            Err(format!("Unknown memory layer: {s}"))
         }
     }
 }
@@ -393,14 +424,20 @@ impl std::str::FromStr for MemoryCategory {
     type Err = String;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s.to_lowercase().as_str() {
-            "profile" => Ok(Self::Profile),
-            "preferences" => Ok(Self::Preferences),
-            "entities" => Ok(Self::Entities),
-            "events" => Ok(Self::Events),
-            "cases" => Ok(Self::Cases),
-            "patterns" => Ok(Self::Patterns),
-            _ => Err(format!("Unknown memory category: {s}")),
+        if s.eq_ignore_ascii_case("profile") {
+            Ok(Self::Profile)
+        } else if s.eq_ignore_ascii_case("preferences") {
+            Ok(Self::Preferences)
+        } else if s.eq_ignore_ascii_case("entities") {
+            Ok(Self::Entities)
+        } else if s.eq_ignore_ascii_case("events") {
+            Ok(Self::Events)
+        } else if s.eq_ignore_ascii_case("cases") {
+            Ok(Self::Cases)
+        } else if s.eq_ignore_ascii_case("patterns") {
+            Ok(Self::Patterns)
+        } else {
+            Err(format!("Unknown memory category: {s}"))
         }
     }
 }
@@ -452,12 +489,16 @@ impl std::str::FromStr for FactSpecificity {
     type Err = String;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s.to_lowercase().as_str() {
-            "abstract" => Ok(Self::Abstract),
-            "principle" => Ok(Self::Principle),
-            "pattern" => Ok(Self::Pattern),
-            "instance" => Ok(Self::Instance),
-            _ => Err(format!("Unknown fact specificity: {s}")),
+        if s.eq_ignore_ascii_case("abstract") {
+            Ok(Self::Abstract)
+        } else if s.eq_ignore_ascii_case("principle") {
+            Ok(Self::Principle)
+        } else if s.eq_ignore_ascii_case("pattern") {
+            Ok(Self::Pattern)
+        } else if s.eq_ignore_ascii_case("instance") {
+            Ok(Self::Instance)
+        } else {
+            Err(format!("Unknown fact specificity: {s}"))
         }
     }
 }
@@ -506,11 +547,14 @@ impl std::str::FromStr for TemporalScope {
     type Err = String;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s.to_lowercase().as_str() {
-            "permanent" => Ok(Self::Permanent),
-            "contextual" => Ok(Self::Contextual),
-            "ephemeral" => Ok(Self::Ephemeral),
-            _ => Err(format!("Unknown temporal scope: {s}")),
+        if s.eq_ignore_ascii_case("permanent") {
+            Ok(Self::Permanent)
+        } else if s.eq_ignore_ascii_case("contextual") {
+            Ok(Self::Contextual)
+        } else if s.eq_ignore_ascii_case("ephemeral") {
+            Ok(Self::Ephemeral)
+        } else {
+            Err(format!("Unknown temporal scope: {s}"))
         }
     }
 }

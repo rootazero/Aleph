@@ -68,7 +68,7 @@ pub fn first_writable_symlink_component(path: &Path, writable_roots: &[&Path]) -
         }
         if let Ok(meta) = std::fs::symlink_metadata(&current) {
             if meta.file_type().is_symlink() {
-                return Some(current.clone());
+                return Some(current);
             }
         }
     }

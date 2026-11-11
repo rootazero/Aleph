@@ -52,15 +52,15 @@ impl SessionManager {
     /// side and handed in.
     pub(super) async fn query_blocking<T, F>(&self, f: F) -> Result<T, SessionManagerError>
     where
-        F: FnOnce(&rusqlite::Connection) -> Result<T, SessionManagerError> + Send + 'static,
+        F: FnOnce(&mut rusqlite::Connection) -> Result<T, SessionManagerError> + Send + 'static,
         T: Send + 'static,
     {
         let conn = self.conn.clone();
         tokio::task::spawn_blocking(move || {
-            let guard = conn
+            let mut guard = conn
                 .lock()
                 .map_err(|e| SessionManagerError::DatabaseError(format!("Lock error: {e}")))?;
-            f(&guard)
+            f(&mut guard)
         })
         .await
         .map_err(|e| SessionManagerError::DatabaseError(format!("SQLite task failed: {e}")))?

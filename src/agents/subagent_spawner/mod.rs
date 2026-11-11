@@ -30,9 +30,7 @@ use crate::memory::extensions::MemoryExtensionRegistry;
 use crate::memory::store::raw_memory::RawMemoryStore;
 use crate::providers::AiProvider;
 use crate::routing::session_key::SessionKey;
-use crate::session::events::{
-    now_ms, MessageContent, SessionEvent, SessionEventRecord, TurnTrigger,
-};
+use crate::session::events::{now_ms, MessageContent, SessionEvent, TurnTrigger};
 use crate::session::service::{SessionId, SessionService};
 use crate::thinker::prompt_builder::{PromptBuilder, PromptConfig};
 use crate::tools::service::ToolService;
@@ -1067,8 +1065,8 @@ pub async fn spawn(base: &SpawnerBase, req: SpawnRequest<'_>) -> Result<LoopRunR
         None => body.await,
     };
 
-    // P3 Stage I — explicit MCP scope shutdown on the success path. Errors and
-    // cancels leak the scope to the Drop safety net (which logs `leaked: true`).
+    // P3 Stage I & H — explicit cleanup on the success path. Errors and cancels
+    // leak to the Drop safety net (which logs `leaked: true`).
     if result.is_ok() {
         if let Some(scope) = mcp_scope {
             if let Err(e) = scope.shutdown().await {
@@ -1078,12 +1076,6 @@ pub async fn spawn(base: &SpawnerBase, req: SpawnRequest<'_>) -> Result<LoopRunR
                 );
             }
         }
-    }
-
-    // P3 Stage H — explicit cleanup on the success path. Errors and cancels
-    // leak the handle to the Drop safety net (which logs `leaked: true` via
-    // TraceSink).
-    if result.is_ok() {
         if let Some(h) = worktree_handle {
             if let Err(e) = h.cleanup().await {
                 tracing::error!(
@@ -1187,19 +1179,9 @@ async fn extract_run_result(
             SessionEvent::AssistantMessage { content, .. } => {
                 iterations = iterations.saturating_add(1);
                 // Keep the most recent assistant text as the "final" answer.
-                if !content.text.is_empty() {
-                    final_text = Some(content.text.clone());
-                } else if is_last_assistant(events, rec) {
-                    // Edge case: the *last* AssistantMessage is pure tool_use
-                    // (no text) — the run ended mid-work (typically a capped
-                    // run, `hit_limit=true`). Clear any earlier textual answer
-                    // so stale mid-run narration is never presented as the
-                    // final result; the subagent tool surfaces the cap via
-                    // `hit_iteration_limit` instead. The dedicated
-                    // `final_text_cleared_when_…` regression test below
-                    // asserts this behavior.
-                    final_text = None;
-                }
+                // If the latest assistant message has empty text (pure tool_use),
+                // final_text is cleared to None so stale mid-run narration is not presented.
+                final_text = (!content.text.is_empty()).then(|| content.text.clone());
             }
             SessionEvent::ToolCallRequested { .. } => {
                 tool_calls_made = tool_calls_made.saturating_add(1);
@@ -1454,15 +1436,6 @@ fn build_context_triple(
     }
     let fabric = Arc::new(builder.build());
     (Some(budget), Some(compactor), Some(fabric))
-}
-
-/// Whether `target` is the last `AssistantMessage` in `events` (by seq).
-fn is_last_assistant(events: &[SessionEventRecord], target: &SessionEventRecord) -> bool {
-    events
-        .iter()
-        .rev()
-        .find(|r| matches!(r.event, SessionEvent::AssistantMessage { .. }))
-        .is_some_and(|r| r.seq == target.seq)
 }
 
 #[cfg(test)]

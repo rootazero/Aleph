@@ -120,12 +120,23 @@ pub(crate) fn mask_trace_event(masker: &SecretMasker, event: &mut LoopTraceEvent
             terminate_reason: _,
             duration_ms: _,
             token_breakdown: _,
-            tool_timeline: _,
-        } => Some(
-            final_text
+            tool_timeline,
+        } => {
+            let mut changed = final_text
                 .as_mut()
-                .is_some_and(|t| mask_in_place(masker, t)),
-        ),
+                .is_some_and(|t| mask_in_place(masker, t));
+            for invocation in tool_timeline.iter_mut() {
+                // The provider supplies the tool-call id, so it is model- and
+                // server-controlled text: a credential can ride in it exactly
+                // as it can in the name or the error.
+                changed |= mask_in_place(masker, &mut invocation.id);
+                changed |= mask_in_place(masker, &mut invocation.name);
+                if let Some(ref mut err) = invocation.error {
+                    changed |= mask_in_place(masker, err);
+                }
+            }
+            Some(changed)
+        }
         LoopTraceEvent::WorktreeCreated { path } => Some(mask_path_in_place(masker, path)),
         LoopTraceEvent::WorktreeCleanedUp { path, leaked: _ } => {
             Some(mask_path_in_place(masker, path))
@@ -407,6 +418,53 @@ mod tests {
         }
     }
 
+    #[test]
+    fn redacts_secret_in_session_completed_tool_timeline() {
+        let cap = Arc::new(CaptureSink::default());
+        let sink = UnattendedRedactingSink::new(cap.clone());
+
+        // A tool error containing a credential in the timeline. The
+        // provider-supplied tool-call id is text too, and it is the field a
+        // model controls most freely.
+        let timeline = vec![crate::orchestrator::dispatch::ToolInvocation {
+            id: format!("call-AKIAIOSFODNN7EXAMPLE"),
+            name: "shell".into(),
+            duration_ms: 100,
+            success: false,
+            error: Some(format!("AWS key AKIAIOSFODNN7EXAMPLE leaked in error")),
+        }];
+
+        sink.on_trace(&LoopTraceEvent::SessionCompleted {
+            outcome: LoopTraceSessionOutcome::Completed,
+            iterations: 1,
+            tool_calls_made: 1,
+            total_tokens: 0,
+            hit_limit: false,
+            final_text: Some("done".into()),
+            terminate_reason: None,
+            duration_ms: None,
+            token_breakdown: None,
+            tool_timeline: timeline,
+        });
+
+        let events = cap.events.lock().unwrap();
+        match &events[0] {
+            LoopTraceEvent::SessionCompleted { tool_timeline, .. } => {
+                let err = tool_timeline[0].error.as_ref().unwrap();
+                assert!(
+                    !err.contains("AKIAIOSFODNN7EXAMPLE"),
+                    "timeline error leaked: {err}"
+                );
+                assert!(
+                    !tool_timeline[0].id.contains("AKIAIOSFODNN7EXAMPLE"),
+                    "timeline tool-call id leaked: {}",
+                    tool_timeline[0].id
+                );
+            }
+            other => panic!("unexpected event: {other:?}"),
+        }
+    }
+
     /// A real AWS key shape, so `SecretMasker`'s own pattern decides which
     /// bytes are a secret — not a pattern this test invented.
     const KEY: &str = "AKIAIOSFODNN7EXAMPLE";
@@ -474,7 +532,13 @@ mod tests {
                 terminate_reason: None,
                 duration_ms: None,
                 token_breakdown: None,
-                tool_timeline: Vec::new(),
+                tool_timeline: vec![crate::orchestrator::dispatch::ToolInvocation {
+                    id: format!("t-{KEY}"),
+                    name: format!("tool-{KEY}"),
+                    duration_ms: 5,
+                    success: false,
+                    error: Some(format!("failed with {KEY}")),
+                }],
             },
             LoopTraceEvent::WorktreeCreated {
                 path: std::path::PathBuf::from(format!("/tmp/{KEY}")),

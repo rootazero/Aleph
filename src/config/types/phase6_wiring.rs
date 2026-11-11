@@ -250,7 +250,7 @@ impl ModelThresholdToml {
                 return false;
             }
             model_lc.as_deref().is_some_and(|m| m.contains(&needle))
-                || provider_lc.contains(&needle)
+                || provider_lc == needle
         })
     }
 }

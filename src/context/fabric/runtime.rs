@@ -1171,11 +1171,11 @@ impl ContextFabric {
             .map_err(|e| ContextFabricError::Serialization(e.to_string()))?;
         let measured_tokens =
             estimate_tokens_smart(std::str::from_utf8(&serialized).unwrap_or_default()) as u64;
-        if response.output_bytes != serialized.len() as u64
-            || response.output_tokens != measured_tokens
+        if response.output_bytes < serialized.len() as u64
+            || response.output_tokens < measured_tokens
         {
             return Err(ContextFabricError::MalformedOutput(
-                "result measurements do not match serialized output".into(),
+                "result measurements underestimate serialized output".into(),
             ));
         }
         if response.output_bytes > post_descriptor.output_budget.max_bytes

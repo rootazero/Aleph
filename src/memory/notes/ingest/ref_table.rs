@@ -98,7 +98,7 @@ impl RefTable {
         match Self::parse_token(value) {
             Some(idx) => match self.paths.get(idx) {
                 Some(path) => {
-                    *value = path.clone();
+                    value.clone_from(path);
                     FieldOutcome::Resolved
                 }
                 None => FieldOutcome::OutOfRange,

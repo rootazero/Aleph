@@ -257,7 +257,7 @@ impl AgentLedger {
         agent_id: Option<&str>,
         limit: i64,
     ) -> Result<Vec<LedgerRecord>, KeyError> {
-        Ok(self.keys.store().ledger_recent(agent_id, limit)?)
+        self.keys.store().ledger_recent(agent_id, limit).map_err(Into::into)
     }
 
     pub fn verify(&self, agent_id: &str) -> Result<ChainReport, KeyError> {
@@ -564,6 +564,12 @@ pub fn global() -> Option<Arc<AgentLedger>> {
     LEDGER.get().cloned()
 }
 
+/// Query whether the process-wide ledger is installed without cloning its handle.
+#[must_use]
+pub fn is_installed() -> bool {
+    LEDGER.get().is_some()
+}
+
 /// Enqueue a record from a hot path.
 ///
 /// A no-op when no ledger is installed (unit tests, pre-boot, embedded uses) —
@@ -581,8 +587,11 @@ pub async fn record(new: NewRecord) {
         );
         return;
     };
-    let agent_id = new.agent_id.clone();
     if let Err(e) = tx.send(LedgerJob::Append(new)).await {
+        let agent_id = match &e.0 {
+            LedgerJob::Append(r) => &r.agent_id,
+            _ => "unknown",
+        };
         if let Some(l) = LEDGER.get() {
             l.note_lost();
         }

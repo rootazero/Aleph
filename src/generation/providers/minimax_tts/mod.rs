@@ -336,7 +336,10 @@ impl GenerationProvider for MinimaxTtsProvider {
                     msg = %parsed.base_resp.best_message(),
                     "MiniMax T2A logical failure (HTTP 200, status_code != 0)"
                 );
-                return Err(self.parse_error(status, &text));
+                return Err(map_status_code(
+                    parsed.base_resp.status_code,
+                    parsed.base_resp.best_message(),
+                ));
             }
 
             let audio_hex = parsed
@@ -507,7 +510,11 @@ fn build_request(
 
 /// Clamp a requested speaking rate into `MiniMax`'s accepted `[0.5, 2.0]` range.
 fn clamp_speed(speed: f32) -> f32 {
-    speed.clamp(SPEED_MIN, SPEED_MAX)
+    if !speed.is_finite() {
+        1.0
+    } else {
+        speed.clamp(SPEED_MIN, SPEED_MAX)
+    }
 }
 
 /// Validate and resolve the requested audio format. Defaults to `mp3`.

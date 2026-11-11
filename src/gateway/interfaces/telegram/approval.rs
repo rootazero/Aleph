@@ -137,7 +137,7 @@ impl ChannelApprovalCapability for TelegramChannelApprovalCapability {
                 ApprovalAction::Deny => "❌ Approval denied.",
             };
             let update = OutboundMessage::text(pending.conversation_id.as_str(), text);
-            let _ = self.channel.send(update).await;
+            self.channel.send(update).await?;
             let _ = msg_id;
         }
         Ok(())

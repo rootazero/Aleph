@@ -656,10 +656,18 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
         // future-drop alike — while the success arms call `cleanup_now()` to
         // keep the cleanup at its original, log-adjacent position and disarm
         // the guard so it does not double-clean.
+        //
+        // The guard is constructed BEFORE `media_blocks` is evaluated so that
+        // any media already written to the session cache during
+        // `archive_inbound_attachments` / `media_processor.process` (which
+        // ran above) is covered even if this future is dropped before reaching
+        // the retry loop.  The `active` flag is set whenever there are
+        // non-empty attachments AND a media processor is present — the same
+        // condition that caused those awaits to write into the cache.
         let mut media_cleanup_guard = MediaCleanupGuard {
             processor: self.media_processor.clone(),
             session_key: request.session_key.to_key_string(),
-            active: !media_blocks.is_empty(),
+            active: !request.attachments.is_empty() && self.media_processor.is_some(),
         };
 
         // === Retry loop: resolve provider → build agent loop → run ===

@@ -64,12 +64,15 @@ fn strip_history(
     fresh_tail_count: usize,
     tool_results: bool,
 ) -> usize {
-    // Locate the newest image-bearing message — that one stays intact.
+    // Locate the newest image-bearing message for the matching category — that one stays intact.
     let newest_image_idx = messages
         .iter()
         .enumerate()
         .rev()
-        .find(|(_, m)| message_has_image(m))
+        .find(|(_, m)| {
+            (tool_results || !matches!(m, UnifiedMessage::ToolResult { .. }))
+                && message_has_image(m)
+        })
         .map(|(i, _)| i);
     let Some(newest_image_idx) = newest_image_idx else {
         return 0; // no images in history

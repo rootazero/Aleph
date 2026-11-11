@@ -2,13 +2,13 @@
 
 use regex::Regex;
 use std::collections::HashSet;
-use std::sync::{Arc, OnceLock};
+use std::sync::OnceLock;
 
-static SYSTEM_EMAIL_PATTERNS: OnceLock<Arc<Vec<Regex>>> = OnceLock::new();
+static SYSTEM_EMAIL_PATTERNS: OnceLock<Vec<Regex>> = OnceLock::new();
 
-fn system_email_patterns() -> &'static Arc<Vec<Regex>> {
+fn system_email_patterns() -> &'static [Regex] {
     SYSTEM_EMAIL_PATTERNS.get_or_init(|| {
-        Arc::new(vec![
+        vec![
             Regex::new(r"(?i)^noreply@").expect("valid regex literal"),
             Regex::new(r"(?i)^no-reply@").expect("valid regex literal"),
             Regex::new(r"(?i)^donotreply@").expect("valid regex literal"),
@@ -29,8 +29,9 @@ fn system_email_patterns() -> &'static Arc<Vec<Regex>> {
             // filtered like any other.
             Regex::new(r"(?i)\.(test|example|invalid|localhost|local)$")
                 .expect("valid regex literal"),
-        ])
+        ]
     })
+    .as_slice()
 }
 
 /// Known test phone numbers, stored once and looked up by `&str` to avoid
@@ -74,9 +75,8 @@ fn local_ips() -> &'static HashSet<&'static str> {
 pub struct PiiAllowlist {
     /// Known test phone numbers (borrowed from the static set)
     test_phones: &'static HashSet<&'static str>,
-    /// System/example email patterns (shared via `Arc` to avoid cloning the
-    /// regex `Vec` on every `Default::default()`)
-    system_email_patterns: Arc<Vec<Regex>>,
+    /// System/example email patterns borrowed from static storage
+    system_email_patterns: &'static [Regex],
     /// Known local/internal IPs (borrowed from the static set)
     local_ips: &'static HashSet<&'static str>,
 }
@@ -85,7 +85,7 @@ impl Default for PiiAllowlist {
     fn default() -> Self {
         Self {
             test_phones: test_phones(),
-            system_email_patterns: Arc::clone(system_email_patterns()),
+            system_email_patterns: system_email_patterns(),
             local_ips: local_ips(),
         }
     }

@@ -1,8 +1,16 @@
+//! lock-policy: none
+//!
 //! `aleph doctor` — unified self-diagnosis + mechanical repair.
 //!
 //! Thin I/O shell over [`alephcore::diagnostics::DiagnosticEngine`]: build
 //! the registry, run the chosen posture, render, and map "unresolved
 //! problems" onto a non-zero exit code so CI can gate on it.
+//!
+//! The registry only reads `~/.aleph/data/` (the SQLite integrity check
+//! opens read-only), and its two repairs cannot contend with a live
+//! daemon: creating a missing data directory means no daemon is using it,
+//! and clearing a stale holder sidecar happens only while the singleton
+//! lock is free.
 
 use alephcore::diagnostics::{DiagnosticEngine, Posture};
 

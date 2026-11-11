@@ -472,10 +472,15 @@ pub async fn handle_update(request: JsonRpcRequest, cron: SharedCronService) -> 
     // send both; clients that only change the zone send just `timezone`, so
     // fall back to the job's current schedule rather than dropping it — that
     // silent drop is what let the Panel editor erase a zone set via the tool.
+    // One guard for the whole read-modify-write: reading the job's current
+    // schedule and writing the merged schedule back must not straddle another
+    // writer, or a concurrent update that already succeeded is silently
+    // reverted. The same guard is reused for the update below.
+    let service = cron.lock().await;
     if let Some(tz) = params.get("timezone").and_then(|v| v.as_str()) {
         let mut kind = match updates.schedule_kind.clone() {
             Some(k) => k,
-            None => match cron.lock().await.get_job(&job_id).await {
+            None => match service.get_job(&job_id).await {
                 Ok(view) => view.schedule_kind,
                 Err(e) => return task_error::respond(request.id, "Failed to get job", &e),
             },
@@ -522,7 +527,6 @@ pub async fn handle_update(request: JsonRpcRequest, cron: SharedCronService) -> 
         }
     }
 
-    let service = cron.lock().await;
     match service.update_job(&job_id, updates).await {
         Ok(()) => match service.get_job(&job_id).await {
             Ok(view) => {
@@ -691,7 +695,20 @@ pub async fn handle_toggle(request: JsonRpcRequest, cron: SharedCronService) -> 
         }
     };
 
-    let enabled = params.get("enabled").and_then(|v| v.as_bool());
+    // An absent `enabled` toggles; an explicit non-boolean is a client error,
+    // not a toggle. `as_bool()` maps "not a boolean" to "absent", so a
+    // malformed disable flipped the job the other way and answered success.
+    let enabled = match params.get("enabled") {
+        None => None,
+        Some(Value::Bool(flag)) => Some(*flag),
+        Some(_) => {
+            return JsonRpcResponse::error(
+                request.id,
+                INVALID_PARAMS,
+                "enabled must be a boolean",
+            );
+        }
+    };
 
     let service = cron.lock().await;
     let result = match enabled {

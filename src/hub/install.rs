@@ -160,9 +160,11 @@ pub(crate) fn install_git_skill(
     // Reject traversal in the SOURCE path too (not just the destination name):
     // `leaf` is joined onto the checkout to pick the copy source, so a `..`
     // segment from a crafted catalog entry could read outside the clone.
-    if leaf
-        .split(['/', '\\'])
-        .any(|seg| seg == "." || seg == ".." || seg.is_empty())
+    if leaf.contains(':')
+        || std::path::Path::new(&leaf).is_absolute()
+        || leaf
+            .split(['/', '\\'])
+            .any(|seg| seg == "." || seg == ".." || seg.is_empty())
     {
         return Err(format!("unsafe skill subdir '{leaf}'"));
     }
@@ -209,9 +211,27 @@ pub(crate) fn install_git_skill(
         return Err(e.to_string());
     }
     let src_leaf = checkout.join(&leaf);
-    if !src_leaf.is_dir() {
+    let checkout_canon = match checkout.canonicalize() {
+        Ok(c) => c,
+        Err(e) => {
+            let _ = std::fs::remove_dir_all(&checkout);
+            return Err(format!("failed to canonicalize checkout path: {e}"));
+        }
+    };
+    let src_leaf_canon = match src_leaf.canonicalize() {
+        Ok(c) => c,
+        Err(e) => {
+            let _ = std::fs::remove_dir_all(&checkout);
+            return Err(format!("subdir '{leaf}' not found in {git_url}: {e}"));
+        }
+    };
+    if src_leaf.is_symlink() || !src_leaf_canon.starts_with(&checkout_canon) {
         let _ = std::fs::remove_dir_all(&checkout);
-        return Err(format!("subdir '{leaf}' not found in {git_url}"));
+        return Err(format!("subdir '{leaf}' escapes checkout root (symlink breakout)"));
+    }
+    if !src_leaf_canon.is_dir() {
+        let _ = std::fs::remove_dir_all(&checkout);
+        return Err(format!("subdir '{leaf}' is not a directory in {git_url}"));
     }
     // Enforce the content pin before the first write.
     if let Err(e) = crate::extension::marketplace::installer::verify_plugin_integrity(
@@ -437,14 +457,12 @@ pub async fn run_install(
     ctx: &InstallContext<'_>,
 ) -> Result<InstallOutcome, String> {
     match spec {
+        InstallSpec::McpStdio { command, .. } if !command_available(command) => {
+            Err(format!(
+                "required command '{command}' not found on PATH — install its runtime (e.g. node/python) and retry"
+            ))
+        }
         InstallSpec::McpStdio { .. } | InstallSpec::McpRemote { .. } => {
-            if let InstallSpec::McpStdio { command, .. } = spec {
-                if !command_available(command) {
-                    return Err(format!(
-                        "required command '{command}' not found on PATH — install its runtime (e.g. node/python) and retry"
-                    ));
-                }
-            }
             let mcp = ctx.mcp.ok_or("MCP manager unavailable")?;
             let id = mcp_server_id(&ctx.entry.id);
             let cfg = mcp_config_from_spec(
@@ -854,5 +872,68 @@ mod tests {
         assert_eq!(plugin_marketplace_name("aleph-hub"), Some("aleph-official"));
         assert_eq!(plugin_marketplace_name("local"), None);
         assert_eq!(plugin_marketplace_name("peer-market"), Some("peer-market"));
+    }
+
+    #[test]
+    fn install_git_skill_rejects_unsafe_subdir_colon_and_absolute() {
+        let _allow = AllowLocalGitUrl::set();
+        let tmp = tempfile::tempdir().unwrap();
+        let (url, skills_dir, entry) = git_skill_fixture(tmp.path());
+        let spec_colon = InstallSpec::GitDir {
+            git_url: url.clone(),
+            subdir: Some("C:bad".into()),
+            git_ref: Some("main".into()),
+            sha256: None,
+        };
+        let err = install_git_skill(&entry, &spec_colon, &skills_dir).unwrap_err();
+        assert!(err.contains("unsafe skill subdir"), "{err}");
+
+        let spec_abs = InstallSpec::GitDir {
+            git_url: url,
+            subdir: Some("/etc/passwd".into()),
+            git_ref: Some("main".into()),
+            sha256: None,
+        };
+        let err = install_git_skill(&entry, &spec_abs, &skills_dir).unwrap_err();
+        assert!(err.contains("unsafe skill subdir"), "{err}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn install_git_skill_rejects_symlink_breakout() {
+        let _allow = AllowLocalGitUrl::set();
+        let tmp = tempfile::tempdir().unwrap();
+        let (url, skills_dir, entry) = git_skill_fixture(tmp.path());
+        let src_path = std::path::PathBuf::from(&url);
+        let outside = tmp.path().join("outside_secret");
+        std::fs::create_dir_all(&outside).unwrap();
+        std::fs::write(outside.join("SKILL.md"), b"# secret").unwrap();
+        std::os::unix::fs::symlink(&outside, src_path.join("escaped-skill")).unwrap();
+        let repo = git2::Repository::open(&src_path).unwrap();
+        let mut idx = repo.index().unwrap();
+        idx.add_all(["escaped-skill"], git2::IndexAddOption::DEFAULT, None)
+            .unwrap();
+        idx.write().unwrap();
+        let tree = repo.find_tree(idx.write_tree().unwrap()).unwrap();
+        let sig = git2::Signature::now("t", "t@t").unwrap();
+        let parent = repo.head().unwrap().peel_to_commit().unwrap();
+        repo.commit(
+            Some("refs/heads/main"),
+            &sig,
+            &sig,
+            "add symlink",
+            &tree,
+            &[&parent],
+        )
+        .unwrap();
+
+        let spec = InstallSpec::GitDir {
+            git_url: url,
+            subdir: Some("escaped-skill".into()),
+            git_ref: Some("main".into()),
+            sha256: None,
+        };
+        let err = install_git_skill(&entry, &spec, &skills_dir).unwrap_err();
+        assert!(err.contains("symlink breakout"), "{err}");
     }
 }

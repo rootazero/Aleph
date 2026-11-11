@@ -50,7 +50,7 @@ pub fn score_merge_candidate(keeper: &KnowledgeNote, absorbed: &KnowledgeNote) -
     let af: std::collections::HashSet<&String> = absorbed.facts.iter().collect();
 
     let overlap = kf.intersection(&af).count();
-    let union = kf.union(&af).count();
+    let union = kf.len() + af.len() - overlap;
 
     // Jaccard fact overlap — high overlap means the absorbed note is mostly
     // redundant (a clean merge); low overlap means we'd be fusing distinct
@@ -64,7 +64,7 @@ pub fn score_merge_candidate(keeper: &KnowledgeNote, absorbed: &KnowledgeNote) -
     // Distinct-fact-loss guard: if the absorbed note carries many facts the
     // keeper lacks, the merge buries them under an unrelated title. Penalise
     // proportionally to how much of the absorbed note is novel.
-    let novel_in_absorbed = af.difference(&kf).count();
+    let novel_in_absorbed = af.len() - overlap;
     let absorbed_total = absorbed.facts.len().max(1);
     let novelty_ratio = novel_in_absorbed as f64 / absorbed_total as f64;
 
@@ -81,14 +81,9 @@ pub fn score_merge_candidate(keeper: &KnowledgeNote, absorbed: &KnowledgeNote) -
 }
 
 fn share_leading_token(a: &str, b: &str) -> bool {
-    let first = |s: &str| -> String {
-        s.split_whitespace()
-            .next()
-            .unwrap_or_default()
-            .to_lowercase()
-    };
-    let fa = first(a);
-    !fa.is_empty() && fa == first(b)
+    let fa = a.split_whitespace().next().unwrap_or_default();
+    let fb = b.split_whitespace().next().unwrap_or_default();
+    !fa.is_empty() && fa.eq_ignore_ascii_case(fb)
 }
 
 #[cfg(test)]

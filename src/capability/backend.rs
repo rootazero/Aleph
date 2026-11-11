@@ -4,7 +4,9 @@
 //! `ToolBackendAdapter` wraps the existing
 //! [`crate::tools::registry::ToolHandlerRegistry`], while
 //! [`LegacyCapabilityHandlerRegistry`] owns the lightweight special-capability
-//! handler entries without duplicating their descriptor source.
+//! handler entries without duplicating their descriptor source. The provider
+//! backend ([`crate::capability::provider_backend::ProviderBackendAdapter`])
+//! adapts the provider registry as a capability source of truth.
 
 use crate::capability::descriptor::{
     CapabilityDescriptor, CapabilityFacet, CapabilityFacets, CapabilityId, CapabilityKind,
@@ -40,10 +42,11 @@ pub const TOOL_NAMESPACE: &str = "aleph/tools";
 
 /// The storage/query contract every capability registry implements.
 ///
-/// `lookup` resolves one capability by id; `enumerate` lists a scope. The Tool
-/// backend and the lightweight special-capability handler backend are live;
-/// other descriptor kinds remain descriptive until their owning backend is
-/// mounted.
+/// `lookup` resolves one capability by id; `enumerate` lists a scope. Three
+/// backends are live — the Tool backend ([`ToolBackendAdapter`]), the provider
+/// backend ([`crate::capability::provider_backend::ProviderBackendAdapter`])
+/// and the lightweight special-capability handler backend; other descriptor
+/// kinds remain descriptive until their owning backend is mounted.
 pub trait CapabilityBackend: Send + Sync {
     fn lookup(&self, id: &CapabilityId) -> Option<CapabilityDescriptor>;
     fn enumerate(&self, scope: &Scope) -> Vec<CapabilityDescriptor>;
@@ -254,7 +257,7 @@ impl CapabilityBackend for LegacyCapabilityHandlerRegistry {
     }
 }
 
-/// The one live backend: adapts [`crate::tools::registry::ToolHandlerRegistry`]
+/// The Tool backend: adapts [`crate::tools::registry::ToolHandlerRegistry`]
 /// to the capability contract without duplicating it.
 pub struct ToolBackendAdapter {
     pub registry: crate::tools::registry::ToolHandlerRegistry,
@@ -264,9 +267,10 @@ impl ToolBackendAdapter {
     /// Whether `id` falls inside `scope`'s kind / namespace restrictions.
     ///
     /// `pub(super)` so the capability sibling module (`zahir_facade`) shares
-    /// THIS predicate when filtering registry change events — one definition of
-    /// "in scope" for both `enumerate`/`snapshot_capabilities` and the
-    /// subscribe drain.
+    /// THIS predicate when filtering registry change events. The scope
+    /// listings (`enumerate` / `snapshot_capabilities`) filter on the
+    /// DESCRIPTOR instead, through `descriptor_in_scope`, which carries the
+    /// behavior-facet half this id-level predicate does not have.
     pub(super) fn in_scope(id: &CapabilityId, scope: &Scope) -> bool {
         if let Some(kind) = scope.kind {
             if kind != CapabilityKind::Tool {
@@ -293,10 +297,12 @@ impl ToolBackendAdapter {
 
     /// `(descriptors, revision)` from ONE registry generation.
     ///
-    /// Both halves come from a single `snapshot_state()` load, so a caller can
-    /// never pair descriptors from generation N with a revision from N+1.
-    /// `describe`/`subscribe` build their `CapabilitySnapshot` from THIS — never
-    /// `enumerate` + a separate `revision()` read (two loads can tear).
+    /// Both halves come from a single `canonical_publication()` load, so a
+    /// caller can never pair descriptors from generation N with a revision from
+    /// N+1. A caller that needs a `CapabilitySnapshot` should take it from here
+    /// rather than from `enumerate` + a separate `revision()` read (two loads
+    /// can tear). NOTE: `ZahirFacade::describe` does not go through this
+    /// method — it reads its own registry snapshot and filters it itself.
     #[must_use]
     pub fn snapshot_capabilities(&self, scope: &Scope) -> (Vec<CapabilityDescriptor>, u64) {
         let snap = self.registry.canonical_publication();

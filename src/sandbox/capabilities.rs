@@ -250,14 +250,10 @@ fn normalize_path_components(path: &std::path::Path) -> std::path::PathBuf {
 fn network_within(child: &NetworkPolicy, baseline: &NetworkPolicy) -> bool {
     use NetworkPolicy::*;
     match (child, baseline) {
-        (None, _) => true,
-        (_, AllowAll) => true,
-        (AllowAll, _) => false,
+        (None, _) | (_, AllowAll) => true,
         (AllowHosts { hosts: c }, AllowHosts { hosts: b }) => c.iter().all(|h| b.contains(h)),
-        (AllowHosts { .. }, None) => false,
         (LoopbackPorts { ports: c }, LoopbackPorts { ports: b }) => c.iter().all(|p| b.contains(p)),
-        (LoopbackPorts { .. }, None | AllowHosts { .. }) => false,
-        (AllowHosts { .. }, LoopbackPorts { .. }) => false,
+        _ => false,
     }
 }
 

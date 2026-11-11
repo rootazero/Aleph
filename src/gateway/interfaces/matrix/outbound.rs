@@ -193,11 +193,13 @@ async fn prepare_attachment(
                 .unwrap_or(&attachment.mime_type)
                 .to_string();
 
-            let bytes = resp.bytes().await.map_err(|e| {
-                ChannelError::ReceiveFailed(format!("Attachment download body read failed: {e}"))
-            })?;
+            let bytes = super::media::read_body_limited(resp, super::media::MATRIX_MEDIA_MAX_SIZE)
+                .await?
+                .ok_or_else(|| {
+                    ChannelError::SendFailed("Matrix attachment exceeds size cap".into())
+                })?;
 
-            return Ok((bytes.to_vec(), content_type, filename));
+            return Ok((bytes, content_type, filename));
         }
 
         if url.starts_with("mxc://") {
@@ -237,7 +239,6 @@ pub async fn send_reaction(
         .as_str()
         .parse()
         .map_err(|e| ChannelError::SendFailed(format!("Invalid event ID: {e}")))?;
-
     let annotation = Annotation::new(event_id, reaction.to_string());
     let content = ReactionEventContent::new(annotation);
 
@@ -273,6 +274,12 @@ pub async fn edit_message(
     if chunks.is_empty() {
         return Err(ChannelError::SendFailed(
             "No message content to edit".to_string(),
+        ));
+    }
+
+    if chunks.len() > 1 {
+        return Err(ChannelError::SendFailed(
+            "Message too long to edit: content exceeds Matrix message limit".to_string(),
         ));
     }
 

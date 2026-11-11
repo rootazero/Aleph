@@ -461,8 +461,10 @@ fn swap_dir_into_place(staged: &Path, dest: &Path) -> bool {
     if let Err(e) = std::fs::rename(staged, dest) {
         let dest_exists = matches!(
             e.kind(),
-            std::io::ErrorKind::AlreadyExists | std::io::ErrorKind::DirectoryNotEmpty
-        );
+            std::io::ErrorKind::AlreadyExists
+                | std::io::ErrorKind::DirectoryNotEmpty
+                | std::io::ErrorKind::PermissionDenied
+        ) || dest.exists();
         if !dest_exists {
             warn!(error = %e, "Failed to atomically swap plugin cache");
             return false;
@@ -618,7 +620,13 @@ fn extract_dir_contents(dir: &Dir, target: &Path) -> std::io::Result<()> {
         }
         match std::fs::rename(&tmp, &dest) {
             Ok(()) => {}
-            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+            Err(e) if dest.exists()
+                || matches!(
+                    e.kind(),
+                    std::io::ErrorKind::AlreadyExists
+                        | std::io::ErrorKind::PermissionDenied
+                        | std::io::ErrorKind::DirectoryNotEmpty
+                ) => {
                 // BUNDLED-R4-02: destination may be a directory (not a file),
                 // which `remove_file` cannot delete and would cause the
                 // rename to fail and the skill to be marked `version: None`

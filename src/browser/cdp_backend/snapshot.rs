@@ -38,9 +38,9 @@ async fn url_and_title(
         // A page that cannot answer is "unknown", never an empty URL.
         return Ok((None, None));
     }
-    let arr = res.value.as_array().cloned().unwrap_or_default();
+    let arr = res.value.as_array();
     let pick = |i: usize| {
-        arr.get(i)
+        arr.and_then(|a| a.get(i))
             .and_then(|v| v.as_str())
             .filter(|s| !s.is_empty())
             .map(str::to_string)

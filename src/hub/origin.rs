@@ -51,9 +51,10 @@ pub struct InstallOrigin {
 #[must_use]
 fn spec_digest(spec: &InstallSpec) -> String {
     use sha2::{Digest, Sha256};
-    let json = serde_json::to_string(spec).unwrap_or_default();
     let mut h = Sha256::new();
-    h.update(json.as_bytes());
+    if let Ok(bytes) = serde_json::to_vec(spec) {
+        h.update(&bytes);
+    }
     hex::encode(h.finalize())
 }
 
@@ -169,11 +170,14 @@ pub(super) fn upsert_origin(conn: &Connection, o: &InstallOrigin) -> rusqlite::R
 }
 
 fn row_to_origin(row: &rusqlite::Row<'_>) -> rusqlite::Result<InstallOrigin> {
-    let kind: String = row.get(1)?;
-    let kind =
-        serde_json::from_value::<ExtensionKind>(serde_json::Value::String(kind)).map_err(|e| {
-            rusqlite::Error::FromSqlConversionFailure(1, rusqlite::types::Type::Text, Box::new(e))
-        })?;
+    let kind_str: String = row.get(1)?;
+    let kind = kind_str.parse::<ExtensionKind>().map_err(|e| {
+        rusqlite::Error::FromSqlConversionFailure(
+            1,
+            rusqlite::types::Type::Text,
+            Box::new(std::io::Error::new(std::io::ErrorKind::InvalidData, e)),
+        )
+    })?;
     Ok(InstallOrigin {
         entry_id: row.get(0)?,
         kind,
@@ -186,12 +190,11 @@ fn row_to_origin(row: &rusqlite::Row<'_>) -> rusqlite::Result<InstallOrigin> {
     })
 }
 
-const SELECT_COLS: &str =
-    "entry_id, kind, source_id, via, version, spec_digest, local_ref, installed_at";
+const ALL_ORIGINS_SQL: &str =
+    "SELECT entry_id, kind, source_id, via, version, spec_digest, local_ref, installed_at FROM install_origin";
 
 pub fn all_origins(conn: &Connection) -> rusqlite::Result<Vec<InstallOrigin>> {
-    let sql = format!("SELECT {SELECT_COLS} FROM install_origin");
-    let mut stmt = conn.prepare(&sql)?;
+    let mut stmt = conn.prepare(ALL_ORIGINS_SQL)?;
     let rows = stmt.query_map([], row_to_origin)?;
     rows.collect()
 }
@@ -225,12 +228,12 @@ pub(super) fn forget_installed(
     // rows share the same leaf (two catalog entries installed into the same
     // directory name), an unscoped forget would silently delete BOTH; we
     // avoid that by requiring the leaf match be unambiguous.
-    let exact: Vec<String> = all
+    let exact: Vec<&str> = all
         .iter()
         .filter(|o| o.local_ref == backend)
-        .map(|o| o.entry_id.clone())
+        .map(|o| o.entry_id.as_str())
         .collect();
-    let doomed: Vec<String> = if !exact.is_empty() {
+    let doomed = if !exact.is_empty() {
         // Two catalog entries that share a `local_ref` (e.g. a hub-managed
         // MCP server id and a user-installed one with the same id) would
         // both be wiped by an unscoped exact-match delete. Mirror the
@@ -246,12 +249,12 @@ pub(super) fn forget_installed(
             );
             return Ok(0);
         }
-        exact
+        exact[0]
     } else {
-        let leaf_matches: Vec<String> = all
+        let leaf_matches: Vec<&str> = all
             .iter()
             .filter(|o| local_ref_addresses(&o.local_ref, backend))
-            .map(|o| o.entry_id.clone())
+            .map(|o| o.entry_id.as_str())
             .collect();
         if leaf_matches.len() > 1 {
             tracing::warn!(
@@ -262,13 +265,12 @@ pub(super) fn forget_installed(
             );
             return Ok(0);
         }
-        leaf_matches
+        match leaf_matches.first() {
+            Some(&target) => target,
+            None => return Ok(0),
+        }
     };
-    let mut removed = 0;
-    for entry_id in doomed {
-        removed += delete_origin(conn, &entry_id)?;
-    }
-    Ok(removed)
+    delete_origin(conn, doomed)
 }
 
 /// True when `local_ref` names the backend object `backend` — either verbatim

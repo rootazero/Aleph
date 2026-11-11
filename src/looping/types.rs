@@ -48,6 +48,7 @@ impl Cadence {
 /// values are never produced (loops reject them), so ms precision is unneeded.
 #[must_use]
 pub fn fmt_duration_ms(ms: u64) -> String {
+    use std::fmt::Write;
     let total_secs = ms / 1_000;
     let (h, m, s) = (
         total_secs / 3_600,
@@ -56,15 +57,15 @@ pub fn fmt_duration_ms(ms: u64) -> String {
     );
     let mut out = String::new();
     if h > 0 {
-        out.push_str(&format!("{h}h"));
+        let _ = write!(out, "{h}h");
     }
     if m > 0 {
-        out.push_str(&format!("{m}m"));
+        let _ = write!(out, "{m}m");
     }
     // Only show seconds when they are the sole component or a remainder; an even
     // "5m" stays "5m", not "5m0s".
     if s > 0 || out.is_empty() {
-        out.push_str(&format!("{s}s"));
+        let _ = write!(out, "{s}s");
     }
     out
 }

@@ -75,6 +75,30 @@ impl From<String> for SkillId {
     }
 }
 
+impl std::borrow::Borrow<str> for SkillId {
+    fn borrow(&self) -> &str {
+        &self.0
+    }
+}
+
+impl AsRef<str> for SkillId {
+    fn as_ref(&self) -> &str {
+        &self.0
+    }
+}
+
+impl PartialEq<str> for SkillId {
+    fn eq(&self, other: &str) -> bool {
+        self.0 == other
+    }
+}
+
+impl PartialEq<&str> for SkillId {
+    fn eq(&self, other: &&str) -> bool {
+        self.0 == *other
+    }
+}
+
 // ---------------------------------------------------------------------------
 // PluginId
 // ---------------------------------------------------------------------------
@@ -130,6 +154,30 @@ impl From<&str> for PluginId {
 impl From<String> for PluginId {
     fn from(s: String) -> Self {
         Self(s)
+    }
+}
+
+impl std::borrow::Borrow<str> for PluginId {
+    fn borrow(&self) -> &str {
+        &self.0
+    }
+}
+
+impl AsRef<str> for PluginId {
+    fn as_ref(&self) -> &str {
+        &self.0
+    }
+}
+
+impl PartialEq<str> for PluginId {
+    fn eq(&self, other: &str) -> bool {
+        self.0 == other
+    }
+}
+
+impl PartialEq<&str> for PluginId {
+    fn eq(&self, other: &&str) -> bool {
+        self.0 == *other
     }
 }
 
@@ -193,14 +241,7 @@ impl SkillSource {
     /// question at compile time rather than inherit someone else's label.
     #[must_use]
     pub fn provenance(&self) -> String {
-        match self {
-            Self::Bundled => "bundled".to_string(),
-            Self::Global => "user".to_string(),
-            Self::Workspace => "workspace".to_string(),
-            Self::Plugin(id) => format!("plugin:{}", id.as_str()),
-            Self::Compat(CompatRoot::Claude) => "claude".to_string(),
-            Self::Compat(CompatRoot::Agents) => "agents".to_string(),
-        }
+        self.to_string()
     }
 
     /// Priority for override resolution. Higher value wins.
@@ -216,6 +257,19 @@ impl SkillSource {
             Self::Global => 2,
             Self::Plugin(_) => 3,
             Self::Workspace => 4,
+        }
+    }
+}
+
+impl fmt::Display for SkillSource {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Bundled => f.write_str("bundled"),
+            Self::Global => f.write_str("user"),
+            Self::Workspace => f.write_str("workspace"),
+            Self::Plugin(id) => write!(f, "plugin:{}", id.as_str()),
+            Self::Compat(CompatRoot::Claude) => f.write_str("claude"),
+            Self::Compat(CompatRoot::Agents) => f.write_str("agents"),
         }
     }
 }
@@ -265,7 +319,7 @@ impl<'de> Deserialize<'de> for Os {
     where
         D: serde::Deserializer<'de>,
     {
-        let s: String = String::deserialize(deserializer)?;
+        let s = std::borrow::Cow::<'de, str>::deserialize(deserializer)?;
         // Reuse the FromStr impl so serde and FromStr can never drift. The
         // serde `#[serde(alias)]` attribute is case-sensitive (e.g. it would
         // accept `macos` but reject `MACOS`); FromStr is case-insensitive.
@@ -311,6 +365,48 @@ pub enum PromptScope {
     Standalone,
     /// Skill is disabled entirely.
     Disabled,
+}
+
+impl PromptScope {
+    /// Canonical lowercase name matching serde rename rule.
+    #[must_use]
+    pub const fn as_str(&self) -> &'static str {
+        match self {
+            Self::System => "system",
+            Self::Tool => "tool",
+            Self::Standalone => "standalone",
+            Self::Disabled => "disabled",
+        }
+    }
+}
+
+impl fmt::Display for PromptScope {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+/// Error returned when parsing an unknown PromptScope string.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[error("unknown prompt scope: {0}")]
+pub struct ParsePromptScopeError(String);
+
+impl FromStr for PromptScope {
+    type Err = ParsePromptScopeError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        if s.eq_ignore_ascii_case("system") {
+            Ok(Self::System)
+        } else if s.eq_ignore_ascii_case("tool") {
+            Ok(Self::Tool)
+        } else if s.eq_ignore_ascii_case("standalone") {
+            Ok(Self::Standalone)
+        } else if s.eq_ignore_ascii_case("disabled") {
+            Ok(Self::Disabled)
+        } else {
+            Err(ParsePromptScopeError(s.to_string()))
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -401,6 +497,43 @@ impl InstallKind {
             Self::Uv => "uv",
             Self::Go => "go",
             Self::Download => "download",
+        }
+    }
+}
+
+impl fmt::Display for InstallKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+/// Error returned when parsing an unknown InstallKind string.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[error("unknown install kind: {0}")]
+pub struct ParseInstallKindError(String);
+
+impl FromStr for InstallKind {
+    type Err = ParseInstallKindError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        if s.eq_ignore_ascii_case("brew") {
+            Ok(Self::Brew)
+        } else if s.eq_ignore_ascii_case("apt") {
+            Ok(Self::Apt)
+        } else if s.eq_ignore_ascii_case("scoop") {
+            Ok(Self::Scoop)
+        } else if s.eq_ignore_ascii_case("winget") {
+            Ok(Self::Winget)
+        } else if s.eq_ignore_ascii_case("npm") {
+            Ok(Self::Npm)
+        } else if s.eq_ignore_ascii_case("uv") {
+            Ok(Self::Uv)
+        } else if s.eq_ignore_ascii_case("go") {
+            Ok(Self::Go)
+        } else if s.eq_ignore_ascii_case("download") {
+            Ok(Self::Download)
+        } else {
+            Err(ParseInstallKindError(s.to_string()))
         }
     }
 }
@@ -638,6 +771,12 @@ impl SkillManifest {
     }
 
     // --- Accessors ---
+
+    /// Unique skill identifier.
+    #[must_use]
+    pub fn id(&self) -> &SkillId {
+        &self.id
+    }
 
     /// Human-readable name.
     #[must_use]

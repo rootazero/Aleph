@@ -60,7 +60,7 @@ pub async fn run_catchup_poll(
         }
         // Piggyback the attachment sweep on the existing poll interval so staged
         // downloads don't accumulate over a long-running daemon — no extra task.
-        super::super::staging::sweep_stale(super::super::staging::RETENTION);
+        super::super::staging::sweep_stale(super::super::staging::RETENTION).await;
         tokio::time::sleep(interval).await;
     }
 }

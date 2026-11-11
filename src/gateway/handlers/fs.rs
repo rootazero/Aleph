@@ -504,17 +504,49 @@ pub async fn handle_read_file(request: JsonRpcRequest, config: SharedConfig) -> 
         Err(msg) => return JsonRpcResponse::error(request.id, OUT_OF_SCOPE, &msg),
     };
 
-    let bytes = match tokio::fs::read(&canon).await {
-        Ok(b) => b,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            return JsonRpcResponse::error(
-                request.id,
-                NOT_FOUND,
-                format!("not found: {}", display_string(&canon)),
-            );
-        }
-        Err(e) => {
-            return JsonRpcResponse::error(request.id, INTERNAL_ERROR, format!("read failed: {e}"));
+    // Open the file and read at most READ_FILE_CAP + 1 bytes so we never
+    // allocate more than that regardless of the file's actual size.
+    // The extra byte lets us detect truncation without reading further.
+    let bytes = {
+        use tokio::io::AsyncReadExt as _;
+        let file = match tokio::fs::File::open(&canon).await {
+            Ok(f) => f,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                return JsonRpcResponse::error(
+                    request.id,
+                    NOT_FOUND,
+                    format!("not found: {}", display_string(&canon)),
+                );
+            }
+            Err(e) => {
+                return JsonRpcResponse::error(
+                    request.id,
+                    INTERNAL_ERROR,
+                    format!("read failed: {e}"),
+                );
+            }
+        };
+        let mut buf = Vec::with_capacity(READ_FILE_CAP + 1);
+        match file
+            .take((READ_FILE_CAP + 1) as u64)
+            .read_to_end(&mut buf)
+            .await
+        {
+            Ok(_) => buf,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                return JsonRpcResponse::error(
+                    request.id,
+                    NOT_FOUND,
+                    format!("not found: {}", display_string(&canon)),
+                );
+            }
+            Err(e) => {
+                return JsonRpcResponse::error(
+                    request.id,
+                    INTERNAL_ERROR,
+                    format!("read failed: {e}"),
+                );
+            }
         }
     };
 

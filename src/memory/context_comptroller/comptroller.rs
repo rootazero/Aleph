@@ -41,10 +41,10 @@ impl ContextComptroller {
 
         // Trim to fit budget
         let mut used_tokens = 0;
-        let mut final_facts = Vec::new();
+        let mut final_facts = Vec::with_capacity(kept_facts.len());
 
         for fact in kept_facts {
-            let tokens = self.estimate_tokens(&fact.content);
+            let tokens = Self::estimate_tokens(&fact.content);
             if used_tokens + tokens <= budget.total {
                 used_tokens += tokens;
                 final_facts.push(fact);
@@ -66,7 +66,7 @@ impl ContextComptroller {
     /// undercount CJK-heavy content by ~3× and silently blow past the
     /// budget. Matches the convention in
     /// `crate::memory::assembler::hydration::estimate_tokens`.
-    fn estimate_tokens(&self, text: &str) -> usize {
+    fn estimate_tokens(text: &str) -> usize {
         (text.chars().count() / 4).max(1)
     }
 }

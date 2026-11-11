@@ -78,9 +78,8 @@ pub(super) fn locked_err(what: &str, holder: &str) -> AlephError {
 /// Truncate `s` on a char boundary to at most `max` chars, appending `…` when
 /// truncated. Used to bound the size of result summaries embedded in events.
 pub(super) fn summarize(s: &str, max: usize) -> String {
-    if s.chars().count() <= max {
-        return s.to_string();
+    match s.char_indices().nth(max) {
+        None => s.to_string(),
+        Some((idx, _)) => format!("{}…", &s[..idx]),
     }
-    let truncated: String = s.chars().take(max).collect();
-    format!("{truncated}…")
 }

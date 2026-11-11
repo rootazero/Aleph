@@ -74,21 +74,41 @@ impl TaskStatus {
     pub const fn is_recoverable(&self) -> bool {
         matches!(self, Self::Running)
     }
+
+    /// String representation as static str
+    pub const fn as_str(&self) -> &'static str {
+        match self {
+            Self::Pending => "pending",
+            Self::Running => "running",
+            Self::Completed => "completed",
+            Self::Failed => "failed",
+            Self::Interrupted => "interrupted",
+            Self::Idle => "idle",
+            Self::Swapped => "swapped",
+        }
+    }
 }
 
 impl std::str::FromStr for TaskStatus {
     type Err = String;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s.to_lowercase().as_str() {
-            "pending" => Ok(Self::Pending),
-            "running" => Ok(Self::Running),
-            "completed" => Ok(Self::Completed),
-            "failed" => Ok(Self::Failed),
-            "interrupted" => Ok(Self::Interrupted),
-            "idle" => Ok(Self::Idle),
-            "swapped" => Ok(Self::Swapped),
-            _ => Err(format!("Unknown task status: {s}")),
+        if s.eq_ignore_ascii_case("pending") {
+            Ok(Self::Pending)
+        } else if s.eq_ignore_ascii_case("running") {
+            Ok(Self::Running)
+        } else if s.eq_ignore_ascii_case("completed") {
+            Ok(Self::Completed)
+        } else if s.eq_ignore_ascii_case("failed") {
+            Ok(Self::Failed)
+        } else if s.eq_ignore_ascii_case("interrupted") {
+            Ok(Self::Interrupted)
+        } else if s.eq_ignore_ascii_case("idle") {
+            Ok(Self::Idle)
+        } else if s.eq_ignore_ascii_case("swapped") {
+            Ok(Self::Swapped)
+        } else {
+            Err(format!("Unknown task status: {s}"))
         }
     }
 }
@@ -114,6 +134,14 @@ impl fmt::Display for RiskLevel {
 }
 
 impl RiskLevel {
+    /// String representation as static str
+    pub const fn as_str(&self) -> &'static str {
+        match self {
+            Self::Low => "low",
+            Self::High => "high",
+        }
+    }
+
     /// Parse risk level from database string with fallback to Low
     pub fn from_str_or_default(s: &str) -> Self {
         match s.parse() {
@@ -130,10 +158,12 @@ impl std::str::FromStr for RiskLevel {
     type Err = String;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s.to_lowercase().as_str() {
-            "low" => Ok(Self::Low),
-            "high" => Ok(Self::High),
-            _ => Err(format!("Unknown risk level: {s}")),
+        if s.eq_ignore_ascii_case("low") {
+            Ok(Self::Low)
+        } else if s.eq_ignore_ascii_case("high") {
+            Ok(Self::High)
+        } else {
+            Err(format!("Unknown risk level: {s}"))
         }
     }
 }
@@ -159,6 +189,14 @@ impl fmt::Display for Lane {
 }
 
 impl Lane {
+    /// String representation as static str
+    pub const fn as_str(&self) -> &'static str {
+        match self {
+            Self::Main => "main",
+            Self::Subagent => "subagent",
+        }
+    }
+
     /// Parse lane from database string with fallback to Subagent
     pub fn from_str_or_default(s: &str) -> Self {
         match s.parse() {
@@ -175,10 +213,12 @@ impl std::str::FromStr for Lane {
     type Err = String;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s.to_lowercase().as_str() {
-            "main" => Ok(Self::Main),
-            "subagent" => Ok(Self::Subagent),
-            _ => Err(format!("Unknown lane: {s}")),
+        if s.eq_ignore_ascii_case("main") {
+            Ok(Self::Main)
+        } else if s.eq_ignore_ascii_case("subagent") {
+            Ok(Self::Subagent)
+        } else {
+            Err(format!("Unknown lane: {s}"))
         }
     }
 }

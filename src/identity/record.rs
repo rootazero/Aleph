@@ -76,16 +76,12 @@ impl LedgerAction {
         Self::IdentityRevoked,
         Self::ArtifactSigned,
     ];
-
-    /// Compile-time guard: ALL must list every variant. Update both when
-    /// adding a variant — the from_str / from_string round-trip would
-    /// silently diverge otherwise (serde would still parse the new
-    /// variant while `from_str` would return `Err`).
-    const _ALL_LEN_MATCHES: () = assert!(
-        Self::ALL.len() == 8,
-        "LedgerAction::ALL must list every variant"
-    );
 }
+
+const _: () = assert!(
+    LedgerAction::ALL.len() == 8,
+    "LedgerAction::ALL must list every variant"
+);
 
 impl fmt::Display for LedgerAction {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -126,13 +122,12 @@ impl LedgerOutcome {
     }
 
     const ALL: &'static [Self] = &[Self::Ok, Self::Error, Self::Denied];
-
-    /// Compile-time guard: ALL must list every variant. See `LedgerAction`.
-    const _ALL_LEN_MATCHES: () = assert!(
-        Self::ALL.len() == 3,
-        "LedgerOutcome::ALL must list every variant"
-    );
 }
+
+const _: () = assert!(
+    LedgerOutcome::ALL.len() == 3,
+    "LedgerOutcome::ALL must list every variant"
+);
 
 impl fmt::Display for LedgerOutcome {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -320,8 +315,8 @@ fn ser_opt_hex<S: serde::Serializer>(bytes: &Option<Vec<u8>>, s: S) -> Result<S:
 /// silently reconstructed as something else — that would turn a corrupted row
 /// into a passing one.
 pub fn row_to_record(row: &rusqlite::Row<'_>) -> rusqlite::Result<LedgerRecord> {
-    let action_str: String = row.get(6)?;
-    let outcome_str: String = row.get(8)?;
+    let action_str = row.get_ref(6)?.as_str()?;
+    let outcome_str = row.get_ref(8)?.as_str()?;
     let parse_err = |i: usize, e: String| {
         rusqlite::Error::FromSqlConversionFailure(i, rusqlite::types::Type::Text, e.into())
     };

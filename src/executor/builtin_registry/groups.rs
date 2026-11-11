@@ -332,14 +332,14 @@ mod tests {
 
     #[test]
     fn test_all_builtin_tools_have_a_group() {
-        let grouped: Vec<&str> = TOOL_CATEGORIES
+        let grouped: std::collections::HashSet<&str> = TOOL_CATEGORIES
             .iter()
             .flat_map(|g| g.tools.iter().copied())
             .collect();
 
         for def in BUILTIN_TOOL_DEFINITIONS.iter() {
             assert!(
-                grouped.contains(&def.name),
+                grouped.contains(def.name),
                 "Builtin tool '{}' is not in any group",
                 def.name
             );

@@ -98,10 +98,7 @@ pub fn compute_hash(p: &Preimage<'_>) -> [u8; 32] {
     opt_lp(&mut h, p.args_fp.map(str::as_bytes));
     lp(&mut h, p.detail.as_bytes());
     lp(&mut h, p.signer_fp.as_bytes());
-    match p.prev_hash {
-        Some(prev) => h.update(prev),
-        None => h.update(GENESIS_HASH),
-    }
+    h.update(p.prev_hash.unwrap_or(&GENESIS_HASH));
     // `principal` is committed to LAST, and a `None` emits **nothing at all**
     // rather than `opt_lp`'s zero tag.
     //

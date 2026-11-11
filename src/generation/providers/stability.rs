@@ -169,15 +169,18 @@ impl StabilityImageProvider {
         base_url: Option<String>,
         model: Option<String>,
     ) -> GenerationResult<Self> {
-        let client = Client::builder()
-            .timeout(Duration::from_secs(DEFAULT_TIMEOUT_SECS))
-            .build()
+        let client = super::http::generation_http_client(Duration::from_secs(DEFAULT_TIMEOUT_SECS))
             .map_err(|e| GenerationError::network(format!("Failed to build HTTP client: {e}")))?;
+
+        let endpoint = base_url
+            .unwrap_or_else(|| DEFAULT_ENDPOINT.to_string())
+            .trim_end_matches('/')
+            .to_string();
 
         Ok(Self {
             client,
             api_key: api_key.into(),
-            endpoint: base_url.unwrap_or_else(|| DEFAULT_ENDPOINT.to_string()),
+            endpoint,
             model: model.unwrap_or_else(|| DEFAULT_MODEL.to_string()),
         })
     }
@@ -248,6 +251,15 @@ impl StabilityImageProvider {
 
     /// Parse API error response and convert to `GenerationError`
     fn parse_error_response(status: reqwest::StatusCode, body: &str) -> GenerationError {
+        Self::parse_error_response_for_model(status, body, DEFAULT_MODEL)
+    }
+
+    /// Parse API error response for a specific model and convert to `GenerationError`
+    fn parse_error_response_for_model(
+        status: reqwest::StatusCode,
+        body: &str,
+        model: &str,
+    ) -> GenerationError {
         // Try to parse as Stability AI error format
         if let Ok(error_response) = serde_json::from_str::<StabilityErrorResponse>(body) {
             let message = error_response.message;
@@ -277,7 +289,7 @@ impl StabilityImageProvider {
                 "Access forbidden - check your API key permissions",
                 "stability-image",
             ),
-            404 => GenerationError::model_not_found(DEFAULT_MODEL, "stability-image"),
+            404 => GenerationError::model_not_found(model, "stability-image"),
             500..=599 => GenerationError::provider(
                 format!("Stability AI server error: {body}"),
                 Some(status.as_u16()),
@@ -420,7 +432,11 @@ impl GenerationProvider for StabilityImageProvider {
                     body = %response_text,
                     "Stability AI API request failed"
                 );
-                return Err(Self::parse_error_response(status, &response_text));
+                return Err(Self::parse_error_response_for_model(
+                    status,
+                    &response_text,
+                    &self.model,
+                ));
             }
 
             // Parse successful response
@@ -798,6 +814,23 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    #[test]
+    fn test_parse_error_response_model_not_found() {
+        let error = StabilityImageProvider::parse_error_response_for_model(
+            reqwest::StatusCode::NOT_FOUND,
+            "Not found",
+            "custom-sd-model",
+        );
+
+        match error {
+            GenerationError::ModelNotFoundError { model, provider } => {
+                assert_eq!(model, "custom-sd-model");
+                assert_eq!(provider, "stability-image");
+            }
+            _ => panic!("Expected ModelNotFoundError, got {:?}", error),
+        }
     }
 
     // === Response parsing tests ===

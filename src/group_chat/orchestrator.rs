@@ -134,10 +134,10 @@ impl GroupChatOrchestrator {
         // 3b. Reject duplicate persona IDs in the same session. The
         // coordinator's lookup by id resolves the FIRST match, so a duplicate
         // id would silently route responses to the wrong persona.
-        let mut seen_ids: std::collections::HashSet<&str> =
+        let mut seen_ids: std::collections::HashSet<String> =
             std::collections::HashSet::with_capacity(participants.len());
         for p in &participants {
-            if !seen_ids.insert(p.id.as_str()) {
+            if !seen_ids.insert(p.id.to_ascii_lowercase()) {
                 return Err(GroupChatError::InvalidPersona(format!(
                     "duplicate persona id '{}' in session",
                     p.id

@@ -823,6 +823,15 @@ impl SessionOwnership {
 struct OwnershipCache {
     order: VecDeque<String>,
     map: HashMap<String, Option<SessionOwnership>>,
+    /// Bumped by every invalidation (`forget_session`).
+    ///
+    /// A cache MISS reads the ownership from the session store, and only then
+    /// inserts it. If an invalidation lands in between, the insert would
+    /// publish the PRE-rescope ownership and poison the cache until FIFO
+    /// eviction: room members would be denied and the former personal owner
+    /// would still be admitted. A fill therefore captures the generation
+    /// before its read and may only publish while the generation is unchanged.
+    generation: u64,
 }
 
 /// Cached team→(owner, scope) stamps for [`SessionIdentity::ByTeamId`].
@@ -1230,56 +1239,87 @@ impl EventVisibilityIndex {
             return cached.is_some_and(|o| o.visible_to(caller));
         }
 
-        let ownership = match SessionKey::from_key_string(session_key) {
-            Some(key) => match store.get_metadata(&key).await {
-                Ok(Some(meta)) => Some(SessionOwnership::of(&meta)),
-                // Row absent: TRANSIENT, exactly like the store error below,
-                // and for a reason that fires on the happy path of a brand-new
-                // conversation. `execute.rs` emits `RunAccepted{session_key}`
-                // BEFORE `ensure_session` creates the row, so the very first
-                // frame of a fresh session can arrive while the row does not
-                // exist yet. Caching that absence as an unresolvable key would
-                // deny EVERY later frame for that session key — the only
-                // invalidation hook is `forget_session`, whose sole caller is
-                // the channel-bind rescope, so nothing on this path would ever
-                // drop the key, and the cache otherwise evicts only by FIFO at
-                // `MAX_CACHED_SESSION_OWNERS` — so streaming for that
-                // conversation would stay dead for the process lifetime. It
-                // fails closed, so nothing leaks, but it dies silently, and
-                // loopback resolves to `Some(OWNER_USER_ID)` so a single-user
-                // box runs this path too.
-                //
-                // Deny THIS frame and re-resolve on the next one. For run
-                // frames the dropped early frame self-heals via
-                // `run_complete`'s summary reconciliation on the client (see
-                // the module doc). For the `running_set_changed` PROJECTION
-                // there is no such client-side reconciliation, so "the next
-                // one" is a real producer, not a hope:
-                // `SessionRunRegistry::republish_running_set`, called by
-                // `execute.rs` immediately after `ensure_session` — see the
-                // projection section of the module doc.
-                Ok(None) => return false,
-                // Store error: fail closed, and don't cache a transient
-                // failure as a permanent "no owner" — matching
-                // `visibility::existing_session_is_visible`'s own rule.
-                Err(_) => return false,
-            },
-            // Malformed session_key string: cache as unresolvable so a
-            // repeated malformed key doesn't re-hit the parse on every event.
-            // This one IS permanent — a string that does not parse today will
-            // not parse later, so nothing can invalidate it. It must stay
-            // distinct from a row whose `owner_user_id` is absent, which reads
-            // as the LEGACY owner and admits them.
-            None => None,
-        };
-        self.cache_ownership(session_key.to_string(), ownership.clone())
-            .await;
-        ownership.is_some_and(|o| o.visible_to(caller))
+        // Fence the fill against a concurrent invalidation (G1-01): capture
+        // the invalidation generation BEFORE the store read; the insert below
+        // is only allowed to publish while the generation is unchanged. A
+        // rescope that lands in between makes the loaded ownership stale, so
+        // the read is repeated once with the new generation instead of
+        // caching the stale value.
+        for _ in 0..2 {
+            let generation = self.ownership_generation().await;
+            let ownership = match SessionKey::from_key_string(session_key) {
+                Some(key) => match store.get_metadata(&key).await {
+                    Ok(Some(meta)) => Some(SessionOwnership::of(&meta)),
+                    // Row absent: TRANSIENT, exactly like the store error below,
+                    // and for a reason that fires on the happy path of a brand-new
+                    // conversation. `execute.rs` emits `RunAccepted{session_key}`
+                    // BEFORE `ensure_session` creates the row, so the very first
+                    // frame of a fresh session can arrive while the row does not
+                    // exist yet. Caching that absence as an unresolvable key would
+                    // deny EVERY later frame for that session key — the only
+                    // invalidation hook is `forget_session`, whose sole caller is
+                    // the channel-bind rescope, so nothing on this path would ever
+                    // drop the key, and the cache otherwise evicts only by FIFO at
+                    // `MAX_CACHED_SESSION_OWNERS` — so streaming for that
+                    // conversation would stay dead for the process lifetime. It
+                    // fails closed, so nothing leaks, but it dies silently, and
+                    // loopback resolves to `Some(OWNER_USER_ID)` so a single-user
+                    // box runs this path too.
+                    //
+                    // Deny THIS frame and re-resolve on the next one. For run
+                    // frames the dropped early frame self-heals via
+                    // `run_complete`'s summary reconciliation on the client (see
+                    // the module doc). For the `running_set_changed` PROJECTION
+                    // there is no such client-side reconciliation, so "the next
+                    // one" is a real producer, not a hope:
+                    // `SessionRunRegistry::republish_running_set`, called by
+                    // `execute.rs` immediately after `ensure_session` — see the
+                    // projection section of the module doc.
+                    Ok(None) => return false,
+                    // Store error: fail closed, and don't cache a transient
+                    // failure as a permanent "no owner" — matching
+                    // `visibility::existing_session_is_visible`'s own rule.
+                    Err(_) => return false,
+                },
+                // Malformed session_key string: cache as unresolvable so a
+                // repeated malformed key doesn't re-hit the parse on every event.
+                // This one IS permanent — a string that does not parse today will
+                // not parse later, so nothing can invalidate it. It must stay
+                // distinct from a row whose `owner_user_id` is absent, which reads
+                // as the LEGACY owner and admits them.
+                None => None,
+            };
+            if self
+                .cache_ownership_if_current(session_key.to_string(), ownership.clone(), generation)
+                .await
+            {
+                return ownership.is_some_and(|o| o.visible_to(caller));
+            }
+            // An invalidation landed during the read: reload with the new
+            // generation. The loop gives this exactly one retry; after that we
+            // fail closed rather than publish an ownership we cannot vouch for.
+        }
+        false
     }
 
-    async fn cache_ownership(&self, session_key: String, ownership: Option<SessionOwnership>) {
+    /// The current invalidation generation of the ownership cache.
+    async fn ownership_generation(&self) -> u64 {
+        self.owners.read().await.generation
+    }
+
+    /// Insert `ownership` into the cache ONLY while `generation` is still the
+    /// current one. Returns whether the value was published.
+    async fn cache_ownership_if_current(
+        &self,
+        session_key: String,
+        ownership: Option<SessionOwnership>,
+        generation: u64,
+    ) -> bool {
         let mut inner = self.owners.write().await;
-        let OwnershipCache { order, map } = &mut *inner;
+        if inner.generation != generation {
+            return false;
+        }
+        let OwnershipCache { order, map, .. } = &mut *inner;
         remember(
             order,
             map,
@@ -1287,6 +1327,7 @@ impl EventVisibilityIndex {
             ownership,
             MAX_CACHED_SESSION_OWNERS,
         );
+        true
     }
 
     /// Whether `caller` may receive a `team.<id>.*` frame.
@@ -1392,7 +1433,11 @@ impl EventVisibilityIndex {
     /// [`SessionStore::rescope_attribution`]: crate::gateway::session_store::SessionStore::rescope_attribution
     pub async fn forget_session(&self, session_key: &str) {
         let mut inner = self.owners.write().await;
-        let OwnershipCache { order, map } = &mut *inner;
+        // Invalidate any in-flight cache FILL too: a fill that read the
+        // pre-rescope ownership before this point must not publish it after
+        // the invalidation (G1-01).
+        inner.generation = inner.generation.wrapping_add(1);
+        let OwnershipCache { order, map, .. } = &mut *inner;
         forget(order, map, session_key);
     }
 

@@ -115,6 +115,13 @@ impl Channel for BlueBubblesChannel {
     }
 
     async fn start(&mut self) -> ChannelResult<()> {
+        self.config.validate().map_err(ChannelError::ConfigError)?;
+        let listener = tokio::net::TcpListener::bind((
+            self.config.webhook_host.as_str(),
+            self.config.webhook_port,
+        ))
+        .await
+        .map_err(|e| ChannelError::NotConnected(format!("BlueBubbles webhook bind failed: {e}")))?;
         self.channel_state
             .set_status(ChannelStatus::Connecting)
             .await;
@@ -135,13 +142,10 @@ impl Channel for BlueBubblesChannel {
             dedup: self.dedup.clone(),
             send_read_receipts: self.config.send_read_receipts && private_api,
         };
-        let (host, port, path) = (
-            self.config.webhook_host.clone(),
-            self.config.webhook_port,
-            self.config.webhook_path.clone(),
-        );
         self.webhook_handle = Some(tokio::spawn(inbound::webhook_server::run_webhook_server(
-            state, host, port, path,
+            state,
+            listener,
+            self.config.webhook_path.clone(),
         )));
 
         let cb = api::webhook_callback_url(
@@ -150,7 +154,19 @@ impl Channel for BlueBubblesChannel {
             &self.config.webhook_path,
             &self.config.password,
         );
-        if !self.api.register_webhook(&cb).await {
+        let registered = self.api.register_webhook(&cb).await;
+        if !registered {
+            if self.offset_tracker.is_none() {
+                if let Some(handle) = self.webhook_handle.take() {
+                    handle.abort();
+                    let _ = handle.await;
+                }
+                self.channel_state.set_status(ChannelStatus::Error).await;
+                return Err(ChannelError::NotConnected(
+                    "BlueBubbles webhook registration failed and no catch-up poll configured"
+                        .into(),
+                ));
+            }
             tracing::warn!("BlueBubbles webhook registration failed — realtime inbound may not arrive (catch-up poll still active if configured)");
         }
 
@@ -159,7 +175,7 @@ impl Channel for BlueBubblesChannel {
         // Sweep any attachments left over from a previous run on connect. The
         // catch-up poll (below, when enabled) keeps sweeping on its interval;
         // this start-time pass covers webhook-only setups and restarts.
-        let swept = staging::sweep_stale(staging::RETENTION);
+        let swept = staging::sweep_stale(staging::RETENTION).await;
         if swept > 0 {
             tracing::debug!("BlueBubbles: swept {swept} stale staged attachment(s)");
         }
@@ -175,8 +191,13 @@ impl Channel for BlueBubblesChannel {
             )));
         }
 
+        // Error signals degraded realtime delivery; catch-up polling remains active.
         self.channel_state
-            .set_status(ChannelStatus::Connected)
+            .set_status(if registered {
+                ChannelStatus::Connected
+            } else {
+                ChannelStatus::Error
+            })
             .await;
         Ok(())
     }
@@ -324,6 +345,49 @@ mod tests {
             poll_interval_secs: 30,
             send_read_receipts: true,
         }
+    }
+
+    #[tokio::test]
+    async fn start_rejects_occupied_listener_before_connecting_upstream() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let mut config = cfg();
+        config.webhook_port = listener.local_addr().unwrap().port();
+        let mut channel = BlueBubblesChannel::new(config);
+        let error = channel.start().await.unwrap_err();
+        assert!(error.to_string().contains("webhook bind failed"));
+        assert!(channel.webhook_handle.is_none());
+        assert!(!channel.running.load(Ordering::SeqCst));
+    }
+
+    #[tokio::test]
+    async fn failed_registration_without_poll_releases_listener() {
+        use axum::response::IntoResponse;
+        let upstream = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let upstream_addr = upstream.local_addr().unwrap();
+        let app = axum::Router::new().fallback(|request: axum::extract::Request| async move {
+            if request.method() == axum::http::Method::POST {
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR.into_response()
+            } else {
+                axum::Json(serde_json::json!({"status": 200, "data": {}})).into_response()
+            }
+        });
+        let server = tokio::spawn(async move { axum::serve(upstream, app).await.unwrap() });
+        let probe = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = probe.local_addr().unwrap().port();
+        drop(probe);
+        let mut config = cfg();
+        config.server_url = format!("http://{upstream_addr}");
+        config.webhook_port = port;
+        let mut channel = BlueBubblesChannel::new(config);
+        let error = channel.start().await.unwrap_err();
+        assert!(error.to_string().contains("registration failed"));
+        assert!(channel.webhook_handle.is_none());
+        assert!(!channel.running.load(Ordering::SeqCst));
+        let rebound = tokio::net::TcpListener::bind(("127.0.0.1", port))
+            .await
+            .unwrap();
+        drop(rebound);
+        server.abort();
     }
 
     #[test]

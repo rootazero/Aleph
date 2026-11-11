@@ -29,7 +29,7 @@ use serde::Serialize;
 use super::capabilities::{capabilities_for, ModelCapabilities};
 use super::endpoint::{endpoint_kind_for_base_url, EndpointKind};
 use super::lifecycle::{lifecycle_for, ModelLifecycle};
-use crate::config::types::provider::{ModelCost, ModelDef, ModelInput};
+use crate::config::types::provider::{ModelCost, ModelDef};
 use crate::pricing::{rate_card, RateBasis, RateCard};
 
 // `ModelSource` is the wire's, not this module's: the picker, `list_models` and
@@ -146,25 +146,13 @@ fn apply_cap_override(
     if let Some(max_output) = def.max_output_tokens {
         caps.max_output_tokens = max_output;
     }
-    if let Some(input) = apply_input_override(&caps.supports_vision, def.input.as_ref()) {
-        caps.supports_vision = input;
+    if let Some(input) = def.input.as_ref() {
+        caps.supports_vision = input.image;
     }
     if let Some(reasoning) = def.reasoning {
         caps.supports_reasoning = reasoning;
     }
     Some(caps)
-}
-
-/// `ModelInput` is non-optional inside, but the outer `Option<ModelInput>` is.
-/// When the operator omits the whole block, leave the catalog's view alone.
-const fn apply_input_override(_current: &bool, input: Option<&ModelInput>) -> Option<bool> {
-    match input {
-        None => None,
-        // `ModelInput`'s only capability flag is `image`; `text` is always
-        // supported in the curated catalog and not modelled as a separate
-        // flag here.
-        Some(ModelInput { image, .. }) => Some(*image),
-    }
 }
 
 /// Fold operator-declared rates into the catalog-derived [`RateCard`].

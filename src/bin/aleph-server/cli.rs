@@ -266,8 +266,8 @@ pub enum Command {
     /// run bash in a LOCAL sandbox. Pure execution arm (no DB/LLM).
     Node {
         /// Center WebSocket base URL, e.g. <ws://127.0.0.1:18790>
-        #[arg(long, value_name = "URL")]
-        center: String,
+        #[arg(long, value_name = "URL", required_unless_present = "reset_identity")]
+        center: Option<String>,
         /// Human-readable node name shown in `environments.list`.
         #[arg(long, value_name = "NAME", default_value = "aleph-node")]
         name: String,
@@ -276,6 +276,14 @@ pub enum Command {
         /// `environments.list` and used by `node_invoke_many`.
         #[arg(long = "tag", value_name = "TAG")]
         tags: Vec<String>,
+        /// Forget the persisted node identity and exit. The identity file
+        /// (`~/.aleph/node/<name>.json`) IS the node's credential: once the
+        /// center has revoked it, that credential is refused forever. This
+        /// command is the executable form of "delete the identity file" — the
+        /// next `aleph-server node --center <URL>` connects as a first boot
+        /// and is re-enrolled. `--center` is not needed for it.
+        #[arg(long)]
+        reset_identity: bool,
     },
     /// SP-3a internal: apply restricted token + Low IL then spawn target
     /// via `CreateProcessAsUserW`. Invoked by `WindowsSandboxDriver`; not
@@ -761,7 +769,7 @@ mod tests {
         ]);
         match args.command {
             Some(Command::Node { center, name, .. }) => {
-                assert_eq!(center, "ws://127.0.0.1:18790");
+                assert_eq!(center.as_deref(), Some("ws://127.0.0.1:18790"));
                 assert_eq!(name, "edge-1");
             }
             _ => panic!("Expected Node command"),
@@ -869,5 +877,37 @@ mod tests {
             }
             _ => panic!("Expected BootstrapRuntime variant"),
         }
+    }
+
+    /// The identity reset is a LOCAL action on the node machine: it needs no
+    /// center, so `--center` must not be required when `--reset-identity` is
+    /// given. The flag is the executable form of "delete the identity file",
+    /// which is the only recovery from a revoked credential.
+    #[test]
+    fn test_cli_parses_node_reset_identity_without_a_center() {
+        let args = parse(&["aleph", "node", "--reset-identity", "--name", "worker-1"]);
+        match args.command {
+            Some(Command::Node {
+                center,
+                name,
+                reset_identity,
+                ..
+            }) => {
+                assert!(reset_identity);
+                assert_eq!(name, "worker-1");
+                assert!(center.is_none(), "no center is needed for a reset");
+            }
+            _ => panic!("Expected Node variant"),
+        }
+    }
+
+    /// Without the reset, the center is still mandatory — the reset flag must
+    /// not have relaxed the normal connect path.
+    #[test]
+    fn test_cli_node_requires_a_center_without_the_reset_flag() {
+        assert!(
+            Args::try_parse_from(["aleph", "node", "--name", "worker-1"]).is_err(),
+            "node must still demand --center"
+        );
     }
 }

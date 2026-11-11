@@ -20,7 +20,7 @@ fn default_webhook_path() -> String {
     "/feishu/events".to_string()
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Clone, Deserialize)]
 pub struct FeishuConfig {
     pub app_id: String,
     pub app_secret: String,
@@ -67,6 +67,46 @@ pub struct FeishuConfig {
     pub accounts: Option<std::collections::HashMap<String, FeishuAccountEntry>>,
     #[serde(default)]
     pub default_account: Option<String>,
+}
+
+/// Hand-written so the credentials never reach a log line, a panic message
+/// or a `tracing` field. Every other field is printed as-is.
+impl std::fmt::Debug for FeishuConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("FeishuConfig")
+            .field("app_id", &self.app_id)
+            .field("app_secret", &"<redacted>")
+            .field("domain", &self.domain)
+            .field("bot_name", &self.bot_name)
+            .field("dm_allowed", &self.dm_allowed)
+            .field("groups_allowed", &self.groups_allowed)
+            .field("group_policy", &self.group_policy)
+            .field("group_allowlist", &self.group_allowlist)
+            .field("require_mention", &self.require_mention)
+            .field("streaming", &self.streaming)
+            .field("render_mode", &self.render_mode)
+            .field("typing_indicator", &self.typing_indicator)
+            .field("reaction_notifications", &self.reaction_notifications)
+            .field("group_session_scope", &self.group_session_scope)
+            .field("connection_mode", &self.connection_mode)
+            .field("webhook_port", &self.webhook_port)
+            .field("webhook_host", &self.webhook_host)
+            .field("webhook_path", &self.webhook_path)
+            .field(
+                "verification_token",
+                &self
+                    .verification_token
+                    .as_ref()
+                    .map(|_| "<redacted>".to_string()),
+            )
+            .field(
+                "encrypt_key",
+                &self.encrypt_key.as_ref().map(|_| "<redacted>".to_string()),
+            )
+            .field("accounts", &self.accounts)
+            .field("default_account", &self.default_account)
+            .finish()
+    }
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]

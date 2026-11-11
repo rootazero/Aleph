@@ -58,7 +58,6 @@ pub use types::{
 mod tests {
     use super::*;
     use crate::generation::{GenerationProvider, GenerationType};
-    use submit_polling::SubmitPolling;
 
     /// An unset config knob leaves THIS builder's default in place.
     ///

@@ -139,7 +139,21 @@ impl ToolPermissionsConfig {
         // 2. Glob-pattern overrides; most restrictive match wins, ties on key.
         let mut matched: Option<PermissionMatch<'_>> = None;
         for (pattern, action) in &self.overrides {
-            if !is_glob_pattern(pattern) || !crate::approval::matches_glob(tool_name, pattern) {
+            if !is_glob_pattern(pattern) {
+                continue;
+            }
+            let is_match = match crate::approval::try_matches_glob(tool_name, pattern) {
+                Ok(m) => m,
+                Err(e) => {
+                    tracing::warn!(
+                        pattern,
+                        error = %e,
+                        "ToolPermissionsConfig: uncompilable glob pattern; treating as match to fail closed"
+                    );
+                    true
+                }
+            };
+            if !is_match {
                 continue;
             }
             let candidate = PermissionMatch {

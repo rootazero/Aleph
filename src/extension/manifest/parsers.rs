@@ -821,14 +821,17 @@ pub fn parse_hooks_content(
     base: &Path,
     plugin_id: &str,
 ) -> Result<Vec<CapabilityDeclaration>> {
-    let config: HooksFileConfig = match serde_json::from_str::<HooksFileConfig>(content) {
-        Ok(c) if !c.hooks.is_empty() => c,
-        // Either the wrapper was absent or it was present but empty; trying the
-        // bare shape is safe because an empty map yields no capabilities either
-        // way.
-        _ => HooksFileConfig {
-            hooks: serde_json::from_str(content)?,
-        },
+    // The two shapes are told apart by the PRESENCE of the top-level `hooks`
+    // field, not by whether the parsed map is empty: `{"hooks":{}}` is a
+    // valid, empty configuration, and re-reading it as a bare event map
+    // failed on the type (`hooks` is an object there, not an array).
+    let raw: serde_json::Value = serde_json::from_str(content)?;
+    let config: HooksFileConfig = if raw.get("hooks").is_some() {
+        serde_json::from_value::<HooksFileConfig>(raw)?
+    } else {
+        HooksFileConfig {
+            hooks: serde_json::from_value(raw)?,
+        }
     };
 
     let mut caps = Vec::new();
@@ -858,6 +861,22 @@ pub fn parse_hooks_content(
             // siblings.) Shell commands from plugin manifests still pass
             // through the operator consent gate before first execution.
             for a in &matcher.hooks {
+                // Only a `command` action is a shell command. An action that
+                // declares another type (`http` / `prompt` / `agent`) is a
+                // different kind of hook the user layer runs; it must not be
+                // re-read as a shell command. An action with no type is the
+                // legacy command form and stays.
+                if let Some(kind) = a.kind.as_deref() {
+                    if kind != "command" {
+                        warn!(
+                            plugin = plugin_id,
+                            event = %event_str,
+                            action = kind,
+                            "plugin hooks.json action dropped: declared type is not `command`"
+                        );
+                        continue;
+                    }
+                }
                 let Some(command) = a.command.as_ref().filter(|c| !c.is_empty()) else {
                     // The user layer runs `prompt` / `http` / `agent`
                     // actions from the same shape; a plugin's are not run,
@@ -986,7 +1005,11 @@ pub fn parse_v2_prompt(
         "tool" => PromptScope::Tool,
         "standalone" => PromptScope::Standalone,
         "disabled" => PromptScope::Disabled,
-        _ => PromptScope::System,
+        other => {
+            return Err(anyhow::anyhow!(
+                "unknown prompt scope '{other}': expected one of `system`, `tool`, `standalone`, `disabled`"
+            ));
+        }
     };
 
     Ok(CapabilityDeclaration::Skill(SkillRegistration {

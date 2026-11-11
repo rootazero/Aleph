@@ -285,7 +285,9 @@ impl TargetControl {
         {
             return Err(InputRejectReason::NotController);
         }
-        let v = &st.viewers[&lease.viewer_session_id];
+        let Some(v) = st.viewers.get(&lease.viewer_session_id) else {
+            return Err(InputRejectReason::NotController);
+        };
         if !v.permissions.contains(&ViewerPermission::HumanInput)
             || matches!(req.event, HumanInputEvent::Navigate { .. })
                 && !v.permissions.contains(&ViewerPermission::Navigate)
@@ -371,7 +373,9 @@ impl TargetControl {
             if req.expected_control_epoch != st.live.control_epoch {
                 return Err(InputRejectReason::StaleControl);
             }
-            let viewer = &st.viewers[&lease.viewer_session_id];
+            let Some(viewer) = st.viewers.get(&lease.viewer_session_id) else {
+                return Err(InputRejectReason::NotController);
+            };
             if req.action_seq == 0 || req.action_seq <= viewer.last_action_seq {
                 return Err(InputRejectReason::ReplayedSeq);
             }
@@ -390,10 +394,9 @@ impl TargetControl {
         if let Err(reason) = check() {
             return rejection(reason, st.live.control_epoch);
         }
-        st.viewers
-            .get_mut(&lease.viewer_session_id)
-            .unwrap()
-            .last_action_seq = req.action_seq;
+        if let Some(v) = st.viewers.get_mut(&lease.viewer_session_id) {
+            v.last_action_seq = req.action_seq;
+        }
         if Self::bump(&mut st)
             .and_then(|()| {
                 self.finish(
@@ -452,7 +455,10 @@ impl TargetControl {
     ) -> Result<QueuedInput, InputRejectReason> {
         let mut st = self.lock();
         Self::validate_input(&st, lease, &request)?;
-        if request.seq == 0 || request.seq <= st.viewers[&lease.viewer_session_id].last_input_seq {
+        let Some(viewer) = st.viewers.get(&lease.viewer_session_id) else {
+            return Err(InputRejectReason::NotController);
+        };
+        if request.seq == 0 || request.seq <= viewer.last_input_seq {
             return Err(InputRejectReason::ReplayedSeq);
         }
         if st.pending.len() >= INPUT_CAPACITY {
@@ -463,10 +469,9 @@ impl TargetControl {
             .checked_add(1)
             .ok_or(InputRejectReason::Revoked)?;
         let id = st.next_id;
-        st.viewers
-            .get_mut(&lease.viewer_session_id)
-            .unwrap()
-            .last_input_seq = request.seq;
+        if let Some(v) = st.viewers.get_mut(&lease.viewer_session_id) {
+            v.last_input_seq = request.seq;
+        }
         st.pending.insert(id);
         Ok(QueuedInput {
             control: self.clone(),
@@ -521,10 +526,9 @@ impl TargetControl {
                 if !st.pending.remove(&queued.id) {
                     return Poll::Ready(Ok(rejected(seq, InputRejectReason::StaleControl)));
                 }
-                st.viewers
-                    .get_mut(&queued.lease.viewer_session_id)
-                    .unwrap()
-                    .last_dispatched_seq = queued.request.seq;
+                if let Some(v) = st.viewers.get_mut(&queued.lease.viewer_session_id) {
+                    v.last_dispatched_seq = queued.request.seq;
+                }
                 // These are dispatch facts, not a claim that page effects
                 // arrived. A failed CDP call remains an error to the caller.
                 if let Some(i) = &mut st.intervention {

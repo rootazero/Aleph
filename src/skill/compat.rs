@@ -1,7 +1,6 @@
 //! Compatibility types — bridges between v2 skill system and legacy consumers.
 
 use crate::domain::skill::{PromptScope, SkillManifest};
-use crate::domain::Entity;
 use serde::{Deserialize, Serialize};
 
 /// Simplified skill info for tool registry and UI display.

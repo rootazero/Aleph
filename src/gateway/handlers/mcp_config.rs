@@ -366,8 +366,23 @@ pub async fn handle_update(
 
     // Blank secrets keep the stored ref; new values rotate into the vault.
     let (env, writes) = plan_secret_env(&params.id, params.config.env, &existing.env);
+
+    // Backup old vault values that will be overwritten
+    let mut old_values = Vec::new();
+    for (name, _) in &writes {
+        if let Ok(old_val) = vault.get_secret(name) {
+            old_values.push((name.clone(), old_val));
+        }
+    }
+
     for (name, value) in &writes {
         if let Err(e) = vault.store_secret(name, value) {
+            // Restore overwritten values
+            for (old_name, old_val) in &old_values {
+                if let Some(old_secret) = old_val {
+                    let _ = vault.store_secret(old_name, old_secret.expose());
+                }
+            }
             return JsonRpcResponse::error(
                 request.id,
                 INTERNAL_ERROR,
@@ -498,20 +513,29 @@ pub async fn migrate_unified_to_actor(
         }
     };
 
-    let existing_ids: std::collections::HashSet<String> = mcp
+    let existing_configs: std::collections::HashMap<String, String> = mcp
         .list_server_configs()
         .await
         .unwrap_or_default()
         .into_iter()
-        .map(|c| c.id)
+        .map(|c| (c.id, c.name))
         .collect();
 
     let mut migrated: Vec<String> = Vec::new();
     for (name, sc) in entries {
         let id = derive_server_id(&name);
-        if existing_ids.contains(&id) {
-            // Actor store already has it (e.g. Hub-installed) — clear the dup.
-            migrated.push(name);
+        if let Some(existing_name) = existing_configs.get(&id) {
+            if existing_name == &name {
+                // Actor store already has it (e.g. Hub-installed) — clear the dup.
+                migrated.push(name);
+            } else {
+                tracing::warn!(
+                    server = %name,
+                    derived_id = %id,
+                    existing_server = %existing_name,
+                    "mcp migration: ID collision with different server; leaving source entry"
+                );
+            }
             continue;
         }
         let (cfg, writes) = unified_entry_to_manager_config(&name, &sc);

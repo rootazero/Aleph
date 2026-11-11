@@ -1,4 +1,5 @@
 use crate::hub::types::{ExtensionCategory, ExtensionEntry, ExtensionKind};
+use crate::utils::sqlite_open::open_sqlite_safe;
 use rusqlite::{params, Connection};
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -22,17 +23,16 @@ pub struct CatalogFilter {
 /// what it does — and matching the stored JSON blob with `LIKE` would hit the
 /// key names too (`"kind":"mcp"` matching a search for `mcp`).
 #[must_use]
-fn matches_query(e: &ExtensionEntry, query: &str) -> bool {
-    let q = query.trim().to_lowercase();
+fn matches_query_lowercased(e: &ExtensionEntry, q: &str) -> bool {
     if q.is_empty() {
         return true;
     }
-    e.name.to_lowercase().contains(&q)
-        || e.description.to_lowercase().contains(&q)
-        || e.tags.iter().any(|t| t.to_lowercase().contains(&q))
+    e.name.to_lowercase().contains(q)
+        || e.description.to_lowercase().contains(q)
+        || e.tags.iter().any(|t| t.to_lowercase().contains(q))
         || e.author
             .as_deref()
-            .is_some_and(|a| a.to_lowercase().contains(&q))
+            .is_some_and(|a| a.to_lowercase().contains(q))
 }
 
 /// Schema: one row per extension; `data` holds the full JSON, indexed columns
@@ -89,27 +89,29 @@ fn upsert_entry(conn: &Connection, e: &ExtensionEntry) -> rusqlite::Result<()> {
 
 fn query_entries(conn: &Connection, f: &CatalogFilter) -> rusqlite::Result<Vec<ExtensionEntry>> {
     let mut sql = String::from("SELECT data FROM catalog WHERE 1=1");
-    let mut args: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
+    let mut args: Vec<&dyn rusqlite::types::ToSql> = Vec::with_capacity(4);
+    let kind_str = f.kind.map(ExtensionKind::as_str);
+    let cat_str = f.category.map(ExtensionCategory::as_str);
+
     if let Some(id) = &f.id {
         sql.push_str(" AND id = ?");
-        args.push(Box::new(id.clone()));
+        args.push(id);
     }
-    if let Some(k) = f.kind {
+    if let Some(ref k) = kind_str {
         sql.push_str(" AND kind = ?");
-        args.push(Box::new(k.as_str().to_string()));
+        args.push(k);
     }
-    if let Some(c) = f.category {
+    if let Some(ref c) = cat_str {
         sql.push_str(" AND category = ?");
-        args.push(Box::new(c.as_str().to_string()));
+        args.push(c);
     }
     if let Some(s) = &f.source_id {
         sql.push_str(" AND source_id = ?");
-        args.push(Box::new(s.clone()));
+        args.push(s);
     }
     sql.push_str(" ORDER BY name_lc");
     let mut stmt = conn.prepare(&sql)?;
-    let refs: Vec<&dyn rusqlite::types::ToSql> = args.iter().map(|b| b.as_ref()).collect();
-    let rows = stmt.query_map(refs.as_slice(), |row| {
+    let rows = stmt.query_map(args.as_slice(), |row| {
         let data: String = row.get(0)?;
         serde_json::from_str::<ExtensionEntry>(&data).map_err(|e| {
             rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, Box::new(e))
@@ -117,7 +119,10 @@ fn query_entries(conn: &Connection, f: &CatalogFilter) -> rusqlite::Result<Vec<E
     })?;
     let mut out: Vec<ExtensionEntry> = rows.collect::<rusqlite::Result<_>>()?;
     if let Some(q) = &f.query {
-        out.retain(|e| matches_query(e, q));
+        let q_lc = q.trim().to_lowercase();
+        if !q_lc.is_empty() {
+            out.retain(|e| matches_query_lowercased(e, &q_lc));
+        }
     }
     Ok(out)
 }
@@ -144,7 +149,7 @@ pub struct CatalogCache {
 
 impl CatalogCache {
     pub fn open(path: &std::path::Path) -> rusqlite::Result<Self> {
-        let conn = Connection::open(path)?;
+        let conn = open_sqlite_safe(path)?;
         init_schema(&conn)?;
         Ok(Self {
             conn: Arc::new(Mutex::new(conn)),
@@ -196,6 +201,9 @@ impl CatalogCache {
         }
     }
     pub async fn upsert_many(&self, entries: &[ExtensionEntry]) -> rusqlite::Result<()> {
+        if entries.is_empty() {
+            return Ok(());
+        }
         let entries = entries.to_vec();
         self.with_conn(move |conn| {
             // Wrap the whole batch so any per-row failure rolls back every prior

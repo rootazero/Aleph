@@ -63,18 +63,21 @@ pub async fn handle_delete_backend(
             remove_from_chain(fallbacks, &params.name);
         }
 
-        // Delete API key from vault
-        if let Err(e) = vault.delete_secret(&vault_key(&params.name)) {
-            warn!(backend = %params.name, error = %e, "Failed to delete search API key from vault");
-        }
-
-        // Save config
+        // Save config FIRST, then delete the credential from the vault: a
+        // failed save must not destroy the stored secret while the backend
+        // entry still references it (the backend would come back without a
+        // usable key).
         if let Err(e) = cfg.save_incremental(&["search"]).map_err(|e| e.to_string()) {
             return JsonRpcResponse::error(
                 request.id,
                 INTERNAL_ERROR,
                 format!("Failed to save config: {e}"),
             );
+        }
+
+        // Delete API key from vault
+        if let Err(e) = vault.delete_secret(&vault_key(&params.name)) {
+            warn!(backend = %params.name, error = %e, "Failed to delete search API key from vault");
         }
     }
 

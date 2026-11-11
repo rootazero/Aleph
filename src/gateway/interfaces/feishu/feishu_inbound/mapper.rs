@@ -60,24 +60,15 @@ pub fn map_event_to_inbound(
             })
         }
         FeishuEvent::CardAction {
-            chat_id,
-            sender_id,
-            action_value,
-            message_id,
-        } => Some(InboundMessage {
-            id: MessageId::new(message_id),
-            channel_id: channel_id.clone(),
-            conversation_id: ConversationId::new(chat_id.clone()),
-            sender_id: UserId::new(sender_id),
-            sender_name: None,
-            text: action_value.clone(),
-            attachments: vec![],
-            timestamp: Utc::now(),
-            reply_to: Some(MessageId::new(message_id)),
-            is_group: false,
-            raw: None,
-            metadata: vec![],
-        }),
+            chat_id: _,
+            sender_id: _,
+            action_value: _,
+            message_id: _,
+        } => {
+            // Card actions lack an authoritative chat type; reject rather
+            // than default to DM, which would bypass group access policy.
+            None
+        }
         _ => None,
     }
 }

@@ -1160,6 +1160,17 @@ impl SessionStore for FileSessionStore {
         // branched session could write between the rewrite and the commit
         // and be lost by the rewrite.
         let mut guard = self.lock_metadata(&new_key_str).await?;
+        // Create-if-absent, decided by the store under its own lock. The
+        // caller-side preflight (`get_metadata`) is a fast path only: another
+        // writer can create the target between that check and this call, and
+        // the branch would then replace a session the caller never owned.
+        // The guard read the document after taking the lock, so `None` here is
+        // authoritative — no window between "does it exist" and "write it".
+        if guard.existing().is_some() {
+            return Err(SessionStoreError::AlreadyExists(format!(
+                "Session {new_key_str} already exists"
+            )));
+        }
         self.write_transcript_locked(&guard, &new_key_str, &checkpoint_messages)
             .await?;
         // P1 data isolation: this is a freshly-created session (new_key), so
@@ -1425,6 +1436,35 @@ impl SessionStore for FileSessionStore {
             }
         }
         Ok(max_epoch)
+    }
+
+    async fn reserve_next_epoch(&self, base_key_pattern: &str) -> Result<u32, SessionStoreError> {
+        use crate::utils::atomic_io::{with_file_lock, write_atomic};
+        use sha2::{Digest, Sha256};
+
+        let persisted = self.get_current_epoch(base_key_pattern).await?;
+        let dir = self.config.base_dir.join(".epoch-reservations");
+        let path = dir.join(hex::encode(Sha256::digest(base_key_pattern.as_bytes())));
+        tokio::task::spawn_blocking(move || -> std::io::Result<u32> {
+            std::fs::create_dir_all(&dir)?;
+            with_file_lock(&path.with_extension("lock"), |_| {
+                let reserved: u32 = match std::fs::read_to_string(&path) {
+                    Ok(value) => value
+                        .parse()
+                        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?,
+                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => 0,
+                    Err(e) => return Err(e),
+                };
+                let next = persisted.max(reserved).checked_add(1).ok_or_else(|| {
+                    std::io::Error::new(std::io::ErrorKind::InvalidData, "Session epoch exhausted")
+                })?;
+                write_atomic(&path, next.to_string().as_bytes())?;
+                Ok(next)
+            })
+        })
+        .await
+        .map_err(|e| SessionStoreError::DatabaseError(e.to_string()))?
+        .map_err(SessionStoreError::from)
     }
 
     async fn get_session_topic(

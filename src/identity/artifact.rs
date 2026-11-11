@@ -199,6 +199,7 @@ fn preimage(agent: &str, sha256: &[u8; 32]) -> Vec<u8> {
 /// Read `path` under the size cap and hash it. Shared by signing and
 /// verification so the two can never disagree about what was hashed.
 fn hash_file(path: &Path) -> Result<[u8; 32], ArtifactError> {
+    use std::io::Read;
     let size = std::fs::metadata(path)
         .map_err(ArtifactError::io(path))?
         .len();
@@ -208,18 +209,26 @@ fn hash_file(path: &Path) -> Result<[u8; 32], ArtifactError> {
             size,
         });
     }
-    let bytes = std::fs::read(path).map_err(ArtifactError::io(path))?;
-    // The file may have grown between the metadata call and the read; the cap
-    // is about what lands in memory, so it is enforced on the bytes, not only
-    // on what metadata promised.
-    let size = bytes.len() as u64;
-    if size > MAX_ARTIFACT_BYTES {
-        return Err(ArtifactError::TooLarge {
-            path: path.to_path_buf(),
-            size,
-        });
+    let file = std::fs::File::open(path).map_err(ArtifactError::io(path))?;
+    let mut reader = std::io::BufReader::with_capacity(16 * 1024, file);
+    let mut hasher = Sha256::new();
+    let mut total_read = 0u64;
+    let mut buf = [0u8; 16 * 1024];
+    loop {
+        let n = reader.read(&mut buf).map_err(ArtifactError::io(path))?;
+        if n == 0 {
+            break;
+        }
+        total_read += n as u64;
+        if total_read > MAX_ARTIFACT_BYTES {
+            return Err(ArtifactError::TooLarge {
+                path: path.to_path_buf(),
+                size: total_read,
+            });
+        }
+        hasher.update(&buf[..n]);
     }
-    Ok(Sha256::digest(&bytes).into())
+    Ok(hasher.finalize().into())
 }
 
 /// Sign `path` as `agent` with its active key and return the envelope.
@@ -321,13 +330,10 @@ pub fn verify_artifact(
     }
     let sig = hex::decode(&envelope.sig)
         .map_err(|e| ArtifactError::malformed(path, format!("envelope sig: {e}")))?;
-    Ok(
-        if verify_signature(&key.public_key, &preimage(&envelope.agent, &digest), &sig).is_ok() {
-            ArtifactVerdict::Valid
-        } else {
-            ArtifactVerdict::BadSignature
-        },
-    )
+    match verify_signature(&key.public_key, &preimage(&envelope.agent, &digest), &sig) {
+        Ok(()) => Ok(ArtifactVerdict::Valid),
+        Err(_) => Ok(ArtifactVerdict::BadSignature),
+    }
 }
 
 #[cfg(test)]

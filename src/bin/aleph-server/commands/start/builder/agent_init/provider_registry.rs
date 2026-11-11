@@ -31,7 +31,13 @@ pub(super) fn build_multi_provider_registry(
     let vault_key_for = |name: &str| format!("ai:{name}");
     let vault_lookup = |name: &str| -> Option<String> {
         match shared_token_mgr.get_secret(&vault_key_for(name)) {
-            Ok(Some(secret)) => Some(secret.expose().to_string()),
+            // A blank vault entry is "no key", not a key. Hydrating it would
+            // register the provider with an empty credential, and every
+            // request to that provider would then fail authentication.
+            Ok(Some(secret)) => {
+                let exposed = secret.expose();
+                (!exposed.trim().is_empty()).then(|| exposed.to_string())
+            }
             _ => None,
         }
     };
@@ -47,19 +53,23 @@ pub(super) fn build_multi_provider_registry(
         cfg.api_key.as_ref().is_some_and(|k| !k.is_empty()) || vault_lookup(name).is_some()
     };
 
-    // Determine default provider name. When no explicit default is
-    // configured, pick the first enabled+keyed provider in NAME ORDER —
-    // `providers` is a HashMap, so iterating it directly would pick a
-    // different default across restarts (non-deterministic routing).
-    let default_name = app_config.general.default_provider.clone().or_else(|| {
-        let mut candidates: Vec<(&String, &alephcore::ProviderConfig)> =
-            app_config.providers.iter().collect();
-        candidates.sort_by(|a, b| a.0.cmp(b.0));
-        candidates
-            .into_iter()
-            .find(|(name, cfg)| cfg.enabled && has_key(name, cfg))
-            .map(|(name, _)| name.clone())
-    });
+    // Determine default provider name. The operator's explicit choice and the
+    // name-ordered fallback are decided ONCE here, so the two registry shapes
+    // below cannot drift apart on what "the default" means:
+    //
+    // - `configured_default`: the operator's explicit `default_provider`.
+    // - the fallback: the first enabled+keyed provider in NAME ORDER —
+    //   `providers` is a HashMap, so iterating it directly would pick a
+    //   different default across restarts (non-deterministic routing).
+    //
+    // The config-only registry starts on `default_name` (configured, else
+    // fallback). The env-seeded registry starts on the env provider and is
+    // overridden by `configured_default` alone — there the env provider
+    // already IS the fallback.
+    let configured_default = app_config.general.default_provider.clone();
+    let default_name = configured_default
+        .clone()
+        .or_else(|| first_enabled_keyed_provider(app_config, &has_key));
 
     // Try env vars first for the initial provider
     let env_provider = if can_create_provider_from_env() {
@@ -96,7 +106,7 @@ pub(super) fn build_multi_provider_registry(
         // configured an explicit default_provider that is actually
         // registered, honor it — otherwise the env provider silently wins
         // over the configured choice.
-        if let Some(cfg_default) = app_config.general.default_provider.as_deref() {
+        if let Some(cfg_default) = configured_default.as_deref() {
             if registry
                 .list_providers()
                 .iter()
@@ -152,4 +162,21 @@ pub(super) fn build_multi_provider_registry(
     } else {
         None
     }
+}
+
+/// The first enabled+keyed provider in NAME ORDER.
+///
+/// `providers` is a HashMap, so iterating it directly would pick a different
+/// default across restarts (non-deterministic routing).
+fn first_enabled_keyed_provider(
+    app_config: &alephcore::Config,
+    has_key: &impl Fn(&str, &alephcore::ProviderConfig) -> bool,
+) -> Option<String> {
+    let mut candidates: Vec<(&String, &alephcore::ProviderConfig)> =
+        app_config.providers.iter().collect();
+    candidates.sort_by(|a, b| a.0.cmp(b.0));
+    candidates
+        .into_iter()
+        .find(|(name, cfg)| cfg.enabled && has_key(name, cfg))
+        .map(|(name, _)| name.clone())
 }

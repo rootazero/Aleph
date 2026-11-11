@@ -1,6 +1,53 @@
 //! Nostr relay connection loop and message operations.
 
-use crate::gateway::channel::{ChannelId, InboundMessageSender};
+use crate::gateway::channel::{ChannelError, ChannelId, ChannelResult, InboundMessageSender};
+
+/// One publish attempt; completion means the relay accepted the event.
+pub struct PublishCommand {
+    pub(crate) event_id: String,
+    pub(crate) raw: String,
+    pub(crate) result: tokio::sync::oneshot::Sender<ChannelResult<()>>,
+}
+
+/// Publish attempts that are waiting for the relay acknowledgement, keyed by event id.
+type PendingWaiters =
+    std::collections::HashMap<String, Vec<tokio::sync::oneshot::Sender<ChannelResult<()>>>>;
+
+/// Fail every publish attempt that the relay has not acknowledged.
+///
+/// A dropped connection leaves the outcome of those attempts unknown, so the
+/// callers have to learn about it instead of waiting for their own timeout.
+fn fail_pending_waits(pending: &mut PendingWaiters, reason: &str) {
+    for (_, waiters) in pending.drain() {
+        for waiter in waiters {
+            let _ = waiter.send(Err(ChannelError::SendFailed(format!(
+                "{reason}; delivery unknown"
+            ))));
+        }
+    }
+}
+
+fn verify_event(event: &super::types::NostrEvent) -> Result<(), String> {
+    use k256::schnorr::{Signature, VerifyingKey};
+
+    let expected_id = super::protocol::compute_event_id(
+        &event.pubkey,
+        event.created_at,
+        event.kind,
+        &event.tags,
+        &event.content,
+    );
+    if expected_id != event.id {
+        return Err("event id does not match canonical hash".into());
+    }
+    let pubkey = hex::decode(&event.pubkey).map_err(|e| e.to_string())?;
+    let id = hex::decode(&event.id).map_err(|e| e.to_string())?;
+    let sig = hex::decode(&event.sig).map_err(|e| e.to_string())?;
+    let key = VerifyingKey::from_slice(&pubkey).map_err(|e| e.to_string())?;
+    let signature = Signature::try_from(sig.as_slice()).map_err(|e| e.to_string())?;
+    // NIP-01 signs the event hash itself, not a second SHA-256 hash of it.
+    key.verify_raw(&id, &signature).map_err(|e| e.to_string())
+}
 
 use super::protocol::{
     build_close_message, build_subscription, convert_event_to_inbound, parse_relay_message,
@@ -29,7 +76,7 @@ impl NostrMessageOps {
         own_pubkey: String,
         channel_id: ChannelId,
         inbound_tx: InboundMessageSender,
-        mut write_cmd_rx: tokio::sync::mpsc::Receiver<String>,
+        mut write_cmd_rx: tokio::sync::mpsc::Receiver<PublishCommand>,
         mut shutdown_rx: tokio::sync::watch::Receiver<bool>,
     ) {
         use futures_util::{SinkExt, StreamExt};
@@ -85,19 +132,39 @@ impl NostrMessageOps {
                 config.subscription_kinds
             );
 
+            // Dropping a connection fails all of its unconfirmed attempts.
+            let mut pending: PendingWaiters = std::collections::HashMap::new();
+            let mut expiry_tick = tokio::time::interval(Duration::from_secs(1));
+
             // Inner message loop
             let should_reconnect = 'inner: loop {
                 let msg = tokio::select! {
                     msg = ws_rx.next() => msg,
-                    Some(raw_cmd) = write_cmd_rx.recv() => {
-                        // Outbound event publish
+                    Some(cmd) = write_cmd_rx.recv() => {
+                        if cmd.result.is_closed() {
+                            continue;
+                        }
                         if let Err(e) = ws_tx
-                            .send(tokio_tungstenite::tungstenite::Message::Text(raw_cmd.into()))
+                            .send(tokio_tungstenite::tungstenite::Message::Text(cmd.raw.into()))
                             .await
                         {
-                            tracing::warn!("Nostr write failed: {e}");
+                            let _ = cmd.result.send(Err(ChannelError::SendFailed(format!(
+                                "Nostr write failed; delivery unknown: {e}"
+                            ))));
+                            fail_pending_waits(
+                                &mut pending,
+                                "Nostr relay connection lost before the event was acknowledged",
+                            );
                             break 'inner true;
                         }
+                        pending.entry(cmd.event_id).or_default().push(cmd.result);
+                        continue;
+                    }
+                    _ = expiry_tick.tick() => {
+                        pending.retain(|_, waiters| {
+                            waiters.retain(|waiter| !waiter.is_closed());
+                            !waiters.is_empty()
+                        });
                         continue;
                     }
                     _ = shutdown_rx.changed() => {
@@ -109,6 +176,10 @@ impl NostrMessageOps {
                                 .send(tokio_tungstenite::tungstenite::Message::Text(close_msg.into()))
                                 .await;
                             let _ = ws_tx.close().await;
+                            fail_pending_waits(
+                                &mut pending,
+                                "Nostr channel shut down before the event was acknowledged",
+                            );
                             return;
                         }
                         continue;
@@ -153,23 +224,11 @@ impl NostrMessageOps {
                         subscription_id: _,
                         event,
                     } => {
-                        // Reject events whose declared id / pubkey / sig don't
-                        // agree with the canonical NIP-01 hash. Without this
-                        // guard a malicious relay can substitute an event
-                        // authored by any pubkey (impersonation) or tamper
-                        // with content mid-flight, and the agent would still
-                        // process it as if it were authentic.
-                        let expected_id = crate::gateway::interfaces::nostr::message_ops::protocol::compute_event_id(
-                            &event.pubkey,
-                            event.created_at,
-                            event.kind,
-                            &event.tags,
-                            &event.content,
-                        );
-                        if expected_id != event.id || event.sig.is_empty() {
+                        if let Err(e) = verify_event(&event) {
                             tracing::debug!(
-                                "Nostr: dropping event with id/sig mismatch (id={})",
-                                event.id.get(..16).unwrap_or(&event.id)
+                                "Nostr: dropping event with invalid signature (id={}, error={:?})",
+                                event.id.get(..16).unwrap_or(&event.id),
+                                e
                             );
                             continue;
                         }
@@ -208,10 +267,17 @@ impl NostrMessageOps {
                         accepted,
                         message,
                     } => {
-                        if accepted {
-                            tracing::debug!("Nostr: event {event_id} accepted by relay");
-                        } else {
-                            tracing::warn!("Nostr: event {event_id} rejected by relay: {message}");
+                        if let Some(waiters) = pending.remove(&event_id) {
+                            for waiter in waiters {
+                                let result = if accepted {
+                                    Ok(())
+                                } else {
+                                    Err(ChannelError::SendFailed(format!(
+                                        "Nostr relay rejected event {event_id}: {message}"
+                                    )))
+                                };
+                                let _ = waiter.send(result);
+                            }
                         }
                     }
                     RelayMessage::Notice { message } => {
@@ -220,6 +286,10 @@ impl NostrMessageOps {
                 }
             };
 
+            fail_pending_waits(
+                &mut pending,
+                "Nostr relay connection dropped before the event was acknowledged",
+            );
             if !should_reconnect || *shutdown_rx.borrow() {
                 break;
             }
@@ -230,5 +300,36 @@ impl NostrMessageOps {
         }
 
         tracing::info!("Nostr relay loop stopped");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A dropped relay connection must fail the pending publish attempts
+    /// instead of leaving the callers waiting for their own timeout.
+    #[test]
+    fn a_dropped_relay_connection_fails_the_pending_publish_attempts() {
+        let (tx1, mut rx1) = tokio::sync::oneshot::channel();
+        let (tx2, mut rx2) = tokio::sync::oneshot::channel();
+        let mut pending: PendingWaiters = PendingWaiters::new();
+        pending.entry("event-1".to_string()).or_default().push(tx1);
+        pending.entry("event-1".to_string()).or_default().push(tx2);
+
+        fail_pending_waits(&mut pending, "relay dropped");
+
+        assert!(
+            pending.is_empty(),
+            "the failed attempts must not stay pending"
+        );
+        assert!(
+            rx1.try_recv().expect("the waiter must be settled").is_err(),
+            "a lost delivery is not a success"
+        );
+        assert!(
+            rx2.try_recv().expect("the waiter must be settled").is_err(),
+            "a lost delivery is not a success"
+        );
     }
 }

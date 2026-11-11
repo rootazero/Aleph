@@ -12,7 +12,7 @@
 
 use crate::routing::config::RouteBinding;
 use crate::sync_primitives::Arc;
-use tokio::sync::{Mutex, RwLock};
+use tokio::sync::RwLock;
 use tracing::warn;
 
 use super::session_store::SessionStore;
@@ -38,14 +38,6 @@ pub struct AgentRouter {
     agents: Arc<RwLock<Vec<String>>>,
     /// Optional session store for epoch resolution
     session_store: Option<Arc<dyn SessionStore>>,
-    /// Per-base-pattern serialization for epoch allocation. Closes the
-    /// TOCTOU window between `get_current_epoch` and `with_epoch(epoch+1)`
-    /// within a single process: without this, two concurrent `/new` writes
-    /// for the same `(agent, peer)` could both observe epoch=N and both
-    /// produce `(session=N+1)` keys, silently overwriting each other.
-    /// Cross-process races remain (would need backend-level CAS); see
-    /// session_store trait for the planned `reserve_next_epoch` API.
-    epoch_locks: Arc<Mutex<()>>,
 }
 
 impl AgentRouter {
@@ -58,7 +50,6 @@ impl AgentRouter {
             default_agent: "main".to_string(),
             agents: Arc::new(RwLock::new(vec!["main".to_string()])),
             session_store: None,
-            epoch_locks: Arc::new(Mutex::new(())),
         }
     }
 
@@ -71,7 +62,6 @@ impl AgentRouter {
             default_agent: default.clone(),
             agents: Arc::new(RwLock::new(vec![default])),
             session_store: None,
-            epoch_locks: Arc::new(Mutex::new(())),
         }
     }
 
@@ -101,7 +91,6 @@ impl AgentRouter {
             default_agent: default,
             agents: Arc::new(RwLock::new(agent_ids)),
             session_store: None,
-            epoch_locks: Arc::new(Mutex::new(())),
         }
     }
 
@@ -199,16 +188,13 @@ impl AgentRouter {
         //    reachable only by its full key string. Fixing that means changing
         //    who shares a base pattern, not adding a retirement here.
         //
-        //    Race fix: hold an in-process mutex across the
-        //    `get_current_epoch → with_epoch(epoch+1)` pair so two concurrent
-        //    `/new` calls for the same base_pattern cannot both observe the
-        //    same epoch and clobber each other's session row.
+        //    Publish the reservation at the store before returning: serial reads
+        //    alone cannot distinguish allocations made before the first message.
         if let Some(ref sm) = self.session_store {
             let base_pattern = base_key.base_key_pattern();
-            let _guard = self.epoch_locks.lock().await;
-            match sm.get_current_epoch(&base_pattern).await {
-                Ok(epoch) => return base_key.with_epoch(epoch + 1),
-                Err(e) => warn!("Failed to resolve epoch for {}: {}", base_pattern, e),
+            match sm.reserve_next_epoch(&base_pattern).await {
+                Ok(epoch) => return base_key.with_epoch(epoch),
+                Err(e) => warn!("Failed to reserve epoch for {}: {}", base_pattern, e),
             }
         }
 
@@ -285,6 +271,60 @@ mod tests {
     fn test_session_key_parse_invalid() {
         assert!(SessionKey::from_key_string("invalid").is_none());
         assert!(SessionKey::from_key_string("agent:").is_none());
+    }
+
+    #[tokio::test]
+    async fn keyless_routes_reserve_distinct_epochs_without_empty_sessions() {
+        use super::super::session_store::{
+            file_backend::{FileSessionStore, FileSessionStoreConfig},
+            sqlite_backend::{SqliteSessionStore, SqliteSessionStoreConfig},
+            types::SessionFilter,
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let stores: Vec<Arc<dyn SessionStore>> = vec![
+            Arc::new(
+                SqliteSessionStore::new(SqliteSessionStoreConfig {
+                    db_path: dir.path().join("sessions.db"),
+                    ..Default::default()
+                })
+                .unwrap(),
+            ),
+            Arc::new(
+                FileSessionStore::new(FileSessionStoreConfig {
+                    base_dir: dir.path().join("sessions"),
+                    ..Default::default()
+                })
+                .unwrap(),
+            ),
+        ];
+        for store in stores {
+            let old = SessionKey::peer("main", "peer").with_epoch(7);
+            store.get_or_create(&old).await.unwrap();
+            let mut first = AgentRouter::new();
+            first.set_session_store(store.clone());
+            let mut second = AgentRouter::new();
+            second.set_session_store(store.clone());
+            let (a, b) = tokio::join!(
+                first.route(None, None, Some("peer"), None),
+                second.route(None, None, Some("peer"), None),
+            );
+            assert_ne!(a, b);
+            assert_eq!(a.epoch().min(b.epoch()), 8);
+            assert_eq!(a.epoch().max(b.epoch()), 9);
+            let explicit = old.to_key_string();
+            assert_eq!(first.route(Some(&explicit), None, None, None).await, old);
+            assert_eq!(
+                first.route(None, None, Some("peer"), None).await.epoch(),
+                10
+            );
+            let sessions = store.list_sessions(SessionFilter::default()).await.unwrap();
+            assert_eq!(
+                sessions.len(),
+                1,
+                "reservations must not create conversations"
+            );
+            assert_eq!(sessions[0].key, explicit);
+        }
     }
 
     #[tokio::test]

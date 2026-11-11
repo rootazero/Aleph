@@ -137,6 +137,38 @@ fn migrate_generation_providers(cfg: &mut Config, vault: &SharedTokenManager) ->
         &mut cfg.generation.transcription_providers,
     ];
 
+    // Collect all provider names with their api_keys across categories to detect conflicts
+    let mut name_to_keys: std::collections::HashMap<String, Vec<String>> =
+        std::collections::HashMap::new();
+    for providers in &categories {
+        for (name, provider) in providers.iter() {
+            if let Some(ref key) = provider.api_key {
+                if !key.is_empty() {
+                    name_to_keys
+                        .entry(name.clone())
+                        .or_insert_with(Vec::new)
+                        .push(key.clone());
+                }
+            }
+        }
+    }
+
+    // Check for conflicts: same name with different non-empty api_keys
+    let mut has_conflict = false;
+    for (name, keys) in &name_to_keys {
+        if keys.len() > 1 {
+            let first = &keys[0];
+            if keys.iter().any(|k| k != first) {
+                tracing::error!(provider = %name, "Conflicting api_keys for same provider name across generation categories; skipping generation migration");
+                has_conflict = true;
+            }
+        }
+    }
+
+    if has_conflict {
+        return 0;
+    }
+
     // We need to collect names first due to borrow checker
     for providers in categories {
         let names: Vec<String> = providers.keys().cloned().collect();
@@ -172,7 +204,6 @@ fn migrate_generation_providers(cfg: &mut Config, vault: &SharedTokenManager) ->
             }
         }
     }
-
     count
 }
 

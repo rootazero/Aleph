@@ -1,13 +1,9 @@
-use crate::sync_primitives::Arc;
-
 use crate::a2a::domain::security::{Credentials, SecurityScheme, TrustLevel};
 use crate::a2a::domain::A2AError;
 use crate::a2a::port::authenticator::{
     A2AAction, A2AAuthContext, A2AAuthPrincipal, A2AAuthenticator,
 };
 use crate::a2a::port::A2AResult;
-
-use crate::sync_primitives::AsyncRwLock;
 
 use super::token_store::TokenStore;
 
@@ -20,7 +16,7 @@ use super::token_store::TokenStore;
 /// - **Reject**: No valid credentials results in Unauthorized error
 pub struct TieredAuthenticator {
     local_bypass: bool,
-    token_store: Arc<AsyncRwLock<TokenStore>>,
+    token_store: TokenStore,
     local_permissions: Vec<String>,
     trusted_permissions: Vec<String>,
     public_permissions: Vec<String>,
@@ -31,7 +27,7 @@ impl TieredAuthenticator {
     pub fn new(local_bypass: bool, tokens: Vec<String>) -> Self {
         Self {
             local_bypass,
-            token_store: Arc::new(AsyncRwLock::new(TokenStore::new(tokens))),
+            token_store: TokenStore::new(tokens),
             local_permissions: vec!["*".to_string()],
             trusted_permissions: vec!["*".to_string()],
             public_permissions: vec!["read".to_string()],
@@ -96,8 +92,7 @@ impl A2AAuthenticator for TieredAuthenticator {
         // Tier 2-3: credential-based authentication
         match &context.credentials {
             Credentials::BearerToken(token) | Credentials::ApiKey(token) => {
-                let store = self.token_store.read().await;
-                if store.is_valid(token) {
+                if self.token_store.is_valid(token) {
                     return Ok(A2AAuthPrincipal {
                         agent_id: None,
                         trust_level: TrustLevel::Trusted,

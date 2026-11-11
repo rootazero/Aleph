@@ -372,15 +372,26 @@ impl GoalWakeService {
         }
     }
 
-    /// Clear the barrier (CAS — a goal that moved on is left alone) and claim
-    /// + spawn the wake continuation.
+    /// Clear the barrier (CAS — a goal that moved on, or that moved on to a
+    /// DIFFERENT wait, is left alone) and claim + spawn the wake continuation.
     async fn wake(&self, goal: &Goal, cause: &str) {
         let now = now_ms();
-        match crate::goal::global().map(|s| s.clear_wait_barrier(&goal.session_id, now)) {
+        // The barrier we observed, not just the session: between reading the
+        // snapshot and getting here the goal may have been re-pointed at
+        // another task. Releasing THAT barrier would resume the pursuit
+        // before the task it now waits for has settled.
+        match crate::goal::global().map(|s| {
+            s.clear_wait_barrier(
+                &goal.session_id,
+                goal.waiting_on_task.as_deref(),
+                goal.waiting_until_ms,
+                now,
+            )
+        }) {
             Some(Ok(true)) => {}
             Some(Ok(false)) => {
                 info!(session = %goal.session_id,
-                    "goal wake: barrier already gone (goal moved on); skipping wake");
+                    "goal wake: barrier already gone or the goal moved on to another wait; skipping wake");
                 return;
             }
             Some(Err(e)) => {

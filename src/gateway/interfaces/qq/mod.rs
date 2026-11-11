@@ -63,8 +63,8 @@ impl QQChannel {
 
     const fn capabilities() -> ChannelCapabilities {
         ChannelCapabilities {
-            attachments: true,
-            images: true,
+            attachments: false,
+            images: false,
             audio: false,
             video: false,
             reactions: false,
@@ -140,20 +140,19 @@ impl Channel for QQChannel {
             account.client_secret.clone(),
         ));
 
-        let token = api
-            .get_access_token()
+        api.get_access_token()
             .await
             .map_err(|e| ChannelError::AuthFailed(format!("QQ auth failed: {e}")))?;
 
         tracing::info!("QQ bot authenticated for account {}", account.id);
-        self.api_client = Some(api);
+        self.api_client = Some(api.clone());
 
         let (event_tx, mut event_rx) = tokio::sync::mpsc::channel::<QQEvent>(100);
         let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
 
         let gateway_ctx = gateway::GatewayContext {
             channel_id: self.info.id.clone(),
-            token,
+            api,
             event_tx,
             shutdown_rx,
         };
@@ -244,10 +243,18 @@ impl ChannelFactory for QQChannelFactory {
     }
 
     async fn create(&self, config: serde_json::Value) -> ChannelResult<Box<dyn Channel>> {
+        self.create_with_id("qq", config).await
+    }
+
+    async fn create_with_id(
+        &self,
+        id: &str,
+        config: serde_json::Value,
+    ) -> ChannelResult<Box<dyn Channel>> {
         // `from_wire` is the one place the two accepted `[channels.qq]`
         // spellings collapse into `accounts`; see its docs.
         let qq_config = QQConfig::from_wire(config).map_err(ChannelError::ConfigError)?;
-        Ok(Box::new(QQChannel::new("qq", qq_config)))
+        Ok(Box::new(QQChannel::new(id, qq_config)))
     }
 }
 

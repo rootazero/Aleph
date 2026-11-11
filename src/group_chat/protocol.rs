@@ -82,31 +82,33 @@ impl Persona {
     /// Returns `Err` if the id, name, or `system_prompt` is empty, or if the
     /// `system_prompt` exceeds the maximum length.
     pub fn validate(&self) -> Result<(), GroupChatError> {
-        if self.id.is_empty() {
+        let id_trimmed = self.id.trim();
+        if id_trimmed.is_empty() {
             return Err(GroupChatError::InvalidPersona(
                 "persona id must not be empty".into(),
             ));
         }
-        let id_lower = self.id.trim().to_ascii_lowercase();
+        let id_lower = id_trimmed.to_ascii_lowercase();
         if matches!(id_lower.as_str(), "coordinator" | "system" | "user" | "admin") {
             return Err(GroupChatError::InvalidPersona(format!(
                 "persona id '{}' uses a reserved identifier",
                 self.id
             )));
         }
-        if self.name.is_empty() {
+        let name_trimmed = self.name.trim();
+        if name_trimmed.is_empty() {
             return Err(GroupChatError::InvalidPersona(
                 "persona name must not be empty".into(),
             ));
         }
-        let name_lower = self.name.trim().to_ascii_lowercase();
+        let name_lower = name_trimmed.to_ascii_lowercase();
         if matches!(name_lower.as_str(), "coordinator" | "system" | "user" | "admin") {
             return Err(GroupChatError::InvalidPersona(format!(
                 "persona name '{}' uses a reserved identifier",
                 self.name
             )));
         }
-        if self.system_prompt.is_empty() {
+        if self.system_prompt.trim().is_empty() {
             return Err(GroupChatError::InvalidPersona(
                 "persona system_prompt must not be empty".into(),
             ));

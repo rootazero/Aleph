@@ -358,6 +358,25 @@ const LESSONS_HEADER: &str = "LESSONS:";
 /// Section header the model echoes for the open-loops block in open-loop mode.
 const OPEN_LOOPS_HEADER: &str = "OPEN_LOOPS:";
 
+/// Find needle in haystack case-insensitively without heap allocation.
+fn find_ascii_case_insensitive(haystack: &str, needle: &str) -> Option<usize> {
+    if needle.is_empty() {
+        return Some(0);
+    }
+    let n = needle.len();
+    if haystack.len() < n {
+        return None;
+    }
+    haystack.char_indices().find_map(|(idx, _)| {
+        let sub = haystack.get(idx..idx + n)?;
+        if sub.eq_ignore_ascii_case(needle) {
+            Some(idx)
+        } else {
+            None
+        }
+    })
+}
+
 /// Split a two-section reflection output into `(lessons, open_loops)`.
 ///
 /// Robust to the model omitting either header: everything before the
@@ -366,28 +385,24 @@ const OPEN_LOOPS_HEADER: &str = "OPEN_LOOPS:";
 /// collapses to an empty string. UTF-8 safe (header matching never slices a
 /// multibyte char — P7).
 fn split_sections(output: &str) -> (String, String) {
-    let lower = output.to_ascii_lowercase();
-    let marker = OPEN_LOOPS_HEADER.to_ascii_lowercase();
-    let (lessons_raw, loops_raw) = match lower.find(&marker) {
-        // `to_ascii_lowercase` preserves byte length/positions, and the marker
-        // is ASCII, so `idx` is a valid char boundary in `output`.
+    let (lessons_raw, loops_raw) = match find_ascii_case_insensitive(output, OPEN_LOOPS_HEADER) {
         Some(idx) => (&output[..idx], &output[idx..]),
         None => (output, ""),
     };
     (
-        normalize_section(&strip_header(lessons_raw, LESSONS_HEADER)),
-        normalize_section(&strip_header(loops_raw, OPEN_LOOPS_HEADER)),
+        normalize_section(strip_header(lessons_raw, LESSONS_HEADER)),
+        normalize_section(strip_header(loops_raw, OPEN_LOOPS_HEADER)),
     )
 }
 
 /// Drop a leading case-insensitive `header` from `section` (after trimming
 /// leading whitespace). Returns the remainder, or the trimmed input unchanged
 /// when the header is absent. `str::get` keeps the slice on a char boundary.
-fn strip_header(section: &str, header: &str) -> String {
+fn strip_header<'a>(section: &'a str, header: &str) -> &'a str {
     let trimmed = section.trim_start();
     match trimmed.get(..header.len()) {
-        Some(prefix) if prefix.eq_ignore_ascii_case(header) => trimmed[header.len()..].to_string(),
-        _ => trimmed.to_string(),
+        Some(prefix) if prefix.eq_ignore_ascii_case(header) => &trimmed[header.len()..],
+        _ => trimmed,
     }
 }
 

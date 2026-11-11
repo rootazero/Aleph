@@ -19,6 +19,7 @@ use async_trait::async_trait;
 
 use crate::diagnostics::check::{HealthCheck, Posture, Presence};
 use crate::diagnostics::finding::{Finding, Severity};
+use crate::utils::sqlite_open::open_sqlite_readonly;
 
 const ID: &str = "core/cache-hit-rate";
 const DB_FILENAME: &str = "state.db";
@@ -56,11 +57,7 @@ impl CacheHitRateCheck {
     /// Blocking (rusqlite is synchronous) — callers must keep it off the
     /// async executor (`spawn_blocking`).
     fn rollup(db_path: &Path) -> Result<(u64, u64, u64), String> {
-        let conn = rusqlite::Connection::open_with_flags(
-            db_path,
-            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
-        )
-        .map_err(|e| format!("{e}"))?;
+        let conn = open_sqlite_readonly(db_path).map_err(|e| format!("{e}"))?;
         let table_exists: bool = conn
             .query_row(
                 "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='task_traces'",

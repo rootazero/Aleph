@@ -6639,7 +6639,7 @@ priority = 60
         let session = test_support::session(&face);
         let mut rx = face
             .sessions()
-            .attach_stream(&session.id)
+            .attach_stream(&test_support::operator(), &session.id)
             .expect("known session");
         install_mcp_face(face.clone());
         let installed = try_mcp_face().expect("installed");

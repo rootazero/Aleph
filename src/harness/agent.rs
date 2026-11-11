@@ -49,7 +49,6 @@ pub(crate) mod think;
 /// not itself wait another full `turn_timeout`. Fail-soft on expiry.
 const GRACE_TIMEOUT_BUDGET: std::time::Duration = std::time::Duration::from_secs(30);
 
-/// A "failure turn" for the consecutive-failure watchdog: the turn made no net
 /// Stage 5b tool-call guardrail outcome. `Block` means the helper already
 /// fired `on_safety_block` + emitted `ToolError`; the caller `continue`s.
 pub(crate) enum ToolCallGuardOutcome {
@@ -208,7 +207,8 @@ impl AgentHarness {
         self.recent_failures
             .lock()
             .unwrap_or_else(|e| e.into_inner())
-            .contains(&(name.to_string(), canonical_args.to_string()))
+            .iter()
+            .any(|(n, a)| n == name && a == canonical_args)
     }
 
     /// Record a `(tool, args)` that just failed. Subsequent identical calls
@@ -902,70 +902,47 @@ impl AgentHarness {
         let token_breakdown = Some(self.token_breakdown());
         let tool_timeline = self.tool_timeline();
 
-        match result {
-            Ok(outcome) => {
-                self.emit(|| crate::harness::trace::LoopTraceEvent::SessionCompleted {
+        let (outcome, hit_limit) = match &result {
+            Ok(outcome) => (
+                *outcome,
+                matches!(
                     outcome,
-                    iterations,
-                    tool_calls_made,
-                    total_tokens: usize::try_from(self.total_tokens.load(Ordering::Relaxed))
-                        .unwrap_or(usize::MAX),
-                    hit_limit: matches!(
-                        outcome,
-                        crate::harness::trace::LoopTraceSessionOutcome::HitLimit,
-                    ),
-                    final_text: final_text.clone(),
-                    terminate_reason: terminate_reason.clone(),
-                    duration_ms,
-                    token_breakdown: token_breakdown.clone(),
-                    tool_timeline: tool_timeline.clone(),
-                });
-                Ok(())
-            }
+                    crate::harness::trace::LoopTraceSessionOutcome::HitLimit,
+                ),
+            ),
             Err(e) => {
                 tracing::warn!(
                     ?current_session,
                     error = %e,
                     "harness session ended in error",
                 );
-                // A harness error is not a cancellation. Only
-                // `HarnessError::Cancelled` — the cooperative abort token — is;
-                // a provider auth failure, a session-store write error, an
-                // output-guardrail block and an exhausted reactive compaction
-                // are failures. The session log has always told the two apart
-                // (`RunOutcome::Errored` vs `Cancelled`, set in
-                // `harness_bridge::runner_impl` right before this event is
-                // emitted); this makes the trace projection agree with the log
-                // instead of contradicting it. The previous shape also computed
-                // `error_class` and then fanned all four of its variants into
-                // `Cancelled`, which collapsed every failure into the
-                // "cancelled" label on the trace surface — softer than a
-                // `HitLimit` cap, and indistinguishable from the user pressing
-                // stop. `HarnessError::class()` still classifies the value for
-                // any downstream consumer that wants the four-way split; here
-                // we only project two outcomes (cancelled vs failed) so the
-                // trace surface agrees with the session log.
+                // A harness error is not a cancellation. Only `HarnessError::Cancelled`
+                // — the cooperative abort token — is; provider errors, session errors,
+                // and exhausted rescues are failures. Mirrors `RunOutcome::Errored`.
                 let session_outcome = if matches!(e, HarnessError::Cancelled) {
                     crate::harness::trace::LoopTraceSessionOutcome::Cancelled
                 } else {
                     crate::harness::trace::LoopTraceSessionOutcome::Failed
                 };
-                self.emit(|| crate::harness::trace::LoopTraceEvent::SessionCompleted {
-                    outcome: session_outcome,
-                    iterations,
-                    tool_calls_made,
-                    total_tokens: usize::try_from(self.total_tokens.load(Ordering::Relaxed))
-                        .unwrap_or(usize::MAX),
-                    hit_limit: false,
-                    final_text,
-                    terminate_reason,
-                    duration_ms,
-                    token_breakdown,
-                    tool_timeline,
-                });
-                Err(e)
+                (session_outcome, false)
             }
-        }
+        };
+
+        self.emit(|| crate::harness::trace::LoopTraceEvent::SessionCompleted {
+            outcome,
+            iterations,
+            tool_calls_made,
+            total_tokens: usize::try_from(self.total_tokens.load(Ordering::Relaxed))
+                .unwrap_or(usize::MAX),
+            hit_limit,
+            final_text,
+            terminate_reason,
+            duration_ms,
+            token_breakdown,
+            tool_timeline,
+        });
+
+        result.map(|_| ())
     }
 }
 

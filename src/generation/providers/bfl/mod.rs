@@ -89,10 +89,10 @@ impl BflProvider {
                 "bfl-flux",
             ));
         }
-        let client = Client::builder()
-            .timeout(Duration::from_secs(DEFAULT_TIMEOUT_SECS))
-            .build()
-            .map_err(|e| GenerationError::network(format!("Failed to build HTTP client: {e}")))?;
+        let client = crate::generation::providers::http::generation_http_client(
+            Duration::from_secs(DEFAULT_TIMEOUT_SECS),
+        )
+        .map_err(|e| GenerationError::network(format!("Failed to build HTTP client: {e}")))?;
         let base = base_url.unwrap_or_else(|| DEFAULT_ENDPOINT.to_string());
         let base_url = base.trim_end_matches('/').to_string();
         Ok(Self {
@@ -142,16 +142,16 @@ impl BflProvider {
                 .await
                 .map_err(|e| GenerationError::network(format!("Poll request failed: {e}")))?;
             let status = response.status();
-            let body = response
-                .text()
-                .await
-                .map_err(|e| GenerationError::network(format!("Failed to read poll body: {e}")))?;
             if !status.is_success() {
+                let body = response
+                    .text()
+                    .await
+                    .map_err(|e| GenerationError::network(format!("Failed to read poll body: {e}")))?;
                 error!(status = %status, body = %body, "BFL poll failed");
                 return Err(self.parse_error(status, &body));
             }
 
-            let poll: types::BflPollResponse = serde_json::from_str(&body).map_err(|e| {
+            let poll: types::BflPollResponse = response.json().await.map_err(|e| {
                 GenerationError::serialization(format!("Failed to parse BFL poll response: {e}"))
             })?;
 
@@ -270,6 +270,24 @@ impl GenerationProvider for BflProvider {
                 .clone()
                 .unwrap_or_else(|| self.model.clone());
 
+            let mut extras_map = serde_json::Map::new();
+            if let Some(ar) = &request.params.aspect_ratio {
+                extras_map.insert(
+                    "aspect_ratio".to_string(),
+                    serde_json::Value::String(ar.clone()),
+                );
+            }
+            for (k, v) in &request.params.extra {
+                if k != "guidance" && k != "safety_tolerance" {
+                    extras_map.insert(k.clone(), v.clone());
+                }
+            }
+            let extras = if extras_map.is_empty() {
+                None
+            } else {
+                Some(serde_json::Value::Object(extras_map))
+            };
+
             let body = types::BflGenerateRequest {
                 prompt: request.prompt.clone(),
                 width: request.params.width,
@@ -289,7 +307,7 @@ impl GenerationProvider for BflProvider {
                     .and_then(|v| v.as_u64())
                     .and_then(|v| u32::try_from(v).ok()),
                 output_format: request.params.format.clone(),
-                extras: None,
+                extras,
             };
 
             let started_at = Instant::now();
@@ -329,11 +347,11 @@ impl GenerationProvider for BflProvider {
             })?;
             info!(id = %submit.id, model = %model, "BFL render submitted, polling");
 
-            let result = self
+            let mut result = self
                 .poll_result(&submit.id, submit.polling_url.as_deref())
                 .await?;
 
-            let sample_url = result.sample.clone().ok_or_else(|| {
+            let sample_url = result.sample.take().ok_or_else(|| {
                 GenerationError::provider(
                     "BFL reported Ready but result.sample was empty",
                     None,

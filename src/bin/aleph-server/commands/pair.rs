@@ -1,3 +1,5 @@
+//! lock-policy: none
+//!
 //! `pair` subcommand — mint a one-time pairing ticket for a remote Panel.
 //!
 //! This is the headless counterpart of Settings → Security → "Pair new device".

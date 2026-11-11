@@ -493,24 +493,36 @@ pub async fn handle_set_enabled(
     let mut entry = if let Some(e) = acp_manager.get_config(&params.id).await {
         e
     } else {
-        // Check presets for disabled harnesses not in manager
+        // Check presets for disabled harnesses not in manager.
+        // Merge order: start from preset (if any), then overlay user config
+        // so that customisations (executable, args, …) are preserved.
         let presets: std::collections::HashMap<String, AcpAdapterEntry> =
             AcpAdapterEntry::all_presets().into_iter().collect();
-        match presets.get(&params.id) {
-            Some(e) => e.clone(),
-            None => {
-                // Check user config
-                let cfg = config.read().await;
-                match cfg.acp.adapters.get(&params.id) {
-                    Some(e) => e.clone(),
-                    None => {
-                        return JsonRpcResponse::error(
-                            request.id,
-                            INVALID_PARAMS,
-                            format!("Harness '{}' not found", params.id),
-                        );
-                    }
-                }
+        let preset_entry = presets.get(&params.id).cloned();
+
+        let cfg = config.read().await;
+        let user_entry = cfg.acp.adapters.get(&params.id).cloned();
+        drop(cfg);
+
+        match (preset_entry, user_entry) {
+            // Both exist: keep the user's entry and fill in only the
+            // fields the user never customised from the preset — so
+            // enabling a preset never overwrites a user customisation.
+            (Some(preset), Some(mut user)) => {
+                user.hydrate_from_preset(&preset);
+                user
+            }
+            // Only a preset — no user customisation to lose.
+            (Some(preset), None) => preset,
+            // Only a user entry (custom harness, no matching preset).
+            (None, Some(user)) => user,
+            // Neither — the ID is unknown.
+            (None, None) => {
+                return JsonRpcResponse::error(
+                    request.id,
+                    INVALID_PARAMS,
+                    format!("Harness '{}' not found", params.id),
+                );
             }
         }
     };

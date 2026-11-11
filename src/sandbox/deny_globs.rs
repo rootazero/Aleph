@@ -212,7 +212,10 @@ pub fn glob_to_anchored_regex(pattern: &str) -> Option<String> {
                 saw_glob = true;
                 regex.push_str("\\]");
             }
-            _ => regex.push_str(&regex::escape(&ch.to_string())),
+            _ => {
+                let mut buf = [0u8; 4];
+                regex.push_str(&regex::escape(ch.encode_utf8(&mut buf)));
+            }
         }
     }
 

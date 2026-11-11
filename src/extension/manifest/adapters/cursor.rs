@@ -177,7 +177,16 @@ impl ManifestAdapter for CursorAdapter {
         // .cursorrules file → single skill
         let cursorrules_path = dir.join(".cursorrules");
         if cursorrules_path.exists() {
-            if let Ok(content) = std::fs::read_to_string(&cursorrules_path) {
+            // A symlink out of the plugin root would turn this read into a
+            // file disclosure; the same containment rule the other component
+            // parsers use decides it.
+            if !parsers::is_path_inside(dir, &cursorrules_path) {
+                tracing::warn!(
+                    "Cursor .cursorrules {:?} is outside the plugin root {:?}; skipping",
+                    cursorrules_path,
+                    dir
+                );
+            } else if let Ok(content) = std::fs::read_to_string(&cursorrules_path) {
                 caps.push(CapabilityDeclaration::Skill(SkillRegistration {
                     name: "cursorrules".to_string(),
                     description: "Cursor rules imported as skill".to_string(),
@@ -193,11 +202,27 @@ impl ManifestAdapter for CursorAdapter {
         // .cursor/rules/ directory → scan for rule files as skills
         let cursor_rules_dir = dir.join(".cursor/rules");
         if cursor_rules_dir.is_dir() {
-            if let Ok(entries) = std::fs::read_dir(&cursor_rules_dir) {
+            // The rules directory itself may point out of the plugin root.
+            if !parsers::is_path_inside(dir, &cursor_rules_dir) {
+                tracing::warn!(
+                    "Cursor rules directory {:?} is outside the plugin root {:?}; skipping",
+                    cursor_rules_dir,
+                    dir
+                );
+            } else if let Ok(entries) = std::fs::read_dir(&cursor_rules_dir) {
                 for entry in entries.flatten() {
                     let path = entry.path();
                     let ext = path.extension().and_then(|e| e.to_str());
                     if ext == Some("md") || ext == Some("mdc") {
+                        // A rule file may be a symlink out of the root.
+                        if !parsers::is_path_inside(dir, &path) {
+                            tracing::warn!(
+                                "Cursor rule file {:?} is outside the plugin root {:?}; skipping",
+                                path,
+                                dir
+                            );
+                            continue;
+                        }
                         if let Ok(content) = std::fs::read_to_string(&path) {
                             let rule_name = path
                                 .file_stem()

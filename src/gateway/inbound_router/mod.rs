@@ -1038,10 +1038,10 @@ impl InboundMessageRouter {
                     if parsed.command_name == "session_new" || parsed.command_name == "new" {
                         return self.handle_new_session(&msg, &ctx).await;
                     }
-                    // Use the rich serializer so Skill / Custom / MCP fields
-                    // (allowed_tools, system_prompt, server_name)
-                    // are preserved in the mode JSON instead of being lossily
-                    // collapsed to `direct_tool`.
+                    // Use the rich serializer so Skill / MCP fields
+                    // (allowed_tools, server_name) are preserved in the mode
+                    // JSON instead of being lossily collapsed to
+                    // `direct_tool`.
                     if let Some(mode_json) =
                         crate::gateway::inbound_router::command_handler::serialize_parsed_command(
                             &parsed,
@@ -1570,6 +1570,168 @@ mod tests {
     };
     use crate::gateway::pairing_store::SqlitePairingStore;
     use crate::gateway::routing_config::DmScope;
+
+    #[tokio::test]
+    async fn line_policy_bridge_is_enforced_by_core_under_runtime_id() {
+        use crate::gateway::inbound_context::{InboundContext, ReplyRoute};
+        use crate::gateway::interfaces::line::config::{
+            LineConfig, LineDmPolicy as Dm, LineGroupPolicy as Group,
+        };
+        use crate::routing::session_key::SessionKey;
+        for (dm, group, is_group, sender, conversation, allowed) in [
+            (Dm::Disabled, Group::Open, false, "42", "G", false),
+            (Dm::Open, Group::Disabled, true, "42", "G", false),
+            (Dm::Allowlist, Group::Open, false, "42", "G", true),
+            (Dm::Allowlist, Group::Open, false, "other", "G", false),
+            (Dm::Open, Group::Allowlist, true, "42", "G", true),
+            (Dm::Open, Group::Allowlist, true, "42", "other", false),
+        ] {
+            let config = LineConfig {
+                dm_policy: dm,
+                group_policy: group,
+                allowed_users: vec!["42".into()],
+                allowed_groups: vec!["G".into()],
+                ..Default::default()
+            };
+            let mut router = InboundMessageRouter::new(
+                Arc::new(ChannelRegistry::new()),
+                Arc::new(SqlitePairingStore::in_memory().unwrap()),
+                RoutingConfig::default(),
+            );
+            router.register_channel_config("line-runtime", ChannelConfig::from(&config));
+            let mut message = cb_message();
+            message.channel_id = ChannelId::new("line-runtime");
+            message.sender_id = UserId::new(sender);
+            message.conversation_id = ConversationId::new(conversation);
+            message.is_group = is_group;
+            message.text = "@aleph hello".into();
+            let route =
+                ReplyRoute::new(message.channel_id.clone(), message.conversation_id.clone());
+            let result = router
+                .check_permission(InboundContext::new(
+                    message,
+                    route,
+                    SessionKey::ephemeral("line-policy"),
+                ))
+                .await;
+            assert_eq!(
+                result.is_ok(),
+                allowed,
+                "{dm:?} {group:?} {sender} {conversation}: {result:?}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn matrix_room_mention_policy_is_owned_by_core() {
+        use crate::gateway::inbound_context::{InboundContext, ReplyRoute};
+        use crate::gateway::interfaces::matrix::config::{MatrixConfig, MatrixRoomPolicy};
+        use crate::routing::session_key::SessionKey;
+        for global in [true, false] {
+            let mut config = MatrixConfig {
+                mention_gating: global,
+                ..Default::default()
+            };
+            config.rooms.insert(
+                "!override:h".into(),
+                MatrixRoomPolicy {
+                    require_mention: Some(!global),
+                    allow_bots: None,
+                    users: None,
+                },
+            );
+            let mut router = InboundMessageRouter::new(
+                Arc::new(ChannelRegistry::new()),
+                Arc::new(SqlitePairingStore::in_memory().unwrap()),
+                RoutingConfig::default(),
+            );
+            router.register_channel_config("matrix-runtime", ChannelConfig::from(&config));
+            for (room, required) in [("!override:h", !global), ("!other:h", global)] {
+                for mentioned in [true, false] {
+                    let mut message = cb_message();
+                    message.channel_id = ChannelId::new("matrix-runtime");
+                    message.conversation_id = ConversationId::new(room);
+                    message.is_group = true;
+                    message.text = "hello".into();
+                    message.metadata = if mentioned {
+                        vec![crate::gateway::channel::MessageMeta::AppMention]
+                    } else {
+                        vec![]
+                    };
+                    let route = ReplyRoute::new(
+                        message.channel_id.clone(),
+                        message.conversation_id.clone(),
+                    );
+                    let result = router
+                        .check_permission(InboundContext::new(
+                            message,
+                            route,
+                            SessionKey::ephemeral("matrix-policy"),
+                        ))
+                        .await;
+                    assert_eq!(
+                        result.is_ok(),
+                        !required || mentioned,
+                        "{global} {room} {mentioned}: {result:?}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn telegram_core_permission_uses_producing_account_and_topic_policy() {
+        use crate::gateway::inbound_context::{InboundContext, ReplyRoute};
+        use crate::gateway::interfaces::telegram::{TelegramChannel, TelegramConfigV2};
+        use crate::routing::session_key::SessionKey;
+        let config: TelegramConfigV2 = serde_json::from_value(serde_json::json!({
+            "accounts": [
+                {"id": "first", "bot_token": "1:a", "dm_policy": "disabled"},
+                {"id": "second", "bot_token": "2:b", "dm_policy": "allowlist",
+                 "allowed_users": [42], "allowed_groups": [-100], "group_policy": "disabled",
+                 "groups": [{"id": "group", "chat_id": -100, "topics": [
+                     {"id": "allowed", "thread_id": 5, "group_policy": "allowlist"},
+                     {"id": "denied", "thread_id": 6, "group_policy": "disabled"}
+                 ]}]}
+            ]
+        }))
+        .unwrap();
+        let registry = Arc::new(ChannelRegistry::new());
+        registry
+            .register(Box::new(TelegramChannel::new("telegram", config)))
+            .await;
+        let router = InboundMessageRouter::new(
+            registry,
+            Arc::new(SqlitePairingStore::in_memory().unwrap()),
+            RoutingConfig::default(),
+        );
+        for (account, conversation, is_group, allowed) in [
+            (Some("second"), "123", false, true),
+            (Some("first"), "123", false, false),
+            (Some("second"), "-100:5", true, true),
+            (Some("second"), "-100:6", true, false),
+            (Some("unknown"), "123", false, false),
+            (None, "123", false, false),
+        ] {
+            let mut message = cb_message();
+            message.sender_id = UserId::new("42");
+            message.conversation_id = ConversationId::new(conversation);
+            message.is_group = is_group;
+            message.raw = account.map(|id| serde_json::json!({"_aleph_telegram_account": id}));
+            let route =
+                ReplyRoute::new(message.channel_id.clone(), message.conversation_id.clone());
+            let ctx = InboundContext::new(message, route, SessionKey::ephemeral("telegram-policy"));
+            let result = router.check_permission(ctx).await;
+            assert_eq!(
+                result.is_ok(),
+                allowed,
+                "{account:?} {conversation}: {result:?}"
+            );
+            if let Ok(ctx) = result {
+                assert!(ctx.is_authorized);
+            }
+        }
+    }
 
     /// Sink stub — intercepts every callback.
     struct AlwaysIntercept;

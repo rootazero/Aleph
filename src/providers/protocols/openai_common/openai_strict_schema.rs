@@ -161,7 +161,7 @@ pub fn ensure_openai_tool_envelope(schema: &mut Value) {
             let mut iter = required_sets.drain(..);
             let mut intersection = iter.next().unwrap_or_default();
             for set in iter {
-                intersection = intersection.intersection(&set).cloned().collect();
+                intersection.retain(|item| set.contains(item));
             }
             if !intersection.is_empty() {
                 let root_req = map
@@ -258,14 +258,9 @@ fn lenient_rewrite_node(node: &mut Value) {
                     .position(|t| t.as_str().is_some_and(|s| s != "null"));
                 if let (Some(_), Some(other)) = (null_idx, other_idx) {
                     let other_type = types.get(other).cloned().unwrap_or(Value::Null);
-                    let mut non_null_branch: serde_json::Map<String, Value> = map
-                        .iter()
-                        .filter(|(k, _)| k.as_str() != "type")
-                        // rust-doctor-disable-next-line excessive-clone
-                        .map(|(k, v)| (k.clone(), v.clone()))
-                        .collect();
+                    let mut non_null_branch = std::mem::take(map);
+                    non_null_branch.remove("type");
                     non_null_branch.insert("type".to_string(), other_type);
-                    map.clear();
                     map.insert(
                         "anyOf".to_string(),
                         Value::Array(vec![
@@ -373,14 +368,9 @@ fn normalize_node(
                     .position(|t| t.as_str().is_some_and(|s| s != "null"));
                 if let (Some(_), Some(other)) = (null_idx, other_idx) {
                     let other_type = types.get(other).cloned().unwrap_or(Value::Null);
-                    let mut non_null_branch: serde_json::Map<String, Value> = map
-                        .iter()
-                        .filter(|(k, _)| k.as_str() != "type")
-                        // rust-doctor-disable-next-line excessive-clone
-                        .map(|(k, v)| (k.clone(), v.clone()))
-                        .collect();
+                    let mut non_null_branch = std::mem::take(map);
+                    non_null_branch.remove("type");
                     non_null_branch.insert("type".to_string(), other_type);
-                    map.clear();
                     map.insert(
                         "anyOf".to_string(),
                         Value::Array(vec![

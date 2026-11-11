@@ -6,7 +6,7 @@ use std::time::Duration;
 use tokio::sync::{Mutex, RwLock};
 use tokio::time::sleep;
 
-use crate::gateway::channel::InboundMessageSender;
+use crate::gateway::channel::{ChannelId, InboundMessageSender};
 
 use super::api::{ApiResult, ILinkApi, WeChatApiError};
 use super::auth::ContextTokenStore;
@@ -24,17 +24,29 @@ pub struct WeChatRuntime {
     config: WeChatConfig,
     api: ILinkApi,
     token_store: ContextTokenStore,
+    /// The id this instance was REGISTERED under.
+    ///
+    /// The platform type ("wechat") is not the instance identity: a channel
+    /// registered as `wechat-work` must tag its inbound messages with that
+    /// id, otherwise routing and reply lookup point at a channel that does
+    /// not exist (or at a different instance of the same platform).
+    channel_id: ChannelId,
     sync_buf: RwLock<String>,
     running: RwLock<bool>,
     dedup: Mutex<MessageDedup>,
 }
 
 impl WeChatRuntime {
-    pub fn new(config: WeChatConfig, token_store: ContextTokenStore) -> Self {
+    pub fn new(
+        config: WeChatConfig,
+        token_store: ContextTokenStore,
+        channel_id: ChannelId,
+    ) -> Self {
         Self {
             api: ILinkApi::new(config.base_url.clone()),
             config,
             token_store,
+            channel_id,
             sync_buf: RwLock::new(String::new()),
             running: RwLock::new(false),
             dedup: Mutex::new(MessageDedup::new()),
@@ -50,7 +62,15 @@ impl WeChatRuntime {
             *running = true;
         }
 
-        let sync_buf = load_sync_buf(&self.config.data_dir, &self.config.account_id).await;
+        let sync_buf = match load_sync_buf(&self.config.data_dir, &self.config.account_id).await {
+            Ok(buf) => buf,
+            Err(e) => {
+                tracing::error!(
+                    "Failed to load the WeChat sync cursor; the sync restarts from scratch: {e}"
+                );
+                String::new()
+            }
+        };
         self.token_store.restore(&self.config.account_id).await;
         {
             let mut buf = self.sync_buf.write().await;
@@ -86,8 +106,18 @@ impl WeChatRuntime {
                             let mut buf = self.sync_buf.write().await;
                             *buf = new_buf.clone();
                             drop(buf);
-                            save_sync_buf(&self.config.data_dir, &self.config.account_id, &new_buf)
-                                .await;
+                            if let Err(e) = save_sync_buf(
+                                &self.config.data_dir,
+                                &self.config.account_id,
+                                &new_buf,
+                            )
+                            .await
+                            {
+                                tracing::error!(
+                                    "Failed to persist the WeChat sync cursor for {}: {e}",
+                                    self.config.account_id
+                                );
+                            }
                         }
                     }
 
@@ -119,7 +149,6 @@ impl WeChatRuntime {
             sleep(Duration::from_millis(backoff_ms)).await;
         }
     }
-
     async fn process_messages(
         &self,
         messages: &[super::types::Message],
@@ -139,11 +168,9 @@ impl WeChatRuntime {
                 continue;
             }
 
-            if let Some(inbound) = map_message_to_inbound(
-                msg,
-                &crate::gateway::channel::ChannelId::new("wechat"),
-                &self.config.account_id,
-            ) {
+            if let Some(inbound) =
+                map_message_to_inbound(msg, &self.channel_id, &self.config.account_id)
+            {
                 if let Some(context_token) = msg.context_token.clone() {
                     self.token_store
                         .set(
@@ -163,7 +190,6 @@ impl WeChatRuntime {
         }
         true
     }
-
     pub async fn stop(&self) {
         let mut running = self.running.write().await;
         *running = false;

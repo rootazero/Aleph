@@ -3,7 +3,6 @@
 use serde::{Deserialize, Serialize};
 
 use crate::domain::skill::{InstallKind, PromptScope, SkillId, SkillManifest, SkillSource};
-use crate::domain::Entity;
 use crate::skill::config::SkillEntryConfig;
 use crate::skill::eligibility::{EligibilityResult, IneligibilityReason};
 use crate::skill::installer::filter_install_specs_for_current_os;

@@ -52,22 +52,22 @@ impl GenerationProvider for OpenAiCompatProvider {
 
             // Build request body. Video uses the Ark task API shape (a
             // `content` array); image uses the OpenAI generations shape.
-            let (body_value, model_label) = if request.generation_type == GenerationType::Video {
+            let (body_bytes, model_label) = if request.generation_type == GenerationType::Video {
                 let body = self.build_video_task_body(&request);
-                let value = serde_json::to_value(&body).map_err(|e| {
+                let bytes = serde_json::to_vec(&body).map_err(|e| {
                     GenerationError::serialization(format!(
                         "Failed to serialize video task request: {e}"
                     ))
                 })?;
-                (value, body.model)
+                (bytes, body.model)
             } else {
                 let body = self.build_request_body(&request);
-                let value = serde_json::to_value(&body).map_err(|e| {
+                let bytes = serde_json::to_vec(&body).map_err(|e| {
                     GenerationError::serialization(format!(
                         "Failed to serialize image request: {e}"
                     ))
                 })?;
-                (value, body.model)
+                (bytes, body.model)
             };
             let url = self.generations_url();
 
@@ -79,7 +79,7 @@ impl GenerationProvider for OpenAiCompatProvider {
                 .post(&url)
                 .header("Authorization", format!("Bearer {}", self.api_key))
                 .header("Content-Type", "application/json")
-                .json(&body_value)
+                .body(body_bytes)
                 .send()
                 .await
                 .map_err(|e| {
@@ -244,6 +244,7 @@ impl OpenAiCompatProvider {
 
     /// Poll an async task until completion
     async fn poll_async_task(&self, poll_url: &str) -> GenerationResult<GenerationData> {
+        let auth_header = format!("Bearer {}", self.api_key);
         for attempt in 1..=MAX_POLL_ATTEMPTS {
             debug!(
                 provider = %self.name,
@@ -256,7 +257,7 @@ impl OpenAiCompatProvider {
             let response = self
                 .client
                 .get(poll_url)
-                .header("Authorization", format!("Bearer {}", self.api_key))
+                .header("Authorization", &auth_header)
                 .send()
                 .await
                 .map_err(|e| GenerationError::network(format!("Poll request failed: {e}")))?;
@@ -285,46 +286,48 @@ impl OpenAiCompatProvider {
             })?;
 
             // Generic proxies use SUCCESS/FAILURE; Volcengine Ark uses
-            // succeeded/failed/cancelled (upper-cased here for matching).
-            match task.status.to_uppercase().as_str() {
-                "SUCCESS" | "SUCCEEDED" => {
-                    info!(
-                        provider = %self.name,
-                        attempt = attempt,
-                        progress = %task.progress.as_deref().unwrap_or("100%"),
-                        "Async task completed"
-                    );
+            // succeeded/failed/cancelled. Match case-insensitively without heap allocations.
+            let status_str = task.status.as_str();
+            if status_str.eq_ignore_ascii_case("success")
+                || status_str.eq_ignore_ascii_case("succeeded")
+            {
+                info!(
+                    provider = %self.name,
+                    attempt = attempt,
+                    progress = %task.progress.as_deref().unwrap_or("100%"),
+                    "Async task completed"
+                );
 
-                    let output_url =
-                        task.data
-                            .as_ref()
-                            .and_then(|d| d.output_url())
-                            .ok_or_else(|| {
-                                GenerationError::provider(
-                                    "Task completed but no output URL in response",
-                                    None,
-                                    &self.name,
-                                )
-                            })?;
+                let output_url = task
+                    .data
+                    .and_then(|d| d.into_output_url())
+                    .ok_or_else(|| {
+                        GenerationError::provider(
+                            "Task completed but no output URL in response",
+                            None,
+                            &self.name,
+                        )
+                    })?;
 
-                    return Ok(GenerationData::url(output_url.to_string()));
+                return Ok(GenerationData::url(output_url));
+            } else if status_str.eq_ignore_ascii_case("failure")
+                || status_str.eq_ignore_ascii_case("failed")
+                || status_str.eq_ignore_ascii_case("cancelled")
+                || status_str.eq_ignore_ascii_case("canceled")
+            {
+                let reason = task
+                    .fail_reason
+                    .or_else(|| task.error.map(|e| e.message))
+                    .filter(|m| !m.is_empty())
+                    .unwrap_or_else(|| "Unknown error".to_string());
+                error!(provider = %self.name, reason = %reason, "Async task failed");
+                return Err(GenerationError::job_failed(reason, None));
+            } else {
+                // NOT_START, IN_PROGRESS, QUEUED, PROCESSING, etc.
+                if let Some(ref progress) = task.progress {
+                    debug!(progress = %progress, status = %task.status, "Task still processing");
                 }
-                "FAILURE" | "FAILED" | "CANCELLED" | "CANCELED" => {
-                    let reason = task
-                        .fail_reason
-                        .or_else(|| task.error.map(|e| e.message))
-                        .filter(|m| !m.is_empty())
-                        .unwrap_or_else(|| "Unknown error".to_string());
-                    error!(provider = %self.name, reason = %reason, "Async task failed");
-                    return Err(GenerationError::job_failed(reason, None));
-                }
-                _ => {
-                    // NOT_START, IN_PROGRESS, QUEUED, PROCESSING, etc.
-                    if let Some(ref progress) = task.progress {
-                        debug!(progress = %progress, status = %task.status, "Task still processing");
-                    }
-                    sleep(Duration::from_secs(POLL_INTERVAL_SECS)).await;
-                }
+                sleep(Duration::from_secs(POLL_INTERVAL_SECS)).await;
             }
         }
 

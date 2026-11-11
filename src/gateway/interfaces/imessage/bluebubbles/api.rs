@@ -174,29 +174,56 @@ impl BlueBubblesApi {
             address: Option<String>,
         }
 
-        let body = serde_json::json!({ "limit": 100, "offset": 0, "with": ["participants"] });
-        let res = self
-            .client
-            .post(self.api_url("/api/v1/chat/query"))
-            .json(&body)
-            .send()
-            .await
-            .ok()?;
-        let wrap: Wrap = res.json().await.ok()?;
-        for chat in wrap.data.unwrap_or_default() {
-            let guid = chat.guid.clone();
-            let matches_id = chat.chat_identifier.as_deref() == Some(target);
-            let matches_part = chat
-                .participants
-                .unwrap_or_default()
-                .iter()
-                .any(|p| p.address.as_deref() == Some(target));
-            if matches_id || matches_part {
-                if let Some(g) = guid {
-                    cache.lock().await.put(target, &g);
-                    return Some(g);
+        let mut offset = 0;
+        let limit = 100;
+        loop {
+            let body =
+                serde_json::json!({ "limit": limit, "offset": offset, "with": ["participants"] });
+            let res = self
+                .client
+                .post(self.api_url("/api/v1/chat/query"))
+                .json(&body)
+                .send()
+                .await
+                .ok()?;
+            let wrap: Wrap = res.json().await.ok()?;
+            let chats = wrap.data.unwrap_or_default();
+            if chats.is_empty() {
+                break;
+            }
+            for chat in &chats {
+                let guid = chat.guid.clone();
+                let matches_id = chat.chat_identifier.as_deref() == Some(target);
+                if matches_id {
+                    if let Some(g) = guid {
+                        cache.lock().await.put(target, &g);
+                        return Some(g);
+                    }
                 }
             }
+            for chat in &chats {
+                let guid = chat.guid.clone();
+                let participants = chat
+                    .participants
+                    .as_ref()
+                    .map(|v| v.as_slice())
+                    .unwrap_or_default();
+                let is_one_on_one = participants.len() == 1;
+                let matches_part = is_one_on_one
+                    && participants
+                        .iter()
+                        .any(|p| p.address.as_deref() == Some(target));
+                if matches_part {
+                    if let Some(g) = guid {
+                        cache.lock().await.put(target, &g);
+                        return Some(g);
+                    }
+                }
+            }
+            // Advance the page: without this the loop re-queried page 1
+            // forever and a target that is not on the first page never
+            // resolved.
+            offset += limit;
         }
         None
     }
@@ -388,9 +415,17 @@ fn mime_to_filename(mime: &str) -> String {
 /// the webhook API cannot send custom headers).
 #[must_use]
 pub fn webhook_callback_url(host: &str, port: u16, path: &str, password: &str) -> String {
+    // Wildcard listeners are advertised as loopback only for local deployment;
+    // remote deployment is rejected by BlueBubblesConfig::validate.
     let host = match host {
-        "0.0.0.0" | "127.0.0.1" | "::" | "localhost" => "localhost",
+        "0.0.0.0" => "127.0.0.1",
+        "::" => "[::1]",
         h => h,
+    };
+    let host = if host.contains(':') && !host.starts_with('[') {
+        format!("[{host}]")
+    } else {
+        host.to_string()
     };
     let enc: String = url::form_urlencoded::byte_serialize(password.as_bytes()).collect();
     format!("http://{host}:{port}{path}?password={enc}")
@@ -455,26 +490,83 @@ impl BlueBubblesApi {
 
     /// Fetch messages created after `after_ms` (epoch milliseconds).
     /// Returns the `data` array; empty on any failure.
+    ///
+    /// The `after` filter of the BlueBubbles message query is EXCLUSIVE
+    /// (`dateCreated > after`), so a cursor that sits exactly on the newest
+    /// message's millisecond skips every OTHER message that shares that
+    /// millisecond — two chats in the same second, or a burst from one
+    /// sender, lose rows silently. The cursor therefore backs off one
+    /// millisecond before the next query and the guid set drops the rows
+    /// that come back twice.
     pub async fn query_messages_after(&self, after_ms: i64) -> Vec<serde_json::Value> {
-        let body = serde_json::json!({
-            "after": after_ms,
-            "limit": 100,
-            "sort": "ASC",
-            "with": ["handle", "attachment", "chats"]
-        });
-        let Ok(res) = self
-            .client
-            .post(self.api_url("/api/v1/message/query"))
-            .json(&body)
-            .send()
-            .await
-        else {
-            return vec![];
-        };
-        let Ok(v) = res.json::<serde_json::Value>().await else {
-            return vec![];
-        };
-        v["data"].as_array().cloned().unwrap_or_default()
+        let mut all_messages = Vec::new();
+        // The filter is exclusive, so the first window starts one millisecond
+        // BEFORE the cursor the caller gave us: the message that sits exactly
+        // on that millisecond is part of what the caller wants.
+        let mut cursor = after_ms.saturating_sub(1);
+        let mut seen_guids = std::collections::HashSet::new();
+        // The newest millisecond seen so far. A batch that does not move it
+        // forward repeated the boundary and nothing else.
+        let mut boundary = after_ms;
+
+        loop {
+            let body = serde_json::json!({
+                "after": cursor,
+                "limit": 100,
+                "sort": "ASC",
+                "with": ["handle", "attachment", "chats"]
+            });
+            let Ok(res) = self
+                .client
+                .post(self.api_url("/api/v1/message/query"))
+                .json(&body)
+                .send()
+                .await
+            else {
+                break;
+            };
+            let Ok(v) = res.json::<serde_json::Value>().await else {
+                break;
+            };
+            let batch = v["data"].as_array().cloned().unwrap_or_default();
+
+            if batch.is_empty() {
+                break;
+            }
+
+            let mut max_timestamp = cursor;
+            let batch_len = batch.len();
+
+            for msg in &batch {
+                if let Some(guid) = msg.get("guid").and_then(|g| g.as_str()) {
+                    if seen_guids.insert(guid.to_string()) {
+                        all_messages.push(msg.clone());
+                    }
+                }
+                if let Some(date_created) = msg.get("dateCreated").and_then(|d| d.as_i64()) {
+                    if date_created > max_timestamp {
+                        max_timestamp = date_created;
+                    }
+                }
+            }
+
+            // No forward progress: the batch only repeated what the previous
+            // query already covered. Stopping here is what keeps the loop
+            // from re-querying the same window forever.
+            if max_timestamp <= boundary {
+                break;
+            }
+            boundary = max_timestamp;
+            // One millisecond back, so the boundary millisecond itself is
+            // inside the next window (the filter is exclusive).
+            cursor = max_timestamp.saturating_sub(1);
+            // A short batch is the last page.
+            if batch_len < 100 {
+                break;
+            }
+        }
+
+        all_messages
     }
 
     /// Download an attachment by GUID, write to a temp file, return the path.
@@ -486,7 +578,7 @@ impl BlueBubblesApi {
         let url = self.api_url(&format!("/api/v1/attachment/{encoded_guid}/download"));
         let res = self.client.get(&url).send().await.ok()?;
         let res = res.error_for_status().ok()?;
-        let bytes = res.bytes().await.ok()?;
+        let bytes = read_attachment_limited(res, 100 * 1024 * 1024).await?;
         let ext = mime_to_ext(mime);
         let sanitized: String = guid
             .chars()
@@ -498,9 +590,13 @@ impl BlueBubblesApi {
                 }
             })
             .collect();
-        // Land in the dedicated staging subdir so the periodic sweep can bound
-        // disk use; fall back to the bare temp dir if the subdir can't be made.
-        let dir = super::staging::ensure_staging_dir().unwrap_or_else(|_| std::env::temp_dir());
+        let dir = match super::staging::ensure_staging_dir().await {
+            Ok(dir) => dir,
+            Err(e) => {
+                tracing::debug!("BlueBubbles attachment staging unavailable: {e}");
+                return None;
+            }
+        };
         let path = dir.join(format!("aleph-bb-{sanitized}.{ext}"));
         if let Err(e) = tokio::fs::write(&path, &bytes).await {
             tracing::debug!("BlueBubbles attachment write failed for {guid}: {e}");
@@ -508,6 +604,21 @@ impl BlueBubblesApi {
         }
         Some(path.to_string_lossy().into_owned())
     }
+}
+
+async fn read_attachment_limited(mut res: reqwest::Response, max: usize) -> Option<Vec<u8>> {
+    if res.content_length().is_some_and(|len| len > max as u64) {
+        return None;
+    }
+    let mut bytes = Vec::new();
+    while let Some(chunk) = res.chunk().await.ok()? {
+        if chunk.len() > max - bytes.len() {
+            tracing::debug!("BlueBubbles attachment exceeds {max} bytes");
+            return None;
+        }
+        bytes.extend_from_slice(&chunk);
+    }
+    Some(bytes)
 }
 
 /// Map a MIME type to a short extension for temp-file naming.
@@ -554,6 +665,111 @@ fn redact_password(s: String) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The cursor must not skip the millisecond it sits on: the BlueBubbles
+    /// `after` filter is exclusive, so a cursor on the newest message's
+    /// timestamp would leave every other message of that millisecond
+    /// unfetched. The query therefore starts one millisecond earlier.
+    #[tokio::test]
+    async fn the_query_cursor_includes_the_boundary_millisecond() {
+        let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::<serde_json::Value>::new()));
+        let recorder = seen.clone();
+        let app = axum::Router::new().route(
+            "/api/v1/message/query",
+            axum::routing::post(move |body: String| {
+                let recorder = recorder.clone();
+                async move {
+                    recorder
+                        .lock()
+                        .unwrap()
+                        .push(serde_json::from_str::<serde_json::Value>(&body).unwrap());
+                    axum::Json(serde_json::json!({
+                        "data": [
+                            { "guid": "g1", "dateCreated": 1000 },
+                            { "guid": "g2", "dateCreated": 1000 }
+                        ]
+                    }))
+                }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+
+        let api = BlueBubblesApi::new(format!("http://{addr}"), "pw".to_string());
+        let msgs = api.query_messages_after(1000).await;
+
+        // Both messages of the boundary millisecond are returned.
+        assert_eq!(msgs.len(), 2);
+        let requests = seen.lock().unwrap();
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0]["after"], 999);
+
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn chunked_attachment_limit_checks_actual_bytes() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        for cap in [3, 4] {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let addr = listener.local_addr().unwrap();
+            let server = tokio::spawn(async move {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let mut request = [0; 2048];
+                socket.read(&mut request).await.unwrap();
+                socket.write_all(b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n2\r\nab\r\n2\r\ncd\r\n0\r\n\r\n").await.unwrap();
+            });
+            let response = reqwest::get(format!("http://{addr}")).await.unwrap();
+            assert!(response.content_length().is_none());
+            let bytes = read_attachment_limited(response, cap).await;
+            assert_eq!(
+                bytes,
+                if cap == 4 {
+                    Some(b"abcd".to_vec())
+                } else {
+                    None
+                }
+            );
+            server.await.unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn staged_write_failure_keeps_attachment_metadata_only() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let app = axum::Router::new().fallback(|| async { "attachment" });
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let guid = uuid::Uuid::new_v4().to_string();
+        let file_name = format!("aleph-bb-{guid}.bin");
+        let dir = super::super::staging::ensure_staging_dir().await.unwrap();
+        let blocked = dir.join(&file_name);
+        tokio::fs::create_dir(&blocked).await.unwrap();
+        let api = BlueBubblesApi::new(format!("http://{addr}"), "pw".into());
+        let result = api
+            .download_attachment(&guid, "application/octet-stream")
+            .await;
+        tokio::fs::remove_dir(&blocked).await.unwrap();
+        server.abort();
+        assert!(result.is_none());
+        assert!(!std::env::temp_dir().join(file_name).exists());
+    }
+
+    #[test]
+    fn callback_supports_local_ipv6_and_encodes_credentials() {
+        for host in ["localhost", "127.0.0.1", "::", "::1", "[::1]"] {
+            let callback = webhook_callback_url(host, 8645, "/hook", "p &?+#/密码");
+            let url = url::Url::parse(&callback).unwrap();
+            assert_eq!(
+                url.query_pairs()
+                    .find(|(key, _)| key == "password")
+                    .unwrap()
+                    .1,
+                "p &?+#/密码"
+            );
+        }
+    }
 
     #[test]
     fn api_url_appends_password_query() {

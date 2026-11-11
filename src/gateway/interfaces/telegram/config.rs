@@ -11,7 +11,7 @@ use super::config_v2::{
 };
 
 /// Telegram channel configuration
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct TelegramConfig {
     /// Bot token from @`BotFather`
     pub bot_token: String,
@@ -68,6 +68,29 @@ pub struct TelegramConfig {
     /// Link preview policy for outbound messages (default: `Enabled`).
     #[serde(default)]
     pub link_preview: super::config_v2::LinkPreviewMode,
+}
+
+/// Hand-written so the credentials never reach a log line, a panic message
+/// or a `tracing` field. Every other field is printed as-is.
+impl std::fmt::Debug for TelegramConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TelegramConfig")
+            .field("bot_token", &"<redacted>")
+            .field("bot_username", &self.bot_username)
+            .field("allowed_users", &self.allowed_users)
+            .field("allowed_groups", &self.allowed_groups)
+            .field("dm_allowed", &self.dm_allowed)
+            .field("groups_allowed", &self.groups_allowed)
+            .field("dm_policy", &self.dm_policy)
+            .field("group_policy", &self.group_policy)
+            .field("polling_interval_secs", &self.polling_interval_secs)
+            .field("send_typing", &self.send_typing)
+            .field("max_retries", &self.max_retries)
+            .field("coalescing", &self.coalescing)
+            .field("streaming", &self.streaming)
+            .field("link_preview", &self.link_preview)
+            .finish()
+    }
 }
 
 const fn default_true() -> bool {
@@ -249,7 +272,17 @@ pub fn parse_telegram_channel_config(
         },
     };
 
-    // Run validation and log warnings for any issues
+    // A zero-capacity Tokio channel panics; reject it at the config boundary.
+    if config.accounts.iter().any(|account| {
+        account
+            .streaming
+            .as_ref()
+            .is_some_and(|streaming| streaming.buffer_size == 0)
+    }) {
+        return Err(<serde_json::Error as serde::de::Error>::custom(
+            "Telegram streaming.buffer_size must be > 0",
+        ));
+    }
     let validation_errors = config.validate();
     if !validation_errors.is_empty() {
         for err in &validation_errors {
@@ -263,6 +296,31 @@ pub fn parse_telegram_channel_config(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn zero_stream_buffer_is_rejected_in_v2_and_legacy_configs() {
+        for raw in [
+            serde_json::json!({"accounts": [{"id": "a", "bot_token": "123:abc", "streaming": {"buffer_size": 0}}]}),
+            serde_json::json!({"bot_token": "123:abc", "streaming": {"buffer_size": 0}}),
+        ] {
+            let error = parse_telegram_channel_config(raw).unwrap_err();
+            assert!(error
+                .to_string()
+                .contains("streaming.buffer_size must be > 0"));
+        }
+        let config = parse_telegram_channel_config(serde_json::json!({
+            "accounts": [{"id": "a", "bot_token": "123:abc"}]
+        }))
+        .unwrap();
+        assert_eq!(
+            config.accounts[0]
+                .streaming
+                .clone()
+                .unwrap_or_default()
+                .buffer_size,
+            256
+        );
+    }
 
     #[test]
     fn test_default_config() {

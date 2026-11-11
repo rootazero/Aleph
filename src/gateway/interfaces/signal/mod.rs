@@ -100,11 +100,16 @@ impl SignalChannel {
     /// Get Signal-specific capabilities
     fn capabilities() -> ChannelCapabilities {
         ChannelCapabilities {
-            attachments: true,
-            images: true,
-            audio: true,
-            video: true,
-            reactions: true,
+            // The send path builds no attachment list (see
+            // `message_ops::build_outbound`: `attachments: Vec::new()`), so
+            // advertising the media capabilities would promise something the
+            // adapter cannot deliver.
+            attachments: false,
+            images: false,
+            audio: false,
+            video: false,
+            // `react` answers UnsupportedFeature.
+            reactions: false,
             replies: true,
             editing: false,
             deletion: false,
@@ -159,7 +164,19 @@ impl Channel for SignalChannel {
         let inbound_tx = self.channel_state.sender();
         let status = self.channel_state.status_handle();
 
-        let handle = SignalMonitor::start(client, config, channel_id, inbound_tx, shutdown_rx);
+        // The retry budget can be exhausted inside the monitor task, whose
+        // JoinHandle result only reports a panic. The flag carries that
+        // failure out so the status becomes `Error` instead of looking like
+        // a clean disconnect (the health monitor would never fire).
+        let retry_exhausted = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let handle = SignalMonitor::start(
+            client,
+            config,
+            channel_id,
+            inbound_tx,
+            shutdown_rx,
+            retry_exhausted.clone(),
+        );
 
         tokio::spawn(async move {
             *status.write().await = ChannelStatus::Connected;
@@ -175,7 +192,7 @@ impl Channel for SignalChannel {
             // (the loop logs "max retries exceeded" before breaking), while
             // only a shutdown-driven exit maps to Disconnected.
             let mut guard = status.write().await;
-            if result.is_err() {
+            if result.is_err() || retry_exhausted.load(std::sync::atomic::Ordering::Relaxed) {
                 *guard = ChannelStatus::Error;
             } else if *guard != ChannelStatus::Error {
                 *guard = ChannelStatus::Disconnected;
@@ -259,12 +276,20 @@ impl ChannelFactory for SignalChannelFactory {
     }
 
     async fn create(&self, config: serde_json::Value) -> ChannelResult<Box<dyn Channel>> {
+        self.create_with_id("signal", config).await
+    }
+
+    async fn create_with_id(
+        &self,
+        id: &str,
+        config: serde_json::Value,
+    ) -> ChannelResult<Box<dyn Channel>> {
         let config: SignalConfig = serde_json::from_value(config)
             .map_err(|e| ChannelError::ConfigError(format!("Invalid Signal config: {e}")))?;
 
         config.validate().map_err(ChannelError::ConfigError)?;
 
-        Ok(Box::new(SignalChannel::new("signal", config)))
+        Ok(Box::new(SignalChannel::new(id, config)))
     }
 }
 

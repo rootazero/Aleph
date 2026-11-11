@@ -41,13 +41,11 @@ use crate::capability::ownership::{OwnerGeneration, OwnershipChange, OwnershipTr
 use crate::capability::special::{CapabilityHandlerRegistry, SpecialPublication};
 use crate::capability::zahir_facade::{FacadeEntriesSnapshot, ZahirFacade};
 use crate::capability::{CapabilitySlot, MissingSemantics, SlotStatus};
-use crate::sync_primitives::Arc;
+use crate::sync_primitives::{Arc, AtomicBool, AtomicU64, Mutex, Ordering, PoisonError, Weak};
 use crate::tools::registry::{
     RegistryEntry, RegistryPublication, RegistrySnapshot, ToolHandlerRegistry,
 };
 use std::collections::{HashMap, VecDeque};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Mutex, Weak};
 use std::time::Duration;
 use tokio::sync::{broadcast, Notify};
 use tokio::task::JoinHandle;
@@ -249,7 +247,7 @@ impl ConsumerState {
     fn last_cursor(&self) -> Cursor {
         self.queue
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .unwrap_or_else(PoisonError::into_inner)
             .last_cursor
     }
 
@@ -260,7 +258,7 @@ impl ConsumerState {
         self.closed.store(true, Ordering::SeqCst);
         self.queue
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .unwrap_or_else(PoisonError::into_inner)
             .items
             .clear();
         self.wake.notify_waiters();
@@ -269,7 +267,7 @@ impl ConsumerState {
     fn try_pop(&self) -> Option<ProjectionEvent> {
         self.queue
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .unwrap_or_else(PoisonError::into_inner)
             .items
             .pop_front()
     }
@@ -278,10 +276,7 @@ impl ConsumerState {
     /// backlog with `Invalidated` + the fresh replacement `Snapshot`.
     /// Returns `true` iff overflow fired and the backlog was cleared.
     fn enqueue_snapshot(&self, snapshot: HostSnapshot) -> bool {
-        let mut q = self
-            .queue
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut q = self.queue.lock().unwrap_or_else(PoisonError::into_inner);
         let backlog_cleared = if q.items.len() >= self.capacity {
             q.items.clear();
             q.items.push_back(ProjectionEvent::Invalidated);
@@ -301,10 +296,7 @@ impl ConsumerState {
     /// ONE atomic unit: the pair is guaranteed to fit together, clearing the
     /// stale backlog first when it would not.
     fn enqueue_invalidation(&self, snapshot: HostSnapshot) {
-        let mut q = self
-            .queue
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut q = self.queue.lock().unwrap_or_else(PoisonError::into_inner);
         if q.items.len() + 2 > self.capacity {
             q.items.clear();
         }
@@ -326,10 +318,7 @@ impl ConsumerState {
         cursor: Cursor,
         replacement: HostSnapshot,
     ) {
-        let mut q = self
-            .queue
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut q = self.queue.lock().unwrap_or_else(PoisonError::into_inner);
         if cursor <= q.last_cursor {
             return;
         }
@@ -789,11 +778,11 @@ impl ProjectionHost {
         *inner
             .source_task
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(source);
+            .unwrap_or_else(PoisonError::into_inner) = Some(source);
         *inner
             .applier_task
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(applier);
+            .unwrap_or_else(PoisonError::into_inner) = Some(applier);
 
         host
     }
@@ -851,7 +840,7 @@ impl ProjectionHost {
             .inner
             .applied
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+            .unwrap_or_else(PoisonError::into_inner);
         if applied.closed {
             return None;
         }
@@ -953,7 +942,7 @@ impl ProjectionHost {
         self.inner
             .completion
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .unwrap_or_else(PoisonError::into_inner)
             .outcome
             .is_some()
     }
@@ -968,7 +957,7 @@ impl ProjectionHost {
             .inner
             .publish
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+            .unwrap_or_else(PoisonError::into_inner);
         let consumer = Arc::new(ConsumerState::new(scope, DEFAULT_PENDING_CAPACITY));
         let mut id = 0;
         if !self.inner.closed.load(Ordering::SeqCst) {
@@ -978,7 +967,7 @@ impl ProjectionHost {
                 .inner
                 .consumers
                 .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
+                .unwrap_or_else(PoisonError::into_inner);
             id = map.next_id;
             map.next_id += 1;
             map.by_id.insert(id, Arc::clone(&consumer));
@@ -1011,7 +1000,7 @@ impl ProjectionHost {
                 .inner
                 .completion
                 .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .unwrap_or_else(PoisonError::into_inner)
                 .outcome
                 .clone()
             {
@@ -1031,7 +1020,7 @@ impl ProjectionHost {
             .inner
             .completion
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+            .unwrap_or_else(PoisonError::into_inner);
         let lifecycle = if completion.outcome.is_some() {
             DiagnosticLifecycle::Closed
         } else if self.inner.closed.load(Ordering::Acquire) || completion.started {
@@ -1045,7 +1034,7 @@ impl ProjectionHost {
             .inner
             .applied
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+            .unwrap_or_else(PoisonError::into_inner);
         let registry_cursor = applied
             .snapshot
             .as_ref()
@@ -1084,7 +1073,7 @@ impl ProjectionHost {
             .default_consumer
             .queue
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+            .unwrap_or_else(PoisonError::into_inner);
         let pending_depth = q.items.len();
         let pending_capacity = self.inner.default_consumer.capacity;
         drop(q);
@@ -1129,7 +1118,7 @@ impl ProjectionHost {
             let mut guard = diagnostics
                 .hold
                 .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
+                .unwrap_or_else(PoisonError::into_inner);
             if guard.active.is_some() {
                 return Err(DiagnosticError::HoldAlreadyActive);
             }
@@ -1148,7 +1137,7 @@ impl ProjectionHost {
                         let cleared = diagnostics
                             .hold
                             .lock()
-                            .unwrap_or_else(std::sync::PoisonError::into_inner)
+                            .unwrap_or_else(PoisonError::into_inner)
                             .clear_if(id);
                         if cleared {
                             diagnostics.notify.notify_waiters();
@@ -1175,7 +1164,7 @@ impl ProjectionHost {
             let still_ours = diagnostics
                 .hold
                 .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .unwrap_or_else(PoisonError::into_inner)
                 .active
                 .as_ref()
                 .is_some_and(|h| h.id == id);
@@ -1194,7 +1183,7 @@ impl ProjectionHost {
         let taken = diagnostics
             .hold
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .unwrap_or_else(PoisonError::into_inner)
             .active
             .take();
         if let Some(hold) = taken {
@@ -1221,7 +1210,7 @@ impl ProjectionHost {
                     .inner
                     .completion
                     .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                    .unwrap_or_else(PoisonError::into_inner);
                 if let Some(outcome) = guard.outcome.clone() {
                     return Ok(outcome);
                 }
@@ -1268,7 +1257,7 @@ impl ProjectionHost {
         self.inner
             .completion
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .unwrap_or_else(PoisonError::into_inner)
             .outcome
             .is_some()
     }
@@ -1319,12 +1308,12 @@ impl ProjectionHandle {
             .host
             .publish
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+            .unwrap_or_else(PoisonError::into_inner);
         let mut map = self
             .host
             .consumers
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+            .unwrap_or_else(PoisonError::into_inner);
         map.by_id.remove(&self.id);
         self.consumer.close_and_discard();
     }
@@ -1340,12 +1329,12 @@ impl Drop for ProjectionHandle {
             .host
             .publish
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+            .unwrap_or_else(PoisonError::into_inner);
         let mut map = self
             .host
             .consumers
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+            .unwrap_or_else(PoisonError::into_inner);
         map.by_id.remove(&self.id);
         self.consumer.close_and_discard();
     }
@@ -1393,7 +1382,7 @@ async fn wait_diagnostic_hold(
     let release_at = diagnostics
         .hold
         .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .unwrap_or_else(PoisonError::into_inner)
         .active
         .as_ref()
         .filter(|h| h.plane == plane)
@@ -1414,15 +1403,12 @@ async fn wait_diagnostic_hold(
 }
 
 fn request_local_close(inner: &Arc<HostInner>) {
-    let _publish = inner
-        .publish
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let _publish = inner.publish.lock().unwrap_or_else(PoisonError::into_inner);
     if !inner.closed.swap(true, Ordering::SeqCst) {
         let consumers = inner
             .consumers
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+            .unwrap_or_else(PoisonError::into_inner);
         for consumer in consumers.by_id.values() {
             consumer.close_and_discard();
         }
@@ -1445,7 +1431,7 @@ fn start_shutdown(inner: &Arc<HostInner>) {
         let mut state = inner
             .completion
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+            .unwrap_or_else(PoisonError::into_inner);
         if state.started {
             false
         } else {
@@ -1459,7 +1445,7 @@ fn start_shutdown(inner: &Arc<HostInner>) {
             let source_task = owned
                 .source_task
                 .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .unwrap_or_else(PoisonError::into_inner)
                 .take();
             let source_failed = match source_task {
                 Some(task) => task.await.is_err(),
@@ -1469,7 +1455,7 @@ fn start_shutdown(inner: &Arc<HostInner>) {
             let applier_task = owned
                 .applier_task
                 .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .unwrap_or_else(PoisonError::into_inner)
                 .take();
             let applier_failed = match applier_task {
                 Some(task) => task.await.is_err(),
@@ -1484,7 +1470,7 @@ fn start_shutdown(inner: &Arc<HostInner>) {
             owned
                 .completion
                 .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .unwrap_or_else(PoisonError::into_inner)
                 .outcome = Some(outcome);
             owned.completion_notify.notify_waiters();
         });
@@ -1634,7 +1620,7 @@ fn publication_already_reflected(inner: &HostInner, cursor: Cursor) -> bool {
     let consumers = inner
         .consumers
         .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
+        .unwrap_or_else(PoisonError::into_inner);
     consumers
         .by_id
         .values()
@@ -1645,10 +1631,7 @@ fn publication_already_reflected(inner: &HostInner, cursor: Cursor) -> bool {
 /// Fan out one primary registry publication to every consumer.
 fn process_registry_publication(inner: &HostInner, publication: RegistryPublication) {
     let (cursor, changes) = inner.facade.map_registry_publication(publication.clone());
-    let _publish = inner
-        .publish
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let _publish = inner.publish.lock().unwrap_or_else(PoisonError::into_inner);
     if inner.closed.load(Ordering::SeqCst) {
         return;
     }
@@ -1682,7 +1665,7 @@ fn process_registry_publication(inner: &HostInner, publication: RegistryPublicat
     let consumers = inner
         .consumers
         .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
+        .unwrap_or_else(PoisonError::into_inner);
     for consumer in consumers.by_id.values() {
         if consumer.is_closed() {
             continue;
@@ -1700,10 +1683,7 @@ fn process_registry_publication(inner: &HostInner, publication: RegistryPublicat
 /// Invalidate every consumer: enqueue `Invalidated` + a fresh snapshot. The
 /// registry cursor is NOT advanced — only the registry advances it.
 fn invalidate_all(inner: &HostInner) {
-    let _publish = inner
-        .publish
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let _publish = inner.publish.lock().unwrap_or_else(PoisonError::into_inner);
     if inner.closed.load(Ordering::SeqCst) {
         return;
     }
@@ -1725,7 +1705,7 @@ fn invalidate_all_from_cut(inner: &HostInner, registry_cut: &RegistrySnapshot) {
     let consumers = inner
         .consumers
         .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
+        .unwrap_or_else(PoisonError::into_inner);
     for consumer in consumers.by_id.values() {
         if consumer.is_closed() {
             continue;
@@ -1737,10 +1717,7 @@ fn invalidate_all_from_cut(inner: &HostInner, registry_cut: &RegistrySnapshot) {
 
 /// Deliver the terminal close projection to every consumer and mark each closed.
 fn deliver_close(inner: &HostInner) {
-    let _publish = inner
-        .publish
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let _publish = inner.publish.lock().unwrap_or_else(PoisonError::into_inner);
     if inner.closed.swap(true, Ordering::SeqCst) {
         return;
     }
@@ -1755,7 +1732,7 @@ fn deliver_close(inner: &HostInner) {
     let consumers = inner
         .consumers
         .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
+        .unwrap_or_else(PoisonError::into_inner);
     for consumer in consumers.by_id.values() {
         if consumer.is_closed() {
             continue;
@@ -1794,10 +1771,8 @@ async fn applier_worker(
                         }
                     }
                     {
-                        let mut applied = inner
-                            .applied
-                            .lock()
-                            .unwrap_or_else(std::sync::PoisonError::into_inner);
+                        let mut applied =
+                            inner.applied.lock().unwrap_or_else(PoisonError::into_inner);
                         applied.snapshot = Some(snapshot.clone());
                         // Replacement receipt (observational only):
                         // write under the SAME lock as the snapshot install
@@ -1827,10 +1802,8 @@ async fn applier_worker(
                     // is never served between invalidation and its replacement
                     // Snapshot.
                     {
-                        let mut applied = inner
-                            .applied
-                            .lock()
-                            .unwrap_or_else(std::sync::PoisonError::into_inner);
+                        let mut applied =
+                            inner.applied.lock().unwrap_or_else(PoisonError::into_inner);
                         applied.snapshot = None;
                         // Observational receipt under the SAME lock cut as
                         // the snapshot clear, so the bumped counter / set
@@ -1850,10 +1823,7 @@ async fn applier_worker(
         }
         let Some(inner) = inner.upgrade() else { return };
         if default.is_closed() {
-            let mut applied = inner
-                .applied
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let mut applied = inner.applied.lock().unwrap_or_else(PoisonError::into_inner);
             applied.closed = true;
             return;
         }
@@ -1881,6 +1851,7 @@ mod tests {
         register_canonical_adapters, register_canonical_adapters_with_tools,
     };
     use crate::session::events::{ToolOutput, TurnId};
+    use crate::sync_primitives::AtomicUsize;
     use crate::tools::adapters::McpRegistryTool;
     use crate::tools::descriptor::{
         ReplayPolicy, ToolCapabilityDescriptor, ToolKind, SCHEMA_VERSION,
@@ -1893,7 +1864,6 @@ mod tests {
     };
     use async_trait::async_trait;
     use serde_json::Value;
-    use std::sync::atomic::AtomicUsize;
 
     fn special_descriptors(facade: &ZahirFacade) -> Vec<CapabilityDescriptor> {
         let mut descriptors = facade
@@ -2280,7 +2250,7 @@ mod tests {
             .default_consumer
             .queue
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+            .unwrap_or_else(PoisonError::into_inner);
         // After mount the queue held [Snapshot(initial)]; invalidate_all must
         // have appended the mandated Invalidated + replacement Snapshot pair.
         assert_eq!(
@@ -2341,7 +2311,7 @@ mod tests {
                 .default_consumer
                 .queue
                 .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
+                .unwrap_or_else(PoisonError::into_inner);
             assert_eq!(
                 q.items.len(),
                 2,
@@ -2415,7 +2385,7 @@ mod tests {
             .consumer
             .queue
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+            .unwrap_or_else(PoisonError::into_inner);
         assert_eq!(q.items.len(), 3);
         assert!(matches!(q.items[0], ProjectionEvent::Snapshot(_)));
         assert!(matches!(q.items[1], ProjectionEvent::Change(_)));
@@ -2444,7 +2414,7 @@ mod tests {
                 .consumer
                 .queue
                 .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
+                .unwrap_or_else(PoisonError::into_inner);
             assert_eq!(q.items.len(), DEFAULT_PENDING_CAPACITY - 1);
         }
 
@@ -2463,7 +2433,7 @@ mod tests {
             .consumer
             .queue
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+            .unwrap_or_else(PoisonError::into_inner);
         assert_eq!(q.items.len(), 2);
         assert!(matches!(q.items[0], ProjectionEvent::Invalidated));
         let ProjectionEvent::Snapshot(snapshot) = &q.items[1] else {
@@ -2502,7 +2472,7 @@ mod tests {
             .default_consumer
             .queue
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+            .unwrap_or_else(PoisonError::into_inner);
         assert_eq!(q.items.len(), 3);
         assert!(matches!(q.items[1], ProjectionEvent::Invalidated));
         let ProjectionEvent::Snapshot(snapshot) = &q.items[2] else {
@@ -2866,7 +2836,7 @@ mod tests {
                 host.inner
                     .publish
                     .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner),
+                    .unwrap_or_else(PoisonError::into_inner),
             );
         }
 
@@ -3138,7 +3108,7 @@ mod tests {
                 .default_consumer
                 .queue
                 .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
+                .unwrap_or_else(PoisonError::into_inner);
             q.items.push_back(ProjectionEvent::Invalidated);
         }
         host.inner.default_consumer.wake.notify_one();
@@ -3217,7 +3187,7 @@ mod tests {
             host.inner
                 .completion
                 .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .unwrap_or_else(PoisonError::into_inner)
                 .outcome
                 .is_none(),
             "shutdown cannot report completion while captured delivery is held"
@@ -3500,7 +3470,7 @@ mod tests {
             .as_ref()?
             .hold
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .unwrap_or_else(PoisonError::into_inner)
             .active
             .as_ref()
             .map(|h| h.plane)
@@ -3721,7 +3691,7 @@ mod tests {
                         .default_consumer
                         .queue
                         .lock()
-                        .unwrap_or_else(std::sync::PoisonError::into_inner);
+                        .unwrap_or_else(PoisonError::into_inner);
                     let last_full = matches!(
                         q.items.back(),
                         Some(ProjectionEvent::Snapshot(s)) if s.entries.len() == 10
@@ -3816,7 +3786,7 @@ mod tests {
             host.inner
                 .completion
                 .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .unwrap_or_else(PoisonError::into_inner)
                 .outcome
                 .is_none(),
             "timeout must not fabricate completion"
@@ -3944,7 +3914,7 @@ mod tests {
                 .default_consumer
                 .queue
                 .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
+                .unwrap_or_else(PoisonError::into_inner);
             q.items.push_back(ProjectionEvent::Invalidated);
         }
         host.inner.default_consumer.wake.notify_one();

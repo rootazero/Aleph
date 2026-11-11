@@ -122,21 +122,24 @@ async fn handle_webhook_after_admission(
 
 /// Resolve the effective event payload string from a raw webhook body.
 ///
-/// If an Encrypt Key is configured and the body carries an `encrypt` field, the
-/// signature (when the signing headers are present) is verified and the payload is
-/// AES-decrypted. Otherwise the raw body is returned unchanged (plaintext mode).
+/// If an Encrypt Key is configured, the body MUST carry an `encrypt` field and
+/// valid signing headers; plaintext events are rejected. The only exception is
+/// a URL-verification challenge that arrives as a plaintext `{"challenge":...}`
+/// body with no `encrypt` field, which is allowed exclusively when no token or
+/// event-type fields are present (i.e. it is structurally a bare challenge).
+/// Without an Encrypt Key the raw body is returned unchanged (plaintext mode).
 fn resolve_payload(
     state: &WebhookState,
     headers: &HeaderMap,
     body_str: &str,
 ) -> Result<String, StatusCode> {
-    let encrypt_field = serde_json::from_str::<serde_json::Value>(body_str)
-        .ok()
-        .and_then(|v| {
-            v.get("encrypt")
-                .and_then(|e| e.as_str())
-                .map(str::to_string)
-        });
+    let parsed = serde_json::from_str::<serde_json::Value>(body_str).ok();
+
+    let encrypt_field = parsed.as_ref().and_then(|v| {
+        v.get("encrypt")
+            .and_then(|e| e.as_str())
+            .map(str::to_string)
+    });
 
     match (state.config.encrypt_key.as_ref(), encrypt_field) {
         (Some(key), Some(encrypted)) => {
@@ -158,7 +161,27 @@ fn resolve_payload(
                 StatusCode::BAD_REQUEST
             })
         }
-        _ => Ok(body_str.to_string()),
+        (Some(_key), None) => {
+            // Encrypt Key is configured but the body arrived in plaintext.
+            // Allow only a bare URL-verification challenge: a JSON object
+            // containing a "challenge" field and nothing that looks like a
+            // real event (no "token", no "header", no "event" fields).
+            let is_bare_challenge = parsed.as_ref().map_or(false, |v| {
+                v.get("challenge").is_some()
+                    && v.get("token").is_none()
+                    && v.get("header").is_none()
+                    && v.get("event").is_none()
+            });
+            if is_bare_challenge {
+                Ok(body_str.to_string())
+            } else {
+                tracing::warn!(
+                    "Feishu webhook: encrypt key configured but plaintext event received; rejecting"
+                );
+                Err(StatusCode::UNAUTHORIZED)
+            }
+        }
+        (None, _) => Ok(body_str.to_string()),
     }
 }
 

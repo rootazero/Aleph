@@ -230,10 +230,11 @@ fn scan_phone(chars: &[char], start: usize) -> Option<usize> {
 }
 
 fn scan_ssn(chars: &[char], start: usize) -> Option<usize> {
-    // First group: 3 digits.
-    if start + 2 >= chars.len() {
+    // An SSN requires exactly 11 characters (3 digits, sep, 2 digits, sep, 4 digits).
+    if start.checked_add(11)? > chars.len() {
         return None;
     }
+    // First group: 3 digits.
     if !chars[start].is_ascii_digit()
         || !chars[start + 1].is_ascii_digit()
         || !chars[start + 2].is_ascii_digit()
@@ -245,10 +246,7 @@ fn scan_ssn(chars: &[char], start: usize) -> Option<usize> {
         return None;
     }
     // Second group: 2 digits.
-    if start + 5 >= chars.len()
-        || !chars[start + 4].is_ascii_digit()
-        || !chars[start + 5].is_ascii_digit()
-    {
+    if !chars[start + 4].is_ascii_digit() || !chars[start + 5].is_ascii_digit() {
         return None;
     }
     // Separator.
@@ -256,8 +254,7 @@ fn scan_ssn(chars: &[char], start: usize) -> Option<usize> {
         return None;
     }
     // Third group: 4 digits.
-    if start + 9 >= chars.len()
-        || !chars[start + 7].is_ascii_digit()
+    if !chars[start + 7].is_ascii_digit()
         || !chars[start + 8].is_ascii_digit()
         || !chars[start + 9].is_ascii_digit()
         || !chars[start + 10].is_ascii_digit()
@@ -350,6 +347,17 @@ mod tests {
         );
         assert!(!redacted.contains("alice@example.com"));
         assert!(redacted.contains("[REDACTED:email]"));
+    }
+
+    #[test]
+    fn ssn_near_end_of_string_does_not_panic() {
+        assert_eq!(redact_profile_pii("account 123"), "account 123");
+        assert_eq!(redact_profile_pii("code 123-45"), "code 123-45");
+        assert_eq!(redact_profile_pii("id 123-45-678"), "id 123-45-678");
+        assert_eq!(
+            redact_profile_pii("real 123-45-6789 end"),
+            "real [REDACTED:ssn] end"
+        );
     }
 
     #[tokio::test]

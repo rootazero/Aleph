@@ -133,27 +133,27 @@ impl GenerationDefaults {
 
         // Validate speed is in range
         if let Some(speed) = self.speed {
-            if !(0.25..=4.0).contains(&speed) {
+            if !speed.is_finite() || !(0.25..=4.0).contains(&speed) {
                 return Err(format!(
-                    "generation.providers.{provider_name}.defaults.speed must be between 0.25 and 4.0, got {speed}"
+                    "generation.providers.{provider_name}.defaults.speed must be a finite number between 0.25 and 4.0, got {speed}"
                 ));
             }
         }
 
         // Validate duration_seconds
         if let Some(duration) = self.duration_seconds {
-            if duration <= 0.0 {
+            if !duration.is_finite() || duration <= 0.0 {
                 return Err(format!(
-                    "generation.providers.{provider_name}.defaults.duration_seconds must be greater than 0"
+                    "generation.providers.{provider_name}.defaults.duration_seconds must be a finite number greater than 0"
                 ));
             }
         }
 
         // Validate guidance_scale
         if let Some(scale) = self.guidance_scale {
-            if scale < 0.0 {
+            if !scale.is_finite() || scale < 0.0 {
                 return Err(format!(
-                    "generation.providers.{provider_name}.defaults.guidance_scale must be >= 0, got {scale}"
+                    "generation.providers.{provider_name}.defaults.guidance_scale must be a finite number >= 0, got {scale}"
                 ));
             }
             if scale > 30.0 {

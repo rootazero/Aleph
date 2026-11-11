@@ -10,7 +10,7 @@
 use crate::sync_primitives::Arc;
 use std::collections::HashMap;
 
-use tracing::{info, warn};
+use tracing::info;
 
 use super::{BuiltinToolConfig, BuiltinToolRegistry};
 use crate::tool_metadata::{ToolSource, UnifiedTool};
@@ -535,13 +535,8 @@ impl BuiltinToolRegistry {
         // recall_context tool — gated on injection_mode (retrieval tools only)
         if expose_retrieval_tools {
             use crate::builtin_tools::RecallContextTool;
-            let schema = serde_json::to_value(schemars::schema_for!(
-                crate::builtin_tools::recall_context::RecallContextArgs
-            ))
-            .unwrap_or_else(|e| {
-                warn!("Failed to serialize schema for recall_context: {}", e);
-                serde_json::Value::Object(Default::default())
-            });
+            use crate::executor::builtin_registry::builder::core_tools::tool_schema;
+            let schema = tool_schema::<crate::builtin_tools::recall_context::RecallContextArgs>("recall_context");
             let mut ut = UnifiedTool::new(
                 format!("builtin:{}", RecallContextTool::NAME),
                 RecallContextTool::NAME,
@@ -556,13 +551,8 @@ impl BuiltinToolRegistry {
         // memory_trace tool — gated on injection_mode (retrieval tools only)
         if expose_retrieval_tools {
             use crate::builtin_tools::memory_trace::MemoryTraceTool;
-            let schema = serde_json::to_value(schemars::schema_for!(
-                crate::builtin_tools::memory_trace::MemoryTraceArgs
-            ))
-            .unwrap_or_else(|e| {
-                warn!("Failed to serialize schema for memory_trace: {}", e);
-                serde_json::Value::Object(Default::default())
-            });
+            use crate::executor::builtin_registry::builder::core_tools::tool_schema;
+            let schema = tool_schema::<crate::builtin_tools::memory_trace::MemoryTraceArgs>("memory_trace");
             let mut ut = UnifiedTool::new(
                 format!("builtin:{}", MemoryTraceTool::NAME),
                 MemoryTraceTool::NAME,
@@ -578,13 +568,8 @@ impl BuiltinToolRegistry {
         // note_graph_query tool — read-only graph interrogation (retrieval tools only)
         if expose_retrieval_tools {
             use crate::builtin_tools::note_graph_query::NoteGraphQueryTool;
-            let schema = serde_json::to_value(schemars::schema_for!(
-                crate::builtin_tools::note_graph_query::NoteGraphQueryArgs
-            ))
-            .unwrap_or_else(|e| {
-                warn!("Failed to serialize schema for note_graph_query: {}", e);
-                serde_json::Value::Object(Default::default())
-            });
+            use crate::executor::builtin_registry::builder::core_tools::tool_schema;
+            let schema = tool_schema::<crate::builtin_tools::note_graph_query::NoteGraphQueryArgs>("note_graph_query");
             let mut ut = UnifiedTool::new(
                 format!("builtin:{}", NoteGraphQueryTool::NAME),
                 NoteGraphQueryTool::NAME,

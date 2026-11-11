@@ -163,7 +163,13 @@ impl FallbackApprovalRequester {
 impl ApprovalRequester for FallbackApprovalRequester {
     async fn request_approval(&self, action: &ApprovalAction) -> ApprovalResponse {
         if self.channel.can_reach_user().await {
-            return self.channel.request_approval(action).await;
+            let response = self.channel.request_approval(action).await;
+            if response.outcome != ApprovalOutcome::Unavailable {
+                return response;
+            }
+            tracing::warn!(
+                "channel approval became unavailable before delivery; falling back to operator"
+            );
         }
         self.operator.request_approval(action).await
     }

@@ -602,6 +602,11 @@ pub async fn handle_list_corrections(
             }
         }
     }
+    // Apply per-partition distilled filtering before global truncation to
+    // preserve pending corrections that would otherwise be dropped.
+    if !include_distilled {
+        rows.retain(|(r, watermark)| r.created_at > *watermark);
+    }
     // Merge into one newest-first ordering and cap once. Each partition was
     // fetched to the full `limit` rather than a share of it, so a union whose
     // corrections all live in one partition returns exactly what a
@@ -611,7 +616,6 @@ pub async fn handle_list_corrections(
 
     let corrections: Vec<_> = rows
         .into_iter()
-        .filter(|(r, watermark)| include_distilled || r.created_at > *watermark)
         .map(|(r, watermark)| {
             let (severity, suggested_rule) = match &r.source {
                 RawMemorySource::Correction {
@@ -637,7 +641,6 @@ pub async fn handle_list_corrections(
 // ============================================================================
 // Trace (evidence-chain walk)
 // ============================================================================
-
 /// Walk a memory claim down to ground-truth evidence.
 ///
 /// Read-only; R4-compliant (I/O only). Forwards to

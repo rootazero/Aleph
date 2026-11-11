@@ -511,7 +511,7 @@ impl IndexIdTracker {
     #[must_use]
     pub fn ids_in_order(&self) -> Vec<&str> {
         let mut entries: Vec<(&u64, &String)> = self.map.iter().collect();
-        entries.sort_by_key(|(index, _)| **index);
+        entries.sort_unstable_by_key(|(index, _)| **index);
         entries.into_iter().map(|(_, id)| id.as_str()).collect()
     }
 }

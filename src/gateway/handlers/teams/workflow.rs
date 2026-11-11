@@ -1,5 +1,4 @@
 //! Templates, ACP members, workflow step review, and task-level control handlers.
-
 use serde::Deserialize;
 use serde_json::json;
 use tracing::debug;
@@ -29,9 +28,13 @@ use crate::gateway::protocol::{
 pub async fn handle_list_templates(request: JsonRpcRequest) -> JsonRpcResponse {
     debug!("Handling teams.list_templates request");
 
-    let registry = crate::teams::templates::TemplateRegistry::discover(
-        &crate::teams::templates::loader::default_user_dir(),
-    );
+    let registry = tokio::task::spawn_blocking(|| {
+        crate::teams::templates::TemplateRegistry::discover(
+            &crate::teams::templates::loader::default_user_dir(),
+        )
+    })
+    .await
+    .unwrap();
 
     let entries: Vec<serde_json::Value> = registry
         .list()
@@ -59,7 +62,6 @@ pub async fn handle_list_templates(request: JsonRpcRequest) -> JsonRpcResponse {
 // functions (capture_snapshot / restore_snapshot + SnapshotStore methods) so
 // behaviour, dry-run defaults, and edge-restoration semantics are identical.
 // =============================================================================
-
 // =============================================================================
 // ACP Member Operations (teams.acp_member.{add,remove,list})
 // =============================================================================

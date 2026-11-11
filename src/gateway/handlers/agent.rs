@@ -161,6 +161,29 @@ pub struct RunState {
     pub input: String,
 }
 
+/// How many finished runs the manager keeps as recent history.
+const MAX_TERMINAL_RUNS: usize = 128;
+
+/// Evict the oldest terminal entries so the run map stays bounded by recent
+/// history instead of growing with every request forever. Active runs
+/// (`Running` / `Cancelled`) are never evicted.
+fn retain_terminal_runs_bounded(runs: &mut HashMap<String, RunState>) {
+    let mut finished: Vec<(std::time::Instant, String)> = runs
+        .iter()
+        .filter_map(|(id, r)| match r.status {
+            RunStatus::Completed | RunStatus::Failed(_) => Some((r.started_at, id.clone())),
+            _ => None,
+        })
+        .collect();
+    if finished.len() > MAX_TERMINAL_RUNS {
+        finished.sort_by_key(|(t, _)| *t);
+        let excess = finished.len() - MAX_TERMINAL_RUNS;
+        for (_, id) in finished.into_iter().take(excess) {
+            runs.remove(&id);
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RunStatus {
     Running,
@@ -245,13 +268,44 @@ impl AgentRunManager {
         let session_key_str = session_key.to_key_string();
         let accepted_at = chrono::Utc::now().to_rfc3339();
 
+        // Admission comes after validation: a request that fails the agent
+        // lookup or the request builder is refused before it is registered
+        // as Running and before `run_accepted` is published — a refused
+        // request must not read as an admitted run.
+        let agent_id = session_key.agent_id();
+        let agent = match self.agent_registry.get(agent_id).await {
+            Some(a) => a,
+            None => {
+                error!("Agent not found: {}", agent_id);
+                return Err(format!("Agent not found: {agent_id}"));
+            }
+        };
+
+        let stream = params.stream;
+        let input = params.input.clone();
+
+        // `sessions: None` — the Simulated-execution fallback has no
+        // `SessionStore` (see this type's doc and `method_visibility.rs`'s
+        // carve-out for the same reason). Errors are surfaced as strings on
+        // this path; the real-engine handlers keep the typed variants.
+        let request = build_run_request(
+            run_id.clone(),
+            &session_key,
+            params,
+            self.app_config.as_ref(),
+            None,
+            agent.config(),
+        )
+        .await
+        .map_err(|e| e.to_string())?;
+
         // Create run state
         let run_state = RunState {
             run_id: run_id.clone(),
             session_key: session_key.clone(),
             started_at: Instant::now(),
             status: RunStatus::Running,
-            input: params.input.clone(),
+            input,
         };
 
         // Store in active runs
@@ -263,7 +317,7 @@ impl AgentRunManager {
         info!("Started run {} for session {}", run_id, session_key_str);
 
         // Emit run accepted event
-        if params.stream {
+        if stream {
             let event = StreamEvent::RunAccepted {
                 run_id: run_id.clone(),
                 session_key: session_key_str.clone(),
@@ -280,34 +334,6 @@ impl AgentRunManager {
                 }
             }
         }
-
-        let agent_id = session_key.agent_id();
-        let agent = match self.agent_registry.get(agent_id).await {
-            Some(a) => a,
-            None => {
-                error!("Agent not found: {}", agent_id);
-                let mut runs = self.active_runs.write().await;
-                if let Some(run) = runs.get_mut(&run_id) {
-                    run.status = RunStatus::Failed(format!("Agent not found: {agent_id}"));
-                }
-                return Err(format!("Agent not found: {agent_id}"));
-            }
-        };
-
-        // `sessions: None` — the Simulated-execution fallback has no
-        // `SessionStore` (see this type's doc and `method_visibility.rs`'s
-        // carve-out for the same reason). Errors are surfaced as strings on
-        // this path; the real-engine handlers keep the typed variants.
-        let request = build_run_request(
-            run_id.clone(),
-            &session_key,
-            params,
-            self.app_config.as_ref(),
-            None,
-            agent.config(),
-        )
-        .await
-        .map_err(|e| e.to_string())?;
 
         // Capture the originating surface before `request` is moved into the
         // spawn — used below to decide cross-surface reply fan-out.
@@ -327,7 +353,6 @@ impl AgentRunManager {
         let base_emitter: Arc<dyn EventEmitter + Send + Sync> = Arc::new(
             GatewayEventEmitter::with_output_mode(self.event_bus.clone(), output_mode),
         );
-
         // Sub-gap (b): if this gateway/Panel run continues a session that
         // originated on an *external* channel (Telegram, ...), wrap the emitter
         // so the final reply is also delivered back to that origin channel —
@@ -367,6 +392,11 @@ impl AgentRunManager {
                     Err(e) => RunStatus::Failed(e.to_string()),
                 };
             }
+            // Reclaim memory from finished runs: evict the oldest terminal
+            // entries so the map stays bounded by recent history instead of
+            // growing with every request forever. Active runs are never
+            // evicted.
+            retain_terminal_runs_bounded(&mut runs);
         });
 
         Ok(AgentRunResult {
@@ -2086,6 +2116,65 @@ mod tests {
         assert!(
             err.to_string().contains("game"),
             "error should name the bad mode: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn finished_run_history_is_bounded_without_evicting_in_flight_runs() {
+        let router = Arc::new(AgentRouter::new());
+        let session_key = router.route(None, None, None, None).await;
+        let (agent_registry, _tmp) = registry_with_main_agent().await;
+        let manager = AgentRunManager::new(
+            router,
+            Arc::new(GatewayEventBus::new()),
+            agent_registry,
+            Arc::new(MockExecutionAdapter),
+        );
+        let oldest = Instant::now() - std::time::Duration::from_secs(256);
+        {
+            let mut runs = manager.active_runs.write().await;
+            for i in 0..=MAX_TERMINAL_RUNS {
+                let run_id = format!("history-{i}");
+                runs.insert(
+                    run_id.clone(),
+                    super::RunState {
+                        run_id,
+                        session_key: session_key.clone(),
+                        started_at: oldest + std::time::Duration::from_secs(i as u64),
+                        status: match i % 2 {
+                            0 => RunStatus::Completed,
+                            _ => RunStatus::Failed("failed".into()),
+                        },
+                        input: String::new(),
+                    },
+                );
+            }
+            runs.insert(
+                "running".into(),
+                super::RunState {
+                    run_id: "running".into(),
+                    session_key: session_key.clone(),
+                    started_at: oldest,
+                    status: RunStatus::Running,
+                    input: "in-flight input".into(),
+                },
+            );
+            retain_terminal_runs_bounded(&mut runs);
+        }
+        // The bound holds and the oldest terminal entry is the one evicted.
+        assert!(manager.get_run_status("history-0").await.is_none());
+        assert!(manager.get_run_status("history-1").await.is_some());
+        assert_eq!(
+            manager.active_runs.read().await.len(),
+            MAX_TERMINAL_RUNS + 1
+        );
+        // The in-flight run survives with its payload and its session key.
+        let running = manager.get_run_status("running").await.unwrap();
+        assert_eq!(running.status, RunStatus::Running);
+        assert_eq!(running.input, "in-flight input");
+        assert_eq!(
+            manager.session_key_of_run("running").await,
+            Some(session_key.clone())
         );
     }
 

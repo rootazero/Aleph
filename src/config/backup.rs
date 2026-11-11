@@ -126,12 +126,16 @@ impl ConfigBackup {
             ));
         };
 
-        let mut source = fs::File::open(config_path).map_err(|e| {
-            AlephError::invalid_config(format!(
-                "Failed to open config for backup {}: {e}",
-                config_path.display()
-            ))
-        })?;
+        let mut source = match fs::File::open(config_path) {
+            Ok(file) => file,
+            Err(e) => {
+                let _ = fs::remove_file(&backup_path);
+                return Err(AlephError::invalid_config(format!(
+                    "Failed to open config for backup {}: {e}",
+                    config_path.display()
+                )));
+            }
+        };
         if let Err(e) =
             std::io::copy(&mut source, &mut destination).and_then(|_| destination.sync_all())
         {
@@ -263,10 +267,13 @@ impl ConfigBackup {
             let name = file_name.to_string_lossy();
 
             if let Some(timestamp) = name.strip_prefix(prefix) {
-                entries.push(BackupEntry {
-                    path: dir_entry.path(),
-                    timestamp: timestamp.to_string(),
-                });
+                // Must start with an ASCII digit (valid timestamp format), ignoring .lock, .tmp, etc.
+                if timestamp.starts_with(|c: char| c.is_ascii_digit()) {
+                    entries.push(BackupEntry {
+                        path: dir_entry.path(),
+                        timestamp: timestamp.to_string(),
+                    });
+                }
             }
         }
 

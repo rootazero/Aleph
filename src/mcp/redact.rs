@@ -36,13 +36,26 @@ const CONSERVATIVE_PATTERNS: &[(&str, &str)] = &[
     ("password=", "password=[REDACTED]"),
 ];
 
+fn find_ascii_case_insensitive(haystack: &str, needle: &str) -> Option<usize> {
+    if needle.is_empty() {
+        return Some(0);
+    }
+    let needle_bytes = needle.as_bytes();
+    let haystack_bytes = haystack.as_bytes();
+    if needle_bytes.len() > haystack_bytes.len() {
+        return None;
+    }
+    haystack_bytes
+        .windows(needle_bytes.len())
+        .position(|window| window.eq_ignore_ascii_case(needle_bytes))
+}
+
 fn conservative_redact(text: &str) -> String {
     let mut current = text.to_string();
     for (needle, replacement) in CONSERVATIVE_PATTERNS {
-        let needle_lower = needle.to_ascii_lowercase();
         let mut out = String::with_capacity(current.len());
         let mut remaining = current.as_str();
-        while let Some(idx) = remaining.to_ascii_lowercase().find(&needle_lower) {
+        while let Some(idx) = find_ascii_case_insensitive(remaining, needle) {
             let prefix = remaining.get(..idx).unwrap_or("");
             out.push_str(prefix);
             out.push_str(replacement);

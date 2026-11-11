@@ -47,6 +47,7 @@
 //! loading required.
 
 use crate::sync_primitives::Mutex;
+use crate::utils::sqlite_open::open_sqlite_safe;
 use crate::utils::text_format::truncate_with_marker;
 use std::path::Path;
 
@@ -124,7 +125,7 @@ pub struct ContentIndex {
 impl ContentIndex {
     /// Open (creating if absent) an index at `db_path` and ensure the schema.
     pub fn open(db_path: &Path) -> Result<Self, IndexError> {
-        let conn = Connection::open(db_path)?;
+        let conn = open_sqlite_safe(db_path)?;
         Self::from_conn(conn)
     }
 
@@ -496,16 +497,19 @@ fn drop_pre_scope_tables(conn: &Connection) -> Result<(), IndexError> {
         // `prepare` is the cheapest column probe that works on a virtual table
         // (`PRAGMA table_info` would too, but needs row parsing). It fails iff
         // the column is absent.
-        if conn
-            .prepare(&format!("SELECT session_id FROM {table} LIMIT 0"))
-            .is_err()
-        {
-            tracing::warn!(
-                table,
-                "content index predates session scoping; recreating it empty \
-                 (offloaded blobs remain readable via their markers)"
-            );
-            conn.execute_batch(&format!("DROP TABLE {table};"))?;
+        match conn.prepare(&format!("SELECT session_id FROM {table} LIMIT 0")) {
+            Ok(_) => {}
+            Err(rusqlite::Error::SqliteFailure(_err, Some(ref msg)))
+                if msg.contains("no such column") =>
+            {
+                tracing::warn!(
+                    table,
+                    "content index predates session scoping; recreating it empty \
+                     (offloaded blobs remain readable via their markers)"
+                );
+                conn.execute_batch(&format!("DROP TABLE {table};"))?;
+            }
+            Err(e) => return Err(IndexError::Sqlite(e)),
         }
     }
     Ok(())

@@ -28,7 +28,7 @@ mod reverse_rpc;
 
 pub use enrollment::{
     admit_node, deregister_node, enroll_node_device, DeregisterError, DeregisterOutcome,
-    NodeAdmission,
+    EnrollError, NodeAdmission,
 };
 pub use node_approval::{ApprovalSlot, CenterApprovalRequester};
 pub(crate) use node_file_cmd::sha256_hex;
@@ -36,7 +36,7 @@ pub use node_file_cmd::{FileReadCommand, FileWriteCommand, MAX_FILE_BYTES};
 pub use node_runtime::{CommandTable, NodeCommand};
 pub(crate) use registry::normalize_node_key;
 pub use registry::{
-    maybe_register_node, CommandDescriptor, Environment, NodeMatch, NodeRegistry, NodeSession,
-    ResolveError,
+    maybe_register_node, CommandDescriptor, Environment, EnvironmentStatus, NodeMatch,
+    NodeRegistry, NodeSession, NodeSummary, ResolveError,
 };
 pub use reverse_rpc::{PendingInvokes, ReverseRpcChannel, ReverseRpcError};

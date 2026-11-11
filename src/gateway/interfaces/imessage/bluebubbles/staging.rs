@@ -20,22 +20,28 @@ pub fn staging_dir() -> PathBuf {
     std::env::temp_dir().join("aleph-imessage-attachments")
 }
 
-/// Create the staging dir if missing and return it. Best-effort — callers fall
-/// back to the bare temp dir if creation fails.
-pub fn ensure_staging_dir() -> std::io::Result<PathBuf> {
+/// Create the staging dir if missing; callers retain metadata on failure.
+pub async fn ensure_staging_dir() -> std::io::Result<PathBuf> {
     let dir = staging_dir();
-    std::fs::create_dir_all(&dir)?;
-    Ok(dir)
+    tokio::task::spawn_blocking(move || std::fs::create_dir_all(&dir))
+        .await
+        .map_err(std::io::Error::other)?
+        .map(|()| staging_dir())
 }
 
 /// Remove staged files older than `max_age`. Best-effort: a missing dir or an
 /// individual removal failure is logged at debug and skipped. Returns how many
 /// files were removed.
-pub fn sweep_stale(max_age: Duration) -> usize {
-    sweep_stale_in(&staging_dir(), max_age)
+pub async fn sweep_stale(max_age: Duration) -> usize {
+    tokio::task::spawn_blocking(move || sweep_stale_blocking(&staging_dir(), max_age))
+        .await
+        .unwrap_or_else(|e| {
+            tracing::debug!("attachment sweep worker failed: {e}");
+            0
+        })
 }
 
-fn sweep_stale_in(dir: &Path, max_age: Duration) -> usize {
+fn sweep_stale_blocking(dir: &Path, max_age: Duration) -> usize {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return 0; // dir doesn't exist yet / unreadable → nothing to sweep
     };
@@ -89,7 +95,7 @@ mod tests {
             .set_modified(old_time)
             .unwrap();
 
-        let removed = sweep_stale_in(&dir, RETENTION);
+        let removed = sweep_stale_blocking(&dir, RETENTION);
         assert_eq!(removed, 1);
         assert!(!stale.exists(), "stale file should be swept");
         assert!(fresh.exists(), "fresh file must survive");
@@ -99,6 +105,6 @@ mod tests {
     fn sweep_missing_dir_is_noop() {
         let dir = std::env::temp_dir().join("aleph-sweep-does-not-exist-xyz");
         std::fs::remove_dir_all(&dir).ok();
-        assert_eq!(sweep_stale_in(&dir, RETENTION), 0);
+        assert_eq!(sweep_stale_blocking(&dir, RETENTION), 0);
     }
 }

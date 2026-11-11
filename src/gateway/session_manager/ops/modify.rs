@@ -56,18 +56,19 @@ impl SessionManager {
         scope_id: &str,
     ) -> Result<bool, SessionManagerError> {
         let key_str = key.to_key_string();
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| SessionManagerError::DatabaseError(format!("Lock error: {e}")))?;
-        let rows = conn
-            .execute(
-                "UPDATE sessions SET owner_user_id = ?2, scope_id = ?3
+        let owner_user_id = owner_user_id.to_owned();
+        let scope_id = scope_id.to_owned();
+        self.query_blocking(move |conn| {
+            let rows = conn
+                .execute(
+                    "UPDATE sessions SET owner_user_id = ?2, scope_id = ?3
                  WHERE key = ?1 AND owner_user_id IS NULL AND scope_id IS NULL",
-                params![&key_str, owner_user_id, scope_id],
-            )
-            .map_err(|e| SessionManagerError::DatabaseError(e.to_string()))?;
-        Ok(rows > 0)
+                    params![&key_str, owner_user_id, scope_id],
+                )
+                .map_err(|e| SessionManagerError::DatabaseError(e.to_string()))?;
+            Ok(rows > 0)
+        })
+        .await
     }
 
     /// Compact a session by removing old messages
@@ -75,11 +76,7 @@ impl SessionManager {
         let key_str = key.to_key_string();
         let keep = self.config.compaction_keep as i64;
 
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| SessionManagerError::DatabaseError(format!("Lock error: {e}")))?;
-
+        self.query_blocking(move |conn| {
         // The rows to drop, named by the SAME ranking that decides which ones
         // are "old": everything past the newest `keep` in reader order.
         //
@@ -153,6 +150,8 @@ impl SessionManager {
         );
 
         Ok(deleted)
+        })
+        .await
     }
 
     /// Close a session: set status=closed, store topic in metadata JSON
@@ -162,106 +161,109 @@ impl SessionManager {
         topic: Option<String>,
     ) -> Result<(), SessionManagerError> {
         let key_str = key.to_key_string();
-        let capture = {
-            let conn = self
-                .conn
-                .lock()
-                .map_err(|e| SessionManagerError::DatabaseError(format!("Lock error: {e}")))?;
+        let agent_id = key.agent_id().to_string();
+        let base_key_pattern = key.base_key_pattern();
+        let epoch = key.epoch();
+        let raw_memory_writer = self.raw_memory_writer.clone();
 
-            // Check current state - can't close if already stopped
-            let current_state: Option<String> = conn
-                .query_row(
-                    "SELECT state FROM sessions WHERE key = ?",
-                    params![&key_str],
-                    |row| row.get(0),
-                )
-                .ok();
-
-            if current_state.as_deref() == Some("stopped") {
-                return Ok(());
-            }
-
-            // Spec 1 G3-A: capture the conversation tail for end-of-session digest extraction.
-            let capture = self.raw_memory_writer.clone().map(|writer| {
-                let agent_id = key.agent_id().to_string();
-                let session_id = key_str.clone();
-                let tail = self
-                    .read_recent_messages(&conn, &key_str, 64)
-                    .unwrap_or_default();
-                // Review fix: the session-end reflector (spawned inside
-                // `emit_session_end_raw`) needs this session's P1 scope columns
-                // to write OPEN_LOOPS.md through the same composed id the
-                // curated-envelope reader resolves — the ambient task-local
-                // scope is not reliably live on this session-close path, so
-                // derive it from the persisted row instead (a `.ok()` miss on a
-                // legacy/pre-P1 row degrades to `(None, None)`, the pre-P1
-                // unscoped behaviour).
-                let (owner_user_id, scope_id): (Option<String>, Option<String>) = conn
+        let capture = self
+            .query_blocking(move |conn| {
+                // Check current state - can't close if already stopped
+                let current_state: Option<String> = conn
                     .query_row(
-                        "SELECT owner_user_id, scope_id FROM sessions WHERE key = ?",
+                        "SELECT state FROM sessions WHERE key = ?",
                         params![&key_str],
-                        |row| Ok((row.get(0)?, row.get(1)?)),
+                        |row| row.get(0),
                     )
-                    .unwrap_or((None, None));
-                (
-                    writer,
-                    crate::memory::store::raw_memory::RawMemory::new(
-                        tail,
-                        crate::memory::store::raw_memory::RawMemorySource::SessionEnd {
-                            reason: crate::memory::store::raw_memory::SessionEndReason::Disconnect,
-                        },
+                    .ok();
+
+                if current_state.as_deref() == Some("stopped") {
+                    return Ok(None);
+                }
+
+                // Spec 1 G3-A: capture the conversation tail for end-of-session digest extraction.
+                let capture = match raw_memory_writer {
+                    Some(writer) => {
+                        let session_id = key_str.clone();
+                        let tail = Self::read_recent_messages(conn, &key_str, 64).unwrap_or_default();
+                        // Review fix: the session-end reflector (spawned inside
+                        // `emit_session_end_raw`) needs this session's P1 scope columns
+                        // to write OPEN_LOOPS.md through the same composed id the
+                        // curated-envelope reader resolves — the ambient task-local
+                        // scope is not reliably live on this session-close path, so
+                        // derive it from the persisted row instead (a `.ok()` miss on a
+                        // legacy/pre-P1 row degrades to `(None, None)`, the pre-P1
+                        // unscoped behaviour).
+                        let (owner_user_id, scope_id): (Option<String>, Option<String>) = conn
+                            .query_row(
+                                "SELECT owner_user_id, scope_id FROM sessions WHERE key = ?",
+                                params![&key_str],
+                                |row| Ok((row.get(0)?, row.get(1)?)),
+                            )
+                            .unwrap_or((None, None));
+                        Some((
+                            writer,
+                            crate::memory::store::raw_memory::RawMemory::new(
+                                tail,
+                                crate::memory::store::raw_memory::RawMemorySource::SessionEnd {
+                                    reason: crate::memory::store::raw_memory::SessionEndReason::Disconnect,
+                                },
+                            )
+                            .with_agent(agent_id)
+                            .with_session(session_id),
+                            crate::scope::ScopeAttribution::from_persisted(
+                                owner_user_id.as_deref(),
+                                scope_id.as_deref(),
+                            ),
+                        ))
+                    }
+                    None => None,
+                };
+
+                let existing_json: Option<String> = conn
+                    .query_row(
+                        "SELECT metadata FROM sessions WHERE key = ?",
+                        params![&key_str],
+                        |row| row.get(0),
                     )
-                    .with_agent(agent_id)
-                    .with_session(session_id),
-                    crate::scope::ScopeAttribution::from_persisted(
-                        owner_user_id.as_deref(),
-                        scope_id.as_deref(),
-                    ),
-                )
-            });
+                    .optional()
+                    .map_err(|e| SessionManagerError::DatabaseError(e.to_string()))?
+                    .flatten();
 
-            let existing_json: Option<String> = conn
-                .query_row(
-                    "SELECT metadata FROM sessions WHERE key = ?",
-                    params![&key_str],
-                    |row| row.get(0),
-                )
-                .optional()
-                .map_err(|e| SessionManagerError::DatabaseError(e.to_string()))?
-                .flatten();
-
-            let mut identity_meta = SessionIdentityMeta::from_json_str(existing_json.as_deref());
-            identity_meta
-                .custom
-                .insert("status".to_string(), serde_json::json!("closed"));
-            if let Some(t) = topic {
+                let mut identity_meta = SessionIdentityMeta::from_json_str(existing_json.as_deref());
                 identity_meta
                     .custom
-                    .insert("topic".to_string(), serde_json::json!(t));
-            }
+                    .insert("status".to_string(), serde_json::json!("closed"));
+                if let Some(t) = topic {
+                    identity_meta
+                        .custom
+                        .insert("topic".to_string(), serde_json::json!(t));
+                }
 
-            let meta_json = identity_meta
-                .to_json_string()
+                let meta_json = identity_meta
+                    .to_json_string()
+                    .map_err(|e| SessionManagerError::DatabaseError(e.to_string()))?;
+
+                conn.execute(
+                    "UPDATE sessions SET metadata = ?, state = 'stopped' WHERE key = ?",
+                    params![&meta_json, &key_str],
+                )
                 .map_err(|e| SessionManagerError::DatabaseError(e.to_string()))?;
 
-            conn.execute(
-                "UPDATE sessions SET metadata = ?, state = 'stopped' WHERE key = ?",
-                params![&meta_json, &key_str],
-            )
-            .map_err(|e| SessionManagerError::DatabaseError(e.to_string()))?;
+                // The scratchpad binding table is process-global and mirrored
+                // write-through to disk on every scratchpad tool call, but nothing
+                // ever pruned it: a binding left by an epoch that has since been
+                // superseded can never be addressed again, yet is rewritten forever.
+                // Closing epoch N is the moment epochs < N are known to be dead.
+                crate::builtin_tools::scratchpad_registry::clear_superseded_epochs(
+                    &base_key_pattern,
+                    epoch,
+                );
 
-            // The scratchpad binding table is process-global and mirrored
-            // write-through to disk on every scratchpad tool call, but nothing
-            // ever pruned it: a binding left by an epoch that has since been
-            // superseded can never be addressed again, yet is rewritten forever.
-            // Closing epoch N is the moment epochs < N are known to be dead.
-            crate::builtin_tools::scratchpad_registry::clear_superseded_epochs(
-                &key.base_key_pattern(),
-                key.epoch(),
-            );
+                Ok(capture)
+            })
+            .await?;
 
-            capture
-        };
         if let Some((writer, raw, scope)) = capture {
             self.capture_session_end(writer, raw, scope, true).await;
         }
@@ -276,38 +278,38 @@ impl SessionManager {
         topic: &str,
     ) -> Result<(), SessionManagerError> {
         let key_str = key.to_key_string();
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| SessionManagerError::DatabaseError(format!("Lock error: {e}")))?;
+        let topic = topic.to_string();
 
-        // Get existing metadata
-        let existing_json: Option<String> = conn
-            .query_row(
-                "SELECT metadata FROM sessions WHERE key = ?",
-                params![&key_str],
-                |row| row.get(0),
+        self.query_blocking(move |conn| {
+            // Get existing metadata
+            let existing_json: Option<String> = conn
+                .query_row(
+                    "SELECT metadata FROM sessions WHERE key = ?",
+                    params![&key_str],
+                    |row| row.get(0),
+                )
+                .optional()
+                .map_err(|e| SessionManagerError::DatabaseError(e.to_string()))?
+                .flatten();
+
+            let mut identity_meta = SessionIdentityMeta::from_json_str(existing_json.as_deref());
+            identity_meta
+                .custom
+                .insert("topic".to_string(), serde_json::json!(topic));
+
+            let meta_json = identity_meta
+                .to_json_string()
+                .map_err(|e| SessionManagerError::DatabaseError(e.to_string()))?;
+
+            conn.execute(
+                "UPDATE sessions SET metadata = ? WHERE key = ?",
+                params![&meta_json, &key_str],
             )
-            .optional()
-            .map_err(|e| SessionManagerError::DatabaseError(e.to_string()))?
-            .flatten();
-
-        let mut identity_meta = SessionIdentityMeta::from_json_str(existing_json.as_deref());
-        identity_meta
-            .custom
-            .insert("topic".to_string(), serde_json::json!(topic));
-
-        let meta_json = identity_meta
-            .to_json_string()
             .map_err(|e| SessionManagerError::DatabaseError(e.to_string()))?;
 
-        conn.execute(
-            "UPDATE sessions SET metadata = ? WHERE key = ?",
-            params![&meta_json, &key_str],
-        )
-        .map_err(|e| SessionManagerError::DatabaseError(e.to_string()))?;
-
-        Ok(())
+            Ok(())
+        })
+        .await
     }
 
     /// Persist (or clear) the user-chosen project working directory for a
@@ -324,44 +326,47 @@ impl SessionManager {
         project_root: Option<&str>,
     ) -> Result<(), SessionManagerError> {
         let key_str = key.to_key_string();
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| SessionManagerError::DatabaseError(format!("Lock error: {e}")))?;
+        let project_root = project_root
+            .map(str::trim)
+            .filter(|p| !p.is_empty())
+            .map(str::to_string);
 
-        let existing_json: Option<String> = conn
-            .query_row(
-                "SELECT metadata FROM sessions WHERE key = ?",
-                params![&key_str],
-                |row| row.get(0),
+        self.query_blocking(move |conn| {
+            let existing_json: Option<String> = conn
+                .query_row(
+                    "SELECT metadata FROM sessions WHERE key = ?",
+                    params![&key_str],
+                    |row| row.get(0),
+                )
+                .optional()
+                .map_err(|e| SessionManagerError::DatabaseError(e.to_string()))?
+                .flatten();
+
+            let mut identity_meta = SessionIdentityMeta::from_json_str(existing_json.as_deref());
+            match project_root {
+                Some(ref path) => {
+                    identity_meta
+                        .custom
+                        .insert("project_root".to_string(), serde_json::json!(path));
+                }
+                None => {
+                    identity_meta.custom.remove("project_root");
+                }
+            }
+
+            let meta_json = identity_meta
+                .to_json_string()
+                .map_err(|e| SessionManagerError::DatabaseError(e.to_string()))?;
+
+            conn.execute(
+                "UPDATE sessions SET metadata = ? WHERE key = ?",
+                params![&meta_json, &key_str],
             )
-            .optional()
-            .map_err(|e| SessionManagerError::DatabaseError(e.to_string()))?
-            .flatten();
-
-        let mut identity_meta = SessionIdentityMeta::from_json_str(existing_json.as_deref());
-        match project_root.map(str::trim).filter(|p| !p.is_empty()) {
-            Some(path) => {
-                identity_meta
-                    .custom
-                    .insert("project_root".to_string(), serde_json::json!(path));
-            }
-            None => {
-                identity_meta.custom.remove("project_root");
-            }
-        }
-
-        let meta_json = identity_meta
-            .to_json_string()
             .map_err(|e| SessionManagerError::DatabaseError(e.to_string()))?;
 
-        conn.execute(
-            "UPDATE sessions SET metadata = ? WHERE key = ?",
-            params![&meta_json, &key_str],
-        )
-        .map_err(|e| SessionManagerError::DatabaseError(e.to_string()))?;
-
-        Ok(())
+            Ok(())
+        })
+        .await
     }
 
     /// Record the originating channel of a session onto its identity metadata.
@@ -383,49 +388,53 @@ impl SessionManager {
             return Ok(());
         }
         let key_str = key.to_key_string();
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| SessionManagerError::DatabaseError(format!("Lock error: {e}")))?;
+        let channel = channel.to_string();
+        let conversation = conversation
+            .map(str::trim)
+            .filter(|c| !c.is_empty())
+            .map(str::to_string);
 
-        let existing_json: Option<String> = conn
-            .query_row(
-                "SELECT metadata FROM sessions WHERE key = ?",
-                params![&key_str],
-                |row| row.get(0),
+        self.query_blocking(move |conn| {
+            let existing_json: Option<String> = conn
+                .query_row(
+                    "SELECT metadata FROM sessions WHERE key = ?",
+                    params![&key_str],
+                    |row| row.get(0),
+                )
+                .optional()
+                .map_err(|e| SessionManagerError::DatabaseError(e.to_string()))?
+                .flatten();
+
+            let mut identity_meta = SessionIdentityMeta::from_json_str(existing_json.as_deref());
+            let current = identity_meta.source_channel.trim();
+            // Never clobber an already-recorded real origin.
+            if !current.is_empty() && current != "unknown" {
+                return Ok(());
+            }
+            identity_meta.source_channel = channel.clone();
+            // Capture the origin conversation id (e.g. Telegram chat id) so a later
+            // cross-surface continuation (sub-gap (b)) can fan the final reply back
+            // to the originating channel.
+            if let Some(ref conv) = conversation {
+                identity_meta.custom.insert(
+                    crate::gateway::session_store::types::ORIGIN_CONVERSATION_KEY.to_string(),
+                    serde_json::json!(conv),
+                );
+            }
+
+            let meta_json = identity_meta
+                .to_json_string()
+                .map_err(|e| SessionManagerError::DatabaseError(e.to_string()))?;
+
+            conn.execute(
+                "UPDATE sessions SET metadata = ? WHERE key = ?",
+                params![&meta_json, &key_str],
             )
-            .optional()
-            .map_err(|e| SessionManagerError::DatabaseError(e.to_string()))?
-            .flatten();
-
-        let mut identity_meta = SessionIdentityMeta::from_json_str(existing_json.as_deref());
-        let current = identity_meta.source_channel.trim();
-        // Never clobber an already-recorded real origin.
-        if !current.is_empty() && current != "unknown" {
-            return Ok(());
-        }
-        identity_meta.source_channel = channel.to_string();
-        // Capture the origin conversation id (e.g. Telegram chat id) so a later
-        // cross-surface continuation (sub-gap (b)) can fan the final reply back
-        // to the originating channel.
-        if let Some(conv) = conversation.map(str::trim).filter(|c| !c.is_empty()) {
-            identity_meta.custom.insert(
-                crate::gateway::session_store::types::ORIGIN_CONVERSATION_KEY.to_string(),
-                serde_json::json!(conv),
-            );
-        }
-
-        let meta_json = identity_meta
-            .to_json_string()
             .map_err(|e| SessionManagerError::DatabaseError(e.to_string()))?;
 
-        conn.execute(
-            "UPDATE sessions SET metadata = ? WHERE key = ?",
-            params![&meta_json, &key_str],
-        )
-        .map_err(|e| SessionManagerError::DatabaseError(e.to_string()))?;
-
-        Ok(())
+            Ok(())
+        })
+        .await
     }
 
     /// Trait-facing alias used by the `SessionStore` impl (the inherent method
@@ -448,19 +457,19 @@ impl SessionManager {
     ) -> Result<(), SessionManagerError> {
         let key_str = key.to_key_string();
         let old_state = self.get_state(key).await.ok();
+        let new_state = state.to_string();
+        let db_key = key_str.clone();
 
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| SessionManagerError::DatabaseError(format!("Lock error: {e}")))?;
+        self.query_blocking(move |conn| {
+            conn.execute(
+                "UPDATE sessions SET state = ? WHERE key = ?",
+                params![new_state, &db_key],
+            )
+            .map_err(|e| SessionManagerError::DatabaseError(format!("Set state failed: {e}")))?;
 
-        conn.execute(
-            "UPDATE sessions SET state = ? WHERE key = ?",
-            params![state.to_string(), &key_str],
-        )
-        .map_err(|e| SessionManagerError::DatabaseError(format!("Set state failed: {e}")))?;
-
-        drop(conn);
+            Ok(())
+        })
+        .await?;
 
         debug!("Session {} transitioned to {}", key_str, state);
         self.emit_session_lifecycle_changed(&key_str, old_state.as_ref(), &state.to_string(), None);
@@ -493,64 +502,68 @@ impl SessionManager {
         }
 
         let key_str = key.to_key_string();
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| SessionManagerError::DatabaseError(format!("Lock error: {e}")))?;
+        let db_key = key_str.clone();
+        let patch = patch.clone();
 
-        let existing_json: Option<String> = conn
-            .query_row(
-                "SELECT metadata FROM sessions WHERE key = ?",
-                params![&key_str],
-                |row| row.get(0),
-            )
-            .optional()
-            .map_err(|e| SessionManagerError::DatabaseError(e.to_string()))?
-            .flatten();
+        let updated = self
+            .query_blocking(move |conn| {
+                let existing_json: Option<String> = conn
+                    .query_row(
+                        "SELECT metadata FROM sessions WHERE key = ?",
+                        params![&db_key],
+                        |row| row.get(0),
+                    )
+                    .optional()
+                    .map_err(|e| SessionManagerError::DatabaseError(e.to_string()))?
+                    .flatten();
 
-        let mut identity_meta = SessionIdentityMeta::from_json_str(existing_json.as_deref());
+                let mut identity_meta =
+                    SessionIdentityMeta::from_json_str(existing_json.as_deref());
 
-        if let Some(status) = &patch.status {
-            identity_meta
-                .custom
-                .insert("status".to_string(), serde_json::json!(status));
-        }
-        if let Some(extra) = &patch.metadata {
-            if let Some(extra_obj) = extra.as_object() {
-                for (k, v) in extra_obj {
-                    identity_meta.custom.insert(k.clone(), v.clone());
+                if let Some(status) = &patch.status {
+                    identity_meta
+                        .custom
+                        .insert("status".to_string(), serde_json::json!(status));
                 }
-            }
-        }
+                if let Some(extra) = &patch.metadata {
+                    if let Some(extra_obj) = extra.as_object() {
+                        for (k, v) in extra_obj {
+                            identity_meta.custom.insert(k.clone(), v.clone());
+                        }
+                    }
+                }
 
-        let meta_json = identity_meta
-            .to_json_string()
-            .map_err(|e| SessionManagerError::DatabaseError(e.to_string()))?;
+                let meta_json = identity_meta
+                    .to_json_string()
+                    .map_err(|e| SessionManagerError::DatabaseError(e.to_string()))?;
 
-        let mut sql = String::from("UPDATE sessions SET metadata = ?");
-        let mut sql_params: Vec<&dyn rusqlite::ToSql> = vec![&meta_json];
+                let mut sql = String::from("UPDATE sessions SET metadata = ?");
+                let mut sql_params: Vec<&dyn rusqlite::ToSql> = vec![&meta_json];
 
-        if let Some(label) = &patch.label {
-            sql.push_str(", label = ?");
-            sql_params.push(label);
-        }
-        if let Some(model) = &patch.model {
-            sql.push_str(", model = ?");
-            sql_params.push(model);
-        }
-        if let Some(provider) = &patch.model_provider {
-            sql.push_str(", model_provider = ?");
-            sql_params.push(provider);
-        }
+                if let Some(label) = &patch.label {
+                    sql.push_str(", label = ?");
+                    sql_params.push(label);
+                }
+                if let Some(model) = &patch.model {
+                    sql.push_str(", model = ?");
+                    sql_params.push(model);
+                }
+                if let Some(provider) = &patch.model_provider {
+                    sql.push_str(", model_provider = ?");
+                    sql_params.push(provider);
+                }
 
-        sql.push_str(" WHERE key = ?");
-        sql_params.push(&key_str as &dyn rusqlite::ToSql);
+                sql.push_str(" WHERE key = ?");
+                sql_params.push(&db_key as &dyn rusqlite::ToSql);
 
-        let updated = conn
-            .execute(&sql, sql_params.as_slice())
-            .map_err(|e| SessionManagerError::DatabaseError(format!("Patch failed: {e}")))?;
+                let updated = conn.execute(&sql, sql_params.as_slice()).map_err(|e| {
+                    SessionManagerError::DatabaseError(format!("Patch failed: {e}"))
+                })?;
 
-        drop(conn);
+                Ok(updated)
+            })
+            .await?;
+
         self.emit_session_updated(&key_str);
         Ok(updated > 0)
     }
@@ -566,86 +579,88 @@ impl SessionManager {
         generation: u64,
     ) -> Result<bool, SessionManagerError> {
         let key_str = key.to_key_string();
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| SessionManagerError::DatabaseError(format!("Lock error: {e}")))?;
+        let db_key = key_str.clone();
+        let patch = patch.clone();
 
-        let existing_json: Option<String> = conn
-            .query_row(
-                "SELECT metadata FROM sessions WHERE key = ?",
-                params![&key_str],
-                |row| row.get(0),
-            )
-            .optional()
-            .map_err(|e| SessionManagerError::DatabaseError(e.to_string()))?
-            .flatten();
+        let updated = self
+            .query_blocking(move |conn| {
+                let existing_json: Option<String> = conn
+                    .query_row(
+                        "SELECT metadata FROM sessions WHERE key = ?",
+                        params![&db_key],
+                        |row| row.get(0),
+                    )
+                    .optional()
+                    .map_err(|e| SessionManagerError::DatabaseError(e.to_string()))?
+                    .flatten();
 
-        let mut identity_meta = if existing_json
-            .as_deref()
-            .is_some_and(|json| !json.trim().is_empty())
-            && existing_json
-                .as_deref()
-                .is_some_and(|json| serde_json::from_str::<SessionIdentityMeta>(json).is_err())
-        {
-            return Ok(false);
-        } else {
-            SessionIdentityMeta::from_json_str(existing_json.as_deref())
-        };
-        let generation_key =
-            crate::providers::session_model_handle::MODEL_PIN_GENERATION_SESSION_KEY;
-        if let Some(value) = identity_meta.custom.get(generation_key) {
-            let durable_generation = value
-                .as_str()
-                .and_then(|value| value.parse::<u64>().ok())
-                .or_else(|| value.as_u64());
-            let Some(durable_generation) = durable_generation else {
-                return Ok(false);
-            };
-            if generation <= durable_generation {
-                return Ok(false);
-            }
-        }
-        if let Some(extra) = &patch.metadata {
-            if let Some(extra_obj) = extra.as_object() {
-                for (k, v) in extra_obj {
-                    identity_meta.custom.insert(k.clone(), v.clone());
+                let mut identity_meta = if existing_json
+                    .as_deref()
+                    .is_some_and(|json| !json.trim().is_empty())
+                    && existing_json.as_deref().is_some_and(|json| {
+                        serde_json::from_str::<SessionIdentityMeta>(json).is_err()
+                    }) {
+                    return Ok(0);
+                } else {
+                    SessionIdentityMeta::from_json_str(existing_json.as_deref())
+                };
+                let generation_key =
+                    crate::providers::session_model_handle::MODEL_PIN_GENERATION_SESSION_KEY;
+                if let Some(value) = identity_meta.custom.get(generation_key) {
+                    let durable_generation = value
+                        .as_str()
+                        .and_then(|value| value.parse::<u64>().ok())
+                        .or_else(|| value.as_u64());
+                    let Some(durable_generation) = durable_generation else {
+                        return Ok(0);
+                    };
+                    if generation <= durable_generation {
+                        return Ok(0);
+                    }
                 }
-            }
-        }
-        identity_meta.custom.insert(
-            generation_key.to_string(),
-            serde_json::Value::String(generation.to_string()),
-        );
+                if let Some(extra) = &patch.metadata {
+                    if let Some(extra_obj) = extra.as_object() {
+                        for (k, v) in extra_obj {
+                            identity_meta.custom.insert(k.clone(), v.clone());
+                        }
+                    }
+                }
+                identity_meta.custom.insert(
+                    generation_key.to_string(),
+                    serde_json::Value::String(generation.to_string()),
+                );
 
-        let meta_json = identity_meta
-            .to_json_string()
-            .map_err(|e| SessionManagerError::DatabaseError(e.to_string()))?;
+                let meta_json = identity_meta
+                    .to_json_string()
+                    .map_err(|e| SessionManagerError::DatabaseError(e.to_string()))?;
 
-        let mut sql = String::from("UPDATE sessions SET metadata = ?");
-        let mut sql_params: Vec<&dyn rusqlite::ToSql> = vec![&meta_json];
+                let mut sql = String::from("UPDATE sessions SET metadata = ?");
+                let mut sql_params: Vec<&dyn rusqlite::ToSql> = vec![&meta_json];
 
-        if let Some(label) = &patch.label {
-            sql.push_str(", label = ?");
-            sql_params.push(label);
-        }
-        if let Some(model) = &patch.model {
-            sql.push_str(", model = ?");
-            sql_params.push(model);
-        }
-        if let Some(provider) = &patch.model_provider {
-            sql.push_str(", model_provider = ?");
-            sql_params.push(provider);
-        }
+                if let Some(label) = &patch.label {
+                    sql.push_str(", label = ?");
+                    sql_params.push(label);
+                }
+                if let Some(model) = &patch.model {
+                    sql.push_str(", model = ?");
+                    sql_params.push(model);
+                }
+                if let Some(provider) = &patch.model_provider {
+                    sql.push_str(", model_provider = ?");
+                    sql_params.push(provider);
+                }
 
-        sql.push_str(" WHERE key = ?");
-        sql_params.push(&key_str as &dyn rusqlite::ToSql);
+                sql.push_str(" WHERE key = ?");
+                sql_params.push(&db_key as &dyn rusqlite::ToSql);
 
-        let updated = conn
-            .execute(&sql, sql_params.as_slice())
-            .map_err(|e| SessionManagerError::DatabaseError(format!("Patch failed: {e}")))?;
+                let updated = conn.execute(&sql, sql_params.as_slice()).map_err(|e| {
+                    SessionManagerError::DatabaseError(format!("Patch failed: {e}"))
+                })?;
 
-        drop(conn);
+                Ok(updated)
+            })
+            .await?;
+
         if updated > 0 {
             self.emit_session_updated(&key_str);
         }
@@ -701,13 +716,17 @@ impl SessionManager {
             model: model.map(str::to_string),
             model_provider: model_provider.map(str::to_string),
         };
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| SessionManagerError::DatabaseError(format!("Lock error: {e}")))?;
-        add_usage(&conn, &key_str, &bill)
-            .map_err(|e| SessionManagerError::DatabaseError(format!("Usage update failed: {e}")))?;
-        drop(conn);
+
+        let key_for_db = key_str.clone();
+        self.query_blocking(move |conn| {
+            add_usage(conn, &key_for_db, &bill).map_err(|e| {
+                SessionManagerError::DatabaseError(format!("Usage update failed: {e}"))
+            })?;
+
+            Ok(())
+        })
+        .await?;
+
         self.emit_session_updated(&key_str);
         Ok(())
     }

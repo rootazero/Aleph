@@ -52,7 +52,7 @@ pub async fn handle_list_pending_approvals(request: JsonRpcRequest) -> JsonRpcRe
 
     // Placeholder implementation:
     tracing::debug!("mcp.list_pending_approvals called (handler not yet integrated)");
-    JsonRpcResponse::success(request.id, json!([]))
+    JsonRpcResponse::error(request.id, -32601, "Approval handler not yet integrated")
 }
 
 /// Handle `mcp.respond_approval`
@@ -149,10 +149,8 @@ mod tests {
         let request = JsonRpcRequest::with_id("mcp.list_pending_approvals", None, json!(1));
         let response = handle_list_pending_approvals(request).await;
 
-        assert!(response.is_success());
-        // Should return empty array as placeholder
-        let result = response.result.unwrap();
-        assert!(result.as_array().unwrap().is_empty());
+        assert!(response.result.is_none());
+        assert_eq!(response.error.unwrap().code, -32601);
     }
 
     #[tokio::test]
@@ -168,9 +166,8 @@ mod tests {
         );
         let response = handle_respond_approval(request).await;
 
-        assert!(response.is_success());
-        let result = response.result.unwrap();
-        assert_eq!(result["success"], true);
+        assert!(response.result.is_none());
+        assert_eq!(response.error.unwrap().code, -32601);
     }
 
     #[tokio::test]
@@ -192,9 +189,8 @@ mod tests {
         );
         let response = handle_cancel_approval(request).await;
 
-        assert!(response.is_success());
-        let result = response.result.unwrap();
-        assert_eq!(result["success"], true);
+        assert!(response.result.is_none());
+        assert_eq!(response.error.unwrap().code, -32601);
     }
 
     #[tokio::test]

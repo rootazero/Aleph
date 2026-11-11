@@ -49,8 +49,8 @@ pub struct NostrChannel {
     config: NostrConfig,
     /// Shared mutable state (status + inbound channel)
     channel_state: ChannelState,
-    /// Outbound write command sender (sends raw JSON to relay)
-    write_tx: Option<mpsc::Sender<String>>,
+    /// Outbound publish attempts with relay acceptance results.
+    write_tx: Option<mpsc::Sender<message_ops::PublishCommand>>,
     /// Shutdown signal sender
     shutdown_tx: Option<watch::Sender<bool>>,
     /// Our own public key (derived from private key)
@@ -91,6 +91,33 @@ impl NostrChannel {
     /// Create a Nostr channel for testing (test mode enabled).
     pub fn for_test(id: impl Into<String>, config: NostrConfig) -> Self {
         Self::with_mode(id, config, true)
+    }
+
+    async fn publish_event(
+        write_tx: &mpsc::Sender<message_ops::PublishCommand>,
+        event: &NostrEvent,
+    ) -> ChannelResult<()> {
+        // Includes queue admission: an offline relay must not leave sends waiting forever.
+        tokio::time::timeout(std::time::Duration::from_secs(30), async {
+            let (result, completion) = tokio::sync::oneshot::channel();
+            write_tx
+                .send(message_ops::PublishCommand {
+                    event_id: event.id.clone(),
+                    raw: message_ops::build_event_message(event),
+                    result,
+                })
+                .await
+                .map_err(|_| ChannelError::SendFailed("Nostr write channel closed".into()))?;
+            completion.await.map_err(|_| {
+                ChannelError::SendFailed("Nostr publish interrupted; delivery unknown".into())
+            })?
+        })
+        .await
+        .map_err(|_| {
+            ChannelError::SendFailed(
+                "Nostr relay acknowledgement timed out; delivery unknown".into(),
+            )
+        })?
     }
 
     /// Get Nostr-specific capabilities
@@ -212,7 +239,6 @@ impl Channel for NostrChannel {
             .await;
         Ok(())
     }
-
     fn send(&self, message: OutboundMessage) -> SendOperation {
         let write_tx = self.write_tx.clone();
         let test_mode = self.test_mode;
@@ -252,6 +278,18 @@ impl Channel for NostrChannel {
                 None
             };
 
+            // A Nostr direct message is private only when it is ENCRYPTED
+            // (NIP-04). This channel has no encryption layer, so publishing a
+            // kind-4 event would hand the plaintext to every relay that
+            // indexes it. Refuse the send instead of leaking it.
+            if recipient_pubkey.is_some() {
+                return Err(ChannelError::UnsupportedFeature(
+                    "Nostr direct messages are not supported: the channel has no NIP-04 \
+                     encryption, so a DM would be readable by every relay that indexes it"
+                        .to_string(),
+                ));
+            }
+
             // Build the event
             let mut event = if let Some(ref recipient) = recipient_pubkey {
                 message_ops::build_dm(&message.text, &own_pubkey, recipient)
@@ -265,12 +303,7 @@ impl Channel for NostrChannel {
 
             let event_id = event.id.clone();
 
-            // Build and send the EVENT message
-            let event_msg = message_ops::build_event_message(&event);
-            write_tx
-                .send(event_msg)
-                .await
-                .map_err(|e| ChannelError::SendFailed(format!("write channel closed: {e}")))?;
+            Self::publish_event(write_tx, &event).await?;
 
             Ok(SendResult {
                 message_id: MessageId::new(event_id),
@@ -304,13 +337,7 @@ impl Channel for NostrChannel {
         message_ops::sign_event(&mut event, &self.config.private_key)
             .map_err(|e| ChannelError::SendFailed(format!("failed to sign reaction: {e}")))?;
 
-        let event_msg = message_ops::build_event_message(&event);
-        write_tx
-            .send(event_msg)
-            .await
-            .map_err(|e| ChannelError::SendFailed(format!("write channel closed: {e}")))?;
-
-        Ok(())
+        Self::publish_event(write_tx, &event).await
     }
 }
 
@@ -324,12 +351,20 @@ impl ChannelFactory for NostrChannelFactory {
     }
 
     async fn create(&self, config: serde_json::Value) -> ChannelResult<Box<dyn Channel>> {
+        self.create_with_id("nostr", config).await
+    }
+
+    async fn create_with_id(
+        &self,
+        id: &str,
+        config: serde_json::Value,
+    ) -> ChannelResult<Box<dyn Channel>> {
         let config: NostrConfig = serde_json::from_value(config)
             .map_err(|e| ChannelError::ConfigError(format!("Invalid Nostr config: {e}")))?;
 
         config.validate().map_err(ChannelError::ConfigError)?;
 
-        Ok(Box::new(NostrChannel::new("nostr", config)))
+        Ok(Box::new(NostrChannel::new(id, config)))
     }
 }
 

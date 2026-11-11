@@ -339,6 +339,10 @@ pub async fn handle_delete(
         Err(e) => return e,
     };
 
+    // Set when the provider is gone from the config but its credential is
+    // still in the vault — the delete succeeded, the cleanup did not.
+    let mut credential_cleanup_error: Option<String> = None;
+
     {
         let mut cfg = config.write().await;
 
@@ -384,22 +388,39 @@ pub async fn handle_delete(
             );
         }
 
-        // Remove provider from the correct typed map
-        get_typed_provider_map_mut(&mut cfg.generation, &gen_type_str).remove(&params.name);
+        // Clone config for atomic update
+        let mut next_cfg = cfg.clone();
 
-        // Delete API key from vault
-        if let Err(e) = vault.delete_secret(&vault_key(&params.name)) {
-            warn!(provider = %params.name, error = %e, "Failed to delete generation API key from vault");
-        }
+        // Remove provider from the correct typed map in the cloned config
+        get_typed_provider_map_mut(&mut next_cfg.generation, &gen_type_str).remove(&params.name);
 
-        // Save to file
-        if let Err(e) = cfg.save_incremental(&["generation"]) {
+        // Save to file first
+        if let Err(e) = next_cfg.save_incremental(&["generation"]) {
             return JsonRpcResponse::error(
                 request.id,
                 INTERNAL_ERROR,
                 format!("Failed to save config: {e}"),
             );
         }
+
+        // Apply the cloned config to shared state
+        *cfg = next_cfg;
+
+        // The config no longer names the provider, so the vault entry is now
+        // an orphan: it can no longer be loaded, but it is still a live
+        // credential until it is deleted. The delete can fail on its own (a
+        // vault I/O error), and that failure has to reach the caller —
+        // reporting plain success is what makes the leftover secret
+        // invisible.
+        if let Err(e) = vault.delete_secret(&vault_key(&params.name)) {
+            warn!(provider = %params.name, error = %e, "Failed to delete generation API key from vault");
+            credential_cleanup_error = Some(e.to_string());
+        }
+    }
+
+    let mut payload = serde_json::json!({ "success": true });
+    if let Some(err) = credential_cleanup_error {
+        payload["credential_cleanup"] = serde_json::json!(format!("failed: {err}"));
     }
 
     // Broadcast event
@@ -411,7 +432,7 @@ pub async fn handle_delete(
         }),
     ));
 
-    JsonRpcResponse::success(request.id, serde_json::json!({ "success": true }))
+    JsonRpcResponse::success(request.id, payload)
 }
 
 /// Set default provider for a generation type
@@ -524,6 +545,115 @@ pub async fn handle_set_default(
     JsonRpcResponse::success(request.id, serde_json::json!({ "success": true }))
 }
 
+#[cfg(test)]
+mod probe_verification_tests {
+    use super::*;
+    use crate::config::types::generation::GenerationProviderConfig;
+    use crate::gateway::security::SecurityStore;
+
+    #[test]
+    fn probe_snapshot_requires_saved_settings_and_credentials_to_remain_unchanged() {
+        let dir = tempfile::tempdir().unwrap();
+        let vault = SharedTokenManager::new(
+            Arc::new(SecurityStore::in_memory().unwrap()),
+            dir.path().join("test.vault"),
+        );
+        vault.generate_token().unwrap();
+        vault
+            .store_secret(&vault_key("target"), "saved-key")
+            .unwrap();
+        let mut cfg = Config::default();
+        cfg.generation.image_providers.insert(
+            "target".into(),
+            GenerationProviderConfig {
+                provider_type: "openai".into(),
+                base_url: Some("https://example.test/v1".into()),
+                ..Default::default()
+            },
+        );
+        let snapshot = |cfg: &Config, key: &str| {
+            saved_generation_probe(
+                &cfg.generation,
+                &vault,
+                "target",
+                "openai",
+                Some("https://example.test/v1"),
+                key,
+            )
+        };
+        let original = snapshot(&cfg, "saved-key");
+        assert!(
+            original.is_some(),
+            "provider type is not the image map's modality"
+        );
+        assert!(snapshot(&cfg, "inline-wrong-key").is_none());
+        assert!(saved_generation_probe(
+            &cfg.generation,
+            &vault,
+            "target",
+            "stability",
+            Some("https://example.test/v1"),
+            "saved-key"
+        )
+        .is_none());
+        cfg.generation
+            .image_providers
+            .get_mut("target")
+            .unwrap()
+            .base_url = None;
+        assert!(snapshot(&cfg, "saved-key").is_none());
+        cfg.generation
+            .image_providers
+            .get_mut("target")
+            .unwrap()
+            .base_url = Some("https://example.test/v1".into());
+        cfg.generation
+            .image_providers
+            .get_mut("target")
+            .unwrap()
+            .models
+            .push("changed-during-probe".into());
+        assert_ne!(original, snapshot(&cfg, "saved-key"));
+        vault
+            .store_secret(&vault_key("target"), "rotated-key")
+            .unwrap();
+        assert!(snapshot(&cfg, "saved-key").is_none());
+        assert!(snapshot(&cfg, "rotated-key").is_some());
+        cfg.generation.image_providers.remove("target");
+        assert!(snapshot(&cfg, "rotated-key").is_none());
+    }
+}
+
+/// The typed map key of the saved provider `name`, when the probed settings
+/// still describe it.
+///
+/// The probe verdict is written back to the saved provider only when the
+/// settings that were probed are the settings that are stored: a probe of a
+/// different provider type, of a different base URL, or with a different
+/// credential must not mark the saved provider verified. `None` means the
+/// probe says nothing about the saved provider.
+fn saved_generation_probe(
+    generation: &crate::config::types::generation::GenerationConfig,
+    vault: &SharedTokenManager,
+    name: &str,
+    provider_type: &str,
+    base_url: Option<&str>,
+    key: &str,
+) -> Option<String> {
+    let type_key = find_provider_type(generation, name)?;
+    let saved = get_typed_provider_map(generation, &type_key).get(name)?;
+    if saved.provider_type != provider_type {
+        return None;
+    }
+    if saved.base_url.as_deref() != base_url {
+        return None;
+    }
+    if resolve_api_key(name, vault).as_deref() != Some(key) {
+        return None;
+    }
+    Some(type_key)
+}
+
 /// Test connection to a generation provider
 pub async fn handle_test_connection(
     request: JsonRpcRequest,
@@ -575,7 +705,17 @@ pub async fn handle_test_connection(
             // never claims a provider is verified when the test actually failed.
             if let Some(ref name) = provider_name {
                 let mut cfg = config.write().await;
-                if let Some(type_str) = find_provider_type(&cfg.generation, name) {
+                // Only update verified if the probed settings (type, base URL
+                // and credential) still describe the saved provider.
+                let matched = saved_generation_probe(
+                    &cfg.generation,
+                    &vault,
+                    name,
+                    &params.provider_type,
+                    params.base_url.as_deref(),
+                    &key,
+                );
+                if let Some(type_str) = matched {
                     if let Some(p) =
                         get_typed_provider_map_mut(&mut cfg.generation, &type_str).get_mut(name)
                     {

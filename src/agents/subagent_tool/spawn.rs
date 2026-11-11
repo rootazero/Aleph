@@ -342,15 +342,38 @@ impl SubagentTool {
             // announcing would spend a fresh turn on the session that was just
             // stopped, telling it to "take any follow-up actions the original
             // task implies". This is the promise `loop_tool`'s cancel note
+            let (settled_iters, settled_tools, settled_tokens, label, final_text, success, summary, error) =
+                match &outcome {
+                    CompletedOutcome::Ok {
+                        final_text,
+                        iterations,
+                        tool_calls_made,
+                        total_tokens,
+                    } => (
+                        *iterations,
+                        *tool_calls_made,
+                        *total_tokens,
+                        "completed",
+                        final_text.clone(),
+                        true,
+                        final_text.clone(),
+                        None,
+                    ),
+                    CompletedOutcome::Err(msg) => {
+                        let label = match tree_lifecycle {
+                            aleph_protocol::subagent_tree::NodeLifecycle::Cancelled => "cancelled",
+                            aleph_protocol::subagent_tree::NodeLifecycle::TimedOut => "timed_out",
+                            _ => "failed",
+                        };
+                        (0, 0, 0, label, msg.clone(), false, String::new(), Some(msg.clone()))
+                    }
+                };
+
             // already makes to the model ("you asked for it to stop, so its
             // outcome is not news") held for every producer, not just that one.
             // Suppression is exact-match only (`lifecycle_from_outcome`): a
             // timeout or a genuine failure is still news.
             let announce = announce_session_id.filter(|_| !cancelled).map(|sid| {
-                let (success, summary, error) = match &outcome {
-                    CompletedOutcome::Ok { final_text, .. } => (true, final_text.clone(), None),
-                    CompletedOutcome::Err(e) => (false, String::new(), Some(e.clone())),
-                };
                 let result = crate::event::SubAgentCompletionEvent {
                     agent_id: announce_agent_id.clone(),
                     child_session_id: rid.clone(),
@@ -367,32 +390,12 @@ impl SubagentTool {
             });
             // Phase 1 — emit Settled (typed lifecycle + metrics) before the
             // outcome moves into the tracker.
-            let (settled_iters, settled_tools, settled_tokens) = match &outcome {
-                CompletedOutcome::Ok {
-                    iterations,
-                    tool_calls_made,
-                    total_tokens,
-                    ..
-                } => (*iterations, *tool_calls_made, *total_tokens),
-                CompletedOutcome::Err(_) => (0, 0, 0),
-            };
             // W24 — stamp the terminal state into the sidecar BEFORE handing
             // the outcome to the tracker: from here on the disk record says
             // "settled", so the next boot's orphan sweep leaves it alone. The
             // terminal text goes down the same masked trail as the progress
             // lines (one file, one redaction gate).
             {
-                let (label, final_text) = match &outcome {
-                    CompletedOutcome::Ok { final_text, .. } => ("completed", final_text.clone()),
-                    CompletedOutcome::Err(msg) => (
-                        match tree_lifecycle {
-                            aleph_protocol::subagent_tree::NodeLifecycle::Cancelled => "cancelled",
-                            aleph_protocol::subagent_tree::NodeLifecycle::TimedOut => "timed_out",
-                            _ => "failed",
-                        },
-                        msg.clone(),
-                    ),
-                };
                 crate::agents::background_persistence::record_settled(&rid, label, &final_text);
                 if cancelled {
                     // Suppressing the announce above is only half of it: a

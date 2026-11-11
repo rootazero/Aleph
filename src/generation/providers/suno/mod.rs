@@ -151,12 +151,13 @@ impl SunoProvider {
     /// or the attempt budget runs out.
     async fn poll_clips(&self, ids: &str) -> GenerationResult<Vec<types::SunoClip>> {
         let url = self.get_url(ids);
+        let auth_header = format!("Bearer {}", self.api_key);
         for attempt in 1..=MAX_POLL_ATTEMPTS {
             debug!(attempt, max = MAX_POLL_ATTEMPTS, "polling Suno clips");
             let response = self
                 .client
                 .get(&url)
-                .header("Authorization", format!("Bearer {}", self.api_key))
+                .header("Authorization", &auth_header)
                 .send()
                 .await
                 .map_err(|e| GenerationError::network(format!("Poll request failed: {e}")))?;
@@ -322,9 +323,9 @@ impl GenerationProvider for SunoProvider {
             let final_clips = self.poll_clips(&ids_csv).await?;
 
             // Pick the first complete clip; surface the rest via metadata.
-            let complete = final_clips
+            let complete_idx = final_clips
                 .iter()
-                .find(|c| c.is_complete())
+                .position(|c| c.is_complete())
                 .ok_or_else(|| {
                     GenerationError::provider(
                         format!(
@@ -336,14 +337,20 @@ impl GenerationProvider for SunoProvider {
                     )
                 })?;
 
-            let audio_url = complete.audio_url.as_ref().ok_or_else(|| {
-                GenerationError::provider(
-                    "Suno clip completed but audio_url is missing",
-                    None,
-                    "suno",
-                )
-            })?;
-            let bytes = self.download(audio_url).await?;
+            let audio_url = final_clips[complete_idx]
+                .audio_url
+                .clone()
+                .ok_or_else(|| {
+                    GenerationError::provider(
+                        "Suno clip completed but audio_url is missing",
+                        None,
+                        "suno",
+                    )
+                })?;
+            let complete_duration = final_clips[complete_idx].duration;
+            let complete_id = final_clips[complete_idx].id.clone();
+
+            let bytes = self.download(&audio_url).await?;
 
             let mut metadata = GenerationMetadata::new()
                 .with_provider("suno")
@@ -351,12 +358,12 @@ impl GenerationProvider for SunoProvider {
                 .with_duration(started_at.elapsed())
                 .with_content_type("audio/mpeg")
                 .with_size_bytes(u64::try_from(bytes.len()).unwrap_or(u64::MAX));
-            if let Some(d) = complete.duration {
+            if let Some(d) = complete_duration {
                 metadata = metadata.with_duration_seconds(d);
             }
-            // Surface alternative clips so callers can fetch them.
+            // Surface alternative clips so callers can fetch them (moving without clone).
             let alt_clips: Vec<serde_json::Value> = final_clips
-                .iter()
+                .into_iter()
                 .map(|c| {
                     serde_json::json!({
                         "id": c.id,
@@ -375,7 +382,7 @@ impl GenerationProvider for SunoProvider {
 
             info!(
                 duration_ms = started_at.elapsed().as_millis(),
-                clip_id = %complete.id,
+                clip_id = %complete_id,
                 bytes = bytes.len(),
                 "Suno generation completed"
             );

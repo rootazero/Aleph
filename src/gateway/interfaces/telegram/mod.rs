@@ -109,15 +109,16 @@ impl TelegramChannel {
         // SW-1: each account gets its own controller. Most installs have a
         // single account; multi-account installs (rare) now resolve
         // independently.
+        //
+        // IF1-04: skip controller construction entirely when no accounts are
+        // configured. Creating a controller for a non-existent "default"
+        // account would panic inside `AccessController::new` (the resolver
+        // has no entry to resolve), and would make the `start()` error path
+        // for "No Telegram accounts configured" unreachable. An empty map
+        // preserves the existing empty-config behaviour without introducing
+        // a fake controller.
         let mut access_by_account = std::collections::HashMap::new();
-        if config_v2.accounts.is_empty() {
-            // No accounts: still build a controller so the channel boots; it
-            // returns Denied for everything.
-            access_by_account.insert(
-                "default".to_string(),
-                Arc::new(AccessController::new(resolver.clone(), "default")),
-            );
-        } else {
+        if !config_v2.accounts.is_empty() {
             for account in &config_v2.accounts {
                 access_by_account.insert(
                     account.id.clone(),
@@ -185,6 +186,60 @@ impl TelegramChannel {
         }
     }
 
+    /// Resolve the adapter-owned account identity and the exact chat/topic policy.
+    pub(crate) fn inbound_config(
+        &self,
+        message: &InboundMessage,
+    ) -> ChannelResult<&ResolvedConfig> {
+        let account_id = message
+            .raw
+            .as_ref()
+            .and_then(|raw| raw.get("_aleph_telegram_account"))
+            .and_then(serde_json::Value::as_str)
+            .or_else(|| {
+                (self.config_v2.accounts.len() == 1).then(|| self.config_v2.accounts[0].id.as_str())
+            })
+            .ok_or_else(|| ChannelError::ConfigError("Missing Telegram inbound account".into()))?;
+        let (chat_id, thread_id) =
+            delivery::parse_conversation_id(message.conversation_id.as_str())?;
+        self.config_resolver
+            .resolve(account_id, chat_id.0, thread_id)
+            .ok_or_else(|| ChannelError::ConfigError("Unknown Telegram inbound account".into()))
+    }
+
+    pub(crate) fn require_mention(&self, account_id: &str) -> bool {
+        self.config_v2
+            .accounts
+            .iter()
+            .find(|account| account.id == account_id)
+            .and_then(|account| account.require_mention)
+            .unwrap_or(false)
+    }
+
+    /// Capture the live transport instead of constructing a second bot client.
+    pub(crate) fn inbound_delivery(
+        &self,
+        message: &InboundMessage,
+    ) -> ChannelResult<delivery::TelegramDelivery> {
+        let config = self.inbound_config(message)?;
+        let instance = self
+            .bot_instances
+            .iter()
+            .find(|bot| bot.account_id == config.account_id)
+            .ok_or_else(|| ChannelError::NotConnected("Telegram account is not running".into()))?;
+        Ok(delivery::TelegramDelivery::new(
+            instance.bot.clone(),
+            config.clone(),
+            self.error_cooldown.clone(),
+            message.conversation_id.as_str(),
+        ))
+    }
+
+    fn stamp_account(message: &mut InboundMessage, account_id: &str) {
+        let raw = message.raw.get_or_insert_with(|| serde_json::json!({}));
+        raw["_aleph_telegram_account"] = serde_json::json!(account_id);
+    }
+
     /// Update internal status
     async fn set_status(&self, status: ChannelStatus) {
         self.channel_state.set_status(status).await;
@@ -211,6 +266,10 @@ impl Channel for TelegramChannel {
 
     fn state(&self) -> &ChannelState {
         &self.channel_state
+    }
+
+    fn as_any(&self) -> Option<&(dyn std::any::Any + Send + Sync)> {
+        Some(self)
     }
 
     // `get_pairing_data` / `list_active_pairing_codes` intentionally fall back to
@@ -455,7 +514,7 @@ impl Channel for TelegramChannel {
             }
 
             if let Some(ref tracker) = self.offset_tracker {
-                instance.set_offset_tracker(tracker.clone());
+                instance.set_offset_tracker(Arc::new(tracker.for_account(&account.id).await));
             }
 
             // Build handler closures capturing channel-specific Arc clones
@@ -549,6 +608,7 @@ impl Channel for TelegramChannel {
                                     if group_addresses_bot {
                                         inbound.metadata.push(MessageMeta::AppMention);
                                     }
+                                    Self::stamp_account(&mut inbound, &access.config().account_id);
 
                                     if let Err(e) = inbound_tx.send(inbound) {
                                         tracing::error!("Failed to send inbound message: {:?}", e);
@@ -562,7 +622,7 @@ impl Channel for TelegramChannel {
                                 // is minted/sent. Forwarding here lets the router
                                 // run that single-source flow; the local access
                                 // controller only pre-classifies.
-                                if let Some(inbound) = handlers::convert_message(
+                                if let Some(mut inbound) = handlers::convert_message(
                                     &msg,
                                     &bot,
                                     &channel_id,
@@ -570,6 +630,7 @@ impl Channel for TelegramChannel {
                                 )
                                 .await
                                 {
+                                    Self::stamp_account(&mut inbound, &access.config().account_id);
                                     if let Err(e) = inbound_tx.send(inbound) {
                                         tracing::error!("Failed to send inbound message: {:?}", e);
                                     }
@@ -623,7 +684,7 @@ impl Channel for TelegramChannel {
                                 is_group,
                             );
                             if decision == AccessDecision::Allowed {
-                                let inbound = InboundMessage {
+                                let mut inbound = InboundMessage {
                                     id: MessageId::new(format!("{CB_MESSAGE_ID_PREFIX}{}", q.id)),
                                     channel_id: channel_id.clone(),
                                     conversation_id: ConversationId::new(conv_id_str),
@@ -641,6 +702,7 @@ impl Channel for TelegramChannel {
                                     raw: None,
                                     metadata: vec![],
                                 };
+                                Self::stamp_account(&mut inbound, &access.config().account_id);
                                 if let Err(e) = inbound_tx.send(inbound) {
                                     tracing::error!(
                                         "Failed to send callback as inbound message: {:?}",
@@ -658,12 +720,14 @@ impl Channel for TelegramChannel {
                     }
                 });
 
+            let poll_account_id = instance.account_id.clone();
             let inbound_tx_for_poll = self.channel_state.sender();
             let channel_id_for_poll = self.info.id.clone();
             let poll_handler =
                 Update::filter_poll_answer().endpoint(move |q: teloxide::types::PollAnswer| {
                     let inbound_tx = inbound_tx_for_poll.clone();
                     let channel_id = channel_id_for_poll.clone();
+                    let account_id = poll_account_id.clone();
                     async move {
                         let (conversation_id, sender_id, sender_name) = match &q.voter {
                             teloxide::types::MaybeAnonymousUser::User(user) => (
@@ -680,8 +744,16 @@ impl Channel for TelegramChannel {
                             ),
                         };
 
-                        let inbound = InboundMessage {
-                            id: MessageId::new(format!("poll_{}", q.poll_id)),
+                        // The poll id alone is not unique: the same poll id
+                        // can appear in different chats, and several voters
+                        // can answer the same poll. Scope the id by the
+                        // voter so two answers never collide.
+                        let mut inbound = InboundMessage {
+                            id: MessageId::new(format!(
+                                "poll_{}_{}",
+                                q.poll_id,
+                                sender_id.as_str()
+                            )),
                             channel_id,
                             conversation_id,
                             sender_id,
@@ -697,21 +769,25 @@ impl Channel for TelegramChannel {
                                 option_ids: q.option_ids,
                             }],
                         };
+                        Self::stamp_account(&mut inbound, &account_id);
                         let _ = inbound_tx.send(inbound);
                         Ok::<(), std::convert::Infallible>(())
                     }
                 });
 
+            let reaction_account_id = instance.account_id.clone();
             let inbound_tx_for_reaction = self.channel_state.sender();
             let channel_id_for_reaction = self.info.id.clone();
             let reaction_handler = Update::filter_message_reaction_updated().endpoint(
                 move |update: teloxide::types::MessageReactionUpdated| {
                     let inbound_tx = inbound_tx_for_reaction.clone();
                     let channel_id = channel_id_for_reaction.clone();
+                    let account_id = reaction_account_id.clone();
                     async move {
-                        if let Some(inbound) =
+                        if let Some(mut inbound) =
                             reaction_handler::convert_reaction(&update, channel_id.as_str())
                         {
+                            Self::stamp_account(&mut inbound, &account_id);
                             let _ = inbound_tx.send(inbound);
                         }
                         Ok::<(), std::convert::Infallible>(())
@@ -747,10 +823,21 @@ impl Channel for TelegramChannel {
                 let account_id = instance.account_id.clone();
                 let bot = instance.bot.clone();
                 let is_healthy = instance.is_healthy.clone();
+                let (health_shutdown_tx, mut health_shutdown_rx) = oneshot::channel();
+                // The sender belongs to the instance: dropping it here would
+                // end the health task on its first tick and the probe would
+                // never run again.
+                instance.health_shutdown_tx = Some(health_shutdown_tx);
                 tokio::spawn(async move {
                     let mut interval = tokio::time::interval(std::time::Duration::from_secs(60));
                     loop {
-                        interval.tick().await;
+                        tokio::select! {
+                            _ = interval.tick() => {}
+                            _ = &mut health_shutdown_rx => {
+                                tracing::debug!(account_id = %account_id, "Health check task shutting down");
+                                break;
+                            }
+                        }
                         match tokio::time::timeout(std::time::Duration::from_secs(10), bot.get_me())
                             .await
                         {
@@ -791,7 +878,13 @@ impl Channel for TelegramChannel {
             if let Some(shutdown_tx) = instance.shutdown_tx.take() {
                 let _ = shutdown_tx.send(());
             }
+            if let Some(health_shutdown_tx) = instance.health_shutdown_tx.take() {
+                let _ = health_shutdown_tx.send(());
+            }
         }
+        // The instances are released so a later start does not keep selecting
+        // the obsolete bots.
+        self.bot_instances.clear();
 
         self.set_status(ChannelStatus::Disconnected).await;
 
@@ -806,11 +899,28 @@ impl Channel for TelegramChannel {
             };
         let chat_id_i64 = chat_id.0;
 
-        let instance = self.bot_instances.iter().find(|inst| {
-            self.config_resolver
-                .resolve(&inst.account_id, chat_id_i64, thread_id)
-                .is_some()
-        });
+        // Select the most-specific matching instance: prefer an explicit
+        // chat-level (or topic-level) mapping over an account-level fallback
+        // (chat_id == 0).  Among equally-specific candidates the first wins,
+        // which preserves deterministic single-account behaviour.
+        let instance = {
+            // Try an exact chat (or chat+topic) match first.
+            let explicit = self.bot_instances.iter().find(|inst| {
+                self.config_resolver
+                    .resolve(&inst.account_id, chat_id_i64, thread_id)
+                    .map(|_resolved| chat_id_i64 != 0)
+                    .unwrap_or(false)
+            });
+            // Fall back to an account-level (chat_id == 0) catch-all only
+            // when no explicit mapping exists for any account.
+            explicit.or_else(|| {
+                self.bot_instances.iter().find(|inst| {
+                    self.config_resolver
+                        .resolve(&inst.account_id, chat_id_i64, thread_id)
+                        .is_some()
+                })
+            })
+        };
         let Some(instance) = instance else {
             let reason = format!(
                 "No Telegram account configured for chat {chat_id_i64} (thread: {thread_id:?}). \
@@ -819,7 +929,11 @@ impl Channel for TelegramChannel {
             return Box::pin(async move { Err(ChannelError::ConfigError(reason)) });
         };
         let bot = instance.bot.clone();
-        let resolved_config = instance.resolved_config.clone();
+        let resolved_config = self
+            .config_resolver
+            .resolve(&instance.account_id, chat_id_i64, thread_id)
+            .expect("selected instance has an effective config")
+            .clone();
         let account_id = instance.account_id.clone();
         let audit_log = Arc::clone(&self.audit_log);
         let error_cooldown = Arc::clone(&self.error_cooldown);
@@ -1004,7 +1118,6 @@ impl Channel for TelegramChannel {
         )
         .await
     }
-
     async fn delete(
         &self,
         _conversation_id: &ConversationId,
@@ -1021,15 +1134,29 @@ impl Channel for TelegramChannel {
         &self,
     ) -> Option<Arc<dyn crate::gateway::channel_approval::ChannelApprovalCapability>> {
         let first = self.bot_instances.first()?;
-        let instance = bot_instance::BotInstance {
-            account_id: first.account_id.clone(),
-            bot: first.bot.clone(),
-            resolved_config: first.resolved_config.clone(),
-            access: first.access.clone(),
-            offset_tracker: first.offset_tracker.clone(),
-            shutdown_tx: None,
-            is_healthy: first.is_healthy.clone(),
-        };
+        // The capability must be able to reach EVERY configured account: the
+        // approval for a chat has to be delivered by the account that owns
+        // that chat. Cloning only the first instance made a multi-account
+        // deployment answer approvals with the wrong bot.
+        let instances: Vec<bot_instance::BotInstance> = self
+            .bot_instances
+            .iter()
+            .map(|inst| bot_instance::BotInstance {
+                account_id: inst.account_id.clone(),
+                bot: inst.bot.clone(),
+                resolved_config: inst.resolved_config.clone(),
+                access: inst.access.clone(),
+                offset_tracker: inst.offset_tracker.clone(),
+                shutdown_tx: None,
+                health_shutdown_tx: None,
+                is_healthy: inst.is_healthy.clone(),
+            })
+            .collect();
+        let access_by_account: std::collections::HashMap<String, Arc<AccessController>> = self
+            .bot_instances
+            .iter()
+            .map(|inst| (inst.account_id.clone(), inst.access.clone()))
+            .collect();
         let first_access = first.access.clone();
         Some(Arc::new(
             crate::gateway::interfaces::telegram::approval::TelegramChannelApprovalCapability::new(
@@ -1037,12 +1164,9 @@ impl Channel for TelegramChannel {
                     info: self.info.clone(),
                     config_v2: self.config_v2.clone(),
                     channel_state: ChannelState::new(100),
-                    bot_instances: vec![instance],
+                    bot_instances: instances,
                     tool_registry: self.tool_registry.clone(),
-                    access_by_account: std::collections::HashMap::from([(
-                        first.account_id.clone(),
-                        first_access.clone(),
-                    )]),
+                    access_by_account,
                     token_fingerprint_verdicts: self.token_fingerprint_verdicts.clone(),
                     audit_log: self.audit_log.clone(),
                     error_cooldown: self.error_cooldown.clone(),
@@ -1066,10 +1190,18 @@ impl ChannelFactory for TelegramChannelFactory {
     }
 
     async fn create(&self, config: serde_json::Value) -> ChannelResult<Box<dyn Channel>> {
+        self.create_with_id("telegram", config).await
+    }
+
+    async fn create_with_id(
+        &self,
+        id: &str,
+        config: serde_json::Value,
+    ) -> ChannelResult<Box<dyn Channel>> {
         let config = config::parse_telegram_channel_config(config)
             .map_err(|e| ChannelError::ConfigError(format!("Invalid Telegram config: {e}")))?;
 
-        Ok(Box::new(TelegramChannel::new("telegram", config)))
+        Ok(Box::new(TelegramChannel::new(id, config)))
     }
 }
 
@@ -1086,6 +1218,84 @@ pub fn register_with_plugin() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn empty_accounts_reaches_start_config_error_without_constructor_panic() {
+        let mut channel = TelegramChannel::new("telegram", TelegramConfigV2::default());
+        assert!(channel.access_by_account.is_empty());
+        assert!(matches!(
+            channel.start().await,
+            Err(ChannelError::ConfigError(_))
+        ));
+    }
+
+    #[tokio::test]
+    async fn channel_send_uses_effective_topic_config_and_live_bot_transport() {
+        use wiremock::{matchers::path, Mock, MockServer, ResponseTemplate};
+        let server = MockServer::start().await;
+        Mock::given(path("/bot123:test/SendMessage"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "ok": true, "result": {"message_id": 42, "date": 1700000000,
+                    "chat": {"id": -100, "type": "private"}}
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let config: TelegramConfigV2 = serde_json::from_value(serde_json::json!({
+            "accounts": [{"id": "test", "bot_token": "123:test", "send_typing": true,
+                "groups": [{"id": "group", "chat_id": -100, "topics": [
+                    {"id": "topic", "thread_id": 5, "send_typing": false}
+                ]}]}]
+        }))
+        .unwrap();
+        let mut channel = TelegramChannel::new("telegram", config);
+        let account = &channel.config_v2.accounts[0];
+        let defaults = channel
+            .config_resolver
+            .resolve("test", 0, None)
+            .unwrap()
+            .clone();
+        let mut instance = bot_instance::BotInstance::new(
+            account,
+            defaults,
+            channel.access_by_account["test"].clone(),
+        );
+        instance.bot = instance.bot.set_api_url(server.uri().parse().unwrap());
+        channel.bot_instances.push(instance);
+        let inbound = InboundMessage {
+            id: MessageId::new("17"),
+            channel_id: ChannelId::new("telegram"),
+            conversation_id: ConversationId::new("-100:5"),
+            sender_id: UserId::new("42"),
+            sender_name: None,
+            text: "hello".into(),
+            attachments: vec![],
+            timestamp: chrono::Utc::now(),
+            reply_to: None,
+            is_group: true,
+            raw: Some(serde_json::json!({"_aleph_telegram_account": "test"})),
+            metadata: vec![],
+        };
+        let streaming_delivery = channel.inbound_delivery(&inbound).unwrap();
+        assert_eq!(
+            streaming_delivery.bot.api_url().as_str(),
+            format!("{}/", server.uri())
+        );
+        assert!(!streaming_delivery.config.send_typing);
+        let result = channel
+            .send(OutboundMessage::text("-100:5", "answer"))
+            .await
+            .unwrap();
+        assert_eq!(result.message_id.as_str(), "42");
+        let requests = server.received_requests().await.unwrap();
+        assert_eq!(
+            requests.len(),
+            1,
+            "topic send_typing=false must reach delivery"
+        );
+        let body: serde_json::Value = serde_json::from_slice(&requests[0].body).unwrap();
+        assert_eq!(body["message_thread_id"], 5);
+    }
 
     #[test]
     fn test_channel_capabilities() {

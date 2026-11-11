@@ -74,12 +74,13 @@ impl ContextInjector {
         let all_tools = client.list_tools().await;
 
         // Filter to resources/tools from this server (prefixed with server_name:)
+        let has_server_prefix = |s: &str| -> bool {
+            s.starts_with(server_name) && s[server_name.len()..].starts_with(':')
+        };
+
         let resources: Vec<ResourceContext> = all_resources
             .into_iter()
-            .filter(|r| {
-                r.uri.starts_with(&format!("{server_name}:"))
-                    || r.name.starts_with(&format!("{server_name}:"))
-            })
+            .filter(|r| has_server_prefix(&r.uri) || has_server_prefix(&r.name))
             .map(|r| ResourceContext {
                 uri: r.uri,
                 name: r.name,
@@ -89,7 +90,7 @@ impl ContextInjector {
 
         let tools: Vec<ToolContext> = all_tools
             .into_iter()
-            .filter(|t| t.name.starts_with(&format!("{server_name}:")))
+            .filter(|t| has_server_prefix(&t.name))
             .map(|t| ToolContext {
                 name: t.name,
                 description: t.description,

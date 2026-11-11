@@ -102,8 +102,17 @@ pub(crate) fn yaml_inline_array(items: &[String]) -> String {
     if items.is_empty() {
         return "[]".to_string();
     }
-    let parts: Vec<String> = items.iter().map(|s| yaml_scalar(s)).collect();
-    format!("[{}]", parts.join(", "))
+    let total_len = items.iter().map(|s| s.len() + 4).sum::<usize>() + 2;
+    let mut out = String::with_capacity(total_len);
+    out.push('[');
+    for (i, item) in items.iter().enumerate() {
+        if i > 0 {
+            out.push_str(", ");
+        }
+        out.push_str(&yaml_scalar(item));
+    }
+    out.push(']');
+    out
 }
 
 /// Render passthrough frontmatter keys (see

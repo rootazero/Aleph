@@ -717,16 +717,19 @@ impl ExtensionManager {
                 .map(|record| record.root_dir.clone())
         };
         if let Some(root_dir) = schema {
-            if let Ok(manifest) =
+            let manifest =
                 crate::extension::manifest::parse_manifest_from_dir_cached_global(&root_dir)
-            {
-                if let Some(ref schema) = manifest.config_schema {
-                    let value = serde_json::Value::Object(map.clone());
-                    let errors =
-                        crate::extension::manifest::validate_config_against_schema(schema, &value);
-                    if !errors.is_empty() {
-                        return Err(errors);
-                    }
+                    .map_err(|e| {
+                        vec![format!(
+                            "Cannot validate configuration: plugin manifest parse failed: {e}"
+                        )]
+                    })?;
+            if let Some(ref schema) = manifest.config_schema {
+                let value = serde_json::Value::Object(map.clone());
+                let errors =
+                    crate::extension::manifest::validate_config_against_schema(schema, &value);
+                if !errors.is_empty() {
+                    return Err(errors);
                 }
             }
         }
@@ -1117,5 +1120,51 @@ mod tests {
                 .is_some_and(|entry| entry.trusted == Some(true)),
             "the durable vouch must be gone too"
         );
+    }
+
+    /// E2-01: Manifest parse failure must propagate when a plugin is found.
+    #[tokio::test]
+    async fn set_plugin_settings_rejects_when_manifest_parse_fails() {
+        let tmp = tempfile::tempdir().unwrap();
+        let plugin_dir = tmp.path().join("plugin-with-broken-manifest");
+        std::fs::create_dir_all(&plugin_dir).unwrap();
+        let manifest_path = plugin_dir.join("plugin.toml");
+        std::fs::write(
+            &manifest_path,
+            "id = \"broken\"\nversion = \"1.0.0\"\nname = \"Broken\"\nconfig_schema = {",
+        )
+        .unwrap();
+
+        let cfg_path = tmp.path().join("plugins.toml");
+        let manager = ExtensionManager::new(crate::extension::ExtensionConfig {
+            discovery: crate::extension::DiscoveryConfig {
+                working_dir: tmp.path().to_path_buf(),
+                scan_claude_dirs: false,
+                scan_project_dirs: false,
+                max_upward_depth: 0,
+                claude_home_override: None,
+            },
+            plugins_config_path: Some(cfg_path),
+            ..crate::extension::ExtensionConfig::default()
+        })
+        .await
+        .unwrap();
+
+        {
+            let mut reg = manager.get_plugin_registry_mut().await;
+            let mut record = crate::extension::PluginRecord::new(
+                "broken".into(),
+                "Broken".into(),
+                crate::extension::PluginKind::Wasm,
+                PluginOrigin::Global,
+            );
+            record.root_dir = plugin_dir;
+            reg.register_plugin(record);
+        }
+
+        let result = manager
+            .set_plugin_settings("broken", serde_json::json!({"field": "value"}))
+            .await;
+        assert!(result.is_err() && result.unwrap_err()[0].contains("manifest parse failed"));
     }
 }

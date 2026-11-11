@@ -143,6 +143,11 @@ impl AsyncTaskData {
             .or(self.url.as_deref())
             .or(self.video_url.as_deref())
     }
+
+    /// Take the output URL by value from whichever field is present
+    pub fn into_output_url(self) -> Option<String> {
+        self.output.or(self.url).or(self.video_url)
+    }
 }
 
 /// Request body for async video task APIs.

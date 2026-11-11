@@ -258,7 +258,7 @@ impl ClarificationRequest {
     }
 
     /// How many questions are outstanding in total.
-    #[allow(clippy::len_without_is_empty)] // see is_empty doc below — answer is genuinely 'never'
+    #[allow(clippy::len_without_is_empty)] // no `is_empty`: a request with no questions is unrepresentable
     #[must_use]
     pub fn len(&self) -> usize {
         self.questions.len()

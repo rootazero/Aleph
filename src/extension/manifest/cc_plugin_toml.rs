@@ -155,7 +155,6 @@ pub struct AlephExtensionsToml {
     /// Handler-backed tools plus their instruction files.
     #[serde(default)]
     pub tools: Vec<ToolSection>,
-
     /// Event hooks declared inline (as opposed to a `hooks/hooks.json` file).
     #[serde(default)]
     pub hooks: Vec<HookSection>,
@@ -180,25 +179,37 @@ pub struct AlephExtensionsToml {
     #[serde(default)]
     pub memory: Option<MemoryManifestSection>,
 }
-
 // =============================================================================
 // Runtime → PluginKind mapping
 // =============================================================================
 
-fn runtime_to_kind(runtime: &str) -> PluginKind {
+fn runtime_to_kind(runtime: &str) -> Result<PluginKind, ExtensionError> {
     match runtime {
-        "wasm" => PluginKind::Wasm,
-        "mcp" => PluginKind::Mcp,
-        "static" => PluginKind::Static,
-        _ => PluginKind::Static,
+        "wasm" => Ok(PluginKind::Wasm),
+        "mcp" => Ok(PluginKind::Mcp),
+        "static" => Ok(PluginKind::Static),
+        other => Err(ExtensionError::invalid_manifest(
+            format!(
+                "unknown runtime {:?}: expected one of \"wasm\", \"mcp\", \"static\"",
+                other
+            ),
+            other,
+        )),
     }
 }
 
-fn runtime_to_aleph_runtime(runtime: &str) -> AlephRuntime {
+fn runtime_to_aleph_runtime(runtime: &str) -> Result<AlephRuntime, ExtensionError> {
     match runtime {
-        "wasm" => AlephRuntime::Wasm,
-        "mcp" => AlephRuntime::Mcp,
-        _ => AlephRuntime::Static,
+        "wasm" => Ok(AlephRuntime::Wasm),
+        "mcp" => Ok(AlephRuntime::Mcp),
+        "static" => Ok(AlephRuntime::Static),
+        other => Err(ExtensionError::invalid_manifest(
+            format!(
+                "unknown runtime {:?}: expected one of \"wasm\", \"mcp\", \"static\"",
+                other
+            ),
+            other,
+        )),
     }
 }
 
@@ -249,9 +260,22 @@ pub fn parse_cc_plugin_toml_content(
     let mut superset = AlephSuperset::default();
     let (kind, entry, aleph_extensions) = if let Some(aleph) = toml.aleph {
         let runtime_str = aleph.runtime.as_deref().unwrap_or("static");
-        let kind = runtime_to_kind(runtime_str);
-        let entry = aleph.entry.unwrap_or_else(|| default_entry_for_kind(kind));
+        // An explicit runtime the platform does not have is a manifest error,
+        // not a request for the static runtime.
+        if !matches!(runtime_str, "wasm" | "mcp" | "static") {
+            return Err(ExtensionError::invalid_manifest(
+                &manifest_path,
+                format!(
+                    "unknown [aleph] runtime '{runtime_str}': expected one of `wasm`, `mcp`, `static`"
+                ),
+            ));
+        }
+        let kind = runtime_to_kind(runtime_str)
+            .map_err(|e| ExtensionError::invalid_manifest(&manifest_path, e.to_string()))?;
         let permissions = convert_permissions(&aleph.permissions);
+        let entry = aleph
+            .entry
+            .unwrap_or_else(|| default_entry_for_kind(kind).to_owned());
 
         superset = AlephSuperset {
             tools: aleph.tools,
@@ -264,7 +288,7 @@ pub fn parse_cc_plugin_toml_content(
         };
 
         let aleph_ext = AlephExtensions {
-            runtime: runtime_to_aleph_runtime(runtime_str),
+            runtime: runtime_to_aleph_runtime(runtime_str)?,
             entry: Some(entry.clone()),
             services: aleph.services,
             contexts: aleph.contexts,
@@ -290,26 +314,27 @@ pub fn parse_cc_plugin_toml_content(
         };
 
         (kind, entry, Some((aleph_ext, permissions)))
-    } else if declares_servers {
-        // A Claude Code MCP plugin declares no `[aleph]` block — its servers
-        // ARE its runtime. Without this inference the manifest parsed as
-        // `Static` and `lifecycle::mount` never started a single server (the
-        // `mcp_server` effect keys on `kind == Mcp`). Which servers, from
-        // which source (inline object, path, or `.mcp.json`), is the
-        // adapter's one reader's answer — `component_source::resolve_mcp_servers`;
-        // this line only decides the kind. The JSON dialect
-        // (`parse_cc_plugin_json_content`) has carried the same inference
-        // since it was written; the TOML dialect never did, so the
-        // *documented-preferred* manifest could not be an MCP plugin at all.
-        (
-            PluginKind::Mcp,
-            default_entry_for_kind(PluginKind::Mcp),
-            None,
-        )
     } else {
-        (PluginKind::Static, ".".to_string(), None)
+        if declares_servers {
+            // A Claude Code MCP plugin declares no `[aleph]` block — its servers
+            // ARE its runtime. Without this inference the manifest parsed as
+            // `Static` and `lifecycle::mount` never started a single server (the
+            // `mcp_server` effect keys on `kind == Mcp`). Which servers, from
+            // which source (inline object, path, or `.mcp.json`), is the
+            // adapter's one reader's answer — `component_source::resolve_mcp_servers`;
+            // this line only decides the kind. The JSON dialect
+            // (`parse_cc_plugin_json_content`) has carried the same inference
+            // since it was written; the TOML dialect never did, so the
+            // *documented-preferred* manifest could not be an MCP plugin at all.
+            (
+                PluginKind::Mcp,
+                default_entry_for_kind(PluginKind::Mcp).to_string(),
+                None::<(_, _)>,
+            )
+        } else {
+            (PluginKind::Static, ".".to_string(), None::<(_, _)>)
+        }
     };
-
     let (aleph_ext, permissions) =
         aleph_extensions.map_or((None, Vec::new()), |(ext, perms)| (Some(ext), perms));
     let wasm_capabilities = aleph_ext

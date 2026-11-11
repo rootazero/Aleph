@@ -678,7 +678,7 @@ pub struct Orchestrator {
 /// has to downcast speculatively. The two common shapes are `&'static str`
 /// (the most common — `panic!("foo")`) and `String` (`panic!("{}", x)`),
 /// plus the synthetic `"Box<dyn Any>"` payload from `std::panic::panic_any`.
-fn panic_message(payload: &Box<dyn std::any::Any + Send>) -> String {
+fn panic_message(payload: &(dyn std::any::Any + Send)) -> String {
     if let Some(s) = payload.downcast_ref::<&'static str>() {
         (*s).to_string()
     } else if let Some(s) = payload.downcast_ref::<String>() {
@@ -1098,29 +1098,30 @@ impl Orchestrator {
                 .flow_registry
                 .resolve(id)
                 .ok_or_else(|| FlowError::UnknownFlow(id.clone())),
-            None => match resolve_flow_id(&req.agent_id, &self.default_routing) {
-                Ok(flow_id) => match self.flow_registry.resolve(&flow_id) {
-                    Some(spec) => Ok(spec),
-                    None => {
-                        // Routing succeeded but the resolved flow id is unknown
-                        // (a routing-table entry whose flow was never
-                        // registered). Prefer serving through the default agent
-                        // over a hard error; if the default is missing too,
-                        // surface the original UnknownFlow so the caller sees
-                        // what actually went wrong.
-                        self.flow_registry
-                            .resolve(DEFAULT_AGENT_FLOW_ID)
-                            .map(|base| fallback_spec_with_agent(base, &req.agent_id))
-                            .ok_or_else(|| FlowError::UnknownFlow(flow_id.clone()))
-                    }
-                },
-                Err(FlowError::UnknownAgent(_)) => self
-                    .flow_registry
-                    .resolve(DEFAULT_AGENT_FLOW_ID)
-                    .map(|base| fallback_spec_with_agent(base, &req.agent_id))
-                    .ok_or_else(|| FlowError::UnknownFlow(DEFAULT_AGENT_FLOW_ID.to_string())),
-                Err(e) => Err(e),
-            },
+            None => {
+                let fallback = || {
+                    self.flow_registry
+                        .resolve(DEFAULT_AGENT_FLOW_ID)
+                        .map(|base| fallback_spec_with_agent(base, &req.agent_id))
+                };
+                match resolve_flow_id(&req.agent_id, &self.default_routing) {
+                    Ok(flow_id) => match self.flow_registry.resolve(&flow_id) {
+                        Some(spec) => Ok(spec),
+                        None => {
+                            // Routing succeeded but the resolved flow id is unknown
+                            // (a routing-table entry whose flow was never
+                            // registered). Prefer serving through the default agent
+                            // over a hard error; if the default is missing too,
+                            // surface the original UnknownFlow so the caller sees
+                            // what actually went wrong.
+                            fallback().ok_or(FlowError::UnknownFlow(flow_id))
+                        }
+                    },
+                    Err(FlowError::UnknownAgent(_)) => fallback()
+                        .ok_or_else(|| FlowError::UnknownFlow(DEFAULT_AGENT_FLOW_ID.to_string())),
+                    Err(e) => Err(e),
+                }
+            }
         }
     }
 
@@ -1133,15 +1134,35 @@ impl Orchestrator {
         depth_guard(req.depth)?;
 
         // Step 3: agent lookup deferred to harness (it holds the AgentRegistry).
+        let FlowRequest {
+            flow_id: _,
+            agent_id: _,
+            input,
+            depth: _,
+            session_hint,
+            parent_session,
+            sandbox_override,
+            event_tx: req_event_tx,
+            tool_service: tool_service_override,
+            trace_sink,
+            interaction_manifest,
+            workspace_override,
+            max_iterations_override,
+            transient_context,
+            think_level,
+            envelope,
+            model_directive,
+            run_id,
+            telecom_public,
+            scope,
+            channel: _,
+        } = req;
 
         // Step 4: session resolve + per-session lock.
         let session_input = SessionResolveInput {
-            // rust-doctor-disable-next-line excessive-clone
             strategy: spec.session_strategy.clone(),
-            // rust-doctor-disable-next-line excessive-clone
-            session_hint: req.session_hint.clone(),
-            // rust-doctor-disable-next-line excessive-clone
-            parent_session: req.parent_session.clone(),
+            session_hint,
+            parent_session,
             fresh_key_fn: || uuid::Uuid::new_v4().to_string(),
         };
         let session_res = resolve_session(session_input)?;
@@ -1168,7 +1189,6 @@ impl Orchestrator {
                 .active_sessions
                 .lock()
                 .unwrap_or_else(|e| e.into_inner());
-            // rust-doctor-disable-next-line excessive-clone
             if !guard.insert(session_res.session_key.clone()) {
                 return Err(FlowError::SessionConflict(session_res.session_key));
             }
@@ -1179,8 +1199,7 @@ impl Orchestrator {
         // Step 6: sandbox provision. Per-request `sandbox_override` short-circuits
         // the factory — the team dispatcher uses it to inject a `WorktreeSandbox`
         // for per-task git isolation. Falls back to the factory when None.
-        // rust-doctor-disable-next-line excessive-clone
-        let sandbox = match req.sandbox_override.clone() {
+        let sandbox = match sandbox_override {
             Some(sb) => sb,
             None => match (self.sandbox_factory)(&session_res.session_key) {
                 Ok(sb) => sb,
@@ -1200,8 +1219,7 @@ impl Orchestrator {
         // gateway's trace mirror) hands the sender in; we subscribe. The
         // subscription must happen before the harness task starts — a
         // broadcast receiver only sees sends made after it exists.
-        // rust-doctor-disable-next-line excessive-clone
-        let (event_tx, event_rx) = match req.event_tx.clone() {
+        let (event_tx, event_rx) = match req_event_tx {
             Some(tx) => {
                 let rx = tx.subscribe();
                 (tx, rx)
@@ -1211,42 +1229,14 @@ impl Orchestrator {
         let (done_tx, done_rx) = oneshot::channel();
         let cancel = CancellationToken::new();
 
-        // rust-doctor-disable-next-line excessive-clone
         let harness = self.harness.clone();
-        // rust-doctor-disable-next-line excessive-clone
         let spec_clone = spec.clone();
-        // rust-doctor-disable-next-line excessive-clone
-        let input_clone = req.input.clone();
-        // rust-doctor-disable-next-line excessive-clone
+        let input_clone = input;
         let sandbox_clone = sandbox.clone();
-        // rust-doctor-disable-next-line excessive-clone
         let cancel_clone = cancel.clone();
-        // rust-doctor-disable-next-line excessive-clone
         let session_key = session_res.session_key.clone();
-        // rust-doctor-disable-next-line excessive-clone
         let active = self.active_sessions.clone();
-        // rust-doctor-disable-next-line excessive-clone
         let session_for_release = session_res.session_key.clone();
-        // rust-doctor-disable-next-line excessive-clone
-        let tool_service_override = req.tool_service.clone();
-        // rust-doctor-disable-next-line excessive-clone
-        let trace_sink = req.trace_sink.clone();
-        // rust-doctor-disable-next-line excessive-clone
-        let interaction_manifest = req.interaction_manifest.clone();
-        // rust-doctor-disable-next-line excessive-clone
-        let workspace_override = req.workspace_override.clone();
-        let max_iterations_override = req.max_iterations_override;
-        // rust-doctor-disable-next-line excessive-clone
-        let transient_context = req.transient_context.clone();
-        let think_level = req.think_level;
-        // rust-doctor-disable-next-line excessive-clone
-        let envelope = req.envelope.clone();
-        // rust-doctor-disable-next-line excessive-clone
-        let model_directive = req.model_directive.clone();
-        // rust-doctor-disable-next-line excessive-clone
-        let run_id = req.run_id.clone();
-        // rust-doctor-disable-next-line excessive-clone
-        let telecom_public = req.telecom_public.clone();
         // Sixth capture at the same boundary: the run-origin task-local
         // (`telecom::run_origin`) is seeded by `run_loop::with_request_scope`
         // on the gateway side and dies at this `tokio::spawn`, so a tool
@@ -1255,12 +1245,11 @@ impl Orchestrator {
         // ordinary child. It is re-seeded from the request's own typed
         // `telecom_public` -- never from metadata / source_channel -- and an
         // ordinary request is seeded explicitly as ordinary (`None`).
-        let run_origin = req.telecom_public.clone();
+        let run_origin = telecom_public.clone();
         // P1 data isolation — captured before the spawn boundary (task-locals
         // do not cross `tokio::spawn`); re-derived into a `ScopeAttribution`
         // and re-seeded inside, sibling of `with_agent_id`/`with_project_root`.
-        // rust-doctor-disable-next-line excessive-clone
-        let (owner_user_id, scope_id) = req.scope.clone().into_parts();
+        let (owner_user_id, scope_id) = scope.into_parts();
         // P2 speaker label — the SAME boundary and the same reason as the two
         // above, but this one has no `FlowRequest` field to be re-derived from,
         // so the live task-local is captured here on the caller's side. It is
@@ -1413,7 +1402,7 @@ impl Orchestrator {
             let outcome = match outcome {
                 Ok(result) => result,
                 Err(panic_payload) => {
-                    let msg = panic_message(&panic_payload);
+                    let msg = panic_message(&*panic_payload);
                     // `session_key` was moved into `harness.run(...)` above;
                     // we cannot reference it again after that move. The
                     // structured context for this log is already captured by
@@ -1435,7 +1424,7 @@ impl Orchestrator {
         });
 
         Ok(FlowHandle {
-            session_key: session_res.session_key.clone(),
+            session_key: session_res.session_key,
             parent_session_key: session_res.parent_session_key,
             events: event_rx,
             completion: done_rx,

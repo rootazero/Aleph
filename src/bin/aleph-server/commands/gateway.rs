@@ -1,10 +1,11 @@
+//! lock-policy: run-no-lock
+//!
 //! Gateway RPC command handlers
 //!
-//! Spec C policy: **`NoLock`**. `gateway call` is a pure JSON-RPC client
+//! `gateway call` is a pure JSON-RPC client
 //! over WebSocket; it does not touch `~/.aleph/data/` and therefore
-//! never contends for the singleton lock. Marker call to `run_no_lock`
-//! at handler entry preserves the policy classification for the
-//! reverse-regression check (Task 25).
+//! never contends for the singleton lock. The `run_no_lock` marker
+//! at handler entry keeps the declared policy and the code in agreement.
 
 use crate::cli::GatewayAction;
 

@@ -30,8 +30,7 @@
 //! ("waiting for: sessionPersistence") in Rust's shape — no plugin tree, no
 //! topological boot, just the sentence a reader needs.
 
-use crate::sync_primitives::Arc;
-use std::sync::OnceLock;
+use crate::sync_primitives::{Arc, OnceLock};
 
 pub mod activation;
 pub mod ambient;

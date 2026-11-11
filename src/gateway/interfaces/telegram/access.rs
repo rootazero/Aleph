@@ -74,6 +74,13 @@ impl AccessController {
     /// `thread_id` is the forum topic id (or `None` for a non-topic message).
     /// Resolution order matches `ConfigResolver::resolve`:
     /// `topic.exact → group.chat_id → account.0`.
+    ///
+    /// The result is the effective (account → chat → topic) decision. The Core
+    /// inbound router re-derives the same effective configuration for telegram
+    /// (`inbound_router/permission.rs` resolves the per-chat / per-topic
+    /// config and overwrites the registered channel policy with it), so this
+    /// local decision must NOT be clamped to the account default: clamping
+    /// would reject a configured per-group override that Core itself accepts.
     #[must_use]
     pub fn check_message(
         &self,
@@ -387,6 +394,39 @@ mod tests {
         assert_eq!(
             ctrl.check_message(111, -100999, None, true),
             AccessDecision::Allowed,
+        );
+    }
+
+    /// A per-group override that is MORE permissive than the account default
+    /// must survive the local decision: the Core inbound router resolves the
+    /// same effective configuration (`inbound_router/permission.rs`), so
+    /// clamping the local decision to the account default would reject a
+    /// configured group that Core itself accepts.
+    #[test]
+    fn per_group_override_opens_a_group_that_the_account_level_disables() {
+        let mut v2 = account_only_v2(DmPolicy::default(), GroupPolicy::Disabled, vec![]);
+        v2.accounts[0].groups = vec![TelegramGroupConfig {
+            id: "g1".to_string(),
+            chat_id: -100111,
+            agent: None,
+            block_streaming: None,
+            error_policy: None,
+            group_policy: Some(GroupPolicy::Open),
+            send_typing: None,
+            allowed_users: None,
+            topics: vec![],
+        }];
+        let ctrl = controller(&v2);
+        assert_eq!(
+            ctrl.check_message(111, -100111, None, true),
+            AccessDecision::Allowed,
+            "a per-group Open must not be clamped away by the account-level Disabled"
+        );
+        // A group the override did not name still follows the account policy.
+        assert_eq!(
+            ctrl.check_message(111, -100999, None, true),
+            AccessDecision::Denied,
+            "an unnamed group must still follow the account-level policy"
         );
     }
 

@@ -1,3 +1,5 @@
+//! lock-policy: none
+//!
 //! `aleph-server identity` — offline reader for agent signing identities and
 //! the signed operation ledger.
 //!
@@ -14,6 +16,7 @@
 //! that wrote it.
 
 use std::error::Error;
+use std::io::Read;
 
 use alephcore::gateway::security::{store::SecurityStore, SharedTokenManager};
 use alephcore::identity::{
@@ -42,8 +45,25 @@ fn open_ledger() -> Result<AgentLedger, Box<dyn Error>> {
         store.clone(),
         data_dir.join("secrets.vault"),
     ));
+    let token = store
+        .get_shared_token_plaintext()
+        .map_err(|e| format!("Failed to read vault master token from security store: {e}"))?
+        .ok_or("No vault master token found. Start the server at least once.")?;
+    if !vault
+        .validate(&token)
+        .map_err(|e| format!("Failed to validate vault master token: {e}"))?
+    {
+        return Err(
+            "Vault master token failed HMAC validation; the security store is inconsistent."
+                .into(),
+        );
+    }
+    // The manager's only public loader also populates its in-memory token, but
+    // returns Option. Validate through the store first so its failures remain
+    // distinguishable from a first run, then populate through that loader.
     if vault.try_load_token_from_db().is_none() {
-        return Err("No vault master token found. Start the server at least once.".into());
+        return Err("Failed to recover the validated vault master token from the security store."
+            .into());
     }
     Ok(AgentLedger::new(Arc::new(AgentKeystore::new(store, vault))))
 }
@@ -81,7 +101,10 @@ fn verify_exported_file(
     // of records, each ~256 B signed + a few metadata fields; 256 MiB
     // is far above any plausible export and well below OOM territory).
     const MAX_EXPORT_BYTES: u64 = 256 * 1024 * 1024;
-    let meta = std::fs::metadata(path).map_err(|e| format!("cannot stat {path}: {e}"))?;
+    let file = std::fs::File::open(path).map_err(|e| format!("cannot open {path}: {e}"))?;
+    let meta = file
+        .metadata()
+        .map_err(|e| format!("cannot stat {path}: {e}"))?;
     if meta.len() > MAX_EXPORT_BYTES {
         return Err(format!(
             "{path} is {} bytes; export cap is {MAX_EXPORT_BYTES} bytes (256 MiB). \
@@ -90,7 +113,17 @@ fn verify_exported_file(
         )
         .into());
     }
-    let body = std::fs::read_to_string(path).map_err(|e| format!("cannot read {path}: {e}"))?;
+    let mut body = String::new();
+    file.take(MAX_EXPORT_BYTES + 1)
+        .read_to_string(&mut body)
+        .map_err(|e| format!("cannot read {path}: {e}"))?;
+    if body.len() as u64 > MAX_EXPORT_BYTES {
+        return Err(format!(
+            "{path} exceeds the export cap of {MAX_EXPORT_BYTES} bytes (256 MiB). \
+             Refusing to read an oversized file as a chain export."
+        )
+        .into());
+    }
     let doc: alephcore::identity::ChainExport =
         serde_json::from_str(&body).map_err(|e| format!("{path} is not a chain export: {e}"))?;
     let report = alephcore::identity::verify_export(&doc, pins)?;

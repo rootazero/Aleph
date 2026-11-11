@@ -188,7 +188,7 @@ pub(super) async fn handle(inbound: TcpStream, allowlist: AllowList) -> Result<(
     let mut inbound = rd
         .into_inner()
         .reunite(wr)
-        .map_err(|e| std::io::Error::other(format!("{e}")))?;
+        .map_err(std::io::Error::other)?;
     let _ = tokio::io::copy_bidirectional(&mut inbound, &mut upstream).await;
     Ok(())
 }

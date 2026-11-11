@@ -93,10 +93,14 @@ impl MattermostChannel {
     /// Get Mattermost-specific capabilities
     fn capabilities() -> ChannelCapabilities {
         ChannelCapabilities {
-            attachments: true,
-            images: true,
-            audio: true,
-            video: true,
+            // The send path builds no attachment list (see
+            // `message_ops::build_outbound`: `attachments: Vec::new()`), so
+            // advertising the media capabilities would promise something the
+            // adapter cannot deliver.
+            attachments: false,
+            images: false,
+            audio: false,
+            video: false,
             reactions: true,
             replies: true,
             editing: true,
@@ -331,12 +335,20 @@ impl ChannelFactory for MattermostChannelFactory {
     }
 
     async fn create(&self, config: serde_json::Value) -> ChannelResult<Box<dyn Channel>> {
+        self.create_with_id("mattermost", config).await
+    }
+
+    async fn create_with_id(
+        &self,
+        id: &str,
+        config: serde_json::Value,
+    ) -> ChannelResult<Box<dyn Channel>> {
         let config: MattermostConfig = serde_json::from_value(config)
             .map_err(|e| ChannelError::ConfigError(format!("Invalid Mattermost config: {e}")))?;
 
         config.validate().map_err(ChannelError::ConfigError)?;
 
-        Ok(Box::new(MattermostChannel::new("mattermost", config)))
+        Ok(Box::new(MattermostChannel::new(id, config)))
     }
 }
 

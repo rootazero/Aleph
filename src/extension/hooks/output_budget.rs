@@ -41,6 +41,7 @@
 //!   `executor.rs` is what protects the *decision* protocol. This budget sits
 //!   downstream of it and only governs how much text reaches the model.
 
+use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
 
 use tracing::warn;
@@ -122,13 +123,26 @@ async fn budget_one(session_id: &str, text: String) -> String {
 
 /// Resolve `~/.aleph/data/hook_outputs/<session>/`, or `None` when the data
 /// directory cannot be located (spilling then degrades to plain truncation).
+///
+/// E3-03 fix: Use a stable hash of the original session ID as the directory name
+/// to prevent collisions from lossy character mapping.
 fn spill_dir(session_id: &str) -> Option<PathBuf> {
     let data = crate::utils::paths::get_data_dir().ok()?;
-    Some(data.join(SPILL_DIR).join(sanitize_segment(session_id)))
+    let mut hasher = Sha256::new();
+    hasher.update(session_id.as_bytes());
+    let hash = hasher
+        .finalize()
+        .as_slice()
+        .iter()
+        .map(|b| format!("{:02x}", b))
+        .collect::<String>();
+    Some(
+        data.join(SPILL_DIR)
+            .join(format!("{}_{}", sanitize_prefix(session_id), &hash[..16])),
+    )
 }
 
-/// Make a session id safe as a single path segment.
-///
+/// Extract a readable prefix from the session ID for directory names.
 /// Aleph session ids embed `:` (`sess:s1`), which is **illegal in a Windows
 /// filename** — an unsanitised id makes every spill write fail there while
 /// working fine on macOS. Path separators and `..` are also folded so a
@@ -136,6 +150,7 @@ fn spill_dir(session_id: &str) -> Option<PathBuf> {
 fn sanitize_segment(session_id: &str) -> String {
     let cleaned: String = session_id
         .chars()
+        .take(32)
         .map(|c| {
             if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
                 c
@@ -146,6 +161,26 @@ fn sanitize_segment(session_id: &str) -> String {
         .collect();
     if cleaned.is_empty() {
         "no-session".to_string()
+    } else {
+        cleaned
+    }
+}
+
+/// Extract a readable prefix from the session ID, used alongside the hash.
+fn sanitize_prefix(session_id: &str) -> String {
+    let cleaned: String = session_id
+        .chars()
+        .take(32)
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    if cleaned.is_empty() {
+        "session".to_string()
     } else {
         cleaned
     }
@@ -374,11 +409,34 @@ mod tests {
     #[test]
     fn session_ids_with_colons_become_legal_path_segments() {
         // Windows rejects ':' in filenames; an unsanitised `sess:s1` made
-        // every spill write fail there while passing on macOS.
-        assert_eq!(sanitize_segment("sess:s1"), "sess_s1");
-        assert_eq!(sanitize_segment("../../etc/passwd"), "______etc_passwd");
-        assert_eq!(sanitize_segment(""), "no-session");
-        assert_eq!(sanitize_segment("plain-id_9"), "plain-id_9");
+        // every spill write fail there while passing on macOS. E3-03 fix uses
+        // hash-based directories to prevent collisions.
+        let dir1 = spill_dir("sess:s1");
+        let dir2 = spill_dir("sess_s1");
+        assert_ne!(
+            dir1, dir2,
+            "Different session IDs must map to different directories"
+        );
+
+        // Verify the directories are filesystem-safe
+        if let Some(path) = dir1 {
+            let name = path.file_name().unwrap().to_string_lossy();
+            assert!(
+                !name.contains(':'),
+                "Path must not contain Windows-illegal characters"
+            );
+            assert!(name.contains("sess"), "Should preserve readable prefix");
+        }
+    }
+
+    #[test]
+    fn spill_dirs_are_stable_for_same_session() {
+        let dir1 = spill_dir("agent:main:ws:1");
+        let dir2 = spill_dir("agent:main:ws:1");
+        assert_eq!(
+            dir1, dir2,
+            "Same session ID must always map to same directory"
+        );
     }
 
     #[test]

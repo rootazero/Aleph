@@ -34,10 +34,12 @@ fn capability_lock(capability: &str) -> Arc<tokio::sync::Mutex<()>> {
     > = OnceLock::new();
     let map = LOCKS.get_or_init(|| crate::sync_primitives::Mutex::new(HashMap::new()));
     let mut guard = map.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(lock) = guard.get(capability) {
+        return lock.clone();
+    }
     guard
         .entry(capability.to_string())
         .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(())))
-        // rust-doctor-disable-next-line excessive-clone
         .clone()
 }
 
@@ -80,14 +82,11 @@ async fn ensure_capability_recursive(
     // `exists()` and the demotion below is acceptable because the next
     // caller still observes a coherent state — either Ready+path, or the
     // newly-Missing entry — and the same race exists in `revalidate_ready`.
-    let snapshot = {
-        let guard = ledger.read().await;
-        if guard.status(capability) == CapabilityStatus::Ready {
-            guard.executable(capability).map(Path::to_path_buf)
-        } else {
-            None
-        }
-    };
+    let snapshot = ledger
+        .read()
+        .await
+        .executable(capability)
+        .map(Path::to_path_buf);
     if let Some(path) = snapshot {
         if path.exists() {
             return Ok(path);
@@ -116,23 +115,18 @@ async fn ensure_capability_recursive(
     {
         let guard = ledger.read().await;
         // Re-check: another task may have resolved this while we waited for the lock
-        if guard.status(capability) == CapabilityStatus::Ready {
-            if let Some(path) = guard.executable(capability) {
-                return Ok(path.to_path_buf());
-            }
+        if let Some(path) = guard.executable(capability) {
+            return Ok(path.to_path_buf());
         }
     }
 
     let mut probe_result = probe::probe(capability);
 
     if probe_result.found {
-        let bin_path = match probe_result.bin_path.take() {
-            Some(path) => path,
-            None => {
-                return Err(AlephError::other(format!(
-                    "Capability {capability} found but no binary path reported"
-                )));
-            }
+        let Some(bin_path) = probe_result.bin_path.take() else {
+            return Err(AlephError::other(format!(
+                "Capability {capability} found but no binary path reported"
+            )));
         };
         if let Some(ref warning) = probe_result.version_warning {
             warn!("{}", warning);
@@ -178,10 +172,8 @@ async fn ensure_capability_recursive(
     {
         let mut guard = ledger.write().await;
         // Re-check after dependency resolution — another task may have finished
-        if guard.status(capability) == CapabilityStatus::Ready {
-            if let Some(path) = guard.executable(capability) {
-                return Ok(path.to_path_buf());
-            }
+        if let Some(path) = guard.executable(capability) {
+            return Ok(path.to_path_buf());
         }
         guard.update_status(capability, CapabilityStatus::Bootstrapping);
     }
@@ -227,68 +219,60 @@ async fn ensure_capability_recursive(
 
     let now = now_secs();
 
-    match bootstrap_result {
-        BootstrapResult::Success { bin_path, version } => {
-            let mut guard = ledger.write().await;
-            guard.update(CapabilityEntry {
-                name: capability.to_string(),
-                // rust-doctor-disable-next-line excessive-clone
-                bin_path: bin_path.clone(),
-                version,
-                status: CapabilityStatus::Ready,
-                source: CapabilitySource::AlephManaged,
-                last_probed: now,
-            });
-            if let Err(e) = guard.persist() {
-                warn!("Failed to persist ledger after bootstrap success: {}", e);
-            }
+    if let BootstrapResult::Success { bin_path, version } = bootstrap_result {
+        let mut guard = ledger.write().await;
+        guard.update(CapabilityEntry {
+            name: capability.to_string(),
+            // rust-doctor-disable-next-line excessive-clone
+            bin_path: bin_path.clone(),
+            version,
+            status: CapabilityStatus::Ready,
+            source: CapabilitySource::AlephManaged,
+            last_probed: now,
+        });
+        if let Err(e) = guard.persist() {
+            warn!("Failed to persist ledger after bootstrap success: {}", e);
+        }
 
-            info!(
-                "Capability {} bootstrapped at {}",
-                capability,
-                bin_path.display()
-            );
-            Ok(bin_path)
-        }
-        BootstrapResult::PathNotFound { expected } => {
-            let mut guard = ledger.write().await;
-            guard.update_status(capability, CapabilityStatus::Missing);
-            Err(runtime_error(
-                capability,
-                &format!("installed but binary not found at {expected}"),
-                None,
-            ))
-        }
-        BootstrapResult::Failed { stderr } => {
-            let mut guard = ledger.write().await;
-            guard.update_status(capability, CapabilityStatus::Missing);
-            Err(runtime_error(
-                capability,
-                "bootstrap command returned a non-zero exit code",
-                Some(&stderr),
-            ))
-        }
+        info!(
+            "Capability {} bootstrapped at {}",
+            capability,
+            bin_path.display()
+        );
+        return Ok(bin_path);
+    }
+
+    // All non-success outcomes demote to Missing
+    ledger
+        .write()
+        .await
+        .update_status(capability, CapabilityStatus::Missing);
+
+    match bootstrap_result {
+        BootstrapResult::Success { .. } => unreachable!(),
+        BootstrapResult::PathNotFound { expected } => Err(runtime_error(
+            capability,
+            &format!("installed but binary not found at {expected}"),
+            None,
+        )),
+        BootstrapResult::Failed { stderr } => Err(runtime_error(
+            capability,
+            "bootstrap command returned a non-zero exit code",
+            Some(&stderr),
+        )),
         BootstrapResult::Unsupported {
             capability: cap,
             reason,
-        } => {
-            let mut guard = ledger.write().await;
-            guard.update_status(capability, CapabilityStatus::Missing);
-            Err(runtime_error(
-                capability,
-                &format!("{cap} is not supported on this platform: {reason}"),
-                None,
-            ))
-        }
-        BootstrapResult::UnknownCapability { capability: cap } => {
-            let mut guard = ledger.write().await;
-            guard.update_status(capability, CapabilityStatus::Missing);
-            Err(runtime_error(
-                capability,
-                &format!("{cap} has no bootstrap spec registered"),
-                None,
-            ))
-        }
+        } => Err(runtime_error(
+            capability,
+            &format!("{cap} is not supported on this platform: {reason}"),
+            None,
+        )),
+        BootstrapResult::UnknownCapability { capability: cap } => Err(runtime_error(
+            capability,
+            &format!("{cap} has no bootstrap spec registered"),
+            None,
+        )),
     }
 }
 

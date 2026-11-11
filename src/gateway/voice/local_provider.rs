@@ -207,10 +207,18 @@ impl LocalVoiceProvider {
                 "local",
             ));
         }
-        let content_type = match format.as_str() {
-            "wav" => "audio/wav",
-            "mp3" => "audio/mpeg",
-            _ => "audio/ogg",
+        let content_type = if let Some(ct) = resp.headers().get("content-type") {
+            ct.to_str().unwrap_or("audio/ogg").to_string()
+        } else {
+            match format.as_str() {
+                "wav" => "audio/wav".to_string(),
+                "mp3" => "audio/mpeg".to_string(),
+                "flac" => "audio/flac".to_string(),
+                "aac" => "audio/aac".to_string(),
+                "pcm" => "audio/pcm".to_string(),
+                "" => "audio/mpeg".to_string(),
+                _ => "audio/ogg".to_string(),
+            }
         };
         let bytes = resp
             .bytes()
@@ -220,7 +228,7 @@ impl LocalVoiceProvider {
             GenerationType::Speech,
             GenerationData::Bytes(bytes.to_vec()),
         );
-        output.metadata.content_type = Some(content_type.to_string());
+        output.metadata.content_type = Some(content_type);
         Ok(output)
     }
 }

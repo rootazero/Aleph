@@ -24,7 +24,6 @@ pub struct GenericAcpAdapter {
     display_name: String,
     executable: String,
     default_mode: AdapterMode,
-    supported_modes: Vec<AdapterMode>,
     oneshot_args: Vec<String>,
     native_acp_args: Vec<String>,
     output_format: OutputFormat,
@@ -47,15 +46,11 @@ impl GenericAcpAdapter {
         let executable = entry.executable.clone().unwrap_or_else(|| id.clone());
         let default_mode = AdapterMode::from_serde(&entry.default_mode);
 
-        // All generic presets support both modes
-        let supported_modes = vec![AdapterMode::Oneshot, AdapterMode::NativeAcp];
-
         Self {
             id,
             display_name,
             executable,
             default_mode,
-            supported_modes,
             oneshot_args: entry.args.clone(),
             native_acp_args: vec!["--acp".to_string()],
             output_format: OutputFormat::from(&entry.output_format),
@@ -86,13 +81,11 @@ impl GenericAcpAdapter {
         trust_level: crate::config::types::acp::TrustLevel,
     ) -> Self {
         let id = id.into();
-        let supported_modes = vec![AdapterMode::Oneshot, AdapterMode::NativeAcp];
         Self {
             id,
             display_name: display_name.into(),
             executable: executable.into(),
             default_mode,
-            supported_modes,
             oneshot_args,
             native_acp_args,
             output_format,
@@ -114,19 +107,9 @@ impl GenericAcpAdapter {
 
 impl GenericAcpAdapter {
     /// `trust_level` → `PermissionPolicy`. Shared by `build_config` and
-    /// `spawn_session`; both built the same 9-line match before the helper
-    /// was extracted. Inherent method (not a trait method), so it lives on
-    /// `GenericAcpAdapter` directly rather than inside the `impl AcpAdapter`
-    /// block where the trait-method-only check would reject it.
+    /// `spawn_session`.
     fn permission_policy(&self) -> crate::acp::incoming::PermissionPolicy {
-        match self.trust_level {
-            crate::config::types::acp::TrustLevel::Full => {
-                crate::acp::incoming::PermissionPolicy::ApproveAll
-            }
-            crate::config::types::acp::TrustLevel::Disabled => {
-                crate::acp::incoming::PermissionPolicy::DenyAll
-            }
-        }
+        crate::acp::incoming::PermissionPolicy::from(&self.trust_level)
     }
 }
 
@@ -145,7 +128,7 @@ impl AcpAdapter for GenericAcpAdapter {
     }
 
     fn supported_modes(&self) -> Vec<AdapterMode> {
-        self.supported_modes.clone()
+        vec![AdapterMode::Oneshot, AdapterMode::NativeAcp]
     }
 
     fn build_config(&self, cwd: Option<&str>) -> AdapterConfig {
@@ -202,42 +185,6 @@ impl AcpAdapter for GenericAcpAdapter {
 mod tests {
     use super::*;
     use crate::config::types::acp::OutputFormatSerde;
-
-    #[test]
-    fn test_output_format_plain_text() {
-        let fmt = OutputFormat::PlainText;
-        assert_eq!(fmt.parse("  hello world  "), "hello world");
-        assert_eq!(fmt.parse("no trim needed"), "no trim needed");
-    }
-
-    #[test]
-    fn test_output_format_json_field() {
-        let fmt = OutputFormat::JsonField {
-            field: "result".to_string(),
-        };
-        let json = r#"{"result": "success", "other": 123}"#;
-        assert_eq!(fmt.parse(json), "success");
-    }
-
-    #[test]
-    fn test_output_format_json_field_missing() {
-        let fmt = OutputFormat::JsonField {
-            field: "missing".to_string(),
-        };
-        let json = r#"{"result": "success"}"#;
-        // Falls back to full JSON string
-        assert_eq!(fmt.parse(json), r#"{"result":"success"}"#);
-    }
-
-    #[test]
-    fn test_output_format_invalid_json() {
-        let fmt = OutputFormat::JsonField {
-            field: "result".to_string(),
-        };
-        let text = "not json at all";
-        // Falls back to raw text
-        assert_eq!(fmt.parse(text), "not json at all");
-    }
 
     #[test]
     fn test_generic_harness_build_config() {

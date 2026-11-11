@@ -35,13 +35,17 @@ use super::EventEmitter;
 /// The planner only *borrows* the event, so the caller keeps ownership and
 /// reuses its own forwarding path for [`Forward`](InstantOutcome::Forward) /
 /// [`Prepend`](InstantOutcome::Prepend) — no clone of the passthrough event.
+/// The one exception is the terminal event of a run whose text was flushed by
+/// the planner: it is re-sequenced in place (see [`plan_instant`]) so the
+/// prepended chunk and the terminal event stay in ascending `seq` order.
 #[derive(Debug)]
 pub(super) enum InstantOutcome {
     /// Delta was absorbed into the buffer; emit nothing for the original event.
     Buffered,
     /// Drop the original event; emit exactly these (already-sequenced) events.
     Replace(Vec<StreamEvent>),
-    /// Emit these events first, then forward the original event unchanged.
+    /// Emit these events first, then forward the original event (whose `seq`
+    /// may have been raised by the planner to keep the stream monotonic).
     Prepend(Vec<StreamEvent>),
     /// Forward the original event unchanged (no buffering interaction).
     Forward,
@@ -83,6 +87,13 @@ pub(super) struct InstantState {
 /// when a replacement/flush chunk is synthesized, so the wire keeps a single
 /// monotonic sequence regardless of which path fired.
 ///
+/// `event` is borrowed mutably for one narrow reason: when the planner
+/// flushes buffered text at `RunComplete`, the prepended final chunk takes the
+/// terminal event's own `seq` and the terminal event is re-sequenced to a
+/// larger one — otherwise the chunk (seq *n+1*) would be published before the
+/// terminal event (seq *n*) and consumers would see the run's `seq` go
+/// backwards.
+///
 /// Behavior (response *text* is coalesced; status/lifecycle events pass through):
 /// - intermediate boundary marker (empty delta) → flush buffer as a standalone
 ///   intermediate chunk, or nothing if empty;
@@ -96,7 +107,7 @@ pub(super) struct InstantState {
 ///   text twice).
 pub(super) fn plan_instant(
     state: &mut InstantState,
-    event: &StreamEvent,
+    event: &mut StreamEvent,
     mut next_seq: impl FnMut() -> u64,
 ) -> InstantOutcome {
     match event {
@@ -145,7 +156,10 @@ pub(super) fn plan_instant(
         }
 
         StreamEvent::RunComplete {
-            run_id, summary, ..
+            run_id,
+            summary,
+            seq,
+            ..
         } => {
             let buffered = std::mem::take(&mut state.buffer);
             let flush_text = if buffered.is_empty() {
@@ -182,7 +196,14 @@ pub(super) fn plan_instant(
             *state = InstantState::default();
             match flush_text {
                 Some(text) => {
-                    InstantOutcome::Prepend(vec![final_chunk(run_id.clone(), next_seq(), text)])
+                    // The flushed chunk takes the terminal event's own `seq`
+                    // and the terminal event is re-sequenced to a larger one,
+                    // so the two go out in ascending order. Handing the chunk
+                    // a *fresh* seq (as this used to) published it before the
+                    // older terminal event and made the run's seq go backwards.
+                    let chunk = final_chunk(run_id.clone(), *seq, text);
+                    *seq = next_seq();
+                    InstantOutcome::Prepend(vec![chunk])
                 }
                 None => InstantOutcome::Forward,
             }
@@ -216,10 +237,10 @@ impl<E: EventEmitter> InstantBufferingEmitter<E> {
 
 #[async_trait]
 impl<E: EventEmitter> EventEmitter for InstantBufferingEmitter<E> {
-    async fn emit(&self, event: StreamEvent) -> Result<(), EventEmitError> {
+    async fn emit(&self, mut event: StreamEvent) -> Result<(), EventEmitError> {
         let outcome = {
             let mut state = self.state.lock().await;
-            plan_instant(&mut state, &event, || self.inner.next_seq())
+            plan_instant(&mut state, &mut event, || self.inner.next_seq())
         };
         // (`&mut state` deref-coerces the guard to `&mut InstantState`.)
         match outcome {
@@ -376,11 +397,11 @@ mod tests {
     fn planner_buffers_until_final() {
         let mut buf = InstantState::default();
         assert!(matches!(
-            plan_instant(&mut buf, &chunk("a", false), seq_source()),
+            plan_instant(&mut buf, &mut chunk("a", false), seq_source()),
             InstantOutcome::Buffered
         ));
         assert_eq!(buf.buffer, "a");
-        match plan_instant(&mut buf, &chunk("b", true), seq_source()) {
+        match plan_instant(&mut buf, &mut chunk("b", true), seq_source()) {
             InstantOutcome::Replace(events) => {
                 assert_eq!(events.len(), 1);
                 assert!(
@@ -400,7 +421,7 @@ mod tests {
             ..Default::default()
         };
         // Empty-delta intermediate = boundary marker → flush as intermediate.
-        match plan_instant(&mut buf, &intermediate(""), seq_source()) {
+        match plan_instant(&mut buf, &mut intermediate(""), seq_source()) {
             InstantOutcome::Replace(events) => {
                 assert_eq!(events.len(), 1);
                 assert!(
@@ -417,7 +438,7 @@ mod tests {
     fn planner_empty_marker_with_empty_buffer_emits_nothing() {
         let mut buf = InstantState::default();
         assert!(matches!(
-            plan_instant(&mut buf, &intermediate(""), seq_source()),
+            plan_instant(&mut buf, &mut intermediate(""), seq_source()),
             InstantOutcome::Replace(events) if events.is_empty()
         ));
     }
@@ -429,7 +450,7 @@ mod tests {
             ..Default::default()
         };
         assert!(matches!(
-            plan_instant(&mut buf, &intermediate("step done"), seq_source()),
+            plan_instant(&mut buf, &mut intermediate("step done"), seq_source()),
             InstantOutcome::Forward
         ));
         // Forwarding must not disturb the running buffer.
@@ -442,7 +463,7 @@ mod tests {
             buffer: "answer".into(),
             ..Default::default()
         };
-        match plan_instant(&mut buf, &run_complete(None), seq_source()) {
+        match plan_instant(&mut buf, &mut run_complete(None), seq_source()) {
             InstantOutcome::Prepend(events) => {
                 assert_eq!(events.len(), 1);
                 assert!(
@@ -458,7 +479,11 @@ mod tests {
     #[test]
     fn planner_run_complete_falls_back_to_summary() {
         let mut buf = InstantState::default(); // nothing streamed (fire-and-forget race)
-        match plan_instant(&mut buf, &run_complete(Some("from summary")), seq_source()) {
+        match plan_instant(
+            &mut buf,
+            &mut run_complete(Some("from summary")),
+            seq_source(),
+        ) {
             InstantOutcome::Prepend(events) => {
                 assert!(
                     matches!(&events[0], StreamEvent::ResponseChunk { delta, .. }
@@ -476,12 +501,16 @@ mod tests {
         // engine) must deliver the answer exactly once.
         let mut buf = InstantState::default();
         assert!(matches!(
-            plan_instant(&mut buf, &chunk("the answer", true), seq_source()),
+            plan_instant(&mut buf, &mut chunk("the answer", true), seq_source()),
             InstantOutcome::Replace(_)
         ));
         assert!(
             matches!(
-                plan_instant(&mut buf, &run_complete(Some("the answer")), seq_source()),
+                plan_instant(
+                    &mut buf,
+                    &mut run_complete(Some("the answer")),
+                    seq_source()
+                ),
                 InstantOutcome::Forward
             ),
             "summary fallback must not re-emit the already-flushed final text"
@@ -497,7 +526,7 @@ mod tests {
         assert!(matches!(
             plan_instant(
                 &mut buf,
-                &run_complete(Some("<think>internal scratch</think>")),
+                &mut run_complete(Some("<think>internal scratch</think>")),
                 seq_source()
             ),
             InstantOutcome::Forward
@@ -514,16 +543,24 @@ mod tests {
         let mut buf = InstantState::default();
         // Run 1: a final chunk delivers the answer, RunComplete adds nothing.
         assert!(matches!(
-            plan_instant(&mut buf, &chunk("run-1 answer", true), seq_source()),
+            plan_instant(&mut buf, &mut chunk("run-1 answer", true), seq_source()),
             InstantOutcome::Replace(_)
         ));
         assert!(matches!(
-            plan_instant(&mut buf, &run_complete(Some("run-1 answer")), seq_source()),
+            plan_instant(
+                &mut buf,
+                &mut run_complete(Some("run-1 answer")),
+                seq_source()
+            ),
             InstantOutcome::Forward
         ));
         // Run 2 on the same planner state: nothing streamed, so the summary
         // fallback MUST fire.
-        match plan_instant(&mut buf, &run_complete(Some("run-2 answer")), seq_source()) {
+        match plan_instant(
+            &mut buf,
+            &mut run_complete(Some("run-2 answer")),
+            seq_source(),
+        ) {
             InstantOutcome::Prepend(events) => assert!(
                 matches!(&events[0], StreamEvent::ResponseChunk { delta, .. }
                     if delta == "run-2 answer")
@@ -536,7 +573,7 @@ mod tests {
     fn planner_silent_run_complete_forwards_only() {
         let mut buf = InstantState::default();
         assert!(matches!(
-            plan_instant(&mut buf, &run_complete(None), seq_source()),
+            plan_instant(&mut buf, &mut run_complete(None), seq_source()),
             InstantOutcome::Forward
         ));
     }

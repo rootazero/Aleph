@@ -725,7 +725,6 @@ pub fn split_frontmatter(content: &str) -> Result<(String, String), SkillParseEr
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::Entity;
 
     /// The twin of `extension::manifest::parsers`' reader of the same
     /// SKILL.md: Claude Code's documented `argument-hint: [a] [b]` is not

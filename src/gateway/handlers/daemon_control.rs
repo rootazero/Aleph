@@ -106,7 +106,9 @@ pub async fn handle_logs(request: JsonRpcRequest) -> JsonRpcResponse {
     let requested_lines = params.lines.min(MAX_LOG_LINES);
 
     let log_dir = log_directory();
-    let log_file = find_latest_log(&log_dir);
+    let log_file = tokio::task::spawn_blocking(move || find_latest_log(&log_dir))
+        .await
+        .unwrap_or(None);
 
     match log_file {
         Some(path) => {

@@ -248,22 +248,22 @@ impl SignerSource for Keyring<'_> {
         if let Some(public_key) = self.own.get(fingerprint) {
             return Ok(check_against(public_key, message, signature));
         }
-        if !self.others.contains_key(fingerprint) {
-            let owner = self
-                .keys
-                .store()
-                .get_agent_key(fingerprint)?
-                .map(|k| k.agent_id);
-            self.others.insert(fingerprint.to_string(), owner);
-        }
-        Ok(
-            match self.others.get(fingerprint).and_then(Option::as_deref) {
-                Some(owner) => Signer::Foreign {
-                    owner: owner.to_string(),
-                },
-                None => Signer::Unknown,
-            },
-        )
+        let owner = match self.others.entry(fingerprint.to_string()) {
+            std::collections::hash_map::Entry::Occupied(e) => e.get().clone(),
+            std::collections::hash_map::Entry::Vacant(e) => {
+                let owner = self
+                    .keys
+                    .store()
+                    .get_agent_key(fingerprint)?
+                    .map(|k| k.agent_id);
+                e.insert(owner.clone());
+                owner
+            }
+        };
+        Ok(match owner {
+            Some(owner) => Signer::Foreign { owner },
+            None => Signer::Unknown,
+        })
     }
 }
 

@@ -48,7 +48,6 @@ use std::path::{Path, PathBuf};
 use tokio::sync::RwLock;
 
 use crate::domain::skill::{SkillId, SkillManifest, SkillSource};
-use crate::domain::Entity;
 
 // ---------------------------------------------------------------------------
 // SkillSystem facade

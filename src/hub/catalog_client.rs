@@ -224,16 +224,19 @@ impl AlephHubCatalog {
             // hostile publisher can route prompt-injection text through any
             // of them. The scan is warn-only by design — failing the whole
             // sync on a single finding is a denial-of-service lever.
-            let scan_blob = format!(
-                "{} {} {} {} {} {} {}",
+            let mut scan_blob = format!(
+                "{} {} {} {} {} {}",
                 he.name,
                 he.description,
                 he.author.as_deref().unwrap_or(""),
                 he.via.as_deref().unwrap_or(""),
                 he.repo_url.as_deref().unwrap_or(""),
                 he.version.as_deref().unwrap_or(""),
-                he.tags.join(" ")
             );
+            for tag in &he.tags {
+                scan_blob.push(' ');
+                scan_blob.push_str(tag);
+            }
             let findings = scan_for_injection(&scan_blob);
             if !findings.is_empty() {
                 tracing::warn!(hub = %self.id, id = %he.id, ?findings, "hub entry injection findings");

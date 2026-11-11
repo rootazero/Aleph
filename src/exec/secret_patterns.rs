@@ -47,16 +47,12 @@ pub(crate) struct SecretPattern {
     pub replacement: &'static str,
 }
 
-#[derive(Clone)]
-pub(crate) struct LeakPatternDef {
-    pub name: &'static str,
-    pub regex: Regex,
-    pub action: super::leak_detector::LeakAction,
-}
+pub(crate) use super::leak_detector::LeakPattern;
+pub(crate) type LeakPatternDef = LeakPattern;
 
 #[derive(Clone)]
 pub(crate) struct LeakDetectorAssets {
-    pub patterns: Vec<LeakPatternDef>,
+    pub patterns: Vec<LeakPattern>,
 }
 
 #[must_use]
@@ -197,10 +193,11 @@ pub(crate) fn secret_masker_patterns() -> Vec<SecretPattern> {
                     // prose of a URL that had no credential at all.
                     //
                     // The password may contain `@` itself, so the class is
-                    // greedy over the whole non-whitespace run and the match
-                    // settles on its LAST `@` — stopping at the first one
-                    // left the tail of the password in clear.
-                    regex: Regex::new(r"://([^\s:/@]+):(\S*)@").unwrap(),
+                    // greedy over the non-delimiter run and the match
+                    // settles on its LAST `@` before path/query/fragment/space —
+                    // stopping at the first one left the tail of the password in clear,
+                    // while matching `\S*` crossed into path/query delimiters and corrupted URLs.
+                    regex: Regex::new(r"://([^\s:/@]+):([^/\s?#]*)@").unwrap(),
                     replacement: "://${1}:***REDACTED***@",
                 },
                 SecretPattern {

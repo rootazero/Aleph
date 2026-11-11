@@ -19,8 +19,10 @@ use std::sync::LazyLock;
 pub(crate) fn sanitize_llm_output(text: &str) -> Cow<'_, str> {
     // Fast path: quick probe for any tag-like pattern before doing real work.
     static QUICK_PROBE: LazyLock<Regex> = LazyLock::new(|| {
+        // Case-insensitive to match the tag scanner below: `<MEMORY>` /
+        // `<THINK>` must not skip the scanner through the fast path.
         Regex::new(
-            r"<(?:think|thinking|thought|antthinking|completion-check|task-complete|memory-context|memory)[\s/>]",
+            r"(?i)<(?:think|thinking|thought|antthinking|completion-check|task-complete|memory-context|memory)[\s/>]",
         )
             .unwrap_or_else(|_| unreachable!("quick probe regex is statically valid"))
     });
@@ -48,7 +50,6 @@ pub(crate) fn sanitize_llm_output(text: &str) -> Cow<'_, str> {
     let collapsed = BLANK_LINES_RE.replace_all(&cleaned, "\n\n");
     Cow::Owned(collapsed.trim().to_string())
 }
-
 /// Tag names that should be stripped (all ASCII, case-insensitive).
 const THINKING_TAGS: &[&str] = &["think", "thinking", "thought", "antthinking"];
 /// Non-reasoning spans the model may echo that must not reach a user.
@@ -70,6 +71,30 @@ const THINKING_TAGS: &[&str] = &["think", "thinking", "thought", "antthinking"];
 /// `discard_tag_pairs_are_all_stripped_from_the_terminal_answer` keeps the two
 /// lists from drifting apart again.
 const OTHER_STRIP_TAGS: &[&str] = &["completion-check", "memory-context", "memory"];
+
+#[cfg(test)]
+mod backtick_progress_tests {
+    use super::{sanitize_llm_output, split_reasoning};
+
+    #[test]
+    fn sanitizing_closes_code_spans_after_embedded_backticks() {
+        for code in ["```a`b``c```", "`a``b`", "``a`b``"] {
+            let input = format!("{code}<think>hidden</think>answer");
+            assert_eq!(sanitize_llm_output(&input), format!("{code}answer"));
+        }
+    }
+
+    #[test]
+    fn reasoning_split_closes_code_spans_after_embedded_backticks() {
+        for code in ["```a`b``c```", "`a``b`", "``a`b``"] {
+            let input = format!("{code}<think>hidden</think>answer");
+            assert_eq!(
+                split_reasoning(&input),
+                (Some("hidden".into()), format!("{code}answer"))
+            );
+        }
+    }
+}
 
 /// Strip tags while respecting code block boundaries.
 ///
@@ -132,6 +157,21 @@ fn strip_tags_code_aware(text: &str) -> String {
                 i += 1;
             }
             result.push_str(&text[start..i]);
+            if i < len {
+                // Found a backtick inside code
+                let bt_run_start = i;
+                let mut bt_run = 0;
+                while i < len && bytes[i] == b'`' {
+                    bt_run += 1;
+                    i += 1;
+                }
+                result.push_str(&text[bt_run_start..i]);
+                if in_fenced_code && bt_run >= 3 {
+                    in_fenced_code = false;
+                } else if !in_fenced_code && bt_run == inline_backtick_count {
+                    inline_backtick_count = 0;
+                }
+            }
             continue;
         }
 
@@ -330,6 +370,19 @@ pub(crate) fn split_reasoning(text: &str) -> (Option<String>, String) {
                 i += 1;
             }
             answer.push_str(&text[start..i]);
+            if i < len {
+                let bt_start = i;
+                while i < len && bytes[i] == b'`' {
+                    i += 1;
+                }
+                let run = i - bt_start;
+                answer.push_str(&text[bt_start..i]);
+                if in_fenced_code && run >= 3 {
+                    in_fenced_code = false;
+                } else if !in_fenced_code && run == inline_backtick_count {
+                    inline_backtick_count = 0;
+                }
+            }
             continue;
         }
 

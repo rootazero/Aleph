@@ -81,35 +81,40 @@ pub(crate) async fn backfill_events_from_messages(
     let mut count: usize = 0;
 
     for msg in messages {
+        let is_user = match msg.role.as_str() {
+            "user" => true,
+            "assistant" => false,
+            // "system", "tool", and unknown roles are skipped: backfill only
+            // reconstructs the conversation turns the harness replays. Skipped
+            // rows do not consume a seq.
+            _ => continue,
+        };
+
         // The stored timestamp's unit is ambiguous (seconds OR milliseconds),
         // and BOTH millisecond fields below — the event's `at` and the
         // appended row's `created_at_ms` — are milliseconds. `stamp_millis` is
         // the crate's ONE boundary application, so the conversion happens
         // once, here, and the converted value feeds both.
         let at_ms = stamp_millis(msg.timestamp);
-        let event: Option<SessionEvent> = match msg.role.as_str() {
-            "user" => Some(SessionEvent::UserMessage {
-                turn_id: uuid::Uuid::new_v4(),
-                content: MessageContent {
-                    text: msg.content.clone(),
-                    // rust-doctor-disable-next-line unnecessary-allocation
-                    blocks: Vec::new(),
-                    thinking: None,
-                    thinking_signature: None,
-                },
+        let turn_id = uuid::Uuid::new_v4();
+        let content = MessageContent {
+            text: msg.content.clone(),
+            blocks: Vec::new(),
+            thinking: None,
+            thinking_signature: None,
+        };
+        let event = if is_user {
+            SessionEvent::UserMessage {
+                turn_id,
+                content,
                 at: at_ms,
                 synthetic: false,
                 author_user_id: None,
-            }),
-            "assistant" => Some(SessionEvent::AssistantMessage {
-                turn_id: uuid::Uuid::new_v4(),
-                content: MessageContent {
-                    text: msg.content.clone(),
-                    // rust-doctor-disable-next-line unnecessary-allocation
-                    blocks: Vec::new(),
-                    thinking: None,
-                    thinking_signature: None,
-                },
+            }
+        } else {
+            SessionEvent::AssistantMessage {
+                turn_id,
+                content,
                 // Rebuilt from a stored row, not observed from a call: the row
                 // records what was billed but not how (cache split, reasoning),
                 // and this event exists to restore conversational context, not
@@ -119,18 +124,12 @@ pub(crate) async fn backfill_events_from_messages(
                 model: None,
                 model_provider: None,
                 model_generation: None,
-            }),
-            // "system", "tool", and unknown roles are skipped: backfill only
-            // reconstructs the conversation turns the harness replays. Skipped
-            // rows do not consume a seq.
-            _ => None,
+            }
         };
 
-        if let Some(event) = event {
-            seq += 1;
-            event_store.append(session_id, seq, &event, at_ms).await?;
-            count += 1;
-        }
+        seq += 1;
+        event_store.append(session_id, seq, &event, at_ms).await?;
+        count += 1;
     }
 
     Ok(count)

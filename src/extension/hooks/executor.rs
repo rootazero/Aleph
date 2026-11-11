@@ -843,6 +843,33 @@ impl HookExecutor {
         // treat empty output as "no effect", so a skipped hook never blocks
         // the tool call. Approving arbitrary code execution is the operator's
         // explicit decision, not a default.
+        //
+        // A command that names its script by a relative path binds that
+        // script to the hook's root, so an explicit working directory would
+        // run other bytes than the ones consent checked. Refused here,
+        // before the spawn.
+        let invocation =
+            command_hook_invocation(command, event_name, context, Some(plugin_root), plugin_name);
+        if let Some(ref actual_cwd) = invocation.current_dir {
+            if let Some(consent) = &self.consent {
+                if consent.binds_relative_script_outside_root(
+                    plugin_name,
+                    scope_key,
+                    plugin_root,
+                    actual_cwd,
+                    command,
+                ) {
+                    return Err(ExtensionError::HookExecution(format!(
+                        "Command names a script by a relative path, but it would run in {} \
+                         while its approval binds the script under {} — the bytes that run \
+                         would not be the ones reviewed. Use an absolute path or \
+                         ${{CLAUDE_PLUGIN_ROOT}} to make the binding explicit.",
+                        actual_cwd.display(),
+                        plugin_root.display()
+                    )));
+                }
+            }
+        }
         if let Some(consent) = &self.consent {
             // Keyed by the hook's `scope_key` — the field
             // `project_scope_allows` reads — so a project hook's approval is
@@ -872,9 +899,6 @@ impl HookExecutor {
 
         // Shell line, directory, environment and stdin payload: one derivation,
         // shared with `aleph-server hooks test` so a reviewed script runs as it does
-        // here.
-        let invocation =
-            command_hook_invocation(command, event_name, context, Some(plugin_root), plugin_name);
         debug!(plugin = plugin_name, event = ?event, "Executing hook command");
 
         let mut cmd = Command::new(invocation.program);
@@ -1123,7 +1147,7 @@ impl HookExecutor {
             req = req.header(k.as_str(), resolved_v);
         }
 
-        match req.send().await {
+        let result = match req.send().await {
             Ok(mut resp) => {
                 let status = resp.status();
                 // Stream the body up to the shared output cap; a hook
@@ -1171,6 +1195,8 @@ impl HookExecutor {
                     )));
                 }
                 let body = String::from_utf8_lossy(&body_bytes).to_string();
+
+                // E3-02 fix: Non-success HTTP status is an error, not a successful empty decision
                 if !status.is_success() {
                     warn!("Hook HTTP response returned status {}", status);
                 }
@@ -1185,12 +1211,18 @@ impl HookExecutor {
                     exit_code: Some(i32::from(status.as_u16())),
                 })
             }
-            Err(e) => Ok(ActionResult {
-                success: false,
-                output: None,
-                error: Some(format!("HTTP request failed: {e}")),
-                exit_code: None,
-            }),
+            Err(e) => Err(ExtensionError::HookExecution(format!(
+                "HTTP request failed: {e}"
+            ))),
+        };
+
+        // E3-02 fix: Convert non-2xx responses to errors for fail-closed handling
+        match result {
+            Ok(ar) if !ar.success => Err(ExtensionError::HookExecution(
+                ar.error
+                    .unwrap_or_else(|| "HTTP request returned non-success status".to_string()),
+            )),
+            other => other,
         }
     }
 

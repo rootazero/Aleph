@@ -137,7 +137,7 @@ pub(super) fn truncate_for_topic(s: &str, max_chars: usize) -> &str {
 /// by `ExecutionEngine` fast path. Preserves source-specific fields per
 /// command kind:
 /// * `Skill` — `skill_id`, `allowed_tools`, `display_name`
-/// * `Custom` — `system_prompt`, `pattern`, `tool_id`
+/// * `Custom` — `tool_id`
 /// * `Mcp`   — `server_name`, `tool_name`
 ///
 /// Without this, the fast-path's `match mode_type { "skill" => ... }` branch
@@ -150,7 +150,9 @@ pub(super) fn truncate_for_topic(s: &str, max_chars: usize) -> &str {
 /// this mode — the two are read back apart in
 /// `execution_engine::slash_skill_scope`, so this must stay a JSON value
 /// rather than being flattened to a list on the way out. (A skill's list
-/// pre-grants instead, and is read from the skill file, not from here.)
+/// pre-grants instead; which of the two a row carries is decided at run time
+/// by `execution_engine::slash_skill_pregrant::registered_skill`, which
+/// reads this same `allowed_tools` value back out of the mode.)
 ///
 /// `owning_plugin` (any kind) is written only when the resolved entry is
 /// plugin-owned; the key is absent otherwise. The fast path's visibility
@@ -188,14 +190,9 @@ pub fn serialize_parsed_command(parsed: &crate::command::ParsedCommand) -> Optio
             "args": args,
             "source": "skill",
         }),
-        CommandContext::Custom {
-            system_prompt,
-            pattern,
-        } => serde_json::json!({
+        CommandContext::Custom => serde_json::json!({
             "type": "custom",
             "tool_id": parsed.tool_id,
-            "system_prompt": system_prompt,
-            "pattern": pattern,
             "args": args,
             "source": "custom",
         }),
@@ -344,9 +341,8 @@ impl InboundMessageRouter {
         );
 
         let new_key = old_key.with_epoch(current_epoch + 1);
+        // Create new session row first
         if let Some(ref sm) = self.session_store {
-            // The successor inherits the source row's attribution, exactly as
-            // the RPC face (`sessions.new`) does — this is the THIRD face of
             // "roll this conversation to the next epoch" and the only one that
             // did not carry it.
             //
@@ -374,6 +370,34 @@ impl InboundMessageRouter {
             }
         }
 
+        // Close the old session synchronously before replying
+        if let Some(ref sm) = self.session_store {
+            if let Err(e) = sm.close_session(&old_key_resolved, None).await {
+                warn!("[Router] Failed to close session: {}", e);
+            }
+        }
+
+        // Generate topic asynchronously in the background
+        let session_store = self.session_store.clone();
+        let llm_provider = self.llm_provider.clone();
+        let app_config = self.app_config.clone();
+        tokio::spawn(async move {
+            if let (Some(sm), Some(llm), Some(cfg)) = (session_store, llm_provider, app_config) {
+                let locale = {
+                    let cfg = cfg.read().await;
+                    crate::gateway::i18n::Locale::from_config(cfg.general.language.as_deref())
+                };
+                if let Some(topic) =
+                    generate_topic_background(sm.as_ref(), &llm, &old_key_resolved, locale).await
+                {
+                    if let Err(e) = sm.set_topic(&old_key_resolved, &topic).await {
+                        warn!("[Router] Failed to update session topic: {}", e);
+                    }
+                }
+            }
+        });
+
+        // Send reply after session state is consistent
         let locale = self.resolve_locale().await;
         let reply_text = crate::gateway::i18n::t(
             crate::gateway::i18n::Msg::NewSessionStarted { topic_suffix: "" },
@@ -384,20 +408,11 @@ impl InboundMessageRouter {
             error!("[Router] Failed to send /new reply: {}", e);
         }
 
-        let topic = self.generate_session_topic(&old_key_resolved).await;
-
-        if let Some(ref sm) = self.session_store {
-            if let Err(e) = sm.close_session(&old_key_resolved, topic.as_deref()).await {
-                warn!("[Router] Failed to close session: {}", e);
-            }
-        }
-
         info!("[Router] New session created: {}", new_key.to_key_string());
         Ok(())
     }
 
     /// Handle /stop (alias /abort): cancel the run currently executing on this
-    /// session and confirm to the user.
     ///
     /// `OpenClaw` `/stop` / codex `Op::Interrupt` parity — the cancel machinery
     /// (`ExecutionEngine::cancel`, Panel `chat.abort`) predates this but was
@@ -541,47 +556,55 @@ impl InboundMessageRouter {
         let sm = self.session_store.as_ref()?;
         let llm = self.llm_provider.as_ref()?;
 
-        // Get recent history
-        let history = sm.get_history(session_key, Some(20)).await.ok()?;
-        if history.len() < 2 {
-            return None;
-        }
-
-        // Build conversation excerpt for LLM
-        let conversation: String = history
-            .iter()
-            .map(|m| {
-                let content = truncate_for_topic(&m.content, 100);
-                format!("{}: {}", m.role, content)
-            })
-            .collect::<Vec<_>>()
-            .join("\n");
-
         let locale = self.resolve_locale().await;
-        let prompt = crate::gateway::i18n::t(
-            crate::gateway::i18n::Msg::TopicGenerationPrompt {
-                conversation: &conversation,
-            },
-            locale,
-        );
+        generate_topic_background(sm.as_ref(), llm, session_key, locale).await
+    }
+}
 
-        let __msgs = [UnifiedMessage::user(&prompt)];
-        let payload = RequestPayload::new(&__msgs).with_system(Some(
-            "You are a title generator. Output ONLY the title, nothing else.",
-        ));
-        match llm.process(payload).await {
-            Ok(resp) => {
-                let topic = resp.text_content().trim().to_string();
-                if topic.is_empty() {
-                    None
-                } else {
-                    Some(topic)
-                }
-            }
-            Err(e) => {
-                warn!("[Router] Failed to generate session topic: {}", e);
+/// Shared topic generation for foreground requests and the /new background task.
+/// Separated to enable spawning without borrowing router fields.
+async fn generate_topic_background(
+    sm: &dyn crate::gateway::session_store::SessionStore,
+    llm: &std::sync::Arc<dyn crate::providers::AiProvider>,
+    session_key: &SessionKey,
+    locale: crate::gateway::i18n::Locale,
+) -> Option<String> {
+    let history = sm.get_history(session_key, Some(20)).await.ok()?;
+    if history.len() < 2 {
+        return None;
+    }
+
+    let conversation: String = history
+        .iter()
+        .map(|m| {
+            let content = truncate_for_topic(&m.content, 100);
+            format!("{}: {}", m.role, content)
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    let prompt = crate::gateway::i18n::t(
+        crate::gateway::i18n::Msg::TopicGenerationPrompt {
+            conversation: &conversation,
+        },
+        locale,
+    );
+    let __msgs = [UnifiedMessage::user(&prompt)];
+    let payload = RequestPayload::new(&__msgs).with_system(Some(
+        "You are a title generator. Output ONLY the title, nothing else.",
+    ));
+    match llm.process(payload).await {
+        Ok(resp) => {
+            let topic = resp.text_content().trim().to_string();
+            if topic.is_empty() {
                 None
+            } else {
+                Some(topic)
             }
+        }
+        Err(e) => {
+            warn!("[Router] Failed to generate session topic: {}", e);
+            None
         }
     }
 }
@@ -591,6 +614,39 @@ mod tests {
     use super::{
         classify_special_slash, parse_clarify_index, SpecialSlash, ROUTER_OWNED_HELP_LINES,
     };
+
+    mod topic_generation_regression {
+        const SOURCE: &str = include_str!("command_handler.rs");
+
+        #[test]
+        fn foreground_and_background_share_topic_generation() {
+            let production = SOURCE.split("#[cfg(test)]").next().unwrap();
+            let foreground = production
+                .split("pub(super) async fn generate_session_topic(")
+                .nth(1)
+                .unwrap()
+                .split("\n    }\n")
+                .next()
+                .unwrap();
+            assert!(foreground.contains("generate_topic_background("));
+            assert_eq!(production.matches("Msg::TopicGenerationPrompt").count(), 1);
+            assert_eq!(production.matches("llm.process(payload)").count(), 1);
+        }
+
+        #[test]
+        fn background_topic_task_moves_the_resolved_key_without_cloning() {
+            let background = SOURCE
+                .split("// Generate topic asynchronously in the background")
+                .nth(1)
+                .unwrap()
+                .split("// Send reply after session state is consistent")
+                .next()
+                .unwrap();
+            assert!(!background.contains("old_key_resolved.clone()"));
+            assert!(!background.contains("old_key_for_topic"));
+            assert_eq!(background.matches("&old_key_resolved").count(), 2);
+        }
+    }
 
     #[test]
     fn classify_help_lowercase() {

@@ -8,19 +8,11 @@ pub fn detect_by_extension(ext: &str) -> Result<MediaType, MediaError> {
     let ext_lower = ext.to_ascii_lowercase();
     let ext_clean = ext_lower.trim_start_matches('.');
 
-    if let Some(ty) = detect_image_extension(ext_clean) {
-        return Ok(ty);
-    }
-    if let Some(ty) = detect_audio_extension(ext_clean) {
-        return Ok(ty);
-    }
-    if let Some(ty) = detect_video_extension(ext_clean) {
-        return Ok(ty);
-    }
-    if let Some(ty) = detect_document_extension(ext_clean) {
-        return Ok(ty);
-    }
-    Err(MediaError::UnsupportedFormat(ext_clean.to_string()))
+    detect_image_extension(ext_clean)
+        .or_else(|| detect_audio_extension(ext_clean))
+        .or_else(|| detect_video_extension(ext_clean))
+        .or_else(|| detect_document_extension(ext_clean))
+        .ok_or_else(|| MediaError::UnsupportedFormat(ext_clean.to_string()))
 }
 
 fn detect_image_extension(ext: &str) -> Option<MediaType> {
@@ -253,10 +245,12 @@ pub async fn detect_from_path(path: &std::path::Path) -> Result<MediaType, Media
     path.extension()
         .and_then(|e| e.to_str())
         .map(detect_by_extension)
-        .unwrap_or(Err(MediaError::DetectionFailed(format!(
-            "Cannot determine media type for: {}",
-            path.display(),
-        ))))
+        .unwrap_or_else(|| {
+            Err(MediaError::DetectionFailed(format!(
+                "Cannot determine media type for: {}",
+                path.display(),
+            )))
+        })
 }
 
 #[cfg(test)]

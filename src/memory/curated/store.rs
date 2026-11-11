@@ -515,7 +515,7 @@ fn apply_one(st: &mut StoreState, op: &BatchOp) -> Result<(), CuratedError> {
             if let Some(entry) = st.entries.get_mut(idx) {
                 *entry = content.to_string();
             } else {
-                return Err(CuratedError::NoMatch(content.to_string()));
+                return Err(CuratedError::NoMatch(old_text.to_string()));
             }
             // Replacing legacy entry de-legacys the file if the user shrinks/curates.
             if st.legacy

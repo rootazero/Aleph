@@ -14,33 +14,9 @@ use super::types::{
     POLL_INTERVAL_SECS, PROVIDER_NAME,
 };
 
-/// Trait for submit and polling operations
-pub(crate) trait SubmitPolling {
+impl MidjourneyProvider {
     /// Submit an imagine task to the API
-    fn submit_imagine(
-        &self,
-        request: &ImagineRequest,
-    ) -> impl std::future::Future<Output = GenerationResult<String>> + Send;
-
-    /// Poll for task completion
-    fn poll_task(
-        &self,
-        task_id: &str,
-    ) -> impl std::future::Future<Output = GenerationResult<TaskResponse>> + Send;
-
-    /// Download image from URL
-    fn download_image(
-        &self,
-        image_url: &str,
-    ) -> impl std::future::Future<Output = GenerationResult<Vec<u8>>> + Send;
-
-    /// Parse API error response and convert to `GenerationError`
-    fn parse_error_response(status: reqwest::StatusCode, body: &str) -> GenerationError;
-}
-
-impl SubmitPolling for MidjourneyProvider {
-    /// Submit an imagine task to the API
-    async fn submit_imagine(&self, request: &ImagineRequest) -> GenerationResult<String> {
+    pub(crate) async fn submit_imagine(&self, request: &ImagineRequest) -> GenerationResult<String> {
         let url = self.submit_url();
 
         debug!(url = %url, "Submitting Midjourney imagine task");
@@ -112,8 +88,9 @@ impl SubmitPolling for MidjourneyProvider {
     }
 
     /// Poll for task completion
-    async fn poll_task(&self, task_id: &str) -> GenerationResult<TaskResponse> {
+    pub(crate) async fn poll_task(&self, task_id: &str) -> GenerationResult<TaskResponse> {
         let url = self.task_url(task_id)?;
+        let auth_header = format!("Bearer {}", self.api_key);
         let mut attempts = 0;
 
         loop {
@@ -134,7 +111,7 @@ impl SubmitPolling for MidjourneyProvider {
             let response = self
                 .client
                 .get(&url)
-                .header("Authorization", format!("Bearer {}", self.api_key))
+                .header("Authorization", &auth_header)
                 .send()
                 .await
                 .map_err(|e| GenerationError::network(format!("Poll request failed: {e}")))?;
@@ -206,7 +183,7 @@ impl SubmitPolling for MidjourneyProvider {
     }
 
     /// Download image from URL
-    async fn download_image(&self, image_url: &str) -> GenerationResult<Vec<u8>> {
+    pub(crate) async fn download_image(&self, image_url: &str) -> GenerationResult<Vec<u8>> {
         debug!(url = %image_url, "Downloading image from URL");
 
         let response = self.client.get(image_url).send().await.map_err(|e| {
@@ -234,7 +211,7 @@ impl SubmitPolling for MidjourneyProvider {
     }
 
     /// Parse API error response and convert to `GenerationError`
-    fn parse_error_response(status: reqwest::StatusCode, body: &str) -> GenerationError {
+    pub(crate) fn parse_error_response(status: reqwest::StatusCode, body: &str) -> GenerationError {
         // Try to parse as API error format
         if let Ok(error_response) = serde_json::from_str::<SubmitResponse>(body) {
             let message = error_response

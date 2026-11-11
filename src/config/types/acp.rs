@@ -573,7 +573,18 @@ impl AcpAdapterEntry {
     /// `cwd`, `env`, `display_name`, and `enabled` are left untouched: those are
     /// chosen by the user, not the preset.
     pub fn hydrate_from_preset(&mut self, preset: &Self) {
-        let presence = self.presence;
+        let presence = AcpAdapterEntryPresence {
+            executable: self.presence.executable || self.executable.is_some(),
+            args: self.presence.args || !self.args.is_empty(),
+            default_mode: self.presence.default_mode
+                || self.default_mode != AdapterModeSerde::default(),
+            output_format: self.presence.output_format
+                || self.output_format != OutputFormatSerde::default(),
+            timeout_seconds: self.presence.timeout_seconds
+                || self.timeout_seconds != default_timeout(),
+            trust_level: self.presence.trust_level
+                || self.trust_level != default_trust_level(),
+        };
         self.hydrate_from_preset_with_presence(preset, &presence);
     }
 

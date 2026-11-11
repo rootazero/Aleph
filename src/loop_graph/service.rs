@@ -14,7 +14,9 @@
 //!   `GraphTopologyLayer` prompt injection (no timestamps, no counters: the
 //!   graph unchanged ⇒ bytes unchanged, so the prompt cache holds).
 
+use std::borrow::Cow;
 use std::collections::HashMap;
+use std::fmt::Write as _;
 use std::time::{Duration, Instant};
 
 use futures::future::join_all;
@@ -139,9 +141,12 @@ enum Debounce {
     HeldForOtherNode,
 }
 
+fn debounce_map() -> &'static Mutex<HashMap<String, Stamp>> {
+    DEBOUNCE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
 fn debounce_pass(watcher_job_id: &str, node_id: &str) -> Debounce {
-    let map = DEBOUNCE.get_or_init(|| Mutex::new(HashMap::new()));
-    let mut guard = map.lock().unwrap_or_else(|e| e.into_inner());
+    let mut guard = debounce_map().lock().unwrap_or_else(|e| e.into_inner());
     let now = Instant::now();
     match guard.get(watcher_job_id) {
         Some(stamp) if now.duration_since(stamp.at) < WATCH_DEBOUNCE => {
@@ -174,8 +179,7 @@ fn debounce_pass(watcher_job_id: &str, node_id: &str) -> Debounce {
 /// [`Debounce::HeldForSameNode`] credits. Keyed on `(job, node)` and a no-op
 /// for anything else: the only entry a successful poke may flip is its own.
 fn debounce_complete(watcher_job_id: &str, node_id: &str) {
-    let map = DEBOUNCE.get_or_init(|| Mutex::new(HashMap::new()));
-    let mut guard = map.lock().unwrap_or_else(|e| e.into_inner());
+    let mut guard = debounce_map().lock().unwrap_or_else(|e| e.into_inner());
     let Some(stamp) = guard.get_mut(watcher_job_id) else {
         return;
     };
@@ -191,8 +195,8 @@ fn debounce_complete(watcher_job_id: &str, node_id: &str) {
 /// Safe: the fresh stamp blocks concurrent passes for the whole window, so the
 /// entry removed here is always the one this failed poke inserted.
 fn debounce_rollback(watcher_job_id: &str) {
-    let map = DEBOUNCE.get_or_init(|| Mutex::new(HashMap::new()));
-    map.lock()
+    debounce_map()
+        .lock()
         .unwrap_or_else(|e| e.into_inner())
         .remove(watcher_job_id);
 }
@@ -245,24 +249,32 @@ pub fn target_has_victory_claim(node_id: &str) -> bool {
 ///
 /// Escaping the metacharacters of the OUTER format is not enough when the inner
 /// format is lines: both seams have to be closed.
-fn one_line(s: &str) -> String {
-    s.chars()
-        .map(|c| match c {
-            // `\n` plus the Unicode line/paragraph separators and NEL map to
-            // a space so a stray newline inside `label` cannot masquerade as
-            // the next header line at the render seam. U+0085 (NEL,
-            // NEXT LINE) is normalized too: some tokenizers and terminals
-            // treat it as a line terminator, and the threat model that
-            // covers U+2028/U+2029 must not stop at the BMP boundary.
-            '\n' | '\u{0085}' | '\u{2028}' | '\u{2029}' => ' ',
-            // `\r` is stripped rather than replaced with a space so a trailing
-            // `\r\n` does not leave a stray space at the line end (matches
-            // `indented_body`'s `trim_end_matches('\r')` discipline).
-            '\r' => '\0',
-            other => other,
-        })
-        .filter(|&c| c != '\0')
-        .collect()
+fn one_line<'a>(s: &'a str) -> Cow<'a, str> {
+    if !s
+        .chars()
+        .any(|c| matches!(c, '\n' | '\r' | '\u{0085}' | '\u{2028}' | '\u{2029}'))
+    {
+        return Cow::Borrowed(s);
+    }
+    Cow::Owned(
+        s.chars()
+            .map(|c| match c {
+                // `\n` plus the Unicode line/paragraph separators and NEL map to
+                // a space so a stray newline inside `label` cannot masquerade as
+                // the next header line at the render seam. U+0085 (NEL,
+                // NEXT LINE) is normalized too: some tokenizers and terminals
+                // treat it as a line terminator, and the threat model that
+                // covers U+2028/U+2029 must not stop at the BMP boundary.
+                '\n' | '\u{0085}' | '\u{2028}' | '\u{2029}' => ' ',
+                // `\r` is stripped rather than replaced with a space so a trailing
+                // `\r\n` does not leave a stray space at the line end (matches
+                // `indented_body`'s `trim_end_matches('\r')` discipline).
+                '\r' => '\0',
+                other => other,
+            })
+            .filter(|&c| c != '\0')
+            .collect(),
+    )
 }
 
 /// Render a human-authored multi-line body under a header without letting any
@@ -588,18 +600,18 @@ fn clamp_handle(s: &str) -> String {
 }
 
 /// Clamp a root reference body, announcing the cut when it happens.
-fn clamp_root_body(body: &str) -> String {
+fn clamp_root_body<'a>(body: &'a str) -> Cow<'a, str> {
     // Counted in chars, not bytes: root bodies are routinely Chinese, where a
     // byte test would clamp at a third of the intended length — and
     // `truncate_text` is char-indexed, so a byte-based "did it truncate?" test
     // would also disagree with it about whether a cut happened.
     if body.chars().count() <= MAX_ROOT_BODY_CHARS {
-        return body.to_string();
+        return Cow::Borrowed(body);
     }
-    format!(
+    Cow::Owned(format!(
         "{}{ROOT_BODY_TRUNCATED}",
         crate::utils::text_format::truncate_text(body, MAX_ROOT_BODY_CHARS)
-    )
+    ))
 }
 
 /// Deterministic topology context for a governed session's prompt. `None`
@@ -721,7 +733,7 @@ fn render_session_topology_inner(
     // Resolve labels for every node id we will mention. Skipping the full
     // `list_nodes` read saves O(N) on a populated graph; the IN-clause stays
     // tight (a few ids per session turn).
-    let mut ids: Vec<&str> = Vec::new();
+    let mut ids: Vec<&str> = Vec::with_capacity(edges.len());
     for e in &edges {
         ids.push(if e.to_id == node_id {
             e.from_id.as_str()
@@ -729,6 +741,8 @@ fn render_session_topology_inner(
             e.to_id.as_str()
         });
     }
+    ids.sort_unstable();
+    ids.dedup();
     let labels: std::collections::HashMap<String, String> = store
         .labels_for_ids(DEFAULT_AGENT, &ids)
         .map_err(|e| {
@@ -752,13 +766,14 @@ fn render_session_topology_inner(
     };
 
     let mut out = String::new();
-    out.push_str(&format!(
-        "本会话是循环治理图中的节点 {}（{}）。\n",
+    let _ = writeln!(
+        out,
+        "本会话是循环治理图中的节点 {}（{}）。",
         clamp_handle(&one_line(&node.id)),
         clamp_handle(&one_line(&node.label))
-    ));
+    );
     if let Some(c) = &node.cadence {
-        out.push_str(&format!("声明节奏: {}\n", clamp_handle(&one_line(c))));
+        let _ = writeln!(out, "声明节奏: {}", clamp_handle(&one_line(c)));
     }
     for e in edges.iter().filter(|e| e.to_id == node_id) {
         match e.kind {
@@ -767,26 +782,36 @@ fn render_session_topology_inner(
             // woken (`cron:`). Otherwise the watcher is real but reviews on its
             // own cadence — saying "会被它复核" of a settle that never fires is
             // the same lie `link` already refuses to tell at write time.
-            EdgeKind::Watches if immediate_review_reaches(&e.from_id, &node_id) => out.push_str(
-                &format!(
-                    "看守你的环: {}——你的胜利宣称会被它从反指标视角复核，用便宜方式赢没有意义。\n",
+            EdgeKind::Watches if immediate_review_reaches(&e.from_id, &node_id) => {
+                let _ = writeln!(
+                    out,
+                    "看守你的环: {}——你的胜利宣称会被它从反指标视角复核，用便宜方式赢没有意义。",
                     label_of(&e.from_id)
-                ),
-            ),
-            EdgeKind::Watches => out.push_str(&format!(
-                "看守你的环: {}——它从反指标视角复核你，按它自己的节奏（不会被你的胜利宣称即时唤醒），\
-                 用便宜方式赢只是晚一点被看见。\n",
-                label_of(&e.from_id)
-            )),
-            EdgeKind::OwnsReference => out.push_str(&format!(
-                "你的 objective 由 {} 治理：你对自己的参照只读。认为目标本身错了→写提案 note\
-                 （note_manage，tag: reference-proposal），由治理环裁决。\n",
-                label_of(&e.from_id)
-            )),
-            EdgeKind::Audits => out.push_str(&format!(
-                "审计你的环: {}——它定期核验你的数字仍触到现实。\n",
-                label_of(&e.from_id)
-            )),
+                );
+            }
+            EdgeKind::Watches => {
+                let _ = writeln!(
+                    out,
+                    "看守你的环: {}——它从反指标视角复核你，按它自己的节奏（不会被你的胜利宣称即时唤醒），\
+                     用便宜方式赢只是晚一点被看见。",
+                    label_of(&e.from_id)
+                );
+            }
+            EdgeKind::OwnsReference => {
+                let _ = writeln!(
+                    out,
+                    "你的 objective 由 {} 治理：你对自己的参照只读。认为目标本身错了→写提案 note\
+                     （note_manage，tag: reference-proposal），由治理环裁决。",
+                    label_of(&e.from_id)
+                );
+            }
+            EdgeKind::Audits => {
+                let _ = writeln!(
+                    out,
+                    "审计你的环: {}——它定期核验你的数字仍触到现实。",
+                    label_of(&e.from_id)
+                );
+            }
             _ => {}
         }
     }
@@ -794,20 +819,19 @@ fn render_session_topology_inner(
         .iter()
         .filter(|e| e.from_id == node_id && e.kind == EdgeKind::AnchoredBy)
     {
-        out.push_str(&format!("你的锚点: {}\n", label_of(&e.to_id)));
+        let _ = writeln!(out, "你的锚点: {}", label_of(&e.to_id));
     }
-    let mut roots = roots;
-    roots.sort_by(|a, b| a.id.cmp(&b.id));
     for r in roots {
         if let Some(body) = &r.body {
             // The body is the human's own text and may legitimately span lines,
             // so it is indented rather than flattened — readable, and no
             // continuation line can pose as the next `根参照` header.
-            out.push_str(&format!(
-                "根参照 {}（人供给——你可以引用、必须遵循、无权修改）: {}\n",
+            let _ = writeln!(
+                out,
+                "根参照 {}（人供给——你可以引用、必须遵循、无权修改）: {}",
                 clamp_handle(&one_line(&r.id)),
                 clamp_root_body(&indented_body(body))
-            ));
+            );
         }
     }
     Ok(Some(out))

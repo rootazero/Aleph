@@ -290,15 +290,7 @@ impl AcpSession {
     ///
     /// The ACP protocol requires `session/new` after `initialize` before prompts.
     pub async fn create_acp_session(&mut self, cwd: &str, timeout: Duration) -> Result<String> {
-        if let Some(sid) = self
-            .acp_session_id
-            .read()
-            .unwrap_or_else(|e| {
-                warn!(harness_id = %self.harness_id, "ACP create: session_id lock poisoned, recovering");
-                e.into_inner()
-            })
-            .clone()
-        {
+        if let Some(sid) = self.acp_session_id() {
             return Ok(sid);
         }
 
@@ -322,13 +314,7 @@ impl AcpSession {
             .to_string();
 
         info!(harness_id = %self.harness_id, session_id = %session_id, "ACP session created");
-        *self
-            .acp_session_id
-            .write()
-            .unwrap_or_else(|e| {
-                warn!(harness_id = %self.harness_id, "ACP create: session_id lock poisoned, recovering");
-                e.into_inner()
-            }) = Some(session_id.clone());
+        self.set_acp_session_id(session_id.clone());
         Ok(session_id)
     }
 
@@ -352,13 +338,7 @@ impl AcpSession {
                     .unwrap_or(session_id)
                     .to_string();
                 info!(harness_id = %self.harness_id, session_id = %sid, "ACP session loaded");
-                *self
-                    .acp_session_id
-                    .write()
-                    .unwrap_or_else(|e| {
-                        warn!(harness_id = %self.harness_id, "ACP load: session_id lock poisoned, recovering");
-                        e.into_inner()
-                    }) = Some(sid.clone());
+                self.set_acp_session_id(sid.clone());
                 Ok(sid)
             }
             Err(e) => {
@@ -439,14 +419,12 @@ impl AcpSession {
             // Legacy path: collect all notifications, extract text after
             match self.transport.request(&req, timeout).await {
                 Ok((resp, notifications)) => {
-                    let mut text_parts: Vec<String> = Vec::new();
-                    for notif in &notifications {
-                        if let Some(chunk) = notif.streaming_text() {
-                            text_parts.push(chunk);
-                        }
-                    }
-                    let result_text = if !text_parts.is_empty() {
-                        text_parts.join("")
+                    let text: String = notifications
+                        .iter()
+                        .filter_map(AcpResponse::streaming_text)
+                        .collect();
+                    let result_text = if !text.is_empty() {
+                        text
                     } else {
                         resp.text_content().unwrap_or_default()
                     };
@@ -470,15 +448,7 @@ impl AcpSession {
     /// `CancelHandle` cloned via `cancel_handle()` — it can send the cancel
     /// notification without locking the session.
     pub async fn cancel(&mut self) -> Result<()> {
-        let session_id = match self
-            .acp_session_id
-            .read()
-            .unwrap_or_else(|e| {
-                warn!(harness_id = %self.harness_id, "ACP cancel: session_id lock poisoned, recovering");
-                e.into_inner()
-            })
-            .clone()
-        {
+        let session_id = match self.acp_session_id() {
             Some(id) => id,
             None => {
                 debug!(harness_id = %self.harness_id, "ACP cancel: no session yet, skipping");
@@ -594,6 +564,16 @@ impl AcpSession {
                 e.into_inner()
             })
             .clone()
+    }
+
+    fn set_acp_session_id(&self, id: String) {
+        *self
+            .acp_session_id
+            .write()
+            .unwrap_or_else(|e| {
+                warn!(harness_id = %self.harness_id, "ACP session_id lock poisoned, recovering");
+                e.into_inner()
+            }) = Some(id);
     }
 
     /// Check if the child process is still running.

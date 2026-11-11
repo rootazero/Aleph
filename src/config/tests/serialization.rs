@@ -447,7 +447,18 @@ fn test_embedding_survives_save_incremental() {
     // Now modify memory config (like memory_config.update would) but keep embedding
     config.memory.bm25_bonus_weight = 0.5;
 
-    // Simulate save_incremental: serialize to toml::Value and extract memory section
+    // Test save_incremental_to_file on disk
+    config
+        .save_incremental_to_file(path, &["memory"])
+        .unwrap();
+
+    let after_content = std::fs::read_to_string(path).unwrap();
+    assert!(
+        after_content.contains("[[memory.embedding.providers]]"),
+        "Saved file must preserve embedding providers after incremental save"
+    );
+
+    // Also verify in-memory toml::Value representation
     let current: toml::Value = toml::Value::try_from(&config).unwrap();
     let memory_val = current.as_table().unwrap().get("memory").unwrap();
 

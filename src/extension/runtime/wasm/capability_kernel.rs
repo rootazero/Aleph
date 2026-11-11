@@ -63,6 +63,20 @@ pub struct WasmCapabilityKernel {
     secret_resolver: Arc<dyn SecretResolver>,
 }
 
+impl std::fmt::Debug for WasmCapabilityKernel {
+    /// The secret resolver is a trait object and is deliberately left out of
+    /// the debug output; every other field is a plain declaration fact.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("WasmCapabilityKernel")
+            .field("plugin_id", &self.plugin_id)
+            .field("capabilities", &self.capabilities)
+            .field("limits", &self.limits)
+            .field("log_count", &self.log_count)
+            .field("http_call_count", &self.http_call_count)
+            .finish_non_exhaustive()
+    }
+}
+
 impl WasmCapabilityKernel {
     #[must_use]
     pub fn new(
@@ -204,6 +218,15 @@ impl WasmCapabilityKernel {
             .as_millis()
             .try_into()
             .unwrap_or(u64::MAX)
+    }
+
+    /// Reset per-execution counters (HTTP call count and log line count) to
+    /// zero before each guest call. The sliding-window timestamp vector used
+    /// by the rate limiter is intentionally left untouched so it continues to
+    /// enforce the declared per-minute / per-hour limits across invocations.
+    pub fn reset_per_execution_counters(&self) {
+        self.http_call_count.store(0, Ordering::SeqCst);
+        self.log_count.store(0, Ordering::SeqCst);
     }
 
     pub fn check_http_limit(&self) -> Result<(), CapabilityError> {

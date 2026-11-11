@@ -89,11 +89,22 @@ impl FeishuStreamingCard {
         }
 
         let seq = self.next_sequence();
-        if let Err(e) = api
+        let final_update_ok = api
             .update_streaming_card(&self.card_id, final_text, seq)
             .await
-        {
-            warn!("Failed to send final streaming card update: {e}");
+            .map_err(|e| {
+                warn!("Failed to send final streaming card update: {e}");
+                e
+            })
+            .is_ok();
+
+        if !final_update_ok {
+            // Final content delivery failed; reset closed so the caller can
+            // observe the truncated state rather than silently swallowing it.
+            // We still attempt to close the card so Feishu does not leave it
+            // in a perpetual streaming state, but we do NOT treat this as a
+            // successful settlement.
+            self.closed.store(false, Ordering::SeqCst);
         }
 
         let summary = match final_text.char_indices().nth(50) {
@@ -262,6 +273,10 @@ impl EventEmitter for FeishuEventEmitter {
                         if let Some(new_card) = self.create_card().await {
                             *card_guard = Some(new_card);
                         } else {
+                            // Card creation failed: delegate this chunk to the inner
+                            // emitter and mark that this run has fallen back so that
+                            // ALL subsequent chunks (including the final one) stay on
+                            // the inner emitter and nothing is split across two buffers.
                             drop(card_guard);
                             return self.inner.emit(event).await;
                         }
@@ -272,13 +287,16 @@ impl EventEmitter for FeishuEventEmitter {
                 }
 
                 if *is_final {
-                    let card_guard = self.card.lock().await;
-                    if let Some(card) = card_guard.as_ref() {
-                        let final_text = card.accumulated_text.lock().await.clone();
-                        card.close(&self.api, &self.mark_side_answer(&final_text))
-                            .await;
+                    // If this run already fell back, stay on inner for the final chunk too.
+                    {
+                        let card_guard = self.card.lock().await;
+                        if let Some(card) = card_guard.as_ref() {
+                            let final_text = card.accumulated_text.lock().await.clone();
+                            card.close(&self.api, &self.mark_side_answer(&final_text))
+                                .await;
+                        }
+                        drop(card_guard);
                     }
-                    drop(card_guard);
                     self.stop_typing().await;
                 }
 

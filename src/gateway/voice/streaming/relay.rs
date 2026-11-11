@@ -23,17 +23,28 @@ const FIRST_DELTA_TIMEOUT: Duration = Duration::from_secs(15);
 
 /// Upper bound on concurrently open backend streams. The Panel holds exactly
 /// one per listening period; anything approaching this is leaked entries, so
-/// the oldest is evicted (dropping its sole sender closes the backend).
+/// the least recently active one is evicted (dropping its sole sender closes
+/// the backend).
 const MAX_ACTIVE_STREAMS: usize = 8;
 
-/// Belt-and-suspenders reap age. Pump-exit removal is the primary cleanup;
-/// this sweeps entries whose backend never closed (utterances are ≤ 30 s, so
-/// anything this old is a leak, not a conversation).
+/// Per-caller share of [`MAX_ACTIVE_STREAMS`]: one live dictation plus headroom
+/// for a second tab or device. Enforced before the global ceiling so a caller
+/// that opens many streams evicts its OWN oldest one instead of cutting off
+/// another caller's in-flight dictation — the cap is leak hygiene, not a way
+/// for one member to kill everyone else's voice session.
+const MAX_STREAMS_PER_OWNER: usize = 2;
+
+/// Belt-and-suspenders IDLE reap age. Pump-exit removal is the primary
+/// cleanup; this sweeps entries whose backend never closed. Measured from the
+/// last audio frame rather than from `insert`'s mint, so a healthy long
+/// dictation is not reaped merely for being old.
 const STREAM_TTL: Duration = Duration::from_secs(10 * 60);
 
 struct StreamEntry {
     tx: mpsc::Sender<Vec<u8>>,
-    opened: Instant,
+    /// Last sign of life: mint time, refreshed by every audio frame handed out
+    /// through [`StreamRegistry::audio_sender`].
+    last_activity: Instant,
     /// Who opened this stream, resolved at the ONE mint point.
     ///
     /// Recorded because a stream id is not a capability, whatever it looks
@@ -60,16 +71,61 @@ pub struct StreamRegistry {
 impl StreamRegistry {
     pub async fn insert(&self, tx: mpsc::Sender<Vec<u8>>) -> String {
         let id = uuid::Uuid::new_v4().to_string();
+        // Resolved HERE, at the single mint point, the same shape
+        // `teams::broadcast::register_fanout` uses for tree run ids.
+        //
+        // `ambient_owner` is `CALLER_USER` → `scope.owner_user_id`, which in a
+        // project room is the room CREATOR identically for every member. A
+        // voice stream opened from inside a tool call within a project room
+        // would therefore be attributed to whoever created the room, not the
+        // actual speaker — and `voice.transcribe.delta` classifies ByUserId
+        // from this stamp, so a member's STT deltas would reach only the
+        // creator. `visibility::ambient_principal` — THE "who is the person"
+        // derivation (seeded speaker first, under any scope; then
+        // `ambient_owner`) — puts a member's stream on their own connection.
+        // Not `ambient_room_author`: that is the transcript byline, which
+        // answers only in a `Project` scope, and routing a stream is not a
+        // byline (final review M11).
+        let owner = crate::gateway::visibility::ambient_principal();
         let mut guard = self.inner.lock().await;
-        // Opportunistic hygiene at the only growth point: reap expired
-        // entries, then evict the oldest if still at capacity. Dropping an
-        // entry's sender closes its backend; the pump then publishes the
-        // terminal closed event and re-removes (a no-op).
-        guard.retain(|_, e| e.opened.elapsed() < STREAM_TTL);
+        // Opportunistic hygiene at the only growth point: reap idle entries,
+        // then evict the oldest if still at capacity. Dropping an entry's
+        // sender closes its backend; the pump then publishes the terminal
+        // closed event and re-removes (a no-op).
+        guard.retain(|_, e| e.last_activity.elapsed() < STREAM_TTL);
+        // Per-caller cap runs FIRST: an owner over its share loses its own
+        // oldest stream, never another caller's. Unattributed entries
+        // (`owner == None`: cron, internal, pre-identity loopback) keep the
+        // pre-existing global-only ceiling.
+        if let Some(owner_id) = owner.as_deref() {
+            while guard
+                .values()
+                .filter(|e| e.owner.as_deref() == Some(owner_id))
+                .count()
+                >= MAX_STREAMS_PER_OWNER
+            {
+                let oldest = guard
+                    .iter()
+                    .filter(|(_, e)| e.owner.as_deref() == Some(owner_id))
+                    .min_by_key(|(_, e)| e.last_activity)
+                    .map(|(k, _)| k.clone());
+                match oldest {
+                    Some(k) => {
+                        tracing::warn!(
+                            stream_id = %k,
+                            owner = %owner_id,
+                            "voice stream per-caller cap reached — evicting that caller's oldest"
+                        );
+                        guard.remove(&k);
+                    }
+                    None => break,
+                }
+            }
+        }
         while guard.len() >= MAX_ACTIVE_STREAMS {
             let oldest = guard
                 .iter()
-                .min_by_key(|(_, e)| e.opened)
+                .min_by_key(|(_, e)| e.last_activity)
                 .map(|(k, _)| k.clone());
             match oldest {
                 Some(k) => {
@@ -83,24 +139,8 @@ impl StreamRegistry {
             id.clone(),
             StreamEntry {
                 tx,
-                opened: Instant::now(),
-                // Resolved HERE, at the single mint point, the same shape
-                // `teams::broadcast::register_fanout` uses for tree run ids.
-                //
-                // `ambient_owner` is `CALLER_USER` → `scope.owner_user_id`,
-                // which in a project room is the room CREATOR identically for
-                // every member. A voice stream opened from inside a tool call
-                // within a project room would therefore be attributed to
-                // whoever created the room, not the actual speaker — and
-                // `voice.transcribe.delta` classifies ByUserId from this
-                // stamp, so a member's STT deltas would reach only the
-                // creator. `visibility::ambient_principal` — THE "who is the
-                // person" derivation (seeded speaker first, under any scope;
-                // then `ambient_owner`) — puts a member's stream on their own
-                // connection. Not `ambient_room_author`: that is the
-                // transcript byline, which answers only in a `Project` scope,
-                // and routing a stream is not a byline (final review M11).
-                owner: crate::gateway::visibility::ambient_principal(),
+                last_activity: Instant::now(),
+                owner,
             },
         );
         id
@@ -166,8 +206,16 @@ impl StreamRegistry {
 
     /// Clone the audio sender so the `audio` handler can push frames without
     /// holding the registry lock across the (awaiting) send.
+    ///
+    /// Handing out the sender is a sign of life, so the idle stamp is refreshed
+    /// here — the only caller is `voice.stream.audio`. Without it the TTL would
+    /// measure how long a stream has been OPEN, and a healthy 10-minute
+    /// dictation would be reaped by the next unrelated `insert`.
     pub async fn audio_sender(&self, id: &str) -> Option<mpsc::Sender<Vec<u8>>> {
-        self.inner.lock().await.get(id).map(|e| e.tx.clone())
+        let mut guard = self.inner.lock().await;
+        let entry = guard.get_mut(id)?;
+        entry.last_activity = Instant::now();
+        Some(entry.tx.clone())
     }
 
     pub async fn remove(&self, id: &str) {

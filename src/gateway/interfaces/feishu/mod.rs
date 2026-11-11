@@ -265,10 +265,7 @@ impl FeishuChannel {
         } else {
             let mut runtime = FeishuRuntime::new(api.clone(), self.config.clone(), bot_open_id);
             runtime
-                .start(
-                    ChannelId::new(&self.config.app_id),
-                    self.channel_state.sender(),
-                )
+                .start(self.info.id.clone(), self.channel_state.sender())
                 .await?;
             self.runtime = Some(runtime);
         }
@@ -506,10 +503,18 @@ impl ChannelFactory for FeishuChannelFactory {
     }
 
     async fn create(&self, config: serde_json::Value) -> ChannelResult<Box<dyn Channel>> {
+        self.create_with_id("feishu", config).await
+    }
+
+    async fn create_with_id(
+        &self,
+        id: &str,
+        config: serde_json::Value,
+    ) -> ChannelResult<Box<dyn Channel>> {
         let config: FeishuConfig = serde_json::from_value(config)
             .map_err(|e| ChannelError::ConfigError(format!("Invalid Feishu config: {e}")))?;
 
-        Ok(Box::new(FeishuChannel::new("feishu", config)?))
+        Ok(Box::new(FeishuChannel::new(id, config)?))
     }
 }
 

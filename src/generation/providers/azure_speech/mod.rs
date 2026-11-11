@@ -396,7 +396,11 @@ const RATE_MIN: f32 = 0.5;
 const RATE_MAX: f32 = 2.0;
 
 fn clamp_rate(speed: f32) -> f32 {
-    speed.clamp(RATE_MIN, RATE_MAX)
+    if !speed.is_finite() {
+        1.0
+    } else {
+        speed.clamp(RATE_MIN, RATE_MAX)
+    }
 }
 
 /// Build an SSML envelope around the given text. If the caller already passed
@@ -429,9 +433,9 @@ fn build_ssml(input: &str, voice: &str, speed: Option<f32>) -> String {
 /// → `en-US`). Falls back to `en-US` if the name doesn't follow the
 /// `<lang>-<region>-<NameNeural>` convention.
 fn locale_from_voice(voice: &str) -> String {
-    let parts: Vec<&str> = voice.splitn(3, '-').collect();
-    if parts.len() >= 2 {
-        format!("{}-{}", parts[0], parts[1])
+    let mut parts = voice.split('-');
+    if let (Some(lang), Some(region)) = (parts.next(), parts.next()) {
+        format!("{lang}-{region}")
     } else {
         "en-US".to_string()
     }

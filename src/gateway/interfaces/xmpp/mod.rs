@@ -54,7 +54,7 @@ pub struct XmppChannel {
     /// Shutdown signal sender
     shutdown_tx: Option<watch::Sender<bool>>,
     /// Write channel for sending raw XMPP stanzas
-    write_tx: Arc<RwLock<Option<mpsc::Sender<String>>>>,
+    write_tx: Arc<RwLock<Option<mpsc::Sender<message_ops::WriteCommand>>>>,
     /// Test mode: skip TCP connection, allow direct stanza injection
     test_mode: bool,
 }
@@ -126,6 +126,11 @@ impl Channel for XmppChannel {
     async fn start(&mut self) -> ChannelResult<()> {
         // Validate configuration
         self.config.validate().map_err(ChannelError::ConfigError)?;
+        if self.config.use_tls && !self.test_mode {
+            return Err(ChannelError::UnsupportedFeature(
+                "XMPP TLS is not implemented; refusing plaintext authentication".into(),
+            ));
+        }
 
         self.channel_state
             .set_status(ChannelStatus::Connecting)
@@ -141,7 +146,7 @@ impl Channel for XmppChannel {
         self.shutdown_tx = Some(shutdown_tx);
 
         // Create write channel for outbound stanzas
-        let (write_cmd_tx, write_cmd_rx) = mpsc::channel::<String>(64);
+        let (write_cmd_tx, write_cmd_rx) = mpsc::channel::<message_ops::WriteCommand>(64);
         *self.write_tx.write().await = Some(write_cmd_tx);
 
         if self.test_mode {
@@ -207,12 +212,17 @@ impl Channel for XmppChannel {
         let test_mode = self.test_mode;
         let muc_rooms = self.config.muc_rooms.clone();
         Box::pin(async move {
-            let write_tx = write_tx.read().await;
-            let write_tx = write_tx.as_ref().ok_or_else(|| {
-                ChannelError::NotConnected(
-                    "XMPP adapter not started - call start() first".to_string(),
-                )
-            })?;
+            let sender = {
+                let write_tx = write_tx.read().await;
+                write_tx
+                    .as_ref()
+                    .ok_or_else(|| {
+                        ChannelError::NotConnected(
+                            "XMPP adapter not started - call start() first".to_string(),
+                        )
+                    })?
+                    .clone()
+            };
 
             if test_mode {
                 return Ok(SendResult {
@@ -231,7 +241,7 @@ impl Channel for XmppChannel {
                 "chat"
             };
 
-            XmppMessageOps::send_message(write_tx, conversation, &message.text, msg_type).await
+            XmppMessageOps::send_message(&sender, conversation, &message.text, msg_type).await
         })
     }
 
@@ -255,7 +265,8 @@ impl Channel for XmppChannel {
                  <composing xmlns='http://jabber.org/protocol/chatstates'/>\
                  </message>"
             );
-            let _ = write_tx.send(stanza).await;
+            let (ack, _result) = tokio::sync::oneshot::channel();
+            let _ = write_tx.send((stanza, ack)).await;
         }
         Ok(())
     }
@@ -271,12 +282,20 @@ impl ChannelFactory for XmppChannelFactory {
     }
 
     async fn create(&self, config: serde_json::Value) -> ChannelResult<Box<dyn Channel>> {
+        self.create_with_id("xmpp", config).await
+    }
+
+    async fn create_with_id(
+        &self,
+        id: &str,
+        config: serde_json::Value,
+    ) -> ChannelResult<Box<dyn Channel>> {
         let config: XmppConfig = serde_json::from_value(config)
             .map_err(|e| ChannelError::ConfigError(format!("Invalid XMPP config: {e}")))?;
 
         config.validate().map_err(ChannelError::ConfigError)?;
 
-        Ok(Box::new(XmppChannel::new("xmpp", config)))
+        Ok(Box::new(XmppChannel::new(id, config)))
     }
 }
 
@@ -418,18 +437,18 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_start_without_feature() {
+    async fn test_start_rejects_unimplemented_tls() {
         let config = XmppConfig {
             jid: "bot@example.com".to_string(),
             password: "secret".to_string(),
             ..Default::default()
         };
-        let _channel = XmppChannel::new("xmpp", config);
-
-        // Without the xmpp feature, start should return UnsupportedFeature.
-        // When the xmpp feature IS enabled, start() requires a live XMPP server
-        // which cannot be tested in unit tests, so this test only validates
-        // construction succeeds.
+        let mut channel = XmppChannel::new("xmpp", config);
+        assert!(matches!(
+            channel.start().await,
+            Err(ChannelError::UnsupportedFeature(_))
+        ));
+        assert_eq!(channel.status(), ChannelStatus::Disconnected);
     }
 
     #[tokio::test]

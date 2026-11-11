@@ -30,7 +30,10 @@
 //!   interchange"), and re-importing would also need to enforce every store
 //!   invariant the live writer enforces.
 
+use std::borrow::Cow;
 use std::fmt::Write as _;
+
+use serde::Serialize;
 
 use crate::error::Result;
 use crate::loop_graph::store::LoopGraphStore;
@@ -66,7 +69,7 @@ pub fn to_dot(store: &LoopGraphStore, agent_id: &str) -> Result<String> {
     let (nodes, edges) = sorted_topology(store, agent_id)?;
 
     let mut out = String::new();
-    out.push_str(&format!("// loop_graph export, agent={agent_id}\n"));
+    let _ = writeln!(out, "// loop_graph export, agent={agent_id}");
     out.push_str("digraph loop_graph {\n");
     out.push_str("  rankdir=LR;\n");
     out.push_str("  graph [fontname=\"Helvetica\", fontsize=10];\n");
@@ -82,15 +85,11 @@ pub fn to_dot(store: &LoopGraphStore, agent_id: &str) -> Result<String> {
         let label = dot_escape(&n.label);
         // Tooltip carries the body verbatim if present (≤ 200 chars to keep
         // Graphviz responsive); full body still goes through JSON.
-        let tooltip = n
-            .body
-            .as_deref()
-            .map(|b| truncate_chars(b, 200))
-            .unwrap_or_default();
+        let tooltip_raw = n.body.as_deref().map(|b| truncate_chars(b, 200));
+        let tooltip = tooltip_raw.as_deref().map(dot_escape).unwrap_or_default();
         let _ = writeln!(
             out,
-            "  {dot_id} [label=\"{label}\", shape={shape}, color=\"{color}\", fillcolor=\"{color}\", style=\"filled,rounded\", tooltip=\"{}\"];",
-            dot_escape(&tooltip)
+            "  {dot_id} [label=\"{label}\", shape={shape}, color=\"{color}\", fillcolor=\"{color}\", style=\"filled,rounded\", tooltip=\"{tooltip}\"];"
         );
     }
 
@@ -110,6 +109,15 @@ pub fn to_dot(store: &LoopGraphStore, agent_id: &str) -> Result<String> {
     Ok(out)
 }
 
+#[derive(Serialize)]
+struct JsonExport<'a> {
+    agent_id: &'a str,
+    node_count: usize,
+    edge_count: usize,
+    nodes: &'a [GraphNode],
+    edges: &'a [GraphEdge],
+}
+
 /// Format the graph as compact JSON. The Panel uses this to render its own
 /// graph view without re-reading SQLite, and `governance_metrics` uses it to
 /// log the topology at audit boundaries.
@@ -120,13 +128,13 @@ pub fn to_json(store: &LoopGraphStore, agent_id: &str) -> Result<String> {
     // helper.)
     let (nodes, edges) = sorted_topology(store, agent_id)?;
 
-    let payload = serde_json::json!({
-        "agent_id": agent_id,
-        "node_count": nodes.len(),
-        "edge_count": edges.len(),
-        "nodes": nodes,
-        "edges": edges,
-    });
+    let payload = JsonExport {
+        agent_id,
+        node_count: nodes.len(),
+        edge_count: edges.len(),
+        nodes: &nodes,
+        edges: &edges,
+    };
     serde_json::to_string_pretty(&payload).map_err(Into::into)
 }
 
@@ -171,21 +179,32 @@ fn edge_color_for(kind: EdgeKind) -> &'static str {
     }
 }
 
-fn dot_id(id: &str) -> String {
-    // DOT accepts [_A-Za-z0-9]; everything else becomes `_`.
-    id.chars()
-        .map(|c| {
-            if c.is_ascii_alphanumeric() || c == '_' {
-                c
-            } else {
-                '_'
-            }
-        })
-        .collect()
+fn dot_id<'a>(id: &'a str) -> Cow<'a, str> {
+    if id.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
+        Cow::Borrowed(id)
+    } else {
+        Cow::Owned(
+            id.chars()
+                .map(|c| {
+                    if c.is_ascii_alphanumeric() || c == '_' {
+                        c
+                    } else {
+                        '_'
+                    }
+                })
+                .collect(),
+        )
+    }
 }
 
-fn dot_escape(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
+fn dot_escape<'a>(s: &'a str) -> Cow<'a, str> {
+    if !s
+        .chars()
+        .any(|c| matches!(c, '"' | '\\' | '\n' | '\r' | '<' | '>' | '&'))
+    {
+        return Cow::Borrowed(s);
+    }
+    let mut out = String::with_capacity(s.len() + 8);
     for c in s.chars() {
         match c {
             '"' => out.push_str("\\\""),
@@ -198,21 +217,21 @@ fn dot_escape(s: &str) -> String {
             other => out.push(other),
         }
     }
-    out
+    Cow::Owned(out)
 }
 
-fn truncate_chars(s: &str, max: usize) -> String {
+fn truncate_chars<'a>(s: &'a str, max: usize) -> Cow<'a, str> {
     let mut char_count = 0;
     for (byte_idx, _) in s.char_indices() {
         if char_count == max {
             let mut out = String::with_capacity(byte_idx + '…'.len_utf8());
             out.push_str(&s[..byte_idx]);
             out.push('…');
-            return out;
+            return Cow::Owned(out);
         }
         char_count += 1;
     }
-    s.to_string()
+    Cow::Borrowed(s)
 }
 
 #[cfg(test)]

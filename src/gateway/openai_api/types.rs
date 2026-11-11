@@ -220,7 +220,6 @@ pub struct EmbeddingResponse {
     pub model: String,
     pub usage: Usage,
 }
-
 #[derive(Debug, Serialize)]
 pub struct EmbeddingData {
     pub object: String,
@@ -252,7 +251,28 @@ pub struct ResponsesRequest {
 #[serde(untagged)]
 pub enum ResponsesInput {
     Text(String),
-    Messages(Vec<ResponsesMessage>),
+    Messages(Vec<ResponsesInputItem>),
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+pub enum ResponsesInputItem {
+    Message(ResponsesMessage),
+    Tool(ResponsesToolInputItem),
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ResponsesToolInputItem {
+    FunctionCall {
+        call_id: String,
+        name: String,
+        arguments: String,
+    },
+    FunctionCallOutput {
+        call_id: String,
+        output: String,
+    },
 }
 
 #[derive(Debug, Deserialize)]
@@ -735,7 +755,10 @@ mod tests {
         match req.input {
             ResponsesInput::Messages(msgs) => {
                 assert_eq!(msgs.len(), 1);
-                assert_eq!(msgs[0].role, "user");
+                match &msgs[0] {
+                    ResponsesInputItem::Message(message) => assert_eq!(message.role, "user"),
+                    other => panic!("expected a message item, got {other:?}"),
+                }
             }
             _ => panic!("Expected Messages variant"),
         }

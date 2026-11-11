@@ -90,13 +90,20 @@ pub async fn handle_message(
             if let Some(s) = session {
                 face.sessions().mark_initialized(&s.id);
             }
+        } else if msg.method == "notifications/cancelled" {
+            if let (Some(s), Some(request_id)) = (
+                session,
+                msg.params.as_ref().and_then(|p| p.get("requestId")),
+            ) {
+                face.sessions().cancel_request(&s.id, request_id);
+            }
         }
         return Outcome::Accepted;
     }
     let id = msg.id.clone();
 
     if msg.method == "initialize" {
-        return initialize(face, id, msg.params);
+        return initialize(face, caller, id, msg.params);
     }
 
     let Some(session) = session else {
@@ -129,8 +136,24 @@ pub async fn handle_message(
                     }
                 };
             let arguments = params.arguments.unwrap_or_else(|| json!({}));
+            let Some(pending) = face
+                .sessions()
+                .register_request(&session.id, id.as_ref().expect("request id checked above"))
+            else {
+                return reply(JsonRpcResponse::error(
+                    id,
+                    INVALID_REQUEST,
+                    "session closed or request id already active",
+                ));
+            };
             match face
-                .call_tool(caller, session, &params.name, arguments)
+                .call_tool(
+                    caller,
+                    session,
+                    &params.name,
+                    arguments,
+                    pending.cancel.clone(),
+                )
                 .await
             {
                 Ok(result) => reply(JsonRpcResponse::success(id, to_value(&result))),
@@ -149,7 +172,12 @@ pub async fn handle_message(
     }
 }
 
-fn initialize(face: &McpFace, id: Option<Value>, params: Option<Value>) -> Outcome {
+fn initialize(
+    face: &McpFace,
+    caller: &McpCaller,
+    id: Option<Value>,
+    params: Option<Value>,
+) -> Outcome {
     let params: InitializeParams = match params.and_then(|p| serde_json::from_value(p).ok()) {
         Some(p) => p,
         None => {
@@ -162,6 +190,7 @@ fn initialize(face: &McpFace, id: Option<Value>, params: Option<Value>) -> Outco
     };
     let version = negotiate(&params.protocol_version);
     let session = face.sessions().create(
+        caller,
         McpClient {
             client_name: params.client_info.name,
             client_version: params.client_info.version,
@@ -235,6 +264,33 @@ mod tests {
             } => (response, s),
             other => panic!("initialize must reply with a new session: {other:?}"),
         }
+    }
+
+    #[tokio::test]
+    async fn cancellation_notification_reaches_only_the_matching_session_and_request() {
+        let f = face(&["echo"], true);
+        let (_, session) = initialized(&f, "2025-03-26").await;
+        let (_, other) = initialized(&f, "2025-03-26").await;
+        let pending = f
+            .sessions()
+            .register_request(&session.id, &json!(42))
+            .unwrap();
+        let notification = || {
+            JsonRpcRequest::notification("notifications/cancelled", Some(json!({"requestId":42})))
+        };
+        assert!(matches!(
+            handle_message(&f, &operator(), Some(&other), notification()).await,
+            Outcome::Accepted
+        ));
+        assert!(!pending.cancel.is_cancelled());
+        assert!(matches!(
+            handle_message(&f, &operator(), Some(&session), notification()).await,
+            Outcome::Accepted
+        ));
+        assert!(pending.cancel.is_cancelled());
+        drop(pending);
+        handle_message(&f, &operator(), Some(&session), notification()).await;
+        assert!(!f.sessions().cancel_request(&session.id, &json!(42)));
     }
 
     #[test]
@@ -330,7 +386,7 @@ mod tests {
         )
         .await;
         assert!(matches!(out, Outcome::Accepted));
-        assert!(f.sessions().touch(&s.id).unwrap().initialized);
+        assert!(f.sessions().touch(&operator(), &s.id).unwrap().initialized);
         // Any other notification is accepted and ignored.
         let out = handle_message(
             &f,

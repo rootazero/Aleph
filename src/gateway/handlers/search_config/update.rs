@@ -219,9 +219,15 @@ pub async fn handle_update(
     };
 
     // Broadcast config change event
+    let mut sanitized_dto = dto.clone();
+    for backend in sanitized_dto.backends.iter_mut() {
+        if backend.api_key.is_some() {
+            backend.api_key = Some("[REDACTED]".to_string());
+        }
+    }
     let event = GatewayEvent::ConfigChanged(ConfigChangedEvent {
         section: Some("search".to_string()),
-        value: serde_json::to_value(&dto).unwrap_or(Value::Null),
+        value: serde_json::to_value(&sanitized_dto).unwrap_or(Value::Null),
         timestamp: chrono::Utc::now().timestamp_millis(),
     });
     let _ = event_bus.publish_gateway_event(&event);

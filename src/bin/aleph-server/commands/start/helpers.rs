@@ -192,15 +192,8 @@ pub(super) fn load_gateway_config(
                 }
             }
         }
-        None => match FullGatewayConfig::load_default() {
-            Ok(cfg) => cfg,
-            Err(e) => {
-                if !args.daemon {
-                    eprintln!("Warning: {e}, using defaults");
-                }
-                FullGatewayConfig::default()
-            }
-        },
+        None => FullGatewayConfig::load_default()
+            .map_err(|e| format!("Error loading default config: {e}"))?,
     };
 
     // CLI args override config file settings only when explicitly provided.
@@ -217,10 +210,10 @@ pub(super) fn load_gateway_config(
 }
 
 /// Initialize the session store backend based on configuration.
-/// Selects by string: `"file"` enables the JSON/JSONL file backend, any
-/// other value selects `SQLite`. That describes THIS FUNCTION; the SHIPPED
-/// default is `"file"` (`config::types::general::default_session_store_backend`),
-/// so the file branch is the one a stock install takes.
+/// Selects by string: `"file"` enables the JSON/JSONL file backend and
+/// `"sqlite"` selects `SQLite`; unknown values are rejected. The SHIPPED default
+/// is `"file"` (`config::types::general::default_session_store_backend`), so the
+/// file branch is the one a stock install takes.
 /// Returns the trait object and an optional owned `SessionManager` for `SQLite`
 /// so the caller can attach raw-memory writer and event bus before wrapping.
 pub(super) async fn initialize_session_store(
@@ -302,8 +295,7 @@ pub(super) async fn initialize_session_store(
             }
             Err(e) => Err(format!("Error: Failed to initialize file session store: {e}").into()),
         }
-    } else {
-        // SQLite default
+    } else if backend == "sqlite" {
         let sm = match SessionManager::with_defaults() {
             Ok(sm) => sm,
             Err(e) => {
@@ -318,6 +310,11 @@ pub(super) async fn initialize_session_store(
         }
         let dyn_store: Arc<dyn SessionStore> = Arc::new(sm.clone());
         Ok((dyn_store, Some(sm)))
+    } else {
+        Err(format!(
+            "Unknown session store backend '{backend}'; expected 'file' or 'sqlite'."
+        )
+        .into())
     }
 }
 

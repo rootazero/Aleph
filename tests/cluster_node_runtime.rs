@@ -123,8 +123,12 @@ async fn wait_for_node(
     Vec<alephcore::cluster::CommandDescriptor>,
 ) {
     for _ in 0..100 {
-        if let Ok(found) = registry.resolve(name) {
-            return found;
+        // `resolve` was removed in the Occam review: `resolve_with_catalog` is
+        // the one resolver, and it also reports whether the node's declared
+        // command catalog is malformed. The test does not care about that
+        // flag, so it is dropped here.
+        if let Ok((channel, declared, _malformed)) = registry.resolve_with_catalog(name) {
+            return (channel, declared);
         }
         tokio::time::sleep(Duration::from_millis(20)).await;
     }

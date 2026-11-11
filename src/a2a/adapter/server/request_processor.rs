@@ -360,10 +360,8 @@ impl A2ARequestProcessor {
             return resp;
         }
 
-        let params: ListTasksParams = if request.params.is_null() {
-            ListTasksParams::default()
-        } else if request.params.is_object() {
-            match serde_json::from_value(request.params.clone()) {
+        let params: ListTasksParams = if request.params.is_object() {
+            match serde_json::from_value(request.params) {
                 Ok(p) => p,
                 Err(e) => {
                     return JsonRpcResponse::error(

@@ -33,7 +33,7 @@ pub struct RealWaRuntime {
     /// object safety. Only the original `RealWaRuntime` mutates this;
     /// clones see the same value through the shared `Arc`.
     shutdown_tx: Arc<Mutex<Option<oneshot::Sender<()>>>>,
-    bot_handle: Arc<Mutex<Option<whatsapp_rust::bot::BotHandle>>>,
+    supervisor: Arc<Mutex<Option<tokio::task::JoinHandle<()>>>>,
     client: Arc<Mutex<Option<Arc<whatsapp_rust::Client>>>>,
     message_jids: Arc<Mutex<HashMap<String, whatsapp_rust::Jid>>>,
 }
@@ -50,7 +50,7 @@ impl Clone for RealWaRuntime {
             // etc. This is the change that lets the trait method take
             // `&self`.
             shutdown_tx: Arc::clone(&self.shutdown_tx),
-            bot_handle: Arc::clone(&self.bot_handle),
+            supervisor: Arc::clone(&self.supervisor),
             client: Arc::clone(&self.client),
             message_jids: Arc::clone(&self.message_jids),
         }
@@ -64,7 +64,7 @@ impl RealWaRuntime {
             auth,
             event_tx,
             shutdown_tx: Arc::new(Mutex::new(None)),
-            bot_handle: Arc::new(Mutex::new(None)),
+            supervisor: Arc::new(Mutex::new(None)),
             client: Arc::new(Mutex::new(None)),
             message_jids: Arc::new(Mutex::new(HashMap::new())),
         })
@@ -103,40 +103,36 @@ impl RealWaRuntime {
     async fn start_inner(&self) -> ChannelResult<()> {
         info!("Starting WhatsApp runtime...");
 
+        // This lock owns Starting as well as Running, and serializes replacement with shutdown.
+        let mut supervisor = self.supervisor.lock().await;
+        if supervisor.as_ref().is_some_and(|task| !task.is_finished()) {
+            return Err(ChannelError::Internal(
+                "WhatsApp runtime already started".into(),
+            ));
+        }
+        if let Some(task) = supervisor.take() {
+            let _ = task.await;
+        }
         let db_path = self.auth.db_path();
         let backend = self.create_backend(&db_path).await?;
         let transport = whatsapp_rust_tokio_transport::TokioWebSocketTransportFactory::new();
         let http_client = ReqwestHttpClient::new();
 
-        let (shutdown_tx, shutdown_rx) = oneshot::channel();
-        {
-            let mut guard = self.shutdown_tx.lock().await;
-            // If a previous `start()` left a sender here, drop it
-            // silently — that previous shutdown signal will never fire
-            // (the task it was paired with already exited). Refuse to
-            // overwrite only if the BotHandle still exists, which is
-            // the operational meaning of "already started".
-            if self.bot_handle.lock().await.is_some() {
-                return Err(ChannelError::Internal(
-                    "WhatsApp runtime already started".into(),
-                ));
-            }
-            *guard = Some(shutdown_tx);
-        }
+        let (shutdown_tx, mut shutdown_rx) = oneshot::channel();
+        *self.shutdown_tx.lock().await = Some(shutdown_tx);
 
         let event_tx_for_bot = self.event_tx.clone();
         let state_for_bot = Arc::clone(&self.state);
-        let bot_handle_arc = Arc::clone(&self.bot_handle);
         let client_arc = Arc::clone(&self.client);
         let message_jids_arc = Arc::clone(&self.message_jids);
         let shutdown_tx_for_task = Arc::clone(&self.shutdown_tx);
 
-        tokio::spawn(async move {
+        *supervisor = Some(tokio::spawn(async move {
             let event_tx = event_tx_for_bot.clone();
             let state = Arc::clone(&state_for_bot);
             let message_jids = Arc::clone(&message_jids_arc);
 
-            let bot = match whatsapp_rust::bot::Bot::builder()
+            let build = whatsapp_rust::bot::Bot::builder()
                 .with_backend_arc(backend)
                 .with_transport_factory(transport)
                 .with_http_client(http_client)
@@ -150,9 +146,16 @@ impl RealWaRuntime {
                         handle_bot_event((*event).clone(), state, event_tx, message_jids).await;
                     }
                 })
-                .build()
-                .await
-            {
+                .build();
+            let result = tokio::select! {
+                biased;
+                _ = &mut shutdown_rx => {
+                    state_for_bot.set(ConnectionState::Disconnected);
+                    return;
+                }
+                result = build => result,
+            };
+            let bot = match result {
                 Ok(b) => b,
                 Err(e) => {
                     error!(error = %e, "Failed to build bot");
@@ -167,19 +170,8 @@ impl RealWaRuntime {
             }
 
             let handle = bot.spawn();
-
-            {
-                let mut guard = bot_handle_arc.lock().await;
-                *guard = Some(handle);
-            }
-
             let _ = shutdown_rx.await;
-            {
-                let mut guard = bot_handle_arc.lock().await;
-                if let Some(h) = guard.take() {
-                    h.abort();
-                }
-            }
+            handle.shutdown().await;
             {
                 let mut guard = client_arc.lock().await;
                 *guard = None;
@@ -189,7 +181,7 @@ impl RealWaRuntime {
             let mut guard = shutdown_tx_for_task.lock().await;
             *guard = None;
             state_for_bot.set(ConnectionState::Disconnected);
-        });
+        }));
 
         Ok(())
     }
@@ -198,19 +190,15 @@ impl RealWaRuntime {
     /// this is now `&self`.
     async fn shutdown_inner(&self) {
         info!("Shutting down WhatsApp runtime...");
-        let tx = {
-            let mut guard = self.shutdown_tx.lock().await;
-            guard.take()
-        };
+        let mut supervisor = self.supervisor.lock().await;
+        let tx = self.shutdown_tx.lock().await.take();
         if let Some(tx) = tx {
             let _ = tx.send(());
         }
-        {
-            let mut guard = self.bot_handle.lock().await;
-            if let Some(h) = guard.take() {
-                h.abort();
-            }
+        if let Some(task) = supervisor.as_mut() {
+            let _ = task.await;
         }
+        *supervisor = None;
         {
             let mut guard = self.client.lock().await;
             *guard = None;
@@ -223,6 +211,11 @@ impl RealWaRuntime {
     }
 
     pub async fn send_message(&self, msg: OutboundMessage) -> ChannelResult<MessageId> {
+        if !msg.attachments.is_empty() {
+            return Err(ChannelError::UnsupportedFeature(
+                "WhatsApp attachment sending is not implemented; no message was sent".into(),
+            ));
+        }
         self.ensure_connected()?;
         let client = self.get_client().await?;
         let jid: whatsapp_rust::Jid = msg
@@ -495,12 +488,18 @@ async fn handle_bot_event(
         }
         whatsapp_rust::types::events::Event::Messages(batch) => {
             let mut guard = message_jids.lock().await;
-            for message in batch {
-                // Bound the read-receipt lookup map per message, including
-                // messages delivered together by an offline drain.
-                if guard.len() >= 10_000 {
-                    guard.clear();
+            // Evict only the minimum number of old entries needed to
+            // fit the entire batch, rather than clearing the whole map.
+            // Clearing could erase receipt targets for messages in
+            // this same batch that have not yet been forwarded.
+            if guard.len() + batch.len() > 10_000 {
+                let excess = guard.len() + batch.len() - 10_000;
+                let to_remove: Vec<String> = guard.keys().take(excess).cloned().collect();
+                for k in to_remove {
+                    guard.remove(&k);
                 }
+            }
+            for message in batch {
                 let info = &message.info;
                 guard.insert(info.id.to_string(), info.source.chat.clone());
             }
@@ -510,5 +509,78 @@ async fn handle_bot_event(
 
     if event_tx.send(event).await.is_err() {
         error!("Event receiver dropped");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::gateway::{
+        channel::Channel,
+        interfaces::whatsapp::{WhatsAppChannel, WhatsAppConfig},
+    };
+    use crate::secrets::vault::SecretVault;
+
+    #[tokio::test]
+    async fn stop_joins_starting_runtime_and_suspended_channel_loop() {
+        tokio::time::timeout(std::time::Duration::from_secs(1), async {
+            let dir = tempfile::tempdir().unwrap();
+            let auth = WaAuthManager::with_vault(
+                SecretVault::open(dir.path().join("auth.vault")).unwrap(),
+                "test",
+            );
+            let (tx, _rx) = mpsc::channel(1);
+            let runtime = RealWaRuntime::new(auth, tx).await.unwrap();
+            let (shutdown_tx, shutdown_rx) = oneshot::channel();
+            let (stopping_tx, stopping_rx) = oneshot::channel();
+            let (release_tx, release_rx) = oneshot::channel();
+            *runtime.shutdown_tx.lock().await = Some(shutdown_tx);
+            let state = runtime.state_handle();
+            *runtime.supervisor.lock().await = Some(tokio::spawn(async move {
+                let _ = shutdown_rx.await;
+                let _ = stopping_tx.send(());
+                let _ = release_rx.await;
+                state.set(ConnectionState::Disconnected);
+            }));
+            assert!(
+                runtime.start_inner().await.is_err(),
+                "Starting already owns the runtime"
+            );
+            let stopping = runtime.clone();
+            let stop = tokio::spawn(async move { stopping.shutdown_inner().await });
+            stopping_rx.await.unwrap();
+            assert!(!stop.is_finished(), "shutdown must join the old builder");
+            release_tx.send(()).unwrap();
+            stop.await.unwrap();
+            assert!(runtime.supervisor.lock().await.is_none());
+
+            let (mut channel, _fake) =
+                WhatsAppChannel::for_test_with_fake("wa-test", WhatsAppConfig::default());
+            let pairing = Arc::clone(&channel.pairing_state);
+            let (entered_tx, entered_rx) = oneshot::channel();
+            let task = tokio::spawn(async move {
+                let _ = entered_tx.send(());
+                std::future::pending::<()>().await;
+                *pairing.write().await = PairingState::Idle;
+            });
+            let finished = task.abort_handle();
+            channel.event_task = Some(task);
+            entered_rx.await.unwrap();
+            assert!(channel.start().await.is_err());
+            channel.stop().await.unwrap();
+            assert!(
+                finished.is_finished(),
+                "stop must join even a loop suspended in acknowledgement"
+            );
+            channel.start().await.unwrap();
+            tokio::task::yield_now().await;
+            assert!(matches!(
+                channel.pairing_state().await,
+                PairingState::Connected { .. }
+            ));
+            channel.stop().await.unwrap();
+        })
+        .await
+        .expect("owned lifecycle tasks must finish");
     }
 }

@@ -119,10 +119,12 @@ pub async fn handle_update(
                 );
             }
         };
-        cfg.general = merged;
+
+        let original = std::mem::replace(&mut cfg.general, merged);
 
         // Save to file
         if let Err(e) = cfg.save_incremental(&["general"]) {
+            cfg.general = original;
             return JsonRpcResponse::error(
                 request.id,
                 INTERNAL_ERROR,

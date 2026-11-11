@@ -38,7 +38,6 @@ use crate::event::filter::EventFilter;
 use crate::event::types::AlephEvent;
 use crate::sync_primitives::Arc;
 use crate::sync_primitives::{AsyncRwLock, AtomicU64, Ordering};
-use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use tokio::sync::broadcast;
@@ -189,7 +188,7 @@ pub struct GlobalBus {
 }
 
 // Singleton instance
-static GLOBAL_BUS: Lazy<GlobalBus> = Lazy::new(GlobalBus::new);
+static GLOBAL_BUS: std::sync::LazyLock<GlobalBus> = std::sync::LazyLock::new(GlobalBus::new);
 
 impl Default for GlobalBus {
     fn default() -> Self {
@@ -262,11 +261,13 @@ impl GlobalBus {
             "Broadcasting global event"
         );
 
-        // Send via broadcast channel for async subscribers. A subscriber
-        // who ALSO wired `subscribe_async` for the same event will see it
+        // Send via broadcast channel for async subscribers if there are active receivers.
+        // A subscriber who ALSO wired `subscribe_async` for the same event will see it
         // twice — see the "Single-delivery contract" doc above.
-        if let Err(e) = self.sender.send(global_event.clone()) {
-            trace!("No broadcast receivers: {}", e);
+        if self.sender.receiver_count() > 0 {
+            if let Err(e) = self.sender.send(global_event.clone()) {
+                trace!("No broadcast receivers: {}", e);
+            }
         }
 
         // Collect matching callbacks and dispatch each in its own task.

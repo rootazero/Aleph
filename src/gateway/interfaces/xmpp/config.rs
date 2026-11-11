@@ -18,7 +18,7 @@ fn default_nick() -> String {
 }
 
 /// XMPP channel configuration
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct XmppConfig {
     /// Full JID (e.g., "bot@example.com")
     pub jid: String,
@@ -45,6 +45,22 @@ pub struct XmppConfig {
     /// Nickname used in MUC rooms (default: "aleph")
     #[serde(default = "default_nick")]
     pub nick: String,
+}
+
+/// Hand-written so the credentials never reach a log line, a panic message
+/// or a `tracing` field. Every other field is printed as-is.
+impl std::fmt::Debug for XmppConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("XmppConfig")
+            .field("jid", &self.jid)
+            .field("password", &"<redacted>")
+            .field("server", &self.server)
+            .field("port", &self.port)
+            .field("muc_rooms", &self.muc_rooms)
+            .field("use_tls", &self.use_tls)
+            .field("nick", &self.nick)
+            .finish()
+    }
 }
 
 impl Default for XmppConfig {

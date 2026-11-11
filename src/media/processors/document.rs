@@ -46,13 +46,7 @@ impl MediaProvider for TextDocumentProvider {
         matches!(
             media_type,
             MediaType::Document {
-                format: DocFormat::Txt,
-                ..
-            } | MediaType::Document {
-                format: DocFormat::Markdown,
-                ..
-            } | MediaType::Document {
-                format: DocFormat::Html,
+                format: DocFormat::Txt | DocFormat::Markdown | DocFormat::Html,
                 ..
             }
         )

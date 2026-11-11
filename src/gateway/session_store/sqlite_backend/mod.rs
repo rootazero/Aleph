@@ -510,6 +510,12 @@ impl SessionStore for SessionManager {
             .map_err(map_err)
     }
 
+    async fn reserve_next_epoch(&self, base_key_pattern: &str) -> Result<u32, SessionStoreError> {
+        self.reserve_next_epoch(base_key_pattern)
+            .await
+            .map_err(map_err)
+    }
+
     async fn get_session_topic(
         &self,
         key: &SessionKey,

@@ -178,8 +178,9 @@ impl HarnessRunner for AgentHarnessRunner {
         // being shadowed by that provider's static catalog. The directive-less
         // path is byte-identical to before — it uses `BrainRef` and lets the
         // failover primary walk its catalog as usual.
-        let session_pref_key = SessionKey::from_key_string(&session_key)
-            // rust-doctor-disable-next-line excessive-clone
+        let parsed_session_key = SessionKey::from_key_string(&session_key);
+        let session_pref_key = parsed_session_key
+            .as_ref()
             .map_or_else(|| session_key.clone(), |s| s.to_key_string());
         let session_model_snapshot =
             crate::providers::session_model_handle::get_session_model_snapshot(&session_pref_key);
@@ -233,7 +234,7 @@ impl HarnessRunner for AgentHarnessRunner {
         // under `spec.agent` so orchestrator ↔ harness session identity stays
         // deterministic (no fresh-uuid divergence).
         let session_id: SessionId =
-            SessionKey::from_key_string(&session_key).unwrap_or_else(|| SessionKey::Ephemeral {
+            parsed_session_key.unwrap_or_else(|| SessionKey::Ephemeral {
                 // rust-doctor-disable-next-line excessive-clone
                 agent_id: spec.agent.clone(),
                 // rust-doctor-disable-next-line excessive-clone
@@ -318,14 +319,12 @@ impl HarnessRunner for AgentHarnessRunner {
             .then(|| llm.serving_model_hint().map(std::borrow::Cow::into_owned))
             .flatten();
         let gauge_model: String = if dynamic_identity {
-            // rust-doctor-disable-next-line excessive-clone
             serving_hint
-                .clone()
-                // rust-doctor-disable-next-line excessive-clone
-                .unwrap_or_else(|| provider_name.clone())
+                .as_deref()
+                .unwrap_or(&provider_name)
+                .to_string()
         } else {
-            // rust-doctor-disable-next-line excessive-clone
-            identity_model_id.clone()
+            identity_model_id
         };
         // Provider id that keys the cost estimate. Prefer the explicit routing
         // directive, then the provider's serving hint, and finally its wrapper name.
@@ -475,6 +474,7 @@ impl HarnessRunner for AgentHarnessRunner {
         // service here is how the bridge observes it without reaching in.)
         // The trait contract says implementations cache and return an `Arc`
         // for O(1) per-turn cloning, so the extra call is a clone.
+        let session_key_str = session_id.to_key_string();
         if let Some(reg) = crate::thinker::prompt_size_registry::global_prompt_size_registry() {
             let tool_sizes = tools
                 .metadata_schema()
@@ -487,7 +487,7 @@ impl HarnessRunner for AgentHarnessRunner {
                     )
                 })
                 .collect();
-            reg.record_turn(&session_id.to_key_string(), prompt_layout, tool_sizes);
+            reg.record_turn(&session_key_str, prompt_layout, tool_sizes);
         }
         // Wire the platform-specific power capability so the harness can
         // inhibit idle sleep for the duration of each Think→Act turn.
@@ -520,7 +520,7 @@ impl HarnessRunner for AgentHarnessRunner {
                 // Count reasoning as this run's provider will send it.
                 budget_inner.set_reasoning_replay(llm.reasoning_replay(None));
                 budget_inner.set_server_clears_tool_results(llm.clears_tool_results_server_side());
-                budget_inner.publish_message_tokens_as(session_id.to_key_string());
+                budget_inner.publish_message_tokens_as(session_key_str.clone());
                 // Seed ONLY the tokenizer-calibration factor from the previous
                 // run on the same model (see CALIBRATION_CARRYOVER below): the
                 // fresh per-run budget keeps breaker / split counters
@@ -553,7 +553,7 @@ impl HarnessRunner for AgentHarnessRunner {
                 // the provider prompt cache with freshly-worded summary text.
                 // Hash-validated on read, so a history rewritten between runs
                 // (post-turn compression, splits) simply misses.
-                .with_cache_carryover(session_id.to_key_string())
+                .with_cache_carryover(session_key_str.clone())
                 // This run's stop signal. The harness races every LLM call it
                 // makes itself against this token; the compaction step was the
                 // one that was not, so stopping mid-compaction waited out the
@@ -572,7 +572,7 @@ impl HarnessRunner for AgentHarnessRunner {
                 .with_monitor_scope(
                     crate::thinker::prompt_builder::cache_monitor::cache_scope(
                         &spec.agent,
-                        Some(&session_id.to_key_string()),
+                        Some(&session_key_str),
                     ),
                 );
                 // Wire the zero-API-cost session-summary reuse path: the
@@ -686,7 +686,7 @@ impl HarnessRunner for AgentHarnessRunner {
             .map(|store| {
                 crate::tools::result_store::ToolResultStore::for_session(
                     &store,
-                    session_id.to_key_string(),
+                    session_key_str.clone(),
                 )
             });
         // Layer 3 turn budget + Layer 2 shared store. Prefer the
@@ -785,7 +785,7 @@ impl HarnessRunner for AgentHarnessRunner {
                     std::sync::Arc::new(crate::memory::tool_signal_sink::RawMemoryToolSink::new(
                         store,
                         sink_agent_id,
-                        session_id.to_key_string(),
+                        session_key_str.clone(),
                     ))
                         as std::sync::Arc<dyn crate::memory::tool_signal_sink::ToolSignalSink>
                 }
@@ -961,7 +961,7 @@ impl HarnessRunner for AgentHarnessRunner {
             }
         };
 
-        let mut final_text = String::new();
+        let mut last_assistant_content: Option<&crate::session::MessageContent> = None;
         let mut iterations: u32 = 0;
         let mut tool_calls_made: u32 = 0;
         // Scope the per-run counters to THIS run: only count events emitted
@@ -1003,27 +1003,7 @@ impl HarnessRunner for AgentHarnessRunner {
         for r in run_records {
             match &r.event {
                 SessionEvent::AssistantMessage { content, .. } => {
-                    // P5: dropped the 8-layer JSON field extraction
-                    // (action.summary / action.content / action.text / summary
-                    // / content / message / text / reasoning) that previously
-                    // tried to recover a "real" message from the legacy
-                    // {reasoning, action} envelope. `ResponseFormatLayer` was
-                    // unregistered from the prompt pipeline on 2026-05-10
-                    // (see memory: project_response_format_layer_cleanup),
-                    // so the model no longer emits that envelope and the
-                    // fallback only served to silently rewrite valid JSON
-                    // payloads. Native tool_use is the canonical egress now.
-                    //
-                    // Thinking-only completions (extended-thinking providers
-                    // that may put output in the `thinking` field on a
-                    // text-empty assistant turn) keep the explicit fallback.
-                    final_text = if content.text.is_empty() {
-                        // rust-doctor-disable-next-line excessive-clone
-                        content.thinking.clone().unwrap_or_default()
-                    } else {
-                        // rust-doctor-disable-next-line excessive-clone
-                        content.text.clone()
-                    };
+                    last_assistant_content = Some(content);
                     iterations = iterations.saturating_add(1);
                 }
                 SessionEvent::ToolCallRequested { .. } => {
@@ -1032,6 +1012,29 @@ impl HarnessRunner for AgentHarnessRunner {
                 _ => {}
             }
         }
+
+        // P5: dropped the 8-layer JSON field extraction
+        // (action.summary / action.content / action.text / summary
+        // / content / message / text / reasoning) that previously
+        // tried to recover a "real" message from the legacy
+        // {reasoning, action} envelope. `ResponseFormatLayer` was
+        // unregistered from the prompt pipeline on 2026-05-10
+        // (see memory: project_response_format_layer_cleanup),
+        // so the model no longer emits that envelope and the
+        // fallback only served to silently rewrite valid JSON
+        // payloads. Native tool_use is the canonical egress now.
+        //
+        // Thinking-only completions (extended-thinking providers
+        // that may put output in the `thinking` field on a
+        // text-empty assistant turn) keep the explicit fallback.
+        // Cloned once for the terminal assistant turn rather than on every iteration.
+        let final_text = match last_assistant_content {
+            Some(content) if content.text.is_empty() => {
+                content.thinking.clone().unwrap_or_default()
+            }
+            Some(content) => content.text.clone(),
+            None => String::new(),
+        };
 
         // Durable receipt for a run whose input a guardrail refused. Placed
         // here rather than beside `RunFinished` above because the discriminator
@@ -1141,10 +1144,8 @@ impl HarnessRunner for AgentHarnessRunner {
             context_window,
             // Same pair the cost estimate above is keyed on — resolved once
             // pre-loop, never the FailoverProvider wrapper name.
-            // rust-doctor-disable-next-line excessive-clone
-            serving_model: Some(gauge_model.clone()),
-            // rust-doctor-disable-next-line excessive-clone
-            serving_provider: Some(cost_provider.clone()),
+            serving_model: Some(gauge_model),
+            serving_provider: Some(cost_provider),
             // Owner runs never offer `request_private_lookup`.
             private_lookup: None,
         };
