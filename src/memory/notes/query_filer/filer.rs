@@ -5,7 +5,6 @@
 use crate::sync_primitives::Arc;
 use async_trait::async_trait;
 use serde::Deserialize;
-use sha2::{Digest, Sha256};
 use std::path::PathBuf;
 
 use crate::builtin_tools::note_manage::scan_note_for_exfiltration;

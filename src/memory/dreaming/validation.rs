@@ -18,7 +18,7 @@
 //! cycle *per corpus*, and a semantic-coherence verdict overlaps what the
 //! `note_drift` stage already produces — R7), not a wiring gap to close.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
 

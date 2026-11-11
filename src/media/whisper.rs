@@ -179,7 +179,8 @@ impl TranscriptionService for WhisperTranscription {
             .local_path
             .file_name()
             .and_then(|n| n.to_str())
-            .unwrap_or("audio.bin");
+            .map(str::to_string)
+            .unwrap_or_else(|| "audio.bin".to_string());
 
         let file_part = multipart::Part::bytes(file_bytes)
             .file_name(file_name)

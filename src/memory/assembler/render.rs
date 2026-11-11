@@ -1,6 +1,6 @@
 //! Pure envelope renderer. No I/O, deterministic.
 
-use super::envelope::{EnvelopeItem, EnvelopeSlot, ItemSource, MemoryEnvelope, SlotKind};
+use super::envelope::{EnvelopeItem, ItemSource, MemoryEnvelope, SlotKind};
 use crate::memory::context::CognitiveLayer;
 use crate::thinker::xml_util::escape_xml_attr;
 use schemars::JsonSchema;
