@@ -55,3 +55,21 @@ The fresh declared runner detection reports `cargo check --all-targets`, `cargo 
 - Portable follow-up design, implementation plan and restart prompt are authored after this checkpoint merge. Their status is planning only; this session must not implement the proposed readiness fix.
 
 完整本地收据仍在 ignored / 外部证据目录中；后续交接文档必须携带足够事实，不能依赖新 clone 自动拥有本机证据。
+
+## Completed local integration / 实际本地合并
+
+The actual checkpoint commit is `fa996e6407c1ba7adbdf871b9b4185a0257dafd8`, `feat(capability): checkpoint Phase 7 I3 production integration` (101 files). Local `main` fast-forwarded to it; merging the spike task branch reported already up to date. Both task tips are ancestors. No branch, worktree or stash was deleted and no push occurred.
+
+Immediately before that product checkpoint commit, the required `/verify` runner exited 3 with `CHECKS_CONSENT_REQUIRED`: the detected commands were untrusted and **nothing was run**. No trust/configuration/policy was changed; the user-requested known-non-green checkpoint commit and local merge succeeded. This is not a fresh passing build/test/lint or completion of the standard all-green finishing workflow.
+
+源码检查点已按要求先合入本地 main，再做只读调查；没有为了通过提交而绕过 hook、伪造 Git 或修改授权。已有 branch-switch/post-commit hooks 曾自动启动 graph rebuild，完成状态不作为源码或验收证据。
+
+## Restart handoff / 重启交接入口
+
+1. Design / 修复方案: `docs/superpowers/specs/2026-11-12-session-ui-readiness-design.md`.
+2. Concrete task plan and canonical later roadmap / 逐任务计划与后续路线: `docs/superpowers/plans/2026-11-12-session-ui-readiness-and-phase7-continuation.md`.
+3. Copyable request / 新会话复制正文: `docs/superpowers/prompts/2026-11-12-phase7-main-restart.md`.
+
+The design proposes A, with **one unapproved product semantic choice**: legitimate metadata can commit for a no-run inline success and before a later queue/spend/run denial. A covers every addressed-key success from the two real handlers, not only their pre-spawn branches. The new session must confirm this choice and the plan before code. A document check is not human approval. No readiness implementation, new fixture compilation, model/service run, full-suite rerun or NSH dependency migration occurred while authoring these documents.
+
+Capability Phase7 remaining acceptance, the actually named Phase8 Integration & Security planning gate, and the distinct NSH Phase0–6 roadmap are explicitly separated in the plan. NSH 0.5.0 is the preferred new compatibility target; current Core-only E2 evidence does not prove native NSH compatibility. GPUI remains deferred. Do not invent Phase8/9 implementation details or remove Tauri before the master roadmap's gates.
