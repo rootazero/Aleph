@@ -131,11 +131,8 @@ fn resolve_refs_recursive(node: &mut Value, defs: &Value, depth: usize) {
             }
 
             // Recurse into all values (structural nesting keeps the same depth)
-            let keys: Vec<String> = map.keys().cloned().collect();
-            for key in keys {
-                if let Some(child) = map.get_mut(&key) {
-                    resolve_refs_recursive(child, defs, depth);
-                }
+            for child in map.values_mut() {
+                resolve_refs_recursive(child, defs, depth);
             }
         }
         Value::Array(arr) => {
@@ -186,7 +183,7 @@ fn clean_recursive(node: &mut Value) {
 
     // Gemini wants a scalar `type`. Normalize a JSON-Schema type array
     // (e.g. ["string","null"]) to a scalar type plus `nullable`.
-    if let Some(Value::Array(types)) = obj.get("type").cloned() {
+    if let Some(types) = obj.get("type").and_then(|v| v.as_array()) {
         let has_null = types.iter().any(|t| t.as_str() == Some("null"));
         let first_non_null = types
             .iter()
@@ -268,21 +265,13 @@ fn reconcile_required(obj: &mut serde_json::Map<String, Value>) {
         .map(|m| m.keys().map(String::as_str).collect())
         .unwrap_or_default();
 
-    let kept: Option<Vec<Value>> = obj.get("required").and_then(|r| r.as_array()).map(|arr| {
-        arr.iter()
-            .filter(|item| item.as_str().is_some_and(|name| prop_names.contains(name)))
-            .cloned()
-            .collect()
-    });
-
-    match kept {
-        Some(kept) if !kept.is_empty() => {
-            obj.insert("required".into(), Value::Array(kept));
-        }
-        // Empty after pruning, or `required` wasn't an array → remove it.
-        _ => {
+    if let Some(Value::Array(arr)) = obj.get_mut("required") {
+        arr.retain(|item| item.as_str().is_some_and(|name| prop_names.contains(name)));
+        if arr.is_empty() {
             obj.remove("required");
         }
+    } else {
+        obj.remove("required");
     }
 }
 
