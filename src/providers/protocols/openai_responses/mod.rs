@@ -180,8 +180,9 @@ impl OpenAiResponsesProtocol {
         let stop = config.stop_sequences.as_ref().and_then(|raw| {
             let v: Vec<String> = raw
                 .split(',')
-                .map(|s| s.trim().to_string())
+                .map(str::trim)
                 .filter(|s| !s.is_empty())
+                .map(str::to_string)
                 .collect();
             if v.is_empty() {
                 None
