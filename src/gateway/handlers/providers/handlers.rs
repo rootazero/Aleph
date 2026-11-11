@@ -346,9 +346,10 @@ async fn create_provider_inner(
         Err(e) => return e,
     };
 
-    // Snapshot (name + config WITH api_key) for live registration, captured
-    // before the key is stripped for persistence. None when no registry.
-    let mut registration: Option<(String, ProviderConfig)> = None;
+    // Snapshot (name + the built provider) for live registration. The
+    // provider is built unconditionally (the build is the protocol
+    // validation); it is only handed to a registry when one is attached.
+    let mut registration: Option<(String, Arc<dyn crate::providers::AiProvider>)> = None;
 
     // Create provider
     {
@@ -376,6 +377,26 @@ async fn create_provider_inner(
             Err(e) => return JsonRpcResponse::error(request.id, INVALID_PARAMS, e),
         };
 
+        // H5-05: build the provider BEFORE the credential is stored and the
+        // config is persisted. A provider that cannot be constructed must not
+        // leave a vault key, a config entry or a broadcast claiming a provider
+        // the registry cannot serve — the caller has to learn about it now.
+        // The build is the protocol validation, so it runs even in config-only
+        // mode (no live registry attached).
+        match crate::providers::create_provider(&params.name, provider_config.clone()) {
+            Ok(provider) => {
+                registration = Some((params.name.clone(), provider));
+            }
+            Err(e) => {
+                error!(name = %params.name, error = %e, "Failed to build provider");
+                return JsonRpcResponse::error(
+                    request.id,
+                    INTERNAL_ERROR,
+                    format!("Failed to build provider: {e}"),
+                );
+            }
+        }
+
         // Store API key in vault (then clear from config so it's never persisted)
         if let Some(ref api_key) = provider_config.api_key {
             if let Err(e) = vault.store_secret(&vault_key(&params.name), api_key) {
@@ -386,11 +407,6 @@ async fn create_provider_inner(
                     format!("Failed to store API key: {e}"),
                 );
             }
-        }
-        // Capture the registration snapshot (with the key) before clearing it,
-        // so the live registry can build a working provider instance.
-        if multi_registry.is_some() {
-            registration = Some((params.name.clone(), provider_config.clone()));
         }
         provider_config.api_key = None;
 
@@ -416,20 +432,12 @@ async fn create_provider_inner(
     let mut constructed = false;
     // Hot-register into the live registry so the provider is usable and an
     // auto-derived failover fallback without a restart (mirrors set_default's
-    // runtime swap). A build failure leaves the config saved — the provider
-    // becomes live on the next restart.
-    if let (Some(registry), Some((name, pc))) = (&multi_registry, registration) {
-        match crate::providers::create_provider(&name, pc) {
-            Ok(provider) => {
-                registry.register(name.clone(), provider);
-                constructed = true;
-                info!(name = %name, "Provider registered in live registry");
-            }
-            Err(e) => error!(
-                name = %name, error = %e,
-                "Failed to build provider for live registration (config saved)"
-            ),
-        }
+    // runtime swap). The provider was already built above — a build failure
+    // aborted the request before the credential or the config was touched.
+    if let (Some(registry), Some((name, provider))) = (&multi_registry, registration) {
+        registry.register(name.clone(), provider);
+        constructed = true;
+        info!(name = %name, "Provider registered in live registry");
     }
 
     refresh_selectable_publication(
@@ -522,14 +530,18 @@ async fn delete_provider_inner(
             );
         }
 
-        // Remove provider
-        cfg.providers.remove(&params.name);
+        // H5-04: remove the provider from a candidate copy and publish it to
+        // the shared config only after the save succeeded — a failed save must
+        // not leave the in-memory config missing a provider that is still on
+        // disk and still usable.
+        let mut cfg_candidate = (*cfg).clone();
+        cfg_candidate.providers.remove(&params.name);
 
         // Scrub the deleted provider from the failover chain so deletion does
         // not leave a dangling reference behind. The `[fallback_provider]`
         // section is only persisted when the chain actually changed.
         let mut sections: Vec<&str> = vec!["providers"];
-        if let Some(fb) = cfg.fallback_provider.as_mut() {
+        if let Some(fb) = cfg_candidate.fallback_provider.as_mut() {
             if crate::gateway::handlers::remove_from_chain(&mut fb.chain, &params.name) {
                 sections.push("fallback_provider");
             }
@@ -539,7 +551,7 @@ async fn delete_provider_inner(
         // durably committed. If the config write fails the provider still
         // exists on disk with its credential intact and the caller gets an
         // error, so the state remains consistent and the operation is retryable.
-        if let Err(e) = save_config(&cfg, &sections).await {
+        if let Err(e) = save_config(&cfg_candidate, &sections).await {
             error!(error = %e, "Failed to save config");
             return JsonRpcResponse::error(
                 request.id,
@@ -547,6 +559,7 @@ async fn delete_provider_inner(
                 format!("Failed to save config: {e}"),
             );
         }
+        *cfg = cfg_candidate;
 
         // Config is durably committed; now remove the API key from the vault.
         // A failure here is logged but does not roll back — the provider is
@@ -1071,7 +1084,9 @@ async fn set_default_provider_inner(
         .unwrap_or_else(|| params.name.clone());
 
     // Set default provider and build new provider instance
-    let provider_config_for_swap: Option<(String, crate::config::ProviderConfig)>;
+    // H5-05: the provider built for the runtime swap, produced before the
+    // switch is persisted so a build failure aborts the request.
+    let mut built_provider: Option<(String, Arc<dyn crate::providers::AiProvider>)> = None;
     {
         let mut cfg = config.write().await;
 
@@ -1109,7 +1124,7 @@ async fn set_default_provider_inner(
 
         // Capture provider config before setting default (for runtime swap).
         // api_key is #[serde(skip)] so it's None on the in-memory config — inject from vault.
-        provider_config_for_swap = if multi_registry.is_some() {
+        let provider_config_for_swap = if multi_registry.is_some() {
             cfg.providers.get(&name).map(|pc| {
                 let mut pc = pc.clone();
                 if pc.api_key.as_ref().is_none_or(|k| k.is_empty()) {
@@ -1122,6 +1137,28 @@ async fn set_default_provider_inner(
         } else {
             None
         };
+
+        // H5-05: build the replacement provider BEFORE the default switch is
+        // persisted — a provider that cannot be constructed must not leave a
+        // saved "new default" that the runtime never adopts, and the caller
+        // must learn about it now.
+        if multi_registry.is_some() {
+            if let Some((provider_name, pc)) = provider_config_for_swap.as_ref() {
+                match crate::providers::create_provider(provider_name.as_str(), pc.clone()) {
+                    Ok(provider) => {
+                        built_provider = Some((provider_name.clone(), provider));
+                    }
+                    Err(e) => {
+                        error!(name = %provider_name, error = %e, "Failed to build provider for the default switch");
+                        return JsonRpcResponse::error(
+                            request.id.clone(),
+                            INTERNAL_ERROR,
+                            format!("Failed to build provider: {e}"),
+                        );
+                    }
+                }
+            }
+        }
 
         // H5-04: same candidate-then-publish discipline as create/update — the
         // default switch is only published to the shared config once the file
@@ -1150,34 +1187,25 @@ async fn set_default_provider_inner(
 
     let mut constructed = false;
     // Hot-swap the runtime provider using MultiProviderRegistry
-    if let (Some(registry), Some((name, provider_config))) =
-        (multi_registry, provider_config_for_swap)
-    {
-        match crate::providers::create_provider(&name, provider_config) {
-            Ok(new_provider) => {
-                registry.register(name.clone(), new_provider);
-                constructed = true;
-                if let Err(e) = registry.set_default(&name) {
-                    error!(name = %name, error = %e, "Failed to set default in multi-registry");
-                } else {
-                    // Clear the breaker that gates dialing, so a provider
-                    // promoted to default is actually tried. This used to reset
-                    // the registry's own health map instead — which fed only the
-                    // `ModelResolved` badge and gated nothing — so promoting a
-                    // provider whose circuit was open left it skipped for the
-                    // rest of the cooldown. Same fix, and same reason, as the
-                    // connection-test path above.
-                    if let Some(health) = crate::providers::failover::global_health() {
-                        if health.reset(&name).await {
-                            info!(name = %name, "set as default; failover circuit reset");
-                        }
-                    }
-                    info!(name = %name, providers = ?registry.list_providers(), "Provider set as default in multi-registry");
+    if let (Some(registry), Some((name, new_provider))) = (multi_registry, built_provider) {
+        registry.register(name.clone(), new_provider);
+        constructed = true;
+        if let Err(e) = registry.set_default(&name) {
+            error!(name = %name, error = %e, "Failed to set default in multi-registry");
+        } else {
+            // Clear the breaker that gates dialing, so a provider
+            // promoted to default is actually tried. This used to reset
+            // the registry's own health map instead — which fed only the
+            // `ModelResolved` badge and gated nothing — so promoting a
+            // provider whose circuit was open left it skipped for the
+            // rest of the cooldown. Same fix, and same reason, as the
+            // connection-test path above.
+            if let Some(health) = crate::providers::failover::global_health() {
+                if health.reset(&name).await {
+                    info!(name = %name, "set as default; failover circuit reset");
                 }
             }
-            Err(e) => {
-                error!(name = %name, error = %e, "Failed to create provider for hot-swap (config saved)");
-            }
+            info!(name = %name, providers = ?registry.list_providers(), "Provider set as default in multi-registry");
         }
     }
 
