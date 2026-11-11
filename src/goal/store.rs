@@ -542,7 +542,14 @@ impl GoalStore {
         let Some(current) = Self::get_locked(conn, session_id)? else {
             return Ok(ContinuationDecision::Idle);
         };
-        Self::claim_goal_locked(conn, current, tokens_total, now_ms, gate_configured, workspace)
+        Self::claim_goal_locked(
+            conn,
+            current,
+            tokens_total,
+            now_ms,
+            gate_configured,
+            workspace,
+        )
     }
 
     fn claim_goal_locked(
@@ -1250,15 +1257,34 @@ impl GoalStore {
     }
 
     /// Clear an unsatisfied wait barrier (both kinds) on a still-Active goal,
-    /// in one guard. Used by the goal-wake service when the awaited task
-    /// settles (or the boot recheck finds it already settled / vanished —
-    /// fail-open) before it claims the wake continuation. `false` = nothing
-    /// to clear (goal gone, terminal, or barrier already dropped) — the wake
-    /// is then a no-op, never a resurrection.
-    pub fn clear_wait_barrier(&self, session_id: &str, now_ms: u64) -> Result<bool> {
+    /// in one guard — but ONLY when the live goal still carries the SAME
+    /// barrier the caller observed. A goal that moved on to a different wait
+    /// keeps its barrier: the wake that read the old snapshot must not
+    /// release the new one (that is how a parked pursuit could resume before
+    /// the task it now waits for has settled).
+    ///
+    /// `expected_task` / `expected_until_ms` are the barrier the caller saw.
+    /// The two barrier kinds are mutually exclusive, so exactly one of them
+    /// is `Some` on both sides.
+    ///
+    /// `false` = nothing to clear (goal gone, terminal, barrier already
+    /// dropped, or the barrier no longer matches) — the wake is then a
+    /// no-op, never a resurrection.
+    pub fn clear_wait_barrier(
+        &self,
+        session_id: &str,
+        expected_task: Option<&str>,
+        expected_until_ms: Option<u64>,
+        now_ms: u64,
+    ) -> Result<bool> {
         let conn = self.lock();
         match Self::get_locked(&conn, session_id)? {
             Some(g) if g.is_active() && g.has_wait_barrier() => {
+                if g.waiting_on_task.as_deref() != expected_task
+                    || g.waiting_until_ms != expected_until_ms
+                {
+                    return Ok(false);
+                }
                 Self::put_locked(&conn, &g.without_wait(now_ms))?;
                 Ok(true)
             }
@@ -1662,7 +1688,7 @@ mod tests {
         // User un-parks: clears the barrier (tool) then supersedes the armed
         // marker. Without the supersede the next claim would gate on the future
         // pending marker and stay Idle until the ORIGINAL wake.
-        assert!(store.clear_wait_barrier("sess-unpark", 2_000).unwrap());
+        assert!(store.clear_wait_barrier("sess-unpark", None, Some(61_000), 2_000).unwrap());
         assert!(store.supersede_wait_timer("sess-unpark", 61_000).unwrap());
         assert_eq!(
             store
@@ -1833,7 +1859,7 @@ mod tests {
         assert_eq!(live.continuations_used, 0, "parking spends nothing");
 
         // The wake service clears the barrier, then the claim proceeds.
-        assert!(store.clear_wait_barrier("sess-task", 2_000).unwrap());
+        assert!(store.clear_wait_barrier("sess-task", Some("task-42"), None, 2_000).unwrap());
         assert!(matches!(
             store
                 .try_claim_continuation("sess-task", None, 2_000, false, None)
@@ -1841,7 +1867,7 @@ mod tests {
             ContinuationDecision::Fire { .. }
         ));
         // Second clear is a no-op (CAS honesty).
-        assert!(!store.clear_wait_barrier("sess-task", 3_000).unwrap());
+        assert!(!store.clear_wait_barrier("sess-task", Some("task-42"), None, 3_000).unwrap());
     }
 
     #[test]
@@ -1909,11 +1935,39 @@ mod tests {
             .with_wait_on_task("t".into(), None, 1)
             .with_status(GoalStatus::Complete, 2);
         store.put(&g).unwrap();
-        assert!(!store.clear_wait_barrier("sess-done", 3).unwrap());
+        assert!(!store
+            .clear_wait_barrier("sess-done", Some("t"), None, 3)
+            .unwrap());
         assert_eq!(
             store.get("sess-done").unwrap().unwrap().status,
             GoalStatus::Complete
         );
+    }
+
+    #[test]
+    fn a_goal_that_moved_on_keeps_its_new_wait_barrier() {
+        let (store, _d) = temp_store();
+        // The goal waits on task A, then is re-pointed at task B.
+        store
+            .put(&Goal::new("sess-1", "obj", 0, 0).with_wait_on_task("a".into(), None, 1))
+            .unwrap();
+        store
+            .put(&Goal::new("sess-1", "obj", 0, 0).with_wait_on_task("b".into(), None, 1))
+            .unwrap();
+
+        // The stale wake (which observed task A) must not release task B.
+        assert!(!store
+            .clear_wait_barrier("sess-1", Some("a"), None, 2)
+            .unwrap());
+        let live = store.get("sess-1").unwrap().unwrap();
+        assert!(live.has_wait_barrier(), "B's barrier must survive A's wake");
+        assert_eq!(live.waiting_on_task.as_deref(), Some("b"));
+
+        // The current wake (which observed task B) clears it.
+        assert!(store
+            .clear_wait_barrier("sess-1", Some("b"), None, 3)
+            .unwrap());
+        assert!(!store.get("sess-1").unwrap().unwrap().has_wait_barrier());
     }
 
     #[test]
