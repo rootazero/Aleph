@@ -304,9 +304,12 @@ impl Channel for CliChannel {
 
             // In test mode, skip stdout I/O
             if !test_mode {
-                let message_text = message.text.clone();
-                let prompt = config.prompt.clone();
                 tokio::task::spawn_blocking(move || {
+                    // The text is moved into the blocking thread, not copied:
+                    // the message text can be large, and cloning it on the
+                    // async worker would block the runtime.
+                    let message_text = message.text;
+                    let prompt = config.prompt.clone();
                     let mut stdout = io::stdout().lock();
                     writeln!(stdout, "\n{}", message_text).map_err(|e| {
                         ChannelError::SendFailed(format!("Failed to write to stdout: {e}"))
