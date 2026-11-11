@@ -469,6 +469,20 @@ cargo check -p alephcore --all-targets -j1
 
 **新增测试只是被编译，从未被运行**（见 §7）。
 
+### 5.1b 收口轮（2026-11-11）的统一验证
+
+P0 + P1 收口轮在同一台机器上跑**同一条**命令（`/tmp/cc_p0b.sh`，同样的内存控制与 flock 串行化）：
+
+| 项 | 结果 |
+|---|---|
+| lib | ✅ 通过 |
+| lib test / 其它 target | ✅ 通过 |
+| 退出码 | `CARGO_EXIT=0`（日志 `/tmp/cc_p0b.log`） |
+
+中途撞到过一次 `CARGO_EXIT=101`（9 个错误）：其中 8 个来自**另一个会话**在 12:24 合进 `main` 的 orchestrator/pii/projects 轮次（他们的 `concat!` 常量拼接在 Rust 里不合法，且没有留下任何 cargo check 记录），该会话随后用自己的提交 `82f7213cc` 等修好了；剩下 1 个 `src/gateway/session_manager/ops/modify.rs:467` 属于本轮范围 —— 那是 delegated agent 在被限流打死前写下的 GX3-01 迁移，日志读到的是它写了一半时的旧版本，重跑后不再出现。
+
+**新增测试同样只是被编译，从未被运行**（见 §7）。
+
 ### 5.2 rustfmt 闸门
 
 `rustfmt --edition 2021 --check --config skip_children=true`（`skip_children` 避免格式化污染模块树）
@@ -529,7 +543,7 @@ B 轨的脚本让模型重写一个 ±30 行区域再按区域回填。**它不�
 | 10 | **未做运行时/真机验证** | 通道适配器（telegram / discord / feishu / whatsapp / imessage / matrix / line / xmpp / slack / qq / wechat / nostr / sms / irc / signal / email / mattermost / webhook）的修复**没有真实流量验证**，只做了静态复核 |
 | 11 | **没有做并发压力验证** | 锁、竞态、取消语义类发现只靠阅读与代码复核判定，没有 loom / tsan / 压测 |
 | 12 | **没有重审本轮三个模块以外的代码** | 本轮范围就是 `src/extension` / `src/fetch` / `src/gateway`（822 文件 / 413.5K LOC） |
-| 13 | **最终复核打回的条目没有全部修完** | 跨族复核一共给出 **54 条** PARTIAL / NOT_FIXED / REGRESSION；按合并后 `main` 的实际代码逐条重新核对后，仍成立 **38 条**，已整理成 [`ISSUES.md`](ISSUES.md)（现象 → 位置 → 当前状态 → 为什么没修 → 建议改法 → 验收标准）。其中需要新机制（任务句柄注册表 / 槽位预留 / 存储层可见性下推 / 取消安全结算）的条目留给下一轮。**本轮引入并已修复的回归**：`src/gateway/channel_registry.rs` 的 `start_channel` 丢掉了 `finish_legacy_operation` 调用 → 通道启动后永久 Busy（G1-03），已按基线语义补回 |
+| 13 | **最终复核打回的条目没有全部修完** | 跨族复核一共给出 **54 条** PARTIAL / NOT_FIXED / REGRESSION；按合并后 `main` 的实际代码逐条重新核对后仍成立 **38 条**（收口轮后 **16 条**）（[`ISSUES.md`](ISSUES.md)：现象 → 位置 → 当前状态 → 为什么没修 → 建议改法 → 验收标准）。**2026-11-11 收口轮**：9 条 P0 全部修完（IF6-03 凭据配置的 redact Debug、IF6-05 工厂按实例 id 注册、IF6-02 IMAP 取信失败不再吞掉、EE1-01 时间线遮蔽工具调用 id、H1-01 hooks 删除加锁、E5-03 UrlPath 注入只替换整段、H6-02 凭据清理失败要报告、H5-01 checkpoint 分支原子 create-if-absent、IF4-06 imessage 游标保留边界毫秒），P1 里再修 9 条（IF1-03 / IF1-06 / IF1-08 / IF4-29 / IF5-05 / IF6-10 / IF6-11 / H5-04 / H5-05 / E5-01）；清单现在是 **16 条**，逐条状态见 [`ISSUES.md`](ISSUES.md)。**2026-11-11 收口轮第二批**：P1 再修 11 条（IF1-03 poll/reaction id 带发送者、IF1-06 不再把生效策略钳到账户默认、IF1-08 长答案切块、IF4-29 MUC 回声按加入昵称过滤、IF5-05 中继断开时结算待发请求、IF6-10 signal/mattermost 附件能力位对齐事实、IF6-11 CLI 文本移进 blocking 闭包、H5-04 删除通道先存后发、H5-05 创建通道先构造后落库、E5-01 工作区读取单一实现、GX3-01 会话写入移出 async worker），IF1-02 复核后确认前提有误、代码本已正确（不改代码），IF5-12 随 IF6-05 同文件一并修完。其中需要新机制（任务句柄注册表 / 槽位预留 / 存储层可见性下推 / 取消安全结算）的条目留给下一轮。**本轮引入并已修复的回归**：`src/gateway/channel_registry.rs` 的 `start_channel` 丢掉了 `finish_legacy_operation` 调用 → 通道启动后永久 Busy（G1-03），已按基线语义补回 |
 | 14 | **Telegram 审批能力的授权仍用第一个账号的 allowlist** | IF1-01 修到"用哪个 bot 回审批"✓；但 `authorize_actor` 只拿到 actor、拿不到会话上下文，无法定位账号 → 多账号部署下审批授权仍是第一个账号的口径 |
 | 15 | **Telegram 超长答案补发时预览消息保留** | IF1-08 的补发是"追加新消息"，已存在的 preview 仍在 → 用户会看到 preview + 完整答案的重复内容；改成"删掉 preview 再发"需要新的删除语义，未做 |
 | 16 | **没有把区域拼接工具的产物逐行与基线对齐** | 区域损坏是**按基线语义手修**的（对照基线提交 `79dacfa33`），不是逐行机器比对；少数"模型顺手改了但 finding 没要求"的改动可能仍然留在 diff 里 |
