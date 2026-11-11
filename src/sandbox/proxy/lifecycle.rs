@@ -24,7 +24,7 @@ use super::{connect, socks5};
 /// Handle to a running proxy. Dropping shuts it down.
 pub struct ProxyHandle {
     addr: SocketAddr,
-    shutdown_tx: Arc<watch::Sender<bool>>,
+    shutdown_tx: watch::Sender<bool>,
 }
 
 impl ProxyHandle {
@@ -86,7 +86,7 @@ pub async fn spawn(allowlist: AllowList) -> Result<ProxyHandle, ProxyStartError>
 
     Ok(ProxyHandle {
         addr,
-        shutdown_tx: Arc::new(shutdown_tx),
+        shutdown_tx,
     })
 }
 
