@@ -490,14 +490,25 @@ impl BlueBubblesApi {
 
     /// Fetch messages created after `after_ms` (epoch milliseconds).
     /// Returns the `data` array; empty on any failure.
+    ///
+    /// The `after` filter of the BlueBubbles message query is EXCLUSIVE
+    /// (`dateCreated > after`), so a cursor that sits exactly on the newest
+    /// message's millisecond skips every OTHER message that shares that
+    /// millisecond — two chats in the same second, or a burst from one
+    /// sender, lose rows silently. The cursor therefore backs off one
+    /// millisecond before the next query and the guid set drops the rows
+    /// that come back twice.
     pub async fn query_messages_after(&self, after_ms: i64) -> Vec<serde_json::Value> {
         let mut all_messages = Vec::new();
-        let mut current_after = after_ms;
+        let mut cursor = after_ms;
         let mut seen_guids = std::collections::HashSet::new();
+        // The newest millisecond seen so far. A batch that does not move it
+        // forward repeated the boundary and nothing else.
+        let mut boundary = after_ms;
 
         loop {
             let body = serde_json::json!({
-                "after": current_after,
+                "after": cursor,
                 "limit": 100,
                 "sort": "ASC",
                 "with": ["handle", "attachment", "chats"]
@@ -520,10 +531,10 @@ impl BlueBubblesApi {
                 break;
             }
 
-            let mut max_timestamp = current_after;
-            let mut has_messages_at_max = false;
+            let mut max_timestamp = cursor;
+            let batch_len = batch.len();
 
-            for msg in batch {
+            for msg in &batch {
                 if let Some(guid) = msg.get("guid").and_then(|g| g.as_str()) {
                     if seen_guids.insert(guid.to_string()) {
                         all_messages.push(msg.clone());
@@ -532,18 +543,24 @@ impl BlueBubblesApi {
                 if let Some(date_created) = msg.get("dateCreated").and_then(|d| d.as_i64()) {
                     if date_created > max_timestamp {
                         max_timestamp = date_created;
-                        has_messages_at_max = true;
-                    } else if date_created == max_timestamp {
-                        has_messages_at_max = true;
                     }
                 }
             }
 
-            if !has_messages_at_max || max_timestamp == current_after {
+            // No forward progress: the batch only repeated what the previous
+            // query already covered. Stopping here is what keeps the loop
+            // from re-querying the same window forever.
+            if max_timestamp <= boundary {
                 break;
             }
-
-            current_after = max_timestamp;
+            boundary = max_timestamp;
+            // One millisecond back, so the boundary millisecond itself is
+            // inside the next window (the filter is exclusive).
+            cursor = max_timestamp.saturating_sub(1);
+            // A short batch is the last page.
+            if batch_len < 100 {
+                break;
+            }
         }
 
         all_messages
@@ -645,6 +662,48 @@ fn redact_password(s: String) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The cursor must not skip the millisecond it sits on: the BlueBubbles
+    /// `after` filter is exclusive, so a cursor on the newest message's
+    /// timestamp would leave every other message of that millisecond
+    /// unfetched. The query therefore starts one millisecond earlier.
+    #[tokio::test]
+    async fn the_query_cursor_includes_the_boundary_millisecond() {
+        let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::<serde_json::Value>::new()));
+        let recorder = seen.clone();
+        let app = axum::Router::new().route(
+            "/api/v1/message/query",
+            axum::routing::post(move |body: String| {
+                let recorder = recorder.clone();
+                async move {
+                    recorder
+                        .lock()
+                        .unwrap()
+                        .push(serde_json::from_str::<serde_json::Value>(&body).unwrap());
+                    axum::Json(serde_json::json!({
+                        "data": [
+                            { "guid": "g1", "dateCreated": 1000 },
+                            { "guid": "g2", "dateCreated": 1000 }
+                        ]
+                    }))
+                }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+
+        let api = BlueBubblesApi::new(format!("http://{addr}"), "pw".to_string());
+        let msgs = api.query_messages_after(1000).await;
+
+        // Both messages of the boundary millisecond are returned.
+        assert_eq!(msgs.len(), 2);
+        let requests = seen.lock().unwrap();
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0]["after"], 999);
+
+        server.abort();
+    }
 
     #[tokio::test]
     async fn chunked_attachment_limit_checks_actual_bytes() {
