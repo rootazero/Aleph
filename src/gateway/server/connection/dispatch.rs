@@ -258,17 +258,25 @@ pub async fn dispatch_for_connection(
     // connection that was demoted (or re-logged-in) while the request waited
     // behind a queue and a lane permit must be refused here, so the admin
     // gate in `process_request` sees the demotion too.
-    let live = CallerSnapshot::read(connections, conn_id, client_is_local).await;
-    let denial = crate::gateway::caller_identity::with_caller_identity(
-        live.role.clone(),
-        live.user.clone(),
-        client_is_local,
-        Some(conn_id.to_string()),
-        async { authorization_error(method, req_id.clone()) },
-    )
-    .await;
-    if let Some(denial) = denial {
-        return denial;
+    //
+    // Browser viewer methods keep their own contract: a denial there must not
+    // echo the reason (no credential, user or wall message), so they fall
+    // through to `revalidate_for_dispatch` and answer with the generic
+    // `denied`. The gate below still applies -- it only decides WHICH refusal
+    // the caller sees, never whether the call is admitted.
+    if !is_browser_viewer_method(method) {
+        let live = CallerSnapshot::read(connections, conn_id, client_is_local).await;
+        let denial = crate::gateway::caller_identity::with_caller_identity(
+            live.role.clone(),
+            live.user.clone(),
+            client_is_local,
+            Some(conn_id.to_string()),
+            async { authorization_error(method, req_id.clone()) },
+        )
+        .await;
+        if let Some(denial) = denial {
+            return denial;
+        }
     }
     match revalidate_for_dispatch(connections, conn_id, client_is_local, method, start).await {
         Some(snap) => {
