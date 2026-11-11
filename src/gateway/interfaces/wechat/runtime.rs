@@ -62,7 +62,15 @@ impl WeChatRuntime {
             *running = true;
         }
 
-        let sync_buf = load_sync_buf(&self.config.data_dir, &self.config.account_id).await;
+        let sync_buf = match load_sync_buf(&self.config.data_dir, &self.config.account_id).await {
+            Ok(buf) => buf,
+            Err(e) => {
+                tracing::error!(
+                    "Failed to load the WeChat sync cursor; the sync restarts from scratch: {e}"
+                );
+                String::new()
+            }
+        };
         self.token_store.restore(&self.config.account_id).await;
         {
             let mut buf = self.sync_buf.write().await;
@@ -98,8 +106,18 @@ impl WeChatRuntime {
                             let mut buf = self.sync_buf.write().await;
                             *buf = new_buf.clone();
                             drop(buf);
-                            save_sync_buf(&self.config.data_dir, &self.config.account_id, &new_buf)
-                                .await;
+                            if let Err(e) = save_sync_buf(
+                                &self.config.data_dir,
+                                &self.config.account_id,
+                                &new_buf,
+                            )
+                            .await
+                            {
+                                tracing::error!(
+                                    "Failed to persist the WeChat sync cursor for {}: {e}",
+                                    self.config.account_id
+                                );
+                            }
                         }
                     }
 
