@@ -357,12 +357,20 @@ impl EmailMessageOps {
 
                 use futures::StreamExt;
                 let mut published_uids: Vec<String> = Vec::new();
+                let mut fetch_error: Option<String> = None;
                 while let Some(result) = messages_stream.next().await {
                     let fetch = match result {
                         Ok(fetch) => fetch,
                         Err(e) => {
+                            // A FETCH error means the message could not be read
+                            // at all. It stays UNSEEN, so the next poll retries
+                            // it — but this batch is incomplete, and the caller
+                            // has to learn that: counting a partial batch as a
+                            // complete one is how a dropped message becomes a
+                            // silent one.
                             tracing::warn!("Email: IMAP fetch error: {e}");
-                            continue;
+                            fetch_error = Some(e.to_string());
+                            break;
                         }
                     };
                     let body = match fetch.body() {
@@ -444,6 +452,12 @@ impl EmailMessageOps {
                         // Consume the stream to apply the flag changes
                         while store_stream.next().await.is_some() {}
                     }
+                }
+
+                if let Some(err) = fetch_error {
+                    return Err(ChannelError::Internal(format!(
+                        "IMAP FETCH failed after {total_processed} published messages: {err}"
+                    )));
                 }
             }
         }
