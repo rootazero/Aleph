@@ -126,22 +126,7 @@ impl SessionSummarySource {
     }
 }
 
-// === Private helpers ===
-
-/// Extract the numeric depth from a path segment beginning with `'d'`.
-///
-/// For example:
-/// - `"aleph://session/abc/d2/1"` → `2`
-/// - `"aleph://session/abc/d0/3"` → `0`
-/// - `"invalid/path"` → `0`
-fn extract_depth(path: &str) -> u32 {
-    path.split('/')
-        .find_map(|seg| {
-            seg.strip_prefix('d')
-                .and_then(|rest| rest.parse::<u32>().ok())
-        })
-        .unwrap_or(0)
-}
+use super::extract_depth;
 
 /// Estimate token count using content-aware ratio detection.
 ///

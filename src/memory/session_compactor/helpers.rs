@@ -151,9 +151,6 @@ impl SessionCompactor {
             .with_session(session_id)
             .with_path(path);
         if let Some(ref registry) = self.capture_registry {
-            let store: Arc<dyn crate::memory::store::raw_memory::RawMemoryStore> =
-                // rust-doctor-disable-next-line excessive-clone
-                self.database.clone();
             let ctx = CaptureCtx {
                 agent_id: agent_id.to_string(),
                 namespace: crate::memory::namespace::NamespaceScope::Owner,
@@ -161,7 +158,7 @@ impl SessionCompactor {
                 source_hint: "session_compressed".into(),
             };
             if let Err(e) = insert_with_runtime_capture_filter(
-                &store,
+                &self.database,
                 registry,
                 self.memory_runtime.as_ref(),
                 &ctx,
@@ -247,16 +244,11 @@ impl SessionCompactor {
             agent_id,
         );
 
-        // rust-doctor-disable-next-line excessive-clone
-        let raw = RawMemory::new(fact.content.clone(), RawMemorySource::SessionCompressed)
+        let raw = RawMemory::new(fact.content, RawMemorySource::SessionCompressed)
             .with_agent(agent_id)
             .with_session(session_id)
-            // rust-doctor-disable-next-line excessive-clone
-            .with_path(fact.path.clone());
+            .with_path(fact.path);
         if let Some(ref registry) = self.capture_registry {
-            let store: Arc<dyn crate::memory::store::raw_memory::RawMemoryStore> =
-                // rust-doctor-disable-next-line excessive-clone
-                self.database.clone();
             let ctx = CaptureCtx {
                 agent_id: agent_id.to_string(),
                 namespace: crate::memory::namespace::NamespaceScope::Owner,
@@ -264,7 +256,7 @@ impl SessionCompactor {
                 source_hint: "session_compressed".into(),
             };
             insert_with_runtime_capture_filter(
-                &store,
+                &self.database,
                 registry,
                 self.memory_runtime.as_ref(),
                 &ctx,

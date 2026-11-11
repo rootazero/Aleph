@@ -62,7 +62,7 @@ impl SessionEndSummarizer {
             .max_by_key(|r| extract_depth_from_path(r.path.as_deref().unwrap_or("")));
 
         Ok(best.map(|src| {
-            RawMemory::new(src.content.clone(), RawMemorySource::SessionCompressed)
+            RawMemory::new(src.content, RawMemorySource::SessionCompressed)
                 .with_agent(agent_id)
                 .with_session(session_id)
                 .with_path(format!("aleph://session/{session_id}/end-summary"))
@@ -70,21 +70,7 @@ impl SessionEndSummarizer {
     }
 }
 
-/// Parse depth from a `aleph://session/{sid}/d{depth}/{seq}` path.
-/// Returns 0 for paths that don't match.
-///
-/// Note: `session_compactor::summary_source::extract_depth` exists but is
-/// private (`fn`, not `pub fn`), so we inline an equivalent helper here.
-fn extract_depth_from_path(path: &str) -> u32 {
-    // Split on "/d" — the last occurrence is the depth segment.
-    // Path shape: aleph://session/<sid>/d<depth>/<seq>
-    // Use the LAST "/d" so a session id containing "/d" can never shadow the
-    // real depth segment. "/d" is ASCII, so `idx + 2` is a char boundary.
-    path.rfind("/d")
-        .and_then(|idx| path[idx + 2..].split_once('/'))
-        .and_then(|(d, _)| d.parse::<u32>().ok())
-        .unwrap_or(0)
-}
+use crate::memory::session_compactor::extract_depth as extract_depth_from_path;
 
 // ---------------------------------------------------------------------------
 // Tests

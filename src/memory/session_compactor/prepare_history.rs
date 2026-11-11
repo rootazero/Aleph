@@ -70,10 +70,9 @@ impl SessionCompactor {
                     session = %session_id,
                     "Failed to fetch session summaries, falling back to raw history"
                 );
-                let raw = agent.get_history(session_key, None).await;
-                return raw
-                    .into_iter()
-                    .map(|m| session_message_to_unified(&m))
+                return raw_messages
+                    .iter()
+                    .map(session_message_to_unified)
                     .collect();
             }
         };

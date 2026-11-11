@@ -390,11 +390,17 @@ impl CompressionService {
                     .collect();
                 if !session_end_raws.is_empty() {
                     let agent = workspace_id.to_string();
-                    let digest: String = session_end_raws
-                        .iter()
-                        .map(|r| r.content.clone())
-                        .collect::<Vec<_>>()
-                        .join("\n");
+                    let digest: String = {
+                        let total_len = session_end_raws.iter().map(|r| r.content.len() + 1).sum();
+                        let mut buf = String::with_capacity(total_len);
+                        for (i, r) in session_end_raws.iter().enumerate() {
+                            if i > 0 {
+                                buf.push('\n');
+                            }
+                            buf.push_str(&r.content);
+                        }
+                        buf
+                    };
                     let reason = match &session_end_raws[0].source {
                         RawMemorySource::SessionEnd { reason } => format!("{reason:?}"),
                         _ => "unknown".to_string(),
@@ -469,7 +475,7 @@ impl CompressionService {
             // `raws[0].source`, so a mixed drain MUST be split or
             // Reflection/SessionEnd/Delegation rows silently degrade to
             // whichever source happened to be fetched first.
-            let mut groups: Vec<(String, Vec<RawMemory>)> = Vec::new();
+            let mut groups: Vec<(&'static str, Vec<RawMemory>)> = Vec::new();
             for r in ingestable {
                 let key = ingest_group_key(&r.source);
                 match groups.iter_mut().find(|(k, _)| *k == key) {
@@ -829,11 +835,16 @@ fn partition_by_retry_grace(
 /// ignored so a drain does not shatter into per-payload micro-batches;
 /// `SessionEnd` splits by reason because Disconnect (DIGEST) and TaskDone
 /// (RETRO) select different prompts.
-fn ingest_group_key(source: &crate::memory::store::raw_memory::RawMemorySource) -> String {
-    use crate::memory::store::raw_memory::RawMemorySource;
+fn ingest_group_key(source: &crate::memory::store::raw_memory::RawMemorySource) -> &'static str {
+    use crate::memory::store::raw_memory::{RawMemorySource, SessionEndReason};
     match source {
-        RawMemorySource::SessionEnd { reason } => format!("session_end/{reason:?}"),
-        other => other.to_persisted().0.to_string(),
+        RawMemorySource::SessionEnd {
+            reason: SessionEndReason::Disconnect,
+        } => "session_end/Disconnect",
+        RawMemorySource::SessionEnd {
+            reason: SessionEndReason::TaskDone,
+        } => "session_end/TaskDone",
+        other => other.to_persisted().0,
     }
 }
 
