@@ -71,9 +71,23 @@ impl IMessageChannel {
         Self::with_mode(config, false)
     }
 
+    /// Create a new iMessage channel under an explicit instance id.
+    ///
+    /// The registry passes the configured instance id; the channel id is what
+    /// routes a reply back to the right instance, so it cannot be the adapter
+    /// name when more than one iMessage account is configured.
+    #[must_use]
+    pub fn with_id(id: impl Into<String>, config: IMessageConfig) -> Self {
+        Self::with_mode_and_id(id, config, false)
+    }
+
     fn with_mode(config: IMessageConfig, test_mode: bool) -> Self {
+        Self::with_mode_and_id("imessage", config, test_mode)
+    }
+
+    fn with_mode_and_id(id: impl Into<String>, config: IMessageConfig, test_mode: bool) -> Self {
         let info = ChannelInfo {
-            id: ChannelId::new("imessage"),
+            id: ChannelId::new(id),
             name: "iMessage".to_string(),
             channel_type: "imessage".to_string(),
             status: ChannelStatus::Disconnected,
@@ -408,6 +422,14 @@ impl ChannelFactory for IMessageChannelFactory {
     }
 
     async fn create(&self, config: serde_json::Value) -> ChannelResult<Box<dyn Channel>> {
+        self.create_with_id("imessage", config).await
+    }
+
+    async fn create_with_id(
+        &self,
+        id: &str,
+        config: serde_json::Value,
+    ) -> ChannelResult<Box<dyn Channel>> {
         let config: IMessageConfig = serde_json::from_value(config)
             .map_err(|e| ChannelError::ConfigError(format!("Invalid iMessage config: {e}")))?;
 
@@ -417,7 +439,7 @@ impl ChannelFactory for IMessageChannelFactory {
             ));
         }
 
-        Ok(Box::new(IMessageChannel::new(config)))
+        Ok(Box::new(IMessageChannel::with_id(id, config)))
     }
 }
 

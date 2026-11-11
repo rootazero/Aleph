@@ -243,10 +243,18 @@ impl ChannelFactory for QQChannelFactory {
     }
 
     async fn create(&self, config: serde_json::Value) -> ChannelResult<Box<dyn Channel>> {
+        self.create_with_id("qq", config).await
+    }
+
+    async fn create_with_id(
+        &self,
+        id: &str,
+        config: serde_json::Value,
+    ) -> ChannelResult<Box<dyn Channel>> {
         // `from_wire` is the one place the two accepted `[channels.qq]`
         // spellings collapse into `accounts`; see its docs.
         let qq_config = QQConfig::from_wire(config).map_err(ChannelError::ConfigError)?;
-        Ok(Box::new(QQChannel::new("qq", qq_config)))
+        Ok(Box::new(QQChannel::new(id, qq_config)))
     }
 }
 

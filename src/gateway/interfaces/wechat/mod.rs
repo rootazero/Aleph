@@ -261,12 +261,20 @@ impl ChannelFactory for WeChatChannelFactory {
     }
 
     async fn create(&self, config: serde_json::Value) -> ChannelResult<Box<dyn Channel>> {
+        self.create_with_id("wechat", config).await
+    }
+
+    async fn create_with_id(
+        &self,
+        id: &str,
+        config: serde_json::Value,
+    ) -> ChannelResult<Box<dyn Channel>> {
         let config: WeChatConfig = serde_json::from_value(config)
             .map_err(|e| ChannelError::ConfigError(format!("Invalid WeChat config: {e}")))?;
 
         config.validate().map_err(ChannelError::ConfigError)?;
 
-        Ok(Box::new(WeChatChannel::new("wechat", config)))
+        Ok(Box::new(WeChatChannel::new(id, config)))
     }
 }
 

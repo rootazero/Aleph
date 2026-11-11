@@ -253,12 +253,7 @@ impl ChannelFactory for IrcChannelFactory {
     }
 
     async fn create(&self, config: serde_json::Value) -> ChannelResult<Box<dyn Channel>> {
-        let config: IrcConfig = serde_json::from_value(config)
-            .map_err(|e| ChannelError::ConfigError(format!("Invalid IRC config: {e}")))?;
-
-        config.validate().map_err(ChannelError::ConfigError)?;
-
-        Ok(Box::new(IrcChannel::new("irc", config)))
+        self.create_with_id("irc", config).await
     }
 
     async fn create_with_id(

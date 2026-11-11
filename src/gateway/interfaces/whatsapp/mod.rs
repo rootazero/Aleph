@@ -737,9 +737,17 @@ impl ChannelFactory for WhatsAppChannelFactory {
     }
 
     async fn create(&self, config: serde_json::Value) -> ChannelResult<Box<dyn Channel>> {
+        self.create_with_id("whatsapp", config).await
+    }
+
+    async fn create_with_id(
+        &self,
+        id: &str,
+        config: serde_json::Value,
+    ) -> ChannelResult<Box<dyn Channel>> {
         let config: WhatsAppConfig = serde_json::from_value(config)
             .map_err(|e| ChannelError::ConfigError(format!("Invalid WhatsApp config: {e}")))?;
-        Ok(Box::new(WhatsAppChannel::new("whatsapp", config)))
+        Ok(Box::new(WhatsAppChannel::new(id, config)))
     }
 }
 

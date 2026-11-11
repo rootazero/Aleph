@@ -1182,10 +1182,18 @@ impl ChannelFactory for TelegramChannelFactory {
     }
 
     async fn create(&self, config: serde_json::Value) -> ChannelResult<Box<dyn Channel>> {
+        self.create_with_id("telegram", config).await
+    }
+
+    async fn create_with_id(
+        &self,
+        id: &str,
+        config: serde_json::Value,
+    ) -> ChannelResult<Box<dyn Channel>> {
         let config = config::parse_telegram_channel_config(config)
             .map_err(|e| ChannelError::ConfigError(format!("Invalid Telegram config: {e}")))?;
 
-        Ok(Box::new(TelegramChannel::new("telegram", config)))
+        Ok(Box::new(TelegramChannel::new(id, config)))
     }
 }
 

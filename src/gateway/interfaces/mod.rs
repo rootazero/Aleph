@@ -140,6 +140,63 @@ pub fn register_channel_plugins() {
     register_plain_channel!("xmpp", XmppChannelFactory);
 }
 
+#[cfg(test)]
+mod instance_id_tests {
+    //! The configured instance id is what routes a reply back to the right
+    //! instance, so a factory must not fall back to the adapter name when more
+    //! than one instance of the same type is configured.
+    //!
+    //! `ChannelFactory::create_with_id` has a default implementation that
+    //! ignores the id and calls `create`. A factory that does not override it
+    //! therefore registers every instance under the adapter name, and two
+    //! instances of the same type collide.
+
+    use crate::gateway::channel::{Channel, ChannelFactory};
+
+    #[tokio::test]
+    async fn a_factory_registers_the_channel_under_the_configured_instance_id() {
+        use super::{EmailChannelFactory, MattermostChannelFactory, SignalChannelFactory};
+
+        let email = EmailChannelFactory
+            .create_with_id(
+                "email-work",
+                serde_json::json!({
+                    "imap_host": "imap.example.test",
+                    "smtp_host": "smtp.example.test",
+                    "username": "bot@example.test",
+                    "password": "secret",
+                    "from_address": "bot@example.test",
+                }),
+            )
+            .await
+            .expect("email instance is created");
+        assert_eq!(email.id().as_str(), "email-work");
+
+        let signal = SignalChannelFactory
+            .create_with_id(
+                "signal-main",
+                serde_json::json!({
+                    "phone_number": "+15550000000",
+                    "api_url": "http://127.0.0.1:8080",
+                }),
+            )
+            .await
+            .expect("signal instance is created");
+        assert_eq!(signal.id().as_str(), "signal-main");
+
+        let mattermost = MattermostChannelFactory
+            .create_with_id(
+                "mattermost-ops",
+                serde_json::json!({
+                    "server_url": "https://mm.example.test",
+                    "bot_token": "secret",
+                }),
+            )
+            .await
+            .expect("mattermost instance is created");
+        assert_eq!(mattermost.id().as_str(), "mattermost-ops");
+    }
+}
 
 #[cfg(test)]
 mod credential_debug_tests {

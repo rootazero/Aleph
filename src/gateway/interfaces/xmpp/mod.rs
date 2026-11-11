@@ -282,12 +282,20 @@ impl ChannelFactory for XmppChannelFactory {
     }
 
     async fn create(&self, config: serde_json::Value) -> ChannelResult<Box<dyn Channel>> {
+        self.create_with_id("xmpp", config).await
+    }
+
+    async fn create_with_id(
+        &self,
+        id: &str,
+        config: serde_json::Value,
+    ) -> ChannelResult<Box<dyn Channel>> {
         let config: XmppConfig = serde_json::from_value(config)
             .map_err(|e| ChannelError::ConfigError(format!("Invalid XMPP config: {e}")))?;
 
         config.validate().map_err(ChannelError::ConfigError)?;
 
-        Ok(Box::new(XmppChannel::new("xmpp", config)))
+        Ok(Box::new(XmppChannel::new(id, config)))
     }
 }
 

@@ -353,12 +353,7 @@ impl ChannelFactory for WebhookChannelFactory {
     }
 
     async fn create(&self, config: serde_json::Value) -> ChannelResult<Box<dyn Channel>> {
-        let config: WebhookChannelConfig = serde_json::from_value(config)
-            .map_err(|e| ChannelError::ConfigError(format!("Invalid Webhook config: {e}")))?;
-
-        config.validate().map_err(ChannelError::ConfigError)?;
-
-        Ok(Box::new(WebhookChannel::new("webhook", config)))
+        self.create_with_id("webhook", config).await
     }
 
     /// The webhook channel's runtime id IS the configured instance id —

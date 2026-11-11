@@ -333,6 +333,11 @@ impl Channel for SlackChannel {
         conversation_id: &ConversationId,
         message_id: &MessageId,
     ) -> ChannelResult<()> {
+        if !self.config.enable_deletion {
+            return Err(ChannelError::UnsupportedFeature(
+                "message deletion is disabled".to_string(),
+            ));
+        }
         SlackMessageOps::delete_message(
             &self.client,
             &self.config.bot_token,
@@ -370,12 +375,20 @@ impl ChannelFactory for SlackChannelFactory {
     }
 
     async fn create(&self, config: serde_json::Value) -> ChannelResult<Box<dyn Channel>> {
+        self.create_with_id("slack", config).await
+    }
+
+    async fn create_with_id(
+        &self,
+        id: &str,
+        config: serde_json::Value,
+    ) -> ChannelResult<Box<dyn Channel>> {
         let config: SlackConfig = serde_json::from_value(config)
             .map_err(|e| ChannelError::ConfigError(format!("Invalid Slack config: {e}")))?;
 
         config.validate().map_err(ChannelError::ConfigError)?;
 
-        Ok(Box::new(SlackChannel::new("slack", config)))
+        Ok(Box::new(SlackChannel::new(id, config)))
     }
 }
 

@@ -503,10 +503,18 @@ impl ChannelFactory for FeishuChannelFactory {
     }
 
     async fn create(&self, config: serde_json::Value) -> ChannelResult<Box<dyn Channel>> {
+        self.create_with_id("feishu", config).await
+    }
+
+    async fn create_with_id(
+        &self,
+        id: &str,
+        config: serde_json::Value,
+    ) -> ChannelResult<Box<dyn Channel>> {
         let config: FeishuConfig = serde_json::from_value(config)
             .map_err(|e| ChannelError::ConfigError(format!("Invalid Feishu config: {e}")))?;
 
-        Ok(Box::new(FeishuChannel::new("feishu", config)?))
+        Ok(Box::new(FeishuChannel::new(id, config)?))
     }
 }
 
