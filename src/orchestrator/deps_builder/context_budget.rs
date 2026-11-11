@@ -97,7 +97,7 @@ fn derive_summarizer_input_budget(
 ) -> usize {
     let summary_model = super::summary::effective_summary_model(config, primary_provider_key);
     let window = if let Some((model, _)) = summary_model {
-        capabilities_for(model)
+        capabilities_for(&model)
             .map(|c| u64::from(c.context_window))
             .or_else(|| {
                 config
