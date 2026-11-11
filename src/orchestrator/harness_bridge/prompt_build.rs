@@ -1187,16 +1187,14 @@ fn truncate_chars(s: &str, max_chars: usize) -> String {
 /// Returns an empty string when no user-side text is available; callers treat
 /// the empty case as "skip retrieval".
 pub(crate) fn last_user_query(input: &FlowInput) -> String {
-    let text_of = |content: &crate::session::events::MessageContent| content.text.as_str();
     match input {
         FlowInput::Prompt(s) => s.clone(),
         FlowInput::Messages(msgs) | FlowInput::Multimodal(msgs) => msgs
             .iter()
             .rev()
-            .map(text_of)
-            .find(|s| !s.is_empty())
-            .unwrap_or("")
-            .to_string(),
+            .find(|c| !c.text.is_empty())
+            .map(|c| c.text.clone())
+            .unwrap_or_default(),
         FlowInput::History { prompt, .. } => prompt.clone(),
         FlowInput::Resume => String::new(),
     }
