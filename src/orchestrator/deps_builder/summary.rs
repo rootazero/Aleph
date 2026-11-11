@@ -15,14 +15,13 @@ use crate::providers::{create_provider, AiProvider};
 fn build_provider_with_swapped_model(
     base: &ProviderConfig,
     primary_provider_key: &str,
-    new_model: String,
+    new_model: &str,
     source_tag: Option<&str>,
     info_msg: &'static str,
     warn_msg: &'static str,
 ) -> Option<Arc<dyn AiProvider>> {
-    // rust-doctor-disable-next-line excessive-clone
     let mut cfg = base.clone();
-    cfg.models = vec![new_model.clone()];
+    cfg.models = vec![new_model.to_string()];
     match create_provider(primary_provider_key, cfg) {
         Ok(provider) => {
             tracing::info!(
@@ -91,10 +90,10 @@ fn build_provider_with_swapped_model(
 /// cheap provider is built. In that case the returned model is the primary's
 /// own default, so callers that want "which model summarizes" (rather than
 /// "should a cheap provider be built") get the true answer either way.
-pub(crate) fn effective_summary_model(
-    config: &Config,
+pub(crate) fn effective_summary_model<'a>(
+    config: &'a Config,
     primary_provider_key: &str,
-) -> Option<(String, &'static str)> {
+) -> Option<(&'a str, &'static str)> {
     let cb = config.effective_context_budget()?;
     let base = config.providers.get(primary_provider_key)?;
     let explicit = cb
@@ -102,19 +101,18 @@ pub(crate) fn effective_summary_model(
         .as_ref()
         .map(|s| s.trim())
         .filter(|s| !s.is_empty());
-    let (model, source): (String, &'static str) = match explicit {
-        Some(model) => (model.to_string(), "summary_model"),
+    let (model, source): (&'a str, &'static str) = match explicit {
+        Some(model) => (model, "summary_model"),
         None => (
-            crate::providers::get_preset(&primary_provider_key.to_lowercase())
-                .and_then(|p| p.default_aux_model)?
-                .to_string(),
+            crate::providers::get_preset(primary_provider_key)
+                .and_then(|p| p.default_aux_model)?,
             "preset aux_model",
         ),
     };
     if base.models.first().is_some_and(|m| m.as_str() == model) {
         // Resolved model == primary default: summarization runs on the main
         // model (the byte-identical cheap provider is never built).
-        return base.models.first().map(|m| (m.clone(), "primary default"));
+        return base.models.first().map(|m| (m.as_str(), "primary default"));
     }
     Some((model, source))
 }
@@ -133,12 +131,10 @@ pub fn build_cheap_summary_provider(
         return None;
     }
 
-    // rust-doctor-disable-next-line excessive-clone
-    // See common-clone construction tail in `build_provider_with_swapped_model`.
     build_provider_with_swapped_model(
         base,
         primary_provider_key,
-        summary_model.clone(),
+        summary_model,
         Some(source),
         "context budget: routing history summarization to cheap-tier model",
         "context budget: cheap summary provider build failed — summarization will use the main LLM",
@@ -184,11 +180,10 @@ pub fn build_dream_provider(
         .as_ref()
         .map(|s| s.trim())
         .filter(|s| !s.is_empty());
-    let dream_model: String = match explicit {
-        Some(model) => model.to_string(),
-        None => crate::providers::get_preset(&primary_provider_key.to_lowercase())
-            .and_then(|p| p.default_aux_model)?
-            .to_string(),
+    let dream_model: &str = match explicit {
+        Some(model) => model,
+        None => crate::providers::get_preset(primary_provider_key)
+            .and_then(|p| p.default_aux_model)?,
     };
 
     // No-op when the resolved model is the primary's own default — the rebuilt
@@ -206,12 +201,10 @@ pub fn build_dream_provider(
     } else {
         "preset aux_model"
     };
-    // rust-doctor-disable-next-line excessive-clone
-    // See common-clone construction tail in `build_provider_with_swapped_model`.
     build_provider_with_swapped_model(
         base,
         primary_provider_key,
-        dream_model.clone(),
+        dream_model,
         Some(source),
         "dreaming: routing dream-pipeline stages to cheap-tier model",
         "dreaming: cheap provider build failed — dream stages will use the main LLM",
@@ -255,12 +248,11 @@ pub fn build_strategy_planner_provider(
 
     // Tier 1 only: explicit operator override. No `default_aux_model` tier-2 —
     // an unset/blank planner_model reuses the executor provider (return None).
-    let planner_model: String = strategy
+    let planner_model: &str = strategy
         .planner_model
         .as_ref()
         .map(|s| s.trim())
-        .filter(|s| !s.is_empty())?
-        .to_string();
+        .filter(|s| !s.is_empty())?;
 
     // No-op when the resolved planner model is the primary's own default model —
     // the rebuilt provider would be byte-identical, so reuse the main LLM.
@@ -272,12 +264,10 @@ pub fn build_strategy_planner_provider(
         return None;
     }
 
-    // rust-doctor-disable-next-line excessive-clone
-    // See common-clone construction tail in `build_provider_with_swapped_model`.
     build_provider_with_swapped_model(
         base,
         primary_provider_key,
-        planner_model.clone(),
+        planner_model,
         None,
         "strategy: routing strategic-planner node to a dedicated model",
         "strategy: planner provider build failed — planner will use the main LLM",
