@@ -103,13 +103,13 @@ fn jaccard(a: &HashSet<&str>, b: &HashSet<&str>) -> f32 {
 ///
 /// `contents[i]` and `relevance[i]` must align. Returns a permutation of the
 /// input indices. Inputs of length < 2 are returned in original order.
-pub fn mmr_reorder(contents: &[String], relevance: &[f32], lambda: f32) -> Vec<usize> {
+pub fn mmr_reorder<T: AsRef<str>>(contents: &[T], relevance: &[f32], lambda: f32) -> Vec<usize> {
     let n = contents.len();
     if n < 2 || contents.len() != relevance.len() {
         return (0..n).collect();
     }
     let lambda = lambda.clamp(0.0, 1.0);
-    let tokens: Vec<HashSet<&str>> = contents.iter().map(|c| token_set(c)).collect();
+    let tokens: Vec<HashSet<&str>> = contents.iter().map(|c| token_set(c.as_ref())).collect();
 
     let mut remaining: Vec<usize> = (0..n).collect();
     let mut selected: Vec<usize> = Vec::with_capacity(n);
