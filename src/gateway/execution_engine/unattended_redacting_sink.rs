@@ -126,6 +126,10 @@ pub(crate) fn mask_trace_event(masker: &SecretMasker, event: &mut LoopTraceEvent
                 .as_mut()
                 .is_some_and(|t| mask_in_place(masker, t));
             for invocation in tool_timeline.iter_mut() {
+                // The provider supplies the tool-call id, so it is model- and
+                // server-controlled text: a credential can ride in it exactly
+                // as it can in the name or the error.
+                changed |= mask_in_place(masker, &mut invocation.id);
                 changed |= mask_in_place(masker, &mut invocation.name);
                 if let Some(ref mut err) = invocation.error {
                     changed |= mask_in_place(masker, err);
@@ -419,9 +423,11 @@ mod tests {
         let cap = Arc::new(CaptureSink::default());
         let sink = UnattendedRedactingSink::new(cap.clone());
 
-        // A tool error containing a credential in the timeline
+        // A tool error containing a credential in the timeline. The
+        // provider-supplied tool-call id is text too, and it is the field a
+        // model controls most freely.
         let timeline = vec![crate::orchestrator::dispatch::ToolInvocation {
-            id: "t1".into(),
+            id: format!("call-AKIAIOSFODNN7EXAMPLE"),
             name: "shell".into(),
             duration_ms: 100,
             success: false,
@@ -448,6 +454,11 @@ mod tests {
                 assert!(
                     !err.contains("AKIAIOSFODNN7EXAMPLE"),
                     "timeline error leaked: {err}"
+                );
+                assert!(
+                    !tool_timeline[0].id.contains("AKIAIOSFODNN7EXAMPLE"),
+                    "timeline tool-call id leaked: {}",
+                    tool_timeline[0].id
                 );
             }
             other => panic!("unexpected event: {other:?}"),
@@ -522,7 +533,7 @@ mod tests {
                 duration_ms: None,
                 token_breakdown: None,
                 tool_timeline: vec![crate::orchestrator::dispatch::ToolInvocation {
-                    id: "t1".into(),
+                    id: format!("t-{KEY}"),
                     name: format!("tool-{KEY}"),
                     duration_ms: 5,
                     success: false,
