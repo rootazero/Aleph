@@ -507,10 +507,9 @@ impl AnthropicProtocol {
     /// compare passes the future-proof test — a newer model ID gates
     /// correctly with no code change.
     pub(super) fn claude_version(model: &str) -> Option<(u32, u32)> {
-        let m = model.to_lowercase().replace('.', "-");
         let is_version_seg = |seg: &str| seg.len() <= 2 && seg.parse::<u32>().is_ok();
-        let mut numbers = m
-            .split('-')
+        let mut numbers = model
+            .split(|c| c == '-' || c == '.' || c == '_')
             .skip_while(|seg| !is_version_seg(seg))
             .take_while(|seg| is_version_seg(seg))
             .map(|seg| seg.parse::<u32>().unwrap_or(0));

@@ -95,8 +95,10 @@ pub(crate) fn parse_gemini_sse_chunk(
                             continue;
                         }
                     };
-                    let args = fc.get("args").cloned().unwrap_or(serde_json::Value::Null);
-                    let args_str = args.to_string();
+                    let args_str = match fc.get("args") {
+                        Some(args) => args.to_string(),
+                        None => "null".to_string(),
+                    };
 
                     // Prefer native ID (Gemini 3+), fallback to synthetic.
                     //
@@ -242,12 +244,15 @@ pub(crate) fn parse_gemini_sse_chunk(
 /// Handles both the object form `{"error": {...}}` and the streaming array
 /// form `[{"error": {...}}]`. Returns `None` when no envelope can be parsed.
 pub(crate) fn parse_gemini_error_body(body: &str) -> Option<GeminiError> {
-    let value: serde_json::Value = serde_json::from_str(body).ok()?;
-    let error_obj = match &value {
-        serde_json::Value::Array(items) => items.first()?.get("error")?,
-        serde_json::Value::Object(_) => value.get("error")?,
+    let mut value: serde_json::Value = serde_json::from_str(body).ok()?;
+    let error_val = match &mut value {
+        serde_json::Value::Array(items) => {
+            let first = items.first_mut()?;
+            let obj = first.as_object_mut()?;
+            obj.remove("error")?
+        }
+        serde_json::Value::Object(map) => map.remove("error")?,
         _ => return None,
     };
-    // rust-doctor-disable-next-line excessive-clone
-    serde_json::from_value(error_obj.clone()).ok()
+    serde_json::from_value(error_val).ok()
 }
