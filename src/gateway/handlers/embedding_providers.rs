@@ -358,6 +358,10 @@ pub async fn handle_remove(
         Err(e) => return e,
     };
 
+    // Set when the provider is gone from the config but its credential is
+    // still in the vault — the delete succeeded, the cleanup did not.
+    let mut credential_cleanup_error: Option<String> = None;
+
     {
         let mut cfg = config.write().await;
 
@@ -391,12 +395,10 @@ pub async fn handle_remove(
         // Remove provider
         cfg.memory.embedding.providers.retain(|p| p.id != params.id);
 
-        // Delete API key from vault
-        if let Err(e) = vault.delete_secret(&vault_key(&params.id)) {
-            warn!(provider = %params.id, error = %e, "Failed to delete embedding API key from vault");
-        }
-
-        // Save to file
+        // Save to file BEFORE the credential goes away. The other order leaves
+        // a configured provider whose key has been deleted — a broken provider
+        // the operator never asked for. This order can only leave an orphan
+        // credential, which is inert.
         if let Err(e) = cfg.save_incremental(&["memory"]) {
             return JsonRpcResponse::error(
                 request.id,
@@ -404,6 +406,19 @@ pub async fn handle_remove(
                 format!("Failed to save config: {e}"),
             );
         }
+
+        // The credential is now an orphan: it can no longer be loaded, but it
+        // is still a live secret until it is deleted. A vault failure here
+        // has to reach the caller instead of being logged and forgotten.
+        if let Err(e) = vault.delete_secret(&vault_key(&params.id)) {
+            warn!(provider = %params.id, error = %e, "Failed to delete embedding API key from vault");
+            credential_cleanup_error = Some(e.to_string());
+        }
+    }
+
+    let mut payload = serde_json::json!({ "success": true });
+    if let Some(err) = credential_cleanup_error {
+        payload["credential_cleanup"] = serde_json::json!(format!("failed: {err}"));
     }
 
     // Broadcast event
@@ -415,7 +430,7 @@ pub async fn handle_remove(
         }),
     ));
 
-    JsonRpcResponse::success(request.id, serde_json::json!({ "success": true }))
+    JsonRpcResponse::success(request.id, payload)
 }
 
 /// Set a provider as active.

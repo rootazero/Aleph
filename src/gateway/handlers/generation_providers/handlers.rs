@@ -339,6 +339,10 @@ pub async fn handle_delete(
         Err(e) => return e,
     };
 
+    // Set when the provider is gone from the config but its credential is
+    // still in the vault — the delete succeeded, the cleanup did not.
+    let mut credential_cleanup_error: Option<String> = None;
+
     {
         let mut cfg = config.write().await;
 
@@ -402,10 +406,21 @@ pub async fn handle_delete(
         // Apply the cloned config to shared state
         *cfg = next_cfg;
 
-        // Delete API key from vault (after successful save)
+        // The config no longer names the provider, so the vault entry is now
+        // an orphan: it can no longer be loaded, but it is still a live
+        // credential until it is deleted. The delete can fail on its own (a
+        // vault I/O error), and that failure has to reach the caller —
+        // reporting plain success is what makes the leftover secret
+        // invisible.
         if let Err(e) = vault.delete_secret(&vault_key(&params.name)) {
             warn!(provider = %params.name, error = %e, "Failed to delete generation API key from vault");
+            credential_cleanup_error = Some(e.to_string());
         }
+    }
+
+    let mut payload = serde_json::json!({ "success": true });
+    if let Some(err) = credential_cleanup_error {
+        payload["credential_cleanup"] = serde_json::json!(format!("failed: {err}"));
     }
 
     // Broadcast event
@@ -417,7 +432,7 @@ pub async fn handle_delete(
         }),
     ));
 
-    JsonRpcResponse::success(request.id, serde_json::json!({ "success": true }))
+    JsonRpcResponse::success(request.id, payload)
 }
 
 /// Set default provider for a generation type
