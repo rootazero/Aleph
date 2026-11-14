@@ -80,16 +80,9 @@ const SECRET_SUBSTRINGS: &[&str] = &["SECRET", "PASSWORD", "PRIVATE_KEY", "CREDE
 #[must_use]
 pub fn is_secret_env(name: &str) -> bool {
     let upper = name.to_ascii_uppercase();
-    if SECRET_ENV_EXACT.contains(&upper.as_str()) {
-        return true;
-    }
-    if SECRET_SUFFIXES.iter().any(|s| upper.ends_with(s)) {
-        return true;
-    }
-    if SECRET_SUBSTRINGS.iter().any(|s| upper.contains(s)) {
-        return true;
-    }
-    false
+    SECRET_ENV_EXACT.contains(&upper.as_str())
+        || SECRET_SUFFIXES.iter().any(|s| upper.ends_with(s))
+        || SECRET_SUBSTRINGS.iter().any(|s| upper.contains(s))
 }
 
 #[cfg(test)]

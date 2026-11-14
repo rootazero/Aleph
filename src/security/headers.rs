@@ -54,16 +54,12 @@ fn is_static_asset(path: &str) -> bool {
 /// and treat the source list as the segment between a directive name and
 /// the next `;`.
 fn csp_contains_wildcard_source(csp: &str) -> bool {
-    let mut source_iter = csp.split(';');
-    source_iter.any(|directive| {
+    csp.split(';').any(|directive| {
         // Drop the directive name and inspect only the source list, so a
         // legitimate `frame-ancestors *` (already a permissive policy) is
         // flagged via this same helper. Quoted `'none'` is not a wildcard.
         let mut tokens = directive.split_whitespace();
-        match tokens.next() {
-            Some(_) => tokens.any(|tok| tok == "*"),
-            None => false,
-        }
+        tokens.next().is_some() && tokens.any(|tok| tok == "*")
     })
 }
 
