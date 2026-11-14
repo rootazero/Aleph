@@ -254,13 +254,10 @@ impl SecretVault {
 
         let previous = self.data.entries.insert(name.to_string(), entry);
         if let Err(e) = self.save() {
-            match previous {
-                Some(previous) => {
-                    self.data.entries.insert(name.to_string(), previous);
-                }
-                None => {
-                    self.data.entries.remove(name);
-                }
+            if let Some(previous) = previous {
+                self.data.entries.insert(name.to_string(), previous);
+            } else {
+                self.data.entries.remove(name);
             }
             return Err(e);
         }
@@ -271,18 +268,17 @@ impl SecretVault {
 
     /// Delete a secret by name.
     pub fn delete(&mut self, name: &str) -> Result<bool, SecretError> {
-        let previous = self.data.entries.remove(name);
-        if previous.is_some() {
-            if let Err(e) = self.save() {
-                if let Some(previous) = previous {
-                    self.data.entries.insert(name.to_string(), previous);
-                }
-                return Err(e);
-            }
-            info!(name = name, "Secret deleted from vault");
-            return Ok(true);
+        let Some(previous) = self.data.entries.remove(name) else {
+            return Ok(false);
+        };
+
+        if let Err(e) = self.save() {
+            self.data.entries.insert(name.to_string(), previous);
+            return Err(e);
         }
-        Ok(false)
+
+        info!(name = name, "Secret deleted from vault");
+        Ok(true)
     }
 
     /// Check if a secret exists.
