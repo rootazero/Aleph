@@ -81,12 +81,8 @@ pub(crate) fn identity(url: &str) -> String {
     }
 
     let scheme = parsed.scheme().to_lowercase();
-    let host = parsed
-        .host_str()
-        .unwrap_or_default()
-        .to_lowercase()
-        .trim_start_matches("www.")
-        .to_string();
+    let host_lower = parsed.host_str().unwrap_or_default().to_lowercase();
+    let host = host_lower.trim_start_matches("www.");
     let port = parsed.port().map_or_else(String::new, |p| format!(":{p}"));
     let path = parsed.path().trim_end_matches('/');
     let query = parsed.query().map_or_else(String::new, |q| format!("?{q}"));
