@@ -139,7 +139,7 @@ pub async fn install(name: &str) -> Result<BootstrapResult, BootstrapError> {
         // daemon's PATH need not contain it yet.
         InstallStrategy::NpmGlobal { .. } => {
             if let Some(dir) = npm_global::bin_dir() {
-                prepend_existing_dirs(vec![dir]);
+                prepend_existing_dirs(&[dir]);
             }
         }
         InstallStrategy::GithubRelease { tag, .. } => {
@@ -148,7 +148,7 @@ pub async fn install(name: &str) -> Result<BootstrapResult, BootstrapError> {
             // prefix. Without this the install succeeds and the re-probe on the
             // next line reports `PathNotFound`.
             if let Ok(dir) = crate::runtimes::github_release::install_dir(name, tag) {
-                prepend_existing_dirs(vec![dir]);
+                prepend_existing_dirs(&[dir]);
             }
         }
         InstallStrategy::Shell(_) | InstallStrategy::PowerShell(_) => {}
@@ -227,9 +227,10 @@ async fn run_powershell(script: &str) -> Result<CmdOutcome, BootstrapError> {
     // ladder used to be hand-copied here and in three other places. Both hosts
     // run the winget install commands identically. `-NoProfile` avoids loading
     // the user profile (faster, no profile side effects).
-    let program = crate::utils::shell::powershell_host().map_or_else(
-        || PathBuf::from("powershell"),
-        |shell| shell.program.clone(),
+    let host = crate::utils::shell::powershell_host();
+    let program: &std::path::Path = host.map_or_else(
+        || std::path::Path::new("powershell"),
+        |shell| shell.program.as_path(),
     );
     run_cmd(Command::new(program).args(["-NoProfile", "-Command", script])).await
 }
@@ -300,21 +301,22 @@ fn enrich_path_for_reprobe() {
         candidates.push(PathBuf::from(r"C:\Program Files\Git\cmd"));
     }
 
-    prepend_existing_dirs(candidates);
+    prepend_existing_dirs(&candidates);
 }
 
 /// Prepend the given directories to the process PATH, skipping any that don't
 /// exist or are already present. Idempotent. Shared by `enrich_path_for_reprobe`
 /// and `enrich_path_for_via_parent`.
-fn prepend_existing_dirs(candidates: Vec<PathBuf>) {
+fn prepend_existing_dirs(candidates: &[PathBuf]) {
     let _guard = PATH_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let current = std::env::var_os("PATH").unwrap_or_default();
     let mut existing: std::collections::HashSet<PathBuf> =
         std::env::split_paths(&current).collect();
     let mut prepended: Vec<PathBuf> = Vec::new();
     for cand in candidates {
-        if cand.is_dir() && existing.insert(cand.clone()) {
-            prepended.push(cand);
+        if cand.is_dir() && !existing.contains(cand) {
+            existing.insert(cand.clone());
+            prepended.push(cand.clone());
         }
     }
     if prepended.is_empty() {
@@ -342,7 +344,7 @@ async fn enrich_path_for_via_parent(parent: &str) {
         _ => None,
     };
     if let Some(dir) = bin_dir {
-        prepend_existing_dirs(vec![dir]);
+        prepend_existing_dirs(&[dir]);
     }
 }
 
@@ -448,7 +450,6 @@ async fn run_github_release(
     // mirror. A mirror that supplied both would be choosing the archive AND
     // the hash it is checked against.
     let source = crate::runtimes::github_release::ReleaseSource::for_runtime(name);
-    let asset_host = source.asset_host.clone();
     match crate::runtimes::github_release::install_release(
         name,
         repo,
@@ -464,7 +465,7 @@ async fn run_github_release(
             CmdOutcome::Success
         }
         Err(e) => CmdOutcome::Failed {
-            stderr: format!("{name} {tag} (assets from {asset_host}): {e}"),
+            stderr: format!("{name} {tag} (assets from {}): {e}", source.asset_host),
         },
     }
 }
