@@ -1,7 +1,7 @@
 //! Janitor duties: reap zombie (worker-lost) and orphaned (crash-left) tasks
 //! back to a schedulable or terminal state.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 
 use crate::agents::swarm::tasks::acceptance::{
     read_stale_review_warned_at, with_stale_review_warned_at,

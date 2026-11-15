@@ -57,8 +57,9 @@ impl AcpMemberRef {
     pub fn parse(agent_id: &str) -> Option<Self> {
         let rest = agent_id.strip_prefix(ACP_MEMBER_PREFIX)?;
         let (harness, session_name) = match rest.split_once('/') {
-            Some((h, "")) | None => (h, None),
+            Some((h, "")) => (h, None),
             Some((h, s)) => (h, Some(s)),
+            None => (rest, None),
         };
         if harness.is_empty() || harness.contains(':') {
             return None;

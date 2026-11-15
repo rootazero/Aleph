@@ -40,10 +40,10 @@ pub const MENTION_ALL: &str = "*all*";
 #[must_use]
 pub fn extract_mentions(content: &str) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
-    let mut seen: HashSet<&str> = HashSet::new();
-    let mut push = |id: &str| {
-        if seen.insert(id) {
-            out.push(id.to_string());
+    let mut seen: HashSet<String> = HashSet::new();
+    let mut push = |id: String| {
+        if seen.insert(id.clone()) {
+            out.push(id);
         }
     };
 
@@ -117,8 +117,8 @@ fn scan_line(line: &str, push: &mut impl FnMut(String)) {
             if j > start {
                 if let Some(raw) = line.get(start..j) {
                     let normalised = match raw {
-                        "all" | "everyone" => MENTION_ALL,
-                        other => other,
+                        "all" | "everyone" => MENTION_ALL.to_string(),
+                        other => other.to_string(),
                     };
                     push(normalised);
                     prev_is_ident = true;

@@ -194,16 +194,17 @@ pub async fn restore_snapshot(
     // --- Task diff ---------------------------------------------------------
     // Live tasks keyed by (subject, owner) — that's the "logical identity"
     // we restore against, since snapshot ids won't match.
-    let live_key = |t: &CoordTask| (t.subject.as_str(), t.owner.as_deref());
-    let live_by_key: HashMap<(&str, Option<&str>), &CoordTask> =
-        live_tasks.iter().map(|t| (live_key(t), t)).collect();
+    let live_by_key: HashMap<(&str, Option<&str>), &CoordTask> = live_tasks
+        .iter()
+        .map(|t| ((t.subject.as_str(), t.owner.as_deref()), t))
+        .collect();
 
     let mut tasks_to_add: Vec<String> = Vec::new();
     let mut tasks_to_update: Vec<String> = Vec::new();
     let mut tasks_to_skip_active: Vec<String> = Vec::new();
 
     for snap in &payload.tasks {
-        let k = live_key(snap);
+        let k = (snap.subject.as_str(), snap.owner.as_deref());
         match live_by_key.get(&k) {
             Some(live) if live.status == CoordTaskStatus::InProgress => {
                 tasks_to_skip_active.push(snap.subject.clone());
@@ -337,7 +338,7 @@ pub async fn restore_snapshot(
     //    restore will (or did) actually re-attach.
     let mut id_map: HashMap<String, String> = HashMap::new();
     for snap in &payload.tasks {
-        let k = live_key(snap);
+        let k = (snap.subject.as_str(), snap.owner.as_deref());
         if let Some(live) = live_by_key.get(&k) {
             id_map.insert(snap.id.clone(), live.id.clone());
         }
