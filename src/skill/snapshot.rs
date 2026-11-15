@@ -107,16 +107,15 @@ impl SkillSnapshot {
                     // Apply the user's scope override (if any) on a clone so the
                     // downstream prompt layer, which reads `manifest.scope()`,
                     // honours it. Without an override this is a plain clone.
-                    let effective = match entry.and_then(|e| e.scope_override.clone()) {
-                        Some(scope) => {
-                            let mut m = manifest.clone();
+                    let effective_scope = entry
+                        .and_then(|e| e.scope_override.as_ref())
+                        .unwrap_or_else(|| manifest.scope());
+                    if !manifest.invocation().disable_model_invocation && effective_scope.is_model_visible() {
+                        let mut m = manifest.clone();
+                        if let Some(scope) = entry.and_then(|e| e.scope_override.clone()) {
                             m.set_scope(scope);
-                            m
                         }
-                        None => manifest.clone(),
-                    };
-                    if effective.is_model_visible() {
-                        eligible_manifests.push(effective);
+                        eligible_manifests.push(m);
                     }
                 }
                 EligibilityResult::Ineligible(_reasons) => {

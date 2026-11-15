@@ -26,9 +26,8 @@ impl SkillRegistry {
     /// higher source priority is kept. Returns `true` if the manifest was
     /// actually inserted (or replaced the existing one).
     pub fn register(&mut self, manifest: SkillManifest) -> bool {
-        let id = manifest.id().clone();
-        match self.manifests.get(&id) {
-            Some(existing) if existing.priority() >= manifest.priority() => {
+        if let Some(existing) = self.manifests.get(manifest.id()) {
+            if existing.priority() >= manifest.priority() {
                 // Existing has equal or higher priority — reject the newcomer.
                 // The equal-priority case is the same-id tie (e.g. a skill
                 // installed in both `~/.agents/skills` and `~/.claude/skills`):
@@ -37,18 +36,16 @@ impl SkillRegistry {
                 // won" is debuggable. (Manifests carry no source path, so the
                 // log names the provenance labels, not the directories.)
                 tracing::debug!(
-                    skill_id = %id,
+                    skill_id = %manifest.id(),
                     kept = %existing.source().provenance(),
                     dropped = %manifest.source().provenance(),
                     "duplicate skill id dropped (equal-or-lower priority)"
                 );
-                false
-            }
-            _ => {
-                self.manifests.insert(id, manifest);
-                true
+                return false;
             }
         }
+        self.manifests.insert(manifest.id().clone(), manifest);
+        true
     }
 
     /// Register multiple manifests at once.

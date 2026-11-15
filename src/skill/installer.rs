@@ -242,9 +242,14 @@ pub fn select_best_install<'a>(
     specs: &'a [InstallSpec],
     prefs: &InstallPreferences,
 ) -> Option<&'a InstallSpec> {
-    let mut candidates = filter_install_specs_for_current_os(specs);
-    candidates.sort_by_key(|spec| install_kind_rank(&spec.kind, prefs.prefer_brew));
-    candidates.into_iter().next()
+    let current = current_os();
+    specs
+        .iter()
+        .filter(|spec| match &spec.os {
+            None => true,
+            Some(os_list) => os_list.contains(&current),
+        })
+        .min_by_key(|spec| install_kind_rank(&spec.kind, prefs.prefer_brew))
 }
 
 /// Build the shell [`Command`](tokio::process::Command) used to run an install
