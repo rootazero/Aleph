@@ -1115,7 +1115,7 @@ mod tests {
         // Every filesystem verb this module reaches for must be preceded, in
         // its own function, by the scope check.
         for verb in [
-            "tokio::fs::read(",
+            "tokio::fs::File::open(",
             "tokio::fs::read_dir(",
             "tokio::fs::create_dir_all(",
         ] {

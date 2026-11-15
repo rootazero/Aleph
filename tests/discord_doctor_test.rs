@@ -102,28 +102,23 @@ message_content = false
     );
 }
 
-/// A config file that doesn't exist surfaces as a single
-/// `Unknown`-tagged finding — never as `Ok`. This is the third state
-/// the check maintains; severity alone (`Info`) cannot distinguish
-/// "config is fine" from "config could not be read".
+/// Missing configuration means no Discord channel is configured.
+/// Existing but malformed or unreadable configuration still reports Unknown.
 #[tokio::test]
-async fn missing_file_yields_unknown_tag() {
+async fn missing_file_is_unconfigured_with_ok_tag() {
     let check = DiscordChannelHealthCheck::new(std::path::PathBuf::from(
         "/nonexistent/path/discord-config.toml",
     ));
     let findings = check.run(Posture::Inspect).await;
     assert_eq!(findings.len(), 1);
-    assert!(findings[0].detail.contains("Could not load"));
-    // The tag must be `discord-unknown`, NOT `discord-ok`, otherwise a
-    // future CI consumer would misread "I don't know" as "it's fine".
     assert!(
-        findings[0].has_tag("discord-unknown"),
-        "tag absent: {:?}",
+        findings[0].has_tag("discord-ok"),
+        "unconfigured: {:?}",
         findings[0]
     );
     assert!(
-        !findings[0].has_tag("discord-ok"),
-        "tag false-positive: {:?}",
+        !findings[0].has_tag("discord-unknown"),
+        "not an I/O failure: {:?}",
         findings[0]
     );
 }

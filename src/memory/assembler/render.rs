@@ -134,16 +134,16 @@ fn render_item_markdown(out: &mut String, item: &EnvelopeItem, slot: SlotKind) {
     let formatted_date = format_date(item.updated_at);
     match &item.source {
         ItemSource::Note { .. } => {
-            let _ = write!(
+            let _ = writeln!(
                 out,
-                "## [{}] ({} · updated {})\n",
+                "## [{}] ({} · updated {})",
                 item.id, layer, formatted_date
             );
         }
         ItemSource::Raw { session_id, .. } => {
-            let _ = write!(
+            let _ = writeln!(
                 out,
-                "## [raw @ session {}, {} · t={}]\n",
+                "## [raw @ session {}, {} · t={}]",
                 session_id, layer, formatted_date
             );
         }
@@ -151,9 +151,9 @@ fn render_item_markdown(out: &mut String, item: &EnvelopeItem, slot: SlotKind) {
             layer: summary_layer,
             session_id,
         } => {
-            let _ = write!(
+            let _ = writeln!(
                 out,
-                "## [{} @ session {}, {} · t={}]\n",
+                "## [{} @ session {}, {} · t={}]",
                 summary_layer, session_id, layer, formatted_date
             );
         }
@@ -181,29 +181,29 @@ fn render_xml(env: &MemoryEnvelope) -> String {
     }
     use std::fmt::Write as _;
     let mut out = String::from("<MemoryEnvelope>\n");
-    let _ = write!(
+    let _ = writeln!(
         out,
-        "  <schema_version>{}</schema_version>\n",
+        "  <schema_version>{}</schema_version>",
         env.schema_version
     );
-    let _ = write!(
+    let _ = writeln!(
         out,
-        "  <query>{}</query>\n",
+        "  <query>{}</query>",
         escape_xml_attr(&env.query)
     );
     for slot in env.slots.iter().filter(|s| !s.items.is_empty()) {
-        let _ = write!(out, "  <slot kind=\"{}\">\n", slot_tag(slot.kind));
+        let _ = writeln!(out, "  <slot kind=\"{}\">", slot_tag(slot.kind));
         if let Some(directive) = slot_directive(slot.kind) {
-            let _ = write!(
+            let _ = writeln!(
                 out,
-                "    <directive>{}</directive>\n",
+                "    <directive>{}</directive>",
                 escape_xml_attr(directive)
             );
         }
         for item in &slot.items {
-            let _ = write!(
+            let _ = writeln!(
                 out,
-                "    <item id=\"{}\" layer=\"{}\"><title>{}</title><content>{}</content></item>\n",
+                "    <item id=\"{}\" layer=\"{}\"><title>{}</title><content>{}</content></item>",
                 escape_xml_attr(&item.id),
                 cognitive_layer(slot.kind, &item.source).as_str(),
                 escape_xml_attr(&item.title),

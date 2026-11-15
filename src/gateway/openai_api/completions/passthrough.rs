@@ -138,31 +138,6 @@ fn convert_messages(messages: &[ChatMessage]) -> Result<Vec<UnifiedMessage>, Api
         .collect())
 }
 
-#[cfg(test)]
-mod gx6_tests {
-    use super::*;
-
-    #[test]
-    fn systems_are_ordered_context_once_and_developer_is_explicitly_rejected() {
-        let messages: Vec<ChatMessage> = serde_json::from_value(json!([
-            {"role":"system","content":"first"},
-            {"role":"user","content":"question"},
-            {"role":"system","content":"second"}
-        ]))
-        .unwrap();
-        assert_eq!(convert_messages(&messages).unwrap().len(), 1);
-        assert_eq!(
-            extract_system_prompt(&messages).as_deref(),
-            Some("first\n\nsecond")
-        );
-        let developer: Vec<ChatMessage> = serde_json::from_value(json!([
-            {"role":"developer","content":"distinct authority"}
-        ]))
-        .unwrap();
-        assert!(convert_messages(&developer).is_err());
-    }
-}
-
 /// Extract all system contents in order as the provider system prompt.
 fn extract_system_prompt(messages: &[ChatMessage]) -> Option<String> {
     let mut system_parts = Vec::new();
@@ -300,5 +275,30 @@ pub async fn handle(
         };
 
         Ok(Json(completion).into_response())
+    }
+}
+
+#[cfg(test)]
+mod gx6_tests {
+    use super::*;
+
+    #[test]
+    fn systems_are_ordered_context_once_and_developer_is_explicitly_rejected() {
+        let messages: Vec<ChatMessage> = serde_json::from_value(json!([
+            {"role":"system","content":"first"},
+            {"role":"user","content":"question"},
+            {"role":"system","content":"second"}
+        ]))
+        .unwrap();
+        assert_eq!(convert_messages(&messages).unwrap().len(), 1);
+        assert_eq!(
+            extract_system_prompt(&messages).as_deref(),
+            Some("first\n\nsecond")
+        );
+        let developer: Vec<ChatMessage> = serde_json::from_value(json!([
+            {"role":"developer","content":"distinct authority"}
+        ]))
+        .unwrap();
+        assert!(convert_messages(&developer).is_err());
     }
 }

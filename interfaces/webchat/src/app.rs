@@ -1,4 +1,6 @@
-use crate::i18n::{I18nContextProvider, t_string, use_i18n};
+use crate::i18n::{I18nContextProvider, use_i18n};
+#[cfg(feature = "panel-modular")]
+use crate::i18n::t_string;
 use crate::state::memory::MemoryState;
 use aleph_protocol::browser_live::{CLOSED_TOPIC, RESOURCE_TOPIC};
 use leptos::prelude::*;

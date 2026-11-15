@@ -64,6 +64,9 @@ fn session_filter_clause(
 pub struct MarkdownSessionStore {
     pub(super) base_dir: PathBuf,
     pub(super) db: Arc<Mutex<Connection>>,
+    // Serialize metadata read/modify/write across raw-session writers, without
+    // holding the SQLite mutex during filesystem I/O.
+    metadata_writes: Mutex<()>,
 }
 
 impl MarkdownSessionStore {
@@ -113,6 +116,7 @@ impl MarkdownSessionStore {
         let store = Self {
             base_dir: base_dir.to_path_buf(),
             db: Arc::new(Mutex::new(conn)),
+            metadata_writes: Mutex::new(()),
         };
         store.recover_raw_deletions().await?;
         Ok(store)
@@ -172,6 +176,7 @@ impl MarkdownSessionStore {
 #[async_trait]
 impl RawSessionStore for MarkdownSessionStore {
     async fn create_session(&self, mut metadata: SessionMetadata) -> Result<(), AlephError> {
+        let _write = self.metadata_writes.lock().await;
         let session_key = session_directory_key(&metadata.session_id);
         let session_dir = self.session_dir(&metadata.session_id);
         let metadata_path = session_dir.join("metadata.json");
@@ -336,6 +341,7 @@ impl RawSessionStore for MarkdownSessionStore {
         role: MessageRole,
         content: &str,
     ) -> Result<(), AlephError> {
+        let _write = self.metadata_writes.lock().await;
         let mut metadata = self.read_metadata(session_id).await?;
         let transcript_path = self.session_dir(session_id).join("transcript.md");
 
@@ -394,6 +400,7 @@ impl RawSessionStore for MarkdownSessionStore {
         args: &str,
         result: &ToolResult,
     ) -> Result<(), AlephError> {
+        let _write = self.metadata_writes.lock().await;
         let mut metadata = self.read_metadata(session_id).await?;
         let tool_outputs_path = self.session_dir(session_id).join("tool_outputs.md");
 
@@ -496,6 +503,7 @@ impl RawSessionStore for MarkdownSessionStore {
     }
 
     async fn finalize_session(&self, session_id: &str, ended_at: i64) -> Result<(), AlephError> {
+        let _write = self.metadata_writes.lock().await;
         let mut metadata = self.read_metadata(session_id).await?;
 
         // Update metadata

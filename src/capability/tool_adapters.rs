@@ -21,10 +21,9 @@ use base64::Engine;
 use schemars::schema_for;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
-use std::sync::{
-    atomic::{AtomicBool, Ordering},
-    Mutex as StdMutex, OnceLock, Weak,
-};
+#[cfg(test)]
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{OnceLock, Weak};
 use tokio::sync::RwLock;
 use tokio_util::sync::CancellationToken;
 
@@ -49,7 +48,7 @@ pub struct TerminalCapabilitySource {
     #[cfg(test)]
     fail_after_binding: AtomicBool,
     #[cfg(test)]
-    last_registration: StdMutex<Option<String>>,
+    last_registration: std::sync::Mutex<Option<String>>,
 }
 
 impl TerminalCapabilitySource {
@@ -71,17 +70,8 @@ impl TerminalCapabilitySource {
             #[cfg(test)]
             fail_after_binding: AtomicBool::new(false),
             #[cfg(test)]
-            last_registration: StdMutex::new(None),
+            last_registration: std::sync::Mutex::new(None),
         }
-    }
-
-    pub(crate) fn bind_facade(
-        &self,
-        facade: Weak<crate::capability::zahir_facade::ZahirFacade>,
-    ) -> Result<(), CapabilityInvocationError> {
-        self.facade
-            .set(facade)
-            .map_err(|_| CapabilityInvocationError::Unavailable)
     }
 
     fn facade(&self) -> Option<Arc<crate::capability::zahir_facade::ZahirFacade>> {
@@ -181,7 +171,7 @@ impl TerminalCapabilitySource {
                 return Err(crate::gateway::handlers::pty::PtyCapabilityError::Unavailable);
             }
         };
-        let registration = match facade.bind_terminal_session(id.clone(), visibility) {
+        let _registration = match facade.bind_terminal_session(id.clone(), visibility) {
             Ok(registration) => registration,
             Err(error) => {
                 let _ = self.specials.unregister(&id);
@@ -196,7 +186,7 @@ impl TerminalCapabilitySource {
                 .last_registration
                 .lock()
                 .unwrap_or_else(|error| error.into_inner()) = Some(session_id.to_owned());
-            if let Some(token) = registration.as_ref() {
+            if let Some(token) = _registration.as_ref() {
                 debug_assert!(facade.rollback_terminal_session(token));
             }
             let _ = self.specials.unregister(&id);
@@ -305,7 +295,13 @@ impl TerminalCapabilitySource {
         if cancel.is_cancelled() {
             return Err(CapabilityDispatchError::Cancelled);
         }
-        if !self.config.read().await.policies.terminal.enabled {
+        // Disabling new terminal work must not strand an existing owned session.
+        if !self.config.read().await.policies.terminal.enabled
+            && !matches!(
+                &params.operation,
+                aleph_protocol::capability::PtyOperation::Close
+            )
+        {
             return Err(CapabilityDispatchError::Unavailable);
         }
         let manager =
@@ -906,4 +902,89 @@ pub(crate) fn register_canonical_adapters_with_tools_bundle(
         special,
         tools: tool_handles,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{CapabilityDispatchError, CapabilityHandlerRegistry, TerminalCapabilitySource};
+    use crate::capability::ownership::OwnershipTree;
+    use crate::capability::policy::PolicyEngine;
+    use crate::gateway::pty::{self, SpawnOptions};
+    use crate::sync_primitives::Arc;
+    use aleph_protocol::capability::{PtyInvokeParams, PtyOperation};
+    use std::sync::Weak;
+    use tokio::sync::RwLock;
+    use tokio_util::sync::CancellationToken;
+
+    #[tokio::test]
+    #[serial_test::serial(pty_global_manager)]
+    async fn disabled_terminal_keeps_owned_close_available() {
+        let manager = pty::manager();
+        manager.deactivate().await.unwrap();
+        let generation = manager
+            .activate(Arc::new(crate::gateway::event_bus::GatewayEventBus::new()))
+            .unwrap();
+        let config = Arc::new(RwLock::new(crate::Config::default()));
+        config.write().await.policies.terminal.enabled = true;
+        let source = Arc::new(TerminalCapabilitySource::new(
+            CapabilityHandlerRegistry::new(),
+            Arc::new(
+                PolicyEngine::with_shared_tree(Arc::new(OwnershipTree::new()), Default::default())
+                    .unwrap(),
+            ),
+            Weak::new(),
+            config.clone(),
+        ));
+        let session_id = manager
+            .spawn_at(generation, &SpawnOptions::default())
+            .unwrap()
+            .session_id;
+        let owned =
+            crate::gateway::handlers::pty::require_owned_session_with_source(&session_id, &source)
+                .unwrap();
+        config.write().await.policies.terminal.enabled = false;
+        let mut denied = Vec::new();
+        for operation in [
+            PtyOperation::Input {
+                data: "blocked".into(),
+                base64: false,
+            },
+            PtyOperation::Resize { rows: 24, cols: 80 },
+        ] {
+            denied.push(
+                source
+                    .invoke_params_with_owner(
+                        PtyInvokeParams {
+                            session_id: session_id.clone(),
+                            operation,
+                        },
+                        CancellationToken::new(),
+                        owned.clone(),
+                    )
+                    .await,
+            );
+        }
+        let closed = source
+            .invoke_params_with_owner(
+                PtyInvokeParams {
+                    session_id,
+                    operation: PtyOperation::Close,
+                },
+                CancellationToken::new(),
+                owned,
+            )
+            .await;
+        let remaining = manager.list().len();
+        manager.deactivate().await.unwrap();
+        assert!(
+            denied
+                .into_iter()
+                .all(|result| matches!(result, Err(CapabilityDispatchError::Unavailable)))
+        );
+        assert!(
+            closed.is_ok(),
+            "disabling new terminal work must preserve owned cleanup: {closed:?}"
+        );
+        assert_eq!(remaining, 0, "close must reach the real manager");
+    }
 }

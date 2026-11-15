@@ -356,7 +356,7 @@ impl PtyManager {
     }
 
     #[cfg(test)]
-    fn new() -> TestManager {
+    fn cold_fixture() -> TestManager {
         let runtime = tokio::runtime::Builder::new_multi_thread()
             .worker_threads(1)
             .enable_all()
@@ -1466,7 +1466,7 @@ mod tests {
             specials.clone(),
         );
         let source = terminal_test_source(specials.clone(), Some(&facade));
-        let mgr = PtyManager::new();
+        let mgr = PtyManager::cold_fixture();
         mgr.bind_capability_source(Arc::downgrade(&source))
             .expect("source binding");
         source.fail_next_registration_after_binding();
@@ -1620,7 +1620,7 @@ mod tests {
             specials.clone(),
         );
         let source = terminal_test_source(specials.clone(), Some(&facade));
-        let mgr = PtyManager::new();
+        let mgr = PtyManager::cold_fixture();
         mgr.bind_capability_source(Arc::downgrade(&source))
             .expect("source binding");
         let sid = mgr
@@ -1668,7 +1668,7 @@ mod tests {
             specials.clone(),
         );
         let source = terminal_test_source(specials.clone(), Some(&facade));
-        let mgr = PtyManager::new();
+        let mgr = PtyManager::cold_fixture();
         mgr.bind_capability_source(Arc::downgrade(&source))
             .expect("source binding");
         mgr.spawn(&SpawnOptions {
@@ -1703,7 +1703,7 @@ mod tests {
 
     #[test]
     fn spawn_write_list_close_roundtrip() {
-        let mgr = PtyManager::new();
+        let mgr = PtyManager::cold_fixture();
         // The local fixture owns a real driver; no subscriber is required.
         let res = mgr
             .spawn(&SpawnOptions {
@@ -1732,7 +1732,7 @@ mod tests {
 
     #[test]
     fn unknown_session_is_error() {
-        let mgr = PtyManager::new();
+        let mgr = PtyManager::cold_fixture();
         assert!(mgr.resize("ghost", 24, 80).is_err());
         assert!(mgr.list().is_empty());
     }
@@ -1759,7 +1759,7 @@ mod tests {
         } else {
             ("sh", vec!["-c".into(), "read -r _; exit 3".into()])
         };
-        let mgr = PtyManager::new();
+        let mgr = PtyManager::cold_fixture();
         let sid = mgr
             .spawn(&SpawnOptions {
                 command: Some(cmd.into()),
@@ -1816,7 +1816,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         j::enable_for_test(tmp.path().to_path_buf());
         const PROGRAM: &str = "aleph-no-such-program-xyz";
-        let err = PtyManager::new()
+        let err = PtyManager::cold_fixture()
             .spawn(&SpawnOptions {
                 command: Some(PROGRAM.into()),
                 created_by: Some("u-alice".into()),
@@ -1861,7 +1861,7 @@ mod tests {
         let _g = j::test_gate();
         let tmp = tempfile::tempdir().unwrap();
         j::enable_for_test(tmp.path().to_path_buf());
-        let mgr = PtyManager::new();
+        let mgr = PtyManager::cold_fixture();
         let res = mgr
             .spawn(&SpawnOptions {
                 created_by: Some("u-alice".into()),
@@ -1908,7 +1908,7 @@ mod tests {
     /// deterministic, and it never thrashes between two live clients.
     #[test]
     fn the_smallest_attached_viewport_wins() {
-        let mgr = PtyManager::new();
+        let mgr = PtyManager::cold_fixture();
         let res = mgr
             .spawn(&SpawnOptions {
                 rows: 40,
@@ -1937,7 +1937,7 @@ mod tests {
     /// shell's death.
     #[test]
     fn the_owner_stamp_outlives_the_session_it_names() {
-        let mgr = PtyManager::new();
+        let mgr = PtyManager::cold_fixture();
         let sid = mgr
             .spawn(&SpawnOptions {
                 created_by: Some("u-alice".to_string()),
@@ -1974,7 +1974,7 @@ mod tests {
     /// stamp per shell it ever opened.
     #[test]
     fn owner_stamps_are_evicted_by_capacity() {
-        let mgr = PtyManager::new();
+        let mgr = PtyManager::cold_fixture();
         {
             let mut inner = mgr.inner.lock().expect("lock");
             for i in 0..(OWNER_RETENTION + 2) {
@@ -2024,7 +2024,7 @@ mod tests {
                 })
             }
         }
-        let mgr = PtyManager::new();
+        let mgr = PtyManager::cold_fixture();
         mgr.set_max_sessions(1);
         let opts = SpawnOptions {
             created_by: Some("owner".into()),
@@ -2054,7 +2054,7 @@ mod tests {
 
     #[test]
     fn live_owner_stamps_keep_their_fifo_position_during_churn() {
-        let mgr = PtyManager::new();
+        let mgr = PtyManager::cold_fixture();
         let sid = mgr
             .spawn(&SpawnOptions {
                 created_by: Some("long-lived-owner".into()),
@@ -2105,7 +2105,7 @@ mod tests {
     /// record creates an orphaned `viewports` entry for a dead session_id.
     #[test]
     fn note_viewport_on_unknown_session_is_an_error() {
-        let mgr = PtyManager::new();
+        let mgr = PtyManager::cold_fixture();
         assert!(mgr.note_viewport("ghost", "conn-a", 24, 80).is_err());
         // And it must not have recorded anything under that dead id.
         assert_eq!(mgr.effective_size("ghost"), None);
@@ -2116,7 +2116,7 @@ mod tests {
     /// must reach the grid that actually bounds the ring.
     #[test]
     fn the_configured_scrollback_reaches_the_session_grid() {
-        let mgr = PtyManager::new();
+        let mgr = PtyManager::cold_fixture();
         let sid = mgr
             .spawn(&SpawnOptions {
                 rows: 3,
@@ -2140,7 +2140,7 @@ mod tests {
     fn a_spawn_records_who_asked_for_it() {
         // A LOCAL PtyManager, so `list()` really is this test's own sessions.
         // Never index the process-global one -- see the handler test below.
-        let mgr = PtyManager::new();
+        let mgr = PtyManager::cold_fixture();
         let sid = mgr
             .spawn(&SpawnOptions {
                 created_by: Some("u-alice".to_string()),
@@ -2157,7 +2157,7 @@ mod tests {
     /// already open still open.
     #[test]
     fn close_all_terminates_every_live_session() {
-        let mgr = PtyManager::new();
+        let mgr = PtyManager::cold_fixture();
         let a = mgr.spawn(&SpawnOptions::default()).expect("a").session_id;
         let b = mgr.spawn(&SpawnOptions::default()).expect("b").session_id;
         assert_eq!(mgr.list().len(), 2);

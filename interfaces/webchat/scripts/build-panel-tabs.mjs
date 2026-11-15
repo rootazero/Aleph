@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { cp, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { brotliCompressSync, gzipSync } from 'node:zlib';
 
 const panel = resolve(import.meta.dir, '..');
 const root = resolve(panel, '../..');
@@ -21,7 +22,7 @@ if (args.some((arg) => arg !== '--clean' && !arg.startsWith('--output='))) {
 const run = async (command, cwd = root, env = process.env) => {
   console.log(`$ ${command.join(' ')}`);
   if (command[0] === 'cargo') {
-    await run(['python', memoryGate], root, env);
+    await run(['python3', memoryGate, '--required-bytes', '4294967296'], root, env);
   }
   const result = Bun.spawn(command, { cwd, env, stdin: 'ignore', stdout: 'inherit', stderr: 'inherit' });
   const exitCode = await result.exited;
@@ -30,7 +31,7 @@ const run = async (command, cwd = root, env = process.env) => {
 
 const capture = async (command, cwd = root, env = process.env) => {
   if (command[0] === 'cargo') {
-    await run(['python', memoryGate], root, env);
+    await run(['python3', memoryGate, '--required-bytes', '4294967296'], root, env);
   }
   const result = Bun.spawn(command, { cwd, env, stdout: 'pipe', stderr: 'inherit' });
   const value = await new Response(result.stdout).text();
@@ -43,19 +44,12 @@ const sourceInputs = [
   'Cargo.lock',
   'Cargo.toml',
   'interfaces/webchat/Cargo.toml',
-  'interfaces/webchat/src/app.rs',
-  'interfaces/webchat/src/lib.rs',
-  'interfaces/webchat/src/panel/loader.rs',
-  'interfaces/webchat/src/panel/mod.rs',
-  'interfaces/webchat/src/panel/projection.rs',
-  'interfaces/webchat/src/panel/registry.rs',
-  'interfaces/webchat/src/panel/sdk.rs',
-  'interfaces/webchat/src/panel/source.rs',
-  'interfaces/webchat/src/panel/shell.rs',
+  'interfaces/webchat/src',
+  'interfaces/webchat/scripts/build-panel-tabs.mjs',
   'interfaces/webchat/panel_loader.js',
   'interfaces/webchat/tabs/terminal/Cargo.toml',
-  'interfaces/webchat/tabs/terminal/src/lib.rs',
-  'interfaces/webchat/tabs/terminal/src/sdk.rs',
+  'interfaces/webchat/tabs/terminal/src',
+  'interfaces/webchat/tabs/terminal-ui/Cargo.toml',
   'interfaces/webchat/tabs/terminal-ui/src',
   'interfaces/webchat/styles/tailwind.css',
   'interfaces/webchat/index.html',
@@ -120,7 +114,7 @@ const hostWasm = join(output, 'target/wasm32-unknown-unknown', profile, 'aleph_p
 const terminalWasm = join(output, 'target/wasm32-unknown-unknown', profile, 'panel_tab_terminal.wasm');
 
 await run([
-  'cargo', 'build', '--locked', '-p', 'aleph-panel', '--lib', '--no-default-features',
+  'cargo', 'build', '--offline', '--locked', '--jobs', '1', '-p', 'aleph-panel', '--lib', '--no-default-features',
   '--features', 'panel-modular', '--profile', profile, '--target', 'wasm32-unknown-unknown',
 ], hostCwd, env);
 await run([
@@ -132,7 +126,7 @@ await Bun.write(join(output, 'aleph_panel_bg.wasm'), await Bun.file(join(output,
 await rm(join(output, 'aleph_panel_bg.optimized.wasm'), { force: true });
 
 await run([
-  'cargo', 'build', '--locked', '-p', 'panel-tab-terminal', '--lib', '--no-default-features',
+  'cargo', 'build', '--offline', '--locked', '--jobs', '1', '-p', 'panel-tab-terminal', '--lib', '--no-default-features',
   '--profile', profile, '--target', 'wasm32-unknown-unknown',
 ], terminalCwd, env);
 await run([
@@ -178,7 +172,7 @@ for (const [name, packageName, features] of [
   ['terminal', 'panel-tab-terminal', ['--no-default-features']],
 ]) {
   const tree = await capture([
-    'cargo', 'tree', '--locked', '-p', packageName, '--target', 'wasm32-unknown-unknown', ...features,
+    'cargo', 'tree', '--offline', '--locked', '-p', packageName, '--target', 'wasm32-unknown-unknown', ...features,
     '-e', 'normal', '--prefix', 'none', '--format', '{p}',
   ], packageName === 'aleph-panel' ? hostCwd : terminalCwd);
   await writeFile(join(output, `${name}-dependencies.txt`), tree + '\n');
@@ -202,5 +196,22 @@ await writeFile(join(output, 'build-inputs.json'), JSON.stringify({
   source_inputs: buildRecord.source_inputs,
   source_input_hashes: buildRecord.source_input_hashes,
 }, null, 2) + '\n');
+
+// Package the encodings selected by the production static server.
+const compressAssets = async (directory) => {
+  for (const file of await readdir(directory, { withFileTypes: true })) {
+    const path = join(directory, file.name);
+    if (file.isDirectory()) {
+      await compressAssets(path);
+      continue;
+    }
+    if (!/\.(html|css|js|wasm|json)$/.test(file.name)) continue;
+    const bytes = await readFile(path);
+    await writeFile(`${path}.br`, brotliCompressSync(bytes));
+    await writeFile(`${path}.gz`, gzipSync(bytes));
+  }
+};
+if ((await hashInputs()).buildId !== buildId) throw Error('Panel source inputs changed during build');
+await compressAssets(output);
 
 console.log(`Built ${output} with terminal entry ${entry}`);

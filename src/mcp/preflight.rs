@@ -97,7 +97,7 @@ fn redact_url_for_error(url: &str) -> String {
         let after_scheme = scheme_end + 3;
         if let Some(rest) = s.get(after_scheme..) {
             let authority_len = rest
-                .find(|c| c == '/' || c == '?' || c == '#')
+                .find(['/', '?', '#'])
                 .unwrap_or(rest.len());
             if let Some(at) = rest.get(..authority_len).and_then(|auth| auth.find('@')) {
                 let userinfo_end = after_scheme + at;

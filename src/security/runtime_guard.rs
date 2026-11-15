@@ -716,8 +716,10 @@ mod tests {
 
     #[tokio::test]
     async fn inbound_pii_filter_runs_when_leak_detection_disabled() {
-        let mut config = SecurityGuardConfig::default();
-        config.leak_detection = false;
+        let config = SecurityGuardConfig {
+            leak_detection: false,
+            ..SecurityGuardConfig::default()
+        };
         let guard = RuntimeSecurityGuard::new_without_audit(config);
         let result = guard
             .process_inbound("Call me at 13812345678", &SecurityContext::default())
@@ -750,9 +752,11 @@ mod tests {
 
     #[tokio::test]
     async fn inbound_without_security_filters_stays_clean() {
-        let mut config = SecurityGuardConfig::default();
-        config.leak_detection = false;
-        config.pii_filtering = false;
+        let config = SecurityGuardConfig {
+            leak_detection: false,
+            pii_filtering: false,
+            ..SecurityGuardConfig::default()
+        };
         let guard = RuntimeSecurityGuard::new_without_audit(config);
         let text = "Call me at 13812345678";
         let result = guard

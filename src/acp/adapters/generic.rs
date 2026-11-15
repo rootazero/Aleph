@@ -139,7 +139,6 @@ impl AcpAdapter for GenericAcpAdapter {
             env: self.env.clone(),
             timeout: self.timeout.max(Duration::from_secs(1)),
             permission_policy: self.permission_policy(),
-            ..Default::default()
         }
     }
 
@@ -173,7 +172,6 @@ impl AcpAdapter for GenericAcpAdapter {
             env: self.env.clone(),
             timeout,
             permission_policy: self.permission_policy(),
-            ..Default::default()
         };
         let mut session = AcpSession::spawn(self.id(), &config).await?;
         session.initialize(timeout).await?;

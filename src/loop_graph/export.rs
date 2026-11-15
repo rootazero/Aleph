@@ -221,15 +221,13 @@ fn dot_escape<'a>(s: &'a str) -> Cow<'a, str> {
 }
 
 fn truncate_chars<'a>(s: &'a str, max: usize) -> Cow<'a, str> {
-    let mut char_count = 0;
-    for (byte_idx, _) in s.char_indices() {
+    for (char_count, (byte_idx, _)) in s.char_indices().enumerate() {
         if char_count == max {
             let mut out = String::with_capacity(byte_idx + '…'.len_utf8());
             out.push_str(&s[..byte_idx]);
             out.push('…');
             return Cow::Owned(out);
         }
-        char_count += 1;
     }
     Cow::Borrowed(s)
 }

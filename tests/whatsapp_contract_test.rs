@@ -16,8 +16,8 @@ fn test_whatsapp_properties() {
     test_channel_properties(&channel);
 
     assert_eq!(channel.channel_type(), "whatsapp");
-    assert!(channel.capabilities().images);
-    assert!(channel.capabilities().audio);
+    assert!(!channel.capabilities().images);
+    assert!(!channel.capabilities().audio);
     assert!(channel.capabilities().reactions);
     assert!(channel.capabilities().replies);
     assert!(channel.capabilities().read_receipts);

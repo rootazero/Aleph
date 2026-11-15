@@ -117,6 +117,13 @@ impl special_backend::CapabilityHandler for LegacyHandlerAdapter {
 #[derive(Clone)]
 pub struct LegacyCapabilityHandlerRegistry {
     special: special_backend::CapabilityHandlerRegistry,
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "legacy dispatch still emits invocation events while in-crate terminal/UI callers migrate"
+        )
+    )]
     events: Option<CapabilityEventEmitter>,
 }
 
@@ -175,6 +182,13 @@ impl LegacyCapabilityHandlerRegistry {
             })
     }
 
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "legacy synchronous dispatch remains for compatibility migration; no production caller is wired yet"
+        )
+    )]
     pub(crate) fn dispatch(
         &self,
         id: &CapabilityId,

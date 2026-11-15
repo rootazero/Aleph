@@ -488,10 +488,6 @@ where
     h
 }
 
-fn fxhash_str(s: &str) -> u64 {
-    fxhash_bytes_iter([s.as_bytes()])
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

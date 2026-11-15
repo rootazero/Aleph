@@ -248,7 +248,7 @@ fn skip_escape_sequence(chars: &mut std::str::Chars<'_>) {
     match chars.next() {
         // CSI — parameters and intermediates, then a final byte in 0x40..=0x7E.
         Some('[') => {
-            while let Some(c) = chars.next() {
+            for c in chars.by_ref() {
                 if ('\u{40}'..='\u{7e}').contains(&c) {
                     break;
                 }
@@ -257,7 +257,7 @@ fn skip_escape_sequence(chars: &mut std::str::Chars<'_>) {
         // OSC / DCS / SOS / PM / APC — a string, terminated by BEL or ST
         // (ESC \).
         Some(']' | 'P' | 'X' | '^' | '_') => {
-            while let Some(c) = chars.next() {
+            for c in chars.by_ref() {
                 if c == '\u{7}' {
                     break;
                 }
@@ -270,11 +270,10 @@ fn skip_escape_sequence(chars: &mut std::str::Chars<'_>) {
         }
         // A two-byte escape, optionally with an intermediate byte
         // (ESC ( B — a charset designator).
-        Some(c) => {
-            if ('\u{20}'..='\u{2f}').contains(&c) {
-                let _ = chars.next();
-            }
+        Some(c) if ('\u{20}'..='\u{2f}').contains(&c) => {
+            let _ = chars.next();
         }
+        Some(_) => {}
         None => {}
     }
 }

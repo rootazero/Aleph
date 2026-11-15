@@ -170,8 +170,10 @@ pub(crate) async fn validate_request_url(
     provider_name: &str,
     allow_private_network: bool,
 ) -> Result<()> {
-    let mut policy = crate::security::ssrf::SsrfPolicy::default();
-    policy.allow_private_network = allow_private_network;
+    let policy = crate::security::ssrf::SsrfPolicy {
+        allow_private_network,
+        ..Default::default()
+    };
     let mut url_for_validation = url::Url::parse(url)
         .map_err(|e| AlephError::network(format!("{provider_name} URL validation failed: {e}")))?;
     if url_for_validation.password().is_some() || !url_for_validation.username().is_empty() {

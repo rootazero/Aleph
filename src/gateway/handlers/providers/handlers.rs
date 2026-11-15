@@ -349,7 +349,7 @@ async fn create_provider_inner(
     // Snapshot (name + the built provider) for live registration. The
     // provider is built unconditionally (the build is the protocol
     // validation); it is only handed to a registry when one is attached.
-    let mut registration: Option<(String, Arc<dyn crate::providers::AiProvider>)> = None;
+    let registration: (String, Arc<dyn crate::providers::AiProvider>);
 
     // Create provider
     {
@@ -385,7 +385,7 @@ async fn create_provider_inner(
         // mode (no live registry attached).
         match crate::providers::create_provider(&params.name, provider_config.clone()) {
             Ok(provider) => {
-                registration = Some((params.name.clone(), provider));
+                registration = (params.name.clone(), provider);
             }
             Err(e) => {
                 error!(name = %params.name, error = %e, "Failed to build provider");
@@ -434,7 +434,8 @@ async fn create_provider_inner(
     // auto-derived failover fallback without a restart (mirrors set_default's
     // runtime swap). The provider was already built above — a build failure
     // aborted the request before the credential or the config was touched.
-    if let (Some(registry), Some((name, provider))) = (&multi_registry, registration) {
+    if let Some(registry) = &multi_registry {
+        let (name, provider) = registration;
         registry.register(name.clone(), provider);
         constructed = true;
         info!(name = %name, "Provider registered in live registry");

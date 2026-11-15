@@ -249,7 +249,7 @@ impl StabilityImageProvider {
         }
     }
 
-    /// Parse API error response and convert to `GenerationError`
+    #[cfg(test)]
     fn parse_error_response(status: reqwest::StatusCode, body: &str) -> GenerationError {
         Self::parse_error_response_for_model(status, body, DEFAULT_MODEL)
     }

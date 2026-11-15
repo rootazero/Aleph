@@ -249,10 +249,14 @@ struct PendingRegistration {
     pending: Arc<RwLock<HashMap<String, PendingEntry>>>,
     id: String,
     generation: Arc<()>,
+    armed: bool,
 }
 
 impl Drop for PendingRegistration {
     fn drop(&mut self) {
+        if !self.armed {
+            return;
+        }
         let mut pending = self.pending.write().unwrap_or_else(|e| e.into_inner());
         if pending
             .get(&self.id)
@@ -281,6 +285,9 @@ impl Future for RegisteredApprovalReceiver {
                 // Normal completion is removed by `await_registered`, which
                 // must harvest the resolver's denial reason first. Cancellation
                 // remains armed so dropping the wait retires this registration.
+                if let Some(cleanup) = this.cleanup.as_mut() {
+                    cleanup.armed = false;
+                }
                 this.cleanup = None;
                 Poll::Ready(result)
             }
@@ -669,17 +676,19 @@ impl ExecApprovalManager {
             generation
         };
 
-        let cleanup = PendingRegistration {
+        // Operator registrations are retired by their outer registration guard.
+        let cleanup = (!operator_once).then(|| PendingRegistration {
             pending: self.pending.clone(),
             id: id.clone(),
             generation: generation.clone(),
-        };
+            armed: true,
+        });
         (
             id,
             RegisteredApprovalReceiver {
                 receiver: rx,
                 generation: Some(generation.clone()),
-                cleanup: Some(cleanup),
+                cleanup,
             },
             timeout,
             Some(generation),
@@ -3220,6 +3229,22 @@ mod tests {
     /// without cascading — the bridge uses this on a delivery failure (the
     /// card never reached anyone) so a transient channel hiccup is not
     /// misfiled as a `UserRejected` denial by the brute-force breaker.
+    #[tokio::test]
+    async fn dropping_a_pending_ordinary_wait_removes_its_registration() {
+        let manager = ExecApprovalManager::new();
+        let (id, rx, timeout) = manager.register_pending(manager.create(&mock_request(), 60_000));
+        let mut wait = Box::pin(manager.await_registered(id.clone(), rx, timeout));
+        assert!(std::future::Future::poll(
+            wait.as_mut(),
+            &mut std::task::Context::from_waker(std::task::Waker::noop())
+        )
+        .is_pending());
+        assert!(manager.pending.read().unwrap().contains_key(&id));
+
+        drop(wait);
+        assert!(!manager.pending.read().unwrap().contains_key(&id));
+    }
+
     #[tokio::test]
     async fn retire_pending_removes_live_entry_without_stamping_decision() {
         let manager = ExecApprovalManager::new();

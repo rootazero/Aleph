@@ -54,7 +54,7 @@ pub enum PolicyDenial {
     #[error("principal mismatch: expected {expected:?}, got {actual:?}")]
     PrincipalMismatch {
         expected: OwnerRef,
-        actual: OwnerRef,
+        actual: Box<OwnerRef>,
     },
 
     /// The visibility scope does not match the request.
@@ -166,7 +166,7 @@ impl PolicyEngine {
         if &owner != principal {
             return Err(PolicyDenial::PrincipalMismatch {
                 expected: owner.clone(),
-                actual: principal.clone(),
+                actual: Box::new(principal.clone()),
             });
         }
 
@@ -227,7 +227,7 @@ impl PolicyEngine {
         if current_owner != lease.owner {
             return Err(PolicyDenial::PrincipalMismatch {
                 expected: lease.owner.clone(),
-                actual: current_owner,
+                actual: Box::new(current_owner),
             });
         }
 
@@ -251,7 +251,7 @@ impl PolicyEngine {
                 _ => {
                     return Err(PolicyDenial::ApprovalRequired {
                         context: required_approval.clone(),
-                    })
+                    });
                 }
             }
         }
@@ -518,10 +518,11 @@ mod tests {
             )
             .unwrap();
 
-        let mut descriptor_vis = VisibilityScope::default();
-        descriptor_vis.approval = Some("admin-approval".to_string());
+        let descriptor_vis = VisibilityScope {
+            approval: Some("admin-approval".to_string()),
+            ..VisibilityScope::default()
+        };
         let descriptor = fake_descriptor(cap.clone(), descriptor_vis, LifetimeScope::Runtime);
-
         let result = policy.resolve(&cap, &owner, &vis, &descriptor);
         assert!(matches!(result, Err(PolicyDenial::ApprovalRequired { .. })));
     }
@@ -531,8 +532,10 @@ mod tests {
         let tree = OwnershipTree::new();
         let policy = PolicyEngine::new(tree);
         let cap = cap_id("approved");
-        let mut vis = VisibilityScope::default();
-        vis.approval = Some("admin-approval".to_string());
+        let vis = VisibilityScope {
+            approval: Some("admin-approval".to_string()),
+            ..VisibilityScope::default()
+        };
         let owner = OwnerRef::Runtime;
 
         policy
@@ -545,8 +548,10 @@ mod tests {
             )
             .unwrap();
 
-        let mut descriptor_vis = VisibilityScope::default();
-        descriptor_vis.approval = Some("admin-approval".to_string());
+        let descriptor_vis = VisibilityScope {
+            approval: Some("admin-approval".to_string()),
+            ..VisibilityScope::default()
+        };
         let descriptor = fake_descriptor(cap.clone(), descriptor_vis, LifetimeScope::Runtime);
 
         let lease = policy.resolve(&cap, &owner, &vis, &descriptor).unwrap();
@@ -571,8 +576,10 @@ mod tests {
             )
             .unwrap();
 
-        let mut descriptor_vis = VisibilityScope::default();
-        descriptor_vis.allowed_kinds = Some(vec!["Skill".to_string(), "Agent".to_string()]);
+        let descriptor_vis = VisibilityScope {
+            allowed_kinds: Some(vec!["Skill".to_string(), "Agent".to_string()]),
+            ..VisibilityScope::default()
+        };
         let descriptor = fake_descriptor(cap.clone(), descriptor_vis, LifetimeScope::Runtime);
 
         let result = policy.resolve(&cap, &owner, &vis, &descriptor);
@@ -597,8 +604,10 @@ mod tests {
             )
             .unwrap();
 
-        let mut descriptor_vis = VisibilityScope::default();
-        descriptor_vis.allowed_ids = Some(vec!["allowed-id".to_string()]);
+        let descriptor_vis = VisibilityScope {
+            allowed_ids: Some(vec!["allowed-id".to_string()]),
+            ..VisibilityScope::default()
+        };
         let descriptor = fake_descriptor(cap.clone(), descriptor_vis, LifetimeScope::Runtime);
 
         let result = policy.resolve(&cap, &owner, &vis, &descriptor);
@@ -775,11 +784,13 @@ mod tests {
         let cap = cap_id("multi-constraint");
         let owner = OwnerRef::Runtime;
 
-        let mut vis = VisibilityScope::default();
-        vis.principal = Some("agent-a".to_string());
-        vis.workspace = Some("workspace-a".to_string());
-        vis.session = Some(SessionKey::new("test", "."));
-        vis.approval = Some("admin".to_string());
+        let vis = VisibilityScope {
+            principal: Some("agent-a".to_string()),
+            workspace: Some("workspace-a".to_string()),
+            session: Some(SessionKey::new("test", ".")),
+            approval: Some("admin".to_string()),
+            ..VisibilityScope::default()
+        };
 
         policy
             .tree

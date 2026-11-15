@@ -128,6 +128,10 @@ fn shared_spawn_params_preserve_existing_rpc_defaults() {
 #[serial_test::serial(pty_global_manager)]
 async fn full_pty_can_close_and_old_capture_cannot_restart_it() {
     let manager = pty::manager();
+    manager
+        .deactivate()
+        .await
+        .expect("join the previous test driver before replacing its event bus");
     let _provider_handle = manager.provider_handle();
     let bus = crate::sync_primitives::Arc::new(crate::gateway::event_bus::GatewayEventBus::new());
     let generation = manager.activate(bus).expect("real manager activation");
@@ -303,6 +307,10 @@ async fn execute_terminal_tool(
 async fn registered_terminal_tool_executes_real_spawn_and_existing_list() {
     let (facade, source, tools) = terminal_tool_domain(BTreeMap::new());
     let manager = pty::manager();
+    manager
+        .deactivate()
+        .await
+        .expect("join the previous test driver before replacing its event bus");
     let generation = manager
         .activate(crate::sync_primitives::Arc::new(
             crate::gateway::event_bus::GatewayEventBus::new(),
@@ -367,6 +375,10 @@ async fn denied_spawn_has_zero_effect_under_allocate_policy() {
     );
     let (facade, source, tools) = terminal_tool_domain(constraints);
     let manager = pty::manager();
+    manager
+        .deactivate()
+        .await
+        .expect("join the previous test driver before replacing its event bus");
     manager
         .activate(crate::sync_primitives::Arc::new(
             crate::gateway::event_bus::GatewayEventBus::new(),
@@ -453,6 +465,10 @@ async fn stage_a_plain_terminal_replacement_cannot_defer_runtime_policy() {
 #[tokio::test]
 #[serial_test::serial(pty_global_manager)]
 async fn stage_a_stable_terminal_deny_reaches_existing_session_ingress() {
+    pty::manager()
+        .deactivate()
+        .await
+        .expect("join the previous test driver before replacing its event bus");
     let constraints = BTreeMap::from([(
         "aleph/tools/terminal_capability".into(),
         CapabilityConstraintRule {
@@ -990,6 +1006,10 @@ fn a_stage_a2_closed_and_stopped_pty_fact_sources_are_reclaimed() {
 #[serial_test::serial(pty_global_manager)]
 async fn stage_a_canonical_pty_sessions_uses_real_occupancy_and_allows_close() {
     use crate::config::types::policies::capability_constraints::ResourceUnit;
+    pty::manager()
+        .deactivate()
+        .await
+        .expect("join the previous test driver before replacing its event bus");
     let constraints = BTreeMap::from([(
         "aleph/tools/terminal_capability".into(),
         CapabilityConstraintRule {
@@ -1060,6 +1080,10 @@ async fn stage_a_canonical_pty_sessions_uses_real_occupancy_and_allows_close() {
 #[tokio::test]
 #[serial_test::serial(pty_global_manager)]
 async fn stage_a_resize_uses_real_connection_minimum_and_disconnect_growth() {
+    pty::manager()
+        .deactivate()
+        .await
+        .expect("join the previous test driver before replacing its event bus");
     let (facade, source, tools) = terminal_tool_domain(BTreeMap::new());
     let manager = pty::manager();
     let generation = manager
@@ -1133,6 +1157,10 @@ async fn stage_a_resize_uses_real_connection_minimum_and_disconnect_growth() {
 async fn gateway_facade_rejects_captured_session_after_provider_restart() {
     let (_facade, source, _tools) = terminal_tool_domain(BTreeMap::new());
     let manager = pty::manager();
+    manager
+        .deactivate()
+        .await
+        .expect("join the previous test driver before replacing its event bus");
     let first_generation = manager
         .activate(crate::sync_primitives::Arc::new(
             crate::gateway::event_bus::GatewayEventBus::new(),
@@ -1182,6 +1210,10 @@ async fn gateway_facade_rejects_captured_session_after_provider_restart() {
 async fn addressed_handler_rejects_stale_generation_before_effect() {
     let (_facade, source, _tools) = terminal_tool_domain(BTreeMap::new());
     let manager = pty::manager();
+    manager
+        .deactivate()
+        .await
+        .expect("join the previous test driver before replacing its event bus");
     let first_generation = manager
         .activate(crate::sync_primitives::Arc::new(
             crate::gateway::event_bus::GatewayEventBus::new(),

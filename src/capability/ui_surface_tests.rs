@@ -746,7 +746,7 @@ impl GuardFixture {
         tree.register(
             descriptor.id.clone(),
             descriptor.owner.clone(),
-            descriptor.lifetime.clone(),
+            descriptor.lifetime,
             descriptor.visibility.clone(),
         )
         .unwrap();

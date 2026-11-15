@@ -115,6 +115,7 @@ impl FirecrawlFetchProvider {
         scrape_url
             .path_segments_mut()
             .map_err(|_| AlephError::invalid_config("firecrawl base_url cannot be a base"))?
+            .pop_if_empty()
             .extend(&["v2", "scrape"]);
         Ok(Self {
             api_key,

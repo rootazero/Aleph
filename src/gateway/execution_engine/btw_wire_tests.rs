@@ -274,7 +274,7 @@ fn execute_redirects_before_it_admits() {
         .find("redirect_to_side_session(&mut request)")
         .expect("execute() still redirects; if this moved, so did the invariant");
     let admit = production
-        .find("self.admit_run(")
+        .find(".admit_run(")
         .expect("execute() still admits; the scan stopped matching, so its green means nothing");
 
     assert!(

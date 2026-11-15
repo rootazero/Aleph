@@ -66,10 +66,13 @@ impl EventEmitter for TelegramEventEmitter {
                 "Telegram delivery task failed: {error}"
             ))),
         };
-        // Wait for final text before the single media drain, even on text failure.
-        // No event is forwarded to the media leg, so it cannot duplicate text.
+        // RunComplete drains media after text; RunError discards pending
+        // attachments without starting another transport operation. The media
+        // leg never re-emits the terminal text.
         if run_ended {
             self.media.deliver_run_media().await;
+        } else {
+            drop(self.media.drain_and_send_media().await);
         }
         completion.and(forwarded)
     }
@@ -192,7 +195,7 @@ mod tests {
             crate::gateway::media::resolved_test_attachment(),
         ]));
         let emitter = emitter_with("run", pending.clone());
-        emitter
+        let result = emitter
             .emit(StreamEvent::RunError {
                 run_id: "run".into(),
                 seq: 3,
@@ -200,8 +203,11 @@ mod tests {
                 error_code: None,
                 session_key: None,
             })
-            .await
-            .unwrap();
+            .await;
+        assert!(matches!(
+            result,
+            Err(EventEmitError::EventBus(error)) if error.contains("run failed: boom")
+        ));
         assert!(pending.lock().await.is_empty());
     }
 

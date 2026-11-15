@@ -1265,7 +1265,7 @@ mod tests {
         let inbound = InboundMessage {
             id: MessageId::new("17"),
             channel_id: ChannelId::new("telegram"),
-            conversation_id: ConversationId::new("-100:5"),
+            conversation_id: ConversationId::new("-100:topic:5"),
             sender_id: UserId::new("42"),
             sender_name: None,
             text: "hello".into(),
@@ -1283,7 +1283,7 @@ mod tests {
         );
         assert!(!streaming_delivery.config.send_typing);
         let result = channel
-            .send(OutboundMessage::text("-100:5", "answer"))
+            .send(OutboundMessage::text("-100:topic:5", "answer"))
             .await
             .unwrap();
         assert_eq!(result.message_id.as_str(), "42");

@@ -1786,6 +1786,20 @@ impl ChannelRegistry {
                 Err(ChannelError::RateLimited { retry_after_secs })
                     if retries_left > 0 && policy == OutboundDeliveryPolicy::Automatic =>
                 {
+                    if let AttemptKind::Replay { store, record_id } = kind {
+                        // A 429 is a definite pre-delivery refusal. Release only
+                        // this completed attempt's stamp; the next iteration
+                        // must revalidate the row and policy before re-stamping.
+                        if store.clear_inflight(record_id).is_err() {
+                            return Attempt {
+                                result: Err(ChannelError::ConfigError(
+                                    "delivery state unavailable: rate-limit retry refused".into(),
+                                )),
+                                policy: Some(policy),
+                                replay_refused: true,
+                            };
+                        }
+                    }
                     let wait =
                         Duration::from_secs(retry_after_secs).min(self.send_retry.max_retry_after);
                     warn!(
@@ -4305,6 +4319,13 @@ mod tests {
             0,
             "new Box must receive no replay"
         );
+        assert_eq!(
+            store
+                .reconcile_inflight(super::super::delivery_queue::now_secs())
+                .unwrap(),
+            0,
+            "a definite 429 refusal must not leave an unknown-outcome stamp"
+        );
         // Refusal is not classification: the refused replay leaves the row for
         // the guarded prepare path, which sees the live ExplicitOnly policy.
         registry.prepare_delivery_store_on(&store).await.unwrap();
@@ -4312,9 +4333,11 @@ mod tests {
         let letter = store.recent_dead_letters(1).unwrap().remove(0);
         assert_eq!(
             letter.reason,
-            DeadLetterReason::UnknownOutcome,
-            "first attempt was on wire"
+            DeadLetterReason::ExplicitOnlyRetired,
+            "the first attempt was definitely refused before delivery"
         );
+        assert!(letter.reason.replay_safe());
+        assert!(!letter.reason.redrivable());
         assert!(letter.retired_by_policy);
         assert!(!format!("{letter:?}").contains("private-replay-body"));
     }

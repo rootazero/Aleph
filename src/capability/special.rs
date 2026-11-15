@@ -214,7 +214,7 @@ struct TerminalPolicySource {
 /// Immutable registry record retained by an admitted capture.
 #[derive(Clone)]
 pub struct CapturedSpecialEntry {
-    descriptor: CapabilityDescriptor,
+    descriptor: Arc<CapabilityDescriptor>,
     schema: Value,
     canonical_schema: Arc<[u8]>,
     handler: Arc<dyn CapabilityHandler>,
@@ -298,7 +298,7 @@ impl CapturedSpecialEntry {
 
     #[must_use]
     pub fn descriptor(&self) -> &CapabilityDescriptor {
-        &self.descriptor
+        self.descriptor.as_ref()
     }
 
     #[must_use]
@@ -609,7 +609,7 @@ impl CapabilityHandlerRegistry {
             }
         }
         let capture = CapturedSpecialEntry {
-            descriptor: registration.descriptor,
+            descriptor: Arc::new(registration.descriptor),
             schema: registration.schema,
             canonical_schema: Arc::from(canonical_schema),
             handler: registration.handler,
@@ -654,7 +654,7 @@ impl CapabilityHandlerRegistry {
             .read()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         state.entries.get(id).map(|entry| CapturedSpecialEntry {
-            descriptor: entry.capture.descriptor.clone(),
+            descriptor: Arc::clone(&entry.capture.descriptor),
             schema: entry.capture.schema.clone(),
             canonical_schema: Arc::clone(&entry.capture.canonical_schema),
             handler: Arc::clone(&entry.capture.handler),
@@ -918,7 +918,7 @@ impl CapabilityHandlerRegistry {
                         .is_none_or(|namespace| entry.capture.descriptor.id.namespace == *namespace)
             })
             .map(|entry| CapturedSpecialEntry {
-                descriptor: entry.capture.descriptor.clone(),
+                descriptor: Arc::clone(&entry.capture.descriptor),
                 schema: entry.capture.schema.clone(),
                 canonical_schema: Arc::clone(&entry.capture.canonical_schema),
                 handler: Arc::clone(&entry.capture.handler),
@@ -943,6 +943,13 @@ impl CapabilityHandlerRegistry {
     /// Compatibility-only bridge for the old synchronous terminal/UI tests.
     /// It still resolves the handler from this registry; it does not own a
     /// second descriptor or handler map.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "retained only for the legacy registry bridge until synchronous terminal/UI callers migrate"
+        )
+    )]
     pub(crate) fn dispatch_legacy(
         &self,
         id: &CapabilityId,
@@ -1048,13 +1055,14 @@ impl CapabilityHandlerRegistry {
 
 impl crate::capability::backend::CapabilityBackend for CapabilityHandlerRegistry {
     fn lookup(&self, id: &CapabilityId) -> Option<CapabilityDescriptor> {
-        self.capture(id).map(|capture| capture.descriptor.clone())
+        self.capture(id)
+            .map(|capture| capture.descriptor.as_ref().clone())
     }
 
     fn enumerate(&self, scope: &Scope) -> Vec<CapabilityDescriptor> {
         self.describe(scope)
             .into_iter()
-            .map(|capture| capture.descriptor.clone())
+            .map(|capture| capture.descriptor.as_ref().clone())
             .collect()
     }
 

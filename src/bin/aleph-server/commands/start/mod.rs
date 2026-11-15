@@ -1843,7 +1843,7 @@ async fn start_server_body(
         let mut provider_owners = std::collections::HashMap::new();
         let mut provider_configs = Vec::new();
         let mut providers = app_cfg.providers.iter().collect::<Vec<_>>();
-        providers.sort_by(|(left, _), (right, _)| left.cmp(right));
+        providers.sort_by_key(|(left, _)| *left);
         for (name, config) in providers {
             provider_configs.push((name.clone(), config.clone()));
             match build_http_provider(name, config) {

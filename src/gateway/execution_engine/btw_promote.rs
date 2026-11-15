@@ -82,11 +82,18 @@ where
         // ordinary turn. `stamp_attribution` writes only on create and
         // `attribution_backfill` only fills NULLs, so a wrong stamp here is
         // permanent and takes the room out of every member's sight.
-        crate::scope::with_scope(
+        let session_preparation = crate::scope::with_scope(
             super::run_loop::scope_for_session(&request.metadata, main),
             agent.ensure_session(main),
         )
         .await;
+        if let Err(error) = session_preparation {
+            let error =
+                ExecutionError::Failed(format!("session metadata preparation failed: {error}"));
+            self.emit_pre_admission_run_error(emitter, run_id, main, request, &error)
+                .await;
+            return Err(error);
+        }
 
         // Announced before the work, not after: this is the ONE frame carrying
         // `{run_id, session_key}`, so it is what seeds `EventVisibilityIndex`'s

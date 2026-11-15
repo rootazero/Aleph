@@ -49,6 +49,16 @@ struct StreamState {
     sequence_number: u64,
 }
 
+impl StreamState {
+    fn event(&mut self, event_type: &str, mut data: Value) -> String {
+        data.as_object_mut()
+            .expect("Responses SSE event payloads are objects")
+            .insert("sequence_number".into(), json!(self.sequence_number));
+        self.sequence_number += 1;
+        sse_event(event_type, &data)
+    }
+}
+
 // =============================================================================
 // provider_deltas_to_responses_sse
 // =============================================================================
@@ -106,22 +116,20 @@ pub fn provider_deltas_to_responses_sse(
             match state.deltas.next().await {
                 None => {
                     // Stream ended unexpectedly — emit completed with what we have
-                    let frame = completed_frame(&state);
+                    let frame = completed_frame(&mut state);
                     state.done = true;
                     return Some((frame, state));
                 }
                 Some(Err(e)) => {
-                    let frame = sse_event(
-                        "response.failed",
-                        &json!({
-                            "id": state.resp_id,
-                            "object": "response",
-                            "error": {
-                                "message": e.to_string(),
-                                "type": "server_error"
-                            }
-                        }),
-                    );
+                    let data = json!({
+                        "id": state.resp_id,
+                        "object": "response",
+                        "error": {
+                            "message": e.to_string(),
+                            "type": "server_error"
+                        }
+                    });
+                    let frame = state.event("response.failed", data);
                     state.done = true;
                     return Some((frame, state));
                 }
@@ -129,9 +137,9 @@ pub fn provider_deltas_to_responses_sse(
                     match delta {
                         ProviderDelta::TextDelta(s) => {
                             state.text_content.push_str(&s);
-                            let frame = sse_event(
+                            let frame = state.event(
                                 "response.output_text.delta",
-                                &json!({
+                                json!({
                                     "type": "response.output_text.delta",
                                     "delta": s,
                                 }),
@@ -139,9 +147,9 @@ pub fn provider_deltas_to_responses_sse(
                             return Some((frame, state));
                         }
                         ProviderDelta::ThinkingDelta(s) => {
-                            let frame = sse_event(
+                            let frame = state.event(
                                 "response.reasoning.delta",
-                                &json!({
+                                json!({
                                     "type": "response.reasoning.delta",
                                     "delta": s,
                                 }),
@@ -158,9 +166,9 @@ pub fn provider_deltas_to_responses_sse(
                             state
                                 .tool_calls
                                 .push((id.clone(), name.clone(), String::new()));
-                            let frame = sse_event(
+                            let frame = state.event(
                                 "response.output_item.added",
-                                &json!({
+                                json!({
                                     "type": "response.output_item.added",
                                     "item": super::function_call_item(&id, &name, ""),
                                 }),
@@ -177,9 +185,9 @@ pub fn provider_deltas_to_responses_sse(
                             {
                                 entry.2.push_str(&arg_frag);
                             }
-                            let frame = sse_event(
+                            let frame = state.event(
                                 "response.function_call_arguments.delta",
-                                &json!({
+                                json!({
                                     "type": "response.function_call_arguments.delta",
                                     "call_id": id,
                                     "delta": arg_frag,
@@ -210,9 +218,9 @@ pub fn provider_deltas_to_responses_sse(
                                 .find(|(tid, _, _)| tid == &id)
                                 .map(|(_, _, a)| a.clone())
                                 .unwrap_or_default();
-                            let frame = sse_event(
+                            let frame = state.event(
                                 "response.function_call_arguments.done",
-                                &json!({
+                                json!({
                                     "type": "response.function_call_arguments.done",
                                     "call_id": id,
                                     "arguments": args,
@@ -231,9 +239,8 @@ pub fn provider_deltas_to_responses_sse(
                         }
                         ProviderDelta::Done(reason) => {
                             let frame = match reason {
-                                crate::providers::StopReason::MaxTokens => sse_event(
-                                    "response.incomplete",
-                                    &json!({
+                                crate::providers::StopReason::MaxTokens => {
+                                    let data = json!({
                                         "id": state.resp_id,
                                         "object": "response",
                                         "status": "incomplete",
@@ -241,25 +248,24 @@ pub fn provider_deltas_to_responses_sse(
                                             "reason": "max_output_tokens"
                                         },
                                         "usage": state.usage
-                                    }),
-                                ),
-                                _ => completed_frame(&state),
+                                    });
+                                    state.event("response.incomplete", data)
+                                }
+                                _ => completed_frame(&mut state),
                             };
                             state.done = true;
                             return Some((frame, state));
                         }
                         ProviderDelta::Error(e) => {
-                            let frame = sse_event(
-                                "response.failed",
-                                &json!({
-                                    "id": state.resp_id,
-                                    "object": "response",
-                                    "error": {
-                                        "message": e,
-                                        "type": "server_error"
-                                    }
-                                }),
-                            );
+                            let data = json!({
+                                "id": state.resp_id,
+                                "object": "response",
+                                "error": {
+                                    "message": e,
+                                    "type": "server_error"
+                                }
+                            });
+                            let frame = state.event("response.failed", data);
                             state.done = true;
                             return Some((frame, state));
                         }
@@ -275,7 +281,7 @@ pub fn provider_deltas_to_responses_sse(
 }
 
 /// Build the `response.completed` SSE frame from accumulated state.
-fn completed_frame(state: &StreamState) -> String {
+fn completed_frame(state: &mut StreamState) -> String {
     // Build output items
     let mut output = Vec::new();
 
@@ -299,18 +305,16 @@ fn completed_frame(state: &StreamState) -> String {
         |u| serde_json::to_value(u).unwrap_or(json!({})),
     );
 
-    sse_event(
-        "response.completed",
-        &json!({
-            "id": state.resp_id,
-            "object": "response",
-            "created_at": state.created_at,
-            "status": "completed",
-            "model": state.model,
-            "output": output,
-            "usage": usage,
-        }),
-    )
+    let data = json!({
+        "id": state.resp_id,
+        "object": "response",
+        "created_at": state.created_at,
+        "status": "completed",
+        "model": state.model,
+        "output": output,
+        "usage": usage,
+    });
+    state.event("response.completed", data)
 }
 
 // =============================================================================
@@ -367,8 +371,20 @@ mod tests {
         assert!(frames[1].contains("Hello "));
         assert!(frames[2].contains("response.output_text.delta"));
         assert!(frames[2].contains("world"));
-        assert!(frames[3].contains("response.completed"));
         assert!(frames[3].contains("Hello world"));
+        let sequences: Vec<_> = frames
+            .iter()
+            .map(|frame| {
+                let data = frame
+                    .lines()
+                    .find_map(|line| line.strip_prefix("data: "))
+                    .unwrap();
+                serde_json::from_str::<Value>(data).unwrap()["sequence_number"]
+                    .as_u64()
+                    .unwrap()
+            })
+            .collect();
+        assert_eq!(sequences, vec![0, 1, 2, 3]);
     }
 
     #[tokio::test]

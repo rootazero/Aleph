@@ -21,7 +21,7 @@ fn test_mattermost_properties() {
     assert_eq!(channel.channel_type(), "mattermost");
     assert!(channel.capabilities().typing_indicator);
     assert!(channel.capabilities().reactions);
-    assert!(channel.capabilities().attachments);
+    assert!(!channel.capabilities().attachments);
     assert!(channel.capabilities().rich_text);
     assert!(channel.capabilities().editing);
     assert!(channel.capabilities().deletion);

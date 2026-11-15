@@ -130,7 +130,7 @@ impl ActiveHoursSchedule {
         let minute_of_day = (dt.hour() * 60 + dt.minute()) as u16;
         self.windows
             .get(weekday_idx)
-            .map_or(false, |wins| wins.iter().any(|w| w.contains(minute_of_day)))
+            .is_some_and(|wins| wins.iter().any(|w| w.contains(minute_of_day)))
     }
 
     /// Compute the next ms-since-epoch when this schedule opens, starting

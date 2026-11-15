@@ -80,18 +80,14 @@ impl ToolQuery {
     /// 4. Max depth: 3 levels
     pub async fn resolve_command(&self, input: &str) -> Option<super::types::ResolvedCommand> {
         let trimmed = input.trim();
-        let Some(without_slash) = trimmed.strip_prefix('/') else {
-            return None;
-        };
+        let without_slash = trimmed.strip_prefix('/')?;
         if without_slash.is_empty() {
             return None;
         }
 
         // Split into words
         let all_words: Vec<&str> = without_slash.split_whitespace().collect();
-        let Some((first_word_raw, rest_words)) = all_words.split_first() else {
-            return None;
-        };
+        let (first_word_raw, rest_words) = all_words.split_first()?;
 
         // Strip @botname suffix from first word (Telegram: "/gen@mybot" → "gen")
         let first_word = match first_word_raw.split_once('@') {

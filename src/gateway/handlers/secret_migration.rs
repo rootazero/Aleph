@@ -146,7 +146,7 @@ fn migrate_generation_providers(cfg: &mut Config, vault: &SharedTokenManager) ->
                 if !key.is_empty() {
                     name_to_keys
                         .entry(name.clone())
-                        .or_insert_with(Vec::new)
+                        .or_default()
                         .push(key.clone());
                 }
             }

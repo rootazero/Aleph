@@ -1694,11 +1694,13 @@ impl DeliveryStore {
 
     /// Most-recently dead-lettered deliveries, newest first, for troubleshooting
     /// (parity-plus over openclaw, which retains failed rows but exposes no
-    /// inspection path). Rows whose payload no longer deserializes are skipped.
+    /// inspection path). Oversize diagnostics project a content-free message;
+    /// other rows whose payload no longer deserializes are skipped.
     pub fn recent_dead_letters(&self, limit: usize) -> rusqlite::Result<Vec<DeadLetter>> {
         let conn = self.guard();
         let raw: Vec<(
             String,
+            Option<String>,
             String,
             i64,
             Option<String>,
@@ -1708,19 +1710,20 @@ impl DeliveryStore {
             bool,
         )> = {
             let mut stmt = conn.prepare(
-                "SELECT channel_id, payload, attempts, last_error, reason, created_at, died_at, retired_by_policy
+                "SELECT channel_id, conversation_id, payload, attempts, last_error, reason, created_at, died_at, retired_by_policy
                  FROM dead_letters ORDER BY died_at DESC LIMIT ?1",
             )?;
             let rows = stmt.query_map(params![limit as i64], |r| {
                 Ok((
                     r.get::<_, String>(0)?,
-                    r.get::<_, String>(1)?,
-                    r.get::<_, i64>(2)?,
-                    r.get::<_, Option<String>>(3)?,
+                    r.get::<_, Option<String>>(1)?,
+                    r.get::<_, String>(2)?,
+                    r.get::<_, i64>(3)?,
                     r.get::<_, Option<String>>(4)?,
-                    r.get::<_, i64>(5)?,
+                    r.get::<_, Option<String>>(5)?,
                     r.get::<_, i64>(6)?,
-                    r.get::<_, bool>(7)?,
+                    r.get::<_, i64>(7)?,
+                    r.get::<_, bool>(8)?,
                 ))
             })?;
             rows.collect::<rusqlite::Result<Vec<_>>>()?
@@ -1728,6 +1731,7 @@ impl DeliveryStore {
         let mut out = Vec::with_capacity(raw.len());
         for (
             channel_id,
+            conversation_id,
             payload,
             attempts,
             last_error,
@@ -1737,23 +1741,30 @@ impl DeliveryStore {
             retired_by_policy,
         ) in raw
         {
-            if let Ok(message) = serde_json::from_str::<OutboundMessage>(&payload) {
-                out.push(DeadLetter {
-                    channel_id,
-                    message,
-                    attempts: attempts.max(0) as u32,
-                    last_error: last_error.unwrap_or_default(),
-                    // Rows written before the column existed carry the DEFAULT
-                    // ('exhausted'), which is exactly what they were.
-                    reason: reason.as_deref().map_or(
-                        DeadLetterReason::Exhausted,
-                        DeadLetterReason::from_str_lossy,
-                    ),
-                    created_at,
-                    died_at,
-                    retired_by_policy,
-                });
-            }
+            // Pre-column rows default to exhausted. Oversize rows deliberately
+            // store diagnostics, not messages, and are never redrivable.
+            let reason = reason.as_deref().map_or(
+                DeadLetterReason::Exhausted,
+                DeadLetterReason::from_str_lossy,
+            );
+            let message = if reason == DeadLetterReason::PayloadTooLarge {
+                OutboundMessage::text(conversation_id.as_deref().unwrap_or_default(), "")
+            } else {
+                let Ok(message) = serde_json::from_str::<OutboundMessage>(&payload) else {
+                    continue;
+                };
+                message
+            };
+            out.push(DeadLetter {
+                channel_id,
+                message,
+                attempts: attempts.max(0) as u32,
+                last_error: last_error.unwrap_or_default(),
+                reason,
+                created_at,
+                died_at,
+                retired_by_policy,
+            });
         }
         Ok(out)
     }
@@ -3310,6 +3321,10 @@ mod tests {
         let dl = s.recent_dead_letters(10).unwrap();
         assert_eq!(dl.len(), 1, "but still visible to the operator");
         assert_eq!(dl[0].reason, DeadLetterReason::PayloadTooLarge);
+        assert_eq!(dl[0].message.conversation_id, big.conversation_id);
+        assert!(dl[0].message.text.is_empty());
+        assert!(dl[0].message.attachments.is_empty());
+        assert!(!format!("{:?}", dl[0]).contains(&"x".repeat(2000)));
         // Two questions, two answers. The old single assertion said
         // `!replay_safe()` with the message "redriving it would re-hit the cap"
         // — a true sentence attached to the wrong predicate, which is how the

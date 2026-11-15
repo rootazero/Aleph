@@ -188,10 +188,8 @@ mod tests {
             &cache,
             &api,
         );
-        assert!(msg.is_some());
-        let msg = msg.unwrap();
-        assert_eq!(msg.text, "approve");
-        assert_eq!(msg.conversation_id.as_str(), "oc_1");
+        // An unclassified card must not bypass group policy by becoming a DM.
+        assert!(msg.is_none());
     }
 
     #[test]

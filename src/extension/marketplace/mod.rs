@@ -650,28 +650,19 @@ fn resolve_plugin_path(
     // inside the marketplace directory. Returning `None` rather than joining
     // an empty path matters: an empty relative path resolves to the
     // marketplace root itself, and the installer copies whatever it is given.
-    let source = source.as_relative_path()?;
+    let relative = Path::new(source.as_relative_path()?);
+    // Reject malformed paths instead of rewriting them into valid local paths.
+    if relative.components().any(|component| {
+        matches!(
+            component,
+            Component::Prefix(_) | Component::RootDir | Component::ParentDir
+        )
+    }) {
+        return None;
+    }
 
-    // Strip leading "./" or "." to get a plain relative component.
-    let relative = source
-        .strip_prefix("./")
-        .or_else(|| source.strip_prefix('.'))
-        .unwrap_or(source);
-
-    // Defense-in-depth: the `source` field comes from a marketplace manifest,
-    // which may be untrusted. Keep only normal path components so a crafted
-    // value (`../../etc`, `/etc/passwd`) can never escape the marketplace
-    // directory. RootDir/Prefix/ParentDir/CurDir components are dropped.
-    let safe: PathBuf = Path::new(relative)
-        .components()
-        .filter(|c| matches!(c, Component::Normal(_)))
-        .collect();
-
-    // Filtering the components is not enough: an intermediate symlink inside
-    // the marketplace is followed by the filesystem, so the joined path can
-    // still land outside the marketplace root. Canonicalize both sides and
-    // keep the result only when it is inside the canonical root.
-    let candidate = marketplace_dir.join(safe);
+    // Intermediate symlinks must stay within the canonical marketplace root.
+    let candidate = marketplace_dir.join(relative);
     let canonical_root = marketplace_dir.canonicalize().ok()?;
     let canonical = candidate.canonicalize().ok()?;
     if !canonical.starts_with(&canonical_root) {
@@ -726,6 +717,7 @@ mod tests {
             resolve_plugin_path(root.path(), &internal),
             Some(root.path().join("plugins/inside").canonicalize().unwrap())
         );
+        std::fs::create_dir(root.path().join("existing-plugin")).unwrap();
         for source in ["../existing-plugin", "/plugins/inside", "./missing"] {
             assert_eq!(
                 resolve_plugin_path(
@@ -967,6 +959,7 @@ mod tests {
         let cache = tempfile::TempDir::new().unwrap();
         let builtin = cache.path().join(BUILTIN_MARKETPLACE_NAME);
         std::fs::create_dir_all(builtin.join(".claude-plugin")).unwrap();
+        std::fs::create_dir(builtin.join("diagnostics")).unwrap();
         std::fs::write(
             builtin.join(".claude-plugin").join("marketplace.json"),
             r#"{"name":"aleph-official","plugins":[
@@ -1112,6 +1105,9 @@ mod tests {
         // copied, so this reaches no disk. Calling it for an installable entry
         // would install into the developer's real `~/.aleph`.
         let local = make_local_marketplace(THREE_ENTRIES);
+        for name in ["alpha", "beta"] {
+            std::fs::create_dir_all(local.path().join("plugins").join(name)).unwrap();
+        }
         let cache = tempfile::TempDir::new().unwrap();
         let mgr = browsing_manager(&local, &cache);
 
@@ -1158,18 +1154,20 @@ mod tests {
 
     #[test]
     fn test_resolve_plugin_path_strips_dot_slash() {
-        use std::path::PathBuf;
-        let root = PathBuf::from("/marketplace");
+        let root = tempfile::tempdir().unwrap();
+        for name in ["foo", "bar"] {
+            std::fs::create_dir_all(root.path().join("plugins").join(name)).unwrap();
+        }
         let path = |s: &str| {
             crate::extension::marketplace::types::MarketplacePluginSource::Path(s.to_string())
         };
         assert_eq!(
-            resolve_plugin_path(&root, &path("./plugins/foo")),
-            Some(PathBuf::from("/marketplace/plugins/foo"))
+            resolve_plugin_path(root.path(), &path("./plugins/foo")),
+            Some(root.path().join("plugins/foo").canonicalize().unwrap())
         );
         assert_eq!(
-            resolve_plugin_path(&root, &path("plugins/bar")),
-            Some(PathBuf::from("/marketplace/plugins/bar"))
+            resolve_plugin_path(root.path(), &path("plugins/bar")),
+            Some(root.path().join("plugins/bar").canonicalize().unwrap())
         );
     }
 }

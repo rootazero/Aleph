@@ -10,6 +10,8 @@ use tokio::sync::RwLock;
 use tracing::{debug, info, warn};
 
 use super::router::SessionKey;
+use super::session_store::error::SessionStoreError;
+use super::session_store::types::SessionMetadata;
 use super::session_store::SessionStore;
 
 #[cfg(test)]
@@ -421,11 +423,12 @@ impl AgentInstance {
         }
     }
 
-    /// Ensure a session exists.
-    pub async fn ensure_session(&self, key: &SessionKey) {
-        if let Err(e) = self.session_store.get_or_create(key).await {
-            warn!("Failed to ensure session in store: {}", e);
-        }
+    /// Ensure a session exists and return the canonical persisted metadata.
+    pub async fn ensure_session(
+        &self,
+        key: &SessionKey,
+    ) -> Result<SessionMetadata, SessionStoreError> {
+        self.session_store.get_or_create(key).await
     }
 
     /// Record the session's originating channel (and, for inbound channels, its
@@ -931,7 +934,10 @@ mod tests {
         let instance = AgentInstance::new(config, sm).unwrap();
         let key = SessionKey::main("test");
 
-        instance.ensure_session(&key).await;
+        instance
+            .ensure_session(&key)
+            .await
+            .expect("session creation must succeed");
         assert!(instance.get_history(&key, None).await.is_empty());
     }
 

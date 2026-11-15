@@ -72,7 +72,7 @@ pub fn has_status_code(msg: &str, code: u16) -> bool {
         let end = start + needle.len();
         let left_ok =
             start == 0 || bytes.get(start.saturating_sub(1)).is_some_and(|b| !b.is_ascii_digit());
-        let right_ok = bytes.get(end).map_or(true, |b| !b.is_ascii_digit());
+        let right_ok = bytes.get(end).is_none_or(|b| !b.is_ascii_digit());
         if left_ok && right_ok {
             return true;
         }

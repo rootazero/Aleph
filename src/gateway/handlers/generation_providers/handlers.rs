@@ -639,7 +639,7 @@ fn saved_generation_probe(
     provider_type: &str,
     base_url: Option<&str>,
     key: &str,
-) -> Option<String> {
+) -> Option<(String, serde_json::Value)> {
     let type_key = find_provider_type(generation, name)?;
     let saved = get_typed_provider_map(generation, &type_key).get(name)?;
     if saved.provider_type != provider_type {
@@ -651,7 +651,7 @@ fn saved_generation_probe(
     if resolve_api_key(name, vault).as_deref() != Some(key) {
         return None;
     }
-    Some(type_key)
+    Some((type_key, serde_json::to_value(saved).ok()?))
 }
 
 /// Test connection to a generation provider
@@ -694,6 +694,19 @@ pub async fn handle_test_connection(
             message: "API key is required".to_string(),
         },
         Some(key) => {
+            let snapshot = if let Some(name) = provider_name.as_ref() {
+                let cfg = config.read().await;
+                saved_generation_probe(
+                    &cfg.generation,
+                    &vault,
+                    name,
+                    &params.provider_type,
+                    params.base_url.as_deref(),
+                    &key,
+                )
+            } else {
+                None
+            };
             let outcome = crate::generation::probe_generation_provider(
                 &params.provider_type,
                 &key,
@@ -705,8 +718,8 @@ pub async fn handle_test_connection(
             // never claims a provider is verified when the test actually failed.
             if let Some(ref name) = provider_name {
                 let mut cfg = config.write().await;
-                // Only update verified if the probed settings (type, base URL
-                // and credential) still describe the saved provider.
+                // A probe may finish after a config edit or credential rotation.
+                // Persist only while the complete saved settings and key match.
                 let matched = saved_generation_probe(
                     &cfg.generation,
                     &vault,
@@ -715,7 +728,9 @@ pub async fn handle_test_connection(
                     params.base_url.as_deref(),
                     &key,
                 );
-                if let Some(type_str) = matched {
+                if let Some((type_str, _)) =
+                    matched.filter(|current| snapshot.as_ref() == Some(current))
+                {
                     if let Some(p) =
                         get_typed_provider_map_mut(&mut cfg.generation, &type_str).get_mut(name)
                     {

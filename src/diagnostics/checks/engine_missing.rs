@@ -157,10 +157,10 @@ fn pinned_binary_is_usable(path: &std::path::Path) -> bool {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        return std::fs::metadata(path).is_ok_and(|metadata| {
+        std::fs::metadata(path).is_ok_and(|metadata| {
             let mode = metadata.permissions().mode();
             mode & 0o111 != 0 && mode & 0o444 != 0
-        });
+        })
     }
     #[cfg(not(unix))]
     {

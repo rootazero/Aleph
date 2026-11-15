@@ -69,7 +69,7 @@ impl StartupResources {
     }
 
     pub(in crate::commands::start) async fn cleanup(&mut self) -> Result<(), AlephError> {
-        if self.cleanup_called.swap(true, Ordering::SeqCst) {
+        if self.cleanup_called.load(Ordering::SeqCst) {
             return Ok(()); // Already cleaned up
         }
         // STOP linearizes with both no-rule admissions and source publication.
@@ -168,7 +168,11 @@ impl StartupResources {
         };
         match failure.or(observation_failure).or(projection_failure) {
             Some(error) => Err(error),
-            None => Ok(()),
+            None => {
+                // Cancellation or failure must leave the owned cleanup retryable.
+                self.cleanup_called.store(true, Ordering::SeqCst);
+                Ok(())
+            }
         }
     }
 

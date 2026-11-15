@@ -1121,13 +1121,18 @@ mod tests {
         let _guard = crate::runtimes::post_install::HomeEnvGuards::acquire_and_clear();
 
         let spawner = StubSpawner::ok(99);
-        let out = tool(spawner.clone())
-            .call(RuntimeManageArgs {
-                action: RuntimeAction::Install,
-                capability: Some("chromium".into()),
-            })
+        // A caller-less test can deduplicate against another test's live job.
+        let out = crate::sandbox::context::SESSION_ID
+            .scope(
+                crate::routing::session_key::SessionKey::ephemeral("runtime-ledger-failure-spawn"),
+                tool(spawner.clone()).call(RuntimeManageArgs {
+                    action: RuntimeAction::Install,
+                    capability: Some("chromium".into()),
+                }),
+            )
             .await
             .expect("tool answers");
+        assert_eq!(spawner.started(), vec!["chromium".to_string()]);
 
         assert!(
             out.ok,

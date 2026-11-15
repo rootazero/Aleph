@@ -85,83 +85,6 @@ async fn poll_updates(
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use wiremock::{matchers::path, Mock, MockServer, ResponseTemplate};
-
-    #[tokio::test]
-    async fn polling_acknowledges_only_completed_handlers_in_update_order() {
-        let server = MockServer::start().await;
-        let updates: Vec<_> = [10, 11]
-            .into_iter()
-            .map(|id| {
-                serde_json::json!({
-                    "update_id": id, "message": {"message_id": id, "date": 1700000000,
-                        "chat": {"id": 123, "type": "private"}, "text": "hello"}
-                })
-            })
-            .collect();
-        Mock::given(path("/bot123:test/GetUpdates"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "ok": true, "result": updates
-            })))
-            .up_to_n_times(1)
-            .with_priority(1)
-            .mount(&server)
-            .await;
-        Mock::given(path("/bot123:test/GetUpdates"))
-            .respond_with(ResponseTemplate::new(500))
-            .with_priority(2)
-            .mount(&server)
-            .await;
-        let tracker = Arc::new(
-            OffsetTracker::new(
-                Arc::new(crate::resilience::StateDatabase::in_memory().unwrap()),
-                "ordered".into(),
-            )
-            .await,
-        );
-        let (entered, mut received) = tokio::sync::mpsc::channel(2);
-        let release = Arc::new(tokio::sync::Semaphore::new(0));
-        let gate = release.clone();
-        let handler: UpdateHandler<std::convert::Infallible> =
-            dptree::entry().endpoint(move |update: Update| {
-                let entered = entered.clone();
-                let gate = gate.clone();
-                async move {
-                    entered.send(update.id.0).await.unwrap();
-                    gate.acquire().await.unwrap().forget();
-                    Ok::<(), std::convert::Infallible>(())
-                }
-            });
-        let bot = Bot::new("123:test").set_api_url(server.uri().parse().unwrap());
-        let worker_tracker = tracker.clone();
-        let task = tokio::spawn(async move {
-            let mut processed = 0;
-            let result = poll_updates(&bot, &handler, Some(&worker_tracker), &mut processed).await;
-            (result, processed)
-        });
-        assert_eq!(received.recv().await, Some(10));
-        assert_eq!(tracker.load(), 0, "in-flight update is not acknowledged");
-        release.add_permits(1);
-        assert_eq!(received.recv().await, Some(11));
-        assert_eq!(
-            tracker.load(),
-            10,
-            "second update cannot overtake its handler"
-        );
-        release.add_permits(1);
-        let (result, processed) = task.await.unwrap();
-        assert!(result.is_err());
-        assert_eq!(processed, 11);
-        assert_eq!(tracker.load(), 11);
-        let requests = server.received_requests().await.unwrap();
-        let body: serde_json::Value = serde_json::from_slice(&requests[1].body).unwrap();
-        assert_eq!(body["offset"], 12);
-    }
-}
-
 /// Run the Telegram long-polling loop with watchdog and auto-restart.
 ///
 /// The caller builds the dptree `handler` (message + callback branches)
@@ -372,4 +295,81 @@ pub(crate) async fn run_polling_loop(
     }
 
     *status.write().await = ChannelStatus::Disconnected;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use wiremock::{matchers::path, Mock, MockServer, ResponseTemplate};
+
+    #[tokio::test]
+    async fn polling_acknowledges_only_completed_handlers_in_update_order() {
+        let server = MockServer::start().await;
+        let updates: Vec<_> = [10, 11]
+            .into_iter()
+            .map(|id| {
+                serde_json::json!({
+                    "update_id": id, "message": {"message_id": id, "date": 1700000000,
+                        "chat": {"id": 123, "type": "private"}, "text": "hello"}
+                })
+            })
+            .collect();
+        Mock::given(path("/bot123:test/GetUpdates"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "ok": true, "result": updates
+            })))
+            .up_to_n_times(1)
+            .with_priority(1)
+            .mount(&server)
+            .await;
+        Mock::given(path("/bot123:test/GetUpdates"))
+            .respond_with(ResponseTemplate::new(500))
+            .with_priority(2)
+            .mount(&server)
+            .await;
+        let tracker = Arc::new(
+            OffsetTracker::new(
+                Arc::new(crate::resilience::StateDatabase::in_memory().unwrap()),
+                "ordered".into(),
+            )
+            .await,
+        );
+        let (entered, mut received) = tokio::sync::mpsc::channel(2);
+        let release = Arc::new(tokio::sync::Semaphore::new(0));
+        let gate = release.clone();
+        let handler: UpdateHandler<std::convert::Infallible> =
+            dptree::entry().endpoint(move |update: Update| {
+                let entered = entered.clone();
+                let gate = gate.clone();
+                async move {
+                    entered.send(update.id.0).await.unwrap();
+                    gate.acquire().await.unwrap().forget();
+                    Ok::<(), std::convert::Infallible>(())
+                }
+            });
+        let bot = Bot::new("123:test").set_api_url(server.uri().parse().unwrap());
+        let worker_tracker = tracker.clone();
+        let task = tokio::spawn(async move {
+            let mut processed = 0;
+            let result = poll_updates(&bot, &handler, Some(&worker_tracker), &mut processed).await;
+            (result, processed)
+        });
+        assert_eq!(received.recv().await, Some(10));
+        assert_eq!(tracker.load(), 0, "in-flight update is not acknowledged");
+        release.add_permits(1);
+        assert_eq!(received.recv().await, Some(11));
+        assert_eq!(
+            tracker.load(),
+            10,
+            "second update cannot overtake its handler"
+        );
+        release.add_permits(1);
+        let (result, processed) = task.await.unwrap();
+        assert!(result.is_err());
+        assert_eq!(processed, 11);
+        assert_eq!(tracker.load(), 11);
+        let requests = server.received_requests().await.unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&requests[1].body).unwrap();
+        assert_eq!(body["offset"], 12);
+    }
 }

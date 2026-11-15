@@ -522,8 +522,43 @@ where
         // Ensure session exists in memory + SQLite before adding messages.
         // Scoped: the CREATE branch stamps `owner_user_id`/`scope_id` from the
         // ambient scope, which no producer still has by here (they all spawn).
-        // See `run_loop::ensure_session_under_request_scope`.
-        super::run_loop::ensure_session_under_request_scope(&agent, &request).await;
+        // See `run_loop::prepare_session_for_run`.
+        let session_preparation = super::run_loop::prepare_session_for_run(&agent, &request).await;
+        if let Err(error) = session_preparation {
+            let error =
+                ExecutionError::Failed(format!("session metadata preparation failed: {error}"));
+            self.emit_pre_admission_run_error(
+                emitter.as_ref(),
+                &run_id,
+                btw_main_session
+                    .as_ref()
+                    .unwrap_or(&request.session_key),
+                &request,
+                &error,
+            )
+            .await;
+            {
+                let mut runs = self.active_runs.write().await;
+                if let Some(run) = runs.get_mut(&run_id) {
+                    run.state = RunState::Failed {
+                        error: error.to_string(),
+                    };
+                    run.completed_at = Some(chrono::Utc::now());
+                    run.cancel_tx = None;
+                }
+            }
+            if trace_task_persisted {
+                self.persist_run_task_status(&run_id, TaskStatus::Failed)
+                    .await;
+            }
+            let runs_clone = self.active_runs.clone();
+            let run_id_clone = run_id.clone();
+            tokio::spawn(async move {
+                tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
+                runs_clone.write().await.remove(&run_id_clone);
+            });
+            return Err(error);
+        }
         // Carry whatever has settled on the main conversation into the side
         // session, so a side question is asked *about* the thing the user is
         // looking at rather than into an empty room. After the scope step
@@ -919,7 +954,7 @@ where
                 Some(Arc::new(crate::gateway::session_store::hook_transcripts::StoreTranscripts::new(
                     agent.session_store(),
                 ))),
-                self.run_agent_loop(
+                Box::pin(self.run_agent_loop(
                     &run_id,
                     &request,
                     agent.clone(),
@@ -928,7 +963,7 @@ where
                     trace_task_persisted.then(|| run_id.clone()),
                     cancel_token.clone(),
                     occupancy_out.clone(),
-                ),
+                )),
             ) => result,
 
             _ = cancel_rx.recv() => {

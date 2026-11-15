@@ -194,10 +194,7 @@ where
             // Keep the `LockHeldError` instead of dropping it: it names the
             // running server's PID, which is the actionable half of the
             // diagnosis once the forward has failed.
-            let held = match e.downcast::<LockHeldError>() {
-                Ok(held) => held,
-                Err(e) => return Err(e),
-            };
+            let held = e.downcast::<LockHeldError>()?;
             match crate::cli::ipc_client::forward_to_server::<T>(data_dir, method, route, ipc_body)
             {
                 Ok(out) => Ok(out),

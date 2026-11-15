@@ -99,19 +99,6 @@ pub(crate) fn latest_complete_exchange(records: &[SessionEventRecord]) -> Option
     None
 }
 
-/// Did a run that executed on THIS session finish this turn successfully?
-fn completed_here(span: &[SessionEventRecord]) -> bool {
-    span.iter().any(|r| {
-        matches!(
-            r.event,
-            SessionEvent::RunFinished {
-                outcome: RunOutcome::Completed,
-                ..
-            }
-        )
-    })
-}
-
 /// The question and the final answer inside one closed turn.
 ///
 /// The question is the turn's **first** real user message: the harness writes

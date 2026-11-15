@@ -275,7 +275,7 @@ mod tests {
     #[test]
     fn test_capabilities() {
         let caps = QQChannel::capabilities();
-        assert!(caps.images);
+        assert!(!caps.images);
         assert_eq!(caps.max_message_length, 4000);
     }
 }

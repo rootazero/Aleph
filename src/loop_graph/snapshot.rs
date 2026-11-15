@@ -454,7 +454,7 @@ fn map_edges(s: &Snapshot) -> std::collections::BTreeMap<(&str, &str, EdgeKind),
         .collect()
 }
 
-fn diff_sort_key<'a>(d: &'a TopologyDiff) -> (u8, &'a str, &'a str, &'a str) {
+fn diff_sort_key(d: &TopologyDiff) -> (u8, &str, &str, &str) {
     match d {
         TopologyDiff::Added { id, .. } => (0, id.as_str(), "", ""),
         TopologyDiff::Removed { id, .. } => (1, id.as_str(), "", ""),

@@ -225,9 +225,7 @@ impl MutationGate {
             return None;
         }
 
-        let Some(first) = self.synthesis_history.front() else {
-            return None;
-        };
+        let first = self.synthesis_history.front()?;
 
         for (path, digest) in first {
             let mut previous = digest;

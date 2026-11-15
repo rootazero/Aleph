@@ -61,7 +61,7 @@ async fn rpc(socket: &mut Socket, method: &str, params: Value) -> Value {
     tokio::time::timeout(Duration::from_secs(15), async {
         loop {
             let message = socket.next().await.unwrap().unwrap();
-            if let Some(text) = message.to_text().ok() {
+            if let Ok(text) = message.to_text() {
                 let response: Value = serde_json::from_str(text).unwrap();
                 if response.get("id") == Some(&json!(1)) {
                     return response;

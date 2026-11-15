@@ -503,16 +503,18 @@ mod tests {
     async fn unspeakable_replies_skip_instead_of_counting_as_failures() {
         let reg = speech_registry(vec![("tts", Arc::new(VoiceStrictProvider))]);
         let state = state_with_provider(None, Some("invalid"));
-        for text in ["```rust\nlet x = 1;\n```", "https://example.com", ""] {
+        for text in ["```rust\nlet x = 1;\n```", "  \n ", ""] {
             assert!(matches!(
                 generate_tts_outcome(text, &state, &reg, &GenerationConfig::default()).await,
                 TtsOutcome::Skipped
             ));
         }
-        assert!(matches!(
-            generate_tts_outcome("hello", &state, &reg, &GenerationConfig::default()).await,
-            TtsOutcome::Failed
-        ));
+        for text in ["hello", "https://example.com"] {
+            assert!(matches!(
+                generate_tts_outcome(text, &state, &reg, &GenerationConfig::default()).await,
+                TtsOutcome::Failed
+            ));
+        }
     }
 
     #[test]

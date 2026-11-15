@@ -240,8 +240,8 @@ mod tests {
     #[test]
     fn test_channel_capabilities() {
         let caps = EmailChannel::capabilities();
-        assert!(caps.attachments);
-        assert!(caps.images);
+        assert!(!caps.attachments);
+        assert!(!caps.images);
         assert!(!caps.audio);
         assert!(!caps.video);
         assert!(!caps.reactions);
@@ -252,7 +252,7 @@ mod tests {
         assert!(!caps.read_receipts);
         assert!(caps.rich_text);
         assert_eq!(caps.max_message_length, 1_048_576);
-        assert_eq!(caps.max_attachment_size, 25 * 1024 * 1024);
+        assert_eq!(caps.max_attachment_size, 0);
     }
 
     #[test]

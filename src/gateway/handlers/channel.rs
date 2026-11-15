@@ -458,7 +458,7 @@ pub async fn handle_start(
                 return JsonRpcResponse::error(
                     request.id,
                     INTERNAL_ERROR,
-                    &format!("Channel {} not found in config", channel_id),
+                    format!("Channel {} not found in config", channel_id),
                 );
             }
         }

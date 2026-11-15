@@ -111,7 +111,7 @@ where
         }
 
         if stop_canonical.as_ref().is_some_and(|sp| &current == sp)
-            || stop.is_some_and(|sr| &current == sr)
+            || stop.is_some_and(|sr| current == sr)
         {
             break;
         }

@@ -136,7 +136,7 @@ pub struct AsyncTaskData {
 }
 
 impl AsyncTaskData {
-    /// Get the output URL from whichever field is present
+    #[cfg(test)]
     pub fn output_url(&self) -> Option<&str> {
         self.output
             .as_deref()

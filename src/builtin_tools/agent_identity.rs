@@ -416,7 +416,7 @@ Arguments are never stored; each record carries a fingerprint of them, plus a se
                 })
                 .await
                 .map_err(|e| AlephError::tool(format!("the export writer failed: {e}")))?
-                .map_err(|e| AlephError::tool(e))?;
+                .map_err(AlephError::tool)?;
 
                 // The head, in the exact form `--expect-head` accepts. Emitted
                 // ready to paste because the alternative — telling an auditor to
@@ -494,7 +494,7 @@ Arguments are never stored; each record carries a fingerprint of them, plus a se
                 })
                 .await
                 .map_err(|e| AlephError::tool(format!("the envelope writer failed: {e}")))?
-                .map_err(|e| AlephError::tool(e))?;
+                .map_err(AlephError::tool)?;
 
                 // The signing is itself a fact the agent's chain must be able
                 // to prove: the envelope can be copied anywhere, so the chain

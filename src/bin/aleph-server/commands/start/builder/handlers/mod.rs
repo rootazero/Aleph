@@ -24,7 +24,6 @@ use alephcore::gateway::{
     AgentEnvStore, ChannelRegistry, ConfigEvent, ConfigWatcher, ConfigWatcherConfig,
 };
 use alephcore::group_chat::GroupChatExecutor;
-use alephcore::memory::store::MemoryBackend;
 
 use crate::cli::Args;
 use crate::server_init::serve_webchat_on_listener;

@@ -110,8 +110,9 @@ mod tests {
             Arc::new(crate::generation::GenerationProviderRegistry::new()),
             Arc::new(tokio::sync::RwLock::new(Default::default())),
         );
+        let text = "```rust\nlet x = 1;\n```";
         for _ in 0..3 {
-            emitter.send_as_voice("https://example.com").await;
+            emitter.send_as_voice(text).await;
         }
         let state = emitter.channel_registry.get_voice_state("rec").await;
         assert!(state.enabled);
@@ -123,8 +124,7 @@ mod tests {
         assert_eq!(messages.len(), 3);
         assert!(messages
             .iter()
-            .all(|message| message.text.contains("https://example.com")
-                && message.attachments.is_empty()));
+            .all(|message| message.text.contains(text) && message.attachments.is_empty()));
         drop(messages);
         // A speakable reply with no configured provider remains a real failure.
         emitter.send_as_voice("hello").await;
@@ -1036,6 +1036,14 @@ mod outbound_chunking_tests {
                 assert!(queued[0].message.text.starts_with('a'));
                 assert!(queued[1].message.text.starts_with('b'));
                 assert!(queued[2].message.text.starts_with('c'));
+                assert!(queued.iter().all(|record| record.attempts == 0));
+                assert_eq!(
+                    store
+                        .reconcile_inflight(crate::gateway::delivery_queue::now_secs())
+                        .unwrap(),
+                    0,
+                    "reported 429 refusals must not leave unknown-outcome stamps"
+                );
             }
         }
     }

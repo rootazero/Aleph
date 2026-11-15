@@ -234,10 +234,7 @@ pub(crate) fn split_wikilinks(text: &str) -> Vec<WikiSegment<'_>> {
             None => (inner, None),
         };
         out.push(WikiSegment::Link { target, label });
-        rest = match after_open.get(close_rel + 2..) {
-            Some(s) => s,
-            None => "",
-        };
+        rest = after_open.get(close_rel + 2..).unwrap_or_default();
     }
 }
 

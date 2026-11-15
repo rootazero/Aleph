@@ -480,21 +480,21 @@ mod tests {
     }
 
     /// The production wire for the frame the test above proves is needed:
-    /// `execute.rs` must re-publish AFTER `ensure_session`, not before. A
+    /// `execute.rs` must re-publish AFTER `prepare_session_for_run`, not before. A
     /// source-level pin because the full `ExecutionEngine::execute` needs a
     /// live orchestrator to run a turn and so has no unit-level harness —
     /// without this, deleting the call leaves every test green.
     #[test]
     fn execute_republishes_the_running_set_after_creating_the_session_row() {
         let src = include_str!("execute.rs");
-        // The needle is the scoped helper, not `agent.ensure_session` directly:
-        // creating the row without `run_loop::ensure_session_under_request_scope`
+        // The needle is the scoped preparation helper, not `agent.ensure_session` directly:
+        // creating the row without `run_loop::prepare_session_for_run`
         // leaves `owner_user_id`/`scope_id` NULL (the task-local does not cross
         // the producers' `tokio::spawn`), and an unstamped row is exactly what
         // the projection below cannot resolve. Both properties are about the
         // same statement, so they share one anchor.
         let ensure = src
-            .find("run_loop::ensure_session_under_request_scope(&agent, &request).await;")
+            .find("run_loop::prepare_session_for_run(&agent, &request).await")
             .expect("execute.rs still creates the session row under the run's own scope");
         let republish = src
             .find("session_run_registry.republish_running_set()")

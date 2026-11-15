@@ -328,9 +328,7 @@ impl NodeRegistry {
     /// already returns the evicted session.
     pub fn deregister(&self, conn_id: &str) -> Option<NodeSession> {
         let mut inner = self.inner.write().unwrap_or_else(|e| e.into_inner());
-        let Some(node_id) = inner.nodes_by_conn.remove(conn_id) else {
-            return None;
-        };
+        let node_id = inner.nodes_by_conn.remove(conn_id)?;
         if let std::collections::hash_map::Entry::Occupied(entry) =
             inner.nodes_by_id.entry(node_id.clone())
         {

@@ -35,7 +35,7 @@ impl Fixture {
         let mut config = Config::default();
         config.policies.terminal.enabled = false;
         config
-            .save_to_file(&dir.path().join("config.toml"))
+            .save_to_file(dir.path().join("config.toml"))
             .unwrap();
         let config = Arc::new(RwLock::new(config));
         let bus = Arc::new(GatewayEventBus::new());
@@ -393,7 +393,7 @@ async fn patch_rollback_and_failed_persistence_observe_source_effects() {
 
 #[tokio::test]
 #[serial_test::serial(pty_global_manager)]
-async fn competing_config_writer_waits_for_the_apply_read_guard() {
+async fn competing_config_writer_remains_admitted_while_live_apply_drains() {
     stop_previous_driver().await;
     let fixture = Fixture::new();
     fixture.patcher.apply(request(true)).await.unwrap();
@@ -418,17 +418,20 @@ async fn competing_config_writer_waits_for_the_apply_read_guard() {
         "ordinary readers remain admitted"
     );
     let mut writer = std::pin::pin!(fixture.config.write());
-    assert!(writer
+    let Poll::Ready(mut config) = writer
         .as_mut()
         .poll(&mut Context::from_waker(Waker::noop()))
-        .is_pending());
+    else {
+        panic!("live apply must release the config read lock before awaiting shutdown");
+    };
+    config.policies.terminal.enabled = true;
+    drop(config);
     release.send(()).unwrap();
     assert!(stop
         .await
         .unwrap()
         .live_applied
         .contains(&"policies.terminal"));
-    writer.await.policies.terminal.enabled = true;
     let cfg = fixture.config.read().await;
     assert_eq!(
         apply_live_sections(&cfg, &["policies.terminal"], Some(&fixture.bus), None).await,

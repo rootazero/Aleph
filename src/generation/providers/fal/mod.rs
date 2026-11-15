@@ -56,7 +56,6 @@ const POLL_INTERVAL_MAX_MS: u64 = 6000;
 #[derive(Clone)]
 pub struct FalProvider {
     client: Client,
-    api_key: String,
     auth_header: String,
     /// Queue base, e.g. `https://queue.fal.run` (no trailing slash).
     endpoint: String,
@@ -165,7 +164,6 @@ impl FalProviderBuilder {
 
         Ok(FalProvider {
             client,
-            api_key: self.api_key,
             auth_header,
             endpoint,
             model: self.model.unwrap_or_else(|| DEFAULT_MODEL.to_string()),

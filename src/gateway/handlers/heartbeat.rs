@@ -637,7 +637,7 @@ mod tests {
 
         let dir = tempfile::tempdir().unwrap();
         let service = std::sync::Arc::new(tokio::sync::Mutex::new(HeartbeatService::new(
-            HeartbeatStore::open(&dir.path().join("heartbeat.db")).unwrap(),
+            HeartbeatStore::open(dir.path().join("heartbeat.db")).unwrap(),
             HeartbeatConfig::default(),
         )));
         let schedule = serde_json::to_value(ActiveHoursSchedule::default()).unwrap();
