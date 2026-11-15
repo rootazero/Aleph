@@ -198,13 +198,13 @@ impl SpendLedger for SqliteSpendLedger {
     }
 
     fn spent_for(&self, principal: &Principal, period_start_ms: i64) -> anyhow::Result<Spent> {
-        let key = principal.as_key().to_string();
+        let key = (principal.as_key().to_string(), period_start_ms);
 
         if let Some(row) = self
             .cache
             .lock()
             .unwrap_or_else(|e| e.into_inner())
-            .get(&(key.clone(), period_start_ms))
+            .get(&key)
         {
             return Ok(Spent {
                 usd: row.usd,
@@ -224,7 +224,7 @@ impl SpendLedger for SqliteSpendLedger {
             .query_row(
                 "SELECT usd, unpriced_calls, partial_calls FROM spend_ledger \
                  WHERE principal_id = ?1 AND period_start = ?2",
-                rusqlite::params![key, period_start_ms],
+                rusqlite::params![key.0, period_start_ms],
                 |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
             )
             .optional()?;
@@ -232,7 +232,7 @@ impl SpendLedger for SqliteSpendLedger {
 
         let mut cache = self.cache.lock().unwrap_or_else(|e| e.into_inner());
         cache.insert(
-            (key, period_start_ms),
+            key,
             CachedRow {
                 usd,
                 unpriced_calls: unpriced_calls.max(0) as u64,
@@ -326,19 +326,19 @@ impl SpendLedger for SqliteSpendLedger {
             "SELECT principal_id, usd, unpriced_calls, partial_calls FROM spend_ledger \
              WHERE period_start = ?1 ORDER BY usd DESC, principal_id ASC",
         )?;
-        let rows: Vec<(String, f64, i64, i64)> = stmt
+        let rows = stmt
             .query_map(rusqlite::params![period_start_ms], |row| {
-                Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
-            })?
-            .collect::<Result<Vec<_>, rusqlite::Error>>()?;
-        drop(stmt);
-        drop(conn);
-
-        Ok(rows
-            .into_iter()
-            .map(|(principal_id, usd, unpriced_calls, partial_calls)| {
-                (
-                    Principal::from_key(&principal_id),
+                let principal_id: String = row.get(0)?;
+                let usd: f64 = row.get(1)?;
+                let unpriced_calls: i64 = row.get(2)?;
+                let partial_calls: i64 = row.get(3)?;
+                let principal = match principal_id.as_str() {
+                    Principal::UNATTRIBUTED_KEY => Principal::Unattributed,
+                    Principal::TELECOM_PUBLIC_KEY => Principal::TelecomPublic,
+                    _ => Principal::User(principal_id),
+                };
+                Ok((
+                    principal,
                     Spent {
                         usd,
                         unpriced_calls: unpriced_calls.max(0) as u64,
@@ -347,8 +347,12 @@ impl SpendLedger for SqliteSpendLedger {
                         // See `Spent::period_end_ms`'s doc.
                         period_end_ms: None,
                     },
-                )
-            })
-            .collect())
+                ))
+            })?
+            .collect::<Result<Vec<_>, rusqlite::Error>>()?;
+        drop(stmt);
+        drop(conn);
+
+        Ok(rows)
     }
 }
