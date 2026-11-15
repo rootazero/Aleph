@@ -6,7 +6,7 @@
 
 use std::collections::{BTreeMap, HashSet};
 
-use crate::domain::skill::{SkillId, SkillManifest};
+use crate::domain::skill::{PromptScope, SkillId, SkillManifest};
 use crate::skill::config::SkillEntryConfig;
 use crate::skill::eligibility::{EligibilityResult, EligibilityService};
 use crate::skill::prompt::SkillPromptBudget;
@@ -110,7 +110,9 @@ impl SkillSnapshot {
                     let effective_scope = entry
                         .and_then(|e| e.scope_override.as_ref())
                         .unwrap_or_else(|| manifest.scope());
-                    if !manifest.invocation().disable_model_invocation && effective_scope.is_model_visible() {
+                    if !manifest.invocation().disable_model_invocation
+                        && *effective_scope != PromptScope::Disabled
+                    {
                         let mut m = manifest.clone();
                         if let Some(scope) = entry.and_then(|e| e.scope_override.clone()) {
                             m.set_scope(scope);

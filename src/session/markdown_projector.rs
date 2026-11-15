@@ -31,6 +31,7 @@ use crate::session::events::{SessionEvent, SessionEventRecord};
 use crate::session::observer::SessionEventObserver;
 use crate::session::service::SessionId;
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
+use serde::Deserialize;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::mpsc;

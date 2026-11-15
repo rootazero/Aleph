@@ -101,9 +101,9 @@ pub async fn retire_from_and_close_run(
     } else {
         open_run_after_retire(&events, from_seq)?
     };
-    let closer: Vec<SessionEvent> = match closed_run {
+    let closer: Vec<SessionEvent> = match &closed_run {
         Some(run_id) => vec![SessionEvent::RunFinished {
-            run_id,
+            run_id: run_id.clone(),
             outcome: RunOutcome::Cancelled,
             at: now_ms(),
         }],

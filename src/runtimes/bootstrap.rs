@@ -541,7 +541,7 @@ mod tests {
         // PATH before/after: PATH is a process-global env var, so an equality
         // check would race with other tests mutating it in parallel.
         let missing = PathBuf::from("/definitely/not/a/real/dir/xyz123");
-        prepend_existing_dirs(vec![missing.clone()]);
+        prepend_existing_dirs(&[missing.clone()]);
         let after = std::env::var("PATH").unwrap_or_default();
         let missing_str = missing.to_string_lossy();
         assert!(
