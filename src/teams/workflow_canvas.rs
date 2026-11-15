@@ -332,7 +332,9 @@ fn split_subject(text: &str) -> (String, String) {
     } else {
         subject_raw.to_string()
     };
-    let rest: String = lines.collect::<Vec<_>>().join("\n").trim().to_string();
+    let rest = text
+        .split_once('\n')
+        .map_or_else(String::new, |(_, r)| r.trim().to_string());
     (subject, rest)
 }
 

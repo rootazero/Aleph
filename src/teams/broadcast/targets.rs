@@ -63,19 +63,13 @@ pub fn resolve_targets(
             .collect()
     };
 
-    // Guard rails: remove the sender + the reserved handle "user"
-    targets.retain(|a| a != sender && a != RESERVED_USER_HANDLE);
-
-    // Dedup (preserve first-occurrence order)
+    // Guard rails & dedup: remove sender, "user", and retain first occurrence
     let mut seen = std::collections::HashSet::new();
-    targets.retain(|a| seen.insert(a.clone()));
+    targets.retain(|a| a != sender && a != RESERVED_USER_HANDLE && seen.insert(a.clone()));
 
     // No @: user-triggered → leader fallback; agent reply → chain stops (empty)
-    if targets.is_empty() && user_triggered {
-        let leader = leader_id.to_string();
-        if leader != sender {
-            targets.push(leader);
-        }
+    if targets.is_empty() && user_triggered && leader_id != sender {
+        targets.push(leader_id.to_string());
     }
 
     // Width cap. The members past the cap were EXPLICITLY addressed — dropping

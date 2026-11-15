@@ -23,9 +23,9 @@ use crate::teams::TeamStore;
 /// borrow `tasks` mutably-or-not freely.
 pub(super) fn topo_sort_and_count_edges(tasks: &[CoordTask]) -> Result<(Vec<usize>, usize)> {
     let n = tasks.len();
-    let mut id_to_idx: HashMap<String, usize> = HashMap::with_capacity(n);
+    let mut id_to_idx: HashMap<&str, usize> = HashMap::with_capacity(n);
     for (i, t) in tasks.iter().enumerate() {
-        if id_to_idx.insert(t.id.clone(), i).is_some() {
+        if id_to_idx.insert(t.id.as_str(), i).is_some() {
             return Err(AlephError::ConfigError {
                 message: format!("snapshot task graph has duplicate id: '{}'", t.id),
                 suggestion: None,
@@ -194,8 +194,8 @@ pub async fn restore_snapshot(
     // --- Task diff ---------------------------------------------------------
     // Live tasks keyed by (subject, owner) — that's the "logical identity"
     // we restore against, since snapshot ids won't match.
-    let live_key = |t: &CoordTask| (t.subject.clone(), t.owner.clone());
-    let live_by_key: HashMap<(String, Option<String>), &CoordTask> =
+    let live_key = |t: &CoordTask| (t.subject.as_str(), t.owner.as_deref());
+    let live_by_key: HashMap<(&str, Option<&str>), &CoordTask> =
         live_tasks.iter().map(|t| (live_key(t), t)).collect();
 
     let mut tasks_to_add: Vec<String> = Vec::new();

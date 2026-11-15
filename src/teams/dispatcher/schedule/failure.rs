@@ -53,14 +53,10 @@ impl TeamDispatcher {
         // was in flight (a lost-update race); the fresh row is the current
         // truth. A fetch failure degrades to the snapshot (P7 — same read
         // the guard already tolerated).
-        let fresh = match self.coord_store.get_task(&task.id).await {
-            Ok(Some(t)) => Some(t),
-            Ok(None) => None,
-            Err(e) => {
-                tracing::warn!(task_id = %task.id, error = %e, "dispatcher: fail_or_retry re-fetch failed; using claim-time snapshot");
-                None
-            }
-        };
+        let fresh = self.coord_store.get_task(&task.id).await.unwrap_or_else(|e| {
+            tracing::warn!(task_id = %task.id, error = %e, "dispatcher: fail_or_retry re-fetch failed; using claim-time snapshot");
+            None
+        });
         if let Some(t) = &fresh {
             if t.status.is_terminal() {
                 tracing::info!(task_id = %task.id, status = %t.status, "dispatcher: task already terminal; neither retrying nor failing");

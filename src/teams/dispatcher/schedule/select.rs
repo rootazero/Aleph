@@ -255,22 +255,21 @@ pub fn select_schedulable(
     // Per-owner concurrency load, seeded from tasks already in flight in this
     // process. Owned `String` keys keep the fill free of borrow gymnastics —
     // owner ids are short and the candidate set per tick is small.
-    let mut load: HashMap<String, usize> = HashMap::new();
+    let mut load: HashMap<&str, usize> = HashMap::new();
     for owner in running.values() {
-        *load.entry(owner.clone()).or_insert(0) += 1;
+        *load.entry(owner.as_str()).or_insert(0) += 1;
     }
 
     let mut picked: Vec<CoordTask> = Vec::with_capacity(available_slots);
-    let mut candidates_with_state: Vec<(CoordTask, bool)> =
-        candidates.iter().map(|&t| (t.clone(), false)).collect();
+    let mut consumed = vec![false; candidates.len()];
 
     while picked.len() < available_slots {
         // Pick the eligible candidate whose owner is least loaded; ties resolve
         // to the earliest in priority/FIFO order (first un-consumed wins).
         let mut best: Option<usize> = None;
         let mut best_load = usize::MAX;
-        for (i, (task, consumed)) in candidates_with_state.iter().enumerate() {
-            if *consumed {
+        for (i, task) in candidates.iter().enumerate() {
+            if consumed[i] {
                 continue;
             }
             let owner = task.owner.as_deref().unwrap_or("");
@@ -286,12 +285,11 @@ pub fn select_schedulable(
         let Some(i) = best else {
             break; // nothing left that is both un-consumed and under cap
         };
-        if let Some((task, consumed)) = candidates_with_state.get_mut(i) {
-            *consumed = true;
-            let owner = task.owner.clone().unwrap_or_default();
-            *load.entry(owner).or_insert(0) += 1;
-            picked.push(task.clone());
-        }
+        consumed[i] = true;
+        let task = candidates[i];
+        let owner = task.owner.as_deref().unwrap_or("");
+        *load.entry(owner).or_insert(0) += 1;
+        picked.push((*task).clone());
     }
 
     picked

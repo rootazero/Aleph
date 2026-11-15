@@ -294,11 +294,7 @@ impl EventHandler for TeamNotifier {
                     // insert so the next settled moment fires the
                     // notification afresh.
                     if !self.team_work_finished(team_id).await {
-                        let mut done = self
-                            .completed_teams
-                            .lock()
-                            .unwrap_or_else(|e| e.into_inner());
-                        done.remove(team_id);
+                        self.rearm_completion_claim(team_id);
                         return Ok(vec![]);
                     }
                     let summary = result_summary.as_deref().unwrap_or("");
@@ -313,11 +309,7 @@ impl EventHandler for TeamNotifier {
                         )
                         .await;
                     if !notified {
-                        let mut done = self
-                            .completed_teams
-                            .lock()
-                            .unwrap_or_else(|e| e.into_inner());
-                        done.remove(team_id);
+                        self.rearm_completion_claim(team_id);
                     }
                 }
             // TeamNotifier subscribes to TeamTaskCompleted, TeamTaskFailed, and
