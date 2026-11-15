@@ -465,7 +465,7 @@ fn extract_from_targz(
             archive: label.to_string(),
             detail: format!("a tar entry has an unreadable path: {e}"),
         })?;
-        if path.to_string_lossy() != member {
+        if path.as_ref() != Path::new(member) {
             continue;
         }
         copy_member_capped(&mut entry, dest, label, member)?;
@@ -487,20 +487,17 @@ fn extract_from_zip(
         })?;
     // The Windows asset holds `obscura.exe`, not `obscura`; accepting either
     // keeps the spec's `binary_in_archive` one string across all platforms.
-    let wanted = [member.to_string(), format!("{member}.exe")];
     for i in 0..zipfile.len() {
         let mut entry = zipfile.by_index(i).map_err(|e| ReleaseError::Archive {
             archive: label.to_string(),
             detail: format!("cannot read zip entry {i}: {e}"),
         })?;
-        let name = entry
-            .name()
-            .map_err(|e| ReleaseError::Archive {
-                archive: label.to_string(),
-                detail: format!("cannot read zip entry {i} name: {e}"),
-            })?
-            .into_owned();
-        if !wanted.iter().any(|w| w == &name) {
+        let name = entry.name().map_err(|e| ReleaseError::Archive {
+            archive: label.to_string(),
+            detail: format!("cannot read zip entry {i} name: {e}"),
+        })?;
+        let matches = name == member || name.strip_suffix(".exe") == Some(member);
+        if !matches {
             continue;
         }
         copy_member_capped(&mut entry, dest, label, member)?;

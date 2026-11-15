@@ -143,17 +143,23 @@ fn find_on_path(bin_name: &str, search_path: &OsStr) -> Option<PathBuf> {
 /// Manually walk `search_path` (a joined PATH string) looking for `bin_name`.
 fn find_in_dirs(bin_name: &str, search_path: &OsStr) -> Option<PathBuf> {
     for dir in std::env::split_paths(search_path) {
-        let candidates: Vec<PathBuf> = if cfg!(target_os = "windows") {
-            vec![
-                dir.join(format!("{bin_name}.exe")),
-                dir.join(format!("{bin_name}.bat")),
-                dir.join(format!("{bin_name}.cmd")),
-                dir.join(bin_name),
-            ]
-        } else {
-            vec![dir.join(bin_name)]
-        };
-        for candidate in candidates {
+        #[cfg(target_os = "windows")]
+        {
+            let exts = [".exe", ".bat", ".cmd", ""];
+            for ext in exts {
+                let candidate = if ext.is_empty() {
+                    dir.join(bin_name)
+                } else {
+                    dir.join(format!("{bin_name}{ext}"))
+                };
+                if is_executable_file(&candidate) {
+                    return Some(candidate);
+                }
+            }
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            let candidate = dir.join(bin_name);
             if is_executable_file(&candidate) {
                 return Some(candidate);
             }
@@ -410,17 +416,16 @@ fn fnm_node_bin_dirs(root: &Path) -> Vec<PathBuf> {
 static REGEX_CACHE: Lazy<Mutex<HashMap<&'static str, Regex>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
 
-fn get_compiled_regex(pattern: &'static str) -> Option<Regex> {
+fn with_compiled_regex<R>(pattern: &'static str, f: impl FnOnce(&Regex) -> R) -> Option<R> {
     let mut cache = REGEX_CACHE.lock().unwrap_or_else(|e| e.into_inner());
     if let Some(re) = cache.get(pattern) {
-        // rust-doctor-disable-next-line excessive-clone
-        return Some(re.clone());
+        return Some(f(re));
     }
     match Regex::new(pattern) {
         Ok(re) => {
-            // rust-doctor-disable-next-line excessive-clone
-            cache.insert(pattern, re.clone());
-            Some(re)
+            let res = f(&re);
+            cache.insert(pattern, re);
+            Some(res)
         }
         Err(e) => {
             warn!("invalid version regex '{}': {}", pattern, e);
@@ -442,15 +447,25 @@ fn get_version(
     // version would come back empty even though the binary itself was located.
     cmd.arg(version_flag).env("PATH", search_path);
     let output = cmd.no_window().output().ok()?;
-    let combined = format!(
-        "{}{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr),
-    );
-    let re = get_compiled_regex(version_regex)?;
-    re.captures(&combined)
-        .and_then(|caps| caps.get(1))
-        .map(|m| m.as_str().to_string())
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    if let Some(version) = with_compiled_regex(version_regex, |re| {
+        re.captures(&stdout)
+            .and_then(|caps| caps.get(1))
+            .map(|m| m.as_str().to_string())
+    })
+    .flatten()
+    {
+        return Some(version);
+    }
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    with_compiled_regex(version_regex, |re| {
+        re.captures(&stderr)
+            .and_then(|caps| caps.get(1))
+            .map(|m| m.as_str().to_string())
+    })
+    .flatten()
 }
 
 fn check_version_warning(spec: &RuntimeSpec, version: Option<&str>) -> Option<String> {
