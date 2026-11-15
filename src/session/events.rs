@@ -898,11 +898,12 @@ pub const fn durability_of(event: &SessionEvent) -> Durability {
 }
 
 /// A batch is as durable as its most durable member.
-pub fn batch_durability<'a>(events: impl Iterator<Item = &'a SessionEvent>) -> Durability {
-    events
-        .map(durability_of)
-        .max()
-        .unwrap_or(Durability::Normal)
+pub fn batch_durability<'a>(mut events: impl Iterator<Item = &'a SessionEvent>) -> Durability {
+    if events.any(|e| durability_of(e) == Durability::Barrier) {
+        Durability::Barrier
+    } else {
+        Durability::Normal
+    }
 }
 
 /// Second column of the same table (§7.3): may an older binary skip this row
@@ -924,7 +925,7 @@ pub fn now_ms() -> Timestamp {
             tracing::warn!(error = %e, "System clock went backwards — returning 0");
             0
         },
-        |d| d.as_millis() as i64,
+        |d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX),
     )
 }
 

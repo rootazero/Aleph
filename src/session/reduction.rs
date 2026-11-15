@@ -399,13 +399,12 @@ pub struct RunReduction {
 /// record `seq: 1` is still a slice. Only a *decrease* is the shape that
 /// derives a false anchor and a false disposition.
 pub fn validate_slice(events: &[SessionEventRecord]) -> Result<(), LogContradiction> {
-    match events.windows(2).find(|w| matches!(w, [prev, next] if next.seq < prev.seq)) {
-        Some(w) => {
-            let at_seq = w.get(1).map_or(0, |r| r.seq);
-            Err(LogContradiction::OutOfOrderSlice { at_seq })
+    for w in events.windows(2) {
+        if w[1].seq < w[0].seq {
+            return Err(LogContradiction::OutOfOrderSlice { at_seq: w[1].seq });
         }
-        None => Ok(()),
     }
+    Ok(())
 }
 
 /// The run-marker set: the events `SessionEventStore::load_run_markers`
@@ -712,12 +711,12 @@ pub fn reduce_run(events: &[SessionEventRecord]) -> Result<RunReduction, LogCont
                 if after_finish_without_start && saw_run_started && unmarked_first.is_none() {
                     unmarked_first = Some(record.seq);
                 }
-                let prior: Vec<EventSeq> = dispatches
-                    .iter()
-                    .filter(|d| d.call_id == call_id)
-                    .map(|d| d.seq)
-                    .collect();
-                if !prior.is_empty() {
+                if dispatches.iter().any(|d| d.call_id == call_id) {
+                    let prior: Vec<EventSeq> = dispatches
+                        .iter()
+                        .filter(|d| d.call_id == call_id)
+                        .map(|d| d.seq)
+                        .collect();
                     note_duplicate(
                         &mut contradictions,
                         call_id,
