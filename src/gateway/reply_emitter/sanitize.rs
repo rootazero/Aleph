@@ -72,30 +72,6 @@ const THINKING_TAGS: &[&str] = &["think", "thinking", "thought", "antthinking"];
 /// lists from drifting apart again.
 const OTHER_STRIP_TAGS: &[&str] = &["completion-check", "memory-context", "memory"];
 
-#[cfg(test)]
-mod backtick_progress_tests {
-    use super::{sanitize_llm_output, split_reasoning};
-
-    #[test]
-    fn sanitizing_closes_code_spans_after_embedded_backticks() {
-        for code in ["```a`b``c```", "`a``b`", "``a`b``"] {
-            let input = format!("{code}<think>hidden</think>answer");
-            assert_eq!(sanitize_llm_output(&input), format!("{code}answer"));
-        }
-    }
-
-    #[test]
-    fn reasoning_split_closes_code_spans_after_embedded_backticks() {
-        for code in ["```a`b``c```", "`a``b`", "``a`b``"] {
-            let input = format!("{code}<think>hidden</think>answer");
-            assert_eq!(
-                split_reasoning(&input),
-                (Some("hidden".into()), format!("{code}answer"))
-            );
-        }
-    }
-}
-
 /// Strip tags while respecting code block boundaries.
 ///
 /// Operates on `&[u8]` byte slices (all tag names are ASCII) to avoid the
@@ -466,4 +442,28 @@ fn try_extract_paired_tag_bytes(bytes: &[u8], pos: usize, tag: &[u8]) -> Option<
         }
     }
     None
+}
+
+#[cfg(test)]
+mod backtick_progress_tests {
+    use super::{sanitize_llm_output, split_reasoning};
+
+    #[test]
+    fn sanitizing_closes_code_spans_after_embedded_backticks() {
+        for code in ["```a`b``c```", "`a``b`", "``a`b``"] {
+            let input = format!("{code}<think>hidden</think>answer");
+            assert_eq!(sanitize_llm_output(&input), format!("{code}answer"));
+        }
+    }
+
+    #[test]
+    fn reasoning_split_closes_code_spans_after_embedded_backticks() {
+        for code in ["```a`b``c```", "`a``b`", "``a`b``"] {
+            let input = format!("{code}<think>hidden</think>answer");
+            assert_eq!(
+                split_reasoning(&input),
+                (Some("hidden".into()), format!("{code}answer"))
+            );
+        }
+    }
 }

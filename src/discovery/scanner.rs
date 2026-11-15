@@ -615,7 +615,7 @@ fn has_marker_file(dir: &Path, marker: &str) -> bool {
             }
         })
         .any(|entry| {
-            entry.file_type().map_or(false, |ft| ft.is_file())
+            entry.file_type().is_ok_and(|ft| ft.is_file())
                 && entry
                     .file_name()
                     .to_str()

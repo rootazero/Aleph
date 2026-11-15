@@ -389,11 +389,10 @@ impl GenerationProviderRegistry {
     pub fn remove(&mut self, name: &str) -> Option<Arc<dyn GenerationProvider>> {
         let (removed, primary_key) = if let Some(p) = self.providers.remove(name) {
             (p, name.to_string())
-        } else if let Some(primary) = self.canonical_index.get(name).cloned() {
+        } else {
+            let primary = self.canonical_index.get(name).cloned()?;
             let p = self.providers.remove(&primary)?;
             (p, primary)
-        } else {
-            return None;
         };
 
         // Keep the canonical index consistent: drop the mapping only when it

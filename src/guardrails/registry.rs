@@ -225,8 +225,8 @@ impl GuardrailRegistry {
             return (events, None);
         }
         let mut blocked = None;
-        for idx in 0..events.len() {
-            let decision = match screenable_text(&events[idx].event) {
+        for (idx, event) in events.iter_mut().enumerate() {
+            let decision = match screenable_text(&event.event) {
                 Some(text) => self.evaluate_input(text).await,
                 None => continue,
             };
@@ -236,14 +236,14 @@ impl GuardrailRegistry {
                     tracing::warn!(reason = %reason, "input guardrail warned");
                 }
                 GuardrailDecision::Sanitize(rep) => {
-                    set_screened_text(&mut events[idx].event, rep.text);
+                    set_screened_text(&mut event.event, rep.text);
                 }
                 GuardrailDecision::Block { reason, .. } if blocking == Some(idx) => {
                     blocked = Some(reason);
                     break;
                 }
                 GuardrailDecision::Block { reason, .. } => {
-                    let seq = events[idx].seq;
+                    let seq = event.seq;
                     tracing::warn!(
                         seq = seq,
                         reason = %reason,
@@ -258,7 +258,7 @@ impl GuardrailRegistry {
                     // correlate a redaction with the session seq that held
                     // the original.
                     set_screened_text(
-                        &mut events[idx].event,
+                        &mut event.event,
                         format!("{REDACTED_USER_MESSAGE} [redacted:seq={seq}]"),
                     );
                 }

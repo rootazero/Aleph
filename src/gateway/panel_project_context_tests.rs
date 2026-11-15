@@ -224,3 +224,17 @@ fn deactivated_user_or_missing_verified_identity_refuses_selected_context() {
         .unwrap();
     assert!(selector.resolve(&caller).is_err());
 }
+
+#[test]
+fn request_context_preserves_authenticated_caller_and_canonical_selector() {
+    let (_guard, selector, caller, _) = fixture();
+    let selector = Arc::new(selector);
+    let context = PanelRequestContext {
+        caller,
+        selector: selector.clone(),
+    };
+
+    assert_eq!(context.caller.verified_user.as_deref(), Some("panel-alice"));
+    assert_eq!(context.caller.device_id.as_deref(), Some("panel-device"));
+    assert!(Arc::ptr_eq(&context.selector, &selector));
+}

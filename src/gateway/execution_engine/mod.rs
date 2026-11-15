@@ -56,6 +56,7 @@ mod tests;
 pub(crate) use agent_trace_emit_sink::AgentTraceEmitSink;
 pub use concurrency::{AgentSlotUsage, ConcurrencySnapshot};
 pub use engine::{ContinuationDeps, ExecutionEngine};
+pub use run_loop::prepare_session_for_run;
 #[cfg(test)]
 pub(crate) use run_trace_sinks::PersistenceProbe;
 pub(crate) use run_trace_sinks::{ChildTraceSinks, RunTraceSinks};

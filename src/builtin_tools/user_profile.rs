@@ -120,21 +120,21 @@ fn redact_profile_pii(input: &str) -> String {
                 continue;
             }
         }
+        // SSN-like: prefer the specific shape over the phone fallback so
+        // the generic scanner does not swallow its classification or suffix.
+        if c.is_ascii_digit() {
+            if let Some(end) = scan_ssn(&chars, i) {
+                out.push_str("[REDACTED:ssn]");
+                i = end;
+                continue;
+            }
+        }
         // Phone-like: 7+ consecutive digits, optionally separated by spaces
         // or dashes (US/NANP shape). Conservative — won't catch every
         // international format but catches the common ones.
         if c.is_ascii_digit() {
             if let Some(end) = scan_phone(&chars, i) {
                 out.push_str("[REDACTED:phone]");
-                i = end;
-                continue;
-            }
-        }
-        // SSN-like: three digits, dash or space, two digits, dash or space,
-        // four digits.
-        if c.is_ascii_digit() {
-            if let Some(end) = scan_ssn(&chars, i) {
-                out.push_str("[REDACTED:ssn]");
                 i = end;
                 continue;
             }
@@ -353,10 +353,28 @@ mod tests {
     fn ssn_near_end_of_string_does_not_panic() {
         assert_eq!(redact_profile_pii("account 123"), "account 123");
         assert_eq!(redact_profile_pii("code 123-45"), "code 123-45");
-        assert_eq!(redact_profile_pii("id 123-45-678"), "id 123-45-678");
+        assert_eq!(scan_ssn(&"123-45-678".chars().collect::<Vec<_>>(), 0), None);
+        assert_eq!(redact_profile_pii("id 123-45-678"), "id [REDACTED:phone]");
         assert_eq!(
             redact_profile_pii("real 123-45-6789 end"),
             "real [REDACTED:ssn] end"
+        );
+    }
+
+    #[test]
+    fn ssn_classification_precedes_phone_fallback() {
+        assert_eq!(
+            redact_profile_pii("id 123 45 6789 end"),
+            "id [REDACTED:ssn] end"
+        );
+        assert_eq!(redact_profile_pii("id 123-45-6789"), "id [REDACTED:ssn]");
+        assert_eq!(
+            redact_profile_pii("phone 1234567"),
+            "phone [REDACTED:phone]"
+        );
+        assert_eq!(
+            redact_profile_pii("longer 123-45-67890"),
+            "longer [REDACTED:phone]"
         );
     }
 

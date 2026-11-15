@@ -867,9 +867,7 @@ impl ExtensionManager {
                 output.plugin_id, id
             ));
         }
-        let Some(manifest) = manifest else {
-            return None;
-        };
+        let manifest = manifest?;
         if manifest.id != id {
             return Some(format!(
                 "plugin manifest declares id '{}' but '{}' was authorised; \
@@ -3426,7 +3424,19 @@ handler = "handler"
 
         let loader = manager.get_plugin_loader_for_test().write_owned().await;
         let mut call = Box::pin(b4_execute_canonical(&service, "b4-admitted-a"));
-        assert!(futures::poll!(call.as_mut()).is_pending());
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            loop {
+                if let std::task::Poll::Ready(result) = futures::poll!(call.as_mut()) {
+                    panic!("canonical call completed before loader admission: {result:?}");
+                }
+                if owner.admission.available_permits() == RuntimeOwner::MAX_IN_FLIGHT as usize - 1 {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("sealed production call must acquire admission before reload");
         assert_eq!(
             owner.admission.available_permits(),
             RuntimeOwner::MAX_IN_FLIGHT as usize - 1,

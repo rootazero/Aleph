@@ -307,9 +307,21 @@ async fn mounted_facade_admits_and_invokes_only_current_special_capture() {
         ),
     )
     .await;
-    let before = manager
-        .attach_snapshot_at(generation, &session.session_id)
-        .expect("before input");
+    // The driver publishes the initial dirty screen independently of input.
+    // Observe that real frame before pinning the zero-effect baseline.
+    let before = tokio::time::timeout(std::time::Duration::from_secs(2), async {
+        loop {
+            let snapshot = manager
+                .attach_snapshot_at(generation, &session.session_id)
+                .expect("before input");
+            if snapshot.seq > 0 {
+                break snapshot;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("initial owned PTY frame must arrive before input validation");
     let oversized = "界".repeat(MAX_PTY_INPUT_BYTES / "界".len() + 1);
     let expected_error = PtyInvokeParams {
         session_id: session.session_id.clone(),

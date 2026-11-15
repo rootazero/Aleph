@@ -202,13 +202,13 @@ pub(in crate::commands::start) async fn register_agent_handlers(
     // Assigned unconditionally below (from `build_multi_provider_registry`)
     // before any read, so deferred init keeps the dead initial value out.
     let multi_reg: Option<Arc<alephcore::MultiProviderRegistry>>;
-    let mut channel_reg_cell: Option<
+    let channel_reg_cell: Option<
         Arc<tokio::sync::OnceCell<Arc<alephcore::gateway::channel_registry::ChannelRegistry>>>,
-    > = None;
-    let mut clar_mgr_cell: Option<
+    >;
+    let clar_mgr_cell: Option<
         Arc<tokio::sync::OnceCell<Arc<alephcore::clarification::ClarificationManager>>>,
-    > = None;
-    let mut tool_reg_out: Option<Arc<BuiltinToolRegistry>> = None;
+    >;
+    let tool_reg_out: Option<Arc<BuiltinToolRegistry>>;
     let mut orch_cell_out: Option<
         std::sync::Arc<std::sync::OnceLock<std::sync::Arc<alephcore::orchestrator::Orchestrator>>>,
     > = None;
@@ -739,8 +739,6 @@ pub(in crate::commands::start) async fn register_agent_handlers(
         let gateway_context_cell = tool_registry.gateway_context_cell();
         channel_reg_cell = Some(tool_registry.channel_registry_cell());
         clar_mgr_cell = Some(tool_registry.clarification_manager_cell());
-
-        default_prov = Some(provider_registry.default_provider());
 
         let tool_registry = Arc::new(tool_registry);
         let tool_registry_for_heartbeat = tool_registry.clone();
@@ -1614,7 +1612,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
             Ok(registry) => Arc::new(registry),
             Err(e) => {
                 abort_spawned_tasks(&spawned_tasks);
-                return Err(e.into());
+                return Err(e);
             }
         };
         let gateway_ctx = Arc::new(alephcore::gateway::context::GatewayContext::new(

@@ -138,9 +138,6 @@ pub(crate) struct PluginProjection {
     /// Sub-agents contributed by **active** plugins, each with its owner's
     /// `ScopeKey` — [`crate::agents::visible_plugin_subagents`] filters by it.
     pub(crate) subagents: Vec<crate::agents::PluginSubagent>,
-    /// Canonical Panel snapshot derived from the same registry read and
-    /// revision publication as the other plugin-owned views.
-    pub(crate) panel_snapshot: aleph_protocol::panel::PanelUiCapabilitySnapshot,
     pub(crate) panel_diagnostics: Vec<super::panel::PanelProjectionDiagnostic>,
 }
 
@@ -206,7 +203,7 @@ impl Views {
         let prepared =
             super::panel_publication::PreparedPanelPublication::prepare(records, &trust_policy)
                 .await;
-        let (panel_snapshot, panel_diagnostics) = {
+        let panel_diagnostics = {
             // No I/O under these locks; current policy validation and generation replacement
             // share the policy-read -> publication-write order.
             let policy = self
@@ -217,17 +214,12 @@ impl Views {
                 .panel_publication
                 .write()
                 .unwrap_or_else(|e| e.into_inner());
-            let diagnostics = publication.commit(prepared, &policy);
-            (
-                publication.snapshot(&super::visibility::VisibilityCtx::default()),
-                diagnostics,
-            )
+            publication.commit(prepared, &policy)
         };
 
         PluginProjection {
             plugin_skill_dirs,
             subagents,
-            panel_snapshot,
             panel_diagnostics,
         }
     }

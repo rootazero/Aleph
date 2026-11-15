@@ -1455,9 +1455,8 @@ impl ProjectStore {
         // half that succeeded (best effort: `remove_dir` only removes an
         // EMPTY directory, and something may have been written into it in
         // the meantime).
-        self.add(&target, Some(trimmed.to_string())).map_err(|e| {
+        self.add(&target, Some(trimmed.to_string())).inspect_err(|_e| {
             let _ = std::fs::remove_dir(&target);
-            e
         })
     }
 

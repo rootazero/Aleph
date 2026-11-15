@@ -536,17 +536,16 @@ mod tests {
 
     #[test]
     fn firecrawl_connection_test_passes_configured_timeout() {
-        let source = include_str!("fetch_config.rs");
-        let handler = source
-            .split("pub async fn handle_test(")
-            .nth(1)
-            .unwrap()
-            .split("#[cfg(test)]")
-            .next()
-            .unwrap();
-        assert!(handler.contains("FirecrawlFetchProvider::new_with_timeout("));
-        assert!(handler.contains("base_url, api_key, params.timeout_seconds"));
-        assert!(!handler.contains("FirecrawlFetchProvider::new(base_url, api_key)"));
+        let source = crate::utils::source_scan::production_prefix(include_str!("fetch_config.rs"));
+        let handler = source.split("pub async fn handle_test(").nth(1).unwrap();
+        let compact = handler
+            .chars()
+            .filter(|c| !c.is_whitespace())
+            .collect::<String>();
+        assert!(compact.contains(
+            "FirecrawlFetchProvider::new_with_timeout(base_url,api_key,params.timeout_seconds"
+        ));
+        assert!(!compact.contains("FirecrawlFetchProvider::new(base_url,api_key)"));
     }
 
     #[test]

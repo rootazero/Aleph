@@ -75,10 +75,10 @@ pub async fn handle_respond_approval(request: JsonRpcRequest) -> JsonRpcResponse
         request_id = %params.request_id,
         approved = params.approved,
         reason = ?params.reason,
-        "Approval response received (handler not yet integrated)"
+        "Approval response refused (handler not yet integrated)"
     );
 
-    JsonRpcResponse::success(request.id, json!({"success": true}))
+    JsonRpcResponse::error(request.id, -32601, "Approval handler not yet integrated")
 }
 
 /// Handle `mcp.cancel_approval`
@@ -95,10 +95,10 @@ pub async fn handle_cancel_approval(request: JsonRpcRequest) -> JsonRpcResponse 
 
     tracing::info!(
         request_id = %params.request_id,
-        "Approval cancellation received (handler not yet integrated)"
+        "Approval cancellation refused (handler not yet integrated)"
     );
 
-    JsonRpcResponse::success(request.id, json!({"success": true}))
+    JsonRpcResponse::error(request.id, -32601, "Approval handler not yet integrated")
 }
 
 #[cfg(test)]

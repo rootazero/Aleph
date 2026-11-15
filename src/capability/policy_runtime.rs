@@ -251,7 +251,7 @@ struct AdmissionTracker {
 impl AdmissionTracker {
     fn reserve(self: &Arc<Self>, id: &CapabilityId) -> Result<RunningCapabilityCall, PolicyDenial> {
         self.active
-            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |active| {
+            .try_update(Ordering::SeqCst, Ordering::SeqCst, |active| {
                 active.checked_add(1)
             })
             .map_err(|_| unavailable(id))?;
@@ -549,7 +549,7 @@ impl PolicyEngine {
         self.runtime
             .admissions
             .active
-            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |active| {
+            .try_update(Ordering::SeqCst, Ordering::SeqCst, |active| {
                 active.checked_add(1)
             })
             .map_err(|_| unavailable(id))?;

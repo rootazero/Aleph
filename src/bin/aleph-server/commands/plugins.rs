@@ -111,7 +111,7 @@ pub async fn handle_plugins_install(url: &str) -> Result<(), Box<dyn std::error:
     if let Err(reason) =
         alephcore::extension::ensure_plugin_destination_is_safe(&plugins_dir, &dest_path)
     {
-        return Err(format!("{reason}").into());
+        return Err(reason.to_string().into());
     }
 
     if tokio::fs::try_exists(&dest_path).await.unwrap_or(false) {
@@ -132,7 +132,7 @@ pub async fn handle_plugins_install(url: &str) -> Result<(), Box<dyn std::error:
                 &dest_path,
             ) {
                 let _ = std::fs::remove_dir_all(&dest_path);
-                return Err(format!("{reason}").into());
+                return Err(reason.to_string().into());
             }
             println!("Repository cloned successfully.");
 
@@ -347,7 +347,7 @@ pub async fn handle_plugin_install(
                 println!("Plugin '{source}' installed to {path:?}");
             }
             Err(e) => {
-                return Err(format!("{e}").into());
+                return Err(e.to_string().into());
             }
         }
     } else {

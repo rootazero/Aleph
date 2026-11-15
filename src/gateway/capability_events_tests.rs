@@ -632,6 +632,33 @@ async fn diagnostic_dispose_uses_current_source_audience_and_deduplicates_withdr
 #[tokio::test]
 #[serial_test::serial(pty_global_manager)]
 async fn production_events_reach_zahir_ws_and_same_sequence_audit() {
+    // This fixture binds a process-lifetime terminal source. Keep that binding
+    // in its own process rather than resetting production identity guards.
+    const CHILD: &str = "ALEPH_PRODUCTION_CAPABILITY_EVENTS_CHILD";
+    const SELECTOR: &str =
+        "gateway::capability_events_tests::production_events_reach_zahir_ws_and_same_sequence_audit";
+    if std::env::var_os(CHILD).is_none() {
+        use std::io::Write;
+
+        let output = tokio::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", SELECTOR, "--nocapture", "--test-threads=1"])
+            .env(CHILD, "1")
+            .kill_on_drop(true)
+            .output()
+            .await
+            .expect("run the process-isolated production event fixture");
+        std::io::stdout().write_all(&output.stdout).unwrap();
+        std::io::stderr().write_all(&output.stderr).unwrap();
+        assert!(output.status.success(), "production event child must pass");
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            stdout.contains(SELECTOR)
+                && stdout.contains("test result: ok. 1 passed; 0 failed; 0 ignored;"),
+            "NO_COVERAGE: the child must execute the intended event fixture"
+        );
+        return;
+    }
+
     #[derive(Default)]
     struct Audit(std::sync::Mutex<Vec<crate::capability::events::CapabilityEventRecord>>);
     impl crate::capability::events::EventPersistence for Audit {

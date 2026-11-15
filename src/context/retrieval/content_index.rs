@@ -494,22 +494,20 @@ fn drop_pre_scope_tables(conn: &Connection) -> Result<(), IndexError> {
         if exists == 0 {
             continue;
         }
-        // `prepare` is the cheapest column probe that works on a virtual table
-        // (`PRAGMA table_info` would too, but needs row parsing). It fails iff
-        // the column is absent.
-        match conn.prepare(&format!("SELECT session_id FROM {table} LIMIT 0")) {
-            Ok(_) => {}
-            Err(rusqlite::Error::SqliteFailure(_err, Some(ref msg)))
-                if msg.contains("no such column") =>
-            {
-                tracing::warn!(
-                    table,
-                    "content index predates session scoping; recreating it empty \
-                     (offloaded blobs remain readable via their markers)"
-                );
-                conn.execute_batch(&format!("DROP TABLE {table};"))?;
-            }
-            Err(e) => return Err(IndexError::Sqlite(e)),
+        // Inspect schema directly: a missing column may surface as either
+        // SqliteFailure or SqlInputError, depending on SQLite preparation.
+        let scoped: bool = conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM pragma_table_info(?1) WHERE name = 'session_id')",
+            params![table],
+            |row| row.get(0),
+        )?;
+        if !scoped {
+            tracing::warn!(
+                table,
+                "content index predates session scoping; recreating it empty \
+                 (offloaded blobs remain readable via their markers)"
+            );
+            conn.execute_batch(&format!("DROP TABLE {table};"))?;
         }
     }
     Ok(())

@@ -41,7 +41,8 @@ impl Peer {
         let rendered = response["result"].to_string();
         assert!(rendered.contains(device), "validated device identity must be echoed: {rendered}");
         assert!(rendered.contains("owner"), "credential must bind the fixture owner");
-        peer.rpc("events.subscribe", json!({"topics":["capabilities.ui.display"]})).await;
+        let subscription = peer.rpc("events.subscribe", json!({"topics":["capabilities.ui.display"]})).await;
+        assert!(subscription.get("error").is_none(), "display subscription must succeed: {subscription}");
         peer
     }
 
@@ -113,9 +114,18 @@ impl Fixture {
             note_memory_dir: scratch.path().join("notes"),
         }, tree.clone());
         let policy = Arc::new(PolicyEngine::with_shared_tree(tree.clone(), Default::default()).unwrap());
-        let host = ProjectionHost::mount_with_runtime(ToolHandlerRegistry::new(), tree, memory,
-            CapabilityHandlerRegistry::new(), policy, false);
+        let tools = ToolHandlerRegistry::new();
+        let host = ProjectionHost::mount_with_runtime(
+            tools.clone(),
+            tree,
+            memory,
+            CapabilityHandlerRegistry::new(),
+            policy,
+            false,
+        );
         assert!(host.wait_until_ready().await);
+        host.register_special_tool_adapters(&tools)
+            .expect("mount the production canonical UI and terminal adapters");
         set_projection_host(host.clone());
         let security = Arc::new(SecurityStore::in_memory().unwrap());
         let tokens = Arc::new(DeviceTokenManager::new(security.clone()));
@@ -197,8 +207,16 @@ async fn display_event_and_ack_progress_on_same_authenticated_connection() {
         assert!(attachment["surface_id"].as_str().is_some());
         let invoke = f.a.send("capabilities.ui.invoke", operation(&attachment, "before acknowledgement")).await;
         // Causal RED: old inline invoke cannot deliver this until its 5000ms timeout.
-        let frame = tokio::time::timeout(Duration::from_millis(1500), f.a.display()).await
-            .expect("DISPLAY must reach the same authenticated socket BEFORE the 5000ms ack timeout");
+        let frame = tokio::time::timeout(Duration::from_millis(1500), async {
+            loop {
+                let frame = f.a.frame().await;
+                assert_ne!(frame["id"], json!(invoke), "invoke must remain pending before DISPLAY/ACK: {frame}");
+                if frame.get("id").is_none() && frame.to_string().contains("capabilities.ui.display") {
+                    break frame;
+                }
+                f.a.saved.push(frame);
+            }
+        }).await.expect("DISPLAY must reach the same authenticated socket BEFORE the 5000ms ack timeout");
         let text = frame.to_string();
         assert!(text.contains("before acknowledgement"));
         let data = frame.get("params").and_then(|p| p.get("data")).or_else(|| frame.get("data")).expect("display payload");

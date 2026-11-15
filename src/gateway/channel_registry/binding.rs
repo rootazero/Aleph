@@ -1141,7 +1141,7 @@ impl super::ChannelRegistry {
             }
         }
         let (executions, forwarder) = {
-            let (mut runtime, _poisoned) = lock_runtime(&entry);
+            let (mut runtime, _poisoned) = lock_runtime(entry);
             (
                 std::mem::take(&mut runtime.executions),
                 runtime.forwarder.take(),

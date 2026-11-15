@@ -324,7 +324,7 @@ fn sketch_subpath(
     // Where the pen starts: past the rounded start corner when closed.
     let r0 = corner_reach(0);
     let start_pt = if r0 > 0.0 {
-        match (pts.get(0), pts.get(1)) {
+        match (pts.first(), pts.get(1)) {
             (Some(&p0), Some(&p1)) => toward(p0, p1, r0),
             (Some(&p0), None) => p0,
             _ => (0.0, 0.0),

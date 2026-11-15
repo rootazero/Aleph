@@ -985,7 +985,9 @@ pub fn code_keeping_literals(src: &str) -> String {
 /// If `signature` is not in `code`, or its body never closes — a broken scan
 /// must say so rather than return an empty set that matches an empty
 /// expectation.
+// The gateway census fixture includes this file as a module but does not use this helper.
 #[cfg(test)]
+#[cfg_attr(test, allow(dead_code))]
 pub(crate) fn string_literals_in_fn(code: &str, signature: &str) -> (String, Vec<String>) {
     let start = code.find(signature).unwrap_or_else(|| {
         panic!("the scan is broken, not the tree: no `{signature}` in this file")
@@ -1046,7 +1048,9 @@ pub(crate) fn rust_sources_under(root: &std::path::Path) -> Vec<(String, String)
 /// Strict, per-root source input for test/helper censuses. Paths are normalized
 /// relative to `project_root`, independently of Core's manifest directory.
 /// Unlike the historical census walker above, every discovery/read error is red.
+// Some integration fixtures include this source file without the producer census.
 #[cfg(any(test, feature = "test-helpers"))]
+#[cfg_attr(test, allow(dead_code))]
 pub fn rust_sources_under_root(
     project_root: &std::path::Path,
     subtree: &std::path::Path,

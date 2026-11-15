@@ -776,8 +776,10 @@ mod tests {
         use std::time::Duration;
 
         for allowed in [vec!["111@s.whatsapp.net".to_string()], vec![]] {
-            let mut config = WhatsAppConfig::default();
-            config.allowed_chats = allowed;
+            let mut config = WhatsAppConfig {
+                allowed_chats: allowed,
+                ..WhatsAppConfig::default()
+            };
             config.access.dm_policy = DmPolicy::Open;
             let restricted = !config.allowed_chats.is_empty();
             let (mut channel, fake) = WhatsAppChannel::for_test_with_fake("wa-test", config);
@@ -804,8 +806,10 @@ mod tests {
             channel.stop().await.unwrap();
         }
 
-        let mut config = WhatsAppConfig::default();
-        config.allowed_chats = vec!["111@s.whatsapp.net".into()];
+        let mut config = WhatsAppConfig {
+            allowed_chats: vec!["111@s.whatsapp.net".into()],
+            ..WhatsAppConfig::default()
+        };
         config.access.dm_policy = DmPolicy::Disabled;
         let (mut channel, fake) = WhatsAppChannel::for_test_with_fake("wa-test", config);
         let mut rx = channel.inbound_subscribe();

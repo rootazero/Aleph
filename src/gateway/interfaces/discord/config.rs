@@ -240,8 +240,10 @@ mod tests {
 
     #[test]
     fn test_debug_redacts_bot_token() {
-        let mut config = DiscordConfig::default();
-        config.bot_token = "super-secret-token".to_string();
+        let config = DiscordConfig {
+            bot_token: "super-secret-token".to_string(),
+            ..DiscordConfig::default()
+        };
         let rendered = format!("{config:?}");
         assert!(!rendered.contains("super-secret-token"));
         assert!(rendered.contains("<redacted>"));

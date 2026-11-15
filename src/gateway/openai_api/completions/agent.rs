@@ -335,7 +335,10 @@ pub async fn handle(
     // the agent sees the conversation the client intended.
     // Task 7a: emit via SessionService instead of direct messages-table write.
     if req.messages.len() > 1 {
-        agent.ensure_session(&session_key).await;
+        agent
+            .ensure_session(&session_key)
+            .await
+            .map_err(|_| ApiError::InternalError("Session unavailable".to_string()))?;
         for msg in &req.messages[..req.messages.len() - 1] {
             if let Some(content) = &msg.content {
                 let turn_id = uuid::Uuid::new_v4();

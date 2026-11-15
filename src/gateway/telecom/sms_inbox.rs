@@ -905,7 +905,7 @@ mod tests {
     fn empty_provider_ids_return_invalid_identity_not_invalid_timestamp() {
         let now = Utc.timestamp_opt(1_800_000_000, 0).unwrap();
         let store = inbox(4, 4096);
-        let mut empty_account = envelope("", "message-1", "body", now);
+        let empty_account = envelope("", "message-1", "body", now);
         assert!(matches!(
             store.accept(&context(now), &empty_account),
             Err(SmsInboxError::InvalidIdentity(_))

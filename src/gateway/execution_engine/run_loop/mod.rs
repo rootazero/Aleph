@@ -443,15 +443,18 @@ fn admission_result_for(verdict: crate::spend::Verdict) -> Result<(), ExecutionE
 /// One helper rather than the same three lines at both engines' call sites:
 /// `ExecutionEngine::execute` and `SimpleExecutionEngine::execute` each create
 /// the row, and a second copy is a second answer waiting to drift.
-pub(super) async fn ensure_session_under_request_scope(
+pub async fn prepare_session_for_run(
     agent: &AgentInstance,
     request: &RunRequest,
-) {
+) -> Result<
+    crate::gateway::session_store::types::SessionMetadata,
+    crate::gateway::session_store::error::SessionStoreError,
+> {
     crate::scope::with_scope(
         request_scope(request),
         agent.ensure_session(&request.session_key),
     )
-    .await;
+    .await
 }
 
 /// The directory this run works in: the request's `workspace_override`
@@ -788,7 +791,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                                 originator,
                                 crate::gateway::media::with_pending_media(
                                     Some(delivery_media),
-                                    self.run_agent_loop_inner(
+                                    Box::pin(self.run_agent_loop_inner(
                                         run_id,
                                         request,
                                         agent.clone(),
@@ -800,7 +803,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                                         hook_executor.clone(),
                                         hook_session_id.clone(),
                                         occupancy_out,
-                                    ),
+                                    )),
                                 ),
                             ),
                         ),

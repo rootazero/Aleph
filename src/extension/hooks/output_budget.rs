@@ -142,30 +142,6 @@ fn spill_dir(session_id: &str) -> Option<PathBuf> {
     )
 }
 
-/// Extract a readable prefix from the session ID for directory names.
-/// Aleph session ids embed `:` (`sess:s1`), which is **illegal in a Windows
-/// filename** — an unsanitised id makes every spill write fail there while
-/// working fine on macOS. Path separators and `..` are also folded so a
-/// hostile id cannot escape the spill root.
-fn sanitize_segment(session_id: &str) -> String {
-    let cleaned: String = session_id
-        .chars()
-        .take(32)
-        .map(|c| {
-            if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
-                c
-            } else {
-                '_'
-            }
-        })
-        .collect();
-    if cleaned.is_empty() {
-        "no-session".to_string()
-    } else {
-        cleaned
-    }
-}
-
 /// Extract a readable prefix from the session ID, used alongside the hash.
 fn sanitize_prefix(session_id: &str) -> String {
     let cleaned: String = session_id

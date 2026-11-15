@@ -360,10 +360,14 @@ fn read_workspace_file(state: &HostState, relative_path: &str) -> Result<String,
         .check_workspace_read(&canonical_relative)
         .map_err(|e| e.to_string())?;
 
-    // Open the file and confirm it is a regular file before reading, so that
-    // FIFOs and other special files cannot block indefinitely. Then read
-    // through a bounded reader: if the content exceeds the cap we reject it
-    // even when metadata().len() reported a smaller (or zero) size.
+    // Reject special paths before opening: opening a FIFO can block before
+    // handle metadata is available. Check the opened handle as well, then
+    // read through a bounded reader regardless of the reported file size.
+    let metadata = std::fs::metadata(&canonical)
+        .map_err(|e| format!("failed to stat {}: {e}", canonical.display()))?;
+    if !metadata.is_file() {
+        return Err("path is not a regular file".to_string());
+    }
     let file = std::fs::File::open(&canonical)
         .map_err(|e| format!("failed to read {}: {e}", canonical.display()))?;
     let metadata = file

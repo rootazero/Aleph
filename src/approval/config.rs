@@ -171,7 +171,6 @@ pub fn matches_glob(value: &str, pattern: &str) -> bool {
 /// The fallible twin of [`matches_glob`]: `Ok(true)` / `Ok(false)` is a real
 /// match decision, `Err` is "the pattern is broken" — a different question
 /// with a different answer, which must not be collapsed into "no match".
-#[must_use]
 pub fn try_matches_glob(value: &str, pattern: &str) -> Result<bool, regex::Error> {
     cached_glob_regex(pattern).map(|re| re.is_match(value))
 }
@@ -812,7 +811,7 @@ fn canonicalize_url_case(value: &str) -> String {
         .map_or(0, |(i, c)| i + c.len_utf8());
     let authority_start = idx + "://".len();
     let authority_end = value[authority_start..]
-        .find(|c| c == '/' || c == '?' || c == '#')
+        .find(['/', '?', '#'])
         .map_or(value.len(), |i| authority_start + i);
     let authority = &value[authority_start..authority_end];
     // Only the host (after the last `@`) is a name; the userinfo before it

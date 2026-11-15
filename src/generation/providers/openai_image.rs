@@ -216,7 +216,7 @@ impl OpenAiImageProvider {
         })
     }
 
-    /// Parse API error response and convert to `GenerationError`
+    #[cfg(test)]
     fn parse_error_response(&self, status: reqwest::StatusCode, body: &str) -> GenerationError {
         self.parse_error_response_with_retry(status, body, None)
     }

@@ -550,15 +550,6 @@ impl InboundMessageRouter {
         }
         Ok(())
     }
-
-    /// Generate a topic summary for the current session using LLM
-    pub(super) async fn generate_session_topic(&self, session_key: &SessionKey) -> Option<String> {
-        let sm = self.session_store.as_ref()?;
-        let llm = self.llm_provider.as_ref()?;
-
-        let locale = self.resolve_locale().await;
-        generate_topic_background(sm.as_ref(), llm, session_key, locale).await
-    }
 }
 
 /// Shared topic generation for foreground requests and the /new background task.
@@ -619,23 +610,20 @@ mod tests {
         const SOURCE: &str = include_str!("command_handler.rs");
 
         #[test]
-        fn foreground_and_background_share_topic_generation() {
-            let production = SOURCE.split("#[cfg(test)]").next().unwrap();
-            let foreground = production
-                .split("pub(super) async fn generate_session_topic(")
-                .nth(1)
-                .unwrap()
-                .split("\n    }\n")
-                .next()
-                .unwrap();
-            assert!(foreground.contains("generate_topic_background("));
+        fn new_background_path_uses_the_shared_topic_generator() {
+            let production = crate::utils::source_scan::production_prefix(SOURCE);
+            assert!(production.contains(
+                "generate_topic_background(sm.as_ref(), &llm, &old_key_resolved, locale).await"
+            ));
+            assert!(production.contains("async fn generate_topic_background("));
             assert_eq!(production.matches("Msg::TopicGenerationPrompt").count(), 1);
             assert_eq!(production.matches("llm.process(payload)").count(), 1);
         }
 
         #[test]
         fn background_topic_task_moves_the_resolved_key_without_cloning() {
-            let background = SOURCE
+            let production = crate::utils::source_scan::production_prefix(SOURCE);
+            let background = production
                 .split("// Generate topic asynchronously in the background")
                 .nth(1)
                 .unwrap()

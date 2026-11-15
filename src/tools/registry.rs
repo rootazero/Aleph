@@ -300,6 +300,7 @@ impl CanonicalEntryLease {
     /// Both captures must come from registry-owned immutable read boundaries.
     /// Unrelated registry mutations do not invalidate an unchanged entry; the
     /// actual plugin provider must still admit its captured generation now.
+    #[cfg(test)]
     pub(crate) fn validate_capture(&self, current: &Self) -> bool {
         if self.provider_generation != current.provider_generation
             || self.entry.descriptor != current.entry.descriptor
@@ -1403,16 +1404,6 @@ impl ToolHandlerRegistry {
             )))
         })?;
         result.ok_or(PluginPublicationError::Closed)
-    }
-
-    /// RuntimeOwner holds its control fence and has prepared all bindings and
-    /// definitions before this call. Ready state and the batch are committed
-    /// under the actual provider lifecycle guard, never independent snapshots.
-    pub(crate) fn publish_plugin_batch_with_ready_commit(
-        &self,
-        batch: PluginBatch,
-    ) -> Result<PluginBatchRegistration, PluginPublicationError> {
-        self.publish_plugin_batch_with_ready_replacement(batch, None)
     }
 
     pub(crate) fn publish_plugin_batch_with_ready_replacement(
@@ -3256,7 +3247,7 @@ mod tests {
                 }
                 let before = registry.shared.snapshot();
                 let mut events = registry.subscribe_publications();
-                let result = registry.publish_plugin_batch_with_ready_commit(batch);
+                let result = registry.publish_plugin_batch_with_ready_replacement(batch, None);
                 if failure != "success" {
                     let error = result.expect_err("must reject entire batch");
                     match failure {

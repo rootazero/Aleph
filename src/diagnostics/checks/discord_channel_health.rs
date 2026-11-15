@@ -242,7 +242,8 @@ fn findings_for(verdict: &DiscordVerdict) -> Vec<Finding> {
 
 /// Load and parse the discord config subset from `path`.
 ///
-/// Returns `Unknown(reason)` on any I/O or parse failure — the same shape
+/// An absent config means no channel is configured. Other I/O or parse failures
+/// return `Unknown(reason)` — the same shape
 /// `media_codecs` uses for `gst-inspect-1.0` being absent. The path is
 /// always the same on every supported platform (`config.toml` next to
 /// the data dir), so we resolve it eagerly and surface the resolution
@@ -397,12 +398,12 @@ mod tests {
     }
 
     #[test]
-    fn unknown_is_info_with_unknown_tag() {
+    fn unknown_is_warning_with_unknown_tag() {
         let verdict = DiscordVerdict::Unknown("parse error".to_string());
         let f = findings_for(&verdict);
         assert_eq!(f.len(), 1);
-        // Severity::Info, same as `Ok` — the distinction is the tag.
-        assert_eq!(f[0].severity, Severity::Info);
+        // An unreadable or malformed config must not look like a healthy check.
+        assert_eq!(f[0].severity, Severity::Warning);
         assert!(f[0].has_tag(TAG_DISCORD_UNKNOWN));
         assert!(f[0].detail.contains("parse error"));
     }
@@ -541,16 +542,11 @@ mod tests {
         }
     }
 
-    /// A file that doesn't exist surfaces as `Unknown`, not as `Ok`.
-    /// Same rule as `media_codecs`: "I couldn't tell" is not the same
-    /// answer as "it's fine".
+    /// Missing configuration is an unconfigured channel, not a failed audit.
     #[tokio::test]
-    async fn probe_a_missing_file_reports_unknown() {
+    async fn probe_a_missing_file_reports_unconfigured_ok() {
         let verdict = probe(std::path::Path::new("/nonexistent/path/config.toml")).await;
-        match verdict {
-            DiscordVerdict::Unknown(reason) => assert!(reason.contains("read failed")),
-            other => panic!("expected Unknown, got {other:?}"),
-        }
+        assert!(matches!(verdict, DiscordVerdict::Ok));
     }
 
     /// A malformed file surfaces as `Unknown` with a parse error, not as

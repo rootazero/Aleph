@@ -215,8 +215,6 @@ impl XmppMessageOps {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
         use tokio::net::TcpStream;
 
-        const MAX_STANZA_SIZE: usize = 1024 * 1024;
-
         if config.use_tls {
             tracing::error!("XMPP TLS is not implemented; refusing to connect with use_tls=true");
             return;
@@ -492,7 +490,7 @@ mod regression_tests {
         ));
         let (mut socket, _) = listener.accept().await.unwrap();
         let mut header = [0; 1024];
-        socket.read(&mut header).await.unwrap();
+        let _bytes_read = socket.read(&mut header).await.unwrap();
         let payload = format!("<message><body>{}", "a".repeat(MAX_STANZA_SIZE));
         let _ = socket.write_all(payload.as_bytes()).await;
         let closed = tokio::time::timeout(Duration::from_secs(2), socket.read(&mut header)).await;

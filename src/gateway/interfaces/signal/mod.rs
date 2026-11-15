@@ -300,11 +300,11 @@ mod tests {
     #[test]
     fn test_channel_capabilities() {
         let caps = SignalChannel::capabilities();
-        assert!(caps.attachments);
-        assert!(caps.images);
-        assert!(caps.audio);
-        assert!(caps.video);
-        assert!(caps.reactions);
+        assert!(!caps.attachments);
+        assert!(!caps.images);
+        assert!(!caps.audio);
+        assert!(!caps.video);
+        assert!(!caps.reactions);
         assert!(caps.replies);
         assert!(!caps.editing);
         assert!(!caps.deletion);

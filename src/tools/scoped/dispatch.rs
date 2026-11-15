@@ -1061,8 +1061,8 @@ impl ScopedToolService {
     ///
     /// Split out of [`Self::execute_gated`] so the wall clock can wrap exactly
     /// this and nothing above it. Everything above it can block on a person.
-    async fn route_and_execute<'call>(
-        &'call self,
+    async fn route_and_execute(
+        &self,
         routing: RoutingTarget,
         name: &str,
         effective_input: &Value,
@@ -1169,8 +1169,8 @@ impl ScopedToolService {
     }
 
     /// One attempt with owned captured data and a single sealed-token lifetime.
-    async fn invoke_admitted_target<'call>(
-        &'call self,
+    async fn invoke_admitted_target(
+        &self,
         target: RoutingTarget,
         name: String,
         input: Value,
@@ -1267,9 +1267,7 @@ impl ScopedToolService {
                                 ),
                             )
                             .await;
-                            if result.is_err() {
-                                return result;
-                            }
+                            let result = result?;
                             Self::validate_plugin_capture(registry.as_deref(), &lease)?;
                             let (validation_lease, validation_backend) =
                                 if lease.is_cold_declaration() {
@@ -1298,7 +1296,7 @@ impl ScopedToolService {
                                         "canonical capability lease became stale: {error:?}"
                                     ),
                                 })?;
-                            result
+                            Ok(result)
                         },
                     )
                     .await;
@@ -1369,9 +1367,7 @@ impl ScopedToolService {
                             }
                             None => invocation.await,
                         };
-                        if result.is_err() {
-                            return result;
-                        }
+                        let result = result?;
                         let (validation_lease, validation_backend) = if lease.is_cold_declaration()
                         {
                             rebind_cold_plugin_capture(
@@ -1398,7 +1394,7 @@ impl ScopedToolService {
                                     "canonical capability lease became stale: {error:?}"
                                 ),
                             })?;
-                        result
+                        Ok(result)
                     },
                 )
                 .await;
@@ -1582,9 +1578,7 @@ impl ScopedToolService {
                     ),
                 )
                 .await;
-                if result.is_err() {
-                    return result;
-                }
+                let result = result?;
                 let (validation_lease, validation_backend) = if lease.is_cold_declaration() {
                     rebind_cold_plugin_capture(
                         self.canonical_registry.as_deref().ok_or_else(|| {
@@ -1608,7 +1602,7 @@ impl ScopedToolService {
                         name: entry.descriptor.name.clone(),
                         reason: format!("canonical capability lease became stale: {error:?}"),
                     })?;
-                return result;
+                return Ok(result);
             }
             RoutingTarget::Subagent => {
                 let st = self

@@ -88,8 +88,12 @@ impl SimpleExecutionEngine {
         // Ensure the session row exists before any state transitions; tests and
         // fallback paths may run without the global SessionService initialized.
         // Scoped for the same reason the full engine scopes it — see
-        // `run_loop::ensure_session_under_request_scope`.
-        super::run_loop::ensure_session_under_request_scope(&agent, &request).await;
+        // `run_loop::prepare_session_for_run`.
+        super::run_loop::prepare_session_for_run(&agent, &request)
+            .await
+            .map_err(|error| {
+                ExecutionError::Failed(format!("session metadata preparation failed: {error}"))
+            })?;
 
         // Atomically check Idle and transition to Running to close the TOCTOU
         // window between an is_idle() probe and the later set_state(Running).
@@ -454,44 +458,6 @@ impl SimpleExecutionEngine {
     }
 }
 
-#[cfg(test)]
-mod cancellation_tests {
-    use super::super::tests::{gate_test_agent, gate_test_request, TestEmitter};
-    use super::*;
-
-    #[tokio::test]
-    async fn channel_only_run_cancels_without_an_unused_token() {
-        let temp = tempfile::tempdir().unwrap();
-        let agent = gate_test_agent(&temp, "simple-cancel").await;
-        let session = crate::gateway::router::SessionKey::main("simple-cancel");
-        let request = gate_test_request(&session, "simple-cancel-run");
-        let engine = SimpleExecutionEngine::default();
-        let emitter = Arc::new(TestEmitter::new());
-
-        let (result, ()) = tokio::time::timeout(std::time::Duration::from_secs(5), async {
-            tokio::join!(engine.execute(request, agent, emitter), async {
-                loop {
-                    let runs = engine.active_runs.read().await;
-                    if let Some(run) = runs.get("simple-cancel-run") {
-                        assert!(!run.cancel_token.is_cancelled());
-                        break;
-                    }
-                    drop(runs);
-                    tokio::task::yield_now().await;
-                }
-                engine.cancel("simple-cancel-run").await.unwrap();
-            })
-        })
-        .await
-        .expect("channel cancellation must terminate the simple run");
-        assert!(matches!(result, Err(ExecutionError::Cancelled)));
-        assert!(matches!(
-            engine.get_status("simple-cancel-run").await.unwrap().state,
-            RunState::Cancelled
-        ));
-    }
-}
-
 impl Default for SimpleExecutionEngine {
     fn default() -> Self {
         Self::new(ExecutionEngineConfig::default())
@@ -549,5 +515,43 @@ impl ExecutionAdapter for SimpleExecutionEngine {
     fn running_sessions(&self) -> Vec<String> {
         // SimpleExecutionEngine has no per-session run registry; honest empty.
         Vec::new()
+    }
+}
+
+#[cfg(test)]
+mod cancellation_tests {
+    use super::super::tests::{gate_test_agent, gate_test_request, TestEmitter};
+    use super::*;
+
+    #[tokio::test]
+    async fn channel_only_run_cancels_without_an_unused_token() {
+        let temp = tempfile::tempdir().unwrap();
+        let agent = gate_test_agent(&temp, "simple-cancel").await;
+        let session = crate::gateway::router::SessionKey::main("simple-cancel");
+        let request = gate_test_request(&session, "simple-cancel-run");
+        let engine = SimpleExecutionEngine::default();
+        let emitter = Arc::new(TestEmitter::new());
+
+        let (result, ()) = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            tokio::join!(engine.execute(request, agent, emitter), async {
+                loop {
+                    let runs = engine.active_runs.read().await;
+                    if let Some(run) = runs.get("simple-cancel-run") {
+                        assert!(!run.cancel_token.is_cancelled());
+                        break;
+                    }
+                    drop(runs);
+                    tokio::task::yield_now().await;
+                }
+                engine.cancel("simple-cancel-run").await.unwrap();
+            })
+        })
+        .await
+        .expect("channel cancellation must terminate the simple run");
+        assert!(matches!(result, Err(ExecutionError::Cancelled)));
+        assert!(matches!(
+            engine.get_status("simple-cancel-run").await.unwrap().state,
+            RunState::Cancelled
+        ));
     }
 }

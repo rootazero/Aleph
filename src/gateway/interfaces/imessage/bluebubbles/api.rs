@@ -204,9 +204,7 @@ impl BlueBubblesApi {
             for chat in &chats {
                 let guid = chat.guid.clone();
                 let participants = chat
-                    .participants
-                    .as_ref()
-                    .map(|v| v.as_slice())
+                    .participants.as_deref()
                     .unwrap_or_default();
                 let is_one_on_one = participants.len() == 1;
                 let matches_part = is_one_on_one
@@ -717,7 +715,7 @@ mod tests {
             let server = tokio::spawn(async move {
                 let (mut socket, _) = listener.accept().await.unwrap();
                 let mut request = [0; 2048];
-                socket.read(&mut request).await.unwrap();
+                let _bytes_read = socket.read(&mut request).await.unwrap();
                 socket.write_all(b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n2\r\nab\r\n2\r\ncd\r\n0\r\n\r\n").await.unwrap();
             });
             let response = reqwest::get(format!("http://{addr}")).await.unwrap();

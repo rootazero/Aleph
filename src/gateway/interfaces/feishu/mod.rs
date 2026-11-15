@@ -601,11 +601,16 @@ mod lifecycle_tests {
         let provider = old.provider.clone();
         let generation = provider.generation();
         let path = old.config.webhook_path.clone();
+        let (headers, body) = feishu_inbound::crypto::test_support::signed_event(
+            old.config.encrypt_key.as_deref().unwrap(),
+            r#"{"token":"token","challenge":"ready"}"#,
+        );
         registry.register(Box::new(old)).await;
         let old_handle = registry.get(&ChannelId::new(id)).await.unwrap();
         let response = reqwest::Client::new()
             .post(format!("http://{address}{path}"))
-            .json(&serde_json::json!({"token": "token", "challenge": "ready"}))
+            .headers(headers)
+            .body(body)
             .send()
             .await
             .unwrap();

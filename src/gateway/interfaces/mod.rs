@@ -151,7 +151,7 @@ mod instance_id_tests {
     //! therefore registers every instance under the adapter name, and two
     //! instances of the same type collide.
 
-    use crate::gateway::channel::{Channel, ChannelFactory};
+    use crate::gateway::channel::ChannelFactory;
 
     #[tokio::test]
     async fn a_factory_registers_the_channel_under_the_configured_instance_id() {
@@ -229,20 +229,28 @@ mod credential_debug_tests {
         use super::telegram::config_v2::TelegramAccountConfig;
         use super::xmpp::config::XmppConfig;
 
-        let mut irc = IrcConfig::default();
-        irc.password = Some(SECRET.to_string());
+        let irc = IrcConfig {
+            password: Some(SECRET.to_string()),
+            ..IrcConfig::default()
+        };
         assert_redacted("IrcConfig", &format!("{irc:?}"));
 
-        let mut mattermost = MattermostConfig::default();
-        mattermost.bot_token = SECRET.to_string();
+        let mattermost = MattermostConfig {
+            bot_token: SECRET.to_string(),
+            ..MattermostConfig::default()
+        };
         assert_redacted("MattermostConfig", &format!("{mattermost:?}"));
 
-        let mut email = EmailConfig::default();
-        email.password = SECRET.to_string();
+        let email = EmailConfig {
+            password: SECRET.to_string(),
+            ..EmailConfig::default()
+        };
         assert_redacted("EmailConfig", &format!("{email:?}"));
 
-        let mut matrix = MatrixConfig::default();
-        matrix.access_token = SECRET.to_string();
+        let matrix = MatrixConfig {
+            access_token: SECRET.to_string(),
+            ..MatrixConfig::default()
+        };
         assert_redacted("MatrixConfig", &format!("{matrix:?}"));
 
         let feishu: FeishuConfig = serde_json::from_value(serde_json::json!({
@@ -255,16 +263,22 @@ mod credential_debug_tests {
         .expect("feishu config deserializes");
         assert_redacted("FeishuConfig", &format!("{feishu:?}"));
 
-        let mut telegram = TelegramConfig::default();
-        telegram.bot_token = SECRET.to_string();
+        let telegram = TelegramConfig {
+            bot_token: SECRET.to_string(),
+            ..TelegramConfig::default()
+        };
         assert_redacted("TelegramConfig", &format!("{telegram:?}"));
 
-        let mut account = TelegramAccountConfig::default();
-        account.bot_token = SECRET.to_string();
+        let account = TelegramAccountConfig {
+            bot_token: SECRET.to_string(),
+            ..TelegramAccountConfig::default()
+        };
         assert_redacted("TelegramAccountConfig", &format!("{account:?}"));
 
-        let mut xmpp = XmppConfig::default();
-        xmpp.password = SECRET.to_string();
+        let xmpp = XmppConfig {
+            password: SECRET.to_string(),
+            ..XmppConfig::default()
+        };
         assert_redacted("XmppConfig", &format!("{xmpp:?}"));
     }
 }

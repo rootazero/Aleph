@@ -130,57 +130,6 @@ fn function_call_item(id: &str, name: &str, arguments: &str) -> serde_json::Valu
     json!({"type": "function_call", "id": id, "call_id": id, "name": name, "arguments": arguments})
 }
 
-#[cfg(test)]
-mod gx6_tests {
-    use super::*;
-    use crate::providers::adapter::ToolChoice;
-    use crate::providers::message::ContentBlock;
-
-    #[test]
-    fn flattened_tools_and_choices_convert_without_the_chat_wire_parser() {
-        let tools = convert_responses_tools(&[json!({
-            "type": "function", "name": "lookup", "parameters": {"type": "object"}, "strict": true
-        })])
-        .unwrap();
-        assert_eq!(tools[0].name, "lookup");
-        assert_eq!(tools[0].parameters, json!({"type": "object"}));
-        assert!(tools[0].strict);
-        assert!(
-            matches!(convert_responses_tool_choice(&json!({"type":"function","name":"lookup"})).unwrap(), ToolChoice::Specific(name) if name == "lookup")
-        );
-        for choice in ["auto", "none", "required"] {
-            assert!(convert_responses_tool_choice(&json!(choice)).is_ok());
-        }
-        assert!(convert_responses_tools(&[json!({"type":"web_search_preview"})]).is_err());
-        assert!(convert_responses_tool_choice(&json!({"type":"allowed_tools"})).is_err());
-    }
-
-    #[test]
-    fn function_call_output_round_trips_with_the_call_id_not_the_item_id() {
-        let input: ResponsesInput = serde_json::from_value(json!([
-            {"role":"user","content":"lookup"},
-            {"type":"function_call","id":"fc_item","call_id":"c1","name":"lookup","arguments":"{}"},
-            {"type":"function_call_output","call_id":"c1","output":"ok"}
-        ]))
-        .unwrap();
-        let messages = convert_input(&input).unwrap();
-        assert!(
-            matches!(&messages[1], UnifiedMessage::Assistant { content } if matches!(&content[0], ContentBlock::ToolCall { id, .. } if id == "c1"))
-        );
-        assert!(
-            matches!(&messages[2], UnifiedMessage::ToolResult { tool_call_id, .. } if tool_call_id == "c1")
-        );
-        let item = function_call_item("c1", "lookup", "{}");
-        assert_eq!(item["id"], "c1");
-        assert_eq!(item["call_id"], "c1");
-        let replay: ResponsesInput = serde_json::from_value(json!([item])).unwrap();
-        assert!(matches!(
-            &convert_input(&replay).unwrap()[0],
-            UnifiedMessage::Assistant { .. }
-        ));
-    }
-}
-
 /// Handle a `POST /v1/responses` request.
 pub async fn handle(
     State(state): State<Arc<OpenAiApiState>>,
@@ -298,5 +247,56 @@ pub async fn handle(
         };
 
         Ok(Json(resp).into_response())
+    }
+}
+
+#[cfg(test)]
+mod gx6_tests {
+    use super::*;
+    use crate::providers::adapter::ToolChoice;
+    use crate::providers::message::ContentBlock;
+
+    #[test]
+    fn flattened_tools_and_choices_convert_without_the_chat_wire_parser() {
+        let tools = convert_responses_tools(&[json!({
+            "type": "function", "name": "lookup", "parameters": {"type": "object"}, "strict": true
+        })])
+        .unwrap();
+        assert_eq!(tools[0].name, "lookup");
+        assert_eq!(tools[0].parameters, json!({"type": "object"}));
+        assert!(tools[0].strict);
+        assert!(
+            matches!(convert_responses_tool_choice(&json!({"type":"function","name":"lookup"})).unwrap(), ToolChoice::Specific(name) if name == "lookup")
+        );
+        for choice in ["auto", "none", "required"] {
+            assert!(convert_responses_tool_choice(&json!(choice)).is_ok());
+        }
+        assert!(convert_responses_tools(&[json!({"type":"web_search_preview"})]).is_err());
+        assert!(convert_responses_tool_choice(&json!({"type":"allowed_tools"})).is_err());
+    }
+
+    #[test]
+    fn function_call_output_round_trips_with_the_call_id_not_the_item_id() {
+        let input: ResponsesInput = serde_json::from_value(json!([
+            {"role":"user","content":"lookup"},
+            {"type":"function_call","id":"fc_item","call_id":"c1","name":"lookup","arguments":"{}"},
+            {"type":"function_call_output","call_id":"c1","output":"ok"}
+        ]))
+        .unwrap();
+        let messages = convert_input(&input).unwrap();
+        assert!(
+            matches!(&messages[1], UnifiedMessage::Assistant { content } if matches!(&content[0], ContentBlock::ToolCall { id, .. } if id == "c1"))
+        );
+        assert!(
+            matches!(&messages[2], UnifiedMessage::ToolResult { tool_call_id, .. } if tool_call_id == "c1")
+        );
+        let item = function_call_item("c1", "lookup", "{}");
+        assert_eq!(item["id"], "c1");
+        assert_eq!(item["call_id"], "c1");
+        let replay: ResponsesInput = serde_json::from_value(json!([item])).unwrap();
+        assert!(matches!(
+            &convert_input(&replay).unwrap()[0],
+            UnifiedMessage::Assistant { .. }
+        ));
     }
 }

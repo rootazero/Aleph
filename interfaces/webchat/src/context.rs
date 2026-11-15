@@ -674,6 +674,7 @@ pub(crate) struct PtyTopicLease {
 }
 
 impl PtyTopicLease {
+    #[cfg(any(test, target_arch = "wasm32"))]
     pub(crate) fn epoch(&self) -> u64 {
         self.coverage.epoch
     }
@@ -1438,6 +1439,14 @@ impl DashboardState {
         Ok(slot.clone())
     }
 
+    /// Acquire an exact-topic lease for the currently connected PTY epoch.
+    #[cfg_attr(
+        not(target_arch = "wasm32"),
+        expect(
+            dead_code,
+            reason = "lease acquisition remains covered by lifecycle tests; production subscribe/unsubscribe uses the recorded path until terminal components own leases"
+        )
+    )]
     pub(crate) async fn acquire_pty_topic(&self, topic: &str) -> Result<PtyTopicLease, String> {
         self.await_gateway_ready().await?;
         self.acquire_pty_topic_with_io(topic, self.pty_coverage_io()).await

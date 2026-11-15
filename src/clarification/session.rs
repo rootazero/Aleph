@@ -398,6 +398,26 @@ impl ClarificationManager {
         expected_request_id: Option<&str>,
         expected_question_id: Option<&str>,
     ) -> ResolveOutcome {
+        self.resolve_many_expected_before_send(
+            session_key,
+            replies,
+            expected_request_id,
+            expected_question_id,
+            || {},
+        )
+        .await
+    }
+
+    // Production supplies a no-op. Tests can close the real receiver after
+    // the liveness check without racing timers or exposing a public hook.
+    async fn resolve_many_expected_before_send(
+        &self,
+        session_key: &str,
+        replies: &[&str],
+        expected_request_id: Option<&str>,
+        expected_question_id: Option<&str>,
+        before_send: impl FnOnce(),
+    ) -> ResolveOutcome {
         /// What the write-locked inspection decided, so the acting half runs
         /// with no outstanding borrow of the map.
         enum Step {
@@ -408,7 +428,7 @@ impl ClarificationManager {
             /// Waiter gone (run cancelled): retire the zombie card.
             Abandoned,
             /// Answers recorded, questions remain.
-            More(Box<RenderedQuestion>, usize, Option<GatewayEventFrame>),
+            More(Box<RenderedQuestion>, usize, Option<Box<GatewayEventFrame>>),
             /// Answers recorded, none remain.
             Complete,
         }
@@ -450,7 +470,7 @@ impl ClarificationManager {
                                 entry.answers.len(),
                             )
                         });
-                        Step::More(Box::new(rendered), total - cursor, frame)
+                        Step::More(Box::new(rendered), total - cursor, frame.map(Box::new))
                     }
                     None => Step::Complete,
                 }
@@ -503,6 +523,7 @@ impl ClarificationManager {
                     .expect("invariant: observed under this same write lock");
                 let request_id = entry.request_id.clone();
                 let answers = std::mem::take(&mut entry.answers);
+                before_send();
                 let delivered = match entry.sender.take() {
                     Some(sender) => sender.send(ClarificationResult::answered(answers)).is_ok(),
                     None => false,
@@ -1423,12 +1444,8 @@ mod tests {
     /// its card survives until the request deadline, waiting for a reply that
     /// can no longer arrive.
     ///
-    /// That window is a genuine race, and the test drives it: the reply batch
-    /// keeps the registry lock held across every question, and the waiter is
-    /// dropped while the batch runs. The handshake orders the two — the
-    /// resolving task signals that it is about to resolve, the liveness check
-    /// happens synchronously right after that signal, so the drop can only
-    /// land later, on another worker.
+    /// Close the real receiver at the final send boundary, after the entry
+    /// has passed the liveness check, rather than betting on worker timing.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     #[serial_test::serial(gateway_event_bus)]
     async fn a_vanished_waiter_still_ends_the_request_with_a_cancelled_frame() {
@@ -1438,94 +1455,51 @@ mod tests {
         let bus = Arc::new(GatewayEventBus::new());
         set_team_event_bus(bus.clone());
         let mut frames = bus.subscribe_typed();
-
-        // Enough questions that the reply batch holds the registry lock well
-        // past the moment the waiter is dropped.
-        const QUESTIONS: usize = 4096;
-        const OPTIONS: usize = 20;
-        let questions: Vec<ClarificationQuestion> = (0..QUESTIONS)
-            .map(|i| {
-                ClarificationQuestion::select(
-                    &format!("q{i}"),
-                    "Where?",
-                    (0..OPTIONS)
-                        .map(|o| ClarificationOption::new(&format!("v{o}"), &format!("option {o}")))
-                        .collect(),
-                )
-            })
-            .collect();
-        let request = ClarificationRequest::new(questions).expect("non-empty request");
-
+        let request = ClarificationRequest::new(vec![ClarificationQuestion::select(
+            "q0",
+            "Where?",
+            vec![ClarificationOption::new("v0", "option 0")],
+        )])
+        .expect("non-empty request");
         let mgr = ClarificationManager::new();
-
-        for attempt in 0..5 {
-            let session_key = format!("sess-vanished-{attempt}");
-            let rx = mgr
-                .register(
-                    session_key.clone(),
-                    request.clone(),
-                    DEFAULT_CLARIFY_TIMEOUT,
-                    "",
-                )
-                .await;
-
-            // The waiter vanishes while the registry lock is held: the answer
-            // that follows has nobody left to deliver to.
-            let (started_tx, started_rx) = oneshot::channel();
-            let dropper = tokio::spawn(async move {
-                let _ = started_rx.await;
-                // The resolving task is working through the batch by now: drop
-                // the waiter, so it lands after the liveness check and before
-                // the send.
-                tokio::time::sleep(Duration::from_micros(200)).await;
+        let session_key = "sess-vanished-before-send";
+        let rx = mgr
+            .register(session_key.to_owned(), request, DEFAULT_CLARIFY_TIMEOUT, "")
+            .await;
+        let mut reached_send = false;
+        let outcome = mgr
+            .resolve_many_expected_before_send(session_key, &["1"], None, None, || {
+                reached_send = true;
                 drop(rx);
-            });
-            let resolve_mgr = mgr.clone();
-            let resolve_key = session_key.clone();
-            let resolve = tokio::spawn(async move {
-                let _ = started_tx.send(());
-                let replies: Vec<&str> = vec!["1"; QUESTIONS];
-                resolve_mgr.resolve_many(&resolve_key, &replies).await
-            });
+            })
+            .await;
 
-            let outcome = resolve.await.expect("resolve task");
-            dropper.await.expect("dropper task");
-
-            if outcome == ResolveOutcome::Done {
-                // The waiter was still parked when the send happened: the drop
-                // landed too late. Try again.
-                continue;
+        assert!(
+            reached_send,
+            "the live entry must reach the final send boundary"
+        );
+        assert_eq!(outcome, ResolveOutcome::Stale);
+        assert!(
+            !outcome.consumed(),
+            "a vanished waiter must not consume the reply"
+        );
+        let mut ended = Vec::new();
+        loop {
+            match frames.try_recv() {
+                Ok(GatewayEventFrame::ClarificationEnded {
+                    session_key: key,
+                    outcome: frame_outcome,
+                    ..
+                }) if key == session_key => ended.push(frame_outcome),
+                Ok(_) => {}
+                Err(tokio::sync::broadcast::error::TryRecvError::Lagged(_)) => continue,
+                Err(_) => break,
             }
-            assert_eq!(outcome, ResolveOutcome::Stale);
-            assert!(
-                !outcome.consumed(),
-                "a vanished waiter must not consume the reply"
-            );
-
-            // The terminal frame for this request: `Cancelled`, because nobody
-            // received the answer.
-            let mut ended: Option<ClarificationOutcome> = None;
-            loop {
-                match frames.try_recv() {
-                    Ok(GatewayEventFrame::ClarificationEnded {
-                        session_key: key,
-                        outcome: frame_outcome,
-                        ..
-                    }) if key == session_key => ended = Some(frame_outcome),
-                    Ok(_) => {}
-                    // The ring overflowed: the receiver resyncs to the newest
-                    // frame, so keep draining.
-                    Err(tokio::sync::broadcast::error::TryRecvError::Lagged(_)) => continue,
-                    Err(_) => break,
-                }
-            }
-            assert_eq!(
-                ended,
-                Some(ClarificationOutcome::Cancelled),
-                "a vanished waiter must end the request with a Cancelled frame"
-            );
-            return;
         }
-        panic!("the waiter never vanished in time");
+        assert_eq!(
+            ended,
+            vec![ClarificationOutcome::Cancelled],
+            "a vanished waiter must end exactly once with a Cancelled frame"
+        );
     }
 }

@@ -30,7 +30,7 @@ fn test_email_properties() {
     assert!(!channel.capabilities().reactions);
     assert!(!channel.capabilities().editing);
     assert!(channel.capabilities().rich_text);
-    assert!(channel.capabilities().attachments);
+    assert!(!channel.capabilities().attachments);
     assert_eq!(channel.capabilities().max_message_length, 1_048_576);
 }
 

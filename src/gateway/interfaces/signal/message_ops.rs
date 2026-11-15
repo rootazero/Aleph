@@ -417,9 +417,15 @@ mod tests {
         assert_eq!(inbound.sender_id.as_str(), "+9876543210");
         assert_eq!(inbound.sender_name.as_deref(), Some("Alice"));
         assert_eq!(inbound.text, "Hello from Signal!");
-        assert_eq!(inbound.id.as_str(), "1700000000000");
+        assert_eq!(inbound.id.as_str(), "1700000000000:+9876543210:+9876543210");
         assert!(!inbound.is_group);
         assert_eq!(inbound.conversation_id.as_str(), "+9876543210");
+
+        let mut other = msg.clone();
+        other["envelope"]["source"] = serde_json::json!("+9876543211");
+        let other =
+            SignalMessageOps::convert_message(&other, &channel_id, "+1234567890", &config).unwrap();
+        assert_ne!(inbound.id, other.id);
     }
 
     #[test]

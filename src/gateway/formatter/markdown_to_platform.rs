@@ -79,27 +79,6 @@ pub(super) fn markdown_to_telegram_html(text: &str) -> String {
     repair_html_tags(&out)
 }
 
-#[cfg(test)]
-mod gx6_tests {
-    use super::*;
-
-    #[test]
-    fn telegram_code_is_literal_and_slack_fences_keep_their_content() {
-        assert_eq!(
-            markdown_to_telegram_html("`**x** <&> [x](url)` **bold** `~~x~~`"),
-            "<code>**x** &lt;&amp;&gt; [x](url)</code> <b>bold</b> <code>~~x~~</code>"
-        );
-        assert_eq!(
-            markdown_to_telegram_html("`unclosed **bold**"),
-            "`unclosed <b>bold</b>"
-        );
-        assert_eq!(
-            markdown_to_slack_mrkdwn("```rust\nlet x = 1;\n```"),
-            "```\nlet x = 1;\n```"
-        );
-    }
-}
-
 /// Apply Telegram-specific inline formatting (bold, italic, strikethrough,
 /// code, links) to already-HTML-escaped text.
 fn telegram_inline(s: &str) -> String {
@@ -359,5 +338,26 @@ fn trim_trailing_newline(out: &mut String, original: &str) {
     }
     if !original.ends_with('\n') && out.ends_with('\n') {
         out.truncate(out.trim_end_matches('\n').len());
+    }
+}
+
+#[cfg(test)]
+mod gx6_tests {
+    use super::*;
+
+    #[test]
+    fn telegram_code_is_literal_and_slack_fences_keep_their_content() {
+        assert_eq!(
+            markdown_to_telegram_html("`**x** <&> [x](url)` **bold** `~~x~~`"),
+            "<code>**x** &lt;&amp;&gt; [x](url)</code> <b>bold</b> <code>~~x~~</code>"
+        );
+        assert_eq!(
+            markdown_to_telegram_html("`unclosed **bold**"),
+            "`unclosed <b>bold</b>"
+        );
+        assert_eq!(
+            markdown_to_slack_mrkdwn("```rust\nlet x = 1;\n```"),
+            "```\nlet x = 1;\n```"
+        );
     }
 }

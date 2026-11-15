@@ -25,8 +25,7 @@ use crate::gateway::session_store::SessionStore;
 use crate::gateway::visibility::session_visible_to;
 use crate::sync_primitives::{Arc, AtomicU64, Ordering};
 use aleph_protocol::capability::{
-    UiAttachParams, UiAttachment, UiDetachParams, UiInputEvent, UiInvokeParams, UiOperation,
-    UiRenderAck, UiSubmitInput,
+    UiAttachParams, UiAttachment, UiDetachParams, UiInvokeParams, UiRenderAck, UiSubmitInput,
 };
 use serde_json::{json, Value};
 use tokio_util::sync::CancellationToken;
@@ -87,7 +86,7 @@ pub async fn handle_attach(
 ) -> JsonRpcResponse {
     let params: UiAttachParams = match parse_params(&request) {
         Ok(params) => params,
-        Err(error) => return error,
+        Err(error) => return *error,
     };
     let Some(connection_id) = current_caller_conn_id() else {
         return JsonRpcResponse::error(
@@ -236,7 +235,7 @@ pub async fn handle_invoke(mut request: JsonRpcRequest) -> JsonRpcResponse {
     }
     let params: UiInvokeParams = match parse_params(&request) {
         Ok(params) => params,
-        Err(error) => return error,
+        Err(error) => return *error,
     };
     let Some(connection_id) = current_caller_conn_id() else {
         return JsonRpcResponse::error(
@@ -285,7 +284,7 @@ pub async fn handle_invoke(mut request: JsonRpcRequest) -> JsonRpcResponse {
 pub async fn handle_ack(request: JsonRpcRequest) -> JsonRpcResponse {
     let ack: UiRenderAck = match parse_params(&request) {
         Ok(ack) => ack,
-        Err(error) => return error,
+        Err(error) => return *error,
     };
     let Some(connection_id) = current_caller_conn_id() else {
         return JsonRpcResponse::error(
@@ -306,7 +305,7 @@ pub async fn handle_ack(request: JsonRpcRequest) -> JsonRpcResponse {
 pub async fn handle_submit_input(request: JsonRpcRequest) -> JsonRpcResponse {
     let input: UiSubmitInput = match parse_params(&request) {
         Ok(input) => input,
-        Err(error) => return error,
+        Err(error) => return *error,
     };
     let Some(connection_id) = current_caller_conn_id() else {
         return JsonRpcResponse::error(
@@ -327,7 +326,7 @@ pub async fn handle_submit_input(request: JsonRpcRequest) -> JsonRpcResponse {
 pub async fn handle_detach(request: JsonRpcRequest) -> JsonRpcResponse {
     let params: UiDetachParams = match parse_params(&request) {
         Ok(params) => params,
-        Err(error) => return error,
+        Err(error) => return *error,
     };
     if params.surface_id.is_empty() || params.mount_generation == 0 {
         return JsonRpcResponse::error(request.id, INVALID_PARAMS, "invalid surface attachment");
@@ -417,7 +416,7 @@ fn surface_for_request(
     let Some(host) = crate::capability::projection_host::projection_host() else {
         return Err(UiError::Unavailable);
     };
-    surface_for_request_at_host(&host, surface_id, connection_id, mount_generation)
+    surface_for_request_at_host(host, surface_id, connection_id, mount_generation)
 }
 
 fn surface_for_request_at_host(
@@ -460,20 +459,20 @@ fn request_call_id(request: &JsonRpcRequest, method: &str) -> String {
 
 fn parse_params<T: serde::de::DeserializeOwned>(
     request: &JsonRpcRequest,
-) -> Result<T, JsonRpcResponse> {
+) -> Result<T, Box<JsonRpcResponse>> {
     match &request.params {
         Some(params) => serde_json::from_value(params.clone()).map_err(|error| {
-            JsonRpcResponse::error(
+            Box::new(JsonRpcResponse::error(
                 request.id.clone(),
                 INVALID_PARAMS,
                 format!("Invalid params: {error}"),
-            )
+            ))
         }),
-        None => Err(JsonRpcResponse::error(
+        None => Err(Box::new(JsonRpcResponse::error(
             request.id.clone(),
             INVALID_PARAMS,
             "Missing params",
-        )),
+        ))),
     }
 }
 
@@ -519,6 +518,7 @@ fn invocation_error_response(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use aleph_protocol::capability::{UiInputEvent, UiOperation};
 
     #[test]
     fn generated_surface_ids_are_capability_ids_in_the_ui_namespace() {

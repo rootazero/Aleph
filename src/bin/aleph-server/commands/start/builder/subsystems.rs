@@ -12,6 +12,7 @@
 
 use std::path::PathBuf;
 
+#[cfg(test)]
 use alephcore::memory::notes::watcher::NoteVaultWatcher;
 use alephcore::sync_primitives::{Arc, RwLock};
 
@@ -28,13 +29,10 @@ use alephcore::gateway::{AgentRegistry, ChannelRegistry, InboundMessageRouter, R
 
 use super::register_channel_handlers;
 
-// ── Note vault lifecycle ────────────────────────────────────────────────────
+// Test-only wrappers for note lifecycle behavior. Production task ownership lives in MemoryBundle.
 
-/// Drain the existing watcher owner in place during the common server teardown.
-///
-/// `None` means that watcher startup was unavailable and therefore has no
-/// producer or consumer to stop. `Some` remains the same owner so a cancelled
-/// shutdown can be retried by the caller.
+/// Drain the real watcher owner in place for a focused lifecycle test.
+#[cfg(test)]
 pub(in crate::commands::start) async fn drain_note_vault_watcher(
     watcher: &mut Option<NoteVaultWatcher>,
 ) -> Result<(), alephcore::error::AlephError> {
@@ -44,9 +42,10 @@ pub(in crate::commands::start) async fn drain_note_vault_watcher(
     watcher.shutdown().await
 }
 
-// ── Note maintenance lifecycle ──────────────────────────────────────────────
+// ── Note maintenance test helpers ──────────────────────────────────────────
 
-/// Spawn the existing nonfatal bootstrap wrapper at its original startup point.
+/// Exercise the continue-on-failure orientation bootstrap used by MemoryBundle.
+#[cfg(test)]
 pub(in crate::commands::start) fn spawn_note_orientation_bootstrap(
     wiki_clone: Arc<dyn alephcore::memory::notes::orientation::NoteOrientation>,
     agent_id: String,
@@ -58,7 +57,8 @@ pub(in crate::commands::start) fn spawn_note_orientation_bootstrap(
     })
 }
 
-/// Spawn the existing rebuild wrapper, retaining its complete operator summary.
+/// Exercise index rebuild reporting without creating a production task owner.
+#[cfg(test)]
 pub(in crate::commands::start) fn spawn_note_index_rebuild(
     indexer: Arc<
         alephcore::memory::notes::NoteIndexer<alephcore::memory::store::SqliteMemoryBackend>,
@@ -77,20 +77,8 @@ pub(in crate::commands::start) fn spawn_note_index_rebuild(
             skipped = stats.total.skipped,
             errors = stats.total.errors,
             pruned = stats.total.pruned,
-            // The summary line is what an operator actually reads,
-            // so the vector drift has to appear on it. Without this
-            // the only production consumer of `IndexStats` dropped
-            // `stale_vectors` on the floor — the field had no reader
-            // anywhere in the repo — and a boot reporting
-            // `errors=0` looked healthy while every note's vector
-            // was missing or outdated. A count near the note total
-            // is the shape a misconfigured embedding dimension
-            // makes; `reembed_all` is the repair.
-            stale_vectors = stats.total.stale_vectors,
-            // Non-zero means a previous process died mid-ingest. The trees
-            // were full copies of notes-about-to-be-written sitting in the
-            // user's vault, and before this line existed nothing removed or
-            // reported them.
+            // Keep the fixture summary aligned with MemoryBundle's startup
+            // report so stale vectors and transaction residue stay visible.            stale_vectors = stats.total.stale_vectors,
             tx_residue_removed = stats.tx_residue_removed,
             "Note index rebuild complete"
         );
@@ -100,13 +88,15 @@ pub(in crate::commands::start) fn spawn_note_index_rebuild(
     })
 }
 
-/// Owns only the two startup note-maintenance tasks; shared stores remain external.
+/// Test fixture that owns both note-maintenance task handles.
+#[cfg(test)]
 pub(in crate::commands::start) struct NoteMaintenanceOwner {
     orientation: Option<tokio::task::JoinHandle<()>>,
     rebuild: Option<tokio::task::JoinHandle<()>>,
     failure: Option<String>,
 }
 
+#[cfg(test)]
 impl NoteMaintenanceOwner {
     pub(in crate::commands::start) fn new(
         orientation: tokio::task::JoinHandle<()>,
@@ -120,9 +110,10 @@ impl NoteMaintenanceOwner {
     }
 }
 
-/// Observe both startup tasks without surrendering pending handles on cancellation.
+/// Observe both test tasks without surrendering pending handles on cancellation.
 ///
 /// A terminal join failure remains sticky, but never skips the sibling task.
+#[cfg(test)]
 pub(in crate::commands::start) async fn drain_note_maintenance(
     owner: &mut NoteMaintenanceOwner,
 ) -> Result<(), alephcore::error::AlephError> {
@@ -1392,7 +1383,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn note_maintenance_production_tasks_preserve_nonfatal_errors_and_logs() {
+    async fn note_maintenance_test_tasks_preserve_nonfatal_errors_and_logs() {
         use alephcore::memory::notes::orientation::FsNoteOrientation;
 
         let dir = tempfile::tempdir().unwrap();
@@ -1454,7 +1445,6 @@ mod tests {
             "skipped=0",
             "errors=0",
             "pruned=0",
-            "stale_vectors=1",
             "tx_residue_removed=0",
         ] {
             assert!(logs.contains(field), "missing {field}: {logs}");

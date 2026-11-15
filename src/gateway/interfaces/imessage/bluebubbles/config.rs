@@ -69,6 +69,22 @@ impl BlueBubblesConfig {
     }
 }
 
+/// Hand-written `Debug` so the server password never reaches a log line:
+/// the derived `Debug` printed the secret verbatim.
+impl std::fmt::Debug for BlueBubblesConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("BlueBubblesConfig")
+            .field("server_url", &self.server_url)
+            .field("password", &"***")
+            .field("webhook_host", &self.webhook_host)
+            .field("webhook_port", &self.webhook_port)
+            .field("webhook_path", &self.webhook_path)
+            .field("poll_interval_secs", &self.poll_interval_secs)
+            .field("send_read_receipts", &self.send_read_receipts)
+            .finish()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -85,22 +101,6 @@ mod tests {
         assert!(config.validate().is_err());
         config.server_url = "http://localhost:1234".into();
         assert!(config.validate().is_ok());
-    }
-}
-
-/// Hand-written `Debug` so the server password never reaches a log line:
-/// the derived `Debug` printed the secret verbatim.
-impl std::fmt::Debug for BlueBubblesConfig {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("BlueBubblesConfig")
-            .field("server_url", &self.server_url)
-            .field("password", &"***")
-            .field("webhook_host", &self.webhook_host)
-            .field("webhook_port", &self.webhook_port)
-            .field("webhook_path", &self.webhook_path)
-            .field("poll_interval_secs", &self.poll_interval_secs)
-            .field("send_read_receipts", &self.send_read_receipts)
-            .finish()
     }
 }
 

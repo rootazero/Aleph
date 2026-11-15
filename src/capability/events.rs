@@ -720,10 +720,6 @@ pub struct AuditedPolicyEngine {
     events: CapabilityEventEmitter,
 }
 
-#[expect(
-    clippy::result_large_err,
-    reason = "Observation preserves the existing PolicyEngine denial type without an API migration."
-)]
 impl AuditedPolicyEngine {
     pub(crate) fn new(
         inner: crate::capability::policy::PolicyEngine,

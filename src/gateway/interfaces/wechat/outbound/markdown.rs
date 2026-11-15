@@ -11,7 +11,7 @@ pub fn markdown_to_wechat(markdown: &str) -> String {
     result = convert_italic(&result);
     result = convert_inline_code(&result);
 
-    result.trim().to_string()
+    truncate(result.trim())
 }
 
 fn convert_bold(text: &str) -> String {
@@ -150,6 +150,15 @@ mod tests {
         let long_text = "a".repeat(5000);
         let result = truncate(&long_text);
         assert!(result.contains("truncated"));
+        assert!(result.len() <= MAX_MESSAGE_LENGTH + 15);
+    }
+
+    #[test]
+    fn markdown_conversion_truncates_to_the_wechat_byte_limit() {
+        let input = format!("{}世界", "a".repeat(MAX_MESSAGE_LENGTH - 1));
+        let result = markdown_to_wechat(&input);
+        assert!(result.starts_with(&"a".repeat(MAX_MESSAGE_LENGTH - 1)));
+        assert!(result.ends_with("...(truncated)"));
         assert!(result.len() <= MAX_MESSAGE_LENGTH + 15);
     }
 

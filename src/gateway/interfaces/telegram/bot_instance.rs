@@ -27,14 +27,6 @@ fn create_bot_with_proxy(token: &str, proxy_url: Option<&str>) -> Bot {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn invalid_proxy_falls_back_without_panicking() {
-        let _bot = super::create_bot_with_proxy("123:test", Some(":// invalid proxy"));
-    }
-}
-
 pub struct BotInstance {
     pub account_id: String,
     pub bot: Bot,
@@ -73,5 +65,13 @@ impl BotInstance {
 
     pub fn set_offset_tracker(&mut self, tracker: Arc<OffsetTracker>) {
         self.offset_tracker = Some(tracker);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn invalid_proxy_falls_back_without_panicking() {
+        let _bot = super::create_bot_with_proxy("123:test", Some(":// invalid proxy"));
     }
 }

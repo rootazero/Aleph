@@ -61,7 +61,7 @@ fn ui_display_admits_connection(
         topic,
         event_data,
         connection_id,
-        host.as_deref().map(|host| host.as_ref()),
+        host.map(|host| host.as_ref()),
     )
 }
 

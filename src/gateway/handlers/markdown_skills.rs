@@ -577,7 +577,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let skills = dir.path().join("skills");
         let sibling = dir.path().join("skills-old");
-        std::fs::create_dir_all(&skills).unwrap();
+        std::fs::create_dir_all(skills.join("child")).unwrap();
         std::fs::create_dir_all(&sibling).unwrap();
         assert!(is_inside(&skills.join("child"), &skills));
         assert!(!is_inside(&sibling, &skills));

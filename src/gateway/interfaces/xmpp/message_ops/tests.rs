@@ -497,9 +497,9 @@ fn test_convert_skips_own_chat_message() {
 fn test_convert_skips_own_muc_message() {
     use crate::gateway::channel::ChannelId;
 
-    // In MUC, from="room@conference/nick" and we compare nick against our local JID part
+    // The joined MUC nick may differ from the local part of our JID.
     let msg = XmppMessage {
-        from: "room@conference.example.com/bot".to_string(),
+        from: "room@conference.example.com/aleph-bot".to_string(),
         body: "My MUC message".to_string(),
         msg_type: "groupchat".to_string(),
         thread: None,
@@ -507,7 +507,8 @@ fn test_convert_skips_own_muc_message() {
     };
 
     let channel_id = ChannelId::new("xmpp");
-    let result = XmppMessageOps::convert_message(&msg, &channel_id, "bot@example.com", None);
+    let result =
+        XmppMessageOps::convert_message(&msg, &channel_id, "bot@example.com", Some("aleph-bot"));
     assert!(result.is_none());
 }
 

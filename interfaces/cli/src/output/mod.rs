@@ -58,7 +58,6 @@ pub fn print_table(headers: &[&str], rows: &[Vec<String>], json_mode: bool, raw:
 
     // Compute column widths using *display* widths (count chars, not bytes)
     // so wide CJK / emoji cells line up correctly.
-    let col_count = headers.len();
     let mut widths: Vec<usize> = headers.iter().map(|h| display_width(h)).collect();
 
     for row in rows {

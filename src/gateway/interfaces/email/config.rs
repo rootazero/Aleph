@@ -166,7 +166,7 @@ impl EmailConfig {
                     sender
                         .split('@')
                         .nth(1)
-                        .map_or(false, |domain| domain == &allowed[1..])
+                        .is_some_and(|domain| domain == &allowed[1..])
                 } else {
                     sender == allowed
                 }

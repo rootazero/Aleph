@@ -286,6 +286,13 @@ struct Binding {
     owner: OwnerRef,
     lifetime: LifetimeScope,
     generation: OwnerGeneration,
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "the binding incarnation fences exact rollback after a terminal-registration failure"
+        )
+    )]
     binding_nonce: u64,
     claims: HashMap<FencingToken, (OwnerGeneration, OwnerRef)>,
 }
@@ -518,6 +525,13 @@ impl OwnershipTree {
 
     /// Remove one binding only when the exact registration incarnation remains
     /// unclaimed and unrotated. Claims, replacement, and rotation all fail safe.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "preserves the exact-registration rollback invariant for terminal publication failures"
+        )
+    )]
     pub(crate) fn rollback_if_matches(&self, token: &RegistrationToken) -> bool {
         let mut inner = self.inner.lock().unwrap_or_else(PoisonError::into_inner);
         let key = Self::key(&token.capability, &token.visibility);

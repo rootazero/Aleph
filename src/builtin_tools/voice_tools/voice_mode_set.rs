@@ -177,7 +177,7 @@ impl AlephTool for VoiceModeSetTool {
                 )));
             }
         }
-        let current_opt = (!current_channel.is_empty()).then(|| current_channel.as_str());
+        let current_opt = (!current_channel.is_empty()).then_some(current_channel.as_str());
         Ok(self.execute(args, current_opt).await)
     }
 }

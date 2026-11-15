@@ -427,11 +427,11 @@ mod tests {
         // provider-supplied tool-call id is text too, and it is the field a
         // model controls most freely.
         let timeline = vec![crate::orchestrator::dispatch::ToolInvocation {
-            id: format!("call-AKIAIOSFODNN7EXAMPLE"),
+            id: "call-AKIAIOSFODNN7EXAMPLE".to_string(),
             name: "shell".into(),
             duration_ms: 100,
             success: false,
-            error: Some(format!("AWS key AKIAIOSFODNN7EXAMPLE leaked in error")),
+            error: Some("AWS key AKIAIOSFODNN7EXAMPLE leaked in error".to_string()),
         }];
 
         sink.on_trace(&LoopTraceEvent::SessionCompleted {

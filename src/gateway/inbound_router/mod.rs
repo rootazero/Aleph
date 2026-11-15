@@ -1708,8 +1708,9 @@ mod tests {
         for (account, conversation, is_group, allowed) in [
             (Some("second"), "123", false, true),
             (Some("first"), "123", false, false),
-            (Some("second"), "-100:5", true, true),
-            (Some("second"), "-100:6", true, false),
+            (Some("second"), "-100:topic:5", true, true),
+            (Some("second"), "-100:topic:6", true, false),
+            (Some("second"), "-100:5", true, false),
             (Some("unknown"), "123", false, false),
             (None, "123", false, false),
         ] {

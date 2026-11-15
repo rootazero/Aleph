@@ -14,7 +14,7 @@ thread_local! {
     /// would wait for a lock its own thread already holds, and that wait can
     /// never be cancelled. Tracking the active registries lets the nested
     /// call fail fast instead of hanging the thread.
-    static ACTIVE_REGISTRIES: RefCell<Vec<usize>> = RefCell::new(Vec::new());
+    static ACTIVE_REGISTRIES: RefCell<Vec<usize>> = const { RefCell::new(Vec::new()) };
 }
 
 /// Fail-fast guard against re-entering one registry on one thread.

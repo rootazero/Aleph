@@ -184,11 +184,9 @@ impl OwnedPtySession {
     }
 }
 
-/// Resolve the ambient caller's owned session against the live manager.
-///
-/// This is the typed domain gate used by legacy RPC and capability faces. It
-/// deliberately collapses a foreign owner and an unknown id into `NotFound`
-/// so the existing no-oracle response remains byte-identical.
+/// Test-only explicit source injection; production authorization resolves the
+/// active manager source through `require_owned_session`.
+#[cfg(test)]
 pub(crate) fn require_owned_session_with_source(
     session_id: &str,
     source: &Arc<crate::capability::tool_adapters::TerminalCapabilitySource>,

@@ -509,7 +509,7 @@ impl AnthropicProtocol {
     pub(super) fn claude_version(model: &str) -> Option<(u32, u32)> {
         let is_version_seg = |seg: &str| seg.len() <= 2 && seg.parse::<u32>().is_ok();
         let mut numbers = model
-            .split(|c| c == '-' || c == '.' || c == '_')
+            .split(['-', '.', '_'])
             .skip_while(|seg| !is_version_seg(seg))
             .take_while(|seg| is_version_seg(seg))
             .map(|seg| seg.parse::<u32>().unwrap_or(0));

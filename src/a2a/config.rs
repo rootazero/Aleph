@@ -54,6 +54,7 @@ pub struct A2AServerConfig {
 
 /// A2A security settings
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(Default)]
 pub struct A2ASecurityConfig {
     /// Allow unauthenticated access from localhost.
     ///
@@ -69,14 +70,6 @@ pub struct A2ASecurityConfig {
     pub tokens: Vec<String>,
 }
 
-impl Default for A2ASecurityConfig {
-    fn default() -> Self {
-        Self {
-            local_bypass: false,
-            tokens: Vec::new(),
-        }
-    }
-}
 
 /// A pre-registered remote A2A agent entry
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]

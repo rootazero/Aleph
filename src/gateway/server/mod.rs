@@ -1635,7 +1635,7 @@ mod tests {
         let applied = crate::config::live_apply::apply_live_sections(
             &disabled,
             &["policies.terminal"],
-            Some(&server.event_bus()),
+            Some(server.event_bus()),
             None,
         )
         .await;
@@ -1655,7 +1655,7 @@ mod tests {
         assert!(crate::config::live_apply::apply_live_sections(
             &enabled,
             &["policies.terminal"],
-            Some(&server.event_bus()),
+            Some(server.event_bus()),
             None,
         )
         .await
@@ -1667,7 +1667,7 @@ mod tests {
         assert!(crate::config::live_apply::apply_live_sections(
             &disabled,
             &["policies.terminal"],
-            Some(&server.event_bus()),
+            Some(server.event_bus()),
             None,
         )
         .await

@@ -26,9 +26,9 @@
 
 use crate::acp::manager::SessionKey;
 use crate::capability::descriptor::CapabilityId;
-use crate::capability::ownership::{OwnerGeneration, OwnerRef, VisibilityScope};
+use crate::capability::ownership::{OwnerGeneration, VisibilityScope};
 use std::collections::{HashMap, HashSet, VecDeque};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use tokio::sync::broadcast;
 
 /// A unique identifier for a capability grant.
@@ -112,7 +112,7 @@ pub enum GrantError {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum GrantChange {
     /// A new grant was created.
-    Created { grant: Grant },
+    Created { grant: Arc<Grant> },
     /// A grant was revoked (and all its descendants).
     Revoked { grant_id: GrantId },
 }
@@ -208,14 +208,13 @@ impl GrantRegistry {
             return Err(GrantError::ChainTooLong(self.max_depth));
         }
 
-        // Validate parent grant exists if specified
+        // Revocation removes the active entry, so check its tombstone first.
         if let Some(ref parent_id) = grant.parent_grant {
-            if !inner.grants.contains_key(parent_id) {
-                return Err(GrantError::NotFound(parent_id.0.clone()));
-            }
-            // Check parent is not revoked
             if inner.revoked.contains(parent_id) {
                 return Err(GrantError::Revoked(parent_id.0.clone()));
+            }
+            if !inner.grants.contains_key(parent_id) {
+                return Err(GrantError::NotFound(parent_id.0.clone()));
             }
         }
 
@@ -254,7 +253,9 @@ impl GrantRegistry {
         }
 
         // Emit change notification
-        let _ = inner.changes.send(GrantChange::Created { grant });
+        let _ = inner.changes.send(GrantChange::Created {
+            grant: Arc::new(grant),
+        });
 
         Ok(())
     }
@@ -302,11 +303,10 @@ impl GrantRegistry {
             .unwrap_or_else(std::sync::PoisonError::into_inner);
 
         // Check grant exists
-        let grant = inner
+        inner
             .grants
             .get(grant_id)
-            .ok_or_else(|| GrantError::NotFound(grant_id.0.clone()))?
-            .clone();
+            .ok_or_else(|| GrantError::NotFound(grant_id.0.clone()))?;
 
         // Collect all descendants (BFS)
         let mut to_revoke = VecDeque::new();

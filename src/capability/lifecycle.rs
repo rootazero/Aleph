@@ -82,7 +82,7 @@ impl Lease {
     #[must_use]
     pub fn is_expired(&self) -> bool {
         self.ttl
-            .map_or(false, |ttl| self.issued_at.elapsed() >= ttl)
+            .is_some_and(|ttl| self.issued_at.elapsed() >= ttl)
     }
 
     /// Time remaining before expiration, if any.

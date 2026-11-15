@@ -830,6 +830,13 @@ impl ZahirFacade {
     }
 
     /// Roll back one exact, unclaimed registration without creating a tombstone.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "paired with the test-injected post-publication failure path; production registration currently has no later fallible step"
+        )
+    )]
     pub(crate) fn rollback_terminal_session(
         &self,
         token: &crate::capability::ownership::RegistrationToken,
@@ -974,7 +981,7 @@ impl ZahirFacade {
             return Err(CapabilityInvocationError::Unavailable);
         }
         let provider = capture.provider_handle();
-        let _provider_call = provider
+        provider
             .acquire_call(capture.provider_generation())
             .map_err(|_| CapabilityInvocationError::Unavailable)?;
         let facts = self.special_policy_facts(capture)?;
@@ -1864,13 +1871,9 @@ impl Zahir for ZahirFacade {
         // ordinary Tool with the same name must never provide a cache revision
         // for that identity, even when the special source is not visible.
         if let Some(capture) = self.specials.capture(&reference.id) {
-            if self
+            self
                 .tree
-                .generation(&reference.id, &reference.visibility)
-                .is_none()
-            {
-                return None;
-            }
+                .generation(&reference.id, &reference.visibility)?;
             return Some(capture.descriptor().revision);
         }
         // Only the Tool source currently guarantees non-reused per-descriptor
@@ -1900,13 +1903,9 @@ impl Zahir for ZahirFacade {
         // ordinary Tool or provider metadata entry with the same ID cannot
         // shadow its descriptor or mint a cacheable admission.
         if let Some(capture) = self.specials.capture(&reference.id) {
-            if self
+            self
                 .tree
-                .generation(&reference.id, &reference.visibility)
-                .is_none()
-            {
-                return None;
-            }
+                .generation(&reference.id, &reference.visibility)?;
             let mut descriptor = capture.descriptor().clone();
             descriptor.visibility = reference.visibility.clone();
             return Some((descriptor, true));
@@ -3114,32 +3113,4 @@ mod tests {
         assert_eq!(snap.owner_generations, cloned.owner_generations);
     }
 
-    #[test]
-    fn activate_captures_new_generation_and_fences_old_lease() {
-        // Test that activation captures a new provider generation and old leases
-        // become invalid (generation mismatch). This validates fail-closed generation fencing.
-
-        // For now, this is a placeholder RED test that documents the intent.
-        // The full test requires integration with a real provider that transitions
-        // through activation. Memory provides the proof-of-concept in zahir_facade_memory_tests.
-        //
-        // Full test steps:
-        // 1. Create a provider in Cold state
-        // 2. Resolve it → lease with generation N
-        // 3. Activate it → lease with generation N+1
-        // 4. Validate old lease (generation N) → fails with generation mismatch
-        //
-        // This enforces that:
-        // - resolve never starts anything (old lease remains valid as long as provider is Cold)
-        // - activate is explicit and owner-performed (generates new generation)
-        // - fail-closed: old lease rejected after provider state changes
-
-        // The MemoryActivator in src/memory/runtime/mod.rs provides a real implementation
-        // of this pattern; see zahir_facade_memory_tests::stale_tool_does_not_reacquire_after_restart
-        // for the full verification.
-        assert!(
-            true,
-            "activation generation fencing is verified through Memory provider proof"
-        );
-    }
 }
