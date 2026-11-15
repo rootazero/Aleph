@@ -39,31 +39,19 @@ pub fn compute_next_run_for_job(job: &CronJob, now_ms: i64) -> Option<i64> {
             stagger_ms,
         } => {
             let from = chrono::DateTime::from_timestamp_millis(now_ms)?;
-            let base = compute_next_cron(expr, tz.as_deref(), from);
-            match base {
-                Ok(Some(next)) => {
-                    // Apply stagger if configured
-                    let staggered = match stagger_ms {
-                        Some(s) if *s > 0 => compute_staggered_next(&job.id, next, *s, now_ms),
-                        _ => next,
-                    };
-                    // Apply min gap using last_ended = last_run_at + last_duration
-                    let last_ended = match (job.state.last_run_at_ms, job.state.last_duration_ms) {
-                        (Some(started), Some(duration)) => Some(started + duration),
-                        _ => None,
-                    };
-                    Some(apply_min_gap(staggered, last_ended))
-                }
-                Ok(None) => None,
-                Err(_) => None,
-            }
+            let next = compute_next_cron(expr, tz.as_deref(), from).ok()??;
+            let staggered = match stagger_ms {
+                Some(s) if *s > 0 => compute_staggered_next(&job.id, next, *s, now_ms),
+                _ => next,
+            };
+            let last_ended = match (job.state.last_run_at_ms, job.state.last_duration_ms) {
+                (Some(started), Some(duration)) => Some(started.saturating_add(duration)),
+                _ => None,
+            };
+            Some(apply_min_gap(staggered, last_ended))
         }
         ScheduleKind::At { at, .. } => {
-            if *at > now_ms && job.state.last_run_at_ms.is_none() {
-                Some(*at)
-            } else {
-                None
-            }
+            (*at > now_ms && job.state.last_run_at_ms.is_none()).then_some(*at)
         }
     }
 }

@@ -241,9 +241,11 @@ pub fn pause_all_owned_by(store: &mut HeartbeatStore, user_id: &str) -> Vec<Stri
     // Read first, mutate second: `tasks_mut()` marks the store dirty on the
     // spot, so taking it for a sweep that matches nothing would schedule a
     // write for a call that changed nothing.
-    for id in &owned {
-        if let Some(task) = store.get_task_mut(id) {
-            disarm(task);
+    if !owned.is_empty() {
+        for task in store.tasks_mut() {
+            if task.enabled && aleph_protocol::users::owned_by(task.owner_user_id.as_deref(), user_id) {
+                disarm(task);
+            }
         }
     }
     owned

@@ -56,7 +56,8 @@ pub fn build_heartbeat_prompt(
         serde_json::to_string_pretty(&probe_result.raw_value).unwrap_or_default()
     );
     if let Some(reason) = wake_reason {
-        prompt.push_str(&format!("\nWake reason: {reason}"));
+        use std::fmt::Write;
+        let _ = write!(prompt, "\nWake reason: {reason}");
     }
     prompt.push_str(
         "\n\nCheck HEARTBEAT.md for your assigned tasks. \

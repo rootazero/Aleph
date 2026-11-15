@@ -355,13 +355,9 @@ fn load_all_jobs(conn: &Connection) -> Result<Vec<CronJob>, String> {
         })
         .map_err(|e| format!("failed to query jobs: {e}"))?
         .filter_map(|r| match r {
-            Ok(json) => match serde_json::from_str::<CronJob>(&json) {
-                Ok(job) => Some(job),
-                Err(e) => {
-                    warn!(error = %e, "Skipping corrupt cron job row");
-                    None
-                }
-            },
+            Ok(json) => serde_json::from_str::<CronJob>(&json)
+                .map_err(|e| warn!(error = %e, "Skipping corrupt cron job row"))
+                .ok(),
             Err(e) => {
                 warn!(error = %e, "Failed to read cron job row");
                 None

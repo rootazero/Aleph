@@ -71,10 +71,16 @@ impl WakeQueue {
     /// Otherwise the incoming request replaces it.
     pub fn enqueue(&self, req: WakeRequest) {
         let mut map = self.pending.lock().unwrap_or_else(|e| e.into_inner());
-        let updated = match map.get(&req.task_id) {
-            // Keep the existing entry if it has equal or higher priority
-            Some(existing) if existing.priority >= req.priority => false,
-            _ => {
+        let updated = match map.get_mut(&req.task_id) {
+            Some(existing) => {
+                if req.priority > existing.priority {
+                    *existing = req;
+                    true
+                } else {
+                    false
+                }
+            }
+            None => {
                 map.insert(req.task_id.clone(), req);
                 true
             }
