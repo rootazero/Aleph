@@ -123,18 +123,17 @@ pub fn resolve_active_key(
         // Skip the goal/loop tiers when the session is not currently in
         // that flow; skip the team tier when no team is associated. The
         // session tier is always considered.
-        if tier == Tier::Goal && !goal_live {
-            continue;
-        }
-        if tier == Tier::Loop && !loop_live {
-            continue;
-        }
-        if tier == Tier::Team && team_id.is_none() {
-            continue;
-        }
-        let key = tier.key_for(session_id, team_id.unwrap_or(""));
-        if store.get(&key)?.is_some() {
-            return Ok(Some(key));
+        let should_check = match tier {
+            Tier::Goal => goal_live,
+            Tier::Loop => loop_live,
+            Tier::Team => team_id.is_some(),
+            Tier::Session => true,
+        };
+        if should_check {
+            let key = tier.key_for(session_id, team_id.unwrap_or(""));
+            if store.get(&key)?.is_some() {
+                return Ok(Some(key));
+            }
         }
     }
     Ok(None)
@@ -213,7 +212,7 @@ mod tests {
 
     #[test]
     fn team_key_is_team_prefixed() {
-        assert_eq!(super::team_key("squad-1"), "team:squad-1");
+        assert_eq!(team_key("squad-1"), "team:squad-1");
     }
 
     #[test]
@@ -235,13 +234,15 @@ mod tests {
         }
     }
 
+    fn temp_store() -> (StrategyStore, tempfile::TempDir) {
+        let dir = tempfile::tempdir().unwrap();
+        let s = StrategyStore::open(&dir.path().join("s.db")).unwrap();
+        (s, dir)
+    }
+
     #[test]
     fn resolve_active_key_picks_goal_first_when_goal_live_and_row_present() {
-        let (store, _d) = {
-            let dir = tempfile::tempdir().unwrap();
-            let s = StrategyStore::open(&dir.path().join("s.db")).unwrap();
-            (s, dir)
-        };
+        let (store, _d) = temp_store();
         store
             .put(&goal_key("s1"), &sample_strategy("goal-o"))
             .unwrap();
@@ -258,11 +259,7 @@ mod tests {
 
     #[test]
     fn resolve_active_key_falls_through_to_loop_when_goal_row_missing() {
-        let (store, _d) = {
-            let dir = tempfile::tempdir().unwrap();
-            let s = StrategyStore::open(&dir.path().join("s.db")).unwrap();
-            (s, dir)
-        };
+        let (store, _d) = temp_store();
         store
             .put(&loop_key("s1"), &sample_strategy("loop-o"))
             .unwrap();
@@ -280,11 +277,7 @@ mod tests {
 
     #[test]
     fn resolve_active_key_team_tier_sits_between_loop_and_session() {
-        let (store, _d) = {
-            let dir = tempfile::tempdir().unwrap();
-            let s = StrategyStore::open(&dir.path().join("s.db")).unwrap();
-            (s, dir)
-        };
+        let (store, _d) = temp_store();
         store
             .put(&team_key("t1"), &sample_strategy("team-o"))
             .unwrap();
@@ -302,11 +295,7 @@ mod tests {
 
     #[test]
     fn resolve_active_key_skips_goal_tier_when_goal_not_live() {
-        let (store, _d) = {
-            let dir = tempfile::tempdir().unwrap();
-            let s = StrategyStore::open(&dir.path().join("s.db")).unwrap();
-            (s, dir)
-        };
+        let (store, _d) = temp_store();
         // A stale goal row from a previous /goal flow must NOT surface when
         // the current flow is just a /loop — the `goal_live` gate is what
         // keeps an unrelated /goal objective from suddenly welding into the
@@ -328,11 +317,7 @@ mod tests {
 
     #[test]
     fn resolve_active_key_returns_none_when_no_tier_has_a_row() {
-        let (store, _d) = {
-            let dir = tempfile::tempdir().unwrap();
-            let s = StrategyStore::open(&dir.path().join("s.db")).unwrap();
-            (s, dir)
-        };
+        let (store, _d) = temp_store();
         let active = resolve_active_key(&store, "ghost", false, false, None).unwrap();
         assert!(active.is_none());
     }

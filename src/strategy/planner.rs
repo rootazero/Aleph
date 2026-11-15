@@ -26,18 +26,18 @@ pub struct PlannerContext {
 /// Light env summary for the planner (OS + cwd), never failing. Single source
 /// of truth shared by the goal / loop / workflow planner call sites.
 pub fn env_summary() -> String {
-    let cwd = std::env::current_dir()
-        .map(|p| p.display().to_string())
-        .unwrap_or_else(|e| {
+    match std::env::current_dir() {
+        Ok(cwd) => format!("os={} cwd={}", std::env::consts::OS, cwd.display()),
+        Err(e) => {
             // CWD failures (deleted dir, permission, Windows long-path) would
             // otherwise render as a literal empty string in the prompt — an
             // LLM may then read "cwd=" as "cwd really is empty". Surface the
             // failure with a sentinel so downstream guardrail reasoning stays
             // honest, and log so operators can diagnose.
             tracing::warn!(error = %e, "planner env_summary: current_dir failed");
-            "<unknown>".to_string()
-        });
-    format!("os={} cwd={}", std::env::consts::OS, cwd)
+            format!("os={} cwd=<unknown>", std::env::consts::OS)
+        }
+    }
 }
 
 /// System prompt enforcing the §3 content contract and §4 tool-free rules.
@@ -204,7 +204,7 @@ fn balanced_object_end(bytes: &[u8], start: usize) -> Option<usize> {
     let mut depth: i32 = 0;
     let mut in_string = false;
     let mut escape = false;
-    for (i, &b) in bytes.iter().enumerate().skip(start) {
+    for (offset, &b) in bytes.get(start..)?.iter().enumerate() {
         if escape {
             escape = false;
             continue;
@@ -216,7 +216,7 @@ fn balanced_object_end(bytes: &[u8], start: usize) -> Option<usize> {
             b'}' if !in_string => {
                 depth -= 1;
                 if depth == 0 {
-                    return Some(i);
+                    return Some(start + offset);
                 }
             }
             _ => {}
@@ -229,7 +229,6 @@ fn balanced_object_end(bytes: &[u8], start: usize) -> Option<usize> {
 mod tests {
     use super::*;
     use crate::providers::{AiProvider, MockError, MockProvider};
-    use std::sync::Arc;
 
     fn ctx() -> PlannerContext {
         PlannerContext {
