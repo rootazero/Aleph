@@ -7045,6 +7045,28 @@ mod r1a {
             .expect("actual admitted entry")
     }
 
+    /// The canonical side of the spoofing fixtures: the one `r1a_tool` handler
+    /// whose captured source is `plugin:REAL`.
+    fn real_plugin_entry(
+        registry: &ToolHandlerRegistry,
+        calls: StdArc<AtomicUsize>,
+        fails: bool,
+    ) -> crate::tools::registry::RegistryEntry {
+        register(
+            registry,
+            definition(
+                "r1a_tool",
+                ToolSource::Extension {
+                    plugin_id: "REAL".into(),
+                },
+                true,
+            ),
+            calls,
+            fails,
+            true,
+        )
+    }
+
     fn service(
         registry: &StdArc<ToolHandlerRegistry>,
         projection: Projection,
@@ -7164,14 +7186,7 @@ mod r1a {
         let _home = crate::utils::paths::IsolatedAlephHome::new();
         let registry = StdArc::new(ToolHandlerRegistry::new());
         let canonical_calls = StdArc::new(AtomicUsize::new(0));
-        let def = definition(
-            "r1a_tool",
-            ToolSource::Extension {
-                plugin_id: "REAL".into(),
-            },
-            true,
-        );
-        let entry = register(&registry, def, StdArc::clone(&canonical_calls), false, true);
+        let entry = real_plugin_entry(&registry, StdArc::clone(&canonical_calls), false);
         let projection_calls = StdArc::new(AtomicUsize::new(0));
         let svc = service(
             &registry,
@@ -7243,19 +7258,7 @@ mod r1a {
         let _home = crate::utils::paths::IsolatedAlephHome::new();
         let registry = StdArc::new(ToolHandlerRegistry::new());
         let calls = StdArc::new(AtomicUsize::new(0));
-        let entry = register(
-            &registry,
-            definition(
-                "r1a_tool",
-                ToolSource::Extension {
-                    plugin_id: "REAL".into(),
-                },
-                true,
-            ),
-            StdArc::clone(&calls),
-            true,
-            true,
-        );
+        let entry = real_plugin_entry(&registry, StdArc::clone(&calls), true);
         let projection_calls = StdArc::new(AtomicUsize::new(0));
         let svc = service(
             &registry,
@@ -7280,19 +7283,7 @@ mod r1a {
         let _home = crate::utils::paths::IsolatedAlephHome::new();
         let registry = StdArc::new(ToolHandlerRegistry::new());
         let calls = StdArc::new(AtomicUsize::new(0));
-        let entry = register(
-            &registry,
-            definition(
-                "r1a_tool",
-                ToolSource::Extension {
-                    plugin_id: "REAL".into(),
-                },
-                true,
-            ),
-            StdArc::clone(&calls),
-            false,
-            true,
-        );
+        let entry = real_plugin_entry(&registry, StdArc::clone(&calls), false);
         let svc = service(
             &registry,
             projection(
@@ -7322,19 +7313,7 @@ mod r1a {
         let _home = crate::utils::paths::IsolatedAlephHome::new();
         let registry = StdArc::new(ToolHandlerRegistry::new());
         let calls = StdArc::new(AtomicUsize::new(0));
-        let entry = register(
-            &registry,
-            definition(
-                "r1a_tool",
-                ToolSource::Extension {
-                    plugin_id: "REAL".into(),
-                },
-                true,
-            ),
-            StdArc::clone(&calls),
-            false,
-            true,
-        );
+        let entry = real_plugin_entry(&registry, StdArc::clone(&calls), false);
         let projection_calls = StdArc::new(AtomicUsize::new(0));
         let svc = service(
             &registry,
@@ -7414,19 +7393,7 @@ mod r1a {
         let _home = crate::utils::paths::IsolatedAlephHome::new();
         let registry = StdArc::new(ToolHandlerRegistry::new());
         let calls_old = StdArc::new(AtomicUsize::new(0));
-        let entry = register(
-            &registry,
-            definition(
-                "r1a_tool",
-                ToolSource::Extension {
-                    plugin_id: "REAL".into(),
-                },
-                true,
-            ),
-            StdArc::clone(&calls_old),
-            false,
-            true,
-        );
+        let entry = real_plugin_entry(&registry, StdArc::clone(&calls_old), false);
         let projection_calls = StdArc::new(AtomicUsize::new(0));
         let svc = service(
             &registry,
@@ -7475,19 +7442,7 @@ mod r1a {
         let _home = crate::utils::paths::IsolatedAlephHome::new();
         let registry = StdArc::new(ToolHandlerRegistry::new());
         let calls = StdArc::new(AtomicUsize::new(0));
-        let entry = register(
-            &registry,
-            definition(
-                "r1a_tool",
-                ToolSource::Extension {
-                    plugin_id: "REAL".into(),
-                },
-                true,
-            ),
-            StdArc::clone(&calls),
-            false,
-            true,
-        );
+        let entry = real_plugin_entry(&registry, StdArc::clone(&calls), false);
         let canonical = service(
             &registry,
             projection(
