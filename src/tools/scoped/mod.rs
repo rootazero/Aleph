@@ -33,9 +33,9 @@ mod traits;
 pub(crate) use ledger::record_allowlist_refusal;
 
 #[cfg(test)]
-mod tests;
-#[cfg(test)]
 mod production_policy_tests;
+#[cfg(test)]
+mod tests;
 // POSIX-only: the hooks under test are `sh` commands.
 #[cfg(all(test, unix))]
 mod hook_block_tests;
@@ -245,30 +245,23 @@ impl ScopedToolService {
         }
         Some(health.snapshot())
     }
-}
 
-#[async_trait]
-impl ToolService for ScopedToolService {
-    /// The tier this chokepoint will enforce, straight from the method the
-    /// gate itself calls — including a `PlanGate` that a human has already
-    /// released. One derivation, two readers (the gate, and the sub-agent
-    /// prompt that has to describe the gate).
-    fn enforced_exec_tier(&self) -> Option<crate::config::types::policies::ExecTier> {
-        self.effective_exec_tier()
-    }
-
-    /// The derivation this service's own Layer-2 footer uses (the inherent
-    /// `recovery_tools`, which method resolution picks over this one) — one
-    /// derivation, read here by the harness's Layer-3 spill.
-    fn recovery_tools(&self) -> crate::tools::result_processing::RecoveryTools {
-        Self::recovery_tools(self)
-    }
-
-    async fn list(&self) -> Vec<ToolDefinition> {
-        // Take a single health snapshot so the filter is consistent across
-        // every tool in this list call.
-        let health_snap = self.refreshed_health_snapshot().await;
-
+    /// The gated definition list both `list()` and `metadata_schema()`
+    /// publish: loop tools projected to `ToolDefinition`, the subagent tool
+    /// appended, then the allow / deny / health / deferred gates **in this
+    /// order**, then the request-time rewriter pass (after gating, so removed
+    /// tools are not visited). One derivation so the two readers cannot
+    /// drift: `metadata_schema()` previously re-spelled this body with
+    /// "Mirror list()" comments.
+    ///
+    /// `health_snap` is ONE snapshot for the whole call, so the health gate is
+    /// consistent across every tool. `list()` passes a freshly refreshed one
+    /// (`refreshed_health_snapshot`); the sync `metadata_schema()` passes the
+    /// cache's current snapshot.
+    fn gated_definitions(
+        &self,
+        health_snap: Option<&crate::tool_metadata::HealthSnapshot>,
+    ) -> Vec<ToolDefinition> {
         let mut defs: Vec<ToolDefinition> = self
             .inner
             .tool_definitions()
@@ -311,7 +304,7 @@ impl ToolService for ScopedToolService {
         // Health gate: strip any tool whose probe reports a non-expired
         // Unhealthy. Tools without a registered probe pass through (the
         // snapshot reports them healthy by default).
-        if let Some(snap) = &health_snap {
+        if let Some(snap) = health_snap {
             defs.retain(|d| snap.is_healthy(&d.name));
         }
 
@@ -323,12 +316,36 @@ impl ToolService for ScopedToolService {
         }
 
         // Request-time rewriter pass: extensions / host code may rewrite
-        // descriptions or schemas without touching the underlying
-        // registry entry. Runs after gating so removed tools are not
-        // visited.
+        // descriptions or schemas without touching the underlying registry
+        // entry. Runs after gating so removed tools are not visited.
         self.apply_definition_rewriters(&mut defs);
 
         defs
+    }
+}
+
+#[async_trait]
+impl ToolService for ScopedToolService {
+    /// The tier this chokepoint will enforce, straight from the method the
+    /// gate itself calls — including a `PlanGate` that a human has already
+    /// released. One derivation, two readers (the gate, and the sub-agent
+    /// prompt that has to describe the gate).
+    fn enforced_exec_tier(&self) -> Option<crate::config::types::policies::ExecTier> {
+        self.effective_exec_tier()
+    }
+
+    /// The derivation this service's own Layer-2 footer uses (the inherent
+    /// `recovery_tools`, which method resolution picks over this one) — one
+    /// derivation, read here by the harness's Layer-3 spill.
+    fn recovery_tools(&self) -> crate::tools::result_processing::RecoveryTools {
+        Self::recovery_tools(self)
+    }
+
+    async fn list(&self) -> Vec<ToolDefinition> {
+        // Refresh stale probes, then take a single snapshot so the health
+        // gate is consistent across every tool in this list call.
+        let health_snap = self.refreshed_health_snapshot().await;
+        self.gated_definitions(health_snap.as_ref())
     }
 
     /// `list()` plus the deferred tier: everything `execute()` would actually
@@ -662,49 +679,11 @@ impl ToolService for ScopedToolService {
             }
         }
 
-        // Take a snapshot for filter application — same as list().
+        // Cache miss: rebuild the gated list (one derivation with `list()`;
+        // this sync path reads the cache's current health snapshot rather than
+        // refreshing probes), then convert to the metadata form.
         let health_snap = self.health.as_ref().map(|h| h.snapshot());
-
-        // Cache miss: rebuild loop-side defs (matching list() body), then convert.
-        let mut defs: Vec<ToolDefinition> = self
-            .inner
-            .tool_definitions()
-            .into_iter()
-            .map(|d| {
-                let metadata = Self::builtin_metadata(
-                    &d.name,
-                    d.concurrent_safe,
-                    d.requires_confirmation,
-                    d.max_duration_ms,
-                );
-                ToolDefinition {
-                    name: d.name,
-                    description: d.description,
-                    input_schema: d.parameters,
-                    source: ToolSource::Builtin,
-                    metadata,
-                }
-            })
-            .collect();
-        if let Some(ref st) = self.subagent_tool {
-            defs.push(Self::subagent_definition(st.as_ref()));
-        }
-        if !self.allowed.is_empty() {
-            // Mirror list() — subagent is exempt from allow-filter via is_allowed.
-            defs.retain(|d| self.is_allowed(&d.name));
-        }
-        // Mirror list() — Deny tools never reach the LLM-visible schema.
-        defs.retain(|d| !self.is_hidden_from_model(&d.name));
-        if let Some(snap) = &health_snap {
-            defs.retain(|d| snap.is_healthy(&d.name));
-        }
-        if !self.deferred.is_empty() {
-            defs.retain(|d| !self.is_deferred(&d.name));
-        }
-        // Mirror `list()`: rewriters run after gating, before the
-        // metadata-form conversion. Cached output reflects the rewrite,
-        // so subsequent O(1) hits don't re-pay the cost.
-        self.apply_definition_rewriters(&mut defs);
+        let defs = self.gated_definitions(health_snap.as_ref());
         // Direct descriptor-field projection. No `ToolCapabilityDescriptor` is
         // available here: `self.inner` is a `LoopToolRegistry` of trait objects
         // carrying only name/description/schema/flags, so we project the fields
