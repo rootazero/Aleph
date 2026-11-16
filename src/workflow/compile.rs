@@ -409,7 +409,7 @@ fn compute_parallel_assignments(
         let Some(label) = parallel_label(step.parallel_group.as_deref()) else {
             continue;
         };
-        let size = *label_to_size.get(label).unwrap_or(&1);
+        let size = label_to_size[label];
         let counter = counters.entry(label.to_string()).or_insert(0);
         let index = *counter;
         *counter += 1;
@@ -504,9 +504,7 @@ pub async fn materialize(
     let mut task_ids = Vec::with_capacity(def.steps.len());
 
     for &idx in &order {
-        let Some(step) = def.steps.get(idx) else {
-            continue;
-        };
+        let step = &def.steps[idx];
 
         // depends_on resolves to already-created task ids because we iterate
         // in topological order — a dependency is always materialised first.
