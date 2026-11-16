@@ -47,7 +47,7 @@ impl BuiltinHandler {
     }
 
     /// Builder knob for [`BuiltinHandler::fences_output`]. The default `false`
-    /// covers every native builtin; the MCP bridge turns it on for the five
+    /// covers every native builtin; the MCP bridge turns it on for the
     /// capability builtins whose output passes through a server the harness
     /// does not control.
     pub fn with_fences_output(mut self, value: bool) -> Self {
