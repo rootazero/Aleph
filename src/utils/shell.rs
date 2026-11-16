@@ -270,7 +270,7 @@ static WINDOWS_POWERSHELL: OnceLock<Option<ResolvedShell>> = OnceLock::new();
 /// `is_inaccessible_windows_apps_powershell_path`); it is here for both
 /// PowerShell and Python because one predicate is cheaper to keep true than two.
 #[cfg(windows)]
-pub(crate) fn is_windows_apps_alias(path: &std::path::Path) -> bool {
+fn is_windows_apps_alias(path: &std::path::Path) -> bool {
     path.components().any(|c| {
         c.as_os_str()
             .to_str()
@@ -328,7 +328,7 @@ fn locate(kind: ShellKind) -> Option<ResolvedShell> {
 /// user installed — `/bin/bash` is 3.2 on macOS — which is the build the
 /// sandbox was ever able to run.
 #[cfg(not(windows))]
-pub(crate) fn locate_runnable(name: &str, path_var: Option<&std::ffi::OsStr>) -> Option<PathBuf> {
+fn locate_runnable(name: &str, path_var: Option<&std::ffi::OsStr>) -> Option<PathBuf> {
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("/"));
     let on_path: Vec<PathBuf> = which::which_in_all(name, path_var, cwd)
         .map(Iterator::collect)
