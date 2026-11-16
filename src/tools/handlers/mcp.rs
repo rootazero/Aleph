@@ -125,7 +125,7 @@ pub(crate) fn is_tool_key_of_server(server_id: &str, name: &str) -> bool {
 /// `[A-Za-z0-9_-]`, truncating to 64 characters. Strict-schema providers
 /// (`OpenAI` function calling) reject names outside this set with a request-
 /// level 400, which would poison the whole turn for every tool.
-pub(crate) fn sanitize_tool_name(raw: &str) -> String {
+fn sanitize_tool_name(raw: &str) -> String {
     raw.chars()
         .map(|c| {
             if c.is_ascii_alphanumeric() || c == '_' || c == '-' {

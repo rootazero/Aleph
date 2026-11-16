@@ -113,7 +113,7 @@ const BROWSER_PROBE_TTL: Duration = Duration::from_secs(300);
 
 /// Capability name the managed driver resolves through the runtime ledger —
 /// the same string `browser::playwright_cli` passes to `ensure_capability`.
-pub(crate) const MANAGED_CAPABILITY: &str = "playwright-cli";
+const MANAGED_CAPABILITY: &str = "playwright-cli";
 
 /// The managed driver's CLI, if a call could reach one right now: a
 /// system-installed `playwright-cli` on `PATH`, else the ledger's `Ready`
@@ -148,7 +148,7 @@ fn managed_driver_ready() -> bool {
 /// Whether the existing-session driver could run: a system Chromium to attach
 /// to, and the `npx` launcher that starts `chrome-devtools-mcp`. Either one
 /// missing leaves the driver unable to open a page, so both are required.
-pub(crate) fn existing_session_driver_ready() -> bool {
+fn existing_session_driver_ready() -> bool {
     find_chromium().is_ok() && which::which("npx").is_ok()
 }
 
