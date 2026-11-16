@@ -5050,21 +5050,26 @@ mod a3 {
         overlap: Option<StdArc<Barrier>>,
     }
 
+    impl RecordingHandler {
+        /// The plain spy these tests want: the approval-gated `terminal`
+        /// definition, no partial write, no cross-invocation barrier.
+        fn new(tag: &'static str, invoked: &StdArc<StdMutex<Vec<Invocation>>>) -> Self {
+            Self {
+                definition: definition("terminal", false),
+                tag,
+                invoked: StdArc::clone(invoked),
+                partial_write: None,
+                own_identity: unsafe_identity(1),
+                overlap: None,
+            }
+        }
+    }
+
     #[tokio::test]
     async fn fresh_canonical_entry_runs_real_handler_effect() {
         let registry = StdArc::new(ToolHandlerRegistry::new());
         let invoked = StdArc::new(StdMutex::new(Vec::new()));
-        register(
-            &registry,
-            RecordingHandler {
-                definition: definition("terminal", false),
-                tag: "handler1",
-                invoked: invoked.clone(),
-                partial_write: None,
-                own_identity: unsafe_identity(1),
-                overlap: None,
-            },
-        );
+        register(&registry, RecordingHandler::new("handler1", &invoked));
         let svc = service(&registry).with_confirmation(StdArc::new(SequenceRequester::new([
             ApprovalOutcome::Approved,
         ])));
@@ -5087,17 +5092,7 @@ mod a3 {
     ) -> (ScopedToolService, StdArc<StdMutex<Vec<Invocation>>>) {
         let registry = StdArc::new(ToolHandlerRegistry::new());
         let invoked = StdArc::new(StdMutex::new(Vec::new()));
-        register(
-            &registry,
-            RecordingHandler {
-                definition: definition("terminal", false),
-                tag: "runtime-facts",
-                invoked: invoked.clone(),
-                partial_write: None,
-                own_identity: unsafe_identity(1),
-                overlap: None,
-            },
-        );
+        register(&registry, RecordingHandler::new("runtime-facts", &invoked));
         let generation = crate::capability::ownership::OwnerGeneration(0);
         let mut controller = crate::capability::activation::CapabilityActivationController::new(
             None,
@@ -5248,17 +5243,7 @@ mod a3 {
     async fn canonical_dispatch_denies_runtime_constraint_before_handler_effect() {
         let registry = StdArc::new(ToolHandlerRegistry::new());
         let invoked = StdArc::new(StdMutex::new(Vec::new()));
-        register(
-            &registry,
-            RecordingHandler {
-                definition: definition("terminal", false),
-                tag: "handler1",
-                invoked: invoked.clone(),
-                partial_write: None,
-                own_identity: unsafe_identity(1),
-                overlap: None,
-            },
-        );
+        register(&registry, RecordingHandler::new("handler1", &invoked));
 
         let runtime_context = crate::capability::constraints::ConstraintContext::now(0)
             .expect("system clock must be available");
@@ -5301,17 +5286,7 @@ mod a3 {
     async fn missing_canonical_facade_fails_closed_before_handler_effect() {
         let registry = StdArc::new(ToolHandlerRegistry::new());
         let invoked = StdArc::new(StdMutex::new(Vec::new()));
-        register(
-            &registry,
-            RecordingHandler {
-                definition: definition("terminal", false),
-                tag: "handler1",
-                invoked: invoked.clone(),
-                partial_write: None,
-                own_identity: unsafe_identity(1),
-                overlap: None,
-            },
-        );
+        register(&registry, RecordingHandler::new("handler1", &invoked));
         let mut inner = LoopToolRegistry::new();
         inner.bind_canonical_registry(registry.clone(), StdArc::new(|_| true));
         assert!(inner.canonical_registry().is_some());
@@ -5338,17 +5313,7 @@ mod a3 {
     async fn provider_generation_stale_fails_before_handler_effect() {
         let registry = StdArc::new(ToolHandlerRegistry::new());
         let invoked = StdArc::new(StdMutex::new(Vec::new()));
-        register(
-            &registry,
-            RecordingHandler {
-                definition: definition("terminal", false),
-                tag: "handler1",
-                invoked: invoked.clone(),
-                partial_write: None,
-                own_identity: unsafe_identity(1),
-                overlap: None,
-            },
-        );
+        register(&registry, RecordingHandler::new("handler1", &invoked));
         let svc = service(&registry);
         let first = svc.with_confirmation(StdArc::new(SequenceRequester::new([
             ApprovalOutcome::Approved,
@@ -5406,17 +5371,7 @@ mod a3 {
     async fn owner_bump_fails_before_handler_effect() {
         let registry = StdArc::new(ToolHandlerRegistry::new());
         let invoked = StdArc::new(StdMutex::new(Vec::new()));
-        register(
-            &registry,
-            RecordingHandler {
-                definition: definition("terminal", false),
-                tag: "handler1",
-                invoked: invoked.clone(),
-                partial_write: None,
-                own_identity: unsafe_identity(1),
-                overlap: None,
-            },
-        );
+        register(&registry, RecordingHandler::new("handler1", &invoked));
         let (svc, host) = canonical_service(&registry);
         let first = svc.with_confirmation(StdArc::new(SequenceRequester::new([
             ApprovalOutcome::Approved,
@@ -5465,17 +5420,7 @@ mod a3 {
     async fn unregister_between_gate_and_dispatch_fails_before_handler_effect() {
         let registry = StdArc::new(ToolHandlerRegistry::new());
         let invoked = StdArc::new(StdMutex::new(Vec::new()));
-        register(
-            &registry,
-            RecordingHandler {
-                definition: definition("terminal", false),
-                tag: "handler1",
-                invoked: invoked.clone(),
-                partial_write: None,
-                own_identity: unsafe_identity(1),
-                overlap: None,
-            },
-        );
+        register(&registry, RecordingHandler::new("handler1", &invoked));
         let arrived = StdArc::new(Barrier::new(2));
         let release = StdArc::new(Barrier::new(2));
         let requester = StdArc::new(BoundaryRequester {
@@ -5511,17 +5456,7 @@ mod a3 {
     async fn stale_canonical_entry_fails_before_handler_effect() {
         let registry = StdArc::new(ToolHandlerRegistry::new());
         let invoked = StdArc::new(StdMutex::new(Vec::new()));
-        register(
-            &registry,
-            RecordingHandler {
-                definition: definition("terminal", false),
-                tag: "handler1",
-                invoked: invoked.clone(),
-                partial_write: None,
-                own_identity: unsafe_identity(1),
-                overlap: None,
-            },
-        );
+        register(&registry, RecordingHandler::new("handler1", &invoked));
         let arrived = StdArc::new(Barrier::new(2));
         let release = StdArc::new(Barrier::new(2));
         let requester = StdArc::new(BoundaryRequester {
@@ -5548,12 +5483,8 @@ mod a3 {
             .await
             .expect("capture must reach the approval barrier");
         let replacement = RecordingHandler {
-            definition: definition("terminal", false),
-            tag: "handler2",
-            invoked: invoked.clone(),
-            partial_write: None,
             own_identity: unsafe_identity(2),
-            overlap: None,
+            ..RecordingHandler::new("handler2", &invoked)
         };
         registry
             .replace(
@@ -5837,17 +5768,7 @@ mod a3 {
     async fn replacement_between_gate_and_dispatch_rejects_stale_capture() {
         let registry = StdArc::new(ToolHandlerRegistry::new());
         let invoked = StdArc::new(StdMutex::new(Vec::new()));
-        register(
-            &registry,
-            RecordingHandler {
-                definition: definition("terminal", false),
-                tag: "handler1",
-                invoked: invoked.clone(),
-                partial_write: None,
-                own_identity: unsafe_identity(1),
-                overlap: None,
-            },
-        );
+        register(&registry, RecordingHandler::new("handler1", &invoked));
         let arrived = StdArc::new(Barrier::new(2));
         let release = StdArc::new(Barrier::new(2));
         let requester = StdArc::new(BoundaryRequester {
@@ -5874,12 +5795,8 @@ mod a3 {
             .await
             .expect("rev1 must reach the approval barrier");
         let replacement = RecordingHandler {
-            definition: definition("terminal", false),
-            tag: "handler2",
-            invoked: invoked.clone(),
-            partial_write: None,
             own_identity: unsafe_identity(2),
-            overlap: None,
+            ..RecordingHandler::new("handler2", &invoked)
         };
         registry
             .replace(
@@ -5947,17 +5864,7 @@ mod a3 {
     async fn proof_for_original_input_cannot_authorize_rewrite() {
         let registry = StdArc::new(ToolHandlerRegistry::new());
         let invoked = StdArc::new(StdMutex::new(Vec::new()));
-        register(
-            &registry,
-            RecordingHandler {
-                definition: definition("terminal", false),
-                tag: "terminal",
-                invoked: invoked.clone(),
-                partial_write: None,
-                own_identity: unsafe_identity(1),
-                overlap: None,
-            },
-        );
+        register(&registry, RecordingHandler::new("terminal", &invoked));
         let requester = StdArc::new(SequenceRequester::new([
             ApprovalOutcome::Approved,
             ApprovalOutcome::Denied,
@@ -6042,12 +5949,8 @@ mod a3 {
         register(
             &registry,
             RecordingHandler {
-                definition: definition("terminal", false),
-                tag: "terminal",
-                invoked: invoked.clone(),
-                partial_write: None,
-                own_identity: unsafe_identity(1),
                 overlap: Some(StdArc::new(Barrier::new(2))),
+                ..RecordingHandler::new("terminal", &invoked)
             },
         );
         let requester = StdArc::new(ParallelRequester {
@@ -6313,11 +6216,8 @@ mod a3 {
             &registry,
             RecordingHandler {
                 definition: definition("terminal", true),
-                tag: "terminal",
-                invoked: invoked.clone(),
                 partial_write: Some(sink.clone()),
-                own_identity: unsafe_identity(1),
-                overlap: None,
+                ..RecordingHandler::new("terminal", &invoked)
             },
         );
         assert_eq!(
@@ -6366,17 +6266,7 @@ mod a3 {
     async fn removed_canonical_entry_never_resurrects_its_projection() {
         let registry = StdArc::new(ToolHandlerRegistry::new());
         let invoked = StdArc::new(StdMutex::new(Vec::new()));
-        register(
-            &registry,
-            RecordingHandler {
-                definition: definition("terminal", false),
-                tag: "old",
-                invoked: invoked.clone(),
-                partial_write: None,
-                own_identity: unsafe_identity(1),
-                overlap: None,
-            },
-        );
+        register(&registry, RecordingHandler::new("old", &invoked));
         let requester = StdArc::new(SequenceRequester::new([ApprovalOutcome::Approved]));
         let svc = service(&registry).with_confirmation(requester.clone());
         registry.unregister("terminal").unwrap();
@@ -6406,17 +6296,7 @@ mod a3 {
     async fn source_changed_canonical_entry_fails_closed_for_same_service() {
         let registry = StdArc::new(ToolHandlerRegistry::new());
         let invoked = StdArc::new(StdMutex::new(Vec::new()));
-        register(
-            &registry,
-            RecordingHandler {
-                definition: definition("terminal", false),
-                tag: "old",
-                invoked: invoked.clone(),
-                partial_write: None,
-                own_identity: unsafe_identity(1),
-                overlap: None,
-            },
-        );
+        register(&registry, RecordingHandler::new("old", &invoked));
         let svc = service(&registry);
         let mut changed = definition("terminal", false);
         changed.source = ToolSource::Mcp {
@@ -6424,11 +6304,8 @@ mod a3 {
         };
         let replacement = RecordingHandler {
             definition: changed,
-            tag: "hidden",
-            invoked: invoked.clone(),
-            partial_write: None,
             own_identity: unsafe_identity(2),
-            overlap: None,
+            ..RecordingHandler::new("hidden", &invoked)
         };
         registry
             .replace(
@@ -6456,11 +6333,7 @@ mod a3 {
             &registry,
             RecordingHandler {
                 definition: first,
-                tag: "old",
-                invoked: invoked.clone(),
-                partial_write: None,
-                own_identity: unsafe_identity(1),
-                overlap: None,
+                ..RecordingHandler::new("old", &invoked)
             },
         );
         let requester = StdArc::new(SequenceRequester::new([ApprovalOutcome::Denied]));
@@ -6468,12 +6341,8 @@ mod a3 {
             .with_exec_tier(crate::config::types::policies::ExecTier::Full)
             .with_confirmation(requester.clone());
         let replacement = RecordingHandler {
-            definition: definition("terminal", false),
-            tag: "new-confirmed",
-            invoked: invoked.clone(),
-            partial_write: None,
             own_identity: unsafe_identity(2),
-            overlap: None,
+            ..RecordingHandler::new("new-confirmed", &invoked)
         };
         registry
             .replace(
@@ -6672,11 +6541,7 @@ mod a3 {
             &registry,
             RecordingHandler {
                 definition: def,
-                tag: "visible",
-                invoked: invoked.clone(),
-                partial_write: None,
-                own_identity: unsafe_identity(1),
-                overlap: None,
+                ..RecordingHandler::new("visible", &invoked)
             },
         );
         let visibility = StdArc::new(std::sync::atomic::AtomicBool::new(true));
