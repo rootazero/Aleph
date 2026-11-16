@@ -6,6 +6,14 @@
 //! replacement is best-effort and may briefly be observable as a missing
 //! target. The temp file is created alongside `path` so the rename never
 //! crosses a filesystem boundary.
+//!
+//! This is intentionally not an async wrapper around
+//! [`crate::utils::atomic_io::write_atomic`]. This version makes a best-effort
+//! attempt to preserve an existing destination's permissions and fsyncs only
+//! the staging file; the synchronous version creates a `0600` staging file on
+//! Unix and additionally makes a best-effort parent-directory fsync. Unifying
+//! them requires auditing callers that rely on those distinct permission and
+//! durability semantics.
 
 use crate::error::AlephError;
 use std::path::Path;
