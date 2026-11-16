@@ -95,6 +95,43 @@ impl MarkdownCliTool {
             .map_or(DEFAULT_EXECUTION_TIMEOUT, Duration::from_secs)
     }
 
+    /// Run a prepared [`Command`] under the skill's execution timeout and
+    /// collect its output.
+    ///
+    /// The spawn contract lives here so that every execution mode shares one
+    /// implementation of it: piped stdout/stderr, null stdin, `kill_on_drop`
+    /// (the child is killed when the timeout fires *or* when the caller is
+    /// cancelled, so a timed-out skill leaves no orphaned process behind),
+    /// and the [`MarkdownToolOutput`] shape.
+    ///
+    /// `label` names the execution mode in the timeout message (`"Skill"`,
+    /// `"Docker skill"`, `"VirtualFs skill"`).
+    async fn run_command(&self, mut cmd: Command, label: &str) -> Result<MarkdownToolOutput> {
+        cmd.stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .stdin(Stdio::null());
+        // Kill the child if this future is dropped (timeout or cancellation)
+        // so the skill cannot outlive the call that started it.
+        cmd.kill_on_drop(true);
+
+        let timeout = self.execution_timeout();
+        let output = tokio::time::timeout(timeout, cmd.no_window().output())
+            .await
+            .map_err(|_| {
+                anyhow::anyhow!(
+                    "{label} '{}' timed out after {}s",
+                    self.spec.name,
+                    timeout.as_secs()
+                )
+            })??;
+
+        Ok(MarkdownToolOutput {
+            stdout: String::from_utf8_lossy(&output.stdout).to_string(),
+            stderr: String::from_utf8_lossy(&output.stderr).to_string(),
+            exit_code: output.status.code().unwrap_or(-1),
+        })
+    }
+
     /// Execute on host system (with `SafetyGate` if configured).
     ///
     /// # Host-mode contract (see `docs/superpowers/specs/2026-05-20-host-sandbox-netns-decision-design.md`)
@@ -134,9 +171,6 @@ impl MarkdownCliTool {
         // Build command (Windows-aware: resolves `.cmd`/`.bat` launchers so a
         // node/npm CLI that passes the `which` binary check also executes).
         let mut cmd = build_host_command(bin, cli_args);
-        cmd.stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .stdin(Stdio::null());
 
         // Apply network restrictions if specified.
         // See the function-level doc above for the host-mode contract:
@@ -160,24 +194,7 @@ impl MarkdownCliTool {
             }
         }
 
-        // Execute with timeout
-        cmd.kill_on_drop(true);
-        let timeout = self.execution_timeout();
-        let output = tokio::time::timeout(timeout, cmd.no_window().output())
-            .await
-            .map_err(|_| {
-                anyhow::anyhow!(
-                    "Skill '{}' timed out after {}s",
-                    self.spec.name,
-                    timeout.as_secs()
-                )
-            })??;
-
-        Ok(MarkdownToolOutput {
-            stdout: String::from_utf8_lossy(&output.stdout).to_string(),
-            stderr: String::from_utf8_lossy(&output.stderr).to_string(),
-            exit_code: output.status.code().unwrap_or(-1),
-        })
+        self.run_command(cmd, "Skill").await
     }
 
     /// Execute in Docker container with proper env and error handling
@@ -221,44 +238,22 @@ impl MarkdownCliTool {
         docker_args.push(bin.clone());
         docker_args.extend_from_slice(cli_args);
 
-        let timeout = self.execution_timeout();
-        let output = tokio::time::timeout(
-            timeout,
-            Command::new("docker")
-                .kill_on_drop(true)
-                .args(&docker_args)
-                .stdout(Stdio::piped())
-                .stderr(Stdio::piped())
-                .stdin(Stdio::null())
-                .no_window()
-                .output(),
-        )
-        .await
-        .map_err(|_| {
-            anyhow::anyhow!(
-                "Docker skill '{}' timed out after {}s",
-                self.spec.name,
-                timeout.as_secs()
-            )
-        })??;
+        let mut cmd = Command::new("docker");
+        cmd.args(&docker_args);
+
+        let output = self.run_command(cmd, "Docker skill").await?;
 
         // Enhanced exit code handling
-        if !output.status.success() {
-            let exit_code = output.status.code().unwrap_or(-1);
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            check_docker_exit_code(exit_code, &stderr, bin, &container_image)?;
+        if output.exit_code != 0 {
+            check_docker_exit_code(output.exit_code, &output.stderr, bin, &container_image)?;
             warn!(
                 tool = %self.spec.name,
-                exit_code = exit_code,
+                exit_code = output.exit_code,
                 "Tool execution failed"
             );
         }
 
-        Ok(MarkdownToolOutput {
-            stdout: String::from_utf8_lossy(&output.stdout).to_string(),
-            stderr: String::from_utf8_lossy(&output.stderr).to_string(),
-            exit_code: output.status.code().unwrap_or(-1),
-        })
+        Ok(output)
     }
 
     /// Push Docker runtime args from the skill's `aleph.docker` config:
@@ -418,11 +413,7 @@ impl MarkdownCliTool {
 
         // Build command with isolated environment
         let mut cmd = Command::new(bin);
-        cmd.args(cli_args)
-            .current_dir(&sandbox.work_dir)
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .stdin(Stdio::null());
+        cmd.args(cli_args).current_dir(&sandbox.work_dir);
 
         // Apply sandbox environment variables
         sandbox.apply_env(&mut cmd);
@@ -437,26 +428,9 @@ impl MarkdownCliTool {
             }
         }
 
-        // Execute with timeout
-        cmd.kill_on_drop(true);
-        let timeout = self.execution_timeout();
-        let output = tokio::time::timeout(timeout, cmd.no_window().output())
-            .await
-            .map_err(|_| {
-                anyhow::anyhow!(
-                    "VirtualFs skill '{}' timed out after {}s",
-                    self.spec.name,
-                    timeout.as_secs()
-                )
-            })??;
-
         // Cleanup happens when sandbox is dropped
 
-        Ok(MarkdownToolOutput {
-            stdout: String::from_utf8_lossy(&output.stdout).to_string(),
-            stderr: String::from_utf8_lossy(&output.stderr).to_string(),
-            exit_code: output.status.code().unwrap_or(-1),
-        })
+        self.run_command(cmd, "VirtualFs skill").await
     }
 }
 
