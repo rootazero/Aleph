@@ -95,6 +95,7 @@
 
 use std::time::{Duration, Instant};
 
+use serde::Deserialize;
 use serde_json::Value;
 use tracing::{debug, warn};
 
@@ -497,7 +498,10 @@ fn media_items(value: &Value) -> Vec<MediaItem> {
     let Some(raw) = value.get(MEDIA_FIELD) else {
         return Vec::new();
     };
-    match serde_json::from_value::<Vec<MediaItem>>(raw.clone()) {
+    // Deserialized straight out of the borrowed value: `from_value` would
+    // need an owned copy of the whole `_media` subtree first, and the items a
+    // tool declares can carry a `data:` URL whose payload is megabytes.
+    match Vec::<MediaItem>::deserialize(raw) {
         Ok(items) => items,
         Err(e) => {
             debug!(error = %e, "tool output carried a malformed `_media` field; nothing harvested");
