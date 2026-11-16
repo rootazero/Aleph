@@ -216,23 +216,14 @@ impl OnboardingFlow {
         data.secondary_provider = Some(secondary_provider.clone());
 
         if secondary_provider != "ollama" {
-            let api_key = if Some(&secondary_provider) == data.primary_provider.as_ref() {
-                let use_same = prompter
+            // Ask the "same key?" question only when both providers can share
+            // one key; `&&` keeps it ahead of the key prompt.
+            let reuse_primary_key = Some(&secondary_provider) == data.primary_provider.as_ref()
+                && prompter
                     .confirm("Use the same API key as the primary provider?", true)
                     .await?;
-                if use_same {
-                    data.primary_api_key.clone()
-                } else {
-                    Some(
-                        prompter
-                            .text(
-                                &format!("Enter your {secondary_provider} API key:"),
-                                Some("sk-..."),
-                                true,
-                            )
-                            .await?,
-                    )
-                }
+            let api_key = if reuse_primary_key {
+                data.primary_api_key.clone()
             } else {
                 Some(
                     prompter
