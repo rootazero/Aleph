@@ -120,7 +120,15 @@ impl SkillWatcher {
     ///
     /// This is a blocking async function that processes file events
     /// and invokes the reload callback when skills change.
-    pub async fn run(mut self, skills_dir: PathBuf, reload_callback: ReloadCallback) -> Result<()> {
+    ///
+    /// `_skills_dir` is kept for API compatibility: the watcher already
+    /// watches the directory it was built with, and the event handling below
+    /// derives the affected skill directories from the event paths themselves.
+    pub async fn run(
+        mut self,
+        _skills_dir: PathBuf,
+        reload_callback: ReloadCallback,
+    ) -> Result<()> {
         info!("Skill watcher event loop started");
 
         while let Some(event) = self.event_rx.recv().await {
@@ -134,9 +142,7 @@ impl SkillWatcher {
             }
 
             // Reload affected skills
-            if let Err(e) =
-                Self::handle_skill_events(&skills_dir, &skill_events, &reload_callback).await
-            {
+            if let Err(e) = Self::handle_skill_events(&skill_events, &reload_callback).await {
                 error!(error = %e, "Failed to handle skill events");
             }
         }
@@ -180,7 +186,6 @@ impl SkillWatcher {
 
     /// Handle skill reload events
     async fn handle_skill_events(
-        _skills_dir: &Path,
         events: &[SkillEvent],
         reload_callback: &ReloadCallback,
     ) -> Result<()> {
