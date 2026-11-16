@@ -135,6 +135,14 @@ fn extract_embedded(src: &str) -> Option<&str> {
     Some(rest.get(..end)?.trim())
 }
 
+/// The manifest id of the step at 0-based `index`.
+///
+/// A step's own id and the dependency edges pointing at it are the same
+/// string, so both are derived here instead of being formatted twice.
+fn step_id(index: usize) -> String {
+    format!("step_{}", index + 1)
+}
+
 /// Light-weight scan of a hand-written `.workflow.js`.
 fn scan_bare(raw: &str) -> Result<ImportOutcome> {
     // Every read below works on the comment-blanked copy so offsets stay
@@ -320,12 +328,9 @@ fn scan_bare(raw: &str) -> Result<ImportOutcome> {
                 let phase = call.opts.phase.or_else(|| current_phase.clone());
                 // Depend on every step in the preceding layer: one for a
                 // sequential predecessor, N for a fan-in after a parallel block.
-                let depends_on: Vec<String> = prev_layer
-                    .iter()
-                    .map(|&p| format!("step_{}", p + 1))
-                    .collect();
+                let depends_on: Vec<String> = prev_layer.iter().map(|&p| step_id(p)).collect();
                 steps.push(WorkflowManifestStep {
-                    id: format!("step_{}", i + 1),
+                    id: step_id(i),
                     agent: "agent".to_string(),
                     prompt: call.prompt,
                     depends_on,
@@ -375,12 +380,9 @@ fn scan_bare(raw: &str) -> Result<ImportOutcome> {
                 // It joins the DAG with the same layer logic as an agent step:
                 // it can follow the prior layer and be depended on by the next.
                 let i = steps.len();
-                let depends_on: Vec<String> = prev_layer
-                    .iter()
-                    .map(|&p| format!("step_{}", p + 1))
-                    .collect();
+                let depends_on: Vec<String> = prev_layer.iter().map(|&p| step_id(p)).collect();
                 steps.push(WorkflowManifestStep {
-                    id: format!("step_{}", i + 1),
+                    id: step_id(i),
                     // A clarify step is owned by the sentinel, not a team member,
                     // so its `agent` is intentionally empty (matches `from_def`).
                     agent: String::new(), // rust-doctor-disable-line unnecessary-allocation
