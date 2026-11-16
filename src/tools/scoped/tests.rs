@@ -3130,9 +3130,7 @@ impl LoopTool for FailingTestRunner {
     }
 }
 
-fn hygiene_store(
-    _name: &str,
-) -> (
+fn hygiene_store() -> (
     tempfile::TempDir,
     StdArc<crate::tools::result_store::ToolResultStore>,
 ) {
@@ -3154,7 +3152,7 @@ fn hygiene_store(
 /// the only available next move was to re-run the suite.
 #[tokio::test]
 async fn a_failing_test_run_reaches_the_model_as_signal_not_as_json_envelope_head() {
-    let (_scratch, hygiene) = hygiene_store("failing_test_run");
+    let (_scratch, hygiene) = hygiene_store();
     let mut registry = LoopToolRegistry::new();
     registry.register(Box::new(FailingTestRunner));
     // A retrieval tool to read the offload back: without one nothing is
@@ -3225,7 +3223,7 @@ async fn a_small_result_is_untouched_by_ingress_hygiene() {
             }
         }
     }
-    let (_scratch, hygiene) = hygiene_store("small_untouched");
+    let (_scratch, hygiene) = hygiene_store();
     let mut registry = LoopToolRegistry::new();
     registry.register(Box::new(Tiny));
     let svc = ScopedToolService::new(StdArc::new(registry), std::collections::BTreeSet::new())
@@ -3278,7 +3276,7 @@ async fn the_recovery_footer_names_only_retrieval_tools_the_model_can_call() {
         |names: &[&str]| -> BTreeSet<String> { names.iter().map(|n| (*n).to_string()).collect() };
 
     // Positive half: both callable ⇒ the search hint is offered.
-    let (_s1, store) = hygiene_store("footer_both");
+    let (_s1, store) = hygiene_store();
     let both = footer_of(
         ScopedToolService::new(registry(), allow(&["bash", "ctx_search", "file_read"]))
             .with_result_store(store),
@@ -3287,7 +3285,7 @@ async fn the_recovery_footer_names_only_retrieval_tools_the_model_can_call() {
     assert!(both.contains("ctx_search("), "both callable:\n{both}");
 
     // Not in the agent's allow set.
-    let (_s2, store) = hygiene_store("footer_not_allowed");
+    let (_s2, store) = hygiene_store();
     let not_allowed = footer_of(
         ScopedToolService::new(registry(), allow(&["bash", "file_read"])).with_result_store(store),
     )
@@ -3302,7 +3300,7 @@ async fn the_recovery_footer_names_only_retrieval_tools_the_model_can_call() {
     );
 
     // Denied by policy (and hidden from the model's list).
-    let (_s3, store) = hygiene_store("footer_denied");
+    let (_s3, store) = hygiene_store();
     let denied = footer_of(
         ScopedToolService::new(registry(), BTreeSet::new())
             .with_tool_permissions(perms(
@@ -3320,7 +3318,7 @@ async fn the_recovery_footer_names_only_retrieval_tools_the_model_can_call() {
 
     // Neither callable ⇒ nothing is offloaded: a bare path the model has no
     // tool to open is a dead handle. The cut says so instead.
-    let (_s4, store) = hygiene_store("footer_neither");
+    let (_s4, store) = hygiene_store();
     let neither = ScopedToolService::new(registry(), allow(&["bash"]))
         .with_result_store(store)
         .execute("bash", json!({}))
@@ -4766,7 +4764,7 @@ async fn an_allowlist_narrows_the_retrieval_set_under_it() {
     registry.register(Box::new(StubTool {
         tool_name: "file_read",
     }));
-    let (_scratch, store) = hygiene_store("allowlist_chain");
+    let (_scratch, store) = hygiene_store();
     let parent: StdArc<dyn ToolService> = StdArc::new(
         ScopedToolService::new(StdArc::new(registry), BTreeSet::new()).with_result_store(store),
     );
@@ -4820,7 +4818,7 @@ async fn an_agent_with_no_retrieval_tool_gets_a_cut_not_an_offload() {
     registry.register(Box::new(StubTool {
         tool_name: "file_read",
     }));
-    let (_scratch, store) = hygiene_store("no_retrieval_chain");
+    let (_scratch, store) = hygiene_store();
     let parent: StdArc<dyn ToolService> = StdArc::new(
         ScopedToolService::new(StdArc::new(registry), BTreeSet::new()).with_result_store(store),
     );
@@ -5645,23 +5643,13 @@ mod a3 {
     // fixture binds the canonical registry and the existing facade handle; the
     // mounted-host binding path is exercised separately by canonical_service.
     fn service(registry: &StdArc<ToolHandlerRegistry>) -> ScopedToolService {
-        let mut inner = LoopToolRegistry::new();
-        inner.bind_canonical_registry(registry.clone(), StdArc::new(|_| true));
-        assert!(
-            inner.bind_canonical_facade(crate::capability::zahir_facade::ZahirFacade::new(
+        service_with_facade(
+            registry,
+            crate::capability::zahir_facade::ZahirFacade::new(
                 registry.as_ref().clone(),
                 StdArc::new(crate::capability::ownership::OwnershipTree::new()),
-            ),)
-        );
-        for entry in registry.entries_snapshot().values() {
-            inner.register(Box::new(
-                crate::tools::adapters::McpRegistryTool::from_registry_entry(
-                    StdArc::clone(&entry.handler),
-                    &entry.descriptor,
-                ),
-            ));
-        }
-        ScopedToolService::new(StdArc::new(inner), BTreeSet::new())
+            ),
+        )
     }
 
     fn service_with_facade(
@@ -6747,7 +6735,7 @@ mod a3 {
             registry
                 .register_with_result_budget(descriptor(&a), StdArc::new(a), Some(SMALL))
                 .unwrap();
-            let (_scratch, store) = hygiene_store("r0_replace_before");
+            let (_scratch, store) = hygiene_store();
             let requester = StdArc::new(SequenceRequester::new([ApprovalOutcome::Approved]));
             let svc = budget_service(&registry, Some(SMALL), store)
                 .with_turn_context(turn_ctx("r0-replace-before-execute"))
@@ -6798,7 +6786,7 @@ mod a3 {
                 release: release.clone(),
                 seen: StdMutex::new(Vec::new()),
             });
-            let (_scratch, store) = hygiene_store("r0_gate_held");
+            let (_scratch, store) = hygiene_store();
             let svc = StdArc::new(
                 budget_service(&registry, Some(SMALL), store.clone())
                     .with_turn_context(turn_ctx("r0-gate-held-capture"))
@@ -6868,7 +6856,7 @@ mod a3 {
             registry
                 .register_with_result_budget(descriptor(&a), StdArc::new(a), Some(SMALL))
                 .unwrap();
-            let (_scratch, store) = hygiene_store("r0_none");
+            let (_scratch, store) = hygiene_store();
             let requester = StdArc::new(SequenceRequester::new([ApprovalOutcome::Approved]));
             let svc = budget_service(&registry, Some(SMALL), store)
                 .with_turn_context(turn_ctx("r0-canonical-none"))
@@ -6906,7 +6894,7 @@ mod a3 {
             registry
                 .register_with_result_budget(descriptor(&a), StdArc::new(a), Some(SMALL))
                 .unwrap();
-            let (_scratch, store) = hygiene_store("r0_rpc");
+            let (_scratch, store) = hygiene_store();
             let requester = StdArc::new(SequenceRequester::new([ApprovalOutcome::Approved]));
             let svc = budget_service(&registry, Some(SMALL), store)
                 .with_structured_rpc_transport()
