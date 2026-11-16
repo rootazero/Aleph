@@ -488,7 +488,7 @@ impl ToolService for ScopedToolService {
         let turn_for_scope = self.turn_context.clone();
         let turn_for_tier = self.turn_context.clone();
         let fut = async move {
-            match turn_for_scope.clone() {
+            match turn_for_scope {
                 Some(turn) => {
                     let session = turn.session_key.clone();
                     crate::sandbox::context::SESSION_ID
