@@ -979,8 +979,7 @@ async fn after_tool_hook_observer_fires_on_success() {
     let svc = ScopedToolService::new(echo_registry(), BTreeSet::new())
         .with_hook_executor(executor, "test-session");
 
-    let _ = svc
-        .execute("echo", json!({}))
+    svc.execute("echo", json!({}))
         .await
         .expect("execute should succeed");
 
