@@ -16,9 +16,6 @@ use super::tool_adapter::MarkdownCliTool;
 pub struct SkillLoader {
     /// Base directory to scan (e.g., "skills/")
     base_dir: PathBuf,
-
-    /// Whether to scan recursively
-    recursive: bool,
 }
 
 impl SkillLoader {
@@ -26,7 +23,6 @@ impl SkillLoader {
     pub fn new(base_dir: impl Into<PathBuf>) -> Self {
         Self {
             base_dir: base_dir.into(),
-            recursive: true,
         }
     }
 
@@ -39,7 +35,6 @@ impl SkillLoader {
 
         info!(
             base_dir = %self.base_dir.display(),
-            recursive = self.recursive,
             "Scanning for Markdown skills"
         );
 
@@ -97,16 +92,11 @@ impl SkillLoader {
 
         // Use walkdir (sync) in blocking task to avoid stack issues
         let base_dir = self.base_dir.clone();
-        let recursive = self.recursive;
 
         let skill_files = tokio::task::spawn_blocking(move || {
-            let walker = if recursive {
-                WalkDir::new(&base_dir)
-                    .follow_links(false) // Prevent symlink loops
-                    .max_depth(10) // Reasonable limit
-            } else {
-                WalkDir::new(&base_dir).max_depth(1)
-            };
+            let walker = WalkDir::new(&base_dir)
+                .follow_links(false) // Prevent symlink loops
+                .max_depth(10); // Reasonable limit
 
             walker
                 .into_iter()
