@@ -6697,7 +6697,7 @@ mod a3 {
 
         /// The produced size must sit strictly between the two budgets the
         /// real resolver would enforce, or the test proves nothing.
-        fn assert_discriminating_size() -> usize {
+        fn assert_discriminating_size() {
             let produced = crate::context::budget::pressure::estimate_tokens_smart(&body("x"));
             let resolve = crate::tools::result_processing::resolve_result_budget;
             assert_eq!(resolve(NAME, Some(SMALL)), Some(SMALL));
@@ -6707,7 +6707,6 @@ mod a3 {
                 produced > SMALL * 2 && produced < LARGE.min(default),
                 "fixture size {produced} must discriminate {SMALL} from {LARGE}/{default}"
             );
-            produced
         }
 
         fn assert_inline_whole(text: &str, tag: &str) {
@@ -6728,7 +6727,7 @@ mod a3 {
         // budget (or a second live lookup) instead of the entry it captured.
         #[tokio::test]
         async fn replacement_before_execute_uses_replacement_entry_budget() {
-            let produced = assert_discriminating_size();
+            assert_discriminating_size();
             let registry = StdArc::new(ToolHandlerRegistry::new());
             let calls: Calls = StdArc::new(StdMutex::new(Vec::new()));
             let a = handler("budgetA", 1, &calls);
@@ -6764,7 +6763,6 @@ mod a3 {
             assert_eq!(calls[0].1.as_deref(), Some("r0-before"));
             let seen = requester.seen.lock().unwrap();
             assert_eq!(seen.len(), 1, "exactly one real approval");
-            let _ = produced;
         }
 
         // Break caught: a call captured at rev1 adopts rev2's budget after the
