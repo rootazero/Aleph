@@ -96,10 +96,20 @@ fn is_cjk(ch: char) -> bool {
     )
 }
 
+/// One indexed document: its term frequencies and its token count.
+struct DocIndex {
+    /// Term → occurrences in this document.
+    tf: HashMap<String, usize>,
+    /// Token count — the BM25 document length `dl`.
+    len: usize,
+}
+
 /// In-memory BM25 index over the tool corpus.
 struct Bm25 {
     docs: Vec<ToolDoc>,
-    doc_tokens: Vec<Vec<String>>,
+    /// Per-document index, computed once at build time. Scoring a document is
+    /// a lookup in this map instead of a fresh scan of its tokens.
+    doc_index: Vec<DocIndex>,
     df: HashMap<String, usize>,
     avgdl: f64,
     n: usize,
@@ -107,27 +117,31 @@ struct Bm25 {
 
 impl Bm25 {
     fn build(docs: Vec<ToolDoc>) -> Self {
-        let doc_tokens: Vec<Vec<String>> = docs
-            .iter()
-            .map(|d| {
-                let mut t = tokenize(&d.name);
-                t.extend(tokenize(&d.description));
-                t
-            })
-            .collect();
         let n = docs.len();
         let mut df: HashMap<String, usize> = HashMap::new();
-        for toks in &doc_tokens {
-            let uniq: std::collections::HashSet<&String> = toks.iter().collect();
-            for t in uniq {
-                *df.entry(t.clone()).or_insert(0) += 1;
+        let mut doc_index: Vec<DocIndex> = Vec::with_capacity(n);
+        let mut total = 0usize;
+        for d in &docs {
+            let mut toks = tokenize(&d.name);
+            toks.extend(tokenize(&d.description));
+            let len = toks.len();
+            total += len;
+            let mut tf: HashMap<String, usize> = HashMap::new();
+            for t in toks {
+                *tf.entry(t).or_insert(0) += 1;
             }
+            // Document frequency: a document contributes at most one count per
+            // distinct term, so the term frequencies double as the unique-term
+            // set.
+            for term in tf.keys() {
+                *df.entry(term.clone()).or_insert(0) += 1;
+            }
+            doc_index.push(DocIndex { len, tf });
         }
-        let total: usize = doc_tokens.iter().map(Vec::len).sum();
         let avgdl = if n == 0 { 0.0 } else { total as f64 / n as f64 };
         Self {
             docs,
-            doc_tokens,
+            doc_index,
             df,
             avgdl,
             n,
@@ -137,17 +151,13 @@ impl Bm25 {
     fn score(&self, q_tokens: &[String], doc_idx: usize) -> f64 {
         const K1: f64 = 1.5;
         const B: f64 = 0.75;
-        let Some(toks) = self.doc_tokens.get(doc_idx) else {
+        let Some(doc) = self.doc_index.get(doc_idx) else {
             return 0.0;
         };
-        let dl = toks.len() as f64;
-        let mut tf: HashMap<&str, usize> = HashMap::new();
-        for t in toks {
-            *tf.entry(t.as_str()).or_insert(0) += 1;
-        }
+        let dl = doc.len as f64;
         let mut score = 0.0;
         for q in q_tokens {
-            let f = *tf.get(q.as_str()).unwrap_or(&0) as f64;
+            let f = *doc.tf.get(q.as_str()).unwrap_or(&0) as f64;
             if f == 0.0 {
                 continue;
             }
