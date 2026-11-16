@@ -84,6 +84,45 @@ fn in_mem_session() -> Arc<dyn crate::session::service::SessionService> {
     Arc::new(InProcessActorSessionService::new(store))
 }
 
+/// The subagent tool the list / describe / execute tests attach beside the
+/// registry: a real `SubagentTool` over a canned-reply provider.
+fn mock_subagent_tool(reply: &'static str) -> Arc<crate::agents::subagent_tool::SubagentTool> {
+    use crate::agents::background_tracker::BackgroundAgentTracker;
+    use crate::agents::AgentRegistry;
+    use crate::harness::chain_context::ChainContext;
+    use crate::providers::adapter::{ProviderResponse, RequestPayload};
+    use crate::providers::AiProvider;
+    use std::future::Future;
+    use std::pin::Pin;
+
+    struct MockProvider(&'static str);
+    impl AiProvider for MockProvider {
+        fn process<'a>(
+            &'a self,
+            _p: RequestPayload<'a>,
+        ) -> Pin<Box<dyn Future<Output = crate::error::Result<ProviderResponse>> + Send + 'a>>
+        {
+            let reply = self.0;
+            Box::pin(async move { Ok(ProviderResponse::text_only(reply.into())) })
+        }
+        fn name(&self) -> &str {
+            "mock"
+        }
+        fn color(&self) -> &str {
+            "#000"
+        }
+    }
+
+    Arc::new(crate::agents::subagent_tool::SubagentTool::new(
+        Arc::new(MockProvider(reply)),
+        ChainContext::new(),
+        Arc::new(AgentRegistry::with_builtins()),
+        Arc::new(BackgroundAgentTracker::new()),
+        in_mem_session(),
+        Arc::new(NoopParentTools),
+    ))
+}
+
 struct StubTool {
     tool_name: &'static str,
 }
@@ -203,43 +242,7 @@ fn metadata_schema_reflects_rewriter_after_cache_bump() {
 // -------------------------------------------------------------------------
 #[tokio::test]
 async fn list_includes_subagent_tool_when_set() {
-    use crate::agents::background_tracker::BackgroundAgentTracker;
-    use crate::agents::AgentRegistry;
-    use crate::harness::chain_context::ChainContext;
-    use crate::providers::adapter::{ProviderResponse, RequestPayload};
-    use crate::providers::AiProvider;
-    use std::future::Future;
-    use std::pin::Pin;
-
-    struct MockProvider;
-    impl AiProvider for MockProvider {
-        fn process<'a>(
-            &'a self,
-            _p: RequestPayload<'a>,
-        ) -> Pin<Box<dyn Future<Output = crate::error::Result<ProviderResponse>> + Send + 'a>>
-        {
-            Box::pin(async { Ok(ProviderResponse::text_only("ok".into())) })
-        }
-        fn name(&self) -> &str {
-            "mock"
-        }
-        fn color(&self) -> &str {
-            "#000"
-        }
-    }
-
-    let provider: Arc<dyn AiProvider> = Arc::new(MockProvider);
-    let chain = ChainContext::new();
-    let registry_arc = Arc::new(AgentRegistry::with_builtins());
-    let tracker = Arc::new(BackgroundAgentTracker::new());
-    let st = Arc::new(crate::agents::subagent_tool::SubagentTool::new(
-        provider,
-        chain,
-        registry_arc,
-        tracker,
-        in_mem_session(),
-        Arc::new(NoopParentTools),
-    ));
+    let st = mock_subagent_tool("ok");
 
     let registry = make_registry(&["read_file"]);
     let svc = ScopedToolService::new(registry, BTreeSet::new()).with_subagent_tool(st);
@@ -276,40 +279,7 @@ async fn list_includes_subagent_tool_when_set() {
 // -------------------------------------------------------------------------
 #[tokio::test]
 async fn subagent_survives_non_empty_allow_set() {
-    use crate::agents::background_tracker::BackgroundAgentTracker;
-    use crate::agents::AgentRegistry;
-    use crate::harness::chain_context::ChainContext;
-    use crate::providers::adapter::{ProviderResponse, RequestPayload};
-    use crate::providers::AiProvider;
-    use std::future::Future;
-    use std::pin::Pin;
-
-    struct MockProvider;
-    impl AiProvider for MockProvider {
-        fn process<'a>(
-            &'a self,
-            _p: RequestPayload<'a>,
-        ) -> Pin<Box<dyn Future<Output = crate::error::Result<ProviderResponse>> + Send + 'a>>
-        {
-            Box::pin(async { Ok(ProviderResponse::text_only("ok".into())) })
-        }
-        fn name(&self) -> &str {
-            "mock"
-        }
-        fn color(&self) -> &str {
-            "#000"
-        }
-    }
-
-    let provider: Arc<dyn AiProvider> = Arc::new(MockProvider);
-    let st = Arc::new(crate::agents::subagent_tool::SubagentTool::new(
-        provider,
-        ChainContext::new(),
-        Arc::new(AgentRegistry::with_builtins()),
-        Arc::new(BackgroundAgentTracker::new()),
-        in_mem_session(),
-        Arc::new(NoopParentTools),
-    ));
+    let st = mock_subagent_tool("ok");
 
     // Production-shaped allow set: only registry-known tool names, no
     // "subagent" entry — exactly what gateway run_loop produces.
@@ -358,43 +328,7 @@ async fn subagent_survives_non_empty_allow_set() {
 // -------------------------------------------------------------------------
 #[tokio::test]
 async fn execute_routes_to_subagent_tool_by_name() {
-    use crate::agents::background_tracker::BackgroundAgentTracker;
-    use crate::agents::AgentRegistry;
-    use crate::harness::chain_context::ChainContext;
-    use crate::providers::adapter::{ProviderResponse, RequestPayload};
-    use crate::providers::AiProvider;
-    use std::future::Future;
-    use std::pin::Pin;
-
-    struct MockProvider;
-    impl AiProvider for MockProvider {
-        fn process<'a>(
-            &'a self,
-            _p: RequestPayload<'a>,
-        ) -> Pin<Box<dyn Future<Output = crate::error::Result<ProviderResponse>> + Send + 'a>>
-        {
-            Box::pin(async { Ok(ProviderResponse::text_only("subagent result".into())) })
-        }
-        fn name(&self) -> &str {
-            "mock"
-        }
-        fn color(&self) -> &str {
-            "#000"
-        }
-    }
-
-    let provider: Arc<dyn AiProvider> = Arc::new(MockProvider);
-    let chain = ChainContext::new();
-    let registry_arc = Arc::new(AgentRegistry::with_builtins());
-    let tracker = Arc::new(BackgroundAgentTracker::new());
-    let st = Arc::new(crate::agents::subagent_tool::SubagentTool::new(
-        provider,
-        chain,
-        registry_arc,
-        tracker,
-        in_mem_session(),
-        Arc::new(NoopParentTools),
-    ));
+    let st = mock_subagent_tool("subagent result");
 
     // Registry has NO "subagent" tool — proves routing goes to st, not inner
     let registry = make_registry(&["read_file"]);
