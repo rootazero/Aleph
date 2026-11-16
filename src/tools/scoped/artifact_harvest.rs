@@ -287,11 +287,25 @@ fn scratch_media_session() -> String {
 struct ResolvedMedia {
     /// What the channel should receive, in declaration order.
     deliver: Vec<Attachment>,
-    /// Resolved items, each paired with the declaration the store reads for
-    /// naming (`Attachment` carries no `media_type`).
-    store: Vec<(MediaItem, Attachment)>,
+    /// Resolved items, as the store lane needs them. The declaration is kept
+    /// because the store reads it for naming (`Attachment` carries no
+    /// `media_type`); the file's path and MIME type are kept because the
+    /// delivery lane owns the attachment — a second copy of it would clone
+    /// the item's URL with it, and for a `data:` URL that string is the whole
+    /// encoded payload.
+    store: Vec<StoredMedia>,
     /// What could not be resolved at all.
     failures: Vec<MediaFailure>,
+}
+
+/// One resolved item, as the store lane needs it.
+struct StoredMedia {
+    /// The declaration this came from, for naming.
+    item: MediaItem,
+    /// The file the single resolution wrote.
+    path: String,
+    /// The resolved MIME type, for the artifact's name and type.
+    mime_type: String,
 }
 
 /// The instant the harvest must have stopped fetching by, given when the
@@ -359,8 +373,17 @@ async fn resolve_media_items(
 
         match outcome {
             Ok(attachment) => {
-                out.deliver.push(attachment.clone());
-                out.store.push((item, attachment));
+                // The store lane needs the file, not a second copy of the
+                // attachment: cloning one clones the item's URL with it, and
+                // for a `data:` URL that string is the whole encoded payload.
+                if let Some(path) = attachment.path.as_deref() {
+                    out.store.push(StoredMedia {
+                        item,
+                        path: path.to_string(),
+                        mime_type: attachment.mime_type.clone(),
+                    });
+                }
+                out.deliver.push(attachment);
             }
             Err(reason) => {
                 // A remote URL we could not fetch may still be one the channel
@@ -499,29 +522,26 @@ async fn store_resolved_media(
     session_key: &str,
     run_id: Option<&str>,
     tool: &str,
-    resolved: &[(MediaItem, Attachment)],
+    resolved: &[StoredMedia],
 ) -> usize {
     let mut stored = 0usize;
 
-    for (item, attachment) in resolved {
-        let Some(path) = attachment.path.as_deref() else {
-            continue;
-        };
-        let bytes = match tokio::fs::read(path).await {
+    for media in resolved {
+        let bytes = match tokio::fs::read(&media.path).await {
             Ok(bytes) => bytes,
             Err(e) => {
                 warn!(error = %e, "resolved media file could not be read; not stored as an artifact");
                 continue;
             }
         };
-        let filename = filename_for(item, &attachment.mime_type);
+        let filename = filename_for(&media.item, &media.mime_type);
         match store
             .put(
                 session_key,
                 run_id,
                 ArtifactOrigin::Outbound,
                 &filename,
-                &attachment.mime_type,
+                &media.mime_type,
                 &bytes,
             )
             .await
