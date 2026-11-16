@@ -992,12 +992,11 @@ fn agent_skills_dir(dirs: &mut Vec<PathBuf>) {
 /// cross-platform home ladder as `~/.aleph` (HOME → USERPROFILE →
 /// HOMEDRIVE+HOMEPATH), so the macOS/Linux/Windows match is inherited.
 pub(crate) fn user_skills_roots() -> Result<(PathBuf, Option<PathBuf>, Option<PathBuf>)> {
-    let global_agents = get_home_dir()
-        .ok()
+    let home = get_home_dir().ok();
+    let global_agents = home
+        .as_ref()
         .map(|home| home.join(".agents").join("skills"));
-    let global_claude = get_home_dir()
-        .ok()
-        .map(|home| home.join(".claude").join("skills"));
+    let global_claude = home.map(|home| home.join(".claude").join("skills"));
     Ok((get_skills_dir()?, global_agents, global_claude))
 }
 
