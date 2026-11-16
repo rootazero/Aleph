@@ -317,6 +317,17 @@ pub struct MaterializedWorkflow {
     pub task_ids: Vec<CoordTaskId>,
 }
 
+/// The normalised parallel-group label of a step, or `None` when the step
+/// declares no group (or an empty / whitespace-only one).
+///
+/// One place for the rule, because the group list, the group size and the
+/// group stamp must all agree on which steps carry a group: a label spelled
+/// two ways in two places is one typo away from a group that is listed but
+/// never stamped.
+fn parallel_label(raw: Option<&str>) -> Option<&str> {
+    raw.map(str::trim).filter(|s| !s.is_empty())
+}
+
 /// List the parallel groups declared by `manifest`, in declaration order
 /// (the order the first member of each group first appears in the step
 /// list). Each inner `Vec` is the set of step ids that share a
@@ -346,12 +357,7 @@ pub fn parallel_groups_for(
     // the projection is a stable surface for tests and UI.
     let mut label_order: Vec<String> = Vec::new();
     for step in &manifest.steps {
-        let Some(label) = step
-            .parallel_group
-            .as_deref()
-            .map(str::trim)
-            .filter(|s| !s.is_empty())
-        else {
+        let Some(label) = parallel_label(step.parallel_group.as_deref()) else {
             continue;
         };
         if !groups.contains_key(label) {
@@ -388,12 +394,7 @@ fn compute_parallel_assignments(
     let mut label_to_size: HashMap<String, usize> = HashMap::new();
     // First pass: count members of every label so the size is stable.
     for step in &def.steps {
-        if let Some(label) = step
-            .parallel_group
-            .as_deref()
-            .map(str::trim)
-            .filter(|s| !s.is_empty())
-        {
+        if let Some(label) = parallel_label(step.parallel_group.as_deref()) {
             *label_to_size.entry(label.to_string()).or_insert(0) += 1;
         }
     }
@@ -405,12 +406,7 @@ fn compute_parallel_assignments(
     let mut counters: HashMap<String, usize> = HashMap::new();
     let mut out: HashMap<String, (String, usize, usize)> = HashMap::new();
     for step in &def.steps {
-        let Some(label) = step
-            .parallel_group
-            .as_deref()
-            .map(str::trim)
-            .filter(|s| !s.is_empty())
-        else {
+        let Some(label) = parallel_label(step.parallel_group.as_deref()) else {
             continue;
         };
         let size = *label_to_size.get(label).unwrap_or(&1);
@@ -420,6 +416,23 @@ fn compute_parallel_assignments(
         out.insert(step.id.clone(), (label.to_string(), index, size));
     }
     out
+}
+
+/// Stamp the parallel-group triple onto a materialised task's metadata.
+///
+/// Shared by the agent and the collect branch of [`materialize`] so both rows
+/// carry the same three keys. `None` (a step outside any labelled group)
+/// writes nothing — byte-identical legacy rows.
+fn stamp_parallel_group(meta: &mut serde_json::Value, assignment: Option<&(String, usize, usize)>) {
+    let Some((group, index, size)) = assignment else {
+        return;
+    };
+    let Some(obj) = meta.as_object_mut() else {
+        return;
+    };
+    obj.insert(WORKFLOW_PARALLEL_GROUP_KEY.to_string(), json!(group));
+    obj.insert(WORKFLOW_PARALLEL_INDEX_KEY.to_string(), json!(index));
+    obj.insert(WORKFLOW_PARALLEL_SIZE_KEY.to_string(), json!(size));
 }
 
 /// Materialise `def` into `coord_tasks` under `team_id`, substituting the run's
@@ -559,14 +572,7 @@ pub async fn materialize(
             // a parallel group (a synth over a labelled fan-out is a real
             // shape), so the same labelling applies. `None` for an
             // ungrouped collect → byte-identical row.
-            if let Some((group, index, size)) = parallel_assignments.get(step.id.as_str()).cloned()
-            {
-                if let Some(obj) = meta.as_object_mut() {
-                    obj.insert(WORKFLOW_PARALLEL_GROUP_KEY.to_string(), json!(group));
-                    obj.insert(WORKFLOW_PARALLEL_INDEX_KEY.to_string(), json!(index));
-                    obj.insert(WORKFLOW_PARALLEL_SIZE_KEY.to_string(), json!(size));
-                }
-            }
+            stamp_parallel_group(&mut meta, parallel_assignments.get(step.id.as_str()));
             (crate::workflow::collect::COLLECT_OWNER.to_string(), meta)
         } else {
             let mut meta = json!({
@@ -620,14 +626,7 @@ pub async fn materialize(
             // their row shape is different (clarify has CLARIFY_META_KEY,
             // collect is handled in the collect branch below), and parallel
             // grouping is meaningless on a step that does not run an agent.
-            if let Some((group, index, size)) = parallel_assignments.get(step.id.as_str()).cloned()
-            {
-                if let Some(obj) = meta.as_object_mut() {
-                    obj.insert(WORKFLOW_PARALLEL_GROUP_KEY.to_string(), json!(group));
-                    obj.insert(WORKFLOW_PARALLEL_INDEX_KEY.to_string(), json!(index));
-                    obj.insert(WORKFLOW_PARALLEL_SIZE_KEY.to_string(), json!(size));
-                }
-            }
+            stamp_parallel_group(&mut meta, parallel_assignments.get(step.id.as_str()));
             // Per-step execution-budget overrides: stamped through the SAME
             // metadata helpers `task_create` uses, so the dispatcher's
             // existing consumers (`effective_timeout_secs` at launch,
