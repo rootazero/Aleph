@@ -64,7 +64,7 @@ pub struct ImportOutcome {
 /// `.workflow.js` could otherwise hold 4–5 GiB resident. 16 MiB is comfortably
 /// above the largest realistic workflow (the documented engineering format
 /// keeps the whole declarative surface under a few hundred KiB).
-pub(crate) const MAX_IMPORT_BYTES: usize = 16 * 1024 * 1024;
+const MAX_IMPORT_BYTES: usize = 16 * 1024 * 1024;
 
 /// Parse `src` into a manifest. See module docs for the three paths.
 pub fn parse_workflow_js(src: &str) -> Result<ImportOutcome> {
