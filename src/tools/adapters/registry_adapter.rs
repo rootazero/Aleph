@@ -367,41 +367,35 @@ pub fn builtin_concurrency_claim(
     input: &Value,
 ) -> crate::tools::concurrency::ConcurrencyClaim {
     use crate::tools::concurrency::ConcurrencyClaim;
-    if name == "file_ops" {
-        return file_ops_claim(input);
-    }
-    if name == "apply_patch" {
-        return apply_patch_claim(input);
-    }
-    if name == "doctor" {
-        return doctor_claim(input);
-    }
-    if name == "note_schema" {
-        return note_schema_claim(input);
-    }
-    if name == "a2a_agents" {
-        return a2a_agents_claim(input);
-    }
-    if name == "inbox_read" {
-        return inbox_read_claim(input);
-    }
-    if name == "session_send" {
-        return session_send_claim(input);
-    }
-    if let Some(path) = bounded_file_writer_path(name, input) {
-        return ConcurrencyClaim::paths(std::iter::once(path));
-    }
-    if name == "node_invoke" {
-        if let Some(node) = input.get("node").and_then(Value::as_str) {
-            return ConcurrencyClaim::nodes(std::iter::once(crate::cluster::normalize_node_key(
-                node,
-            )));
+    // One dispatch table. The input-dependent tools resolve their own scope
+    // from their arguments; every other name falls through to the shape
+    // rules below (bounded file writers, node fan-out, then the read-only
+    // allowlist).
+    match name {
+        "file_ops" => file_ops_claim(input),
+        "apply_patch" => apply_patch_claim(input),
+        "doctor" => doctor_claim(input),
+        "note_schema" => note_schema_claim(input),
+        "a2a_agents" => a2a_agents_claim(input),
+        "inbox_read" => inbox_read_claim(input),
+        "session_send" => session_send_claim(input),
+        _ => {
+            if let Some(path) = bounded_file_writer_path(name, input) {
+                return ConcurrencyClaim::paths(std::iter::once(path));
+            }
+            if name == "node_invoke" {
+                if let Some(node) = input.get("node").and_then(Value::as_str) {
+                    return ConcurrencyClaim::nodes(std::iter::once(
+                        crate::cluster::normalize_node_key(node),
+                    ));
+                }
+            }
+            if READ_ONLY_TOOLS.contains(&name) {
+                ConcurrencyClaim::Shared
+            } else {
+                ConcurrencyClaim::global()
+            }
         }
-    }
-    if READ_ONLY_TOOLS.contains(&name) {
-        ConcurrencyClaim::Shared
-    } else {
-        ConcurrencyClaim::global()
     }
 }
 
