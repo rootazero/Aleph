@@ -294,7 +294,11 @@ impl WizardSession {
             Err(mpsc::error::TryRecvError::Empty) => {}
         }
 
-        if settled || self.is_done() {
+        // Re-read the live status: `settled` is a pre-lock snapshot, and the
+        // flow may have settled while this call waited for the receiver. A
+        // terminal status never reverts to `Running`, so the fresh read is
+        // authoritative and no second predicate is needed.
+        if self.is_done() {
             return self.terminal_result();
         }
 
