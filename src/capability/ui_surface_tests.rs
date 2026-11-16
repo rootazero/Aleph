@@ -697,7 +697,42 @@ async fn surface_bounds_timeout_and_disconnect_are_explicit() {
         .is_err());
 }
 
+#[tokio::test]
+async fn disable_closes_owned_surface_and_rejects_old_lease() {
+    let messages = Arc::new(Mutex::new(Vec::new()));
+    let surface = Arc::new(surface("disable-surface", "connection", messages.clone()));
+    let pending = tokio::spawn({
+        let surface = surface.clone();
+        async move {
+            surface
+                .display(
+                    "pending before disable".into(),
+                    call("connection", "disable-surface"),
+                    CancellationToken::new(),
+                )
+                .await
+        }
+    });
+    let message = wait_for_message(&messages).await;
+    surface
+        .submit_input(
+            "connection",
+            UiSubmitInput {
+                surface_id: "disable-surface".into(),
+                mount_generation: 1,
+                event: UiInputEvent::KeyDown { key: "queued".into() },
+            },
+        )
+        .unwrap();
+    surface.close().await.unwrap();
+    assert!(pending.await.unwrap().is_err());
+    assert!(surface.ack("connection", ack(&message, true)).is_err());
+    assert!(matches!(surface.input(), Err(super::ui::UiError::Closed)));
+    surface.close().await.unwrap();
+}
+
 struct ActiveCallFacts(crate::capability::policy_runtime::PolicyFactSourceKey);
+
 impl crate::capability::policy_runtime::ConstraintFactsSource for ActiveCallFacts {
     fn source_key(&self) -> crate::capability::policy_runtime::PolicyFactSourceKey {
         self.0.clone()

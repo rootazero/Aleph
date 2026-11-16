@@ -275,6 +275,56 @@ async fn all_admissions_drain_even_without_configured_quota() {
 }
 
 #[test]
+fn foreign_scope_denial_records_policy_violation_without_handler_effect() {
+    let temp = tempfile::TempDir::new().unwrap();
+    let hub = Arc::new(InMemoryEventStream::default());
+    let registry = ToolHandlerRegistry::new();
+    let effect = temp.path().join("foreign-scope-effect");
+    let facade = observation_facade(temp.path(), registry.clone(), hub.clone());
+    let _registration = register_observation_tool_with_effect(
+        &registry,
+        "foreign_scope_fixture",
+        Some(effect.clone()),
+    );
+    let id = CapabilityId {
+        namespace: "aleph/tools".into(),
+        name: "foreign_scope_fixture".into(),
+    };
+    let entry = registry.capture_entry(&id.name).unwrap();
+    let result = facade.resolve_with_capture_for_call(
+        Reference {
+            id: id.clone(),
+            visibility: VisibilityScope {
+                principal: Some("alice".into()),
+                ..Default::default()
+            },
+        },
+        entry,
+        &CapabilityCallContext::from_trusted_parts(
+            OwnerRef::Runtime,
+            Some("bob".into()),
+            None,
+            None,
+            Some("foreign-connection".into()),
+            "foreign-scope-call".into(),
+        ),
+    );
+    assert_eq!(
+        result,
+        Err(crate::capability::facade::ResolveError::NotVisible)
+    );
+    assert!(!effect.exists(), "foreign scope must not reach the handler");
+    let records = hub.snapshot().unwrap();
+    assert!(records.records().iter().any(|record| {
+        matches!(
+            record.event(),
+            CapabilityEvent::ExecutionFailed { id: actual, operation, reason, .. }
+                if actual == &id && operation == "resolve" && reason == "not_visible"
+        )
+    }));
+}
+
+#[test]
 fn contextual_resolve_and_prepare_refusals_are_observed_at_the_actual_boundary() {
     use crate::config::types::policies::capability_constraints::{
         CapabilityConstraintRule, CapabilityConstraintsConfig,
@@ -1590,7 +1640,7 @@ async fn cancelled_memory_caller_keeps_actual_sqlite_completion_before_source_wi
 }
 
 #[tokio::test]
-async fn cancelled_ui_caller_keeps_owned_completion_and_close_releases_drain() {
+async fn ui_surface_cancel_after_dispatch_joins_worker_and_clears_pending() {
     use crate::capability::provider::{
         ProviderHandle, ProviderId, ProviderLifecycle, ProviderTransport,
     };

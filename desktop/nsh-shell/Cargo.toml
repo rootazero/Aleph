@@ -4,22 +4,20 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-nsh-core = { path = "/Volumes/TBU4/Github/nsh/crates/nsh-core" }
-nsh-base = { path = "/Volumes/TBU4/Github/nsh/crates/nsh-base", default-features = false }
-nsh-engine = { path = "/Volumes/TBU4/Github/nsh/crates/nsh-engine", default-features = false }
+nsh-core = { git = "https://github.com/longbridge/nsh.git", rev = "f4d68f7f9f31eb7b3ecc8a4cbc31096d5c6238a1" }
+nsh-base = { git = "https://github.com/longbridge/nsh.git", rev = "f4d68f7f9f31eb7b3ecc8a4cbc31096d5c6238a1", default-features = false }
+nsh-engine = { git = "https://github.com/longbridge/nsh.git", rev = "f4d68f7f9f31eb7b3ecc8a4cbc31096d5c6238a1", default-features = false }
 aleph-client = { path = "../../shared/client" }
 aleph-protocol = { path = "../../shared/protocol" }
-tokio = { version = "1.53", features = ["rt-multi-thread", "sync", "time", "macros"] }
+tokio = { version = "1", features = ["rt-multi-thread", "sync", "time", "macros"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["std"] }
-uuid = { version = "1", features = ["v4"] }
-chrono = { version = "0.4", features = ["serde"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
-nsh-platform-macos = { path = "/Volumes/TBU4/Github/nsh/crates/nsh-platform-macos", default-features = false }
+nsh-platform-macos = { git = "https://github.com/longbridge/nsh.git", rev = "f4d68f7f9f31eb7b3ecc8a4cbc31096d5c6238a1", default-features = false }
 
 log = "0.4"
 
 [dev-dependencies]
 futures-util = "0.3"
-tokio-tungstenite = "0.30"
+tokio-tungstenite = "0.28"
