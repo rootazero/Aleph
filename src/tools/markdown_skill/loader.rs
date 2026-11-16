@@ -12,6 +12,16 @@ use super::parser::parse_skill_file;
 use super::spec::{AlephSkillSpec, SandboxMode};
 use super::tool_adapter::MarkdownCliTool;
 
+/// The skill-file naming rule: `SKILL.md` or `*.skill.md`, case-insensitively.
+///
+/// One spelling of the rule, shared by the directory scan below and by the
+/// watcher's event filter (`super::watcher`): a file the watcher reloads but
+/// the loader never loads - or the other way round - is a silently divergent
+/// hot-reload, and the two sides must not be allowed to drift apart.
+pub(super) fn is_skill_file_name(file_name: &str) -> bool {
+    file_name.eq_ignore_ascii_case("SKILL.md") || file_name.to_lowercase().ends_with(".skill.md")
+}
+
 /// Skill loader for scanning and loading Markdown skills
 pub struct SkillLoader {
     /// Base directory to scan (e.g., "skills/")
@@ -122,11 +132,9 @@ impl SkillLoader {
 
     /// Static version for use in `spawn_blocking`
     fn is_skill_file_static(path: &Path) -> bool {
-        if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
-            name.eq_ignore_ascii_case("SKILL.md") || name.to_lowercase().ends_with(".skill.md")
-        } else {
-            false
-        }
+        path.file_name()
+            .and_then(|n| n.to_str())
+            .is_some_and(is_skill_file_name)
     }
 
     /// Load a single skill file

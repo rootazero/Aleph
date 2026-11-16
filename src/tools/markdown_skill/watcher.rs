@@ -15,7 +15,7 @@ use tracing::{debug, error, info, warn};
 
 use crate::error::{AlephError, Result};
 
-use super::loader::SkillLoader;
+use super::loader::{is_skill_file_name, SkillLoader};
 use super::registry_owner::markdown_skill_registry_owner;
 use super::tool_adapter::MarkdownCliTool;
 
@@ -175,9 +175,7 @@ impl SkillWatcher {
     fn is_skill_file(path: &Path) -> bool {
         path.file_name()
             .and_then(|n| n.to_str())
-            .is_some_and(|name| {
-                name.eq_ignore_ascii_case("SKILL.md") || name.to_lowercase().ends_with(".skill.md")
-            })
+            .is_some_and(is_skill_file_name)
     }
 
     /// Handle skill reload events
