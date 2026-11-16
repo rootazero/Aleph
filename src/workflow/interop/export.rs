@@ -2,9 +2,11 @@
 //!
 //! Deterministic string rendering — no reasoning. The static dependency DAG is
 //! reconstructed into the declarative `phase()` / `parallel()` / sequential
-//! `agent()` skeleton; imperative control flow is never emitted (Aleph's source
-//! has none). A `/* @aleph-workflow {json} */` header carries the full manifest
-//! for lossless re-import.
+//! step skeleton: `agent(prompt, {opts})` for an agent step, `clarify(...)` for
+//! a clarify step and `collect(...)` for a collect step (the latter two are
+//! Aleph extensions to the `.workflow.js` vocabulary). Imperative control flow
+//! is never emitted (Aleph's source has none). A `/* @aleph-workflow {json} */`
+//! header carries the full manifest for lossless re-import.
 //!
 //! The `meta.phases` plan is *reconciled* with the body: any phase a step
 //! references via its `phase` field is declared in `meta.phases` even when the
