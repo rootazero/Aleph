@@ -653,18 +653,7 @@ fn assert_denial_observed(marker: &std::path::Path, err: &ToolError) {
 
 #[cfg(unix)]
 fn guest_turn(session: &str) -> crate::tools::turn_context::TurnContext {
-    crate::tools::turn_context::TurnContext {
-        session_key: crate::routing::session_key::SessionKey::main(session),
-        run_id: String::new(),
-        channel_id: String::new(),
-        conversation_id: String::new(),
-        caller_role: Some("guest".to_string()),
-        channel_tool_permissions: None,
-        unattended: false,
-        plan_gate: None,
-        side_question: false,
-        telecom_authority: None,
-    }
+    role_turn(session, "guest")
 }
 
 /// Arm 1: the `deny_rule` gate (here an explicit `[policies.tool_permissions]`
@@ -1817,6 +1806,24 @@ fn turn_ctx(agent: &str) -> crate::tools::turn_context::TurnContext {
     }
 }
 
+/// The same isolation rule as `turn_ctx`, for the tier tests that differ only
+/// in the caller's role. A role-carrying turn has no channel behind it, so the
+/// channel and conversation stay empty.
+fn role_turn(agent: &str, role: &str) -> crate::tools::turn_context::TurnContext {
+    crate::tools::turn_context::TurnContext {
+        session_key: crate::routing::session_key::SessionKey::main(agent),
+        run_id: String::new(),
+        channel_id: String::new(),
+        conversation_id: String::new(),
+        caller_role: Some(role.to_string()),
+        channel_tool_permissions: None,
+        unattended: false,
+        plan_gate: None,
+        side_question: false,
+        telecom_authority: None,
+    }
+}
+
 #[tokio::test]
 async fn session_grant_skips_reprompt_within_session() {
     // An "approve for session" must be remembered for the SAME call: the first
@@ -2140,26 +2147,12 @@ async fn execute_without_turn_context_leaves_session_unset() {
 
 #[tokio::test]
 async fn chat_tier_blocked_from_config_tool() {
-    use crate::routing::session_key::SessionKey;
     let registry = make_registry(&["cron_manage"]);
-    let svc = ScopedToolService::new(registry, BTreeSet::new()).with_turn_context(
-        crate::tools::turn_context::TurnContext {
-            // Distinct from every other test's key on purpose: `main()` is
-            // deterministic, and the approval stores it keys (session memory +
-            // denial ledger) are process-global with a sticky session-pause
-            // flag. Two tests on one key share a bucket and go order-dependent.
-            session_key: SessionKey::main("agent-cfg-chat-tier"),
-            run_id: String::new(),
-            channel_id: String::new(),
-            conversation_id: String::new(),
-            caller_role: Some("guest".to_string()),
-            channel_tool_permissions: None,
-            unattended: false,
-            plan_gate: None,
-            side_question: false,
-            telecom_authority: None,
-        },
-    );
+    // Distinct session key per test: the approval stores this key addresses
+    // (`main()` is deterministic) are process-global with a sticky session-pause
+    // flag, so two tests on one key share a bucket and go order-dependent.
+    let svc = ScopedToolService::new(registry, BTreeSet::new())
+        .with_turn_context(role_turn("agent-cfg-chat-tier", "guest"));
     let err = svc.execute("cron_manage", json!({})).await.unwrap_err();
     assert!(
         matches!(err, ToolError::PermissionDenied { .. }),
@@ -2169,22 +2162,9 @@ async fn chat_tier_blocked_from_config_tool() {
 
 #[tokio::test]
 async fn operator_tier_allowed_config_tool() {
-    use crate::routing::session_key::SessionKey;
     let registry = make_registry(&["cron_manage"]);
-    let svc = ScopedToolService::new(registry, BTreeSet::new()).with_turn_context(
-        crate::tools::turn_context::TurnContext {
-            session_key: SessionKey::main("agent-cfg-operator-tier"),
-            run_id: String::new(),
-            channel_id: String::new(),
-            conversation_id: String::new(),
-            caller_role: Some("operator".to_string()),
-            channel_tool_permissions: None,
-            unattended: false,
-            plan_gate: None,
-            side_question: false,
-            telecom_authority: None,
-        },
-    );
+    let svc = ScopedToolService::new(registry, BTreeSet::new())
+        .with_turn_context(role_turn("agent-cfg-operator-tier", "operator"));
     assert!(svc.execute("cron_manage", json!({})).await.is_ok());
 }
 
@@ -2222,29 +2202,17 @@ impl crate::sandbox::exec_approval::gate::ApprovalRequester for StubApprover {
 
 #[tokio::test]
 async fn chat_tier_config_tool_approved_executes() {
-    use crate::routing::session_key::SessionKey;
     use crate::sandbox::exec_approval::gate::ApprovalOutcome;
     let mut reg = LoopToolRegistry::new();
     reg.register(Box::new(StubTool {
         tool_name: "cron_manage",
     }));
+    // Distinct session key per test: confirm_with_memory writes to the
+    // process-global denial_ledger / session_memory keyed by session, so
+    // sharing a key across tests would let the `denied` test's ledger entry
+    // auto-reject this one (order-dependent flake).
     let svc = ScopedToolService::new(Arc::new(reg), BTreeSet::new())
-        .with_turn_context(crate::tools::turn_context::TurnContext {
-            // Distinct session key per test: confirm_with_memory writes to the
-            // process-global denial_ledger / session_memory keyed by session, so
-            // sharing a key across tests would let the `denied` test's ledger
-            // entry auto-reject this one (order-dependent flake).
-            session_key: SessionKey::main("cfg-approve-test"),
-            run_id: String::new(),
-            channel_id: String::new(),
-            conversation_id: String::new(),
-            caller_role: Some("guest".to_string()),
-            channel_tool_permissions: None,
-            unattended: false,
-            plan_gate: None,
-            side_question: false,
-            telecom_authority: None,
-        })
+        .with_turn_context(role_turn("cfg-approve-test", "guest"))
         .with_config_approval(Arc::new(StubApprover(ApprovalOutcome::Approved)));
     assert!(
         svc.execute("cron_manage", json!({})).await.is_ok(),
@@ -2254,25 +2222,13 @@ async fn chat_tier_config_tool_approved_executes() {
 
 #[tokio::test]
 async fn chat_tier_config_tool_denied_rejected() {
-    use crate::routing::session_key::SessionKey;
     use crate::sandbox::exec_approval::gate::ApprovalOutcome;
     let mut reg = LoopToolRegistry::new();
     reg.register(Box::new(StubTool {
         tool_name: "cron_manage",
     }));
     let svc = ScopedToolService::new(Arc::new(reg), BTreeSet::new())
-        .with_turn_context(crate::tools::turn_context::TurnContext {
-            session_key: SessionKey::main("cfg-deny-test"),
-            run_id: String::new(),
-            channel_id: String::new(),
-            conversation_id: String::new(),
-            caller_role: Some("guest".to_string()),
-            channel_tool_permissions: None,
-            unattended: false,
-            plan_gate: None,
-            side_question: false,
-            telecom_authority: None,
-        })
+        .with_turn_context(role_turn("cfg-deny-test", "guest"))
         .with_config_approval(Arc::new(StubApprover(ApprovalOutcome::Denied)));
     let err = svc.execute("cron_manage", json!({})).await.unwrap_err();
     assert!(
@@ -2350,7 +2306,6 @@ impl LoopTool for OperatorConfirmTool {
 /// confirm the action the operator already read and authorized.
 #[tokio::test]
 async fn operator_approval_is_not_double_prompted_by_the_confirm_gate() {
-    use crate::routing::session_key::SessionKey;
     use crate::sandbox::exec_approval::gate::ApprovalOutcome;
     let mut reg = LoopToolRegistry::new();
     reg.register(Box::new(OperatorConfirmTool));
@@ -2361,18 +2316,7 @@ async fn operator_approval_is_not_double_prompted_by_the_confirm_gate() {
     let own_channel = StdArc::new(FakeRequester::new(ApprovalOutcome::Denied));
 
     let svc = ScopedToolService::new(Arc::new(reg), BTreeSet::new())
-        .with_turn_context(crate::tools::turn_context::TurnContext {
-            session_key: SessionKey::main("cfg-no-double-prompt"),
-            run_id: String::new(),
-            channel_id: String::new(),
-            conversation_id: String::new(),
-            caller_role: Some("guest".to_string()),
-            channel_tool_permissions: None,
-            unattended: false,
-            plan_gate: None,
-            side_question: false,
-            telecom_authority: None,
-        })
+        .with_turn_context(role_turn("cfg-no-double-prompt", "guest"))
         .with_config_approval(StdArc::clone(&operator) as _)
         .with_confirmation(StdArc::clone(&own_channel) as _);
 
@@ -2396,25 +2340,13 @@ async fn operator_approval_is_not_double_prompted_by_the_confirm_gate() {
 /// confirmation gate must still fire for it.
 #[tokio::test]
 async fn operator_tier_caller_still_hits_the_confirm_gate() {
-    use crate::routing::session_key::SessionKey;
     use crate::sandbox::exec_approval::gate::ApprovalOutcome;
     let mut reg = LoopToolRegistry::new();
     reg.register(Box::new(OperatorConfirmTool));
 
     let own_channel = StdArc::new(FakeRequester::new(ApprovalOutcome::Approved));
     let svc = ScopedToolService::new(Arc::new(reg), BTreeSet::new())
-        .with_turn_context(crate::tools::turn_context::TurnContext {
-            session_key: SessionKey::main("cfg-operator-still-confirms"),
-            run_id: String::new(),
-            channel_id: String::new(),
-            conversation_id: String::new(),
-            caller_role: Some("operator".to_string()),
-            channel_tool_permissions: None,
-            unattended: false,
-            plan_gate: None,
-            side_question: false,
-            telecom_authority: None,
-        })
+        .with_turn_context(role_turn("cfg-operator-still-confirms", "operator"))
         .with_confirmation(StdArc::clone(&own_channel) as _);
 
     svc.execute("vault_store", json!({"key": "k", "value": "v"}))
@@ -2885,16 +2817,8 @@ async fn approval_gates_no_longer_force_global_claims() {
     use crate::tools::service::ToolService;
 
     let ctx_with_role = |role: Option<&str>| crate::tools::turn_context::TurnContext {
-        session_key: crate::routing::session_key::SessionKey::main("op-gate-test"),
-        run_id: String::new(),
-        channel_id: "test".to_string(),
-        conversation_id: "conv".to_string(),
         caller_role: role.map(String::from),
-        channel_tool_permissions: None,
-        unattended: false,
-        plan_gate: None,
-        side_question: false,
-        telecom_authority: None,
+        ..turn_ctx("op-gate-test")
     };
 
     for role in [Some("guest"), Some("operator")] {
@@ -3010,18 +2934,7 @@ async fn every_card_names_the_rule_that_raised_it() {
         tool_name: "cron_manage",
     }));
     let guest = ScopedToolService::new(Arc::new(reg), BTreeSet::new())
-        .with_turn_context(crate::tools::turn_context::TurnContext {
-            session_key: crate::routing::session_key::SessionKey::main("rule-id-operator-gate"),
-            run_id: String::new(),
-            channel_id: String::new(),
-            conversation_id: String::new(),
-            caller_role: Some("guest".to_string()),
-            channel_tool_permissions: None,
-            unattended: false,
-            plan_gate: None,
-            side_question: false,
-            telecom_authority: None,
-        })
+        .with_turn_context(role_turn("rule-id-operator-gate", "guest"))
         .with_config_approval(StdArc::clone(&operator) as _);
     guest.execute("cron_manage", json!({})).await.unwrap();
     assert_eq!(operator.rule_ids(), vec![Some("operator_required")]);
