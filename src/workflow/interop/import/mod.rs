@@ -93,7 +93,7 @@ pub fn parse_workflow_js(src: &str) -> Result<ImportOutcome> {
 
     // Path 1: embedded lossless block.
     if let Some(json) = extract_embedded(src) {
-        let manifest: WorkflowManifest = serde_json::from_str(&json).map_err(|e| {
+        let manifest: WorkflowManifest = serde_json::from_str(json).map_err(|e| {
             // The embed scanner does not parse string literals — it looks for
             // the literal byte sequence `*/` to close the block. A hand-written
             // prompt that contains `*/` inside a string (`description: "use
@@ -128,11 +128,11 @@ pub fn parse_workflow_js(src: &str) -> Result<ImportOutcome> {
 
 /// Extract the JSON between the first `EMBED_PREFIX` and the matching
 /// `EMBED_SUFFIX` that follows it.  Only the first embed block is considered.
-fn extract_embedded(src: &str) -> Option<String> {
+fn extract_embedded(src: &str) -> Option<&str> {
     let start = src.find(EMBED_PREFIX)? + EMBED_PREFIX.len();
     let rest = src.get(start..)?;
     let end = rest.find(EMBED_SUFFIX)?;
-    Some(rest.get(..end)?.trim().to_string())
+    Some(rest.get(..end)?.trim())
 }
 
 /// Light-weight scan of a hand-written `.workflow.js`.
