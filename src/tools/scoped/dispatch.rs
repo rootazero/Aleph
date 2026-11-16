@@ -554,56 +554,18 @@ impl ScopedToolService {
         // The reason names the entry that denied it (`deny_rule`), so the model
         // relays something the user can act on instead of "the policy says no".
         if let Some(rule) = self.deny_rule_for_descriptor(name, descriptor) {
-            // The per-CALL half of the read-only verdicts. `ExecTier::Plan::rule_for` only
-            // sees a tool's NAME-level facts, so a read/write multiplexer —
-            // `file_ops` above all, whose `list`/`search`/`stats` arms are the
-            // repo-exploration a plan is built out of — comes back denied
-            // wholesale. Here we hold the arguments, so we can ask the ONE
-            // per-call read classifier this repo already maintains:
-            // `LoopTool::concurrency_claim(input) == Shared`, which is
-            // `Exclusive { Global }` by default (fail-closed for anything that
-            // declares nothing) and is resolved per-argument by the same
-            // adapter that resolves it for parallel dispatch.
-            //
-            // Keyed on the PROPERTY the re-admission needs — "the only thing
-            // denying this is a Plan-shaped, name-level verdict" — not on which
-            // rule happens to be reporting it. Two rules produce that verdict:
-            // `PlanMode` and `SideQuestion`, the latter because a side question
-            // composes to `Plan` and then reports itself (`deny_rule` checks it
-            // first, correctly: the repairs `PlanMode` and `PolicyDeny` name —
-            // approve the plan, edit the policy — genuinely do not apply to a
-            // side question). Reading the rule NAME instead made a side question
-            // miss this arm entirely, so `file_ops list/search/stats`, `doctor`,
-            // `note_schema read`, `a2a_agents list` and `inbox_read peek` — the
-            // exploration a side question is mostly made of — were refused by a
-            // sentence that says "it can read and search", with "do not retry"
-            // attached. `GateRule::SideQuestion::reason` is a promise the code
-            // has to keep, and this is where it keeps it.
-            //
-            // `denied_only_by_plan` stays in the condition and does the scoping:
-            // an operator's `deny` entry, a `default = "deny"` install, every
-            // other tier's verdict, and the side-question floor on
-            // `scratchpad`/`subagent` (rung -1 of `permission_for`, which
-            // `denied_only_by_plan` does not consult, so it reports `false` for
-            // those two) all stay refused. For the `PlanMode` arm it is
-            // true by construction — that is how `deny_rule` produced the
-            // variant — so this is a no-op there and a real bound here.
-            if matches!(rule, GateRule::PlanMode | GateRule::SideQuestion)
-                && self.denied_only_by_plan_for_descriptor(name, descriptor)
-                && self.dispatch_concurrency_claim(name, &input, captured.as_ref(), descriptor)
-                    == crate::tools::concurrency::ConcurrencyClaim::Shared
-            {
-                // Falls through to the rest of the pipeline — this call reads.
-            } else {
-                let explanation = rule.reason(name);
-                if let Some(ref l) = ledger {
-                    l.commit_refusal(&input, &explanation).await;
-                }
-                return Err(ToolError::PermissionDenied {
-                    name: name.to_string(),
-                    reason: format!("{explanation}{}", rule.deny_advice()),
-                });
-            }
+            // The per-CALL read-only re-admission lives in `refuse_denied_call`
+            // — shared with the post-rewrite re-check below, which must apply
+            // the identical verdict to the effective bytes.
+            self.refuse_denied_call(
+                name,
+                &input,
+                captured.as_ref(),
+                descriptor,
+                ledger.as_ref(),
+                rule,
+            )
+            .await?;
         }
 
         // Config-tier authorization gate — suspended for live operator approval.
@@ -659,24 +621,15 @@ impl ScopedToolService {
         // policy/tier, operator and confirmation gates on the effective tuple.
         if effective_input != input {
             if let Some(rule) = self.deny_rule_for_descriptor(name, descriptor) {
-                if !(matches!(rule, GateRule::PlanMode | GateRule::SideQuestion)
-                    && self.denied_only_by_plan_for_descriptor(name, descriptor)
-                    && self.dispatch_concurrency_claim(
-                        name,
-                        &effective_input,
-                        captured.as_ref(),
-                        descriptor,
-                    ) == crate::tools::concurrency::ConcurrencyClaim::Shared)
-                {
-                    let explanation = rule.reason(name);
-                    if let Some(ref l) = ledger {
-                        l.commit_refusal(&effective_input, &explanation).await;
-                    }
-                    return Err(ToolError::PermissionDenied {
-                        name: name.into(),
-                        reason: format!("{explanation}{}", rule.deny_advice()),
-                    });
-                }
+                self.refuse_denied_call(
+                    name,
+                    &effective_input,
+                    captured.as_ref(),
+                    descriptor,
+                    ledger.as_ref(),
+                    rule,
+                )
+                .await?;
             }
             approved_by_operator_gate = self.check_operator_gate(name, &effective_input).await?;
             // A hook's prior question does not authorize rewritten arguments against
@@ -846,6 +799,76 @@ impl ScopedToolService {
         }
 
         result
+    }
+
+    /// The per-CALL half of the deny gate's read-only verdicts — shared by the
+    /// original argument check and the post-rewrite re-check, which must never
+    /// diverge: a call the first check admits must be admitted by the re-check
+    /// on the effective bytes, and a refusal either check emits must name the
+    /// same rule and reach the same ledger.
+    ///
+    /// `ExecTier::Plan::rule_for` only sees a tool's NAME-level facts, so a
+    /// read/write multiplexer — `file_ops` above all, whose
+    /// `list`/`search`/`stats` arms are the repo-exploration a plan is built
+    /// out of — comes back denied wholesale. Here we hold the arguments, so
+    /// we can ask the ONE per-call read classifier this repo already
+    /// maintains: `LoopTool::concurrency_claim(input) == Shared`, which is
+    /// `Exclusive { Global }` by default (fail-closed for anything that
+    /// declares nothing) and is resolved per-argument by the same adapter
+    /// that resolves it for parallel dispatch.
+    ///
+    /// Keyed on the PROPERTY the re-admission needs — "the only thing denying
+    /// this is a Plan-shaped, name-level verdict" — not on which rule happens
+    /// to be reporting it. Two rules produce that verdict: `PlanMode` and
+    /// `SideQuestion`, the latter because a side question composes to `Plan`
+    /// and then reports itself (`deny_rule` checks it first, correctly: the
+    /// repairs `PlanMode` and `PolicyDeny` name — approve the plan, edit the
+    /// policy — genuinely do not apply to a side question). Reading the rule
+    /// NAME instead made a side question miss this arm entirely, so
+    /// `file_ops list/search/stats`, `doctor`, `note_schema read`,
+    /// `a2a_agents list` and `inbox_read peek` — the exploration a side
+    /// question is mostly made of — were refused by a sentence that says "it
+    /// can read and search", with "do not retry" attached.
+    /// `GateRule::SideQuestion::reason` is a promise the code has to keep, and
+    /// this is where it keeps it.
+    ///
+    /// `denied_only_by_plan` stays in the condition and does the scoping: an
+    /// operator's `deny` entry, a `default = "deny"` install, every other
+    /// tier's verdict, and the side-question floor on `scratchpad`/`subagent`
+    /// (rung -1 of `permission_for`, which `denied_only_by_plan` does not
+    /// consult, so it reports `false` for those two) all stay refused. For
+    /// the `PlanMode` arm it is true by construction — that is how
+    /// `deny_rule` produced the variant — so this is a no-op there and a real
+    /// bound here.
+    ///
+    /// Returns `Ok(())` when the call is re-admitted as read-only (it falls
+    /// through to the rest of the pipeline); otherwise commits the refusal to
+    /// the ledger and returns the `PermissionDenied` naming the entry that
+    /// denied it, so the model relays something the user can act on.
+    async fn refuse_denied_call(
+        &self,
+        name: &str,
+        input: &Value,
+        captured: Option<&RegistryEntry>,
+        descriptor: Option<&ToolCapabilityDescriptor>,
+        ledger: Option<&super::ledger::LedgerIntent>,
+        rule: GateRule<'_>,
+    ) -> Result<(), ToolError> {
+        let read_only = matches!(rule, GateRule::PlanMode | GateRule::SideQuestion)
+            && self.denied_only_by_plan_for_descriptor(name, descriptor)
+            && self.dispatch_concurrency_claim(name, input, captured, descriptor)
+                == crate::tools::concurrency::ConcurrencyClaim::Shared;
+        if read_only {
+            return Ok(());
+        }
+        let explanation = rule.reason(name);
+        if let Some(l) = ledger {
+            l.commit_refusal(input, &explanation).await;
+        }
+        Err(ToolError::PermissionDenied {
+            name: name.into(),
+            reason: format!("{explanation}{}", rule.deny_advice()),
+        })
     }
 
     /// The captured handler decides argument-level Plan/side-question admission.
