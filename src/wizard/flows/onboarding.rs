@@ -56,9 +56,7 @@ impl OnboardingFlow {
     /// Get model options for a provider
     fn model_options(provider: &str) -> Vec<WizardOption> {
         match provider {
-            // Date-less aliases: the old dated picks here included ids that
-            // were already retired (claude-3-5-haiku) or days from retirement
-            // (claude-sonnet-4-20250514, gone 2026-06-15).
+            // Date-less aliases so the picks do not expire.
             "anthropic" => vec![
                 WizardOption::new(json!("claude-opus-4-8"), "Claude Opus 4.8")
                     .with_hint("Most capable, best for complex tasks"),
@@ -277,9 +275,8 @@ impl OnboardingFlow {
         prompter: &RpcPrompter,
         data: &OnboardingData,
     ) -> Result<(), WizardSessionError> {
-        // Re-prompt on "no" so a user who hits the wrong button doesn't lose
-        // every answer collected so far to a single misclick — the old code
-        // returned `WizardSessionError::Cancelled` and the flow aborted.
+        // Re-prompt on "no" so a wrong button press does not discard every
+        // answer collected so far.
         let mut confirmed = false;
         while !confirmed {
             let review_text = Self::render_review(data);
