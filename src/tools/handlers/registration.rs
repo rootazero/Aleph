@@ -165,6 +165,7 @@ pub async fn register_mcp_tools(
     if let Some(disp) = tool_catalog {
         if !registered.is_empty() {
             let catalog = Arc::clone(disp);
+            let registry = registry.clone();
             scope.track_disposer(
                 format!("catalog:{server_id}"),
                 async_disposer(move || async move {
