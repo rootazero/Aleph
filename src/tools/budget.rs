@@ -1,8 +1,9 @@
 //! Per-tool wall-clock execution budgets.
 //!
 //! Static-classification table for built-in tools, mirroring the
-//! `IDEMPOTENT_BUILTIN_TOOLS` pattern in `retry.rs`, plus the resolution
-//! chain every `describe()` site uses: the tool's own declared budget
+//! `READ_ONLY_TOOLS` allowlist that `retry::is_idempotent_builtin_name`
+//! consults, plus the resolution chain every `describe()` site uses: the
+//! tool's own declared budget
 //! ([`crate::tools::runtime::LoopTool::max_duration_ms`]) → this table →
 //! [`DEFAULT_TOOL_BUDGET_MS`].
 //!
