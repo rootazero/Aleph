@@ -503,30 +503,22 @@ impl WorkflowDef {
                         step.id
                     )));
                 };
-                if let Some(dep_vec) = dependents.get_mut(j) {
-                    dep_vec.push(i);
-                }
-                if let Some(deg) = indegree.get_mut(i) {
-                    *deg += 1;
-                }
+                dependents[j].push(i);
+                indegree[i] += 1;
             }
         }
 
         // Seed with all roots, preserving list order for deterministic output.
         let mut queue: VecDeque<usize> = (0..self.steps.len())
-            .filter(|&i| indegree.get(i).copied() == Some(0))
+            .filter(|&i| indegree[i] == 0)
             .collect();
         let mut order = Vec::with_capacity(self.steps.len());
         while let Some(i) = queue.pop_front() {
             order.push(i);
-            if let Some(children) = dependents.get(i) {
-                for &child in children {
-                    if let Some(deg) = indegree.get_mut(child) {
-                        *deg = deg.saturating_sub(1);
-                        if *deg == 0 {
-                            queue.push_back(child);
-                        }
-                    }
+            for &child in &dependents[i] {
+                indegree[child] = indegree[child].saturating_sub(1);
+                if indegree[child] == 0 {
+                    queue.push_back(child);
                 }
             }
         }
