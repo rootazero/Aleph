@@ -1,0 +1,83 @@
+{
+  "schema_version": 1,
+  "full_suite": {
+    "status": "UNRESOLVED_TIMEOUT",
+    "command": "cargo test -p alephcore --lib --offline --locked --jobs 1",
+    "target_dir": "/tmp/aleph-phase8-main-lib-20261115-2210",
+    "timeout_seconds": 600,
+    "controlled_exit_code": -15,
+    "elapsed_seconds": 600.01083111763,
+    "log": "/tmp/aleph-phase9-handoff-full-lib.log",
+    "log_lines": 7226,
+    "failed_or_panic_markers": 0,
+    "test_result_summaries": 0,
+    "over_60s_notices": 33,
+    "distinct_over_60s_tests": 33,
+    "long_running_tests": [
+      "extension::claude_cache_tests::a_claude_code_update_moves_the_hook_root_and_the_approval_stays_behind",
+      "extension::claude_cache_tests::an_unreadable_index_forgets_nothing",
+      "extension::claude_cache_tests::an_unreadable_index_keeps_the_usage_history",
+      "extension::claude_cache_tests::one_id_in_aleph_home_and_the_claude_cache_is_one_row_the_aleph_copy",
+      "extension::claude_cache_tests::read_only_discovery_names_a_claude_cache_id_without_loading_it",
+      "extension::claude_cache_tests::the_model_may_disable_but_not_enable_a_claude_cache_row",
+      "extension::claude_cache_tests::the_rpc_face_enables_and_disables_a_claude_cache_row",
+      "extension::claude_cache_tests::two_broken_claude_code_plugins_at_one_version_are_two_error_rows",
+      "extension::context_adapter::tests::lifecycle_mount_dynamic_resolver_grant_revoke_and_replacement",
+      "extension::hooks::consent::tests::only_a_spliced_text_beside_its_literal_sibling_is_superseded",
+      "extension::hooks::executor::tests::a_plugin_hooks_data_directory_reaches_it_through_the_environment",
+      "extension::hooks::output_budget::tests::oversized_context_is_bounded_and_keeps_head_and_tail",
+      "extension::hooks::output_budget::tests::oversized_context_is_recoverable_from_the_spill_file",
+      "extension::hooks::output_budget::tests::preview_is_char_boundary_safe_for_multibyte_text",
+      "extension::hooks::registry::tests::plugin_collection_uses_active_owning_row_identity_despite_builtin_spelling",
+      "extension::hooks::registry::tests::registered_loader_captures_each_real_file_and_preserves_public_configs",
+      "extension::mcp_plugin_tests::an_absolute_command_outside_the_root_is_counted_and_spawned",
+      "extension::mcp_plugin_tests::an_explicit_non_mcp_runtime_counts_no_servers_and_says_why",
+      "extension::mcp_plugin_tests::an_inline_mcp_servers_object_is_counted_and_spawned",
+      "extension::service_ops::tests::manual_service_control_serializes_with_mount_lifecycle",
+      "extension::service_ops::tests::manual_stop_does_not_target_replacement_mount",
+      "extension::tests::projection_publishes_skill_dirs_with_their_scope_keys"
+    ],
+    "note": "33 over-60-second notices occurred across 22 distinct test names; the list is the distinct set observed before termination."
+  },
+  "focused_rerun": {
+    "status": "PARTIAL_WITH_UNRESOLVED_TIMEOUT",
+    "tests": [
+      {
+        "name": "foreign_scope_denial_records_policy_violation_without_handler_effect",
+        "status": "UNRESOLVED_TIMEOUT",
+        "timeout_seconds": 300,
+        "controlled_exit_code": -15,
+        "log": "/tmp/aleph-phase9-handoff-foreign_scope_denial_records_policy_violation_without_handler_effect.log",
+        "memory_gate": "available_bytes=6652100608 required_bytes=4294967296 ALLOW"
+      },
+      {"name": "stale_lease_after_owner_bump_fails_and_fresh_resolve_succeeds", "status": "NOT_RUN"},
+      {"name": "ui_surface_cancel_after_dispatch_joins_worker_and_clears_pending", "status": "NOT_RUN"},
+      {"name": "projection_lag_requires_snapshot_before_reconnect_resolve", "status": "NOT_RUN"},
+      {"name": "disable_closes_owned_surface_and_rejects_old_lease", "status": "NOT_RUN"},
+      {"name": "captured_terminal_rejects_provider_replacement_before_invoke", "status": "NOT_RUN"}
+    ],
+    "note": "Earlier individual 1/1 results remain in the Phase8 execution receipt. This fresh handoff rerun timed out on its first control, so remaining controls were not launched."
+  },
+  "nsh_package": {
+    "status": "PASS",
+    "command": "cargo test -p aleph-nsh-shell --offline --locked --jobs 1",
+    "target_dir": "/tmp/aleph-nsh-check-20261115-2215",
+    "memory_gate": "available_bytes=6696108032 required_bytes=4294967296 ALLOW",
+    "shell_tests": 27,
+    "compatibility_tests": 1,
+    "failed": 0
+  },
+  "static_checks": {
+    "targeted_nsh_rustfmt": "PASS",
+    "parity_python_compile": "PASS",
+    "parity_schema_json_parse": "PASS",
+    "git_diff_check": "PASS"
+  },
+  "review": {
+    "spec": "PASS_WITH_RECORDED_LIMITS",
+    "spec_run": "826d7a9d-c679-40a3-beac-764c31de9696",
+    "quality": "OK_WITH_RECORDED_LIMITS",
+    "quality_run": "933842ca-b352-4e23-990c-50137adb3541"
+  },
+  "lock_sha256": "d6f2e99dd2df5868b15f2940d74cf8845ea7c26d3ff69819ce42422180bb1cdb"
+}

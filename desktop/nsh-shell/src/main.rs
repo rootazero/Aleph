@@ -15,12 +15,15 @@ fn main() -> std::process::ExitCode {
     fn App() -> impl IntoElement {
         use components::{input_field::input_field, message_list::message_list};
         use connection::{spawn_connection_loop, ShellStatus};
-        use session::{Message, Role, SessionEvent, SessionManager};
+        use session::{Artifact, Message, Role, SessionEvent, SessionManager};
         use std::sync::Arc;
 
         let connection_status = signal(ShellStatus::Connecting);
         let session_info = signal(String::from("No session"));
         let messages = signal(Vec::<Message>::new());
+        let artifacts = signal(Vec::<Artifact>::new());
+        let queued = signal(None::<String>);
+        let active_run = signal(None::<String>);
         let draft = signal(String::new());
         let is_generating = signal(false);
         let send_error = signal(None::<String>);
@@ -37,12 +40,15 @@ fn main() -> std::process::ExitCode {
             }
         });
 
-        let session_info_for_setup = session_info;
         let connection_for_setup = connection_status;
         let manager_for_setup = active_session;
         let messages_for_setup = messages;
+        let artifacts_for_setup = artifacts;
         let stream_for_setup = streaming_id;
+        let queued_for_setup = queued;
+        let active_run_for_setup = active_run;
         let generating_for_setup = is_generating;
+        let error_for_setup = send_error;
 
         spawn(async move {
             loop {
@@ -52,83 +58,91 @@ fn main() -> std::process::ExitCode {
                     continue;
                 }
 
-                if session_info_for_setup.get() == "No session" {
-                    let mut manager = SessionManager::new();
-                    match manager.create_session().await {
-                        Ok(session_id) => {
-                            session_info_for_setup.set(format!("Session: {session_id}"));
-                            let mut events = manager.subscribe_events();
-                            manager_for_setup.set(Some(Arc::new(manager)));
+                match SessionManager::connect().await {
+                    Ok(mut manager) => {
+                        let mut events = manager.subscribe_events();
+                        manager_for_setup.set(Some(Arc::new(manager)));
 
-                            spawn(async move {
-                                while let Some(event) = events.recv().await {
-                                    match event {
-                                        SessionEvent::MessageAdded(message) => {
-                                            let current = messages_for_setup.get();
-                                            if message.role == Role::Assistant {
-                                                if let Some(stream_id) = stream_for_setup.get() {
-                                                    messages_for_setup.set(
-                                                        components::message_list::finish_stream(
-                                                            &current, &stream_id, message,
-                                                        ),
-                                                    );
-                                                    stream_for_setup.set(None);
-                                                } else {
-                                                    messages_for_setup
-                                                        .set([current, vec![message]].concat());
-                                                }
+                        spawn(async move {
+                            while let Some(event) = events.recv().await {
+                                match event {
+                                    SessionEvent::SessionReady { session_id } => {
+                                        session_info.set(format!("Session: {session_id}"));
+                                    }
+                                    SessionEvent::Queued { run_id, ahead } => {
+                                        queued_for_setup.set(Some(format!(
+                                            "Queued run {run_id} ({ahead} ahead)"
+                                        )));
+                                    }
+                                    SessionEvent::RunStarted { run_id } => {
+                                        queued_for_setup.set(None);
+                                        active_run_for_setup.set(Some(run_id));
+                                    }
+                                    SessionEvent::HistoryLoaded(history) => {
+                                        stream_for_setup.set(None);
+                                        messages_for_setup.set(history);
+                                    }
+                                    SessionEvent::ArtifactsLoaded(items) => {
+                                        artifacts_for_setup.set(items);
+                                    }
+                                    SessionEvent::MessageAdded(message) => {
+                                        let current = messages_for_setup.get();
+                                        if message.role == Role::Assistant {
+                                            if let Some(stream_id) = stream_for_setup.get() {
+                                                messages_for_setup.set(
+                                                    components::message_list::finish_stream(
+                                                        &current, &stream_id, message,
+                                                    ),
+                                                );
+                                                stream_for_setup.set(None);
                                             } else {
                                                 messages_for_setup
                                                     .set([current, vec![message]].concat());
                                             }
-                                        }
-                                        SessionEvent::MessageDelta { delta } => {
-                                            let stream_id =
-                                                stream_for_setup.get().unwrap_or_else(|| {
-                                                    let id = format!(
-                                                        "streaming-{}",
-                                                        uuid::Uuid::new_v4()
-                                                    );
-                                                    stream_for_setup.set(Some(id.clone()));
-                                                    id
-                                                });
-                                            let current = messages_for_setup.get();
-                                            messages_for_setup.set(
-                                                components::message_list::append_stream_delta(
-                                                    &current,
-                                                    &stream_id,
-                                                    &chrono::Utc::now().to_rfc3339(),
-                                                    &delta,
-                                                ),
-                                            );
-                                        }
-                                        SessionEvent::GenerationStarted => {
-                                            generating_for_setup.set(true);
-                                            let stream_id =
-                                                format!("streaming-{}", uuid::Uuid::new_v4());
-                                            stream_for_setup.set(Some(stream_id.clone()));
-                                            let current = messages_for_setup.get();
-                                            messages_for_setup.set(
-                                                components::message_list::append_stream_delta(
-                                                    &current,
-                                                    &stream_id,
-                                                    &chrono::Utc::now().to_rfc3339(),
-                                                    "",
-                                                ),
-                                            );
-                                        }
-                                        SessionEvent::MessageComplete => {}
-                                        SessionEvent::GenerationComplete => {
-                                            generating_for_setup.set(false);
+                                        } else {
+                                            messages_for_setup
+                                                .set([current, vec![message]].concat());
                                         }
                                     }
+                                    SessionEvent::MessageDelta { delta } => {
+                                        let stream_id = stream_for_setup
+                                            .get()
+                                            .unwrap_or_else(|| "streaming-active-run".to_string());
+                                        stream_for_setup.set(Some(stream_id.clone()));
+                                        let current = messages_for_setup.get();
+                                        messages_for_setup.set(
+                                            components::message_list::append_stream_delta(
+                                                &current, &stream_id, "", &delta,
+                                            ),
+                                        );
+                                    }
+                                    SessionEvent::GenerationStarted => {
+                                        generating_for_setup.set(true);
+                                        let stream_id = "streaming-active-run".to_string();
+                                        stream_for_setup.set(Some(stream_id.clone()));
+                                        let current = messages_for_setup.get();
+                                        messages_for_setup.set(
+                                            components::message_list::append_stream_delta(
+                                                &current, &stream_id, "", "",
+                                            ),
+                                        );
+                                    }
+                                    SessionEvent::MessageComplete => {}
+                                    SessionEvent::GenerationComplete => {
+                                        generating_for_setup.set(false);
+                                        active_run_for_setup.set(None);
+                                    }
+                                    SessionEvent::Error(error) => {
+                                        error_for_setup.set(Some(error));
+                                        generating_for_setup.set(false);
+                                    }
                                 }
-                                generating_for_setup.set(false);
-                            });
-                        }
-                        Err(error) => {
-                            session_info_for_setup.set(format!("Session error: {error}"));
-                        }
+                            }
+                            generating_for_setup.set(false);
+                        });
+                    }
+                    Err(error) => {
+                        error_for_setup.set(Some(error));
                     }
                 }
 
@@ -173,8 +187,13 @@ fn main() -> std::process::ExitCode {
                         server_version,
                         session_count,
                     } => format!(
-                        "Connected: server v{server_version}, {session_count} sessions\n{}",
-                        session_info.get()
+                        "Connected: server v{server_version}, {session_count} sessions\n{}\n{}\n{}",
+                        session_info.get(),
+                        queued.get().unwrap_or_else(|| "Queue: idle".to_string()),
+                        active_run
+                            .get()
+                            .map(|run_id| format!("Run: {run_id}"))
+                            .unwrap_or_else(|| "Run: idle".to_string())
                     ),
                     ShellStatus::Error(error) => format!("Connection error: {error}"),
                 };
@@ -184,6 +203,18 @@ fn main() -> std::process::ExitCode {
                 }
             }))
             .child(message_list(messages))
+            .child(text(move || {
+                let items = artifacts
+                    .get()
+                    .into_iter()
+                    .map(|item| format!("{} ({} bytes)", item.filename, item.size))
+                    .collect::<Vec<_>>();
+                if items.is_empty() {
+                    "Artifacts: none".to_string()
+                } else {
+                    format!("Artifacts:\n{}", items.join("\n"))
+                }
+            }))
             .child(input_field(
                 draft,
                 move |value| draft_for_change.set(value),

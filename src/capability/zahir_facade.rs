@@ -2420,20 +2420,17 @@ mod tests {
     }
 
     #[test]
-    fn owner_bump_rejects_old_lease_without_provider_restart() {
-        let (host, registry, tree) = host_parts(&["a"]);
-        let provider = host.provider();
+    fn stale_lease_after_owner_bump_fails_and_fresh_resolve_succeeds() {
+        let (host, _registry, tree) = host_parts(&["a"]);
         let id = tool_id("a");
         let lease = host.resolve(ref_for(&id)).expect("resolve succeeds");
-        let provider_generation = provider.generation();
-        let source_revision = registry.revision();
 
         tree.bump(LifetimeScope::Runtime)
             .expect("runtime bump succeeds");
 
-        assert_eq!(provider.generation(), provider_generation);
-        assert_eq!(registry.revision(), source_revision);
         assert_eq!(host.validate_lease(&lease), Err(ResolveError::StaleOwner));
+        let fresh = host.resolve(ref_for(&id)).expect("fresh resolve succeeds after owner bump");
+        assert_eq!(fresh.owner_generation, OwnerGeneration(1));
     }
 
     #[test]
@@ -2840,7 +2837,7 @@ mod tests {
     }
 
     #[test]
-    fn subscribe_lagged_resyncs_to_fresh_snapshot() {
+    fn projection_lag_requires_snapshot_before_reconnect_resolve() {
         let (host, reg, _tree) = host_parts(&["a"]);
         // ① Receiver BEFORE snapshot, exactly like `subscribe`. The receiver is
         // never drained, so the 256-slot ring overflows during the mutation
@@ -2871,6 +2868,10 @@ mod tests {
         let latest_revision = reg.snapshot_state().revision();
         assert_eq!(stream.committed_cursor, Cursor(latest_revision));
         assert_eq!(host.describe(scope_all()).capabilities.len(), 301);
+        let fresh = host
+            .resolve(ref_for(&tool_id("a")))
+            .expect("new consumer resolves against the replacement snapshot");
+        assert_eq!(fresh.owner_generation, OwnerGeneration(0));
     }
 
     #[test]

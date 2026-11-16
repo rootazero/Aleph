@@ -1154,7 +1154,7 @@ async fn stage_a_resize_uses_real_connection_minimum_and_disconnect_growth() {
 
 #[tokio::test]
 #[serial_test::serial(pty_global_manager)]
-async fn gateway_facade_rejects_captured_session_after_provider_restart() {
+async fn captured_terminal_rejects_provider_replacement_before_invoke() {
     let (_facade, source, _tools) = terminal_tool_domain(BTreeMap::new());
     let manager = pty::manager();
     manager

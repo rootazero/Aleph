@@ -57,6 +57,8 @@ fn display_message(message: &Message) -> String {
     let role = match message.role {
         Role::User => "You",
         Role::Assistant => "Assistant",
+        Role::System => "System",
+        Role::Tool => "Tool",
     };
 
     if message.message_id.starts_with("streaming-") && message.content.is_empty() {

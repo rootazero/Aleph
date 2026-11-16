@@ -163,8 +163,9 @@ async fn run_authenticated_cycle(
                     if event.is_none() {
                         break;
                     }
-                    // Phase 2 only keeps the event channel alive. Phase 3 will
-                    // project events into the NSH session and activity views.
+                    // The dedicated SessionManager owns the canonical session
+                    // projection; this connection loop only keeps its transport
+                    // heartbeat alive and reports lifecycle status.
                 }
                 () = tokio::time::sleep(CONNECTION_POLL_INTERVAL) => {
                     if !client.is_connected() {
@@ -267,8 +268,12 @@ mod tests {
             // Serve connect successfully
             let msg = socket.next().await.unwrap().unwrap();
             let req: Value = serde_json::from_str(msg.to_text().unwrap()).unwrap();
-            let response = json!({"jsonrpc": "2.0", "id": req["id"], "result": {"role": "operator"}});
-            socket.send(Message::Text(response.to_string().into())).await.unwrap();
+            let response =
+                json!({"jsonrpc": "2.0", "id": req["id"], "result": {"role": "operator"}});
+            socket
+                .send(Message::Text(response.to_string().into()))
+                .await
+                .unwrap();
 
             // Inject handshake error
             let msg = socket.next().await.unwrap().unwrap();
@@ -278,7 +283,10 @@ mod tests {
                 "id": req["id"],
                 "error": {"code": -32000, "message": "auth required"}
             });
-            socket.send(Message::Text(error_response.to_string().into())).await.unwrap();
+            socket
+                .send(Message::Text(error_response.to_string().into()))
+                .await
+                .unwrap();
 
             // Wait for client close handshake
             tokio::time::sleep(Duration::from_millis(100)).await;
@@ -289,7 +297,10 @@ mod tests {
         let _ = run_authenticated_cycle(&status_tx, &url).await;
 
         server.await.unwrap();
-        assert!(*closed.lock().await, "client did not close connection after error");
+        assert!(
+            *closed.lock().await,
+            "client did not close connection after error"
+        );
     }
 
     #[tokio::test]
@@ -319,7 +330,12 @@ mod tests {
                 let mut socket = accept_async(stream).await.unwrap();
 
                 // Serve full handshake
-                for method in ["connect", "system.hello", "events.subscribe", "sessions.list"] {
+                for method in [
+                    "connect",
+                    "system.hello",
+                    "events.subscribe",
+                    "sessions.list",
+                ] {
                     let msg = timeout(Duration::from_secs(1), socket.next())
                         .await
                         .unwrap()
@@ -340,7 +356,10 @@ mod tests {
                         _ => unreachable!(),
                     };
                     let response = json!({"jsonrpc": "2.0", "id": req["id"], "result": result});
-                    socket.send(Message::Text(response.to_string().into())).await.unwrap();
+                    socket
+                        .send(Message::Text(response.to_string().into()))
+                        .await
+                        .unwrap();
                 }
 
                 // Close to trigger reconnect
@@ -364,7 +383,10 @@ mod tests {
         server.abort();
         status_monitor.abort();
 
-        assert!(result.is_ok(), "worker should complete 12 cycles without hitting failure limit");
+        assert!(
+            result.is_ok(),
+            "worker should complete 12 cycles without hitting failure limit"
+        );
         result.unwrap().unwrap();
 
         let final_count = *connected_count.lock().await;
@@ -394,7 +416,12 @@ mod tests {
                 let mut socket = accept_async(stream).await.unwrap();
 
                 // Serve full handshake
-                for method in ["connect", "system.hello", "events.subscribe", "sessions.list"] {
+                for method in [
+                    "connect",
+                    "system.hello",
+                    "events.subscribe",
+                    "sessions.list",
+                ] {
                     let msg = socket.next().await.unwrap().unwrap();
                     let req: Value = serde_json::from_str(msg.to_text().unwrap()).unwrap();
                     let result = match method {
@@ -411,7 +438,10 @@ mod tests {
                         _ => unreachable!(),
                     };
                     let response = json!({"jsonrpc": "2.0", "id": req["id"], "result": result});
-                    socket.send(Message::Text(response.to_string().into())).await.unwrap();
+                    socket
+                        .send(Message::Text(response.to_string().into()))
+                        .await
+                        .unwrap();
                 }
 
                 // Close after first handshake to trigger automatic reconnect
@@ -451,7 +481,11 @@ mod tests {
         server.await.unwrap();
         std::env::remove_var("NSH_TEST_DAEMON_URL");
 
-        assert_eq!(versions_seen, vec!["v0", "v1"], "must reconnect and complete second handshake");
+        assert_eq!(
+            versions_seen,
+            vec!["v0", "v1"],
+            "must reconnect and complete second handshake"
+        );
     }
 
     #[tokio::test]
@@ -561,8 +595,12 @@ mod tests {
             // Serve connect successfully
             let msg = socket.next().await.unwrap().unwrap();
             let req: Value = serde_json::from_str(msg.to_text().unwrap()).unwrap();
-            let response = json!({"jsonrpc": "2.0", "id": req["id"], "result": {"role": "operator"}});
-            socket.send(Message::Text(response.to_string().into())).await.unwrap();
+            let response =
+                json!({"jsonrpc": "2.0", "id": req["id"], "result": {"role": "operator"}});
+            socket
+                .send(Message::Text(response.to_string().into()))
+                .await
+                .unwrap();
 
             // Inject handshake error
             let msg = socket.next().await.unwrap().unwrap();
@@ -572,7 +610,10 @@ mod tests {
                 "id": req["id"],
                 "error": {"code": -32000, "message": "authentication required"}
             });
-            socket.send(Message::Text(error_response.to_string().into())).await.unwrap();
+            socket
+                .send(Message::Text(error_response.to_string().into()))
+                .await
+                .unwrap();
         });
 
         let (status_tx, _status_rx) = mpsc::channel(8);
@@ -608,7 +649,10 @@ mod tests {
                     })
                 };
                 let response = json!({"jsonrpc": "2.0", "id": req["id"], "result": result});
-                socket.send(Message::Text(response.to_string().into())).await.unwrap();
+                socket
+                    .send(Message::Text(response.to_string().into()))
+                    .await
+                    .unwrap();
             }
 
             // Inject subscribe error
@@ -619,7 +663,10 @@ mod tests {
                 "id": req["id"],
                 "error": {"code": -32603, "message": "subscription limit exceeded"}
             });
-            socket.send(Message::Text(error_response.to_string().into())).await.unwrap();
+            socket
+                .send(Message::Text(error_response.to_string().into()))
+                .await
+                .unwrap();
         });
 
         let (status_tx, _status_rx) = mpsc::channel(8);
@@ -655,8 +702,12 @@ mod tests {
             // Serve connect successfully
             let msg = socket.next().await.unwrap().unwrap();
             let req: Value = serde_json::from_str(msg.to_text().unwrap()).unwrap();
-            let response = json!({"jsonrpc": "2.0", "id": req["id"], "result": {"role": "operator"}});
-            socket.send(Message::Text(response.to_string().into())).await.unwrap();
+            let response =
+                json!({"jsonrpc": "2.0", "id": req["id"], "result": {"role": "operator"}});
+            socket
+                .send(Message::Text(response.to_string().into()))
+                .await
+                .unwrap();
 
             // Return incompatible protocol version
             let msg = socket.next().await.unwrap().unwrap();
@@ -669,7 +720,10 @@ mod tests {
                 "limits": {"max_message_bytes": 8388608, "max_inflight_requests": 128}
             });
             let response = json!({"jsonrpc": "2.0", "id": req["id"], "result": result});
-            socket.send(Message::Text(response.to_string().into())).await.unwrap();
+            socket
+                .send(Message::Text(response.to_string().into()))
+                .await
+                .unwrap();
         });
 
         let (status_tx, _status_rx) = mpsc::channel(8);
@@ -708,7 +762,10 @@ mod tests {
                     _ => unreachable!(),
                 };
                 let response = json!({"jsonrpc": "2.0", "id": req["id"], "result": result});
-                socket.send(Message::Text(response.to_string().into())).await.unwrap();
+                socket
+                    .send(Message::Text(response.to_string().into()))
+                    .await
+                    .unwrap();
             }
 
             // Inject sessions.list error
@@ -719,7 +776,10 @@ mod tests {
                 "id": req["id"],
                 "error": {"code": -32603, "message": "internal database error"}
             });
-            socket.send(Message::Text(error_response.to_string().into())).await.unwrap();
+            socket
+                .send(Message::Text(error_response.to_string().into()))
+                .await
+                .unwrap();
         });
 
         let (status_tx, _status_rx) = mpsc::channel(8);
@@ -757,7 +817,10 @@ mod tests {
                     _ => unreachable!(),
                 };
                 let response = json!({"jsonrpc": "2.0", "id": req["id"], "result": result});
-                socket.send(Message::Text(response.to_string().into())).await.unwrap();
+                socket
+                    .send(Message::Text(response.to_string().into()))
+                    .await
+                    .unwrap();
             }
 
             // Close the socket to simulate event stream closure
