@@ -234,12 +234,14 @@ impl MarkdownCliTool {
         // Pass environment variables and extra flags (filtered through allowlist)
         self.push_docker_runtime_args(&mut docker_args);
 
-        docker_args.push(container_image.clone());
-        docker_args.push(bin.clone());
-        docker_args.extend_from_slice(cli_args);
-
+        // The image, the binary and the model's arguments are the payload, not
+        // flags: append them to the command directly instead of copying them
+        // into the flag vector (which cloned every argument for nothing).
         let mut cmd = Command::new("docker");
-        cmd.args(&docker_args);
+        cmd.args(&docker_args)
+            .arg(&container_image)
+            .arg(bin)
+            .args(cli_args);
 
         let output = self.run_command(cmd, "Docker skill").await?;
 
