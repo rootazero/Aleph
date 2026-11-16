@@ -8,6 +8,7 @@
 //! filtering. See CLAUDE.md R10 (the Progressive Disclosure exception).
 
 use std::collections::BTreeSet;
+use std::fmt::Write as _;
 
 use serde_json::json;
 
@@ -122,15 +123,19 @@ impl ToolDefinitionRewriter for ProgressiveDisclosureRewriter {
         def.input_schema = json!({ "type": "object", "additionalProperties": true });
 
         if self.truncate_desc && !preserves_full_description(&def.name) {
-            if let Some(head) = first_sentence_head(&def.description) {
-                def.description = head.to_string();
+            // The head is a prefix of the description, so the text can be cut
+            // where it stands instead of being re-allocated.
+            let head_len = first_sentence_head(&def.description).map(str::len);
+            if let Some(head_len) = head_len {
+                def.description.truncate(head_len);
             }
             // else: no clean boundary → keep full description (fail-safe, never garbled)
         }
-        def.description.push_str(&format!(
+        let _ = write!(
+            def.description,
             " [Parameters collapsed — call get_tool_schema(tool_name=\"{}\") to load the full input schema before calling this tool.]",
             def.name
-        ));
+        );
     }
 }
 
