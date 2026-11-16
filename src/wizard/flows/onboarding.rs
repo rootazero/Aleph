@@ -299,10 +299,9 @@ impl OnboardingFlow {
              Messaging Apps: {}",
             data.primary_provider.as_deref().unwrap_or("Not set"),
             data.primary_model.as_deref().unwrap_or("Not set"),
-            if data.secondary_provider.is_some() {
+            if let Some(secondary_provider) = &data.secondary_provider {
                 format!(
-                    "{} / {}",
-                    data.secondary_provider.as_deref().unwrap_or(""),
+                    "{secondary_provider} / {}",
                     data.secondary_model.as_deref().unwrap_or("")
                 )
             } else {
