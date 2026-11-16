@@ -53,7 +53,9 @@ pub(crate) fn collect_consts(src: &str) -> ConstTable {
             while i < n && chars.get(i).copied().is_some_and(is_ident_char) {
                 i += 1;
             }
-            if chars.get(start..i).map(|s| s.iter().collect::<String>()).as_deref() == Some("const") {
+            // The identifier is exactly `const` — `matches_keyword_at` must end
+            // where the identifier ends, so `constants` does not match.
+            if matches_keyword_at(&chars, start, "const") == Some(i) {
                 if let Some((name, val)) = read_const_decl(&chars, i) {
                     table.entry(name).or_insert(val);
                 }
@@ -231,16 +233,24 @@ fn parse_bool(chars: &[char], start: usize) -> Option<(Value, usize)> {
     parse_keyword(chars, start, "false").map(|next| (Value::Bool(false), next))
 }
 
+/// Match the literal keyword `kw` starting exactly at `chars[start]`, returning
+/// the index just past it. Comparing chars in place keeps keyword detection
+/// allocation-free — the identifier being tested is already a char slice.
+fn matches_keyword_at(chars: &[char], start: usize, kw: &str) -> Option<usize> {
+    let mut i = start;
+    for expected in kw.chars() {
+        if chars.get(i) != Some(&expected) {
+            return None;
+        }
+        i += 1;
+    }
+    Some(i)
+}
+
 /// Match the exact keyword `kw` at `start`, requiring it not run into a longer
 /// identifier (`trueish` must not match `true`). Returns the index past it.
 fn parse_keyword(chars: &[char], start: usize, kw: &str) -> Option<usize> {
-    let kw: Vec<char> = kw.chars().collect();
-    for (k, &ch) in kw.iter().enumerate() {
-        if chars.get(start + k) != Some(&ch) {
-            return None;
-        }
-    }
-    let after = start + kw.len();
+    let after = matches_keyword_at(chars, start, kw)?;
     match chars.get(after) {
         Some(c) if is_ident_char(*c) => None,
         _ => Some(after),
