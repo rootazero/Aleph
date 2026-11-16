@@ -143,9 +143,7 @@ pub async fn register_mcp_tools(
                         Arc::new(McpServerProbe::new(Arc::clone(&client), server_id)),
                     );
                     if let Some(builder) = catalog_builder {
-                        let catalog_id = disp
-                            .register_with_conflict_resolution(builder)
-                            .await;
+                        let catalog_id = disp.register_with_conflict_resolution(builder).await;
                         catalog_entries.push((qualified.clone(), revision, catalog_id));
                     }
                 }
@@ -168,26 +166,20 @@ pub async fn register_mcp_tools(
         if !registered.is_empty() {
             let catalog = Arc::clone(disp);
             let registry = registry.clone();
-            let catalog_entries = catalog_entries.clone();
             scope.track_disposer(
                 format!("catalog:{server_id}"),
-                async_disposer(move || {
-                    let catalog = Arc::clone(&catalog);
-                    let registry = registry.clone();
-                    let catalog_entries = catalog_entries.clone();
-                    async move {
-                        for (name, revision, catalog_id) in catalog_entries {
-                            let still_current = registry
-                                .descriptor(&name)
-                                .is_some_and(|descriptor| descriptor.revision == revision);
-                            if !still_current {
-                                continue;
-                            }
-                            let _ = catalog.health().unregister_probe(&name);
-                            let _ = catalog.remove_by_id(&catalog_id).await;
+                async_disposer(move || async move {
+                    for (name, revision, catalog_id) in catalog_entries {
+                        let still_current = registry
+                            .descriptor(&name)
+                            .is_some_and(|descriptor| descriptor.revision == revision);
+                        if !still_current {
+                            continue;
                         }
-                        Ok(())
+                        let _ = catalog.health().unregister_probe(&name);
+                        let _ = catalog.remove_by_id(&catalog_id).await;
                     }
+                    Ok(())
                 }),
             );
         }
