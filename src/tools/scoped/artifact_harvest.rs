@@ -104,7 +104,9 @@ use crate::gateway::channel::Attachment;
 // The ping's frame shape is owned by the gateway (one source, two producers —
 // see that module for why the bus resolution is allowed to differ).
 use crate::gateway::event_emitter::artifact_ping::publish_artifact_ping;
-use crate::gateway::media::{is_remote_fetch_url, MediaItem, PendingMedia, MAX_MEDIA_PER_RUN};
+use crate::gateway::media::{
+    is_data_url, is_remote_fetch_url, MediaItem, PendingMedia, MAX_MEDIA_PER_RUN,
+};
 use crate::media::cache::MediaCache;
 use crate::tools::turn_context::TurnContext;
 
@@ -582,7 +584,8 @@ fn filename_for(item: &MediaItem, mime_type: &str) -> String {
             return name.to_string();
         }
     }
-    if !item.url.to_ascii_lowercase().starts_with("data:") {
+    // A `data:` URL carries no path segment to borrow a name from.
+    if !is_data_url(&item.url) {
         let path = item.url.split(['?', '#']).next().unwrap_or(&item.url);
         if let Some(segment) = path.rsplit('/').next() {
             let segment = segment.trim();
