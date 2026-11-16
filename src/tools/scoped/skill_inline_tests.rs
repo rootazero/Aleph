@@ -234,7 +234,6 @@ fn only_entry(consent: &ShellHookConsent) -> ConsentEntry {
 /// data, the command waits for consent — filed under the plugin, the skill
 /// and the text as written — and once approved it shows the file, with the
 /// plugin's root and the run's directory in its environment.
-#[cfg(unix)]
 #[tokio::test]
 async fn a_plugin_skill_dir_is_data_to_its_inline_commands_and_they_wait_for_consent() {
     let f = Fixture::plugin(
@@ -285,7 +284,6 @@ async fn a_plugin_skill_dir_is_data_to_its_inline_commands_and_they_wait_for_con
 /// spliced `${ALEPH_SKILL_DIR}` runs. Whatever was filed is approved, as an
 /// operator reviewing it would, before anything is asserted: a splice would
 /// then run `touch M`.
-#[cfg(unix)]
 #[tokio::test]
 async fn a_user_skill_waits_for_consent_and_its_dir_is_data() {
     let f = Fixture::new("user-skills", "s $(touch M)", &[READ_X]);
@@ -313,7 +311,6 @@ async fn a_user_skill_waits_for_consent_and_its_dir_is_data() {
 /// Consent is not enough: a guest's call, and a call whose policy denies
 /// `bash`, run no approved command — each gets the placeholder naming why —
 /// while the operator's call runs it (the approval is live).
-#[cfg(unix)]
 #[tokio::test]
 async fn an_approved_command_runs_only_for_an_operator_whose_turn_allows_bash() {
     const TOUCH: &str = r#"touch "$ALEPH_SKILL_DIR/ran""#;
@@ -344,7 +341,6 @@ async fn an_approved_command_runs_only_for_an_operator_whose_turn_allows_bash() 
 
 /// A call no tool gate judged — `skill_read` called directly, as the
 /// `tools.invoke` RPC does — runs nothing, approved or not.
-#[cfg(unix)]
 #[tokio::test]
 async fn a_call_outside_the_chokepoint_runs_no_inline_command() {
     const TOUCH: &str = r#"touch "$ALEPH_SKILL_DIR/ran""#;
