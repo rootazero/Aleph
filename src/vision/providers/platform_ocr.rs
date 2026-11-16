@@ -9,7 +9,27 @@ use crate::sync_primitives::Arc;
 
 use crate::vision::error::VisionError;
 use crate::vision::provider::VisionProvider;
-use crate::vision::types::{ImageFormat, ImageInput, OcrResult, VisionCapabilities, VisionResult};
+use crate::vision::types::{
+    ImageFormat, ImageInput, OcrResult, VisionCapabilities, VisionResult, MAX_IMAGE_FILE_SIZE,
+};
+
+/// PNG signature bytes (`89 50 4E 47 0D 0A 1A 0A`).
+///
+/// The platform OCR backend only accepts PNG, so every input path checks the
+/// payload against this signature before handing it over — a mislabeled
+/// JPEG-as-PNG payload would otherwise be recognised as the wrong format
+/// (or silently produce wrong text).
+const PNG_MAGIC: &[u8] = &[0x89, b'P', b'N', b'G', b'\r', b'\n', 0x1a, b'\n'];
+
+/// The image size cap expressed in whole megabytes, for error messages.
+const MAX_IMAGE_FILE_SIZE_MB: u64 = MAX_IMAGE_FILE_SIZE / (1024 * 1024);
+
+/// Error for an image file whose size exceeds [`MAX_IMAGE_FILE_SIZE`].
+fn image_file_too_large() -> VisionError {
+    VisionError::ImageError(format!(
+        "image file exceeds maximum size of {MAX_IMAGE_FILE_SIZE_MB} MB"
+    ))
+}
 
 /// Vision provider backed by the platform-native OCR engine.
 ///
@@ -100,18 +120,16 @@ impl PlatformOcrProvider {
                 if data.len() > crate::vision::types::MAX_BASE64_ENCODED_SIZE {
                     return Err(VisionError::ImageError(format!(
                         "base64 image exceeds maximum encoded size of {} KB \
-                         (decoded limit: {} MB)",
-                        crate::vision::types::MAX_BASE64_ENCODED_SIZE / 1024,
-                        crate::vision::types::MAX_IMAGE_FILE_SIZE / (1024 * 1024)
+                         (decoded limit: {MAX_IMAGE_FILE_SIZE_MB} MB)",
+                        crate::vision::types::MAX_BASE64_ENCODED_SIZE / 1024
                     )));
                 }
                 let decoded = base64::engine::general_purpose::STANDARD
                     .decode(data)
                     .map_err(|e| VisionError::ImageError(format!("Invalid base64 image: {e}")))?;
-                if decoded.len() as u64 > crate::vision::types::MAX_IMAGE_FILE_SIZE {
+                if decoded.len() as u64 > MAX_IMAGE_FILE_SIZE {
                     return Err(VisionError::ImageError(format!(
-                        "decoded image exceeds maximum size of {} MB",
-                        crate::vision::types::MAX_IMAGE_FILE_SIZE / (1024 * 1024)
+                        "decoded image exceeds maximum size of {MAX_IMAGE_FILE_SIZE_MB} MB"
                     )));
                 }
                 // The platform OCR backend only accepts PNG. Verify the
@@ -120,7 +138,6 @@ impl PlatformOcrProvider {
                 // detects format from magic bytes, but other platform
                 // providers will not (and silently producing wrong OCR text
                 // is worse than failing fast).
-                const PNG_MAGIC: &[u8] = &[0x89, b'P', b'N', b'G', b'\r', b'\n', 0x1a, b'\n'];
                 match format {
                     ImageFormat::Png => {
                         if !decoded.starts_with(PNG_MAGIC) {
@@ -151,11 +168,8 @@ impl PlatformOcrProvider {
                         e
                     ))
                 })?;
-                if meta.len() > crate::vision::types::MAX_IMAGE_FILE_SIZE {
-                    return Err(VisionError::ImageError(format!(
-                        "image file exceeds maximum size of {} MB",
-                        crate::vision::types::MAX_IMAGE_FILE_SIZE / (1024 * 1024)
-                    )));
+                if meta.len() > MAX_IMAGE_FILE_SIZE {
+                    return Err(image_file_too_large());
                 }
                 let bytes = tokio::fs::read(path).await.map_err(|e| {
                     VisionError::ImageError(format!(
@@ -166,11 +180,8 @@ impl PlatformOcrProvider {
                 })?;
                 // Defence-in-depth: re-check post-read in case the file was
                 // extended between `metadata` and `read` (TOCTOU).
-                if bytes.len() as u64 > crate::vision::types::MAX_IMAGE_FILE_SIZE {
-                    return Err(VisionError::ImageError(format!(
-                        "image file exceeds maximum size of {} MB",
-                        crate::vision::types::MAX_IMAGE_FILE_SIZE / (1024 * 1024)
-                    )));
+                if bytes.len() as u64 > MAX_IMAGE_FILE_SIZE {
+                    return Err(image_file_too_large());
                 }
                 // Symmetric with the Base64 arm: a mislabeled JPEG-as-PNG
                 // payload gets caught at the boundary rather than handed to
@@ -178,7 +189,6 @@ impl PlatformOcrProvider {
                 // produces wrong text instead of failing fast. The upstream
                 // Vision framework detects format from magic bytes too, so
                 // this matches its expectations rather than fighting them.
-                const PNG_MAGIC: &[u8] = &[0x89, b'P', b'N', b'G', b'\r', b'\n', 0x1a, b'\n'];
                 if !bytes.starts_with(PNG_MAGIC) {
                     return Err(VisionError::ImageError(format!(
                         "image file {} does not start with PNG magic signature; \
