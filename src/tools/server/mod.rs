@@ -54,14 +54,14 @@ impl AlephToolServer {
     /// Returns [`ToolUpdateInfo`] describing whether an existing tool was
     /// replaced.
     pub async fn replace_tool(&self, tool: impl AlephToolDyn + 'static) -> ToolUpdateInfo {
-        replace_tool_arc_impl(&self.tools, Arc::new(tool)).await
+        replace_tool_arc_impl(&self.tools, Arc::new(tool))
     }
 
     /// List all registered tools as `Arc<dyn AlephToolDyn>`.
     ///
     /// Used by the minimal agent loop factory to wrap tools via adapters.
     pub async fn list_tools_arc(&self) -> Vec<Arc<dyn AlephToolDyn>> {
-        list_tools_arc_impl(&self.tools).await
+        list_tools_arc_impl(&self.tools)
     }
 }
 
