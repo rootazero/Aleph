@@ -437,7 +437,7 @@ async fn legacy_mutations_never_misalign_registered_metadata() {
 
 #[tokio::test]
 async fn registered_loader_captures_each_real_file_and_preserves_public_configs() {
-    let _home = crate::utils::paths::IsolatedAlephHome::new();
+    let _home = crate::utils::paths::IsolatedDiscoveryHome::new();
     let dir = tempfile::tempdir().unwrap();
     let global = crate::utils::paths::get_config_dir()
         .unwrap()
@@ -508,7 +508,7 @@ async fn registered_loader_captures_each_real_file_and_preserves_public_configs(
 #[tokio::test]
 async fn plugin_collection_uses_active_owning_row_identity_despite_builtin_spelling() {
     use crate::extension::{ExtensionConfig, ExtensionManager, HookRegistration};
-    let _home = crate::utils::paths::IsolatedAlephHome::new();
+    let _home = crate::utils::paths::IsolatedDiscoveryHome::new();
     let dir = tempfile::tempdir().unwrap();
     let manager = ExtensionManager::new(ExtensionConfig {
         discovery: crate::discovery::DiscoveryConfig {

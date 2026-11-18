@@ -1,9 +1,9 @@
-use crate::api::native_credentials::{
-    attempt_current, native_expected, native_handshake, new_device_id, ticket_from_search,
-    AttemptReceipt, ConnectSendError, HandshakeRequest, NativeAuthState, NativeOutcome, TauriIpc,
-};
 use crate::api::ExecApprovalApi;
 use crate::api::TelecomApprovalApi;
+use crate::api::native_credentials::{
+    AttemptReceipt, ConnectSendError, HandshakeRequest, NativeAuthState, NativeOutcome, TauriIpc,
+    attempt_current, native_expected, native_handshake, new_device_id, ticket_from_search,
+};
 use crate::components::sidebar::SystemAlert;
 #[cfg(feature = "panel-modular")]
 use crate::panel::discovery::{PanelDiscoveryState, SnapshotUpdate};
@@ -17,13 +17,108 @@ use serde_json::Value;
 use shared_ui_logic::connection::connector::AlephConnector;
 use shared_ui_logic::connection::wasm::WasmConnector;
 use shared_ui_logic::connection::{
-    classify, stage_for_connect_error, ConnectionError, ConnectionFailure, FailureStage,
-    OriginLiveness,
+    ConnectionError, ConnectionFailure, FailureStage, OriginLiveness, classify,
+    stage_for_connect_error,
 };
 use std::collections::{BTreeSet, HashMap};
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+
+/// The socket loop and the optional QA ingress use the same receipt fence.
+fn dispatch_received_notification(
+    state: DashboardState,
+    receipt: &Option<AttemptReceipt>,
+    url: &str,
+    value: &Value,
+) -> bool {
+    if !attempt_current(receipt) || state.gateway_url.try_get_untracked().as_deref() != Some(url) {
+        return false;
+    }
+    let event = match value.get("method").and_then(Value::as_str) {
+        Some(aleph_protocol::jsonrpc::TOPIC_EVENT_METHOD) => {
+            let Some(topic) = value.pointer("/params/topic").and_then(Value::as_str) else {
+                return false;
+            };
+            GatewayEvent {
+                topic: topic.to_string(),
+                data: value
+                    .pointer("/params/data")
+                    .cloned()
+                    .unwrap_or(Value::Null),
+            }
+        }
+        Some(method) if method.starts_with("stream.") => GatewayEvent {
+            topic: method.replacen("stream.", "run.", 1),
+            data: value.get("params").cloned().unwrap_or(Value::Null),
+        },
+        _ => return false,
+    };
+    state.dispatch_event(event);
+    true
+}
+
+#[cfg(all(feature = "runtime-qa", target_arch = "wasm32"))]
+fn publish_qa_reconnecting(epoch: u64) {
+    use wasm_bindgen::JsCast;
+    let Some(window) = web_sys::window() else {
+        return;
+    };
+    let Some(performance) = window.performance() else {
+        return;
+    };
+    let Some(origin) = js_sys::Reflect::get(&window, &"__alephPanelQaTimeOrigin".into())
+        .ok()
+        .and_then(|value| value.as_f64())
+        .filter(|value| value.is_finite() && *value > 0.0)
+    else {
+        return;
+    };
+    let event = js_sys::Object::new();
+    let _ = js_sys::Reflect::set(&event, &"connection_epoch".into(), &(epoch as f64).into());
+    let _ = js_sys::Reflect::set(&event, &"browser_at_ms".into(), &performance.now().into());
+    let _ = js_sys::Reflect::set(&event, &"browser_time_origin_ms".into(), &origin.into());
+    if let Ok(callback) = js_sys::Reflect::get(&window, &"__alephPanelQaOnReconnecting".into())
+        .and_then(|value| value.dyn_into::<js_sys::Function>())
+    {
+        let _ = callback.call1(&window, &event);
+    }
+}
+
+/// QA builds retain two actual ingress receipts for a delayed-delivery probe.
+/// Default builds expose no browser injection function.
+#[cfg(all(feature = "runtime-qa", target_arch = "wasm32"))]
+fn install_qa_ingress(state: DashboardState, receipt: Option<AttemptReceipt>, url: String) {
+    use wasm_bindgen::closure::Closure;
+    std::thread_local! {
+        static INGRESS: std::cell::RefCell<Vec<Closure<dyn FnMut(String) -> bool>>> =
+            const { std::cell::RefCell::new(Vec::new()) };
+    }
+    let Some(window) = web_sys::window() else {
+        return;
+    };
+    if window.location().hostname().ok().as_deref() != Some("127.0.0.1") {
+        return;
+    }
+    let callback = Closure::<dyn FnMut(String) -> bool>::new(move |raw: String| {
+        let Ok(value) = serde_json::from_str(&raw) else {
+            return false;
+        };
+        dispatch_received_notification(state, &receipt, &url, &value)
+    });
+    INGRESS.with(|callbacks| {
+        let mut callbacks = callbacks.borrow_mut();
+        if callbacks.len() == 2 {
+            callbacks.remove(0);
+        }
+        callbacks.push(callback);
+        let functions = js_sys::Array::new();
+        callbacks.iter().for_each(|callback| {
+            functions.push(callback.as_ref());
+        });
+        let _ = js_sys::Reflect::set(&window, &"__alephPanelQaIngress".into(), &functions);
+    });
+}
 
 const WS_OPEN_TIMEOUT_MS: u32 = 8_000;
 /// A/B requests emit no gateway event; mounted operator views sample this list.
@@ -642,7 +737,9 @@ const fn approval_seed_applies(
     epoch_then == epoch_now && edits_then == edits_now
 }
 
-type PtyCoverageRpc = dyn Fn(&'static str, Value) -> futures::future::LocalBoxFuture<'static, Result<Value, String>> + Send + Sync;
+type PtyCoverageRpc = dyn Fn(&'static str, Value) -> futures::future::LocalBoxFuture<'static, Result<Value, String>>
+    + Send
+    + Sync;
 
 #[derive(Clone)]
 pub(crate) struct PtyCoverageIo {
@@ -739,7 +836,11 @@ impl PtyTopicCoverage {
         let mut status = self.effect.lock().await;
         if !self.is_current()
             || self.owners.load(Ordering::Acquire) != 0
-            || self.ledger.lock().unwrap_or_else(|e| e.into_inner()).contains(&(self.topic.into(), Vec::new()))
+            || self
+                .ledger
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .contains(&(self.topic.into(), Vec::new()))
             || *status == PtyCoverageStatus::Absent
         {
             return Ok(());
@@ -983,7 +1084,7 @@ async fn probe_origin_liveness() -> OriginLiveness {
     );
     let fetch = JsFuture::from(window.fetch_with_str(&url));
 
-    use futures::future::{select, Either};
+    use futures::future::{Either, select};
     match select(Box::pin(fetch), TimeoutFuture::new(ORIGIN_PROBE_TIMEOUT_MS)).await {
         Either::Left((Ok(_), _)) => OriginLiveness::Serving,
         Either::Left((Err(_), _)) => OriginLiveness::Silent,
@@ -1372,7 +1473,8 @@ impl DashboardState {
                 break;
             };
             let result = if is_pty_topic(pattern) && except.is_empty() {
-                self.subscribe_pty_recorded(pattern, self.pty_coverage_io()).await
+                self.subscribe_pty_recorded(pattern, self.pty_coverage_io())
+                    .await
             } else {
                 subscribe_recorded(
                     &ledger,
@@ -1394,46 +1496,79 @@ impl DashboardState {
     }
 
     fn current_connection_epoch(&self) -> Option<u64> {
-        self.is_connected.try_get_untracked().unwrap_or(false)
-            .then(|| self.connection_epoch.try_get_untracked()).flatten()
+        self.is_connected
+            .try_get_untracked()
+            .unwrap_or(false)
+            .then(|| self.connection_epoch.try_get_untracked())
+            .flatten()
     }
 
     fn pty_coverage_io(&self) -> PtyCoverageIo {
         let state = *self;
         PtyCoverageIo {
-            rpc: Arc::new(move |method, params| async move {
-                // No readiness wait here: the effect gate already selected the
-                // current epoch, and send_rpc sends before its first await.
-                state.send_rpc(method, params).await.map_err(|error| error.message)
-            }.boxed_local()),
-            schedule: Arc::new(|work| spawn_local(async move {
-                if work.run().await.is_err() {
-                    // Never expose an RPC payload or retain a disposed Owner.
-                    #[cfg(target_arch = "wasm32")]
-                    web_sys::console::warn_1(&"PTY topic release failed".into());
+            rpc: Arc::new(move |method, params| {
+                async move {
+                    // No readiness wait here: the effect gate already selected the
+                    // current epoch, and send_rpc sends before its first await.
+                    state
+                        .send_rpc(method, params)
+                        .await
+                        .map_err(|error| error.message)
                 }
-            })),
+                .boxed_local()
+            }),
+            schedule: Arc::new(|work| {
+                spawn_local(async move {
+                    if work.run().await.is_err() {
+                        // Never expose an RPC payload or retain a disposed Owner.
+                        #[cfg(target_arch = "wasm32")]
+                        web_sys::console::warn_1(&"PTY topic release failed".into());
+                    }
+                })
+            }),
         }
     }
 
-    fn pty_coverage_slot(&self, topic: &str, io: PtyCoverageIo) -> Result<Arc<PtyTopicCoverage>, String> {
+    fn pty_coverage_slot(
+        &self,
+        topic: &str,
+        io: PtyCoverageIo,
+    ) -> Result<Arc<PtyTopicCoverage>, String> {
         let topic = match topic {
             "pty.screen" => "pty.screen",
             "pty.exit" => "pty.exit",
             _ => return Err("Unsupported PTY topic".into()),
         };
         let epoch = self.current_connection_epoch().ok_or("Not connected")?;
-        let slots = self.pty_topic_coverage.try_get_value().ok_or("Panel disposed")?;
-        let ledger = self.subscribed_topics.try_get_value().ok_or("Panel disposed")?;
+        let slots = self
+            .pty_topic_coverage
+            .try_get_value()
+            .ok_or("Panel disposed")?;
+        let ledger = self
+            .subscribed_topics
+            .try_get_value()
+            .ok_or("Panel disposed")?;
         let mut slots = slots.lock().unwrap_or_else(|e| e.into_inner());
-        let slot = slots.entry(topic).or_insert_with(|| Arc::new(PtyTopicCoverage {
-            state: *self, epoch, topic, owners: AtomicUsize::new(0),
-            effect: futures::lock::Mutex::new(PtyCoverageStatus::Absent), ledger: ledger.clone(), io: io.clone(),
-        }));
+        let slot = slots.entry(topic).or_insert_with(|| {
+            Arc::new(PtyTopicCoverage {
+                state: *self,
+                epoch,
+                topic,
+                owners: AtomicUsize::new(0),
+                effect: futures::lock::Mutex::new(PtyCoverageStatus::Absent),
+                ledger: ledger.clone(),
+                io: io.clone(),
+            })
+        });
         if slot.epoch != epoch {
             *slot = Arc::new(PtyTopicCoverage {
-                state: *self, epoch, topic, owners: AtomicUsize::new(0),
-                effect: futures::lock::Mutex::new(PtyCoverageStatus::Absent), ledger, io,
+                state: *self,
+                epoch,
+                topic,
+                owners: AtomicUsize::new(0),
+                effect: futures::lock::Mutex::new(PtyCoverageStatus::Absent),
+                ledger,
+                io,
             });
         }
         Ok(slot.clone())
@@ -1449,41 +1584,78 @@ impl DashboardState {
     )]
     pub(crate) async fn acquire_pty_topic(&self, topic: &str) -> Result<PtyTopicLease, String> {
         self.await_gateway_ready().await?;
-        self.acquire_pty_topic_with_io(topic, self.pty_coverage_io()).await
+        self.acquire_pty_topic_with_io(topic, self.pty_coverage_io())
+            .await
     }
 
-    pub(crate) async fn acquire_pty_topic_with_io(&self, topic: &str, io: PtyCoverageIo) -> Result<PtyTopicLease, String> {
+    pub(crate) async fn acquire_pty_topic_with_io(
+        &self,
+        topic: &str,
+        io: PtyCoverageIo,
+    ) -> Result<PtyTopicLease, String> {
         let coverage = self.pty_coverage_slot(topic, io)?;
         coverage.owners.fetch_add(1, Ordering::AcqRel);
         let (reply, result) = oneshot::channel();
-        (coverage.io.schedule)(PtyCoverageWork::Acquire { lease: PtyTopicLease { coverage: coverage.clone() }, reply });
-        result.await.map_err(|_| "PTY coverage work stopped".to_string())?
+        (coverage.io.schedule)(PtyCoverageWork::Acquire {
+            lease: PtyTopicLease {
+                coverage: coverage.clone(),
+            },
+            reply,
+        });
+        result
+            .await
+            .map_err(|_| "PTY coverage work stopped".to_string())?
     }
 
-    async fn subscribe_pty_recorded(&self, topic: &str, io: PtyCoverageIo) -> Result<(), SubscribeError> {
-        let coverage = self.pty_coverage_slot(topic, io).map_err(|message| SubscribeError::Rpc(RpcFailure::local(message)))?;
+    async fn subscribe_pty_recorded(
+        &self,
+        topic: &str,
+        io: PtyCoverageIo,
+    ) -> Result<(), SubscribeError> {
+        let coverage = self
+            .pty_coverage_slot(topic, io)
+            .map_err(|message| SubscribeError::Rpc(RpcFailure::local(message)))?;
         let mut status = coverage.effect.lock().await;
-        if !coverage.is_current() { return Err(SubscribeError::Superseded); }
+        if !coverage.is_current() {
+            return Err(SubscribeError::Superseded);
+        }
         *status = PtyCoverageStatus::Unconfirmed;
         let result = subscribe_recorded(
-            &coverage.ledger, (topic.into(), Vec::new()), coverage.epoch,
+            &coverage.ledger,
+            (topic.into(), Vec::new()),
+            coverage.epoch,
             || self.current_connection_epoch(),
-            async { (coverage.io.rpc)("events.subscribe", topics_request(topic, &[])).await.map_err(RpcFailure::local) },
-        ).await;
-        if result.is_ok() { *status = PtyCoverageStatus::Confirmed; }
+            async {
+                (coverage.io.rpc)("events.subscribe", topics_request(topic, &[]))
+                    .await
+                    .map_err(RpcFailure::local)
+            },
+        )
+        .await;
+        if result.is_ok() {
+            *status = PtyCoverageStatus::Confirmed;
+        }
         result
     }
 
     async fn unsubscribe_pty_recorded(&self, topic: &str, io: PtyCoverageIo) -> Result<(), String> {
         let coverage = self.pty_coverage_slot(topic, io)?;
         let mut status = coverage.effect.lock().await;
-        if !coverage.is_current() { return Err("PTY connection superseded".into()); }
+        if !coverage.is_current() {
+            return Err("PTY connection superseded".into());
+        }
         if coverage.owners.load(Ordering::Acquire) == 0 {
             *status = PtyCoverageStatus::Absent;
             (coverage.io.rpc)("events.unsubscribe", topics_request(topic, &[])).await?;
-            if !coverage.is_current() { return Err("PTY connection superseded".into()); }
+            if !coverage.is_current() {
+                return Err("PTY connection superseded".into());
+            }
         }
-        coverage.ledger.lock().unwrap_or_else(|e| e.into_inner()).remove(&(topic.into(), Vec::new()));
+        coverage
+            .ledger
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(&(topic.into(), Vec::new()));
         Ok(())
     }
 
@@ -1515,7 +1687,9 @@ impl DashboardState {
     ) -> Result<(), String> {
         if is_pty_topic(pattern) && except.is_empty() {
             self.await_gateway_ready().await?;
-            return self.unsubscribe_pty_recorded(pattern, self.pty_coverage_io()).await;
+            return self
+                .unsubscribe_pty_recorded(pattern, self.pty_coverage_io())
+                .await;
         }
         let except: Vec<String> = except.iter().map(|e| (*e).to_string()).collect();
         self.rpc_call("events.unsubscribe", topics_request(pattern, &except))
@@ -1742,7 +1916,7 @@ impl DashboardState {
                 GatewayReadiness::Ready => return Ok(()),
                 GatewayReadiness::Walled => return Err(GATEWAY_NOT_READY.to_string()),
                 GatewayReadiness::TooEarly if waited >= GATEWAY_READY_TIMEOUT_MS => {
-                    return Err(GATEWAY_NOT_READY.to_string())
+                    return Err(GATEWAY_NOT_READY.to_string());
                 }
                 GatewayReadiness::TooEarly => {}
             }
@@ -1805,7 +1979,7 @@ impl DashboardState {
         // closed"); this 30s ceiling additionally covers a server that accepts
         // the request and then never replies without closing the socket,
         // converting an infinite spinner into a surfaced, retryable error.
-        use futures::future::{select, Either};
+        use futures::future::{Either, select};
         match select(response_rx, TimeoutFuture::new(30_000)).await {
             Either::Left((res, _)) => {
                 res.map_err(|e| RpcFailure::local(format!("Response channel closed: {e}")))?
@@ -1903,7 +2077,7 @@ impl DashboardState {
                     FailureStage::Handshake,
                     Some(&e.message),
                     false,
-                ))
+                ));
             }
         };
         self.capture_connect_verdict(&resp);
@@ -2068,7 +2242,7 @@ impl DashboardState {
         }
         let mut connector = WasmConnector::new();
 
-        use futures::future::{select, Either};
+        use futures::future::{Either, select};
         let open_result = {
             let connect_fut = Box::pin(connector.connect(&url));
             let open = select(connect_fut, TimeoutFuture::new(WS_OPEN_TIMEOUT_MS)).await;
@@ -2110,6 +2284,8 @@ impl DashboardState {
                     return Ok(());
                 };
                 let loop_url = url.clone();
+                #[cfg(all(feature = "runtime-qa", target_arch = "wasm32"))]
+                install_qa_ingress(state, loop_receipt.clone(), loop_url.clone());
 
                 // Spawn message loop task that owns the connector
                 spawn_local(async move {
@@ -2195,43 +2371,7 @@ impl DashboardState {
                                                 }
                                             }
                                         } else {
-                                            // This is an event notification
-                                            // Parse event format: { "method": "event", "params": { "topic": "...", "data": {...} } }
-                                            //
-                                            // The method name comes from the
-                                            // shared constant, not a literal:
-                                            // it is a wire key, and this was
-                                            // the sixth writer of it — the one
-                                            // the constant was introduced to
-                                            // abolish and then missed, on the
-                                            // client side of the same wire.
-                                            if let Some(method) = value.get("method").and_then(|m| m.as_str()) {
-                                                if method == aleph_protocol::jsonrpc::TOPIC_EVENT_METHOD {
-                                                    if let Some(params) = value.get("params") {
-                                                        if let Some(topic) = params.get("topic").and_then(|t| t.as_str()) {
-                                                            let data = params.get("data").cloned().unwrap_or(Value::Null);
-
-                                                            let event = GatewayEvent {
-                                                                topic: topic.to_string(),
-                                                                data,
-                                                            };
-
-                                                            // Dispatch event to subscribers
-                                                            state.dispatch_event(event);
-                                                        }
-                                                    }
-                                                } else if method.starts_with("stream.") {
-                                                    // Gateway sends streaming events as {method: "stream.run_accepted", params: {...StreamEvent...}}
-                                                    // Convert to GatewayEvent with run.* topic for subscriber filtering
-                                                    let data = value.get("params").cloned().unwrap_or(Value::Null);
-                                                    let topic = method.replacen("stream.", "run.", 1);
-                                                    let event = GatewayEvent {
-                                                        topic,
-                                                        data,
-                                                    };
-                                                    state.dispatch_event(event);
-                                                }
-                                            }
+                                            dispatch_received_notification(state, &loop_receipt, &loop_url, &value);
                                         }
                                     }
                                     Err(e) => {
@@ -2546,6 +2686,8 @@ impl DashboardState {
             return Ok(());
         };
         self.is_reconnecting.set(true);
+        #[cfg(all(feature = "runtime-qa", target_arch = "wasm32"))]
+        publish_qa_reconnecting(self.connection_epoch.get_untracked());
         let mut strategy = ReconnectStrategy::new(MAX_RECONNECT_ATTEMPTS, 1000);
         let mut attempt: u32 = 0;
         while let Some(delay) = {
@@ -3018,6 +3160,13 @@ pub(crate) mod tests {
     // a day: every test in this crate stopped compiling, so none of them ran
     // and none of them could fail.
     use super::{
+        BASE_TOPICS,
+        GATEWAY_NOT_READY,
+        GatewayReadiness,
+        PendingRpcs,
+        RpcFailure,
+        SubmittedCredential,
+        SubscribeError,
         approval_seed_applies,
         // `role_is_operator` was removed with the cached `role` field (see the
         // 2026-08-07 note above); nothing in this module used it and only the
@@ -3033,36 +3182,103 @@ pub(crate) mod tests {
         subscribe_diagnostic,
         subscribe_recorded,
         ws_url_for,
-        GatewayReadiness,
-        PendingRpcs,
-        RpcFailure,
-        SubmittedCredential,
-        SubscribeError,
-        BASE_TOPICS,
-        GATEWAY_NOT_READY,
     };
-    use leptos::prelude::{GetUntracked, GetValue, Update};
+    use leptos::prelude::{GetUntracked, GetValue, Set, Update};
     use std::collections::BTreeSet;
+
+    #[test]
+    fn recorded_gateway_queue_wire_reaches_production_chat_projection() {
+        use crate::platform::wide::views::chat::events::subscribe_run_events;
+        use crate::platform::wide::views::chat::state::{ChatPhase, ChatState};
+        use crate::state::canvas::CanvasState;
+        use crate::state::layout::WorkspaceState;
+        use crate::state::sessions::SessionMap;
+        use leptos::prelude::Owner;
+
+        let owner = Owner::new();
+        owner.with(|| {
+            // Captured from one real isolated Gateway with steering disabled.
+            let frames: Vec<serde_json::Value> = serde_json::from_str(include_str!(
+                "../../../qa/fixtures/nsh-panel-parity/queued-wire.json"
+            ))
+            .unwrap();
+            assert_eq!(frames.len(), 3);
+            let state = super::DashboardState::new();
+            let auth = super::NativeAuthState::default();
+            let receipt = auth.begin();
+            assert!(super::attempt_current(&receipt));
+            state.gateway_url.set("ws://127.0.0.1/ws".to_string());
+            let chat = ChatState::new();
+            let sessions = SessionMap::new();
+            let conversation = sessions.start_new(chat, "main", "Queued wire".to_string());
+            let session_key = frames[0]["params"]["session_key"].as_str().unwrap();
+            let run_id = frames[0]["params"]["run_id"].as_str().unwrap();
+            sessions.set_session_key(conversation, session_key);
+            let subscription = subscribe_run_events(
+                &state,
+                sessions,
+                chat,
+                WorkspaceState::new(),
+                CanvasState::new(),
+                || panic!("queue lifecycle unexpectedly requested localized trace context"),
+            );
+            for (frame, expected) in frames.iter().zip([
+                ChatPhase::Queued { ahead: 0 },
+                ChatPhase::Thinking,
+                ChatPhase::Idle,
+            ]) {
+                assert!(super::dispatch_received_notification(
+                    state,
+                    &receipt,
+                    "ws://127.0.0.1/ws",
+                    frame,
+                ));
+                assert_eq!(chat.phase.get_untracked(), expected);
+                assert_eq!(
+                    chat.session_key.get_untracked().as_deref(),
+                    Some(session_key)
+                );
+                if expected.is_busy() {
+                    assert_eq!(sessions.route_lookup(run_id), Some(conversation));
+                    assert_eq!(chat.active_run_id.get_untracked().as_deref(), Some(run_id));
+                }
+            }
+            assert!(chat.active_run_id.get_untracked().is_none());
+            state.unsubscribe_events(subscription);
+        });
+        owner.cleanup();
+    }
 
     /// Drives the production coverage work and RPC boundary without a global executor.
     pub(crate) struct PtyHarness {
         pub(crate) state: super::DashboardState,
         pub(crate) io: super::PtyCoverageIo,
-        pub(crate) effects: std::sync::Arc<std::sync::Mutex<Vec<(&'static str, serde_json::Value)>>>,
+        pub(crate) effects:
+            std::sync::Arc<std::sync::Mutex<Vec<(&'static str, serde_json::Value)>>>,
         jobs: std::sync::Arc<std::sync::Mutex<std::collections::VecDeque<super::PtyCoverageWork>>>,
     }
 
     impl PtyHarness {
         pub(crate) fn new(state: super::DashboardState) -> Self {
-            Self::with_rpc(state, |_, _| async { Ok(serde_json::Value::Null) }.boxed_local())
+            Self::with_rpc(state, |_, _| {
+                async { Ok(serde_json::Value::Null) }.boxed_local()
+            })
         }
 
         pub(crate) fn with_rpc(
             state: super::DashboardState,
-            rpc: impl Fn(&'static str, serde_json::Value) -> futures::future::LocalBoxFuture<'static, Result<serde_json::Value, String>> + Send + Sync + 'static,
+            rpc: impl Fn(
+                &'static str,
+                serde_json::Value,
+            )
+                -> futures::future::LocalBoxFuture<'static, Result<serde_json::Value, String>>
+            + Send
+            + Sync
+            + 'static,
         ) -> Self {
             let effects = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
-            let jobs = std::sync::Arc::new(std::sync::Mutex::new(std::collections::VecDeque::new()));
+            let jobs =
+                std::sync::Arc::new(std::sync::Mutex::new(std::collections::VecDeque::new()));
             let recorded = effects.clone();
             let scheduled = jobs.clone();
             let io = super::PtyCoverageIo {
@@ -3070,13 +3286,26 @@ pub(crate) mod tests {
                     recorded.lock().unwrap().push((method, params.clone()));
                     rpc(method, params)
                 }),
-                schedule: std::sync::Arc::new(move |work| scheduled.lock().unwrap().push_back(work)),
+                schedule: std::sync::Arc::new(move |work| {
+                    scheduled.lock().unwrap().push_back(work)
+                }),
             };
-            Self { state, io, effects, jobs }
+            Self {
+                state,
+                io,
+                effects,
+                jobs,
+            }
         }
 
         pub(crate) fn next(&self) -> futures::future::LocalBoxFuture<'static, Result<(), String>> {
-            self.jobs.lock().unwrap().pop_front().expect("owned coverage work").run().boxed_local()
+            self.jobs
+                .lock()
+                .unwrap()
+                .pop_front()
+                .expect("owned coverage work")
+                .run()
+                .boxed_local()
         }
 
         pub(crate) fn flush(&self) -> Vec<Result<(), String>> {
@@ -3088,14 +3317,22 @@ pub(crate) mod tests {
         }
 
         pub(crate) fn acquire(&self) -> super::PtyTopicLease {
-            let mut pending = self.state.acquire_pty_topic_with_io("pty.screen", self.io.clone()).boxed_local();
+            let mut pending = self
+                .state
+                .acquire_pty_topic_with_io("pty.screen", self.io.clone())
+                .boxed_local();
             assert!(pending.as_mut().now_or_never().is_none());
             assert!(self.flush().iter().all(Result::is_ok));
             futures::executor::block_on(pending).unwrap()
         }
 
         pub(crate) fn methods(&self) -> Vec<&'static str> {
-            self.effects.lock().unwrap().iter().map(|(method, _)| *method).collect()
+            self.effects
+                .lock()
+                .unwrap()
+                .iter()
+                .map(|(method, _)| *method)
+                .collect()
         }
     }
 
@@ -3123,14 +3360,23 @@ pub(crate) mod tests {
         drop(second);
         assert_eq!(host.flush(), [Ok(())]);
         assert_eq!(host.methods(), ["events.subscribe", "events.unsubscribe"]);
-        assert!(host.effects.lock().unwrap().iter().all(|(_, params)| params == &super::topics_request("pty.screen", &[])));
+        assert!(
+            host.effects
+                .lock()
+                .unwrap()
+                .iter()
+                .all(|(_, params)| params == &super::topics_request("pty.screen", &[]))
+        );
     }
 
     #[test]
     fn pty_coverage_same_epoch_reacquire_before_queued_release_keeps_coverage() {
         let (_owner, host) = pty_fixture();
         drop(host.acquire());
-        let mut next = host.state.acquire_pty_topic_with_io("pty.screen", host.io.clone()).boxed_local();
+        let mut next = host
+            .state
+            .acquire_pty_topic_with_io("pty.screen", host.io.clone())
+            .boxed_local();
         assert!(next.as_mut().now_or_never().is_none());
         assert!(host.flush().iter().all(Result::is_ok));
         let next = futures::executor::block_on(next).unwrap();
@@ -3146,13 +3392,25 @@ pub(crate) mod tests {
         let (tx, rx) = futures::channel::oneshot::channel();
         let reply = std::sync::Mutex::new(Some(rx));
         let host = PtyHarness::with_rpc(base.state, move |method, _| {
-            let reply = (method == "events.unsubscribe").then(|| reply.lock().unwrap().take()).flatten();
-            async move { if let Some(reply) = reply { reply.await.unwrap() } else { Ok(serde_json::Value::Null) } }.boxed_local()
+            let reply = (method == "events.unsubscribe")
+                .then(|| reply.lock().unwrap().take())
+                .flatten();
+            async move {
+                if let Some(reply) = reply {
+                    reply.await.unwrap()
+                } else {
+                    Ok(serde_json::Value::Null)
+                }
+            }
+            .boxed_local()
         });
         drop(host.acquire());
         let mut release = host.next();
         assert!(release.as_mut().now_or_never().is_none());
-        let mut acquire = host.state.acquire_pty_topic_with_io("pty.screen", host.io.clone()).boxed_local();
+        let mut acquire = host
+            .state
+            .acquire_pty_topic_with_io("pty.screen", host.io.clone())
+            .boxed_local();
         assert!(acquire.as_mut().now_or_never().is_none());
         let mut worker = host.next();
         assert!(worker.as_mut().now_or_never().is_none());
@@ -3161,7 +3419,10 @@ pub(crate) mod tests {
         assert_eq!(futures::executor::block_on(release), Ok(()));
         assert_eq!(futures::executor::block_on(worker), Ok(()));
         let lease = futures::executor::block_on(acquire).unwrap();
-        assert_eq!(host.methods(), ["events.subscribe", "events.unsubscribe", "events.subscribe"]);
+        assert_eq!(
+            host.methods(),
+            ["events.subscribe", "events.unsubscribe", "events.subscribe"]
+        );
         drop(lease);
         assert_eq!(host.flush(), [Ok(())]);
     }
@@ -3172,10 +3433,22 @@ pub(crate) mod tests {
         let (tx, rx) = futures::channel::oneshot::channel();
         let reply = std::sync::Mutex::new(Some(rx));
         let host = PtyHarness::with_rpc(base.state, move |method, _| {
-            let reply = (method == "events.subscribe").then(|| reply.lock().unwrap().take()).flatten();
-            async move { if let Some(reply) = reply { reply.await.unwrap() } else { Ok(serde_json::Value::Null) } }.boxed_local()
+            let reply = (method == "events.subscribe")
+                .then(|| reply.lock().unwrap().take())
+                .flatten();
+            async move {
+                if let Some(reply) = reply {
+                    reply.await.unwrap()
+                } else {
+                    Ok(serde_json::Value::Null)
+                }
+            }
+            .boxed_local()
         });
-        let mut acquire = host.state.acquire_pty_topic_with_io("pty.screen", host.io.clone()).boxed_local();
+        let mut acquire = host
+            .state
+            .acquire_pty_topic_with_io("pty.screen", host.io.clone())
+            .boxed_local();
         assert!(acquire.as_mut().now_or_never().is_none());
         let mut worker = host.next();
         assert!(worker.as_mut().now_or_never().is_none());
@@ -3199,7 +3472,10 @@ pub(crate) mod tests {
         assert_eq!(host.methods(), ["events.subscribe", "events.subscribe"]);
         drop(current);
         assert_eq!(host.flush(), [Ok(())]);
-        assert_eq!(host.methods(), ["events.subscribe", "events.subscribe", "events.unsubscribe"]);
+        assert_eq!(
+            host.methods(),
+            ["events.subscribe", "events.subscribe", "events.unsubscribe"]
+        );
     }
 
     #[test]
@@ -3210,9 +3486,19 @@ pub(crate) mod tests {
         let reply = std::sync::Mutex::new(Some(rx));
         let host = PtyHarness::with_rpc(base.state, move |_, _| {
             let reply = reply.lock().unwrap().take();
-            async move { if let Some(reply) = reply { reply.await.unwrap() } else { Ok(serde_json::Value::Null) } }.boxed_local()
+            async move {
+                if let Some(reply) = reply {
+                    reply.await.unwrap()
+                } else {
+                    Ok(serde_json::Value::Null)
+                }
+            }
+            .boxed_local()
         });
-        let mut old = host.state.acquire_pty_topic_with_io("pty.screen", host.io.clone()).boxed_local();
+        let mut old = host
+            .state
+            .acquire_pty_topic_with_io("pty.screen", host.io.clone())
+            .boxed_local();
         assert!(old.as_mut().now_or_never().is_none());
         let mut worker = host.next();
         assert!(worker.as_mut().now_or_never().is_none());
@@ -3232,13 +3518,24 @@ pub(crate) mod tests {
         let (_owner, base) = pty_fixture();
         let fail = std::sync::atomic::AtomicBool::new(true);
         let host = PtyHarness::with_rpc(base.state, move |method, _| {
-            let fail = method == "events.unsubscribe" && fail.swap(false, std::sync::atomic::Ordering::SeqCst);
-            async move { if fail { Err("test release failure".into()) } else { Ok(serde_json::Value::Null) } }.boxed_local()
+            let fail = method == "events.unsubscribe"
+                && fail.swap(false, std::sync::atomic::Ordering::SeqCst);
+            async move {
+                if fail {
+                    Err("test release failure".into())
+                } else {
+                    Ok(serde_json::Value::Null)
+                }
+            }
+            .boxed_local()
         });
         drop(host.acquire());
         assert_eq!(host.flush(), [Err("test release failure".into())]);
         let next = host.acquire();
-        assert_eq!(host.methods(), ["events.subscribe", "events.unsubscribe", "events.subscribe"]);
+        assert_eq!(
+            host.methods(),
+            ["events.subscribe", "events.unsubscribe", "events.subscribe"]
+        );
         drop(next);
         assert_eq!(host.flush(), [Ok(())]);
     }
@@ -3246,17 +3543,35 @@ pub(crate) mod tests {
     #[test]
     fn pty_coverage_recorded_owner_and_lease_release_do_not_erase_each_other() {
         let (_owner, host) = pty_fixture();
-        futures::executor::block_on(host.state.subscribe_pty_recorded("pty.screen", host.io.clone())).unwrap();
+        futures::executor::block_on(
+            host.state
+                .subscribe_pty_recorded("pty.screen", host.io.clone()),
+        )
+        .unwrap();
         let lease = host.acquire();
         drop(lease);
         assert_eq!(host.flush(), [Ok(())]);
         assert_eq!(host.methods(), ["events.subscribe"]);
         let ledger = host.state.subscribed_topics.get_value();
-        assert!(ledger.lock().unwrap().contains(&("pty.screen".into(), Vec::new())));
+        assert!(
+            ledger
+                .lock()
+                .unwrap()
+                .contains(&("pty.screen".into(), Vec::new()))
+        );
         let lease = host.acquire();
-        futures::executor::block_on(host.state.unsubscribe_pty_recorded("pty.screen", host.io.clone())).unwrap();
+        futures::executor::block_on(
+            host.state
+                .unsubscribe_pty_recorded("pty.screen", host.io.clone()),
+        )
+        .unwrap();
         assert_eq!(host.methods(), ["events.subscribe"]);
-        assert!(!ledger.lock().unwrap().contains(&("pty.screen".into(), Vec::new())));
+        assert!(
+            !ledger
+                .lock()
+                .unwrap()
+                .contains(&("pty.screen".into(), Vec::new()))
+        );
         drop(lease);
         assert_eq!(host.flush(), [Ok(())]);
         assert_eq!(host.methods(), ["events.subscribe", "events.unsubscribe"]);
@@ -3274,7 +3589,7 @@ pub(crate) mod tests {
 
     #[test]
     fn telecom_poll_needs_initial_success_and_stops_on_role_refusal() {
-        use super::{telecom_poll_continues, RpcFailure};
+        use super::{RpcFailure, telecom_poll_continues};
         let transport = Some(Err(RpcFailure {
             code: None,
             message: "temporary disconnect".into(),
@@ -3835,6 +4150,39 @@ pub(crate) mod tests {
     /// counter, or that accidentally allowed a decrement on disconnect, would
     /// silently break every reconnect-driven Effect across the panel
     /// (`app.rs`, `chat_sidebar.rs`, `chat/state/mod.rs::pending_reattach`).
+    #[test]
+    fn received_notification_rejects_old_receipts_before_subscriber_effects() {
+        with_owner(|| {
+            let dash = super::DashboardState::new();
+            dash.gateway_url.set("ws://127.0.0.1:18790/ws".to_string());
+            let clock =
+                std::sync::Arc::new(crate::api::native_credentials::AttemptClock::default());
+            let old = Some(crate::api::native_credentials::AttemptClock::begin(&clock).unwrap());
+            let effects = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+            let recorded = effects.clone();
+            dash.subscribe_events(move |_| {
+                recorded.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            });
+            let frame = serde_json::json!({"method": "stream.response_chunk", "params": {"run_id": "run-a", "content": "late"}});
+            let current =
+                Some(crate::api::native_credentials::AttemptClock::begin(&clock).unwrap());
+            assert!(!super::dispatch_received_notification(
+                dash,
+                &old,
+                "ws://127.0.0.1:18790/ws",
+                &frame
+            ));
+            assert_eq!(effects.load(std::sync::atomic::Ordering::SeqCst), 0);
+            assert!(super::dispatch_received_notification(
+                dash,
+                &current,
+                "ws://127.0.0.1:18790/ws",
+                &frame
+            ));
+            assert_eq!(effects.load(std::sync::atomic::Ordering::SeqCst), 1);
+        });
+    }
+
     #[test]
     fn connection_epoch_is_monotone_across_reconnect() {
         with_owner(|| {

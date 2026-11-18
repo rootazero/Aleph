@@ -498,10 +498,10 @@ fn check_nonce_file(root: &Path, nonce: &str) -> Result<(), QaRootError> {
 }
 
 fn has_aleph_component(p: &Path) -> bool {
-    p.components().any(|c| match c {
-        Component::Normal(s) => s.to_string_lossy().eq_ignore_ascii_case(".aleph"),
-        _ => false,
-    })
+    // Reject either path spelling even when QA receipts cross host platforms.
+    p.to_string_lossy()
+        .split(['/', '\\'])
+        .any(|component| component.eq_ignore_ascii_case(".aleph"))
 }
 
 fn is_link_or_reparse(md: &fs::Metadata) -> bool {

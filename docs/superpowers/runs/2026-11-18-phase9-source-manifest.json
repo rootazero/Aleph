@@ -1,0 +1,266 @@
+{
+  "base": "3892804c112fd6e574166a4c03a7c40a77d0b239",
+  "scope": "Frozen current D matrix implementation and tests",
+  "files": [
+    {
+      "path": ".superpowers/sdd/2026-11-15-phase9-runtime-proof-and-dependency-closure/full-closure/run_isolated_parity.py",
+      "sha256": "242a6eb35424032c2f1640ce1cefa598ef35ed10eb9fa709e40a835f7af2ee05",
+      "bytes": 2916
+    },
+    {
+      "path": "Cargo.lock",
+      "sha256": "12300967333b45f8a0fa1f401cf13a559b5b8a881ee95550b1bbf1a8d42e21f5",
+      "bytes": 426085
+    },
+    {
+      "path": "desktop/nsh-shell/src/main.rs",
+      "sha256": "06c280d1ec04f3e68074e9e2953b2debfd492f0c89a723942ddf0b174466a3b4",
+      "bytes": 4273
+    },
+    {
+      "path": "desktop/nsh-shell/src/shell_host.rs",
+      "sha256": "42baa5175487f76d1c08faafedff029a4cc5795a41f5ca967ded6e511de228f0",
+      "bytes": 3342
+    },
+    {
+      "path": "desktop/shell/build.rs",
+      "sha256": "351072bfba7f2cd364ad13fef24fc3b4980e1b7ce6dcd144be435e59b2dc1aba",
+      "bytes": 2007
+    },
+    {
+      "path": "desktop/shell/src/main.rs",
+      "sha256": "b52de5e6f42804e3284b7ddba3381cf43c37c4d347359e382afaa2337d36f9ac",
+      "bytes": 102570
+    },
+    {
+      "path": "desktop/shell/src/phase9_qa.rs",
+      "sha256": "703bef9ee63077a67d3083e254645285a52328e24528063cdbb556a7f09aff23",
+      "bytes": 5729
+    },
+    {
+      "path": "desktop/shell/src/qa_root.rs",
+      "sha256": "ff3af8cf87ec79322097603949cfa4867b3fccbd34347c2442db86c718f1af36",
+      "bytes": 39208
+    },
+    {
+      "path": "interfaces/webchat/Cargo.toml",
+      "sha256": "58dc39418b0cffc0418d0c11d88c4581492cc1d9fa8ec832eb6cfee1ffec8eba",
+      "bytes": 8054
+    },
+    {
+      "path": "interfaces/webchat/src/app.rs",
+      "sha256": "666714616fa28c949079d35bdc730e28547a8e264c295ae66458de7026cccbdc",
+      "bytes": 48188
+    },
+    {
+      "path": "interfaces/webchat/src/components/artifacts/mod.rs",
+      "sha256": "3a58b680d028854a82a9f80bd9e21b22b0592182e89e304dad28101df79aef35",
+      "bytes": 26230
+    },
+    {
+      "path": "interfaces/webchat/src/components/chat_sidebar.rs",
+      "sha256": "1a0f905ff08f55a84dcf20bcf50ffd06afd4e5ebf3974575264617e991cdc496",
+      "bytes": 139938
+    },
+    {
+      "path": "interfaces/webchat/src/context.rs",
+      "sha256": "cdf990288227f300409f8e7dbcbdefb9e60ea7f7a7db112e321dfcdfc96cf9e2",
+      "bytes": 176892
+    },
+    {
+      "path": "interfaces/webchat/src/platform/wide/views/chat/events.rs",
+      "sha256": "b2b95947fa6f884651b16d4069a17f5ebc90d62f74d6174f86bd85777e2abd82",
+      "bytes": 117604
+    },
+    {
+      "path": "interfaces/webchat/src/state/reattach.rs",
+      "sha256": "d15d1790b9b48cc899f5aefe6fb4a7566b1b53ce32895322e9d1ed6e48c2185a",
+      "bytes": 17277
+    },
+    {
+      "path": "interfaces/webchat/src/state/sessions.rs",
+      "sha256": "807cf9b5b74aefa36fd277e5139780a866893e21a617b23daad6128f99062123",
+      "bytes": 53487
+    },
+    {
+      "path": "justfile",
+      "sha256": "1aba2fe18517c94e5639b68f9fcc44929d2c670868ea714ef3adf6dcb9ecf8d0",
+      "bytes": 36737
+    },
+    {
+      "path": "qa/cargo_lock_delta.py",
+      "sha256": "7f8f7e48d982bd2382c1d8bd03596b31b4e82762cd7634cdb8fe5af40c5ccf4a",
+      "bytes": 2773
+    },
+    {
+      "path": "qa/fixtures/nsh-panel-parity/queued-wire.json",
+      "sha256": "d1fb685df9f0534e3ab0094ed31802d5f0b90e3af5b64d20b49223f10dd7aa64",
+      "bytes": 2156
+    },
+    {
+      "path": "qa/fixtures/nsh-panel-parity/runtime-valid.json",
+      "sha256": "366e54b86e1a36c25c9086b37667297058f1c18208f86670291ca4ba85ca1cae",
+      "bytes": 7467
+    },
+    {
+      "path": "qa/fixtures/nsh-panel-parity/scenario.json",
+      "sha256": "71b7f3bbcc592f879841be9d7846a4e8ce5e9a837635cbf6cb9edc88fb87876c",
+      "bytes": 160
+    },
+    {
+      "path": "qa/nsh_panel_driver.js",
+      "sha256": "178436a53757a07a553c2a22e42363b38ff689a7c441ba174cdb5d14b41e9f6e",
+      "bytes": 11715
+    },
+    {
+      "path": "qa/nsh_panel_driver.test.mjs",
+      "sha256": "400a482d5438dae884e23b27f959c58b1366e58fd380e325441487c315acea34",
+      "bytes": 11111
+    },
+    {
+      "path": "qa/nsh_panel_gateway.py",
+      "sha256": "f64f2c7f918152b1d27856520b1cbb7f3247eaa5c515eec90df30cb0331f12e3",
+      "bytes": 6831
+    },
+    {
+      "path": "qa/nsh_panel_launcher.py",
+      "sha256": "85dda49c544795886c6180ccd9864d5625b1b0eb7c6b6b2c30dc7661bdc8deea",
+      "bytes": 71336
+    },
+    {
+      "path": "qa/nsh_panel_matrix.py",
+      "sha256": "d3cb6d9d24b68abc26b384ba351716adfaa50cca13342767bf49712206940280",
+      "bytes": 4116
+    },
+    {
+      "path": "qa/nsh_panel_provider.py",
+      "sha256": "cc51df7dfa05bbcd0644d9082f65ca3a311c586c2d4bf6f1d3f834c8fc419c78",
+      "bytes": 3821
+    },
+    {
+      "path": "qa/nsh_panel_runtime.schema.json",
+      "sha256": "9c068b4ef647ef8fc206513dfb43bcccbd1b5d8dcf751e4f44ff9a863b83eb47",
+      "bytes": 4941
+    },
+    {
+      "path": "qa/phase9_app_launch_wrapper.c",
+      "sha256": "26750e2e0bbf06e94b0e38e3923f17358bfca03a23ff3f55cef41f50c722a6bc",
+      "bytes": 1009
+    },
+    {
+      "path": "qa/phase9_clock.rs",
+      "sha256": "6d83a6f1a218aafd4aa0341a03a3ae564ba0f53769ceb295affc0c167a8f9e41",
+      "bytes": 2320
+    },
+    {
+      "path": "qa/phase9_nsworkspace_launcher.swift",
+      "sha256": "aa3daeb3a885529092e69a8a79d53fe1c75404ae8ffb8a3302e8d8dbaf83929e",
+      "bytes": 4467
+    },
+    {
+      "path": "qa/phase9_runtime.md",
+      "sha256": "99106bddc30a50b9275a41256a72365232706c722ba1a5b9b25d60866ac69316",
+      "bytes": 7834
+    },
+    {
+      "path": "qa/phase9_test_closure.py",
+      "sha256": "ce8694789cd4b7ef3cefef10ccb979ef0618df70b5c41449da74bdf36ad314b5",
+      "bytes": 8108
+    },
+    {
+      "path": "qa/test_cargo_lock_delta.py",
+      "sha256": "970ae8654c491415bced4f22f9d0709b650a6c58846ecb76e324d1e653e7211d",
+      "bytes": 1625
+    },
+    {
+      "path": "qa/test_nsh_panel_gateway.py",
+      "sha256": "c5e6d4aa91a7c519d5719587f7eb3db97bd06fcbb3d2fd17516e8c61cf697139",
+      "bytes": 1865
+    },
+    {
+      "path": "qa/test_nsh_panel_gateway_exit.py",
+      "sha256": "9d21fdd3be74dcb6964881968e1338ae861a9dd65e8bd9cfc627e3a5a40dcc5e",
+      "bytes": 3991
+    },
+    {
+      "path": "qa/test_nsh_panel_launcher.py",
+      "sha256": "a7a35c7d900b5fb269ad2f74e48eeb7e85f34fcdc758a131db149c38b6ec65e3",
+      "bytes": 37089
+    },
+    {
+      "path": "qa/test_nsh_panel_provider.py",
+      "sha256": "a52738077b644e83fa2dc4484475842cb13c56de734636db265125ced57ecc58",
+      "bytes": 2395
+    },
+    {
+      "path": "qa/test_phase9_native_meter.py",
+      "sha256": "f1543dc5b7b4798c730f685f1771b993abb5b3f098d59a685560d56264b39291",
+      "bytes": 14971
+    },
+    {
+      "path": "qa/test_phase9_test_closure.py",
+      "sha256": "9f3f1c06c0b2f937e9080b4e3c600e74cd4e997e761be948aec7778863d3f7e6",
+      "bytes": 8284
+    },
+    {
+      "path": "src/builtin_tools/runtime_manage.rs",
+      "sha256": "403c893642191c84c0fe07b300ad4a46c5cd3b2c268c3e63d0abf834add8b85e",
+      "bytes": 82915
+    },
+    {
+      "path": "src/discovery/home_scan_census.rs",
+      "sha256": "99b769192605faf17332db806825329f729ec6980647451b7360a91f88d1d3cd",
+      "bytes": 21329
+    },
+    {
+      "path": "src/extension/claude_cache_tests.rs",
+      "sha256": "7860e0e869495db1e2dc4ad2a41511ffa65613135efa5b4177ee63e9a8bcbffb",
+      "bytes": 25366
+    },
+    {
+      "path": "src/extension/context_adapter.rs",
+      "sha256": "105f92f8f4bb2c9716c8f8d22efb691d1cd56af6d35e3699897d4113e6d0a4ed",
+      "bytes": 43444
+    },
+    {
+      "path": "src/extension/hooks/executor.rs",
+      "sha256": "330286b0b86e2125fd21b3972c060fd5ae4951e71edf91fb5fa8c7fce2a3a111",
+      "bytes": 131752
+    },
+    {
+      "path": "src/extension/hooks/registry/tests.rs",
+      "sha256": "b2739dad266a097bde4db5580b95a7c45084e28c458c74b6e3725e517305c1c5",
+      "bytes": 24777
+    },
+    {
+      "path": "src/extension/mcp_plugin_tests.rs",
+      "sha256": "a94b5fc38ec4457459f7c6b5c5b199db709cdc930e47b3a29a754123223201d3",
+      "bytes": 12293
+    },
+    {
+      "path": "src/extension/mod.rs",
+      "sha256": "e1b552cf4aae2a92e2922dbd52c9c8bfccafaf7055897c798e53e007ca99cb07",
+      "bytes": 133598
+    },
+    {
+      "path": "src/extension/service_ops.rs",
+      "sha256": "4f640c079fc52a3e3755f34c756758c4c1eb5dd4258a64f5cb3c4083f50b7fee",
+      "bytes": 16190
+    },
+    {
+      "path": "src/extension/visibility.rs",
+      "sha256": "6903d44e94c7e45ab948790cf85dcd2ec4bc41df96008b2f2dafdbd71d8b072e",
+      "bytes": 27876
+    },
+    {
+      "path": "src/gateway/handlers/daemon_control.rs",
+      "sha256": "f65d9d96828286c2b73972ca6c2dc4ee82cbdb1d4571a195c2071d4200a92d1f",
+      "bytes": 10847
+    },
+    {
+      "path": "src/utils/paths.rs",
+      "sha256": "acbd0b5cdb7426d35a2956ce17b1a655afdd0a0ec32899f7be5941c241463b97",
+      "bytes": 110200
+    }
+  ]
+}

@@ -1,0 +1,57 @@
+{
+  "name": "ipc-acl-host-tests",
+  "memory_gate": {
+    "argv": [
+      "python3",
+      "qa/browser_live/check_memory.py",
+      "--required-bytes",
+      "4294967296"
+    ],
+    "cwd": "/Volumes/TBU4/Workspace/Aleph",
+    "env_overrides": {},
+    "exit_code": 0,
+    "timed_out": false,
+    "pid": 78423,
+    "cleanup_error": null,
+    "group_probe": null,
+    "unjoined_descendants": false,
+    "elapsed_seconds": 0.04530970798805356,
+    "stdout": "/Volumes/TBU4/Workspace/Aleph/.superpowers/sdd/2026-11-15-phase9-runtime-proof-and-dependency-closure/ipc-acl-host-tests-memory.stdout.log",
+    "stderr": "/Volumes/TBU4/Workspace/Aleph/.superpowers/sdd/2026-11-15-phase9-runtime-proof-and-dependency-closure/ipc-acl-host-tests-memory.stderr.log",
+    "output": "available_bytes=6622052352 required_bytes=4294967296 ALLOW\n"
+  },
+  "command": {
+    "argv": [
+      "cargo",
+      "test",
+      "-p",
+      "aleph-desktop-shell",
+      "-p",
+      "aleph-nsh-shell",
+      "--no-default-features",
+      "--features",
+      "aleph-desktop-shell/qa-owned-root",
+      "--offline",
+      "--locked",
+      "--jobs",
+      "1"
+    ],
+    "cwd": "/Volumes/TBU4/Workspace/Aleph",
+    "env_overrides": {
+      "CARGO_TARGET_DIR": "/Volumes/TBU4/Workspace/Aleph/.phase9-target",
+      "RUST_BACKTRACE": "1"
+    },
+    "exit_code": 101,
+    "timed_out": false,
+    "pid": 78467,
+    "cleanup_error": null,
+    "group_probe": null,
+    "unjoined_descendants": false,
+    "elapsed_seconds": 1.8329800000065006,
+    "stdout": "/Volumes/TBU4/Workspace/Aleph/.superpowers/sdd/2026-11-15-phase9-runtime-proof-and-dependency-closure/ipc-acl-host-tests.stdout.log",
+    "stderr": "/Volumes/TBU4/Workspace/Aleph/.superpowers/sdd/2026-11-15-phase9-runtime-proof-and-dependency-closure/ipc-acl-host-tests.stderr.log",
+    "output": "   Compiling aleph-desktop-shell v26.9.1 (/Volumes/TBU4/Workspace/Aleph/desktop/shell)\nerror[E0597]: `commands` does not live long enough\n  --> desktop/shell/build.rs:41:64\n   |\n36 |     let mut commands = COMMANDS.to_vec();\n   |         ------------ binding `commands` declared here\n...\n41 |         .app_manifest(tauri_build::AppManifest::new().commands(&commands));\n   |                       -----------------------------------------^^^^^^^^^-\n   |                       |                                        |\n   |                       |                                        borrowed value does not live long enough\n   |                       argument requires that `commands` is borrowed for `'static`\n...\n47 | }\n   | - `commands` dropped here while still borrowed\n\nFor more information about this error, try `rustc --explain E0597`.\nerror: could not compile `aleph-desktop-shell` (build script) due to 1 previous error\n"
+  },
+  "lock_sha256": "12300967333b45f8a0fa1f401cf13a559b5b8a881ee95550b1bbf1a8d42e21f5",
+  "status": "FAIL"
+}

@@ -1,0 +1,8 @@
+{
+  "kind": "normal_default_features",
+  "build_receipt": "2026-11-16-phase9-panel-production-identity.json",
+  "files": {
+    "interfaces/webchat/dist/aleph_panel.js": "70984b761985f0cbe437bacc5fb88d3566b478b83b998ad126b6e208080e73ac",
+    "interfaces/webchat/dist/aleph_panel_bg.wasm": "eaf3dada3aa5dfe78fb1d52557ec34517d3f739d1e68f1d231e3333ab628700d"
+  }
+}

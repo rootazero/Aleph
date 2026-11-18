@@ -1,0 +1,56 @@
+{
+  "name": "shell-binaries-title",
+  "memory_gate": {
+    "argv": [
+      "python3",
+      "qa/browser_live/check_memory.py",
+      "--required-bytes",
+      "4294967296"
+    ],
+    "cwd": "/Volumes/TBU4/Workspace/Aleph",
+    "env_overrides": {},
+    "exit_code": 0,
+    "timed_out": false,
+    "pid": 74957,
+    "cleanup_error": null,
+    "group_probe": null,
+    "unjoined_descendants": false,
+    "elapsed_seconds": 0.04404700000304729,
+    "stdout": "/Volumes/TBU4/Workspace/Aleph/.superpowers/sdd/2026-11-15-phase9-runtime-proof-and-dependency-closure/shell-binaries-title-memory.stdout.log",
+    "stderr": "/Volumes/TBU4/Workspace/Aleph/.superpowers/sdd/2026-11-15-phase9-runtime-proof-and-dependency-closure/shell-binaries-title-memory.stderr.log",
+    "output": "available_bytes=7988166656 required_bytes=4294967296 ALLOW\n"
+  },
+  "command": {
+    "argv": [
+      "cargo",
+      "build",
+      "-p",
+      "aleph-desktop-shell",
+      "-p",
+      "aleph-nsh-shell",
+      "--no-default-features",
+      "--features",
+      "aleph-desktop-shell/qa-owned-root",
+      "--offline",
+      "--locked",
+      "--jobs",
+      "1"
+    ],
+    "cwd": "/Volumes/TBU4/Workspace/Aleph",
+    "env_overrides": {
+      "CARGO_TARGET_DIR": "/Volumes/TBU4/Workspace/Aleph/.phase9-target",
+      "RUST_BACKTRACE": "1"
+    },
+    "exit_code": 0,
+    "timed_out": false,
+    "pid": 75001,
+    "cleanup_error": null,
+    "group_probe": null,
+    "unjoined_descendants": false,
+    "elapsed_seconds": 6.168146957992576,
+    "stdout": "/Volumes/TBU4/Workspace/Aleph/.superpowers/sdd/2026-11-15-phase9-runtime-proof-and-dependency-closure/shell-binaries-title.stdout.log",
+    "stderr": "/Volumes/TBU4/Workspace/Aleph/.superpowers/sdd/2026-11-15-phase9-runtime-proof-and-dependency-closure/shell-binaries-title.stderr.log",
+    "output": "   Compiling aleph-desktop-shell v26.9.1 (/Volumes/TBU4/Workspace/Aleph/desktop/shell)\n   Compiling aleph-nsh-shell v0.1.0 (/Volumes/TBU4/Workspace/Aleph/desktop/nsh-shell)\n    Finished `dev` profile [unoptimized + debuginfo] target(s) in 6.12s\n"
+  },
+  "status": "PASS"
+}

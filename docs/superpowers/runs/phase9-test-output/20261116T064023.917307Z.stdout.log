@@ -1,0 +1,6 @@
+
+running 1 test
+test extension::claude_cache_tests::an_unreadable_index_forgets_nothing ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 22421 filtered out; finished in 0.05s
+

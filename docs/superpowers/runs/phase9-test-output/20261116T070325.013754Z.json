@@ -1,0 +1,63 @@
+{
+  "schema_version": 1,
+  "timestamp": "20261116T070325.013754Z",
+  "memory_gate": {
+    "argv": [
+      "python3",
+      "qa/browser_live/check_memory.py",
+      "--required-bytes",
+      "4294967296"
+    ],
+    "cwd": "/Volumes/TBU4/Workspace/Aleph",
+    "env_overrides": {},
+    "exit_code": 0,
+    "timed_out": false,
+    "pid": 92065,
+    "cleanup_error": null,
+    "unjoined_descendants": false,
+    "elapsed_seconds": 0.028751167003065348,
+    "stdout": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T070325.013754Z-memory.stdout.log",
+    "stderr": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T070325.013754Z-memory.stderr.log"
+  },
+  "test_filter": "builtin_tools::runtime_manage::tests::install_chromiums_real_subprocess_output_reaches_poll_through_the_tee",
+  "status": "FAIL",
+  "command": {
+    "argv": [
+      "cargo",
+      "test",
+      "-p",
+      "alephcore",
+      "--lib",
+      "--offline",
+      "--locked",
+      "--jobs",
+      "1",
+      "builtin_tools::runtime_manage::tests::install_chromiums_real_subprocess_output_reaches_poll_through_the_tee",
+      "--",
+      "--test-threads=1"
+    ],
+    "cwd": "/Volumes/TBU4/Workspace/Aleph",
+    "env_overrides": {
+      "HOME": "/Users/zouguojun/.p9-home-31ajewx6",
+      "ALEPH_HOME": "/tmp/p9-bwjxf7ng/aleph",
+      "CARGO_HOME": "/Users/zouguojun/.cargo",
+      "RUSTUP_HOME": "/Users/zouguojun/.rustup",
+      "TMPDIR": "/tmp/p9-bwjxf7ng",
+      "CARGO_TARGET_DIR": "/Volumes/TBU4/Workspace/Aleph/.phase9-target",
+      "RUST_BACKTRACE": "1"
+    },
+    "exit_code": 101,
+    "timed_out": false,
+    "pid": 92067,
+    "cleanup_error": null,
+    "unjoined_descendants": false,
+    "elapsed_seconds": 5.5219839999917895,
+    "stdout": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T070325.013754Z.stdout.log",
+    "stderr": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T070325.013754Z.stderr.log"
+  },
+  "fixture": {
+    "path": "/tmp/p9-bwjxf7ng",
+    "home": "/Users/zouguojun/.p9-home-31ajewx6",
+    "cleanup": "removed"
+  }
+}

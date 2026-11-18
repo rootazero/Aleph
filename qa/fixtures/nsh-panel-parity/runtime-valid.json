@@ -1,0 +1,338 @@
+{
+  "version": 1,
+  "surface": "nsh",
+  "origin": "protocol_fixture",
+  "qa_run_id": "fixture-runtime",
+  "events": [
+    {
+      "qa_run_id": "fixture-runtime",
+      "kind": "ready",
+      "at_ms": 100,
+      "session_key": null,
+      "run_id": null,
+      "connection_epoch": 0,
+      "payload": {}
+    },
+    {
+      "qa_run_id": "fixture-runtime",
+      "kind": "hello",
+      "at_ms": 200,
+      "session_key": null,
+      "run_id": null,
+      "connection_epoch": 1,
+      "payload": {}
+    },
+    {
+      "qa_run_id": "fixture-runtime",
+      "kind": "route-requested",
+      "at_ms": 300,
+      "session_key": null,
+      "run_id": null,
+      "connection_epoch": 1,
+      "payload": {}
+    },
+    {
+      "qa_run_id": "fixture-runtime",
+      "kind": "route-ready",
+      "at_ms": 500,
+      "session_key": null,
+      "run_id": null,
+      "connection_epoch": 1,
+      "payload": {}
+    },
+    {
+      "qa_run_id": "fixture-runtime",
+      "kind": "input",
+      "at_ms": 600,
+      "session_key": null,
+      "run_id": null,
+      "connection_epoch": 1,
+      "payload": {}
+    },
+    {
+      "qa_run_id": "fixture-runtime",
+      "kind": "accepted",
+      "at_ms": 800,
+      "session_key": "canonical-session",
+      "run_id": "canonical-run",
+      "connection_epoch": 1,
+      "payload": {}
+    },
+    {
+      "qa_run_id": "fixture-runtime",
+      "kind": "send-received",
+      "at_ms": 850,
+      "session_key": "canonical-session",
+      "run_id": "canonical-run",
+      "connection_epoch": 1,
+      "payload": {"request_id": 7, "request_session": "canonical-session"}
+    },
+    {
+      "qa_run_id": "fixture-runtime",
+      "kind": "streamed",
+      "at_ms": 900,
+      "session_key": "canonical-session",
+      "run_id": "canonical-run",
+      "connection_epoch": 1,
+      "payload": {}
+    },
+    {
+      "qa_run_id": "fixture-runtime",
+      "kind": "complete",
+      "at_ms": 1000,
+      "session_key": "canonical-session",
+      "run_id": "canonical-run",
+      "connection_epoch": 1,
+      "payload": {}
+    },
+    {
+      "qa_run_id": "fixture-runtime",
+      "kind": "artifact-refreshed",
+      "at_ms": 1100,
+      "session_key": "canonical-session",
+      "run_id": "canonical-run",
+      "connection_epoch": 1,
+      "payload": {
+        "refetched": true
+      }
+    },
+    {
+      "qa_run_id": "fixture-runtime",
+      "kind": "disconnected",
+      "at_ms": 1200,
+      "session_key": "canonical-session",
+      "run_id": "canonical-run",
+      "connection_epoch": 1,
+      "payload": {"production_state": true, "marked_epoch": 1}
+    },
+    {
+      "qa_run_id": "fixture-runtime",
+      "kind": "hello",
+      "at_ms": 1300,
+      "session_key": "canonical-session",
+      "run_id": "canonical-run",
+      "connection_epoch": 2,
+      "payload": {}
+    },
+    {
+      "qa_run_id": "fixture-runtime",
+      "kind": "snapshot",
+      "at_ms": 1400,
+      "session_key": "canonical-session",
+      "run_id": "canonical-run",
+      "connection_epoch": 2,
+      "payload": {
+        "sessions": true,
+        "history": true,
+        "artifacts": true
+      }
+    },
+    {
+      "qa_run_id": "fixture-runtime",
+      "kind": "rejected",
+      "at_ms": 1500,
+      "session_key": "canonical-session",
+      "run_id": "canonical-run",
+      "connection_epoch": 2,
+      "payload": {
+        "reason": "old_epoch",
+        "before": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "after": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "boundary": "panel_ingress",
+        "handler_invoked": true,
+        "current_control_accepted": true,
+        "stale_frame_accepted": false
+      }
+    },
+    {
+      "qa_run_id": "fixture-runtime",
+      "kind": "rejected",
+      "at_ms": 1600,
+      "session_key": "canonical-session",
+      "run_id": "canonical-run",
+      "connection_epoch": 2,
+      "payload": {
+        "reason": "wrong_session",
+        "before": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "after": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      }
+    },
+    {
+      "qa_run_id": "fixture-runtime",
+      "kind": "rejected",
+      "at_ms": 1700,
+      "session_key": "canonical-session",
+      "run_id": "canonical-run",
+      "connection_epoch": 2,
+      "payload": {
+        "reason": "malformed_topic",
+        "before": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "after": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      }
+    },
+    {
+      "qa_run_id": "fixture-runtime",
+      "kind": "rejected",
+      "at_ms": 1800,
+      "session_key": "canonical-session",
+      "run_id": "canonical-run",
+      "connection_epoch": 2,
+      "payload": {
+        "reason": "duplicate",
+        "before": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "after": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      }
+    },
+    {
+      "qa_run_id": "fixture-runtime",
+      "kind": "reconnected",
+      "at_ms": 2000,
+      "session_key": "canonical-session",
+      "run_id": "canonical-run",
+      "connection_epoch": 2,
+      "payload": {}
+    },
+    {
+      "qa_run_id": "fixture-runtime",
+      "kind": "close-requested",
+      "at_ms": 2100,
+      "session_key": "canonical-session",
+      "run_id": "canonical-run",
+      "connection_epoch": 2,
+      "payload": {}
+    },
+    {
+      "qa_run_id": "fixture-runtime",
+      "kind": "closed",
+      "at_ms": 2200,
+      "session_key": "canonical-session",
+      "run_id": "canonical-run",
+      "connection_epoch": 2,
+      "payload": {
+        "owned_drained": true
+      }
+    }
+  ],
+  "resources": [
+    {
+      "at_ms": 0,
+      "rss_mb": 30,
+      "threads": 4
+    },
+    {
+      "at_ms": 100,
+      "rss_mb": 30,
+      "threads": 4
+    },
+    {
+      "at_ms": 200,
+      "rss_mb": 30,
+      "threads": 4
+    },
+    {
+      "at_ms": 300,
+      "rss_mb": 30,
+      "threads": 4
+    },
+    {
+      "at_ms": 400,
+      "rss_mb": 30,
+      "threads": 4
+    },
+    {
+      "at_ms": 500,
+      "rss_mb": 30,
+      "threads": 4
+    },
+    {
+      "at_ms": 600,
+      "rss_mb": 30,
+      "threads": 4
+    },
+    {
+      "at_ms": 700,
+      "rss_mb": 30,
+      "threads": 4
+    },
+    {
+      "at_ms": 800,
+      "rss_mb": 30,
+      "threads": 4
+    },
+    {
+      "at_ms": 900,
+      "rss_mb": 30,
+      "threads": 4
+    },
+    {
+      "at_ms": 1000,
+      "rss_mb": 30,
+      "threads": 4
+    },
+    {
+      "at_ms": 1100,
+      "rss_mb": 30,
+      "threads": 4
+    },
+    {
+      "at_ms": 1200,
+      "rss_mb": 30,
+      "threads": 4
+    },
+    {
+      "at_ms": 1300,
+      "rss_mb": 30,
+      "threads": 4
+    },
+    {
+      "at_ms": 1400,
+      "rss_mb": 30,
+      "threads": 4
+    },
+    {
+      "at_ms": 1500,
+      "rss_mb": 30,
+      "threads": 4
+    },
+    {
+      "at_ms": 1600,
+      "rss_mb": 30,
+      "threads": 4
+    },
+    {
+      "at_ms": 1700,
+      "rss_mb": 30,
+      "threads": 4
+    },
+    {
+      "at_ms": 1800,
+      "rss_mb": 30,
+      "threads": 4
+    },
+    {
+      "at_ms": 1900,
+      "rss_mb": 30,
+      "threads": 4
+    },
+    {
+      "at_ms": 2000,
+      "rss_mb": 30,
+      "threads": 4
+    },
+    {
+      "at_ms": 2100,
+      "rss_mb": 30,
+      "threads": 4
+    },
+    {
+      "at_ms": 2200,
+      "rss_mb": 30,
+      "threads": 4
+    }
+  ],
+  "direct_child": {
+    "exit_code": 0,
+    "forced": false
+  },
+  "gateway": null
+}

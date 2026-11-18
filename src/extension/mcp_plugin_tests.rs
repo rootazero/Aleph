@@ -105,7 +105,7 @@ fn assert_counted_and_spawned(row: &PluginInfo, n: usize, spawned: &[(&str, &str
 
 #[tokio::test]
 async fn a_bare_command_is_counted_and_spawned_from_path() {
-    let _home = crate::utils::paths::IsolatedAlephHome::new();
+    let _home = crate::utils::paths::IsolatedDiscoveryHome::new();
     let tmp = tempfile::tempdir().unwrap();
     write_cc_plugin(
         tmp.path(),
@@ -125,7 +125,7 @@ async fn a_bare_command_is_counted_and_spawned_from_path() {
 /// spawn face ran it: `mcp_servers_count: 0` beside a running server.
 #[tokio::test]
 async fn an_absolute_command_outside_the_root_is_counted_and_spawned() {
-    let _home = crate::utils::paths::IsolatedAlephHome::new();
+    let _home = crate::utils::paths::IsolatedDiscoveryHome::new();
     let tmp = tempfile::tempdir().unwrap();
     // "Absolute" is platform-relative (`Path::is_absolute`): a rooted `/x`
     // is not absolute on Windows and would be root-prefixed, then refused.
@@ -147,7 +147,7 @@ async fn an_absolute_command_outside_the_root_is_counted_and_spawned() {
 /// the daemon's working directory (`McpManagerConfig` carries no cwd).
 #[tokio::test]
 async fn a_relative_or_rooted_command_inside_the_root_is_counted_and_spawned_from_the_root() {
-    let _home = crate::utils::paths::IsolatedAlephHome::new();
+    let _home = crate::utils::paths::IsolatedDiscoveryHome::new();
     let tmp = tempfile::tempdir().unwrap();
     let root = write_cc_plugin(
         tmp.path(),
@@ -182,7 +182,7 @@ async fn a_relative_or_rooted_command_inside_the_root_is_counted_and_spawned_fro
 /// `<root>/.mcp.json`, so it was never started.
 #[tokio::test]
 async fn an_inline_mcp_servers_object_is_counted_and_spawned() {
-    let _home = crate::utils::paths::IsolatedAlephHome::new();
+    let _home = crate::utils::paths::IsolatedDiscoveryHome::new();
     let tmp = tempfile::tempdir().unwrap();
     write_cc_plugin(
         tmp.path(),
@@ -202,7 +202,7 @@ async fn an_inline_mcp_servers_object_is_counted_and_spawned() {
 /// says which server and why.
 #[tokio::test]
 async fn a_root_variable_that_climbs_out_is_refused_on_both_faces_and_the_row_says_why() {
-    let _home = crate::utils::paths::IsolatedAlephHome::new();
+    let _home = crate::utils::paths::IsolatedDiscoveryHome::new();
     let tmp = tempfile::tempdir().unwrap();
     write_cc_plugin(
         tmp.path(),
@@ -241,7 +241,7 @@ async fn a_root_variable_that_climbs_out_is_refused_on_both_faces_and_the_row_sa
 /// counts the new server (the adapter parse is uncached) and nothing starts it.
 #[tokio::test]
 async fn a_dot_mcp_json_added_after_the_first_load_is_counted_and_spawned_on_reload() {
-    let _home = crate::utils::paths::IsolatedAlephHome::new();
+    let _home = crate::utils::paths::IsolatedDiscoveryHome::new();
     let tmp = tempfile::tempdir().unwrap();
     let root = write_cc_plugin(tmp.path(), "p415-late", "", None);
     let manager = attached_manager(tmp.path()).await;
@@ -268,7 +268,7 @@ async fn a_dot_mcp_json_added_after_the_first_load_is_counted_and_spawned_on_rel
 /// never run.
 #[tokio::test]
 async fn an_explicit_non_mcp_runtime_counts_no_servers_and_says_why() {
-    let _home = crate::utils::paths::IsolatedAlephHome::new();
+    let _home = crate::utils::paths::IsolatedDiscoveryHome::new();
     let tmp = tempfile::tempdir().unwrap();
     write_cc_plugin(
         tmp.path(),

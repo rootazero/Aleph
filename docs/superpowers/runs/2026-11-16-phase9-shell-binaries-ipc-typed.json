@@ -1,0 +1,56 @@
+{
+  "name": "shell-binaries-ipc-typed",
+  "memory_gate": {
+    "argv": [
+      "python3",
+      "qa/browser_live/check_memory.py",
+      "--required-bytes",
+      "4294967296"
+    ],
+    "cwd": "/Volumes/TBU4/Workspace/Aleph",
+    "env_overrides": {},
+    "exit_code": 0,
+    "timed_out": false,
+    "pid": 5039,
+    "cleanup_error": null,
+    "group_probe": null,
+    "unjoined_descendants": false,
+    "elapsed_seconds": 0.041561042016837746,
+    "stdout": "/Volumes/TBU4/Workspace/Aleph/.superpowers/sdd/2026-11-15-phase9-runtime-proof-and-dependency-closure/shell-binaries-ipc-typed-memory.stdout.log",
+    "stderr": "/Volumes/TBU4/Workspace/Aleph/.superpowers/sdd/2026-11-15-phase9-runtime-proof-and-dependency-closure/shell-binaries-ipc-typed-memory.stderr.log",
+    "output": "available_bytes=7664353280 required_bytes=4294967296 ALLOW\n"
+  },
+  "command": {
+    "argv": [
+      "cargo",
+      "build",
+      "-p",
+      "aleph-desktop-shell",
+      "-p",
+      "aleph-nsh-shell",
+      "--no-default-features",
+      "--features",
+      "aleph-desktop-shell/qa-owned-root",
+      "--offline",
+      "--locked",
+      "--jobs",
+      "1"
+    ],
+    "cwd": "/Volumes/TBU4/Workspace/Aleph",
+    "env_overrides": {
+      "CARGO_TARGET_DIR": "/Volumes/TBU4/Workspace/Aleph/.phase9-target",
+      "RUST_BACKTRACE": "1"
+    },
+    "exit_code": 101,
+    "timed_out": false,
+    "pid": 5082,
+    "cleanup_error": null,
+    "group_probe": null,
+    "unjoined_descendants": false,
+    "elapsed_seconds": 1.162789000023622,
+    "stdout": "/Volumes/TBU4/Workspace/Aleph/.superpowers/sdd/2026-11-15-phase9-runtime-proof-and-dependency-closure/shell-binaries-ipc-typed.stdout.log",
+    "stderr": "/Volumes/TBU4/Workspace/Aleph/.superpowers/sdd/2026-11-15-phase9-runtime-proof-and-dependency-closure/shell-binaries-ipc-typed.stderr.log",
+    "output": "   Compiling aleph-desktop-shell v26.9.1 (/Volumes/TBU4/Workspace/Aleph/desktop/shell)\nerror[E0282]: type annotations needed\n   --> desktop/shell/src/main.rs:698:21\n    |\n698 |             return (tauri::generate_handler![phase9_qa::phase9_observation])(invoke);\n    |                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ cannot infer type\n    |\n    = note: this error originates in the macro `tauri::generate_handler` (in Nightly builds, run with -Z macro-backtrace for more info)\n\nFor more information about this error, try `rustc --explain E0282`.\nerror: could not compile `aleph-desktop-shell` (bin \"aleph-desktop-shell\") due to 1 previous error\n"
+  },
+  "status": "FAIL"
+}

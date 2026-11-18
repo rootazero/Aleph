@@ -1,241 +1,115 @@
-mod connection;
-mod runtime;
-mod session;
-mod supervisor;
+mod shell_host;
 
-#[cfg(any(target_os = "macos", test))]
-mod components;
+#[cfg(all(target_os = "macos", debug_assertions))]
+#[path = "../../../qa/phase9_clock.rs"]
+mod clock;
 
 #[cfg(target_os = "macos")]
 fn main() -> std::process::ExitCode {
-    use nsh_core::prelude::*;
-    use nsh_platform_macos::{run_app, AppOptions, AppSource, Root};
+    use nsh_core::prelude::{IntoElement, Prop, Props, Styled, component, web_view};
+    use nsh_platform_macos::{AppOptions, AppSource, Root, quit_app, run_app};
+    use std::io::Write;
+    use std::sync::Mutex;
 
-    #[component]
-    fn App() -> impl IntoElement {
-        use components::{input_field::input_field, message_list::message_list};
-        use connection::{spawn_connection_loop, ShellStatus};
-        use session::{Artifact, Message, Role, SessionEvent, SessionManager};
-        use std::sync::Arc;
-
-        let connection_status = signal(ShellStatus::Connecting);
-        let session_info = signal(String::from("No session"));
-        let messages = signal(Vec::<Message>::new());
-        let artifacts = signal(Vec::<Artifact>::new());
-        let queued = signal(None::<String>);
-        let active_run = signal(None::<String>);
-        let draft = signal(String::new());
-        let is_generating = signal(false);
-        let send_error = signal(None::<String>);
-        let active_session = signal_with(None::<Arc<SessionManager>>, SignalEquals::Never);
-        let streaming_id = signal(None::<String>);
-
-        let (conn_tx, mut conn_rx) = tokio::sync::mpsc::channel::<ShellStatus>(8);
-        let _handle = spawn_connection_loop(conn_tx);
-
-        let connection_for_events = connection_status;
-        spawn(async move {
-            while let Some(new_status) = conn_rx.recv().await {
-                connection_for_events.set(new_status);
+    let endpoint = std::env::var("ALEPH_NSH_QA_URL").ok();
+    let nonce = std::env::var("ALEPH_NSH_QA_NONCE").ok();
+    let settings =
+        match shell_host::HostSettings::from_inputs(endpoint.as_deref(), nonce.as_deref()) {
+            Ok(settings) => settings,
+            Err(error) => {
+                eprintln!("NSH host refused configuration: {error}");
+                return std::process::ExitCode::FAILURE;
             }
-        });
-
-        let connection_for_setup = connection_status;
-        let manager_for_setup = active_session;
-        let messages_for_setup = messages;
-        let artifacts_for_setup = artifacts;
-        let stream_for_setup = streaming_id;
-        let queued_for_setup = queued;
-        let active_run_for_setup = active_run;
-        let generating_for_setup = is_generating;
-        let error_for_setup = send_error;
-
-        spawn(async move {
-            loop {
-                tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-
-                if !matches!(connection_for_setup.get(), ShellStatus::Connected { .. }) {
-                    continue;
-                }
-
-                match SessionManager::connect().await {
-                    Ok(mut manager) => {
-                        let mut events = manager.subscribe_events();
-                        manager_for_setup.set(Some(Arc::new(manager)));
-
-                        spawn(async move {
-                            while let Some(event) = events.recv().await {
-                                match event {
-                                    SessionEvent::SessionReady { session_id } => {
-                                        session_info.set(format!("Session: {session_id}"));
-                                    }
-                                    SessionEvent::Queued { run_id, ahead } => {
-                                        queued_for_setup.set(Some(format!(
-                                            "Queued run {run_id} ({ahead} ahead)"
-                                        )));
-                                    }
-                                    SessionEvent::RunStarted { run_id } => {
-                                        queued_for_setup.set(None);
-                                        active_run_for_setup.set(Some(run_id));
-                                    }
-                                    SessionEvent::HistoryLoaded(history) => {
-                                        stream_for_setup.set(None);
-                                        messages_for_setup.set(history);
-                                    }
-                                    SessionEvent::ArtifactsLoaded(items) => {
-                                        artifacts_for_setup.set(items);
-                                    }
-                                    SessionEvent::MessageAdded(message) => {
-                                        let current = messages_for_setup.get();
-                                        if message.role == Role::Assistant {
-                                            if let Some(stream_id) = stream_for_setup.get() {
-                                                messages_for_setup.set(
-                                                    components::message_list::finish_stream(
-                                                        &current, &stream_id, message,
-                                                    ),
-                                                );
-                                                stream_for_setup.set(None);
-                                            } else {
-                                                messages_for_setup
-                                                    .set([current, vec![message]].concat());
-                                            }
-                                        } else {
-                                            messages_for_setup
-                                                .set([current, vec![message]].concat());
-                                        }
-                                    }
-                                    SessionEvent::MessageDelta { delta } => {
-                                        let stream_id = stream_for_setup
-                                            .get()
-                                            .unwrap_or_else(|| "streaming-active-run".to_string());
-                                        stream_for_setup.set(Some(stream_id.clone()));
-                                        let current = messages_for_setup.get();
-                                        messages_for_setup.set(
-                                            components::message_list::append_stream_delta(
-                                                &current, &stream_id, "", &delta,
-                                            ),
-                                        );
-                                    }
-                                    SessionEvent::GenerationStarted => {
-                                        generating_for_setup.set(true);
-                                        let stream_id = "streaming-active-run".to_string();
-                                        stream_for_setup.set(Some(stream_id.clone()));
-                                        let current = messages_for_setup.get();
-                                        messages_for_setup.set(
-                                            components::message_list::append_stream_delta(
-                                                &current, &stream_id, "", "",
-                                            ),
-                                        );
-                                    }
-                                    SessionEvent::MessageComplete => {}
-                                    SessionEvent::GenerationComplete => {
-                                        generating_for_setup.set(false);
-                                        active_run_for_setup.set(None);
-                                    }
-                                    SessionEvent::Error(error) => {
-                                        error_for_setup.set(Some(error));
-                                        generating_for_setup.set(false);
-                                    }
-                                }
-                            }
-                            generating_for_setup.set(false);
-                        });
-                    }
-                    Err(error) => {
-                        error_for_setup.set(Some(error));
-                    }
-                }
-
-                break;
-            }
-        });
-
-        let draft_for_change = draft;
-        let draft_for_submit = draft;
-        let manager_for_submit = active_session;
-        let generating_for_submit = is_generating;
-        let error_for_submit = send_error;
-        let submit_message = move || {
-            if generating_for_submit.get() {
-                return;
-            }
-            let content = draft_for_submit.get();
-            if content.trim().is_empty() {
-                return;
-            }
-            let Some(manager) = manager_for_submit.get() else {
-                error_for_submit.set(Some("No active session".to_string()));
-                return;
-            };
-
-            draft_for_submit.set(String::new());
-            error_for_submit.set(None);
-            generating_for_submit.set(true);
-            spawn(async move {
-                if let Err(error) = manager.send_message(content).await {
-                    error_for_submit.set(Some(error));
-                    generating_for_submit.set(false);
-                }
-            });
         };
-
-        view()
-            .child(text(move || {
-                let status = match connection_status.get() {
-                    ShellStatus::Connecting => "Connecting to Aleph server...".to_string(),
-                    ShellStatus::Connected {
-                        server_version,
-                        session_count,
-                    } => format!(
-                        "Connected: server v{server_version}, {session_count} sessions\n{}\n{}\n{}",
-                        session_info.get(),
-                        queued.get().unwrap_or_else(|| "Queue: idle".to_string()),
-                        active_run
-                            .get()
-                            .map(|run_id| format!("Run: {run_id}"))
-                            .unwrap_or_else(|| "Run: idle".to_string())
-                    ),
-                    ShellStatus::Error(error) => format!("Connection error: {error}"),
-                };
-                match send_error.get() {
-                    Some(error) => format!("{status}\n{error}"),
-                    None => status,
-                }
-            }))
-            .child(message_list(messages))
-            .child(text(move || {
-                let items = artifacts
-                    .get()
-                    .into_iter()
-                    .map(|item| format!("{} ({} bytes)", item.filename, item.size))
-                    .collect::<Vec<_>>();
-                if items.is_empty() {
-                    "Artifacts: none".to_string()
-                } else {
-                    format!("Artifacts:\n{}", items.join("\n"))
-                }
-            }))
-            .child(input_field(
-                draft,
-                move |value| draft_for_change.set(value),
-                submit_message,
-                is_generating,
-            ))
+    let qa_run_id = std::env::var("ALEPH_PANEL_QA_RUN_ID").unwrap_or_default();
+    let message = std::env::var("ALEPH_PANEL_QA_MESSAGE").unwrap_or_default();
+    let script = settings
+        .qa_nonce
+        .as_ref()
+        .map(|nonce| {
+            format!(
+            "{}\ninstallAlephPanelQa({}, event => window.nsh.postMessage(JSON.stringify(event)));",
+            include_str!("../../../qa/nsh_panel_driver.js"),
+            serde_json::json!({"nonce": nonce, "qa_run_id": qa_run_id, "message": message})
+        )
+        })
+        .unwrap_or_default();
+    // This single-window debug trace is not a Chat or Artifacts projection.
+    static LAST_EVENT: Mutex<Option<serde_json::Value>> = Mutex::new(None);
+    #[derive(Clone, PartialEq, Props)]
+    struct AppProps {
+        url: Prop<String>,
+        script: Prop<String>,
+        nonce: Prop<Option<String>>,
+        qa_run_id: Prop<String>,
     }
-
-    let root = Root::of::<App>();
-    run_app(
+    #[component]
+    fn App(props: AppProps) -> impl IntoElement {
+        web_view(props.url)
+            .flex_1()
+            .injected_java_script_before_content(props.script.get_untracked())
+            .on_message(move |raw: &str| {
+                let nonce = props.nonce.get_untracked();
+                let Some(nonce) = nonce.as_deref() else {
+                    return;
+                };
+                let Ok(mut event) = serde_json::from_str::<serde_json::Value>(raw) else {
+                    return;
+                };
+                if event["nonce"].as_str() != Some(nonce)
+                    || event["qa_run_id"].as_str() != Some(props.qa_run_id.get_untracked().as_str())
+                {
+                    return;
+                }
+                #[cfg(debug_assertions)]
+                clock::annotate(&mut event);
+                println!("ALEPH_PANEL_QA {event}");
+                let _ = std::io::stdout().flush();
+                let close = event["kind"].as_str() == Some("close-requested");
+                *LAST_EVENT
+                    .lock()
+                    .unwrap_or_else(|poison| poison.into_inner()) = Some(event);
+                if close {
+                    quit_app();
+                }
+            })
+    }
+    let root = Root::new::<App>(move || AppProps {
+        url: settings.url.clone().into(),
+        script: script.clone().into(),
+        nonce: settings.qa_nonce.clone().into(),
+        qa_run_id: qa_run_id.clone().into(),
+    });
+    #[cfg(debug_assertions)]
+    clock::start();
+    let exit = run_app(
         AppSource::Rust(root),
         AppOptions {
-            title: "Aleph NSH Desktop".to_string(),
-            size: (800, 600),
+            title: "Aleph".to_string(),
+            size: (1180, 800),
             app_id: "com.aleph.nsh-shell".to_string(),
             ..AppOptions::default()
         },
-    )
+    );
+    // run_app has returned: the owned native engine has stopped.
+    if let Some(mut event) = LAST_EVENT
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner())
+        .take()
+    {
+        event["kind"] = "closed".into();
+        event["payload"] =
+            serde_json::json!({"owned_drained": exit == std::process::ExitCode::SUCCESS});
+        #[cfg(debug_assertions)]
+        clock::annotate(&mut event);
+        println!("ALEPH_PANEL_QA {event}");
+        let _ = std::io::stdout().flush();
+    }
+    exit
 }
 
 #[cfg(not(target_os = "macos"))]
 fn main() -> std::process::ExitCode {
-    std::process::ExitCode::SUCCESS
+    eprintln!("The NSH host is currently supported on macOS only");
+    std::process::ExitCode::FAILURE
 }

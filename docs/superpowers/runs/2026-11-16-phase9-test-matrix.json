@@ -1,0 +1,2448 @@
+{
+  "schema_version": 1,
+  "inventory_source": "docs/superpowers/runs/2026-11-16-phase8-handoff-verification.json",
+  "slow_count": 22,
+  "positive_count": 6,
+  "cargo_lock_sha256": "d6f2e99dd2df5868b15f2940d74cf8845ea7c26d3ff69819ce42422180bb1cdb",
+  "runner_sha256": "38c78f6dcc660d869d3049d5b772702488f9add21b8f0a215766b71edf9d603d",
+  "runs": [
+    {
+      "case": "extension::claude_cache_tests::a_claude_code_update_moves_the_hook_root_and_the_approval_stays_behind",
+      "receipt": {
+        "schema_version": 1,
+        "timestamp": "20261116T060333.584379Z",
+        "memory_gate": {
+          "argv": [
+            "python3",
+            "qa/browser_live/check_memory.py",
+            "--required-bytes",
+            "4294967296"
+          ],
+          "cwd": "/Volumes/TBU4/Workspace/Aleph",
+          "env_overrides": {},
+          "exit_code": 0,
+          "timed_out": false,
+          "unjoined_descendants": false,
+          "elapsed_seconds": 0.03460137505317107,
+          "stdout": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T060333.584379Z-memory.stdout.log",
+          "stderr": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T060333.584379Z-memory.stderr.log"
+        },
+        "test_filter": "extension::claude_cache_tests::a_claude_code_update_moves_the_hook_root_and_the_approval_stays_behind",
+        "status": "FAIL",
+        "command": {
+          "argv": [
+            "cargo",
+            "test",
+            "-p",
+            "alephcore",
+            "--lib",
+            "--offline",
+            "--locked",
+            "--jobs",
+            "1",
+            "extension::claude_cache_tests::a_claude_code_update_moves_the_hook_root_and_the_approval_stays_behind",
+            "--",
+            "--test-threads=1"
+          ],
+          "cwd": "/Volumes/TBU4/Workspace/Aleph",
+          "env_overrides": {
+            "HOME": "/var/folders/qt/d007hr751cl59b3_8sptd8fr0000gp/T/aleph-phase9-test-tn0q0b1m/home",
+            "USERPROFILE": "/var/folders/qt/d007hr751cl59b3_8sptd8fr0000gp/T/aleph-phase9-test-tn0q0b1m/home",
+            "ALEPH_HOME": "/var/folders/qt/d007hr751cl59b3_8sptd8fr0000gp/T/aleph-phase9-test-tn0q0b1m/home/.aleph",
+            "CARGO_HOME": "/Users/zouguojun/.cargo",
+            "RUSTUP_HOME": "/Users/zouguojun/.rustup",
+            "TMPDIR": "/var/folders/qt/d007hr751cl59b3_8sptd8fr0000gp/T/aleph-phase9-test-tn0q0b1m",
+            "CARGO_TARGET_DIR": "/Volumes/TBU4/Workspace/Aleph/.phase9-target",
+            "RUST_BACKTRACE": "1"
+          },
+          "exit_code": 101,
+          "timed_out": false,
+          "unjoined_descendants": false,
+          "elapsed_seconds": 2.655984165961854,
+          "stdout": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T060333.584379Z.stdout.log",
+          "stderr": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T060333.584379Z.stderr.log"
+        },
+        "fixture": {
+          "path": "/var/folders/qt/d007hr751cl59b3_8sptd8fr0000gp/T/aleph-phase9-test-tn0q0b1m",
+          "cleanup": "removed"
+        }
+      },
+      "supervisor": {
+        "argv": [
+          "/opt/homebrew/opt/python@3.15/bin/python3.15",
+          "qa/phase9_test_closure.py",
+          "--repo-root",
+          ".",
+          "--target-dir",
+          ".phase9-target",
+          "--receipt",
+          "docs/superpowers/runs/2026-11-15-phase9-test-closure-receipt.md",
+          "--timeout-seconds",
+          "600",
+          "--test-filter",
+          "extension::claude_cache_tests::a_claude_code_update_moves_the_hook_root_and_the_approval_stays_behind"
+        ],
+        "cwd": "/Volumes/TBU4/Workspace/Aleph",
+        "env_overrides": {},
+        "exit_code": 1,
+        "timed_out": false,
+        "unjoined_descendants": false,
+        "elapsed_seconds": 2.72990137495799,
+        "stdout": "/Volumes/TBU4/Workspace/Aleph/.superpowers/sdd/2026-11-15-phase9-runtime-proof-and-dependency-closure/matrix-00.stdout.log",
+        "stderr": "/Volumes/TBU4/Workspace/Aleph/.superpowers/sdd/2026-11-15-phase9-runtime-proof-and-dependency-closure/matrix-00.stderr.log"
+      }
+    },
+    {
+      "case": "extension::claude_cache_tests::an_unreadable_index_forgets_nothing",
+      "receipt": {
+        "schema_version": 1,
+        "timestamp": "20261116T060336.305995Z",
+        "memory_gate": {
+          "argv": [
+            "python3",
+            "qa/browser_live/check_memory.py",
+            "--required-bytes",
+            "4294967296"
+          ],
+          "cwd": "/Volumes/TBU4/Workspace/Aleph",
+          "env_overrides": {},
+          "exit_code": 0,
+          "timed_out": false,
+          "unjoined_descendants": false,
+          "elapsed_seconds": 0.02795441704802215,
+          "stdout": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T060336.305995Z-memory.stdout.log",
+          "stderr": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T060336.305995Z-memory.stderr.log"
+        },
+        "test_filter": "extension::claude_cache_tests::an_unreadable_index_forgets_nothing",
+        "status": "FAIL",
+        "command": {
+          "argv": [
+            "cargo",
+            "test",
+            "-p",
+            "alephcore",
+            "--lib",
+            "--offline",
+            "--locked",
+            "--jobs",
+            "1",
+            "extension::claude_cache_tests::an_unreadable_index_forgets_nothing",
+            "--",
+            "--test-threads=1"
+          ],
+          "cwd": "/Volumes/TBU4/Workspace/Aleph",
+          "env_overrides": {
+            "HOME": "/var/folders/qt/d007hr751cl59b3_8sptd8fr0000gp/T/aleph-phase9-test-dijgwevc/home",
+            "USERPROFILE": "/var/folders/qt/d007hr751cl59b3_8sptd8fr0000gp/T/aleph-phase9-test-dijgwevc/home",
+            "ALEPH_HOME": "/var/folders/qt/d007hr751cl59b3_8sptd8fr0000gp/T/aleph-phase9-test-dijgwevc/home/.aleph",
+            "CARGO_HOME": "/Users/zouguojun/.cargo",
+            "RUSTUP_HOME": "/Users/zouguojun/.rustup",
+            "TMPDIR": "/var/folders/qt/d007hr751cl59b3_8sptd8fr0000gp/T/aleph-phase9-test-dijgwevc",
+            "CARGO_TARGET_DIR": "/Volumes/TBU4/Workspace/Aleph/.phase9-target",
+            "RUST_BACKTRACE": "1"
+          },
+          "exit_code": 101,
+          "timed_out": false,
+          "unjoined_descendants": false,
+          "elapsed_seconds": 1.4568017909768969,
+          "stdout": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T060336.305995Z.stdout.log",
+          "stderr": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T060336.305995Z.stderr.log"
+        },
+        "fixture": {
+          "path": "/var/folders/qt/d007hr751cl59b3_8sptd8fr0000gp/T/aleph-phase9-test-dijgwevc",
+          "cleanup": "removed"
+        }
+      },
+      "supervisor": {
+        "argv": [
+          "/opt/homebrew/opt/python@3.15/bin/python3.15",
+          "qa/phase9_test_closure.py",
+          "--repo-root",
+          ".",
+          "--target-dir",
+          ".phase9-target",
+          "--receipt",
+          "docs/superpowers/runs/2026-11-15-phase9-test-closure-receipt.md",
+          "--timeout-seconds",
+          "600",
+          "--test-filter",
+          "extension::claude_cache_tests::an_unreadable_index_forgets_nothing"
+        ],
+        "cwd": "/Volumes/TBU4/Workspace/Aleph",
+        "env_overrides": {},
+        "exit_code": 1,
+        "timed_out": false,
+        "unjoined_descendants": false,
+        "elapsed_seconds": 1.515262916975189,
+        "stdout": "/Volumes/TBU4/Workspace/Aleph/.superpowers/sdd/2026-11-15-phase9-runtime-proof-and-dependency-closure/matrix-01.stdout.log",
+        "stderr": "/Volumes/TBU4/Workspace/Aleph/.superpowers/sdd/2026-11-15-phase9-runtime-proof-and-dependency-closure/matrix-01.stderr.log"
+      }
+    },
+    {
+      "case": "extension::claude_cache_tests::an_unreadable_index_keeps_the_usage_history",
+      "receipt": {
+        "schema_version": 1,
+        "timestamp": "20261116T060337.821944Z",
+        "memory_gate": {
+          "argv": [
+            "python3",
+            "qa/browser_live/check_memory.py",
+            "--required-bytes",
+            "4294967296"
+          ],
+          "cwd": "/Volumes/TBU4/Workspace/Aleph",
+          "env_overrides": {},
+          "exit_code": 0,
+          "timed_out": false,
+          "unjoined_descendants": false,
+          "elapsed_seconds": 0.02789983298862353,
+          "stdout": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T060337.821944Z-memory.stdout.log",
+          "stderr": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T060337.821944Z-memory.stderr.log"
+        },
+        "test_filter": "extension::claude_cache_tests::an_unreadable_index_keeps_the_usage_history",
+        "status": "FAIL",
+        "command": {
+          "argv": [
+            "cargo",
+            "test",
+            "-p",
+            "alephcore",
+            "--lib",
+            "--offline",
+            "--locked",
+            "--jobs",
+            "1",
+            "extension::claude_cache_tests::an_unreadable_index_keeps_the_usage_history",
+            "--",
+            "--test-threads=1"
+          ],
+          "cwd": "/Volumes/TBU4/Workspace/Aleph",
+          "env_overrides": {
+            "HOME": "/var/folders/qt/d007hr751cl59b3_8sptd8fr0000gp/T/aleph-phase9-test-mdxhz0h8/home",
+            "USERPROFILE": "/var/folders/qt/d007hr751cl59b3_8sptd8fr0000gp/T/aleph-phase9-test-mdxhz0h8/home",
+            "ALEPH_HOME": "/var/folders/qt/d007hr751cl59b3_8sptd8fr0000gp/T/aleph-phase9-test-mdxhz0h8/home/.aleph",
+            "CARGO_HOME": "/Users/zouguojun/.cargo",
+            "RUSTUP_HOME": "/Users/zouguojun/.rustup",
+            "TMPDIR": "/var/folders/qt/d007hr751cl59b3_8sptd8fr0000gp/T/aleph-phase9-test-mdxhz0h8",
+            "CARGO_TARGET_DIR": "/Volumes/TBU4/Workspace/Aleph/.phase9-target",
+            "RUST_BACKTRACE": "1"
+          },
+          "exit_code": 101,
+          "timed_out": false,
+          "unjoined_descendants": false,
+          "elapsed_seconds": 1.4539123749709688,
+          "stdout": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T060337.821944Z.stdout.log",
+          "stderr": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T060337.821944Z.stderr.log"
+        },
+        "fixture": {
+          "path": "/var/folders/qt/d007hr751cl59b3_8sptd8fr0000gp/T/aleph-phase9-test-mdxhz0h8",
+          "cleanup": "removed"
+        }
+      },
+      "supervisor": {
+        "argv": [
+          "/opt/homebrew/opt/python@3.15/bin/python3.15",
+          "qa/phase9_test_closure.py",
+          "--repo-root",
+          ".",
+          "--target-dir",
+          ".phase9-target",
+          "--receipt",
+          "docs/superpowers/runs/2026-11-15-phase9-test-closure-receipt.md",
+          "--timeout-seconds",
+          "600",
+          "--test-filter",
+          "extension::claude_cache_tests::an_unreadable_index_keeps_the_usage_history"
+        ],
+        "cwd": "/Volumes/TBU4/Workspace/Aleph",
+        "env_overrides": {},
+        "exit_code": 1,
+        "timed_out": false,
+        "unjoined_descendants": false,
+        "elapsed_seconds": 1.51433283300139,
+        "stdout": "/Volumes/TBU4/Workspace/Aleph/.superpowers/sdd/2026-11-15-phase9-runtime-proof-and-dependency-closure/matrix-02.stdout.log",
+        "stderr": "/Volumes/TBU4/Workspace/Aleph/.superpowers/sdd/2026-11-15-phase9-runtime-proof-and-dependency-closure/matrix-02.stderr.log"
+      }
+    },
+    {
+      "case": "extension::claude_cache_tests::one_id_in_aleph_home_and_the_claude_cache_is_one_row_the_aleph_copy",
+      "receipt": {
+        "schema_version": 1,
+        "timestamp": "20261116T060339.344117Z",
+        "memory_gate": {
+          "argv": [
+            "python3",
+            "qa/browser_live/check_memory.py",
+            "--required-bytes",
+            "4294967296"
+          ],
+          "cwd": "/Volumes/TBU4/Workspace/Aleph",
+          "env_overrides": {},
+          "exit_code": 0,
+          "timed_out": false,
+          "unjoined_descendants": false,
+          "elapsed_seconds": 0.02800204197410494,
+          "stdout": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T060339.344117Z-memory.stdout.log",
+          "stderr": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T060339.344117Z-memory.stderr.log"
+        },
+        "test_filter": "extension::claude_cache_tests::one_id_in_aleph_home_and_the_claude_cache_is_one_row_the_aleph_copy",
+        "status": "PASS",
+        "command": {
+          "argv": [
+            "cargo",
+            "test",
+            "-p",
+            "alephcore",
+            "--lib",
+            "--offline",
+            "--locked",
+            "--jobs",
+            "1",
+            "extension::claude_cache_tests::one_id_in_aleph_home_and_the_claude_cache_is_one_row_the_aleph_copy",
+            "--",
+            "--test-threads=1"
+          ],
+          "cwd": "/Volumes/TBU4/Workspace/Aleph",
+          "env_overrides": {
+            "HOME": "/var/folders/qt/d007hr751cl59b3_8sptd8fr0000gp/T/aleph-phase9-test-a21ca1ch/home",
+            "USERPROFILE": "/var/folders/qt/d007hr751cl59b3_8sptd8fr0000gp/T/aleph-phase9-test-a21ca1ch/home",
+            "ALEPH_HOME": "/var/folders/qt/d007hr751cl59b3_8sptd8fr0000gp/T/aleph-phase9-test-a21ca1ch/home/.aleph",
+            "CARGO_HOME": "/Users/zouguojun/.cargo",
+            "RUSTUP_HOME": "/Users/zouguojun/.rustup",
+            "TMPDIR": "/var/folders/qt/d007hr751cl59b3_8sptd8fr0000gp/T/aleph-phase9-test-a21ca1ch",
+            "CARGO_TARGET_DIR": "/Volumes/TBU4/Workspace/Aleph/.phase9-target",
+            "RUST_BACKTRACE": "1"
+          },
+          "exit_code": 0,
+          "timed_out": false,
+          "unjoined_descendants": false,
+          "elapsed_seconds": 0.607582958007697,
+          "stdout": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T060339.344117Z.stdout.log",
+          "stderr": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T060339.344117Z.stderr.log"
+        },
+        "fixture": {
+          "path": "/var/folders/qt/d007hr751cl59b3_8sptd8fr0000gp/T/aleph-phase9-test-a21ca1ch",
+          "cleanup": "removed"
+        }
+      },
+      "supervisor": {
+        "argv": [
+          "/opt/homebrew/opt/python@3.15/bin/python3.15",
+          "qa/phase9_test_closure.py",
+          "--repo-root",
+          ".",
+          "--target-dir",
+          ".phase9-target",
+          "--receipt",
+          "docs/superpowers/runs/2026-11-15-phase9-test-closure-receipt.md",
+          "--timeout-seconds",
+          "600",
+          "--test-filter",
+          "extension::claude_cache_tests::one_id_in_aleph_home_and_the_claude_cache_is_one_row_the_aleph_copy"
+        ],
+        "cwd": "/Volumes/TBU4/Workspace/Aleph",
+        "env_overrides": {},
+        "exit_code": 0,
+        "timed_out": false,
+        "unjoined_descendants": false,
+        "elapsed_seconds": 0.6741398330195807,
+        "stdout": "/Volumes/TBU4/Workspace/Aleph/.superpowers/sdd/2026-11-15-phase9-runtime-proof-and-dependency-closure/matrix-03.stdout.log",
+        "stderr": "/Volumes/TBU4/Workspace/Aleph/.superpowers/sdd/2026-11-15-phase9-runtime-proof-and-dependency-closure/matrix-03.stderr.log"
+      }
+    },
+    {
+      "case": "extension::claude_cache_tests::read_only_discovery_names_a_claude_cache_id_without_loading_it",
+      "receipt": {
+        "schema_version": 1,
+        "timestamp": "20261116T060340.011778Z",
+        "memory_gate": {
+          "argv": [
+            "python3",
+            "qa/browser_live/check_memory.py",
+            "--required-bytes",
+            "4294967296"
+          ],
+          "cwd": "/Volumes/TBU4/Workspace/Aleph",
+          "env_overrides": {},
+          "exit_code": 0,
+          "timed_out": false,
+          "unjoined_descendants": false,
+          "elapsed_seconds": 0.028258333040867,
+          "stdout": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T060340.011778Z-memory.stdout.log",
+          "stderr": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T060340.011778Z-memory.stderr.log"
+        },
+        "test_filter": "extension::claude_cache_tests::read_only_discovery_names_a_claude_cache_id_without_loading_it",
+        "status": "PASS",
+        "command": {
+          "argv": [
+            "cargo",
+            "test",
+            "-p",
+            "alephcore",
+            "--lib",
+            "--offline",
+            "--locked",
+            "--jobs",
+            "1",
+            "extension::claude_cache_tests::read_only_discovery_names_a_claude_cache_id_without_loading_it",
+            "--",
+            "--test-threads=1"
+          ],
+          "cwd": "/Volumes/TBU4/Workspace/Aleph",
+          "env_overrides": {
+            "HOME": "/var/folders/qt/d007hr751cl59b3_8sptd8fr0000gp/T/aleph-phase9-test-w0_92iw5/home",
+            "USERPROFILE": "/var/folders/qt/d007hr751cl59b3_8sptd8fr0000gp/T/aleph-phase9-test-w0_92iw5/home",
+            "ALEPH_HOME": "/var/folders/qt/d007hr751cl59b3_8sptd8fr0000gp/T/aleph-phase9-test-w0_92iw5/home/.aleph",
+            "CARGO_HOME": "/Users/zouguojun/.cargo",
+            "RUSTUP_HOME": "/Users/zouguojun/.rustup",
+            "TMPDIR": "/var/folders/qt/d007hr751cl59b3_8sptd8fr0000gp/T/aleph-phase9-test-w0_92iw5",
+            "CARGO_TARGET_DIR": "/Volumes/TBU4/Workspace/Aleph/.phase9-target",
+            "RUST_BACKTRACE": "1"
+          },
+          "exit_code": 0,
+          "timed_out": false,
+          "unjoined_descendants": false,
+          "elapsed_seconds": 0.5422803330002353,
+          "stdout": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T060340.011778Z.stdout.log",
+          "stderr": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T060340.011778Z.stderr.log"
+        },
+        "fixture": {
+          "path": "/var/folders/qt/d007hr751cl59b3_8sptd8fr0000gp/T/aleph-phase9-test-w0_92iw5",
+          "cleanup": "removed"
+        }
+      },
+      "supervisor": {
+        "argv": [
+          "/opt/homebrew/opt/python@3.15/bin/python3.15",
+          "qa/phase9_test_closure.py",
+          "--repo-root",
+          ".",
+          "--target-dir",
+          ".phase9-target",
+          "--receipt",
+          "docs/superpowers/runs/2026-11-15-phase9-test-closure-receipt.md",
+          "--timeout-seconds",
+          "600",
+          "--test-filter",
+          "extension::claude_cache_tests::read_only_discovery_names_a_claude_cache_id_without_loading_it"
+        ],
+        "cwd": "/Volumes/TBU4/Workspace/Aleph",
+        "env_overrides": {},
+        "exit_code": 0,
+        "timed_out": false,
+        "unjoined_descendants": false,
+        "elapsed_seconds": 0.601536208007019,
+        "stdout": "/Volumes/TBU4/Workspace/Aleph/.superpowers/sdd/2026-11-15-phase9-runtime-proof-and-dependency-closure/matrix-04.stdout.log",
+        "stderr": "/Volumes/TBU4/Workspace/Aleph/.superpowers/sdd/2026-11-15-phase9-runtime-proof-and-dependency-closure/matrix-04.stderr.log"
+      }
+    },
+    {
+      "case": "extension::claude_cache_tests::the_model_may_disable_but_not_enable_a_claude_cache_row",
+      "receipt": {
+        "schema_version": 1,
+        "timestamp": "20261116T060340.613423Z",
+        "memory_gate": {
+          "argv": [
+            "python3",
+            "qa/browser_live/check_memory.py",
+            "--required-bytes",
+            "4294967296"
+          ],
+          "cwd": "/Volumes/TBU4/Workspace/Aleph",
+          "env_overrides": {},
+          "exit_code": 0,
+          "timed_out": false,
+          "unjoined_descendants": false,
+          "elapsed_seconds": 0.02792045898968354,
+          "stdout": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T060340.613423Z-memory.stdout.log",
+          "stderr": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T060340.613423Z-memory.stderr.log"
+        },
+        "test_filter": "extension::claude_cache_tests::the_model_may_disable_but_not_enable_a_claude_cache_row",
+        "status": "FAIL",
+        "command": {
+          "argv": [
+            "cargo",
+            "test",
+            "-p",
+            "alephcore",
+            "--lib",
+            "--offline",
+            "--locked",
+            "--jobs",
+            "1",
+            "extension::claude_cache_tests::the_model_may_disable_but_not_enable_a_claude_cache_row",
+            "--",
+            "--test-threads=1"
+          ],
+          "cwd": "/Volumes/TBU4/Workspace/Aleph",
+          "env_overrides": {
+            "HOME": "/var/folders/qt/d007hr751cl59b3_8sptd8fr0000gp/T/aleph-phase9-test-scdchfvv/home",
+            "USERPROFILE": "/var/folders/qt/d007hr751cl59b3_8sptd8fr0000gp/T/aleph-phase9-test-scdchfvv/home",
+            "ALEPH_HOME": "/var/folders/qt/d007hr751cl59b3_8sptd8fr0000gp/T/aleph-phase9-test-scdchfvv/home/.aleph",
+            "CARGO_HOME": "/Users/zouguojun/.cargo",
+            "RUSTUP_HOME": "/Users/zouguojun/.rustup",
+            "TMPDIR": "/var/folders/qt/d007hr751cl59b3_8sptd8fr0000gp/T/aleph-phase9-test-scdchfvv",
+            "CARGO_TARGET_DIR": "/Volumes/TBU4/Workspace/Aleph/.phase9-target",
+            "RUST_BACKTRACE": "1"
+          },
+          "exit_code": 101,
+          "timed_out": false,
+          "unjoined_descendants": false,
+          "elapsed_seconds": 1.4572725420002826,
+          "stdout": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T060340.613423Z.stdout.log",
+          "stderr": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T060340.613423Z.stderr.log"
+        },
+        "fixture": {
+          "path": "/var/folders/qt/d007hr751cl59b3_8sptd8fr0000gp/T/aleph-phase9-test-scdchfvv",
+          "cleanup": "removed"
+        }
+      },
+      "supervisor": {
+        "argv": [
+          "/opt/homebrew/opt/python@3.15/bin/python3.15",
+          "qa/phase9_test_closure.py",
+          "--repo-root",
+          ".",
+          "--target-dir",
+          ".phase9-target",
+          "--receipt",
+          "docs/superpowers/runs/2026-11-15-phase9-test-closure-receipt.md",
+          "--timeout-seconds",
+          "600",
+          "--test-filter",
+          "extension::claude_cache_tests::the_model_may_disable_but_not_enable_a_claude_cache_row"
+        ],
+        "cwd": "/Volumes/TBU4/Workspace/Aleph",
+        "env_overrides": {},
+        "exit_code": 1,
+        "timed_out": false,
+        "unjoined_descendants": false,
+        "elapsed_seconds": 1.5169032500125468,
+        "stdout": "/Volumes/TBU4/Workspace/Aleph/.superpowers/sdd/2026-11-15-phase9-runtime-proof-and-dependency-closure/matrix-05.stdout.log",
+        "stderr": "/Volumes/TBU4/Workspace/Aleph/.superpowers/sdd/2026-11-15-phase9-runtime-proof-and-dependency-closure/matrix-05.stderr.log"
+      }
+    },
+    {
+      "case": "extension::claude_cache_tests::the_rpc_face_enables_and_disables_a_claude_cache_row",
+      "receipt": {
+        "schema_version": 1,
+        "timestamp": "20261116T060342.130875Z",
+        "memory_gate": {
+          "argv": [
+            "python3",
+            "qa/browser_live/check_memory.py",
+            "--required-bytes",
+            "4294967296"
+          ],
+          "cwd": "/Volumes/TBU4/Workspace/Aleph",
+          "env_overrides": {},
+          "exit_code": 0,
+          "timed_out": false,
+          "unjoined_descendants": false,
+          "elapsed_seconds": 0.02834062499459833,
+          "stdout": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T060342.130875Z-memory.stdout.log",
+          "stderr": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T060342.130875Z-memory.stderr.log"
+        },
+        "test_filter": "extension::claude_cache_tests::the_rpc_face_enables_and_disables_a_claude_cache_row",
+        "status": "FAIL",
+        "command": {
+          "argv": [
+            "cargo",
+            "test",
+            "-p",
+            "alephcore",
+            "--lib",
+            "--offline",
+            "--locked",
+            "--jobs",
+            "1",
+            "extension::claude_cache_tests::the_rpc_face_enables_and_disables_a_claude_cache_row",
+            "--",
+            "--test-threads=1"
+          ],
+          "cwd": "/Volumes/TBU4/Workspace/Aleph",
+          "env_overrides": {
+            "HOME": "/var/folders/qt/d007hr751cl59b3_8sptd8fr0000gp/T/aleph-phase9-test-2ddy30vm/home",
+            "USERPROFILE": "/var/folders/qt/d007hr751cl59b3_8sptd8fr0000gp/T/aleph-phase9-test-2ddy30vm/home",
+            "ALEPH_HOME": "/var/folders/qt/d007hr751cl59b3_8sptd8fr0000gp/T/aleph-phase9-test-2ddy30vm/home/.aleph",
+            "CARGO_HOME": "/Users/zouguojun/.cargo",
+            "RUSTUP_HOME": "/Users/zouguojun/.rustup",
+            "TMPDIR": "/var/folders/qt/d007hr751cl59b3_8sptd8fr0000gp/T/aleph-phase9-test-2ddy30vm",
+            "CARGO_TARGET_DIR": "/Volumes/TBU4/Workspace/Aleph/.phase9-target",
+            "RUST_BACKTRACE": "1"
+          },
+          "exit_code": 101,
+          "timed_out": false,
+          "unjoined_descendants": false,
+          "elapsed_seconds": 1.4415553329745308,
+          "stdout": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T060342.130875Z.stdout.log",
+          "stderr": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T060342.130875Z.stderr.log"
+        },
+        "fixture": {
+          "path": "/var/folders/qt/d007hr751cl59b3_8sptd8fr0000gp/T/aleph-phase9-test-2ddy30vm",
+          "cleanup": "removed"
+        }
+      },
+      "supervisor": {
+        "argv": [
+          "/opt/homebrew/opt/python@3.15/bin/python3.15",
+          "qa/phase9_test_closure.py",
+          "--repo-root",
+          ".",
+          "--target-dir",
+          ".phase9-target",
+          "--receipt",
+          "docs/superpowers/runs/2026-11-15-phase9-test-closure-receipt.md",
+          "--timeout-seconds",
+          "600",
+          "--test-filter",
+          "extension::claude_cache_tests::the_rpc_face_enables_and_disables_a_claude_cache_row"
+        ],
+        "cwd": "/Volumes/TBU4/Workspace/Aleph",
+        "env_overrides": {},
+        "exit_code": 1,
+        "timed_out": false,
+        "unjoined_descendants": false,
+        "elapsed_seconds": 1.5009877500124276,
+        "stdout": "/Volumes/TBU4/Workspace/Aleph/.superpowers/sdd/2026-11-15-phase9-runtime-proof-and-dependency-closure/matrix-06.stdout.log",
+        "stderr": "/Volumes/TBU4/Workspace/Aleph/.superpowers/sdd/2026-11-15-phase9-runtime-proof-and-dependency-closure/matrix-06.stderr.log"
+      }
+    },
+    {
+      "case": "extension::claude_cache_tests::two_broken_claude_code_plugins_at_one_version_are_two_error_rows",
+      "receipt": {
+        "schema_version": 1,
+        "timestamp": "20261116T060343.632497Z",
+        "memory_gate": {
+          "argv": [
+            "python3",
+            "qa/browser_live/check_memory.py",
+            "--required-bytes",
+            "4294967296"
+          ],
+          "cwd": "/Volumes/TBU4/Workspace/Aleph",
+          "env_overrides": {},
+          "exit_code": 0,
+          "timed_out": false,
+          "unjoined_descendants": false,
+          "elapsed_seconds": 0.027966833033133298,
+          "stdout": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T060343.632497Z-memory.stdout.log",
+          "stderr": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T060343.632497Z-memory.stderr.log"
+        },
+        "test_filter": "extension::claude_cache_tests::two_broken_claude_code_plugins_at_one_version_are_two_error_rows",
+        "status": "FAIL",
+        "command": {
+          "argv": [
+            "cargo",
+            "test",
+            "-p",
+            "alephcore",
+            "--lib",
+            "--offline",
+            "--locked",
+            "--jobs",
+            "1",
+            "extension::claude_cache_tests::two_broken_claude_code_plugins_at_one_version_are_two_error_rows",
+            "--",
+            "--test-threads=1"
+          ],
+          "cwd": "/Volumes/TBU4/Workspace/Aleph",
+          "env_overrides": {
+            "HOME": "/var/folders/qt/d007hr751cl59b3_8sptd8fr0000gp/T/aleph-phase9-test-em4c3ike/home",
+            "USERPROFILE": "/var/folders/qt/d007hr751cl59b3_8sptd8fr0000gp/T/aleph-phase9-test-em4c3ike/home",
+            "ALEPH_HOME": "/var/folders/qt/d007hr751cl59b3_8sptd8fr0000gp/T/aleph-phase9-test-em4c3ike/home/.aleph",
+            "CARGO_HOME": "/Users/zouguojun/.cargo",
+            "RUSTUP_HOME": "/Users/zouguojun/.rustup",
+            "TMPDIR": "/var/folders/qt/d007hr751cl59b3_8sptd8fr0000gp/T/aleph-phase9-test-em4c3ike",
+            "CARGO_TARGET_DIR": "/Volumes/TBU4/Workspace/Aleph/.phase9-target",
+            "RUST_BACKTRACE": "1"
+          },
+          "exit_code": 101,
+          "timed_out": false,
+          "unjoined_descendants": false,
+          "elapsed_seconds": 1.604615541989915,
+          "stdout": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T060343.632497Z.stdout.log",
+          "stderr": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T060343.632497Z.stderr.log"
+        },
+        "fixture": {
+          "path": "/var/folders/qt/d007hr751cl59b3_8sptd8fr0000gp/T/aleph-phase9-test-em4c3ike",
+          "cleanup": "removed"
+        }
+      },
+      "supervisor": {
+        "argv": [
+          "/opt/homebrew/opt/python@3.15/bin/python3.15",
+          "qa/phase9_test_closure.py",
+          "--repo-root",
+          ".",
+          "--target-dir",
+          ".phase9-target",
+          "--receipt",
+          "docs/superpowers/runs/2026-11-15-phase9-test-closure-receipt.md",
+          "--timeout-seconds",
+          "600",
+          "--test-filter",
+          "extension::claude_cache_tests::two_broken_claude_code_plugins_at_one_version_are_two_error_rows"
+        ],
+        "cwd": "/Volumes/TBU4/Workspace/Aleph",
+        "env_overrides": {},
+        "exit_code": 1,
+        "timed_out": false,
+        "unjoined_descendants": false,
+        "elapsed_seconds": 1.6643683339934796,
+        "stdout": "/Volumes/TBU4/Workspace/Aleph/.superpowers/sdd/2026-11-15-phase9-runtime-proof-and-dependency-closure/matrix-07.stdout.log",
+        "stderr": "/Volumes/TBU4/Workspace/Aleph/.superpowers/sdd/2026-11-15-phase9-runtime-proof-and-dependency-closure/matrix-07.stderr.log"
+      }
+    },
+    {
+      "case": "extension::context_adapter::tests::lifecycle_mount_dynamic_resolver_grant_revoke_and_replacement",
+      "receipt": {
+        "schema_version": 1,
+        "timestamp": "20261116T060345.297087Z",
+        "memory_gate": {
+          "argv": [
+            "python3",
+            "qa/browser_live/check_memory.py",
+            "--required-bytes",
+            "4294967296"
+          ],
+          "cwd": "/Volumes/TBU4/Workspace/Aleph",
+          "env_overrides": {},
+          "exit_code": 0,
+          "timed_out": false,
+          "unjoined_descendants": false,
+          "elapsed_seconds": 0.027755666989833117,
+          "stdout": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T060345.297087Z-memory.stdout.log",
+          "stderr": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T060345.297087Z-memory.stderr.log"
+        },
+        "test_filter": "extension::context_adapter::tests::lifecycle_mount_dynamic_resolver_grant_revoke_and_replacement",
+        "status": "FAIL",
+        "command": {
+          "argv": [
+            "cargo",
+            "test",
+            "-p",
+            "alephcore",
+            "--lib",
+            "--offline",
+            "--locked",
+            "--jobs",
+            "1",
+            "extension::context_adapter::tests::lifecycle_mount_dynamic_resolver_grant_revoke_and_replacement",
+            "--",
+            "--test-threads=1"
+          ],
+          "cwd": "/Volumes/TBU4/Workspace/Aleph",
+          "env_overrides": {
+            "HOME": "/var/folders/qt/d007hr751cl59b3_8sptd8fr0000gp/T/aleph-phase9-test-mmb8g7rl/home",
+            "USERPROFILE": "/var/folders/qt/d007hr751cl59b3_8sptd8fr0000gp/T/aleph-phase9-test-mmb8g7rl/home",
+            "ALEPH_HOME": "/var/folders/qt/d007hr751cl59b3_8sptd8fr0000gp/T/aleph-phase9-test-mmb8g7rl/home/.aleph",
+            "CARGO_HOME": "/Users/zouguojun/.cargo",
+            "RUSTUP_HOME": "/Users/zouguojun/.rustup",
+            "TMPDIR": "/var/folders/qt/d007hr751cl59b3_8sptd8fr0000gp/T/aleph-phase9-test-mmb8g7rl",
+            "CARGO_TARGET_DIR": "/Volumes/TBU4/Workspace/Aleph/.phase9-target",
+            "RUST_BACKTRACE": "1"
+          },
+          "exit_code": 101,
+          "timed_out": false,
+          "unjoined_descendants": false,
+          "elapsed_seconds": 1.4570601250161417,
+          "stdout": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T060345.297087Z.stdout.log",
+          "stderr": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T060345.297087Z.stderr.log"
+        },
+        "fixture": {
+          "path": "/var/folders/qt/d007hr751cl59b3_8sptd8fr0000gp/T/aleph-phase9-test-mmb8g7rl",
+          "cleanup": "removed"
+        }
+      },
+      "supervisor": {
+        "argv": [
+          "/opt/homebrew/opt/python@3.15/bin/python3.15",
+          "qa/phase9_test_closure.py",
+          "--repo-root",
+          ".",
+          "--target-dir",
+          ".phase9-target",
+          "--receipt",
+          "docs/superpowers/runs/2026-11-15-phase9-test-closure-receipt.md",
+          "--timeout-seconds",
+          "600",
+          "--test-filter",
+          "extension::context_adapter::tests::lifecycle_mount_dynamic_resolver_grant_revoke_and_replacement"
+        ],
+        "cwd": "/Volumes/TBU4/Workspace/Aleph",
+        "env_overrides": {},
+        "exit_code": 1,
+        "timed_out": false,
+        "unjoined_descendants": false,
+        "elapsed_seconds": 1.515904416970443,
+        "stdout": "/Volumes/TBU4/Workspace/Aleph/.superpowers/sdd/2026-11-15-phase9-runtime-proof-and-dependency-closure/matrix-08.stdout.log",
+        "stderr": "/Volumes/TBU4/Workspace/Aleph/.superpowers/sdd/2026-11-15-phase9-runtime-proof-and-dependency-closure/matrix-08.stderr.log"
+      }
+    },
+    {
+      "case": "extension::hooks::consent::tests::only_a_spliced_text_beside_its_literal_sibling_is_superseded",
+      "receipt": {
+        "schema_version": 1,
+        "timestamp": "20261116T060346.813355Z",
+        "memory_gate": {
+          "argv": [
+            "python3",
+            "qa/browser_live/check_memory.py",
+            "--required-bytes",
+            "4294967296"
+          ],
+          "cwd": "/Volumes/TBU4/Workspace/Aleph",
+          "env_overrides": {},
+          "exit_code": 0,
+          "timed_out": false,
+          "unjoined_descendants": false,
+          "elapsed_seconds": 0.028098125010728836,
+          "stdout": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T060346.813355Z-memory.stdout.log",
+          "stderr": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T060346.813355Z-memory.stderr.log"
+        },
+        "test_filter": "extension::hooks::consent::tests::only_a_spliced_text_beside_its_literal_sibling_is_superseded",
+        "status": "PASS",
+        "command": {
+          "argv": [
+            "cargo",
+            "test",
+            "-p",
+            "alephcore",
+            "--lib",
+            "--offline",
+            "--locked",
+            "--jobs",
+            "1",
+            "extension::hooks::consent::tests::only_a_spliced_text_beside_its_literal_sibling_is_superseded",
+            "--",
+            "--test-threads=1"
+          ],
+          "cwd": "/Volumes/TBU4/Workspace/Aleph",
+          "env_overrides": {
+            "HOME": "/var/folders/qt/d007hr751cl59b3_8sptd8fr0000gp/T/aleph-phase9-test-ifcmov40/home",
+            "USERPROFILE": "/var/folders/qt/d007hr751cl59b3_8sptd8fr0000gp/T/aleph-phase9-test-ifcmov40/home",
+            "ALEPH_HOME": "/var/folders/qt/d007hr751cl59b3_8sptd8fr0000gp/T/aleph-phase9-test-ifcmov40/home/.aleph",
+            "CARGO_HOME": "/Users/zouguojun/.cargo",
+            "RUSTUP_HOME": "/Users/zouguojun/.rustup",
+            "TMPDIR": "/var/folders/qt/d007hr751cl59b3_8sptd8fr0000gp/T/aleph-phase9-test-ifcmov40",
+            "CARGO_TARGET_DIR": "/Volumes/TBU4/Workspace/Aleph/.phase9-target",
+            "RUST_BACKTRACE": "1"
+          },
+          "exit_code": 0,
+          "timed_out": false,
+          "unjoined_descendants": false,
+          "elapsed_seconds": 0.5429460000013933,
+          "stdout": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T060346.813355Z.stdout.log",
+          "stderr": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T060346.813355Z.stderr.log"
+        },
+        "fixture": {
+          "path": "/var/folders/qt/d007hr751cl59b3_8sptd8fr0000gp/T/aleph-phase9-test-ifcmov40",
+          "cleanup": "removed"
+        }
+      },
+      "supervisor": {
+        "argv": [
+          "/opt/homebrew/opt/python@3.15/bin/python3.15",
+          "qa/phase9_test_closure.py",
+          "--repo-root",
+          ".",
+          "--target-dir",
+          ".phase9-target",
+          "--receipt",
+          "docs/superpowers/runs/2026-11-15-phase9-test-closure-receipt.md",
+          "--timeout-seconds",
+          "600",
+          "--test-filter",
+          "extension::hooks::consent::tests::only_a_spliced_text_beside_its_literal_sibling_is_superseded"
+        ],
+        "cwd": "/Volumes/TBU4/Workspace/Aleph",
+        "env_overrides": {},
+        "exit_code": 0,
+        "timed_out": false,
+        "unjoined_descendants": false,
+        "elapsed_seconds": 0.6022306670201942,
+        "stdout": "/Volumes/TBU4/Workspace/Aleph/.superpowers/sdd/2026-11-15-phase9-runtime-proof-and-dependency-closure/matrix-09.stdout.log",
+        "stderr": "/Volumes/TBU4/Workspace/Aleph/.superpowers/sdd/2026-11-15-phase9-runtime-proof-and-dependency-closure/matrix-09.stderr.log"
+      }
+    },
+    {
+      "case": "extension::hooks::executor::tests::a_plugin_hooks_data_directory_reaches_it_through_the_environment",
+      "receipt": {
+        "schema_version": 1,
+        "timestamp": "20261116T060347.415416Z",
+        "memory_gate": {
+          "argv": [
+            "python3",
+            "qa/browser_live/check_memory.py",
+            "--required-bytes",
+            "4294967296"
+          ],
+          "cwd": "/Volumes/TBU4/Workspace/Aleph",
+          "env_overrides": {},
+          "exit_code": 0,
+          "timed_out": false,
+          "unjoined_descendants": false,
+          "elapsed_seconds": 0.027535125031135976,
+          "stdout": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T060347.415416Z-memory.stdout.log",
+          "stderr": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T060347.415416Z-memory.stderr.log"
+        },
+        "test_filter": "extension::hooks::executor::tests::a_plugin_hooks_data_directory_reaches_it_through_the_environment",
+        "status": "PASS",
+        "command": {
+          "argv": [
+            "cargo",
+            "test",
+            "-p",
+            "alephcore",
+            "--lib",
+            "--offline",
+            "--locked",
+            "--jobs",
+            "1",
+            "extension::hooks::executor::tests::a_plugin_hooks_data_directory_reaches_it_through_the_environment",
+            "--",
+            "--test-threads=1"
+          ],
+          "cwd": "/Volumes/TBU4/Workspace/Aleph",
+          "env_overrides": {
+            "HOME": "/var/folders/qt/d007hr751cl59b3_8sptd8fr0000gp/T/aleph-phase9-test-30ie1oxq/home",
+            "USERPROFILE": "/var/folders/qt/d007hr751cl59b3_8sptd8fr0000gp/T/aleph-phase9-test-30ie1oxq/home",
+            "ALEPH_HOME": "/var/folders/qt/d007hr751cl59b3_8sptd8fr0000gp/T/aleph-phase9-test-30ie1oxq/home/.aleph",
+            "CARGO_HOME": "/Users/zouguojun/.cargo",
+            "RUSTUP_HOME": "/Users/zouguojun/.rustup",
+            "TMPDIR": "/var/folders/qt/d007hr751cl59b3_8sptd8fr0000gp/T/aleph-phase9-test-30ie1oxq",
+            "CARGO_TARGET_DIR": "/Volumes/TBU4/Workspace/Aleph/.phase9-target",
+            "RUST_BACKTRACE": "1"
+          },
+          "exit_code": 0,
+          "timed_out": false,
+          "unjoined_descendants": false,
+          "elapsed_seconds": 0.5464778330060653,
+          "stdout": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T060347.415416Z.stdout.log",
+          "stderr": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T060347.415416Z.stderr.log"
+        },
+        "fixture": {
+          "path": "/var/folders/qt/d007hr751cl59b3_8sptd8fr0000gp/T/aleph-phase9-test-30ie1oxq",
+          "cleanup": "removed"
+        }
+      },
+      "supervisor": {
+        "argv": [
+          "/opt/homebrew/opt/python@3.15/bin/python3.15",
+          "qa/phase9_test_closure.py",
+          "--repo-root",
+          ".",
+          "--target-dir",
+          ".phase9-target",
+          "--receipt",
+          "docs/superpowers/runs/2026-11-15-phase9-test-closure-receipt.md",
+          "--timeout-seconds",
+          "600",
+          "--test-filter",
+          "extension::hooks::executor::tests::a_plugin_hooks_data_directory_reaches_it_through_the_environment"
+        ],
+        "cwd": "/Volumes/TBU4/Workspace/Aleph",
+        "env_overrides": {},
+        "exit_code": 0,
+        "timed_out": false,
+        "unjoined_descendants": false,
+        "elapsed_seconds": 0.6046581249684095,
+        "stdout": "/Volumes/TBU4/Workspace/Aleph/.superpowers/sdd/2026-11-15-phase9-runtime-proof-and-dependency-closure/matrix-10.stdout.log",
+        "stderr": "/Volumes/TBU4/Workspace/Aleph/.superpowers/sdd/2026-11-15-phase9-runtime-proof-and-dependency-closure/matrix-10.stderr.log"
+      }
+    },
+    {
+      "case": "extension::hooks::output_budget::tests::oversized_context_is_bounded_and_keeps_head_and_tail",
+      "receipt": {
+        "schema_version": 1,
+        "timestamp": "20261116T060348.020649Z",
+        "memory_gate": {
+          "argv": [
+            "python3",
+            "qa/browser_live/check_memory.py",
+            "--required-bytes",
+            "4294967296"
+          ],
+          "cwd": "/Volumes/TBU4/Workspace/Aleph",
+          "env_overrides": {},
+          "exit_code": 0,
+          "timed_out": false,
+          "unjoined_descendants": false,
+          "elapsed_seconds": 0.02870158402947709,
+          "stdout": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T060348.020649Z-memory.stdout.log",
+          "stderr": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T060348.020649Z-memory.stderr.log"
+        },
+        "test_filter": "extension::hooks::output_budget::tests::oversized_context_is_bounded_and_keeps_head_and_tail",
+        "status": "PASS",
+        "command": {
+          "argv": [
+            "cargo",
+            "test",
+            "-p",
+            "alephcore",
+            "--lib",
+            "--offline",
+            "--locked",
+            "--jobs",
+            "1",
+            "extension::hooks::output_budget::tests::oversized_context_is_bounded_and_keeps_head_and_tail",
+            "--",
+            "--test-threads=1"
+          ],
+          "cwd": "/Volumes/TBU4/Workspace/Aleph",
+          "env_overrides": {
+            "HOME": "/var/folders/qt/d007hr751cl59b3_8sptd8fr0000gp/T/aleph-phase9-test-ht_t4ql5/home",
+            "USERPROFILE": "/var/folders/qt/d007hr751cl59b3_8sptd8fr0000gp/T/aleph-phase9-test-ht_t4ql5/home",
+            "ALEPH_HOME": "/var/folders/qt/d007hr751cl59b3_8sptd8fr0000gp/T/aleph-phase9-test-ht_t4ql5/home/.aleph",
+            "CARGO_HOME": "/Users/zouguojun/.cargo",
+            "RUSTUP_HOME": "/Users/zouguojun/.rustup",
+            "TMPDIR": "/var/folders/qt/d007hr751cl59b3_8sptd8fr0000gp/T/aleph-phase9-test-ht_t4ql5",
+            "CARGO_TARGET_DIR": "/Volumes/TBU4/Workspace/Aleph/.phase9-target",
+            "RUST_BACKTRACE": "1"
+          },
+          "exit_code": 0,
+          "timed_out": false,
+          "unjoined_descendants": false,
+          "elapsed_seconds": 0.548463459010236,
+          "stdout": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T060348.020649Z.stdout.log",
+          "stderr": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T060348.020649Z.stderr.log"
+        },
+        "fixture": {
+          "path": "/var/folders/qt/d007hr751cl59b3_8sptd8fr0000gp/T/aleph-phase9-test-ht_t4ql5",
+          "cleanup": "removed"
+        }
+      },
+      "supervisor": {
+        "argv": [
+          "/opt/homebrew/opt/python@3.15/bin/python3.15",
+          "qa/phase9_test_closure.py",
+          "--repo-root",
+          ".",
+          "--target-dir",
+          ".phase9-target",
+          "--receipt",
+          "docs/superpowers/runs/2026-11-15-phase9-test-closure-receipt.md",
+          "--timeout-seconds",
+          "600",
+          "--test-filter",
+          "extension::hooks::output_budget::tests::oversized_context_is_bounded_and_keeps_head_and_tail"
+        ],
+        "cwd": "/Volumes/TBU4/Workspace/Aleph",
+        "env_overrides": {},
+        "exit_code": 0,
+        "timed_out": false,
+        "unjoined_descendants": false,
+        "elapsed_seconds": 0.6081058330019005,
+        "stdout": "/Volumes/TBU4/Workspace/Aleph/.superpowers/sdd/2026-11-15-phase9-runtime-proof-and-dependency-closure/matrix-11.stdout.log",
+        "stderr": "/Volumes/TBU4/Workspace/Aleph/.superpowers/sdd/2026-11-15-phase9-runtime-proof-and-dependency-closure/matrix-11.stderr.log"
+      }
+    },
+    {
+      "case": "extension::hooks::output_budget::tests::oversized_context_is_recoverable_from_the_spill_file",
+      "receipt": {
+        "schema_version": 1,
+        "timestamp": "20261116T060348.629238Z",
+        "memory_gate": {
+          "argv": [
+            "python3",
+            "qa/browser_live/check_memory.py",
+            "--required-bytes",
+            "4294967296"
+          ],
+          "cwd": "/Volumes/TBU4/Workspace/Aleph",
+          "env_overrides": {},
+          "exit_code": 0,
+          "timed_out": false,
+          "unjoined_descendants": false,
+          "elapsed_seconds": 0.028482166002504528,
+          "stdout": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T060348.629238Z-memory.stdout.log",
+          "stderr": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T060348.629238Z-memory.stderr.log"
+        },
+        "test_filter": "extension::hooks::output_budget::tests::oversized_context_is_recoverable_from_the_spill_file",
+        "status": "PASS",
+        "command": {
+          "argv": [
+            "cargo",
+            "test",
+            "-p",
+            "alephcore",
+            "--lib",
+            "--offline",
+            "--locked",
+            "--jobs",
+            "1",
+            "extension::hooks::output_budget::tests::oversized_context_is_recoverable_from_the_spill_file",
+            "--",
+            "--test-threads=1"
+          ],
+          "cwd": "/Volumes/TBU4/Workspace/Aleph",
+          "env_overrides": {
+            "HOME": "/var/folders/qt/d007hr751cl59b3_8sptd8fr0000gp/T/aleph-phase9-test-bj73ivjt/home",
+            "USERPROFILE": "/var/folders/qt/d007hr751cl59b3_8sptd8fr0000gp/T/aleph-phase9-test-bj73ivjt/home",
+            "ALEPH_HOME": "/var/folders/qt/d007hr751cl59b3_8sptd8fr0000gp/T/aleph-phase9-test-bj73ivjt/home/.aleph",
+            "CARGO_HOME": "/Users/zouguojun/.cargo",
+            "RUSTUP_HOME": "/Users/zouguojun/.rustup",
+            "TMPDIR": "/var/folders/qt/d007hr751cl59b3_8sptd8fr0000gp/T/aleph-phase9-test-bj73ivjt",
+            "CARGO_TARGET_DIR": "/Volumes/TBU4/Workspace/Aleph/.phase9-target",
+            "RUST_BACKTRACE": "1"
+          },
+          "exit_code": 0,
+          "timed_out": false,
+          "unjoined_descendants": false,
+          "elapsed_seconds": 0.5467334580025636,
+          "stdout": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T060348.629238Z.stdout.log",
+          "stderr": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T060348.629238Z.stderr.log"
+        },
+        "fixture": {
+          "path": "/var/folders/qt/d007hr751cl59b3_8sptd8fr0000gp/T/aleph-phase9-test-bj73ivjt",
+          "cleanup": "removed"
+        }
+      },
+      "supervisor": {
+        "argv": [
+          "/opt/homebrew/opt/python@3.15/bin/python3.15",
+          "qa/phase9_test_closure.py",
+          "--repo-root",
+          ".",
+          "--target-dir",
+          ".phase9-target",
+          "--receipt",
+          "docs/superpowers/runs/2026-11-15-phase9-test-closure-receipt.md",
+          "--timeout-seconds",
+          "600",
+          "--test-filter",
+          "extension::hooks::output_budget::tests::oversized_context_is_recoverable_from_the_spill_file"
+        ],
+        "cwd": "/Volumes/TBU4/Workspace/Aleph",
+        "env_overrides": {},
+        "exit_code": 0,
+        "timed_out": false,
+        "unjoined_descendants": false,
+        "elapsed_seconds": 0.606005624984391,
+        "stdout": "/Volumes/TBU4/Workspace/Aleph/.superpowers/sdd/2026-11-15-phase9-runtime-proof-and-dependency-closure/matrix-12.stdout.log",
+        "stderr": "/Volumes/TBU4/Workspace/Aleph/.superpowers/sdd/2026-11-15-phase9-runtime-proof-and-dependency-closure/matrix-12.stderr.log"
+      }
+    },
+    {
+      "case": "extension::hooks::output_budget::tests::preview_is_char_boundary_safe_for_multibyte_text",
+      "receipt": {
+        "schema_version": 1,
+        "timestamp": "20261116T060349.235279Z",
+        "memory_gate": {
+          "argv": [
+            "python3",
+            "qa/browser_live/check_memory.py",
+            "--required-bytes",
+            "4294967296"
+          ],
+          "cwd": "/Volumes/TBU4/Workspace/Aleph",
+          "env_overrides": {},
+          "exit_code": 0,
+          "timed_out": false,
+          "unjoined_descendants": false,
+          "elapsed_seconds": 0.02812037500552833,
+          "stdout": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T060349.235279Z-memory.stdout.log",
+          "stderr": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T060349.235279Z-memory.stderr.log"
+        },
+        "test_filter": "extension::hooks::output_budget::tests::preview_is_char_boundary_safe_for_multibyte_text",
+        "status": "PASS",
+        "command": {
+          "argv": [
+            "cargo",
+            "test",
+            "-p",
+            "alephcore",
+            "--lib",
+            "--offline",
+            "--locked",
+            "--jobs",
+            "1",
+            "extension::hooks::output_budget::tests::preview_is_char_boundary_safe_for_multibyte_text",
+            "--",
+            "--test-threads=1"
+          ],
+          "cwd": "/Volumes/TBU4/Workspace/Aleph",
+          "env_overrides": {
+            "HOME": "/var/folders/qt/d007hr751cl59b3_8sptd8fr0000gp/T/aleph-phase9-test-x9pwqls7/home",
+            "USERPROFILE": "/var/folders/qt/d007hr751cl59b3_8sptd8fr0000gp/T/aleph-phase9-test-x9pwqls7/home",
+            "ALEPH_HOME": "/var/folders/qt/d007hr751cl59b3_8sptd8fr0000gp/T/aleph-phase9-test-x9pwqls7/home/.aleph",
+            "CARGO_HOME": "/Users/zouguojun/.cargo",
+            "RUSTUP_HOME": "/Users/zouguojun/.rustup",
+            "TMPDIR": "/var/folders/qt/d007hr751cl59b3_8sptd8fr0000gp/T/aleph-phase9-test-x9pwqls7",
+            "CARGO_TARGET_DIR": "/Volumes/TBU4/Workspace/Aleph/.phase9-target",
+            "RUST_BACKTRACE": "1"
+          },
+          "exit_code": 0,
+          "timed_out": false,
+          "unjoined_descendants": false,
+          "elapsed_seconds": 0.5600775419734418,
+          "stdout": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T060349.235279Z.stdout.log",
+          "stderr": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T060349.235279Z.stderr.log"
+        },
+        "fixture": {
+          "path": "/var/folders/qt/d007hr751cl59b3_8sptd8fr0000gp/T/aleph-phase9-test-x9pwqls7",
+          "cleanup": "removed"
+        }
+      },
+      "supervisor": {
+        "argv": [
+          "/opt/homebrew/opt/python@3.15/bin/python3.15",
+          "qa/phase9_test_closure.py",
+          "--repo-root",
+          ".",
+          "--target-dir",
+          ".phase9-target",
+          "--receipt",
+          "docs/superpowers/runs/2026-11-15-phase9-test-closure-receipt.md",
+          "--timeout-seconds",
+          "600",
+          "--test-filter",
+          "extension::hooks::output_budget::tests::preview_is_char_boundary_safe_for_multibyte_text"
+        ],
+        "cwd": "/Volumes/TBU4/Workspace/Aleph",
+        "env_overrides": {},
+        "exit_code": 0,
+        "timed_out": false,
+        "unjoined_descendants": false,
+        "elapsed_seconds": 0.6189817499835044,
+        "stdout": "/Volumes/TBU4/Workspace/Aleph/.superpowers/sdd/2026-11-15-phase9-runtime-proof-and-dependency-closure/matrix-13.stdout.log",
+        "stderr": "/Volumes/TBU4/Workspace/Aleph/.superpowers/sdd/2026-11-15-phase9-runtime-proof-and-dependency-closure/matrix-13.stderr.log"
+      }
+    },
+    {
+      "case": "extension::hooks::registry::tests::plugin_collection_uses_active_owning_row_identity_despite_builtin_spelling",
+      "receipt": {
+        "schema_version": 1,
+        "timestamp": "20261116T060349.855482Z",
+        "memory_gate": {
+          "argv": [
+            "python3",
+            "qa/browser_live/check_memory.py",
+            "--required-bytes",
+            "4294967296"
+          ],
+          "cwd": "/Volumes/TBU4/Workspace/Aleph",
+          "env_overrides": {},
+          "exit_code": 0,
+          "timed_out": false,
+          "unjoined_descendants": false,
+          "elapsed_seconds": 0.027869459008798003,
+          "stdout": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T060349.855482Z-memory.stdout.log",
+          "stderr": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T060349.855482Z-memory.stderr.log"
+        },
+        "test_filter": "extension::hooks::registry::tests::plugin_collection_uses_active_owning_row_identity_despite_builtin_spelling",
+        "status": "PASS",
+        "command": {
+          "argv": [
+            "cargo",
+            "test",
+            "-p",
+            "alephcore",
+            "--lib",
+            "--offline",
+            "--locked",
+            "--jobs",
+            "1",
+            "extension::hooks::registry::tests::plugin_collection_uses_active_owning_row_identity_despite_builtin_spelling",
+            "--",
+            "--test-threads=1"
+          ],
+          "cwd": "/Volumes/TBU4/Workspace/Aleph",
+          "env_overrides": {
+            "HOME": "/var/folders/qt/d007hr751cl59b3_8sptd8fr0000gp/T/aleph-phase9-test-wwtbnn3q/home",
+            "USERPROFILE": "/var/folders/qt/d007hr751cl59b3_8sptd8fr0000gp/T/aleph-phase9-test-wwtbnn3q/home",
+            "ALEPH_HOME": "/var/folders/qt/d007hr751cl59b3_8sptd8fr0000gp/T/aleph-phase9-test-wwtbnn3q/home/.aleph",
+            "CARGO_HOME": "/Users/zouguojun/.cargo",
+            "RUSTUP_HOME": "/Users/zouguojun/.rustup",
+            "TMPDIR": "/var/folders/qt/d007hr751cl59b3_8sptd8fr0000gp/T/aleph-phase9-test-wwtbnn3q",
+            "CARGO_TARGET_DIR": "/Volumes/TBU4/Workspace/Aleph/.phase9-target",
+            "RUST_BACKTRACE": "1"
+          },
+          "exit_code": 0,
+          "timed_out": false,
+          "unjoined_descendants": false,
+          "elapsed_seconds": 0.5472355840029195,
+          "stdout": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T060349.855482Z.stdout.log",
+          "stderr": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T060349.855482Z.stderr.log"
+        },
+        "fixture": {
+          "path": "/var/folders/qt/d007hr751cl59b3_8sptd8fr0000gp/T/aleph-phase9-test-wwtbnn3q",
+          "cleanup": "removed"
+        }
+      },
+      "supervisor": {
+        "argv": [
+          "/opt/homebrew/opt/python@3.15/bin/python3.15",
+          "qa/phase9_test_closure.py",
+          "--repo-root",
+          ".",
+          "--target-dir",
+          ".phase9-target",
+          "--receipt",
+          "docs/superpowers/runs/2026-11-15-phase9-test-closure-receipt.md",
+          "--timeout-seconds",
+          "600",
+          "--test-filter",
+          "extension::hooks::registry::tests::plugin_collection_uses_active_owning_row_identity_despite_builtin_spelling"
+        ],
+        "cwd": "/Volumes/TBU4/Workspace/Aleph",
+        "env_overrides": {},
+        "exit_code": 0,
+        "timed_out": false,
+        "unjoined_descendants": false,
+        "elapsed_seconds": 0.6070939170313068,
+        "stdout": "/Volumes/TBU4/Workspace/Aleph/.superpowers/sdd/2026-11-15-phase9-runtime-proof-and-dependency-closure/matrix-14.stdout.log",
+        "stderr": "/Volumes/TBU4/Workspace/Aleph/.superpowers/sdd/2026-11-15-phase9-runtime-proof-and-dependency-closure/matrix-14.stderr.log"
+      }
+    },
+    {
+      "case": "extension::hooks::registry::tests::registered_loader_captures_each_real_file_and_preserves_public_configs",
+      "receipt": {
+        "schema_version": 1,
+        "timestamp": "20261116T060350.463171Z",
+        "memory_gate": {
+          "argv": [
+            "python3",
+            "qa/browser_live/check_memory.py",
+            "--required-bytes",
+            "4294967296"
+          ],
+          "cwd": "/Volumes/TBU4/Workspace/Aleph",
+          "env_overrides": {},
+          "exit_code": 0,
+          "timed_out": false,
+          "unjoined_descendants": false,
+          "elapsed_seconds": 0.029770207998808473,
+          "stdout": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T060350.463171Z-memory.stdout.log",
+          "stderr": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T060350.463171Z-memory.stderr.log"
+        },
+        "test_filter": "extension::hooks::registry::tests::registered_loader_captures_each_real_file_and_preserves_public_configs",
+        "status": "PASS",
+        "command": {
+          "argv": [
+            "cargo",
+            "test",
+            "-p",
+            "alephcore",
+            "--lib",
+            "--offline",
+            "--locked",
+            "--jobs",
+            "1",
+            "extension::hooks::registry::tests::registered_loader_captures_each_real_file_and_preserves_public_configs",
+            "--",
+            "--test-threads=1"
+          ],
+          "cwd": "/Volumes/TBU4/Workspace/Aleph",
+          "env_overrides": {
+            "HOME": "/var/folders/qt/d007hr751cl59b3_8sptd8fr0000gp/T/aleph-phase9-test-dk50xfst/home",
+            "USERPROFILE": "/var/folders/qt/d007hr751cl59b3_8sptd8fr0000gp/T/aleph-phase9-test-dk50xfst/home",
+            "ALEPH_HOME": "/var/folders/qt/d007hr751cl59b3_8sptd8fr0000gp/T/aleph-phase9-test-dk50xfst/home/.aleph",
+            "CARGO_HOME": "/Users/zouguojun/.cargo",
+            "RUSTUP_HOME": "/Users/zouguojun/.rustup",
+            "TMPDIR": "/var/folders/qt/d007hr751cl59b3_8sptd8fr0000gp/T/aleph-phase9-test-dk50xfst",
+            "CARGO_TARGET_DIR": "/Volumes/TBU4/Workspace/Aleph/.phase9-target",
+            "RUST_BACKTRACE": "1"
+          },
+          "exit_code": 0,
+          "timed_out": false,
+          "unjoined_descendants": false,
+          "elapsed_seconds": 0.5463675419450738,
+          "stdout": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T060350.463171Z.stdout.log",
+          "stderr": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T060350.463171Z.stderr.log"
+        },
+        "fixture": {
+          "path": "/var/folders/qt/d007hr751cl59b3_8sptd8fr0000gp/T/aleph-phase9-test-dk50xfst",
+          "cleanup": "removed"
+        }
+      },
+      "supervisor": {
+        "argv": [
+          "/opt/homebrew/opt/python@3.15/bin/python3.15",
+          "qa/phase9_test_closure.py",
+          "--repo-root",
+          ".",
+          "--target-dir",
+          ".phase9-target",
+          "--receipt",
+          "docs/superpowers/runs/2026-11-15-phase9-test-closure-receipt.md",
+          "--timeout-seconds",
+          "600",
+          "--test-filter",
+          "extension::hooks::registry::tests::registered_loader_captures_each_real_file_and_preserves_public_configs"
+        ],
+        "cwd": "/Volumes/TBU4/Workspace/Aleph",
+        "env_overrides": {},
+        "exit_code": 0,
+        "timed_out": false,
+        "unjoined_descendants": false,
+        "elapsed_seconds": 0.6077077079680748,
+        "stdout": "/Volumes/TBU4/Workspace/Aleph/.superpowers/sdd/2026-11-15-phase9-runtime-proof-and-dependency-closure/matrix-15.stdout.log",
+        "stderr": "/Volumes/TBU4/Workspace/Aleph/.superpowers/sdd/2026-11-15-phase9-runtime-proof-and-dependency-closure/matrix-15.stderr.log"
+      }
+    },
+    {
+      "case": "extension::mcp_plugin_tests::an_absolute_command_outside_the_root_is_counted_and_spawned",
+      "receipt": {
+        "schema_version": 1,
+        "timestamp": "20261116T060351.070770Z",
+        "memory_gate": {
+          "argv": [
+            "python3",
+            "qa/browser_live/check_memory.py",
+            "--required-bytes",
+            "4294967296"
+          ],
+          "cwd": "/Volumes/TBU4/Workspace/Aleph",
+          "env_overrides": {},
+          "exit_code": 0,
+          "timed_out": false,
+          "unjoined_descendants": false,
+          "elapsed_seconds": 0.02832949999719858,
+          "stdout": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T060351.070770Z-memory.stdout.log",
+          "stderr": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T060351.070770Z-memory.stderr.log"
+        },
+        "test_filter": "extension::mcp_plugin_tests::an_absolute_command_outside_the_root_is_counted_and_spawned",
+        "status": "FAIL",
+        "command": {
+          "argv": [
+            "cargo",
+            "test",
+            "-p",
+            "alephcore",
+            "--lib",
+            "--offline",
+            "--locked",
+            "--jobs",
+            "1",
+            "extension::mcp_plugin_tests::an_absolute_command_outside_the_root_is_counted_and_spawned",
+            "--",
+            "--test-threads=1"
+          ],
+          "cwd": "/Volumes/TBU4/Workspace/Aleph",
+          "env_overrides": {
+            "HOME": "/var/folders/qt/d007hr751cl59b3_8sptd8fr0000gp/T/aleph-phase9-test-rn2yfj3x/home",
+            "USERPROFILE": "/var/folders/qt/d007hr751cl59b3_8sptd8fr0000gp/T/aleph-phase9-test-rn2yfj3x/home",
+            "ALEPH_HOME": "/var/folders/qt/d007hr751cl59b3_8sptd8fr0000gp/T/aleph-phase9-test-rn2yfj3x/home/.aleph",
+            "CARGO_HOME": "/Users/zouguojun/.cargo",
+            "RUSTUP_HOME": "/Users/zouguojun/.rustup",
+            "TMPDIR": "/var/folders/qt/d007hr751cl59b3_8sptd8fr0000gp/T/aleph-phase9-test-rn2yfj3x",
+            "CARGO_TARGET_DIR": "/Volumes/TBU4/Workspace/Aleph/.phase9-target",
+            "RUST_BACKTRACE": "1"
+          },
+          "exit_code": 101,
+          "timed_out": false,
+          "unjoined_descendants": false,
+          "elapsed_seconds": 1.4561212499975227,
+          "stdout": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T060351.070770Z.stdout.log",
+          "stderr": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T060351.070770Z.stderr.log"
+        },
+        "fixture": {
+          "path": "/var/folders/qt/d007hr751cl59b3_8sptd8fr0000gp/T/aleph-phase9-test-rn2yfj3x",
+          "cleanup": "removed"
+        }
+      },
+      "supervisor": {
+        "argv": [
+          "/opt/homebrew/opt/python@3.15/bin/python3.15",
+          "qa/phase9_test_closure.py",
+          "--repo-root",
+          ".",
+          "--target-dir",
+          ".phase9-target",
+          "--receipt",
+          "docs/superpowers/runs/2026-11-15-phase9-test-closure-receipt.md",
+          "--timeout-seconds",
+          "600",
+          "--test-filter",
+          "extension::mcp_plugin_tests::an_absolute_command_outside_the_root_is_counted_and_spawned"
+        ],
+        "cwd": "/Volumes/TBU4/Workspace/Aleph",
+        "env_overrides": {},
+        "exit_code": 1,
+        "timed_out": false,
+        "unjoined_descendants": false,
+        "elapsed_seconds": 1.5155209579970688,
+        "stdout": "/Volumes/TBU4/Workspace/Aleph/.superpowers/sdd/2026-11-15-phase9-runtime-proof-and-dependency-closure/matrix-16.stdout.log",
+        "stderr": "/Volumes/TBU4/Workspace/Aleph/.superpowers/sdd/2026-11-15-phase9-runtime-proof-and-dependency-closure/matrix-16.stderr.log"
+      }
+    },
+    {
+      "case": "extension::mcp_plugin_tests::an_explicit_non_mcp_runtime_counts_no_servers_and_says_why",
+      "receipt": {
+        "schema_version": 1,
+        "timestamp": "20261116T060352.586893Z",
+        "memory_gate": {
+          "argv": [
+            "python3",
+            "qa/browser_live/check_memory.py",
+            "--required-bytes",
+            "4294967296"
+          ],
+          "cwd": "/Volumes/TBU4/Workspace/Aleph",
+          "env_overrides": {},
+          "exit_code": 0,
+          "timed_out": false,
+          "unjoined_descendants": false,
+          "elapsed_seconds": 0.029084582987707108,
+          "stdout": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T060352.586893Z-memory.stdout.log",
+          "stderr": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T060352.586893Z-memory.stderr.log"
+        },
+        "test_filter": "extension::mcp_plugin_tests::an_explicit_non_mcp_runtime_counts_no_servers_and_says_why",
+        "status": "FAIL",
+        "command": {
+          "argv": [
+            "cargo",
+            "test",
+            "-p",
+            "alephcore",
+            "--lib",
+            "--offline",
+            "--locked",
+            "--jobs",
+            "1",
+            "extension::mcp_plugin_tests::an_explicit_non_mcp_runtime_counts_no_servers_and_says_why",
+            "--",
+            "--test-threads=1"
+          ],
+          "cwd": "/Volumes/TBU4/Workspace/Aleph",
+          "env_overrides": {
+            "HOME": "/var/folders/qt/d007hr751cl59b3_8sptd8fr0000gp/T/aleph-phase9-test-fsj4jppl/home",
+            "USERPROFILE": "/var/folders/qt/d007hr751cl59b3_8sptd8fr0000gp/T/aleph-phase9-test-fsj4jppl/home",
+            "ALEPH_HOME": "/var/folders/qt/d007hr751cl59b3_8sptd8fr0000gp/T/aleph-phase9-test-fsj4jppl/home/.aleph",
+            "CARGO_HOME": "/Users/zouguojun/.cargo",
+            "RUSTUP_HOME": "/Users/zouguojun/.rustup",
+            "TMPDIR": "/var/folders/qt/d007hr751cl59b3_8sptd8fr0000gp/T/aleph-phase9-test-fsj4jppl",
+            "CARGO_TARGET_DIR": "/Volumes/TBU4/Workspace/Aleph/.phase9-target",
+            "RUST_BACKTRACE": "1"
+          },
+          "exit_code": 101,
+          "timed_out": false,
+          "unjoined_descendants": false,
+          "elapsed_seconds": 1.456441416987218,
+          "stdout": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T060352.586893Z.stdout.log",
+          "stderr": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T060352.586893Z.stderr.log"
+        },
+        "fixture": {
+          "path": "/var/folders/qt/d007hr751cl59b3_8sptd8fr0000gp/T/aleph-phase9-test-fsj4jppl",
+          "cleanup": "removed"
+        }
+      },
+      "supervisor": {
+        "argv": [
+          "/opt/homebrew/opt/python@3.15/bin/python3.15",
+          "qa/phase9_test_closure.py",
+          "--repo-root",
+          ".",
+          "--target-dir",
+          ".phase9-target",
+          "--receipt",
+          "docs/superpowers/runs/2026-11-15-phase9-test-closure-receipt.md",
+          "--timeout-seconds",
+          "600",
+          "--test-filter",
+          "extension::mcp_plugin_tests::an_explicit_non_mcp_runtime_counts_no_servers_and_says_why"
+        ],
+        "cwd": "/Volumes/TBU4/Workspace/Aleph",
+        "env_overrides": {},
+        "exit_code": 1,
+        "timed_out": false,
+        "unjoined_descendants": false,
+        "elapsed_seconds": 1.5170434170286171,
+        "stdout": "/Volumes/TBU4/Workspace/Aleph/.superpowers/sdd/2026-11-15-phase9-runtime-proof-and-dependency-closure/matrix-17.stdout.log",
+        "stderr": "/Volumes/TBU4/Workspace/Aleph/.superpowers/sdd/2026-11-15-phase9-runtime-proof-and-dependency-closure/matrix-17.stderr.log"
+      }
+    },
+    {
+      "case": "extension::mcp_plugin_tests::an_inline_mcp_servers_object_is_counted_and_spawned",
+      "receipt": {
+        "schema_version": 1,
+        "timestamp": "20261116T060354.104497Z",
+        "memory_gate": {
+          "argv": [
+            "python3",
+            "qa/browser_live/check_memory.py",
+            "--required-bytes",
+            "4294967296"
+          ],
+          "cwd": "/Volumes/TBU4/Workspace/Aleph",
+          "env_overrides": {},
+          "exit_code": 0,
+          "timed_out": false,
+          "unjoined_descendants": false,
+          "elapsed_seconds": 0.0290342919761315,
+          "stdout": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T060354.104497Z-memory.stdout.log",
+          "stderr": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T060354.104497Z-memory.stderr.log"
+        },
+        "test_filter": "extension::mcp_plugin_tests::an_inline_mcp_servers_object_is_counted_and_spawned",
+        "status": "FAIL",
+        "command": {
+          "argv": [
+            "cargo",
+            "test",
+            "-p",
+            "alephcore",
+            "--lib",
+            "--offline",
+            "--locked",
+            "--jobs",
+            "1",
+            "extension::mcp_plugin_tests::an_inline_mcp_servers_object_is_counted_and_spawned",
+            "--",
+            "--test-threads=1"
+          ],
+          "cwd": "/Volumes/TBU4/Workspace/Aleph",
+          "env_overrides": {
+            "HOME": "/var/folders/qt/d007hr751cl59b3_8sptd8fr0000gp/T/aleph-phase9-test-9jwidlzg/home",
+            "USERPROFILE": "/var/folders/qt/d007hr751cl59b3_8sptd8fr0000gp/T/aleph-phase9-test-9jwidlzg/home",
+            "ALEPH_HOME": "/var/folders/qt/d007hr751cl59b3_8sptd8fr0000gp/T/aleph-phase9-test-9jwidlzg/home/.aleph",
+            "CARGO_HOME": "/Users/zouguojun/.cargo",
+            "RUSTUP_HOME": "/Users/zouguojun/.rustup",
+            "TMPDIR": "/var/folders/qt/d007hr751cl59b3_8sptd8fr0000gp/T/aleph-phase9-test-9jwidlzg",
+            "CARGO_TARGET_DIR": "/Volumes/TBU4/Workspace/Aleph/.phase9-target",
+            "RUST_BACKTRACE": "1"
+          },
+          "exit_code": 101,
+          "timed_out": false,
+          "unjoined_descendants": false,
+          "elapsed_seconds": 1.4706068750238046,
+          "stdout": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T060354.104497Z.stdout.log",
+          "stderr": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T060354.104497Z.stderr.log"
+        },
+        "fixture": {
+          "path": "/var/folders/qt/d007hr751cl59b3_8sptd8fr0000gp/T/aleph-phase9-test-9jwidlzg",
+          "cleanup": "removed"
+        }
+      },
+      "supervisor": {
+        "argv": [
+          "/opt/homebrew/opt/python@3.15/bin/python3.15",
+          "qa/phase9_test_closure.py",
+          "--repo-root",
+          ".",
+          "--target-dir",
+          ".phase9-target",
+          "--receipt",
+          "docs/superpowers/runs/2026-11-15-phase9-test-closure-receipt.md",
+          "--timeout-seconds",
+          "600",
+          "--test-filter",
+          "extension::mcp_plugin_tests::an_inline_mcp_servers_object_is_counted_and_spawned"
+        ],
+        "cwd": "/Volumes/TBU4/Workspace/Aleph",
+        "env_overrides": {},
+        "exit_code": 1,
+        "timed_out": false,
+        "unjoined_descendants": false,
+        "elapsed_seconds": 1.531284417025745,
+        "stdout": "/Volumes/TBU4/Workspace/Aleph/.superpowers/sdd/2026-11-15-phase9-runtime-proof-and-dependency-closure/matrix-18.stdout.log",
+        "stderr": "/Volumes/TBU4/Workspace/Aleph/.superpowers/sdd/2026-11-15-phase9-runtime-proof-and-dependency-closure/matrix-18.stderr.log"
+      }
+    },
+    {
+      "case": "extension::service_ops::tests::manual_service_control_serializes_with_mount_lifecycle",
+      "receipt": {
+        "schema_version": 1,
+        "timestamp": "20261116T060355.636410Z",
+        "memory_gate": {
+          "argv": [
+            "python3",
+            "qa/browser_live/check_memory.py",
+            "--required-bytes",
+            "4294967296"
+          ],
+          "cwd": "/Volumes/TBU4/Workspace/Aleph",
+          "env_overrides": {},
+          "exit_code": 0,
+          "timed_out": false,
+          "unjoined_descendants": false,
+          "elapsed_seconds": 0.028633209003601223,
+          "stdout": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T060355.636410Z-memory.stdout.log",
+          "stderr": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T060355.636410Z-memory.stderr.log"
+        },
+        "test_filter": "extension::service_ops::tests::manual_service_control_serializes_with_mount_lifecycle",
+        "status": "PASS",
+        "command": {
+          "argv": [
+            "cargo",
+            "test",
+            "-p",
+            "alephcore",
+            "--lib",
+            "--offline",
+            "--locked",
+            "--jobs",
+            "1",
+            "extension::service_ops::tests::manual_service_control_serializes_with_mount_lifecycle",
+            "--",
+            "--test-threads=1"
+          ],
+          "cwd": "/Volumes/TBU4/Workspace/Aleph",
+          "env_overrides": {
+            "HOME": "/var/folders/qt/d007hr751cl59b3_8sptd8fr0000gp/T/aleph-phase9-test-g14ucvic/home",
+            "USERPROFILE": "/var/folders/qt/d007hr751cl59b3_8sptd8fr0000gp/T/aleph-phase9-test-g14ucvic/home",
+            "ALEPH_HOME": "/var/folders/qt/d007hr751cl59b3_8sptd8fr0000gp/T/aleph-phase9-test-g14ucvic/home/.aleph",
+            "CARGO_HOME": "/Users/zouguojun/.cargo",
+            "RUSTUP_HOME": "/Users/zouguojun/.rustup",
+            "TMPDIR": "/var/folders/qt/d007hr751cl59b3_8sptd8fr0000gp/T/aleph-phase9-test-g14ucvic",
+            "CARGO_TARGET_DIR": "/Volumes/TBU4/Workspace/Aleph/.phase9-target",
+            "RUST_BACKTRACE": "1"
+          },
+          "exit_code": 0,
+          "timed_out": false,
+          "unjoined_descendants": false,
+          "elapsed_seconds": 1.2978803750011139,
+          "stdout": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T060355.636410Z.stdout.log",
+          "stderr": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T060355.636410Z.stderr.log"
+        },
+        "fixture": {
+          "path": "/var/folders/qt/d007hr751cl59b3_8sptd8fr0000gp/T/aleph-phase9-test-g14ucvic",
+          "cleanup": "removed"
+        }
+      },
+      "supervisor": {
+        "argv": [
+          "/opt/homebrew/opt/python@3.15/bin/python3.15",
+          "qa/phase9_test_closure.py",
+          "--repo-root",
+          ".",
+          "--target-dir",
+          ".phase9-target",
+          "--receipt",
+          "docs/superpowers/runs/2026-11-15-phase9-test-closure-receipt.md",
+          "--timeout-seconds",
+          "600",
+          "--test-filter",
+          "extension::service_ops::tests::manual_service_control_serializes_with_mount_lifecycle"
+        ],
+        "cwd": "/Volumes/TBU4/Workspace/Aleph",
+        "env_overrides": {},
+        "exit_code": 0,
+        "timed_out": false,
+        "unjoined_descendants": false,
+        "elapsed_seconds": 1.35846641700482,
+        "stdout": "/Volumes/TBU4/Workspace/Aleph/.superpowers/sdd/2026-11-15-phase9-runtime-proof-and-dependency-closure/matrix-19.stdout.log",
+        "stderr": "/Volumes/TBU4/Workspace/Aleph/.superpowers/sdd/2026-11-15-phase9-runtime-proof-and-dependency-closure/matrix-19.stderr.log"
+      }
+    },
+    {
+      "case": "extension::service_ops::tests::manual_stop_does_not_target_replacement_mount",
+      "receipt": {
+        "schema_version": 1,
+        "timestamp": "20261116T060356.995881Z",
+        "memory_gate": {
+          "argv": [
+            "python3",
+            "qa/browser_live/check_memory.py",
+            "--required-bytes",
+            "4294967296"
+          ],
+          "cwd": "/Volumes/TBU4/Workspace/Aleph",
+          "env_overrides": {},
+          "exit_code": 0,
+          "timed_out": false,
+          "unjoined_descendants": false,
+          "elapsed_seconds": 0.0284230419783853,
+          "stdout": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T060356.995881Z-memory.stdout.log",
+          "stderr": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T060356.995881Z-memory.stderr.log"
+        },
+        "test_filter": "extension::service_ops::tests::manual_stop_does_not_target_replacement_mount",
+        "status": "PASS",
+        "command": {
+          "argv": [
+            "cargo",
+            "test",
+            "-p",
+            "alephcore",
+            "--lib",
+            "--offline",
+            "--locked",
+            "--jobs",
+            "1",
+            "extension::service_ops::tests::manual_stop_does_not_target_replacement_mount",
+            "--",
+            "--test-threads=1"
+          ],
+          "cwd": "/Volumes/TBU4/Workspace/Aleph",
+          "env_overrides": {
+            "HOME": "/var/folders/qt/d007hr751cl59b3_8sptd8fr0000gp/T/aleph-phase9-test-rm8vag_6/home",
+            "USERPROFILE": "/var/folders/qt/d007hr751cl59b3_8sptd8fr0000gp/T/aleph-phase9-test-rm8vag_6/home",
+            "ALEPH_HOME": "/var/folders/qt/d007hr751cl59b3_8sptd8fr0000gp/T/aleph-phase9-test-rm8vag_6/home/.aleph",
+            "CARGO_HOME": "/Users/zouguojun/.cargo",
+            "RUSTUP_HOME": "/Users/zouguojun/.rustup",
+            "TMPDIR": "/var/folders/qt/d007hr751cl59b3_8sptd8fr0000gp/T/aleph-phase9-test-rm8vag_6",
+            "CARGO_TARGET_DIR": "/Volumes/TBU4/Workspace/Aleph/.phase9-target",
+            "RUST_BACKTRACE": "1"
+          },
+          "exit_code": 0,
+          "timed_out": false,
+          "unjoined_descendants": false,
+          "elapsed_seconds": 1.248415040958207,
+          "stdout": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T060356.995881Z.stdout.log",
+          "stderr": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T060356.995881Z.stderr.log"
+        },
+        "fixture": {
+          "path": "/var/folders/qt/d007hr751cl59b3_8sptd8fr0000gp/T/aleph-phase9-test-rm8vag_6",
+          "cleanup": "removed"
+        }
+      },
+      "supervisor": {
+        "argv": [
+          "/opt/homebrew/opt/python@3.15/bin/python3.15",
+          "qa/phase9_test_closure.py",
+          "--repo-root",
+          ".",
+          "--target-dir",
+          ".phase9-target",
+          "--receipt",
+          "docs/superpowers/runs/2026-11-15-phase9-test-closure-receipt.md",
+          "--timeout-seconds",
+          "600",
+          "--test-filter",
+          "extension::service_ops::tests::manual_stop_does_not_target_replacement_mount"
+        ],
+        "cwd": "/Volumes/TBU4/Workspace/Aleph",
+        "env_overrides": {},
+        "exit_code": 0,
+        "timed_out": false,
+        "unjoined_descendants": false,
+        "elapsed_seconds": 1.3090630830265582,
+        "stdout": "/Volumes/TBU4/Workspace/Aleph/.superpowers/sdd/2026-11-15-phase9-runtime-proof-and-dependency-closure/matrix-20.stdout.log",
+        "stderr": "/Volumes/TBU4/Workspace/Aleph/.superpowers/sdd/2026-11-15-phase9-runtime-proof-and-dependency-closure/matrix-20.stderr.log"
+      }
+    },
+    {
+      "case": "extension::tests::projection_publishes_skill_dirs_with_their_scope_keys",
+      "receipt": {
+        "schema_version": 1,
+        "timestamp": "20261116T060358.306534Z",
+        "memory_gate": {
+          "argv": [
+            "python3",
+            "qa/browser_live/check_memory.py",
+            "--required-bytes",
+            "4294967296"
+          ],
+          "cwd": "/Volumes/TBU4/Workspace/Aleph",
+          "env_overrides": {},
+          "exit_code": 0,
+          "timed_out": false,
+          "unjoined_descendants": false,
+          "elapsed_seconds": 0.03145358298206702,
+          "stdout": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T060358.306534Z-memory.stdout.log",
+          "stderr": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T060358.306534Z-memory.stderr.log"
+        },
+        "test_filter": "extension::tests::projection_publishes_skill_dirs_with_their_scope_keys",
+        "status": "FAIL",
+        "command": {
+          "argv": [
+            "cargo",
+            "test",
+            "-p",
+            "alephcore",
+            "--lib",
+            "--offline",
+            "--locked",
+            "--jobs",
+            "1",
+            "extension::tests::projection_publishes_skill_dirs_with_their_scope_keys",
+            "--",
+            "--test-threads=1"
+          ],
+          "cwd": "/Volumes/TBU4/Workspace/Aleph",
+          "env_overrides": {
+            "HOME": "/var/folders/qt/d007hr751cl59b3_8sptd8fr0000gp/T/aleph-phase9-test-1on1bzjm/home",
+            "USERPROFILE": "/var/folders/qt/d007hr751cl59b3_8sptd8fr0000gp/T/aleph-phase9-test-1on1bzjm/home",
+            "ALEPH_HOME": "/var/folders/qt/d007hr751cl59b3_8sptd8fr0000gp/T/aleph-phase9-test-1on1bzjm/home/.aleph",
+            "CARGO_HOME": "/Users/zouguojun/.cargo",
+            "RUSTUP_HOME": "/Users/zouguojun/.rustup",
+            "TMPDIR": "/var/folders/qt/d007hr751cl59b3_8sptd8fr0000gp/T/aleph-phase9-test-1on1bzjm",
+            "CARGO_TARGET_DIR": "/Volumes/TBU4/Workspace/Aleph/.phase9-target",
+            "RUST_BACKTRACE": "1"
+          },
+          "exit_code": 101,
+          "timed_out": false,
+          "unjoined_descendants": false,
+          "elapsed_seconds": 1.4817566249985248,
+          "stdout": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T060358.306534Z.stdout.log",
+          "stderr": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T060358.306534Z.stderr.log"
+        },
+        "fixture": {
+          "path": "/var/folders/qt/d007hr751cl59b3_8sptd8fr0000gp/T/aleph-phase9-test-1on1bzjm",
+          "cleanup": "removed"
+        }
+      },
+      "supervisor": {
+        "argv": [
+          "/opt/homebrew/opt/python@3.15/bin/python3.15",
+          "qa/phase9_test_closure.py",
+          "--repo-root",
+          ".",
+          "--target-dir",
+          ".phase9-target",
+          "--receipt",
+          "docs/superpowers/runs/2026-11-15-phase9-test-closure-receipt.md",
+          "--timeout-seconds",
+          "600",
+          "--test-filter",
+          "extension::tests::projection_publishes_skill_dirs_with_their_scope_keys"
+        ],
+        "cwd": "/Volumes/TBU4/Workspace/Aleph",
+        "env_overrides": {},
+        "exit_code": 1,
+        "timed_out": false,
+        "unjoined_descendants": false,
+        "elapsed_seconds": 1.5462246660026722,
+        "stdout": "/Volumes/TBU4/Workspace/Aleph/.superpowers/sdd/2026-11-15-phase9-runtime-proof-and-dependency-closure/matrix-21.stdout.log",
+        "stderr": "/Volumes/TBU4/Workspace/Aleph/.superpowers/sdd/2026-11-15-phase9-runtime-proof-and-dependency-closure/matrix-21.stderr.log"
+      }
+    },
+    {
+      "case": "gateway::capability_events_tests::foreign_scope_denial_records_policy_violation_without_handler_effect",
+      "receipt": {
+        "schema_version": 1,
+        "timestamp": "20261116T060359.851185Z",
+        "memory_gate": {
+          "argv": [
+            "python3",
+            "qa/browser_live/check_memory.py",
+            "--required-bytes",
+            "4294967296"
+          ],
+          "cwd": "/Volumes/TBU4/Workspace/Aleph",
+          "env_overrides": {},
+          "exit_code": 0,
+          "timed_out": false,
+          "unjoined_descendants": false,
+          "elapsed_seconds": 0.0281378339859657,
+          "stdout": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T060359.851185Z-memory.stdout.log",
+          "stderr": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T060359.851185Z-memory.stderr.log"
+        },
+        "test_filter": "gateway::capability_events_tests::foreign_scope_denial_records_policy_violation_without_handler_effect",
+        "status": "PASS",
+        "command": {
+          "argv": [
+            "cargo",
+            "test",
+            "-p",
+            "alephcore",
+            "--lib",
+            "--offline",
+            "--locked",
+            "--jobs",
+            "1",
+            "gateway::capability_events_tests::foreign_scope_denial_records_policy_violation_without_handler_effect",
+            "--",
+            "--test-threads=1"
+          ],
+          "cwd": "/Volumes/TBU4/Workspace/Aleph",
+          "env_overrides": {
+            "HOME": "/var/folders/qt/d007hr751cl59b3_8sptd8fr0000gp/T/aleph-phase9-test-1wepjjnv/home",
+            "USERPROFILE": "/var/folders/qt/d007hr751cl59b3_8sptd8fr0000gp/T/aleph-phase9-test-1wepjjnv/home",
+            "ALEPH_HOME": "/var/folders/qt/d007hr751cl59b3_8sptd8fr0000gp/T/aleph-phase9-test-1wepjjnv/home/.aleph",
+            "CARGO_HOME": "/Users/zouguojun/.cargo",
+            "RUSTUP_HOME": "/Users/zouguojun/.rustup",
+            "TMPDIR": "/var/folders/qt/d007hr751cl59b3_8sptd8fr0000gp/T/aleph-phase9-test-1wepjjnv",
+            "CARGO_TARGET_DIR": "/Volumes/TBU4/Workspace/Aleph/.phase9-target",
+            "RUST_BACKTRACE": "1"
+          },
+          "exit_code": 0,
+          "timed_out": false,
+          "unjoined_descendants": false,
+          "elapsed_seconds": 0.5559569160104729,
+          "stdout": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T060359.851185Z.stdout.log",
+          "stderr": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T060359.851185Z.stderr.log"
+        },
+        "fixture": {
+          "path": "/var/folders/qt/d007hr751cl59b3_8sptd8fr0000gp/T/aleph-phase9-test-1wepjjnv",
+          "cleanup": "removed"
+        }
+      },
+      "supervisor": {
+        "argv": [
+          "/opt/homebrew/opt/python@3.15/bin/python3.15",
+          "qa/phase9_test_closure.py",
+          "--repo-root",
+          ".",
+          "--target-dir",
+          ".phase9-target",
+          "--receipt",
+          "docs/superpowers/runs/2026-11-15-phase9-test-closure-receipt.md",
+          "--timeout-seconds",
+          "600",
+          "--test-filter",
+          "gateway::capability_events_tests::foreign_scope_denial_records_policy_violation_without_handler_effect"
+        ],
+        "cwd": "/Volumes/TBU4/Workspace/Aleph",
+        "env_overrides": {},
+        "exit_code": 0,
+        "timed_out": false,
+        "unjoined_descendants": false,
+        "elapsed_seconds": 0.6149498750455678,
+        "stdout": "/Volumes/TBU4/Workspace/Aleph/.superpowers/sdd/2026-11-15-phase9-runtime-proof-and-dependency-closure/matrix-22.stdout.log",
+        "stderr": "/Volumes/TBU4/Workspace/Aleph/.superpowers/sdd/2026-11-15-phase9-runtime-proof-and-dependency-closure/matrix-22.stderr.log"
+      }
+    },
+    {
+      "case": "capability::zahir_facade::tests::stale_lease_after_owner_bump_fails_and_fresh_resolve_succeeds",
+      "receipt": {
+        "schema_version": 1,
+        "timestamp": "20261116T060400.466419Z",
+        "memory_gate": {
+          "argv": [
+            "python3",
+            "qa/browser_live/check_memory.py",
+            "--required-bytes",
+            "4294967296"
+          ],
+          "cwd": "/Volumes/TBU4/Workspace/Aleph",
+          "env_overrides": {},
+          "exit_code": 0,
+          "timed_out": false,
+          "unjoined_descendants": false,
+          "elapsed_seconds": 0.028508290997706354,
+          "stdout": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T060400.466419Z-memory.stdout.log",
+          "stderr": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T060400.466419Z-memory.stderr.log"
+        },
+        "test_filter": "capability::zahir_facade::tests::stale_lease_after_owner_bump_fails_and_fresh_resolve_succeeds",
+        "status": "PASS",
+        "command": {
+          "argv": [
+            "cargo",
+            "test",
+            "-p",
+            "alephcore",
+            "--lib",
+            "--offline",
+            "--locked",
+            "--jobs",
+            "1",
+            "capability::zahir_facade::tests::stale_lease_after_owner_bump_fails_and_fresh_resolve_succeeds",
+            "--",
+            "--test-threads=1"
+          ],
+          "cwd": "/Volumes/TBU4/Workspace/Aleph",
+          "env_overrides": {
+            "HOME": "/var/folders/qt/d007hr751cl59b3_8sptd8fr0000gp/T/aleph-phase9-test-er7ffu8w/home",
+            "USERPROFILE": "/var/folders/qt/d007hr751cl59b3_8sptd8fr0000gp/T/aleph-phase9-test-er7ffu8w/home",
+            "ALEPH_HOME": "/var/folders/qt/d007hr751cl59b3_8sptd8fr0000gp/T/aleph-phase9-test-er7ffu8w/home/.aleph",
+            "CARGO_HOME": "/Users/zouguojun/.cargo",
+            "RUSTUP_HOME": "/Users/zouguojun/.rustup",
+            "TMPDIR": "/var/folders/qt/d007hr751cl59b3_8sptd8fr0000gp/T/aleph-phase9-test-er7ffu8w",
+            "CARGO_TARGET_DIR": "/Volumes/TBU4/Workspace/Aleph/.phase9-target",
+            "RUST_BACKTRACE": "1"
+          },
+          "exit_code": 0,
+          "timed_out": false,
+          "unjoined_descendants": false,
+          "elapsed_seconds": 0.5382681250339374,
+          "stdout": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T060400.466419Z.stdout.log",
+          "stderr": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T060400.466419Z.stderr.log"
+        },
+        "fixture": {
+          "path": "/var/folders/qt/d007hr751cl59b3_8sptd8fr0000gp/T/aleph-phase9-test-er7ffu8w",
+          "cleanup": "removed"
+        }
+      },
+      "supervisor": {
+        "argv": [
+          "/opt/homebrew/opt/python@3.15/bin/python3.15",
+          "qa/phase9_test_closure.py",
+          "--repo-root",
+          ".",
+          "--target-dir",
+          ".phase9-target",
+          "--receipt",
+          "docs/superpowers/runs/2026-11-15-phase9-test-closure-receipt.md",
+          "--timeout-seconds",
+          "600",
+          "--test-filter",
+          "capability::zahir_facade::tests::stale_lease_after_owner_bump_fails_and_fresh_resolve_succeeds"
+        ],
+        "cwd": "/Volumes/TBU4/Workspace/Aleph",
+        "env_overrides": {},
+        "exit_code": 0,
+        "timed_out": false,
+        "unjoined_descendants": false,
+        "elapsed_seconds": 0.597725041967351,
+        "stdout": "/Volumes/TBU4/Workspace/Aleph/.superpowers/sdd/2026-11-15-phase9-runtime-proof-and-dependency-closure/matrix-23.stdout.log",
+        "stderr": "/Volumes/TBU4/Workspace/Aleph/.superpowers/sdd/2026-11-15-phase9-runtime-proof-and-dependency-closure/matrix-23.stderr.log"
+      }
+    },
+    {
+      "case": "gateway::capability_events_tests::ui_surface_cancel_after_dispatch_joins_worker_and_clears_pending",
+      "receipt": {
+        "schema_version": 1,
+        "timestamp": "20261116T060401.064434Z",
+        "memory_gate": {
+          "argv": [
+            "python3",
+            "qa/browser_live/check_memory.py",
+            "--required-bytes",
+            "4294967296"
+          ],
+          "cwd": "/Volumes/TBU4/Workspace/Aleph",
+          "env_overrides": {},
+          "exit_code": 0,
+          "timed_out": false,
+          "unjoined_descendants": false,
+          "elapsed_seconds": 0.028549833048600703,
+          "stdout": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T060401.064434Z-memory.stdout.log",
+          "stderr": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T060401.064434Z-memory.stderr.log"
+        },
+        "test_filter": "gateway::capability_events_tests::ui_surface_cancel_after_dispatch_joins_worker_and_clears_pending",
+        "status": "PASS",
+        "command": {
+          "argv": [
+            "cargo",
+            "test",
+            "-p",
+            "alephcore",
+            "--lib",
+            "--offline",
+            "--locked",
+            "--jobs",
+            "1",
+            "gateway::capability_events_tests::ui_surface_cancel_after_dispatch_joins_worker_and_clears_pending",
+            "--",
+            "--test-threads=1"
+          ],
+          "cwd": "/Volumes/TBU4/Workspace/Aleph",
+          "env_overrides": {
+            "HOME": "/var/folders/qt/d007hr751cl59b3_8sptd8fr0000gp/T/aleph-phase9-test-0llj1n6c/home",
+            "USERPROFILE": "/var/folders/qt/d007hr751cl59b3_8sptd8fr0000gp/T/aleph-phase9-test-0llj1n6c/home",
+            "ALEPH_HOME": "/var/folders/qt/d007hr751cl59b3_8sptd8fr0000gp/T/aleph-phase9-test-0llj1n6c/home/.aleph",
+            "CARGO_HOME": "/Users/zouguojun/.cargo",
+            "RUSTUP_HOME": "/Users/zouguojun/.rustup",
+            "TMPDIR": "/var/folders/qt/d007hr751cl59b3_8sptd8fr0000gp/T/aleph-phase9-test-0llj1n6c",
+            "CARGO_TARGET_DIR": "/Volumes/TBU4/Workspace/Aleph/.phase9-target",
+            "RUST_BACKTRACE": "1"
+          },
+          "exit_code": 0,
+          "timed_out": false,
+          "unjoined_descendants": false,
+          "elapsed_seconds": 0.5517062080325559,
+          "stdout": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T060401.064434Z.stdout.log",
+          "stderr": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T060401.064434Z.stderr.log"
+        },
+        "fixture": {
+          "path": "/var/folders/qt/d007hr751cl59b3_8sptd8fr0000gp/T/aleph-phase9-test-0llj1n6c",
+          "cleanup": "removed"
+        }
+      },
+      "supervisor": {
+        "argv": [
+          "/opt/homebrew/opt/python@3.15/bin/python3.15",
+          "qa/phase9_test_closure.py",
+          "--repo-root",
+          ".",
+          "--target-dir",
+          ".phase9-target",
+          "--receipt",
+          "docs/superpowers/runs/2026-11-15-phase9-test-closure-receipt.md",
+          "--timeout-seconds",
+          "600",
+          "--test-filter",
+          "gateway::capability_events_tests::ui_surface_cancel_after_dispatch_joins_worker_and_clears_pending"
+        ],
+        "cwd": "/Volumes/TBU4/Workspace/Aleph",
+        "env_overrides": {},
+        "exit_code": 0,
+        "timed_out": false,
+        "unjoined_descendants": false,
+        "elapsed_seconds": 0.6105719580082223,
+        "stdout": "/Volumes/TBU4/Workspace/Aleph/.superpowers/sdd/2026-11-15-phase9-runtime-proof-and-dependency-closure/matrix-24.stdout.log",
+        "stderr": "/Volumes/TBU4/Workspace/Aleph/.superpowers/sdd/2026-11-15-phase9-runtime-proof-and-dependency-closure/matrix-24.stderr.log"
+      }
+    },
+    {
+      "case": "capability::zahir_facade::tests::projection_lag_requires_snapshot_before_reconnect_resolve",
+      "receipt": {
+        "schema_version": 1,
+        "timestamp": "20261116T060401.676024Z",
+        "memory_gate": {
+          "argv": [
+            "python3",
+            "qa/browser_live/check_memory.py",
+            "--required-bytes",
+            "4294967296"
+          ],
+          "cwd": "/Volumes/TBU4/Workspace/Aleph",
+          "env_overrides": {},
+          "exit_code": 0,
+          "timed_out": false,
+          "unjoined_descendants": false,
+          "elapsed_seconds": 0.02863125002477318,
+          "stdout": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T060401.676024Z-memory.stdout.log",
+          "stderr": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T060401.676024Z-memory.stderr.log"
+        },
+        "test_filter": "capability::zahir_facade::tests::projection_lag_requires_snapshot_before_reconnect_resolve",
+        "status": "PASS",
+        "command": {
+          "argv": [
+            "cargo",
+            "test",
+            "-p",
+            "alephcore",
+            "--lib",
+            "--offline",
+            "--locked",
+            "--jobs",
+            "1",
+            "capability::zahir_facade::tests::projection_lag_requires_snapshot_before_reconnect_resolve",
+            "--",
+            "--test-threads=1"
+          ],
+          "cwd": "/Volumes/TBU4/Workspace/Aleph",
+          "env_overrides": {
+            "HOME": "/var/folders/qt/d007hr751cl59b3_8sptd8fr0000gp/T/aleph-phase9-test-ry9l43ra/home",
+            "USERPROFILE": "/var/folders/qt/d007hr751cl59b3_8sptd8fr0000gp/T/aleph-phase9-test-ry9l43ra/home",
+            "ALEPH_HOME": "/var/folders/qt/d007hr751cl59b3_8sptd8fr0000gp/T/aleph-phase9-test-ry9l43ra/home/.aleph",
+            "CARGO_HOME": "/Users/zouguojun/.cargo",
+            "RUSTUP_HOME": "/Users/zouguojun/.rustup",
+            "TMPDIR": "/var/folders/qt/d007hr751cl59b3_8sptd8fr0000gp/T/aleph-phase9-test-ry9l43ra",
+            "CARGO_TARGET_DIR": "/Volumes/TBU4/Workspace/Aleph/.phase9-target",
+            "RUST_BACKTRACE": "1"
+          },
+          "exit_code": 0,
+          "timed_out": false,
+          "unjoined_descendants": false,
+          "elapsed_seconds": 0.5708347500185482,
+          "stdout": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T060401.676024Z.stdout.log",
+          "stderr": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T060401.676024Z.stderr.log"
+        },
+        "fixture": {
+          "path": "/var/folders/qt/d007hr751cl59b3_8sptd8fr0000gp/T/aleph-phase9-test-ry9l43ra",
+          "cleanup": "removed"
+        }
+      },
+      "supervisor": {
+        "argv": [
+          "/opt/homebrew/opt/python@3.15/bin/python3.15",
+          "qa/phase9_test_closure.py",
+          "--repo-root",
+          ".",
+          "--target-dir",
+          ".phase9-target",
+          "--receipt",
+          "docs/superpowers/runs/2026-11-15-phase9-test-closure-receipt.md",
+          "--timeout-seconds",
+          "600",
+          "--test-filter",
+          "capability::zahir_facade::tests::projection_lag_requires_snapshot_before_reconnect_resolve"
+        ],
+        "cwd": "/Volumes/TBU4/Workspace/Aleph",
+        "env_overrides": {},
+        "exit_code": 0,
+        "timed_out": false,
+        "unjoined_descendants": false,
+        "elapsed_seconds": 0.6308797909878194,
+        "stdout": "/Volumes/TBU4/Workspace/Aleph/.superpowers/sdd/2026-11-15-phase9-runtime-proof-and-dependency-closure/matrix-25.stdout.log",
+        "stderr": "/Volumes/TBU4/Workspace/Aleph/.superpowers/sdd/2026-11-15-phase9-runtime-proof-and-dependency-closure/matrix-25.stderr.log"
+      }
+    },
+    {
+      "case": "capability::ui_surface_tests::disable_closes_owned_surface_and_rejects_old_lease",
+      "receipt": {
+        "schema_version": 1,
+        "timestamp": "20261116T060402.307412Z",
+        "memory_gate": {
+          "argv": [
+            "python3",
+            "qa/browser_live/check_memory.py",
+            "--required-bytes",
+            "4294967296"
+          ],
+          "cwd": "/Volumes/TBU4/Workspace/Aleph",
+          "env_overrides": {},
+          "exit_code": 0,
+          "timed_out": false,
+          "unjoined_descendants": false,
+          "elapsed_seconds": 0.02856549998978153,
+          "stdout": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T060402.307412Z-memory.stdout.log",
+          "stderr": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T060402.307412Z-memory.stderr.log"
+        },
+        "test_filter": "capability::ui_surface_tests::disable_closes_owned_surface_and_rejects_old_lease",
+        "status": "PASS",
+        "command": {
+          "argv": [
+            "cargo",
+            "test",
+            "-p",
+            "alephcore",
+            "--lib",
+            "--offline",
+            "--locked",
+            "--jobs",
+            "1",
+            "capability::ui_surface_tests::disable_closes_owned_surface_and_rejects_old_lease",
+            "--",
+            "--test-threads=1"
+          ],
+          "cwd": "/Volumes/TBU4/Workspace/Aleph",
+          "env_overrides": {
+            "HOME": "/var/folders/qt/d007hr751cl59b3_8sptd8fr0000gp/T/aleph-phase9-test-_7o8sc3_/home",
+            "USERPROFILE": "/var/folders/qt/d007hr751cl59b3_8sptd8fr0000gp/T/aleph-phase9-test-_7o8sc3_/home",
+            "ALEPH_HOME": "/var/folders/qt/d007hr751cl59b3_8sptd8fr0000gp/T/aleph-phase9-test-_7o8sc3_/home/.aleph",
+            "CARGO_HOME": "/Users/zouguojun/.cargo",
+            "RUSTUP_HOME": "/Users/zouguojun/.rustup",
+            "TMPDIR": "/var/folders/qt/d007hr751cl59b3_8sptd8fr0000gp/T/aleph-phase9-test-_7o8sc3_",
+            "CARGO_TARGET_DIR": "/Volumes/TBU4/Workspace/Aleph/.phase9-target",
+            "RUST_BACKTRACE": "1"
+          },
+          "exit_code": 0,
+          "timed_out": false,
+          "unjoined_descendants": false,
+          "elapsed_seconds": 0.5454412910039537,
+          "stdout": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T060402.307412Z.stdout.log",
+          "stderr": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T060402.307412Z.stderr.log"
+        },
+        "fixture": {
+          "path": "/var/folders/qt/d007hr751cl59b3_8sptd8fr0000gp/T/aleph-phase9-test-_7o8sc3_",
+          "cleanup": "removed"
+        }
+      },
+      "supervisor": {
+        "argv": [
+          "/opt/homebrew/opt/python@3.15/bin/python3.15",
+          "qa/phase9_test_closure.py",
+          "--repo-root",
+          ".",
+          "--target-dir",
+          ".phase9-target",
+          "--receipt",
+          "docs/superpowers/runs/2026-11-15-phase9-test-closure-receipt.md",
+          "--timeout-seconds",
+          "600",
+          "--test-filter",
+          "capability::ui_surface_tests::disable_closes_owned_surface_and_rejects_old_lease"
+        ],
+        "cwd": "/Volumes/TBU4/Workspace/Aleph",
+        "env_overrides": {},
+        "exit_code": 0,
+        "timed_out": false,
+        "unjoined_descendants": false,
+        "elapsed_seconds": 0.6058137090294622,
+        "stdout": "/Volumes/TBU4/Workspace/Aleph/.superpowers/sdd/2026-11-15-phase9-runtime-proof-and-dependency-closure/matrix-26.stdout.log",
+        "stderr": "/Volumes/TBU4/Workspace/Aleph/.superpowers/sdd/2026-11-15-phase9-runtime-proof-and-dependency-closure/matrix-26.stderr.log"
+      }
+    },
+    {
+      "case": "gateway::capability_terminal_tests::captured_terminal_rejects_provider_replacement_before_invoke",
+      "receipt": {
+        "schema_version": 1,
+        "timestamp": "20261116T060402.913922Z",
+        "memory_gate": {
+          "argv": [
+            "python3",
+            "qa/browser_live/check_memory.py",
+            "--required-bytes",
+            "4294967296"
+          ],
+          "cwd": "/Volumes/TBU4/Workspace/Aleph",
+          "env_overrides": {},
+          "exit_code": 0,
+          "timed_out": false,
+          "unjoined_descendants": false,
+          "elapsed_seconds": 0.028105749981477857,
+          "stdout": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T060402.913922Z-memory.stdout.log",
+          "stderr": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T060402.913922Z-memory.stderr.log"
+        },
+        "test_filter": "gateway::capability_terminal_tests::captured_terminal_rejects_provider_replacement_before_invoke",
+        "status": "PASS",
+        "command": {
+          "argv": [
+            "cargo",
+            "test",
+            "-p",
+            "alephcore",
+            "--lib",
+            "--offline",
+            "--locked",
+            "--jobs",
+            "1",
+            "gateway::capability_terminal_tests::captured_terminal_rejects_provider_replacement_before_invoke",
+            "--",
+            "--test-threads=1"
+          ],
+          "cwd": "/Volumes/TBU4/Workspace/Aleph",
+          "env_overrides": {
+            "HOME": "/var/folders/qt/d007hr751cl59b3_8sptd8fr0000gp/T/aleph-phase9-test-xegrarjo/home",
+            "USERPROFILE": "/var/folders/qt/d007hr751cl59b3_8sptd8fr0000gp/T/aleph-phase9-test-xegrarjo/home",
+            "ALEPH_HOME": "/var/folders/qt/d007hr751cl59b3_8sptd8fr0000gp/T/aleph-phase9-test-xegrarjo/home/.aleph",
+            "CARGO_HOME": "/Users/zouguojun/.cargo",
+            "RUSTUP_HOME": "/Users/zouguojun/.rustup",
+            "TMPDIR": "/var/folders/qt/d007hr751cl59b3_8sptd8fr0000gp/T/aleph-phase9-test-xegrarjo",
+            "CARGO_TARGET_DIR": "/Volumes/TBU4/Workspace/Aleph/.phase9-target",
+            "RUST_BACKTRACE": "1"
+          },
+          "exit_code": 0,
+          "timed_out": false,
+          "unjoined_descendants": false,
+          "elapsed_seconds": 0.5568458749912679,
+          "stdout": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T060402.913922Z.stdout.log",
+          "stderr": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T060402.913922Z.stderr.log"
+        },
+        "fixture": {
+          "path": "/var/folders/qt/d007hr751cl59b3_8sptd8fr0000gp/T/aleph-phase9-test-xegrarjo",
+          "cleanup": "removed"
+        }
+      },
+      "supervisor": {
+        "argv": [
+          "/opt/homebrew/opt/python@3.15/bin/python3.15",
+          "qa/phase9_test_closure.py",
+          "--repo-root",
+          ".",
+          "--target-dir",
+          ".phase9-target",
+          "--receipt",
+          "docs/superpowers/runs/2026-11-15-phase9-test-closure-receipt.md",
+          "--timeout-seconds",
+          "600",
+          "--test-filter",
+          "gateway::capability_terminal_tests::captured_terminal_rejects_provider_replacement_before_invoke"
+        ],
+        "cwd": "/Volumes/TBU4/Workspace/Aleph",
+        "env_overrides": {},
+        "exit_code": 0,
+        "timed_out": false,
+        "unjoined_descendants": false,
+        "elapsed_seconds": 0.6165614170022309,
+        "stdout": "/Volumes/TBU4/Workspace/Aleph/.superpowers/sdd/2026-11-15-phase9-runtime-proof-and-dependency-closure/matrix-27.stdout.log",
+        "stderr": "/Volumes/TBU4/Workspace/Aleph/.superpowers/sdd/2026-11-15-phase9-runtime-proof-and-dependency-closure/matrix-27.stderr.log"
+      }
+    },
+    {
+      "case": "FULL LIB",
+      "receipt": {
+        "status": "FAIL",
+        "reason": "runner did not emit a terminal JSON receipt"
+      },
+      "supervisor": {
+        "argv": [
+          "/opt/homebrew/opt/python@3.15/bin/python3.15",
+          "qa/phase9_test_closure.py",
+          "--repo-root",
+          ".",
+          "--target-dir",
+          ".phase9-target",
+          "--receipt",
+          "docs/superpowers/runs/2026-11-15-phase9-test-closure-receipt.md",
+          "--timeout-seconds",
+          "600"
+        ],
+        "cwd": "/Volumes/TBU4/Workspace/Aleph",
+        "env_overrides": {},
+        "exit_code": 1,
+        "timed_out": false,
+        "unjoined_descendants": false,
+        "elapsed_seconds": 600.098514375044,
+        "stdout": "/Volumes/TBU4/Workspace/Aleph/.superpowers/sdd/2026-11-15-phase9-runtime-proof-and-dependency-closure/matrix-28.stdout.log",
+        "stderr": "/Volumes/TBU4/Workspace/Aleph/.superpowers/sdd/2026-11-15-phase9-runtime-proof-and-dependency-closure/matrix-28.stderr.log"
+      }
+    }
+  ],
+  "status": "NOT_CLOSED"
+}

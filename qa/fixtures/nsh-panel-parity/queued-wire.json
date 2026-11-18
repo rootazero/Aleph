@@ -1,0 +1,81 @@
+[
+  {
+    "jsonrpc": "2.0",
+    "method": "stream.run_queued",
+    "params": {
+      "ahead": 0,
+      "run_id": "27a258d8-ab1a-4452-8997-4b04686763c0",
+      "session_key": "agent:main:phase9-queued-proof",
+      "type": "run_queued"
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "stream.run_accepted",
+    "params": {
+      "accepted_at": "2026-11-18T06:59:06.480106+00:00",
+      "run_id": "27a258d8-ab1a-4452-8997-4b04686763c0",
+      "session_key": "agent:main:phase9-queued-proof",
+      "type": "run_accepted"
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "stream.run_complete",
+    "params": {
+      "run_id": "27a258d8-ab1a-4452-8997-4b04686763c0",
+      "seq": 59,
+      "summary": {
+        "context_tokens": 16,
+        "context_window": 128000,
+        "cost_status": "unknown",
+        "duration_ms": 645,
+        "estimated_cost_usd": 0.0,
+        "final_response": "PHASE9_RUNTIME_PROOF",
+        "loops": 8,
+        "terminate_reason": "stop_hook_halt",
+        "token_breakdown": {
+          "cache_creation": 0,
+          "cache_read": 0,
+          "input": 64,
+          "output": 64,
+          "reasoning": 0
+        },
+        "tool_calls": 4,
+        "tool_summaries": [
+          {
+            "duration_ms": 23,
+            "emoji": "\ud83d\udd27",
+            "success": true,
+            "tool_id": "phase9-artifact",
+            "tool_name": "artifact_publish"
+          },
+          {
+            "duration_ms": 24,
+            "emoji": "\ud83d\udd27",
+            "success": true,
+            "tool_id": "phase9-artifact",
+            "tool_name": "artifact_publish"
+          },
+          {
+            "duration_ms": 25,
+            "emoji": "\ud83d\udd27",
+            "success": true,
+            "tool_id": "phase9-artifact",
+            "tool_name": "artifact_publish"
+          },
+          {
+            "duration_ms": 24,
+            "emoji": "\ud83d\udd27",
+            "success": true,
+            "tool_id": "phase9-artifact",
+            "tool_name": "artifact_publish"
+          }
+        ],
+        "total_tokens": 128
+      },
+      "total_duration_ms": 645,
+      "type": "run_complete"
+    }
+  }
+]

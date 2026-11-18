@@ -1,0 +1,7 @@
+2026-11-16T10:35:29.163542Z  INFO aleph_desktop_shell::cert_trust::adapter_macos: cert-trust: WKWebView challenge hook installed
+ALEPH_PANEL_QA_TRANSPORT navigation allowed=false scheme=tauri host=Some("localhost") port=None
+ALEPH_PANEL_QA_TRANSPORT navigation allowed=true scheme=http host=Some("127.0.0.1") port=Some(53295)
+ALEPH_PANEL_QA_TRANSPORT title allowed=true bytes=428
+ALEPH_PANEL_QA {"connection_epoch":0,"kind":"ready","nonce":"5d7941955947379735b657be86ced01de1ee80a85b223e7a36938f1f0bd1f696","payload":{},"qa_run_id":"8b2584263a4945e29e8b062996504d3e","run_id":null,"session_key":null}
+ALEPH_PANEL_QA {"connection_epoch":1,"kind":"hello","nonce":"5d7941955947379735b657be86ced01de1ee80a85b223e7a36938f1f0bd1f696","payload":{},"qa_run_id":"8b2584263a4945e29e8b062996504d3e","run_id":null,"session_key":null}
+ALEPH_PANEL_QA_TRANSPORT title allowed=true bytes=1000

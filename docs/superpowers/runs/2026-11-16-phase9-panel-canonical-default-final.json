@@ -1,0 +1,43 @@
+{
+  "name": "panel-canonical-default-final",
+  "runtime_qa": false,
+  "command": {
+    "argv": [
+      "just",
+      "wasm"
+    ],
+    "cwd": "/Volumes/TBU4/Workspace/Aleph",
+    "env_overrides": {
+      "CARGO_TARGET_DIR": "/Volumes/TBU4/Workspace/Aleph/.phase9-target",
+      "PATH": "/Volumes/TBU4/Workspace/Aleph/.superpowers/sdd/2026-11-15-phase9-runtime-proof-and-dependency-closure/cargo-gated-stderr:/opt/homebrew/bin:/opt/homebrew/opt/rustup/bin:/Users/zouguojun/.bun/bin:/Users/zouguojun/.local/state/fnm_multishells/1488_1794447693947/bin:/opt/homebrew/opt/go/libexec/bin:/Users/zouguojun/.go/bin:/Users/zouguojun/.cargo/bin:/Users/zouguojun/.uv/.venv/bin:/Users/zouguojun/.local/bin:/opt/homebrew/bin:/opt/homebrew/sbin:/Users/zouguojun/.local/bin:/Users/zouguojun/.local/bin:/opt/homebrew/bin:/opt/homebrew/sbin:/Library/Frameworks/Python.framework/Versions/3.10/bin:/usr/local/bin:/System/Cryptexes/App/usr/bin:/usr/bin:/bin:/usr/sbin:/sbin:/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin:/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin:/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin:/pkg/env/global/bin:/Library/Apple/usr/bin:/opt/homebrew/bin:/Users/zouguojun/.cargo/bin",
+      "RUST_BACKTRACE": "1",
+      "ALEPH_PANEL_RUNTIME_QA": "0"
+    },
+    "exit_code": 0,
+    "timed_out": false,
+    "pid": 34002,
+    "cleanup_error": null,
+    "group_probe": null,
+    "unjoined_descendants": false,
+    "elapsed_seconds": 270.8883664169698,
+    "stdout": "/Volumes/TBU4/Workspace/Aleph/.superpowers/sdd/2026-11-15-phase9-runtime-proof-and-dependency-closure/panel-canonical-default-final.stdout.log",
+    "stderr": "/Volumes/TBU4/Workspace/Aleph/.superpowers/sdd/2026-11-15-phase9-runtime-proof-and-dependency-closure/panel-canonical-default-final.stderr.log",
+    "output": "\n> control_plane@1.0.0 build:css\n> tailwindcss -i styles/tailwind.css -o dist/tailwind.css --minify\n\navailable_bytes=8667021312 required_bytes=4294967296 ALLOW\navailable_bytes=9469280256 required_bytes=4294967296 ALLOW\n\u2713 wasm-opt applied (feature set fenced)\n\u2713 webview baseline consistent\n  aleph_panel.js: 120139 -> 14425 (-88.0%)\n  aleph_panel_bg.wasm: 70922716 -> 3759360 (-94.7%)\n  index.html: 7425 -> 2575 (-65.3%)\n  tailwind.css: 146900 -> 19565 (-86.7%)\n\u2713 precompressed 4 file(s), skipped 0\n\u2713 panel dist OK: all 39 wasm references in aleph_panel.js resolve against 42 exports in aleph_panel_bg.wasm.\n\u2713 WASM: interfaces/webchat/dist/\n\u2248 tailwindcss v4.2.2\n\n(node:34081) [DEP0205] DeprecationWarning: `module.register()` is deprecated. Use `module.registerHooks()` instead.\n(Use `node --trace-deprecation ...` to show where the warning was created)\nDone in 89ms\navailable_bytes=8660664320 required_bytes=4294967296 ALLOW\n   Compiling aleph-panel v0.2.0 (/Volumes/TBU4/Workspace/Aleph/interfaces/webchat)\nwarning: method `epoch` is never used\n   --> interfaces/webchat/src/context.rs:748:19\n    |\n746 | impl PtyTopicLease {\n    | ------------------ method in this implementation\n747 |     #[cfg(any(test, target_arch = \"wasm32\"))]\n748 |     pub(crate) fn epoch(&self) -> u64 {\n    |                   ^^^^^\n    |\n    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default\n\nwarning: variant `Acquire` is never constructed\n   --> interfaces/webchat/src/context.rs:764:5\n    |\n763 | enum PtyCoverageWork {\n    |      --------------- variant in this enum\n764 |     Acquire {\n    |     ^^^^^^^\n\nwarning: methods `acquire_pty_topic` and `acquire_pty_topic_with_io` are never used\n    --> interfaces/webchat/src/context.rs:1558:25\n     |\n1193 | impl DashboardState {\n     | ------------------- methods in this implementation\n...\n1558 |     pub(crate) async fn acquire_pty_topic(&self, topic: &str) -> Result<PtyTopicLease, String> {\n     |                         ^^^^^^^^^^^^^^^^^\n...\n1564 |     pub(crate) async fn acquire_pty_topic_with_io(\n     |                         ^^^^^^^^^^^^^^^^^^^^^^^^^\n\nwarning: `aleph-panel` (lib) generated 3 warnings\n    Finished `wasm-release` profile [optimized] target(s) in 3m 25s\navailable_bytes=9442000896 required_bytes=4294967296 ALLOW\n"
+  },
+  "lock_sha256": "12300967333b45f8a0fa1f401cf13a559b5b8a881ee95550b1bbf1a8d42e21f5",
+  "lock_unchanged": true,
+  "artifacts": {
+    "interfaces/webchat/dist/aleph_panel_bg.wasm": {
+      "sha256": "fd4d749ba8b44753b1b91715eac9993eb16b8e5ec624423fff8ebcc3ebb23728",
+      "bytes": 70922716
+    },
+    "interfaces/webchat/dist/aleph_panel.js": {
+      "sha256": "70984b761985f0cbe437bacc5fb88d3566b478b83b998ad126b6e208080e73ac",
+      "bytes": 120139
+    }
+  },
+  "previous_wasm_sha256": "9dd254d4b946ed3381b5738a29cf84e0191c7e8fb081b8fd4938b15b958769bb",
+  "qa_ingress_name_present": false,
+  "justfile_sha256": "1aba2fe18517c94e5639b68f9fcc44929d2c670868ea714ef3adf6dcb9ecf8d0",
+  "status": "PASS"
+}

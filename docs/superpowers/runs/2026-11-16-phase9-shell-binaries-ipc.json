@@ -1,0 +1,56 @@
+{
+  "name": "shell-binaries-ipc",
+  "memory_gate": {
+    "argv": [
+      "python3",
+      "qa/browser_live/check_memory.py",
+      "--required-bytes",
+      "4294967296"
+    ],
+    "cwd": "/Volumes/TBU4/Workspace/Aleph",
+    "env_overrides": {},
+    "exit_code": 0,
+    "timed_out": false,
+    "pid": 4075,
+    "cleanup_error": null,
+    "group_probe": null,
+    "unjoined_descendants": false,
+    "elapsed_seconds": 0.038572957972064614,
+    "stdout": "/Volumes/TBU4/Workspace/Aleph/.superpowers/sdd/2026-11-15-phase9-runtime-proof-and-dependency-closure/shell-binaries-ipc-memory.stdout.log",
+    "stderr": "/Volumes/TBU4/Workspace/Aleph/.superpowers/sdd/2026-11-15-phase9-runtime-proof-and-dependency-closure/shell-binaries-ipc-memory.stderr.log",
+    "output": "available_bytes=7976484864 required_bytes=4294967296 ALLOW\n"
+  },
+  "command": {
+    "argv": [
+      "cargo",
+      "build",
+      "-p",
+      "aleph-desktop-shell",
+      "-p",
+      "aleph-nsh-shell",
+      "--no-default-features",
+      "--features",
+      "aleph-desktop-shell/qa-owned-root",
+      "--offline",
+      "--locked",
+      "--jobs",
+      "1"
+    ],
+    "cwd": "/Volumes/TBU4/Workspace/Aleph",
+    "env_overrides": {
+      "CARGO_TARGET_DIR": "/Volumes/TBU4/Workspace/Aleph/.phase9-target",
+      "RUST_BACKTRACE": "1"
+    },
+    "exit_code": 101,
+    "timed_out": false,
+    "pid": 4120,
+    "cleanup_error": null,
+    "group_probe": null,
+    "unjoined_descendants": false,
+    "elapsed_seconds": 2.5142915000324138,
+    "stdout": "/Volumes/TBU4/Workspace/Aleph/.superpowers/sdd/2026-11-15-phase9-runtime-proof-and-dependency-closure/shell-binaries-ipc.stdout.log",
+    "stderr": "/Volumes/TBU4/Workspace/Aleph/.superpowers/sdd/2026-11-15-phase9-runtime-proof-and-dependency-closure/shell-binaries-ipc.stderr.log",
+    "output": "   Compiling aleph-desktop-shell v26.9.1 (/Volumes/TBU4/Workspace/Aleph/desktop/shell)\nerror[E0282]: type annotations needed\n   --> desktop/shell/src/main.rs:681:19\n    |\n681 |       let handler = tauri::generate_handler![\n    |  ___________________^\n682 | |         connection::get_connection_target,\n683 | |         connection::set_connection_target,\n684 | |         connection::clear_connection_target,\n...   |\n693 | |         keyring_bridge::panel_credential_delete,\n694 | |     ];\n    | |_____^ cannot infer type\n    |\n    = note: this error originates in the macro `tauri::generate_handler` (in Nightly builds, run with -Z macro-backtrace for more info)\n\nFor more information about this error, try `rustc --explain E0282`.\nerror: could not compile `aleph-desktop-shell` (bin \"aleph-desktop-shell\") due to 1 previous error\n"
+  },
+  "status": "FAIL"
+}

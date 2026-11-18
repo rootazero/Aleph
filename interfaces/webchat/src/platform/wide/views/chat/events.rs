@@ -8,9 +8,9 @@ use super::state::{
     ChatState, ContextUsage, ModelInfo, ProviderRetryNotice, RunCost, RunHalt, ToolSettlement,
 };
 use crate::context::{DashboardState, GatewayEvent};
-use crate::i18n::{td_string, I18nCtx, Locale};
+use crate::i18n::{I18nCtx, Locale, td_string};
 use crate::state::canvas::CanvasState;
-use crate::state::layout::{auto_reveal_decision, WorkspaceBody, WorkspaceState};
+use crate::state::layout::{WorkspaceBody, WorkspaceState, auto_reveal_decision};
 use crate::state::notifications::{AskOptionView, AskQuestionView, PendingAskView};
 use crate::state::sessions::SessionMap;
 use crate::state::user_directory::UserDirectoryState;
@@ -935,11 +935,9 @@ fn resolve_target(
         "reasoning" if run_id.is_empty() => sessions.active_conv(),
         _ => sessions.route_lookup(run_id),
     }?;
-    // Only bind here when the send path hasn't already (route absent) — binding
-    // twice would double-count `running` and leave a phantom dot.
-    if matches!(event_type, "run_accepted" | "run_queued")
-        && sessions.route_lookup(run_id).is_none()
-    {
+    // Binding is idempotent and also fills the canonical identity when the
+    // send response registered this run before its session key was known.
+    if matches!(event_type, "run_accepted" | "run_queued") {
         sessions.bind_run(run_id, conv, session_key);
     }
     let target = sessions.chat_for(conv, singleton);
@@ -961,7 +959,7 @@ pub fn subscribe_run_events(
     singleton: ChatState,
     workspace: WorkspaceState,
     canvas: CanvasState,
-    i18n: I18nCtx,
+    i18n: impl Fn() -> I18nCtx + Send + Sync + 'static,
 ) -> usize {
     let trace_runs = Arc::new(Mutex::new(HashSet::<String>::new()));
     // Owned Copy captured into the 'static event closure — used to drive
@@ -1187,7 +1185,7 @@ pub fn subscribe_run_events(
                     workspace,
                     run_id,
                     trace_event,
-                    i18n.get_locale_untracked(),
+                    i18n().get_locale_untracked(),
                 );
                 // Auto-reveal lives HERE, not inside `apply_trace_event`:
                 // that projection is shared with `replay_run`, and replaying
@@ -1195,7 +1193,7 @@ pub fn subscribe_run_events(
                 // canvas from a run that finished days ago. Foreground only,
                 // for the reason `resolve_target` is asked.
                 if is_foreground {
-                    canvas_auto_reveal(dash, canvas, workspace, i18n, run_id, trace_event);
+                    canvas_auto_reveal(dash, canvas, workspace, i18n(), run_id, trace_event);
                 }
             }
             "tool_start" => {
@@ -1501,9 +1499,10 @@ mod projection_tests {
         let msgs = chat.messages.get_untracked();
         let tagged: Vec<usize> = msgs.iter().filter_map(|m| m.iteration).collect();
         assert_eq!(tagged, vec![1, 2]);
-        assert!(msgs
-            .iter()
-            .any(|m| m.iteration == Some(2) && m.content.contains("done")));
+        assert!(
+            msgs.iter()
+                .any(|m| m.iteration == Some(2) && m.content.contains("done"))
+        );
     }
 
     #[test]
@@ -1832,6 +1831,30 @@ mod projection_tests {
         // settle clears running.
         resolve_target(&sessions, singleton, "run_complete", "run-a", None);
         assert!(!sessions.is_running(a));
+    }
+
+    #[test]
+    fn accepted_backfills_a_send_bound_run_before_idle_reconnect() {
+        let owner = Owner::new();
+        owner.set();
+        let sessions = crate::state::sessions::SessionMap::new();
+        let singleton = ChatState::new();
+        let conv = sessions.start_new(singleton, "agent-a", "A");
+        sessions.bind_run("run-a", conv, None);
+        resolve_target(&sessions, singleton, "run_accepted", "run-a", Some("sk-a"))
+            .expect("send-bound conversation accepts its canonical identity");
+        assert_eq!(
+            sessions.meta(conv).unwrap().session_key.as_deref(),
+            Some("sk-a")
+        );
+        assert_eq!(sessions.running_count_for(conv), 1);
+        resolve_target(&sessions, singleton, "run_complete", "run-a", None);
+        assert_eq!(
+            sessions
+                .rejoin_target(&std::collections::HashSet::new())
+                .as_deref(),
+            Some("sk-a")
+        );
     }
 
     #[test]

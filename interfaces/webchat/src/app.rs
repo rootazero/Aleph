@@ -1,6 +1,6 @@
-use crate::i18n::{I18nContextProvider, use_i18n};
 #[cfg(feature = "panel-modular")]
 use crate::i18n::t_string;
+use crate::i18n::{I18nContextProvider, use_i18n};
 use crate::state::memory::MemoryState;
 use aleph_protocol::browser_live::{CLOSED_TOPIC, RESOURCE_TOPIC};
 use leptos::prelude::*;
@@ -193,15 +193,16 @@ fn AppContent() -> impl IntoView {
     // sessions no longer freeze while another tab is in view.
     {
         let ws = expect_context::<WorkspaceState>();
-        // The dispatcher outlives every component, so it cannot look the i18n
-        // context up on demand — hand it the (Copy) handle once here.
+        // The dispatcher outlives every component, so capture the existing
+        // context and provide it only when a localized trace needs it.
+        let i18n = use_i18n();
         let _root_run_sub = subscribe_run_events(
             &state,
             session_map,
             chat_state,
             ws,
             canvas_state,
-            use_i18n(),
+            move || i18n,
         );
         // Root-level subscription is app-lifetime; no on_cleanup needed.
     }

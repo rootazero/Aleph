@@ -1,0 +1,19 @@
+   Compiling waproto v0.7.0
+   Compiling wacore-libsignal v0.7.0
+   Compiling wacore-appstate v0.7.0
+   Compiling wacore-noise v0.7.0
+   Compiling wacore v0.7.0
+   Compiling whatsapp-rust-tokio-transport v0.7.0
+   Compiling whatsapp-rust-sqlite-storage v0.7.0 (/Volumes/TBU4/Workspace/Aleph/vendor/whatsapp-rust-sqlite-storage)
+   Compiling whatsapp-rust v0.7.0
+   Compiling alephcore v26.9.1 (/Volumes/TBU4/Workspace/Aleph)
+warning: linker stderr: ld: __eh_frame section too large (max 16MB) to encode dwarf unwind offsets in compact unwind table, performance of exception handling might be affected
+  |
+  = note: `#[warn(linker_messages)]` on by default
+
+warning: `alephcore` (lib test) generated 1 warning
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 9m 23s
+     Running unittests src/lib.rs (.phase9-target/debug/deps/alephcore-fcfe678a58e433e6)
+kill: 6095: No such process
+kill: 6137: No such process
+kill: 6267: No such process

@@ -186,7 +186,11 @@ wasm:
     # 2. Compile Rust → WASM (lib only: the cdylib is the shipped artifact and
     #    the vestigial src/main.rs bin breaks under fat LTO)
     python {{memory_gate}}
-    cargo build -p aleph-panel --lib --target wasm32-unknown-unknown --profile wasm-release
+    extra_features=()
+    if [[ "${ALEPH_PANEL_RUNTIME_QA:-0}" == "1" ]]; then
+        extra_features=(--features runtime-qa)
+    fi
+    cargo build -p aleph-panel --lib --target wasm32-unknown-unknown --profile wasm-release "${extra_features[@]}"
     # Resolve cargo's real target dir instead of hardcoding `target/`. A literal
     # relative path breaks in git worktrees: .cargo/config.toml pins an absolute
     # shared target-dir, so `cargo build` writes there while a cwd-relative

@@ -1,0 +1,29 @@
+{
+  "name": "panel-production-verified",
+  "command": {
+    "argv": [
+      "just",
+      "wasm"
+    ],
+    "cwd": "/Volumes/TBU4/Workspace/Aleph",
+    "env_overrides": {
+      "CARGO_TARGET_DIR": "/Volumes/TBU4/Workspace/Aleph/.phase9-target",
+      "PATH": "/Volumes/TBU4/Workspace/Aleph/.superpowers/sdd/2026-11-15-phase9-runtime-proof-and-dependency-closure/cargo-gated-stderr:/opt/homebrew/bin:/opt/homebrew/opt/rustup/bin:/Users/zouguojun/.bun/bin:/Users/zouguojun/.local/state/fnm_multishells/1488_1794447693947/bin:/opt/homebrew/opt/go/libexec/bin:/Users/zouguojun/.go/bin:/Users/zouguojun/.cargo/bin:/Users/zouguojun/.uv/.venv/bin:/Users/zouguojun/.local/bin:/opt/homebrew/bin:/opt/homebrew/sbin:/Users/zouguojun/.local/bin:/Users/zouguojun/.local/bin:/opt/homebrew/bin:/opt/homebrew/sbin:/Library/Frameworks/Python.framework/Versions/3.10/bin:/usr/local/bin:/System/Cryptexes/App/usr/bin:/usr/bin:/bin:/usr/sbin:/sbin:/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin:/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin:/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin:/pkg/env/global/bin:/Library/Apple/usr/bin:/opt/homebrew/bin:/Users/zouguojun/.cargo/bin",
+      "RUST_BACKTRACE": "1"
+    },
+    "exit_code": 0,
+    "timed_out": false,
+    "pid": 21927,
+    "cleanup_error": null,
+    "group_probe": null,
+    "unjoined_descendants": false,
+    "elapsed_seconds": 65.70071645802818,
+    "stdout": "/Volumes/TBU4/Workspace/Aleph/.superpowers/sdd/2026-11-15-phase9-runtime-proof-and-dependency-closure/panel-production-verified.stdout.log",
+    "stderr": "/Volumes/TBU4/Workspace/Aleph/.superpowers/sdd/2026-11-15-phase9-runtime-proof-and-dependency-closure/panel-production-verified.stderr.log",
+    "output": "\n> control_plane@1.0.0 build:css\n> tailwindcss -i styles/tailwind.css -o dist/tailwind.css --minify\n\navailable_bytes=9681289216 required_bytes=4294967296 ALLOW\navailable_bytes=9736585216 required_bytes=4294967296 ALLOW\n\u2713 wasm-opt applied (feature set fenced)\n\u2713 webview baseline consistent\n  aleph_panel.js: 120139 -> 14425 (-88.0%)\n  aleph_panel_bg.wasm: 70922861 -> 3759798 (-94.7%)\n  index.html: 7425 -> 2575 (-65.3%)\n  tailwind.css: 146900 -> 19565 (-86.7%)\n\u2713 precompressed 4 file(s), skipped 0\n\u2713 panel dist OK: all 39 wasm references in aleph_panel.js resolve against 42 exports in aleph_panel_bg.wasm.\n\u2713 WASM: interfaces/webchat/dist/\n\u2248 tailwindcss v4.2.2\n\n(node:22010) [DEP0205] DeprecationWarning: `module.register()` is deprecated. Use `module.registerHooks()` instead.\n(Use `node --trace-deprecation ...` to show where the warning was created)\nDone in 107ms\navailable_bytes=9672769536 required_bytes=4294967296 ALLOW\nwarning: method `epoch` is never used\n   --> interfaces/webchat/src/context.rs:678:19\n    |\n676 | impl PtyTopicLease {\n    | ------------------ method in this implementation\n677 |     #[cfg(any(test, target_arch = \"wasm32\"))]\n678 |     pub(crate) fn epoch(&self) -> u64 {\n    |                   ^^^^^\n    |\n    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default\n\nwarning: variant `Acquire` is never constructed\n   --> interfaces/webchat/src/context.rs:694:5\n    |\n693 | enum PtyCoverageWork {\n    |      --------------- variant in this enum\n694 |     Acquire {\n    |     ^^^^^^^\n\nwarning: methods `acquire_pty_topic` and `acquire_pty_topic_with_io` are never used\n    --> interfaces/webchat/src/context.rs:1450:25\n     |\n1119 | impl DashboardState {\n     | ------------------- methods in this implementation\n...\n1450 |     pub(crate) async fn acquire_pty_topic(&self, topic: &str) -> Result<PtyTopicLease, String> {\n     |                         ^^^^^^^^^^^^^^^^^\n...\n1455 |     pub(crate) async fn acquire_pty_topic_with_io(&self, topic: &str, io: PtyCoverageIo) -> Result<PtyTopicLease, String> {\n     |                         ^^^^^^^^^^^^^^^^^^^^^^^^^\n\nwarning: `aleph-panel` (lib) generated 3 warnings\n    Finished `wasm-release` profile [optimized] target(s) in 0.79s\navailable_bytes=9728016384 required_bytes=4294967296 ALLOW\n"
+  },
+  "lock_sha256": "12300967333b45f8a0fa1f401cf13a559b5b8a881ee95550b1bbf1a8d42e21f5",
+  "lock_unchanged": true,
+  "cargo_wrapper_sha256": "de589da79de01b5bfaba5fa703336fddc6db8da6e87269a8ead68f980531e500",
+  "status": "PASS"
+}

@@ -2952,7 +2952,7 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test]
     async fn a_plugin_hooks_data_directory_reaches_it_through_the_environment() {
-        let _home = crate::utils::paths::IsolatedAlephHome::new();
+        let _home = crate::utils::paths::IsolatedDiscoveryHome::new();
         let dir = tempfile::tempdir().unwrap();
         let out = dir.path().join("out");
         let mut hook = interceptor_command_hook(&format!(

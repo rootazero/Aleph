@@ -1,0 +1,52 @@
+{
+  "status": "NOT_CLOSED",
+  "runs": [
+    {
+      "status": "FAIL",
+      "reason": "schema:$.events:[{'connection_epoch': 0, 'kind': 'ready', 'payload': {}, 'qa_run_id': '75cc90704d094281b8cb0da99eeb13cb', 'run_id': None, 'session_key': None, 'at_ms': 4960.923625039868}] is too short",
+      "runtime_document": "docs/superpowers/runs/2026-11-16-phase9-runtime-attempt2-output/tauri-0.json"
+    },
+    {
+      "status": "FAIL",
+      "reason": "runtime_order_or_missing:['accepted', 'artifact-refreshed', 'closed', 'complete', 'reconnected', 'streamed']",
+      "runtime_document": "docs/superpowers/runs/2026-11-16-phase9-runtime-attempt2-output/nsh-0.json"
+    }
+  ],
+  "performance": {
+    "status": "OPEN"
+  },
+  "gateway_cleanup": {
+    "status": "READY",
+    "children": [
+      {
+        "name": "model",
+        "argv": [
+          "/Users/zouguojun/.cache/uv/builds-v0/.tmpKGFN86/bin/python",
+          "/Volumes/TBU4/Workspace/Aleph/qa/nsh_panel_provider.py",
+          "--port",
+          "52845",
+          "--record",
+          "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/2026-11-16-phase9-runtime-attempt2-gateway/model-requests.jsonl"
+        ],
+        "pid": 65987,
+        "cwd": "/tmp/p9-gateway-y8mmyqp0",
+        "exit_code": -15,
+        "forced": false
+      },
+      {
+        "name": "gateway",
+        "argv": [
+          "/Volumes/TBU4/Workspace/Aleph/.phase9-target/debug/aleph-server",
+          "--port",
+          "52844",
+          "start"
+        ],
+        "pid": 65988,
+        "cwd": "/tmp/p9-gateway-y8mmyqp0",
+        "exit_code": 0,
+        "forced": false
+      }
+    ],
+    "fixture_removed": true
+  }
+}

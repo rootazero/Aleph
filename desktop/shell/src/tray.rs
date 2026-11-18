@@ -4,9 +4,9 @@
 //! no state and makes no decisions of its own.
 
 use tauri::{
+    AppHandle, Manager,
     menu::{Menu, MenuItem, PredefinedMenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
-    AppHandle, Manager,
 };
 
 #[cfg(not(feature = "embedded-core"))]

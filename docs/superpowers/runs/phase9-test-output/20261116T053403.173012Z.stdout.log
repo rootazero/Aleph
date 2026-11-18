@@ -1,0 +1,36 @@
+
+running 1 test
+test utils::paths::tests::discovery_fixture_isolates_agents_home_even_when_claude_scanning_is_disabled ... FAILED
+
+failures:
+
+---- utils::paths::tests::discovery_fixture_isolates_agents_home_even_when_claude_scanning_is_disabled stdout ----
+
+thread 'utils::paths::tests::discovery_fixture_isolates_agents_home_even_when_claude_scanning_is_disabled' (13773361) panicked at src/utils/paths.rs:1289:9:
+assertion `left == right` failed
+  left: "/Users/zouguojun"
+ right: "/var/folders/qt/d007hr751cl59b3_8sptd8fr0000gp/T/aleph-phase9-test-1yxe0jn_"
+stack backtrace:
+   0: __rustc::rust_begin_unwind
+             at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library/std/src/panicking.rs:679:5
+   1: core::panicking::panic_fmt
+             at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library/core/src/panicking.rs:80:14
+   2: core::panicking::assert_failed_inner
+   3: core::panicking::assert_failed::<std::path::PathBuf, std::path::PathBuf>
+             at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library/core/src/panicking.rs:407:5
+   4: alephcore::utils::paths::tests::discovery_fixture_isolates_agents_home_even_when_claude_scanning_is_disabled
+             at ./src/utils/paths.rs:1289:9
+   5: alephcore::utils::paths::tests::discovery_fixture_isolates_agents_home_even_when_claude_scanning_is_disabled::{closure#0}
+             at ./src/utils/paths.rs:1286:86
+   6: <alephcore::utils::paths::tests::discovery_fixture_isolates_agents_home_even_when_claude_scanning_is_disabled::{closure#0} as core::ops::function::FnOnce<()>>::call_once
+             at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library/core/src/ops/function.rs:250:5
+   7: <fn() -> core::result::Result<(), alloc::string::String> as core::ops::function::FnOnce<()>>::call_once
+             at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library/core/src/ops/function.rs:250:5
+note: Some details are omitted, run with `RUST_BACKTRACE=full` for a verbose backtrace.
+
+
+failures:
+    utils::paths::tests::discovery_fixture_isolates_agents_home_even_when_claude_scanning_is_disabled
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 22421 filtered out; finished in 0.62s
+

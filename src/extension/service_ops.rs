@@ -233,11 +233,11 @@ mod tests {
     /// disposer to have to clean up.
     async fn manager_with_one_service(
         tmp: &std::path::Path,
-    ) -> (ExtensionManager, crate::utils::paths::IsolatedAlephHome) {
+    ) -> (ExtensionManager, crate::utils::paths::IsolatedDiscoveryHome) {
         // Held by the caller for the whole test: `Config::load()` writes a
         // default config under the Aleph home when none exists (see the
         // `IsolatedAlephHome` doc) and the manager may touch it after `new`.
-        let home = crate::utils::paths::IsolatedAlephHome::new();
+        let home = crate::utils::paths::IsolatedDiscoveryHome::new();
         let manager = ExtensionManager::new(ExtensionConfig {
             discovery: DiscoveryConfig {
                 working_dir: tmp.to_path_buf(),
