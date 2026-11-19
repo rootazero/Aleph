@@ -408,6 +408,11 @@ impl ResourceRegistry {
     }
 
     /// The close tombstone of a closed resource still within retention.
+    ///
+    /// Test-only: in production the tombstone travels with the transition
+    /// (`close` hands it to the caller, `sweep` hands it to the lifecycle),
+    /// and a resource id that is no longer active is simply not active.
+    #[cfg(test)]
     pub(crate) fn closed(&self, resource_id: &str) -> Option<BrowserLiveClosed> {
         let now = (self.clock)();
         match self.lock().slots.get(resource_id)? {

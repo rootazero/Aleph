@@ -351,6 +351,42 @@ fn browser_live_scope(binding: Option<&Value>) -> SessionIdentity {
     }
 }
 
+/// Scope of a browser-live intervention frame from its `summary` payload
+/// member (`InterventionSummary`). Fail closed on the same rules as
+/// [`browser_live_scope`], but the shape differs: an intervention names its
+/// principal and its conversation destination directly instead of carrying a
+/// `ResourceBinding`, and a `Connection` principal (a bridge that acts for
+/// nobody) attributes the frame to no one.
+fn browser_live_intervention_scope(summary: Option<&Value>) -> SessionIdentity {
+    use aleph_protocol::browser_live::{ConversationBinding, IssuerIdentity};
+    let Some(summary) = summary else {
+        return SessionIdentity::Withheld;
+    };
+    let Some(Ok(principal)) = summary
+        .get("principal")
+        .map(|p| serde_json::from_value::<IssuerIdentity>(p.clone()))
+    else {
+        return SessionIdentity::Withheld;
+    };
+    let IssuerIdentity::User { user_id } = principal else {
+        return SessionIdentity::Withheld;
+    };
+    let Some(Ok(destination)) = summary
+        .get("destination")
+        .map(|d| serde_json::from_value::<ConversationBinding>(d.clone()))
+    else {
+        return SessionIdentity::Withheld;
+    };
+    if user_id.is_empty() || destination.session_key.is_empty() || destination.run_id.is_empty() {
+        return SessionIdentity::Withheld;
+    }
+    SessionIdentity::ByBrowserLiveScope {
+        user_id,
+        session_key: destination.session_key,
+        run_id: destination.run_id,
+    }
+}
+
 /// The one topic this module PROJECTS rather than admits/denies, and the one
 /// payload field it rewrites. Named once because two bodies match on them —
 /// [`session_identity_of`]'s `Global` arm and
@@ -656,6 +692,11 @@ pub(crate) fn classify(topic: &str, data: Option<&Value>) -> Option<SessionIdent
         ),
         aleph_protocol::browser_live::CLOSED_TOPIC => {
             browser_live_scope(data.and_then(|d| d.pointer("/closed/binding")))
+        }
+        // An intervention names its principal and destination directly, so it
+        // does not go through `browser_live_scope` (which reads a binding).
+        aleph_protocol::browser_live::INTERVENTION_TOPIC => {
+            browser_live_intervention_scope(data.and_then(|d| d.pointer("/summary")))
         }
 
         // A project room's roster-visible state changed
@@ -3203,6 +3244,33 @@ mod tests {
         }
     }
 
+    fn bl_intervention(principal: bl::IssuerIdentity) -> bl::InterventionSummary {
+        bl::InterventionSummary {
+            intervention_id: "intervention-1".into(),
+            destination: bl::ConversationBinding {
+                session_key: "agent:operator:browser".into(),
+                run_id: "run-7".into(),
+            },
+            target: bl::BrowserTargetBinding {
+                profile: "default".into(),
+                browser_session_id: "bs-1".into(),
+                target_id: "t-1".into(),
+            },
+            principal,
+            started_at_ms: 1_799_000_000_000,
+            ended_at_ms: 1_799_000_001_000,
+            control_epoch_before: 1,
+            control_epoch_after: 2,
+            ended_by: bl::InterventionEnd::Cede,
+            facts: bl::InterventionFacts {
+                input_event_count: 3,
+                typed_text_chars: 2,
+                navigation_count: 0,
+                final_origin: None,
+            },
+        }
+    }
+
     fn expected_browser_live(binding: &bl::ResourceBinding) -> SessionIdentity {
         match binding {
             bl::ResourceBinding::Browser { viewer } => match &viewer.principal {
@@ -3493,6 +3561,21 @@ mod tests {
                 GatewayEventFrame::BrowserLiveClosed { closed } => {
                     expected_browser_live(&closed.binding)
                 }
+                // An intervention carries its principal and destination
+                // instead of a binding: a `User` principal scopes the frame
+                // to that user's session, a `Connection` principal to nobody.
+                GatewayEventFrame::BrowserLiveIntervention { summary } => {
+                    match &summary.principal {
+                        bl::IssuerIdentity::User { user_id } => {
+                            SessionIdentity::ByBrowserLiveScope {
+                                user_id: user_id.clone(),
+                                session_key: summary.destination.session_key.clone(),
+                                run_id: summary.destination.run_id.clone(),
+                            }
+                        }
+                        bl::IssuerIdentity::Connection { .. } => SessionIdentity::Withheld,
+                    }
+                }
             }
         }
 
@@ -3761,6 +3844,16 @@ mod tests {
             },
             GatewayEventFrame::BrowserLiveClosed {
                 closed: bl_closed(bl_artifact_binding()),
+            },
+            GatewayEventFrame::BrowserLiveIntervention {
+                summary: bl_intervention(bl::IssuerIdentity::User {
+                    user_id: "u-alice".into(),
+                }),
+            },
+            GatewayEventFrame::BrowserLiveIntervention {
+                summary: bl_intervention(bl::IssuerIdentity::Connection {
+                    connection_id: "conn-1".into(),
+                }),
             },
         ];
 

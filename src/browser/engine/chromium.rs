@@ -495,6 +495,23 @@ impl EngineProcess for ChromiumLauncher {
         let resolved =
             crate::browser::chromium_resolve::resolve_binary(&self.runtime, &req.browser, None)
                 .await?;
+        // The cdp path had no report of a substitution: it resolved through
+        // the same function as the managed path and then dropped
+        // `resolved.engine`, so "asked for Brave, got Chrome" was silent here
+        // while `playwright_cli.rs` warned about it — one verb, two faces
+        // (判据 §9). The predicate is the same one the managed path uses, and
+        // it fires only when a NON-default engine was asked for and not
+        // granted, so it is not an always-red warning (判据 §2).
+        if crate::browser::chromium_resolve::engine_mismatch(&req.browser, resolved.engine.as_ref())
+        {
+            tracing::warn!(
+                profile = %req.profile,
+                requested = ?req.browser,
+                resolved = ?resolved.engine,
+                path = %resolved.path.display(),
+                "the profile asked for one engine and got another"
+            );
+        }
         let spec = ChromiumLaunchSpec {
             binary: resolved.path,
             user_data_dir: req.data_dir.clone(),

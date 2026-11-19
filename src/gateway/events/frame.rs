@@ -541,6 +541,17 @@ pub enum GatewayEventFrame {
     BrowserLiveClosed {
         closed: aleph_protocol::browser_live::BrowserLiveClosed,
     },
+    /// A human intervention on a browser-live target ended
+    /// (`aleph_protocol::browser_live::InterventionSummary`).
+    ///
+    /// The third browser-live frame. The resource announcement and the close
+    /// already travel; the intervention summary is the record of what a human
+    /// did in between (input events, typed characters, navigations) — the
+    /// only durable trace of an intervention, and the only way an operator
+    /// learns that the browser was driven by hand.
+    BrowserLiveIntervention {
+        summary: aleph_protocol::browser_live::InterventionSummary,
+    },
 }
 
 /// How a clarification ended, carried on [`GatewayEventFrame::ClarificationEnded`].
@@ -814,6 +825,9 @@ impl GatewayEventFrame {
             Self::CanvasUpdated { .. } => aleph_protocol::canvas::TOPIC,
             Self::BrowserLiveResource { .. } => aleph_protocol::browser_live::RESOURCE_TOPIC,
             Self::BrowserLiveClosed { .. } => aleph_protocol::browser_live::CLOSED_TOPIC,
+            Self::BrowserLiveIntervention { .. } => {
+                aleph_protocol::browser_live::INTERVENTION_TOPIC
+            }
         }
         .to_string()
     }

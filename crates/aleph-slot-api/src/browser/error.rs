@@ -72,10 +72,10 @@ pub enum BrowserError {
     ///
     /// Produced by the event pump's `Target.targetDestroyed` fold
     /// (`engine::EngineHandle::ensure_tab` answering from the table's dead
-    /// set) and by the Core `TabRegistry::resolve_identity` path —
-    /// the page's own `window.close`, a browser restart, a re-attach onto a
-    /// browser whose tabs changed. The recovery it names is a fresh listing,
-    /// because every id the model holds may be stale, not only this one.
+    /// set) — the page's own `window.close`, a browser restart, a re-attach
+    /// onto a browser whose tabs changed. The recovery it names is a fresh
+    /// listing, because every id the model holds may be stale, not only this
+    /// one.
     #[error("{}", tab_gone_text(tab_id, last_url))]
     TabGone {
         tab_id: String,

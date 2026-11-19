@@ -23,6 +23,7 @@ use crate::browser::live::viewer_backend::{LiveViewerBackend, ViewerBackend};
 use crate::browser::network_policy::BrowserSsrfGuard;
 use crate::builtin_tools::browser_tools::present::BrowserLiveProducer;
 use crate::gateway::event_bus::GatewayEventBus;
+use crate::gateway::events::GatewayEventFrame;
 use crate::sync_primitives::Arc;
 
 /// Longest viewer grant the issuer will mint.
@@ -36,15 +37,23 @@ const VIEWER_VIEWPORT: ViewportCssPx = ViewportCssPx {
     height: 800,
 };
 
-/// Fail-closed intervention destination. No durable human-intervention
-/// destination exists yet, and the issuer only mints `Frames` grants, so input
-/// (the only caller of the sink) is unreachable; if it ever were reached, the
-/// delivery fails and `TargetControl` closes the control plane.
-fn fail_closed_sink() -> InterventionSink {
-    Arc::new(|_| {
-        Err(BrowserError::ActionFailed(
-            "no intervention destination is configured".into(),
-        ))
+/// Intervention destination: the gateway event bus.
+///
+/// The summary IS the intervention's only durable trace (what the human did,
+/// where, and when), so it travels as a browser-live frame instead of being
+/// dropped. A failure to publish is returned as an error: the sink contract
+/// says a failed delivery closes the target's control plane, never silently
+/// returns Agent authority.
+fn event_bus_sink(event_bus: Arc<GatewayEventBus>) -> InterventionSink {
+    Arc::new(move |summary| {
+        event_bus
+            .publish_frame(&GatewayEventFrame::BrowserLiveIntervention { summary })
+            .map(|_| ())
+            .map_err(|error| {
+                BrowserError::ActionFailed(format!(
+                    "publishing the intervention summary failed: {error}"
+                ))
+            })
     })
 }
 
@@ -93,7 +102,7 @@ impl BrowserLiveRuntime {
     ) -> Result<Self, GrantDenied> {
         let lifecycle =
             BrowserLiveLifecycle::new(ResourceRegistry::default(), ViewerGrantStore::default())
-                .with_event_bus(event_bus);
+                .with_event_bus(event_bus.clone());
         let owners = LiveOwnerRegistry::default();
         // Every owner that registers here reports document boundaries
         // (navigation, reload, event gap) straight to this lifecycle, which
@@ -109,7 +118,7 @@ impl BrowserLiveRuntime {
         )?;
         let backend = Arc::new(LiveViewerBackend::new(
             owners.clone(),
-            fail_closed_sink(),
+            event_bus_sink(event_bus),
             VIEWER_VIEWPORT,
             guard,
             lifecycle.resources().clone(),
@@ -207,6 +216,53 @@ mod tests {
                 .is_none());
             assert!(server.browser_viewer.is_none(), "origin {origin:?}");
         }
+    }
+
+    #[tokio::test]
+    async fn the_intervention_sink_publishes_the_summary_as_a_browser_live_frame() {
+        let bus = Arc::new(GatewayEventBus::new());
+        let mut frames = bus.subscribe_typed();
+        let sink = event_bus_sink(bus.clone());
+        let summary = aleph_protocol::browser_live::InterventionSummary {
+            intervention_id: "intervention-1".into(),
+            destination: ConversationBinding {
+                session_key: "agent:operator:browser".into(),
+                run_id: "run-7".into(),
+            },
+            target: BrowserTargetBinding {
+                profile: "default".into(),
+                browser_session_id: "browser-one".into(),
+                target_id: "target-one".into(),
+            },
+            principal: IssuerIdentity::User {
+                user_id: USER.into(),
+            },
+            started_at_ms: 1_799_000_000_000,
+            ended_at_ms: 1_799_000_001_000,
+            control_epoch_before: 1,
+            control_epoch_after: 2,
+            ended_by: aleph_protocol::browser_live::InterventionEnd::Cede,
+            facts: aleph_protocol::browser_live::InterventionFacts {
+                input_event_count: 3,
+                typed_text_chars: 2,
+                navigation_count: 0,
+                final_origin: None,
+            },
+        };
+        sink(summary.clone()).expect("the sink publishes the summary");
+        let frame = frames.recv().await.expect("the frame is delivered");
+        assert_eq!(
+            frame.topic_name(),
+            aleph_protocol::browser_live::INTERVENTION_TOPIC
+        );
+        assert!(
+            matches!(
+                frame,
+                GatewayEventFrame::BrowserLiveIntervention { summary }
+                    if summary.intervention_id == "intervention-1"
+            ),
+            "the summary travels as the intervention frame"
+        );
     }
 
     #[test]

@@ -34,7 +34,6 @@ use aleph_cdp::{CdpEvent, SessionId};
 
 use crate::browser::engine::{EngineHandle, TabEntry, TabTable};
 use crate::browser::error::BrowserError;
-use crate::browser::tab_registry::TabRegistry;
 
 use super::CdpBackend;
 
@@ -232,12 +231,10 @@ fn claim_pump(flag: &AtomicBool) -> bool {
 /// resolving the same handle concurrently is the normal case, and two pumps
 /// would record every console line twice.
 ///
-/// `identities` is the profile-manager-owned tab-identity registry, handed in
-/// so the `Target.targetDestroyed` arm can push the death into it (the
-/// event-push half of `TabRegistry::resolve_identity`). The caller wires it
-/// BEFORE claiming the slot, so the pump never observes an event it cannot
-/// report.
-pub(super) fn ensure_pump(handle: &Arc<EngineHandle>, identities: &Arc<TabRegistry>) {
+/// The pump folds the `Target.targetDestroyed` arm into the engine's own tab
+/// table — the layer the verbs consult — so it needs nothing beyond the
+/// handle.
+pub(super) fn ensure_pump(handle: &Arc<EngineHandle>) {
     if !claim_pump(&handle.pump_started) {
         return;
     }
@@ -253,10 +250,6 @@ pub(super) fn ensure_pump(handle: &Arc<EngineHandle>, identities: &Arc<TabRegist
     // websocket — alive forever, and the pump would outlive the browser it was
     // reading. The upgrade failing IS the exit condition.
     let weak: Weak<EngineHandle> = Arc::downgrade(handle);
-    // The registry rides as an `Arc`: it is manager-owned and outlives the
-    // pump in every real topology, and holding it keeps no engine alive — the
-    // handle's `Weak` above remains the exit condition.
-    let identities = identities.clone();
     tokio::spawn(async move {
         // Ask for target lifecycle events. This is the ONLY reason a tab we did
         // not create ourselves can enter the table, and it is an event rather
@@ -298,7 +291,7 @@ pub(super) fn ensure_pump(handle: &Arc<EngineHandle>, identities: &Arc<TabRegist
             // adoption is: it takes the table lock and reports to the
             // identity registry.
             if ev.method == "Target.targetDestroyed" {
-                fold_destroyed_target(&handle, &identities, &ev).await;
+                fold_destroyed_target(&handle, &ev).await;
                 continue;
             }
             let mut tabs = handle.tabs.lock().await;
@@ -307,7 +300,7 @@ pub(super) fn ensure_pump(handle: &Arc<EngineHandle>, identities: &Arc<TabRegist
     });
 }
 
-/// Fold a `Target.targetDestroyed` into the table and the identity registry.
+/// Fold a `Target.targetDestroyed` into the engine's tab table.
 ///
 /// The fold is conditional on the tab being OURS: an entry that is not in the
 /// table is either a target this profile never tracked (the discovery stream
@@ -323,11 +316,7 @@ pub(super) fn ensure_pump(handle: &Arc<EngineHandle>, identities: &Arc<TabRegist
 /// fold a tab whose adoption is still in flight inside THIS loop. (A verb
 /// racing the fold from OUTSIDE the loop resolves one lock acquisition
 /// earlier or later; both orders are honest answers.)
-async fn fold_destroyed_target(
-    handle: &Arc<EngineHandle>,
-    identities: &Arc<TabRegistry>,
-    ev: &CdpEvent,
-) {
+async fn fold_destroyed_target(handle: &Arc<EngineHandle>, ev: &CdpEvent) {
     let Some(target_id) = ev.params["targetId"].as_str() else {
         return;
     };
@@ -342,8 +331,8 @@ async fn fold_destroyed_target(
                 tabs.active = None;
             }
             // Kept so `ensure_tab` can answer `TabGone` with the last URL the
-            // table observed — the same fact `TabRegistry::resolve_identity`
-            // carries, at the layer the verbs actually consult.
+            // table observed — the same fact the registry's URL note carries,
+            // at the layer the verbs actually consult.
             tabs.dead.insert(target_id.to_string(), entry.url.clone());
         }
         removed
@@ -351,9 +340,6 @@ async fn fold_destroyed_target(
     if removed.is_none() {
         return;
     }
-    // The event-push half of the identity registry: `resolve_identity` answers
-    // `TabGone` from this note without waiting for a caller-fed enumeration.
-    identities.record_death(&handle.profile, target_id);
 }
 
 /// Adopt a page the page itself opened (`target=_blank`, `window.open`).
@@ -1084,18 +1070,6 @@ mod tests {
             !handle.tabs.lock().await.entries.contains_key("T1"),
             "the dead tab is out of the live table"
         );
-
-        // The registry's answer comes from the PUSH, not from a fresh
-        // enumeration: a live list that still carries T1 must not save it —
-        // an enumeration can lag, the destroy event was observed.
-        let reg = backend.tab_identities.clone();
-        let err = reg
-            .resolve_identity("default", "T1", &["T1".to_string()])
-            .expect_err("the pushed death beats the enumeration");
-        assert!(
-            matches!(err, BrowserError::TabGone { .. }),
-            "event push, not enumeration: {err:?}"
-        );
     }
 
     /// **Review Focus #4: the destroyed arm must not disturb popup adoption.**
@@ -1181,14 +1155,6 @@ mod tests {
         assert!(
             matches!(err, BrowserError::TabNotFound(_)),
             "we closed it: TabNotFound, not TabGone — got {err:?}"
-        );
-        let reg = backend.tab_identities.clone();
-        assert!(
-            matches!(
-                reg.resolve_identity("default", "T1", &[]),
-                Err(BrowserError::TabNotFound(_))
-            ),
-            "the registry forgot it too"
         );
     }
 }

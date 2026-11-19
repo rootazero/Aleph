@@ -722,14 +722,16 @@ const MAX_SCREENSHOT_DECODE_ALLOC: u64 = 256 * 1024 * 1024;
 /// The budgets are checked against the PNG **header** first, so a capture
 /// that is already inside them costs no decode at all, and an oversized one
 /// is known before a single pixel is materialised. A capture that cannot be
-/// decoded within the decode limits is replaced by a bounded placeholder
-/// rather than handed back unbounded.
-pub(crate) fn bound_screenshot_png(png_bytes: Vec<u8>) -> Vec<u8> {
+/// decoded within the decode limits is reported as a failure: handing the
+/// original back is exactly what the budgets exist to prevent, and a
+/// stand-in image would report a capture that never happened as a
+/// successful one.
+pub(crate) fn bound_screenshot_png(png_bytes: Vec<u8>) -> Result<Vec<u8>, String> {
     let header = png_header_dimensions(&png_bytes);
     if let Some((width, height)) = header {
         if width.max(height) <= MAX_SCREENSHOT_EDGE && png_bytes.len() <= MAX_SCREENSHOT_BYTES {
             // Inside both budgets → byte-for-byte passthrough, no decode.
-            return png_bytes;
+            return Ok(png_bytes);
         }
     }
     // Over a budget (or not a PNG whose header we can read): decode it, but
@@ -741,17 +743,22 @@ pub(crate) fn bound_screenshot_png(png_bytes: Vec<u8>) -> Vec<u8> {
         // over the edge cap (a format we cannot read the header of, e.g.).
         // Otherwise a bounded stand-in takes its place: handing the original
         // back is exactly what the budgets exist to prevent.
-        let over_edge_cap = header.is_some_and(|(width, height)| width.max(height) > MAX_SCREENSHOT_EDGE);
+        let over_edge_cap =
+            header.is_some_and(|(width, height)| width.max(height) > MAX_SCREENSHOT_EDGE);
         if !over_edge_cap && png_bytes.len() <= MAX_SCREENSHOT_BYTES {
-            return png_bytes;
+            return Ok(png_bytes);
         }
-        return placeholder_png();
+        return Err(format!(
+            "the capture is over the screenshot budget ({} bytes, edge cap {MAX_SCREENSHOT_EDGE}px) \
+             and could not be decoded to fit it",
+            png_bytes.len()
+        ));
     };
     // Fast path: within both budgets → byte-for-byte passthrough.
     if decoded.width().max(decoded.height()) <= MAX_SCREENSHOT_EDGE
         && png_bytes.len() <= MAX_SCREENSHOT_BYTES
     {
-        return png_bytes;
+        return Ok(png_bytes);
     }
     let fitted = decoded.resize(
         MAX_SCREENSHOT_EDGE,
@@ -763,10 +770,10 @@ pub(crate) fn bound_screenshot_png(png_bytes: Vec<u8>) -> Vec<u8> {
         .write_to(&mut std::io::Cursor::new(&mut buf), image::ImageFormat::Png)
         .is_err()
     {
-        return placeholder_png();
+        return Err("the bounded capture could not be re-encoded as PNG".to_string());
     }
     if buf.len() <= MAX_SCREENSHOT_BYTES {
-        return buf;
+        return Ok(buf);
     }
     // Still over the byte cap (dense content compresses poorly): iteratively
     // downscale the edge-capped image — 0.7 / 0.5 / 0.35 / 0.25 of its
@@ -798,13 +805,13 @@ pub(crate) fn bound_screenshot_png(png_bytes: Vec<u8>) -> Vec<u8> {
             break; // encode failure → fall through to the best attempt so far
         }
         if attempt.len() <= MAX_SCREENSHOT_BYTES {
-            return attempt;
+            return Ok(attempt);
         }
         if attempt.len() < smallest.len() {
             smallest = attempt;
         }
     }
-    smallest
+    Ok(smallest)
 }
 
 /// The dimensions a PNG's header declares, without decoding it.
@@ -834,24 +841,6 @@ fn decode_bounded(bytes: &[u8]) -> Option<image::DynamicImage> {
     limits.max_alloc = Some(MAX_SCREENSHOT_DECODE_ALLOC);
     reader.limits(limits);
     reader.decode().ok()
-}
-
-/// A bounded stand-in for a capture that could not be re-encoded.
-///
-/// One transparent pixel: a valid PNG (the format contract every consumer
-/// assumes), a few dozen bytes, and no unbounded payload. A model sees "the
-/// capture could not be bounded" instead of the megabytes the budgets exist
-/// to keep out of the request.
-fn placeholder_png() -> Vec<u8> {
-    let placeholder = image::DynamicImage::new_rgba8(1, 1);
-    let mut buf = Vec::new();
-    if placeholder
-        .write_to(&mut std::io::Cursor::new(&mut buf), image::ImageFormat::Png)
-        .is_err()
-    {
-        return Vec::new();
-    }
-    buf
 }
 
 pub use click::{BrowserClickArgs, BrowserClickOutput, BrowserClickTool};
@@ -1082,7 +1071,7 @@ mod tests {
         // A full-page-style capture far over the edge cap is shrunk; the result
         // is still a valid PNG whose longest edge is within budget.
         let big = png_of(4000, 1000);
-        let out = super::bound_screenshot_png(big.clone());
+        let out = super::bound_screenshot_png(big.clone()).expect("bounded");
         assert_ne!(out, big, "oversized capture must be re-encoded smaller");
         let decoded = image::load_from_memory(&out).expect("still a valid png");
         assert!(decoded.width().max(decoded.height()) <= super::MAX_SCREENSHOT_EDGE);
@@ -1092,7 +1081,7 @@ mod tests {
     fn bound_screenshot_leaves_within_budget_bytes_untouched() {
         // Already within the cap → returned byte-for-byte (no needless re-encode).
         let small = png_of(800, 600);
-        let out = super::bound_screenshot_png(small.clone());
+        let out = super::bound_screenshot_png(small.clone()).expect("bounded");
         assert_eq!(out, small);
     }
 
@@ -1100,15 +1089,19 @@ mod tests {
     fn bound_screenshot_passes_through_non_image_bytes() {
         // A decode failure must never drop the capture — bytes flow through.
         let junk = b"\x00\x01not a png".to_vec();
-        assert_eq!(super::bound_screenshot_png(junk.clone()), junk);
+        assert_eq!(
+            super::bound_screenshot_png(junk.clone()).expect("passthrough"),
+            junk
+        );
     }
 
     /// A capture that cannot be decoded within the decode limits must not be
     /// handed back as it came in: the budgets exist to keep the payload out
-    /// of the request, and a failed decode used to return the original bytes
-    /// whatever they were.
+    /// of the request. It must also not be answered with a stand-in picture —
+    /// a 1x1 PNG reported as a successful screenshot is a capture that never
+    /// happened.
     #[test]
-    fn bound_screenshot_replaces_an_undecodable_oversized_capture() {
+    fn bound_screenshot_fails_an_undecodable_oversized_capture() {
         let mut oversized = Vec::new();
         oversized.extend_from_slice(&[0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a]);
         oversized.extend_from_slice(&13u32.to_be_bytes()); // IHDR length
@@ -1117,14 +1110,12 @@ mod tests {
         oversized.extend_from_slice(&30_000u32.to_be_bytes()); // height
         oversized.extend_from_slice(&[8, 6, 0, 0, 0]); // bit depth, colour type, …
         oversized.extend_from_slice(&[0u8; 4096]); // not a real image body
-        let out = super::bound_screenshot_png(oversized.clone());
-        assert_ne!(
-            out, oversized,
-            "the unbounded original must not come back"
+        let err = super::bound_screenshot_png(oversized)
+            .expect_err("an undecodable oversized capture is a failure");
+        assert!(
+            err.contains("could not be decoded"),
+            "the reason names the cause: {err}"
         );
-        assert!(out.len() <= super::MAX_SCREENSHOT_BYTES);
-        let decoded = image::load_from_memory(&out).expect("the stand-in is still a valid png");
-        assert!(decoded.width().max(decoded.height()) <= super::MAX_SCREENSHOT_EDGE);
     }
 
     /// Incompressible-noise PNG: solid-color fixtures deflate to nothing and
@@ -1159,7 +1150,7 @@ mod tests {
         // landing over the cap post-clamp.)
         let noisy = noise_png(2000);
         assert!(noisy.len() > super::MAX_SCREENSHOT_BYTES);
-        let out = super::bound_screenshot_png(noisy);
+        let out = super::bound_screenshot_png(noisy).expect("bounded");
         assert!(
             out.len() <= super::MAX_SCREENSHOT_BYTES,
             "dense capture must fit the byte budget: {} bytes",
@@ -1900,11 +1891,9 @@ mod principal_profile_census {
         "session_active",
         "prepare_engine",
         "switch_engine",
-        "engine_handle",
         "engine_handle_for",
         "launch_request_for",
         "launch_request_for_engine",
-        "live_endpoint",
     ];
 
     #[test]

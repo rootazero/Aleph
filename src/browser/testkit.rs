@@ -897,8 +897,8 @@ impl super::engine::process::EngineProcess for FakeEngineProcess {
 ///
 /// Named `fake_handle` and not `fake_engine_handle` on purpose: the
 /// `browser::home_guard_census` flags any test body containing
-/// `engine_handle(`, on the reading that it called
-/// `ProfileManager::engine_handle` and therefore resolved `$ALEPH_HOME`. This
+/// `engine_handle(`, on the reading that it called the
+/// manager's engine resolver and therefore resolved `$ALEPH_HOME`. This
 /// helper resolves nothing — a tempdir for the sidecar, a literal for the data
 /// dir — so every caller of it would have been a FALSE offender, and the census
 /// would have been "fixed" by handing seven tests a guard that guards nothing

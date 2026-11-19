@@ -33,9 +33,6 @@ pub(crate) mod wait_probe;
 
 pub use discovery::find_chromium;
 pub use error::BrowserError;
-// Crate-internal: `live_endpoint` is `pub(crate)` too, and its first real
-// consumer (the live view, Plan 2) lives in this crate.
-pub(crate) use engine::process::CdpEndpoint;
 
 /// R72 class guard: fails when a `#[test]`/`#[tokio::test]` fn anywhere under
 /// `src/browser/` resolves `ALEPH_HOME` without holding the one guard that
@@ -110,7 +107,6 @@ mod home_guard_census {
         // panics on the first offender it finds proves nothing about the
         // second.
         "launch_request_for(",
-        "engine_handle(",
         "engine_handle_for(",
     ];
 

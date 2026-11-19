@@ -356,7 +356,7 @@ mod tests {
 
         let manager = ProfileManager::new(BrowserSystemConfig::default());
         let injected: Vec<String> = manager
-            .list_profiles()
+            .list_profiles_for(None)
             .into_iter()
             .map(|(name, _)| name)
             .collect();
