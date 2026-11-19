@@ -672,7 +672,6 @@ mod tests {
             params: Some(serde_json::json!({ "path": "/tmp/x" })),
         };
         assert!(req.is_incoming_request());
-        assert!(!req.is_notification());
         let (id, method, params) = req.as_incoming_request().unwrap();
         assert_eq!(id, 42);
         assert_eq!(method, "fs/read_text_file");
@@ -706,7 +705,9 @@ mod tests {
             params: Some(serde_json::json!({})),
         };
         assert!(!notif.is_incoming_request());
-        assert!(notif.is_notification());
+        // A notification is a frame with a method and no id.
+        assert_eq!(notif.id, None);
+        assert!(notif.method.is_some());
     }
 
     #[test]
