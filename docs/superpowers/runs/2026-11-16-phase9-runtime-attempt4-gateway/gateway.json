@@ -1,0 +1,9 @@
+{
+  "kind": "production_gateway",
+  "isolated": true,
+  "url": "http://127.0.0.1:52995/",
+  "binary": "/Volumes/TBU4/Workspace/Aleph/.phase9-target/debug/aleph-server",
+  "binary_sha256": "3d97a101b0eff154d59e8e3f552c4dae42804ee8c73ac653c68027928947bd2b",
+  "pid": 86296,
+  "model_endpoint": "deterministic_protocol_fixture"
+}

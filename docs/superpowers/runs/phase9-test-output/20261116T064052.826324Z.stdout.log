@@ -1,0 +1,6 @@
+
+running 1 test
+test extension::mcp_plugin_tests::a_root_variable_that_climbs_out_is_refused_on_both_faces_and_the_row_says_why ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 22421 filtered out; finished in 0.41s
+

@@ -1,0 +1,2 @@
+2026-11-16T10:08:45.667442Z  INFO aleph_desktop_shell::cert_trust::adapter_macos: cert-trust: WKWebView challenge hook installed
+ALEPH_PANEL_QA {"connection_epoch":0,"kind":"ready","nonce":"6f4f9e4bbef29199d903854fa99b8a54d4b142f67e44342c13ee8edfa2f37747","payload":{},"qa_run_id":"75cc90704d094281b8cb0da99eeb13cb","run_id":null,"session_key":null}

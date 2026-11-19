@@ -1,0 +1,73 @@
+[
+  {
+    "name": "runner",
+    "argv": [
+      "uv",
+      "run",
+      "--offline",
+      "--no-project",
+      "--with",
+      "jsonschema==4.25.1",
+      "python",
+      "-m",
+      "unittest",
+      "discover",
+      "-s",
+      "qa",
+      "-p",
+      "test_phase9_test_closure.py"
+    ],
+    "exit_code": 0,
+    "log": "docs/superpowers/runs/2026-11-16-phase9-final-runner-tests.log",
+    "sha256": "14c1d9a223e3d15de8512f9f7a976dfde02032b77236388e6c157d5d7531c905"
+  },
+  {
+    "name": "lock",
+    "argv": [
+      "python3",
+      "-m",
+      "unittest",
+      "discover",
+      "-s",
+      "qa",
+      "-p",
+      "test_cargo_lock_delta.py"
+    ],
+    "exit_code": 0,
+    "log": "docs/superpowers/runs/2026-11-16-phase9-final-lock-tests.log",
+    "sha256": "33060fd73862c5e1af97335504d5b45211fce6d229657f556d8deceeadc52ce4"
+  },
+  {
+    "name": "runtime",
+    "argv": [
+      "uv",
+      "run",
+      "--offline",
+      "--no-project",
+      "--with",
+      "jsonschema==4.25.1",
+      "python",
+      "-m",
+      "unittest",
+      "discover",
+      "-s",
+      "qa",
+      "-p",
+      "test_nsh_panel*.py"
+    ],
+    "exit_code": 0,
+    "log": "docs/superpowers/runs/2026-11-16-phase9-final-runtime-tests.log",
+    "sha256": "9607c0ebdd73c864fa64d208cfdb12417956cd5c9d7eeae7d781d8c4dc10e5e1"
+  },
+  {
+    "name": "driver",
+    "argv": [
+      "node",
+      "--test",
+      "qa/nsh_panel_driver.test.mjs"
+    ],
+    "exit_code": 0,
+    "log": "docs/superpowers/runs/2026-11-16-phase9-final-driver-tests.log",
+    "sha256": "d707adc0cb732f126cc3542527602e41f74b147ee4059b6d850383c96048142b"
+  }
+]

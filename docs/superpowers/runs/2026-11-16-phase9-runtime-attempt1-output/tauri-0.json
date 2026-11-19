@@ -1,0 +1,115 @@
+{
+  "version": 1,
+  "surface": "tauri",
+  "origin": "live_gateway",
+  "qa_run_id": "6c108ea5e89042409ac2912629c35206",
+  "gateway": {
+    "kind": "production_gateway",
+    "isolated": true,
+    "url": "http://127.0.0.1:52721/",
+    "binary": "/Volumes/TBU4/Workspace/Aleph/.phase9-target/debug/aleph-server",
+    "binary_sha256": "3d97a101b0eff154d59e8e3f552c4dae42804ee8c73ac653c68027928947bd2b",
+    "pid": 55638,
+    "model_endpoint": "deterministic_protocol_fixture"
+  },
+  "events": [],
+  "resources": [
+    {
+      "at_ms": 5.807749985251576,
+      "rss_mb": 0.03125,
+      "threads": 2
+    },
+    {
+      "at_ms": 102.03458298929036,
+      "rss_mb": 0.03125,
+      "threads": 2
+    },
+    {
+      "at_ms": 202.02799997059628,
+      "rss_mb": 0.03125,
+      "threads": 2
+    },
+    {
+      "at_ms": 302.0249579567462,
+      "rss_mb": 0.03125,
+      "threads": 2
+    },
+    {
+      "at_ms": 400.07741696899757,
+      "rss_mb": 0.03125,
+      "threads": 2
+    },
+    {
+      "at_ms": 502.02329200692475,
+      "rss_mb": 0.03125,
+      "threads": 2
+    },
+    {
+      "at_ms": 602.0253750029951,
+      "rss_mb": 0.03125,
+      "threads": 2
+    },
+    {
+      "at_ms": 700.6811669562012,
+      "rss_mb": 0.03125,
+      "threads": 2
+    },
+    {
+      "at_ms": 802.0432079792954,
+      "rss_mb": 0.03125,
+      "threads": 2
+    },
+    {
+      "at_ms": 902.0212919567712,
+      "rss_mb": 9.40625,
+      "threads": 2
+    },
+    {
+      "at_ms": 1002.0262079779059,
+      "rss_mb": 9.421875,
+      "threads": 2
+    },
+    {
+      "at_ms": 1102.0252919988707,
+      "rss_mb": 9.421875,
+      "threads": 2
+    },
+    {
+      "at_ms": 1202.0318749709986,
+      "rss_mb": 9.421875,
+      "threads": 2
+    },
+    {
+      "at_ms": 1302.0244999788702,
+      "rss_mb": 9.421875,
+      "threads": 2
+    }
+  ],
+  "direct_child": {
+    "exit_code": 2,
+    "forced": false
+  },
+  "resource_scope": {
+    "complete": false,
+    "kind": "direct_child_only",
+    "reason": "WebKit XPC process ownership is not inferred from POSIX parentage"
+  },
+  "capture": {
+    "argv": [
+      "/Volumes/TBU4/Workspace/Aleph/.phase9-target/debug/aleph-desktop-shell",
+      "--qa-root",
+      "/var/folders/qt/d007hr751cl59b3_8sptd8fr0000gp/T/aleph-shell-qa-m78ypl19",
+      "--qa-nonce",
+      "16d601fae9e02685ce114ca497cec15720a42d9a8dd73367509ff55a9a9768e4"
+    ],
+    "cwd": "/Volumes/TBU4/Workspace/Aleph/desktop/shell",
+    "pid": 55787,
+    "cleanup_error": null,
+    "binary_sha256": "cfe93686c18068c2af526ee13168c53bec79c30a79940d841734adc96444dcb8",
+    "stdout": "docs/superpowers/runs/2026-11-16-phase9-runtime-attempt1-output/tauri-0.stdout.log",
+    "stderr": "docs/superpowers/runs/2026-11-16-phase9-runtime-attempt1-output/tauri-0.stderr.log",
+    "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "stderr_sha256": "396eac5f525d98cfc14d05499d29649e98bce389681fb862dafbd4b8e6c993f9"
+  },
+  "fixture_cleanup": true
+}

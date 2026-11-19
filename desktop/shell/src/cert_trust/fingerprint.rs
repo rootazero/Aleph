@@ -86,9 +86,11 @@ mod tests {
         let fp = fingerprint_sha256(&sample_der());
         let groups: Vec<&str> = fp.split(':').collect();
         assert_eq!(groups.len(), 32, "sha256 = 32 bytes");
-        assert!(groups.iter().all(|g| g.len() == 2
-            && g.chars()
-                .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_lowercase())));
+        assert!(groups.iter().all(|g| {
+            g.len() == 2
+                && g.chars()
+                    .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_lowercase())
+        }));
     }
 
     #[test]

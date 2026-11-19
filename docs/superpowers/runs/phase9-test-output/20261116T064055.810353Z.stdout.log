@@ -1,0 +1,6 @@
+
+running 1 test
+test extension::tests::a_legacy_disabled_marker_is_migrated_then_removed ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 22421 filtered out; finished in 0.02s
+

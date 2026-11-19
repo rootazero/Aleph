@@ -1,0 +1,53 @@
+{
+  "name": "gateway-binary-fixed",
+  "memory_gate": {
+    "argv": [
+      "python3",
+      "qa/browser_live/check_memory.py",
+      "--required-bytes",
+      "4294967296"
+    ],
+    "cwd": "/Volumes/TBU4/Workspace/Aleph",
+    "env_overrides": {},
+    "exit_code": 0,
+    "timed_out": false,
+    "pid": 51293,
+    "cleanup_error": null,
+    "group_probe": null,
+    "unjoined_descendants": false,
+    "elapsed_seconds": 0.03304900001967326,
+    "stdout": "/Volumes/TBU4/Workspace/Aleph/.superpowers/sdd/2026-11-15-phase9-runtime-proof-and-dependency-closure/gateway-binary-fixed-memory.stdout.log",
+    "stderr": "/Volumes/TBU4/Workspace/Aleph/.superpowers/sdd/2026-11-15-phase9-runtime-proof-and-dependency-closure/gateway-binary-fixed-memory.stderr.log",
+    "output": "available_bytes=7471874048 required_bytes=4294967296 ALLOW\n"
+  },
+  "command": {
+    "argv": [
+      "cargo",
+      "build",
+      "-p",
+      "alephcore",
+      "--bin",
+      "aleph-server",
+      "--offline",
+      "--locked",
+      "--jobs",
+      "1"
+    ],
+    "cwd": "/Volumes/TBU4/Workspace/Aleph",
+    "env_overrides": {
+      "CARGO_TARGET_DIR": "/Volumes/TBU4/Workspace/Aleph/.phase9-target",
+      "RUST_BACKTRACE": "1"
+    },
+    "exit_code": 0,
+    "timed_out": false,
+    "pid": 51295,
+    "cleanup_error": null,
+    "group_probe": null,
+    "unjoined_descendants": false,
+    "elapsed_seconds": 378.4254378749756,
+    "stdout": "/Volumes/TBU4/Workspace/Aleph/.superpowers/sdd/2026-11-15-phase9-runtime-proof-and-dependency-closure/gateway-binary-fixed.stdout.log",
+    "stderr": "/Volumes/TBU4/Workspace/Aleph/.superpowers/sdd/2026-11-15-phase9-runtime-proof-and-dependency-closure/gateway-binary-fixed.stderr.log",
+    "output": "   Compiling tokio v1.53.3\n   Compiling tokio-util v0.7.20\n   Compiling h2 v0.4.20\n   Compiling tokio-native-tls v0.3.1\n   Compiling hyper v1.12.0\n   Compiling hyper-util v0.1.21\n   Compiling async-compression v0.4.51\n   Compiling tower v0.5.3\n   Compiling tokio-rustls v0.26.6\n   Compiling tower-http v0.6.11\n   Compiling hyper-tls v0.6.0\n   Compiling hyper-rustls v0.27.10\n   Compiling reqwest v0.13.5\n   Compiling eyeball-im v0.9.1\n   Compiling readlock-tokio v0.1.6\n   Compiling deadpool-runtime v0.3.1\n   Compiling eyeball v0.8.8\n   Compiling matrix-sdk-common v0.19.1\n   Compiling reqwest v0.12.28\n   Compiling tokio-tungstenite v0.30.0\n   Compiling matrix-sdk-base v0.19.1\n   Compiling deadpool v0.13.1\n   Compiling deadpool-sync v0.2.0\n   Compiling tokio-websockets v0.13.3\n   Compiling tokio-stream v0.1.19\n   Compiling teloxide-core v0.13.0\n   Compiling matrix-sdk-sqlite v0.19.1\n   Compiling wasmtime-wasi v49.0.3\n   Compiling whatsapp-rust-tokio-transport v0.7.0\n   Compiling oauth2-reqwest v0.1.0-alpha.3\n   Compiling aleph-desktop v26.9.1 (/Volumes/TBU4/Workspace/Aleph/desktop/shared)\n   Compiling tokio-tungstenite v0.29.0\n   Compiling whatsapp-rust-sqlite-storage v0.7.0 (/Volumes/TBU4/Workspace/Aleph/vendor/whatsapp-rust-sqlite-storage)\n   Compiling fs-err v3.3.2\n   Compiling tokio-tungstenite v0.21.0\n   Compiling backon v1.6.0\n   Compiling lettre v0.11.23\n   Compiling axum v0.8.9\n   Compiling matrix-sdk v0.19.1\n   Compiling alephcore v26.9.1 (/Volumes/TBU4/Workspace/Aleph)\n   Compiling extism v1.41.0\n   Compiling serenity v0.12.5\n   Compiling tower-http v0.7.1\n   Compiling reqwest-eventsource v0.6.0\n   Compiling axum-server v0.8.0\n   Compiling teloxide v0.17.0\n   Compiling jsonschema v0.59.0\n   Compiling aleph-desktop-macos v26.9.1 (/Volumes/TBU4/Workspace/Aleph/desktop/macos)\n   Compiling aleph-client v0.1.0 (/Volumes/TBU4/Workspace/Aleph/shared/client)\n   Compiling whatsapp-rust v0.7.0\n   Compiling aleph-cdp v26.9.1 (/Volumes/TBU4/Workspace/Aleph/crates/aleph-cdp)\n   Compiling aleph-slot-api v26.9.1 (/Volumes/TBU4/Workspace/Aleph/crates/aleph-slot-api)\nwarning: linker stderr: ld: __eh_frame section too large (max 16MB) to encode dwarf unwind offsets in compact unwind table, performance of exception handling might be affected\n  |\n  = note: `#[warn(linker_messages)]` on by default\n\nwarning: `alephcore` (bin \"aleph-server\") generated 1 warning\n    Finished `dev` profile [unoptimized + debuginfo] target(s) in 6m 18s\n"
+  },
+  "status": "PASS"
+}

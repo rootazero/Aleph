@@ -1,0 +1,4702 @@
+{
+  "schema_version": 1,
+  "inventory_source": "docs/superpowers/runs/2026-11-16-phase8-handoff-verification.json",
+  "slow_count": 22,
+  "positive_count": 6,
+  "expanded_filter_count": 50,
+  "full_suite_timeout_seconds": 1200,
+  "cargo_lock_sha256": "d6f2e99dd2df5868b15f2940d74cf8845ea7c26d3ff69819ce42422180bb1cdb",
+  "runner_sha256": "e34997fa1770baab2af9c666b5feb0c254d68c23c7353acb7219b085f03a8b24",
+  "runs": [
+    {
+      "case": "extension::claude_cache_tests::a_claude_code_update_moves_the_hook_root_and_the_approval_stays_behind",
+      "receipt": {
+        "schema_version": 1,
+        "timestamp": "20261116T064022.347985Z",
+        "memory_gate": {
+          "argv": [
+            "python3",
+            "qa/browser_live/check_memory.py",
+            "--required-bytes",
+            "4294967296"
+          ],
+          "cwd": "/Volumes/TBU4/Workspace/Aleph",
+          "env_overrides": {},
+          "exit_code": 0,
+          "timed_out": false,
+          "pid": 72757,
+          "cleanup_error": null,
+          "unjoined_descendants": false,
+          "elapsed_seconds": 0.03739245800534263,
+          "stdout": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T064022.347985Z-memory.stdout.log",
+          "stderr": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T064022.347985Z-memory.stderr.log"
+        },
+        "test_filter": "extension::claude_cache_tests::a_claude_code_update_moves_the_hook_root_and_the_approval_stays_behind",
+        "status": "PASS",
+        "command": {
+          "argv": [
+            "cargo",
+            "test",
+            "-p",
+            "alephcore",
+            "--lib",
+            "--offline",
+            "--locked",
+            "--jobs",
+            "1",
+            "extension::claude_cache_tests::a_claude_code_update_moves_the_hook_root_and_the_approval_stays_behind",
+            "--",
+            "--test-threads=1"
+          ],
+          "cwd": "/Volumes/TBU4/Workspace/Aleph",
+          "env_overrides": {
+            "HOME": "/Users/zouguojun/.p9-home-82u_s877",
+            "ALEPH_HOME": "/tmp/p9-59_c6j7y/aleph",
+            "CARGO_HOME": "/Users/zouguojun/.cargo",
+            "RUSTUP_HOME": "/Users/zouguojun/.rustup",
+            "TMPDIR": "/tmp/p9-59_c6j7y",
+            "CARGO_TARGET_DIR": "/Volumes/TBU4/Workspace/Aleph/.phase9-target",
+            "RUST_BACKTRACE": "1"
+          },
+          "exit_code": 0,
+          "timed_out": false,
+          "pid": 72759,
+          "cleanup_error": null,
+          "unjoined_descendants": false,
+          "elapsed_seconds": 1.5006286659627222,
+          "stdout": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T064022.347985Z.stdout.log",
+          "stderr": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T064022.347985Z.stderr.log"
+        },
+        "fixture": {
+          "path": "/tmp/p9-59_c6j7y",
+          "home": "/Users/zouguojun/.p9-home-82u_s877",
+          "cleanup": "removed"
+        }
+      },
+      "supervisor": {
+        "argv": [
+          "/opt/homebrew/opt/python@3.15/bin/python3.15",
+          "qa/phase9_test_closure.py",
+          "--repo-root",
+          ".",
+          "--target-dir",
+          ".phase9-target",
+          "--receipt",
+          "docs/superpowers/runs/2026-11-15-phase9-test-closure-receipt.md",
+          "--timeout-seconds",
+          "600",
+          "--test-filter",
+          "extension::claude_cache_tests::a_claude_code_update_moves_the_hook_root_and_the_approval_stays_behind"
+        ],
+        "cwd": "/Volumes/TBU4/Workspace/Aleph",
+        "env_overrides": {},
+        "exit_code": 0,
+        "timed_out": false,
+        "pid": 72736,
+        "cleanup_error": null,
+        "unjoined_descendants": false,
+        "elapsed_seconds": 1.5816128749866039,
+        "stdout": "/Volumes/TBU4/Workspace/Aleph/.superpowers/sdd/2026-11-15-phase9-runtime-proof-and-dependency-closure/repaired-matrix-00.stdout.log",
+        "stderr": "/Volumes/TBU4/Workspace/Aleph/.superpowers/sdd/2026-11-15-phase9-runtime-proof-and-dependency-closure/repaired-matrix-00.stderr.log"
+      }
+    },
+    {
+      "case": "extension::claude_cache_tests::an_unreadable_index_forgets_nothing",
+      "receipt": {
+        "schema_version": 1,
+        "timestamp": "20261116T064023.917307Z",
+        "memory_gate": {
+          "argv": [
+            "python3",
+            "qa/browser_live/check_memory.py",
+            "--required-bytes",
+            "4294967296"
+          ],
+          "cwd": "/Volumes/TBU4/Workspace/Aleph",
+          "env_overrides": {},
+          "exit_code": 0,
+          "timed_out": false,
+          "pid": 72767,
+          "cleanup_error": null,
+          "unjoined_descendants": false,
+          "elapsed_seconds": 0.02727650001179427,
+          "stdout": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T064023.917307Z-memory.stdout.log",
+          "stderr": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T064023.917307Z-memory.stderr.log"
+        },
+        "test_filter": "extension::claude_cache_tests::an_unreadable_index_forgets_nothing",
+        "status": "PASS",
+        "command": {
+          "argv": [
+            "cargo",
+            "test",
+            "-p",
+            "alephcore",
+            "--lib",
+            "--offline",
+            "--locked",
+            "--jobs",
+            "1",
+            "extension::claude_cache_tests::an_unreadable_index_forgets_nothing",
+            "--",
+            "--test-threads=1"
+          ],
+          "cwd": "/Volumes/TBU4/Workspace/Aleph",
+          "env_overrides": {
+            "HOME": "/Users/zouguojun/.p9-home-zn95byue",
+            "ALEPH_HOME": "/tmp/p9-mzuyilhg/aleph",
+            "CARGO_HOME": "/Users/zouguojun/.cargo",
+            "RUSTUP_HOME": "/Users/zouguojun/.rustup",
+            "TMPDIR": "/tmp/p9-mzuyilhg",
+            "CARGO_TARGET_DIR": "/Volumes/TBU4/Workspace/Aleph/.phase9-target",
+            "RUST_BACKTRACE": "1"
+          },
+          "exit_code": 0,
+          "timed_out": false,
+          "pid": 72769,
+          "cleanup_error": null,
+          "unjoined_descendants": false,
+          "elapsed_seconds": 0.5766917910077609,
+          "stdout": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T064023.917307Z.stdout.log",
+          "stderr": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T064023.917307Z.stderr.log"
+        },
+        "fixture": {
+          "path": "/tmp/p9-mzuyilhg",
+          "home": "/Users/zouguojun/.p9-home-zn95byue",
+          "cleanup": "removed"
+        }
+      },
+      "supervisor": {
+        "argv": [
+          "/opt/homebrew/opt/python@3.15/bin/python3.15",
+          "qa/phase9_test_closure.py",
+          "--repo-root",
+          ".",
+          "--target-dir",
+          ".phase9-target",
+          "--receipt",
+          "docs/superpowers/runs/2026-11-15-phase9-test-closure-receipt.md",
+          "--timeout-seconds",
+          "600",
+          "--test-filter",
+          "extension::claude_cache_tests::an_unreadable_index_forgets_nothing"
+        ],
+        "cwd": "/Volumes/TBU4/Workspace/Aleph",
+        "env_overrides": {},
+        "exit_code": 0,
+        "timed_out": false,
+        "pid": 72766,
+        "cleanup_error": null,
+        "unjoined_descendants": false,
+        "elapsed_seconds": 0.6340575410285965,
+        "stdout": "/Volumes/TBU4/Workspace/Aleph/.superpowers/sdd/2026-11-15-phase9-runtime-proof-and-dependency-closure/repaired-matrix-01.stdout.log",
+        "stderr": "/Volumes/TBU4/Workspace/Aleph/.superpowers/sdd/2026-11-15-phase9-runtime-proof-and-dependency-closure/repaired-matrix-01.stderr.log"
+      }
+    },
+    {
+      "case": "extension::claude_cache_tests::an_unreadable_index_keeps_the_usage_history",
+      "receipt": {
+        "schema_version": 1,
+        "timestamp": "20261116T064024.551342Z",
+        "memory_gate": {
+          "argv": [
+            "python3",
+            "qa/browser_live/check_memory.py",
+            "--required-bytes",
+            "4294967296"
+          ],
+          "cwd": "/Volumes/TBU4/Workspace/Aleph",
+          "env_overrides": {},
+          "exit_code": 0,
+          "timed_out": false,
+          "pid": 72777,
+          "cleanup_error": null,
+          "unjoined_descendants": false,
+          "elapsed_seconds": 0.02809475001413375,
+          "stdout": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T064024.551342Z-memory.stdout.log",
+          "stderr": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T064024.551342Z-memory.stderr.log"
+        },
+        "test_filter": "extension::claude_cache_tests::an_unreadable_index_keeps_the_usage_history",
+        "status": "PASS",
+        "command": {
+          "argv": [
+            "cargo",
+            "test",
+            "-p",
+            "alephcore",
+            "--lib",
+            "--offline",
+            "--locked",
+            "--jobs",
+            "1",
+            "extension::claude_cache_tests::an_unreadable_index_keeps_the_usage_history",
+            "--",
+            "--test-threads=1"
+          ],
+          "cwd": "/Volumes/TBU4/Workspace/Aleph",
+          "env_overrides": {
+            "HOME": "/Users/zouguojun/.p9-home-vkysqkka",
+            "ALEPH_HOME": "/tmp/p9-its4x6mg/aleph",
+            "CARGO_HOME": "/Users/zouguojun/.cargo",
+            "RUSTUP_HOME": "/Users/zouguojun/.rustup",
+            "TMPDIR": "/tmp/p9-its4x6mg",
+            "CARGO_TARGET_DIR": "/Volumes/TBU4/Workspace/Aleph/.phase9-target",
+            "RUST_BACKTRACE": "1"
+          },
+          "exit_code": 0,
+          "timed_out": false,
+          "pid": 72779,
+          "cleanup_error": null,
+          "unjoined_descendants": false,
+          "elapsed_seconds": 0.5925137919839472,
+          "stdout": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T064024.551342Z.stdout.log",
+          "stderr": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T064024.551342Z.stderr.log"
+        },
+        "fixture": {
+          "path": "/tmp/p9-its4x6mg",
+          "home": "/Users/zouguojun/.p9-home-vkysqkka",
+          "cleanup": "removed"
+        }
+      },
+      "supervisor": {
+        "argv": [
+          "/opt/homebrew/opt/python@3.15/bin/python3.15",
+          "qa/phase9_test_closure.py",
+          "--repo-root",
+          ".",
+          "--target-dir",
+          ".phase9-target",
+          "--receipt",
+          "docs/superpowers/runs/2026-11-15-phase9-test-closure-receipt.md",
+          "--timeout-seconds",
+          "600",
+          "--test-filter",
+          "extension::claude_cache_tests::an_unreadable_index_keeps_the_usage_history"
+        ],
+        "cwd": "/Volumes/TBU4/Workspace/Aleph",
+        "env_overrides": {},
+        "exit_code": 0,
+        "timed_out": false,
+        "pid": 72776,
+        "cleanup_error": null,
+        "unjoined_descendants": false,
+        "elapsed_seconds": 0.6503065830329433,
+        "stdout": "/Volumes/TBU4/Workspace/Aleph/.superpowers/sdd/2026-11-15-phase9-runtime-proof-and-dependency-closure/repaired-matrix-02.stdout.log",
+        "stderr": "/Volumes/TBU4/Workspace/Aleph/.superpowers/sdd/2026-11-15-phase9-runtime-proof-and-dependency-closure/repaired-matrix-02.stderr.log"
+      }
+    },
+    {
+      "case": "extension::claude_cache_tests::one_id_in_aleph_home_and_the_claude_cache_is_one_row_the_aleph_copy",
+      "receipt": {
+        "schema_version": 1,
+        "timestamp": "20261116T064025.202178Z",
+        "memory_gate": {
+          "argv": [
+            "python3",
+            "qa/browser_live/check_memory.py",
+            "--required-bytes",
+            "4294967296"
+          ],
+          "cwd": "/Volumes/TBU4/Workspace/Aleph",
+          "env_overrides": {},
+          "exit_code": 0,
+          "timed_out": false,
+          "pid": 72782,
+          "cleanup_error": null,
+          "unjoined_descendants": false,
+          "elapsed_seconds": 0.02766641601920128,
+          "stdout": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T064025.202178Z-memory.stdout.log",
+          "stderr": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T064025.202178Z-memory.stderr.log"
+        },
+        "test_filter": "extension::claude_cache_tests::one_id_in_aleph_home_and_the_claude_cache_is_one_row_the_aleph_copy",
+        "status": "PASS",
+        "command": {
+          "argv": [
+            "cargo",
+            "test",
+            "-p",
+            "alephcore",
+            "--lib",
+            "--offline",
+            "--locked",
+            "--jobs",
+            "1",
+            "extension::claude_cache_tests::one_id_in_aleph_home_and_the_claude_cache_is_one_row_the_aleph_copy",
+            "--",
+            "--test-threads=1"
+          ],
+          "cwd": "/Volumes/TBU4/Workspace/Aleph",
+          "env_overrides": {
+            "HOME": "/Users/zouguojun/.p9-home-emb1cspk",
+            "ALEPH_HOME": "/tmp/p9-sd0t7smw/aleph",
+            "CARGO_HOME": "/Users/zouguojun/.cargo",
+            "RUSTUP_HOME": "/Users/zouguojun/.rustup",
+            "TMPDIR": "/tmp/p9-sd0t7smw",
+            "CARGO_TARGET_DIR": "/Volumes/TBU4/Workspace/Aleph/.phase9-target",
+            "RUST_BACKTRACE": "1"
+          },
+          "exit_code": 0,
+          "timed_out": false,
+          "pid": 72784,
+          "cleanup_error": null,
+          "unjoined_descendants": false,
+          "elapsed_seconds": 0.5752772919950075,
+          "stdout": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T064025.202178Z.stdout.log",
+          "stderr": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T064025.202178Z.stderr.log"
+        },
+        "fixture": {
+          "path": "/tmp/p9-sd0t7smw",
+          "home": "/Users/zouguojun/.p9-home-emb1cspk",
+          "cleanup": "removed"
+        }
+      },
+      "supervisor": {
+        "argv": [
+          "/opt/homebrew/opt/python@3.15/bin/python3.15",
+          "qa/phase9_test_closure.py",
+          "--repo-root",
+          ".",
+          "--target-dir",
+          ".phase9-target",
+          "--receipt",
+          "docs/superpowers/runs/2026-11-15-phase9-test-closure-receipt.md",
+          "--timeout-seconds",
+          "600",
+          "--test-filter",
+          "extension::claude_cache_tests::one_id_in_aleph_home_and_the_claude_cache_is_one_row_the_aleph_copy"
+        ],
+        "cwd": "/Volumes/TBU4/Workspace/Aleph",
+        "env_overrides": {},
+        "exit_code": 0,
+        "timed_out": false,
+        "pid": 72781,
+        "cleanup_error": null,
+        "unjoined_descendants": false,
+        "elapsed_seconds": 0.6330579170025885,
+        "stdout": "/Volumes/TBU4/Workspace/Aleph/.superpowers/sdd/2026-11-15-phase9-runtime-proof-and-dependency-closure/repaired-matrix-03.stdout.log",
+        "stderr": "/Volumes/TBU4/Workspace/Aleph/.superpowers/sdd/2026-11-15-phase9-runtime-proof-and-dependency-closure/repaired-matrix-03.stderr.log"
+      }
+    },
+    {
+      "case": "extension::claude_cache_tests::read_only_discovery_names_a_claude_cache_id_without_loading_it",
+      "receipt": {
+        "schema_version": 1,
+        "timestamp": "20261116T064025.835847Z",
+        "memory_gate": {
+          "argv": [
+            "python3",
+            "qa/browser_live/check_memory.py",
+            "--required-bytes",
+            "4294967296"
+          ],
+          "cwd": "/Volumes/TBU4/Workspace/Aleph",
+          "env_overrides": {},
+          "exit_code": 0,
+          "timed_out": false,
+          "pid": 72789,
+          "cleanup_error": null,
+          "unjoined_descendants": false,
+          "elapsed_seconds": 0.027858957997523248,
+          "stdout": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T064025.835847Z-memory.stdout.log",
+          "stderr": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T064025.835847Z-memory.stderr.log"
+        },
+        "test_filter": "extension::claude_cache_tests::read_only_discovery_names_a_claude_cache_id_without_loading_it",
+        "status": "PASS",
+        "command": {
+          "argv": [
+            "cargo",
+            "test",
+            "-p",
+            "alephcore",
+            "--lib",
+            "--offline",
+            "--locked",
+            "--jobs",
+            "1",
+            "extension::claude_cache_tests::read_only_discovery_names_a_claude_cache_id_without_loading_it",
+            "--",
+            "--test-threads=1"
+          ],
+          "cwd": "/Volumes/TBU4/Workspace/Aleph",
+          "env_overrides": {
+            "HOME": "/Users/zouguojun/.p9-home-_y6q31v3",
+            "ALEPH_HOME": "/tmp/p9-ndv6k0hb/aleph",
+            "CARGO_HOME": "/Users/zouguojun/.cargo",
+            "RUSTUP_HOME": "/Users/zouguojun/.rustup",
+            "TMPDIR": "/tmp/p9-ndv6k0hb",
+            "CARGO_TARGET_DIR": "/Volumes/TBU4/Workspace/Aleph/.phase9-target",
+            "RUST_BACKTRACE": "1"
+          },
+          "exit_code": 0,
+          "timed_out": false,
+          "pid": 72791,
+          "cleanup_error": null,
+          "unjoined_descendants": false,
+          "elapsed_seconds": 0.5414471669937484,
+          "stdout": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T064025.835847Z.stdout.log",
+          "stderr": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T064025.835847Z.stderr.log"
+        },
+        "fixture": {
+          "path": "/tmp/p9-ndv6k0hb",
+          "home": "/Users/zouguojun/.p9-home-_y6q31v3",
+          "cleanup": "removed"
+        }
+      },
+      "supervisor": {
+        "argv": [
+          "/opt/homebrew/opt/python@3.15/bin/python3.15",
+          "qa/phase9_test_closure.py",
+          "--repo-root",
+          ".",
+          "--target-dir",
+          ".phase9-target",
+          "--receipt",
+          "docs/superpowers/runs/2026-11-15-phase9-test-closure-receipt.md",
+          "--timeout-seconds",
+          "600",
+          "--test-filter",
+          "extension::claude_cache_tests::read_only_discovery_names_a_claude_cache_id_without_loading_it"
+        ],
+        "cwd": "/Volumes/TBU4/Workspace/Aleph",
+        "env_overrides": {},
+        "exit_code": 0,
+        "timed_out": false,
+        "pid": 72788,
+        "cleanup_error": null,
+        "unjoined_descendants": false,
+        "elapsed_seconds": 0.5991321250330657,
+        "stdout": "/Volumes/TBU4/Workspace/Aleph/.superpowers/sdd/2026-11-15-phase9-runtime-proof-and-dependency-closure/repaired-matrix-04.stdout.log",
+        "stderr": "/Volumes/TBU4/Workspace/Aleph/.superpowers/sdd/2026-11-15-phase9-runtime-proof-and-dependency-closure/repaired-matrix-04.stderr.log"
+      }
+    },
+    {
+      "case": "extension::claude_cache_tests::the_model_may_disable_but_not_enable_a_claude_cache_row",
+      "receipt": {
+        "schema_version": 1,
+        "timestamp": "20261116T064026.435839Z",
+        "memory_gate": {
+          "argv": [
+            "python3",
+            "qa/browser_live/check_memory.py",
+            "--required-bytes",
+            "4294967296"
+          ],
+          "cwd": "/Volumes/TBU4/Workspace/Aleph",
+          "env_overrides": {},
+          "exit_code": 0,
+          "timed_out": false,
+          "pid": 72794,
+          "cleanup_error": null,
+          "unjoined_descendants": false,
+          "elapsed_seconds": 0.028271874994970858,
+          "stdout": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T064026.435839Z-memory.stdout.log",
+          "stderr": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T064026.435839Z-memory.stderr.log"
+        },
+        "test_filter": "extension::claude_cache_tests::the_model_may_disable_but_not_enable_a_claude_cache_row",
+        "status": "PASS",
+        "command": {
+          "argv": [
+            "cargo",
+            "test",
+            "-p",
+            "alephcore",
+            "--lib",
+            "--offline",
+            "--locked",
+            "--jobs",
+            "1",
+            "extension::claude_cache_tests::the_model_may_disable_but_not_enable_a_claude_cache_row",
+            "--",
+            "--test-threads=1"
+          ],
+          "cwd": "/Volumes/TBU4/Workspace/Aleph",
+          "env_overrides": {
+            "HOME": "/Users/zouguojun/.p9-home-u0fgj1fy",
+            "ALEPH_HOME": "/tmp/p9-w12el2st/aleph",
+            "CARGO_HOME": "/Users/zouguojun/.cargo",
+            "RUSTUP_HOME": "/Users/zouguojun/.rustup",
+            "TMPDIR": "/tmp/p9-w12el2st",
+            "CARGO_TARGET_DIR": "/Volumes/TBU4/Workspace/Aleph/.phase9-target",
+            "RUST_BACKTRACE": "1"
+          },
+          "exit_code": 0,
+          "timed_out": false,
+          "pid": 72796,
+          "cleanup_error": null,
+          "unjoined_descendants": false,
+          "elapsed_seconds": 0.580264083982911,
+          "stdout": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T064026.435839Z.stdout.log",
+          "stderr": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T064026.435839Z.stderr.log"
+        },
+        "fixture": {
+          "path": "/tmp/p9-w12el2st",
+          "home": "/Users/zouguojun/.p9-home-u0fgj1fy",
+          "cleanup": "removed"
+        }
+      },
+      "supervisor": {
+        "argv": [
+          "/opt/homebrew/opt/python@3.15/bin/python3.15",
+          "qa/phase9_test_closure.py",
+          "--repo-root",
+          ".",
+          "--target-dir",
+          ".phase9-target",
+          "--receipt",
+          "docs/superpowers/runs/2026-11-15-phase9-test-closure-receipt.md",
+          "--timeout-seconds",
+          "600",
+          "--test-filter",
+          "extension::claude_cache_tests::the_model_may_disable_but_not_enable_a_claude_cache_row"
+        ],
+        "cwd": "/Volumes/TBU4/Workspace/Aleph",
+        "env_overrides": {},
+        "exit_code": 0,
+        "timed_out": false,
+        "pid": 72793,
+        "cleanup_error": null,
+        "unjoined_descendants": false,
+        "elapsed_seconds": 0.6387287919642404,
+        "stdout": "/Volumes/TBU4/Workspace/Aleph/.superpowers/sdd/2026-11-15-phase9-runtime-proof-and-dependency-closure/repaired-matrix-05.stdout.log",
+        "stderr": "/Volumes/TBU4/Workspace/Aleph/.superpowers/sdd/2026-11-15-phase9-runtime-proof-and-dependency-closure/repaired-matrix-05.stderr.log"
+      }
+    },
+    {
+      "case": "extension::claude_cache_tests::the_rpc_face_enables_and_disables_a_claude_cache_row",
+      "receipt": {
+        "schema_version": 1,
+        "timestamp": "20261116T064027.075407Z",
+        "memory_gate": {
+          "argv": [
+            "python3",
+            "qa/browser_live/check_memory.py",
+            "--required-bytes",
+            "4294967296"
+          ],
+          "cwd": "/Volumes/TBU4/Workspace/Aleph",
+          "env_overrides": {},
+          "exit_code": 0,
+          "timed_out": false,
+          "pid": 72799,
+          "cleanup_error": null,
+          "unjoined_descendants": false,
+          "elapsed_seconds": 0.027830082981381565,
+          "stdout": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T064027.075407Z-memory.stdout.log",
+          "stderr": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T064027.075407Z-memory.stderr.log"
+        },
+        "test_filter": "extension::claude_cache_tests::the_rpc_face_enables_and_disables_a_claude_cache_row",
+        "status": "PASS",
+        "command": {
+          "argv": [
+            "cargo",
+            "test",
+            "-p",
+            "alephcore",
+            "--lib",
+            "--offline",
+            "--locked",
+            "--jobs",
+            "1",
+            "extension::claude_cache_tests::the_rpc_face_enables_and_disables_a_claude_cache_row",
+            "--",
+            "--test-threads=1"
+          ],
+          "cwd": "/Volumes/TBU4/Workspace/Aleph",
+          "env_overrides": {
+            "HOME": "/Users/zouguojun/.p9-home-yfhm4jk8",
+            "ALEPH_HOME": "/tmp/p9-3r6x6v7g/aleph",
+            "CARGO_HOME": "/Users/zouguojun/.cargo",
+            "RUSTUP_HOME": "/Users/zouguojun/.rustup",
+            "TMPDIR": "/tmp/p9-3r6x6v7g",
+            "CARGO_TARGET_DIR": "/Volumes/TBU4/Workspace/Aleph/.phase9-target",
+            "RUST_BACKTRACE": "1"
+          },
+          "exit_code": 0,
+          "timed_out": false,
+          "pid": 72801,
+          "cleanup_error": null,
+          "unjoined_descendants": false,
+          "elapsed_seconds": 0.5798068339936435,
+          "stdout": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T064027.075407Z.stdout.log",
+          "stderr": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T064027.075407Z.stderr.log"
+        },
+        "fixture": {
+          "path": "/tmp/p9-3r6x6v7g",
+          "home": "/Users/zouguojun/.p9-home-yfhm4jk8",
+          "cleanup": "removed"
+        }
+      },
+      "supervisor": {
+        "argv": [
+          "/opt/homebrew/opt/python@3.15/bin/python3.15",
+          "qa/phase9_test_closure.py",
+          "--repo-root",
+          ".",
+          "--target-dir",
+          ".phase9-target",
+          "--receipt",
+          "docs/superpowers/runs/2026-11-15-phase9-test-closure-receipt.md",
+          "--timeout-seconds",
+          "600",
+          "--test-filter",
+          "extension::claude_cache_tests::the_rpc_face_enables_and_disables_a_claude_cache_row"
+        ],
+        "cwd": "/Volumes/TBU4/Workspace/Aleph",
+        "env_overrides": {},
+        "exit_code": 0,
+        "timed_out": false,
+        "pid": 72798,
+        "cleanup_error": null,
+        "unjoined_descendants": false,
+        "elapsed_seconds": 0.6388359589618631,
+        "stdout": "/Volumes/TBU4/Workspace/Aleph/.superpowers/sdd/2026-11-15-phase9-runtime-proof-and-dependency-closure/repaired-matrix-06.stdout.log",
+        "stderr": "/Volumes/TBU4/Workspace/Aleph/.superpowers/sdd/2026-11-15-phase9-runtime-proof-and-dependency-closure/repaired-matrix-06.stderr.log"
+      }
+    },
+    {
+      "case": "extension::claude_cache_tests::two_broken_claude_code_plugins_at_one_version_are_two_error_rows",
+      "receipt": {
+        "schema_version": 1,
+        "timestamp": "20261116T064027.713327Z",
+        "memory_gate": {
+          "argv": [
+            "python3",
+            "qa/browser_live/check_memory.py",
+            "--required-bytes",
+            "4294967296"
+          ],
+          "cwd": "/Volumes/TBU4/Workspace/Aleph",
+          "env_overrides": {},
+          "exit_code": 0,
+          "timed_out": false,
+          "pid": 72804,
+          "cleanup_error": null,
+          "unjoined_descendants": false,
+          "elapsed_seconds": 0.027595667052082717,
+          "stdout": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T064027.713327Z-memory.stdout.log",
+          "stderr": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T064027.713327Z-memory.stderr.log"
+        },
+        "test_filter": "extension::claude_cache_tests::two_broken_claude_code_plugins_at_one_version_are_two_error_rows",
+        "status": "PASS",
+        "command": {
+          "argv": [
+            "cargo",
+            "test",
+            "-p",
+            "alephcore",
+            "--lib",
+            "--offline",
+            "--locked",
+            "--jobs",
+            "1",
+            "extension::claude_cache_tests::two_broken_claude_code_plugins_at_one_version_are_two_error_rows",
+            "--",
+            "--test-threads=1"
+          ],
+          "cwd": "/Volumes/TBU4/Workspace/Aleph",
+          "env_overrides": {
+            "HOME": "/Users/zouguojun/.p9-home-sz3lhs4k",
+            "ALEPH_HOME": "/tmp/p9-hb3wv3om/aleph",
+            "CARGO_HOME": "/Users/zouguojun/.cargo",
+            "RUSTUP_HOME": "/Users/zouguojun/.rustup",
+            "TMPDIR": "/tmp/p9-hb3wv3om",
+            "CARGO_TARGET_DIR": "/Volumes/TBU4/Workspace/Aleph/.phase9-target",
+            "RUST_BACKTRACE": "1"
+          },
+          "exit_code": 0,
+          "timed_out": false,
+          "pid": 72806,
+          "cleanup_error": null,
+          "unjoined_descendants": false,
+          "elapsed_seconds": 0.930792749975808,
+          "stdout": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T064027.713327Z.stdout.log",
+          "stderr": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T064027.713327Z.stderr.log"
+        },
+        "fixture": {
+          "path": "/tmp/p9-hb3wv3om",
+          "home": "/Users/zouguojun/.p9-home-sz3lhs4k",
+          "cleanup": "removed"
+        }
+      },
+      "supervisor": {
+        "argv": [
+          "/opt/homebrew/opt/python@3.15/bin/python3.15",
+          "qa/phase9_test_closure.py",
+          "--repo-root",
+          ".",
+          "--target-dir",
+          ".phase9-target",
+          "--receipt",
+          "docs/superpowers/runs/2026-11-15-phase9-test-closure-receipt.md",
+          "--timeout-seconds",
+          "600",
+          "--test-filter",
+          "extension::claude_cache_tests::two_broken_claude_code_plugins_at_one_version_are_two_error_rows"
+        ],
+        "cwd": "/Volumes/TBU4/Workspace/Aleph",
+        "env_overrides": {},
+        "exit_code": 0,
+        "timed_out": false,
+        "pid": 72803,
+        "cleanup_error": null,
+        "unjoined_descendants": false,
+        "elapsed_seconds": 0.9880245829699561,
+        "stdout": "/Volumes/TBU4/Workspace/Aleph/.superpowers/sdd/2026-11-15-phase9-runtime-proof-and-dependency-closure/repaired-matrix-07.stdout.log",
+        "stderr": "/Volumes/TBU4/Workspace/Aleph/.superpowers/sdd/2026-11-15-phase9-runtime-proof-and-dependency-closure/repaired-matrix-07.stderr.log"
+      }
+    },
+    {
+      "case": "extension::context_adapter::tests::lifecycle_mount_dynamic_resolver_grant_revoke_and_replacement",
+      "receipt": {
+        "schema_version": 1,
+        "timestamp": "20261116T064028.703916Z",
+        "memory_gate": {
+          "argv": [
+            "python3",
+            "qa/browser_live/check_memory.py",
+            "--required-bytes",
+            "4294967296"
+          ],
+          "cwd": "/Volumes/TBU4/Workspace/Aleph",
+          "env_overrides": {},
+          "exit_code": 0,
+          "timed_out": false,
+          "pid": 72809,
+          "cleanup_error": null,
+          "unjoined_descendants": false,
+          "elapsed_seconds": 0.027518250048160553,
+          "stdout": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T064028.703916Z-memory.stdout.log",
+          "stderr": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T064028.703916Z-memory.stderr.log"
+        },
+        "test_filter": "extension::context_adapter::tests::lifecycle_mount_dynamic_resolver_grant_revoke_and_replacement",
+        "status": "PASS",
+        "command": {
+          "argv": [
+            "cargo",
+            "test",
+            "-p",
+            "alephcore",
+            "--lib",
+            "--offline",
+            "--locked",
+            "--jobs",
+            "1",
+            "extension::context_adapter::tests::lifecycle_mount_dynamic_resolver_grant_revoke_and_replacement",
+            "--",
+            "--test-threads=1"
+          ],
+          "cwd": "/Volumes/TBU4/Workspace/Aleph",
+          "env_overrides": {
+            "HOME": "/Users/zouguojun/.p9-home-m9r69x0i",
+            "ALEPH_HOME": "/tmp/p9-qdee75ns/aleph",
+            "CARGO_HOME": "/Users/zouguojun/.cargo",
+            "RUSTUP_HOME": "/Users/zouguojun/.rustup",
+            "TMPDIR": "/tmp/p9-qdee75ns",
+            "CARGO_TARGET_DIR": "/Volumes/TBU4/Workspace/Aleph/.phase9-target",
+            "RUST_BACKTRACE": "1"
+          },
+          "exit_code": 0,
+          "timed_out": false,
+          "pid": 72811,
+          "cleanup_error": null,
+          "unjoined_descendants": false,
+          "elapsed_seconds": 1.152112583979033,
+          "stdout": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T064028.703916Z.stdout.log",
+          "stderr": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T064028.703916Z.stderr.log"
+        },
+        "fixture": {
+          "path": "/tmp/p9-qdee75ns",
+          "home": "/Users/zouguojun/.p9-home-m9r69x0i",
+          "cleanup": "removed"
+        }
+      },
+      "supervisor": {
+        "argv": [
+          "/opt/homebrew/opt/python@3.15/bin/python3.15",
+          "qa/phase9_test_closure.py",
+          "--repo-root",
+          ".",
+          "--target-dir",
+          ".phase9-target",
+          "--receipt",
+          "docs/superpowers/runs/2026-11-15-phase9-test-closure-receipt.md",
+          "--timeout-seconds",
+          "600",
+          "--test-filter",
+          "extension::context_adapter::tests::lifecycle_mount_dynamic_resolver_grant_revoke_and_replacement"
+        ],
+        "cwd": "/Volumes/TBU4/Workspace/Aleph",
+        "env_overrides": {},
+        "exit_code": 0,
+        "timed_out": false,
+        "pid": 72808,
+        "cleanup_error": null,
+        "unjoined_descendants": false,
+        "elapsed_seconds": 1.2116710409754887,
+        "stdout": "/Volumes/TBU4/Workspace/Aleph/.superpowers/sdd/2026-11-15-phase9-runtime-proof-and-dependency-closure/repaired-matrix-08.stdout.log",
+        "stderr": "/Volumes/TBU4/Workspace/Aleph/.superpowers/sdd/2026-11-15-phase9-runtime-proof-and-dependency-closure/repaired-matrix-08.stderr.log"
+      }
+    },
+    {
+      "case": "extension::hooks::consent::tests::only_a_spliced_text_beside_its_literal_sibling_is_superseded",
+      "receipt": {
+        "schema_version": 1,
+        "timestamp": "20261116T064029.915120Z",
+        "memory_gate": {
+          "argv": [
+            "python3",
+            "qa/browser_live/check_memory.py",
+            "--required-bytes",
+            "4294967296"
+          ],
+          "cwd": "/Volumes/TBU4/Workspace/Aleph",
+          "env_overrides": {},
+          "exit_code": 0,
+          "timed_out": false,
+          "pid": 72814,
+          "cleanup_error": null,
+          "unjoined_descendants": false,
+          "elapsed_seconds": 0.028829874994698912,
+          "stdout": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T064029.915120Z-memory.stdout.log",
+          "stderr": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T064029.915120Z-memory.stderr.log"
+        },
+        "test_filter": "extension::hooks::consent::tests::only_a_spliced_text_beside_its_literal_sibling_is_superseded",
+        "status": "PASS",
+        "command": {
+          "argv": [
+            "cargo",
+            "test",
+            "-p",
+            "alephcore",
+            "--lib",
+            "--offline",
+            "--locked",
+            "--jobs",
+            "1",
+            "extension::hooks::consent::tests::only_a_spliced_text_beside_its_literal_sibling_is_superseded",
+            "--",
+            "--test-threads=1"
+          ],
+          "cwd": "/Volumes/TBU4/Workspace/Aleph",
+          "env_overrides": {
+            "HOME": "/Users/zouguojun/.p9-home-dg65f4c2",
+            "ALEPH_HOME": "/tmp/p9-caxyj_28/aleph",
+            "CARGO_HOME": "/Users/zouguojun/.cargo",
+            "RUSTUP_HOME": "/Users/zouguojun/.rustup",
+            "TMPDIR": "/tmp/p9-caxyj_28",
+            "CARGO_TARGET_DIR": "/Volumes/TBU4/Workspace/Aleph/.phase9-target",
+            "RUST_BACKTRACE": "1"
+          },
+          "exit_code": 0,
+          "timed_out": false,
+          "pid": 72816,
+          "cleanup_error": null,
+          "unjoined_descendants": false,
+          "elapsed_seconds": 0.5676124169840477,
+          "stdout": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T064029.915120Z.stdout.log",
+          "stderr": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T064029.915120Z.stderr.log"
+        },
+        "fixture": {
+          "path": "/tmp/p9-caxyj_28",
+          "home": "/Users/zouguojun/.p9-home-dg65f4c2",
+          "cleanup": "removed"
+        }
+      },
+      "supervisor": {
+        "argv": [
+          "/opt/homebrew/opt/python@3.15/bin/python3.15",
+          "qa/phase9_test_closure.py",
+          "--repo-root",
+          ".",
+          "--target-dir",
+          ".phase9-target",
+          "--receipt",
+          "docs/superpowers/runs/2026-11-15-phase9-test-closure-receipt.md",
+          "--timeout-seconds",
+          "600",
+          "--test-filter",
+          "extension::hooks::consent::tests::only_a_spliced_text_beside_its_literal_sibling_is_superseded"
+        ],
+        "cwd": "/Volumes/TBU4/Workspace/Aleph",
+        "env_overrides": {},
+        "exit_code": 0,
+        "timed_out": false,
+        "pid": 72813,
+        "cleanup_error": null,
+        "unjoined_descendants": false,
+        "elapsed_seconds": 0.6271970410016365,
+        "stdout": "/Volumes/TBU4/Workspace/Aleph/.superpowers/sdd/2026-11-15-phase9-runtime-proof-and-dependency-closure/repaired-matrix-09.stdout.log",
+        "stderr": "/Volumes/TBU4/Workspace/Aleph/.superpowers/sdd/2026-11-15-phase9-runtime-proof-and-dependency-closure/repaired-matrix-09.stderr.log"
+      }
+    },
+    {
+      "case": "extension::hooks::executor::tests::a_plugin_hooks_data_directory_reaches_it_through_the_environment",
+      "receipt": {
+        "schema_version": 1,
+        "timestamp": "20261116T064030.542515Z",
+        "memory_gate": {
+          "argv": [
+            "python3",
+            "qa/browser_live/check_memory.py",
+            "--required-bytes",
+            "4294967296"
+          ],
+          "cwd": "/Volumes/TBU4/Workspace/Aleph",
+          "env_overrides": {},
+          "exit_code": 0,
+          "timed_out": false,
+          "pid": 72903,
+          "cleanup_error": null,
+          "unjoined_descendants": false,
+          "elapsed_seconds": 0.02828233304899186,
+          "stdout": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T064030.542515Z-memory.stdout.log",
+          "stderr": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T064030.542515Z-memory.stderr.log"
+        },
+        "test_filter": "extension::hooks::executor::tests::a_plugin_hooks_data_directory_reaches_it_through_the_environment",
+        "status": "PASS",
+        "command": {
+          "argv": [
+            "cargo",
+            "test",
+            "-p",
+            "alephcore",
+            "--lib",
+            "--offline",
+            "--locked",
+            "--jobs",
+            "1",
+            "extension::hooks::executor::tests::a_plugin_hooks_data_directory_reaches_it_through_the_environment",
+            "--",
+            "--test-threads=1"
+          ],
+          "cwd": "/Volumes/TBU4/Workspace/Aleph",
+          "env_overrides": {
+            "HOME": "/Users/zouguojun/.p9-home-7tuk7sjy",
+            "ALEPH_HOME": "/tmp/p9-7iek_iv7/aleph",
+            "CARGO_HOME": "/Users/zouguojun/.cargo",
+            "RUSTUP_HOME": "/Users/zouguojun/.rustup",
+            "TMPDIR": "/tmp/p9-7iek_iv7",
+            "CARGO_TARGET_DIR": "/Volumes/TBU4/Workspace/Aleph/.phase9-target",
+            "RUST_BACKTRACE": "1"
+          },
+          "exit_code": 0,
+          "timed_out": false,
+          "pid": 72905,
+          "cleanup_error": null,
+          "unjoined_descendants": false,
+          "elapsed_seconds": 0.5598427089862525,
+          "stdout": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T064030.542515Z.stdout.log",
+          "stderr": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T064030.542515Z.stderr.log"
+        },
+        "fixture": {
+          "path": "/tmp/p9-7iek_iv7",
+          "home": "/Users/zouguojun/.p9-home-7tuk7sjy",
+          "cleanup": "removed"
+        }
+      },
+      "supervisor": {
+        "argv": [
+          "/opt/homebrew/opt/python@3.15/bin/python3.15",
+          "qa/phase9_test_closure.py",
+          "--repo-root",
+          ".",
+          "--target-dir",
+          ".phase9-target",
+          "--receipt",
+          "docs/superpowers/runs/2026-11-15-phase9-test-closure-receipt.md",
+          "--timeout-seconds",
+          "600",
+          "--test-filter",
+          "extension::hooks::executor::tests::a_plugin_hooks_data_directory_reaches_it_through_the_environment"
+        ],
+        "cwd": "/Volumes/TBU4/Workspace/Aleph",
+        "env_overrides": {},
+        "exit_code": 0,
+        "timed_out": false,
+        "pid": 72902,
+        "cleanup_error": null,
+        "unjoined_descendants": false,
+        "elapsed_seconds": 0.6190061669913121,
+        "stdout": "/Volumes/TBU4/Workspace/Aleph/.superpowers/sdd/2026-11-15-phase9-runtime-proof-and-dependency-closure/repaired-matrix-10.stdout.log",
+        "stderr": "/Volumes/TBU4/Workspace/Aleph/.superpowers/sdd/2026-11-15-phase9-runtime-proof-and-dependency-closure/repaired-matrix-10.stderr.log"
+      }
+    },
+    {
+      "case": "extension::hooks::output_budget::tests::oversized_context_is_bounded_and_keeps_head_and_tail",
+      "receipt": {
+        "schema_version": 1,
+        "timestamp": "20261116T064031.161161Z",
+        "memory_gate": {
+          "argv": [
+            "python3",
+            "qa/browser_live/check_memory.py",
+            "--required-bytes",
+            "4294967296"
+          ],
+          "cwd": "/Volumes/TBU4/Workspace/Aleph",
+          "env_overrides": {},
+          "exit_code": 0,
+          "timed_out": false,
+          "pid": 72928,
+          "cleanup_error": null,
+          "unjoined_descendants": false,
+          "elapsed_seconds": 0.0278929159976542,
+          "stdout": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T064031.161161Z-memory.stdout.log",
+          "stderr": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T064031.161161Z-memory.stderr.log"
+        },
+        "test_filter": "extension::hooks::output_budget::tests::oversized_context_is_bounded_and_keeps_head_and_tail",
+        "status": "PASS",
+        "command": {
+          "argv": [
+            "cargo",
+            "test",
+            "-p",
+            "alephcore",
+            "--lib",
+            "--offline",
+            "--locked",
+            "--jobs",
+            "1",
+            "extension::hooks::output_budget::tests::oversized_context_is_bounded_and_keeps_head_and_tail",
+            "--",
+            "--test-threads=1"
+          ],
+          "cwd": "/Volumes/TBU4/Workspace/Aleph",
+          "env_overrides": {
+            "HOME": "/Users/zouguojun/.p9-home-hiwb00na",
+            "ALEPH_HOME": "/tmp/p9-fnsat6_6/aleph",
+            "CARGO_HOME": "/Users/zouguojun/.cargo",
+            "RUSTUP_HOME": "/Users/zouguojun/.rustup",
+            "TMPDIR": "/tmp/p9-fnsat6_6",
+            "CARGO_TARGET_DIR": "/Volumes/TBU4/Workspace/Aleph/.phase9-target",
+            "RUST_BACKTRACE": "1"
+          },
+          "exit_code": 0,
+          "timed_out": false,
+          "pid": 72930,
+          "cleanup_error": null,
+          "unjoined_descendants": false,
+          "elapsed_seconds": 0.539950541977305,
+          "stdout": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T064031.161161Z.stdout.log",
+          "stderr": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T064031.161161Z.stderr.log"
+        },
+        "fixture": {
+          "path": "/tmp/p9-fnsat6_6",
+          "home": "/Users/zouguojun/.p9-home-hiwb00na",
+          "cleanup": "removed"
+        }
+      },
+      "supervisor": {
+        "argv": [
+          "/opt/homebrew/opt/python@3.15/bin/python3.15",
+          "qa/phase9_test_closure.py",
+          "--repo-root",
+          ".",
+          "--target-dir",
+          ".phase9-target",
+          "--receipt",
+          "docs/superpowers/runs/2026-11-15-phase9-test-closure-receipt.md",
+          "--timeout-seconds",
+          "600",
+          "--test-filter",
+          "extension::hooks::output_budget::tests::oversized_context_is_bounded_and_keeps_head_and_tail"
+        ],
+        "cwd": "/Volumes/TBU4/Workspace/Aleph",
+        "env_overrides": {},
+        "exit_code": 0,
+        "timed_out": false,
+        "pid": 72927,
+        "cleanup_error": null,
+        "unjoined_descendants": false,
+        "elapsed_seconds": 0.5977028750348836,
+        "stdout": "/Volumes/TBU4/Workspace/Aleph/.superpowers/sdd/2026-11-15-phase9-runtime-proof-and-dependency-closure/repaired-matrix-11.stdout.log",
+        "stderr": "/Volumes/TBU4/Workspace/Aleph/.superpowers/sdd/2026-11-15-phase9-runtime-proof-and-dependency-closure/repaired-matrix-11.stderr.log"
+      }
+    },
+    {
+      "case": "extension::hooks::output_budget::tests::oversized_context_is_recoverable_from_the_spill_file",
+      "receipt": {
+        "schema_version": 1,
+        "timestamp": "20261116T064031.759065Z",
+        "memory_gate": {
+          "argv": [
+            "python3",
+            "qa/browser_live/check_memory.py",
+            "--required-bytes",
+            "4294967296"
+          ],
+          "cwd": "/Volumes/TBU4/Workspace/Aleph",
+          "env_overrides": {},
+          "exit_code": 0,
+          "timed_out": false,
+          "pid": 72933,
+          "cleanup_error": null,
+          "unjoined_descendants": false,
+          "elapsed_seconds": 0.027732708025723696,
+          "stdout": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T064031.759065Z-memory.stdout.log",
+          "stderr": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T064031.759065Z-memory.stderr.log"
+        },
+        "test_filter": "extension::hooks::output_budget::tests::oversized_context_is_recoverable_from_the_spill_file",
+        "status": "PASS",
+        "command": {
+          "argv": [
+            "cargo",
+            "test",
+            "-p",
+            "alephcore",
+            "--lib",
+            "--offline",
+            "--locked",
+            "--jobs",
+            "1",
+            "extension::hooks::output_budget::tests::oversized_context_is_recoverable_from_the_spill_file",
+            "--",
+            "--test-threads=1"
+          ],
+          "cwd": "/Volumes/TBU4/Workspace/Aleph",
+          "env_overrides": {
+            "HOME": "/Users/zouguojun/.p9-home-vapmrs_f",
+            "ALEPH_HOME": "/tmp/p9-iwg2zzro/aleph",
+            "CARGO_HOME": "/Users/zouguojun/.cargo",
+            "RUSTUP_HOME": "/Users/zouguojun/.rustup",
+            "TMPDIR": "/tmp/p9-iwg2zzro",
+            "CARGO_TARGET_DIR": "/Volumes/TBU4/Workspace/Aleph/.phase9-target",
+            "RUST_BACKTRACE": "1"
+          },
+          "exit_code": 0,
+          "timed_out": false,
+          "pid": 72935,
+          "cleanup_error": null,
+          "unjoined_descendants": false,
+          "elapsed_seconds": 0.5383771250490099,
+          "stdout": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T064031.759065Z.stdout.log",
+          "stderr": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T064031.759065Z.stderr.log"
+        },
+        "fixture": {
+          "path": "/tmp/p9-iwg2zzro",
+          "home": "/Users/zouguojun/.p9-home-vapmrs_f",
+          "cleanup": "removed"
+        }
+      },
+      "supervisor": {
+        "argv": [
+          "/opt/homebrew/opt/python@3.15/bin/python3.15",
+          "qa/phase9_test_closure.py",
+          "--repo-root",
+          ".",
+          "--target-dir",
+          ".phase9-target",
+          "--receipt",
+          "docs/superpowers/runs/2026-11-15-phase9-test-closure-receipt.md",
+          "--timeout-seconds",
+          "600",
+          "--test-filter",
+          "extension::hooks::output_budget::tests::oversized_context_is_recoverable_from_the_spill_file"
+        ],
+        "cwd": "/Volumes/TBU4/Workspace/Aleph",
+        "env_overrides": {},
+        "exit_code": 0,
+        "timed_out": false,
+        "pid": 72932,
+        "cleanup_error": null,
+        "unjoined_descendants": false,
+        "elapsed_seconds": 0.5958208329975605,
+        "stdout": "/Volumes/TBU4/Workspace/Aleph/.superpowers/sdd/2026-11-15-phase9-runtime-proof-and-dependency-closure/repaired-matrix-12.stdout.log",
+        "stderr": "/Volumes/TBU4/Workspace/Aleph/.superpowers/sdd/2026-11-15-phase9-runtime-proof-and-dependency-closure/repaired-matrix-12.stderr.log"
+      }
+    },
+    {
+      "case": "extension::hooks::output_budget::tests::preview_is_char_boundary_safe_for_multibyte_text",
+      "receipt": {
+        "schema_version": 1,
+        "timestamp": "20261116T064032.355612Z",
+        "memory_gate": {
+          "argv": [
+            "python3",
+            "qa/browser_live/check_memory.py",
+            "--required-bytes",
+            "4294967296"
+          ],
+          "cwd": "/Volumes/TBU4/Workspace/Aleph",
+          "env_overrides": {},
+          "exit_code": 0,
+          "timed_out": false,
+          "pid": 72938,
+          "cleanup_error": null,
+          "unjoined_descendants": false,
+          "elapsed_seconds": 0.027892166981473565,
+          "stdout": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T064032.355612Z-memory.stdout.log",
+          "stderr": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T064032.355612Z-memory.stderr.log"
+        },
+        "test_filter": "extension::hooks::output_budget::tests::preview_is_char_boundary_safe_for_multibyte_text",
+        "status": "PASS",
+        "command": {
+          "argv": [
+            "cargo",
+            "test",
+            "-p",
+            "alephcore",
+            "--lib",
+            "--offline",
+            "--locked",
+            "--jobs",
+            "1",
+            "extension::hooks::output_budget::tests::preview_is_char_boundary_safe_for_multibyte_text",
+            "--",
+            "--test-threads=1"
+          ],
+          "cwd": "/Volumes/TBU4/Workspace/Aleph",
+          "env_overrides": {
+            "HOME": "/Users/zouguojun/.p9-home-v838pw82",
+            "ALEPH_HOME": "/tmp/p9-l52lk6yb/aleph",
+            "CARGO_HOME": "/Users/zouguojun/.cargo",
+            "RUSTUP_HOME": "/Users/zouguojun/.rustup",
+            "TMPDIR": "/tmp/p9-l52lk6yb",
+            "CARGO_TARGET_DIR": "/Volumes/TBU4/Workspace/Aleph/.phase9-target",
+            "RUST_BACKTRACE": "1"
+          },
+          "exit_code": 0,
+          "timed_out": false,
+          "pid": 72940,
+          "cleanup_error": null,
+          "unjoined_descendants": false,
+          "elapsed_seconds": 0.5430569580057636,
+          "stdout": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T064032.355612Z.stdout.log",
+          "stderr": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T064032.355612Z.stderr.log"
+        },
+        "fixture": {
+          "path": "/tmp/p9-l52lk6yb",
+          "home": "/Users/zouguojun/.p9-home-v838pw82",
+          "cleanup": "removed"
+        }
+      },
+      "supervisor": {
+        "argv": [
+          "/opt/homebrew/opt/python@3.15/bin/python3.15",
+          "qa/phase9_test_closure.py",
+          "--repo-root",
+          ".",
+          "--target-dir",
+          ".phase9-target",
+          "--receipt",
+          "docs/superpowers/runs/2026-11-15-phase9-test-closure-receipt.md",
+          "--timeout-seconds",
+          "600",
+          "--test-filter",
+          "extension::hooks::output_budget::tests::preview_is_char_boundary_safe_for_multibyte_text"
+        ],
+        "cwd": "/Volumes/TBU4/Workspace/Aleph",
+        "env_overrides": {},
+        "exit_code": 0,
+        "timed_out": false,
+        "pid": 72937,
+        "cleanup_error": null,
+        "unjoined_descendants": false,
+        "elapsed_seconds": 0.6009377910522744,
+        "stdout": "/Volumes/TBU4/Workspace/Aleph/.superpowers/sdd/2026-11-15-phase9-runtime-proof-and-dependency-closure/repaired-matrix-13.stdout.log",
+        "stderr": "/Volumes/TBU4/Workspace/Aleph/.superpowers/sdd/2026-11-15-phase9-runtime-proof-and-dependency-closure/repaired-matrix-13.stderr.log"
+      }
+    },
+    {
+      "case": "extension::hooks::registry::tests::plugin_collection_uses_active_owning_row_identity_despite_builtin_spelling",
+      "receipt": {
+        "schema_version": 1,
+        "timestamp": "20261116T064032.956631Z",
+        "memory_gate": {
+          "argv": [
+            "python3",
+            "qa/browser_live/check_memory.py",
+            "--required-bytes",
+            "4294967296"
+          ],
+          "cwd": "/Volumes/TBU4/Workspace/Aleph",
+          "env_overrides": {},
+          "exit_code": 0,
+          "timed_out": false,
+          "pid": 72943,
+          "cleanup_error": null,
+          "unjoined_descendants": false,
+          "elapsed_seconds": 0.02742312499321997,
+          "stdout": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T064032.956631Z-memory.stdout.log",
+          "stderr": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T064032.956631Z-memory.stderr.log"
+        },
+        "test_filter": "extension::hooks::registry::tests::plugin_collection_uses_active_owning_row_identity_despite_builtin_spelling",
+        "status": "PASS",
+        "command": {
+          "argv": [
+            "cargo",
+            "test",
+            "-p",
+            "alephcore",
+            "--lib",
+            "--offline",
+            "--locked",
+            "--jobs",
+            "1",
+            "extension::hooks::registry::tests::plugin_collection_uses_active_owning_row_identity_despite_builtin_spelling",
+            "--",
+            "--test-threads=1"
+          ],
+          "cwd": "/Volumes/TBU4/Workspace/Aleph",
+          "env_overrides": {
+            "HOME": "/Users/zouguojun/.p9-home-xjy05lov",
+            "ALEPH_HOME": "/tmp/p9-cq_zah4l/aleph",
+            "CARGO_HOME": "/Users/zouguojun/.cargo",
+            "RUSTUP_HOME": "/Users/zouguojun/.rustup",
+            "TMPDIR": "/tmp/p9-cq_zah4l",
+            "CARGO_TARGET_DIR": "/Volumes/TBU4/Workspace/Aleph/.phase9-target",
+            "RUST_BACKTRACE": "1"
+          },
+          "exit_code": 0,
+          "timed_out": false,
+          "pid": 72945,
+          "cleanup_error": null,
+          "unjoined_descendants": false,
+          "elapsed_seconds": 0.5291750420001335,
+          "stdout": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T064032.956631Z.stdout.log",
+          "stderr": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T064032.956631Z.stderr.log"
+        },
+        "fixture": {
+          "path": "/tmp/p9-cq_zah4l",
+          "home": "/Users/zouguojun/.p9-home-xjy05lov",
+          "cleanup": "removed"
+        }
+      },
+      "supervisor": {
+        "argv": [
+          "/opt/homebrew/opt/python@3.15/bin/python3.15",
+          "qa/phase9_test_closure.py",
+          "--repo-root",
+          ".",
+          "--target-dir",
+          ".phase9-target",
+          "--receipt",
+          "docs/superpowers/runs/2026-11-15-phase9-test-closure-receipt.md",
+          "--timeout-seconds",
+          "600",
+          "--test-filter",
+          "extension::hooks::registry::tests::plugin_collection_uses_active_owning_row_identity_despite_builtin_spelling"
+        ],
+        "cwd": "/Volumes/TBU4/Workspace/Aleph",
+        "env_overrides": {},
+        "exit_code": 0,
+        "timed_out": false,
+        "pid": 72942,
+        "cleanup_error": null,
+        "unjoined_descendants": false,
+        "elapsed_seconds": 0.5864025839837268,
+        "stdout": "/Volumes/TBU4/Workspace/Aleph/.superpowers/sdd/2026-11-15-phase9-runtime-proof-and-dependency-closure/repaired-matrix-14.stdout.log",
+        "stderr": "/Volumes/TBU4/Workspace/Aleph/.superpowers/sdd/2026-11-15-phase9-runtime-proof-and-dependency-closure/repaired-matrix-14.stderr.log"
+      }
+    },
+    {
+      "case": "extension::hooks::registry::tests::registered_loader_captures_each_real_file_and_preserves_public_configs",
+      "receipt": {
+        "schema_version": 1,
+        "timestamp": "20261116T064033.543827Z",
+        "memory_gate": {
+          "argv": [
+            "python3",
+            "qa/browser_live/check_memory.py",
+            "--required-bytes",
+            "4294967296"
+          ],
+          "cwd": "/Volumes/TBU4/Workspace/Aleph",
+          "env_overrides": {},
+          "exit_code": 0,
+          "timed_out": false,
+          "pid": 72948,
+          "cleanup_error": null,
+          "unjoined_descendants": false,
+          "elapsed_seconds": 0.028088249964639544,
+          "stdout": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T064033.543827Z-memory.stdout.log",
+          "stderr": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T064033.543827Z-memory.stderr.log"
+        },
+        "test_filter": "extension::hooks::registry::tests::registered_loader_captures_each_real_file_and_preserves_public_configs",
+        "status": "PASS",
+        "command": {
+          "argv": [
+            "cargo",
+            "test",
+            "-p",
+            "alephcore",
+            "--lib",
+            "--offline",
+            "--locked",
+            "--jobs",
+            "1",
+            "extension::hooks::registry::tests::registered_loader_captures_each_real_file_and_preserves_public_configs",
+            "--",
+            "--test-threads=1"
+          ],
+          "cwd": "/Volumes/TBU4/Workspace/Aleph",
+          "env_overrides": {
+            "HOME": "/Users/zouguojun/.p9-home-neqg5mt8",
+            "ALEPH_HOME": "/tmp/p9-ryzy5obw/aleph",
+            "CARGO_HOME": "/Users/zouguojun/.cargo",
+            "RUSTUP_HOME": "/Users/zouguojun/.rustup",
+            "TMPDIR": "/tmp/p9-ryzy5obw",
+            "CARGO_TARGET_DIR": "/Volumes/TBU4/Workspace/Aleph/.phase9-target",
+            "RUST_BACKTRACE": "1"
+          },
+          "exit_code": 0,
+          "timed_out": false,
+          "pid": 72950,
+          "cleanup_error": null,
+          "unjoined_descendants": false,
+          "elapsed_seconds": 0.5397457910003141,
+          "stdout": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T064033.543827Z.stdout.log",
+          "stderr": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T064033.543827Z.stderr.log"
+        },
+        "fixture": {
+          "path": "/tmp/p9-ryzy5obw",
+          "home": "/Users/zouguojun/.p9-home-neqg5mt8",
+          "cleanup": "removed"
+        }
+      },
+      "supervisor": {
+        "argv": [
+          "/opt/homebrew/opt/python@3.15/bin/python3.15",
+          "qa/phase9_test_closure.py",
+          "--repo-root",
+          ".",
+          "--target-dir",
+          ".phase9-target",
+          "--receipt",
+          "docs/superpowers/runs/2026-11-15-phase9-test-closure-receipt.md",
+          "--timeout-seconds",
+          "600",
+          "--test-filter",
+          "extension::hooks::registry::tests::registered_loader_captures_each_real_file_and_preserves_public_configs"
+        ],
+        "cwd": "/Volumes/TBU4/Workspace/Aleph",
+        "env_overrides": {},
+        "exit_code": 0,
+        "timed_out": false,
+        "pid": 72947,
+        "cleanup_error": null,
+        "unjoined_descendants": false,
+        "elapsed_seconds": 0.5979860840016045,
+        "stdout": "/Volumes/TBU4/Workspace/Aleph/.superpowers/sdd/2026-11-15-phase9-runtime-proof-and-dependency-closure/repaired-matrix-15.stdout.log",
+        "stderr": "/Volumes/TBU4/Workspace/Aleph/.superpowers/sdd/2026-11-15-phase9-runtime-proof-and-dependency-closure/repaired-matrix-15.stderr.log"
+      }
+    },
+    {
+      "case": "extension::mcp_plugin_tests::an_absolute_command_outside_the_root_is_counted_and_spawned",
+      "receipt": {
+        "schema_version": 1,
+        "timestamp": "20261116T064034.141780Z",
+        "memory_gate": {
+          "argv": [
+            "python3",
+            "qa/browser_live/check_memory.py",
+            "--required-bytes",
+            "4294967296"
+          ],
+          "cwd": "/Volumes/TBU4/Workspace/Aleph",
+          "env_overrides": {},
+          "exit_code": 0,
+          "timed_out": false,
+          "pid": 72954,
+          "cleanup_error": null,
+          "unjoined_descendants": false,
+          "elapsed_seconds": 0.02772558300057426,
+          "stdout": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T064034.141780Z-memory.stdout.log",
+          "stderr": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T064034.141780Z-memory.stderr.log"
+        },
+        "test_filter": "extension::mcp_plugin_tests::an_absolute_command_outside_the_root_is_counted_and_spawned",
+        "status": "PASS",
+        "command": {
+          "argv": [
+            "cargo",
+            "test",
+            "-p",
+            "alephcore",
+            "--lib",
+            "--offline",
+            "--locked",
+            "--jobs",
+            "1",
+            "extension::mcp_plugin_tests::an_absolute_command_outside_the_root_is_counted_and_spawned",
+            "--",
+            "--test-threads=1"
+          ],
+          "cwd": "/Volumes/TBU4/Workspace/Aleph",
+          "env_overrides": {
+            "HOME": "/Users/zouguojun/.p9-home-ja92z7cm",
+            "ALEPH_HOME": "/tmp/p9-1w5tw6to/aleph",
+            "CARGO_HOME": "/Users/zouguojun/.cargo",
+            "RUSTUP_HOME": "/Users/zouguojun/.rustup",
+            "TMPDIR": "/tmp/p9-1w5tw6to",
+            "CARGO_TARGET_DIR": "/Volumes/TBU4/Workspace/Aleph/.phase9-target",
+            "RUST_BACKTRACE": "1"
+          },
+          "exit_code": 0,
+          "timed_out": false,
+          "pid": 72956,
+          "cleanup_error": null,
+          "unjoined_descendants": false,
+          "elapsed_seconds": 0.6106675839982927,
+          "stdout": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T064034.141780Z.stdout.log",
+          "stderr": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T064034.141780Z.stderr.log"
+        },
+        "fixture": {
+          "path": "/tmp/p9-1w5tw6to",
+          "home": "/Users/zouguojun/.p9-home-ja92z7cm",
+          "cleanup": "removed"
+        }
+      },
+      "supervisor": {
+        "argv": [
+          "/opt/homebrew/opt/python@3.15/bin/python3.15",
+          "qa/phase9_test_closure.py",
+          "--repo-root",
+          ".",
+          "--target-dir",
+          ".phase9-target",
+          "--receipt",
+          "docs/superpowers/runs/2026-11-15-phase9-test-closure-receipt.md",
+          "--timeout-seconds",
+          "600",
+          "--test-filter",
+          "extension::mcp_plugin_tests::an_absolute_command_outside_the_root_is_counted_and_spawned"
+        ],
+        "cwd": "/Volumes/TBU4/Workspace/Aleph",
+        "env_overrides": {},
+        "exit_code": 0,
+        "timed_out": false,
+        "pid": 72953,
+        "cleanup_error": null,
+        "unjoined_descendants": false,
+        "elapsed_seconds": 0.6685495419660583,
+        "stdout": "/Volumes/TBU4/Workspace/Aleph/.superpowers/sdd/2026-11-15-phase9-runtime-proof-and-dependency-closure/repaired-matrix-16.stdout.log",
+        "stderr": "/Volumes/TBU4/Workspace/Aleph/.superpowers/sdd/2026-11-15-phase9-runtime-proof-and-dependency-closure/repaired-matrix-16.stderr.log"
+      }
+    },
+    {
+      "case": "extension::mcp_plugin_tests::an_explicit_non_mcp_runtime_counts_no_servers_and_says_why",
+      "receipt": {
+        "schema_version": 1,
+        "timestamp": "20261116T064034.812510Z",
+        "memory_gate": {
+          "argv": [
+            "python3",
+            "qa/browser_live/check_memory.py",
+            "--required-bytes",
+            "4294967296"
+          ],
+          "cwd": "/Volumes/TBU4/Workspace/Aleph",
+          "env_overrides": {},
+          "exit_code": 0,
+          "timed_out": false,
+          "pid": 72960,
+          "cleanup_error": null,
+          "unjoined_descendants": false,
+          "elapsed_seconds": 0.028059457952622324,
+          "stdout": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T064034.812510Z-memory.stdout.log",
+          "stderr": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T064034.812510Z-memory.stderr.log"
+        },
+        "test_filter": "extension::mcp_plugin_tests::an_explicit_non_mcp_runtime_counts_no_servers_and_says_why",
+        "status": "PASS",
+        "command": {
+          "argv": [
+            "cargo",
+            "test",
+            "-p",
+            "alephcore",
+            "--lib",
+            "--offline",
+            "--locked",
+            "--jobs",
+            "1",
+            "extension::mcp_plugin_tests::an_explicit_non_mcp_runtime_counts_no_servers_and_says_why",
+            "--",
+            "--test-threads=1"
+          ],
+          "cwd": "/Volumes/TBU4/Workspace/Aleph",
+          "env_overrides": {
+            "HOME": "/Users/zouguojun/.p9-home-2t44xztc",
+            "ALEPH_HOME": "/tmp/p9-zk03gpig/aleph",
+            "CARGO_HOME": "/Users/zouguojun/.cargo",
+            "RUSTUP_HOME": "/Users/zouguojun/.rustup",
+            "TMPDIR": "/tmp/p9-zk03gpig",
+            "CARGO_TARGET_DIR": "/Volumes/TBU4/Workspace/Aleph/.phase9-target",
+            "RUST_BACKTRACE": "1"
+          },
+          "exit_code": 0,
+          "timed_out": false,
+          "pid": 72962,
+          "cleanup_error": null,
+          "unjoined_descendants": false,
+          "elapsed_seconds": 0.5510382499778643,
+          "stdout": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T064034.812510Z.stdout.log",
+          "stderr": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T064034.812510Z.stderr.log"
+        },
+        "fixture": {
+          "path": "/tmp/p9-zk03gpig",
+          "home": "/Users/zouguojun/.p9-home-2t44xztc",
+          "cleanup": "removed"
+        }
+      },
+      "supervisor": {
+        "argv": [
+          "/opt/homebrew/opt/python@3.15/bin/python3.15",
+          "qa/phase9_test_closure.py",
+          "--repo-root",
+          ".",
+          "--target-dir",
+          ".phase9-target",
+          "--receipt",
+          "docs/superpowers/runs/2026-11-15-phase9-test-closure-receipt.md",
+          "--timeout-seconds",
+          "600",
+          "--test-filter",
+          "extension::mcp_plugin_tests::an_explicit_non_mcp_runtime_counts_no_servers_and_says_why"
+        ],
+        "cwd": "/Volumes/TBU4/Workspace/Aleph",
+        "env_overrides": {},
+        "exit_code": 0,
+        "timed_out": false,
+        "pid": 72959,
+        "cleanup_error": null,
+        "unjoined_descendants": false,
+        "elapsed_seconds": 0.6104802500340156,
+        "stdout": "/Volumes/TBU4/Workspace/Aleph/.superpowers/sdd/2026-11-15-phase9-runtime-proof-and-dependency-closure/repaired-matrix-17.stdout.log",
+        "stderr": "/Volumes/TBU4/Workspace/Aleph/.superpowers/sdd/2026-11-15-phase9-runtime-proof-and-dependency-closure/repaired-matrix-17.stderr.log"
+      }
+    },
+    {
+      "case": "extension::mcp_plugin_tests::an_inline_mcp_servers_object_is_counted_and_spawned",
+      "receipt": {
+        "schema_version": 1,
+        "timestamp": "20261116T064035.423313Z",
+        "memory_gate": {
+          "argv": [
+            "python3",
+            "qa/browser_live/check_memory.py",
+            "--required-bytes",
+            "4294967296"
+          ],
+          "cwd": "/Volumes/TBU4/Workspace/Aleph",
+          "env_overrides": {},
+          "exit_code": 0,
+          "timed_out": false,
+          "pid": 72965,
+          "cleanup_error": null,
+          "unjoined_descendants": false,
+          "elapsed_seconds": 0.03236399998422712,
+          "stdout": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T064035.423313Z-memory.stdout.log",
+          "stderr": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T064035.423313Z-memory.stderr.log"
+        },
+        "test_filter": "extension::mcp_plugin_tests::an_inline_mcp_servers_object_is_counted_and_spawned",
+        "status": "PASS",
+        "command": {
+          "argv": [
+            "cargo",
+            "test",
+            "-p",
+            "alephcore",
+            "--lib",
+            "--offline",
+            "--locked",
+            "--jobs",
+            "1",
+            "extension::mcp_plugin_tests::an_inline_mcp_servers_object_is_counted_and_spawned",
+            "--",
+            "--test-threads=1"
+          ],
+          "cwd": "/Volumes/TBU4/Workspace/Aleph",
+          "env_overrides": {
+            "HOME": "/Users/zouguojun/.p9-home-p675paza",
+            "ALEPH_HOME": "/tmp/p9-8mer2clf/aleph",
+            "CARGO_HOME": "/Users/zouguojun/.cargo",
+            "RUSTUP_HOME": "/Users/zouguojun/.rustup",
+            "TMPDIR": "/tmp/p9-8mer2clf",
+            "CARGO_TARGET_DIR": "/Volumes/TBU4/Workspace/Aleph/.phase9-target",
+            "RUST_BACKTRACE": "1"
+          },
+          "exit_code": 0,
+          "timed_out": false,
+          "pid": 72967,
+          "cleanup_error": null,
+          "unjoined_descendants": false,
+          "elapsed_seconds": 0.6083630420034751,
+          "stdout": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T064035.423313Z.stdout.log",
+          "stderr": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T064035.423313Z.stderr.log"
+        },
+        "fixture": {
+          "path": "/tmp/p9-8mer2clf",
+          "home": "/Users/zouguojun/.p9-home-p675paza",
+          "cleanup": "removed"
+        }
+      },
+      "supervisor": {
+        "argv": [
+          "/opt/homebrew/opt/python@3.15/bin/python3.15",
+          "qa/phase9_test_closure.py",
+          "--repo-root",
+          ".",
+          "--target-dir",
+          ".phase9-target",
+          "--receipt",
+          "docs/superpowers/runs/2026-11-15-phase9-test-closure-receipt.md",
+          "--timeout-seconds",
+          "600",
+          "--test-filter",
+          "extension::mcp_plugin_tests::an_inline_mcp_servers_object_is_counted_and_spawned"
+        ],
+        "cwd": "/Volumes/TBU4/Workspace/Aleph",
+        "env_overrides": {},
+        "exit_code": 0,
+        "timed_out": false,
+        "pid": 72964,
+        "cleanup_error": null,
+        "unjoined_descendants": false,
+        "elapsed_seconds": 0.6723912919987924,
+        "stdout": "/Volumes/TBU4/Workspace/Aleph/.superpowers/sdd/2026-11-15-phase9-runtime-proof-and-dependency-closure/repaired-matrix-18.stdout.log",
+        "stderr": "/Volumes/TBU4/Workspace/Aleph/.superpowers/sdd/2026-11-15-phase9-runtime-proof-and-dependency-closure/repaired-matrix-18.stderr.log"
+      }
+    },
+    {
+      "case": "extension::service_ops::tests::manual_service_control_serializes_with_mount_lifecycle",
+      "receipt": {
+        "schema_version": 1,
+        "timestamp": "20261116T064036.096549Z",
+        "memory_gate": {
+          "argv": [
+            "python3",
+            "qa/browser_live/check_memory.py",
+            "--required-bytes",
+            "4294967296"
+          ],
+          "cwd": "/Volumes/TBU4/Workspace/Aleph",
+          "env_overrides": {},
+          "exit_code": 0,
+          "timed_out": false,
+          "pid": 73001,
+          "cleanup_error": null,
+          "unjoined_descendants": false,
+          "elapsed_seconds": 0.02874525001971051,
+          "stdout": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T064036.096549Z-memory.stdout.log",
+          "stderr": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T064036.096549Z-memory.stderr.log"
+        },
+        "test_filter": "extension::service_ops::tests::manual_service_control_serializes_with_mount_lifecycle",
+        "status": "PASS",
+        "command": {
+          "argv": [
+            "cargo",
+            "test",
+            "-p",
+            "alephcore",
+            "--lib",
+            "--offline",
+            "--locked",
+            "--jobs",
+            "1",
+            "extension::service_ops::tests::manual_service_control_serializes_with_mount_lifecycle",
+            "--",
+            "--test-threads=1"
+          ],
+          "cwd": "/Volumes/TBU4/Workspace/Aleph",
+          "env_overrides": {
+            "HOME": "/Users/zouguojun/.p9-home-4d22l2cf",
+            "ALEPH_HOME": "/tmp/p9-lta47b_3/aleph",
+            "CARGO_HOME": "/Users/zouguojun/.cargo",
+            "RUSTUP_HOME": "/Users/zouguojun/.rustup",
+            "TMPDIR": "/tmp/p9-lta47b_3",
+            "CARGO_TARGET_DIR": "/Volumes/TBU4/Workspace/Aleph/.phase9-target",
+            "RUST_BACKTRACE": "1"
+          },
+          "exit_code": 0,
+          "timed_out": false,
+          "pid": 73003,
+          "cleanup_error": null,
+          "unjoined_descendants": false,
+          "elapsed_seconds": 1.3064487910014577,
+          "stdout": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T064036.096549Z.stdout.log",
+          "stderr": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T064036.096549Z.stderr.log"
+        },
+        "fixture": {
+          "path": "/tmp/p9-lta47b_3",
+          "home": "/Users/zouguojun/.p9-home-4d22l2cf",
+          "cleanup": "removed"
+        }
+      },
+      "supervisor": {
+        "argv": [
+          "/opt/homebrew/opt/python@3.15/bin/python3.15",
+          "qa/phase9_test_closure.py",
+          "--repo-root",
+          ".",
+          "--target-dir",
+          ".phase9-target",
+          "--receipt",
+          "docs/superpowers/runs/2026-11-15-phase9-test-closure-receipt.md",
+          "--timeout-seconds",
+          "600",
+          "--test-filter",
+          "extension::service_ops::tests::manual_service_control_serializes_with_mount_lifecycle"
+        ],
+        "cwd": "/Volumes/TBU4/Workspace/Aleph",
+        "env_overrides": {},
+        "exit_code": 0,
+        "timed_out": false,
+        "pid": 73000,
+        "cleanup_error": null,
+        "unjoined_descendants": false,
+        "elapsed_seconds": 1.3669670000090264,
+        "stdout": "/Volumes/TBU4/Workspace/Aleph/.superpowers/sdd/2026-11-15-phase9-runtime-proof-and-dependency-closure/repaired-matrix-19.stdout.log",
+        "stderr": "/Volumes/TBU4/Workspace/Aleph/.superpowers/sdd/2026-11-15-phase9-runtime-proof-and-dependency-closure/repaired-matrix-19.stderr.log"
+      }
+    },
+    {
+      "case": "extension::service_ops::tests::manual_stop_does_not_target_replacement_mount",
+      "receipt": {
+        "schema_version": 1,
+        "timestamp": "20261116T064037.462506Z",
+        "memory_gate": {
+          "argv": [
+            "python3",
+            "qa/browser_live/check_memory.py",
+            "--required-bytes",
+            "4294967296"
+          ],
+          "cwd": "/Volumes/TBU4/Workspace/Aleph",
+          "env_overrides": {},
+          "exit_code": 0,
+          "timed_out": false,
+          "pid": 73007,
+          "cleanup_error": null,
+          "unjoined_descendants": false,
+          "elapsed_seconds": 0.028591500013135374,
+          "stdout": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T064037.462506Z-memory.stdout.log",
+          "stderr": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T064037.462506Z-memory.stderr.log"
+        },
+        "test_filter": "extension::service_ops::tests::manual_stop_does_not_target_replacement_mount",
+        "status": "PASS",
+        "command": {
+          "argv": [
+            "cargo",
+            "test",
+            "-p",
+            "alephcore",
+            "--lib",
+            "--offline",
+            "--locked",
+            "--jobs",
+            "1",
+            "extension::service_ops::tests::manual_stop_does_not_target_replacement_mount",
+            "--",
+            "--test-threads=1"
+          ],
+          "cwd": "/Volumes/TBU4/Workspace/Aleph",
+          "env_overrides": {
+            "HOME": "/Users/zouguojun/.p9-home-egdgggx7",
+            "ALEPH_HOME": "/tmp/p9-ljzms77d/aleph",
+            "CARGO_HOME": "/Users/zouguojun/.cargo",
+            "RUSTUP_HOME": "/Users/zouguojun/.rustup",
+            "TMPDIR": "/tmp/p9-ljzms77d",
+            "CARGO_TARGET_DIR": "/Volumes/TBU4/Workspace/Aleph/.phase9-target",
+            "RUST_BACKTRACE": "1"
+          },
+          "exit_code": 0,
+          "timed_out": false,
+          "pid": 73009,
+          "cleanup_error": null,
+          "unjoined_descendants": false,
+          "elapsed_seconds": 1.2396759999683127,
+          "stdout": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T064037.462506Z.stdout.log",
+          "stderr": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T064037.462506Z.stderr.log"
+        },
+        "fixture": {
+          "path": "/tmp/p9-ljzms77d",
+          "home": "/Users/zouguojun/.p9-home-egdgggx7",
+          "cleanup": "removed"
+        }
+      },
+      "supervisor": {
+        "argv": [
+          "/opt/homebrew/opt/python@3.15/bin/python3.15",
+          "qa/phase9_test_closure.py",
+          "--repo-root",
+          ".",
+          "--target-dir",
+          ".phase9-target",
+          "--receipt",
+          "docs/superpowers/runs/2026-11-15-phase9-test-closure-receipt.md",
+          "--timeout-seconds",
+          "600",
+          "--test-filter",
+          "extension::service_ops::tests::manual_stop_does_not_target_replacement_mount"
+        ],
+        "cwd": "/Volumes/TBU4/Workspace/Aleph",
+        "env_overrides": {},
+        "exit_code": 0,
+        "timed_out": false,
+        "pid": 73006,
+        "cleanup_error": null,
+        "unjoined_descendants": false,
+        "elapsed_seconds": 1.2991677920217626,
+        "stdout": "/Volumes/TBU4/Workspace/Aleph/.superpowers/sdd/2026-11-15-phase9-runtime-proof-and-dependency-closure/repaired-matrix-20.stdout.log",
+        "stderr": "/Volumes/TBU4/Workspace/Aleph/.superpowers/sdd/2026-11-15-phase9-runtime-proof-and-dependency-closure/repaired-matrix-20.stderr.log"
+      }
+    },
+    {
+      "case": "extension::tests::projection_publishes_skill_dirs_with_their_scope_keys",
+      "receipt": {
+        "schema_version": 1,
+        "timestamp": "20261116T064038.763032Z",
+        "memory_gate": {
+          "argv": [
+            "python3",
+            "qa/browser_live/check_memory.py",
+            "--required-bytes",
+            "4294967296"
+          ],
+          "cwd": "/Volumes/TBU4/Workspace/Aleph",
+          "env_overrides": {},
+          "exit_code": 0,
+          "timed_out": false,
+          "pid": 73012,
+          "cleanup_error": null,
+          "unjoined_descendants": false,
+          "elapsed_seconds": 0.029406042012851685,
+          "stdout": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T064038.763032Z-memory.stdout.log",
+          "stderr": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T064038.763032Z-memory.stderr.log"
+        },
+        "test_filter": "extension::tests::projection_publishes_skill_dirs_with_their_scope_keys",
+        "status": "PASS",
+        "command": {
+          "argv": [
+            "cargo",
+            "test",
+            "-p",
+            "alephcore",
+            "--lib",
+            "--offline",
+            "--locked",
+            "--jobs",
+            "1",
+            "extension::tests::projection_publishes_skill_dirs_with_their_scope_keys",
+            "--",
+            "--test-threads=1"
+          ],
+          "cwd": "/Volumes/TBU4/Workspace/Aleph",
+          "env_overrides": {
+            "HOME": "/Users/zouguojun/.p9-home-4iekcrsp",
+            "ALEPH_HOME": "/tmp/p9-err5itgc/aleph",
+            "CARGO_HOME": "/Users/zouguojun/.cargo",
+            "RUSTUP_HOME": "/Users/zouguojun/.rustup",
+            "TMPDIR": "/tmp/p9-err5itgc",
+            "CARGO_TARGET_DIR": "/Volumes/TBU4/Workspace/Aleph/.phase9-target",
+            "RUST_BACKTRACE": "1"
+          },
+          "exit_code": 0,
+          "timed_out": false,
+          "pid": 73014,
+          "cleanup_error": null,
+          "unjoined_descendants": false,
+          "elapsed_seconds": 0.5663131670444272,
+          "stdout": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T064038.763032Z.stdout.log",
+          "stderr": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T064038.763032Z.stderr.log"
+        },
+        "fixture": {
+          "path": "/tmp/p9-err5itgc",
+          "home": "/Users/zouguojun/.p9-home-4iekcrsp",
+          "cleanup": "removed"
+        }
+      },
+      "supervisor": {
+        "argv": [
+          "/opt/homebrew/opt/python@3.15/bin/python3.15",
+          "qa/phase9_test_closure.py",
+          "--repo-root",
+          ".",
+          "--target-dir",
+          ".phase9-target",
+          "--receipt",
+          "docs/superpowers/runs/2026-11-15-phase9-test-closure-receipt.md",
+          "--timeout-seconds",
+          "600",
+          "--test-filter",
+          "extension::tests::projection_publishes_skill_dirs_with_their_scope_keys"
+        ],
+        "cwd": "/Volumes/TBU4/Workspace/Aleph",
+        "env_overrides": {},
+        "exit_code": 0,
+        "timed_out": false,
+        "pid": 73011,
+        "cleanup_error": null,
+        "unjoined_descendants": false,
+        "elapsed_seconds": 0.6266499169869348,
+        "stdout": "/Volumes/TBU4/Workspace/Aleph/.superpowers/sdd/2026-11-15-phase9-runtime-proof-and-dependency-closure/repaired-matrix-21.stdout.log",
+        "stderr": "/Volumes/TBU4/Workspace/Aleph/.superpowers/sdd/2026-11-15-phase9-runtime-proof-and-dependency-closure/repaired-matrix-21.stderr.log"
+      }
+    },
+    {
+      "case": "gateway::capability_events_tests::foreign_scope_denial_records_policy_violation_without_handler_effect",
+      "receipt": {
+        "schema_version": 1,
+        "timestamp": "20261116T064039.389200Z",
+        "memory_gate": {
+          "argv": [
+            "python3",
+            "qa/browser_live/check_memory.py",
+            "--required-bytes",
+            "4294967296"
+          ],
+          "cwd": "/Volumes/TBU4/Workspace/Aleph",
+          "env_overrides": {},
+          "exit_code": 0,
+          "timed_out": false,
+          "pid": 73017,
+          "cleanup_error": null,
+          "unjoined_descendants": false,
+          "elapsed_seconds": 0.02788033295655623,
+          "stdout": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T064039.389200Z-memory.stdout.log",
+          "stderr": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T064039.389200Z-memory.stderr.log"
+        },
+        "test_filter": "gateway::capability_events_tests::foreign_scope_denial_records_policy_violation_without_handler_effect",
+        "status": "PASS",
+        "command": {
+          "argv": [
+            "cargo",
+            "test",
+            "-p",
+            "alephcore",
+            "--lib",
+            "--offline",
+            "--locked",
+            "--jobs",
+            "1",
+            "gateway::capability_events_tests::foreign_scope_denial_records_policy_violation_without_handler_effect",
+            "--",
+            "--test-threads=1"
+          ],
+          "cwd": "/Volumes/TBU4/Workspace/Aleph",
+          "env_overrides": {
+            "HOME": "/Users/zouguojun/.p9-home-r4ciy_3j",
+            "ALEPH_HOME": "/tmp/p9-s8i7t_td/aleph",
+            "CARGO_HOME": "/Users/zouguojun/.cargo",
+            "RUSTUP_HOME": "/Users/zouguojun/.rustup",
+            "TMPDIR": "/tmp/p9-s8i7t_td",
+            "CARGO_TARGET_DIR": "/Volumes/TBU4/Workspace/Aleph/.phase9-target",
+            "RUST_BACKTRACE": "1"
+          },
+          "exit_code": 0,
+          "timed_out": false,
+          "pid": 73019,
+          "cleanup_error": null,
+          "unjoined_descendants": false,
+          "elapsed_seconds": 0.5368504159851,
+          "stdout": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T064039.389200Z.stdout.log",
+          "stderr": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T064039.389200Z.stderr.log"
+        },
+        "fixture": {
+          "path": "/tmp/p9-s8i7t_td",
+          "home": "/Users/zouguojun/.p9-home-r4ciy_3j",
+          "cleanup": "removed"
+        }
+      },
+      "supervisor": {
+        "argv": [
+          "/opt/homebrew/opt/python@3.15/bin/python3.15",
+          "qa/phase9_test_closure.py",
+          "--repo-root",
+          ".",
+          "--target-dir",
+          ".phase9-target",
+          "--receipt",
+          "docs/superpowers/runs/2026-11-15-phase9-test-closure-receipt.md",
+          "--timeout-seconds",
+          "600",
+          "--test-filter",
+          "gateway::capability_events_tests::foreign_scope_denial_records_policy_violation_without_handler_effect"
+        ],
+        "cwd": "/Volumes/TBU4/Workspace/Aleph",
+        "env_overrides": {},
+        "exit_code": 0,
+        "timed_out": false,
+        "pid": 73016,
+        "cleanup_error": null,
+        "unjoined_descendants": false,
+        "elapsed_seconds": 0.5950318329851143,
+        "stdout": "/Volumes/TBU4/Workspace/Aleph/.superpowers/sdd/2026-11-15-phase9-runtime-proof-and-dependency-closure/repaired-matrix-22.stdout.log",
+        "stderr": "/Volumes/TBU4/Workspace/Aleph/.superpowers/sdd/2026-11-15-phase9-runtime-proof-and-dependency-closure/repaired-matrix-22.stderr.log"
+      }
+    },
+    {
+      "case": "capability::zahir_facade::tests::stale_lease_after_owner_bump_fails_and_fresh_resolve_succeeds",
+      "receipt": {
+        "schema_version": 1,
+        "timestamp": "20261116T064039.984968Z",
+        "memory_gate": {
+          "argv": [
+            "python3",
+            "qa/browser_live/check_memory.py",
+            "--required-bytes",
+            "4294967296"
+          ],
+          "cwd": "/Volumes/TBU4/Workspace/Aleph",
+          "env_overrides": {},
+          "exit_code": 0,
+          "timed_out": false,
+          "pid": 73022,
+          "cleanup_error": null,
+          "unjoined_descendants": false,
+          "elapsed_seconds": 0.028590250003617257,
+          "stdout": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T064039.984968Z-memory.stdout.log",
+          "stderr": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T064039.984968Z-memory.stderr.log"
+        },
+        "test_filter": "capability::zahir_facade::tests::stale_lease_after_owner_bump_fails_and_fresh_resolve_succeeds",
+        "status": "PASS",
+        "command": {
+          "argv": [
+            "cargo",
+            "test",
+            "-p",
+            "alephcore",
+            "--lib",
+            "--offline",
+            "--locked",
+            "--jobs",
+            "1",
+            "capability::zahir_facade::tests::stale_lease_after_owner_bump_fails_and_fresh_resolve_succeeds",
+            "--",
+            "--test-threads=1"
+          ],
+          "cwd": "/Volumes/TBU4/Workspace/Aleph",
+          "env_overrides": {
+            "HOME": "/Users/zouguojun/.p9-home-j82vb8uo",
+            "ALEPH_HOME": "/tmp/p9-bgho_1av/aleph",
+            "CARGO_HOME": "/Users/zouguojun/.cargo",
+            "RUSTUP_HOME": "/Users/zouguojun/.rustup",
+            "TMPDIR": "/tmp/p9-bgho_1av",
+            "CARGO_TARGET_DIR": "/Volumes/TBU4/Workspace/Aleph/.phase9-target",
+            "RUST_BACKTRACE": "1"
+          },
+          "exit_code": 0,
+          "timed_out": false,
+          "pid": 73024,
+          "cleanup_error": null,
+          "unjoined_descendants": false,
+          "elapsed_seconds": 0.5648245420306921,
+          "stdout": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T064039.984968Z.stdout.log",
+          "stderr": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T064039.984968Z.stderr.log"
+        },
+        "fixture": {
+          "path": "/tmp/p9-bgho_1av",
+          "home": "/Users/zouguojun/.p9-home-j82vb8uo",
+          "cleanup": "removed"
+        }
+      },
+      "supervisor": {
+        "argv": [
+          "/opt/homebrew/opt/python@3.15/bin/python3.15",
+          "qa/phase9_test_closure.py",
+          "--repo-root",
+          ".",
+          "--target-dir",
+          ".phase9-target",
+          "--receipt",
+          "docs/superpowers/runs/2026-11-15-phase9-test-closure-receipt.md",
+          "--timeout-seconds",
+          "600",
+          "--test-filter",
+          "capability::zahir_facade::tests::stale_lease_after_owner_bump_fails_and_fresh_resolve_succeeds"
+        ],
+        "cwd": "/Volumes/TBU4/Workspace/Aleph",
+        "env_overrides": {},
+        "exit_code": 0,
+        "timed_out": false,
+        "pid": 73021,
+        "cleanup_error": null,
+        "unjoined_descendants": false,
+        "elapsed_seconds": 0.6241977909812704,
+        "stdout": "/Volumes/TBU4/Workspace/Aleph/.superpowers/sdd/2026-11-15-phase9-runtime-proof-and-dependency-closure/repaired-matrix-23.stdout.log",
+        "stderr": "/Volumes/TBU4/Workspace/Aleph/.superpowers/sdd/2026-11-15-phase9-runtime-proof-and-dependency-closure/repaired-matrix-23.stderr.log"
+      }
+    },
+    {
+      "case": "gateway::capability_events_tests::ui_surface_cancel_after_dispatch_joins_worker_and_clears_pending",
+      "receipt": {
+        "schema_version": 1,
+        "timestamp": "20261116T064040.609869Z",
+        "memory_gate": {
+          "argv": [
+            "python3",
+            "qa/browser_live/check_memory.py",
+            "--required-bytes",
+            "4294967296"
+          ],
+          "cwd": "/Volumes/TBU4/Workspace/Aleph",
+          "env_overrides": {},
+          "exit_code": 0,
+          "timed_out": false,
+          "pid": 73111,
+          "cleanup_error": null,
+          "unjoined_descendants": false,
+          "elapsed_seconds": 0.02855962497415021,
+          "stdout": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T064040.609869Z-memory.stdout.log",
+          "stderr": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T064040.609869Z-memory.stderr.log"
+        },
+        "test_filter": "gateway::capability_events_tests::ui_surface_cancel_after_dispatch_joins_worker_and_clears_pending",
+        "status": "PASS",
+        "command": {
+          "argv": [
+            "cargo",
+            "test",
+            "-p",
+            "alephcore",
+            "--lib",
+            "--offline",
+            "--locked",
+            "--jobs",
+            "1",
+            "gateway::capability_events_tests::ui_surface_cancel_after_dispatch_joins_worker_and_clears_pending",
+            "--",
+            "--test-threads=1"
+          ],
+          "cwd": "/Volumes/TBU4/Workspace/Aleph",
+          "env_overrides": {
+            "HOME": "/Users/zouguojun/.p9-home-9eq278oq",
+            "ALEPH_HOME": "/tmp/p9-fec7h_0g/aleph",
+            "CARGO_HOME": "/Users/zouguojun/.cargo",
+            "RUSTUP_HOME": "/Users/zouguojun/.rustup",
+            "TMPDIR": "/tmp/p9-fec7h_0g",
+            "CARGO_TARGET_DIR": "/Volumes/TBU4/Workspace/Aleph/.phase9-target",
+            "RUST_BACKTRACE": "1"
+          },
+          "exit_code": 0,
+          "timed_out": false,
+          "pid": 73113,
+          "cleanup_error": null,
+          "unjoined_descendants": false,
+          "elapsed_seconds": 0.5598934590234421,
+          "stdout": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T064040.609869Z.stdout.log",
+          "stderr": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T064040.609869Z.stderr.log"
+        },
+        "fixture": {
+          "path": "/tmp/p9-fec7h_0g",
+          "home": "/Users/zouguojun/.p9-home-9eq278oq",
+          "cleanup": "removed"
+        }
+      },
+      "supervisor": {
+        "argv": [
+          "/opt/homebrew/opt/python@3.15/bin/python3.15",
+          "qa/phase9_test_closure.py",
+          "--repo-root",
+          ".",
+          "--target-dir",
+          ".phase9-target",
+          "--receipt",
+          "docs/superpowers/runs/2026-11-15-phase9-test-closure-receipt.md",
+          "--timeout-seconds",
+          "600",
+          "--test-filter",
+          "gateway::capability_events_tests::ui_surface_cancel_after_dispatch_joins_worker_and_clears_pending"
+        ],
+        "cwd": "/Volumes/TBU4/Workspace/Aleph",
+        "env_overrides": {},
+        "exit_code": 0,
+        "timed_out": false,
+        "pid": 73110,
+        "cleanup_error": null,
+        "unjoined_descendants": false,
+        "elapsed_seconds": 0.6194650419638492,
+        "stdout": "/Volumes/TBU4/Workspace/Aleph/.superpowers/sdd/2026-11-15-phase9-runtime-proof-and-dependency-closure/repaired-matrix-24.stdout.log",
+        "stderr": "/Volumes/TBU4/Workspace/Aleph/.superpowers/sdd/2026-11-15-phase9-runtime-proof-and-dependency-closure/repaired-matrix-24.stderr.log"
+      }
+    },
+    {
+      "case": "capability::zahir_facade::tests::projection_lag_requires_snapshot_before_reconnect_resolve",
+      "receipt": {
+        "schema_version": 1,
+        "timestamp": "20261116T064041.232442Z",
+        "memory_gate": {
+          "argv": [
+            "python3",
+            "qa/browser_live/check_memory.py",
+            "--required-bytes",
+            "4294967296"
+          ],
+          "cwd": "/Volumes/TBU4/Workspace/Aleph",
+          "env_overrides": {},
+          "exit_code": 0,
+          "timed_out": false,
+          "pid": 73116,
+          "cleanup_error": null,
+          "unjoined_descendants": false,
+          "elapsed_seconds": 0.02891437499783933,
+          "stdout": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T064041.232442Z-memory.stdout.log",
+          "stderr": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T064041.232442Z-memory.stderr.log"
+        },
+        "test_filter": "capability::zahir_facade::tests::projection_lag_requires_snapshot_before_reconnect_resolve",
+        "status": "PASS",
+        "command": {
+          "argv": [
+            "cargo",
+            "test",
+            "-p",
+            "alephcore",
+            "--lib",
+            "--offline",
+            "--locked",
+            "--jobs",
+            "1",
+            "capability::zahir_facade::tests::projection_lag_requires_snapshot_before_reconnect_resolve",
+            "--",
+            "--test-threads=1"
+          ],
+          "cwd": "/Volumes/TBU4/Workspace/Aleph",
+          "env_overrides": {
+            "HOME": "/Users/zouguojun/.p9-home-0mdv9_ij",
+            "ALEPH_HOME": "/tmp/p9-tdc6836w/aleph",
+            "CARGO_HOME": "/Users/zouguojun/.cargo",
+            "RUSTUP_HOME": "/Users/zouguojun/.rustup",
+            "TMPDIR": "/tmp/p9-tdc6836w",
+            "CARGO_TARGET_DIR": "/Volumes/TBU4/Workspace/Aleph/.phase9-target",
+            "RUST_BACKTRACE": "1"
+          },
+          "exit_code": 0,
+          "timed_out": false,
+          "pid": 73118,
+          "cleanup_error": null,
+          "unjoined_descendants": false,
+          "elapsed_seconds": 0.5976945000002161,
+          "stdout": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T064041.232442Z.stdout.log",
+          "stderr": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T064041.232442Z.stderr.log"
+        },
+        "fixture": {
+          "path": "/tmp/p9-tdc6836w",
+          "home": "/Users/zouguojun/.p9-home-0mdv9_ij",
+          "cleanup": "removed"
+        }
+      },
+      "supervisor": {
+        "argv": [
+          "/opt/homebrew/opt/python@3.15/bin/python3.15",
+          "qa/phase9_test_closure.py",
+          "--repo-root",
+          ".",
+          "--target-dir",
+          ".phase9-target",
+          "--receipt",
+          "docs/superpowers/runs/2026-11-15-phase9-test-closure-receipt.md",
+          "--timeout-seconds",
+          "600",
+          "--test-filter",
+          "capability::zahir_facade::tests::projection_lag_requires_snapshot_before_reconnect_resolve"
+        ],
+        "cwd": "/Volumes/TBU4/Workspace/Aleph",
+        "env_overrides": {},
+        "exit_code": 0,
+        "timed_out": false,
+        "pid": 73115,
+        "cleanup_error": null,
+        "unjoined_descendants": false,
+        "elapsed_seconds": 0.6595403750543483,
+        "stdout": "/Volumes/TBU4/Workspace/Aleph/.superpowers/sdd/2026-11-15-phase9-runtime-proof-and-dependency-closure/repaired-matrix-25.stdout.log",
+        "stderr": "/Volumes/TBU4/Workspace/Aleph/.superpowers/sdd/2026-11-15-phase9-runtime-proof-and-dependency-closure/repaired-matrix-25.stderr.log"
+      }
+    },
+    {
+      "case": "capability::ui_surface_tests::disable_closes_owned_surface_and_rejects_old_lease",
+      "receipt": {
+        "schema_version": 1,
+        "timestamp": "20261116T064041.890701Z",
+        "memory_gate": {
+          "argv": [
+            "python3",
+            "qa/browser_live/check_memory.py",
+            "--required-bytes",
+            "4294967296"
+          ],
+          "cwd": "/Volumes/TBU4/Workspace/Aleph",
+          "env_overrides": {},
+          "exit_code": 0,
+          "timed_out": false,
+          "pid": 73122,
+          "cleanup_error": null,
+          "unjoined_descendants": false,
+          "elapsed_seconds": 0.028735291038174182,
+          "stdout": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T064041.890701Z-memory.stdout.log",
+          "stderr": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T064041.890701Z-memory.stderr.log"
+        },
+        "test_filter": "capability::ui_surface_tests::disable_closes_owned_surface_and_rejects_old_lease",
+        "status": "PASS",
+        "command": {
+          "argv": [
+            "cargo",
+            "test",
+            "-p",
+            "alephcore",
+            "--lib",
+            "--offline",
+            "--locked",
+            "--jobs",
+            "1",
+            "capability::ui_surface_tests::disable_closes_owned_surface_and_rejects_old_lease",
+            "--",
+            "--test-threads=1"
+          ],
+          "cwd": "/Volumes/TBU4/Workspace/Aleph",
+          "env_overrides": {
+            "HOME": "/Users/zouguojun/.p9-home-zks7nnrz",
+            "ALEPH_HOME": "/tmp/p9-2h6psvur/aleph",
+            "CARGO_HOME": "/Users/zouguojun/.cargo",
+            "RUSTUP_HOME": "/Users/zouguojun/.rustup",
+            "TMPDIR": "/tmp/p9-2h6psvur",
+            "CARGO_TARGET_DIR": "/Volumes/TBU4/Workspace/Aleph/.phase9-target",
+            "RUST_BACKTRACE": "1"
+          },
+          "exit_code": 0,
+          "timed_out": false,
+          "pid": 73124,
+          "cleanup_error": null,
+          "unjoined_descendants": false,
+          "elapsed_seconds": 0.5522461659857072,
+          "stdout": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T064041.890701Z.stdout.log",
+          "stderr": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T064041.890701Z.stderr.log"
+        },
+        "fixture": {
+          "path": "/tmp/p9-2h6psvur",
+          "home": "/Users/zouguojun/.p9-home-zks7nnrz",
+          "cleanup": "removed"
+        }
+      },
+      "supervisor": {
+        "argv": [
+          "/opt/homebrew/opt/python@3.15/bin/python3.15",
+          "qa/phase9_test_closure.py",
+          "--repo-root",
+          ".",
+          "--target-dir",
+          ".phase9-target",
+          "--receipt",
+          "docs/superpowers/runs/2026-11-15-phase9-test-closure-receipt.md",
+          "--timeout-seconds",
+          "600",
+          "--test-filter",
+          "capability::ui_surface_tests::disable_closes_owned_surface_and_rejects_old_lease"
+        ],
+        "cwd": "/Volumes/TBU4/Workspace/Aleph",
+        "env_overrides": {},
+        "exit_code": 0,
+        "timed_out": false,
+        "pid": 73121,
+        "cleanup_error": null,
+        "unjoined_descendants": false,
+        "elapsed_seconds": 0.6121632080175914,
+        "stdout": "/Volumes/TBU4/Workspace/Aleph/.superpowers/sdd/2026-11-15-phase9-runtime-proof-and-dependency-closure/repaired-matrix-26.stdout.log",
+        "stderr": "/Volumes/TBU4/Workspace/Aleph/.superpowers/sdd/2026-11-15-phase9-runtime-proof-and-dependency-closure/repaired-matrix-26.stderr.log"
+      }
+    },
+    {
+      "case": "gateway::capability_terminal_tests::captured_terminal_rejects_provider_replacement_before_invoke",
+      "receipt": {
+        "schema_version": 1,
+        "timestamp": "20261116T064042.502896Z",
+        "memory_gate": {
+          "argv": [
+            "python3",
+            "qa/browser_live/check_memory.py",
+            "--required-bytes",
+            "4294967296"
+          ],
+          "cwd": "/Volumes/TBU4/Workspace/Aleph",
+          "env_overrides": {},
+          "exit_code": 0,
+          "timed_out": false,
+          "pid": 73127,
+          "cleanup_error": null,
+          "unjoined_descendants": false,
+          "elapsed_seconds": 0.028115957975387573,
+          "stdout": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T064042.502896Z-memory.stdout.log",
+          "stderr": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T064042.502896Z-memory.stderr.log"
+        },
+        "test_filter": "gateway::capability_terminal_tests::captured_terminal_rejects_provider_replacement_before_invoke",
+        "status": "PASS",
+        "command": {
+          "argv": [
+            "cargo",
+            "test",
+            "-p",
+            "alephcore",
+            "--lib",
+            "--offline",
+            "--locked",
+            "--jobs",
+            "1",
+            "gateway::capability_terminal_tests::captured_terminal_rejects_provider_replacement_before_invoke",
+            "--",
+            "--test-threads=1"
+          ],
+          "cwd": "/Volumes/TBU4/Workspace/Aleph",
+          "env_overrides": {
+            "HOME": "/Users/zouguojun/.p9-home-sbd6ozm4",
+            "ALEPH_HOME": "/tmp/p9-9rbo47lp/aleph",
+            "CARGO_HOME": "/Users/zouguojun/.cargo",
+            "RUSTUP_HOME": "/Users/zouguojun/.rustup",
+            "TMPDIR": "/tmp/p9-9rbo47lp",
+            "CARGO_TARGET_DIR": "/Volumes/TBU4/Workspace/Aleph/.phase9-target",
+            "RUST_BACKTRACE": "1"
+          },
+          "exit_code": 0,
+          "timed_out": false,
+          "pid": 73129,
+          "cleanup_error": null,
+          "unjoined_descendants": false,
+          "elapsed_seconds": 0.5573073329869658,
+          "stdout": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T064042.502896Z.stdout.log",
+          "stderr": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T064042.502896Z.stderr.log"
+        },
+        "fixture": {
+          "path": "/tmp/p9-9rbo47lp",
+          "home": "/Users/zouguojun/.p9-home-sbd6ozm4",
+          "cleanup": "removed"
+        }
+      },
+      "supervisor": {
+        "argv": [
+          "/opt/homebrew/opt/python@3.15/bin/python3.15",
+          "qa/phase9_test_closure.py",
+          "--repo-root",
+          ".",
+          "--target-dir",
+          ".phase9-target",
+          "--receipt",
+          "docs/superpowers/runs/2026-11-15-phase9-test-closure-receipt.md",
+          "--timeout-seconds",
+          "600",
+          "--test-filter",
+          "gateway::capability_terminal_tests::captured_terminal_rejects_provider_replacement_before_invoke"
+        ],
+        "cwd": "/Volumes/TBU4/Workspace/Aleph",
+        "env_overrides": {},
+        "exit_code": 0,
+        "timed_out": false,
+        "pid": 73126,
+        "cleanup_error": null,
+        "unjoined_descendants": false,
+        "elapsed_seconds": 0.6159969999571331,
+        "stdout": "/Volumes/TBU4/Workspace/Aleph/.superpowers/sdd/2026-11-15-phase9-runtime-proof-and-dependency-closure/repaired-matrix-27.stdout.log",
+        "stderr": "/Volumes/TBU4/Workspace/Aleph/.superpowers/sdd/2026-11-15-phase9-runtime-proof-and-dependency-closure/repaired-matrix-27.stderr.log"
+      }
+    },
+    {
+      "case": "builtin_tools::code_exec::seatbelt_live_tests::bash_tool_runs_when_path_puts_an_unrunnable_bash_first",
+      "receipt": {
+        "schema_version": 1,
+        "timestamp": "20261116T064043.118893Z",
+        "memory_gate": {
+          "argv": [
+            "python3",
+            "qa/browser_live/check_memory.py",
+            "--required-bytes",
+            "4294967296"
+          ],
+          "cwd": "/Volumes/TBU4/Workspace/Aleph",
+          "env_overrides": {},
+          "exit_code": 0,
+          "timed_out": false,
+          "pid": 73133,
+          "cleanup_error": null,
+          "unjoined_descendants": false,
+          "elapsed_seconds": 0.028326125000603497,
+          "stdout": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T064043.118893Z-memory.stdout.log",
+          "stderr": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T064043.118893Z-memory.stderr.log"
+        },
+        "test_filter": "builtin_tools::code_exec::seatbelt_live_tests::bash_tool_runs_when_path_puts_an_unrunnable_bash_first",
+        "status": "PASS",
+        "command": {
+          "argv": [
+            "cargo",
+            "test",
+            "-p",
+            "alephcore",
+            "--lib",
+            "--offline",
+            "--locked",
+            "--jobs",
+            "1",
+            "builtin_tools::code_exec::seatbelt_live_tests::bash_tool_runs_when_path_puts_an_unrunnable_bash_first",
+            "--",
+            "--test-threads=1"
+          ],
+          "cwd": "/Volumes/TBU4/Workspace/Aleph",
+          "env_overrides": {
+            "HOME": "/Users/zouguojun/.p9-home-_xts12zu",
+            "ALEPH_HOME": "/tmp/p9-tx152q9x/aleph",
+            "CARGO_HOME": "/Users/zouguojun/.cargo",
+            "RUSTUP_HOME": "/Users/zouguojun/.rustup",
+            "TMPDIR": "/tmp/p9-tx152q9x",
+            "CARGO_TARGET_DIR": "/Volumes/TBU4/Workspace/Aleph/.phase9-target",
+            "RUST_BACKTRACE": "1"
+          },
+          "exit_code": 0,
+          "timed_out": false,
+          "pid": 73135,
+          "cleanup_error": null,
+          "unjoined_descendants": false,
+          "elapsed_seconds": 0.5595117079792544,
+          "stdout": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T064043.118893Z.stdout.log",
+          "stderr": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T064043.118893Z.stderr.log"
+        },
+        "fixture": {
+          "path": "/tmp/p9-tx152q9x",
+          "home": "/Users/zouguojun/.p9-home-_xts12zu",
+          "cleanup": "removed"
+        }
+      },
+      "supervisor": {
+        "argv": [
+          "/opt/homebrew/opt/python@3.15/bin/python3.15",
+          "qa/phase9_test_closure.py",
+          "--repo-root",
+          ".",
+          "--target-dir",
+          ".phase9-target",
+          "--receipt",
+          "docs/superpowers/runs/2026-11-15-phase9-test-closure-receipt.md",
+          "--timeout-seconds",
+          "600",
+          "--test-filter",
+          "builtin_tools::code_exec::seatbelt_live_tests::bash_tool_runs_when_path_puts_an_unrunnable_bash_first"
+        ],
+        "cwd": "/Volumes/TBU4/Workspace/Aleph",
+        "env_overrides": {},
+        "exit_code": 0,
+        "timed_out": false,
+        "pid": 73132,
+        "cleanup_error": null,
+        "unjoined_descendants": false,
+        "elapsed_seconds": 0.6178279579617083,
+        "stdout": "/Volumes/TBU4/Workspace/Aleph/.superpowers/sdd/2026-11-15-phase9-runtime-proof-and-dependency-closure/repaired-matrix-28.stdout.log",
+        "stderr": "/Volumes/TBU4/Workspace/Aleph/.superpowers/sdd/2026-11-15-phase9-runtime-proof-and-dependency-closure/repaired-matrix-28.stderr.log"
+      }
+    },
+    {
+      "case": "builtin_tools::runtime_manage::tests::a_failing_ledger_still_reports_ok_for_a_real_spawn",
+      "receipt": {
+        "schema_version": 1,
+        "timestamp": "20261116T064043.737474Z",
+        "memory_gate": {
+          "argv": [
+            "python3",
+            "qa/browser_live/check_memory.py",
+            "--required-bytes",
+            "4294967296"
+          ],
+          "cwd": "/Volumes/TBU4/Workspace/Aleph",
+          "env_overrides": {},
+          "exit_code": 0,
+          "timed_out": false,
+          "pid": 73142,
+          "cleanup_error": null,
+          "unjoined_descendants": false,
+          "elapsed_seconds": 0.02765616704709828,
+          "stdout": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T064043.737474Z-memory.stdout.log",
+          "stderr": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T064043.737474Z-memory.stderr.log"
+        },
+        "test_filter": "builtin_tools::runtime_manage::tests::a_failing_ledger_still_reports_ok_for_a_real_spawn",
+        "status": "PASS",
+        "command": {
+          "argv": [
+            "cargo",
+            "test",
+            "-p",
+            "alephcore",
+            "--lib",
+            "--offline",
+            "--locked",
+            "--jobs",
+            "1",
+            "builtin_tools::runtime_manage::tests::a_failing_ledger_still_reports_ok_for_a_real_spawn",
+            "--",
+            "--test-threads=1"
+          ],
+          "cwd": "/Volumes/TBU4/Workspace/Aleph",
+          "env_overrides": {
+            "HOME": "/Users/zouguojun/.p9-home-tjdxxsa8",
+            "ALEPH_HOME": "/tmp/p9-f5z1qwfm/aleph",
+            "CARGO_HOME": "/Users/zouguojun/.cargo",
+            "RUSTUP_HOME": "/Users/zouguojun/.rustup",
+            "TMPDIR": "/tmp/p9-f5z1qwfm",
+            "CARGO_TARGET_DIR": "/Volumes/TBU4/Workspace/Aleph/.phase9-target",
+            "RUST_BACKTRACE": "1"
+          },
+          "exit_code": 0,
+          "timed_out": false,
+          "pid": 73144,
+          "cleanup_error": null,
+          "unjoined_descendants": false,
+          "elapsed_seconds": 0.5424930829904042,
+          "stdout": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T064043.737474Z.stdout.log",
+          "stderr": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T064043.737474Z.stderr.log"
+        },
+        "fixture": {
+          "path": "/tmp/p9-f5z1qwfm",
+          "home": "/Users/zouguojun/.p9-home-tjdxxsa8",
+          "cleanup": "removed"
+        }
+      },
+      "supervisor": {
+        "argv": [
+          "/opt/homebrew/opt/python@3.15/bin/python3.15",
+          "qa/phase9_test_closure.py",
+          "--repo-root",
+          ".",
+          "--target-dir",
+          ".phase9-target",
+          "--receipt",
+          "docs/superpowers/runs/2026-11-15-phase9-test-closure-receipt.md",
+          "--timeout-seconds",
+          "600",
+          "--test-filter",
+          "builtin_tools::runtime_manage::tests::a_failing_ledger_still_reports_ok_for_a_real_spawn"
+        ],
+        "cwd": "/Volumes/TBU4/Workspace/Aleph",
+        "env_overrides": {},
+        "exit_code": 0,
+        "timed_out": false,
+        "pid": 73141,
+        "cleanup_error": null,
+        "unjoined_descendants": false,
+        "elapsed_seconds": 0.6006869580014609,
+        "stdout": "/Volumes/TBU4/Workspace/Aleph/.superpowers/sdd/2026-11-15-phase9-runtime-proof-and-dependency-closure/repaired-matrix-29.stdout.log",
+        "stderr": "/Volumes/TBU4/Workspace/Aleph/.superpowers/sdd/2026-11-15-phase9-runtime-proof-and-dependency-closure/repaired-matrix-29.stderr.log"
+      }
+    },
+    {
+      "case": "builtin_tools::runtime_manage::tests::install_chromiums_real_subprocess_output_reaches_poll_through_the_tee",
+      "receipt": {
+        "schema_version": 1,
+        "timestamp": "20261116T064044.339274Z",
+        "memory_gate": {
+          "argv": [
+            "python3",
+            "qa/browser_live/check_memory.py",
+            "--required-bytes",
+            "4294967296"
+          ],
+          "cwd": "/Volumes/TBU4/Workspace/Aleph",
+          "env_overrides": {},
+          "exit_code": 0,
+          "timed_out": false,
+          "pid": 73147,
+          "cleanup_error": null,
+          "unjoined_descendants": false,
+          "elapsed_seconds": 0.027906709001399577,
+          "stdout": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T064044.339274Z-memory.stdout.log",
+          "stderr": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T064044.339274Z-memory.stderr.log"
+        },
+        "test_filter": "builtin_tools::runtime_manage::tests::install_chromiums_real_subprocess_output_reaches_poll_through_the_tee",
+        "status": "PASS",
+        "command": {
+          "argv": [
+            "cargo",
+            "test",
+            "-p",
+            "alephcore",
+            "--lib",
+            "--offline",
+            "--locked",
+            "--jobs",
+            "1",
+            "builtin_tools::runtime_manage::tests::install_chromiums_real_subprocess_output_reaches_poll_through_the_tee",
+            "--",
+            "--test-threads=1"
+          ],
+          "cwd": "/Volumes/TBU4/Workspace/Aleph",
+          "env_overrides": {
+            "HOME": "/Users/zouguojun/.p9-home-38schv89",
+            "ALEPH_HOME": "/tmp/p9-et2bl_2s/aleph",
+            "CARGO_HOME": "/Users/zouguojun/.cargo",
+            "RUSTUP_HOME": "/Users/zouguojun/.rustup",
+            "TMPDIR": "/tmp/p9-et2bl_2s",
+            "CARGO_TARGET_DIR": "/Volumes/TBU4/Workspace/Aleph/.phase9-target",
+            "RUST_BACKTRACE": "1"
+          },
+          "exit_code": 0,
+          "timed_out": false,
+          "pid": 73149,
+          "cleanup_error": null,
+          "unjoined_descendants": false,
+          "elapsed_seconds": 2.6720356669975445,
+          "stdout": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T064044.339274Z.stdout.log",
+          "stderr": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T064044.339274Z.stderr.log"
+        },
+        "fixture": {
+          "path": "/tmp/p9-et2bl_2s",
+          "home": "/Users/zouguojun/.p9-home-38schv89",
+          "cleanup": "removed"
+        }
+      },
+      "supervisor": {
+        "argv": [
+          "/opt/homebrew/opt/python@3.15/bin/python3.15",
+          "qa/phase9_test_closure.py",
+          "--repo-root",
+          ".",
+          "--target-dir",
+          ".phase9-target",
+          "--receipt",
+          "docs/superpowers/runs/2026-11-15-phase9-test-closure-receipt.md",
+          "--timeout-seconds",
+          "600",
+          "--test-filter",
+          "builtin_tools::runtime_manage::tests::install_chromiums_real_subprocess_output_reaches_poll_through_the_tee"
+        ],
+        "cwd": "/Volumes/TBU4/Workspace/Aleph",
+        "env_overrides": {},
+        "exit_code": 0,
+        "timed_out": false,
+        "pid": 73146,
+        "cleanup_error": null,
+        "unjoined_descendants": false,
+        "elapsed_seconds": 2.736920209019445,
+        "stdout": "/Volumes/TBU4/Workspace/Aleph/.superpowers/sdd/2026-11-15-phase9-runtime-proof-and-dependency-closure/repaired-matrix-30.stdout.log",
+        "stderr": "/Volumes/TBU4/Workspace/Aleph/.superpowers/sdd/2026-11-15-phase9-runtime-proof-and-dependency-closure/repaired-matrix-30.stderr.log"
+      }
+    },
+    {
+      "case": "diagnostics::checks::browser_runtime::tests::always_reports_chromium_node_and_managed_findings",
+      "receipt": {
+        "schema_version": 1,
+        "timestamp": "20261116T064047.081078Z",
+        "memory_gate": {
+          "argv": [
+            "python3",
+            "qa/browser_live/check_memory.py",
+            "--required-bytes",
+            "4294967296"
+          ],
+          "cwd": "/Volumes/TBU4/Workspace/Aleph",
+          "env_overrides": {},
+          "exit_code": 0,
+          "timed_out": false,
+          "pid": 73156,
+          "cleanup_error": null,
+          "unjoined_descendants": false,
+          "elapsed_seconds": 0.02921987499576062,
+          "stdout": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T064047.081078Z-memory.stdout.log",
+          "stderr": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T064047.081078Z-memory.stderr.log"
+        },
+        "test_filter": "diagnostics::checks::browser_runtime::tests::always_reports_chromium_node_and_managed_findings",
+        "status": "PASS",
+        "command": {
+          "argv": [
+            "cargo",
+            "test",
+            "-p",
+            "alephcore",
+            "--lib",
+            "--offline",
+            "--locked",
+            "--jobs",
+            "1",
+            "diagnostics::checks::browser_runtime::tests::always_reports_chromium_node_and_managed_findings",
+            "--",
+            "--test-threads=1"
+          ],
+          "cwd": "/Volumes/TBU4/Workspace/Aleph",
+          "env_overrides": {
+            "HOME": "/Users/zouguojun/.p9-home-77tnd53k",
+            "ALEPH_HOME": "/tmp/p9-xqxcj0rc/aleph",
+            "CARGO_HOME": "/Users/zouguojun/.cargo",
+            "RUSTUP_HOME": "/Users/zouguojun/.rustup",
+            "TMPDIR": "/tmp/p9-xqxcj0rc",
+            "CARGO_TARGET_DIR": "/Volumes/TBU4/Workspace/Aleph/.phase9-target",
+            "RUST_BACKTRACE": "1"
+          },
+          "exit_code": 0,
+          "timed_out": false,
+          "pid": 73158,
+          "cleanup_error": null,
+          "unjoined_descendants": false,
+          "elapsed_seconds": 0.5507083330303431,
+          "stdout": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T064047.081078Z.stdout.log",
+          "stderr": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T064047.081078Z.stderr.log"
+        },
+        "fixture": {
+          "path": "/tmp/p9-xqxcj0rc",
+          "home": "/Users/zouguojun/.p9-home-77tnd53k",
+          "cleanup": "removed"
+        }
+      },
+      "supervisor": {
+        "argv": [
+          "/opt/homebrew/opt/python@3.15/bin/python3.15",
+          "qa/phase9_test_closure.py",
+          "--repo-root",
+          ".",
+          "--target-dir",
+          ".phase9-target",
+          "--receipt",
+          "docs/superpowers/runs/2026-11-15-phase9-test-closure-receipt.md",
+          "--timeout-seconds",
+          "600",
+          "--test-filter",
+          "diagnostics::checks::browser_runtime::tests::always_reports_chromium_node_and_managed_findings"
+        ],
+        "cwd": "/Volumes/TBU4/Workspace/Aleph",
+        "env_overrides": {},
+        "exit_code": 0,
+        "timed_out": false,
+        "pid": 73155,
+        "cleanup_error": null,
+        "unjoined_descendants": false,
+        "elapsed_seconds": 0.6154522920260206,
+        "stdout": "/Volumes/TBU4/Workspace/Aleph/.superpowers/sdd/2026-11-15-phase9-runtime-proof-and-dependency-closure/repaired-matrix-31.stdout.log",
+        "stderr": "/Volumes/TBU4/Workspace/Aleph/.superpowers/sdd/2026-11-15-phase9-runtime-proof-and-dependency-closure/repaired-matrix-31.stderr.log"
+      }
+    },
+    {
+      "case": "diagnostics::checks::browser_runtime::tests::never_repairs_in_fix_posture",
+      "receipt": {
+        "schema_version": 1,
+        "timestamp": "20261116T064047.692284Z",
+        "memory_gate": {
+          "argv": [
+            "python3",
+            "qa/browser_live/check_memory.py",
+            "--required-bytes",
+            "4294967296"
+          ],
+          "cwd": "/Volumes/TBU4/Workspace/Aleph",
+          "env_overrides": {},
+          "exit_code": 0,
+          "timed_out": false,
+          "pid": 73161,
+          "cleanup_error": null,
+          "unjoined_descendants": false,
+          "elapsed_seconds": 0.02816337498370558,
+          "stdout": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T064047.692284Z-memory.stdout.log",
+          "stderr": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T064047.692284Z-memory.stderr.log"
+        },
+        "test_filter": "diagnostics::checks::browser_runtime::tests::never_repairs_in_fix_posture",
+        "status": "PASS",
+        "command": {
+          "argv": [
+            "cargo",
+            "test",
+            "-p",
+            "alephcore",
+            "--lib",
+            "--offline",
+            "--locked",
+            "--jobs",
+            "1",
+            "diagnostics::checks::browser_runtime::tests::never_repairs_in_fix_posture",
+            "--",
+            "--test-threads=1"
+          ],
+          "cwd": "/Volumes/TBU4/Workspace/Aleph",
+          "env_overrides": {
+            "HOME": "/Users/zouguojun/.p9-home-rb33k1uw",
+            "ALEPH_HOME": "/tmp/p9-7opdvlyf/aleph",
+            "CARGO_HOME": "/Users/zouguojun/.cargo",
+            "RUSTUP_HOME": "/Users/zouguojun/.rustup",
+            "TMPDIR": "/tmp/p9-7opdvlyf",
+            "CARGO_TARGET_DIR": "/Volumes/TBU4/Workspace/Aleph/.phase9-target",
+            "RUST_BACKTRACE": "1"
+          },
+          "exit_code": 0,
+          "timed_out": false,
+          "pid": 73163,
+          "cleanup_error": null,
+          "unjoined_descendants": false,
+          "elapsed_seconds": 0.5547577500110492,
+          "stdout": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T064047.692284Z.stdout.log",
+          "stderr": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T064047.692284Z.stderr.log"
+        },
+        "fixture": {
+          "path": "/tmp/p9-7opdvlyf",
+          "home": "/Users/zouguojun/.p9-home-rb33k1uw",
+          "cleanup": "removed"
+        }
+      },
+      "supervisor": {
+        "argv": [
+          "/opt/homebrew/opt/python@3.15/bin/python3.15",
+          "qa/phase9_test_closure.py",
+          "--repo-root",
+          ".",
+          "--target-dir",
+          ".phase9-target",
+          "--receipt",
+          "docs/superpowers/runs/2026-11-15-phase9-test-closure-receipt.md",
+          "--timeout-seconds",
+          "600",
+          "--test-filter",
+          "diagnostics::checks::browser_runtime::tests::never_repairs_in_fix_posture"
+        ],
+        "cwd": "/Volumes/TBU4/Workspace/Aleph",
+        "env_overrides": {},
+        "exit_code": 0,
+        "timed_out": false,
+        "pid": 73160,
+        "cleanup_error": null,
+        "unjoined_descendants": false,
+        "elapsed_seconds": 0.6132178750121966,
+        "stdout": "/Volumes/TBU4/Workspace/Aleph/.superpowers/sdd/2026-11-15-phase9-runtime-proof-and-dependency-closure/repaired-matrix-32.stdout.log",
+        "stderr": "/Volumes/TBU4/Workspace/Aleph/.superpowers/sdd/2026-11-15-phase9-runtime-proof-and-dependency-closure/repaired-matrix-32.stderr.log"
+      }
+    },
+    {
+      "case": "diagnostics::checks::browser_runtime::tests::prerequisite_findings_are_advisory_never_gating",
+      "receipt": {
+        "schema_version": 1,
+        "timestamp": "20261116T064048.306106Z",
+        "memory_gate": {
+          "argv": [
+            "python3",
+            "qa/browser_live/check_memory.py",
+            "--required-bytes",
+            "4294967296"
+          ],
+          "cwd": "/Volumes/TBU4/Workspace/Aleph",
+          "env_overrides": {},
+          "exit_code": 0,
+          "timed_out": false,
+          "pid": 73166,
+          "cleanup_error": null,
+          "unjoined_descendants": false,
+          "elapsed_seconds": 0.027816833986435086,
+          "stdout": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T064048.306106Z-memory.stdout.log",
+          "stderr": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T064048.306106Z-memory.stderr.log"
+        },
+        "test_filter": "diagnostics::checks::browser_runtime::tests::prerequisite_findings_are_advisory_never_gating",
+        "status": "PASS",
+        "command": {
+          "argv": [
+            "cargo",
+            "test",
+            "-p",
+            "alephcore",
+            "--lib",
+            "--offline",
+            "--locked",
+            "--jobs",
+            "1",
+            "diagnostics::checks::browser_runtime::tests::prerequisite_findings_are_advisory_never_gating",
+            "--",
+            "--test-threads=1"
+          ],
+          "cwd": "/Volumes/TBU4/Workspace/Aleph",
+          "env_overrides": {
+            "HOME": "/Users/zouguojun/.p9-home-e4yeopy0",
+            "ALEPH_HOME": "/tmp/p9-4lrxcgtt/aleph",
+            "CARGO_HOME": "/Users/zouguojun/.cargo",
+            "RUSTUP_HOME": "/Users/zouguojun/.rustup",
+            "TMPDIR": "/tmp/p9-4lrxcgtt",
+            "CARGO_TARGET_DIR": "/Volumes/TBU4/Workspace/Aleph/.phase9-target",
+            "RUST_BACKTRACE": "1"
+          },
+          "exit_code": 0,
+          "timed_out": false,
+          "pid": 73168,
+          "cleanup_error": null,
+          "unjoined_descendants": false,
+          "elapsed_seconds": 0.5569780829828233,
+          "stdout": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T064048.306106Z.stdout.log",
+          "stderr": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T064048.306106Z.stderr.log"
+        },
+        "fixture": {
+          "path": "/tmp/p9-4lrxcgtt",
+          "home": "/Users/zouguojun/.p9-home-e4yeopy0",
+          "cleanup": "removed"
+        }
+      },
+      "supervisor": {
+        "argv": [
+          "/opt/homebrew/opt/python@3.15/bin/python3.15",
+          "qa/phase9_test_closure.py",
+          "--repo-root",
+          ".",
+          "--target-dir",
+          ".phase9-target",
+          "--receipt",
+          "docs/superpowers/runs/2026-11-15-phase9-test-closure-receipt.md",
+          "--timeout-seconds",
+          "600",
+          "--test-filter",
+          "diagnostics::checks::browser_runtime::tests::prerequisite_findings_are_advisory_never_gating"
+        ],
+        "cwd": "/Volumes/TBU4/Workspace/Aleph",
+        "env_overrides": {},
+        "exit_code": 0,
+        "timed_out": false,
+        "pid": 73165,
+        "cleanup_error": null,
+        "unjoined_descendants": false,
+        "elapsed_seconds": 0.6153199160471559,
+        "stdout": "/Volumes/TBU4/Workspace/Aleph/.superpowers/sdd/2026-11-15-phase9-runtime-proof-and-dependency-closure/repaired-matrix-33.stdout.log",
+        "stderr": "/Volumes/TBU4/Workspace/Aleph/.superpowers/sdd/2026-11-15-phase9-runtime-proof-and-dependency-closure/repaired-matrix-33.stderr.log"
+      }
+    },
+    {
+      "case": "diagnostics::checks::browser_runtime::tests::the_doctor_claims_a_withheld_family_only_when_the_gate_withholds_it",
+      "receipt": {
+        "schema_version": 1,
+        "timestamp": "20261116T064048.922003Z",
+        "memory_gate": {
+          "argv": [
+            "python3",
+            "qa/browser_live/check_memory.py",
+            "--required-bytes",
+            "4294967296"
+          ],
+          "cwd": "/Volumes/TBU4/Workspace/Aleph",
+          "env_overrides": {},
+          "exit_code": 0,
+          "timed_out": false,
+          "pid": 73171,
+          "cleanup_error": null,
+          "unjoined_descendants": false,
+          "elapsed_seconds": 0.029658209008630365,
+          "stdout": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T064048.922003Z-memory.stdout.log",
+          "stderr": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T064048.922003Z-memory.stderr.log"
+        },
+        "test_filter": "diagnostics::checks::browser_runtime::tests::the_doctor_claims_a_withheld_family_only_when_the_gate_withholds_it",
+        "status": "PASS",
+        "command": {
+          "argv": [
+            "cargo",
+            "test",
+            "-p",
+            "alephcore",
+            "--lib",
+            "--offline",
+            "--locked",
+            "--jobs",
+            "1",
+            "diagnostics::checks::browser_runtime::tests::the_doctor_claims_a_withheld_family_only_when_the_gate_withholds_it",
+            "--",
+            "--test-threads=1"
+          ],
+          "cwd": "/Volumes/TBU4/Workspace/Aleph",
+          "env_overrides": {
+            "HOME": "/Users/zouguojun/.p9-home-3nfn_u5m",
+            "ALEPH_HOME": "/tmp/p9-jntj5xdk/aleph",
+            "CARGO_HOME": "/Users/zouguojun/.cargo",
+            "RUSTUP_HOME": "/Users/zouguojun/.rustup",
+            "TMPDIR": "/tmp/p9-jntj5xdk",
+            "CARGO_TARGET_DIR": "/Volumes/TBU4/Workspace/Aleph/.phase9-target",
+            "RUST_BACKTRACE": "1"
+          },
+          "exit_code": 0,
+          "timed_out": false,
+          "pid": 73173,
+          "cleanup_error": null,
+          "unjoined_descendants": false,
+          "elapsed_seconds": 0.5641199169913307,
+          "stdout": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T064048.922003Z.stdout.log",
+          "stderr": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T064048.922003Z.stderr.log"
+        },
+        "fixture": {
+          "path": "/tmp/p9-jntj5xdk",
+          "home": "/Users/zouguojun/.p9-home-3nfn_u5m",
+          "cleanup": "removed"
+        }
+      },
+      "supervisor": {
+        "argv": [
+          "/opt/homebrew/opt/python@3.15/bin/python3.15",
+          "qa/phase9_test_closure.py",
+          "--repo-root",
+          ".",
+          "--target-dir",
+          ".phase9-target",
+          "--receipt",
+          "docs/superpowers/runs/2026-11-15-phase9-test-closure-receipt.md",
+          "--timeout-seconds",
+          "600",
+          "--test-filter",
+          "diagnostics::checks::browser_runtime::tests::the_doctor_claims_a_withheld_family_only_when_the_gate_withholds_it"
+        ],
+        "cwd": "/Volumes/TBU4/Workspace/Aleph",
+        "env_overrides": {},
+        "exit_code": 0,
+        "timed_out": false,
+        "pid": 73170,
+        "cleanup_error": null,
+        "unjoined_descendants": false,
+        "elapsed_seconds": 0.6248142920085229,
+        "stdout": "/Volumes/TBU4/Workspace/Aleph/.superpowers/sdd/2026-11-15-phase9-runtime-proof-and-dependency-closure/repaired-matrix-34.stdout.log",
+        "stderr": "/Volumes/TBU4/Workspace/Aleph/.superpowers/sdd/2026-11-15-phase9-runtime-proof-and-dependency-closure/repaired-matrix-34.stderr.log"
+      }
+    },
+    {
+      "case": "diagnostics::checks::browser_runtime::tests::the_managed_finding_agrees_with_the_tool_gate",
+      "receipt": {
+        "schema_version": 1,
+        "timestamp": "20261116T064049.548754Z",
+        "memory_gate": {
+          "argv": [
+            "python3",
+            "qa/browser_live/check_memory.py",
+            "--required-bytes",
+            "4294967296"
+          ],
+          "cwd": "/Volumes/TBU4/Workspace/Aleph",
+          "env_overrides": {},
+          "exit_code": 0,
+          "timed_out": false,
+          "pid": 73176,
+          "cleanup_error": null,
+          "unjoined_descendants": false,
+          "elapsed_seconds": 0.030174833023920655,
+          "stdout": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T064049.548754Z-memory.stdout.log",
+          "stderr": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T064049.548754Z-memory.stderr.log"
+        },
+        "test_filter": "diagnostics::checks::browser_runtime::tests::the_managed_finding_agrees_with_the_tool_gate",
+        "status": "PASS",
+        "command": {
+          "argv": [
+            "cargo",
+            "test",
+            "-p",
+            "alephcore",
+            "--lib",
+            "--offline",
+            "--locked",
+            "--jobs",
+            "1",
+            "diagnostics::checks::browser_runtime::tests::the_managed_finding_agrees_with_the_tool_gate",
+            "--",
+            "--test-threads=1"
+          ],
+          "cwd": "/Volumes/TBU4/Workspace/Aleph",
+          "env_overrides": {
+            "HOME": "/Users/zouguojun/.p9-home-2k1fcdie",
+            "ALEPH_HOME": "/tmp/p9-4zjfmw4_/aleph",
+            "CARGO_HOME": "/Users/zouguojun/.cargo",
+            "RUSTUP_HOME": "/Users/zouguojun/.rustup",
+            "TMPDIR": "/tmp/p9-4zjfmw4_",
+            "CARGO_TARGET_DIR": "/Volumes/TBU4/Workspace/Aleph/.phase9-target",
+            "RUST_BACKTRACE": "1"
+          },
+          "exit_code": 0,
+          "timed_out": false,
+          "pid": 73178,
+          "cleanup_error": null,
+          "unjoined_descendants": false,
+          "elapsed_seconds": 0.5662823749589734,
+          "stdout": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T064049.548754Z.stdout.log",
+          "stderr": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T064049.548754Z.stderr.log"
+        },
+        "fixture": {
+          "path": "/tmp/p9-4zjfmw4_",
+          "home": "/Users/zouguojun/.p9-home-2k1fcdie",
+          "cleanup": "removed"
+        }
+      },
+      "supervisor": {
+        "argv": [
+          "/opt/homebrew/opt/python@3.15/bin/python3.15",
+          "qa/phase9_test_closure.py",
+          "--repo-root",
+          ".",
+          "--target-dir",
+          ".phase9-target",
+          "--receipt",
+          "docs/superpowers/runs/2026-11-15-phase9-test-closure-receipt.md",
+          "--timeout-seconds",
+          "600",
+          "--test-filter",
+          "diagnostics::checks::browser_runtime::tests::the_managed_finding_agrees_with_the_tool_gate"
+        ],
+        "cwd": "/Volumes/TBU4/Workspace/Aleph",
+        "env_overrides": {},
+        "exit_code": 0,
+        "timed_out": false,
+        "pid": 73175,
+        "cleanup_error": null,
+        "unjoined_descendants": false,
+        "elapsed_seconds": 0.6283569160150364,
+        "stdout": "/Volumes/TBU4/Workspace/Aleph/.superpowers/sdd/2026-11-15-phase9-runtime-proof-and-dependency-closure/repaired-matrix-35.stdout.log",
+        "stderr": "/Volumes/TBU4/Workspace/Aleph/.superpowers/sdd/2026-11-15-phase9-runtime-proof-and-dependency-closure/repaired-matrix-35.stderr.log"
+      }
+    },
+    {
+      "case": "extension::claude_cache_tests::a_claude_cache_plugin_loads_disabled_and_never_writes_under_claude_home",
+      "receipt": {
+        "schema_version": 1,
+        "timestamp": "20261116T064050.177241Z",
+        "memory_gate": {
+          "argv": [
+            "python3",
+            "qa/browser_live/check_memory.py",
+            "--required-bytes",
+            "4294967296"
+          ],
+          "cwd": "/Volumes/TBU4/Workspace/Aleph",
+          "env_overrides": {},
+          "exit_code": 0,
+          "timed_out": false,
+          "pid": 73223,
+          "cleanup_error": null,
+          "unjoined_descendants": false,
+          "elapsed_seconds": 0.029054208018351346,
+          "stdout": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T064050.177241Z-memory.stdout.log",
+          "stderr": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T064050.177241Z-memory.stderr.log"
+        },
+        "test_filter": "extension::claude_cache_tests::a_claude_cache_plugin_loads_disabled_and_never_writes_under_claude_home",
+        "status": "PASS",
+        "command": {
+          "argv": [
+            "cargo",
+            "test",
+            "-p",
+            "alephcore",
+            "--lib",
+            "--offline",
+            "--locked",
+            "--jobs",
+            "1",
+            "extension::claude_cache_tests::a_claude_cache_plugin_loads_disabled_and_never_writes_under_claude_home",
+            "--",
+            "--test-threads=1"
+          ],
+          "cwd": "/Volumes/TBU4/Workspace/Aleph",
+          "env_overrides": {
+            "HOME": "/Users/zouguojun/.p9-home-9uq4yrsi",
+            "ALEPH_HOME": "/tmp/p9-d1_48y34/aleph",
+            "CARGO_HOME": "/Users/zouguojun/.cargo",
+            "RUSTUP_HOME": "/Users/zouguojun/.rustup",
+            "TMPDIR": "/tmp/p9-d1_48y34",
+            "CARGO_TARGET_DIR": "/Volumes/TBU4/Workspace/Aleph/.phase9-target",
+            "RUST_BACKTRACE": "1"
+          },
+          "exit_code": 0,
+          "timed_out": false,
+          "pid": 73225,
+          "cleanup_error": null,
+          "unjoined_descendants": false,
+          "elapsed_seconds": 0.5849587499978952,
+          "stdout": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T064050.177241Z.stdout.log",
+          "stderr": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T064050.177241Z.stderr.log"
+        },
+        "fixture": {
+          "path": "/tmp/p9-d1_48y34",
+          "home": "/Users/zouguojun/.p9-home-9uq4yrsi",
+          "cleanup": "removed"
+        }
+      },
+      "supervisor": {
+        "argv": [
+          "/opt/homebrew/opt/python@3.15/bin/python3.15",
+          "qa/phase9_test_closure.py",
+          "--repo-root",
+          ".",
+          "--target-dir",
+          ".phase9-target",
+          "--receipt",
+          "docs/superpowers/runs/2026-11-15-phase9-test-closure-receipt.md",
+          "--timeout-seconds",
+          "600",
+          "--test-filter",
+          "extension::claude_cache_tests::a_claude_cache_plugin_loads_disabled_and_never_writes_under_claude_home"
+        ],
+        "cwd": "/Volumes/TBU4/Workspace/Aleph",
+        "env_overrides": {},
+        "exit_code": 0,
+        "timed_out": false,
+        "pid": 73222,
+        "cleanup_error": null,
+        "unjoined_descendants": false,
+        "elapsed_seconds": 0.6448406669660471,
+        "stdout": "/Volumes/TBU4/Workspace/Aleph/.superpowers/sdd/2026-11-15-phase9-runtime-proof-and-dependency-closure/repaired-matrix-36.stdout.log",
+        "stderr": "/Volumes/TBU4/Workspace/Aleph/.superpowers/sdd/2026-11-15-phase9-runtime-proof-and-dependency-closure/repaired-matrix-36.stderr.log"
+      }
+    },
+    {
+      "case": "extension::mcp_plugin_tests::a_bare_command_is_counted_and_spawned_from_path",
+      "receipt": {
+        "schema_version": 1,
+        "timestamp": "20261116T064050.822426Z",
+        "memory_gate": {
+          "argv": [
+            "python3",
+            "qa/browser_live/check_memory.py",
+            "--required-bytes",
+            "4294967296"
+          ],
+          "cwd": "/Volumes/TBU4/Workspace/Aleph",
+          "env_overrides": {},
+          "exit_code": 0,
+          "timed_out": false,
+          "pid": 73270,
+          "cleanup_error": null,
+          "unjoined_descendants": false,
+          "elapsed_seconds": 0.028139041969552636,
+          "stdout": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T064050.822426Z-memory.stdout.log",
+          "stderr": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T064050.822426Z-memory.stderr.log"
+        },
+        "test_filter": "extension::mcp_plugin_tests::a_bare_command_is_counted_and_spawned_from_path",
+        "status": "PASS",
+        "command": {
+          "argv": [
+            "cargo",
+            "test",
+            "-p",
+            "alephcore",
+            "--lib",
+            "--offline",
+            "--locked",
+            "--jobs",
+            "1",
+            "extension::mcp_plugin_tests::a_bare_command_is_counted_and_spawned_from_path",
+            "--",
+            "--test-threads=1"
+          ],
+          "cwd": "/Volumes/TBU4/Workspace/Aleph",
+          "env_overrides": {
+            "HOME": "/Users/zouguojun/.p9-home-iz0w4eqz",
+            "ALEPH_HOME": "/tmp/p9-k8xkra0r/aleph",
+            "CARGO_HOME": "/Users/zouguojun/.cargo",
+            "RUSTUP_HOME": "/Users/zouguojun/.rustup",
+            "TMPDIR": "/tmp/p9-k8xkra0r",
+            "CARGO_TARGET_DIR": "/Volumes/TBU4/Workspace/Aleph/.phase9-target",
+            "RUST_BACKTRACE": "1"
+          },
+          "exit_code": 0,
+          "timed_out": false,
+          "pid": 73272,
+          "cleanup_error": null,
+          "unjoined_descendants": false,
+          "elapsed_seconds": 0.609247750020586,
+          "stdout": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T064050.822426Z.stdout.log",
+          "stderr": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T064050.822426Z.stderr.log"
+        },
+        "fixture": {
+          "path": "/tmp/p9-k8xkra0r",
+          "home": "/Users/zouguojun/.p9-home-iz0w4eqz",
+          "cleanup": "removed"
+        }
+      },
+      "supervisor": {
+        "argv": [
+          "/opt/homebrew/opt/python@3.15/bin/python3.15",
+          "qa/phase9_test_closure.py",
+          "--repo-root",
+          ".",
+          "--target-dir",
+          ".phase9-target",
+          "--receipt",
+          "docs/superpowers/runs/2026-11-15-phase9-test-closure-receipt.md",
+          "--timeout-seconds",
+          "600",
+          "--test-filter",
+          "extension::mcp_plugin_tests::a_bare_command_is_counted_and_spawned_from_path"
+        ],
+        "cwd": "/Volumes/TBU4/Workspace/Aleph",
+        "env_overrides": {},
+        "exit_code": 0,
+        "timed_out": false,
+        "pid": 73269,
+        "cleanup_error": null,
+        "unjoined_descendants": false,
+        "elapsed_seconds": 0.6684947500471026,
+        "stdout": "/Volumes/TBU4/Workspace/Aleph/.superpowers/sdd/2026-11-15-phase9-runtime-proof-and-dependency-closure/repaired-matrix-37.stdout.log",
+        "stderr": "/Volumes/TBU4/Workspace/Aleph/.superpowers/sdd/2026-11-15-phase9-runtime-proof-and-dependency-closure/repaired-matrix-37.stderr.log"
+      }
+    },
+    {
+      "case": "extension::mcp_plugin_tests::a_dot_mcp_json_added_after_the_first_load_is_counted_and_spawned_on_reload",
+      "receipt": {
+        "schema_version": 1,
+        "timestamp": "20261116T064051.492015Z",
+        "memory_gate": {
+          "argv": [
+            "python3",
+            "qa/browser_live/check_memory.py",
+            "--required-bytes",
+            "4294967296"
+          ],
+          "cwd": "/Volumes/TBU4/Workspace/Aleph",
+          "env_overrides": {},
+          "exit_code": 0,
+          "timed_out": false,
+          "pid": 73305,
+          "cleanup_error": null,
+          "unjoined_descendants": false,
+          "elapsed_seconds": 0.027741333993617445,
+          "stdout": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T064051.492015Z-memory.stdout.log",
+          "stderr": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T064051.492015Z-memory.stderr.log"
+        },
+        "test_filter": "extension::mcp_plugin_tests::a_dot_mcp_json_added_after_the_first_load_is_counted_and_spawned_on_reload",
+        "status": "PASS",
+        "command": {
+          "argv": [
+            "cargo",
+            "test",
+            "-p",
+            "alephcore",
+            "--lib",
+            "--offline",
+            "--locked",
+            "--jobs",
+            "1",
+            "extension::mcp_plugin_tests::a_dot_mcp_json_added_after_the_first_load_is_counted_and_spawned_on_reload",
+            "--",
+            "--test-threads=1"
+          ],
+          "cwd": "/Volumes/TBU4/Workspace/Aleph",
+          "env_overrides": {
+            "HOME": "/Users/zouguojun/.p9-home-_xrbqf01",
+            "ALEPH_HOME": "/tmp/p9-gsnapr6_/aleph",
+            "CARGO_HOME": "/Users/zouguojun/.cargo",
+            "RUSTUP_HOME": "/Users/zouguojun/.rustup",
+            "TMPDIR": "/tmp/p9-gsnapr6_",
+            "CARGO_TARGET_DIR": "/Volumes/TBU4/Workspace/Aleph/.phase9-target",
+            "RUST_BACKTRACE": "1"
+          },
+          "exit_code": 0,
+          "timed_out": false,
+          "pid": 73307,
+          "cleanup_error": null,
+          "unjoined_descendants": false,
+          "elapsed_seconds": 0.6097122910432518,
+          "stdout": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T064051.492015Z.stdout.log",
+          "stderr": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T064051.492015Z.stderr.log"
+        },
+        "fixture": {
+          "path": "/tmp/p9-gsnapr6_",
+          "home": "/Users/zouguojun/.p9-home-_xrbqf01",
+          "cleanup": "removed"
+        }
+      },
+      "supervisor": {
+        "argv": [
+          "/opt/homebrew/opt/python@3.15/bin/python3.15",
+          "qa/phase9_test_closure.py",
+          "--repo-root",
+          ".",
+          "--target-dir",
+          ".phase9-target",
+          "--receipt",
+          "docs/superpowers/runs/2026-11-15-phase9-test-closure-receipt.md",
+          "--timeout-seconds",
+          "600",
+          "--test-filter",
+          "extension::mcp_plugin_tests::a_dot_mcp_json_added_after_the_first_load_is_counted_and_spawned_on_reload"
+        ],
+        "cwd": "/Volumes/TBU4/Workspace/Aleph",
+        "env_overrides": {},
+        "exit_code": 0,
+        "timed_out": false,
+        "pid": 73304,
+        "cleanup_error": null,
+        "unjoined_descendants": false,
+        "elapsed_seconds": 0.6690160830039531,
+        "stdout": "/Volumes/TBU4/Workspace/Aleph/.superpowers/sdd/2026-11-15-phase9-runtime-proof-and-dependency-closure/repaired-matrix-38.stdout.log",
+        "stderr": "/Volumes/TBU4/Workspace/Aleph/.superpowers/sdd/2026-11-15-phase9-runtime-proof-and-dependency-closure/repaired-matrix-38.stderr.log"
+      }
+    },
+    {
+      "case": "extension::mcp_plugin_tests::a_relative_or_rooted_command_inside_the_root_is_counted_and_spawned_from_the_root",
+      "receipt": {
+        "schema_version": 1,
+        "timestamp": "20261116T064052.161243Z",
+        "memory_gate": {
+          "argv": [
+            "python3",
+            "qa/browser_live/check_memory.py",
+            "--required-bytes",
+            "4294967296"
+          ],
+          "cwd": "/Volumes/TBU4/Workspace/Aleph",
+          "env_overrides": {},
+          "exit_code": 0,
+          "timed_out": false,
+          "pid": 73339,
+          "cleanup_error": null,
+          "unjoined_descendants": false,
+          "elapsed_seconds": 0.02792716701515019,
+          "stdout": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T064052.161243Z-memory.stdout.log",
+          "stderr": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T064052.161243Z-memory.stderr.log"
+        },
+        "test_filter": "extension::mcp_plugin_tests::a_relative_or_rooted_command_inside_the_root_is_counted_and_spawned_from_the_root",
+        "status": "PASS",
+        "command": {
+          "argv": [
+            "cargo",
+            "test",
+            "-p",
+            "alephcore",
+            "--lib",
+            "--offline",
+            "--locked",
+            "--jobs",
+            "1",
+            "extension::mcp_plugin_tests::a_relative_or_rooted_command_inside_the_root_is_counted_and_spawned_from_the_root",
+            "--",
+            "--test-threads=1"
+          ],
+          "cwd": "/Volumes/TBU4/Workspace/Aleph",
+          "env_overrides": {
+            "HOME": "/Users/zouguojun/.p9-home-ejcwottq",
+            "ALEPH_HOME": "/tmp/p9-qkmxs_9g/aleph",
+            "CARGO_HOME": "/Users/zouguojun/.cargo",
+            "RUSTUP_HOME": "/Users/zouguojun/.rustup",
+            "TMPDIR": "/tmp/p9-qkmxs_9g",
+            "CARGO_TARGET_DIR": "/Volumes/TBU4/Workspace/Aleph/.phase9-target",
+            "RUST_BACKTRACE": "1"
+          },
+          "exit_code": 0,
+          "timed_out": false,
+          "pid": 73341,
+          "cleanup_error": null,
+          "unjoined_descendants": false,
+          "elapsed_seconds": 0.6053963750018738,
+          "stdout": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T064052.161243Z.stdout.log",
+          "stderr": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T064052.161243Z.stderr.log"
+        },
+        "fixture": {
+          "path": "/tmp/p9-qkmxs_9g",
+          "home": "/Users/zouguojun/.p9-home-ejcwottq",
+          "cleanup": "removed"
+        }
+      },
+      "supervisor": {
+        "argv": [
+          "/opt/homebrew/opt/python@3.15/bin/python3.15",
+          "qa/phase9_test_closure.py",
+          "--repo-root",
+          ".",
+          "--target-dir",
+          ".phase9-target",
+          "--receipt",
+          "docs/superpowers/runs/2026-11-15-phase9-test-closure-receipt.md",
+          "--timeout-seconds",
+          "600",
+          "--test-filter",
+          "extension::mcp_plugin_tests::a_relative_or_rooted_command_inside_the_root_is_counted_and_spawned_from_the_root"
+        ],
+        "cwd": "/Volumes/TBU4/Workspace/Aleph",
+        "env_overrides": {},
+        "exit_code": 0,
+        "timed_out": false,
+        "pid": 73338,
+        "cleanup_error": null,
+        "unjoined_descendants": false,
+        "elapsed_seconds": 0.6642732080072165,
+        "stdout": "/Volumes/TBU4/Workspace/Aleph/.superpowers/sdd/2026-11-15-phase9-runtime-proof-and-dependency-closure/repaired-matrix-39.stdout.log",
+        "stderr": "/Volumes/TBU4/Workspace/Aleph/.superpowers/sdd/2026-11-15-phase9-runtime-proof-and-dependency-closure/repaired-matrix-39.stderr.log"
+      }
+    },
+    {
+      "case": "extension::mcp_plugin_tests::a_root_variable_that_climbs_out_is_refused_on_both_faces_and_the_row_says_why",
+      "receipt": {
+        "schema_version": 1,
+        "timestamp": "20261116T064052.826324Z",
+        "memory_gate": {
+          "argv": [
+            "python3",
+            "qa/browser_live/check_memory.py",
+            "--required-bytes",
+            "4294967296"
+          ],
+          "cwd": "/Volumes/TBU4/Workspace/Aleph",
+          "env_overrides": {},
+          "exit_code": 0,
+          "timed_out": false,
+          "pid": 73346,
+          "cleanup_error": null,
+          "unjoined_descendants": false,
+          "elapsed_seconds": 0.03377495799213648,
+          "stdout": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T064052.826324Z-memory.stdout.log",
+          "stderr": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T064052.826324Z-memory.stderr.log"
+        },
+        "test_filter": "extension::mcp_plugin_tests::a_root_variable_that_climbs_out_is_refused_on_both_faces_and_the_row_says_why",
+        "status": "PASS",
+        "command": {
+          "argv": [
+            "cargo",
+            "test",
+            "-p",
+            "alephcore",
+            "--lib",
+            "--offline",
+            "--locked",
+            "--jobs",
+            "1",
+            "extension::mcp_plugin_tests::a_root_variable_that_climbs_out_is_refused_on_both_faces_and_the_row_says_why",
+            "--",
+            "--test-threads=1"
+          ],
+          "cwd": "/Volumes/TBU4/Workspace/Aleph",
+          "env_overrides": {
+            "HOME": "/Users/zouguojun/.p9-home-enuqcmao",
+            "ALEPH_HOME": "/tmp/p9-y2qb4fbr/aleph",
+            "CARGO_HOME": "/Users/zouguojun/.cargo",
+            "RUSTUP_HOME": "/Users/zouguojun/.rustup",
+            "TMPDIR": "/tmp/p9-y2qb4fbr",
+            "CARGO_TARGET_DIR": "/Volumes/TBU4/Workspace/Aleph/.phase9-target",
+            "RUST_BACKTRACE": "1"
+          },
+          "exit_code": 0,
+          "timed_out": false,
+          "pid": 73348,
+          "cleanup_error": null,
+          "unjoined_descendants": false,
+          "elapsed_seconds": 0.959502124984283,
+          "stdout": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T064052.826324Z.stdout.log",
+          "stderr": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T064052.826324Z.stderr.log"
+        },
+        "fixture": {
+          "path": "/tmp/p9-y2qb4fbr",
+          "home": "/Users/zouguojun/.p9-home-enuqcmao",
+          "cleanup": "removed"
+        }
+      },
+      "supervisor": {
+        "argv": [
+          "/opt/homebrew/opt/python@3.15/bin/python3.15",
+          "qa/phase9_test_closure.py",
+          "--repo-root",
+          ".",
+          "--target-dir",
+          ".phase9-target",
+          "--receipt",
+          "docs/superpowers/runs/2026-11-15-phase9-test-closure-receipt.md",
+          "--timeout-seconds",
+          "600",
+          "--test-filter",
+          "extension::mcp_plugin_tests::a_root_variable_that_climbs_out_is_refused_on_both_faces_and_the_row_says_why"
+        ],
+        "cwd": "/Volumes/TBU4/Workspace/Aleph",
+        "env_overrides": {},
+        "exit_code": 0,
+        "timed_out": false,
+        "pid": 73345,
+        "cleanup_error": null,
+        "unjoined_descendants": false,
+        "elapsed_seconds": 1.0246623330167495,
+        "stdout": "/Volumes/TBU4/Workspace/Aleph/.superpowers/sdd/2026-11-15-phase9-runtime-proof-and-dependency-closure/repaired-matrix-40.stdout.log",
+        "stderr": "/Volumes/TBU4/Workspace/Aleph/.superpowers/sdd/2026-11-15-phase9-runtime-proof-and-dependency-closure/repaired-matrix-40.stderr.log"
+      }
+    },
+    {
+      "case": "extension::projection::tests::lifecycle_projection_replaces_panel_snapshot_on_replacement_and_disable",
+      "receipt": {
+        "schema_version": 1,
+        "timestamp": "20261116T064053.851538Z",
+        "memory_gate": {
+          "argv": [
+            "python3",
+            "qa/browser_live/check_memory.py",
+            "--required-bytes",
+            "4294967296"
+          ],
+          "cwd": "/Volumes/TBU4/Workspace/Aleph",
+          "env_overrides": {},
+          "exit_code": 0,
+          "timed_out": false,
+          "pid": 73351,
+          "cleanup_error": null,
+          "unjoined_descendants": false,
+          "elapsed_seconds": 0.02820804202929139,
+          "stdout": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T064053.851538Z-memory.stdout.log",
+          "stderr": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T064053.851538Z-memory.stderr.log"
+        },
+        "test_filter": "extension::projection::tests::lifecycle_projection_replaces_panel_snapshot_on_replacement_and_disable",
+        "status": "PASS",
+        "command": {
+          "argv": [
+            "cargo",
+            "test",
+            "-p",
+            "alephcore",
+            "--lib",
+            "--offline",
+            "--locked",
+            "--jobs",
+            "1",
+            "extension::projection::tests::lifecycle_projection_replaces_panel_snapshot_on_replacement_and_disable",
+            "--",
+            "--test-threads=1"
+          ],
+          "cwd": "/Volumes/TBU4/Workspace/Aleph",
+          "env_overrides": {
+            "HOME": "/Users/zouguojun/.p9-home-7p3fh4yj",
+            "ALEPH_HOME": "/tmp/p9-3ynbdf92/aleph",
+            "CARGO_HOME": "/Users/zouguojun/.cargo",
+            "RUSTUP_HOME": "/Users/zouguojun/.rustup",
+            "TMPDIR": "/tmp/p9-3ynbdf92",
+            "CARGO_TARGET_DIR": "/Volumes/TBU4/Workspace/Aleph/.phase9-target",
+            "RUST_BACKTRACE": "1"
+          },
+          "exit_code": 0,
+          "timed_out": false,
+          "pid": 73353,
+          "cleanup_error": null,
+          "unjoined_descendants": false,
+          "elapsed_seconds": 1.2633761669858359,
+          "stdout": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T064053.851538Z.stdout.log",
+          "stderr": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T064053.851538Z.stderr.log"
+        },
+        "fixture": {
+          "path": "/tmp/p9-3ynbdf92",
+          "home": "/Users/zouguojun/.p9-home-7p3fh4yj",
+          "cleanup": "removed"
+        }
+      },
+      "supervisor": {
+        "argv": [
+          "/opt/homebrew/opt/python@3.15/bin/python3.15",
+          "qa/phase9_test_closure.py",
+          "--repo-root",
+          ".",
+          "--target-dir",
+          ".phase9-target",
+          "--receipt",
+          "docs/superpowers/runs/2026-11-15-phase9-test-closure-receipt.md",
+          "--timeout-seconds",
+          "600",
+          "--test-filter",
+          "extension::projection::tests::lifecycle_projection_replaces_panel_snapshot_on_replacement_and_disable"
+        ],
+        "cwd": "/Volumes/TBU4/Workspace/Aleph",
+        "env_overrides": {},
+        "exit_code": 0,
+        "timed_out": false,
+        "pid": 73350,
+        "cleanup_error": null,
+        "unjoined_descendants": false,
+        "elapsed_seconds": 1.3220893749967217,
+        "stdout": "/Volumes/TBU4/Workspace/Aleph/.superpowers/sdd/2026-11-15-phase9-runtime-proof-and-dependency-closure/repaired-matrix-41.stdout.log",
+        "stderr": "/Volumes/TBU4/Workspace/Aleph/.superpowers/sdd/2026-11-15-phase9-runtime-proof-and-dependency-closure/repaired-matrix-41.stderr.log"
+      }
+    },
+    {
+      "case": "extension::tests::a_disabled_plugin_stays_inactive_across_a_fresh_load",
+      "receipt": {
+        "schema_version": 1,
+        "timestamp": "20261116T064055.174776Z",
+        "memory_gate": {
+          "argv": [
+            "python3",
+            "qa/browser_live/check_memory.py",
+            "--required-bytes",
+            "4294967296"
+          ],
+          "cwd": "/Volumes/TBU4/Workspace/Aleph",
+          "env_overrides": {},
+          "exit_code": 0,
+          "timed_out": false,
+          "pid": 73356,
+          "cleanup_error": null,
+          "unjoined_descendants": false,
+          "elapsed_seconds": 0.02898974996060133,
+          "stdout": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T064055.174776Z-memory.stdout.log",
+          "stderr": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T064055.174776Z-memory.stderr.log"
+        },
+        "test_filter": "extension::tests::a_disabled_plugin_stays_inactive_across_a_fresh_load",
+        "status": "PASS",
+        "command": {
+          "argv": [
+            "cargo",
+            "test",
+            "-p",
+            "alephcore",
+            "--lib",
+            "--offline",
+            "--locked",
+            "--jobs",
+            "1",
+            "extension::tests::a_disabled_plugin_stays_inactive_across_a_fresh_load",
+            "--",
+            "--test-threads=1"
+          ],
+          "cwd": "/Volumes/TBU4/Workspace/Aleph",
+          "env_overrides": {
+            "HOME": "/Users/zouguojun/.p9-home-760tgu8p",
+            "ALEPH_HOME": "/tmp/p9-2xkfde72/aleph",
+            "CARGO_HOME": "/Users/zouguojun/.cargo",
+            "RUSTUP_HOME": "/Users/zouguojun/.rustup",
+            "TMPDIR": "/tmp/p9-2xkfde72",
+            "CARGO_TARGET_DIR": "/Volumes/TBU4/Workspace/Aleph/.phase9-target",
+            "RUST_BACKTRACE": "1"
+          },
+          "exit_code": 0,
+          "timed_out": false,
+          "pid": 73358,
+          "cleanup_error": null,
+          "unjoined_descendants": false,
+          "elapsed_seconds": 0.5739094999735244,
+          "stdout": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T064055.174776Z.stdout.log",
+          "stderr": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T064055.174776Z.stderr.log"
+        },
+        "fixture": {
+          "path": "/tmp/p9-2xkfde72",
+          "home": "/Users/zouguojun/.p9-home-760tgu8p",
+          "cleanup": "removed"
+        }
+      },
+      "supervisor": {
+        "argv": [
+          "/opt/homebrew/opt/python@3.15/bin/python3.15",
+          "qa/phase9_test_closure.py",
+          "--repo-root",
+          ".",
+          "--target-dir",
+          ".phase9-target",
+          "--receipt",
+          "docs/superpowers/runs/2026-11-15-phase9-test-closure-receipt.md",
+          "--timeout-seconds",
+          "600",
+          "--test-filter",
+          "extension::tests::a_disabled_plugin_stays_inactive_across_a_fresh_load"
+        ],
+        "cwd": "/Volumes/TBU4/Workspace/Aleph",
+        "env_overrides": {},
+        "exit_code": 0,
+        "timed_out": false,
+        "pid": 73355,
+        "cleanup_error": null,
+        "unjoined_descendants": false,
+        "elapsed_seconds": 0.6340960839879699,
+        "stdout": "/Volumes/TBU4/Workspace/Aleph/.superpowers/sdd/2026-11-15-phase9-runtime-proof-and-dependency-closure/repaired-matrix-42.stdout.log",
+        "stderr": "/Volumes/TBU4/Workspace/Aleph/.superpowers/sdd/2026-11-15-phase9-runtime-proof-and-dependency-closure/repaired-matrix-42.stderr.log"
+      }
+    },
+    {
+      "case": "extension::tests::a_legacy_disabled_marker_is_migrated_then_removed",
+      "receipt": {
+        "schema_version": 1,
+        "timestamp": "20261116T064055.810353Z",
+        "memory_gate": {
+          "argv": [
+            "python3",
+            "qa/browser_live/check_memory.py",
+            "--required-bytes",
+            "4294967296"
+          ],
+          "cwd": "/Volumes/TBU4/Workspace/Aleph",
+          "env_overrides": {},
+          "exit_code": 0,
+          "timed_out": false,
+          "pid": 73363,
+          "cleanup_error": null,
+          "unjoined_descendants": false,
+          "elapsed_seconds": 0.031858749978709966,
+          "stdout": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T064055.810353Z-memory.stdout.log",
+          "stderr": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T064055.810353Z-memory.stderr.log"
+        },
+        "test_filter": "extension::tests::a_legacy_disabled_marker_is_migrated_then_removed",
+        "status": "PASS",
+        "command": {
+          "argv": [
+            "cargo",
+            "test",
+            "-p",
+            "alephcore",
+            "--lib",
+            "--offline",
+            "--locked",
+            "--jobs",
+            "1",
+            "extension::tests::a_legacy_disabled_marker_is_migrated_then_removed",
+            "--",
+            "--test-threads=1"
+          ],
+          "cwd": "/Volumes/TBU4/Workspace/Aleph",
+          "env_overrides": {
+            "HOME": "/Users/zouguojun/.p9-home-5_qbkh_9",
+            "ALEPH_HOME": "/tmp/p9-036i8klp/aleph",
+            "CARGO_HOME": "/Users/zouguojun/.cargo",
+            "RUSTUP_HOME": "/Users/zouguojun/.rustup",
+            "TMPDIR": "/tmp/p9-036i8klp",
+            "CARGO_TARGET_DIR": "/Volumes/TBU4/Workspace/Aleph/.phase9-target",
+            "RUST_BACKTRACE": "1"
+          },
+          "exit_code": 0,
+          "timed_out": false,
+          "pid": 73365,
+          "cleanup_error": null,
+          "unjoined_descendants": false,
+          "elapsed_seconds": 0.5829472080222331,
+          "stdout": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T064055.810353Z.stdout.log",
+          "stderr": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T064055.810353Z.stderr.log"
+        },
+        "fixture": {
+          "path": "/tmp/p9-036i8klp",
+          "home": "/Users/zouguojun/.p9-home-5_qbkh_9",
+          "cleanup": "removed"
+        }
+      },
+      "supervisor": {
+        "argv": [
+          "/opt/homebrew/opt/python@3.15/bin/python3.15",
+          "qa/phase9_test_closure.py",
+          "--repo-root",
+          ".",
+          "--target-dir",
+          ".phase9-target",
+          "--receipt",
+          "docs/superpowers/runs/2026-11-15-phase9-test-closure-receipt.md",
+          "--timeout-seconds",
+          "600",
+          "--test-filter",
+          "extension::tests::a_legacy_disabled_marker_is_migrated_then_removed"
+        ],
+        "cwd": "/Volumes/TBU4/Workspace/Aleph",
+        "env_overrides": {},
+        "exit_code": 0,
+        "timed_out": false,
+        "pid": 73362,
+        "cleanup_error": null,
+        "unjoined_descendants": false,
+        "elapsed_seconds": 0.6473491670330986,
+        "stdout": "/Volumes/TBU4/Workspace/Aleph/.superpowers/sdd/2026-11-15-phase9-runtime-proof-and-dependency-closure/repaired-matrix-43.stdout.log",
+        "stderr": "/Volumes/TBU4/Workspace/Aleph/.superpowers/sdd/2026-11-15-phase9-runtime-proof-and-dependency-closure/repaired-matrix-43.stderr.log"
+      }
+    },
+    {
+      "case": "extension::tests::plugin_skills_are_owned_by_the_registry_id_not_the_directory_name",
+      "receipt": {
+        "schema_version": 1,
+        "timestamp": "20261116T064056.458837Z",
+        "memory_gate": {
+          "argv": [
+            "python3",
+            "qa/browser_live/check_memory.py",
+            "--required-bytes",
+            "4294967296"
+          ],
+          "cwd": "/Volumes/TBU4/Workspace/Aleph",
+          "env_overrides": {},
+          "exit_code": 0,
+          "timed_out": false,
+          "pid": 73368,
+          "cleanup_error": null,
+          "unjoined_descendants": false,
+          "elapsed_seconds": 0.03067816700786352,
+          "stdout": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T064056.458837Z-memory.stdout.log",
+          "stderr": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T064056.458837Z-memory.stderr.log"
+        },
+        "test_filter": "extension::tests::plugin_skills_are_owned_by_the_registry_id_not_the_directory_name",
+        "status": "PASS",
+        "command": {
+          "argv": [
+            "cargo",
+            "test",
+            "-p",
+            "alephcore",
+            "--lib",
+            "--offline",
+            "--locked",
+            "--jobs",
+            "1",
+            "extension::tests::plugin_skills_are_owned_by_the_registry_id_not_the_directory_name",
+            "--",
+            "--test-threads=1"
+          ],
+          "cwd": "/Volumes/TBU4/Workspace/Aleph",
+          "env_overrides": {
+            "HOME": "/Users/zouguojun/.p9-home-up5y2uza",
+            "ALEPH_HOME": "/tmp/p9-sg83qxqo/aleph",
+            "CARGO_HOME": "/Users/zouguojun/.cargo",
+            "RUSTUP_HOME": "/Users/zouguojun/.rustup",
+            "TMPDIR": "/tmp/p9-sg83qxqo",
+            "CARGO_TARGET_DIR": "/Volumes/TBU4/Workspace/Aleph/.phase9-target",
+            "RUST_BACKTRACE": "1"
+          },
+          "exit_code": 0,
+          "timed_out": false,
+          "pid": 73370,
+          "cleanup_error": null,
+          "unjoined_descendants": false,
+          "elapsed_seconds": 0.5762583749601617,
+          "stdout": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T064056.458837Z.stdout.log",
+          "stderr": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T064056.458837Z.stderr.log"
+        },
+        "fixture": {
+          "path": "/tmp/p9-sg83qxqo",
+          "home": "/Users/zouguojun/.p9-home-up5y2uza",
+          "cleanup": "removed"
+        }
+      },
+      "supervisor": {
+        "argv": [
+          "/opt/homebrew/opt/python@3.15/bin/python3.15",
+          "qa/phase9_test_closure.py",
+          "--repo-root",
+          ".",
+          "--target-dir",
+          ".phase9-target",
+          "--receipt",
+          "docs/superpowers/runs/2026-11-15-phase9-test-closure-receipt.md",
+          "--timeout-seconds",
+          "600",
+          "--test-filter",
+          "extension::tests::plugin_skills_are_owned_by_the_registry_id_not_the_directory_name"
+        ],
+        "cwd": "/Volumes/TBU4/Workspace/Aleph",
+        "env_overrides": {},
+        "exit_code": 0,
+        "timed_out": false,
+        "pid": 73367,
+        "cleanup_error": null,
+        "unjoined_descendants": false,
+        "elapsed_seconds": 0.6399173749960028,
+        "stdout": "/Volumes/TBU4/Workspace/Aleph/.superpowers/sdd/2026-11-15-phase9-runtime-proof-and-dependency-closure/repaired-matrix-44.stdout.log",
+        "stderr": "/Volumes/TBU4/Workspace/Aleph/.superpowers/sdd/2026-11-15-phase9-runtime-proof-and-dependency-closure/repaired-matrix-44.stderr.log"
+      }
+    },
+    {
+      "case": "extension::tests::plugin_visible_answers_from_the_rows_key_and_fails_closed_on_unknown_ids",
+      "receipt": {
+        "schema_version": 1,
+        "timestamp": "20261116T064057.097638Z",
+        "memory_gate": {
+          "argv": [
+            "python3",
+            "qa/browser_live/check_memory.py",
+            "--required-bytes",
+            "4294967296"
+          ],
+          "cwd": "/Volumes/TBU4/Workspace/Aleph",
+          "env_overrides": {},
+          "exit_code": 0,
+          "timed_out": false,
+          "pid": 73373,
+          "cleanup_error": null,
+          "unjoined_descendants": false,
+          "elapsed_seconds": 0.02850962500087917,
+          "stdout": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T064057.097638Z-memory.stdout.log",
+          "stderr": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T064057.097638Z-memory.stderr.log"
+        },
+        "test_filter": "extension::tests::plugin_visible_answers_from_the_rows_key_and_fails_closed_on_unknown_ids",
+        "status": "PASS",
+        "command": {
+          "argv": [
+            "cargo",
+            "test",
+            "-p",
+            "alephcore",
+            "--lib",
+            "--offline",
+            "--locked",
+            "--jobs",
+            "1",
+            "extension::tests::plugin_visible_answers_from_the_rows_key_and_fails_closed_on_unknown_ids",
+            "--",
+            "--test-threads=1"
+          ],
+          "cwd": "/Volumes/TBU4/Workspace/Aleph",
+          "env_overrides": {
+            "HOME": "/Users/zouguojun/.p9-home-0ts_pkbg",
+            "ALEPH_HOME": "/tmp/p9-8jr6yddu/aleph",
+            "CARGO_HOME": "/Users/zouguojun/.cargo",
+            "RUSTUP_HOME": "/Users/zouguojun/.rustup",
+            "TMPDIR": "/tmp/p9-8jr6yddu",
+            "CARGO_TARGET_DIR": "/Volumes/TBU4/Workspace/Aleph/.phase9-target",
+            "RUST_BACKTRACE": "1"
+          },
+          "exit_code": 0,
+          "timed_out": false,
+          "pid": 73375,
+          "cleanup_error": null,
+          "unjoined_descendants": false,
+          "elapsed_seconds": 0.6228008329635486,
+          "stdout": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T064057.097638Z.stdout.log",
+          "stderr": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T064057.097638Z.stderr.log"
+        },
+        "fixture": {
+          "path": "/tmp/p9-8jr6yddu",
+          "home": "/Users/zouguojun/.p9-home-0ts_pkbg",
+          "cleanup": "removed"
+        }
+      },
+      "supervisor": {
+        "argv": [
+          "/opt/homebrew/opt/python@3.15/bin/python3.15",
+          "qa/phase9_test_closure.py",
+          "--repo-root",
+          ".",
+          "--target-dir",
+          ".phase9-target",
+          "--receipt",
+          "docs/superpowers/runs/2026-11-15-phase9-test-closure-receipt.md",
+          "--timeout-seconds",
+          "600",
+          "--test-filter",
+          "extension::tests::plugin_visible_answers_from_the_rows_key_and_fails_closed_on_unknown_ids"
+        ],
+        "cwd": "/Volumes/TBU4/Workspace/Aleph",
+        "env_overrides": {},
+        "exit_code": 0,
+        "timed_out": false,
+        "pid": 73372,
+        "cleanup_error": null,
+        "unjoined_descendants": false,
+        "elapsed_seconds": 0.6825984999886714,
+        "stdout": "/Volumes/TBU4/Workspace/Aleph/.superpowers/sdd/2026-11-15-phase9-runtime-proof-and-dependency-closure/repaired-matrix-45.stdout.log",
+        "stderr": "/Volumes/TBU4/Workspace/Aleph/.superpowers/sdd/2026-11-15-phase9-runtime-proof-and-dependency-closure/repaired-matrix-45.stderr.log"
+      }
+    },
+    {
+      "case": "extension::tests::re_enabling_needs_no_reload",
+      "receipt": {
+        "schema_version": 1,
+        "timestamp": "20261116T064057.783262Z",
+        "memory_gate": {
+          "argv": [
+            "python3",
+            "qa/browser_live/check_memory.py",
+            "--required-bytes",
+            "4294967296"
+          ],
+          "cwd": "/Volumes/TBU4/Workspace/Aleph",
+          "env_overrides": {},
+          "exit_code": 0,
+          "timed_out": false,
+          "pid": 73380,
+          "cleanup_error": null,
+          "unjoined_descendants": false,
+          "elapsed_seconds": 0.03143416700186208,
+          "stdout": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T064057.783262Z-memory.stdout.log",
+          "stderr": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T064057.783262Z-memory.stderr.log"
+        },
+        "test_filter": "extension::tests::re_enabling_needs_no_reload",
+        "status": "PASS",
+        "command": {
+          "argv": [
+            "cargo",
+            "test",
+            "-p",
+            "alephcore",
+            "--lib",
+            "--offline",
+            "--locked",
+            "--jobs",
+            "1",
+            "extension::tests::re_enabling_needs_no_reload",
+            "--",
+            "--test-threads=1"
+          ],
+          "cwd": "/Volumes/TBU4/Workspace/Aleph",
+          "env_overrides": {
+            "HOME": "/Users/zouguojun/.p9-home-2qncmmz4",
+            "ALEPH_HOME": "/tmp/p9-oq3uxwaf/aleph",
+            "CARGO_HOME": "/Users/zouguojun/.cargo",
+            "RUSTUP_HOME": "/Users/zouguojun/.rustup",
+            "TMPDIR": "/tmp/p9-oq3uxwaf",
+            "CARGO_TARGET_DIR": "/Volumes/TBU4/Workspace/Aleph/.phase9-target",
+            "RUST_BACKTRACE": "1"
+          },
+          "exit_code": 0,
+          "timed_out": false,
+          "pid": 73382,
+          "cleanup_error": null,
+          "unjoined_descendants": false,
+          "elapsed_seconds": 0.6261908340384252,
+          "stdout": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T064057.783262Z.stdout.log",
+          "stderr": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T064057.783262Z.stderr.log"
+        },
+        "fixture": {
+          "path": "/tmp/p9-oq3uxwaf",
+          "home": "/Users/zouguojun/.p9-home-2qncmmz4",
+          "cleanup": "removed"
+        }
+      },
+      "supervisor": {
+        "argv": [
+          "/opt/homebrew/opt/python@3.15/bin/python3.15",
+          "qa/phase9_test_closure.py",
+          "--repo-root",
+          ".",
+          "--target-dir",
+          ".phase9-target",
+          "--receipt",
+          "docs/superpowers/runs/2026-11-15-phase9-test-closure-receipt.md",
+          "--timeout-seconds",
+          "600",
+          "--test-filter",
+          "extension::tests::re_enabling_needs_no_reload"
+        ],
+        "cwd": "/Volumes/TBU4/Workspace/Aleph",
+        "env_overrides": {},
+        "exit_code": 0,
+        "timed_out": false,
+        "pid": 73379,
+        "cleanup_error": null,
+        "unjoined_descendants": false,
+        "elapsed_seconds": 0.6911960830329917,
+        "stdout": "/Volumes/TBU4/Workspace/Aleph/.superpowers/sdd/2026-11-15-phase9-runtime-proof-and-dependency-closure/repaired-matrix-46.stdout.log",
+        "stderr": "/Volumes/TBU4/Workspace/Aleph/.superpowers/sdd/2026-11-15-phase9-runtime-proof-and-dependency-closure/repaired-matrix-46.stderr.log"
+      }
+    },
+    {
+      "case": "extension::tests::tool_handler_registry_first_attachment_after_empty_discovery_is_refused",
+      "receipt": {
+        "schema_version": 1,
+        "timestamp": "20261116T064058.475641Z",
+        "memory_gate": {
+          "argv": [
+            "python3",
+            "qa/browser_live/check_memory.py",
+            "--required-bytes",
+            "4294967296"
+          ],
+          "cwd": "/Volumes/TBU4/Workspace/Aleph",
+          "env_overrides": {},
+          "exit_code": 0,
+          "timed_out": false,
+          "pid": 73385,
+          "cleanup_error": null,
+          "unjoined_descendants": false,
+          "elapsed_seconds": 0.031460249971132725,
+          "stdout": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T064058.475641Z-memory.stdout.log",
+          "stderr": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T064058.475641Z-memory.stderr.log"
+        },
+        "test_filter": "extension::tests::tool_handler_registry_first_attachment_after_empty_discovery_is_refused",
+        "status": "PASS",
+        "command": {
+          "argv": [
+            "cargo",
+            "test",
+            "-p",
+            "alephcore",
+            "--lib",
+            "--offline",
+            "--locked",
+            "--jobs",
+            "1",
+            "extension::tests::tool_handler_registry_first_attachment_after_empty_discovery_is_refused",
+            "--",
+            "--test-threads=1"
+          ],
+          "cwd": "/Volumes/TBU4/Workspace/Aleph",
+          "env_overrides": {
+            "HOME": "/Users/zouguojun/.p9-home-nnx2b345",
+            "ALEPH_HOME": "/tmp/p9-dxma52tl/aleph",
+            "CARGO_HOME": "/Users/zouguojun/.cargo",
+            "RUSTUP_HOME": "/Users/zouguojun/.rustup",
+            "TMPDIR": "/tmp/p9-dxma52tl",
+            "CARGO_TARGET_DIR": "/Volumes/TBU4/Workspace/Aleph/.phase9-target",
+            "RUST_BACKTRACE": "1"
+          },
+          "exit_code": 0,
+          "timed_out": false,
+          "pid": 73387,
+          "cleanup_error": null,
+          "unjoined_descendants": false,
+          "elapsed_seconds": 0.5879450839711353,
+          "stdout": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T064058.475641Z.stdout.log",
+          "stderr": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T064058.475641Z.stderr.log"
+        },
+        "fixture": {
+          "path": "/tmp/p9-dxma52tl",
+          "home": "/Users/zouguojun/.p9-home-nnx2b345",
+          "cleanup": "removed"
+        }
+      },
+      "supervisor": {
+        "argv": [
+          "/opt/homebrew/opt/python@3.15/bin/python3.15",
+          "qa/phase9_test_closure.py",
+          "--repo-root",
+          ".",
+          "--target-dir",
+          ".phase9-target",
+          "--receipt",
+          "docs/superpowers/runs/2026-11-15-phase9-test-closure-receipt.md",
+          "--timeout-seconds",
+          "600",
+          "--test-filter",
+          "extension::tests::tool_handler_registry_first_attachment_after_empty_discovery_is_refused"
+        ],
+        "cwd": "/Volumes/TBU4/Workspace/Aleph",
+        "env_overrides": {},
+        "exit_code": 0,
+        "timed_out": false,
+        "pid": 73384,
+        "cleanup_error": null,
+        "unjoined_descendants": false,
+        "elapsed_seconds": 0.65319083299255,
+        "stdout": "/Volumes/TBU4/Workspace/Aleph/.superpowers/sdd/2026-11-15-phase9-runtime-proof-and-dependency-closure/repaired-matrix-47.stdout.log",
+        "stderr": "/Volumes/TBU4/Workspace/Aleph/.superpowers/sdd/2026-11-15-phase9-runtime-proof-and-dependency-closure/repaired-matrix-47.stderr.log"
+      }
+    },
+    {
+      "case": "extension::tests::tool_handler_registry_same_arc_reattachment_is_ok_after_empty_discovery",
+      "receipt": {
+        "schema_version": 1,
+        "timestamp": "20261116T064059.128813Z",
+        "memory_gate": {
+          "argv": [
+            "python3",
+            "qa/browser_live/check_memory.py",
+            "--required-bytes",
+            "4294967296"
+          ],
+          "cwd": "/Volumes/TBU4/Workspace/Aleph",
+          "env_overrides": {},
+          "exit_code": 0,
+          "timed_out": false,
+          "pid": 73390,
+          "cleanup_error": null,
+          "unjoined_descendants": false,
+          "elapsed_seconds": 0.030601957987528294,
+          "stdout": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T064059.128813Z-memory.stdout.log",
+          "stderr": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T064059.128813Z-memory.stderr.log"
+        },
+        "test_filter": "extension::tests::tool_handler_registry_same_arc_reattachment_is_ok_after_empty_discovery",
+        "status": "PASS",
+        "command": {
+          "argv": [
+            "cargo",
+            "test",
+            "-p",
+            "alephcore",
+            "--lib",
+            "--offline",
+            "--locked",
+            "--jobs",
+            "1",
+            "extension::tests::tool_handler_registry_same_arc_reattachment_is_ok_after_empty_discovery",
+            "--",
+            "--test-threads=1"
+          ],
+          "cwd": "/Volumes/TBU4/Workspace/Aleph",
+          "env_overrides": {
+            "HOME": "/Users/zouguojun/.p9-home-us0en1l4",
+            "ALEPH_HOME": "/tmp/p9-8mxcg4mc/aleph",
+            "CARGO_HOME": "/Users/zouguojun/.cargo",
+            "RUSTUP_HOME": "/Users/zouguojun/.rustup",
+            "TMPDIR": "/tmp/p9-8mxcg4mc",
+            "CARGO_TARGET_DIR": "/Volumes/TBU4/Workspace/Aleph/.phase9-target",
+            "RUST_BACKTRACE": "1"
+          },
+          "exit_code": 0,
+          "timed_out": false,
+          "pid": 73392,
+          "cleanup_error": null,
+          "unjoined_descendants": false,
+          "elapsed_seconds": 0.5923174999770708,
+          "stdout": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T064059.128813Z.stdout.log",
+          "stderr": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T064059.128813Z.stderr.log"
+        },
+        "fixture": {
+          "path": "/tmp/p9-8mxcg4mc",
+          "home": "/Users/zouguojun/.p9-home-us0en1l4",
+          "cleanup": "removed"
+        }
+      },
+      "supervisor": {
+        "argv": [
+          "/opt/homebrew/opt/python@3.15/bin/python3.15",
+          "qa/phase9_test_closure.py",
+          "--repo-root",
+          ".",
+          "--target-dir",
+          ".phase9-target",
+          "--receipt",
+          "docs/superpowers/runs/2026-11-15-phase9-test-closure-receipt.md",
+          "--timeout-seconds",
+          "600",
+          "--test-filter",
+          "extension::tests::tool_handler_registry_same_arc_reattachment_is_ok_after_empty_discovery"
+        ],
+        "cwd": "/Volumes/TBU4/Workspace/Aleph",
+        "env_overrides": {},
+        "exit_code": 0,
+        "timed_out": false,
+        "pid": 73389,
+        "cleanup_error": null,
+        "unjoined_descendants": false,
+        "elapsed_seconds": 0.6562704590032808,
+        "stdout": "/Volumes/TBU4/Workspace/Aleph/.superpowers/sdd/2026-11-15-phase9-runtime-proof-and-dependency-closure/repaired-matrix-48.stdout.log",
+        "stderr": "/Volumes/TBU4/Workspace/Aleph/.superpowers/sdd/2026-11-15-phase9-runtime-proof-and-dependency-closure/repaired-matrix-48.stderr.log"
+      }
+    },
+    {
+      "case": "sandbox::proxy::netns_bridge::tests::host_bridge_forwards_bytes_uds_to_tcp",
+      "receipt": {
+        "schema_version": 1,
+        "timestamp": "20261116T064059.785414Z",
+        "memory_gate": {
+          "argv": [
+            "python3",
+            "qa/browser_live/check_memory.py",
+            "--required-bytes",
+            "4294967296"
+          ],
+          "cwd": "/Volumes/TBU4/Workspace/Aleph",
+          "env_overrides": {},
+          "exit_code": 0,
+          "timed_out": false,
+          "pid": 73395,
+          "cleanup_error": null,
+          "unjoined_descendants": false,
+          "elapsed_seconds": 0.030955875001382083,
+          "stdout": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T064059.785414Z-memory.stdout.log",
+          "stderr": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T064059.785414Z-memory.stderr.log"
+        },
+        "test_filter": "sandbox::proxy::netns_bridge::tests::host_bridge_forwards_bytes_uds_to_tcp",
+        "status": "PASS",
+        "command": {
+          "argv": [
+            "cargo",
+            "test",
+            "-p",
+            "alephcore",
+            "--lib",
+            "--offline",
+            "--locked",
+            "--jobs",
+            "1",
+            "sandbox::proxy::netns_bridge::tests::host_bridge_forwards_bytes_uds_to_tcp",
+            "--",
+            "--test-threads=1"
+          ],
+          "cwd": "/Volumes/TBU4/Workspace/Aleph",
+          "env_overrides": {
+            "HOME": "/Users/zouguojun/.p9-home-p9ogrj9i",
+            "ALEPH_HOME": "/tmp/p9-p5xbm1ww/aleph",
+            "CARGO_HOME": "/Users/zouguojun/.cargo",
+            "RUSTUP_HOME": "/Users/zouguojun/.rustup",
+            "TMPDIR": "/tmp/p9-p5xbm1ww",
+            "CARGO_TARGET_DIR": "/Volumes/TBU4/Workspace/Aleph/.phase9-target",
+            "RUST_BACKTRACE": "1"
+          },
+          "exit_code": 0,
+          "timed_out": false,
+          "pid": 73397,
+          "cleanup_error": null,
+          "unjoined_descendants": false,
+          "elapsed_seconds": 0.6510277919587679,
+          "stdout": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T064059.785414Z.stdout.log",
+          "stderr": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T064059.785414Z.stderr.log"
+        },
+        "fixture": {
+          "path": "/tmp/p9-p5xbm1ww",
+          "home": "/Users/zouguojun/.p9-home-p9ogrj9i",
+          "cleanup": "removed"
+        }
+      },
+      "supervisor": {
+        "argv": [
+          "/opt/homebrew/opt/python@3.15/bin/python3.15",
+          "qa/phase9_test_closure.py",
+          "--repo-root",
+          ".",
+          "--target-dir",
+          ".phase9-target",
+          "--receipt",
+          "docs/superpowers/runs/2026-11-15-phase9-test-closure-receipt.md",
+          "--timeout-seconds",
+          "600",
+          "--test-filter",
+          "sandbox::proxy::netns_bridge::tests::host_bridge_forwards_bytes_uds_to_tcp"
+        ],
+        "cwd": "/Volumes/TBU4/Workspace/Aleph",
+        "env_overrides": {},
+        "exit_code": 0,
+        "timed_out": false,
+        "pid": 73394,
+        "cleanup_error": null,
+        "unjoined_descendants": false,
+        "elapsed_seconds": 0.7155321669997647,
+        "stdout": "/Volumes/TBU4/Workspace/Aleph/.superpowers/sdd/2026-11-15-phase9-runtime-proof-and-dependency-closure/repaired-matrix-49.stdout.log",
+        "stderr": "/Volumes/TBU4/Workspace/Aleph/.superpowers/sdd/2026-11-15-phase9-runtime-proof-and-dependency-closure/repaired-matrix-49.stderr.log"
+      }
+    },
+    {
+      "case": "FULL LIB",
+      "receipt": {
+        "schema_version": 1,
+        "timestamp": "20261116T064100.502081Z",
+        "memory_gate": {
+          "argv": [
+            "python3",
+            "qa/browser_live/check_memory.py",
+            "--required-bytes",
+            "4294967296"
+          ],
+          "cwd": "/Volumes/TBU4/Workspace/Aleph",
+          "env_overrides": {},
+          "exit_code": 0,
+          "timed_out": false,
+          "pid": 73484,
+          "cleanup_error": null,
+          "unjoined_descendants": false,
+          "elapsed_seconds": 0.030946999962907284,
+          "stdout": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T064100.502081Z-memory.stdout.log",
+          "stderr": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T064100.502081Z-memory.stderr.log"
+        },
+        "test_filter": null,
+        "status": "FAIL",
+        "command": {
+          "argv": [
+            "cargo",
+            "test",
+            "-p",
+            "alephcore",
+            "--lib",
+            "--offline",
+            "--locked",
+            "--jobs",
+            "1",
+            "--",
+            "--test-threads=1"
+          ],
+          "cwd": "/Volumes/TBU4/Workspace/Aleph",
+          "env_overrides": {
+            "HOME": "/Users/zouguojun/.p9-home-m1hkokte",
+            "ALEPH_HOME": "/tmp/p9-8ccgbb7h/aleph",
+            "CARGO_HOME": "/Users/zouguojun/.cargo",
+            "RUSTUP_HOME": "/Users/zouguojun/.rustup",
+            "TMPDIR": "/tmp/p9-8ccgbb7h",
+            "CARGO_TARGET_DIR": "/Volumes/TBU4/Workspace/Aleph/.phase9-target",
+            "RUST_BACKTRACE": "1"
+          },
+          "exit_code": 101,
+          "timed_out": false,
+          "pid": 73486,
+          "cleanup_error": null,
+          "unjoined_descendants": false,
+          "elapsed_seconds": 654.8204691670253,
+          "stdout": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T064100.502081Z.stdout.log",
+          "stderr": "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/phase9-test-output/20261116T064100.502081Z.stderr.log"
+        },
+        "fixture": {
+          "path": "/tmp/p9-8ccgbb7h",
+          "home": "/Users/zouguojun/.p9-home-m1hkokte",
+          "cleanup": "removed"
+        }
+      },
+      "supervisor": {
+        "argv": [
+          "/opt/homebrew/opt/python@3.15/bin/python3.15",
+          "qa/phase9_test_closure.py",
+          "--repo-root",
+          ".",
+          "--target-dir",
+          ".phase9-target",
+          "--receipt",
+          "docs/superpowers/runs/2026-11-15-phase9-test-closure-receipt.md",
+          "--timeout-seconds",
+          "1200"
+        ],
+        "cwd": "/Volumes/TBU4/Workspace/Aleph",
+        "env_overrides": {},
+        "exit_code": 1,
+        "timed_out": false,
+        "pid": 73483,
+        "cleanup_error": null,
+        "unjoined_descendants": false,
+        "elapsed_seconds": 654.9018753330456,
+        "stdout": "/Volumes/TBU4/Workspace/Aleph/.superpowers/sdd/2026-11-15-phase9-runtime-proof-and-dependency-closure/repaired-matrix-50.stdout.log",
+        "stderr": "/Volumes/TBU4/Workspace/Aleph/.superpowers/sdd/2026-11-15-phase9-runtime-proof-and-dependency-closure/repaired-matrix-50.stderr.log"
+      }
+    }
+  ],
+  "status": "NOT_CLOSED"
+}

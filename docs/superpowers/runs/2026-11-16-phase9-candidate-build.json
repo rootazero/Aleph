@@ -1,0 +1,50 @@
+{
+  "lock_sha256": "12300967333b45f8a0fa1f401cf13a559b5b8a881ee95550b1bbf1a8d42e21f5",
+  "status": "BUILD_PASS",
+  "commands": [
+    {
+      "argv": [
+        "cargo",
+        "test",
+        "-p",
+        "alephcore",
+        "--lib",
+        "--no-run",
+        "--offline",
+        "--locked",
+        "--jobs",
+        "1"
+      ],
+      "cwd": "/Volumes/TBU4/Workspace/Aleph",
+      "env_overrides": {
+        "CARGO_TARGET_DIR": "/Volumes/TBU4/Workspace/Aleph/.phase9-target"
+      },
+      "exit_code": 0,
+      "timed_out": false,
+      "pid": 56204,
+      "cleanup_error": null,
+      "unjoined_descendants": false,
+      "elapsed_seconds": 953.9841851659585,
+      "stdout": "/Volumes/TBU4/Workspace/Aleph/.superpowers/sdd/2026-11-15-phase9-runtime-proof-and-dependency-closure/candidate-test-build.stdout.log",
+      "stderr": "/Volumes/TBU4/Workspace/Aleph/.superpowers/sdd/2026-11-15-phase9-runtime-proof-and-dependency-closure/candidate-test-build.stderr.log"
+    }
+  ],
+  "memory_gate": {
+    "argv": [
+      "python3",
+      "qa/browser_live/check_memory.py",
+      "--required-bytes",
+      "4294967296"
+    ],
+    "cwd": "/Volumes/TBU4/Workspace/Aleph",
+    "env_overrides": {},
+    "exit_code": 0,
+    "timed_out": false,
+    "pid": 56202,
+    "cleanup_error": null,
+    "unjoined_descendants": false,
+    "elapsed_seconds": 0.03675174998352304,
+    "stdout": "/Volumes/TBU4/Workspace/Aleph/.superpowers/sdd/2026-11-15-phase9-runtime-proof-and-dependency-closure/candidate-build-memory.stdout.log",
+    "stderr": "/Volumes/TBU4/Workspace/Aleph/.superpowers/sdd/2026-11-15-phase9-runtime-proof-and-dependency-closure/candidate-build-memory.stderr.log"
+  }
+}

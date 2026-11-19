@@ -2013,7 +2013,7 @@ mod tests {
     /// working dir itself); the real plugin is the positive control.
     #[tokio::test]
     async fn component_dirs_are_not_plugin_candidates() {
-        let _home = crate::utils::paths::IsolatedAlephHome::new();
+        let _home = crate::utils::paths::IsolatedDiscoveryHome::new();
         let dir = tempfile::tempdir().unwrap();
         let skill = dir.path().join(".aleph/skills/planted-skill");
         std::fs::create_dir_all(&skill).unwrap();
@@ -2066,7 +2066,7 @@ mod tests {
         // `Config::load()` writes a default config when none exists, so an
         // un-isolated run of this test targets the real `~/.aleph/config.toml`
         // — invisible on a developer box that already has one, fatal on CI.
-        let _home = crate::utils::paths::IsolatedAlephHome::new();
+        let _home = crate::utils::paths::IsolatedDiscoveryHome::new();
         let tmp = tempfile::tempdir().unwrap();
         write_project_plugin(tmp.path(), "quiet-plugin");
         let (manager, cfg_path) = isolated_manager(tmp.path()).await;
@@ -2165,7 +2165,7 @@ mod tests {
         // `Config::load()` writes a default config when none exists, so an
         // un-isolated run of this test targets the real `~/.aleph/config.toml`
         // — invisible on a developer box that already has one, fatal on CI.
-        let _home = crate::utils::paths::IsolatedAlephHome::new();
+        let _home = crate::utils::paths::IsolatedDiscoveryHome::new();
         let tmp = tempfile::tempdir().unwrap();
         write_project_plugin(tmp.path(), "wakeable");
         let (manager, cfg_path) = isolated_manager(tmp.path()).await;
@@ -2215,7 +2215,7 @@ mod tests {
         // `Config::load()` writes a default config when none exists, so an
         // un-isolated run of this test targets the real `~/.aleph/config.toml`
         // — invisible on a developer box that already has one, fatal on CI.
-        let _home = crate::utils::paths::IsolatedAlephHome::new();
+        let _home = crate::utils::paths::IsolatedDiscoveryHome::new();
         let tmp = tempfile::tempdir().unwrap();
         write_project_plugin(tmp.path(), "old-timer");
         let marker = tmp.path().join("plugins/old-timer/.disabled");
@@ -2451,7 +2451,7 @@ mod tests {
         // `Config::load()` writes a default config when none exists, so an
         // un-isolated run of this test targets the real `~/.aleph/config.toml`
         // — invisible on a developer box that already has one, fatal on CI.
-        let _home = crate::utils::paths::IsolatedAlephHome::new();
+        let _home = crate::utils::paths::IsolatedDiscoveryHome::new();
         use crate::extension::visibility::{ScopeKey, VisibilityCtx};
         let dir = tempfile::tempdir().unwrap();
         write_project_plugin(dir.path(), "p2-vis");
@@ -2679,7 +2679,7 @@ mod tests {
         // unguarded read here raced a concurrent sibling's publish and lost
         // the entry before the assertion — reproducible 100% of the time
         // under this module's default parallel test run.
-        let _home = crate::utils::paths::IsolatedAlephHome::new();
+        let _home = crate::utils::paths::IsolatedDiscoveryHome::new();
         let dir = tempfile::tempdir().unwrap();
         write_project_plugin(dir.path(), "p2-skilled");
         std::fs::create_dir_all(dir.path().join("plugins/p2-skilled/skills/hello")).unwrap();
@@ -2707,7 +2707,7 @@ mod tests {
     /// looks up an owner no registry names and drops the skill everywhere.
     #[tokio::test]
     async fn plugin_skills_are_owned_by_the_registry_id_not_the_directory_name() {
-        let _home = crate::utils::paths::IsolatedAlephHome::new();
+        let _home = crate::utils::paths::IsolatedDiscoveryHome::new();
         let dir = tempfile::tempdir().unwrap();
         // Auto-discovered plugin: no manifest, id = sanitize_plugin_id("My_Plugin").
         let skill = dir.path().join("plugins/My_Plugin/skills/planted");
@@ -2830,7 +2830,7 @@ mod tests {
     /// allocation — not a clone of its contents, not a fresh registry.
     #[tokio::test]
     async fn tool_handler_registry_fresh_attachment_stores_the_exact_arc() {
-        let _home = crate::utils::paths::IsolatedAlephHome::new();
+        let _home = crate::utils::paths::IsolatedDiscoveryHome::new();
         let tmp = tempfile::tempdir().unwrap();
         let (manager, _cfg) = isolated_manager(tmp.path()).await;
         assert!(stored_tool_handler_registry(&manager).is_none());
@@ -2852,7 +2852,7 @@ mod tests {
     /// authority changes.
     #[tokio::test]
     async fn tool_handler_registry_same_arc_reattachment_is_ok_after_empty_discovery() {
-        let _home = crate::utils::paths::IsolatedAlephHome::new();
+        let _home = crate::utils::paths::IsolatedDiscoveryHome::new();
         let tmp = tempfile::tempdir().unwrap();
         let (manager, _cfg) = isolated_manager(tmp.path()).await;
         let registry = fresh_tool_handler_registry();
@@ -2878,7 +2878,7 @@ mod tests {
     /// pointer survives the refusal.
     #[tokio::test]
     async fn tool_handler_registry_different_arc_is_refused_and_the_original_is_kept() {
-        let _home = crate::utils::paths::IsolatedAlephHome::new();
+        let _home = crate::utils::paths::IsolatedDiscoveryHome::new();
         let tmp = tempfile::tempdir().unwrap();
         let (manager, _cfg) = isolated_manager(tmp.path()).await;
         let first = fresh_tool_handler_registry();
@@ -2907,7 +2907,7 @@ mod tests {
     /// resource.
     #[tokio::test]
     async fn tool_handler_registry_first_attachment_after_empty_discovery_is_refused() {
-        let _home = crate::utils::paths::IsolatedAlephHome::new();
+        let _home = crate::utils::paths::IsolatedDiscoveryHome::new();
         let tmp = tempfile::tempdir().unwrap();
         let (manager, _cfg) = isolated_manager(tmp.path()).await;
 
@@ -2941,7 +2941,7 @@ mod tests {
         use std::future::Future;
         use std::task::{Context, Poll, Waker};
 
-        let _home = crate::utils::paths::IsolatedAlephHome::new();
+        let _home = crate::utils::paths::IsolatedDiscoveryHome::new();
         let tmp = tempfile::tempdir().unwrap();
         let (manager, _cfg) = isolated_manager(tmp.path()).await;
 
@@ -2980,7 +2980,7 @@ mod tests {
     /// without the resource. The resource stays unset on every refusal.
     #[tokio::test]
     async fn tool_handler_registry_first_attachment_with_an_existing_row_is_refused() {
-        let _home = crate::utils::paths::IsolatedAlephHome::new();
+        let _home = crate::utils::paths::IsolatedDiscoveryHome::new();
         for status in [
             PluginStatus::Disabled,
             PluginStatus::Error("boom".to_string()),
@@ -3024,7 +3024,7 @@ mod tests {
     /// attachment even with the cache flag false.
     #[tokio::test]
     async fn tool_handler_registry_first_attachment_with_a_mounted_scope_is_refused() {
-        let _home = crate::utils::paths::IsolatedAlephHome::new();
+        let _home = crate::utils::paths::IsolatedDiscoveryHome::new();
         let tmp = tempfile::tempdir().unwrap();
         let (manager, _cfg) = isolated_manager(tmp.path()).await;
         manager
@@ -3049,7 +3049,7 @@ mod tests {
     /// discovery cache, registry row or scope has been published yet.
     #[tokio::test]
     async fn tool_handler_registry_first_attachment_with_a_loaded_runtime_is_refused() {
-        let _home = crate::utils::paths::IsolatedAlephHome::new();
+        let _home = crate::utils::paths::IsolatedDiscoveryHome::new();
         let tmp = tempfile::tempdir().unwrap();
         let (manager, _cfg) = isolated_manager(tmp.path()).await;
         let guest = tempfile::tempdir().unwrap();

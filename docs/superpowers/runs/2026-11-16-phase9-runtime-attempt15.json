@@ -1,0 +1,81 @@
+{
+  "status": "PASS",
+  "runs": [
+    {
+      "status": "PASS",
+      "reason": null,
+      "resource_complete": false,
+      "evidence_scope": "schema_and_marker_correlations_plus_direct_child_exit",
+      "qa_run_id": "07accfa4d8574268b291d37ca516c520",
+      "surface": "tauri",
+      "metrics": {
+        "first_frame_ms": 6110.147125029471,
+        "route_ms": 63.104874978307635,
+        "input_ms": 189.5459999796003,
+        "reconnect_ms": 987.1120829484425,
+        "close_ms": 4.67204098822549,
+        "rss_mb": 152.203125,
+        "threads": 24
+      },
+      "schema_sha256": "05cd5638ebe655e6d5c4cc4716b69077bd5ce9c3a983bd793852df08b33f2bbe",
+      "runtime_document": "docs/superpowers/runs/2026-11-16-phase9-runtime-attempt15-output/tauri-0.json"
+    },
+    {
+      "status": "PASS",
+      "reason": null,
+      "resource_complete": false,
+      "evidence_scope": "schema_and_marker_correlations_plus_direct_child_exit",
+      "qa_run_id": "09a8f565aec9438f9d13da15eaf3509f",
+      "surface": "nsh",
+      "metrics": {
+        "first_frame_ms": 5029.229958017822,
+        "route_ms": 81.90674998331815,
+        "input_ms": 218.29604101367295,
+        "reconnect_ms": 1019.6535830036737,
+        "close_ms": 17.852582968771458,
+        "rss_mb": 117.296875,
+        "threads": 18.0
+      },
+      "schema_sha256": "05cd5638ebe655e6d5c4cc4716b69077bd5ce9c3a983bd793852df08b33f2bbe",
+      "runtime_document": "docs/superpowers/runs/2026-11-16-phase9-runtime-attempt15-output/nsh-0.json"
+    }
+  ],
+  "performance": {
+    "status": "OPEN"
+  },
+  "gateway_cleanup": {
+    "status": "READY",
+    "children": [
+      {
+        "name": "model",
+        "argv": [
+          "/Users/zouguojun/.cache/uv/builds-v0/.tmpkPqaki/bin/python",
+          "/Volumes/TBU4/Workspace/Aleph/qa/nsh_panel_provider.py",
+          "--port",
+          "56861",
+          "--record",
+          "/Volumes/TBU4/Workspace/Aleph/docs/superpowers/runs/2026-11-16-phase9-runtime-attempt15-gateway/model-requests.jsonl"
+        ],
+        "pid": 43992,
+        "cwd": "/tmp/p9-gateway-a8rykeck",
+        "exit_code": -15,
+        "forced": false
+      },
+      {
+        "name": "gateway",
+        "argv": [
+          "/Volumes/TBU4/Workspace/Aleph/.phase9-target/debug/aleph-server",
+          "--port",
+          "56860",
+          "start"
+        ],
+        "pid": 43993,
+        "cwd": "/tmp/p9-gateway-a8rykeck",
+        "exit_code": 0,
+        "forced": false
+      }
+    ],
+    "panel_assets_unchanged": true,
+    "fixture_removed": true
+  }
+}

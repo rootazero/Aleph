@@ -1,0 +1,11 @@
+✔ route observation follows navigation and return before input (2.222458ms)
+✔ queued is not acceptance and rejected connect is not hello (0.528125ms)
+✔ stream observations correlate to the accepted run and current socket epoch (0.410792ms)
+ℹ tests 3
+ℹ suites 0
+ℹ pass 3
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 109.563167

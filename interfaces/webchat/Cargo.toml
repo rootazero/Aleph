@@ -37,6 +37,7 @@ crate-type = ["cdylib", "rlib"]
 [features]
 panel-modular = []
 panel-tab-spike = ["panel-modular"]
+runtime-qa = []
 default = ["legacy-terminal"]
 legacy-terminal = ["dep:aleph-terminal-ui"]
 

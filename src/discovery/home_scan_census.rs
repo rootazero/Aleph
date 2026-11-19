@@ -95,6 +95,7 @@ mod tests {
 
     const REDIRECTS: &[&str] = &[
         "HomeEnvGuards::acquire_and_set(",
+        "IsolatedDiscoveryHome::new(",
         "claude_home_override: Some(",
         "scan_claude_dirs: false",
     ];

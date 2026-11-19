@@ -24,14 +24,14 @@ use std::sync::Once;
 use block2::Block;
 use core_foundation::base::TCFType;
 use objc2::runtime::{AnyClass, AnyObject, Imp, Sel};
-use objc2::{msg_send, sel, ClassType};
+use objc2::{ClassType, msg_send, sel};
 use objc2_foundation::{
     NSString, NSURLAuthenticationChallenge, NSURLAuthenticationMethodServerTrust, NSURLCredential,
     NSURLSessionAuthChallengeDisposition,
 };
 use security_framework::trust::SecTrust;
 
-use crate::cert_trust::install::{resolve, HookAction, CERT_TRUST_APP};
+use crate::cert_trust::install::{CERT_TRUST_APP, HookAction, resolve};
 
 /// Default Panel listen port. The TOFU store keys on `host:port` (Task 4); a
 /// protection space with no explicit port (0) is normalized to this.

@@ -1,0 +1,17 @@
+{
+  "base": "3892804c112fd6e574166a4c03a7c40a77d0b239",
+  "head": "3892804c112fd6e574166a4c03a7c40a77d0b239",
+  "branch": "runtime-proof",
+  "source_manifest_sha256": "10d6f3148c1fbe2d1457226217632418178830f0e4fda2f3a7edb527f191b4c5",
+  "source_files": 43,
+  "source_mismatches": [],
+  "default_artifact_mismatches": [],
+  "lock_sha256": "12300967333b45f8a0fa1f401cf13a559b5b8a881ee95550b1bbf1a8d42e21f5",
+  "default_qa_ingress_absent": true,
+  "runtime_receipt": "docs/superpowers/runs/2026-11-16-phase9-runtime-attempt15.json",
+  "runtime_status": "PASS",
+  "performance": "OPEN_RESOURCE_OWNERSHIP",
+  "protected_paths_git_status": "",
+  "diff_check_exit": 0,
+  "status": "PASS_WITH_OPEN_PERFORMANCE_GATE"
+}

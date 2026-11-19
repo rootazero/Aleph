@@ -1,0 +1,6 @@
+
+running 1 test
+test diagnostics::checks::browser_runtime::tests::the_doctor_claims_a_withheld_family_only_when_the_gate_withholds_it ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 22421 filtered out; finished in 0.02s
+
