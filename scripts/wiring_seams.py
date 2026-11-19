@@ -8,7 +8,8 @@ the code exists, may even have tests, but its far end is never reached.
 missing, and the producer is `pub` so the compiler stays quiet.
 
 This is the form-1 detector of the severed-wire audit (2026-11-19) applied to
-the three audited modules: `src/a2a`, `src/acp`, `src/agents`.
+the audited modules: `src/a2a`, `src/acp`, `src/agents` (round 1) and
+`src/browser`, `src/builtin_tools`, `src/bundled` (round 2).
 
     DEFINED  — every `pub fn` / `pub async fn` in the module
     CONSUMED — the same name used in production code anywhere in the tree
@@ -65,10 +66,17 @@ CONSUMER_GLOBS = "src/**/*.rs,crates/**/*.rs,plugins/**/*.rs,bin/**/*.rs,sdk/**/
 # `coord_task_dependencies` row is inserted with a freshly minted task id,
 # which makes the check structurally constant-true (it was CUT at that call
 # site as vacuous — see `store/crud.rs::create_task`). Deliberately not wired.
+#
+# Round 2 (2026-11-19, `src/browser` / `src/builtin_tools` / `src/bundled`):
+# every entry below was triaged read-first — the reason for keeping the wire
+# open is recorded next to it.
 KNOWN_SEVERED: dict[str, set[str]] = {
     "a2a-public-api": {"infer_from_addr"},
     "acp-public-api": set(),
     "agents-public-api": {"check_no_cycle_sync"},
+    "browser-public-api": set(),
+    "builtin-tools-public-api": set(),
+    "bundled-public-api": set(),
 }
 
 SPECS = [
@@ -97,6 +105,33 @@ SPECS = [
         consumed_glob=CONSUMER_GLOBS,
         consumed_re=CONSUMED_RE,
         known_severed=KNOWN_SEVERED["agents-public-api"],
+        exclude_decl=True,
+    ),
+    SeamSpec(
+        name="browser-public-api",
+        defined_glob="src/browser/**/*.rs",
+        defined_re=DEFINED_RE,
+        consumed_glob=CONSUMER_GLOBS,
+        consumed_re=CONSUMED_RE,
+        known_severed=KNOWN_SEVERED["browser-public-api"],
+        exclude_decl=True,
+    ),
+    SeamSpec(
+        name="builtin-tools-public-api",
+        defined_glob="src/builtin_tools/**/*.rs",
+        defined_re=DEFINED_RE,
+        consumed_glob=CONSUMER_GLOBS,
+        consumed_re=CONSUMED_RE,
+        known_severed=KNOWN_SEVERED["builtin-tools-public-api"],
+        exclude_decl=True,
+    ),
+    SeamSpec(
+        name="bundled-public-api",
+        defined_glob="src/bundled/**/*.rs",
+        defined_re=DEFINED_RE,
+        consumed_glob=CONSUMER_GLOBS,
+        consumed_re=CONSUMED_RE,
+        known_severed=KNOWN_SEVERED["bundled-public-api"],
         exclude_decl=True,
     ),
 ]

@@ -31,8 +31,12 @@ _TEST_MOD_RE = re.compile(r"\n\s*#\[cfg\(test\)\]")
 
 try:  # The repo's brace-matching test stripper is more precise than the cut.
     from wiring_strip import strip_tests as _repo_strip_tests  # noqa: E402
+    from wiring_strip import test_only_module_names  # noqa: E402
 except ImportError:  # pragma: no cover - standalone use
     _repo_strip_tests = None
+
+    def test_only_module_names(text: str) -> set[str]:  # type: ignore[misc]
+        return set()
 
 
 def _strip_comments(text: str) -> str:
@@ -162,17 +166,40 @@ def _consumer_files(spec: SeamSpec, root: Path) -> list[Path]:
     return [root / f for f in spec.consumed_files]
 
 
+def _test_only_module_files(root: Path) -> set[Path]:
+    """Files whose WHOLE body is test code.
+
+    `#[cfg(test)] mod foo;` declares a module whose body lives in the sibling
+    `foo.rs` (or `foo/mod.rs`). The attribute applies to the entire module,
+    so that file is compiled only under `cfg(test)` and none of its symbols
+    exist in a production build. The guards must not read them as production
+    symbols: every helper in such a file would read as a severed wire that
+    never existed (15 of them in `src/browser/testkit.rs` alone).
+    """
+    out: set[Path] = set()
+    for f in root.rglob("*.rs"):
+        try:
+            text = f.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        for name in test_only_module_names(text):
+            out.add(f.parent / f"{name}.rs")
+            out.add(f.parent / name / "mod.rs")
+    return out
+
+
 def audit_seam(spec: SeamSpec, root: Path) -> tuple[list[str], dict[str, str]]:
     """Return (unexpected_severed_names, defined_map)."""
+    skip = _test_only_module_files(root)
     defined = _scan(
-        sorted(root.glob(spec.defined_glob)),
+        [f for f in sorted(root.glob(spec.defined_glob)) if f not in skip],
         re.compile(spec.defined_re, re.MULTILINE),
         root,
         spec.strip_tests,
     )
     consumed = set(
         _scan(
-            _consumer_files(spec, root),
+            [f for f in _consumer_files(spec, root) if f not in skip],
             re.compile(spec.consumed_re, re.MULTILINE),
             root,
             spec.strip_tests,

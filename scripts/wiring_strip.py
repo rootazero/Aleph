@@ -51,8 +51,162 @@ from __future__ import annotations
 
 import re
 
-_CFG_TEST_RE = re.compile(r"^[ \t]*#\[cfg\(test\)\][ \t]*\r?\n", re.MULTILINE)
+_CFG_ATTR_RE = re.compile(r"^[ \t]*#\[cfg\((?P<pred>[^\]\n]*)\)\][ \t]*\r?\n", re.MULTILINE)
 _ATTR_LINE_RE = re.compile(r"^[ \t]*#\[[^\n]*\][ \t]*\r?\n")
+# A module DECLARATION (`mod foo;`). The sibling file `foo.rs` (or
+# `foo/mod.rs`) is the whole body of that module, so a declaration behind a
+# test-only cfg means that file is compiled only under `cfg(test)`: none of
+# its symbols exist in a production build. Reading them as production symbols
+# turns every helper in such a file into a "severed wire" that never existed.
+_MOD_DECL_RE = re.compile(
+    r"[ \t]*(?:pub(?:\([^)]*\))?[ \t]+)?mod[ \t]+([A-Za-z_][A-Za-z0-9_]*)[ \t]*;"
+)
+
+# `#[cfg(feature = "test-helpers")]` — a test-only feature (it exists so an
+# integration test can reach a fake the library otherwise keeps private).
+# The guards treat it like `cfg(test)`.
+_TEST_ONLY_FEATURE = "test-helpers"
+
+
+def _cfg_tokens(pred: str) -> list[str]:
+    """Tokenise a `cfg` predicate: idents, strings, `=`, `(`, `)`, `,`."""
+    out: list[str] = []
+    i = 0
+    n = len(pred)
+    while i < n:
+        c = pred[i]
+        if c.isspace():
+            i += 1
+            continue
+        if c in "(),":
+            out.append(c)
+            i += 1
+            continue
+        if c == "=":
+            out.append("=")
+            i += 1
+            continue
+        if c == '"':
+            j = pred.find('"', i + 1)
+            if j == -1:
+                out.append(pred[i:])
+                break
+            out.append(pred[i : j + 1])
+            i = j + 1
+            continue
+        j = i
+        while j < n and (pred[j].isalnum() or pred[j] == "_"):
+            j += 1
+        if j == i:
+            i += 1
+            continue
+        out.append(pred[i:j])
+        i = j
+    return out
+
+
+def _cfg_leaf(name: str, value: str | None) -> str:
+    """Three-valued answer for a leaf predicate.
+
+    "F" — cannot hold in a production build (test-only).
+    "U" — unknown: it may hold in a production build (a platform gate, a
+    shipping feature, a debug build). Kept, so the guards still see the
+    production surface.
+    """
+    if name == "test":
+        return "F"
+    if name == "feature" and value == _TEST_ONLY_FEATURE:
+        return "F"
+    return "U"
+
+
+def _cfg_and(vals: list[str]) -> str:
+    if "F" in vals:
+        return "F"
+    if all(v == "T" for v in vals):
+        return "T"
+    return "U"
+
+
+def _cfg_or(vals: list[str]) -> str:
+    if "T" in vals:
+        return "T"
+    if all(v == "F" for v in vals):
+        return "F"
+    return "U"
+
+
+def _cfg_parse(toks: list[str], i: int) -> tuple[str, int]:
+    tok = toks[i]
+    if tok in ("all", "any"):
+        i += 1
+        if i >= len(toks) or toks[i] != "(":
+            raise ValueError("expected (")
+        i += 1
+        vals: list[str] = []
+        while True:
+            v, i = _cfg_parse(toks, i)
+            vals.append(v)
+            if i < len(toks) and toks[i] == ",":
+                i += 1
+                continue
+            break
+        if i >= len(toks) or toks[i] != ")":
+            raise ValueError("expected )")
+        i += 1
+        return (_cfg_and(vals) if tok == "all" else _cfg_or(vals)), i
+    if tok == "not":
+        i += 1
+        if i >= len(toks) or toks[i] != "(":
+            raise ValueError("expected (")
+        v, i = _cfg_parse(toks, i + 1)
+        if i >= len(toks) or toks[i] != ")":
+            raise ValueError("expected )")
+        return ("T" if v == "F" else "F" if v == "T" else "U"), i + 1
+    name = tok
+    value = None
+    if i + 2 < len(toks) and toks[i + 1] == "=":
+        value = toks[i + 2].strip('"')
+        i += 3
+    else:
+        i += 1
+    return _cfg_leaf(name, value), i
+
+
+def _cfg_production(pred: str) -> bool:
+    """True when the `cfg` predicate CAN hold in a production build.
+
+    The guards read production code, so an item that a shipping build does
+    not compile must not be read as production code. The shapes this repo
+    uses for that are `cfg(test)`, `cfg(feature = "test-helpers")`,
+    `cfg(any(test, feature = "test-helpers"))` and
+    `cfg(all(test, ...))`.
+
+    A platform gate (`cfg(windows)`, `cfg(target_os = "macos")`,
+    `cfg(not(unix))`) is PRODUCTION code: it ships in a build for that
+    platform, and hiding it would hide real severances. An unknown
+    predicate is treated the same way (conservative: it may still ship).
+    """
+    toks = _cfg_tokens(pred)
+    if not toks:
+        return True
+    try:
+        value, _ = _cfg_parse(toks, 0)
+    except (ValueError, IndexError):
+        return True
+    return value != "F"
+
+
+def test_only_module_names(text: str) -> set[str]:
+    """Names of modules declared behind a test-only `cfg`."""
+    out: set[str] = set()
+    for m in _CFG_ATTR_RE.finditer(text):
+        if _cfg_production(m.group("pred")):
+            continue
+        decl = _MOD_DECL_RE.match(text, m.end())
+        if decl:
+            out.add(decl.group(1))
+    return out
 
 
 def _skip_string(text: str, i: int) -> int:
@@ -222,13 +376,24 @@ def _skip_item(text: str, start: int) -> int:
 
 
 def strip_tests(text: str) -> str:
-    """`text` with every `#[cfg(test)]`-attributed item removed."""
+    """`text` with every item a PRODUCTION build would not compile removed.
+
+    An item is dropped when its `cfg` predicate cannot hold in a production
+    build: `cfg(test)`, `cfg(feature = "test-helpers")`,
+    `cfg(any(test, ...))` and `cfg(all(test, ...))`. A `cfg` that CAN hold in
+    production keeps its item (and its attribute) — the guards must see the
+    production surface, not a guess.
+    """
     out: list[str] = []
     pos = 0
     while True:
-        m = _CFG_TEST_RE.search(text, pos)
+        m = _CFG_ATTR_RE.search(text, pos)
         if not m:
             out.append(text[pos:])
             return "".join(out)
         out.append(text[pos : m.start()])
+        if _cfg_production(m.group("pred")):
+            out.append(m.group(0))
+            pos = m.end()
+            continue
         pos = _skip_item(text, m.end())
