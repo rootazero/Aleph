@@ -1503,6 +1503,7 @@ mod tests {
             "child-agent",
             &ephemeral_for("child-agent", None),
             CancellationToken::new(),
+            None,
         );
         let compactor = compactor.expect("a context budget config arms the child's compactor");
         let _ = compactor
