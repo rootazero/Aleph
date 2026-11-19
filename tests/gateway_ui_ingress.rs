@@ -112,6 +112,7 @@ impl Fixture {
         let memory = MemoryRuntime::new(MemoryRuntimeConfig {
             metadata_path: scratch.path().join("memory.sqlite"),
             note_memory_dir: scratch.path().join("notes"),
+            retrieval_tuning: Default::default(),
         }, tree.clone());
         let policy = Arc::new(PolicyEngine::with_shared_tree(tree.clone(), Default::default()).unwrap());
         let tools = ToolHandlerRegistry::new();

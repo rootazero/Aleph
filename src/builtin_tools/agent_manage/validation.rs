@@ -1,16 +1,25 @@
 //! Shared agent-ID validation and ID-generation helpers.
 //!
-//! Two call sites today — `agent_create` (LLM-driven) and `AgentManager`
-//! (TOML persistence). Both need the same grammar; this is the single source
-//! so the LLM-side error message and the TOML-side `invalid_config` agree
-//! byte-for-byte.
+//! Two grammars exist, on purpose, and this module is where the difference
+//! is written down:
 //!
-//! Grammar: `[a-z0-9][a-z0-9_-]{0,63}` (1–64 chars). Tool-id grammar mirrors
-//! `AgentManager::validate_id` minus the 32-char cap (the runtime registry
-//! allows longer ids so sub-agent descriptors and user-created agents have
-//! room). When `AgentManager` rejects a longer id the LLM gets a clean
-//! `protected`/already-exists error on the second round-trip; the asymmetry
-//! here is intentional — runtime ids are user-facing, TOML ids are admin.
+//! - **the runtime grammar** (here): `[a-z0-9][a-z0-9_-]{0,63}` — what
+//!   `agent_create` accepts. Lowercase-first, so an id is safe as a directory
+//!   name, a routing key and a command-line argument on every platform.
+//! - **the TOML grammar** (`config::agent_manager::validate_id`): 1-32 chars
+//!   of `[A-Za-z0-9_-]` — what `[[agents.list]]` accepts. It is the ADMIN
+//!   path: an operator editing `config.toml` by hand, where uppercase is
+//!   allowed and the length is capped by the storage layer.
+//!
+//! The runtime grammar is a strict SUBSET of the TOML one (lowercase, a
+//! first-character rule, and the length cap that `agent_create` enforces
+//! before it writes anything). So every id the tool accepts is persistable —
+//! there is no id the LLM can create that the TOML layer then refuses.
+//!
+//! The two error MESSAGES differ by design: this one is written for the
+//! model ("Agent ID must start with a lowercase letter or digit"), the
+//! TOML-side one is an `invalid_config` for an operator. They are not
+//! byte-for-byte equal, and no longer claim to be.
 
 /// Validate an agent ID against the runtime grammar.
 ///

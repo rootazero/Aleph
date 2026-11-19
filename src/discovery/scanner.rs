@@ -684,7 +684,9 @@ fn has_plugin_manifest(path: &Path) -> bool {
         "aleph.plugin.json",
         MCP_CONFIG_FILE,
     ];
-    MANIFEST_REL_PATHS.iter().any(|rel| path.join(rel).is_file())
+    MANIFEST_REL_PATHS
+        .iter()
+        .any(|rel| path.join(rel).is_file())
         || is_existing_dir_no_follow(&path.join(".cursor/rules"))
         || is_existing_dir_no_follow(&path.join("skills"))
         || is_existing_dir_no_follow(&path.join("commands"))

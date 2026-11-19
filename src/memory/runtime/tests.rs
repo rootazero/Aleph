@@ -19,6 +19,7 @@ fn runtime(root: &std::path::Path) -> Arc<MemoryRuntime> {
         MemoryRuntimeConfig {
             metadata_path: root.join("memory/metadata.db"),
             note_memory_dir: root.join("notes"),
+            retrieval_tuning: Default::default(),
         },
         Arc::new(OwnershipTree::new()),
     )
@@ -39,6 +40,7 @@ async fn configured_runtime(
         MemoryRuntimeConfig {
             metadata_path: root.join("memory/metadata.db"),
             note_memory_dir: root.join("notes"),
+            retrieval_tuning: Default::default(),
         },
         Arc::new(OwnershipTree::new()),
         super::MemoryServicesConfig {

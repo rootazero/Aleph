@@ -14,6 +14,7 @@ async fn runtime_rebuild_category_tasks_keep_source_operation() {
         MemoryRuntimeConfig {
             metadata_path: root.path().join("metadata.db"),
             note_memory_dir: note_dir.clone(),
+            retrieval_tuning: Default::default(),
         },
         Arc::new(crate::capability::ownership::OwnershipTree::new()),
     );

@@ -249,6 +249,12 @@ async fn start_server_body(
         alephcore::memory::runtime::MemoryRuntimeConfig {
             metadata_path: aleph_home.join("metadata.db"),
             note_memory_dir: aleph_home.join("memory").join("note"),
+            // The hybrid fusion knobs the operator configured reach the live
+            // store here; before this the config parsed and was never read.
+            retrieval_tuning: alephcore::memory::store::sqlite::RetrievalTuning {
+                rrf_k: loaded_app_config.memory.rrf_k,
+                bm25_bonus_weight: loaded_app_config.memory.bm25_bonus_weight,
+            },
         },
         ownership_tree.clone(),
     );
@@ -2623,8 +2629,9 @@ async fn start_server_body(
             // webhook URL is operator- or client-supplied, so it must be
             // checked against the same host lists as every other outbound
             // request instead of the permissive built-in default.
-            let notification =
-                Arc::new(NotificationService::with_ssrf_policy(webhook_ssrf_policy.clone()));
+            let notification = Arc::new(NotificationService::with_ssrf_policy(
+                webhook_ssrf_policy.clone(),
+            ));
             let task_store: Arc<dyn A2ATaskManager> = Arc::new(TaskStore::new());
             let stream_hub: Arc<dyn A2AStreamingHandler> =
                 Arc::new(StreamHub::with_notification(notification.clone()));

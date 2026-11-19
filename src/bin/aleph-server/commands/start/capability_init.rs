@@ -171,6 +171,7 @@ mod tests {
             let memory = MemoryRuntime::new(MemoryRuntimeConfig {
                 metadata_path: root.path().join("memory.db"),
                 note_memory_dir: root.path().join("notes"),
+                retrieval_tuning: Default::default(),
             }, tree.clone());
             let host = ProjectionHost::mount_with_runtime_and_events(
                 ToolHandlerRegistry::new(), tree, memory.clone(), CapabilityHandlerRegistry::new(), policy, events.clone(), false,

@@ -515,8 +515,16 @@ impl ToolRegistry for BuiltinToolRegistry {
                 let store = self.node_security_store.get().ok_or_else(|| {
                     AlephError::tool("node_manage not available: SecurityStore not injected")
                 })?;
-                let tool =
-                    crate::builtin_tools::NodeManageTool::new(reg.clone(), store.clone(), None);
+                // The bus is the SAME one the RPC leg publishes on
+                // (`node.disconnected`), so a deregistration driven by the
+                // model announces itself exactly like one driven by the
+                // operator. It used to be hardcoded `None`, so this leg
+                // evicted the node and stayed silent.
+                let tool = crate::builtin_tools::NodeManageTool::new(
+                    reg.clone(),
+                    store.clone(),
+                    self.gateway_event_bus.get().map(Arc::clone),
+                );
                 tool.call_json(arguments).await
             }),
 

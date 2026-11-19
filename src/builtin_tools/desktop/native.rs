@@ -1091,7 +1091,10 @@ impl super::DesktopTool {
                             // routinely contain small UI text and 0.75 caused
                             // legibility complaints from the LLM consumer. PNG
                             // is unaffected (lossless regardless of quality).
-                            let q = quality.filter(|v| !v.is_nan()).unwrap_or(0.9).clamp(0.0, 1.0);
+                            let q = quality
+                                .filter(|v| !v.is_nan())
+                                .unwrap_or(0.9)
+                                .clamp(0.0, 1.0);
                             let quality_u8 = (q * 100.0) as u8;
                             // The re-encode must not drop what `take_screenshot`
                             // reported: the points-to-pixels ratio survives via
@@ -1303,6 +1306,22 @@ impl super::DesktopTool {
                 let key = main_key
                     .first()
                     .expect("invariant: main_key has exactly one element after split");
+                // The secure-field hard block, on the key path. `type_text` and
+                // `paste` both refuse to write into a password box; a key
+                // combination that carries text (a character, or Cmd/Ctrl+V)
+                // writes into whatever holds focus just the same, and it used
+                // to reach the focused password field with no gate at all.
+                // Combinations that move the caret or copy are left alone.
+                if super::focus_gate::carries_text(keys) {
+                    let pid = match rail {
+                        Rail::Targeted(pid) => Some(pid),
+                        Rail::Global => None,
+                    };
+                    if let Some(refusal) = super::focus_gate::check_secure_only(platform, pid).await
+                    {
+                        return Ok(Some(refusal));
+                    }
+                }
                 let result = match rail {
                     Rail::Targeted(pid) => screen.key_combo_targeted(pid, &modifiers, key).await,
                     Rail::Global => screen.key_combo(&modifiers, key).await,
@@ -1330,6 +1349,18 @@ impl super::DesktopTool {
                         data: None,
                         message: Some("key_button requires 'keys' array".to_string()),
                     }));
+                }
+                // Same secure-field hard block as `key_combo`: a named button
+                // that types a character writes into whatever holds focus.
+                if super::focus_gate::carries_text(keys) {
+                    let pid = match rail {
+                        Rail::Targeted(pid) => Some(pid),
+                        Rail::Global => None,
+                    };
+                    if let Some(refusal) = super::focus_gate::check_secure_only(platform, pid).await
+                    {
+                        return Ok(Some(refusal));
+                    }
                 }
                 let action = match parse_press_action(args.press_action.as_deref()) {
                     Ok(action) => action,

@@ -258,8 +258,11 @@ pub enum CompletedOutcome {
 }
 
 impl CompletedOutcome {
-    /// Convenience constructor for a text-only success (tests, and callers
-    /// with no run metrics to report).
+    /// Convenience constructor for a text-only success.
+    ///
+    /// Test-only: every production caller reports the run metrics it has,
+    /// so no production path needs the zeroed variant.
+    #[cfg(test)]
     pub fn ok_text(text: impl Into<String>) -> Self {
         Self::Ok {
             final_text: text.into(),
@@ -639,7 +642,7 @@ impl BackgroundAgentTracker {
     /// (`SpawnMeta.parent_id`). Backs the `teams.chat.cancel` tree walk: the
     /// group-chat fan-out registers every member run under the RPC-minted
     /// parent run_id, and cancel enumerates them here to fire each engine
-    /// per-run token. O(running) scan, same as `session_has_running`.
+    /// per-run token. O(running) scan.
     ///
     /// Round-8 — sorted by `(started_at_ms, request_id)` for stable
     /// enumeration across `teams.chat.cancel` re-walks and panel rebuilds.
@@ -666,9 +669,9 @@ impl BackgroundAgentTracker {
     /// (`SpawnMeta.root_session`, the top-level session key in
     /// `SessionKey::to_key_string()` form). Backs the leader-cancel walk: when a
     /// leader session is cancelled, its in-flight delegated member runs are
-    /// enumerated here and each engine per-run token is fired. O(running) scan,
-    /// same as `session_has_running`. Ids that are not live engine runs (e.g.
-    /// in-process subagents) simply yield a harmless `cancel` miss at the seam.
+    /// enumerated here and each engine per-run token is fired. O(running) scan.
+    /// Ids that are not live engine runs (e.g. in-process subagents) simply
+    /// yield a harmless `cancel` miss at the seam.
     #[must_use]
     pub fn running_runs_of_session(&self, root_session: &str) -> Vec<String> {
         self.running
@@ -1113,12 +1116,11 @@ impl BackgroundAgentTracker {
     /// owning top-level session key, `SessionKey::to_key_string()`). O(running)
     /// scan of the live set.
     ///
-    /// Backs the gateway's `Interrupt` busy-input guard: a run driving a live
-    /// sub-agent fan-out (team dispatch / parallel subagents) has expensive
-    /// in-flight parallel work that a single mid-task course-correction must
-    /// not destroy. When this returns `true` the Interrupt is demoted to the
-    /// busy queue (wait for the current run to finish) instead of cancelling
-    /// the sibling — hermes `run.py:5436-5446` demote-to-queue parity.
+    /// Test-only: the gateway's busy-input guard does NOT live here. It is
+    /// the execution engine's busy-input mode (`BusyInputMode::Interrupt`
+    /// demotes an interrupt to the busy queue) that decides whether an
+    /// in-flight run survives a course correction.
+    #[cfg(test)]
     pub fn session_has_running(&self, root_session: &str) -> bool {
         self.running
             .read()
@@ -1421,11 +1423,15 @@ impl Default for BackgroundAgentTracker {
 /// proactive announce). What they DO need is presence in the running set while
 /// in flight, so:
 ///
-///   * the gateway Interrupt demote guard
-///     ([`session_has_running`](BackgroundAgentTracker::session_has_running))
-///     refuses to tear down a parent mid-fan-out, and
 ///   * `teams.chat.cancel` can enumerate live members of a fan-out tree
-///     ([`running_children_of`](BackgroundAgentTracker::running_children_of)).
+///     ([`running_children_of`](BackgroundAgentTracker::running_children_of)),
+///     and
+///   * the leader-cancel walk enumerates the in-flight delegated member runs
+///     ([`running_runs_of_session`](BackgroundAgentTracker::running_runs_of_session)).
+///
+/// The gateway's Interrupt demote guard is NOT one of the readers: it is the
+/// execution engine's busy-input mode that decides whether an interrupt
+/// tears a parent down mid-fan-out.
 ///
 /// Registered as *presence-only*
 /// ([`register_presence_only`](BackgroundAgentTracker::register_presence_only)):

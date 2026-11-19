@@ -26,6 +26,7 @@ async fn session_end_archives_raw_when_derived_memory_is_off() {
         MemoryRuntimeConfig {
             metadata_path: root.path().join("memory/metadata.db"),
             note_memory_dir: root.path().join("notes"),
+            retrieval_tuning: Default::default(),
         },
         Arc::new(OwnershipTree::new()),
     );
@@ -101,6 +102,7 @@ async fn flush_does_not_spawn_derived_work_after_runtime_stop() {
         MemoryRuntimeConfig {
             metadata_path: root.path().join("memory/metadata.db"),
             note_memory_dir: root.path().join("notes"),
+            retrieval_tuning: Default::default(),
         },
         Arc::new(OwnershipTree::new()),
         MemoryServicesConfig {
@@ -192,6 +194,7 @@ async fn review_open_loops_use_each_activation_snapshot() {
         MemoryRuntimeConfig {
             metadata_path: root.path().join("memory/metadata.db"),
             note_memory_dir: root.path().join("notes"),
+            retrieval_tuning: Default::default(),
         },
         Arc::new(OwnershipTree::new()),
         MemoryServicesConfig {
@@ -283,6 +286,7 @@ async fn activation_builds_session_services_and_preserves_raw_storage() {
         MemoryRuntimeConfig {
             metadata_path: root.path().join("memory/metadata.db"),
             note_memory_dir: root.path().join("notes"),
+            retrieval_tuning: Default::default(),
         },
         Arc::new(OwnershipTree::new()),
         MemoryServicesConfig {
@@ -371,6 +375,7 @@ async fn compression_factory_uses_the_same_activation_policy() {
         MemoryRuntimeConfig {
             metadata_path: root.path().join("memory/metadata.db"),
             note_memory_dir: root.path().join("notes"),
+            retrieval_tuning: Default::default(),
         },
         Arc::new(OwnershipTree::new()),
         MemoryServicesConfig {
@@ -460,6 +465,7 @@ async fn activation_drains_real_note_maintenance_before_stop_completes() {
         MemoryRuntimeConfig {
             metadata_path: metadata.clone(),
             note_memory_dir: notes.clone(),
+            retrieval_tuning: Default::default(),
         },
         Arc::new(OwnershipTree::new()),
         MemoryServicesConfig {

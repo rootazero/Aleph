@@ -658,6 +658,7 @@ async fn mounted_host_facade_and_audited_zahir_share_one_1024_record_hub() {
         crate::memory::runtime::MemoryRuntimeConfig {
             metadata_path: temp.path().join("metadata.db"),
             note_memory_dir: temp.path().join("notes"),
+            retrieval_tuning: Default::default(),
         },
         tree.clone(),
     );

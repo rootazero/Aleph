@@ -1871,9 +1871,7 @@ impl Zahir for ZahirFacade {
         // ordinary Tool with the same name must never provide a cache revision
         // for that identity, even when the special source is not visible.
         if let Some(capture) = self.specials.capture(&reference.id) {
-            self
-                .tree
-                .generation(&reference.id, &reference.visibility)?;
+            self.tree.generation(&reference.id, &reference.visibility)?;
             return Some(capture.descriptor().revision);
         }
         // Only the Tool source currently guarantees non-reused per-descriptor
@@ -1903,9 +1901,7 @@ impl Zahir for ZahirFacade {
         // ordinary Tool or provider metadata entry with the same ID cannot
         // shadow its descriptor or mint a cacheable admission.
         if let Some(capture) = self.specials.capture(&reference.id) {
-            self
-                .tree
-                .generation(&reference.id, &reference.visibility)?;
+            self.tree.generation(&reference.id, &reference.visibility)?;
             let mut descriptor = capture.descriptor().clone();
             descriptor.visibility = reference.visibility.clone();
             return Some((descriptor, true));
@@ -2429,7 +2425,9 @@ mod tests {
             .expect("runtime bump succeeds");
 
         assert_eq!(host.validate_lease(&lease), Err(ResolveError::StaleOwner));
-        let fresh = host.resolve(ref_for(&id)).expect("fresh resolve succeeds after owner bump");
+        let fresh = host
+            .resolve(ref_for(&id))
+            .expect("fresh resolve succeeds after owner bump");
         assert_eq!(fresh.owner_generation, OwnerGeneration(1));
     }
 
@@ -3113,5 +3111,4 @@ mod tests {
         assert_eq!(snap.registry_closed, cloned.registry_closed);
         assert_eq!(snap.owner_generations, cloned.owner_generations);
     }
-
 }

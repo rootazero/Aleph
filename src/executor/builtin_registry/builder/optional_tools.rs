@@ -760,6 +760,7 @@ mod tests {
                     crate::memory::runtime::MemoryRuntimeConfig {
                         metadata_path: tmp.path().join("runtime.db"),
                         note_memory_dir: tmp.path().join("notes"),
+                        retrieval_tuning: Default::default(),
                     },
                     Arc::new(crate::capability::ownership::OwnershipTree::new()),
                 )),
@@ -903,6 +904,7 @@ mod tests {
             crate::memory::runtime::MemoryRuntimeConfig {
                 metadata_path: tmp.path().join("metadata.db"),
                 note_memory_dir: tmp.path().join("notes"),
+                retrieval_tuning: Default::default(),
             },
             Arc::new(crate::capability::ownership::OwnershipTree::new()),
         );

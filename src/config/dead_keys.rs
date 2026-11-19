@@ -111,6 +111,14 @@ const TOLERATED: &[Tolerated] = &[
         retired: true,
     },
     Tolerated {
+        path: "memory.vector_db",
+        why: "retired 2026-11-19 (severed-wire audit) — the backend selector chose nothing: \
+              one backend (sqlite + sqlite-vec) is the store, and the knob had no reader \
+              outside src/config/; the [memory] migration that kept its value correct went \
+              with it",
+        retired: true,
+    },
+    Tolerated {
         path: "unified_tools.native.search",
         why: "retired 2026-09-25 — `SearchToolConfig` (enabled / default_max_results / \
               default_timeout_seconds) had zero readers; the `search` tool reads the top-level \

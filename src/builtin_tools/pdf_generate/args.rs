@@ -36,6 +36,9 @@ impl PageSize {
     }
 
     /// Get page dimensions in inches (mm / 25.4)
+    ///
+    /// Test-only: no production path converts the page size to inches.
+    #[cfg(test)]
     #[must_use]
     pub fn dimensions_inches(&self) -> (f64, f64) {
         let (w_mm, h_mm) = self.dimensions_mm();

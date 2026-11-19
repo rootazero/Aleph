@@ -609,9 +609,13 @@ async fn btw_initial_side_preparation_failure_reports_to_main_owner() {
                 .await
                 .expect("precreate attributed main row");
             assert_eq!(main.owner_user_id.as_deref(), Some(user));
-            assert_eq!(main.scope_id.as_deref(), Some("personal:readiness-btw-preparation-failure"));
+            assert_eq!(
+                main.scope_id.as_deref(),
+                Some("personal:readiness-btw-preparation-failure")
+            );
 
-            let rpc = rig.start_chat_send_with_input(user, main_key, "/btw induce preparation failure");
+            let rpc =
+                rig.start_chat_send_with_input(user, main_key, "/btw induce preparation failure");
             tokio::pin!(rpc);
             rig.wait_prepare_entered().await;
             rig.release_prepare();
@@ -631,8 +635,13 @@ async fn btw_initial_side_preparation_failure_reports_to_main_owner() {
             let response = rpc
                 .await
                 .expect("real /btw handler must finish or fixture must report failure");
-            assert!(response.error.is_none(), "real /btw handler failed: {response:?}");
-            let result = response.result.expect("/btw failure still returns keyed success");
+            assert!(
+                response.error.is_none(),
+                "real /btw handler failed: {response:?}"
+            );
+            let result = response
+                .result
+                .expect("/btw failure still returns keyed success");
             assert_eq!(result["session_key"], main_key);
             let run_id = result["run_id"].as_str().expect("keyed response run id");
 
@@ -644,8 +653,7 @@ async fn btw_initial_side_preparation_failure_reports_to_main_owner() {
             assert_eq!(terminal["params"]["session_key"], main_key);
             assert_eq!(terminal["params"]["run_id"], run_id);
             assert_eq!(
-                terminal["params"]["error_code"],
-                "FAILED",
+                terminal["params"]["error_code"], "FAILED",
                 "preparation failure must remain a sanitized terminal error"
             );
             assert!(

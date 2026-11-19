@@ -34,6 +34,7 @@ impl Fixture {
             MemoryRuntimeConfig {
                 metadata_path: root.path().join("metadata.db"),
                 note_memory_dir: root.path().join("note"),
+                retrieval_tuning: Default::default(),
             },
             Arc::new(OwnershipTree::new()),
         );
@@ -181,6 +182,7 @@ async fn runtime_tool_stays_cold_and_uses_fresh_services_after_restart() {
         MemoryRuntimeConfig {
             metadata_path: root.path().join("metadata.db"),
             note_memory_dir: root.path().join("note"),
+            retrieval_tuning: Default::default(),
         },
         Arc::new(OwnershipTree::new()),
     );
@@ -202,6 +204,7 @@ async fn runtime_tool_stays_cold_and_uses_fresh_services_after_restart() {
         MemoryRuntimeConfig {
             metadata_path: root.path().join("unconfigured.db"),
             note_memory_dir: root.path().join("unconfigured-note"),
+            retrieval_tuning: Default::default(),
         },
         Arc::new(OwnershipTree::new()),
     );

@@ -242,7 +242,11 @@ impl TeamDispatcher {
                         panic = ?panic_payload,
                         "dispatcher run_task panicked; clearing running registration"
                     );
-                    cleanup_dispatcher.running.lock().await.remove(&task_id_for_log);
+                    cleanup_dispatcher
+                        .running
+                        .lock()
+                        .await
+                        .remove(&task_id_for_log);
                 }
             });
         }

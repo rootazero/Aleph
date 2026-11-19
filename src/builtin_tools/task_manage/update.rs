@@ -122,7 +122,8 @@ impl AlephTool for TaskUpdateTool {
             return Err(crate::error::AlephError::other(format!(
                 "Unknown or unsettable status '{}' (expected one of: pending, \
                  in_progress, waiting_review, completed, failed, cancelled, \
-                 skipped, paused; blocked is derived, not stored)",
+                 skipped, paused; blocked and unsatisfiable are derived, not \
+                 stored)",
                 args.status.as_deref().unwrap_or("")
             )));
         }

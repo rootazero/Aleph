@@ -567,10 +567,8 @@ pub async fn handle_patch_config(
     let mut pending_secrets: Vec<super::channel::ChannelSecret> = Vec::new();
     if let Some(channel_id) = path.strip_prefix("channels.") {
         if patch_request.patch.is_object() {
-            pending_secrets = super::channel::extract_channel_secrets(
-                channel_id,
-                &mut patch_request.patch,
-            );
+            pending_secrets =
+                super::channel::extract_channel_secrets(channel_id, &mut patch_request.patch);
             if !pending_secrets.is_empty() {
                 tracing::info!(
                     channel = %channel_id,

@@ -148,9 +148,11 @@ pub async fn apply_live_sections(
                         {
                             manager
                                 .bind_capability_source(Arc::downgrade(source))
-                                .map_err(|error| crate::gateway::pty::manager::TerminalResidual {
-                                    generation: manager.lifecycle_snapshot().generation,
-                                    detail: error.to_string(),
+                                .map_err(|error| {
+                                    crate::gateway::pty::manager::TerminalResidual {
+                                        generation: manager.lifecycle_snapshot().generation,
+                                        detail: error.to_string(),
+                                    }
                                 })?;
                         }
                         return Ok(true);
@@ -309,9 +311,11 @@ mod tests {
         );
         assert!(crate::gateway::pty::try_manager().is_none());
         cfg.policies.terminal.enabled = true;
-        assert!(apply_live_sections(&cfg, &["policies.terminal"], None, None)
-            .await
-            .is_empty());
+        assert!(
+            apply_live_sections(&cfg, &["policies.terminal"], None, None)
+                .await
+                .is_empty()
+        );
         assert!(crate::gateway::pty::try_manager().is_none());
         let bus = Arc::new(GatewayEventBus::new());
         let applied = apply_live_sections(&cfg, &["policies.terminal"], Some(&bus), None).await;
@@ -362,9 +366,11 @@ mod tests {
     #[tokio::test]
     async fn non_live_sections_are_ignored() {
         let cfg = Config::default();
-        assert!(apply_live_sections(&cfg, &["providers", "memory"], None, None)
-            .await
-            .is_empty());
+        assert!(
+            apply_live_sections(&cfg, &["providers", "memory"], None, None)
+                .await
+                .is_empty()
+        );
     }
 
     #[tokio::test]
@@ -860,9 +866,11 @@ mod tests {
             "the in-flight session must be gone, not merely reported gone"
         );
         cfg.policies.terminal.enabled = false;
-        assert!(apply_live_sections(&cfg, &["policies.terminal"], None, None)
-            .await
-            .contains(&"policies.terminal"));
+        assert!(
+            apply_live_sections(&cfg, &["policies.terminal"], None, None)
+                .await
+                .contains(&"policies.terminal")
+        );
         assert_eq!(crate::gateway::pty::manager::test_driver_id(mgr), None);
     }
 }

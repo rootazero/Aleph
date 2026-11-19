@@ -143,10 +143,9 @@ impl BflProvider {
                 .map_err(|e| GenerationError::network(format!("Poll request failed: {e}")))?;
             let status = response.status();
             if !status.is_success() {
-                let body = response
-                    .text()
-                    .await
-                    .map_err(|e| GenerationError::network(format!("Failed to read poll body: {e}")))?;
+                let body = response.text().await.map_err(|e| {
+                    GenerationError::network(format!("Failed to read poll body: {e}"))
+                })?;
                 error!(status = %status, body = %body, "BFL poll failed");
                 return Err(self.parse_error(status, &body));
             }

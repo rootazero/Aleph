@@ -217,7 +217,10 @@ mod tests {
     fn encode_session_key_avoids_windows_device_names() {
         for key in ["CON", "con", "NUL", "PRN", "COM1", "LPT9"] {
             let encoded = encode_session_key(key);
-            assert!(!is_windows_reserved_name(&encoded), "{key:?} -> {encoded:?}");
+            assert!(
+                !is_windows_reserved_name(&encoded),
+                "{key:?} -> {encoded:?}"
+            );
             assert_eq!(encoded, format!("%{key}"));
         }
         // Prefixing keeps the mapping injective: no other key encodes to the
@@ -225,10 +228,7 @@ mod tests {
         assert_ne!(encode_session_key("CON"), encode_session_key("%CON"));
         // Names the device rule does not match keep their encoding.
         assert_eq!(encode_session_key("console"), "console");
-        assert_eq!(
-            encode_session_key("agent:main:main"),
-            "agent%3Amain%3Amain"
-        );
+        assert_eq!(encode_session_key("agent:main:main"), "agent%3Amain%3Amain");
     }
 
     #[cfg(not(windows))]

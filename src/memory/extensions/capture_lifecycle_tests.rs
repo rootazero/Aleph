@@ -74,6 +74,7 @@ async fn raw_capture_off_preserves_real_archive_without_derived_mutation() {
         MemoryRuntimeConfig {
             metadata_path: root.path().join("derived.db"),
             note_memory_dir: root.path().join("notes"),
+            retrieval_tuning: Default::default(),
         },
         Arc::new(OwnershipTree::new()),
     );
@@ -120,6 +121,7 @@ async fn raw_capture_cancelled_caller_keeps_filter_and_archive_owned() {
         MemoryRuntimeConfig {
             metadata_path: root.path().join("derived.db"),
             note_memory_dir: root.path().join("notes"),
+            retrieval_tuning: Default::default(),
         },
         Arc::new(OwnershipTree::new()),
     );
@@ -196,6 +198,7 @@ async fn raw_capture_compactor_rebuild_keeps_cold_and_expired_source_binding() {
         MemoryRuntimeConfig {
             metadata_path: root.path().join("derived.db"),
             note_memory_dir: root.path().join("notes"),
+            retrieval_tuning: Default::default(),
         },
         Arc::new(OwnershipTree::new()),
     );
@@ -263,6 +266,7 @@ async fn raw_capture_registered_session_complete_respects_off_on_off() {
         MemoryRuntimeConfig {
             metadata_path: root.path().join("derived.db"),
             note_memory_dir: root.path().join("notes"),
+            retrieval_tuning: Default::default(),
         },
         Arc::new(OwnershipTree::new()),
     );

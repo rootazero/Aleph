@@ -150,10 +150,7 @@ where
 /// [`with_scope`] scope or when the surrounding scope explicitly set `None`.
 #[must_use]
 pub fn current_scope() -> Option<ScopeAttribution> {
-    CURRENT_ATTRIBUTION
-        .try_with(Clone::clone)
-        .ok()
-        .flatten()
+    CURRENT_ATTRIBUTION.try_with(Clone::clone).ok().flatten()
 }
 
 /// The user the current execution context acts for, across BOTH ambient

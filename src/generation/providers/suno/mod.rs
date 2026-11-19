@@ -337,16 +337,13 @@ impl GenerationProvider for SunoProvider {
                     )
                 })?;
 
-            let audio_url = final_clips[complete_idx]
-                .audio_url
-                .clone()
-                .ok_or_else(|| {
-                    GenerationError::provider(
-                        "Suno clip completed but audio_url is missing",
-                        None,
-                        "suno",
-                    )
-                })?;
+            let audio_url = final_clips[complete_idx].audio_url.clone().ok_or_else(|| {
+                GenerationError::provider(
+                    "Suno clip completed but audio_url is missing",
+                    None,
+                    "suno",
+                )
+            })?;
             let complete_duration = final_clips[complete_idx].duration;
             let complete_id = final_clips[complete_idx].id.clone();
 

@@ -168,6 +168,7 @@ impl BuiltinToolRegistry {
                 Arc::clone(store),
                 Arc::clone(coord_store),
                 config.artifact_store.clone(),
+                current_agent_id.clone(),
             );
             let status = TeamStatusTool::new(
                 Arc::clone(store),

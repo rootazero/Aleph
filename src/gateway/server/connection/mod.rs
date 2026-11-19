@@ -1859,6 +1859,7 @@ mod response_frame_tests {
             crate::memory::runtime::MemoryRuntimeConfig {
                 metadata_path: root.path().join("memory.db"),
                 note_memory_dir: root.path().join("notes"),
+                retrieval_tuning: Default::default(),
             },
             tree.clone(),
         );

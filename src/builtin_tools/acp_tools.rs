@@ -11,8 +11,8 @@ use tracing::info;
 use super::{notify_tool_result, notify_tool_start, notify_tool_streaming_chunk};
 use crate::acp::adapter::AdapterMode;
 use crate::acp::manager::AcpAdapterManager;
-use crate::acp::AcpChunkCallback;
 use crate::acp::session::CancelDispatch;
+use crate::acp::AcpChunkCallback;
 use crate::config::types::acp::TrustLevel;
 use crate::error::{AlephError, Result};
 use crate::sync_primitives::Arc;
@@ -81,19 +81,35 @@ impl AlephTool for AcpDelegateTool {
         notify_tool_start(Self::NAME, &args_summary);
 
         // Trust level check
-        let config = self
-            .manager
-            .get_config(&args.harness)
-            .await
-            .ok_or_else(|| {
-                crate::acp::protocol::AcpOperationError::new(
+        let config = match self.manager.get_config(&args.harness).await {
+            Some(config) => config,
+            None => {
+                // `acp.list` is a Panel JSON-RPC method — the model cannot
+                // call it. Name the harnesses that DO exist instead of
+                // pointing at a surface the caller has no access to.
+                let mut known: Vec<String> = self
+                    .manager
+                    .list_configs()
+                    .await
+                    .into_iter()
+                    .map(|(id, _)| id)
+                    .collect();
+                known.sort();
+                let known = if known.is_empty() {
+                    "none configured".to_string()
+                } else {
+                    known.join(", ")
+                };
+                return Err(crate::acp::protocol::AcpOperationError::new(
                     crate::acp::protocol::AcpErrorCode::HarnessNotFound,
                     format!(
-                        "Unknown ACP harness: '{}'. Check available harnesses via acp.list.",
+                        "Unknown ACP harness: '{}'. Known harnesses: {known}.",
                         args.harness
                     ),
                 )
-            })?;
+                .into());
+            }
+        };
 
         match config.trust_level {
             TrustLevel::Disabled => {

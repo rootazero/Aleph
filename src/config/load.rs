@@ -229,7 +229,7 @@ impl Config {
         // miss the case where only the [mcp.builtin] migration fired, leaving
         // it unpersisted and re-run on every load.
         let migrated_mcp_contents = Self::migrate_mcp_builtin_in_toml(&contents)?;
-        let migrated_contents = Self::migrate_vector_db_in_toml(&migrated_mcp_contents)?;
+        let migrated_contents = migrated_mcp_contents;
         let migrated = migrated_contents != contents;
         let contents = migrated_contents;
 

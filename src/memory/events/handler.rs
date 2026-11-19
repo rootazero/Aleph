@@ -2110,6 +2110,7 @@ fn reads(conn: &Connection) {
             crate::memory::runtime::MemoryRuntimeConfig {
                 metadata_path: root.path().join("metadata.db"),
                 note_memory_dir: note_dir.clone(),
+                retrieval_tuning: Default::default(),
             },
             Arc::new(crate::capability::ownership::OwnershipTree::new()),
         );

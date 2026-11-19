@@ -40,7 +40,6 @@ fn test_default_memory_config() {
     let memory = MemoryConfig::default();
 
     assert!(memory.enabled);
-    assert_eq!(memory.vector_db, "sqlite-vec");
     // No embedding provider is preselected — the user picks one during setup.
     assert!(memory.embedding.active_provider_id.is_empty());
     assert!(memory.dreaming.enabled);

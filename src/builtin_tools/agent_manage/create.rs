@@ -187,7 +187,6 @@ pub struct AgentCreateTool {
     workspace_mgr: Arc<AgentEnvStore>,
     agent_manager: Option<Arc<AgentManager>>,
     session_store: Arc<dyn crate::gateway::session_store::SessionStore>,
-    raw_memory_writer: Option<Arc<dyn crate::memory::store::raw_memory::RawMemoryStore>>,
     /// Bus for the `Registered` lifecycle event (parity with boot-time
     /// registration and the `agents.create` RPC).
     event_bus: Option<Arc<crate::gateway::event_bus::GatewayEventBus>>,
@@ -204,7 +203,6 @@ impl AgentCreateTool {
             workspace_mgr,
             agent_manager: None,
             session_store,
-            raw_memory_writer: None,
             event_bus: None,
         }
     }
@@ -212,14 +210,6 @@ impl AgentCreateTool {
     #[must_use]
     pub fn with_agent_manager(mut self, manager: Arc<AgentManager>) -> Self {
         self.agent_manager = Some(manager);
-        self
-    }
-
-    pub fn with_raw_memory_writer(
-        mut self,
-        writer: Arc<dyn crate::memory::store::raw_memory::RawMemoryStore>,
-    ) -> Self {
-        self.raw_memory_writer = Some(writer);
         self
     }
 
@@ -454,16 +444,18 @@ impl AlephTool for AgentCreateTool {
         };
 
         let instance = {
-            let mut inst =
+            let inst =
                 AgentInstance::new(config, Arc::clone(&self.session_store)).map_err(|e| {
                     AgentManageError::Io(format!(
                         "Failed to create agent instance '{}': {}",
                         args.id, e
                     ))
                 })?;
-            if let Some(ref writer) = self.raw_memory_writer {
-                inst = inst.with_raw_memory_writer(Arc::clone(writer));
-            }
+            // The L0 raw-memory writer is NOT wired per tool: the registry's
+            // global writer (`AgentRegistry::set_raw_memory_writer`) is the
+            // one that captures an agent's transcript rows, and it is
+            // installed at gateway startup. A per-tool writer had no caller
+            // and its branch was dead in production.
             inst
         };
 

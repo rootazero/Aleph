@@ -268,6 +268,7 @@ async fn owned_registration_failure_keeps_native_and_consumer_completion_observa
         crate::memory::runtime::MemoryRuntimeConfig {
             metadata_path: dir.path().join("owned.db"),
             note_memory_dir: root.clone(),
+            retrieval_tuning: Default::default(),
         },
         Arc::new(crate::capability::ownership::OwnershipTree::new()),
     );

@@ -16,6 +16,7 @@ use crate::looping::{Cadence, LoopRegistry, LoopState, LoopStatus};
 use crate::providers::AiProvider;
 use crate::sync_primitives::Arc;
 use crate::tools::AlephTool;
+use crate::utils::duration::parse_interval_ms;
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
@@ -88,36 +89,6 @@ const MODEL_PACED_FALLBACK_MS: u64 = 600_000; // 10 min
 /// running forever on the 24/7 daemon. Generous (the model/user can raise it),
 /// but never truly unbounded by default.
 pub const DEFAULT_SOFT_MAX_ITERATIONS: u32 = 500;
-
-/// Parse a human duration ("30s","5m","2h","500ms") into ms. Rejects garbage
-/// and sub-second values (a sub-second loop would hammer the engine). No new
-/// dependency — small hand parser (R3 core minimalism).
-pub fn parse_interval_ms(s: &str) -> std::result::Result<u64, String> {
-    let s = s.trim();
-    if s.is_empty() {
-        return Err("empty interval".to_string());
-    }
-    let (num, unit_ms): (&str, u64) = if let Some(n) = s.strip_suffix("ms") {
-        (n, 1)
-    } else if let Some(n) = s.strip_suffix('s') {
-        (n, 1_000)
-    } else if let Some(n) = s.strip_suffix('m') {
-        (n, 60_000)
-    } else if let Some(n) = s.strip_suffix('h') {
-        (n, 3_600_000)
-    } else {
-        return Err(format!("unrecognized interval '{s}' (use 30s/5m/2h)"));
-    };
-    let value: u64 = num
-        .trim()
-        .parse()
-        .map_err(|_| format!("invalid interval number in '{s}'"))?;
-    let ms = value.saturating_mul(unit_ms);
-    if ms < 1_000 {
-        return Err(format!("interval too short: '{s}' is below the 1s minimum"));
-    }
-    Ok(ms)
-}
 
 fn now_ms() -> u64 {
     std::time::SystemTime::now()
@@ -960,6 +931,7 @@ impl AlephTool for LoopTool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::utils::duration::parse_interval_ms;
 
     #[test]
     fn parse_interval_handles_units() {
