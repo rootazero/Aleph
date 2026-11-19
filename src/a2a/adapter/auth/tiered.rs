@@ -34,20 +34,6 @@ impl TieredAuthenticator {
         }
     }
 
-    /// Configure per-level permissions
-    #[must_use]
-    pub fn with_permissions(
-        mut self,
-        local: Vec<String>,
-        trusted: Vec<String>,
-        public: Vec<String>,
-    ) -> Self {
-        self.local_permissions = local;
-        self.trusted_permissions = trusted;
-        self.public_permissions = public;
-        self
-    }
-
     fn permissions_for(&self, level: &TrustLevel) -> Vec<String> {
         match level {
             TrustLevel::Local => self.local_permissions.clone(),
@@ -348,22 +334,18 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn custom_permissions_applied() {
-        let auth = TieredAuthenticator::new(true, vec!["tok".to_string()]).with_permissions(
-            vec!["admin".to_string()],
-            vec!["read".to_string(), "write".to_string()],
-            vec!["read".to_string()],
-        );
+    async fn default_permissions_per_tier() {
+        let auth = TieredAuthenticator::new(true, vec!["tok".to_string()]);
 
         // Local
         let ctx = make_context(localhost_addr(), Credentials::None);
         let p = auth.authenticate(&ctx).await.unwrap();
-        assert_eq!(p.permissions, vec!["admin".to_string()]);
+        assert_eq!(p.permissions, vec!["*".to_string()]);
 
         // Trusted
         let ctx = make_context(remote_addr(), Credentials::BearerToken("tok".to_string()));
         let p = auth.authenticate(&ctx).await.unwrap();
-        assert_eq!(p.permissions, vec!["read".to_string(), "write".to_string()]);
+        assert_eq!(p.permissions, vec!["*".to_string()]);
 
         // Public (OAuth2 rejected until JWKS implemented)
         let ctx = make_context(remote_addr(), Credentials::OAuth2Token("x".to_string()));

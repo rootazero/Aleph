@@ -12,6 +12,7 @@ use super::{notify_tool_result, notify_tool_start, notify_tool_streaming_chunk};
 use crate::acp::adapter::AdapterMode;
 use crate::acp::manager::AcpAdapterManager;
 use crate::acp::AcpChunkCallback;
+use crate::acp::session::CancelDispatch;
 use crate::config::types::acp::TrustLevel;
 use crate::error::{AlephError, Result};
 use crate::sync_primitives::Arc;
@@ -362,10 +363,18 @@ impl AlephTool for AcpSessionControlTool {
                 format!("authenticated via method {method_id}")
             }
             AcpSessionAction::Cancel => {
-                self.manager
+                let dispatch = self
+                    .manager
                     .cancel_named(&args.harness, &cwd, session_name)
                     .await?;
-                "cancel notification sent".to_string()
+                match dispatch {
+                    CancelDispatch::Sent => "cancel notification sent".to_string(),
+                    CancelDispatch::NoSession => {
+                        "cancel skipped: the ACP session has no session id yet \
+                         (session/new has not completed), so nothing was sent"
+                            .to_string()
+                    }
+                }
             }
         };
         notify_tool_result(Self::NAME, &message, true);

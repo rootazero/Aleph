@@ -70,10 +70,14 @@ pub(super) fn AddHarnessPanel(
             .filter(|s| !s.is_empty())
             .collect();
 
+        // The core deserializes `output_format` as an internally tagged
+        // enum (`{"type": "plain_text"}` / `{"type": "json", "field": …}`).
+        // The previous untagged shapes (`"plain_text"` / `{"json": {...}}`)
+        // were rejected by the server with INVALID_PARAMS.
         let output_format = if mode.get() == "oneshot" && output_format_type.get() == "json" {
-            serde_json::json!({ "json": { "field": json_field_name.get() } })
+            serde_json::json!({ "type": "json", "field": json_field_name.get() })
         } else {
-            serde_json::json!("plain_text")
+            serde_json::json!({ "type": "plain_text" })
         };
 
         let env: std::collections::HashMap<String, String> = env_pairs

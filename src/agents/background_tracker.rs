@@ -624,7 +624,7 @@ impl BackgroundAgentTracker {
     /// announce an already-delivered result. Wakes `wait` parkers so a waiter
     /// on a delisted id resolves to `NotFound` instead of blocking out its
     /// full window.
-    pub fn remove_running(&self, request_id: &str) {
+    fn remove_running(&self, request_id: &str) {
         self.running
             .write()
             .unwrap_or_else(|e| {

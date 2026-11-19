@@ -2619,7 +2619,12 @@ async fn start_server_body(
             // created first and injected into the StreamHub so every task
             // status/artifact broadcast also fans out to push-notification
             // webhooks (previously `notify_*` had no caller — dead code).
-            let notification = Arc::new(NotificationService::new());
+            // The operator's `[security.ssrf]` policy is passed in: the
+            // webhook URL is operator- or client-supplied, so it must be
+            // checked against the same host lists as every other outbound
+            // request instead of the permissive built-in default.
+            let notification =
+                Arc::new(NotificationService::with_ssrf_policy(webhook_ssrf_policy.clone()));
             let task_store: Arc<dyn A2ATaskManager> = Arc::new(TaskStore::new());
             let stream_hub: Arc<dyn A2AStreamingHandler> =
                 Arc::new(StreamHub::with_notification(notification.clone()));

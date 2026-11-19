@@ -6,6 +6,7 @@ use super::{AcpAdapterManager, SessionEntry, SessionKey};
 use crate::acp::adapter::AdapterMode;
 use crate::acp::protocol::{AcpErrorCode, AcpOperationError};
 use crate::acp::AcpChunkCallback;
+use crate::acp::session::CancelDispatch;
 use crate::error::Result;
 use crate::sync_primitives::Arc;
 
@@ -92,7 +93,7 @@ impl AcpAdapterManager {
                 );
                 self.emit_persistence_event(crate::acp::AcpSessionEvent::Removed {
                     harness_id: harness_id.to_string(),
-                    cwd: cwd.to_string(),
+                    cwd: key.cwd.to_string_lossy().into_owned(),
                     session_name: session_name.map(str::to_string),
                 })
                 .await;
@@ -172,7 +173,7 @@ impl AcpAdapterManager {
             if evicted {
                 self.emit_persistence_event(crate::acp::AcpSessionEvent::Removed {
                     harness_id: harness_id.to_string(),
-                    cwd: cwd.to_string(),
+                    cwd: key.cwd.to_string_lossy().into_owned(),
                     session_name: session_name.map(str::to_string),
                 })
                 .await;
@@ -301,7 +302,7 @@ impl AcpAdapterManager {
                                 self.emit_persistence_event(crate::acp::AcpSessionEvent::Created {
                                     harness_id: harness_id.to_string(),
                                     acp_session_id: sid,
-                                    cwd: cwd.to_string(),
+                                    cwd: key.cwd.to_string_lossy().into_owned(),
                                     session_name: session_name.map(str::to_string),
                                 })
                                 .await;
@@ -313,7 +314,7 @@ impl AcpAdapterManager {
                             if self.remove_if_same(&key, &entry).await {
                                 self.emit_persistence_event(crate::acp::AcpSessionEvent::Removed {
                                     harness_id: harness_id.to_string(),
-                                    cwd: cwd.to_string(),
+                                    cwd: key.cwd.to_string_lossy().into_owned(),
                                     session_name: session_name.map(str::to_string),
                                 })
                                 .await;
@@ -346,7 +347,7 @@ impl AcpAdapterManager {
                         if retryable && self.remove_if_same(&key, &entry).await {
                             self.emit_persistence_event(crate::acp::AcpSessionEvent::Removed {
                                 harness_id: harness_id.to_string(),
-                                cwd: cwd.to_string(),
+                                cwd: key.cwd.to_string_lossy().into_owned(),
                                 session_name: session_name.map(str::to_string),
                             })
                             .await;
@@ -381,7 +382,7 @@ impl AcpAdapterManager {
     ///
     /// Returns `SessionDead` if no entry exists for this harness/cwd.
     pub async fn cancel(&self, harness_id: &str, cwd: &str) -> Result<()> {
-        self.cancel_named(harness_id, cwd, None).await
+        self.cancel_named(harness_id, cwd, None).await.map(|_| ())
     }
 
     /// Like `cancel`, but targets a specific named session.
@@ -390,7 +391,7 @@ impl AcpAdapterManager {
         harness_id: &str,
         cwd: &str,
         session_name: Option<&str>,
-    ) -> Result<()> {
+    ) -> Result<CancelDispatch> {
         let key = SessionKey::with_name(harness_id, cwd, session_name);
         let entry = self
             .sessions
@@ -572,7 +573,7 @@ impl AcpAdapterManager {
             drop(s);
             self.emit_persistence_event(crate::acp::AcpSessionEvent::Removed {
                 harness_id: harness_id.to_string(),
-                cwd: cwd.to_string(),
+                cwd: key.cwd.to_string_lossy().into_owned(),
                 session_name: session_name.map(str::to_string),
             })
             .await;

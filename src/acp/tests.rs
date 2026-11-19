@@ -67,8 +67,6 @@ fn request_ids_always_increment() {
 fn parse_result_response() {
     let json = r#"{"jsonrpc":"2.0","id":10,"result":{"content":"ok"}}"#;
     let resp: AcpResponse = serde_json::from_str(json).unwrap();
-    assert!(resp.is_result());
-    assert!(!resp.is_notification());
     assert_eq!(resp.id, Some(10));
     assert!(resp.error.is_none());
 }
@@ -77,8 +75,7 @@ fn parse_result_response() {
 fn parse_notification_response() {
     let json = r#"{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s1"}}"#;
     let resp: AcpResponse = serde_json::from_str(json).unwrap();
-    assert!(!resp.is_result());
-    assert!(resp.is_notification());
+    assert_eq!(resp.id, None);
     assert_eq!(resp.method.as_deref(), Some("session/update"));
 }
 
@@ -86,7 +83,7 @@ fn parse_notification_response() {
 fn parse_error_response() {
     let json = r#"{"jsonrpc":"2.0","id":5,"error":{"code":-32601,"message":"Method not found"}}"#;
     let resp: AcpResponse = serde_json::from_str(json).unwrap();
-    assert!(resp.is_result()); // has id
+    assert_eq!(resp.id, Some(5)); // has id
     let err = resp.error.as_ref().unwrap();
     assert_eq!(err.code, -32601);
     assert_eq!(err.message, "Method not found");
