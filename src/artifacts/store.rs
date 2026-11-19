@@ -100,11 +100,6 @@ impl ArtifactStore {
             .as_ref()
     }
 
-    /// Root directory this store writes under.
-    #[must_use]
-    pub fn root(&self) -> &Path {
-        &self.root
-    }
 
     /// Store `bytes` under `session_key` and return the record describing them.
     ///
