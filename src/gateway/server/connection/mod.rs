@@ -1201,9 +1201,22 @@ pub async fn handle_connection(
                                                                 req.params.as_ref(),
                                                                 &rpc_channel_for_node,
                                                             ) {
+                                                                // Publish the name the REGISTRY stored, not
+                                                                // the raw string from the connect frame. The
+                                                                // registry bounds it (≤128 bytes) and both
+                                                                // `node.disconnected` arms publish that
+                                                                // bounded name, so publishing the raw peer
+                                                                // string here made the two events disagree —
+                                                                // and a peer could fan a multi-megabyte name
+                                                                // out to every admin subscriber of `node.**`.
+                                                                let registered_name = ctx
+                                                                    .node_registry
+                                                                    .node_identity_by_conn(&conn_id)
+                                                                    .map(|(_, name)| name)
+                                                                    .unwrap_or_else(|| claim.device_name.clone());
                                                                 if let Err(e) = ctx.event_bus.publish_json(&TopicEvent::new(
                                                                     "node.connected",
-                                                                    serde_json::json!({"node_id": node_id, "name": &claim.device_name, "conn_id": &conn_id}),
+                                                                    serde_json::json!({"node_id": node_id, "name": registered_name, "conn_id": &conn_id}),
                                                                 )) {
                                                                 tracing::warn!(
                                                                     error = %e,

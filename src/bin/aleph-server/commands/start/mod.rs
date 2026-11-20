@@ -624,7 +624,11 @@ async fn start_server_body(
 
     // Security store + vault construction (early — vault needed for API key
     // resolution).
-    let auth_bundle = initialize_vault(final_port, server.node_registry.clone())?;
+    let auth_bundle = initialize_vault(
+        final_port,
+        server.node_registry.clone(),
+        server.event_bus().clone(),
+    )?;
 
     // Install the durable per-principal spend ledger on the same
     // `SecurityStore` every other durable consumer shares — see

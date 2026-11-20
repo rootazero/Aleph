@@ -165,6 +165,7 @@ pub(in crate::commands::start) struct VaultBundle {
 pub(in crate::commands::start) fn initialize_vault(
     port: u16,
     node_registry: Arc<alephcore::cluster::NodeRegistry>,
+    event_bus: Arc<alephcore::gateway::GatewayEventBus>,
 ) -> Result<VaultBundle, Box<dyn std::error::Error>> {
     use alephcore::utils::paths;
     use tracing::{info, warn};
@@ -253,7 +254,13 @@ pub(in crate::commands::start) fn initialize_vault(
                 shared_token_mgr,
                 security_store: auth_security_store,
                 node_registry,
-                event_bus: None,
+                // The cluster RPC handlers publish `node.disconnected` on the
+                // gateway bus. Handing them the SAME bus the gateway server
+                // publishes on is what makes the operator-initiated
+                // deregistration observable: with `None` the event was produced
+                // and dropped, and the Panel kept showing the node as online
+                // until a hard refresh.
+                event_bus: Some(event_bus),
             }),
             mdns_broadcaster,
         }

@@ -100,7 +100,6 @@ mod tests {
                 .into_iter()
                 .map(|c| CommandDescriptor {
                     name: c.to_string(),
-                    schema: json!({}),
                 })
                 .collect(),
             tags: tags.into_iter().map(String::from).collect(),

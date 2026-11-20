@@ -21,7 +21,10 @@ use crate::cluster::{sha256_hex, NodeRegistry, ResolveError, MAX_FILE_BYTES};
 use crate::error::{AlephError, Result};
 use crate::tools::AlephTool;
 
-const DEFAULT_TIMEOUT_MS: u64 = 120_000;
+/// The reverse-RPC window for ONE node call — see `node_invoke`'s
+/// `DEFAULT_TIMEOUT_MS` for why it must enclose the center's approval window
+/// (120s) rather than match it.
+const DEFAULT_TIMEOUT_MS: u64 = 150_000;
 const B64: base64::engine::general_purpose::GeneralPurpose =
     base64::engine::general_purpose::STANDARD;
 
@@ -39,7 +42,7 @@ pub struct NodeFileArgs {
     /// Overwrite an existing destination. Default false.
     #[serde(default)]
     pub overwrite: bool,
-    /// Reverse-RPC timeout in ms (default 120000).
+    /// Reverse-RPC timeout in ms (default 150000).
     #[serde(default)]
     pub timeout_ms: Option<u64>,
 }
@@ -373,7 +376,6 @@ mod tests {
                 .into_iter()
                 .map(|c| CommandDescriptor {
                     name: c.to_string(),
-                    schema: json!({}),
                 })
                 .collect(),
             tags: vec![],
@@ -555,7 +557,6 @@ mod tests {
             channel: channel.clone(),
             declared_commands: vec![CommandDescriptor {
                 name: "file.read".into(),
-                schema: json!({}),
             }],
             tags: vec![],
             version: None,

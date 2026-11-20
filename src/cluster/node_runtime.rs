@@ -15,7 +15,7 @@ use async_trait::async_trait;
 use serde_json::Value;
 
 use crate::builtin_tools::BashExecTool;
-use crate::cluster::CommandDescriptor;
+use crate::cluster::CommandDeclaration;
 use crate::routing::session_key::SessionKey;
 use crate::sandbox::context::SESSION_ID;
 use crate::tools::AlephTool;
@@ -24,7 +24,7 @@ use crate::tools::AlephTool;
 #[async_trait]
 pub trait NodeCommand: Send + Sync {
     async fn run(&self, args: Value) -> Result<Value, String>;
-    fn descriptor(&self) -> CommandDescriptor;
+    fn descriptor(&self) -> CommandDeclaration;
 }
 
 /// Node command table. Keys = allowlist (node-side authoritative).
@@ -91,8 +91,8 @@ impl CommandTable {
     /// if that ever changes, so the emitted order can never depend on
     /// HashMap iteration order.
     #[must_use]
-    pub fn descriptors(&self) -> Vec<CommandDescriptor> {
-        let mut out: Vec<(String, CommandDescriptor)> = self
+    pub fn descriptors(&self) -> Vec<CommandDeclaration> {
+        let mut out: Vec<(String, CommandDeclaration)> = self
             .commands
             .iter()
             .map(|(key, command)| (key.clone(), command.descriptor()))
@@ -145,8 +145,8 @@ impl NodeCommand for BashNodeCommand {
             .await
             .map_err(|e| e.to_string())
     }
-    fn descriptor(&self) -> CommandDescriptor {
-        CommandDescriptor {
+    fn descriptor(&self) -> CommandDeclaration {
+        CommandDeclaration {
             name: "bash".to_string(),
             schema: serde_json::json!({"type": "object"}),
         }
@@ -216,8 +216,8 @@ mod tests {
             }
             Ok(json!({"echoed": args}))
         }
-        fn descriptor(&self) -> CommandDescriptor {
-            CommandDescriptor {
+        fn descriptor(&self) -> CommandDeclaration {
+            CommandDeclaration {
                 name: "echo".to_string(),
                 schema: json!({"type": "object"}),
             }
@@ -322,8 +322,8 @@ mod tests {
         async fn run(&self, _args: Value) -> Result<Value, String> {
             Ok(Value::Null)
         }
-        fn descriptor(&self) -> CommandDescriptor {
-            CommandDescriptor {
+        fn descriptor(&self) -> CommandDeclaration {
+            CommandDeclaration {
                 name: self.0.to_string(),
                 schema: json!({"type": "object"}),
             }

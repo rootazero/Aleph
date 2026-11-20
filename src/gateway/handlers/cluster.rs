@@ -238,9 +238,8 @@ pub async fn handle_environments_list(
                         status: EnvironmentStatus::Offline,
                         commands: Vec::new(),
                         tags: Vec::new(),
-                        connected_at: 0,
                         // The device store stamps milliseconds; Environment speaks
-                        // Unix seconds (same unit as connected_at).
+                        // Unix seconds.
                         last_seen_at: d.last_seen_at.map(|ms| ms / 1000),
                         // Deliberately never remembered for offline nodes: a
                         // stored version is a claim about a machine we cannot
