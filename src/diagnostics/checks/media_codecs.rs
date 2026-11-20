@@ -220,10 +220,6 @@ impl HealthCheck for MediaCodecsCheck {
         CHECK_ID
     }
 
-    fn title(&self) -> &'static str {
-        "Media decoders"
-    }
-
     #[cfg(target_os = "linux")]
     async fn run(&self, _posture: Posture) -> Vec<Finding> {
         findings_for(&probe().await)

@@ -72,10 +72,6 @@ impl HealthCheck for DuplicateInstanceCheck {
         ID
     }
 
-    fn title(&self) -> &'static str {
-        "Duplicate instance"
-    }
-
     async fn run(&self, _posture: Posture) -> Vec<Finding> {
         // sysinfo does synchronous /proc I/O — keep it off the async executor.
         // A panicked or cancelled probe counted nothing. Folding it into `0`

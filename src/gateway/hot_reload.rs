@@ -236,8 +236,9 @@ impl ConfigWatcher {
     ///
     /// # What this does — and what it deliberately does NOT do
     ///
-    /// This swaps the watcher's internal `current_config` (the
-    /// [`GatewayConfig`] snapshot served by `config.get`) and emits
+    /// This swaps the watcher's internal `current_config` (a
+    /// [`GatewayConfig`] snapshot that no RPC serves — `config.get` serves
+    /// the shared app `Config`) and emits
     /// [`ConfigEvent::Reloaded`]. It does NOT call
     /// `crate::config::live_apply::apply_live_sections` and does NOT touch
     /// the shared app `Config` (`Arc<RwLock<Config>>`) that `route`,

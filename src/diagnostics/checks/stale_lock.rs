@@ -46,10 +46,6 @@ impl HealthCheck for StaleLockCheck {
         ID
     }
 
-    fn title(&self) -> &'static str {
-        "Instance lock"
-    }
-
     async fn run(&self, posture: Posture) -> Vec<Finding> {
         // `diagnose_holder` does a synchronous sysinfo process scan — keep it
         // off the async executor (same discipline as `core/duplicate-instance`).

@@ -98,7 +98,16 @@ pub async fn preflight(
                 tracing::debug!(
                     ?session_id,
                     tokens_freed = freed,
+                    owner = ?outcome.owner,
+                    degraded = ?outcome.degraded,
                     "preflight cheap passes saved tokens",
+                );
+            }
+            if !outcome.skipped_observers.is_empty() {
+                tracing::debug!(
+                    ?session_id,
+                    skipped_observers = ?outcome.skipped_observers,
+                    "preflight skipped observer capabilities",
                 );
             }
         }

@@ -258,10 +258,6 @@ impl HealthCheck for HooksConsentCheck {
         ID
     }
 
-    fn title(&self) -> &'static str {
-        "Shell-hook consent"
-    }
-
     async fn run(&self, _posture: Posture) -> Vec<Finding> {
         // Consent is never auto-repaired — approval is a human decision.
         self.diagnose()

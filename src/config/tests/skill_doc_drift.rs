@@ -258,7 +258,7 @@ impl Truth {
 /// null branch (`Option<GuardrailsToml>`), an array (`[[personas]]`) or a map
 /// (`[providers.*]`). Every branch is unioned: this can only widen the accepted
 /// set, which is the direction this guard errs in on purpose.
-fn collect_field_names(
+pub(super) fn collect_field_names(
     node: &Value,
     defs: &Map<String, Value>,
     depth: u8,

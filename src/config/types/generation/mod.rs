@@ -39,7 +39,6 @@ mod tests {
         assert!(config.default_video_provider.is_none());
         assert!(config.default_audio_provider.is_none());
         assert!(config.default_speech_provider.is_none());
-        assert!(config.smart_routing_enabled);
         assert_eq!(config.auto_paste_threshold_mb, 5);
         assert_eq!(config.background_task_threshold_seconds, 30);
         assert!(config.providers.is_empty());
@@ -306,7 +305,6 @@ mod tests {
     fn test_generation_config_toml_serialization() {
         let mut config = GenerationConfig {
             default_image_provider: Some("dalle".to_string()),
-            smart_routing_enabled: true,
             ..GenerationConfig::default()
         };
 

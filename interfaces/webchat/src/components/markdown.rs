@@ -380,8 +380,10 @@ enum Frame {
 }
 
 /// Assistant-message renderer that paces character reveal at
-/// `behavior.typing_speed` (chars/sec) via the shared [`TypewriterClock`], then
-/// switches to full Markdown once the sweep catches up.
+/// `state::typewriter::DEFAULT_CPS` (chars/sec) — the rate is a Panel-local
+/// constant, the server retired `behavior.typing_speed` — via the shared
+/// [`TypewriterClock`], then switches to full Markdown once the sweep catches
+/// up.
 ///
 /// The component is MOUNTED ONCE per row and reads its message through the
 /// row's `Memo` — its predecessor took owned `content`/`message_id` props and
@@ -484,7 +486,7 @@ pub fn TypewriterRenderer(message: Memo<Option<ChatMessage>>) -> impl IntoView {
                 &id,
                 total_chars,
                 now,
-                clock.cps.get_untracked(),
+                crate::state::typewriter::DEFAULT_CPS,
                 clock.instant.get_untracked(),
             ),
             None => total_chars,

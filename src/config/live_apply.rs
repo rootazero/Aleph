@@ -739,6 +739,24 @@ mod tests {
             files.len()
         );
 
+        // The enclosing item of a write: everything from the last top-level
+        // `fn` header before it to the next one. Bounded by the file's own
+        // syntax rather than by a line count, which drifts onto a
+        // neighbouring declaration the first time something above it grows.
+        fn enclosing_body<'a>(src: &'a str, at: usize) -> &'a str {
+            let start = ["\npub async fn ", "\npub fn ", "\nasync fn ", "\nfn "]
+                .iter()
+                .filter_map(|kw| src[..at].rfind(kw))
+                .max()
+                .unwrap_or(0);
+            let end = ["\npub async fn ", "\npub fn ", "\nasync fn ", "\nfn "]
+                .iter()
+                .filter_map(|kw| src[at..].find(kw).map(|i| at + i))
+                .min()
+                .unwrap_or(src.len());
+            &src[start..end]
+        }
+
         let mut checked = 0usize;
         let mut missing: Vec<String> = Vec::new();
         for path in &files {
@@ -756,22 +774,7 @@ mod tests {
                 let Some(at) = src.find(&save) else { continue };
                 checked += 1;
 
-                // The enclosing item: everything from the last top-level `fn`
-                // header before the write to the next one. Bounded by the
-                // file's own syntax rather than by a line count, which drifts
-                // onto a neighbouring declaration the first time something
-                // above it grows.
-                let start = ["\npub async fn ", "\npub fn ", "\nasync fn ", "\nfn "]
-                    .iter()
-                    .filter_map(|kw| src[..at].rfind(kw))
-                    .max()
-                    .unwrap_or(0);
-                let end = ["\npub async fn ", "\npub fn ", "\nasync fn ", "\nfn "]
-                    .iter()
-                    .filter_map(|kw| src[at..].find(kw).map(|i| at + i))
-                    .min()
-                    .unwrap_or(src.len());
-                let body = &src[start..end];
+                let body = enclosing_body(&src, at);
 
                 if body.contains("apply_live_sections") {
                     continue;
@@ -788,6 +791,37 @@ mod tests {
                 }
 
                 missing.push(format!("{name} saves [{section}]"));
+            }
+
+            // The same question for the SUBSECTIONS. A live subsection hangs
+            // under a top-level section that is not itself live
+            // (`policies.spend` under `policies`), so a handler that persists
+            // the top-level section can write a live field without
+            // hot-applying it — and the loop above never sees it, because
+            // `policies` is not in `LIVE_SECTIONS`.
+            //
+            // Only a handler that actually touches the live leaf owes the
+            // executor a call: a handler that writes OTHER fields under the
+            // same top-level section has nothing to hot-apply. The leaf name
+            // is a proxy for "touches that field" — coarse, but it fails
+            // toward demanding the call rather than toward hiding it.
+            for subsection in LIVE_SUBSECTIONS {
+                let Some((top, leaf)) = subsection.split_once('.') else {
+                    continue;
+                };
+                let save = format!("save_incremental(&[\"{top}\"])");
+                let Some(at) = src.find(&save) else { continue };
+                let body = enclosing_body(&src, at);
+                if !body.contains(leaf) {
+                    continue;
+                }
+                checked += 1;
+
+                if body.contains("apply_live_sections") {
+                    continue;
+                }
+
+                missing.push(format!("{name} saves [{top}] and touches {subsection}"));
             }
         }
 

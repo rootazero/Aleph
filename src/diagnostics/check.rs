@@ -55,9 +55,6 @@ pub trait HealthCheck: Send + Sync {
     /// Stable, namespaced identifier, e.g. `core/data-dir`.
     fn id(&self) -> &'static str;
 
-    /// Short human label for headers.
-    fn title(&self) -> &'static str;
-
     /// Run detection. When `posture.allows_repair()` and a problem is
     /// repairable, the check should apply the repair and record the outcome
     /// on the returned finding via `Finding::with_repair`.

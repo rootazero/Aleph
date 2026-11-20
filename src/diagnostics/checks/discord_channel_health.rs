@@ -332,20 +332,10 @@ impl DiscordChannelHealthCheck {
     }
 }
 
-impl Default for DiscordChannelHealthCheck {
-    fn default() -> Self {
-        Self::from_default_path()
-    }
-}
-
 #[async_trait]
 impl HealthCheck for DiscordChannelHealthCheck {
     fn id(&self) -> &'static str {
         CHECK_ID
-    }
-
-    fn title(&self) -> &'static str {
-        "Discord channel config"
     }
 
     fn timeout(&self) -> Duration {

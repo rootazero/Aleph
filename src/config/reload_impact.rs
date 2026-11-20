@@ -204,6 +204,35 @@ pub(crate) fn live_targets() -> Vec<&'static str> {
 }
 
 impl ReloadImpact {
+    /// The single wire shape for a reload verdict.
+    ///
+    /// Every surface that reports *when* a config change takes effect sends
+    /// `{"kind": …, "hint": …}` under the `reload_impact` key. The hint is
+    /// audience-specific prose (the agent gets [`ReloadImpact::agent_hint`], a
+    /// Panel user gets [`ReloadImpact::user_hint_zh`]); the *shape* is not
+    /// audience-specific, and it used to be: the same key travelled as a bare
+    /// verdict string on some RPCs, as `{kind, hint}` on others, and as a
+    /// per-field verdict map on the browser RPC.
+    pub fn wire(self, hint: &str) -> serde_json::Value {
+        serde_json::json!({ "kind": self, "hint": hint })
+    }
+
+    /// The strongest requirement in a set: `Restart` wins over `Live`, and
+    /// `Live` wins over `Inert`.
+    ///
+    /// Used when one change touches several sub-systems with different
+    /// verdicts: the overall answer has to be the one that demands the most
+    /// of the operator.
+    pub fn strongest(impacts: impl IntoIterator<Item = ReloadImpact>) -> ReloadImpact {
+        impacts.into_iter().fold(ReloadImpact::Inert, |verdict, impact| {
+            match (verdict, impact) {
+                (ReloadImpact::Restart, _) | (_, ReloadImpact::Restart) => ReloadImpact::Restart,
+                (ReloadImpact::Live, _) | (_, ReloadImpact::Live) => ReloadImpact::Live,
+                _ => ReloadImpact::Inert,
+            }
+        })
+    }
+
     /// Classify a dot-path config target (e.g. `"providers.openai"`,
     /// `"behavior.output_mode"`, `"generation"`, `"policies.spend.per_user_usd"`) by
     /// the most specific declared live target that covers it — see

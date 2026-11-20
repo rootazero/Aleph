@@ -129,8 +129,10 @@ impl ContentIndex {
         Self::from_conn(conn)
     }
 
-    /// Open an ephemeral in-memory index. Used by tests and by callers that
-    /// want indexing without touching disk.
+    /// Open an ephemeral in-memory index.
+    ///
+    /// Test-only: production opens the on-disk index through [`Self::open`].
+    #[cfg(test)]
     pub fn open_in_memory() -> Result<Self, IndexError> {
         let conn = Connection::open_in_memory()?;
         Self::from_conn(conn)
@@ -325,6 +327,7 @@ impl ContentIndex {
     /// near-ties without letting proximity override a decisive RRF lead.
     /// Single-term queries skip the pass entirely, leaving RRF order byte-for-
     /// byte unchanged.
+    #[cfg(test)]
     pub fn search(
         &self,
         session_id: &str,
@@ -403,10 +406,13 @@ impl ContentIndex {
         Ok(finalize(fused, limit))
     }
 
-    /// Number of chunks indexed by `session_id`, across all its sources. Cheap;
-    /// used by the `ctx_search` tool to tell the model whether anything of *its
-    /// own* is indexed yet — a global count would leak the existence of other
-    /// sessions' output.
+    /// Number of chunks indexed by `session_id`, across all its sources.
+    ///
+    /// Test-only: production counts through [`Self::len_sessions`] — the
+    /// `ctx_search` tool asks the result store, which scopes the count to the
+    /// session's own key set (a global count would leak the existence of other
+    /// sessions' output).
+    #[cfg(test)]
     pub fn len(&self, session_id: &str) -> Result<usize, IndexError> {
         self.len_sessions(&[session_id])
     }

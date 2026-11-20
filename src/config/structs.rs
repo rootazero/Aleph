@@ -449,12 +449,6 @@ impl Default for Config {
 // =============================================================================
 
 impl Config {
-    /// Create a new config with default values
-    #[must_use]
-    pub fn new() -> Self {
-        Self::default()
-    }
-
     /// Convenience accessor for the local voice (BYO endpoint) config.
     #[must_use]
     pub fn local_voice(&self) -> &VoiceLocalConfig {

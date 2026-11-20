@@ -392,10 +392,6 @@ impl HealthCheck for FoldEconomicsCheck {
         ID
     }
 
-    fn title(&self) -> &'static str {
-        TITLE
-    }
-
     async fn run(&self, _posture: Posture) -> Vec<Finding> {
         match Presence::of(ID, TITLE, &self.sessions_db) {
             Err(finding) => return vec![finding],

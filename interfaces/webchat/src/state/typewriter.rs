@@ -1,15 +1,23 @@
 //! Client-side typewriter reveal pacing.
 //!
-//! Wires the `behavior.typing_speed` (chars-per-second) config into the
-//! Panel's streaming renderer. The backend streams *real* chunks throttled for
-//! network efficiency (`reply_emitter` `debounce_ms`); the rate at which the
-//! user *sees* characters appear is a pure presentation concern and lives here
-//! (R10: pacing is presentation, not cognition). This mirrors hermes-agent's
+//! Client-side typewriter reveal pacing.
+//!
+//! The backend streams *real* chunks throttled for network efficiency
+//! (`reply_emitter` `debounce_ms`); the rate at which the user *sees*
+//! characters appear is a pure presentation concern and lives here (R10:
+//! pacing is presentation, not cognition). This mirrors hermes-agent's
 //! client-side delta pacing rather than throttling the core's emit path.
 //!
-//! Before this, `typing_speed` was a configured-but-dead knob — defined,
-//! validated (50-400), surfaced in the Panel slider + i18n + example TOML, yet
-//! consumed by nothing. The slider did nothing. This module is its consumer.
+//! # The rate is a Panel-local constant today
+//!
+//! This module was written to consume `behavior.typing_speed`, but the
+//! SERVER retired that field (2026-08-17 wire audit, config-003): the Panel
+//! asked for a `typing_speed` the server never sends, so the reveal rate
+//! fell back to [`DEFAULT_CPS`] and the Behavior settings page rendered its
+//! load-error arm. The wire audit of 2026-11-20 settled the open product
+//! decision — the rate is a Panel-local constant — so the Panel dropped the
+//! `typing_speed` field from its DTO and the knob with it; nothing here may
+//! claim the config drives the rate.
 //!
 //! # Why a counter, not a start-timestamp
 //!
@@ -39,9 +47,12 @@
 use leptos::prelude::*;
 use std::collections::HashMap;
 
-/// Fallback chars-per-second until the live `behavior.typing_speed` loads.
-/// Matches `src/config/types/general.rs::default_typing_speed`.
-const DEFAULT_CPS: u32 = 200;
+/// Reveal rate in chars-per-second.
+///
+/// The server retired `behavior.typing_speed` (2026-08-17 wire audit,
+/// config-003), so the rate is a Panel-local presentation constant: there is
+/// no server-owned knob behind it and nothing to fetch.
+pub(crate) const DEFAULT_CPS: u32 = 200;
 
 /// Reveal cursor for one streaming message's typewriter sweep.
 ///
@@ -71,9 +82,6 @@ pub struct TypewriterClock {
     /// streaming bubbles re-render and advance their reveal *between* token
     /// arrivals (without it, reveal would only step when a delta lands).
     pub tick: RwSignal<u64>,
-    /// `behavior.typing_speed` (chars/sec). `0` disables pacing (reveal-all),
-    /// so a future "no animation" choice degrades gracefully.
-    pub cps: RwSignal<u32>,
     /// `behavior.output_mode == "instant"` — reveal everything immediately
     /// (the backend already coalesces to a single final chunk in instant mode;
     /// this keeps the Panel honest if a stray streamed delta still arrives).
@@ -104,7 +112,6 @@ impl TypewriterClock {
     pub fn new() -> Self {
         Self {
             tick: RwSignal::new(0),
-            cps: RwSignal::new(DEFAULT_CPS),
             instant: RwSignal::new(false),
             reveals: RwSignal::new(HashMap::new()),
             stable_prefixes: RwSignal::new(HashMap::new()),

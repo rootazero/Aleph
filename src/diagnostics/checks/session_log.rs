@@ -186,10 +186,6 @@ impl HealthCheck for SessionLogCheck {
         ID
     }
 
-    fn title(&self) -> &'static str {
-        "Session log"
-    }
-
     async fn run(&self, posture: Posture) -> Vec<Finding> {
         let Some(events) = self.event_store.as_ref() else {
             return vec![unknown_finding(

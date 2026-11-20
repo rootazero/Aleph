@@ -235,18 +235,19 @@ fn AppContent() -> impl IntoView {
         });
     }
 
-    // Typewriter reveal clock — paces the Panel's streamed-text reveal at the
-    // configured `behavior.typing_speed` (chars/sec). Provided here so the chat
-    // view (reader) and the behavior settings page (writer-on-save) share one
-    // clock. The animation ticker advances the reveal between token arrivals;
-    // the boot fetch wires the *live* typing_speed/output_mode (previously the
-    // slider was a dead knob — see state/typewriter.rs). `f` repair-hotkey
-    // pattern aside, this is pure presentation (R10).
+    // Typewriter reveal clock — paces the Panel's streamed-text reveal.
+    // Provided here so the chat view (reader) and the behavior settings page
+    // (writer-on-save) share one clock. The animation ticker advances the
+    // reveal between token arrivals; the boot fetch wires the *live*
+    // output_mode. The reveal RATE is a Panel-local constant
+    // (`state::typewriter::DEFAULT_CPS`) — the server retired
+    // `behavior.typing_speed`, so there is no server-owned rate to fetch (see
+    // state/typewriter.rs). `f` repair-hotkey pattern aside, this is pure
+    // presentation (R10).
     let typewriter = TypewriterClock::new();
     provide_context(typewriter);
     spawn_local(async move {
         if let Ok(cfg) = BehaviorConfigApi::get(&state).await {
-            typewriter.cps.set(cfg.typing_speed);
             typewriter.instant.set(cfg.output_mode == "instant");
         }
     });

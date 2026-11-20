@@ -44,7 +44,7 @@ impl crate::context::budget::preflight::PreflightStage for HistoricalImageStripp
 #[async_trait]
 impl crate::context::budget::preflight::PreflightStage for HistoricalUserImageStrippingStage {
     fn name(&self) -> &'static str {
-        "historical_image_stripping"
+        "historical_user_image_stripping"
     }
 
     async fn prepare(

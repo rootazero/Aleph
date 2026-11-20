@@ -15,8 +15,9 @@
 enabled = true               # Master switch for cron system
 db_path = "..."              # SQLite store for jobs (defaults under ~/.aleph/data)
 check_interval_secs = 60     # Scheduler tick interval
-max_concurrent_jobs = 5      # Max jobs running simultaneously
+max_concurrent_agents = 5   # Max agent sessions running simultaneously
 job_timeout_secs = 900       # Per-job timeout (default 900)
+history_retention_days = 30  # How long job history is kept
 ```
 
 ## Job Management

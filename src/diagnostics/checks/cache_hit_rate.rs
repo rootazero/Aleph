@@ -102,10 +102,6 @@ impl HealthCheck for CacheHitRateCheck {
         ID
     }
 
-    fn title(&self) -> &'static str {
-        "Prompt cache hit rate"
-    }
-
     async fn run(&self, _posture: Posture) -> Vec<Finding> {
         // Same conflation, same sentence, same fix as `core/cache-health`.
         match Presence::of(ID, "Prompt cache hit rate", &self.db_path) {

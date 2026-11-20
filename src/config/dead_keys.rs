@@ -151,6 +151,20 @@ const TOLERATED: &[Tolerated] = &[
         retired: true,
     },
     Tolerated {
+        path: "profiles.*.smart_recall.score_threshold",
+        why: "retired 2026-11-20 (severed-wire audit) — the Phase 2 trigger counts primary \
+              results (src/builtin_tools/memory_search.rs, min_primary_results); the score \
+              threshold was read by nothing, so the documented semantics never happened",
+        retired: true,
+    },
+    Tolerated {
+        path: "generation.smart_routing_enabled",
+        why: "retired 2026-11-20 (severed-wire audit) — no smart-routing mechanism exists; the \
+              flag gated nothing (see review-results/config-context-batch/config-types-report.md \
+              finding 26)",
+        retired: true,
+    },
+    Tolerated {
         path: "desktop.presence",
         why: "reporter removed 2026-08-09; see the module doc of src/config/types/desktop.rs",
         retired: true,

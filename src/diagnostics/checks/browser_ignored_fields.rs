@@ -17,7 +17,7 @@ use std::path::PathBuf;
 use async_trait::async_trait;
 
 use crate::config::Config;
-use crate::diagnostics::check::{HealthCheck, Posture, Presence};
+use crate::diagnostics::check::{unknown_finding, HealthCheck, Posture, Presence};
 use crate::diagnostics::finding::{Finding, Severity};
 
 const ID: &str = "browser/ignored-fields";
@@ -44,10 +44,6 @@ impl HealthCheck for BrowserIgnoredFieldsCheck {
         ID
     }
 
-    fn title(&self) -> &'static str {
-        "Browser profile settings"
-    }
-
     async fn run(&self, _posture: Posture) -> Vec<Finding> {
         let display = self.config_path.display().to_string();
 
@@ -68,18 +64,20 @@ impl HealthCheck for BrowserIgnoredFieldsCheck {
 
         let config = match Config::load_from_file(&self.config_path) {
             Ok(config) => config,
-            Err(_) => {
+            Err(e) => {
                 // The file is there but could not be turned into a config.
                 // `core/config-parse` owns that finding; HERE the browser
                 // settings are unknown, and unknown must never render as
-                // "nothing is ignored" (判据 §8).
-                return vec![Finding::problem(
+                // "nothing is ignored" (判据 §8). The reason travels with the
+                // finding: a discarded error is indistinguishable from an
+                // absence, which is the defect this house style exists to
+                // prevent (`checks::presence_discipline`).
+                return vec![unknown_finding(
                     ID,
-                    Severity::Warning,
-                    "Browser profile settings unknown",
+                    "Browser profile settings",
                     format!(
-                        "{display} could not be read as a config, so whether a profile setting \
-                         is ignored could not be determined."
+                        "{display} could not be read as a config ({e}), so whether a profile \
+                         setting is ignored could not be determined."
                     ),
                 )
                 .with_fix_hint(

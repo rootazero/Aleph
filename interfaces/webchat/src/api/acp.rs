@@ -130,12 +130,22 @@ impl AcpApi {
 
     /// Get the top-level ACP enabled state from config.
     /// Uses config.get since acp.* handlers may not be registered when ACP is disabled.
+    ///
+    /// `config.get` reads the `section` parameter and returns that TOP-LEVEL
+    /// section verbatim; `{"key": ...}` is not a parameter it knows, so the
+    /// old call fell through to the whole-config branch and `val.as_bool()`
+    /// on `{"config": {...}}` was `None` — the toggle rendered "enabled"
+    /// whatever the file said. Ask for the `acp` section and read `enabled`
+    /// out of it.
     pub async fn get_acp_enabled(state: &DashboardState) -> Result<bool, String> {
         let result = state
-            .rpc_call("config.get", serde_json::json!({ "key": "acp.enabled" }))
+            .rpc_call("config.get", serde_json::json!({ "section": "acp" }))
             .await;
         match result {
-            Ok(val) => Ok(val.as_bool().unwrap_or(true)),
+            Ok(val) => Ok(val
+                .get("enabled")
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or(true)),
             Err(_) => Ok(true), // default to enabled
         }
     }

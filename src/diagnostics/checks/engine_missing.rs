@@ -68,13 +68,6 @@ const fn subject_for(engine: Engine) -> &'static str {
     }
 }
 
-const fn title_for(engine: Engine) -> &'static str {
-    match engine {
-        Engine::Chromium => "Managed browser (Chromium)",
-        Engine::Obscura => "Browser engine (obscura)",
-    }
-}
-
 /// The outer bound on the whole resolution, and the number is chosen by two
 /// constraints, not by taste.
 ///
@@ -238,10 +231,6 @@ impl EngineMissingCheck {
 impl HealthCheck for EngineMissingCheck {
     fn id(&self) -> &'static str {
         id_for(self.engine)
-    }
-
-    fn title(&self) -> &'static str {
-        title_for(self.engine)
     }
 
     async fn run(&self, _posture: Posture) -> Vec<Finding> {
@@ -592,7 +581,10 @@ mod tests {
         let obscura = EngineMissingCheck::for_engine(Engine::Obscura);
         assert_eq!(chromium.id(), "browser/chromium-missing");
         assert_eq!(obscura.id(), "browser/obscura-missing");
-        assert_ne!(chromium.title(), obscura.title());
+        assert_ne!(
+            missing_finding(Engine::Chromium, "no system browser").title,
+            missing_finding(Engine::Obscura, "no binary at the pinned path").title
+        );
 
         let c = missing_finding(Engine::Chromium, "no system browser");
         let o = missing_finding(Engine::Obscura, "no binary at the pinned path");

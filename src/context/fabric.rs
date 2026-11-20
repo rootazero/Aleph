@@ -84,7 +84,6 @@ pub(crate) mod privacy;
 mod protocol_frames;
 pub mod runtime;
 pub(crate) mod tool_admission;
-pub use crate::context::budget::preflight::NativePreflightRegistry;
 pub use runtime::{
     AdmissionOutcome, CompactionOutcome, ContextFabric, ContextFabricBuilder, ContextFabricError,
     ContextHandler, ContextOwner, PreflightOutcome,

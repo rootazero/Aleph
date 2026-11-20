@@ -432,15 +432,28 @@ pub async fn handle_update(
     });
     let _ = event_bus.publish_gateway_event(&event);
 
+    // The browser change touches three sub-systems with three verdicts. The
+    // overall verdict is the strongest one — the operator has to satisfy all
+    // of them — and the per-field verdicts stay visible under `by_field` so a
+    // reader can still see which part was hot-applied.
+    let kind = ReloadImpact::strongest([ssrf_impact, ReloadImpact::Restart, ReloadImpact::Restart]);
+    let mut reload_impact = kind.wire(kind.user_hint_zh());
+    if let Some(obj) = reload_impact.as_object_mut() {
+        obj.insert(
+            "by_field".to_string(),
+            serde_json::json!({
+                "ssrf_policy": ssrf_impact,
+                "profile_drivers": ReloadImpact::Restart,
+                "playwright_cli": ReloadImpact::Restart,
+            }),
+        );
+    }
+
     JsonRpcResponse::success(
         request.id,
         serde_json::json!({
             "success": true,
-            "reload_impact": {
-                "ssrf_policy": ssrf_impact,
-                "profile_drivers": ReloadImpact::Restart,
-                "playwright_cli": ReloadImpact::Restart,
-            },
+            "reload_impact": reload_impact,
             "headless_shadowed_by": effective.headless_shadowed_by,
         }),
     )
@@ -621,10 +634,14 @@ mod tests {
 
         let config = make_config();
         let v = update(&config, base_params()).await.result.unwrap();
-        assert_eq!(v["reload_impact"]["ssrf_policy"], "restart");
+        assert_eq!(v["reload_impact"]["by_field"]["ssrf_policy"], "restart");
         // The restart-scoped groups are named beside it rather than lumped in.
-        assert_eq!(v["reload_impact"]["profile_drivers"], "restart");
-        assert_eq!(v["reload_impact"]["playwright_cli"], "restart");
+        assert_eq!(v["reload_impact"]["by_field"]["profile_drivers"], "restart");
+        assert_eq!(v["reload_impact"]["by_field"]["playwright_cli"], "restart");
+        // The overall verdict is the strongest of the per-field ones, and the
+        // wire shape is the same `{kind, hint}` every other config RPC sends.
+        assert_eq!(v["reload_impact"]["kind"], "restart");
+        assert!(v["reload_impact"]["hint"].as_str().is_some_and(|h| !h.is_empty()));
     }
 
     /// The positive arm, asserted by the *effect* rather than by the call: the
@@ -653,7 +670,7 @@ mod tests {
         params["block_private"] = json!(false);
         let v = update(&config, params).await.result.unwrap();
 
-        assert_eq!(v["reload_impact"]["ssrf_policy"], "live");
+        assert_eq!(v["reload_impact"]["by_field"]["ssrf_policy"], "live");
         assert!(
             manager
                 .check_url("http://127.0.0.1:9000/admin")

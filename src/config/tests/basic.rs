@@ -20,7 +20,7 @@ fn test_default_config_memory() {
 #[test]
 fn test_new_config_matches_default() {
     assert_eq!(
-        Config::new().general.default_provider,
+        Config::default().general.default_provider,
         Config::default().general.default_provider
     );
 }

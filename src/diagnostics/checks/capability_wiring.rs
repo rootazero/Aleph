@@ -220,10 +220,6 @@ impl HealthCheck for CapabilityWiringCheck {
         ID
     }
 
-    fn title(&self) -> &'static str {
-        "Capability wiring"
-    }
-
     async fn run(&self, _posture: Posture) -> Vec<Finding> {
         if !crate::gateway::shutdown_forensics::booted() {
             return vec![Finding::problem(
