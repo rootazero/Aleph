@@ -107,7 +107,8 @@ mod tests {
 
     #[test]
     fn ui_schema_covers_the_display_and_input_operations() {
-        let variants = schema()
+        let schema = schema();
+        let variants = schema
             .get("oneOf")
             .and_then(Value::as_array)
             .expect("oneOf variants");

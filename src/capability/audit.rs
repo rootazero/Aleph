@@ -13,7 +13,9 @@
 //! require a separately supplied persistence sink and are not claimed here.
 
 use crate::capability::descriptor::CapabilityId;
-use crate::capability::event_audience::{EventAudience, TrustedEventScope};
+use crate::capability::event_audience::EventAudience;
+#[cfg(test)]
+use crate::capability::event_audience::TrustedEventScope;
 use crate::capability::events::{
     CapabilityEvent, CapabilityEventRecord, CapabilityEventType, EventError, EventFilter,
     HandlerResult, InMemoryEventStream,
@@ -188,6 +190,7 @@ impl AuditCollector {
     }
 
     /// Query the same retained cut, then apply CURRENT request access outside the lock.
+    #[cfg(test)]
     pub(crate) async fn query_scoped(
         &self,
         scope: &TrustedEventScope,

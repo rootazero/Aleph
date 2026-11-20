@@ -854,6 +854,7 @@ impl ProjectionHost {
         self.inner.facade.event_stream()
     }
 
+    #[cfg(test)]
     pub(crate) fn audit_collector(&self) -> crate::capability::audit::AuditCollector {
         crate::capability::audit::AuditCollector::new(self.event_stream())
     }

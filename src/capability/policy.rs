@@ -17,8 +17,10 @@
 //! id, or disposed lifetime returns a refusal. The policy engine never guesses
 //! or falls back to a permissive default.
 
+#[cfg(test)]
 use crate::acp::manager::SessionKey;
 use crate::capability::descriptor::{CapabilityDescriptor, CapabilityId};
+#[cfg(test)]
 use crate::capability::events::{AuditedPolicyEngine, CapabilityEventEmitter};
 use crate::capability::ownership::{
     LifetimeScope, OwnerGeneration, OwnerRef, OwnershipTree, VisibilityScope,
@@ -124,8 +126,12 @@ impl PolicyEngine {
     }
 
     /// Observe capability-specific policy gates without changing their decisions.
+    ///
+    /// Test-only: no production caller wires an audited policy engine yet
+    /// (2026-11-20 severed-wire audit).
+    #[cfg(test)]
     #[must_use]
-    pub fn with_events(self, events: CapabilityEventEmitter) -> AuditedPolicyEngine {
+    pub(crate) fn with_events(self, events: CapabilityEventEmitter) -> AuditedPolicyEngine {
         AuditedPolicyEngine::new(self, events)
     }
 
@@ -323,6 +329,7 @@ impl PolicyEngine {
     /// - Run can delegate to Task within itself.
     /// - Task cannot delegate.
     /// - External cannot delegate.
+    #[cfg(test)]
     pub(crate) fn can_delegate(&self, delegator: &OwnerRef, delegatee: &OwnerRef) -> bool {
         match delegator {
             OwnerRef::Runtime => true,
@@ -346,6 +353,7 @@ impl PolicyEngine {
     /// Cross-session policy:
     /// - Same session: always allowed.
     /// - Different session: requires explicit grant (not implemented in this phase).
+    #[cfg(test)]
     pub(crate) fn check_cross_session(
         &self,
         requestor_session: &SessionKey,

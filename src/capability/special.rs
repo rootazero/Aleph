@@ -72,6 +72,7 @@ impl CapabilityHandlerCall {
     }
 
     #[must_use]
+    #[cfg(test)]
     pub(crate) fn running_call_count(&self) -> usize {
         self.running_calls.len()
     }
@@ -330,6 +331,7 @@ impl CapturedSpecialEntry {
     }
 
     #[must_use]
+    #[cfg(test)]
     pub(crate) fn canonical_schema(&self) -> &[u8] {
         &self.canonical_schema
     }

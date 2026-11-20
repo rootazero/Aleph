@@ -2113,7 +2113,6 @@ impl Zahir for ZahirFacade {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::capability::backend::CapabilityBackend;
     use crate::capability::descriptor::{
         CapabilityDescriptor, CapabilityFacet, CapabilityFacets, CapabilityId, CapabilityKind,
         CapabilityRevision, ProjectionMetadata, SchemaRef,

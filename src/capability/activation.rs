@@ -6,8 +6,11 @@
 //! constraints before an active capability is used.
 
 use crate::capability::constraints::{ConstraintContext, ConstraintSet, ConstraintViolation};
+#[cfg(test)]
 use crate::capability::descriptor::CapabilityDescriptor;
-use crate::capability::events::{ActivationEventHook, CapabilityEvent, CapabilityEventEmitter};
+use crate::capability::events::{ActivationEventHook, CapabilityEvent};
+#[cfg(test)]
+use crate::capability::events::CapabilityEventEmitter;
 use crate::capability::lifecycle::{CapabilityLifecycle, LifecycleError, LifecycleState};
 use crate::capability::ownership::OwnerGeneration;
 use crate::sync_primitives::Arc;
@@ -104,6 +107,7 @@ impl CapabilityActivationController {
 
     /// Create a new, observed lifecycle. Existing constructors remain unobserved.
     /// The descriptor supplies audit labels, never authorization or generation authority.
+    #[cfg(test)]
     pub(crate) fn new_observed<C: Into<ConstraintSet>>(
         ttl: Option<Duration>,
         owner_generation: OwnerGeneration,

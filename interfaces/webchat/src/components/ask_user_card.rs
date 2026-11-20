@@ -273,6 +273,7 @@ pub fn AskUserCard(ask: PendingAskView) -> impl IntoView {
                                 <div class="flex flex-wrap gap-2 mt-2">
                                     {question.options.into_iter().enumerate().map(|(i, opt)| {
                                         let session_key_o = session_key_o.clone();
+                                        let request_id_o = request_id_o.clone();
                                         // 1-based index — the string core's
                                         // `interpret_reply` maps to this option,
                                         // exactly as for a typed number.

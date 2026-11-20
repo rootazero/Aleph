@@ -183,7 +183,7 @@ impl CanvasStore {
         let mut entries = match tokio::fs::read_dir(&self.root).await {
             Ok(entries) => entries,
             // A root that does not exist yet is an empty library, not a fault.
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return rows,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(rows),
             Err(e) => {
                 // A root that cannot be enumerated is NOT an empty library:
                 // reporting "no canvases" here hides every canvas from the

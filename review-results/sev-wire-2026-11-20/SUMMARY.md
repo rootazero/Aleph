@@ -46,12 +46,17 @@ so the next round does not re-report them.
 
 ## 3. Narrowed (public → crate-internal / test-only)
 
-`AuditCollector::query_scoped`, `ProjectionHost::audit_collector`, `running_call_count`,
-`CapabilityActivationController::new_observed`, `PolicyEngine::{can_delegate, check_cross_session}`,
-`CapturedSpecialEntry::canonical_schema`, `register_canonical_adapters_with_tools`,
-`register_canonical_adapters_with_tools_and_source`, `AuditedPolicyEngine`, `AuditedZahir`
-→ `pub(crate)`; `ProjectionHost::{mount_with_diagnostics, mount_with_capacity, register_special_tool_adapters}`
-→ `#[cfg(test)]`; `ClarificationManager::{cancel, cancel_abandoned}` → `#[cfg(test)]`.
+`pub(crate)` **and** `#[cfg(test)]` (the item does not exist in a production build, so it
+can neither leak nor trigger the dead-code lint): `AuditCollector::query_scoped`,
+`ProjectionHost::audit_collector`, `CapabilityHandlerCall::running_call_count`,
+`CapabilityActivationController::new_observed`, `PolicyEngine::{with_events, can_delegate,
+check_cross_session}`, `CapturedSpecialEntry::canonical_schema`,
+`register_canonical_adapters_with_tools`, `AuditedPolicyEngine`, `AuditedZahir`
+(+ its `Zahir` trait impl), `ActivationEventHook::new`,
+`PolicyRuntime::withdraw_attachment`, `ClarificationManager::{cancel, cancel_abandoned}`,
+`ProjectionHost::{mount_with_diagnostics, mount_with_capacity, register_special_tool_adapters}`.
+
+`pub(crate)` only (still reachable from production code): `register_canonical_adapters_with_tools_and_source`.
 
 ## 4. Fixed (real wiring defects)
 
@@ -129,7 +134,21 @@ aggregate.
 collides with an unrelated symbol elsewhere reads as live. It is a **detector, not a
 judge** — it points at candidates, a human decides.
 
-## 9. Slice reports
+## 9. Verification
+
+| Check | Result |
+|---|---|
+| `cargo check -p alephcore -p aleph-panel --all-targets -j 4` (host) | **exit 0, 0 errors, 0 warnings** — `--all-targets` compiles the *test* code too, which is what a deletion needs |
+| `cargo check -p aleph-panel --target wasm32-unknown-unknown -j 4` | **exit 0** (3 pre-existing `acquire_pty_topic` dead-code warnings) |
+| `cargo test -p aleph-panel --lib i18n_census` | **25 passed** — the new Panel copy does not break the hardcoded-English ratchet |
+| `python3 scripts/capability_wiring_audit.py` | exit 0 — 10 severed, exactly the baselined deferred items |
+| `scripts/wiring_seams.py`, `scripts/rpc_wiring_audit.py`, `scripts/tool_wiring_audit.py` | exit 0 — no new severed wires |
+| `scripts/config_wiring_audit.py` | still reports `TimeWindowConfig` — **pre-existing false positive** (the value is consumed by `compile_constraints` → `Constraint::time_window`, `src/capability/constraints.rs:87,123`; the guard greps by type name). Unchanged by this audit; out of the audited scope. |
+
+The audit ran on a scratch worktree; the fixes were applied on `main` and committed there
+(no PR), as requested.
+
+## 10. Slice reports
 
 `canvas-REPORT.md`, `clarification-REPORT.md`, `cap-core-REPORT.md`, `cap-policy-REPORT.md`,
 `cap-resolve-REPORT.md`, `cap-special-REPORT.md`, `cap-ownership-REPORT.md`,

@@ -811,6 +811,7 @@ pub fn register_canonical_adapters(
 /// Register the canonical special records and their Tool/catalog projections as
 /// one logical operation. If the Tool publication fails, exact handles dispose
 /// only the incarnations created by this operation.
+#[cfg(test)]
 pub(crate) fn register_canonical_adapters_with_tools(
     registry: &CapabilityHandlerRegistry,
     tools: Option<&ToolHandlerRegistry>,

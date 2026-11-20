@@ -4,6 +4,7 @@ use std::{net::SocketAddr, panic::AssertUnwindSafe, sync::Arc, time::Duration};
 
 use alephcore::{
     capability::{
+        events::InMemoryEventStream,
         ownership::OwnershipTree,
         policy::PolicyEngine,
         projection_host::{set_projection_host, ProjectionHost},
@@ -116,16 +117,18 @@ impl Fixture {
         }, tree.clone());
         let policy = Arc::new(PolicyEngine::with_shared_tree(tree.clone(), Default::default()).unwrap());
         let tools = ToolHandlerRegistry::new();
-        let host = ProjectionHost::mount_with_runtime(
+        let events = Arc::new(InMemoryEventStream::new(64).expect("event stream capacity"));
+        let host = ProjectionHost::mount_with_runtime_and_events(
             tools.clone(),
             tree,
             memory,
             CapabilityHandlerRegistry::new(),
             policy,
+            events,
             false,
         );
         assert!(host.wait_until_ready().await);
-        host.register_special_tool_adapters(&tools)
+        host.register_special_tool_adapters_with_terminal_source(&tools, None)
             .expect("mount the production canonical UI and terminal adapters");
         set_projection_host(host.clone());
         let security = Arc::new(SecurityStore::in_memory().unwrap());
