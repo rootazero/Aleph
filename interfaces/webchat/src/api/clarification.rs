@@ -17,6 +17,14 @@ struct PendingListResp {
 struct PendingItem {
     /// Clarification registry key — what `clarification.resolve` is called with.
     session_key: String,
+    /// The identity of the request this card belongs to.
+    ///
+    /// Core mints one per request and refuses an answer that carries a
+    /// different identity; a panel that drops it lets a late answer from a
+    /// SUPERSEDED request land on the new one. (2026-11-20 severed-wire
+    /// audit SD-CLAR-01.)
+    #[serde(default)]
+    request_id: String,
     question: String,
     #[serde(default)]
     options: Vec<String>,
@@ -54,11 +62,32 @@ struct OptionItem {
 #[derive(Deserialize)]
 struct ResolveResp {
     resolved: bool,
+    /// The answer did not reach the request it was meant for: the request was
+    /// superseded or already gone. Core reports it, so the panel can say so
+    /// instead of pretending the answer was taken.
+    /// (2026-11-20 severed-wire audit SD-CLAR-01.)
+    #[serde(default)]
+    stale: bool,
     /// Absent on a core that predates multi-question requests — and `0` is the
     /// right reading there, because every request it can produce has exactly
     /// one question.
     #[serde(default)]
     pending_questions: usize,
+}
+
+/// The expectation to send for a card, or none when the core did not name the
+/// request.
+///
+/// An EMPTY expectation is not the same as no expectation: core compares the
+/// string it is given against the request it holds, so `Some("")` would
+/// reject every answer. (2026-11-20 severed-wire audit SD-CLAR-01.)
+#[must_use]
+pub fn expected_request_id(request_id: &str) -> Option<&str> {
+    if request_id.is_empty() {
+        None
+    } else {
+        Some(request_id)
+    }
 }
 
 /// What `clarification.resolve` reported.
@@ -75,6 +104,13 @@ pub struct ResolveOutcome {
     /// Dropping it on `accepted` alone strands the rest of the walk behind a
     /// card the user can no longer see.
     pub still_asking: usize,
+    /// The answer was rejected as stale: it belonged to a request that has
+    /// been superseded or has already ended.
+    ///
+    /// `accepted == false` already covers "nobody was waiting"; `stale` says
+    /// WHY — the panel shows it instead of a bare "discarded".
+    /// (2026-11-20 severed-wire audit SD-CLAR-01.)
+    pub stale: bool,
 }
 
 impl ResolveOutcome {
@@ -88,6 +124,7 @@ impl ResolveOutcome {
 fn to_view(p: PendingItem) -> PendingAskView {
     PendingAskView {
         session_key: p.session_key,
+        request_id: p.request_id,
         question: p.question,
         options: p.options,
         questions: p
@@ -138,10 +175,15 @@ impl ClarificationApi {
         state: &DashboardState,
         session_key: &str,
         reply: &str,
+        expected_request_id: Option<&str>,
     ) -> Result<ResolveOutcome, String> {
         Self::post(
             state,
-            serde_json::json!({ "session_key": session_key, "reply": reply }),
+            serde_json::json!({
+                "session_key": session_key,
+                "reply": reply,
+                "expected_request_id": expected_request_id,
+            }),
         )
         .await
     }
@@ -155,10 +197,15 @@ impl ClarificationApi {
         state: &DashboardState,
         session_key: &str,
         answers: &[String],
+        expected_request_id: Option<&str>,
     ) -> Result<ResolveOutcome, String> {
         Self::post(
             state,
-            serde_json::json!({ "session_key": session_key, "answers": answers }),
+            serde_json::json!({
+                "session_key": session_key,
+                "answers": answers,
+                "expected_request_id": expected_request_id,
+            }),
         )
         .await
     }
@@ -173,6 +220,7 @@ impl ClarificationApi {
         Ok(ResolveOutcome {
             accepted: resp.resolved,
             still_asking: resp.pending_questions,
+            stale: resp.stale,
         })
     }
 }

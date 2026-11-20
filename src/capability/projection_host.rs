@@ -567,6 +567,11 @@ impl ProjectionHost {
     /// Mount the canonical projection host with startup-scoped diagnostics.
     /// `false` leaves the ordinary source/delivery path unchanged while
     /// omitting all diagnostic hold/timer machinery.
+    ///
+    /// Test fixture: production mounts through `mount_with_memory` /
+    /// `mount_with_runtime_and_events`, so this stays out of the runtime
+    /// surface (severed-wire audit 2026-11-20).
+    #[cfg(test)]
     #[must_use]
     pub fn mount_with_diagnostics(
         registry: ToolHandlerRegistry,
@@ -617,28 +622,6 @@ impl ProjectionHost {
             facade,
             CapabilityHandlerRegistry::new(),
             DEFAULT_PENDING_CAPACITY,
-            diagnostics_enabled,
-        )
-    }
-
-    /// Mount the production runtime with one explicit special registry and the
-    /// same policy/tree authorities used by the facade.
-    #[must_use]
-    pub fn mount_with_runtime(
-        registry: ToolHandlerRegistry,
-        tree: Arc<OwnershipTree>,
-        memory: Arc<crate::memory::runtime::MemoryRuntime>,
-        specials: CapabilityHandlerRegistry,
-        policy: Arc<crate::capability::policy::PolicyEngine>,
-        diagnostics_enabled: bool,
-    ) -> Arc<Self> {
-        Self::mount_with_runtime_and_events(
-            registry,
-            tree,
-            memory,
-            specials,
-            policy,
-            Arc::new(crate::capability::events::InMemoryEventStream::default()),
             diagnostics_enabled,
         )
     }
@@ -792,6 +775,11 @@ impl ProjectionHost {
     /// overflow replacement semantics. The capacity is clamped to
     /// `MIN_PENDING_CAPACITY` because `Invalidated` + replacement `Snapshot`
     /// must fit as one atomic pair.
+    ///
+    /// Test fixture: production mounts through `mount_with_memory` /
+    /// `mount_with_runtime_and_events`, so this stays out of the runtime
+    /// surface (severed-wire audit 2026-11-20).
+    #[cfg(test)]
     #[must_use]
     pub fn mount_with_capacity(
         registry: ToolHandlerRegistry,
@@ -866,7 +854,7 @@ impl ProjectionHost {
         self.inner.facade.event_stream()
     }
 
-    pub fn audit_collector(&self) -> crate::capability::audit::AuditCollector {
+    pub(crate) fn audit_collector(&self) -> crate::capability::audit::AuditCollector {
         crate::capability::audit::AuditCollector::new(self.event_stream())
     }
 
@@ -878,6 +866,12 @@ impl ProjectionHost {
 
     /// Register the host-owned canonical adapters. Domain owners are not
     /// mounted in Task3, so their handlers remain typed `Unavailable`.
+    ///
+    /// Test fixture: production registers the terminal source through
+    /// `register_special_tool_adapters_with_terminal_source`, so the
+    /// source-less variant stays out of the runtime surface (severed-wire
+    /// audit 2026-11-20).
+    #[cfg(test)]
     pub fn register_special_tool_adapters(
         &self,
         tools: &ToolHandlerRegistry,

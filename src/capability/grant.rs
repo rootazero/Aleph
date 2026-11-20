@@ -1,6 +1,13 @@
 //! Cross-session capability grants — delegation, revocation cascades, and
 //! session transitions.
 //!
+//! NOT MOUNTED IN PRODUCTION (2026-11-20 severed-wire audit): the grant
+//! registry has no production consumer yet — the sandbox approval path uses
+//! its own `GrantStore` (src/sandbox/exec_approval/grants.rs), a different
+//! type. The registry is kept as the capability-grant phase surface and is
+//! pinned by `scripts/capability_wiring_audit.py` so it cannot silently grow
+//! new unmounted entry points.
+//!
 //! A **grant** enables one session to delegate a capability to another session.
 //! The grantee receives a transitive capability reference that respects:
 //!

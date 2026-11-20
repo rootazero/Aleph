@@ -117,6 +117,12 @@ pub struct SchemaRef {
 pub struct ProjectionMetadata {
     /// Projection surface name (e.g. `"mcp"`, `"acp-json"`,
     /// `"state-database"`). `None` = not projected anywhere yet.
+    ///
+    /// NOT POPULATED IN PRODUCTION (2026-11-20 severed-wire audit, SW-08;
+    /// open since 2026-10-30 C03-8): the projection layers that would name
+    /// a surface are themselves not mounted, so every descriptor carries
+    /// `None`. Consumers must not read this field as a live projection
+    /// marker.
     pub surface: Option<String>,
 }
 

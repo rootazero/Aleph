@@ -140,6 +140,14 @@ impl PolicyEngine {
     ///
     /// On success, returns a [`CapabilityLease`] that can be validated later
     /// via [`Self::validate_lease`].
+    /// Resolve one capability against the ownership tree and a visibility scope.
+    ///
+    /// NOT MOUNTED IN PRODUCTION (2026-11-20 severed-wire audit): no production
+    /// call site reaches this gate, and [`Self::validate_visibility_scope`]
+    /// rides on it. The live admission path is the facade's own binding,
+    /// principal and lifetime checks. Kept — not deleted — because it is the
+    /// only place the five `VisibilityScope` dimensions are enforced; wiring
+    /// it is a product decision, not a cleanup.
     pub fn resolve(
         &self,
         capability: &CapabilityId,
@@ -238,6 +246,13 @@ impl PolicyEngine {
     ///
     /// Fail-closed: any dimension that's restricted in the descriptor but
     /// unrestricted in the request scope is a mismatch.
+    /// Enforce the `VisibilityScope` dimensions (allowed kinds, allowed ids,
+    /// approval, workspace and session) for one capability.
+    ///
+    /// NOT MOUNTED IN PRODUCTION (2026-11-20 severed-wire audit): the only
+    /// caller is [`Self::resolve`], which has no production call site either.
+    /// The scope dimensions are therefore not enforced anywhere at runtime
+    /// today — that is a known gap, not an intended behaviour.
     fn validate_visibility_scope(
         &self,
         capability: &CapabilityId,
@@ -308,7 +323,7 @@ impl PolicyEngine {
     /// - Run can delegate to Task within itself.
     /// - Task cannot delegate.
     /// - External cannot delegate.
-    pub fn can_delegate(&self, delegator: &OwnerRef, delegatee: &OwnerRef) -> bool {
+    pub(crate) fn can_delegate(&self, delegator: &OwnerRef, delegatee: &OwnerRef) -> bool {
         match delegator {
             OwnerRef::Runtime => true,
             OwnerRef::Session(session_key) => match delegatee {
@@ -331,7 +346,7 @@ impl PolicyEngine {
     /// Cross-session policy:
     /// - Same session: always allowed.
     /// - Different session: requires explicit grant (not implemented in this phase).
-    pub fn check_cross_session(
+    pub(crate) fn check_cross_session(
         &self,
         requestor_session: &SessionKey,
         owner_session: &SessionKey,

@@ -552,7 +552,11 @@ pub fn scope_for_method(method: &str) -> RateLimitScope {
         // so they get the strict write window too.
         "config.patch" | "memory.delete" | "session.compact" | "sessions.delete"
         | "sessions.reset" | "session.truncate" | "plugins.install" | "plugins.uninstall"
-        | "skills.install" | "skills.remove" | "bundled.sync" => RateLimitScope::RpcWrite,
+        | "skills.install" | "skills.remove" | "bundled.sync" | "canvas.delete" => {
+            // canvas.delete removes a document: it is a write lane, not a
+            // read. (2026-11-20 severed-wire audit CAN-04.)
+            RateLimitScope::RpcWrite
+        }
 
         // Resource-intensive operations. `session.export_html` reads the whole
         // transcript plus every inlinable artifact byte and renders a document

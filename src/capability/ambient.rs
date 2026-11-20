@@ -1,4 +1,13 @@
 //! Immutable ambient authority snapshots and their callable handlers.
+//!
+//! DEFERRED, NOT MOUNTED (2026-11-20 severed-wire audit): the ambient family
+//! (`process.id`, `user.id`, `environment.*`) has no production registration —
+//! nothing calls `register_process_handler`, `register_user_handler` or
+//! `register_environment_handler` outside this module's tests, while its
+//! siblings (terminal, UI, special capabilities) are all mounted on the
+//! gateway. Mounting ambient means exposing process identity, user identity
+//! and environment variables as callable capabilities, which is a security
+//! surface decision; it is deferred on purpose, not forgotten.
 
 use crate::capability::backend::{
     LegacyCapabilityDispatchError, LegacyCapabilityHandler, LegacyCapabilityHandlerRegistry,

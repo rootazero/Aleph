@@ -13,7 +13,7 @@ use crate::capability::descriptor::{
     CapabilityRevision, ProjectionMetadata, SchemaRef,
 };
 use crate::capability::events::{CapabilityEvent, CapabilityEventEmitter, HandlerResult};
-use crate::capability::facade::{CapabilitySnapshot, Cursor, Scope};
+use crate::capability::facade::Scope;
 use crate::capability::ownership::{LifetimeScope, OwnerRef, VisibilityScope};
 use crate::capability::provider::{
     ProviderHandle, ProviderId, ProviderLifecycle, ProviderTransport,
@@ -50,7 +50,6 @@ pub const TOOL_NAMESPACE: &str = "aleph/tools";
 pub trait CapabilityBackend: Send + Sync {
     fn lookup(&self, id: &CapabilityId) -> Option<CapabilityDescriptor>;
     fn enumerate(&self, scope: &Scope) -> Vec<CapabilityDescriptor>;
-    fn snapshot(&self, scope: &Scope) -> CapabilitySnapshot;
 }
 
 /// Errors produced by a capability handler during invocation.
@@ -262,13 +261,6 @@ impl CapabilityBackend for LegacyCapabilityHandlerRegistry {
             })
             .collect()
     }
-
-    fn snapshot(&self, scope: &Scope) -> CapabilitySnapshot {
-        CapabilitySnapshot {
-            capabilities: self.enumerate(scope),
-            committed_cursor: Cursor(self.special.revision()),
-        }
-    }
 }
 
 /// The Tool backend: adapts [`crate::tools::registry::ToolHandlerRegistry`]
@@ -353,14 +345,6 @@ impl CapabilityBackend for ToolBackendAdapter {
             .map(|desc| to_descriptor(desc))
             .filter(|d| Self::descriptor_in_scope(d, scope))
             .collect()
-    }
-
-    fn snapshot(&self, scope: &Scope) -> CapabilitySnapshot {
-        let (capabilities, revision) = self.snapshot_capabilities(scope);
-        CapabilitySnapshot {
-            capabilities,
-            committed_cursor: Cursor(revision),
-        }
     }
 }
 
@@ -551,7 +535,7 @@ mod tests {
     fn handler_registry_snapshot_cursor_tracks_registration_revision() {
         let registry = LegacyCapabilityHandlerRegistry::new();
         assert_eq!(
-            registry.snapshot(&Scope::default()).committed_cursor,
+            Cursor(registry.special.revision()),
             Cursor(0)
         );
 
@@ -562,7 +546,7 @@ mod tests {
             )
             .unwrap();
         assert_eq!(
-            registry.snapshot(&Scope::default()).committed_cursor,
+            Cursor(registry.special.revision()),
             Cursor(1)
         );
 
@@ -573,7 +557,7 @@ mod tests {
             )
             .unwrap();
         assert_eq!(
-            registry.snapshot(&Scope::default()).committed_cursor,
+            Cursor(registry.special.revision()),
             Cursor(2)
         );
     }
@@ -694,15 +678,11 @@ mod tests {
             ..Scope::default()
         };
 
-        let snapshot = CapabilityBackend::snapshot(&backend, &callable);
-        assert_eq!(snapshot.capabilities.len(), 1);
-        assert_eq!(snapshot.capabilities[0].kind, CapabilityKind::Tool);
-        assert_eq!(snapshot.committed_cursor, Cursor(1));
-        assert!(
-            CapabilityBackend::snapshot(&backend, &events)
-                .capabilities
-                .is_empty()
-        );
+        let (capabilities, revision) = backend.snapshot_capabilities(&callable);
+        assert_eq!(capabilities.len(), 1);
+        assert_eq!(capabilities[0].kind, CapabilityKind::Tool);
+        assert_eq!(revision, 1);
+        assert!(backend.snapshot_capabilities(&events).0.is_empty());
     }
 
     #[test]

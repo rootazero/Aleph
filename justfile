@@ -524,7 +524,7 @@ check-phase5:
 # Wiring parity guards: catch "severed wire" drift where both ends exist but the
 # connection is missing. Each is a grep-level diff against a triaged baseline —
 # green now, fails only on a NEW severance. See the 2026-07-15 wire audit.
-check-wiring: check-rpc-wiring check-tool-wiring check-config-wiring check-seam-wiring
+check-wiring: check-rpc-wiring check-tool-wiring check-config-wiring check-seam-wiring check-capability-wiring
 
 # RPC: no Panel rpc_call / rate-lane classifier may name a method with no handler
 # (→ METHOD_NOT_FOUND / phantom rate-lane guard).
@@ -546,6 +546,13 @@ check-config-wiring:
 # calls is a severed wire the compiler cannot see. Shrink-only baseline.
 check-seam-wiring:
     python3 scripts/wiring_seams.py
+
+# Capability/canvas/clarification seams: every public item of these modules
+# must have a production consumer — a `pub` declaration nobody reads is a
+# severed wire the compiler cannot see. Shrink-only baseline; the guard is a
+# detector, not a judge (see scripts/capability_wiring_audit.py).
+check-capability-wiring:
+    python3 scripts/capability_wiring_audit.py
 
 # ─── Lint ───
 

@@ -551,6 +551,11 @@ impl ClarificationManager {
 
     /// Cancel the pending clarification for `session_key`, if any, unblocking
     /// its waiter with [`ClarificationResult::cancelled`].
+    /// Test-only: cancels whatever is pending for the session, with NO
+    /// request identity. Production must use [`Self::cancel_if_request`] —
+    /// an identity-less cancel can drop a newer question (2026-11-20
+    /// severed-wire audit, SW-CLAR-02).
+    #[cfg(test)]
     pub async fn cancel(&self, session_key: &str) -> bool {
         self.cancel_if_request(session_key, None).await
     }
@@ -590,6 +595,9 @@ impl ClarificationManager {
     /// key: a fresh sibling question is live, so it is never touched.
     ///
     /// Returns whether an entry was retired.
+    /// Test-only: see [`Self::cancel`]. Production uses
+    /// [`Self::cancel_abandoned_if_request`].
+    #[cfg(test)]
     pub async fn cancel_abandoned(&self, session_key: &str) -> bool {
         self.cancel_abandoned_if_request(session_key, None).await
     }

@@ -52,6 +52,7 @@ use leptos::task::spawn_local;
 fn answer(
     dashboard: DashboardState,
     session_key: String,
+    request_id: String,
     answers: Vec<String>,
     submitting: RwSignal<bool>,
     error: RwSignal<Option<String>>,
@@ -59,21 +60,28 @@ fn answer(
     submitting.set(true);
     error.set(None);
     spawn_local(async move {
+        let expected = crate::api::expected_request_id(&request_id);
         let outcome = if answers.len() == 1 {
             let single_answer = answers.first().map(|s| s.as_str()).unwrap_or("");
-            ClarificationApi::resolve(&dashboard, &session_key, single_answer).await
+            ClarificationApi::resolve(&dashboard, &session_key, single_answer, expected).await
         } else {
-            ClarificationApi::resolve_all(&dashboard, &session_key, &answers).await
+            ClarificationApi::resolve_all(&dashboard, &session_key, &answers, expected).await
         };
         match outcome {
             Ok(outcome) => {
                 if !outcome.accepted {
-                    web_sys::console::warn_1(
-                        &"Question was no longer pending — answer discarded".into(),
-                    );
-                    error.set(Some(
-                        "Question was no longer pending — answer discarded".to_string(),
-                    ));
+                    // A stale answer is a different fact from "nobody was
+                    // waiting": the request was superseded while the answer was
+                    // in flight, and saying so is the difference between a
+                    // confused user and a correct one.
+                    // (2026-11-20 severed-wire audit SD-CLAR-01.)
+                    let message = if outcome.stale {
+                        "Question was superseded — answer discarded"
+                    } else {
+                        "Question was no longer pending — answer discarded"
+                    };
+                    web_sys::console::warn_1(&message.into());
+                    error.set(Some(message.to_string()));
                 }
                 if !outcome.accepted || outcome.is_finished() {
                     dashboard
@@ -166,6 +174,7 @@ pub fn AskUserCard(ask: PendingAskView) -> impl IntoView {
     // there is nothing else to fill in.
     let instant = questions.len() == 1 && questions.first().is_some_and(|q| !q.multi_select);
     let session_key = StoredValue::new(ask.session_key.clone());
+    let request_id = StoredValue::new(ask.request_id.clone());
     let drafts_store = StoredValue::new(drafts.clone());
     let answering = RwSignal::new(false);
     let answer_error = RwSignal::new(Option::<String>::None);
@@ -182,6 +191,7 @@ pub fn AskUserCard(ask: PendingAskView) -> impl IntoView {
         answer(
             dashboard,
             session_key.get_value(),
+            request_id.get_value(),
             answers,
             answering,
             answer_error,
@@ -215,6 +225,7 @@ pub fn AskUserCard(ask: PendingAskView) -> impl IntoView {
                 // `StoredValue` so the closure stays `Copy` — the text field's
                 // Enter handler and the Answer button both need it.
                 let session_key_q = StoredValue::new(ask.session_key.clone());
+                let request_id_q = StoredValue::new(ask.request_id.clone());
                 // Enter in a text field. On a one-question card it answers
                 // outright. On a form it submits the WHOLE set once every
                 // question has something in it — pressing Enter used to do
@@ -232,7 +243,14 @@ pub fn AskUserCard(ask: PendingAskView) -> impl IntoView {
                         return;
                     }
                     draft.set(String::new());
-                    answer(dashboard, session_key_q.get_value(), vec![reply], answering, answer_error);
+                    answer(
+                        dashboard,
+                        session_key_q.get_value(),
+                        request_id_q.get_value(),
+                        vec![reply],
+                        answering,
+                        answer_error,
+                    );
                 };
                 view! {
                     <div class=move || if qi == 0 { "mt-1" } else { "mt-3 pt-3 border-t border-border/60" }>
@@ -250,6 +268,7 @@ pub fn AskUserCard(ask: PendingAskView) -> impl IntoView {
                         })}
                         {has_options.then(|| {
                             let session_key_o = ask.session_key.clone();
+                            let request_id_o = ask.request_id.clone();
                             view! {
                                 <div class="flex flex-wrap gap-2 mt-2">
                                     {question.options.into_iter().enumerate().map(|(i, opt)| {
@@ -276,7 +295,14 @@ pub fn AskUserCard(ask: PendingAskView) -> impl IntoView {
                                                 }
                                                 on:click=move |_| {
                                                     if instant {
-                                                        answer(dashboard, session_key_o.clone(), vec![reply.clone()], answering, answer_error);
+                                                        answer(
+                                                            dashboard,
+                                                            session_key_o.clone(),
+                                                            request_id_o.clone(),
+                                                            vec![reply.clone()],
+                                                            answering,
+                                                            answer_error,
+                                                        );
                                                     } else if multi {
                                                         draft.update(|d| *d = toggle_index(d, idx));
                                                     } else {
@@ -374,6 +400,7 @@ mod tests {
     fn view(questions: Vec<AskQuestionView>, answered: usize) -> PendingAskView {
         PendingAskView {
             session_key: "s".into(),
+            request_id: "r".into(),
             question: "legacy prompt".into(),
             options: vec!["a".into(), "b".into()],
             questions,

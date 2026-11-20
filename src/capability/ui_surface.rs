@@ -193,6 +193,23 @@ impl UiSurface {
         };
         drop(worker);
 
+        // The pending display is marked sent BEFORE it is published: a fast
+        // renderer can ACK the moment the message arrives, and the ACK filter
+        // requires `sent` — the window between the publish and the flip
+        // rejected those legitimate ACKs and the display timed out.
+        // (2026-11-20 severed-wire audit CUI-D1.) The client cannot know the
+        // request id before the publish, so marking it first cannot admit a
+        // spurious ACK.
+        {
+            let mut state = self.state.lock().map_err(|_| UiError::Poisoned)?;
+            let pending = state
+                .pending
+                .as_mut()
+                .filter(|pending| pending.request_id == request_id)
+                .ok_or(UiError::Closed)?;
+            pending.sent = true;
+        }
+
         let message = UiDisplayMessage {
             surface_id: self.attachment.surface_id.clone(),
             mount_generation: self.attachment.mount_generation,
@@ -210,7 +227,6 @@ impl UiSurface {
                 .as_mut()
                 .filter(|pending| pending.request_id == request_id)
                 .ok_or(UiError::Closed)?;
-            pending.sent = true;
             pending.start.take()
         };
         if let Some(start) = start {

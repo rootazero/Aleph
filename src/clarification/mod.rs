@@ -197,6 +197,12 @@ impl ClarificationRequest {
     ///
     /// An empty list is rejected rather than silently accepted: a request with
     /// nothing to ask would register a waiter that no reply can ever complete.
+    /// Multi-question constructor.
+    ///
+    /// NOT REACHED IN PRODUCTION (2026-11-20 severed-wire audit, SW-CLAR-03):
+    /// the production ask path builds single-question requests through
+    /// [`Self::text`] / [`Self::select`]. Kept for the multi-question
+    /// flow, which has no production caller yet.
     pub fn new(questions: Vec<ClarificationQuestion>) -> Result<Self, &'static str> {
         if questions.is_empty() {
             return Err("a clarification must carry at least one question");

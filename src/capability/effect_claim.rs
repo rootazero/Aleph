@@ -1,4 +1,8 @@
 //! Pure reconciliation for effect-claim event histories.
+//!
+//! Not wired yet: no production `SessionEvent::EffectClaim*` construction point exists, so the
+//! reducer has no producer and no consumer outside its own tests. Kept as a documented deferral
+//! (see the "Capability Phase 4" section of `AGENTS.md`) instead of a silent dead module.
 
 use crate::session::events::{ClaimStateWire, OwnerRefWire, SessionEvent};
 
