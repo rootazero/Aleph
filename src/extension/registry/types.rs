@@ -412,25 +412,9 @@ pub struct AgentRegistration {
     #[serde(default)]
     pub description: Option<String>,
 
-    /// Whether to hide from UI
-    #[serde(default)]
-    pub hidden: bool,
-
-    /// UI color (hex format)
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub color: Option<String>,
-
     /// Optional model override
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
-
-    /// Temperature
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub temperature: Option<f32>,
-
-    /// Top P
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub top_p: Option<f32>,
 
     /// Maximum iteration steps
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -439,14 +423,6 @@ pub struct AgentRegistration {
     /// Tool permissions
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tools: Option<HashMap<String, bool>>,
-
-    /// Permission rules
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub permission: Option<HashMap<String, crate::extension::types::PermissionRule>>,
-
-    /// Provider-specific options
-    #[serde(default)]
-    pub options: HashMap<String, serde_json::Value>,
 
     /// Agent system prompt content (markdown body)
     pub content: String,

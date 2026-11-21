@@ -150,41 +150,8 @@ pub const ALEPH_PLUGIN_MANIFEST: &str = "aleph.plugin.json";
 // Auto-Detection Parser
 // =============================================================================
 
-/// Parse a plugin manifest from a directory (async).
-///
-/// Checks formats in priority order:
-/// 1. `.claude-plugin/plugin.toml`
-/// 2. `.claude-plugin/plugin.json`
-/// 3. `aleph.plugin.toml` (deprecated)
-/// 4. Auto-discover from component directories
-pub async fn parse_manifest_from_dir(dir: &Path) -> ExtensionResult<PluginManifest> {
-    // 1. .claude-plugin/plugin.toml (CC-compat, preferred)
-    let cc_toml_path = dir.join(CC_PLUGIN_TOML);
-    if cc_toml_path.exists() {
-        return parse_cc_plugin_toml(dir).await;
-    }
-
-    // 2. .claude-plugin/plugin.json (CC-compat, read-only)
-    let cc_json_path = dir.join(CC_PLUGIN_JSON);
-    if cc_json_path.exists() {
-        return parse_cc_plugin_json(dir).await;
-    }
-
-    // 3. aleph.plugin.toml (deprecated — warn)
-    let aleph_toml_path = dir.join(ALEPH_PLUGIN_TOML);
-    if aleph_toml_path.exists() {
-        tracing::warn!(
-            "Plugin at {:?} uses deprecated aleph.plugin.toml format. Migrate to .claude-plugin/plugin.toml",
-            dir
-        );
-        return parse_aleph_plugin_toml(dir).await;
-    }
-
-    // 4. Auto-discover (no manifest file at all)
-    auto_discover_manifest(dir)
-}
-
-/// Synchronous version of `parse_manifest_from_dir`
+/// Parse a plugin manifest from a directory, consulting the process-wide
+/// manifest cache.
 pub fn parse_manifest_from_dir_sync(dir: &Path) -> ExtensionResult<PluginManifest> {
     parse_manifest_from_dir_sync_with(dir, None)
 }
@@ -499,17 +466,4 @@ mod tests {
         assert!(result.is_err());
     }
 
-    #[tokio::test]
-    async fn test_parse_manifest_from_dir_async_toml() {
-        let temp_dir = TempDir::new().unwrap();
-        tokio::fs::write(
-            temp_dir.path().join("aleph.plugin.toml"),
-            "[plugin]\nid = \"async-toml-test\"\n",
-        )
-        .await
-        .unwrap();
-
-        let manifest = parse_manifest_from_dir(temp_dir.path()).await.unwrap();
-        assert_eq!(manifest.id, "async-toml-test");
-    }
 }

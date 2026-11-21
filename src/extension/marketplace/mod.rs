@@ -356,7 +356,7 @@ impl MarketplaceManager {
         marketplace_name: Option<&str>,
         scope: crate::extension::types::PluginScope,
         project_dir: Option<&std::path::Path>,
-    ) -> Result<std::path::PathBuf, String> {
+    ) -> Result<InstalledPlugin, String> {
         let mut results = self.search_plugin(plugin_name);
 
         if let Some(mkt) = marketplace_name {
@@ -385,6 +385,14 @@ impl MarketplaceManager {
                         validation.errors.join("\n  - ")
                     ));
                 }
+                // The warnings are not fatal, but they are the operator's only
+                // clue that the installed plugin is not actually usable yet
+                // (entry file never built, duplicate hook handler, ...). They
+                // travel with the outcome instead of being dropped here.
+                let warnings = validation.warnings.clone();
+                for warning in &warnings {
+                    tracing::warn!(plugin = plugin_name, "{}", warning);
+                }
                 let install_dir =
                     crate::extension::visibility::scope_install_dir(scope, project_dir)?;
                 // review(extension): refuse symlink escapes at the install
@@ -402,7 +410,8 @@ impl MarketplaceManager {
                         "Refusing to install '{plugin_name}' into unsafe location: {e}"
                     ));
                 }
-                installer::install_plugin_from_cache(plugin_path, &install_dir, plugin_name)
+                let path = installer::install_plugin_from_cache(plugin_path, &install_dir, plugin_name)?;
+                Ok(InstalledPlugin { path, warnings })
             }
             _ => {
                 let names: Vec<_> = results
@@ -499,12 +508,17 @@ impl MarketplaceManager {
                         validation.errors.join("\n  - ")
                     ));
                 }
+                let warnings = validation.warnings.clone();
+                for warning in &warnings {
+                    tracing::warn!(plugin = plugin_name, "{}", warning);
+                }
 
                 installer::update_plugin_from_cache(plugin_path, &install_dir, plugin_name)?;
 
                 Ok(UpdateOutcome::Updated {
                     from: installed_version,
                     to: candidate_version,
+                    warnings,
                 })
             }
             _ => {
@@ -567,6 +581,21 @@ impl MarketplaceManager {
 // Update outcome
 // =============================================================================
 
+/// The result of a marketplace install: where the plugin landed, plus the
+/// non-fatal validation warnings the operator should see.
+#[derive(Debug, Clone)]
+pub struct InstalledPlugin {
+    /// Directory the plugin was installed into.
+    pub path: std::path::PathBuf,
+    /// Non-fatal validation warnings (entry file missing, duplicate hook
+    /// handler, non-semver version, ...). The install itself succeeded.
+    pub warnings: Vec<String>,
+}
+
+// =============================================================================
+// Update outcome
+// =============================================================================
+
 /// Result of an [`update_to_scope`](MarketplaceManager::update_to_scope) call.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum UpdateOutcome {
@@ -576,6 +605,8 @@ pub enum UpdateOutcome {
         from: Option<String>,
         /// Version now installed (if the marketplace declared one).
         to: Option<String>,
+        /// Non-fatal validation warnings for the updated plugin.
+        warnings: Vec<String>,
     },
     /// No change was needed — the installed version is already current.
     AlreadyLatest {

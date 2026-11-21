@@ -373,7 +373,6 @@ pub fn parse_cc_plugin_toml_content(
         repository: toml.repository,
         license: toml.license,
         keywords: toml.keywords.unwrap_or_default(),
-        extensions: Vec::new(),
         // Superset sections, carried in `[aleph]` (which Claude Code ignores).
         // `services_v2` stays `None` because services already round-trip
         // through `aleph_extensions.services` — a second copy would be a

@@ -329,10 +329,6 @@ pub struct PluginManifest {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub keywords: Vec<String>,
 
-    /// Supported file extensions (for static plugins)
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub extensions: Vec<String>,
-
     // ═══════════════════════════════════════════
     // V2 Extension fields (from aleph_plugin.toml)
     // ═══════════════════════════════════════════
@@ -415,7 +411,6 @@ impl PluginManifest {
             repository: None,
             license: None,
             keywords: Vec::new(),
-            extensions: Vec::new(),
             // V2 fields
             tools_v2: None,
             hooks_v2: None,
