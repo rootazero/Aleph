@@ -255,6 +255,27 @@ mod tests {
     }
 
     #[test]
+    fn scrub_redacts_github_and_discord_token_families() {
+        for prefix in ["gho_", "ghu_", "ghs_", "ghr_"] {
+            let token = format!("{prefix}{}", "A".repeat(36));
+            let out = scrub_secrets_bytes(token.as_bytes(), &[]);
+            assert!(out.hits.contains(&"github_token"), "prefix: {prefix}");
+            assert!(!String::from_utf8_lossy(&out.bytes).contains(&token));
+        }
+
+        let fine_grained = format!("github_pat_{}", "A".repeat(50));
+        let out = scrub_secrets_bytes(fine_grained.as_bytes(), &[]);
+        assert!(out.hits.contains(&"github_fine_grained_pat"));
+        assert!(!String::from_utf8_lossy(&out.bytes).contains(&fine_grained));
+
+        let discord = format!("M{}.{}.{} ", "A".repeat(23), "B".repeat(6), "C".repeat(27));
+        let discord = discord.trim_end();
+        let out = scrub_secrets_bytes(discord.as_bytes(), &[]);
+        assert!(out.hits.contains(&"discord_bot_token"));
+        assert!(!String::from_utf8_lossy(&out.bytes).contains(discord));
+    }
+
+    #[test]
     fn scrub_redacts_google_api_key() {
         let mut input = b"key: AIza".to_vec();
         input.extend(std::iter::repeat_n(b'X', 35));

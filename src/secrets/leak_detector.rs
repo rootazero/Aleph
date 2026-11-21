@@ -65,7 +65,16 @@ pub const SECRET_PATTERN_SOURCES: &[(&str, &str)] = &[
     ("sk_ant", r"\bsk-ant-[A-Za-z0-9_\-]{20,}"),
     ("aws_akia", r"AKIA[0-9A-Z]{16}"),
     ("github_pat", r"ghp_[A-Za-z0-9]{20,}"),
+    ("github_token", r"gh[pousr]_[a-zA-Z0-9]{36,}"),
+    (
+        "github_fine_grained_pat",
+        r"github_pat_[A-Za-z0-9_]{50,}",
+    ),
     ("gitlab_pat", r"glpat-[A-Za-z0-9_\-]{20,}"),
+    (
+        "discord_bot_token",
+        r"(?-u:\b)[MN][A-Za-z0-9]{23,}\.[A-Za-z0-9_-]{6,7}\.[A-Za-z0-9_-]{27,}(?-u:\b)",
+    ),
     ("openai_sk", r"\bsk-[a-zA-Z0-9\-]{20,}"),
     ("google_api", r"AIza[a-zA-Z0-9_\-]{35}"),
     // `[A-Z ]*` (zero-or-more, no forced algorithm word) so the canonical PKCS#8
@@ -858,6 +867,18 @@ mod tests {
         let response = "Here's a token: sk-proj-abcdefghijklmnopqrstuvwxyz12345678";
         let decision = detector.scan_inbound(response);
         assert!(decision.is_blocked());
+    }
+
+    #[test]
+    fn every_block_class_name_has_a_byte_floor_pattern() {
+        for name in BLOCK_CLASS_SECRETS {
+            assert!(
+                SECRET_PATTERN_SOURCES
+                    .iter()
+                    .any(|(pattern_name, _)| pattern_name == name),
+                "block-class name {name} has no byte-floor regex"
+            );
+        }
     }
 
     #[test]

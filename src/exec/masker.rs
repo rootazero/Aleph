@@ -303,6 +303,29 @@ mod tests {
     }
 
     #[test]
+    fn test_mask_openai_project_and_hyphenated_key_shapes() {
+        let masker = SecretMasker::new();
+        for (key, prefix) in [
+            (
+                "sk-proj-abcdefghijklmnopqrst_uvwx-123456",
+                "sk-proj-***REDACTED***",
+            ),
+            (
+                "sk-ant-api03-abcdefgh_ijkl-mnopqrstuv",
+                "sk-ant-***REDACTED***",
+            ),
+            (
+                "sk-abcde-fghij_klmnopqrstuvwxyz",
+                "sk-***REDACTED***",
+            ),
+        ] {
+            let output = masker.mask(key);
+            assert!(output.contains(prefix), "got: {output}");
+            assert!(!output.contains(key), "key survived in: {output}");
+        }
+    }
+
+    #[test]
     fn test_mask_aws_key() {
         let masker = SecretMasker::new();
         let input = "AWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE";
@@ -316,6 +339,17 @@ mod tests {
         let input = "GITHUB_TOKEN=ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx";
         let output = masker.mask(input);
         assert!(output.contains("gh*_***REDACTED***"));
+    }
+
+    #[test]
+    fn test_mask_shared_vendor_key_also_blocked_by_leak_detector() {
+        let key = "sk_live_abcdefghijklmnopqrstuvwxyz1234";
+        assert!(crate::secrets::leak_detector::LeakDetector::new()
+            .scan_outbound(key)
+            .is_blocked());
+        let output = SecretMasker::new().mask(key);
+        assert!(output.contains("***REDACTED***"), "got: {output}");
+        assert!(!output.contains(key), "vendor key survived in: {output}");
     }
 
     #[test]
@@ -370,6 +404,14 @@ MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQ...
         let output = masker.mask(input);
         assert!(output.contains("***REDACTED***"));
         assert!(!output.contains("mysupersecret"));
+    }
+
+    #[test]
+    fn generic_password_mask_consumes_escaped_quotes() {
+        let input = r#"password="abcdefgh\"secret""#;
+        let output = SecretMasker::new().mask(input);
+        assert_eq!(output, r#"password="***REDACTED***""#);
+        assert!(!output.contains("secret"), "value tail survived: {output}");
     }
 
     /// The operator's patterns must reach a masker that was constructed
