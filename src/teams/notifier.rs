@@ -207,8 +207,9 @@ impl EventHandler for TeamNotifier {
                 team_id,
                 task_id,
                 status,
-                ..
-            } if status.as_str() == "waiting_review" => {
+                previous_status,
+            } if status.as_str() == "waiting_review"
+                && previous_status.as_deref() != Some("waiting_review") => {
                 self.rearm_completion_claim(team_id);
                 self.notify_leader(
                     team_id,

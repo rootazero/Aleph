@@ -442,15 +442,11 @@ impl TeamStore for SqliteTeamStore {
         })?;
         drop(conn);
 
-        // Members (including the leader) enroll via `add_member`, which emits
-        // one `TeamMemberAdded` each — so `member_ids` is empty here and the
-        // timeline stays complete without double-reporting membership.
         broadcast_team_event(
             &id,
             crate::event::AlephEvent::TeamCreated {
                 team_id: id.clone(),
                 name: input.name.clone(),
-                member_ids: Vec::new(),
             },
         )
         .await;

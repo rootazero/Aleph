@@ -77,6 +77,9 @@ pub(in crate::commands::start) struct AgentHandlersResult {
     /// router so a reply to a paused workflow `clarify` step can complete its
     /// durable task and wake the dispatcher to unblock dependents.
     pub dispatch_signal: Option<Arc<tokio::sync::Notify>>,
+    /// Dispatcher whose first dispatch is deferred until the team event
+    /// logger and notifier have completed their GlobalBus subscriptions.
+    pub team_dispatcher: Option<Arc<alephcore::teams::dispatcher::TeamDispatcher>>,
     /// Snapshot store for `teams.snapshot.*` RPC handlers. Shares the coord
     /// connection — None if coord init failed.
     pub snapshot_store: Option<Arc<alephcore::teams::SqliteSnapshotStore>>,
@@ -223,6 +226,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
     // events scoped to a team's members. `None` in the simulated branch (no
     // state.db == no historical usage to aggregate).
     let mut state_db_out: Option<Arc<alephcore::resilience::StateDatabase>> = None;
+    let mut team_dispatcher_out = None;
 
     // Coord + snapshot stores (single shared connection to coord.db).
     let (coord_store, snapshot_store) = init_coord_and_snapshot(event_bus.clone(), daemon).await;
@@ -1355,9 +1359,9 @@ pub(in crate::commands::start) async fn register_agent_handlers(
                 // clarify answers) pokes the loop immediately instead of
                 // waiting for the fallback tick. Subscribe BEFORE the loop
                 // starts so no early transition slips between the two
-                // (spawn_loop consumes the Arc).
+                // (`spawn_loop` later consumes a clone of this Arc).
                 dispatcher.subscribe_task_events();
-                dispatcher.spawn_loop();
+                team_dispatcher_out = Some(dispatcher);
 
                 // Wake-on-transition seam: every coord-task mutation flows
                 // through `CoordTaskStore::emit_task_topic` → GlobalBus, so one
@@ -1393,7 +1397,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
                 }));
 
                 if !daemon {
-                    println!("  Team dispatcher started");
+                    println!("  Team dispatcher configured");
                 }
             }
 
@@ -1781,6 +1785,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
         background_team_stores,
         coord_task_store: coord_store,
         dispatch_signal: Some(dispatch_signal),
+        team_dispatcher: team_dispatcher_out,
         snapshot_store,
         state_db: state_db_out,
         event_store: event_store.clone(),

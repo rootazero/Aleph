@@ -408,14 +408,10 @@ impl TeamEventLogger {
     /// Map an `AlephEvent` team variant to a `TeamEventType` and extract metadata.
     fn map_event(event: &AlephEvent) -> Option<(TeamEventType, String, serde_json::Value)> {
         match event {
-            AlephEvent::TeamCreated {
-                team_id,
-                name,
-                member_ids,
-            } => Some((
+            AlephEvent::TeamCreated { team_id, name } => Some((
                 TeamEventType::TeamCreated,
                 team_id.clone(),
-                serde_json::json!({"name": name, "member_ids": member_ids}),
+                serde_json::json!({"name": name}),
             )),
             AlephEvent::TeamMemberAdded {
                 team_id,
@@ -444,11 +440,15 @@ impl TeamEventLogger {
                 team_id,
                 task_id,
                 status,
-                progress,
+                previous_status,
             } => Some((
                 TeamEventType::TaskUpdated,
                 team_id.clone(),
-                serde_json::json!({"task_id": task_id, "status": status, "progress": progress}),
+                serde_json::json!({
+                    "task_id": task_id,
+                    "status": status,
+                    "previous_status": previous_status,
+                }),
             )),
             AlephEvent::TeamTaskCompleted {
                 team_id,

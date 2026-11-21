@@ -1720,38 +1720,45 @@ async fn start_server_body(
             let notifier = Arc::new(TeamNotifier::new(team_store, coord_store, sink));
             let ctx = EventContext::new();
 
-            tokio::spawn(async move {
-                // Drive the subscription from the handler's own contract so the
-                // boot filter can never drift from what `handle` actually acts
-                // on — notably `TeamTaskUpdated`/"waiting_review", the leader
-                // nudge that keeps a review-gated DAG from stalling silently.
-                let notifier_subs = notifier.subscriptions();
-                let _notifier_sub = GlobalBus::global()
-                    .subscribe_async(
-                        EventFilter::new(notifier_subs),
-                        move |global_event| {
-                            let handler = notifier.clone();
-                            let event = global_event.event;
-                            let session_id = global_event.source_session_id;
-                            let ctx = ctx.clone();
-                            tokio::spawn(async move {
-                                match handler.handle(&event, &ctx).await {
-                                    Ok(follow_ups) => {
-                                        for follow_up in follow_ups {
-                                            GlobalBus::global()
-                                                .broadcast(handler.name(), &session_id, follow_up)
-                                                .await;
-                                        }
+            // Drive the subscription from the handler's own contract so the
+            // boot filter can never drift from what `handle` actually acts
+            // on — notably `TeamTaskUpdated`/"waiting_review", the leader
+            // nudge that keeps a review-gated DAG from stalling silently.
+            let notifier_subs = notifier.subscriptions();
+            let _notifier_sub = GlobalBus::global()
+                .subscribe_async(
+                    EventFilter::new(notifier_subs),
+                    move |global_event| {
+                        let handler = notifier.clone();
+                        let event = global_event.event;
+                        let session_id = global_event.source_session_id;
+                        let ctx = ctx.clone();
+                        tokio::spawn(async move {
+                            match handler.handle(&event, &ctx).await {
+                                Ok(follow_ups) => {
+                                    for follow_up in follow_ups {
+                                        GlobalBus::global()
+                                            .broadcast(handler.name(), &session_id, follow_up)
+                                            .await;
                                     }
-                                    Err(e) => tracing::warn!(handler = handler.name(), error = %e, "TeamNotifier handle error"),
                                 }
-                            });
-                        },
-                    )
-                    .await;
-                tracing::info!("Team notifier registered (TeamNotifier)");
-            });
+                                Err(e) => tracing::warn!(handler = handler.name(), error = %e, "TeamNotifier handle error"),
+                            }
+                        });
+                    },
+                )
+                .await;
+            tracing::info!("Team notifier registered (TeamNotifier)");
         };
+    }
+
+    // Start dispatching only after both durable logging and leader
+    // notification are listening: the lossy bus cannot replay early events.
+    if let Some(dispatcher) = agent_result.team_dispatcher.clone() {
+        dispatcher.spawn_loop();
+        if !args.daemon {
+            println!("  Team dispatcher started");
+        }
     }
 
     // Register the subagent completion announcer — background subagent

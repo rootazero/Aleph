@@ -547,6 +547,12 @@ check-config-wiring:
 check-discovery-wiring:
     python3 scripts/discovery_wire_audit.py
 
+# Events: every AlephEvent variant must have a producer and a subscriber;
+# repaired transition/boot wires must stay connected.
+check-event-wiring:
+    python3 scripts/event_wire_audit.py
+
+
 # Seams: every public API of the audited protocol/agent modules (src/a2a,
 # src/acp, src/agents) must have a production consumer — a `pub fn` nobody
 # calls is a severed wire the compiler cannot see. Shrink-only baseline.
