@@ -15,15 +15,20 @@
 //! that sets `use_tls` is rejected. Run the connection through a TLS tunnel
 //! when the transport must be encrypted.
 //!
+//! Attachments are not part of the protocol and are neither sent nor extracted;
+//! an inbound line carries text only.
+//!
 //! # Usage
 //!
-//! ```toml
-//! [[channels]]
-//! id = "irc"
-//! channel_type = "irc"
-//! enabled = true
+//! `Config.channels` is a MAP keyed by instance id, so the table header carries
+//! the id and the keys are flat. The `[[channels]]` array-of-tables form this
+//! example used until 2026-11-22 does not parse at all — the server refuses to
+//! boot with `invalid type: sequence, expected a map`.
 //!
-//! [channels.config]
+//! ```toml
+//! [channels.irc]
+//! type = "irc"
+//! enabled = true
 //! server = "irc.libera.chat"
 //! port = 6667
 //! nick = "alephbot"
@@ -218,6 +223,19 @@ impl Channel for IrcChannel {
         let write_tx = self.write_tx.clone();
         let test_mode = self.test_mode;
         Box::pin(async move {
+            // Fail closed: an IRC line carries text only, so an attachment or
+            // button request must error out instead of being dropped.
+            if !message.attachments.is_empty() {
+                return Err(ChannelError::UnsupportedFeature(
+                    "IRC does not support attachments".to_string(),
+                ));
+            }
+            if message.inline_keyboard.is_some() {
+                return Err(ChannelError::UnsupportedFeature(
+                    "IRC does not support buttons".to_string(),
+                ));
+            }
+
             let write_tx = write_tx.read().await;
             let write_tx = write_tx.as_ref().ok_or_else(|| {
                 ChannelError::NotConnected(

@@ -1,23 +1,29 @@
 //! Signal Channel Implementation
 //!
 //! Integrates with Signal via signal-cli's REST API wrapper for sending
-//! and receiving messages. Uses periodic polling for message reception.
+//! messages and a long-lived SSE stream for receiving them.
 //!
 //! # Protocol
 //!
-//! - **Receiving:** Poll `GET /v1/receive/{phone_number}` periodically
+//! - **Receiving:** long-lived `GET /v1/receive/{phone_number}` SSE stream
+//!   (`SignalMonitor`), reconnected with backoff
 //! - **Sending:** `POST /v2/send` with `{"number":"+1...", "message":"..."}`
 //! - **Auth:** None (signal-cli handles registration separately)
 //!
+//! Neither direction carries attachments: outbound requests reject them and an
+//! inbound attachment only surfaces as a note appended to the message text.
+//!
 //! # Usage
 //!
-//! ```toml
-//! [[channels]]
-//! id = "signal"
-//! channel_type = "signal"
-//! enabled = true
+//! `Config.channels` is a MAP keyed by instance id, so the table header carries
+//! the id and the keys are flat. The `[[channels]]` array-of-tables form this
+//! example used until 2026-11-22 does not parse at all — the server refuses to
+//! boot with `invalid type: sequence, expected a map`.
 //!
-//! [channels.config]
+//! ```toml
+//! [channels.signal]
+//! type = "signal"
+//! enabled = true
 //! api_url = "http://localhost:8080"
 //! phone_number = "+1234567890"
 //! allowed_users = ["+9876543210"]
@@ -113,7 +119,9 @@ impl SignalChannel {
             replies: true,
             editing: false,
             deletion: false,
-            typing_indicator: true,
+            // signal-cli's REST API exposes no typing endpoint; the trait
+            // default answers `UnsupportedFeature`.
+            typing_indicator: false,
             // No `mark_read` override — signal-cli can send receipts, but
             // nothing here calls it yet.
             read_receipts: false,
@@ -121,7 +129,8 @@ impl SignalChannel {
             polls: false,
             group_icons: false, // Signal is plain text
             max_message_length: 65535,
-            max_attachment_size: 100 * 1024 * 1024, // 100MB
+            // The channel sends no attachments at all.
+            max_attachment_size: 0,
             stream_protocol: Default::default(),
         }
     }
@@ -222,6 +231,19 @@ impl Channel for SignalChannel {
             .unwrap_or_else(|| self.config.api_url.clone());
         let phone_number = self.config.phone_number.clone();
         Box::pin(async move {
+            // Fail closed: `send_message` posts text only, so an attachment or
+            // button request must error out instead of being dropped.
+            if !message.attachments.is_empty() {
+                return Err(ChannelError::UnsupportedFeature(
+                    "Signal does not support attachments".to_string(),
+                ));
+            }
+            if message.inline_keyboard.is_some() {
+                return Err(ChannelError::UnsupportedFeature(
+                    "Signal does not support buttons".to_string(),
+                ));
+            }
+
             SignalMessageOps::send_message(
                 &client,
                 &api_url,
@@ -233,12 +255,8 @@ impl Channel for SignalChannel {
         })
     }
 
-    async fn send_typing(&self, conversation_id: &ConversationId) -> ChannelResult<()> {
-        // Signal typing indicators would need signal-cli support.
-        // Current signal-cli REST API doesn't expose typing indicators.
-        let _ = conversation_id;
-        Ok(())
-    }
+    // send_typing() — uses the default from the Channel trait, which answers
+    // `UnsupportedFeature` because `capabilities().typing_indicator` is false.
 
     async fn edit(
         &self,
@@ -308,12 +326,14 @@ mod tests {
         assert!(caps.replies);
         assert!(!caps.editing);
         assert!(!caps.deletion);
-        assert!(caps.typing_indicator);
+        // No typing endpoint on signal-cli's REST API — the trait default
+        // answers `UnsupportedFeature`.
+        assert!(!caps.typing_indicator);
         // No `mark_read` override — flip back only together with the impl.
         assert!(!caps.read_receipts);
         assert!(!caps.rich_text);
         assert_eq!(caps.max_message_length, 65535);
-        assert_eq!(caps.max_attachment_size, 100 * 1024 * 1024);
+        assert_eq!(caps.max_attachment_size, 0);
     }
 
     #[test]
@@ -392,8 +412,7 @@ mod tests {
             "api_url": "http://signal:9080",
             "phone_number": "+1234567890",
             "allowed_users": ["+9876543210"],
-            "poll_interval_secs": 5,
-            "send_typing": false
+            "event_source": { "max_retries": 5 }
         });
 
         let result = factory.create(config).await;

@@ -216,6 +216,20 @@ impl Channel for QQChannel {
         let test_mode = self.test_mode;
         let reply_tracker = self.reply_tracker.clone();
         Box::pin(async move {
+            // Fail closed: the delivery path sends text (and quoted replies)
+            // only, so an attachment or button request must error out instead
+            // of being dropped.
+            if !message.attachments.is_empty() {
+                return Err(ChannelError::UnsupportedFeature(
+                    "QQ does not support attachments".to_string(),
+                ));
+            }
+            if message.inline_keyboard.is_some() {
+                return Err(ChannelError::UnsupportedFeature(
+                    "QQ does not support buttons".to_string(),
+                ));
+            }
+
             if test_mode {
                 return Ok(SendResult {
                     message_id: MessageId::new(format!(

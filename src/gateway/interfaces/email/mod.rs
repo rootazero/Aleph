@@ -1,25 +1,28 @@
 //! Email Channel Implementation
 //!
 //! Integrates with email servers using IMAP for receiving messages (polling)
-//! and SMTP for sending messages. Uses the subject line for agent routing
-//! (e.g., `[coder] Fix this bug`).
+//! and SMTP for sending messages.
 //!
 //! # Protocol
 //!
-//! - **IMAP** (polling): Connects to the configured IMAP server, polls for
+//! - **IMAP** (TLS): Connects to the configured IMAP server, polls for
 //!   unseen messages in specified folders, and converts them to `InboundMessages`.
 //! - **SMTP** (STARTTLS): Sends HTML emails via the configured SMTP server,
-//!   converting Markdown body to a styled HTML email.
+//!   converting Markdown body to a styled HTML email. A reply carries the
+//!   inbound `Message-ID` as `In-Reply-To`/`References` and repeats the inbound
+//!   subject as `Re: <subject>`, so the answer stays in the same mail thread.
 //!
 //! # Usage
 //!
-//! ```toml
-//! [[channels]]
-//! id = "email"
-//! channel_type = "email"
-//! enabled = true
+//! `Config.channels` is a MAP keyed by instance id, so the table header carries
+//! the id and the keys are flat. The `[[channels]]` array-of-tables form this
+//! example used until 2026-11-22 does not parse at all — the server refuses to
+//! boot with `invalid type: sequence, expected a map`.
 //!
-//! [channels.config]
+//! ```toml
+//! [channels.email]
+//! type = "email"
+//! enabled = true
 //! imap_host = "imap.gmail.com"
 //! smtp_host = "smtp.gmail.com"
 //! username = "aleph@gmail.com"
@@ -28,12 +31,17 @@
 //! poll_interval_secs = 30
 //! folders = ["INBOX"]
 //! ```
+//!
+//! `use_tls = false` is rejected by [`EmailConfig::validate`]: both protocols
+//! authenticate with the same password, so neither may run in cleartext.
 
 pub mod config;
 pub mod message_ops;
 
 pub use config::EmailConfig;
-pub use message_ops::EmailMessageOps;
+pub use message_ops::{
+    new_inbound_thread_store, EmailMessageOps, InboundThread, InboundThreadStore,
+};
 
 use crate::gateway::channel::{
     Channel, ChannelCapabilities, ChannelError, ChannelFactory, ChannelId, ChannelInfo,
@@ -55,6 +63,8 @@ pub struct EmailChannel {
     shutdown_tx: Option<watch::Sender<bool>>,
     /// Test mode: skip real SMTP/IMAP operations
     test_mode: bool,
+    /// Identity of the last inbound mail per conversation, so replies thread
+    inbound_threads: InboundThreadStore,
 }
 
 impl EmailChannel {
@@ -74,6 +84,7 @@ impl EmailChannel {
             channel_state: ChannelState::new(100),
             shutdown_tx: None,
             test_mode: false,
+            inbound_threads: new_inbound_thread_store(),
         }
     }
 
@@ -142,18 +153,46 @@ impl Channel for EmailChannel {
         let (shutdown_tx, shutdown_rx) = watch::channel(false);
         self.shutdown_tx = Some(shutdown_tx);
 
+        if self.test_mode {
+            self.channel_state
+                .set_status(ChannelStatus::Connected)
+                .await;
+            return Ok(());
+        }
+
+        // Reach the server before claiming `Connected`: a rejected login or an
+        // unreachable host must fail `start`, not disappear into a warning in
+        // a poll loop nobody is watching.
+        if let Err(error) = EmailMessageOps::check_imap_connection(&self.config).await {
+            self.channel_state.set_status(ChannelStatus::Error).await;
+            return Err(error);
+        }
+
         // Spawn IMAP polling loop
         let config = self.config.clone();
         let channel_id = self.info.id.clone();
         let inbound_tx = self.channel_state.sender();
         let status = self.channel_state.status_handle();
+        let threads = self.inbound_threads.clone();
 
         tokio::spawn(async move {
-            *status.write().await = ChannelStatus::Connected;
-
-            EmailMessageOps::run_imap_poll_loop(config, inbound_tx, channel_id, shutdown_rx).await;
-
-            *status.write().await = ChannelStatus::Disconnected;
+            match EmailMessageOps::run_imap_poll_loop(
+                config,
+                inbound_tx,
+                channel_id,
+                threads,
+                shutdown_rx,
+            )
+            .await
+            {
+                Ok(()) => *status.write().await = ChannelStatus::Disconnected,
+                // A fatal poll failure (bad config, rejected login) is
+                // reported as `Error`, never as a healthy disconnect.
+                Err(error) => {
+                    tracing::error!("Email IMAP poll loop stopped with a fatal error: {error}");
+                    *status.write().await = ChannelStatus::Error;
+                }
+            }
         });
 
         self.channel_state
@@ -178,7 +217,21 @@ impl Channel for EmailChannel {
     fn send(&self, message: OutboundMessage) -> SendOperation {
         let config = self.config.clone();
         let test_mode = self.test_mode;
+        let inbound_threads = self.inbound_threads.clone();
         Box::pin(async move {
+            // Fail closed: the SMTP path carries text only, so an attachment or
+            // button request must error out instead of being dropped.
+            if !message.attachments.is_empty() {
+                return Err(ChannelError::UnsupportedFeature(
+                    "Email does not support attachments".to_string(),
+                ));
+            }
+            if message.inline_keyboard.is_some() {
+                return Err(ChannelError::UnsupportedFeature(
+                    "Email does not support buttons".to_string(),
+                ));
+            }
+
             // Test mode: skip real SMTP, return mock success
             if test_mode {
                 return Ok(SendResult {
@@ -190,14 +243,31 @@ impl Channel for EmailChannel {
             // conversation_id is the recipient email address
             let to = message.conversation_id.as_str();
 
-            // Use subject from metadata if provided, otherwise default
+            // Explicit subject wins; otherwise repeat the subject of the last
+            // inbound mail from this address so the reply lands in its thread.
             let subject = message
                 .metadata
                 .get("subject")
                 .cloned()
+                .or_else(|| message_ops::reply_subject_for(&inbound_threads, to))
                 .unwrap_or_else(|| "Message from Aleph".to_string());
 
-            EmailMessageOps::send_email(&config, to, &subject, &message.text).await
+            // Same for the identity the reply points at: an explicit
+            // `reply_to` wins, else the `Message-ID` of the last inbound mail.
+            let in_reply_to = message
+                .reply_to
+                .as_ref()
+                .map(|id| id.as_str().to_string())
+                .or_else(|| message_ops::reply_message_id_for(&inbound_threads, to));
+
+            EmailMessageOps::send_email(
+                &config,
+                to,
+                &subject,
+                &message.text,
+                in_reply_to.as_deref(),
+            )
+            .await
         })
     }
 
@@ -349,6 +419,49 @@ mod tests {
         // When the email feature IS enabled, start() requires live IMAP/SMTP servers
         // which cannot be tested in unit tests, so this test only validates
         // construction succeeds.
+    }
+
+    #[tokio::test]
+    async fn test_send_rejects_attachments() {
+        use crate::gateway::channel::Attachment;
+
+        let channel = EmailChannel::for_test("email", EmailConfig::default());
+        let mut message = OutboundMessage::text("user@test.com", "hello");
+        message.attachments.push(Attachment {
+            id: "a1".to_string(),
+            mime_type: "image/png".to_string(),
+            filename: Some("a.png".to_string()),
+            size: Some(3),
+            url: None,
+            path: None,
+            data: None,
+            is_voice_note: false,
+            is_video_note: false,
+        });
+
+        match channel.send(message).await.unwrap_err() {
+            ChannelError::UnsupportedFeature(msg) => assert!(msg.contains("attachments"), "{msg}"),
+            other => panic!("Expected UnsupportedFeature, got: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_send_rejects_inline_keyboard() {
+        use crate::gateway::channel::{InlineButton, InlineKeyboard};
+
+        let channel = EmailChannel::for_test("email", EmailConfig::default());
+        let mut message = OutboundMessage::text("user@test.com", "hello");
+        message.inline_keyboard = Some(InlineKeyboard {
+            rows: vec![vec![InlineButton {
+                text: "OK".to_string(),
+                callback_data: "ok".to_string(),
+            }]],
+        });
+
+        match channel.send(message).await.unwrap_err() {
+            ChannelError::UnsupportedFeature(msg) => assert!(msg.contains("buttons"), "{msg}"),
+            other => panic!("Expected UnsupportedFeature, got: {other:?}"),
+        }
     }
 
     #[tokio::test]

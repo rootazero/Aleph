@@ -26,10 +26,8 @@ fn test_mattermost_properties() {
     assert!(channel.capabilities().editing);
     assert!(channel.capabilities().deletion);
     assert_eq!(channel.capabilities().max_message_length, 16383);
-    assert_eq!(
-        channel.capabilities().max_attachment_size,
-        100 * 1024 * 1024
-    );
+    // The adapter sends no attachments at all.
+    assert_eq!(channel.capabilities().max_attachment_size, 0);
 }
 
 #[test]

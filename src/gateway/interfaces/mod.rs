@@ -22,6 +22,9 @@
 //! - **Feishu**: Feishu/Lark Bot WebSocket + REST API integration
 //! - **LINE**: LINE Messaging API webhook + REST API integration
 //! - **`WeChat`**: `WeChat` iLink Bot API integration
+//! - **QQ**: QQ Bot API (WebSocket gateway + REST) integration
+//! - **WhatsApp**: Multi-device `WhatsApp` integration via whatsapp-rust
+//! - **Voice Call**: Thin Core-side voice-call transport seam over the relay
 //! - **SMS**: SMS through the thin telecom Relay (unavailable until a Relay transport is attached)
 
 pub mod cli;
@@ -51,6 +54,24 @@ pub mod telegram;
 pub mod webhook;
 pub mod whatsapp;
 pub mod xmpp;
+
+/// Append a note that inbound attachments were not delivered.
+///
+/// Adapters without an inbound attachment path used to hand the model text
+/// that silently omitted a file the user sent, so the model answered as if no
+/// file existed. They call this instead, which keeps the drop visible.
+#[must_use]
+pub fn with_attachment_note(text: String, attachment_count: usize) -> String {
+    if attachment_count == 0 {
+        return text;
+    }
+    let note = format!("[{attachment_count} attachment(s) not supported on this channel]");
+    if text.is_empty() {
+        note
+    } else {
+        format!("{text}\n\n{note}")
+    }
+}
 
 pub use cli::{CliChannel, CliChannelConfig, CliChannelFactory};
 
@@ -280,6 +301,30 @@ mod credential_debug_tests {
             ..XmppConfig::default()
         };
         assert_redacted("XmppConfig", &format!("{xmpp:?}"));
+    }
+}
+
+#[cfg(test)]
+mod attachment_note_tests {
+    #[test]
+    fn zero_attachments_leaves_the_text_untouched() {
+        assert_eq!(super::with_attachment_note("hi".to_string(), 0), "hi");
+    }
+
+    #[test]
+    fn attachments_are_named_in_the_text() {
+        assert_eq!(
+            super::with_attachment_note("hi".to_string(), 2),
+            "hi\n\n[2 attachment(s) not supported on this channel]"
+        );
+    }
+
+    #[test]
+    fn attachment_only_message_keeps_the_note() {
+        assert_eq!(
+            super::with_attachment_note(String::new(), 1),
+            "[1 attachment(s) not supported on this channel]"
+        );
     }
 }
 

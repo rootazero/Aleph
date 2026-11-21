@@ -8,14 +8,6 @@ fn default_api_url() -> String {
     "http://localhost:8080".to_string()
 }
 
-const fn default_poll_interval() -> u64 {
-    2
-}
-
-const fn default_true() -> bool {
-    true
-}
-
 const fn default_reconnect_delay() -> u64 {
     500
 }
@@ -63,14 +55,6 @@ pub struct SignalConfig {
     #[serde(default)]
     pub allowed_users: Vec<String>,
 
-    /// Polling interval in seconds
-    #[serde(default = "default_poll_interval")]
-    pub poll_interval_secs: u64,
-
-    /// Send typing indicator while processing
-    #[serde(default = "default_true")]
-    pub send_typing: bool,
-
     /// SSE event source configuration for real-time inbound
     #[serde(default)]
     pub event_source: EventSourceConfig,
@@ -82,8 +66,6 @@ impl Default for SignalConfig {
             api_url: default_api_url(),
             phone_number: String::new(),
             allowed_users: Vec::new(),
-            poll_interval_secs: default_poll_interval(),
-            send_typing: true,
             event_source: EventSourceConfig::default(),
         }
     }
@@ -125,8 +107,6 @@ mod tests {
         assert_eq!(config.api_url, "http://localhost:8080");
         assert!(config.phone_number.is_empty());
         assert!(config.allowed_users.is_empty());
-        assert_eq!(config.poll_interval_secs, 2);
-        assert!(config.send_typing);
     }
 
     #[test]
@@ -243,8 +223,6 @@ mod tests {
             api_url: "http://signal:9080".to_string(),
             phone_number: "+1234567890".to_string(),
             allowed_users: vec!["+9876543210".to_string()],
-            poll_interval_secs: 5,
-            send_typing: false,
             event_source: EventSourceConfig::default(),
         };
 
@@ -254,8 +232,6 @@ mod tests {
         assert_eq!(deserialized.api_url, config.api_url);
         assert_eq!(deserialized.phone_number, config.phone_number);
         assert_eq!(deserialized.allowed_users, config.allowed_users);
-        assert_eq!(deserialized.poll_interval_secs, config.poll_interval_secs);
-        assert_eq!(deserialized.send_typing, config.send_typing);
         assert_eq!(deserialized.event_source.reconnect_delay_ms, 500);
         assert_eq!(deserialized.event_source.max_retries, 10);
         assert_eq!(deserialized.event_source.backoff_multiplier, 1.5);
@@ -267,8 +243,6 @@ mod tests {
         let config: SignalConfig = serde_json::from_str(json).unwrap();
 
         assert_eq!(config.api_url, "http://localhost:8080");
-        assert_eq!(config.poll_interval_secs, 2);
-        assert!(config.send_typing);
         assert!(config.allowed_users.is_empty());
         assert_eq!(config.event_source.reconnect_delay_ms, 500);
         assert_eq!(config.event_source.max_retries, 10);
