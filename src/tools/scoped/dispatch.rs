@@ -2479,7 +2479,7 @@ impl ScopedToolService {
         // and the run's channel-delivery buffer while the value is still
         // structured — the lines below flatten it to text and truncate it to
         // the result budget, after which the items are gone.
-        let media_failures = super::artifact_harvest::harvest_outbound_media(
+        let media = super::artifact_harvest::harvest_outbound_media(
             name,
             &out.value,
             self.turn_context.as_ref(),
@@ -2491,7 +2491,13 @@ impl ScopedToolService {
         // ended, so this is the last point at which the model can still pick a
         // different URL or re-encode the payload. Absent failures write
         // nothing, so the success path stays byte-identical.
-        super::artifact_harvest::annotate_media_failures(&mut out.value, &media_failures);
+        super::artifact_harvest::annotate_media_failures(&mut out.value, &media.failures);
+        // The other half of the same report: the ids of the artifacts the
+        // store lane just created. A model that was never told the id cannot
+        // name the artifact it produced — and `artifact_publish`'s `figures`
+        // takes exactly those ids, so without them the Figures section of a
+        // deliverable stays dark.
+        super::artifact_harvest::annotate_media_stored(&mut out.value, &media.stored);
 
         // An RPC caller consumes the structured value itself, not a prompt
         // rendering of it. Model-ingress hygiene, the result-token budget,

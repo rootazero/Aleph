@@ -4,10 +4,12 @@
 //! ([`super::session_html`]) and a published deliverable
 //! ([`super::document`]). They differ only in what goes in the middle — the
 //! shell, the page header, the attachment grid and the byte budget are the
-//! same, and must stay the same. The CSP in particular is a guarantee about
-//! *every* document Aleph serves from its own origin, so it exists once here
-//! rather than once per renderer where a later edit could quietly weaken one
-//! of them.
+//! same, and must stay the same.
+//!
+//! The CSP is a guarantee about *every* document Aleph serves from its own
+//! origin, so it has exactly one owner: [`super::CONTENT_SECURITY_POLICY`].
+//! This module puts that policy into the document's own `<meta>` tag; the
+//! gateway derives the policy it sends as a header from the same literal.
 
 use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine as _;
@@ -15,7 +17,8 @@ use std::fmt::Write as _;
 
 use super::markdown::{escape_attr, escape_text};
 use super::{
-    base64_encoded_len, ExportArtifact, MAX_INLINE_ARTIFACT_BYTES, MAX_INLINE_TOTAL_BYTES,
+    base64_encoded_len, ExportArtifact, CONTENT_SECURITY_POLICY, MAX_INLINE_ARTIFACT_BYTES,
+    MAX_INLINE_TOTAL_BYTES,
 };
 
 /// The stylesheet is embedded at COMPILE TIME.
@@ -25,16 +28,6 @@ use super::{
 /// disk would be the same "changed the file, nothing happened" footgun one
 /// layer down.
 const EXPORT_CSS: &str = include_str!("export.css");
-
-/// Content-Security-Policy carried by the document itself, so the guarantee
-/// travels with the file even when it is opened from disk rather than served.
-///
-/// `default-src 'none'` with no `script-src` means no script can execute —
-/// see the module docs for why that is load-bearing rather than decorative.
-/// `img-src data:` and not `https:` is the other half: an exported document is
-/// meant to be readable offline, and a remote image would both break that and
-/// tell whoever the URL names when and from where the document was opened.
-const CSP: &str = "default-src 'none'; img-src data:; style-src 'unsafe-inline'";
 
 /// Wrap a rendered `<body>` fragment in the shared document shell.
 pub(super) fn wrap_document(title: &str, body: &str) -> String {
@@ -50,7 +43,7 @@ pub(super) fn wrap_document(title: &str, body: &str) -> String {
          </head>\n\
          <body>\n{body}</body>\n\
          </html>\n",
-        csp = escape_attr(CSP),
+        csp = escape_attr(CONTENT_SECURITY_POLICY),
         title = escape_text(title),
         css = EXPORT_CSS,
         body = body,
@@ -169,7 +162,13 @@ fn is_image(mime: &str) -> bool {
 }
 
 /// Byte count as the rest of the product spells it (KB/MB, one decimal).
-pub(super) fn human_size(bytes: u64) -> String {
+///
+/// Private to this module: the only caller is the attachment grid below. The
+/// product spells a byte count the same way in two other modules
+/// (`builtin_tools::artifact_publish` and `media::processor`), each with its
+/// own copy — three copies of one formatter is a drift waiting to happen, but
+/// folding them together is a change to modules this one does not own.
+fn human_size(bytes: u64) -> String {
     #[allow(clippy::cast_precision_loss)]
     let n = bytes as f64;
     if bytes < 1024 {
