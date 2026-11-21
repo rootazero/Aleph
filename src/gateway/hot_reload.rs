@@ -15,7 +15,26 @@ use tracing::{debug, error, info, warn};
 
 use super::config::{ConfigError, GatewayConfig};
 
-/// Controls how configuration sections are reloaded at runtime.
+/// Selects which configuration sections a hot reload would apply.
+///
+/// Does not hot-reload anything.
+///
+/// This is a selector with **no production caller**, and the file watcher does
+/// not consult it either. On a change [`ConfigWatcher::start_watching`]
+/// reloads its own [`GatewayConfig`] snapshot and emits
+/// [`ConfigEvent::Reloaded`]; the server's consumer of that event only
+/// re-applies the PII filter settings and publishes a `config.reloaded`
+/// notification — it does not re-point agents, models, or channels. What
+/// actually applies configuration sections is
+/// `crate::config::live_apply::apply_live_sections`, driven by the manual
+/// `config.reload` RPC. So saving the config file can change PII behaviour but
+/// does **not** reconfigure the rest of a running server; that still needs the
+/// reload RPC.
+///
+/// Wiring [`ReloadMode::should_hot_reload`] into an auto-apply path is a design
+/// decision (it would re-point a running runtime on any save, including a
+/// half-written one), not a fix — the variants below describe the policy such
+/// a path would use, not behaviour that exists today.
 ///
 /// - `Off`: Never hot-reload; changes require a full restart.
 /// - `Hot`: Always hot-reload every section immediately.
@@ -34,7 +53,7 @@ pub enum ReloadMode {
 
 impl ReloadMode {
     /// Whether the given configuration section should be hot-reloaded
-    /// under this mode.
+    /// under this mode. Nothing calls this yet — see the type doc.
     #[must_use]
     pub fn should_hot_reload(&self, section: &str) -> bool {
         match self {

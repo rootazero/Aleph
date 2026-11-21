@@ -356,25 +356,6 @@ impl SessionStore for E2eSessionStore {
     ) -> Result<SessionPreview, SessionStoreError> {
         Err(SessionStoreError::DatabaseError("stub".into()))
     }
-    async fn count_by_state(&self, _state: SessionState) -> Result<usize, SessionStoreError> {
-        Err(SessionStoreError::DatabaseError("stub".into()))
-    }
-    async fn list_by_state(
-        &self,
-        _state: SessionState,
-    ) -> Result<Vec<SessionMetadata>, SessionStoreError> {
-        Err(SessionStoreError::DatabaseError("stub".into()))
-    }
-    async fn set_error(
-        &self,
-        _key: &SessionKey,
-        _error_msg: Option<&str>,
-    ) -> Result<(), SessionStoreError> {
-        Err(SessionStoreError::DatabaseError("stub".into()))
-    }
-    async fn stop(&self, _key: &SessionKey) -> Result<(), SessionStoreError> {
-        Err(SessionStoreError::DatabaseError("stub".into()))
-    }
     async fn set_idle(&self, _key: &SessionKey) -> Result<(), SessionStoreError> {
         Err(SessionStoreError::DatabaseError("stub".into()))
     }

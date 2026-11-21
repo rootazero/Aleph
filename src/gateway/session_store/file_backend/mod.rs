@@ -644,7 +644,6 @@ fn new_session_meta(
         last_active_at: now,
         message_count,
         total_tokens: 0,
-        auto_reset_at: None,
         state: Some(SessionState::Created),
         topic: None,
         status: None,
@@ -1726,37 +1725,6 @@ impl SessionStore for FileSessionStore {
         let meta = self.read_metadata(&key_str).await?;
         let messages = self.read_transcript(&key_str, Some(message_limit)).await?;
         Ok(SessionPreview { meta, messages })
-    }
-
-    async fn count_by_state(&self, state: SessionState) -> Result<usize, SessionStoreError> {
-        let sessions = self.list_sessions(SessionFilter::default()).await?;
-        Ok(sessions
-            .into_iter()
-            .filter(|m| m.state == Some(state))
-            .count())
-    }
-
-    async fn list_by_state(
-        &self,
-        state: SessionState,
-    ) -> Result<Vec<SessionMetadata>, SessionStoreError> {
-        let sessions = self.list_sessions(SessionFilter::default()).await?;
-        Ok(sessions
-            .into_iter()
-            .filter(|m| m.state == Some(state))
-            .collect())
-    }
-
-    async fn set_error(
-        &self,
-        key: &SessionKey,
-        _error_msg: Option<&str>,
-    ) -> Result<(), SessionStoreError> {
-        self.set_state(key, SessionState::Error).await
-    }
-
-    async fn stop(&self, key: &SessionKey) -> Result<(), SessionStoreError> {
-        self.set_state(key, SessionState::Stopped).await
     }
 
     async fn set_idle(&self, key: &SessionKey) -> Result<(), SessionStoreError> {

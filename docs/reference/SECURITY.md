@@ -3413,8 +3413,8 @@ attribution, and a bound workspace as the room's default cwd.
      while the file backend still can, and so can any snapshot:
      - **SQLite (opt-in: `[general] session_store_backend = "sqlite"`; the
        shipped default is `"file"`)** — **closed in round-11 (D1)**.
-       `session_manager::ops::query::collect_rows` fails `list_sessions` /
-       `list_by_state` on any undecodable row (each one `warn!`ed by index),
+       `session_manager::ops::query::collect_rows` fails `list_sessions`
+       on any undecodable row (each one `warn!`ed by index),
        so the receipt reads `Unknown`, not `NothingToMove`. Display-only reads
        (`search_messages`, `get_session_preview`) use the lossy
        `collect_rows_lossy`, which drops and counts, loudly. Pinned by
