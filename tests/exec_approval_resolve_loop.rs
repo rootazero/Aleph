@@ -23,7 +23,7 @@ fn request(id: &str) -> ApprovalRequest {
         // later grew a `debug_assert!` rejecting exactly that (a card a human
         // can only ever deny should never be raised), so all three tests
         // panicked before reaching the resolve loop they exist to cover.
-        analysis: CommandAnalysis::success(Vec::new(), Vec::new()),
+        analysis: CommandAnalysis::success(Vec::new()),
         agent_id: "main".to_string(),
         session_key: "telegram:123456".to_string(),
         reason: None,

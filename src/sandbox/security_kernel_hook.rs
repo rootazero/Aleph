@@ -42,36 +42,50 @@ impl SandboxBeforeHook for SecurityKernelHook {
         // same string.
         let text = crate::sandbox::command_policy::command_text(ctx.command);
         let command = crate::sandbox::command_policy::normalize::normalize_for_matching(&text);
-        match self.kernel.assess_custom(&command) {
-            Some(RiskLevel::Blocked) => {
+        match self.kernel.assess_custom_with_reason(&command) {
+            Some((RiskLevel::Blocked, reason)) => {
                 // Same durable trail as the built-in ruleset next to it: a
                 // refusal the operator configured themselves is exactly as
                 // worth reconstructing after an incident, and a second audit
                 // producer would only be a second thing to keep in step.
-                crate::sandbox::command_policy::record_policy_decision(
-                    true,
-                    ctx.command,
-                    &["custom_blocked".to_string()],
-                )
-                .await;
+                //
+                // The operator's `reason` rides along with the verdict: it is
+                // the only explanation they wrote for the rule, and a refusal
+                // that cannot say why it fired teaches them nothing.
+                let reason = reason.filter(|reason| !reason.trim().is_empty());
+                let mut reasons = vec!["custom_blocked".to_string()];
+                if let Some(reason) = reason.as_ref() {
+                    reasons.push(reason.clone());
+                }
+                crate::sandbox::command_policy::record_policy_decision(true, ctx.command, &reasons)
+                    .await;
                 SandboxHookResult::Deny {
                     reason: format!(
-                        "command blocked by custom shell-security pattern ([security].custom_blocked): {}",
-                        ctx.command.program
+                        "command blocked by custom shell-security pattern ([security].custom_blocked): {}{}",
+                        ctx.command.program,
+                        reason
+                            .as_ref()
+                            .map(|reason| format!(" ({reason})"))
+                            .unwrap_or_default()
                     ),
                 }
             }
-            Some(RiskLevel::Danger) => {
+            Some((RiskLevel::Danger, reason)) => {
                 tracing::warn!(
                     target: "shell_security",
                     tool = %ctx.command.tool_name,
                     program = %ctx.command.program,
+                    reason = ?reason,
                     "command matched a custom danger pattern (advisory; allowed)"
                 );
+                let mut reasons = vec!["custom_danger".to_string()];
+                if let Some(reason) = reason.as_ref().filter(|reason| !reason.trim().is_empty()) {
+                    reasons.push(reason.clone());
+                }
                 crate::sandbox::command_policy::record_policy_decision(
                     false,
                     ctx.command,
-                    &["custom_danger".to_string()],
+                    &reasons,
                 )
                 .await;
                 SandboxHookResult::Allow
@@ -189,6 +203,33 @@ mod tests {
             hook.before(ctx).await,
             SandboxHookResult::Deny { .. }
         ));
+    }
+
+    /// The operator's `reason` is the only explanation they wrote for a rule.
+    /// A refusal that drops it leaves the operator staring at a denial they
+    /// cannot act on.
+    #[tokio::test]
+    async fn a_denial_carries_the_operators_reason() {
+        let config = ShellSecurityConfig {
+            enable_custom_patterns: true,
+            mask_patterns: Vec::new(),
+            custom_blocked: vec![CustomRiskPattern {
+                pattern: r"^secret_tool\b".to_string(),
+                reason: Some("the operator banned this tool".to_string()),
+            }],
+            custom_danger: Vec::new(),
+            audit_block_on_full: false,
+        };
+        let hook = SecurityKernelHook::new(SecurityKernel::from_config(&config));
+        let command = cmd("secret_tool", &["--leak"]);
+        let ctx = SandboxHookContext::new(&command);
+        let SandboxHookResult::Deny { reason } = hook.before(ctx).await else {
+            panic!("a custom_blocked pattern must deny");
+        };
+        assert!(
+            reason.contains("the operator banned this tool"),
+            "the denial must carry the operator's reason: {reason}"
+        );
     }
 
     #[tokio::test]
