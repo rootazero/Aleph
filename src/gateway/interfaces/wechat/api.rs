@@ -2,7 +2,7 @@
 //!
 //! Functions for making requests to the iLink Bot API.
 
-use reqwest::header::{HeaderMap, HeaderValue};
+use reqwest::header::HeaderMap;
 use reqwest::Client;
 use std::collections::HashMap;
 

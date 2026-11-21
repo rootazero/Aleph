@@ -30,7 +30,7 @@ use super::{
 };
 use crate::gateway::telecom::{
     lifecycle_bridge::{ControlAck, ControlCommand, ControlCompletion, LifecycleControlReceiver},
-    public_admission::{PublicAdmission, PublicRunPermit, PublicRunRegistry},
+    public_admission::{PublicRunPermit, PublicRunRegistry},
     PublicHistorySession, PublicHistoryStore, PublicHistoryTurn,
 };
 use crate::orchestrator::dispatch::{
@@ -415,6 +415,7 @@ pub async fn run_public_voice_call(
     admitted: AdmittedVoiceCall,
     wiring: PublicVoiceWiring,
 ) -> VoiceCallReport {
+    use crate::gateway::telecom::public_admission::PublicAdmission;
     let permit = match wiring.registry.try_admit(admitted.context()) {
         PublicAdmission::Admitted(p) => p,
         PublicAdmission::OverSpend => return VoiceCallReport::new(VoiceCallTermination::OverSpend),

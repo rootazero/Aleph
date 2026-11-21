@@ -18,7 +18,6 @@
 use crate::gateway::interfaces::feishu::types::{
     ChatType, FeishuEvent, Mention, MessageEventPayload, TextContent, WsEventEnvelope,
 };
-use serde::Deserialize;
 
 /// Parse a raw WebSocket text frame into a `FeishuEvent`.
 ///

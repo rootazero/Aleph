@@ -293,7 +293,6 @@ mod tests {
                     accounts: None,
                     default_account: None,
                 },
-                "bot".into(),
             )),
         }
     }

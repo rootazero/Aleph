@@ -2,10 +2,12 @@
 
 use super::PluginRegistry;
 use crate::context::fabric::{
-    AdmittedContextCall, AuthenticatedCaller, ContextCapabilityDescriptor, ContextCapabilityMode,
-    ContextCapabilityRequest, ContextNamespace, ContextOperation,
+    AdmittedContextCall, AuthenticatedCaller, ContextCapabilityMode, ContextCapabilityRequest,
+    ContextNamespace, ContextOperation,
 };
 use crate::extension::capability::{ContextGrant, ContextGrantAudit, ContextGrantError};
+#[cfg(test)]
+use crate::context::fabric::ContextCapabilityDescriptor;
 use crate::extension::registry::{
     namespaced_component_key, ContextRegistration, ContextRegistryError, ContextStats,
 };

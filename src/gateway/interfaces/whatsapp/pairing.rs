@@ -129,6 +129,7 @@ impl PairingState {
 }
 
 /// Returns a short tag for the state variant (for transition error messages).
+#[cfg(test)]
 pub(crate) const fn state_tag(state: &PairingState) -> &'static str {
     match state {
         PairingState::Idle => "Idle",
