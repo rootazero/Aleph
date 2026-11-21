@@ -1,3 +1,20 @@
+//! Feishu event parsing.
+//!
+//! Only events that can be routed to the agent are parsed:
+//!
+//! - `im.message.receive_v1` — a chat message; its payload carries `chat_type`,
+//!   which is what the DM/group policy engines key off.
+//! - `application.bot.menu_v6` — a click on the bot's profile menu; it happens
+//!   in the operator's own chat with the bot, so it is authoritatively p2p.
+//!
+//! Everything else Feishu can push (`card.action.trigger`,
+//! `im.chat.member.bot.added_v1`, `im.chat.member.bot.deleted_v1`,
+//! `im.message.reaction.created_v1`, `im.message.reaction.deleted_v1`,
+//! `drive.notice.comment_add_v1`) arrives without an authoritative chat type.
+//! Defaulting such an event to a DM would hand group traffic a DM's access
+//! policy, so these are deliberately not parsed into events at all: they
+//! surface as [`FeishuEvent::Unknown`] and never become an inbound message,
+//! instead of a parser that produces a value nobody consumes.
 use crate::gateway::interfaces::feishu::types::{
     ChatType, FeishuEvent, Mention, MessageEventPayload, TextContent, WsEventEnvelope,
 };
@@ -7,6 +24,8 @@ use serde::Deserialize;
 ///
 /// Returns `Ok(None)` for ping/pong frames (handled separately).
 /// Returns `Ok(Some(event))` for business events.
+/// Returns `Ok(Some(FeishuEvent::Unknown(_)))` for events that are not routed
+/// (see the module docs).
 /// Returns `Err` if the JSON is malformed.
 pub fn parse_ws_frame(raw: &str) -> Result<Option<FeishuEvent>, String> {
     let envelope: WsEventEnvelope =
@@ -29,13 +48,7 @@ pub fn parse_ws_frame(raw: &str) -> Result<Option<FeishuEvent>, String> {
 
     match event_type {
         "im.message.receive_v1" => parse_message_event(&envelope),
-        "card.action.trigger" => parse_card_action(&envelope),
-        "im.chat.member.bot.added_v1" => parse_bot_added_event(&envelope),
-        "im.chat.member.bot.deleted_v1" => parse_bot_removed_event(&envelope),
-        "im.message.reaction.created_v1" => parse_reaction_created(&envelope),
-        "im.message.reaction.deleted_v1" => parse_reaction_deleted(&envelope),
         "application.bot.menu_v6" => parse_bot_menu_event(&envelope),
-        "drive.notice.comment_add_v1" => parse_drive_comment_event(&envelope),
         other => Ok(Some(FeishuEvent::Unknown(other.to_string()))),
     }
 }
@@ -103,232 +116,6 @@ fn parse_message_event(envelope: &WsEventEnvelope) -> Result<Option<FeishuEvent>
     }))
 }
 
-fn parse_card_action(envelope: &WsEventEnvelope) -> Result<Option<FeishuEvent>, String> {
-    let event_value = match &envelope.event {
-        Some(v) => v,
-        None => {
-            return Ok(Some(FeishuEvent::Unknown(
-                "card action without body".to_string(),
-            )))
-        }
-    };
-
-    let operator_id = event_value
-        .pointer("/operator/open_id")
-        .and_then(|v| v.as_str())
-        .unwrap_or_default()
-        .to_string();
-
-    let chat_id = event_value
-        .pointer("/context/open_chat_id")
-        .and_then(|v| v.as_str())
-        .unwrap_or_default()
-        .to_string();
-
-    let message_id = event_value
-        .pointer("/context/open_message_id")
-        .and_then(|v| v.as_str())
-        .unwrap_or_default()
-        .to_string();
-
-    let action_value = event_value
-        .pointer("/action/value")
-        .map(|v| {
-            if let Some(s) = v.as_str() {
-                s.to_string()
-            } else {
-                v.to_string()
-            }
-        })
-        .unwrap_or_default();
-
-    if action_value.is_empty() {
-        return Ok(Some(FeishuEvent::Unknown(
-            "card action with empty value".to_string(),
-        )));
-    }
-
-    Ok(Some(FeishuEvent::CardAction {
-        chat_id,
-        sender_id: operator_id,
-        action_value,
-        message_id,
-    }))
-}
-
-fn parse_bot_added_event(envelope: &WsEventEnvelope) -> Result<Option<FeishuEvent>, String> {
-    let event_value = match &envelope.event {
-        Some(v) => v,
-        None => {
-            return Ok(Some(FeishuEvent::Unknown(
-                "bot added event without body".to_string(),
-            )))
-        }
-    };
-
-    let chat_id = event_value
-        .pointer("/chat_id")
-        .and_then(|v| v.as_str())
-        .unwrap_or_default()
-        .to_string();
-
-    let operator_id = event_value
-        .pointer("/operator_id/open_id")
-        .and_then(|v| v.as_str())
-        .unwrap_or_default()
-        .to_string();
-
-    let operator_name = event_value
-        .pointer("/operator_name")
-        .and_then(|v| v.as_str())
-        .map(|s| s.to_string());
-
-    if chat_id.is_empty() {
-        return Ok(Some(FeishuEvent::Unknown(
-            "bot added event without chat_id".to_string(),
-        )));
-    }
-
-    Ok(Some(FeishuEvent::BotAdded {
-        chat_id,
-        operator_id,
-        operator_name,
-    }))
-}
-
-fn parse_bot_removed_event(envelope: &WsEventEnvelope) -> Result<Option<FeishuEvent>, String> {
-    let event_value = match &envelope.event {
-        Some(v) => v,
-        None => {
-            return Ok(Some(FeishuEvent::Unknown(
-                "bot removed event without body".to_string(),
-            )))
-        }
-    };
-
-    let chat_id = event_value
-        .pointer("/chat_id")
-        .and_then(|v| v.as_str())
-        .unwrap_or_default()
-        .to_string();
-
-    let operator_id = event_value
-        .pointer("/operator_id/open_id")
-        .and_then(|v| v.as_str())
-        .map(|s| s.to_string());
-
-    if chat_id.is_empty() {
-        return Ok(Some(FeishuEvent::Unknown(
-            "bot removed event without chat_id".to_string(),
-        )));
-    }
-
-    Ok(Some(FeishuEvent::BotRemoved {
-        chat_id,
-        operator_id,
-    }))
-}
-
-fn parse_reaction_created(envelope: &WsEventEnvelope) -> Result<Option<FeishuEvent>, String> {
-    let event_value = match &envelope.event {
-        Some(v) => v,
-        None => {
-            return Ok(Some(FeishuEvent::Unknown(
-                "reaction created event without body".to_string(),
-            )))
-        }
-    };
-
-    let message_id = event_value
-        .pointer("/message_id")
-        .and_then(|v| v.as_str())
-        .unwrap_or_default()
-        .to_string();
-
-    let chat_id = event_value
-        .pointer("/chat_id")
-        .and_then(|v| v.as_str())
-        .map(|s| s.to_string());
-
-    let emoji = event_value
-        .pointer("/reaction_type/emoji_type")
-        .and_then(|v| v.as_str())
-        .unwrap_or_default()
-        .to_string();
-
-    let operator_id = event_value
-        .pointer("/user_id/open_id")
-        .and_then(|v| v.as_str())
-        .unwrap_or_default()
-        .to_string();
-
-    if message_id.is_empty() || emoji.is_empty() {
-        return Ok(Some(FeishuEvent::Unknown(
-            "reaction created event missing message_id or emoji".to_string(),
-        )));
-    }
-
-    Ok(Some(FeishuEvent::ReactionCreated {
-        message_id,
-        chat_id,
-        emoji,
-        operator_id,
-    }))
-}
-
-fn parse_reaction_deleted(envelope: &WsEventEnvelope) -> Result<Option<FeishuEvent>, String> {
-    let event_value = match &envelope.event {
-        Some(v) => v,
-        None => {
-            return Ok(Some(FeishuEvent::Unknown(
-                "reaction deleted event without body".to_string(),
-            )))
-        }
-    };
-
-    let message_id = event_value
-        .pointer("/message_id")
-        .and_then(|v| v.as_str())
-        .unwrap_or_default()
-        .to_string();
-
-    let chat_id = event_value
-        .pointer("/chat_id")
-        .and_then(|v| v.as_str())
-        .map(|s| s.to_string());
-
-    let emoji = event_value
-        .pointer("/reaction_type/emoji_type")
-        .and_then(|v| v.as_str())
-        .unwrap_or_default()
-        .to_string();
-
-    let operator_id = event_value
-        .pointer("/user_id/open_id")
-        .and_then(|v| v.as_str())
-        .unwrap_or_default()
-        .to_string();
-
-    let reaction_id = event_value
-        .pointer("/reaction_id")
-        .and_then(|v| v.as_str())
-        .map(|s| s.to_string());
-
-    if message_id.is_empty() || emoji.is_empty() {
-        return Ok(Some(FeishuEvent::Unknown(
-            "reaction deleted event missing message_id or emoji".to_string(),
-        )));
-    }
-
-    Ok(Some(FeishuEvent::ReactionDeleted {
-        message_id,
-        chat_id,
-        emoji,
-        operator_id,
-        reaction_id,
-    }))
-}
-
 fn parse_bot_menu_event(envelope: &WsEventEnvelope) -> Result<Option<FeishuEvent>, String> {
     let event_value = match &envelope.event {
         Some(v) => v,
@@ -381,80 +168,6 @@ fn parse_bot_menu_event(envelope: &WsEventEnvelope) -> Result<Option<FeishuEvent
         operator_id,
         operator_name,
         timestamp,
-    }))
-}
-
-fn parse_drive_comment_event(envelope: &WsEventEnvelope) -> Result<Option<FeishuEvent>, String> {
-    let event_value = match &envelope.event {
-        Some(v) => v,
-        None => {
-            return Ok(Some(FeishuEvent::Unknown(
-                "drive comment event without body".to_string(),
-            )))
-        }
-    };
-
-    let event_id = envelope
-        .header
-        .as_ref()
-        .and_then(|h| h.event_id.as_ref())
-        .cloned()
-        .unwrap_or_default();
-
-    let comment_id = event_value
-        .pointer("/comment_id")
-        .and_then(|v| v.as_str())
-        .unwrap_or_default()
-        .to_string();
-
-    let reply_id = event_value
-        .pointer("/reply_id")
-        .and_then(|v| v.as_str())
-        .map(|s| s.to_string());
-
-    let file_type = event_value
-        .pointer("/notice_meta/file_type")
-        .and_then(|v| v.as_str())
-        .unwrap_or_default()
-        .to_string();
-
-    let file_token = event_value
-        .pointer("/notice_meta/file_token")
-        .and_then(|v| v.as_str())
-        .unwrap_or_default()
-        .to_string();
-
-    let from_user_id = event_value
-        .pointer("/notice_meta/from_user_id/open_id")
-        .and_then(|v| v.as_str())
-        .unwrap_or_default()
-        .to_string();
-
-    let mentioned = event_value
-        .pointer("/is_mentioned")
-        .and_then(|v| v.as_bool())
-        .unwrap_or(false);
-
-    let content = event_value
-        .pointer("/comment/text")
-        .and_then(|v| v.as_str())
-        .map(|s| s.to_string());
-
-    if comment_id.is_empty() || file_token.is_empty() {
-        return Ok(Some(FeishuEvent::Unknown(
-            "drive comment event missing comment_id or file_token".to_string(),
-        )));
-    }
-
-    Ok(Some(FeishuEvent::DriveComment {
-        event_id,
-        comment_id,
-        reply_id,
-        file_type,
-        file_token,
-        from_user_id,
-        mentioned,
-        content,
     }))
 }
 
@@ -815,29 +528,25 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_card_action() {
-        let raw = r#"{
-            "header": {"event_id": "e1", "event_type": "card.action.trigger", "token": "t"},
-            "event": {
-                "operator": {"open_id": "ou_user1"},
-                "action": {"value": "start_conversation"},
-                "context": {"open_chat_id": "oc_chat1", "open_message_id": "msg_card1"}
+    fn test_unroutable_event_types_stay_unknown() {
+        // No chat type in the payload => no policy can be applied => these
+        // events are not routed to the agent at all.
+        for event_type in [
+            "card.action.trigger",
+            "im.chat.member.bot.added_v1",
+            "im.chat.member.bot.deleted_v1",
+            "im.message.reaction.created_v1",
+            "im.message.reaction.deleted_v1",
+            "drive.notice.comment_add_v1",
+            "some.future.event_v1",
+        ] {
+            let raw = format!(
+                r#"{{"header": {{"event_id": "e1", "event_type": "{event_type}", "token": "t"}}, "event": {{}}}}"#
+            );
+            match parse_ws_frame(&raw).unwrap().unwrap() {
+                FeishuEvent::Unknown(ty) => assert_eq!(ty, event_type),
+                other => panic!("{event_type} must not be routed, got {other:?}"),
             }
-        }"#;
-        let result = parse_ws_frame(raw).unwrap().unwrap();
-        match result {
-            FeishuEvent::CardAction {
-                chat_id,
-                sender_id,
-                action_value,
-                message_id,
-            } => {
-                assert_eq!(chat_id, "oc_chat1");
-                assert_eq!(sender_id, "ou_user1");
-                assert_eq!(action_value, "start_conversation");
-                assert_eq!(message_id, "msg_card1");
-            }
-            _ => panic!("Expected CardAction"),
         }
     }
 
@@ -846,112 +555,6 @@ mod tests {
         let raw = "not json at all";
         let result = parse_ws_frame(raw);
         assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_parse_bot_added_event() {
-        let raw = r#"{
-            "header": {"event_id": "e1", "event_type": "im.chat.member.bot.added_v1", "token": "t"},
-            "event": {
-                "chat_id": "oc_chat1",
-                "operator_id": {"open_id": "ou_user1"},
-                "operator_name": "TestUser"
-            }
-        }"#;
-        let result = parse_ws_frame(raw).unwrap().unwrap();
-        match result {
-            FeishuEvent::BotAdded {
-                chat_id,
-                operator_id,
-                operator_name,
-            } => {
-                assert_eq!(chat_id, "oc_chat1");
-                assert_eq!(operator_id, "ou_user1");
-                assert_eq!(operator_name, Some("TestUser".to_string()));
-            }
-            _ => panic!("Expected BotAdded event"),
-        }
-    }
-
-    #[test]
-    fn test_parse_bot_removed_event() {
-        let raw = r#"{
-            "header": {"event_id": "e2", "event_type": "im.chat.member.bot.deleted_v1", "token": "t"},
-            "event": {
-                "chat_id": "oc_chat1",
-                "operator_id": {"open_id": "ou_user2"}
-            }
-        }"#;
-        let result = parse_ws_frame(raw).unwrap().unwrap();
-        match result {
-            FeishuEvent::BotRemoved {
-                chat_id,
-                operator_id,
-            } => {
-                assert_eq!(chat_id, "oc_chat1");
-                assert_eq!(operator_id, Some("ou_user2".to_string()));
-            }
-            _ => panic!("Expected BotRemoved event"),
-        }
-    }
-
-    #[test]
-    fn test_parse_reaction_created_event() {
-        let raw = r#"{
-            "header": {"event_id": "e3", "event_type": "im.message.reaction.created_v1", "token": "t"},
-            "event": {
-                "message_id": "msg_001",
-                "chat_id": "oc_chat1",
-                "reaction_type": {"emoji_type": " thumbs_up"},
-                "user_id": {"open_id": "ou_user1"}
-            }
-        }"#;
-        let result = parse_ws_frame(raw).unwrap().unwrap();
-        match result {
-            FeishuEvent::ReactionCreated {
-                message_id,
-                chat_id,
-                emoji,
-                operator_id,
-            } => {
-                assert_eq!(message_id, "msg_001");
-                assert_eq!(chat_id, Some("oc_chat1".to_string()));
-                assert_eq!(emoji, " thumbs_up");
-                assert_eq!(operator_id, "ou_user1");
-            }
-            _ => panic!("Expected ReactionCreated event"),
-        }
-    }
-
-    #[test]
-    fn test_parse_reaction_deleted_event() {
-        let raw = r#"{
-            "header": {"event_id": "e4", "event_type": "im.message.reaction.deleted_v1", "token": "t"},
-            "event": {
-                "message_id": "msg_001",
-                "chat_id": "oc_chat1",
-                "reaction_type": {"emoji_type": " thumbs_up"},
-                "user_id": {"open_id": "ou_user1"},
-                "reaction_id": "reaction_123"
-            }
-        }"#;
-        let result = parse_ws_frame(raw).unwrap().unwrap();
-        match result {
-            FeishuEvent::ReactionDeleted {
-                message_id,
-                chat_id,
-                emoji,
-                operator_id,
-                reaction_id,
-            } => {
-                assert_eq!(message_id, "msg_001");
-                assert_eq!(chat_id, Some("oc_chat1".to_string()));
-                assert_eq!(emoji, " thumbs_up");
-                assert_eq!(operator_id, "ou_user1");
-                assert_eq!(reaction_id, Some("reaction_123".to_string()));
-            }
-            _ => panic!("Expected ReactionDeleted event"),
-        }
     }
 
     #[test]
@@ -981,49 +584,6 @@ mod tests {
                 assert_eq!(timestamp, 1700000000000);
             }
             _ => panic!("Expected BotMenu event"),
-        }
-    }
-
-    #[test]
-    fn test_parse_drive_comment_event() {
-        let raw = r#"{
-            "header": {"event_id": "evt_123", "event_type": "drive.notice.comment_add_v1", "token": "t"},
-            "event": {
-                "event_id": "evt_123",
-                "comment_id": "comment_001",
-                "reply_id": "reply_001",
-                "notice_meta": {
-                    "notice_type": "add_comment",
-                    "file_type": "docx",
-                    "file_token": "file_token_abc",
-                    "from_user_id": {"open_id": "ou_user1"}
-                },
-                "is_mentioned": true,
-                "comment": {"text": "This is a comment"}
-            }
-        }"#;
-        let result = parse_ws_frame(raw).unwrap().unwrap();
-        match result {
-            FeishuEvent::DriveComment {
-                event_id,
-                comment_id,
-                reply_id,
-                file_type,
-                file_token,
-                from_user_id,
-                mentioned,
-                content,
-            } => {
-                assert_eq!(event_id, "evt_123");
-                assert_eq!(comment_id, "comment_001");
-                assert_eq!(reply_id, Some("reply_001".to_string()));
-                assert_eq!(file_type, "docx");
-                assert_eq!(file_token, "file_token_abc");
-                assert_eq!(from_user_id, "ou_user1");
-                assert!(mentioned);
-                assert_eq!(content, Some("This is a comment".to_string()));
-            }
-            _ => panic!("Expected DriveComment event"),
         }
     }
 }

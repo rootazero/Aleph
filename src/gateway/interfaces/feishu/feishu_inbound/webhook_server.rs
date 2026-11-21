@@ -88,7 +88,9 @@ async fn handle_webhook_after_admission(
                 &state.bot_open_id,
                 &state.user_cache,
                 &state.api,
-            ) {
+            )
+            .await
+            {
                 let is_duplicate = state
                     .dedup
                     .lock()
@@ -240,7 +242,6 @@ mod tests {
                 streaming: true,
                 render_mode: "auto".into(),
                 typing_indicator: true,
-                reaction_notifications: true,
                 group_session_scope:
                     crate::gateway::interfaces::feishu::config::GroupSessionScope::default(),
                 connection_mode: "webhook".into(),
@@ -281,7 +282,6 @@ mod tests {
                     streaming: true,
                     render_mode: "auto".into(),
                     typing_indicator: true,
-                    reaction_notifications: true,
                     group_session_scope:
                         crate::gateway::interfaces::feishu::config::GroupSessionScope::default(),
                     connection_mode: "webhook".into(),

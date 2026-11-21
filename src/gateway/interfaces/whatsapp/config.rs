@@ -3,7 +3,7 @@
 //! Configuration for the `WhatsApp` channel adapter.
 
 use crate::gateway::channel_chunking::ChunkMode;
-use crate::gateway::channel_policy::{ChannelAccessConfig, DmPolicy, GroupPolicy};
+use crate::gateway::channel_policy::{ChannelAccessConfig, DmPolicy, E164Number, GroupPolicy};
 use crate::gateway::interfaces::whatsapp::history_buffer::HistoryBufferConfig;
 use crate::gateway::interfaces::whatsapp::media::MediaConfig;
 use crate::gateway::interfaces::whatsapp::reactions::{AckReactionConfig, ReactionLevel};
@@ -12,7 +12,6 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct WhatsAppConfig {
     pub phone_number: Option<String>,
-    pub session_data: Option<String>,
     #[serde(default = "default_true")]
     pub send_typing: bool,
     #[serde(default = "default_true")]
@@ -23,6 +22,13 @@ pub struct WhatsAppConfig {
     pub default_account_id: Option<String>,
     #[serde(default)]
     pub access: ChannelAccessConfig,
+    /// Numbers already paired for DMs (E.164; a leading `+` is optional).
+    ///
+    /// With `dm_policy = "pairing"` a DM from any number absent from this
+    /// list is dropped before it reaches the agent, so an unapproved
+    /// sender cannot open a conversation.
+    #[serde(default)]
+    pub paired_numbers: Vec<String>,
     #[serde(default)]
     pub delivery: DeliveryConfig,
     #[serde(default)]
@@ -38,7 +44,40 @@ const fn default_true() -> bool {
 }
 
 impl WhatsAppConfig {
-    pub const fn validate(&self) -> Result<(), String> {
+    /// Validate configuration.
+    ///
+    /// Only rejects values the adapter would otherwise silently misread:
+    /// every configured number must be a phone number in the same shape the
+    /// `pairing` DM gate compares against the sender JID, i.e. the bare
+    /// digits of an international number with an optional leading `+`.
+    pub fn validate(&self) -> Result<(), String> {
+        let configured = self
+            .phone_number
+            .iter()
+            .map(|number| ("phone_number", number.as_str()))
+            .chain(
+                self.paired_numbers
+                    .iter()
+                    .map(|number| ("paired_numbers", number.as_str())),
+            );
+        for (field, number) in configured {
+            // The policy engines compare the number against the local part of
+            // the sender JID, so anything `normalize` would rewrite (spaces,
+            // dashes, a missing country code) can never match and must be
+            // rejected instead of silently ignored.
+            let digits: String = number
+                .chars()
+                .filter(|c: &char| c.is_ascii_digit())
+                .collect();
+            if E164Number::normalize(number).is_none()
+                || digits != number.strip_prefix('+').unwrap_or(number)
+            {
+                return Err(format!(
+                    "{field} entry {number:?} is not an E.164 phone number; \
+                     use digits with an optional leading '+'"
+                ));
+            }
+        }
         Ok(())
     }
 
@@ -115,5 +154,33 @@ impl Default for ReactionConfig {
             level: ReactionLevel::Minimal,
             ack: Some(AckReactionConfig::default()),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn validate_rejects_numbers_the_pairing_gate_could_never_match() {
+        let config = WhatsAppConfig {
+            paired_numbers: vec!["+1 555 000 1111".to_string()],
+            ..WhatsAppConfig::default()
+        };
+        let err = config.validate().unwrap_err();
+        assert!(err.contains("paired_numbers"), "{err}");
+
+        let config = WhatsAppConfig {
+            paired_numbers: vec!["+15550001111".to_string()],
+            ..WhatsAppConfig::default()
+        };
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn default_config_validates_and_allows_all_chats() {
+        let config = WhatsAppConfig::default();
+        assert!(config.validate().is_ok());
+        assert!(config.is_chat_allowed("111@g.us"));
     }
 }

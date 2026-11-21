@@ -81,7 +81,6 @@ mod tests {
             streaming: true,
             render_mode: "auto".into(),
             typing_indicator: true,
-            reaction_notifications: true,
             group_session_scope: GroupSessionScope::default(),
             connection_mode: "websocket".into(),
             webhook_port: 3000,

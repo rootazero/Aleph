@@ -26,9 +26,11 @@ pub struct Mention {
 // ── Events ──
 
 /// Feishu event types parsed from WebSocket frames.
-/// These cover the full set of events that Aleph can handle.
+///
+/// These cover every event Aleph routes to the agent; see
+/// [`crate::gateway::interfaces::feishu::feishu_inbound::events`] for the
+/// event types that are deliberately not parsed.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[allow(dead_code)]
 pub enum FeishuEvent {
     /// Incoming message in a chat
     MessageReceive {
@@ -43,56 +45,12 @@ pub enum FeishuEvent {
         parent_id: Option<String>,
         root_id: Option<String>,
     },
-    /// Interactive card button/form submission
-    CardAction {
-        chat_id: String,
-        sender_id: String,
-        action_value: String,
-        message_id: String,
-    },
-    /// Bot was added to a chat
-    BotAdded {
-        chat_id: String,
-        operator_id: String,
-        operator_name: Option<String>,
-    },
-    /// Bot was removed from a chat
-    BotRemoved {
-        chat_id: String,
-        operator_id: Option<String>,
-    },
-    /// Reaction (emoji) added to a message
-    ReactionCreated {
-        message_id: String,
-        chat_id: Option<String>,
-        emoji: String,
-        operator_id: String,
-    },
-    /// Reaction (emoji) removed from a message
-    ReactionDeleted {
-        message_id: String,
-        chat_id: Option<String>,
-        emoji: String,
-        operator_id: String,
-        reaction_id: Option<String>,
-    },
     /// Bot menu event (user clicked menu button in bot profile)
     BotMenu {
         event_key: String,
         operator_id: String,
         operator_name: Option<String>,
         timestamp: i64,
-    },
-    /// Drive file comment notification
-    DriveComment {
-        event_id: String,
-        comment_id: String,
-        reply_id: Option<String>,
-        file_type: String,
-        file_token: String,
-        from_user_id: String,
-        mentioned: bool,
-        content: Option<String>,
     },
     /// Unrecognized event type (captured for logging)
     Unknown(String),

@@ -134,6 +134,14 @@ impl WeChatConfig {
         if self.token.is_empty() {
             return Err("token is required".to_string());
         }
+        // `Duration::from_secs_f64` panics on negative or non-finite values, so
+        // reject them here where the operator can see the message.
+        if !self.send_chunk_delay_seconds.is_finite() || self.send_chunk_delay_seconds < 0.0 {
+            return Err(format!(
+                "send_chunk_delay_seconds must be a non-negative number, got {}",
+                self.send_chunk_delay_seconds
+            ));
+        }
         Ok(())
     }
 
@@ -187,6 +195,18 @@ mod tests {
             ..Default::default()
         };
         assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn test_validate_rejects_negative_chunk_delay() {
+        let config = WeChatConfig {
+            account_id: "test".to_string(),
+            token: "token123".to_string(),
+            send_chunk_delay_seconds: -1.0,
+            ..Default::default()
+        };
+        let err = config.validate().unwrap_err();
+        assert!(err.contains("send_chunk_delay_seconds"), "{err}");
     }
 
     #[test]

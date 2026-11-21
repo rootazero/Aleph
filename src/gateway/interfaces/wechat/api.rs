@@ -7,9 +7,9 @@ use reqwest::Client;
 use std::collections::HashMap;
 
 use super::types::{
-    ConfigResponse, GetUpdatesResponse, QrCodeResponse, QrStatusResponse, SendMessagePayload,
-    SendTypingPayload, CHANNEL_VERSION, EP_GET_BOT_QR, EP_GET_CONFIG, EP_GET_QR_STATUS,
-    EP_GET_UPDATES, EP_SEND_MESSAGE, EP_SEND_TYPING, ILINK_APP_CLIENT_VERSION, ILINK_APP_ID,
+    ConfigResponse, GetUpdatesResponse, SendMessagePayload, SendTypingPayload, CHANNEL_VERSION,
+    EP_GET_CONFIG, EP_GET_UPDATES, EP_SEND_MESSAGE, EP_SEND_TYPING, ILINK_APP_CLIENT_VERSION,
+    ILINK_APP_ID,
 };
 
 const SESSION_EXPIRED_CODE: i32 = -14;
@@ -261,68 +261,6 @@ impl ILinkApi {
             .await
             .map_err(WeChatApiError::Http)?
             .json::<ConfigResponse>()
-            .await
-            .map_err(WeChatApiError::Http)
-    }
-
-    /// Get QR code for login.
-    pub async fn get_bot_qr(&self, bot_type: &str) -> ApiResult<QrCodeResponse> {
-        use reqwest::header::HeaderName;
-
-        let url = format!(
-            "{}/{}?bot_type={}",
-            self.base_url.trim_end_matches('/'),
-            EP_GET_BOT_QR,
-            bot_type
-        );
-        let mut headers = HeaderMap::new();
-        let name = HeaderName::from_static("ilink-app-id");
-        if let Ok(value) = HeaderValue::from_str(ILINK_APP_ID) {
-            headers.insert(name, value);
-        }
-        let name = HeaderName::from_static("ilink-app-clientversion");
-        if let Ok(value) = HeaderValue::from_str(&ILINK_APP_CLIENT_VERSION.to_string()) {
-            headers.insert(name, value);
-        }
-
-        self.http
-            .get(&url)
-            .headers(headers)
-            .send()
-            .await
-            .map_err(WeChatApiError::Http)?
-            .json::<QrCodeResponse>()
-            .await
-            .map_err(WeChatApiError::Http)
-    }
-
-    /// Get QR code status.
-    pub async fn get_qr_status(&self, qrcode: &str) -> ApiResult<QrStatusResponse> {
-        use reqwest::header::HeaderName;
-
-        let url = format!(
-            "{}/{}?qrcode={}",
-            self.base_url.trim_end_matches('/'),
-            EP_GET_QR_STATUS,
-            qrcode
-        );
-        let mut headers = HeaderMap::new();
-        let name = HeaderName::from_static("ilink-app-id");
-        if let Ok(value) = HeaderValue::from_str(ILINK_APP_ID) {
-            headers.insert(name, value);
-        }
-        let name = HeaderName::from_static("ilink-app-clientversion");
-        if let Ok(value) = HeaderValue::from_str(&ILINK_APP_CLIENT_VERSION.to_string()) {
-            headers.insert(name, value);
-        }
-
-        self.http
-            .get(&url)
-            .headers(headers)
-            .send()
-            .await
-            .map_err(WeChatApiError::Http)?
-            .json::<QrStatusResponse>()
             .await
             .map_err(WeChatApiError::Http)
     }

@@ -202,9 +202,15 @@ impl FeishuChannel {
         let http = reqwest::Client::new();
         let base_url = self.config.base_url();
 
+        // One transport serves exactly one account. Resolve it fail-closed so a
+        // multi-account config can never answer a tenant with another bot's
+        // identity (see `FeishuConfig::resolve_active_account`).
+        let (account_id, app_id, app_secret) = self.config.resolve_active_account()?;
+        tracing::info!(account = %account_id, "Feishu account resolved");
+
         let auth = Arc::new(TokenManager::new(
-            &self.config.app_id,
-            &self.config.app_secret,
+            &app_id,
+            &app_secret,
             &base_url,
             http.clone(),
         ));
@@ -255,7 +261,7 @@ impl FeishuChannel {
                 api: api.clone(),
                 user_cache: Arc::new(UserProfileCache::new()),
                 dedup: Arc::new(StdMutex::new(MessageDedup::new())),
-                policy: Arc::new(InboundPolicy::new(self.config.clone(), bot_open_id)),
+                policy: Arc::new(InboundPolicy::new(self.config.clone())),
             };
             self.webhook_handle = Some(tokio::spawn(run_webhook_server(
                 webhook_state,
@@ -577,7 +583,7 @@ mod lifecycle_tests {
                 api: api.clone(),
                 user_cache: Arc::new(UserProfileCache::new()),
                 dedup: Arc::new(StdMutex::new(MessageDedup::new())),
-                policy: Arc::new(InboundPolicy::new(channel.config.clone(), "bot".into())),
+                policy: Arc::new(InboundPolicy::new(channel.config.clone())),
             },
             listener,
             rx,
