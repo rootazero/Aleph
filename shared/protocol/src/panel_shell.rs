@@ -44,17 +44,13 @@ mod tests {
 
     #[test]
     fn bridge_cannot_encode_an_arbitrary_destination() {
-        assert!(
-            serde_json::from_str::<ShellRequest>(
-                r#"{"kind":"open-chat","request":1,"document":"a","path":"/settings"}"#
-            )
-            .is_err()
-        );
-        assert!(
-            serde_json::from_str::<ShellRequest>(
-                r#"{"kind":"navigate","request":1,"document":"a"}"#
-            )
-            .is_err()
-        );
+        assert!(serde_json::from_str::<ShellRequest>(
+            r#"{"kind":"open-chat","request":1,"document":"a","path":"/settings"}"#
+        )
+        .is_err());
+        assert!(serde_json::from_str::<ShellRequest>(
+            r#"{"kind":"navigate","request":1,"document":"a"}"#
+        )
+        .is_err());
     }
 }
