@@ -193,3 +193,10 @@ backup/
 pi-subagents/
 pi-tasks/
 cef-rs/
+
+# Local Phase10 NSH build/evidence artifacts (machine-local, never committed)
+# These directories hold cargo build trees, third-party NSH source copies,
+# private-key fixtures and QA receipts that only make sense on this host.
+/.phase10-evidence/
+/.phase10-target/
+/.phase10-target-optimized/
