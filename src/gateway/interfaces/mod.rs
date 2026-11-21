@@ -22,6 +22,9 @@
 //! - **Feishu**: Feishu/Lark Bot WebSocket + REST API integration
 //! - **LINE**: LINE Messaging API webhook + REST API integration
 //! - **`WeChat`**: `WeChat` iLink Bot API integration
+//! - **QQ**: QQ Bot API integration
+//! - **`WhatsApp`**: `WhatsApp` Web multi-device integration via `whatsapp-rust`
+//! - **Voice call**: voice-call channel over an injected transport (`voice_call` plugin family)
 //! - **SMS**: SMS through the thin telecom Relay (unavailable until a Relay transport is attached)
 
 pub mod cli;

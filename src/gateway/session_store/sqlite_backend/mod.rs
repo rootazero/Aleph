@@ -556,29 +556,6 @@ impl SessionStore for SessionManager {
             .map_err(map_err)
     }
 
-    async fn count_by_state(&self, state: SessionState) -> Result<usize, SessionStoreError> {
-        self.count_by_state(state).await.map_err(map_err)
-    }
-
-    async fn list_by_state(
-        &self,
-        state: SessionState,
-    ) -> Result<Vec<SessionMetadata>, SessionStoreError> {
-        self.list_by_state(state).await.map_err(map_err)
-    }
-
-    async fn set_error(
-        &self,
-        key: &SessionKey,
-        error_msg: Option<&str>,
-    ) -> Result<(), SessionStoreError> {
-        self.set_error(key, error_msg).await.map_err(map_err)
-    }
-
-    async fn stop(&self, key: &SessionKey) -> Result<(), SessionStoreError> {
-        self.stop(key).await.map_err(map_err)
-    }
-
     async fn set_idle(&self, key: &SessionKey) -> Result<(), SessionStoreError> {
         self.set_idle(key).await.map_err(map_err)
     }

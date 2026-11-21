@@ -256,7 +256,6 @@ pub struct SessionMetadata {
     pub last_active_at: i64,
     pub message_count: i64,
     pub total_tokens: i64,
-    pub auto_reset_at: Option<i64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub state: Option<crate::gateway::session_manager::SessionState>,
     #[serde(skip_serializing_if = "Option::is_none")]

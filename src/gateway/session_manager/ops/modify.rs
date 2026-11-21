@@ -674,20 +674,6 @@ impl SessionManager {
         self.emit_session_updated(key_str);
     }
 
-    /// Transition session to error state with optional error message
-    pub async fn set_error(
-        &self,
-        key: &SessionKey,
-        _error_msg: Option<&str>,
-    ) -> Result<(), SessionManagerError> {
-        self.set_state(key, SessionState::Error).await
-    }
-
-    /// Transition session to stopped state (permanent)
-    pub async fn stop(&self, key: &SessionKey) -> Result<(), SessionManagerError> {
-        self.set_state(key, SessionState::Stopped).await
-    }
-
     /// Transition session to idle state (after running completes)
     pub async fn set_idle(&self, key: &SessionKey) -> Result<(), SessionManagerError> {
         self.set_state(key, SessionState::Idle).await
