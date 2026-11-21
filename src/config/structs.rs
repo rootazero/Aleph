@@ -481,9 +481,6 @@ impl Config {
             },
         );
         self.fetch = Some(crate::config::types::FetchConfigInternal {
-            enabled: c4.enabled,
-            default_provider: "crawl4ai".into(),
-            fallback_providers: None,
             backends,
             verified_shared: std::collections::HashMap::new(),
         });
@@ -537,8 +534,6 @@ mod tests {
         cfg.migrate_fetch();
 
         let f = cfg.fetch.expect("fetch populated");
-        assert!(f.enabled);
-        assert_eq!(f.default_provider, "crawl4ai");
         let b = &f.backends["crawl4ai"];
         assert_eq!(b.provider_type, "crawl4ai");
         assert_eq!(b.base_url.as_deref(), Some("http://10.10.10.3:11235"));

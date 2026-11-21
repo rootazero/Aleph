@@ -12,21 +12,17 @@ use std::collections::HashMap;
 // =============================================================================
 
 /// Fetch module configuration (parallel to `SearchConfigInternal`).
+///
+/// The section holds the fetch BACKENDS an operator configured (base URL,
+/// vault-backed token, timeout) and backs the `fetch_config.test`
+/// connection check. It deliberately carries NO routing knobs: `web_fetch`
+/// never delegates to a fetch provider (BT-D-R4-22 — the SSRF DNS pin
+/// cannot be enforced on a provider-side crawl), so an `enabled` flag or a
+/// `default_provider` would only ever be a lie an operator could read as an
+/// active setting. Boot logs a one-time warning for configured backends
+/// (see `inert_fetch_backend_names`).
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 pub struct FetchConfigInternal {
-    /// Enable routing `web_fetch` through a configured fetch provider.
-    /// Off → built-in reqwest+readability only (zero behavior change).
-    #[serde(default)]
-    pub enabled: bool,
-
-    /// Preferred provider name (key into `backends`).
-    #[serde(default)]
-    pub default_provider: String,
-
-    /// Providers tried in order if the default fails (before the built-in fallback).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub fallback_providers: Option<Vec<String>>,
-
     /// Backend configurations, keyed by provider name.
     #[serde(default)]
     pub backends: HashMap<String, FetchBackendConfig>,
@@ -116,15 +112,11 @@ mod tests {
             },
         );
         let cfg = FetchConfigInternal {
-            enabled: true,
-            default_provider: "crawl4ai".into(),
-            fallback_providers: None,
             backends,
             verified_shared: HashMap::new(),
         };
         let toml = toml::to_string(&cfg).unwrap();
         let back: FetchConfigInternal = toml::from_str(&toml).unwrap();
-        assert_eq!(back.default_provider, "crawl4ai");
         assert_eq!(
             back.backends["crawl4ai"].base_url.as_deref(),
             Some("http://x:11235")
