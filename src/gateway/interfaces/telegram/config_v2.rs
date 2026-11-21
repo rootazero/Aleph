@@ -174,6 +174,10 @@ pub enum ErrorPolicyMode {
     Reply,
     Silent,
     Once,
+    /// Intended for "tell only the operator", but delivery has no actor
+    /// identity, so it behaves exactly like [`Self::Once`]: the first error in
+    /// the window is shown to whoever is in the chat. Selecting it logs a
+    /// warning at config-load time.
     AdminOnly,
 }
 
@@ -181,8 +185,6 @@ pub enum ErrorPolicyMode {
 pub struct ErrorPolicy {
     #[serde(default)]
     pub mode: ErrorPolicyMode,
-    #[serde(default)]
-    pub template: Option<String>,
     #[serde(default = "default_max_retries")]
     pub max_retries: u32,
 }
@@ -191,7 +193,6 @@ impl Default for ErrorPolicy {
     fn default() -> Self {
         Self {
             mode: ErrorPolicyMode::default(),
-            template: None,
             max_retries: 3,
         }
     }

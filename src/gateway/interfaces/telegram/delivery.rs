@@ -728,12 +728,19 @@ pub async fn send_message(
 // ---------------------------------------------------------------------------
 
 /// Send a typing indicator to a conversation.
+///
+/// The generic reply-emitter typing loop is channel-agnostic and cannot see
+/// per-channel config, so the `send_typing` knob is honoured here.
 pub(crate) async fn send_typing(
     bot: &Bot,
     conversation_id: &str,
-    _config: &ResolvedConfig,
+    config: &ResolvedConfig,
     cooldown: &ErrorCooldown,
 ) -> ChannelResult<()> {
+    if !config.send_typing {
+        return Ok(());
+    }
+
     // Skip if typing circuit breaker has tripped
     if !cooldown.check_typing() {
         tracing::debug!("typing indicator suppressed by circuit breaker");
@@ -1147,16 +1154,22 @@ impl TelegramDelivery {
         }
     }
 
-    /// Send a plain text message and return its Telegram message ID.
+    /// Send a streaming preview message and return its Telegram message ID.
+    ///
+    /// `streaming.preserve_formatting` (default `true`) selects whether the
+    /// preview is rendered as Telegram HTML or sent verbatim as plain text.
     pub async fn send_text_message(&self, text: &str) -> ChannelResult<i64> {
         let (chat_id, thread_id) = parse_conversation_id(&self.conversation_id)?;
-        let html_text = MessageFormatter::format(text, MarkupFormat::TelegramHtml);
-        let mut req = with_thread!(
-            self.bot
-                .send_message(chat_id, &html_text)
-                .parse_mode(ParseMode::Html),
-            thread_id
-        );
+        let preserve = self.config.streaming.preserve_formatting;
+        let body = if preserve {
+            MessageFormatter::format(text, MarkupFormat::TelegramHtml)
+        } else {
+            text.to_string()
+        };
+        let mut req = with_thread!(self.bot.send_message(chat_id, &body), thread_id);
+        if preserve {
+            req = req.parse_mode(ParseMode::Html);
+        }
         if let Some(opts) = link_preview_options(self.config.link_preview) {
             req = req.link_preview_options(opts);
         }
@@ -1171,15 +1184,23 @@ impl TelegramDelivery {
         }
     }
 
-    /// Edit an existing message.
+    /// Edit an existing streaming preview message.
+    ///
+    /// Formats the body the same way [`Self::send_text_message`] does, so the
+    /// `streaming.preserve_formatting` setting applies to edits too.
     pub async fn edit_text_message(&self, message_id: i64, text: &str) -> ChannelResult<()> {
         let (chat_id, _thread_id) = parse_conversation_id(&self.conversation_id)?;
         let msg_id = teloxide::types::MessageId(message_id as i32);
-        let html_text = MessageFormatter::format(text, MarkupFormat::TelegramHtml);
-        let mut request = self
-            .bot
-            .edit_message_text(chat_id, msg_id, &html_text)
-            .parse_mode(ParseMode::Html);
+        let preserve = self.config.streaming.preserve_formatting;
+        let body = if preserve {
+            MessageFormatter::format(text, MarkupFormat::TelegramHtml)
+        } else {
+            text.to_string()
+        };
+        let mut request = self.bot.edit_message_text(chat_id, msg_id, &body);
+        if preserve {
+            request = request.parse_mode(ParseMode::Html);
+        }
         if let Some(opts) = link_preview_options(self.config.link_preview) {
             request = request.link_preview_options(opts);
         }

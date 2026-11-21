@@ -1,8 +1,7 @@
-#[cfg(test)]
-use super::config_v2::ErrorPolicyMode;
 use super::config_v2::{
-    DmPolicy, ErrorPolicy, GroupPolicy, LinkPreviewMode, StreamingMode, StreamingOptions,
-    TelegramAccountConfig, TelegramConfigV2, TelegramGroupConfig, TelegramTopicConfig,
+    DmPolicy, ErrorPolicy, ErrorPolicyMode, GroupPolicy, LinkPreviewMode, StreamingMode,
+    StreamingOptions, TelegramAccountConfig, TelegramConfigV2, TelegramGroupConfig,
+    TelegramTopicConfig,
 };
 use std::collections::HashMap;
 
@@ -74,7 +73,32 @@ impl ConfigResolver {
                 }
             }
         }
-        Self { lookup }
+        let resolver = Self { lookup };
+        resolver.warn_on_unsupported_modes();
+        resolver
+    }
+
+    /// `AdminOnly` cannot be enforced at delivery time: nothing carries an
+    /// actor identity into `ErrorCooldown::should_send_error`, so the mode
+    /// degrades to `Once`. Say so once at load time instead of letting the
+    /// config read as if it filtered errors to admins.
+    fn warn_on_unsupported_modes(&self) {
+        let mut accounts: Vec<&str> = self
+            .lookup
+            .values()
+            .filter(|cfg| matches!(cfg.error_policy.mode, ErrorPolicyMode::AdminOnly))
+            .map(|cfg| cfg.account_id.as_str())
+            .collect();
+        accounts.sort_unstable();
+        accounts.dedup();
+        if !accounts.is_empty() {
+            tracing::warn!(
+                accounts = ?accounts,
+                "telegram error_policy.mode = \"admin_only\" behaves like \"once\": \
+                 delivery has no actor identity, so the error is shown to the chat \
+                 whoever is in it"
+            );
+        }
     }
 
     #[must_use]
@@ -88,6 +112,28 @@ impl ConfigResolver {
             .get(&(account_id.to_string(), chat_id, thread_id))
             .or_else(|| self.lookup.get(&(account_id.to_string(), chat_id, None)))
             .or_else(|| self.lookup.get(&(account_id.to_string(), 0, None)))
+    }
+
+    /// Resolve only when `chat_id` is *explicitly* mapped for `account_id`
+    /// (a group, or a group+topic entry), ignoring the account-level
+    /// `chat_id == 0` catch-all every account registers.
+    ///
+    /// Multi-account outbound routing uses this to distinguish "this account
+    /// owns this chat" from "this account would accept anything", which
+    /// [`Self::resolve`] alone cannot express.
+    #[must_use]
+    pub fn resolve_explicit(
+        &self,
+        account_id: &str,
+        chat_id: i64,
+        thread_id: Option<i32>,
+    ) -> Option<&ResolvedConfig> {
+        if chat_id == 0 {
+            return None;
+        }
+        self.lookup
+            .get(&(account_id.to_string(), chat_id, thread_id))
+            .or_else(|| self.lookup.get(&(account_id.to_string(), chat_id, None)))
     }
 
     fn resolve_account_defaults(account: &TelegramAccountConfig) -> ResolvedConfig {
@@ -206,7 +252,6 @@ mod tests {
                 streaming: None,
                 error_policy: Some(ErrorPolicy {
                     mode: ErrorPolicyMode::Silent,
-                    template: None,
                     max_retries: 3,
                 }),
                 html_fallback: None,
@@ -268,7 +313,6 @@ mod tests {
                 streaming: None,
                 error_policy: Some(ErrorPolicy {
                     mode: ErrorPolicyMode::Reply,
-                    template: None,
                     max_retries: 3,
                 }),
                 html_fallback: None,
@@ -281,7 +325,6 @@ mod tests {
                     block_streaming: None,
                     error_policy: Some(ErrorPolicy {
                         mode: ErrorPolicyMode::Once,
-                        template: None,
                         max_retries: 3,
                     }),
                     group_policy: None,
@@ -294,7 +337,6 @@ mod tests {
                         block_streaming: None,
                         error_policy: Some(ErrorPolicy {
                             mode: ErrorPolicyMode::Silent,
-                            template: None,
                             max_retries: 3,
                         }),
                         dm_policy: None,

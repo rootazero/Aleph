@@ -155,16 +155,6 @@ static TELEGRAM_FIELDS: &[FieldDef] = &[
         options: &[],
     },
     FieldDef {
-        key: "polling_interval_secs",
-        label: "Polling Interval (seconds)",
-        kind: FieldKind::Number { min: 1, max: 60 },
-        placeholder: "1",
-        help: "How often to poll for new messages",
-        required: false,
-        default_value: "1",
-        options: &[],
-    },
-    FieldDef {
         key: "allowed_users",
         label: "Allowed Users",
         kind: FieldKind::TagList,

@@ -234,7 +234,9 @@ impl ErrorCooldown {
     /// - `ErrorPolicyMode::Reply` → always `true`.
     /// - `ErrorPolicyMode::Once` → `true` only if no error has been sent to this
     ///   `scope_key` within the last 60 seconds.
-    /// - `ErrorPolicyMode::AdminOnly` → `true` only if the user is in the allowed list.
+    /// - `ErrorPolicyMode::AdminOnly` → the same 60-second window as `Once`:
+    ///   delivery has no actor identity to filter on, so "admin only" cannot be
+    ///   enforced here (the config loader warns when it is selected).
     pub fn should_send_error(
         &self,
         scope_key: &str,
@@ -244,7 +246,8 @@ impl ErrorCooldown {
         match policy.mode {
             ErrorPolicyMode::Silent => false,
             ErrorPolicyMode::Reply => true,
-            // Admin status is checked by the caller; both modes share the window.
+            // `AdminOnly` shares the window: there is no actor identity at
+            // delivery time, so it degrades to `Once` rather than filtering.
             ErrorPolicyMode::Once | ErrorPolicyMode::AdminOnly => {
                 let now = Instant::now();
                 match self.error_policy_cooldowns.entry(scope_key.to_owned()) {
@@ -591,7 +594,6 @@ mod tests {
         let ec = ErrorCooldown::new();
         let policy = ErrorPolicy {
             mode: ErrorPolicyMode::Silent,
-            template: None,
             max_retries: 3,
         };
         assert!(!ec.should_send_error("conv-1", &policy, "any error"));
@@ -603,7 +605,6 @@ mod tests {
         let ec = ErrorCooldown::new();
         let policy = ErrorPolicy {
             mode: ErrorPolicyMode::Reply,
-            template: None,
             max_retries: 3,
         };
         assert!(ec.should_send_error("conv-1", &policy, "error 1"));
@@ -615,7 +616,6 @@ mod tests {
         let ec = ErrorCooldown::new();
         let policy = ErrorPolicy {
             mode: ErrorPolicyMode::Once,
-            template: None,
             max_retries: 3,
         };
         assert!(ec.should_send_error("conv-1", &policy, "error 1"));
@@ -627,7 +627,6 @@ mod tests {
         let ec = ErrorCooldown::new();
         let policy = ErrorPolicy {
             mode: ErrorPolicyMode::Once,
-            template: None,
             max_retries: 3,
         };
         assert!(ec.should_send_error("conv-1", &policy, "error 1"));
@@ -644,7 +643,6 @@ mod tests {
         let ec = ErrorCooldown::new();
         let policy = ErrorPolicy {
             mode: ErrorPolicyMode::Once,
-            template: None,
             max_retries: 3,
         };
         assert!(ec.should_send_error("conv-a", &policy, "error a"));
