@@ -2,8 +2,6 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::domain::Entity;
-
 use super::enums::{
     FactSource, FactSpecificity, MemoryCategory, MemoryLayer, NoteType, TemporalScope,
 };
@@ -90,14 +88,6 @@ pub struct MemoryFact {
     /// When this fact stopped being true (Unix seconds). None = still valid.
     #[serde(default)]
     pub valid_to: Option<i64>,
-}
-
-impl Entity for MemoryFact {
-    type Id = String;
-
-    fn id(&self) -> &Self::Id {
-        &self.id
-    }
 }
 
 impl MemoryFact {
