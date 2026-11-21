@@ -90,6 +90,14 @@ unicode-width = "0.2"
 # Plugin packaging
 zip = { version = "9", default-features = false, features = ["deflate"] }
 
+# Compiles a manifest's `config_schema` so `aleph plugin validate` can report a
+# broken settings schema BEFORE an install attempt is made. Same pin as
+# alephcore (already in `Cargo.lock`, so no new crate enters the build tree);
+# `default-features = false` and no `resolve-*` / `tls-*` features because a
+# local schema compile resolves nothing over the network — those exist for
+# alephcore's runtime validation paths only.
+jsonschema = { version = "0.59", default-features = false }
+
 # Base64 encoding for shipping local plugin zips to the daemon over JSON-RPC
 base64 = "0.23.1"
 

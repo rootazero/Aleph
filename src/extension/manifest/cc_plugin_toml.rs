@@ -19,7 +19,7 @@ use crate::extension::manifest::toml_types::{
     PromptSection, ServiceSection, ToolSection,
 };
 use crate::extension::manifest::types::{
-    AlephExtensions, AlephRuntime, AuthorInfo, ConfigUiHint, PluginManifest,
+    AlephExtensions, AlephRuntime, ConfigUiHint, PluginManifest,
 };
 use crate::extension::manifest::{sanitize_plugin_id, validate_plugin_id};
 use crate::extension::types::PluginKind;
@@ -52,21 +52,10 @@ pub struct CcPluginToml {
     /// Plugin description
     pub description: Option<String>,
 
-    /// License identifier (SPDX)
-    pub license: Option<String>,
-
-    /// Keywords for search
-    pub keywords: Option<Vec<String>>,
-
-    /// Homepage URL
-    pub homepage: Option<String>,
-
-    /// Repository URL
-    pub repository: Option<String>,
-
-    /// Author section
-    #[serde(rename = "author")]
-    pub author: Option<CcPluginAuthorToml>,
+    // Display-only metadata (`author`, `homepage`, `repository`, `license`,
+    // `keywords`) is deliberately NOT declared: serde ignores the unknown keys,
+    // so CC manifests that carry them still parse, and nothing here pretends to
+    // carry them into `PluginManifest` where no reader would see them.
 
     // Flat component fields (CC-native). Each accepts a path, an array of
     // paths, or an inlined table — see `component_source`.
@@ -88,32 +77,6 @@ pub struct CcPluginToml {
 
     /// Aleph-specific extensions (optional, ignored by Claude Code)
     pub aleph: Option<AlephExtensionsToml>,
-}
-
-/// Author section in CC plugin.toml
-#[derive(Debug, Deserialize)]
-#[serde(untagged)]
-pub enum CcPluginAuthorToml {
-    /// Simple string format: "Name `&lt;email&gt;`"
-    String(String),
-    /// Object format with optional fields
-    Object {
-        #[serde(default)]
-        name: Option<String>,
-        #[serde(default)]
-        email: Option<String>,
-        #[serde(default)]
-        url: Option<String>,
-    },
-}
-
-impl From<CcPluginAuthorToml> for AuthorInfo {
-    fn from(author: CcPluginAuthorToml) -> Self {
-        match author {
-            CcPluginAuthorToml::String(s) => Self::from(s.as_str()),
-            CcPluginAuthorToml::Object { name, email, url } => Self { name, email, url },
-        }
-    }
 }
 
 /// Aleph-specific extensions inside \[aleph\] section
@@ -368,11 +331,6 @@ pub fn parse_cc_plugin_toml_content(
         config_schema: superset.config_schema,
         config_ui_hints: superset.config_ui_hints,
         permissions,
-        author: toml.author.map(AuthorInfo::from),
-        homepage: toml.homepage,
-        repository: toml.repository,
-        license: toml.license,
-        keywords: toml.keywords.unwrap_or_default(),
         // Superset sections, carried in `[aleph]` (which Claude Code ignores).
         // `services_v2` stays `None` because services already round-trip
         // through `aleph_extensions.services` — a second copy would be a
@@ -655,15 +613,21 @@ name = "no-aleph"
     }
 
     #[test]
-    fn test_parse_cc_toml_author_string() {
+    fn test_parse_cc_toml_display_metadata_keys_are_ignored() {
+        // `author`, `homepage`, `repository`, `license`, `keywords` are CC
+        // metadata with no reader on the Aleph side. They are not declared on
+        // the input struct, so serde must skip them instead of rejecting the
+        // manifest — third-party plugins keep shipping them.
         let content = r#"
-name = "author-test"
+name = "metadata-ignored"
 author = "Alice <alice@example.com>"
+homepage = "https://alice.dev"
+repository = "https://github.com/user/repo"
+license = "MIT"
+keywords = ["one", "two"]
 "#;
         let manifest = parse_cc_plugin_toml_content(content, &test_dir()).unwrap();
-        let author = manifest.author.unwrap();
-        assert_eq!(author.name, Some("Alice".to_string()));
-        assert_eq!(author.email, Some("alice@example.com".to_string()));
+        assert_eq!(manifest.name, "metadata-ignored");
     }
 
     #[test]
