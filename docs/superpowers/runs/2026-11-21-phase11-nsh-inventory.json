@@ -1,6 +1,6 @@
 {
   "artifact": "phase11-nsh-inventory",
-  "version": "2026-11-21.2",
+  "version": "2026-11-22.3",
   "status": "FOUNDATION_IMPLEMENTED / P11-A-H_NOT_ACCEPTED",
   "authority": [
     "docs/superpowers/plans/2026-11-21-phase11-nsh-cutover.md",
@@ -31,7 +31,7 @@
         "crate": "nsh-platform-macos",
         "version": "0.6.0",
         "current_manifest": true,
-        "native_acceptance": "historical Phase10 scoped acceptance only; Phase11 WebView regression open"
+        "native_acceptance": "historical Phase10 scoped acceptance; Phase11 isolated native credential IPC effects passed, not full desktop/Panel acceptance"
       },
       {
         "target": "linux",
@@ -160,7 +160,7 @@
         "interfaces/webchat/src/context.rs:2006"
       ],
       "authority": "DeviceCredentialStore + strict lease DTO",
-      "status": "typed NSH adapter implemented; native WebView delivery open"
+      "status": "typed NSH adapter implemented; isolated macOS WebView/OS-store fixture passed; production Panel WASM/pairing open"
     },
     {
       "command": "panel_credential_save",
@@ -178,7 +178,7 @@
         "interfaces/webchat/src/api/native_credentials.rs:266"
       ],
       "authority": "DeviceCredentialStore + lease fence",
-      "status": "typed NSH adapter exposed; active product delete caller not established"
+      "status": "typed NSH adapter exposed; isolated native fixture proves deletion/absence and rejected stale/wrong-document requests leave data unchanged; active product delete caller not established"
     },
     {
       "command": "plugin:autostart|is_enabled",
@@ -381,7 +381,7 @@
       "remaining": [
         "per-caller/non-IPC migration dispositions beyond this census",
         "ordered full-scope SPEC/QUALITY review",
-        "native WebView credential effect proof",
+        "native WebView credential effect proof: resolved for isolated fixture only; production Panel open",
         "three-platform production ownership transfer"
       ]
     },
@@ -405,11 +405,12 @@
       "official platform dependencies and cfg entry implementation",
       "fixed credential transport + canonical-store adapter",
       "targeted Rust/JS regressions",
-      "real macOS isolated OS-store roundtrip"
+      "real macOS isolated OS-store roundtrip",
+      "real macOS WebView typed IPC, two-document lease revocation, no-effect controls, store deletion/absence and natural return"
     ],
     "open": [
       "P11-A complete per-caller review",
-      "native WebView credential E2E",
+      "production Panel WASM credential E2E (fixture native IPC passed)",
       "production full/lite/remote target and daemon supervision migration",
       "three-platform OS integration",
       "autostart/updater/packaging",
@@ -431,7 +432,9 @@
       "windows_target": "NOT RUN: target and runner unavailable",
       "workspace_fmt": "pre-existing unrelated workspace formatting drift; not rewritten",
       "tauri_full_lite": "NOT RERUN",
-      "native_qa": "NOT RUN for changed host; no new timing/performance acceptance"
+      "native_qa": "PASS_SCOPED_NATIVE_CREDENTIAL_EFFECTS: .phase10-evidence/phase11-native-credentials.Kje8rAAJ/receipt.json; ten effects, two documents, natural exit; not Panel WASM/desktop parity/performance",
+      "native_receipt_tests": "cd qa && python3 -m unittest test_phase11_nsh_credentials -v: 6 passed; complete effects RED before evaluator implementation, then GREEN",
+      "qa_python_suite": "uv run --offline --no-project --no-python-downloads --python python3 --with jsonschema python -m unittest discover -s qa -p 'test_*.py' -v: 82 passed; plain python3 first blocked four module imports by missing jsonschema, resolved in isolated cached uv environment"
     }
   },
   "updater_trust": {
@@ -442,6 +445,7 @@
     "finding": "not a drop-in compatible trust/feed contract",
     "recommendation": "preserve existing minisign trust/feed in a focused host adapter; native installer and lifecycle proofs still required",
     "alternative": "official NSH signed-manifest feed requires explicit trust/feed migration approval and receipts",
+    "decision": "user selected preserving existing minisign trust/feed; no key replacement or official NSH manifest-feed switch",
     "implemented": false,
     "new_trust_authorized": false
   },
@@ -461,6 +465,7 @@
     "reason": "no three-platform production acceptance or default/rollback qualification"
   },
   "operations": {
+    "foundation_commit": "9e48df355236585c4fa7d94e5098c12e445d9dab",
     "commit": "local conventional commit intended; final Git identity is external to avoid a self-hash cycle",
     "push": false,
     "tag": false,
