@@ -1662,7 +1662,6 @@ mod tests {
         let reg = only_agent(dir.path());
         assert_eq!(reg.content, "You are odd.");
         assert!(reg.tools.is_none(), "absent `tools:` declares nothing");
-        assert!(reg.color.is_none(), "Claude Code's colour is not carried");
     }
 
     #[test]

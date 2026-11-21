@@ -860,7 +860,7 @@ where
                     // Same post-run steering rescue as the normal completion
                     // path: a side question steered into this command was
                     // acknowledged into the log but never answered.
-                    self.post_run_steering_rescue(&request, agent.as_ref(), &emitter)
+                    self.post_run_steering_rescue(&request, &agent, &emitter)
                         .await;
                     return Ok(());
                 }
@@ -1248,7 +1248,7 @@ where
         // user asked the agent to stop, so pending messages wait for the next
         // interaction instead of restarting the loop they just killed.
         if matches!(final_state, RunState::Completed) {
-            self.post_run_steering_rescue(&request, agent, emitter)
+            self.post_run_steering_rescue(&request, &agent, &emitter)
                 .await;
         }
 
@@ -1277,7 +1277,7 @@ where
     async fn post_run_steering_rescue<E: EventEmitter + Send + Sync + 'static>(
         &self,
         request: &RunRequest,
-        agent: &AgentInstance,
+        agent: &Arc<AgentInstance>,
         emitter: &Arc<E>,
     ) {
         let Some(rescue) =
