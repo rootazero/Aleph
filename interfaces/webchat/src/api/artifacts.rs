@@ -124,6 +124,61 @@ pub struct ExportResult {
     pub size: u64,
 }
 
+/// A per-call idempotency key for a mutating RPC.
+///
+/// The server can be configured to REQUIRE an idempotency key on mutating
+/// RPCs (`require_idempotency_key`): without one those calls are rejected
+/// outright, and with one they are deduplicated per (principal, method). A
+/// key therefore has to be
+///
+/// * unique per LOGICAL operation — two exports are two operations and must
+///   not collapse into one, and
+/// * stable across the retries of ONE logical operation — a transport retry
+///   must reuse the same key, or the server executes the write twice.
+///
+/// This helper runs once per API call and the result travels inside the
+/// request params, so a retry of that call carries the same key.
+/// (2026-11-21 severed-wire audit EXP-01.)
+///
+/// This is the same shape as the helper in `super::canvas`. That one is
+/// private to its own module and `api.rs` is outside this change's scope, so
+/// the shape is repeated here rather than shared — one place to move both to
+/// later.
+fn idempotency_key(method: &str) -> String {
+    static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let seq = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    format!("{method}-{seq:016x}-{}", unique_suffix())
+}
+
+/// A suffix that differs between Panel instances and between tabs.
+fn unique_suffix() -> String {
+    #[cfg(target_arch = "wasm32")]
+    {
+        // `Math::random` is the only entropy source available in a browser
+        // build; `SystemTime::now` panics on wasm32-unknown-unknown.
+        format!("{:016x}", (js_sys::Math::random() * u64::MAX as f64) as u64)
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        format!("{:08x}", std::process::id())
+    }
+}
+
+/// Serialize params for a WRITE call, adding the idempotency key.
+///
+/// The server reads the key out of the params object itself, so it is added
+/// to the params rather than wrapped in a separate envelope.
+fn encode_write(method: &str, params: Value) -> Value {
+    let mut value = params;
+    if let Value::Object(map) = &mut value {
+        map.insert(
+            "idempotency_key".to_string(),
+            Value::String(idempotency_key(method)),
+        );
+    }
+    value
+}
+
 pub struct ArtifactsApi;
 
 impl ArtifactsApi {
@@ -162,13 +217,17 @@ impl ArtifactsApi {
 
     /// Render the session transcript to a self-contained HTML document and
     /// store it as an `export` artifact. Returns its byte URL.
+    ///
+    /// `session.export_html` is a Mutate-lane RPC — it writes a new artifact
+    /// — so the call carries an idempotency key: with
+    /// `require_idempotency_key` on, the server rejects a mutating RPC that
+    /// has none, before the handler ever runs.
     pub async fn export_html(
         state: &DashboardState,
         session_key: &str,
     ) -> Result<ExportResult, String> {
-        let result = state
-            .rpc_call("session.export_html", json!({ "session_key": session_key }))
-            .await?;
+        let params = encode_write("session.export_html", json!({ "session_key": session_key }));
+        let result = state.rpc_call("session.export_html", params).await?;
         serde_json::from_value(result).map_err(|e| e.to_string())
     }
 }
@@ -270,6 +329,44 @@ mod tests {
         let p: TextPreview = serde_json::from_str(j).unwrap();
         assert_eq!(p.content, "# hi");
         assert!(p.truncated);
+    }
+
+    /// The export RPC is Mutate-lane on the server: without an idempotency
+    /// key it is rejected outright when the operator turned on
+    /// `require_idempotency_key`. The key therefore has to be in the params
+    /// of the call itself.
+    #[test]
+    fn an_export_call_carries_an_idempotency_key() {
+        let params = encode_write(
+            "session.export_html",
+            json!({ "session_key": "agent:main:main" }),
+        );
+        let key = params
+            .get("idempotency_key")
+            .and_then(Value::as_str)
+            .unwrap_or_else(|| panic!("no idempotency_key in {params}"));
+        assert!(
+            key.starts_with("session.export_html-"),
+            "unexpected key: {key}"
+        );
+        // The other params are untouched — the key is additive.
+        assert_eq!(
+            params.get("session_key").and_then(Value::as_str),
+            Some("agent:main:main")
+        );
+    }
+
+    /// Two logical exports are two operations: they must not collapse into
+    /// one under the server's per-(principal, method) deduplication.
+    #[test]
+    fn two_exports_get_two_different_keys() {
+        let first = encode_write("session.export_html", json!({ "session_key": "s" }));
+        let second = encode_write("session.export_html", json!({ "session_key": "s" }));
+        assert_ne!(
+            first.get("idempotency_key"),
+            second.get("idempotency_key"),
+            "two exports shared one key"
+        );
     }
 
     #[test]

@@ -222,12 +222,27 @@ impl MessageRecord {
     }
 
     /// The recorded instant as RFC 3339, or an empty string when the stored
-    /// value is unrepresentable.
+    /// value says nothing.
     ///
     /// Empty rather than a placeholder date: a caption that is missing reads as
     /// missing, while a fabricated one reads as fact.
+    ///
+    /// A stored `0` says nothing. It is the same sentinel the write boundary
+    /// reads as "the producer did not say when" — see [`producer_instant`],
+    /// which filters it out — so the read side renders it as absent too.
+    /// Printing 1970 for it would put a date nobody wrote at the head of an
+    /// exported transcript.
+    ///
+    /// [`Self::instant`] deliberately keeps resolving `0` to the epoch. The
+    /// ordering paths — the ranking in `session_store::mod`, the recency read
+    /// in `agent_instance` — need a total order, and an undated row has to
+    /// land at the oldest end of it. A caption needs no order; it needs the
+    /// truth.
     #[must_use]
     pub fn rfc3339(&self) -> String {
+        if self.timestamp == 0 {
+            return String::new();
+        }
         self.instant().map(|dt| dt.to_rfc3339()).unwrap_or_default()
     }
 }
@@ -468,7 +483,23 @@ mod tests {
         // to behave differently per profile on the same stored byte.
         assert_eq!(record_at(i64::MIN).instant(), None);
         assert_eq!(record_at(i64::MIN).rfc3339(), "");
-        assert_eq!(record_at(0).rfc3339(), "1970-01-01T00:00:00+00:00");
+        // `0` is the write boundary's "the producer did not say when"
+        // sentinel — `producer_instant` filters it out before a row is stored
+        // — so the caption side renders it as absent instead of dating a
+        // message nobody dated to 1970. The ordering side keeps the epoch on
+        // purpose: `instant()` and the ranking paths need a total order, and
+        // an undated row has to land at the oldest end of it. A caption needs
+        // no order — it needs the truth.
+        assert_eq!(
+            record_at(0).instant(),
+            chrono::DateTime::from_timestamp_millis(0),
+            "the ordering side still resolves the 0 sentinel to the epoch"
+        );
+        assert_eq!(
+            record_at(0).rfc3339(),
+            "",
+            "the caption side treats the 0 sentinel as absent"
+        );
     }
 
     #[test]

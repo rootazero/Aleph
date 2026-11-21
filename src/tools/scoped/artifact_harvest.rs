@@ -38,7 +38,9 @@
 //! resolution now happens here, once, into the run's own media session
 //! directory (the one `deliver_run_media` already cleans up after draining), and
 //! what could not be resolved comes back as [`MediaFailure`] for the dispatch
-//! chokepoint to put in front of the model while it can still act on it.
+//! chokepoint to put in front of the model while it can still act on it, and
+//! what the store lane created comes back as [`StoredArtifact`] so the model
+//! can name the artifact it just produced.
 //!
 //! # Contract
 //!
@@ -147,8 +149,36 @@ pub(crate) struct MediaFailure {
     pub url_still_offered: bool,
 }
 
+/// One media item that made it into the durable artifact store.
+///
+/// The id is the handle the model needs: it is what `artifact_publish`'s
+/// `figures` takes, and the store lane used to log it and nothing else — so
+/// the model could never name the artifact it had just produced.
+#[derive(Debug, Clone)]
+pub(crate) struct StoredArtifact {
+    /// The artifact's store id.
+    pub id: String,
+    /// The display name it was stored under.
+    pub filename: String,
+}
+
+/// What one harvest settled.
+///
+/// Two halves, because there are two different things to report: the items
+/// that could not be resolved (the model has to correct those) and the
+/// artifacts the store lane created for the ones it could (the model has to
+/// be able to name those).
+#[derive(Debug, Default)]
+pub(crate) struct MediaHarvest {
+    /// Items that could not be resolved.
+    pub failures: Vec<MediaFailure>,
+    /// Artifacts the store lane created.
+    pub stored: Vec<StoredArtifact>,
+}
+
 /// Resolve and settle every `_media` item the tool declared, then ping the
-/// session. Returns the items that could not be resolved.
+/// session. Returns what the harvest settled: the items that could not be
+/// resolved, and the artifacts the store lane created for the ones it could.
 ///
 /// `turn` is the dispatch's routing context; without one there is no session to
 /// attribute the bytes to (direct calls, unit tests) and the harvest is skipped.
@@ -165,7 +195,7 @@ pub(super) async fn harvest_outbound_media(
     value: &Value,
     turn: Option<&TurnContext>,
     caller_deadline: Instant,
-) -> Vec<MediaFailure> {
+) -> MediaHarvest {
     let Some(turn) = turn else {
         // Cheap pre-check so a context-less dispatch does not pay for parsing.
         if !media_items(value).is_empty() {
@@ -174,7 +204,7 @@ pub(super) async fn harvest_outbound_media(
                 "tool declared _media but the dispatch carries no turn context; not settled"
             );
         }
-        return Vec::new();
+        return MediaHarvest::default();
     };
     // The delivery buffer is published run-tree-wide at the run-loop boundary
     // (`crate::gateway::media::with_pending_media`), so the chokepoint can reach
@@ -208,17 +238,17 @@ pub(crate) async fn harvest_media_for_session(
     run_id: Option<&str>,
     delivery: Option<&PendingMedia>,
     caller_deadline: Instant,
-) -> Vec<MediaFailure> {
+) -> MediaHarvest {
     let items = media_items(value);
     if items.is_empty() {
-        return Vec::new();
+        return MediaHarvest::default();
     }
 
     let store = ArtifactStore::shared();
     if delivery.is_none() && store.is_none() {
         // Neither lane exists. Resolving here would be a download nobody reads
         // — and, for a remote URL, a real fetch on the tool-dispatch path.
-        return Vec::new();
+        return MediaHarvest::default();
     }
 
     if items.len() > MAX_MEDIA_PER_RUN {
@@ -239,8 +269,10 @@ pub(crate) async fn harvest_media_for_session(
     if let Some(buffer) = delivery {
         queue_for_delivery(tool, buffer, resolved.deliver).await;
     }
+    let mut stored = Vec::new();
     if let Some(store) = store {
-        if store_resolved_media(store, session_key, run_id, tool, &resolved.store).await > 0 {
+        stored = store_resolved_media(store, session_key, run_id, tool, &resolved.store).await;
+        if !stored.is_empty() {
             publish_artifact_ping(session_key);
         }
     }
@@ -251,7 +283,10 @@ pub(crate) async fn harvest_media_for_session(
         }
     }
 
-    resolved.failures
+    MediaHarvest {
+        failures: resolved.failures,
+        stored,
+    }
 }
 
 /// Which media-cache session the resolved bytes go into, and whether this call
@@ -494,6 +529,38 @@ pub(super) fn annotate_media_failures(value: &mut Value, failures: &[MediaFailur
     );
 }
 
+/// Tool-output field carrying the stored-artifact report back to the model.
+const STORED_FIELD: &str = "_media_artifacts";
+
+/// Write the ids of the stored artifacts into the tool's result value so the
+/// model can refer to them.
+///
+/// The store lane used to log the new artifact id and nothing else, so the
+/// model read "Sending 1 media file..." and never learned that the file had a
+/// durable id — and `artifact_publish`'s `figures` takes exactly those ids.
+/// Absent artifacts write nothing, so a run that stored nothing keeps the
+/// bytes it always had.
+pub(super) fn annotate_media_stored(value: &mut Value, stored: &[StoredArtifact]) {
+    if stored.is_empty() {
+        return;
+    }
+    let Some(obj) = value.as_object_mut() else {
+        return;
+    };
+    let reported: Vec<Value> = stored
+        .iter()
+        .map(|a| serde_json::json!({ "id": a.id, "filename": a.filename }))
+        .collect();
+    obj.insert(
+        STORED_FIELD.to_string(),
+        serde_json::json!({
+            "stored": reported,
+            "note": "These media items were stored as artifacts of this session. Their `id` is \
+                     what artifact_publish's `figures` takes.",
+        }),
+    );
+}
+
 /// Parse the `_media` field. Absent or malformed yields no items — a tool that
 /// mis-shapes its own convention must not break its own call.
 fn media_items(value: &Value) -> Vec<MediaItem> {
@@ -512,7 +579,7 @@ fn media_items(value: &Value) -> Vec<MediaItem> {
     }
 }
 
-/// Store the already-resolved items; returns how many landed in the store.
+/// Store the already-resolved items; returns the artifacts it created.
 ///
 /// Runs inline rather than detached: the ping must not outlive the run that
 /// produced it, and a detached task would have to be reasoned about against run
@@ -529,8 +596,8 @@ async fn store_resolved_media(
     run_id: Option<&str>,
     tool: &str,
     resolved: &[StoredMedia],
-) -> usize {
-    let mut stored = 0usize;
+) -> Vec<StoredArtifact> {
+    let mut stored: Vec<StoredArtifact> = Vec::new();
 
     for media in resolved {
         let bytes = match tokio::fs::read(&media.path).await {
@@ -560,7 +627,10 @@ async fn store_resolved_media(
                     size = record.size,
                     "settled tool media as an outbound artifact"
                 );
-                stored += 1;
+                stored.push(StoredArtifact {
+                    id: record.id,
+                    filename: record.filename,
+                });
             }
             // Best-effort by contract: the tool already succeeded, and losing
             // the durable copy must not turn that into a model-visible error.
@@ -665,7 +735,7 @@ mod tests {
         value: &Value,
         run_id: Option<&str>,
         tool: &str,
-    ) -> usize {
+    ) -> Vec<StoredArtifact> {
         let session = format!("harvest-test-{}", uuid::Uuid::new_v4().simple());
         let resolved = resolve_media_items(tool, media_items(value), &session, ample()).await;
         let stored = store_resolved_media(store, SESSION, run_id, tool, &resolved.store).await;
@@ -784,7 +854,7 @@ mod tests {
         let value = media_value(json!([item(HELLO_PNG, Some("cat.png"))]));
 
         let stored = resolve_then_store(&store, &value, Some("run-1"), "media_send").await;
-        assert_eq!(stored, 1);
+        assert_eq!(stored.len(), 1);
 
         let listed = store.list(SESSION).await.expect("list");
         assert_eq!(listed.len(), 1);
@@ -805,7 +875,7 @@ mod tests {
 
         assert!(media_items(&value).is_empty());
         let stored = resolve_then_store(&store, &value, None, "bash").await;
-        assert_eq!(stored, 0);
+        assert_eq!(stored.len(), 0);
         assert!(store.list(SESSION).await.expect("list").is_empty());
     }
 
@@ -824,14 +894,14 @@ mod tests {
         // filesystem path as its `url` — nothing a channel can send.
         let value = media_value(json!([item("/etc/hosts", Some("hosts"))]));
 
-        let failures =
+        let harvest =
             harvest_media_for_session("media_send", &value, SESSION, None, Some(&queue), ample())
                 .await;
 
-        assert_eq!(failures.len(), 1);
-        assert_eq!(failures[0].url, "/etc/hosts");
+        assert_eq!(harvest.failures.len(), 1);
+        assert_eq!(harvest.failures[0].url, "/etc/hosts");
         assert!(
-            !failures[0].url_still_offered,
+            !harvest.failures[0].url_still_offered,
             "a filesystem path must not go out as a link"
         );
         assert!(
@@ -845,13 +915,13 @@ mod tests {
         let queue = buffer();
         let value = media_value(json!([item("data:image/png;base64,!!!bad!!!", None)]));
 
-        let failures =
+        let harvest =
             harvest_media_for_session("media_send", &value, SESSION, None, Some(&queue), ample())
                 .await;
 
-        assert_eq!(failures.len(), 1);
+        assert_eq!(harvest.failures.len(), 1);
         assert!(
-            !failures[0].url_still_offered,
+            !harvest.failures[0].url_still_offered,
             "a data: URL that did not decode has no link to hand on"
         );
         assert!(queue.lock().await.is_empty());
@@ -862,11 +932,14 @@ mod tests {
         let queue = buffer();
         let value = media_value(json!([item(HELLO_PNG, Some("cat.png"))]));
 
-        let failures =
+        let harvest =
             harvest_media_for_session("media_send", &value, SESSION, None, Some(&queue), ample())
                 .await;
 
-        assert!(failures.is_empty(), "the success path reports nothing");
+        assert!(
+            harvest.failures.is_empty(),
+            "the success path reports nothing"
+        );
         assert_eq!(queue.lock().await.len(), 1);
     }
 
@@ -960,7 +1033,7 @@ mod tests {
         // A remote URL, so the degrade-to-link branch is in play too.
         let value = media_value(json!([item("https://example.com/big.mp4", None)]));
 
-        let failures = harvest_media_for_session(
+        let harvest = harvest_media_for_session(
             "media_send",
             &value,
             SESSION,
@@ -971,14 +1044,18 @@ mod tests {
         )
         .await;
 
-        assert_eq!(failures.len(), 1, "silence is the one unacceptable answer");
-        assert!(
-            failures[0].reason.contains("budget"),
-            "the model has to be able to tell this from a 404; got: {}",
-            failures[0].reason
+        assert_eq!(
+            harvest.failures.len(),
+            1,
+            "silence is the one unacceptable answer"
         );
         assert!(
-            failures[0].url_still_offered,
+            harvest.failures[0].reason.contains("budget"),
+            "the model has to be able to tell this from a 404; got: {}",
+            harvest.failures[0].reason
+        );
+        assert!(
+            harvest.failures[0].url_still_offered,
             "an origin too slow for us is exactly when a bare link is worth most"
         );
         assert_eq!(
@@ -1004,7 +1081,7 @@ mod tests {
         // is what keeps this measuring the deadline rather than the machine.
         let queue = buffer();
         let started = Instant::now();
-        let failures = harvest_media_for_session(
+        let harvest = harvest_media_for_session(
             "media_send",
             &value,
             SESSION,
@@ -1014,7 +1091,7 @@ mod tests {
         )
         .await;
 
-        assert_eq!(failures.len(), 2);
+        assert_eq!(harvest.failures.len(), 2);
         assert!(
             started.elapsed() < Duration::from_secs(2),
             "an expired budget must short-circuit, not fetch; took {:?}",
@@ -1033,11 +1110,11 @@ mod tests {
             item(HELLO_PNG, Some("second.png")),
         ]));
 
-        let failures =
+        let harvest =
             harvest_media_for_session("media_send", &value, SESSION, None, Some(&queue), ample())
                 .await;
 
-        assert!(failures.is_empty());
+        assert!(harvest.failures.is_empty());
         let queued = queue.lock().await;
         assert_eq!(queued.len(), 2);
         assert_eq!(queued[0].filename.as_deref(), Some("first.png"));
@@ -1076,6 +1153,83 @@ mod tests {
         assert_eq!(failed[0]["delivered_as_link_instead"], true);
     }
 
+    // ── The stored-artifact report ───────────────────────────────────────
+    //
+    // The regression these guard: the store lane logged the new artifact id
+    // and nothing else, so the model read "Sending 1 media file..." and never
+    // learned the file had a durable id — and `artifact_publish`'s `figures`
+    // takes exactly those ids. The deliverable's Figures section was dark
+    // because the model had nothing to name.
+
+    #[tokio::test]
+    async fn a_tool_result_with_media_carries_the_stored_artifact_id() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let store = ArtifactStore::new(dir.path().to_path_buf());
+        let mut value = media_value(json!([item(HELLO_PNG, Some("cat.png"))]));
+
+        let stored = resolve_then_store(&store, &value, Some("run-1"), "media_send").await;
+        assert_eq!(stored.len(), 1);
+
+        annotate_media_stored(&mut value, &stored);
+
+        let report = value
+            .get(STORED_FIELD)
+            .expect("the ids ride on the tool result the model reads");
+        let listed = report["stored"].as_array().expect("stored[]");
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0]["id"], stored[0].id);
+        assert_eq!(listed[0]["filename"], "cat.png");
+
+        // The id is a real handle: the store knows the artifact by it.
+        let rows = store.list(SESSION).await.expect("list");
+        assert_eq!(rows[0].id, stored[0].id);
+    }
+
+    #[test]
+    fn a_result_with_nothing_stored_writes_nothing() {
+        let mut value = json!({ "_display": "Sending 1 media file...", MEDIA_FIELD: [] });
+        // rust-doctor-disable-next-line excessive-clone
+        let before = value.clone();
+        annotate_media_stored(&mut value, &[]);
+        assert_eq!(
+            value, before,
+            "no stored artifacts must write nothing at all"
+        );
+    }
+
+    #[test]
+    fn the_failure_annotation_is_unchanged() {
+        // The stored-artifact report is ADDITIVE: the failure report the model
+        // corrects against has to keep exactly the shape it had.
+        let mut value = json!({ "_display": "Sending 1 media file..." });
+        annotate_media_failures(
+            &mut value,
+            &[MediaFailure {
+                url: "https://example.com/gone.png".to_string(),
+                reason: "HTTP 404 Not Found".to_string(),
+                url_still_offered: true,
+            }],
+        );
+        let report = value
+            .get(DELIVERY_FIELD)
+            .expect("the report rides on the tool result the model reads");
+        assert_eq!(
+            report["failed"],
+            json!([{
+                "url": "https://example.com/gone.png",
+                "error": "HTTP 404 Not Found",
+                "delivered_as_link_instead": true,
+            }]),
+            "the failure report changed shape"
+        );
+        assert_eq!(
+            report["note"],
+            "These media items were NOT delivered as files. Delivery happens after \
+             this turn ends, so this is the only point at which you can correct it.",
+            "the failure note changed"
+        );
+    }
+
     #[test]
     fn a_non_object_result_is_left_alone() {
         // `_media` can only have come off an object, so there is nothing to
@@ -1111,7 +1265,7 @@ mod tests {
         // Returns normally with nothing stored — the error is swallowed, and
         // the caller (`apply_layer_two`) has no error to propagate by construction.
         let stored = resolve_then_store(&store, &value, None, "media_send").await;
-        assert_eq!(stored, 0);
+        assert_eq!(stored.len(), 0);
     }
 
     #[tokio::test]
@@ -1126,7 +1280,7 @@ mod tests {
         ]));
 
         let stored = resolve_then_store(&store, &value, None, "media_send").await;
-        assert_eq!(stored, 1, "the resolvable item is still settled");
+        assert_eq!(stored.len(), 1, "the resolvable item is still settled");
         let listed = store.list(SESSION).await.expect("list");
         assert_eq!(listed.len(), 1);
         assert_eq!(listed[0].filename, "cat.png");
@@ -1150,7 +1304,7 @@ mod tests {
         let value = media_value(Value::Array(items));
 
         let stored = resolve_then_store(&store, &value, None, "media_send").await;
-        assert_eq!(stored, MAX_MEDIA_PER_RUN);
+        assert_eq!(stored.len(), MAX_MEDIA_PER_RUN);
         let listed = store.list(SESSION).await.expect("list");
         assert_eq!(listed.len(), MAX_MEDIA_PER_RUN);
     }

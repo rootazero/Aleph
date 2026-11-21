@@ -13,6 +13,50 @@ use super::{
 };
 use crate::artifacts::{ArtifactRecord, ArtifactStore};
 
+/// Why an artifact is listed in the document but carries no bytes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DropReason {
+    /// The artifact does not fit the inline budget: either it is over the
+    /// per-artifact ceiling, or the document's total ceiling is already spent.
+    OverBudget,
+    /// The bytes could not be read back from the store.
+    Unreadable,
+}
+
+impl DropReason {
+    /// The reason in the words a reader or a model needs — "over the inline
+    /// budget" or "unreadable", not "failed".
+    #[must_use]
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            DropReason::OverBudget => "over the inline budget",
+            DropReason::Unreadable => "unreadable",
+        }
+    }
+}
+
+impl std::fmt::Display for DropReason {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+/// An artifact that is listed in the document but carries no bytes.
+///
+/// The row still appears in the document; what is missing is the payload. The
+/// reason travels with the artifact so a caller can name *which* attachment
+/// did not make it and *why* — a figure the budget refused and a figure the
+/// store lost are different failures, and "it failed" says neither.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DroppedArtifact {
+    /// The store id of the artifact.
+    pub id: String,
+    /// The file name the document shows.
+    pub filename: String,
+    /// Why it carries no bytes.
+    pub reason: DropReason,
+}
+
 /// Read the bytes for each record, obeying the inline budget.
 ///
 /// Over-budget artifacts are still returned — they just carry `bytes: None`,
@@ -22,13 +66,33 @@ use crate::artifacts::{ArtifactRecord, ArtifactStore};
 /// whose bytes cannot be read degrades the same way.
 ///
 /// Ordering is the caller's: this preserves the slice it is given.
+///
+/// This is the artifacts-only view of [`collect_artifacts_with_drops`]; a
+/// caller that needs to say *which* attachment was left out uses that one.
 pub async fn collect_artifacts(
     store: &ArtifactStore,
     session_key: &str,
     records: &[ArtifactRecord],
 ) -> Vec<ExportArtifact> {
+    collect_artifacts_with_drops(store, session_key, records).await.0
+}
+
+/// Read the bytes for each record, obeying the inline budget, and report the
+/// artifacts that carry no bytes.
+///
+/// The artifacts come back in the order given. The drops say which of them
+/// were left without bytes and why. Without that second half, a document that
+/// silently lost an attachment looks exactly like one that never had it: the
+/// model publishes it, tells the user every figure is in, and the figure is
+/// not.
+pub async fn collect_artifacts_with_drops(
+    store: &ArtifactStore,
+    session_key: &str,
+    records: &[ArtifactRecord],
+) -> (Vec<ExportArtifact>, Vec<DroppedArtifact>) {
     let mut inlined_total: u64 = 0;
     let mut out = Vec::with_capacity(records.len());
+    let mut dropped: Vec<DroppedArtifact> = Vec::new();
 
     for record in records {
         // The budget is counted in the bytes the document will hold, so a
@@ -50,10 +114,25 @@ pub async fn collect_artifacts(
                         error = %e,
                         "artifact bytes unreadable; including it as a listed-only row"
                     );
+                    dropped.push(DroppedArtifact {
+                        id: record.id.clone(),
+                        filename: record.filename.clone(),
+                        reason: DropReason::Unreadable,
+                    });
                     None
                 }
             }
         } else {
+            warn!(
+                artifact_id = %record.id,
+                filename = %record.filename,
+                "artifact is over the inline budget; including it as a listed-only row"
+            );
+            dropped.push(DroppedArtifact {
+                id: record.id.clone(),
+                filename: record.filename.clone(),
+                reason: DropReason::OverBudget,
+            });
             None
         };
 
@@ -65,7 +144,7 @@ pub async fn collect_artifacts(
         });
     }
 
-    out
+    (out, dropped)
 }
 
 #[cfg(test)]
@@ -104,6 +183,73 @@ mod tests {
         assert!(collected[0].bytes.is_none(), "over-budget is not inlined");
         assert_eq!(collected[0].size, MAX_INLINE_ARTIFACT_BYTES + 1);
         assert_eq!(collected[1].bytes.as_deref(), Some(&b"tiny"[..]));
+    }
+
+    /// The row surviving is not the same as the caller knowing: without the
+    /// drop, a document that quietly lost an attachment is indistinguishable
+    /// from one that never had it.
+    #[tokio::test]
+    async fn a_dropped_artifact_is_reported_with_its_name_and_reason() {
+        let tmp = TempDir::new().expect("tempdir");
+        let store = ArtifactStore::new(tmp.path().to_path_buf());
+
+        let small = store
+            .put(
+                SESSION,
+                None,
+                ArtifactOrigin::Inbound,
+                "small.txt",
+                "text/plain",
+                b"tiny",
+            )
+            .await
+            .expect("put small");
+        let mut huge = small.clone();
+        huge.filename = "huge.bin".to_string();
+        huge.size = MAX_INLINE_ARTIFACT_BYTES + 1;
+        let mut ghost = small.clone();
+        ghost.filename = "ghost.txt".to_string();
+        ghost.id = uuid::Uuid::new_v4().to_string();
+
+        let (collected, dropped) =
+            collect_artifacts_with_drops(&store, SESSION, &[huge.clone(), ghost.clone(), small])
+                .await;
+
+        assert_eq!(collected.len(), 3, "every artifact stays listed");
+        assert_eq!(dropped.len(), 2, "both lost artifacts are reported");
+        assert_eq!(dropped[0].filename, "huge.bin");
+        assert_eq!(dropped[0].id, huge.id);
+        assert_eq!(dropped[0].reason, DropReason::OverBudget);
+        assert_eq!(dropped[0].reason.as_str(), "over the inline budget");
+        assert_eq!(dropped[1].filename, "ghost.txt");
+        assert_eq!(dropped[1].id, ghost.id);
+        assert_eq!(dropped[1].reason, DropReason::Unreadable);
+        assert_eq!(dropped[1].reason.as_str(), "unreadable");
+    }
+
+    #[tokio::test]
+    async fn an_artifact_that_made_it_in_is_not_reported_as_dropped() {
+        let tmp = TempDir::new().expect("tempdir");
+        let store = ArtifactStore::new(tmp.path().to_path_buf());
+
+        let record = store
+            .put(
+                SESSION,
+                None,
+                ArtifactOrigin::Inbound,
+                "small.txt",
+                "text/plain",
+                b"tiny",
+            )
+            .await
+            .expect("put");
+
+        let (collected, dropped) =
+            collect_artifacts_with_drops(&store, SESSION, &[record]).await;
+
+        assert_eq!(collected.len(), 1);
+        assert!(collected[0].bytes.is_some());
+        assert!(dropped.is_empty(), "{:?}", dropped);
     }
 
     #[tokio::test]
