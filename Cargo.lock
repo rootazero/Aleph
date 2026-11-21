@@ -111,6 +111,7 @@ dependencies = [
  "clap_complete",
  "dirs 7.0.0",
  "futures-util",
+ "jsonschema",
  "libc",
  "pulldown-cmark",
  "rpassword",
