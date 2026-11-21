@@ -22,10 +22,29 @@ fn main() -> std::process::ExitCode {
     use std::io::Write;
     use std::sync::Mutex;
 
-    let endpoint = std::env::var("ALEPH_NSH_QA_URL").ok();
-    let nonce = std::env::var("ALEPH_NSH_QA_NONCE").ok();
+    let Ok(args) = std::env::args_os()
+        .skip(1)
+        .map(|arg| arg.into_string())
+        .collect::<Result<Vec<_>, _>>()
+    else {
+        eprintln!("NSH host refused non-Unicode launch arguments");
+        return std::process::ExitCode::FAILURE;
+    };
+    if args.as_slice() == ["--help"] {
+        println!("Usage: aleph-nsh-shell [--connect <origin>]\n\nConnects to an existing Gateway; does not start, stop or reconfigure a service.\nUse HTTPS for a remote origin. No target or credential URL is persisted.");
+        return std::process::ExitCode::SUCCESS;
+    }
+    let qa = ["ALEPH_NSH_QA_URL", "ALEPH_NSH_QA_NONCE"].map(|name| {
+        std::env::var_os(name)
+            .map(|value| value.into_string())
+            .transpose()
+    });
+    let [Ok(endpoint), Ok(nonce)] = qa else {
+        eprintln!("NSH host refused non-Unicode QA configuration");
+        return std::process::ExitCode::FAILURE;
+    };
     let settings =
-        match shell_host::HostSettings::from_inputs(endpoint.as_deref(), nonce.as_deref()) {
+        match shell_host::HostSettings::from_launch(&args, endpoint.as_deref(), nonce.as_deref()) {
             Ok(settings) => settings,
             Err(error) => {
                 eprintln!("NSH host refused configuration: {error}");
@@ -55,6 +74,7 @@ fn main() -> std::process::ExitCode {
     #[derive(Clone, PartialEq, Props)]
     struct AppProps {
         url: Prop<String>,
+        gateway: Prop<String>,
         script: Prop<String>,
         bridge_prefix: Prop<String>,
         nonce: Prop<Option<String>>,
@@ -67,7 +87,7 @@ fn main() -> std::process::ExitCode {
         window.on_close_press(move |_| close_window.hide());
         let view = element_ref();
         let credentials = credentials::CredentialService::new(
-            &props.url.get_untracked(),
+            &props.gateway.get_untracked(),
             props.nonce.get_untracked().as_deref(),
         );
         let bridge = panel_bridge::Bridge::start(
@@ -172,6 +192,7 @@ fn main() -> std::process::ExitCode {
     placement.restore_bounds = settings.qa_nonce.is_none() || placement_data.is_some();
     let root = Root::new::<App>(move || AppProps {
         url: settings.url.clone().into(),
+        gateway: settings.gateway.clone().into(),
         script: script.clone().into(),
         bridge_prefix: bridge_prefix.clone().into(),
         nonce: settings.qa_nonce.clone().into(),

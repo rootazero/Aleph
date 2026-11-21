@@ -1,8 +1,8 @@
 # Phase11 NSH Cutover Contract / Phase11 NSH 切换契约
 
 **Status / 状态:** implemented foundation slices, NOT P11-A–H acceptance / 基础切片已实施，不是全期验收
-**Version / 版本:** `2026-11-22.3`
-**Scope / 范围:** official platform entry selection and fixed credential transport / 官方平台入口选择与固定凭据传输
+**Version / 版本:** `2026-11-22.4`
+**Scope / 范围:** official platform entry selection, fixed credential transport and immutable launch targets / 官方平台入口选择、固定凭据传输与不可变启动目标
 
 ## 1. Authority and non-goals / 权威与不做事项
 
@@ -119,3 +119,34 @@ These are implementation requirements, not claims that the handlers or platform 
 2. **QUALITY (distinct pass after SPEC):** checked effect/no-op and negative directions: failed target commit cannot navigate, rejected stale delete must leave stored value unchanged, Quit cannot imply server stop, missing native platform cannot imply support, and updater verification cannot imply installation. The new fixture observes actual store effects and native return; its six reducer tests reject missing/duplicate/reordered/false observations and absent shutdown acknowledgement. Full production Panel, service processes, signed installer rollback and native Windows/Linux remain unverified.
 
 These are author self-reviews, not independent approval. P11-A remains OPEN because platform experiments and remaining concrete handler/OS feasibility dispositions are incomplete. / 自审不冒充独立批准，闸门仍未关闭。
+
+## 9. Immutable launch target slice / 单进程不可变连接目标切片
+
+This slice is a production launch entry, not full/lite/service or mutable-target acceptance. / 本切片只交付生产启动参数，不冒充产品与服务迁移完成。
+
+- **Caller and authority:** process arguments `--connect <origin>` select one target for the lifetime of this NSH process. `aleph-client::ConnectionTarget` owns parsing, defaults, origin projection and canonical credential transport admission. The old Tauri module reexports the same value type; its persistence/credential transaction gate remains unchanged.
+- **Admission:** accept a bare host/host:port or root HTTP(S) origin. Reject userinfo, query/fragment bootstrap credentials and non-root paths without echoing input. Reject plaintext non-loopback credential transport using the existing client policy. Preserve default `http://127.0.0.1:18790/` when no argument is supplied. `--help` is side-effect-free. Unknown/missing/duplicate arguments fail before creating a window or opening a store.
+- **QA separation:** production arguments and QA endpoint/nonce are mutually exclusive. Existing debug QA isolation remains mandatory; a production argument cannot redirect the nonce store or make a fixture use the production namespace. Non-Unicode process arguments or QA environment values fail closed without echoing their bytes; `--help` returns before reading configuration.
+- **Mounted handler:** `HostSettings` derives Panel root and WS/WSS credential endpoint once; `main` mounts that exact root and passes the admitted endpoint to the existing `CredentialService`. The bootstrap binds to that root's origin. No new arbitrary invoke, TLS exception, certificate approval or native transport client is added.
+- **Effects and lifecycle:** this slice writes no target marker, changes no service/autostart state and never launches/stops a local daemon. A remote launch has no local service acquisition path. Existing OS-store operations retain document/generation/lease/attempt checks. Runtime target change, persisted compatibility, pairing-ticket handoff, setup UI and supervision remain OPEN.
+- **Verification:** RED/GREEN shared URL/transport tests; argument admission and secret-free error tests; retained Tauri connection transactions; both NSH feature modes; WASM build; real isolated native credential fixture. HTTPS remote TLS/production pairing and native Windows/Linux are NOT TESTED.
+
+**SPEC pass (before boundary implementation):** checked immutable selection against the existing target transaction owner; deliberately no mutable write or legacy ticket migration. Existing credential transport policy is reused rather than reimplemented. **QUALITY pass (after SPEC):** checked both directions of QA isolation, rejected argument no-effect, sanitized origin projection and WSS mapping; native readiness/service/recovery cannot be inferred from a parsed target. These are separate author passes, not independent approval. / 本节为实施前两次自审，不改变 P11-A–H 状态。
+
+### Verified launch checkpoint / 已验证启动切片
+
+The [machine receipt](../runs/2026-11-22-phase11-launch-receipt.json) records exact source/native identities and limitations. / 机器回执记录源码、原生身份及验证边界。
+
+- Shared client: 57 tests passed. Retained Tauri full: 167 tests passed; lite with isolated QA feature: 190 passed. These are Rust tests, not installed-product lifecycle proofs. / 保留旧壳单测，不等于安装产品验收。
+- NSH QA feature: 13 unit, five real-process argument tests and two window contract tests passed; one real-store test ignored by default. Malformed QA environment first failed a safe RED case, then passed after removing silent `var(...).ok()` downgrade. / 非 Unicode QA 配置先 RED 后修正，拒绝降级到生产命名空间。
+- Current binary passed the existing real macOS WebView credential fixture: ten effects, two actual documents, isolated final absence and native return. Raw receipt: `.phase10-evidence/phase11-launch-credentials.EU3xi4/receipt.json`. This revalidates the changed endpoint wiring, not HTTPS remote production pairing. / 真实隔离回归覆盖新端点接线，不代表远程生产配对。
+- Strict client/NSH clippy and Panel WASM check passed; WASM retains three existing dead-code warnings. Default switch, daemon takeover, performance rerun and Tauri removal were not performed. / 未切默认、未接管服务、未重跑性能、未删 Tauri。
+
+## 10. Pinned host API gaps / 固定版本宿主 API 缺口
+
+The exact 0.6.0 source, not current website HEAD, defines these limits. / 以下以锁定版本源码为准。
+
+- `nsh-core-0.6.0/src/element/desktop.rs:1082` exposes `launch_at_login() -> impl Future<Output = bool> + 'static`; it returns false for disabled, approval pending, unsupported contexts and read errors. `src/element/desktop.rs:1101` exposes fallible writes, but no public detailed status getter was located. `src/desktop/login_item.rs` has richer backend statuses; importing a type is not access to the installed backend. Do not expose false as a confirmed Disabled status. / 布尔读取丢失状态，不能据此宣称已禁用。
+- `nsh-core-0.6.0/src/single_instance.rs` assigns platform uniqueness/forwarding to release runners. A Rust-hosted `run_app` plus an event listener does not prove duplicate-process exclusion or intent forwarding. / Rust 宿主的单实例仍需真实证明。
+- Safe alternatives for the autostart gap are (A) a narrow platform-side OS adapter bound to the same application identity, preserving official 0.6.0 and never changing server-service autostart, or (B) waiting for a versioned official public status API and validating an explicitly approved dependency upgrade. Neither is silently selected here; no toolkit patch, fork, global service change or production login-item mutation was made. / 可选窄原生适配器或经批准的官方 API 升级；未静默选择。
+- Windows/Linux native runners and Linux's cached GTK dependencies remain absent. No cross-compilation/source review result counts as their native acceptance. / 平台机器与离线依赖缺口不冒充验收。

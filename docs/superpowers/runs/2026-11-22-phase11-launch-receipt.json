@@ -1,0 +1,73 @@
+{
+  "artifact": "phase11-immutable-launch-checkpoint",
+  "status": "PASS_TARGETED_LAUNCH_CHECKS_NOT_PHASE11_ACCEPTANCE",
+  "baseline_commit": "01135aaf86b45f97d51146cfddb4aa28e924dede",
+  "scope": "Canonical connection-target extraction and mounted immutable NSH --connect entry; existing target persistence/service/certificate owners retained",
+  "source_sha256": {
+    "Cargo.lock": "d21611b3f37376d35cd71a493e4c0f5a1da87b0b982abd76d29dcd0af05d2ade",
+    "shared/client/Cargo.toml": "eadda993cdd272c9465d3c3b3c150859725a3d40a2250f44812e3bf01c873591",
+    "shared/client/src/lib.rs": "8a5148622d9a010cccf8ae566572f8ebf4e652be41586720e0ecf34d38b79b05",
+    "shared/client/src/connection_target.rs": "f1db897d506deaab69ca7e2a59f182610898739e8ade8c47189849f75949c5b1",
+    "desktop/shell/src/connection.rs": "94854cef044416b2bb23ff0af45618b77ca2369c865bae1311264503cca82b6b",
+    "desktop/nsh-shell/Cargo.toml": "80898d5381296d944889a9d1f8644993a5ff796416cfa49db448843410a4a0ac",
+    "desktop/nsh-shell/src/main.rs": "445488f99ed99aacdcc570993035280b32a1d385d0a497f31c7c622c01a23f4a",
+    "desktop/nsh-shell/src/shell_host.rs": "983640832c7ac9fa4da3cc5fd8bda2d632f45c88c7e1b3369a805539529df93c",
+    "desktop/nsh-shell/src/credentials.rs": "45897ee416e2cd94894efb963491974004e27d1e55dcadc2ffa51b70d2a2cbf7",
+    "desktop/nsh-shell/tests/launch_arguments.rs": "714bc7c6f5318514ca80853c477bec66bac435b645fe60e2a618e821815c812d"
+  },
+  "red_green": [
+    "canonical parser extraction: five failing stub tests, then preserved parser tests green",
+    "authority/port regression: userinfo colon incorrectly hid explicit port; RED then authority-only scan green",
+    "credential endpoint projection: unavailable stub RED then canonical transport-admitted WS/WSS green",
+    "immutable launch settings: unavailable stub RED then fixed argument admission green",
+    "malformed QA environment: real process safely rejected plaintext remote but missed non-Unicode QA error (RED), then strict environment admission green"
+  ],
+  "checks": {
+    "client": "cargo test -p aleph-client --offline --locked --jobs 1: 57 passed",
+    "nsh_default": "cargo test -p aleph-nsh-shell --offline --locked --jobs 1: 13 unit + 5 real-process launch + 2 integration passed",
+    "nsh_qa": "cargo test -p aleph-nsh-shell --features qa-service --offline --locked --jobs 1: 13 unit + 5 real-process launch + 2 integration passed; 1 isolated OS-store test ignored by default",
+    "tauri_full": "cargo test -p aleph-desktop-shell --offline --locked --jobs 1: 167 passed",
+    "tauri_lite": "cargo test -p aleph-desktop-shell --no-default-features --features qa-owned-root --offline --locked --jobs 1: 190 passed",
+    "panel_wasm": "cargo check -p aleph-panel --target wasm32-unknown-unknown --offline --locked --jobs 1: passed, three existing dead_code warnings",
+    "strict_clippy": "cargo clippy -p aleph-client -p aleph-nsh-shell --all-targets --features qa-service --offline --locked --jobs 1 -- -D warnings: passed",
+    "bridge_js": "node --test desktop/nsh-shell/tests/panel_bridge.test.mjs: 8 passed",
+    "qa_python": "uv run --offline --no-project --no-python-downloads --python python3 --with jsonschema python -m unittest discover -s qa -p test_*.py -v: 82 passed",
+    "focused_rustfmt": "passed for changed client/NSH modules; old Tauri connection module has localized extraction only",
+    "post_check_change": "only the Local variant documentation comment changed after Rust/native tests; no executable Rust change"
+  },
+  "native_regression": {
+    "status": "PASS_SCOPED_NATIVE_CREDENTIAL_EFFECTS",
+    "raw_receipt": ".phase10-evidence/phase11-launch-credentials.EU3xi4/receipt.json",
+    "receipt_sha256": "902acfb9fe0f90672bafd0cf4c724a8b1f81ef3d4e48e7c544b17c8f4119d251",
+    "saved_binary": ".phase10-evidence/phase11-launch-credentials.EU3xi4/aleph-nsh-shell",
+    "binary_sha256": "a0fe7cac3d8cd5bc149276191f545fa1f22e0240ba8a4721633efa3cc935a7d8",
+    "compiled_connection_target_sha256": "0715c625dd246676e0e1d02134a848fb546c9e8d8a43101791363fd326168e8e",
+    "current_source_difference": "Local variant documentation comment corrected to state host-owned startup policy; raw/native identities not rewritten",
+    "effects": "ten checks across two actual documents; isolated canonical OS store empty at end; owned native return and process exit zero",
+    "not_proven": "Production Panel WASM, HTTPS remote pairing/TLS, full/lite/service replacement, performance or native platform parity"
+  },
+  "cargo_discipline": {
+    "memory_gate": "ALLOW before every Cargo invocation, required 4294967296 bytes",
+    "execution": "serial offline locked jobs=1, except normal offline lock refresh after moving direct url dependency from NSH to existing aleph-client",
+    "package_identities_added": 0,
+    "package_identities_removed": 0
+  },
+  "platform_blockers": {
+    "linux_check": "cargo check -p aleph-nsh-shell --target x86_64-unknown-linux-gnu --offline --locked --jobs 1: exit 101, failed to download cairo-rs v0.22.11; offline specified",
+    "windows": "Windows target absent from installed targets; no native runner supplied",
+    "autostart_status": "Pinned public bool API collapses disabled/approval/unavailable/read errors; detailed backend statuses are not publicly readable through the installed host",
+    "single_instance": "Rust-hosted exclusion and forwarding not proven by release-runner documentation"
+  },
+  "historical_matrix_sha256": "fbf5f1272be769ae554ba53df065ef171badb6bbe942bb90e254168664e5f7c2",
+  "review": "ordered slice-level author SPEC then QUALITY; not independent approval or full P11-A acceptance",
+  "gates": "P11-A through P11-H OPEN; dual-track clock not started",
+  "not_done": [
+    "mutable target/setup/discovery/TOFU/credential migration",
+    "service startup/supervision or installed service changes",
+    "autostart/updater/packaging migration",
+    "native Windows/Linux or full product regression/performance",
+    "default switch and rollback rehearsal",
+    "real common fourteen-calendar-day dual operation",
+    "Tauri removal, push, tag, release or signing trust change"
+  ]
+}

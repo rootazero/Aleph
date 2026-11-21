@@ -84,13 +84,9 @@ struct Inner {
 pub(crate) struct CredentialService(Arc<Inner>);
 
 impl CredentialService {
-    pub(crate) fn new(panel_url: &str, qa_nonce: Option<&str>) -> Self {
-        // HostSettings owns admission; only its immutable local URL reaches here.
-        let mut gateway = url::Url::parse(panel_url).expect("admitted Panel URL");
-        assert_eq!(gateway.scheme(), "http");
-        gateway.set_scheme("ws").expect("hierarchical URL");
-        gateway.set_path("/ws");
-        let gateway = gateway.to_string();
+    pub(crate) fn new(gateway: &str, qa_nonce: Option<&str>) -> Self {
+        // HostSettings owns admission and WS/WSS derivation for this immutable target.
+        let gateway = gateway.to_owned();
         Self::with_backend(
             gateway.clone(),
             Arc::new(GatewayStore {

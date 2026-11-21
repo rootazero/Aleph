@@ -1,6 +1,6 @@
 {
   "artifact": "phase11-nsh-inventory",
-  "version": "2026-11-22.3",
+  "version": "2026-11-22.4",
   "status": "FOUNDATION_IMPLEMENTED / P11-A-H_NOT_ACCEPTED",
   "authority": [
     "docs/superpowers/plans/2026-11-21-phase11-nsh-cutover.md",
@@ -73,7 +73,7 @@
   "commands": [
     {
       "command": "get_connection_target",
-      "owner": "desktop/shell/src/connection.rs:668",
+      "owner": "desktop/shell/src/connection.rs:492",
       "callers": [
         "desktop/shell/splash/connect.html:102"
       ],
@@ -82,7 +82,7 @@
     },
     {
       "command": "set_connection_target",
-      "owner": "desktop/shell/src/connection.rs:736",
+      "owner": "desktop/shell/src/connection.rs:560",
       "callers": [
         "desktop/shell/splash/connect.html:86"
       ],
@@ -91,7 +91,7 @@
     },
     {
       "command": "clear_connection_target",
-      "owner": "desktop/shell/src/connection.rs:802",
+      "owner": "desktop/shell/src/connection.rs:626",
       "callers": [
         "desktop/shell/splash/connect.html:97"
       ],
@@ -100,7 +100,7 @@
     },
     {
       "command": "is_lite_shell",
-      "owner": "desktop/shell/src/connection.rs:812",
+      "owner": "desktop/shell/src/connection.rs:636",
       "callers": [
         "desktop/shell/splash/connect.html:75"
       ],
@@ -422,17 +422,17 @@
     "checks": {
       "node": "node --test desktop/nsh-shell/tests/panel_bridge.test.mjs: 8 passed",
       "protocol": "cargo test -p aleph-protocol --offline --locked --jobs 1: 415 unit + 11 integration passed; 2 doctests ignored",
-      "shell_default": "cargo test -p aleph-nsh-shell --offline --locked --jobs 1: 11 unit + 2 integration passed",
-      "shell_qa": "cargo test -p aleph-nsh-shell --features qa-service --offline --locked --jobs 1: 11 unit + 2 integration passed; 1 real-store test ignored by default",
+      "shell_default": "cargo test -p aleph-nsh-shell --offline --locked --jobs 1: 13 unit + 5 real-process launch + 2 integration passed",
+      "shell_qa": "cargo test -p aleph-nsh-shell --features qa-service --offline --locked --jobs 1: 13 unit + 5 real-process launch + 2 integration passed; 1 real-store test ignored by default",
       "os_store": "cargo test -p aleph-nsh-shell --features qa-service --offline --locked --jobs 1 isolated_os_store_roundtrip_and_revoked_lease -- --ignored --test-threads=1: 1 passed; unique namespace, save/load/stale-delete-denial/delete/absence, cleanup; not native WebView delivery",
       "panel_native": "cargo test -p aleph-panel --lib native_credentials --offline --locked --jobs 1: 24 passed",
       "panel_wasm": "cargo check -p aleph-panel --target wasm32-unknown-unknown --offline --locked --jobs 1: passed; existing dead_code warnings",
-      "clippy": "cargo clippy -p aleph-nsh-shell --all-targets --features qa-service --offline --locked --jobs 1 -- -D warnings: passed",
+      "clippy": "cargo clippy -p aleph-client -p aleph-nsh-shell --all-targets --features qa-service --offline --locked --jobs 1 -- -D warnings: passed",
       "linux_target": "BLOCKED: offline cache missing cairo-rs 0.22.11",
       "windows_target": "NOT RUN: target and runner unavailable",
       "workspace_fmt": "pre-existing unrelated workspace formatting drift; not rewritten",
-      "tauri_full_lite": "NOT RERUN",
-      "native_qa": "PASS_SCOPED_NATIVE_CREDENTIAL_EFFECTS: .phase10-evidence/phase11-native-credentials.Kje8rAAJ/receipt.json; ten effects, two documents, natural exit; not Panel WASM/desktop parity/performance",
+      "tauri_full_lite": "full default: 167 passed; lite qa-owned-root: 190 passed; unit suites, not installed-app/service/native lifecycle acceptance",
+      "native_qa": "PASS_SCOPED_NATIVE_CREDENTIAL_EFFECTS: .phase10-evidence/phase11-launch-credentials.EU3xi4/receipt.json; ten effects, two documents, natural exit after endpoint ownership change; prior .phase10-evidence/phase11-native-credentials.Kje8rAAJ/receipt.json retained; not Panel WASM/desktop parity/performance",
       "native_receipt_tests": "cd qa && python3 -m unittest test_phase11_nsh_credentials -v: 6 passed; complete effects RED before evaluator implementation, then GREEN",
       "qa_python_suite": "uv run --offline --no-project --no-python-downloads --python python3 --with jsonschema python -m unittest discover -s qa -p 'test_*.py' -v: 82 passed; plain python3 first blocked four module imports by missing jsonschema, resolved in isolated cached uv environment"
     }
@@ -463,6 +463,24 @@
     "started": false,
     "qualified_common_days": 0,
     "reason": "no three-platform production acceptance or default/rollback qualification"
+  },
+  "immutable_launch_slice": {
+    "status": "IMPLEMENTED_TARGETED_CHECKS_NOT_PRODUCT_ACCEPTANCE",
+    "source_owner": "shared/client/src/connection_target.rs",
+    "old_owner_disposition": "desktop/shell/src/connection.rs reexports canonical target type; existing persistence/credential gate, bootstrap tickets, TLS trust and supervision remain in that module",
+    "handler": "desktop/nsh-shell/src/main.rs admits HostSettings::from_launch before mounting window/credential adapter",
+    "boundary": "--connect <root origin>; one immutable target per process; default unchanged; no marker/service/autostart writes",
+    "transport": "Panel root and WS/WSS credential URL derived once from same target; canonical ensure_credential_transport reused; no plaintext remote, userinfo, ticket/query/fragment or non-root path",
+    "qa_separation": "launch args cannot combine with QA endpoint/nonce; malformed Unicode args/environment fail closed without input echo",
+    "shared_client_tests": "57 passed",
+    "native_regression": ".phase10-evidence/phase11-launch-credentials.EU3xi4/receipt.json",
+    "native_regression_sha256": "902acfb9fe0f90672bafd0cf4c724a8b1f81ef3d4e48e7c544b17c8f4119d251",
+    "limitations": ["HTTPS remote TLS/pairing not exercised", "not mutable target, setup UI, discovery, TOFU or full/lite/service migration", "no Windows/Linux native acceptance"]
+  },
+  "pinned_api_gaps": {
+    "login_item": "nsh-core 0.6.0 src/element/desktop.rs:1082 launch_at_login collapses Disabled/RequiresApproval/Unavailable/read errors to false; set_launch_at_login returns Result but no public detailed status getter was located",
+    "single_instance": "nsh-core 0.6.0 src/single_instance.rs assigns uniqueness to release runners; Rust-hosted run_app uniqueness/forwarding not yet proven",
+    "policy": "do not report unavailable as disabled; do not infer single-instance from a SecondInstance event consumer; no toolkit patch or dependency fork"
   },
   "operations": {
     "foundation_commit": "9e48df355236585c4fa7d94e5098c12e445d9dab",

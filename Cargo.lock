@@ -145,6 +145,7 @@ dependencies = [
  "tokio-tungstenite 0.30.0",
  "toml 1.1.8+spec-1.1.0",
  "tracing",
+ "url",
 ]
 
 [[package]]
@@ -317,7 +318,6 @@ dependencies = [
  "serde_json",
  "tokio",
  "tokio-tungstenite 0.28.0",
- "url",
  "uuid",
 ]
 
