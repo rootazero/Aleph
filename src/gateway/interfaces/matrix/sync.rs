@@ -5,6 +5,8 @@ use crate::gateway::interfaces::matrix::{
 use crate::sync_primitives::Arc;
 use futures::StreamExt;
 use matrix_sdk::config::SyncSettings;
+use matrix_sdk::ruma::api::client::filter::FilterDefinition;
+use matrix_sdk::ruma::UInt;
 use std::time::Duration;
 use tokio::sync::{watch, RwLock};
 
@@ -17,7 +19,19 @@ pub async fn run_sync_loop(
     deduper: Arc<EventDeduper>,
     mut shutdown_rx: watch::Receiver<bool>,
 ) {
-    let settings = SyncSettings::default().timeout(Duration::from_millis(config.sync_timeout_ms));
+    // `SyncSettings` has no dedicated timeline-limit knob in this SDK version, so
+    // `initial_sync_limit` goes out as a `/sync` filter: it caps the timeline
+    // window of each response. A limit of 0 is sent as "no cap" rather than
+    // asking the server for an empty timeline and silently receiving nothing.
+    let mut filter = FilterDefinition::default();
+    filter.room.timeline.limit = if config.initial_sync_limit == 0 {
+        None
+    } else {
+        UInt::new(config.initial_sync_limit)
+    };
+    let settings = SyncSettings::default()
+        .timeout(Duration::from_millis(config.sync_timeout_ms))
+        .filter(filter.into());
 
     let sdk_client = client.inner().clone();
     let stream = sdk_client.sync_stream(settings).await;

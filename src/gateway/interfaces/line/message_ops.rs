@@ -70,36 +70,6 @@ impl LineMessagingApi {
         }
     }
 
-    /// Send a reply message (using replyToken).
-    pub async fn reply(
-        &self,
-        reply_token: &str,
-        messages: Vec<ReplyMessage>,
-    ) -> Result<String, String> {
-        let url = format!("{}/v2/bot/message/reply", self.api_base);
-        let payload = ReplyPayload {
-            reply_token: reply_token.to_string(),
-            messages,
-        };
-        let resp = self
-            .http
-            .post(&url)
-            .header(
-                "Authorization",
-                format!("Bearer {}", self.channel_access_token),
-            )
-            .json(&payload)
-            .send()
-            .await
-            .map_err(|e| format!("HTTP error: {e}"))?;
-
-        if resp.status().is_success() {
-            Ok("ok".to_string())
-        } else {
-            Err(format!("LINE API error: {}", resp.status()))
-        }
-    }
-
     /// Push a text message.
     pub async fn push_text(&self, to: &str, text: &str) -> Result<String, String> {
         let payload = LinePushPayload::Text(TextPayload {
@@ -248,30 +218,6 @@ impl LineMessagingApi {
 
         if resp.status().is_success() {
             Ok(())
-        } else {
-            Err(format!("LINE API error: {}", resp.status()))
-        }
-    }
-
-    pub async fn get_profile(&self, user_id: &str) -> Result<LineUserProfile, String> {
-        let url = format!("{}/v2/bot/profile/{}", self.api_base, user_id);
-        let resp = self
-            .http
-            .get(&url)
-            .header(
-                "Authorization",
-                format!("Bearer {}", self.channel_access_token),
-            )
-            .send()
-            .await
-            .map_err(|e| format!("HTTP error: {e}"))?;
-
-        if resp.status().is_success() {
-            let profile: LineUserProfile = resp
-                .json()
-                .await
-                .map_err(|e| format!("Failed to parse profile response: {e}"))?;
-            Ok(profile)
         } else {
             Err(format!("LINE API error: {}", resp.status()))
         }
@@ -744,49 +690,6 @@ pub struct QuickReplyUriAction {
     pub uri: String,
 }
 
-// --- Reply types ---
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ReplyPayload {
-    pub reply_token: String,
-    pub messages: Vec<ReplyMessage>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(untagged)]
-pub enum ReplyMessage {
-    Text(ReplyTextContent),
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct ReplyTextContent {
-    #[serde(rename = "type")]
-    pub msg_type: String,
-    pub text: String,
-}
-
-impl ReplyTextContent {
-    pub fn new(text: impl Into<String>) -> Self {
-        Self {
-            msg_type: "text".to_string(),
-            text: text.into(),
-        }
-    }
-}
-
-#[derive(Debug, Clone, Deserialize)]
-pub struct LineUserProfile {
-    #[serde(rename = "displayName")]
-    pub display_name: String,
-    #[serde(rename = "userId")]
-    pub user_id: String,
-    #[serde(rename = "pictureUrl")]
-    pub picture_url: Option<String>,
-    #[serde(rename = "statusMessage")]
-    pub status_message: Option<String>,
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -879,20 +782,5 @@ mod tests {
         let json = serde_json::to_string(&payload).unwrap();
         assert!(json.contains("\"type\":\"flex\""));
         assert!(json.contains("\"altText\":\"Flex message\""));
-    }
-
-    #[test]
-    fn test_deserialize_user_profile() {
-        let json = r#"{
-            "displayName": "John Doe",
-            "userId": "U123456",
-            "pictureUrl": "https://example.com/photo.jpg",
-            "statusMessage": "Hello!"
-        }"#;
-        let profile: LineUserProfile = serde_json::from_str(json).unwrap();
-        assert_eq!(profile.display_name, "John Doe");
-        assert_eq!(profile.user_id, "U123456");
-        assert!(profile.picture_url.is_some());
-        assert_eq!(profile.status_message.as_deref(), Some("Hello!"));
     }
 }

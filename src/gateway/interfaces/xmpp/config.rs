@@ -38,7 +38,11 @@ pub struct XmppConfig {
     #[serde(default)]
     pub muc_rooms: Vec<String>,
 
-    /// Whether to use TLS (default: true, reserved for future support)
+    /// Whether TLS is required (default: true)
+    ///
+    /// No TLS upgrade is implemented, so `true` makes the channel refuse to
+    /// start instead of authenticating in plaintext. Plaintext operation needs
+    /// this explicitly set to `false`.
     #[serde(default = "default_true")]
     pub use_tls: bool,
 

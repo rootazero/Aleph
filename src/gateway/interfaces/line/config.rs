@@ -4,7 +4,6 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::gateway::coalescer::CoalescingConfig;
 /// DM access policy.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, Default, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -73,13 +72,6 @@ pub struct LineConfig {
     /// ignored (no access granted) when group_policy is Disabled.
     #[serde(default)]
     pub allowed_groups: Vec<String>,
-
-    /// Send typing indicator while processing.
-    #[serde(default = "default_true")]
-    pub send_typing: bool,
-    /// Message coalescing configuration.
-    #[serde(default)]
-    pub coalescing: Option<CoalescingConfig>,
 }
 
 impl From<&LineConfig> for crate::gateway::inbound_router::ChannelConfig {
@@ -117,10 +109,6 @@ const fn default_webhook_port() -> u16 {
     8080
 }
 
-const fn default_true() -> bool {
-    true
-}
-
 impl Default for LineConfig {
     fn default() -> Self {
         Self {
@@ -133,8 +121,6 @@ impl Default for LineConfig {
             group_policy: LineGroupPolicy::default(),
             allowed_users: Vec::new(),
             allowed_groups: Vec::new(),
-            send_typing: true,
-            coalescing: Some(CoalescingConfig::default()),
         }
     }
 }
@@ -150,26 +136,6 @@ impl LineConfig {
         }
         Ok(())
     }
-
-    /// Check if a user ID is allowed for DM.
-    #[must_use]
-    pub fn is_user_allowed(&self, user_id: &str) -> bool {
-        if self.allowed_users.is_empty() {
-            true
-        } else {
-            self.allowed_users.contains(&user_id.to_string())
-        }
-    }
-
-    /// Check if a group ID is allowed.
-    #[must_use]
-    pub fn is_group_allowed(&self, group_id: &str) -> bool {
-        if self.allowed_groups.is_empty() {
-            true
-        } else {
-            self.allowed_groups.contains(&group_id.to_string())
-        }
-    }
 }
 
 #[cfg(test)]
@@ -184,7 +150,6 @@ mod tests {
         assert_eq!(config.webhook_path, "/line/webhook");
         assert_eq!(config.webhook_host, "0.0.0.0");
         assert_eq!(config.webhook_port, 8080);
-        assert!(config.send_typing);
     }
 
     #[test]

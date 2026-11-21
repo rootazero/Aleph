@@ -94,11 +94,16 @@ pub async fn hydrate_inbound_attachments(
     out
 }
 
+/// Upload `content` to the homeserver media repository and return its MXC URI.
+///
+/// `filename` is sent as the `filename` query parameter (MSC2702) so other
+/// clients' "save as" offers the real name. It is only metadata: the media
+/// repository still serves the blob by content type.
 pub async fn upload_media(
     client: &Client,
     content: Vec<u8>,
     mime_type: &str,
-    _filename: Option<&str>,
+    filename: Option<&str>,
 ) -> Result<String, ChannelError> {
     if content.len() as u64 > MATRIX_MEDIA_MAX_SIZE {
         return Err(ChannelError::SendFailed(format!(
@@ -112,9 +117,13 @@ pub async fn upload_media(
         .parse()
         .map_err(|e| ChannelError::SendFailed(format!("Invalid MIME type: {e}")))?;
 
+    let mut request =
+        matrix_sdk::ruma::api::client::media::create_content::v3::Request::new(content);
+    request.content_type = Some(mime.essence_str().to_owned());
+    request.filename = filename.map(str::to_owned);
+
     let response = client
-        .media()
-        .upload(&mime, content, None)
+        .send(request)
         .await
         .map_err(|e| ChannelError::SendFailed(format!("Media upload failed: {e}")))?;
 
@@ -178,15 +187,6 @@ async fn download_media_limited(
     Ok(read_body_limited(response, max_bytes)
         .await?
         .map(|bytes| (bytes, mime)))
-}
-
-pub async fn download_media(
-    client: &Client,
-    mxc_uri: &str,
-) -> Result<(Vec<u8>, String), ChannelError> {
-    download_media_limited(client, mxc_uri, MATRIX_MEDIA_MAX_SIZE)
-        .await?
-        .ok_or_else(|| ChannelError::ReceiveFailed("Matrix media exceeds attachment cap".into()))
 }
 
 #[cfg(test)]
