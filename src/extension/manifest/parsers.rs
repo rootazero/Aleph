@@ -195,6 +195,12 @@ struct AgentFm {
     tools: Option<crate::yaml::Value>,
     #[serde(default, rename = "permissionMode")]
     permission_mode: Option<crate::yaml::Value>,
+    /// Presence-only. The plugin agent mode axis is not implemented, so a
+    /// `mode:` key must fail loudly in `parse_single_agent` instead of
+    /// being dropped by the deserializer (mirrors the disk agent loader's
+    /// `ForbiddenSystemField` for `mode`).
+    #[serde(default)]
+    mode: Option<crate::yaml::Value>,
 }
 
 // ============================================================================
@@ -755,6 +761,17 @@ fn parse_single_agent(
     let content = std::fs::read_to_string(md_path)
         .with_context(|| format!("Failed to read {}", md_path.display()))?;
     let (fm, body): (AgentFm, String) = parse_frontmatter(&content, md_path)?;
+    // The mode axis exists for disk agents only: a plugin agent always
+    // registers as `All`. A `mode:` key would otherwise be dropped by the
+    // deserializer and the agent would run with a mode the author never
+    // asked for — fail loudly instead.
+    if fm.mode.is_some() {
+        return Err(anyhow::anyhow!(
+            "agent frontmatter `mode:` is not supported for plugin agents \
+             (the plugin agent mode axis is not implemented): {}",
+            md_path.display()
+        ));
+    }
     let name = fm.name.unwrap_or_else(|| default_name.to_string());
     log_unapplied_permission_mode(fm.permission_mode.as_ref(), &name);
     // An agent's `tools:` only narrows, like a command's `allowed-tools:`:
@@ -1510,6 +1527,24 @@ mod tests {
         );
         assert_eq!(tools.len(), 3);
         assert_eq!(reg.model.as_deref(), Some("inherit"));
+    }
+
+    #[test]
+    fn plugin_agent_mode_key_is_rejected_loudly() {
+        // The mode axis is disk-agent only; a plugin agent always registers
+        // as `All`. Silently dropping `mode:` would run the agent with a
+        // mode its author never chose.
+        let dir = tempdir().unwrap();
+        write_agent(
+            dir.path(),
+            "primary.md",
+            "---\nname: primary\ndescription: Wants to be primary\nmode: primary\n---\nBody.\n",
+        );
+        let err = parse_agents_dir(dir.path(), "agents", "plug").unwrap_err();
+        assert!(
+            err.to_string().contains("`mode:` is not supported"),
+            "the error must name the rejected key: {err}"
+        );
     }
 
     /// 24 of 28 marketplace agents write `tools: Read, Grep, Bash` — the comma

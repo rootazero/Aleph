@@ -286,7 +286,6 @@ pub fn parse_cc_plugin_json_content(
         repository,
         license: json.license,
         keywords: json.keywords.unwrap_or_default(),
-        extensions: Vec::new(),
         // Superset sections, carried in the `aleph` object (which Claude Code
         // ignores). `services_v2` stays `None`: services round-trip through
         // `aleph_extensions.services`, and a second copy would be a second

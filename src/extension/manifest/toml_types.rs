@@ -96,8 +96,6 @@ pub struct PluginSection {
     pub license: Option<String>,
     #[serde(default)]
     pub keywords: Option<Vec<String>>,
-    #[serde(default)]
-    pub extensions: Option<Vec<String>>,
 }
 
 /// Plugin author information (TOML format)
@@ -148,26 +146,6 @@ pub enum FilesystemPermission {
 impl Default for FilesystemPermission {
     fn default() -> Self {
         Self::Bool(false)
-    }
-}
-
-impl FilesystemPermission {
-    #[must_use]
-    pub fn can_read(&self) -> bool {
-        match self {
-            Self::Bool(true) => true,
-            Self::Bool(false) => false,
-            Self::Level(s) => matches!(s.as_str(), "read" | "write" | "full"),
-        }
-    }
-
-    #[must_use]
-    pub fn can_write(&self) -> bool {
-        match self {
-            Self::Bool(true) => true,
-            Self::Bool(false) => false,
-            Self::Level(s) => matches!(s.as_str(), "write" | "full"),
-        }
     }
 }
 
@@ -568,7 +546,6 @@ pub fn parse_aleph_plugin_toml_content(
         repository: toml.plugin.repository,
         license: toml.plugin.license,
         keywords: toml.plugin.keywords.unwrap_or_default(),
-        extensions: toml.plugin.extensions.unwrap_or_default(),
         tools_v2: if toml.tools.is_empty() {
             None
         } else {
