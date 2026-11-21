@@ -148,12 +148,8 @@ pub fn analyze_shell_command(
     };
 
     let mut all_segments = Vec::new();
-    let mut chains = Vec::new();
-    let mut chain_segments = Vec::new();
 
     for part in chain_parts {
-        chain_segments.clear();
-
         // Split by pipe |
         let pipeline_parts = match split_pipeline(&part) {
             Ok(parts) => parts,
@@ -168,22 +164,16 @@ pub fn analyze_shell_command(
             };
 
             let resolution = resolve_executable(&argv[0], cwd, env);
-            let segment = CommandSegment::new(raw, argv).with_resolution(resolution);
-            chain_segments.push(segment);
+            let segment = CommandSegment::new(raw).with_resolution(resolution);
+            all_segments.push(segment);
         }
-
-        if !chain_segments.is_empty() {
-            chains.push(chain_segments.clone());
-            all_segments.extend(chain_segments.iter().cloned());
-        }
-        chain_segments.clear();
     }
 
     if all_segments.is_empty() {
         return CommandAnalysis::error("no valid command segments found");
     }
 
-    CommandAnalysis::success(all_segments, chains)
+    CommandAnalysis::success(all_segments)
 }
 
 /// Split command by chain operators (&&, ||, ;)
@@ -498,7 +488,7 @@ mod tests {
         let analysis = analyze_shell_command("ls -la", None, None);
         assert!(analysis.ok);
         assert_eq!(analysis.segments.len(), 1);
-        assert_eq!(analysis.segments[0].argv, vec!["ls", "-la"]);
+        assert_eq!(analysis.segments[0].raw, "ls -la");
     }
 
     #[test]
@@ -518,7 +508,7 @@ mod tests {
     fn test_analyze_complex() {
         let analysis = analyze_shell_command("cd /tmp && ls | grep foo; echo done", None, None);
         assert!(analysis.ok);
-        assert_eq!(analysis.chains.as_ref().unwrap().len(), 3);
+        assert_eq!(analysis.segments.len(), 4);
     }
 
     #[test]
