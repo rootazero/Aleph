@@ -1,0 +1,60 @@
+{
+  "status": "PASS_PLANNING_HANDOFF_VERIFICATION",
+  "date": "2026-11-21",
+  "branch": "main",
+  "phase10_commit": "576c723591e40c139728f7198d9dd1630e7706e6",
+  "phase10_measurement_head": "0e4e1d4ebaa6e6dee8d6af9928f969d2e90f42b7",
+  "phase11_implementation": "NOT_STARTED",
+  "operator_decisions": {
+    "keep_shared_panel": true,
+    "require_all_platforms_before_tauri_removal": [
+      "macOS",
+      "Windows",
+      "Linux"
+    ],
+    "minimum_dual_operation_calendar_days": 14
+  },
+  "documents_sha256": {
+    "docs/superpowers/plans/2026-11-21-phase11-nsh-cutover.md": "54edbb812bca30e19cf005249e22d3b8a95da2f42456e128bf4cd906ec9f83f0",
+    "docs/superpowers/prompts/2026-11-21-phase11-nsh-cutover-restart.md": "aa360b6f6d2b5dbbd52015748cebb1130d32c316b8bbf4890729e694cda9bfc9"
+  },
+  "checks": {
+    "local_markdown_links": 88,
+    "referenced_source_path_occurrences": 107,
+    "phase10_recorded_source_hashes_still_matching": 23,
+    "git_diff_check": "PASS",
+    "phase10_commit_on_local_main": "PASS",
+    "protected_config_files": "NOT_READ_OR_CHANGED",
+    "raw_evidence_and_build_roots": "NOT_STAGED"
+  },
+  "reference_projects": {
+    "official_nsh": "https://github.com/longbridge/nsh",
+    "historical_nsh_checkout": {
+      "relative_location": "../nsh-phase10",
+      "observed_head": "644a31f0cd1cc35855b6241aedec90a2eda9f222",
+      "role": "historical reference only; existing edits preserved"
+    },
+    "historical_aleph_checkout": {
+      "relative_location": "../aleph-phase10-local",
+      "observed_head": "0e4e1d4ebaa6e6dee8d6af9928f969d2e90f42b7",
+      "role": "historical comparison only"
+    },
+    "retiring_framework": [
+      "https://github.com/tauri-apps/tauri",
+      "https://github.com/tauri-apps/plugins-workspace",
+      "https://github.com/tauri-apps/wry",
+      "https://github.com/tauri-apps/tao"
+    ]
+  },
+  "not_run": [
+    "new Cargo build/test",
+    "new native GUI or timing matrix",
+    "Phase11 platform implementation",
+    "14-day dual operation",
+    "installed desktop default cutover",
+    "release or remote push",
+    "Tauri removal"
+  ],
+  "external_urls_not_fetched": 13,
+  "known_validation_limit": "Existing whole-tree Markdown scanner fails on an unrelated empty target; Phase11 links were resolved individually, paths only (not heading-anchor or external-site validation)."
+}
