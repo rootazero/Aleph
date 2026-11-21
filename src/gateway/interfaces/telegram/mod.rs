@@ -218,7 +218,69 @@ impl TelegramChannel {
     }
 }
 
-impl TelegramChannel {}
+impl TelegramChannel {
+    /// Live transport for a conversation we only know by id (approval cards,
+    /// late edits) — the outbound counterpart of [`Self::inbound_delivery`],
+    /// which needs the inbound message's account stamp.
+    pub(crate) fn delivery_for(
+        &self,
+        conversation_id: &ConversationId,
+    ) -> ChannelResult<delivery::TelegramDelivery> {
+        let (chat_id, thread_id) = delivery::parse_conversation_id(conversation_id.as_str())?;
+        let instance = self.select_instance(chat_id.0, thread_id)?;
+        let config = self
+            .config_resolver
+            .resolve(&instance.account_id, chat_id.0, thread_id)
+            .ok_or_else(|| ChannelError::ConfigError("Unknown Telegram account".into()))?;
+        Ok(delivery::TelegramDelivery::new(
+            instance.bot.clone(),
+            config.clone(),
+            self.error_cooldown.clone(),
+            conversation_id.as_str(),
+        ))
+    }
+
+    /// Pick the bot account that carries traffic for `chat_id` / `thread_id`.
+    ///
+    /// An account that maps this chat (or chat+topic) explicitly wins — that
+    /// is the "most specific instance" multi-account routing promises.
+    /// Otherwise the account-level catch-all (`chat_id == 0`, which every
+    /// account registers) may answer only when it cannot be ambiguous: with
+    /// exactly one account configured. With several accounts an unmapped chat
+    /// is a configuration error rather than "first account wins", which is
+    /// what an always-true `resolve(..).is_some()` predicate turned it into.
+    fn select_instance(
+        &self,
+        chat_id: i64,
+        thread_id: Option<i32>,
+    ) -> ChannelResult<&bot_instance::BotInstance> {
+        if let Some(explicit) = self.bot_instances.iter().find(|inst| {
+            self.config_resolver
+                .resolve_explicit(&inst.account_id, chat_id, thread_id)
+                .is_some()
+        }) {
+            return Ok(explicit);
+        }
+
+        let mut candidates = self.bot_instances.iter().filter(|inst| {
+            self.config_resolver
+                .resolve(&inst.account_id, chat_id, thread_id)
+                .is_some()
+        });
+        match (candidates.next(), candidates.next()) {
+            (Some(only), None) => Ok(only),
+            (Some(_), Some(_)) => Err(ChannelError::ConfigError(format!(
+                "No Telegram account maps chat {chat_id} (thread: {thread_id:?}) explicitly and \
+                 {} accounts are configured — add the chat to exactly one account's `groups`",
+                self.bot_instances.len()
+            ))),
+            (None, _) => Err(ChannelError::ConfigError(format!(
+                "No Telegram account configured for chat {chat_id} (thread: {thread_id:?}). \
+                 Ensure the chat_id is covered by allowed_groups or account config"
+            ))),
+        }
+    }
+}
 
 #[async_trait]
 impl Channel for TelegramChannel {
@@ -710,10 +772,10 @@ impl Channel for TelegramChannel {
                             reply_to: None,
                             is_group: false,
                             raw: None,
-                            metadata: vec![MessageMeta::PollAnswer {
-                                poll_id: q.poll_id.to_string(),
-                                option_ids: q.option_ids,
-                            }],
+                            // The answered option ids are already in `text`;
+                            // the old poll-answer metadata carrier had no reader
+                            // anywhere in the tree.
+                            metadata: Vec::new(),
                         };
                         Self::stamp_account(&mut inbound, &account_id);
                         let _ = inbound_tx.send(inbound);
@@ -840,34 +902,12 @@ impl Channel for TelegramChannel {
             };
         let chat_id_i64 = chat_id.0;
 
-        // Select the most-specific matching instance: prefer an explicit
-        // chat-level (or topic-level) mapping over an account-level fallback
-        // (chat_id == 0).  Among equally-specific candidates the first wins,
-        // which preserves deterministic single-account behaviour.
-        let instance = {
-            // Try an exact chat (or chat+topic) match first.
-            let explicit = self.bot_instances.iter().find(|inst| {
-                self.config_resolver
-                    .resolve(&inst.account_id, chat_id_i64, thread_id)
-                    .map(|_resolved| chat_id_i64 != 0)
-                    .unwrap_or(false)
-            });
-            // Fall back to an account-level (chat_id == 0) catch-all only
-            // when no explicit mapping exists for any account.
-            explicit.or_else(|| {
-                self.bot_instances.iter().find(|inst| {
-                    self.config_resolver
-                        .resolve(&inst.account_id, chat_id_i64, thread_id)
-                        .is_some()
-                })
-            })
-        };
-        let Some(instance) = instance else {
-            let reason = format!(
-                "No Telegram account configured for chat {chat_id_i64} (thread: {thread_id:?}). \
-                 Ensure the chat_id is covered by allowed_groups or account config"
-            );
-            return Box::pin(async move { Err(ChannelError::ConfigError(reason)) });
+        // Select the most-specific matching instance: an explicit chat-level
+        // (or topic-level) mapping wins over an account-level catch-all
+        // (chat_id == 0).
+        let instance = match self.select_instance(chat_id_i64, thread_id) {
+            Ok(instance) => instance,
+            Err(error) => return Box::pin(async move { Err(error) }),
         };
         let bot = instance.bot.clone();
         let resolved_config = self
@@ -886,22 +926,7 @@ impl Channel for TelegramChannel {
 
     async fn send_typing(&self, conversation_id: &ConversationId) -> ChannelResult<()> {
         let (chat_id, thread_id) = delivery::parse_conversation_id(conversation_id.as_str())?;
-        let chat_id_i64 = chat_id.0;
-
-        let instance = self
-            .bot_instances
-            .iter()
-            .find(|inst| {
-                self.config_resolver
-                    .resolve(&inst.account_id, chat_id_i64, thread_id)
-                    .is_some()
-            })
-            .ok_or_else(|| {
-                ChannelError::ConfigError(format!(
-                    "No Telegram account configured for chat {chat_id_i64} (thread: {thread_id:?}). \
-                     Ensure the chat_id is covered by allowed_groups or account config"
-                ))
-            })?;
+        let instance = self.select_instance(chat_id.0, thread_id)?;
         delivery::send_typing(
             &instance.bot,
             conversation_id.as_str(),
@@ -918,22 +943,7 @@ impl Channel for TelegramChannel {
         reaction: &str,
     ) -> ChannelResult<()> {
         let (chat_id, thread_id) = delivery::parse_conversation_id(conversation_id.as_str())?;
-        let chat_id_i64 = chat_id.0;
-
-        let instance = self
-            .bot_instances
-            .iter()
-            .find(|inst| {
-                self.config_resolver
-                    .resolve(&inst.account_id, chat_id_i64, thread_id)
-                    .is_some()
-            })
-            .ok_or_else(|| {
-                ChannelError::ConfigError(format!(
-                    "No Telegram account configured for chat {chat_id_i64} (thread: {thread_id:?}). \
-                     Ensure the chat_id is covered by allowed_groups or account config"
-                ))
-            })?;
+        let instance = self.select_instance(chat_id.0, thread_id)?;
         delivery::send_reaction(
             &instance.bot,
             conversation_id.as_str(),
@@ -966,22 +976,7 @@ impl Channel for TelegramChannel {
         }
 
         let (chat_id, thread_id) = delivery::parse_conversation_id(conversation_id.as_str())?;
-        let chat_id_i64 = chat_id.0;
-
-        let instance = self
-            .bot_instances
-            .iter()
-            .find(|inst| {
-                self.config_resolver
-                    .resolve(&inst.account_id, chat_id_i64, thread_id)
-                    .is_some()
-            })
-            .ok_or_else(|| {
-                ChannelError::ConfigError(format!(
-                    "No Telegram account configured for chat {chat_id_i64} (thread: {thread_id:?}). \
-                     Ensure the chat_id is covered by allowed_groups or account config"
-                ))
-            })?;
+        let instance = self.select_instance(chat_id.0, thread_id)?;
 
         // `send_poll` returns a `Message` carrying the poll id; we surface
         // the message id (the Channel trait only has MessageId — downstream
@@ -1010,22 +1005,7 @@ impl Channel for TelegramChannel {
         new_text: &str,
     ) -> ChannelResult<()> {
         let (chat_id, thread_id) = delivery::parse_conversation_id(conversation_id.as_str())?;
-        let chat_id_i64 = chat_id.0;
-
-        let instance = self
-            .bot_instances
-            .iter()
-            .find(|inst| {
-                self.config_resolver
-                    .resolve(&inst.account_id, chat_id_i64, thread_id)
-                    .is_some()
-            })
-            .ok_or_else(|| {
-                ChannelError::ConfigError(format!(
-                    "No Telegram account configured for chat {chat_id_i64} (thread: {thread_id:?}). \
-                     Ensure the chat_id is covered by allowed_groups or account config"
-                ))
-            })?;
+        let instance = self.select_instance(chat_id.0, thread_id)?;
         delivery::edit_message(
             &instance.bot,
             conversation_id.as_str(),

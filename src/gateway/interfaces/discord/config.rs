@@ -16,10 +16,6 @@ pub struct DiscordConfig {
     /// Bot token from Discord Developer Portal
     pub bot_token: String,
 
-    /// Application ID (for slash commands)
-    #[serde(default)]
-    pub application_id: Option<u64>,
-
     /// Allowed guild (server) IDs (empty = allow all)
     #[serde(default)]
     pub allowed_guilds: Vec<u64>,
@@ -39,7 +35,10 @@ pub struct DiscordConfig {
     /// Whether to respond to mentions
     #[serde(default = "default_true")]
     pub respond_to_mentions: bool,
-    /// Whether to use slash commands
+    /// Whether to handle slash commands. Nothing in this process registers
+    /// commands with Discord — an operator who wants `/commands` must register
+    /// them out of band (e.g. in the Developer Portal); this flag only decides
+    /// whether an arriving slash command is dispatched.
     #[serde(default = "default_true")]
     pub slash_commands_enabled: bool,
 
@@ -50,7 +49,6 @@ pub struct DiscordConfig {
     /// Gateway intents to request
     #[serde(default)]
     pub intents: IntentsConfig,
-
 }
 
 /// Hand-written so the bot token never reaches a log line, a panic message
@@ -59,7 +57,6 @@ impl fmt::Debug for DiscordConfig {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("DiscordConfig")
             .field("bot_token", &"<redacted>")
-            .field("application_id", &self.application_id)
             .field("allowed_guilds", &self.allowed_guilds)
             .field("allowed_channels", &self.allowed_channels)
             .field("dm_allowed", &self.dm_allowed)
@@ -128,7 +125,6 @@ impl Default for DiscordConfig {
     fn default() -> Self {
         Self {
             bot_token: String::new(),
-            application_id: None,
             allowed_guilds: Vec::new(),
             allowed_channels: Vec::new(),
             dm_allowed: true,
@@ -146,13 +142,9 @@ impl DiscordConfig {
     #[must_use]
     pub fn from_env() -> Option<Self> {
         let bot_token = std::env::var("DISCORD_BOT_TOKEN").ok()?;
-        let application_id = std::env::var("DISCORD_APPLICATION_ID")
-            .ok()
-            .and_then(|s| s.parse().ok());
 
         Some(Self {
             bot_token,
-            application_id,
             ..Default::default()
         })
     }

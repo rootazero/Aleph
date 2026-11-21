@@ -129,12 +129,17 @@ pub enum ComponentKind {
     ApprovalApprove,
     /// Approval UI button — deny path.
     ApprovalDeny,
+    /// Clarification-answer button (`clarify:<1-based index>`), produced by
+    /// [`crate::clarification::render`]. Forwarding it as inbound text is what
+    /// lets the router's `clarify:` branch resolve the pending question.
+    Clarify,
     /// Generic command callback (future). Reserved for skill/menu callbacks
-    /// that don't carry approval semantics; not yet dispatched.
+    /// that don't carry approval semantics; the default registry answers these
+    /// with [`DispatchOutcome::AckNoReply`].
     Callback,
     /// Unknown kind — preserves the raw `payload` for forensic logging. The
-    /// dispatch table returns `None` for these so the handler falls back to
-    /// the existing approval-sink path on `cb_`-prefixed payloads.
+    /// registry's `Callback` entry also catches these, so an unrecognised
+    /// button is ACKed (see [`CommandRegistry::with_defaults`]).
     Unknown(String),
 }
 
@@ -147,6 +152,7 @@ impl ComponentKind {
         match self {
             Self::ApprovalApprove => "approve",
             Self::ApprovalDeny => "deny",
+            Self::Clarify => "clarify",
             Self::Callback => "callback",
             Self::Unknown(_) => "unknown",
         }
@@ -160,6 +166,7 @@ impl ComponentKind {
         match kind {
             "approve" => Self::ApprovalApprove,
             "deny" => Self::ApprovalDeny,
+            "clarify" => Self::Clarify,
             "callback" => Self::Callback,
             other => Self::Unknown(other.to_string()),
         }
@@ -266,10 +273,13 @@ impl std::error::Error for ComponentParseError {}
 /// Kept tiny so the dispatch table is easy to read at the call site.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DispatchOutcome {
-    /// Hand off to the approval sink. `payload` is the message id the
-    /// approval gate posted; the inbound message gets the `cb_` prefix and
-    /// the existing router picks it up.
-    ForwardToApproval,
+    /// Turn the click into an inbound message for the router. Used by the
+    /// approval buttons (`payload` is the message id the approval gate
+    /// posted; the reconstructed `approve:<id>:<tier>` text is what
+    /// `ApprovalBridge::parse_callback` understands) and by the
+    /// clarification buttons (`clarify:<n>`, consumed by the router's own
+    /// branch).
+    ForwardAsInbound,
     /// No handler registered; the interaction should be ACKed without any
     /// follow-up message (the click is recorded in the audit trail but the
     /// user sees no response). The dispatch table returns this for
@@ -308,19 +318,26 @@ impl CommandRegistry {
         }
     }
 
-    /// Build a registry with the two approval handlers wired to
-    /// `ForwardToApproval`. Tests that don't care about approval behavior
-    /// use `new()`; the production bootstrap calls `with_defaults()`.
+    /// Build a registry with the button kinds this channel can answer wired:
+    /// approve/deny and clarification answers forward to the router, everything
+    /// else ACKs. Tests that only exercise the codec use `new()`; the
+    /// production bootstrap calls `with_defaults()`.
     #[must_use]
     pub fn with_defaults() -> Self {
         let mut r = Self::new();
         r.handlers.insert(
             ComponentKind::ApprovalApprove,
-            Box::new(|_| DispatchOutcome::ForwardToApproval),
+            Box::new(|_| DispatchOutcome::ForwardAsInbound),
         );
         r.handlers.insert(
             ComponentKind::ApprovalDeny,
-            Box::new(|_| DispatchOutcome::ForwardToApproval),
+            Box::new(|_| DispatchOutcome::ForwardAsInbound),
+        );
+        // Without this entry a clarification answer was ACKed and dropped, so
+        // the pending `ask_user` question stayed open until it timed out.
+        r.handlers.insert(
+            ComponentKind::Clarify,
+            Box::new(|_| DispatchOutcome::ForwardAsInbound),
         );
         // Unknown kinds fall back to AckNoReply via this Callback handler;
         // the dispatch table looks up `id.kind` first, then `Callback`.
@@ -458,6 +475,9 @@ fn legacy_inbound(
 ///     → append `:once` or `:deny` so `ApprovalBridge::parse_callback`
 ///     matches. The decision tier defaults to AllowOnce for Approve
 ///     and Deny for Deny.
+/// - `Clarify` → `Forward("clarify:<n>")`. The wired form *is* the shape the
+///   inbound router's `clarify:` branch parses, so the click resolves the
+///   pending question instead of being ACKed into the void.
 ///
 /// `sender_id` / `sender_name` propagate into the forwarded inbound so
 /// the inbound router's originator gate and the audit trail have a
@@ -492,7 +512,7 @@ pub fn dispatch_component_click(
     // documents this as Discord's "raw callback" pattern, but the
     // previous handler forwarded them as text. Keep doing that —
     // routing them through the registry's Callback fallback would
-    // AckOnly-swalllow clicks that bots depend on for approval
+    // AckOnly-swallow clicks that bots depend on for approval
     // resolution (Review Focus #3).
     let is_legacy_no_colon =
         matches!(&id.kind, ComponentKind::Unknown(k) if k == custom_id) && id.payload.is_empty();
@@ -508,10 +528,11 @@ pub fn dispatch_component_click(
     }
 
     match registry.dispatch(&id) {
-        Some(DispatchOutcome::ForwardToApproval) => {
-            // Reconstruct the callback_data that
-            // `ApprovalBridge::parse_callback` understands. Two
-            // wire-format shapes can reach this branch:
+        Some(DispatchOutcome::ForwardAsInbound) => {
+            // Reconstruct the callback_data that the consumer understands.
+            // For approvals that is `ApprovalBridge::parse_callback`; for
+            // clarification buttons the wire form round-trips unchanged.
+            // Two approval wire-format shapes can reach this branch:
             //
             // - Legacy multi-tier: custom_id = `approve:<id>:<decision>`,
             //   id.payload = `<id>:<decision>` (contains a colon).
@@ -632,9 +653,9 @@ mod tests {
     fn registry_defaults_route_approval() {
         let r = CommandRegistry::with_defaults();
         let id = ComponentId::parse("approve:m1").unwrap();
-        assert_eq!(r.dispatch(&id), Some(DispatchOutcome::ForwardToApproval));
+        assert_eq!(r.dispatch(&id), Some(DispatchOutcome::ForwardAsInbound));
         let id = ComponentId::parse("deny:m1").unwrap();
-        assert_eq!(r.dispatch(&id), Some(DispatchOutcome::ForwardToApproval));
+        assert_eq!(r.dispatch(&id), Some(DispatchOutcome::ForwardAsInbound));
     }
 
     #[test]
@@ -678,7 +699,7 @@ mod tests {
     // ----- dispatch_component_click tests (R2 D1) -----
     //
     // The legacy `cb_<id>` fallback is the contract Review Focus #3
-    // called out. Without them the dispatcher would happily AckNo-clud-slow
+    // called out. Without it the dispatcher would happily AckNoReply-swallow
     // legacy bots' approval resolutions and there would be no test to
     // catch it.
 
@@ -703,6 +724,20 @@ mod tests {
                 assert!(msg.is_group);
             }
             CommandAction::AckOnly => panic!("legacy cb_<id> must not AckOnly"),
+        }
+    }
+
+    #[test]
+    fn dispatch_clarify_click_forwards_the_wire_form() {
+        // `ask_user` renders `clarify:<n>` buttons; the router's `clarify:`
+        // branch is the only consumer. ACKing the click silently left the
+        // pending question open until it timed out.
+        let r = CommandRegistry::with_defaults();
+        let action =
+            dispatch_component_click(&r, "clarify:2", "user-1", Some("alice"), 42, conv(), true);
+        match action {
+            CommandAction::Forward(msg) => assert_eq!(msg.text, "clarify:2"),
+            CommandAction::AckOnly => panic!("clarify click must Forward"),
         }
     }
 

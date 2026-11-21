@@ -60,9 +60,11 @@ impl LaneHandle {
     /// - **First-preview withholding** (`min_initial_chars`): the preview is not
     ///   sent until enough text has accrued, so a tiny partial doesn't fire a
     ///   push notification.
-    /// - **Edit throttling** (`debounce_ms`): edits are coalesced to at most one
-    ///   per interval. A throttled edit is not lost — the next delta past the
-    ///   interval (or `finalize`) flushes the latest accumulated text.
+    /// - **Edit throttling** (`debounce_ms` / `max_edit_interval_ms`): edits are
+    ///   coalesced to at most one per interval, where the interval is the larger
+    ///   of the two knobs (so raising either one slows edits down). A throttled
+    ///   edit is not lost — the next delta past the interval (or `finalize`)
+    ///   flushes the latest accumulated text.
     ///
     /// Reasoning lane additionally wraps the accumulated text with the
     /// `REASONING_MESSAGE_PREFIX` marker so a reader can tell the message
@@ -71,7 +73,13 @@ impl LaneHandle {
     pub async fn write_chunk(&self, delta: &str) -> ChannelResult<()> {
         let stream_cfg = &self.delivery.config.streaming;
         let min_initial_chars = stream_cfg.min_initial_chars;
-        let debounce = std::time::Duration::from_millis(stream_cfg.debounce_ms);
+        // `debounce_ms` is the coalescing window and `max_edit_interval_ms` is
+        // the operator's hard "do not edit more often than this" ceiling. Both
+        // express a minimum spacing between edits, so the effective throttle is
+        // the larger of the two (defaults 800 / 200 keep the historical 800).
+        let debounce = std::time::Duration::from_millis(
+            stream_cfg.debounce_ms.max(stream_cfg.max_edit_interval_ms),
+        );
 
         let mut tracker = self.tracker.lock().await;
         let state = tracker

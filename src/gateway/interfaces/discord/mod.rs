@@ -29,12 +29,10 @@ pub mod api;
 pub mod commands;
 pub mod config;
 pub mod permissions;
-pub mod reconnect;
 pub mod security;
 
 pub use commands::{ComponentId, ComponentKind};
 pub use config::{DiscordConfig, IntentsConfig};
-pub use reconnect::{CooldownStore, ReconnectCoordinator, ReconnectDecision};
 
 use crate::gateway::channel::{
     Attachment, Channel, ChannelCapabilities, ChannelError, ChannelFactory, ChannelId, ChannelInfo,
@@ -46,7 +44,6 @@ use crate::sync_primitives::Arc;
 use async_trait::async_trait;
 use chrono::{TimeZone, Utc};
 use tokio::sync::{oneshot, RwLock};
-
 
 use serenity::{
     all::{
@@ -83,18 +80,6 @@ pub struct DiscordChannel {
     /// `None` (no enabled provider), and the inbound path then forwards audio
     /// messages untouched so they remain visible to the user.
     stt_source: Option<Arc<crate::gateway::voice::inbound::SttSource>>,
-    /// Reconnect coordinator (T2.5): owns the backoff schedule, presence
-    /// cooldown gate, and `last_event_at` watchdog that feeds the channel
-    /// health monitor's zombie-detection sweep. Always present (constructed
-    /// with defaults in `new()`) so the wiring never silently disappears.
-    ///
-    /// Wrapped in `Arc` so the [`Handler`] cloned into serenity's event
-    /// callback shares the same underlying backoff / cooldown / atomic
-    /// `last_event_nanos` — `mark_event()` called from a serenity gateway
-    /// event must feed the same watchdog the health monitor reads. R2 D6
-    /// wired the mark; the `Arc` is what lets the handler reach it
-    /// without taking a second mutable borrow of the channel.
-    reconnect: Arc<reconnect::ReconnectCoordinator>,
     /// Component dispatch table (R2 D1): owned by the channel and shared
     /// (via Arc) with the Handler so button clicks resolve to typed
     /// DispatchOutcome instead of becoming raw inbound text. Constructed
@@ -124,7 +109,6 @@ impl DiscordChannel {
             http: None,
             test_mode: false,
             stt_source: None,
-            reconnect: Arc::new(reconnect::ReconnectCoordinator::with_defaults()),
             registry: Arc::new(commands::CommandRegistry::with_defaults()),
         }
     }
@@ -157,15 +141,6 @@ impl DiscordChannel {
     #[must_use]
     pub fn stt_source(&self) -> Option<&Arc<crate::gateway::voice::inbound::SttSource>> {
         self.stt_source.as_ref()
-    }
-
-    /// Read-only view of the reconnect coordinator. Exposed so the health
-    /// monitor's sweep (which lives in `channel_health_monitor`) and the
-    /// inbound path share the same schedule — every place that touches the
-    /// backoff goes through this handle.
-    #[must_use]
-    pub fn reconnect(&self) -> &reconnect::ReconnectCoordinator {
-        &self.reconnect
     }
 
     /// Get Discord-specific capabilities
@@ -310,18 +285,8 @@ struct Handler {
     /// the inbound path then forwards audio messages untouched so they remain
     /// visible to the user, and the agent sees the raw attachment metadata.
     stt_source: Option<Arc<crate::gateway::voice::inbound::SttSource>>,
-    /// Reconnect watchdog (R2 D6): shared `Arc` with the parent
-    /// `DiscordChannel`'s reconnect coordinator. Serenity's gateway events
-    /// stamp the `last_event_nanos` atomic on every observed event so the
-    /// health monitor's `is_zombie()` sweep can distinguish "socket alive"
-    /// from "socket wedged". Without this stamp the coordinator's
-    /// `seconds_since_last_event` is permanently `0`, and every channel
-    /// trips the staleness watchdog the moment it goes idle.
-    reconnect: Arc<reconnect::ReconnectCoordinator>,
     /// Component dispatch table — Arc-shared from the parent
-    /// `DiscordChannel`. Lives alongside the reconnect coordinator so a
-    /// future refactor that consolidates the two Arc-shared fields can
-    /// find them together.
+    /// `DiscordChannel`.
     registry: Arc<commands::CommandRegistry>,
 }
 
@@ -418,11 +383,6 @@ impl Handler {
 #[async_trait]
 impl EventHandler for Handler {
     async fn ready(&self, _ctx: Context, ready: Ready) {
-        // R2 D6: stamp the liveness atomic first so the watchdog's first
-        // `seconds_since_last_event` read returns 0 (sentinel for "never
-        // seen"), not "stale" — the watchdog will see the next gateway
-        // event and tick down from there.
-        self.reconnect.mark_event();
         tracing::info!(
             "Discord bot connected: {}#{} ({})",
             ready.user.name,
@@ -442,17 +402,11 @@ impl EventHandler for Handler {
     }
 
     async fn message(&self, ctx: Context, msg: Message) {
-        // R2 D6: liveness stamp AFTER the self-loop guard so the bot's
-        // own outbound messages don't trivially keep the watchdog fed —
-        // the watchdog wants gateway activity (inbound + outbound),
-        // not "I just spoke". Marking AFTER the early-return makes the
-        // guard the source of truth for "is this the bot itself".
         let bot_self_id = *self.bot_user_id.read().await;
         let is_self = bot_self_id == Some(msg.author.id.get());
         if msg.author.bot && is_self {
             return;
         }
-        self.reconnect.mark_event();
         let is_foreign_bot = msg.author.bot && !is_self;
 
         // Check if this is a DM
@@ -633,13 +587,6 @@ impl EventHandler for Handler {
     }
 
     async fn interaction_create(&self, ctx: Context, interaction: Interaction) {
-        // R2 D6: stamp the liveness atomic first, BEFORE the
-        // component-handler dispatch and the unknown-variant early-return,
-        // because both of those still represent gateway activity the
-        // watchdog should see. Filtering by interaction kind would
-        // reintroduce the "every interaction event is its own decision"
-        // problem the watchdog exists to solve.
-        self.reconnect.mark_event();
         // Button / select-menu clicks (approval UI): forward the callback to the
         // router's approval sink via a cb_-prefixed inbound message, then ACK.
         if let Interaction::Component(component) = &interaction {
@@ -779,7 +726,6 @@ impl EventHandler for Handler {
             channel_id,
             new_channel.parent_id.map_or(0, |p| p.get())
         );
-
     }
 
     async fn thread_update(
@@ -860,8 +806,7 @@ impl Channel for DiscordChannel {
             intents |= GatewayIntents::GUILD_MEMBERS;
         }
         // Thread events (THREAD_CREATE/UPDATE/DELETE) are only delivered
-        // with the GUILDS intent — without it the thread bindings are
-        // never populated and `thread_create` never runs.
+        // with the GUILDS intent — without it `thread_create` never runs.
         if self.config.intents.guild_threads {
             intents |= GatewayIntents::GUILDS;
         }
@@ -876,13 +821,6 @@ impl Channel for DiscordChannel {
             bot_user_id: Arc::new(RwLock::new(None)),
             ready_notify: ready_notify.clone(),
             stt_source: self.stt_source.clone(),
-            // R2 D6: share the parent's reconnect coordinator so the
-            // serenity gateway events (ready / message / interaction_create)
-            // stamp the same `last_event_nanos` atomic the health monitor
-            // reads from `seconds_since_last_event`. Without this clone the
-            // watchdog is permanently stale and every idle channel trips
-            // the staleness sweep.
-            reconnect: Arc::clone(&self.reconnect),
             // R2 D1: share the parent's CommandRegistry so component
             // clicks (button / select-menu) resolve to typed
             // DispatchOutcome via `commands::dispatch_component_click`
@@ -1181,6 +1119,11 @@ impl Channel for DiscordChannel {
     }
 
     async fn send_typing(&self, conversation_id: &ConversationId) -> ChannelResult<()> {
+        // The generic reply-emitter typing loop is channel-agnostic, so this
+        // knob can only be honoured here.
+        if !self.config.send_typing {
+            return Ok(());
+        }
         if self.test_mode {
             if self.status() != ChannelStatus::Connected {
                 return Err(ChannelError::NotConnected(

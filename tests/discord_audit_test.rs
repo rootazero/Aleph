@@ -1,11 +1,9 @@
 //! Integration tests for the discord audit-hook pipeline.
 //!
-//! These exercise the same three functions the discord channel's
-//! inbound handler (line 2) will call:
-//!
-//! - `record_discord_approval_requested`
-//! - `record_discord_approval_resolved`
-//! - `record_discord_approval_blocked`
+//! These exercise `record_discord_approval_resolved`, the one hook with a
+//! live caller (the exec manager's `resolve_with_reason` chokepoint). The
+//! `requested` / `blocked` pair had no producer in the discord channel and
+//! was removed with its re-exports.
 //!
 //! Plus the [`label_for_outcome`] helper that lets the exec manager
 //! turn an [`ApprovalOutcome`] into a stable audit verb without
@@ -27,8 +25,7 @@ mod common;
 use serial_test::serial;
 
 use alephcore::gateway::interfaces::discord::security::{
-    audit_label_for_outcome, record_discord_approval_blocked, record_discord_approval_requested,
-    record_discord_approval_resolved,
+    audit_label_for_outcome, record_discord_approval_resolved,
 };
 use alephcore::security::audit::{AuditEventType, AuditSeverity, SecurityAuditLog};
 
@@ -50,14 +47,11 @@ fn audit_label_table_is_stable() {
 }
 
 /// Single end-to-end test that owns the global audit log for its full
-/// run. Three hooks fire (requested, resolved, blocked) and we read all
-/// three entries back. The blocked entry MUST be `ExecBlocked` /
-/// `Critical` (the spec's reverse test: "should be rejected but audit
-/// recorded it") and the requested/resolved pair MUST be `AuthorityChange`
-/// / `Warn` — same event_type, since both are ratified, not refusals.
+/// run. The resolved hook fires once and we read the entry back: it MUST be
+/// `AuthorityChange` / `Warn` — a ratified decision, not a refusal.
 #[tokio::test]
 #[serial(global_audit_log)]
-async fn end_to_end_three_hooks_emit_expected_event_types() {
+async fn end_to_end_resolved_hook_emits_expected_event_type() {
     let (log, mut rx) = SecurityAuditLog::new(8);
     // One-shot install. If a previous serial test already installed,
     // the call returns false — but our `rx` would then be reading from
@@ -69,7 +63,6 @@ async fn end_to_end_three_hooks_emit_expected_event_types() {
         "test audit log already installed — serial_test isolation broken?"
     );
 
-    record_discord_approval_requested(Some("user-1".into()), Some("sess-1".into()), "!ping").await;
     record_discord_approval_resolved(
         Some("user-1".into()),
         Some("sess-1".into()),
@@ -77,36 +70,19 @@ async fn end_to_end_three_hooks_emit_expected_event_types() {
         "!ping",
     )
     .await;
-    record_discord_approval_blocked(
-        Some("user-2".into()),
-        Some("sess-2".into()),
-        "policy_denied",
-        "!rm_rf",
-    )
-    .await;
 
-    let e1 = rx.recv().await.expect("requested entry");
-    assert_eq!(e1.event_type, AuditEventType::AuthorityChange);
-    assert!(e1.detail.contains("requested"));
-    assert!(e1.detail.contains("!ping"));
+    let e = rx.recv().await.expect("resolved entry");
+    assert_eq!(e.event_type, AuditEventType::AuthorityChange);
+    assert_eq!(e.severity, AuditSeverity::Warn);
+    assert!(e.detail.contains("resolved"));
+    assert!(e.detail.contains("allow_once"));
+    assert!(e.detail.contains("!ping"));
 
-    let e2 = rx.recv().await.expect("resolved entry");
-    assert_eq!(e2.event_type, AuditEventType::AuthorityChange);
-    assert!(e2.detail.contains("resolved"));
-    assert!(e2.detail.contains("allow_once"));
-    assert!(e2.detail.contains("!ping"));
-
-    let e3 = rx.recv().await.expect("blocked entry");
-    assert_eq!(e3.event_type, AuditEventType::ExecBlocked);
-    assert_eq!(e3.severity, AuditSeverity::Critical);
-    assert!(e3.detail.contains("policy_denied"));
-    assert!(e3.detail.contains("!rm_rf"));
-
-    // No fourth entry should arrive: every hook fired exactly once.
+    // No second entry should arrive: the hook fired exactly once.
     let extra = tokio::time::timeout(std::time::Duration::from_millis(50), rx.recv()).await;
     assert!(
         extra.is_err(),
-        "an unexpected fourth entry arrived: {extra:?}"
+        "an unexpected second entry arrived: {extra:?}"
     );
 
     // Drop our handle so the global is the only one left holding a
@@ -115,8 +91,8 @@ async fn end_to_end_three_hooks_emit_expected_event_types() {
     drop(log);
 }
 
-/// A fresh process (no global log installed yet) must let the three
-/// hooks no-op rather than panic. This test runs alongside the
+/// A fresh process (no global log installed yet) must let the hook
+/// no-op rather than panic. This test runs alongside the
 /// end-to-end test under `#[serial]` but installs its OWN log first
 /// so the absence-of-global branch is exercised only by the order of
 /// the tests.
@@ -137,10 +113,7 @@ async fn hooks_do_not_panic_without_a_global_log() {
     // previously-installed log (assertion: the local `rx` is empty).
     let (_local_log, mut local_rx) = SecurityAuditLog::new(8);
 
-    record_discord_approval_requested(Some("u".into()), Some("s".into()), "!ping").await;
     record_discord_approval_resolved(Some("u".into()), Some("s".into()), "allow_once", "!ping")
-        .await;
-    record_discord_approval_blocked(Some("u".into()), Some("s".into()), "rate_limited", "!ping")
         .await;
 
     // Whatever the global state, our local log must be empty — these
